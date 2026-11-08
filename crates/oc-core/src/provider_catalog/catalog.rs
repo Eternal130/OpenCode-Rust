@@ -154,7 +154,15 @@ impl Catalog {
     /// * one of its `environment` credential variables is set — the
     ///   env integration connection rule (`provider.ts:404`; the
     ///   models.dev plugin registers one env method per catalog
-    ///   provider, `packages/core/src/plugin/models-dev.ts:35-52`).
+    ///   provider, `packages/core/src/plugin/models-dev.ts:35-52`); or
+    /// * it is `amazon-bedrock` and the AmazonBedrockPlugin activation
+    ///   chain applies (G-262②, `plugin/provider/amazon-bedrock.ts:
+    ///   31-53`): the narrowed `AWS_BEARER_TOKEN_BEDROCK` env credential
+    ///   or any ambient default-chain input (`AWS_PROFILE`,
+    ///   `AWS_ACCESS_KEY_ID`, web-identity/container creds) flips
+    ///   activation auto→enabled. The raw models.dev names
+    ///   (`AWS_SECRET_ACCESS_KEY`, `AWS_REGION`) are SigV4 chain config,
+    ///   not keys, and never gate visibility on their own.
     ///
     /// Deprecated and non-text models never register in v2
     /// (`plugin/models-dev.ts:101-109`) — both filters apply here too.
@@ -168,7 +176,20 @@ impl Catalog {
         for snapshot in &self.providers {
             let keyless_zen =
                 snapshot.info.id.as_str() == "opencode" && !has_env("OPENCODE_API_KEY");
-            if !keyless_zen && !snapshot.environment.iter().any(|name| has_env(name)) {
+            // G-262② — bedrock availability follows the AmazonBedrockPlugin
+            // (plugin/provider/amazon-bedrock.ts:31-53): the env credential
+            // is the narrowed bearer token (integration/providers.rs), and
+            // the ambient chain above ACTIVATES the provider. The raw
+            // models.dev names (AWS_SECRET_ACCESS_KEY, AWS_REGION) feed the
+            // SigV4 chain but are not keys and must not gate visibility on
+            // their own.
+            let gated = if snapshot.info.id.as_str() == "amazon-bedrock" {
+                has_env("AWS_BEARER_TOKEN_BEDROCK")
+                    || BEDROCK_CHAIN_ENV.iter().any(|name| has_env(name))
+            } else {
+                snapshot.environment.iter().any(|name| has_env(name))
+            };
+            if !keyless_zen && !gated {
                 continue;
             }
             for model in &snapshot.models {
@@ -225,6 +246,20 @@ const BEDROCK_PROFILE_ONLY_IDS: &[&str] = &[
 /// (`plugin/provider/openrouter.ts:16-28`). Custom providers with matching
 /// ids stay untouched (the plugin keys on the openrouter package).
 const OPENROUTER_DISABLED_MODEL_IDS: &[&str] = &["gpt-5-chat-latest", "openai/gpt-5-chat"];
+
+/// G-262② — ambient inputs the AWS default credential chain can turn
+/// into credentials without any key stored in opencode
+/// (`plugin/provider/amazon-bedrock.ts:8-14`): any one of them (or a
+/// configured shared-config `profile`) flips the provider's activation
+/// auto→enabled (`:36-39`), which is what makes Bedrock visible for
+/// users whose credentials live entirely in the environment.
+const BEDROCK_CHAIN_ENV: [&str; 5] = [
+    "AWS_PROFILE",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_WEB_IDENTITY_TOKEN_FILE",
+    "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+    "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+];
 
 /// G-285 — catalog providers with chat-completions `prompt_cache_key` body
 /// support but no dedicated AI package; the ref plugin sets
@@ -878,6 +913,41 @@ mod tests {
             .collect();
         assert!(!anthropic.is_empty(), "anthropic with its env key is available");
         assert_eq!(anthropic.len(), full.len(), "full (non-deprecated, text) model list");
+    }
+
+    /// G-262② — the AmazonBedrockPlugin activation chain
+    /// (`plugin/provider/amazon-bedrock.ts:8-52`): ambient AWS
+    /// default-chain inputs (or the narrowed bearer token) activate the
+    /// provider WITHOUT any stored key, while the non-key models.dev
+    /// names (`AWS_SECRET_ACCESS_KEY`, `AWS_REGION`) alone do not —
+    /// SigV4 chain config is not a credential.
+    #[test]
+    fn provider_catalog_bedrock_chain_env_activation() {
+        let catalog = Catalog::embedded();
+        let bedrock_visible = |names: &[&str]| {
+            catalog
+                .available_models(|name| names.contains(&name))
+                .iter()
+                .any(|(snapshot, _)| snapshot.info.id.as_str() == "amazon-bedrock")
+        };
+        // Each CHAIN_ENV member alone activates (ref list, :8-14).
+        for name in [
+            "AWS_PROFILE",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_WEB_IDENTITY_TOKEN_FILE",
+            "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+            "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+        ] {
+            assert!(bedrock_visible(&[name]), "{name} alone must activate bedrock");
+        }
+        // The narrowed env key still works.
+        assert!(bedrock_visible(&["AWS_BEARER_TOKEN_BEDROCK"]));
+        // Non-key chain config alone does NOT.
+        assert!(
+            !bedrock_visible(&["AWS_SECRET_ACCESS_KEY", "AWS_REGION"]),
+            "chain config without a key or chain input must not activate bedrock"
+        );
+        assert!(!bedrock_visible(&["NEVER_SET"]));
     }
 
     #[test]

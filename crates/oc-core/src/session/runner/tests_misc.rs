@@ -1050,6 +1050,113 @@ async fn runner_retry_prepared_hook_writes_mutations_back() {
     }
 }
 
+// -- G-262①: openai omitOutputLimit on context/compaction hooks ---------
+
+/// G-262① — ref plugin/provider/openai.ts:316-322 registers
+/// `omitOutputLimit` on the openai provider's `session.context` and
+/// `session.compaction` hooks, unconditionally deleting
+/// `options.maxTokens` (the ChatGPT backend rejects a requested output
+/// limit, and OpenAI counts one against rate limits). The prepared
+/// openai context/compaction request must carry NO output limit;
+/// other providers keep theirs, and the title/generate kinds never
+/// carried one.
+#[tokio::test]
+async fn runner_openai_context_compaction_omit_output_limit() {
+    use crate::session::runner::model_request::{RequestInput, RequestKind, SessionModelRequest};
+    use crate::session::runner::tests_harness::test_resolved_model;
+
+    let hooks = Arc::new(crate::hooks::HookRegistry::new());
+    let tools = Arc::new(crate::location::ToolRegistryState::new());
+    let requests = SessionModelRequest::new(Arc::clone(&hooks), tools, AppMetadata::default());
+
+    let row = || {
+        crate::database::schema::SessionRow::new(
+            "ses_omit_limit",
+            "proj_1",
+            "/tmp/opencode/omit-limit",
+            "omit-limit",
+            "2",
+        )
+        .expect("session row")
+    };
+    let mut openai = test_resolved_model();
+    openai.reference.provider_id = oc_schema::id::ProviderId::parse("openai");
+
+    for kind in [RequestKind::Primary, RequestKind::Compaction] {
+        let prepared = requests
+            .prepare(
+                kind,
+                RequestInput {
+                    session: row(),
+                    agent: oc_schema::id::AgentId::parse("build"),
+                    model: openai.clone(),
+                    tools: None,
+                    system: Vec::new(),
+                    messages: Vec::new(),
+                    tool_choice: None,
+                    web_socket: false,
+                    input_tokens: None,
+                },
+            )
+            .await
+            .expect("prepare");
+        let generation = prepared.request.generation.as_ref();
+        assert!(
+            generation.is_none_or(|options| options.max_tokens.is_none()),
+            "{kind:?}: openai output limit must be omitted, got {generation:?}"
+        );
+    }
+
+    // Other providers keep the default output limit on both kinds.
+    for kind in [RequestKind::Primary, RequestKind::Compaction] {
+        let prepared = requests
+            .prepare(
+                kind,
+                RequestInput {
+                    session: row(),
+                    agent: oc_schema::id::AgentId::parse("build"),
+                    model: test_resolved_model(),
+                    tools: None,
+                    system: Vec::new(),
+                    messages: Vec::new(),
+                    tool_choice: None,
+                    web_socket: false,
+                    input_tokens: None,
+                },
+            )
+            .await
+            .expect("prepare");
+        assert_eq!(
+            prepared.request.generation.as_ref().and_then(|options| options.max_tokens),
+            Some(32_000.0),
+            "{kind:?}: non-openai providers keep the output limit"
+        );
+    }
+
+    // Titles never carried one for any provider (unchanged by the fix).
+    let prepared = requests
+        .prepare(
+            RequestKind::Title,
+            RequestInput {
+                session: row(),
+                agent: oc_schema::id::AgentId::parse("build"),
+                model: openai,
+                tools: None,
+                system: Vec::new(),
+                messages: Vec::new(),
+                tool_choice: None,
+                web_socket: false,
+                input_tokens: None,
+            },
+        )
+        .await
+        .expect("prepare");
+    assert!(
+        prepared.request.generation.as_ref().is_none_or(|options| options.max_tokens.is_none()),
+        "title requests keep the provider default"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // AUD-14: AGENTS.md incremental diff rendering (renderUpdate,
 // ref instruction-discovery.ts:124-151)

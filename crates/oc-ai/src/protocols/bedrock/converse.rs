@@ -118,8 +118,61 @@ const DOCUMENT_FORMATS: [(&str, &str); 9] = [
     ("text/markdown", "md"),
 ];
 
-/// Lower one media part into Bedrock image/document blocks; documents get a
-/// user-facing name unique within the request.
+/// G-263③ — validate and canonicalize inline base64
+/// (`bedrock-media.ts` `mediaBase64`): decode strictly, then re-encode,
+/// so an invalid payload fails with the typed request error instead of
+/// a wire-side 400.
+fn media_base64(inline: &crate::schema::media::Inline) -> Result<String, AiError> {
+    let bytes = shared::decode_base64(&inline.base64).map_err(|error| {
+        shared::invalid_request(format!(
+            "Bedrock Converse media data must be valid base64: {error}"
+        ))
+    })?;
+    Ok(encode_base64(&bytes))
+}
+
+/// One character of the Converse document-label alphabet
+/// (`bedrock-media.ts` `documentName`: `[^a-zA-Z0-9 ()\[\]-]` → space).
+fn label_char_allowed(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, ' ' | '(' | ')' | '[' | ']' | '-')
+}
+
+/// G-263③ — the user-facing document label (port of `documentName`,
+/// bedrock-media.ts:60-77): strip the extension, replace disallowed
+/// characters with single spaces, trim, cap at 200, default
+/// "document"; label conflicts take a ` N` suffix re-fitted under the
+/// same cap (Converse requires labels unique across the entire
+/// request, including tool results).
+fn document_name(filename: Option<&str>, names: &mut Vec<String>) -> String {
+    let filename = filename.unwrap_or("");
+    // `/\.[^.]*$/` — the last dot and its extension.
+    let stem = filename.rfind('.').map_or(filename, |at| &filename[..at]);
+    let replaced: String =
+        stem.chars().map(|c| if label_char_allowed(c) { c } else { ' ' }).collect();
+    // `/\s+/g` → " " over the space-only residue, then trim.
+    let collapsed =
+        replaced.split(' ').filter(|part| !part.is_empty()).collect::<Vec<_>>().join(" ");
+    let capped: String = collapsed.chars().take(200).collect();
+    let base = capped.trim();
+    let base = if base.is_empty() { "document" } else { base };
+    let mut name = base.to_string();
+    let mut index = 2;
+    while names.contains(&name) {
+        let suffix = format!(" {index}");
+        let keep = 200usize.saturating_sub(suffix.len());
+        let fitted: String = base.chars().take(keep).collect();
+        name = format!("{}{suffix}", fitted.trim_end());
+        index += 1;
+    }
+    names.push(name.clone());
+    name
+}
+
+/// Lower one media part into Bedrock image/document blocks
+/// (`bedrock-media.ts` `lower`): route by the lowercased MIME; known
+/// image formats become image blocks, known document formats become
+/// named document blocks (announced when the label diverges from the
+/// filename), anything else fails with a clear error.
 fn lower_media(
     asset: &Asset,
     filename: Option<&str>,
@@ -131,25 +184,41 @@ fn lower_media(
         )
     })?;
     let mime = inline.mime.as_str();
-    if let Some((_, format)) = IMAGE_FORMATS.iter().find(|(known, _)| *known == mime) {
+    let lowered = mime.to_ascii_lowercase();
+    if let Some((_, format)) = IMAGE_FORMATS.iter().find(|(known, _)| *known == lowered) {
         return Ok(vec![
-            json!({ "image": { "format": format, "source": { "bytes": inline.base64 } } }),
+            json!({ "image": { "format": format, "source": { "bytes": media_base64(&inline)? } } }),
         ]);
     }
-    if let Some((_, format)) = DOCUMENT_FORMATS.iter().find(|(known, _)| *known == mime) {
-        let base = filename.map_or_else(|| format!("document-{}", names.len() + 1), str::to_string);
-        let mut name = base.clone();
-        let mut attempt = 1;
-        while names.contains(&name) {
-            attempt += 1;
-            name = format!("{base}-{attempt}");
-        }
-        names.push(name.clone());
-        return Ok(vec![json!({
-            "document": { "format": format, "name": name, "source": { "bytes": inline.base64 } }
-        })]);
+    // An image MIME outside `IMAGE_FORMATS` (e.g. `image/svg+xml`) gets an
+    // image-specific error so the caller knows it's format support, not
+    // kind detection.
+    if lowered.starts_with("image/") {
+        return Err(shared::invalid_request(format!(
+            "Bedrock Converse does not support image media type {mime}"
+        )));
     }
-    Err(shared::invalid_request(format!("Bedrock Converse does not support {mime} media")))
+    if let Some((_, format)) = DOCUMENT_FORMATS.iter().find(|(known, _)| *known == lowered) {
+        let name = document_name(filename, names);
+        let mut blocks = Vec::new();
+        // G-263③ — when the label diverges from the filename, tell the
+        // model which label the attached file carries
+        // (bedrock-media.ts:79-87).
+        if let Some(filename) = filename.filter(|filename| *filename != name) {
+            blocks.push(json!({
+                "text": format!(
+                    "Attached file {} has document label {}.",
+                    serde_json::to_string(filename).unwrap_or_default(),
+                    serde_json::to_string(&name).unwrap_or_default(),
+                )
+            }));
+        }
+        blocks.push(json!({
+            "document": { "format": format, "name": name, "source": { "bytes": media_base64(&inline)? } }
+        }));
+        return Ok(blocks);
+    }
+    Err(shared::invalid_request(format!("Bedrock Converse does not support media type {mime}")))
 }
 
 // =============================================================================
@@ -404,26 +473,29 @@ fn lower_messages(
         }
         match message.role {
             MessageRole::System => {
-                let texts: Vec<&str> = message
-                    .content
-                    .iter()
-                    .filter_map(|part| match part {
-                        ContentPart::Text { text, .. } => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect();
-                let mut content = Vec::new();
-                if texts.len() == message.content.len() && !texts.is_empty() {
-                    for text in texts {
-                        content.extend(text_with_cache(breakpoints, text, None));
-                    }
-                } else {
-                    content.extend(text_with_cache(
-                        breakpoints,
-                        &shared::wrap_system_update(texts),
-                        None,
-                    ));
+                // G-263① — chronological system updates lower through
+                // `wrappedSystemUpdate` (bedrock-converse.ts:347-353 over
+                // shared.ts:146-176): the text parts join into ONE
+                // XML-escaped `<system-update>` block (untrusted content
+                // stays visibly lower-authority user text), the cache
+                // hint is the LAST part's, and non-text parts are
+                // unsupported content.
+                let mut texts: Vec<&str> = Vec::new();
+                let mut last_cache: Option<&CacheHint> = None;
+                for part in &message.content {
+                    let ContentPart::Text { text, cache, .. } = part else {
+                        return Err(shared::invalid_request(
+                            "Bedrock Converse system messages only support text content for now",
+                        ));
+                    };
+                    texts.push(text.as_str());
+                    last_cache = cache.as_ref();
                 }
+                let content = text_with_cache(
+                    breakpoints,
+                    &shared::wrap_system_update(texts),
+                    last_cache,
+                );
                 push_user(&mut messages, content);
             }
             MessageRole::User => {
@@ -971,7 +1043,24 @@ fn step(mut state: ParserState, frame: &str) -> Result<(ParserState, Vec<LLMEven
             .or_else(|| details.get("originalMessage"))
             .and_then(Value::as_str)
             .unwrap_or("Bedrock Converse stream error");
-        return Err(AiError::event_error(ADAPTER, message));
+        // G-263② — stream exceptions classify like HTTP failures
+        // (bedrock-converse.ts:798-808): the encoded event carries
+        // `exception.type`, so ThrottlingException maps to a retryable
+        // rate limit and ServiceUnavailableException to a retryable
+        // provider-internal failure instead of the generic
+        // non-retryable event error.
+        let body = shared::encode_json(&event);
+        return Err(AiError::new(crate::provider_error::classify_provider_failure(
+            crate::provider_error::ProviderFailure {
+                message,
+                status: None,
+                raw_body: Some(&body),
+                data: None,
+                http: None,
+                retry_after_ms: None,
+                rate_limit: None,
+            },
+        )));
     }
 
     Ok((state, events))

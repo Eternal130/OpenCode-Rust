@@ -216,6 +216,193 @@ fn url_or_ref_media_fails_cleanly() {
     assert!(error.message().contains("inline image and document media"), "{}", error.message());
 }
 
+// ===========================================================================
+// G-263③: document labels (bedrock-media.ts documentName/lower)
+// ===========================================================================
+
+fn doc_part(filename: Option<&str>, base64: &str) -> ContentPart {
+    ContentPart::Media {
+        media: Asset {
+            source: crate::schema::media::Source::Base64 {
+                data: base64.to_string(),
+                media_type: "application/pdf".to_string(),
+            },
+            media_type: "application/pdf".to_string(),
+            info: None,
+            expires_at: None,
+            provider_metadata: None,
+            headers: None,
+        },
+        filename: filename.map(str::to_string),
+        cache: None,
+        metadata: None,
+        provider_metadata: None,
+    }
+}
+
+/// The label algorithm (bedrock-media.ts:60-77): extension stripped,
+/// disallowed characters collapsed to single spaces, 200-char cap,
+/// "document" fallback, and ` N` suffixes on conflicts — with the
+/// Attached-file announcement whenever the label diverges from the
+/// filename (bedrock-media.ts:79-87).
+#[test]
+fn document_labels_sanitize_dedupe_and_announce() {
+    let route = route();
+    let request = request_with(
+        &route,
+        vec![Message::new(
+            MessageRole::User,
+            vec![
+                doc_part(Some("My Report_v2 FINAL.pdf"), "aGk="),
+                doc_part(Some("My Report_v2 FINAL.pdf"), "aGk="),
+                doc_part(Some("noextension"), "aGk="),
+                doc_part(None, "aGk="),
+            ],
+        )],
+    );
+    let body = body_from(&request).unwrap();
+    let content = body["messages"][0]["content"].as_array().unwrap();
+    // extension stripped + `_` collapsed to a space + hint block first
+    assert_eq!(
+        content[0]["text"],
+        json!("Attached file \"My Report_v2 FINAL.pdf\" has document label \"My Report v2 FINAL\".")
+    );
+    assert_eq!(content[1]["document"]["name"], json!("My Report v2 FINAL"));
+    // second file with the same name: ` 2` suffix + its own hint
+    assert_eq!(
+        content[2]["text"],
+        json!("Attached file \"My Report_v2 FINAL.pdf\" has document label \"My Report v2 FINAL 2\".")
+    );
+    assert_eq!(content[3]["document"]["name"], json!("My Report v2 FINAL 2"));
+    // filename without extension == label → no announcement block
+    assert_eq!(
+        content[4],
+        json!({ "document": { "format": "pdf", "name": "noextension", "source": { "bytes": "aGk=" } } })
+    );
+    // no filename at all → the "document" default
+    assert_eq!(content[5]["document"]["name"], json!("document"));
+}
+
+/// The 200-char cap: long labels truncate, and conflict suffixes re-fit
+/// the base under the same cap (`base.slice(0, 200 - suffix.length)`).
+#[test]
+fn document_labels_truncate_to_200_with_fitted_suffixes() {
+    let route = route();
+    let long = format!("{}.pdf", "a".repeat(250));
+    let request = request_with(
+        &route,
+        vec![Message::new(
+            MessageRole::User,
+            vec![doc_part(Some(&long), "aGk="), doc_part(Some(&long), "aGk=")],
+        )],
+    );
+    let body = body_from(&request).unwrap();
+    let content = body["messages"][0]["content"].as_array().unwrap();
+    let first = content[1]["document"]["name"].as_str().unwrap();
+    assert_eq!(first.len(), 200, "capped at 200: {first}");
+    assert_eq!(first, "a".repeat(200));
+    let second = content[3]["document"]["name"].as_str().unwrap();
+    assert_eq!(second.len(), 200, "suffix re-fits under the cap: {second}");
+    assert_eq!(second, format!("{} 2", "a".repeat(198)));
+}
+
+/// G-263③ — base64 payloads decode-verify before they reach the wire
+/// (bedrock-media.ts `mediaBase64`): invalid data fails with the typed
+/// request error.
+#[test]
+fn invalid_base64_media_fails_cleanly() {
+    let route = route();
+    let request = request_with(
+        &route,
+        vec![Message::new(MessageRole::User, vec![doc_part(Some("r.pdf"), "not valid!!!")])],
+    );
+    let error = body_from(&request).unwrap_err();
+    assert!(
+        error.message().contains("Bedrock Converse media data must be valid base64"),
+        "{}",
+        error.message()
+    );
+}
+
+/// An image MIME outside `IMAGE_FORMATS` gets the image-specific error
+/// (format-support, not kind detection — bedrock-media.ts:84-88).
+#[test]
+fn unsupported_image_type_error_is_image_specific() {
+    let route = route();
+    let request = request_with(
+        &route,
+        vec![Message::new(MessageRole::User, vec![media_part("image/svg+xml", "aGk=")])],
+    );
+    let error = body_from(&request).unwrap_err();
+    assert!(
+        error.message().contains("does not support image media type image/svg+xml"),
+        "{}",
+        error.message()
+    );
+}
+
+// ===========================================================================
+// G-263①: chronological system updates (bedrock-converse.ts:347-353)
+// ===========================================================================
+
+/// History system messages lower as ONE `<system-update>`-wrapped block
+/// (XML-escaped) merging into the previous user turn, with the LAST
+/// part's cache hint driving the positional cachePoint.
+#[test]
+fn history_system_messages_wrap_with_last_part_cache() {
+    let route = route();
+    let cache = || Some(CacheHint { kind: CacheHintKind::Ephemeral, ttl_seconds: None });
+    let request = request_with(
+        &route,
+        vec![
+            Message::user("hello"),
+            Message::new(
+                MessageRole::System,
+                vec![
+                    ContentPart::text("remember <this> & that"),
+                    ContentPart::Text {
+                        text: "and this".into(),
+                        cache: cache(),
+                        metadata: None,
+                        provider_metadata: None,
+                    },
+                ],
+            ),
+            Message::user("again"),
+        ],
+    );
+    let body = body_from(&request).unwrap();
+    let messages = body["messages"].as_array().unwrap();
+    // Converse only alternates user/assistant: the system update and the
+    // following user turn all merge into the one user message.
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    let first = messages[0]["content"].as_array().unwrap();
+    assert_eq!(first[0]["text"], json!("hello"));
+    assert_eq!(
+        first[1]["text"],
+        json!("<system-update>\nremember &lt;this&gt; &amp; that\nand this\n</system-update>")
+    );
+    assert_eq!(first[2], json!({ "cachePoint": { "type": "default" } }));
+    assert_eq!(first[3]["text"], json!("again"));
+}
+
+/// Non-text parts in a history system message are unsupported content
+/// (shared.ts `systemUpdateText`: privileged updates accept text only).
+#[test]
+fn history_system_messages_reject_non_text_parts() {
+    let route = route();
+    let request = request_with(
+        &route,
+        vec![Message::new(MessageRole::System, vec![media_part("image/png", "aGk=")])],
+    );
+    let error = body_from(&request).unwrap_err();
+    assert!(
+        error.message().contains("system messages only support text content"),
+        "{}",
+        error.message()
+    );
+}
+
 #[test]
 fn mistral_tool_ids_project_to_valid_nine_char_ids() {
     let transport: crate::route::SharedTransport =
@@ -406,6 +593,42 @@ fn stream_exceptions_surface_as_provider_errors() {
         )
         .unwrap_err();
     assert!(error.message().contains("input is too long"), "{}", error.message());
+}
+
+/// G-263② — stream exceptions classify through the provider-failure
+/// classifier (bedrock-converse.ts:798-808): the encoded frame carries
+/// `exception.type`, so throttles and service-unavailable failures
+/// keep their retry signal instead of dying as generic event errors.
+#[test]
+fn stream_exceptions_classify_through_provider_failure() {
+    let route = route();
+    let protocol = BedrockConverseProtocol;
+    let request = request_with(&route, vec![Message::user("hi")]);
+
+    let error = protocol
+        .step(
+            protocol.initial(&request),
+            r#"{"exception":{"type":"ThrottlingException","details":{"message":"Rate exceeded"}}}"#,
+        )
+        .unwrap_err();
+    assert!(error.message().contains("Rate exceeded"), "{}", error.message());
+    assert!(
+        crate::provider_error::is_retryable(&error),
+        "ThrottlingException must classify retryable: {}",
+        error.message()
+    );
+
+    let error = protocol
+        .step(
+            protocol.initial(&request),
+            r#"{"exception":{"type":"ServiceUnavailableException","details":{"message":"service unavailable"}}}"#,
+        )
+        .unwrap_err();
+    assert!(
+        crate::provider_error::is_retryable(&error),
+        "ServiceUnavailableException must classify retryable: {}",
+        error.message()
+    );
 }
 
 #[test]
