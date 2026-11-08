@@ -54,6 +54,7 @@ use oc_core::plugin_apply::{
     GuestHookDispatcher, LocationPluginSource, PluginHookDef, PluginToolDef,
 };
 use oc_core::tool::codemode::{CallRecord, CodeModeRuntime, RunOutcome, ToolCallFn};
+use oc_plugin_host::context::install::probe_feature_entry;
 use oc_plugin_host::registrations::PluginState;
 use oc_plugin_host::{
     Bridge, CodeModeToolSpec, HostState, PluginHost, PluginHostConfig, PluginSourceKind,
@@ -252,7 +253,14 @@ impl PluginBoot {
                     raw_id.clone()
                 })),
                 source: wire_source(plugin),
-                features: PluginFeatures { server: Some(true), tui: None, rpc: None },
+                // G-280③ — ref advertises the detected entrypoints
+                // (`Host.resolve`'s tui/rpc probes → module.ts:115-121
+                // `features`; supervisor.ts:109 merges `server: true`).
+                features: PluginFeatures {
+                    server: Some(true),
+                    tui: probe_feature_entry(&plugin.entry, "./tui").map(|_| true),
+                    rpc: probe_feature_entry(&plugin.entry, "./rpc").map(|_| true),
+                },
                 state,
             });
         }

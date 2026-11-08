@@ -1874,14 +1874,8 @@ async fn load_entry(shared: &Arc<Shared>, entry: &std::path::Path) {
 /// TUI plugin). Walks up from the entry to the package root
 /// (the nearest `package.json`) and probes the subpath.
 fn probe_tui_entry(entry: &Path) -> Option<PathBuf> {
-    let mut package_root = entry.parent()?;
-    loop {
-        if package_root.join("package.json").is_file() {
-            break;
-        }
-        package_root = package_root.parent()?;
-    }
-    crate::context::install::resolve_subpath_entry(package_root, "./tui").ok()
+    let package_root = crate::context::install::package_root(entry)?;
+    crate::context::install::resolve_subpath_entry(&package_root, "./tui").ok()
 }
 
 fn mark_ready(shared: &Arc<Shared>) {

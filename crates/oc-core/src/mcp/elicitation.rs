@@ -413,7 +413,23 @@ pub fn to_elicitation_field(
             when: None,
             default: property.get("default").and_then(serde_json::Value::as_bool),
         },
-        "number" | "integer" => form::Field::Integer {
+        // G-280② — ref keeps the two wire kinds distinct
+        // (mcp/index.ts:800-807 `type: property.type`): `number` is the
+        // floating-point Field (schema form.ts NumberField), `integer`
+        // the integral one — collapsing number onto Integer made float
+        // elicitation answers impossible to input.
+        "number" => form::Field::Number {
+            key: key.to_string(),
+            title: Some(title),
+            description,
+            required: required.then_some(true),
+            hidden: None,
+            when: None,
+            minimum: property.get("minimum").and_then(serde_json::Value::as_f64),
+            maximum: property.get("maximum").and_then(serde_json::Value::as_f64),
+            default: property.get("default").and_then(value_as_f64),
+        },
+        "integer" => form::Field::Integer {
             key: key.to_string(),
             title: Some(title),
             description,

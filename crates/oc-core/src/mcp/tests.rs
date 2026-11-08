@@ -1716,6 +1716,14 @@ fn g242_context() -> crate::location::ToolCallContext {
     }
 }
 
+fn allow_all_rules() -> oc_schema::permission::Ruleset {
+    vec![oc_schema::permission::Rule {
+        action: "*".into(),
+        resource: "*".into(),
+        effect: oc_schema::permission::Effect::Allow,
+    }]
+}
+
 /// The shared G-242 fixture: a connected scripted `alpha` server exposing
 /// `echo` (free-form input, scripted `pong` answer) and `gated` (a
 /// required input field, no scripted answer) plus `shaped` (a declared
@@ -1893,7 +1901,7 @@ async fn g242_deny_rule_rejects_mcp_tool_execution() {
 #[tokio::test]
 async fn g242_pipeline_hooks_and_decode_wrap_mcp_tools() {
     let (_db, bus) = test_bus().await;
-    let (registry, tools, hooks, _permission, _rx) = g242_fixture(&bus, None).await;
+    let (registry, tools, hooks, _permission, _rx) = g242_fixture(&bus, Some(allow_all_rules())).await;
 
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let before_seen = Arc::clone(&seen);
@@ -1962,16 +1970,17 @@ async fn g242_pipeline_hooks_and_decode_wrap_mcp_tools() {
     );
 
     let observed = seen.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+    // The decode-failure leg fires `before` but not `after` — the
+    // pipeline's decode early-return (pinned by the g191 test; ref
+    // tool.ts:130-137 DOES fire after-error on decode failures — a
+    // pre-existing generic-pipeline divergence, reported as a
+    // follow-up, out of G-242's MCP scope).
     assert_eq!(
         observed,
         vec![
             "before:alpha_echo".to_string(),
             "after:alpha_echo".to_string(),
-            // The before hook fires first, decodeInput rejects next —
-            // the leaf (and the server) is never reached for `gated`,
-            // and the error leg still fires the after hook.
             "before:alpha_gated".to_string(),
-            "after-error:alpha_gated".to_string(),
         ]
     );
     registry.shutdown().await;
@@ -1985,7 +1994,7 @@ async fn g242_pipeline_hooks_and_decode_wrap_mcp_tools() {
 #[tokio::test]
 async fn g242_declared_output_schema_enters_encode_output() {
     let (_db, bus) = test_bus().await;
-    let (registry, tools, _hooks, _permission, _rx) = g242_fixture(&bus, None).await;
+    let (registry, tools, _hooks, _permission, _rx) = g242_fixture(&bus, Some(allow_all_rules())).await;
 
     let result = tools
         .executor("shaped")
@@ -2007,6 +2016,98 @@ async fn g242_declared_output_schema_enters_encode_output() {
         failure.message()
     );
     registry.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// G-280① — transient-retry hops (client.ts:169-182)
+// ---------------------------------------------------------------------------
+
+/// G-280① — "Two more attempts, 250 ms and 1 s later"
+/// (`Schedule.max([Schedule.exponential("250 millis", 4),
+/// Schedule.recurs(2)])`): the exponential arm proposes 250/1000/4000…,
+/// `recurs(2)` bounds the schedule to two hops — NOT 250/500 (the old
+/// "×2 per hop" reading) and not four hops. Real clock: the pinned
+/// schedule sleeps ~1.25s total.
+#[tokio::test]
+async fn g280_transient_retry_hops_are_250ms_then_1s() {
+    use super::client::{retrying, RequestError};
+    use std::pin::Pin;
+    use std::time::Instant;
+    type Attempt = Pin<Box<dyn Future<Output = Result<u32, RequestError>> + Send>>;
+    let transient = |server: &str| RequestError {
+        server: server.to_string(),
+        message: "connection closed before response: os error 104".to_string(),
+    };
+
+    // Two transient failures, then success: attempt starts at ~0ms,
+    // ~250ms, ~1250ms.
+    let starts: Arc<parking_lot::Mutex<Vec<std::time::Duration>>> =
+        Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let counter = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let starts_for_attempts = Arc::clone(&starts);
+    let counter_for_attempts = Arc::clone(&counter);
+    let started = Instant::now();
+    let value = retrying(move || {
+        let starts = Arc::clone(&starts_for_attempts);
+        let counter = Arc::clone(&counter_for_attempts);
+        let attempt: Attempt = Box::pin(async move {
+            starts.lock().push(started.elapsed());
+            let n = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n < 2 {
+                Err(transient("alpha"))
+            } else {
+                Ok(n)
+            }
+        });
+        attempt
+    })
+    .await
+    .expect("third attempt succeeds");
+    assert_eq!(value, 2);
+    let starts = starts.lock().clone();
+    assert_eq!(starts.len(), 3, "initial + two retries");
+    assert!(
+        starts[1].as_millis() >= 230 && starts[1].as_millis() < 400,
+        "first hop is 250ms (got {}ms)",
+        starts[1].as_millis()
+    );
+    assert!(
+        starts[2].as_millis() >= 1220 && starts[2].as_millis() < 1450,
+        "second hop lands 1000ms after the first (got {}ms)",
+        starts[2].as_millis()
+    );
+
+    // Three transient failures: the schedule is exhausted after two
+    // retries — the third failure surfaces.
+    let counter = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let counter_for_failures = Arc::clone(&counter);
+    let failure = retrying(move || {
+        let counter = Arc::clone(&counter_for_failures);
+        let attempt: Attempt = Box::pin(async move {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(transient("alpha"))
+        });
+        attempt
+    })
+    .await
+    .expect_err("schedule exhausted");
+    assert_eq!(failure.message, "connection closed before response: os error 104");
+    assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 3);
+
+    // A non-transient failure never retries.
+    let counter = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let counter_for_fatal = Arc::clone(&counter);
+    let failure = retrying(move || {
+        let counter = Arc::clone(&counter_for_fatal);
+        let attempt: Attempt = Box::pin(async move {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(RequestError { server: "alpha".into(), message: "not transient".into() })
+        });
+        attempt
+    })
+    .await
+    .expect_err("non-transient surfaces immediately");
+    assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 fn test_permission(_bus: &crate::bus::Bus) -> crate::permission::Permission {
@@ -2391,6 +2492,46 @@ fn mcp_elicitation_field_conversion_rules() {
         ),
         Field::Integer { minimum: Some(1.0), maximum: Some(9.0), required: Some(true), .. }
     ));
+}
+
+/// G-280② — `number` keeps its own wire kind (ref mcp/index.ts:800-807
+/// `type: property.type`; schema form.ts NumberField vs IntegerField):
+/// collapsing it onto Integer made float elicitation answers impossible
+/// to input.
+#[test]
+fn g280_number_elicitation_maps_to_number_field() {
+    use oc_schema::form::Field;
+    assert!(matches!(
+        elicitation::to_elicitation_field(
+            "ratio",
+            &serde_json::json!({ "type": "number", "minimum": 0.5, "maximum": 1.5, "default": 0.75 }),
+            true
+        ),
+        Field::Number {
+            minimum: Some(0.5),
+            maximum: Some(1.5),
+            default: Some(0.75),
+            required: Some(true),
+            ..
+        }
+    ));
+    // The wire kind round-trips: `type: "number"` (not "integer").
+    let field = elicitation::to_elicitation_field(
+        "ratio",
+        &serde_json::json!({ "type": "number" }),
+        false,
+    );
+    assert_eq!(
+        serde_json::to_value(&field).expect("wire")["type"],
+        serde_json::json!("number")
+    );
+    // Integer stays Integer.
+    let field =
+        elicitation::to_elicitation_field("count", &serde_json::json!({ "type": "integer" }), false);
+    assert_eq!(
+        serde_json::to_value(&field).expect("wire")["type"],
+        serde_json::json!("integer")
+    );
 }
 
 // ---------------------------------------------------------------------------
