@@ -30,6 +30,32 @@ async fn env_guard() -> tokio::sync::MutexGuard<'static, ()> {
     ENV_TEST_LOCK.lock().await
 }
 
+/// G-234② — the two gitlab tests pin loopback 8080 and nextest runs
+/// every test in its OWN process, so the in-process ENV_TEST_LOCK
+/// cannot serialize their fixed-port listeners. They contend through
+/// flock(2) instead (the lock auto-releases when a process dies).
+async fn gitlab_port_lock() -> std::fs::File {
+    use std::os::fd::AsRawFd as _;
+    let dir = std::path::Path::new("/tmp/opencode");
+    let _ = std::fs::create_dir_all(dir);
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .read(true)
+        .open(dir.join("gb10-gitlab-8080.lock"))
+        .expect("lock file");
+    loop {
+        #[allow(unsafe_code)] // contained flock(2) on the lock file above
+        let held =
+            unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
+        if held {
+            return file;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
 async fn host() -> Arc<IntegrationHost> {
     let (host, _bus) = host_with_bus().await;
     host
@@ -1115,6 +1141,7 @@ async fn gitlab_pkce_flow_round_trip_against_mock() {
     use base64::Engine;
     use sha2::{Digest, Sha256};
     let _env = env_guard().await;
+    let _port = gitlab_port_lock().await;
     // GitLab pins redirect port 8080 — a busy port is an environment
     // conflict (v2 fails identically), documented-skip.
     if tokio::net::TcpListener::bind(("127.0.0.1", 8080)).await.is_err() {
@@ -1150,12 +1177,16 @@ async fn gitlab_pkce_flow_round_trip_against_mock() {
     assert!(attempt.url.contains("code_challenge_method=S256"), "{}", attempt.url);
     let state = parse_query_param(&attempt.url, "state").expect("state");
 
-    // Act as the browser: hit the fixed loopback redirect.
+    // Act as the browser: hit the fixed loopback redirect. G-234② — the
+    // response is HELD until the exchange settles (the 200 answers with
+    // the branded success card afterwards).
     let callback =
         reqwest::get(format!("http://127.0.0.1:8080/callback?code=gl-code&state={state}"))
             .await
             .expect("callback");
     assert_eq!(callback.status(), 200);
+    let text = callback.text().await.expect("body");
+    assert!(text.contains("OpenCode is now connected to GitLab."), "{text}");
 
     let status = wait_complete(&host, "gitlab", &attempt, 400).await;
     assert!(matches!(status, AttemptStatus::Complete { .. }), "{status:?}");
@@ -1196,8 +1227,7 @@ async fn gitlab_pkce_flow_round_trip_against_mock() {
 }
 
 #[tokio::test]
-async fn gitlab_bundled_client_rejected_off_gitlab_com() {
-    let _env = env_guard().await;
+async fn gitlab_bundled_client_rejected_off_gitlab_com() {    let _env = env_guard().await;
     #[allow(unsafe_code)]
     unsafe {
         std::env::remove_var("GITLAB_OAUTH_CLIENT_ID");
@@ -1659,14 +1689,19 @@ async fn chatgpt_connector_round_trip_against_mock() {
     ));
 
     // Act as the browser: redirect with code + the registered client id.
-    let callback =
+    // G-234② — the response is HELD until the exchange settles, so the
+    // GET runs concurrently with the callback future.
+    let callback_get = tokio::spawn(async move {
         reqwest::get(format!("{redirect}?code=cg-code&state={state}&client_id=client_reg_1"))
             .await
-            .expect("callback");
-    assert_eq!(callback.status(), 200);
-
+            .expect("callback")
+    });
     let AuthMode::Auto(callback_future) = authorization.mode else { panic!("auto") };
     let value = callback_future.await.expect("callback value");
+    let callback = callback_get.await.expect("join");
+    assert_eq!(callback.status(), 200);
+    let text = callback.text().await.expect("body");
+    assert!(text.contains("OpenCode is now connected to ChatGPT."), "{text}");
     let CredentialValue::OAuth(oauth) = value else { panic!() };
     assert_eq!(oauth.access, "cg-access");
     assert_eq!(oauth.method_id, "chatgpt-token-sharing");
@@ -1727,10 +1762,14 @@ async fn chatgpt_reauthorization_reuses_saved_client() {
         }),
     ));
 
-    // The callback omits client_id — the saved client completes the flow.
-    let _ = reqwest::get(format!("{redirect}?code=cg-code&state={state}")).await;
+    // The callback omits client_id — the saved client completes the flow
+    // (G-234②: the redirect responds only after the exchange).
+    let callback_get =
+        tokio::spawn(async move { reqwest::get(format!("{redirect}?code=cg-code&state={state}")).await });
     let AuthMode::Auto(callback_future) = authorization.mode else { panic!("auto") };
     let value = callback_future.await.expect("callback value");
+    let response = callback_get.await.expect("join").expect("callback");
+    assert_eq!(response.status(), 200);
     let CredentialValue::OAuth(oauth) = value else { panic!() };
     assert_eq!(
         oauth.metadata.as_ref().expect("metadata")["clientID"],
@@ -1751,10 +1790,14 @@ async fn chatgpt_reauthorization_reuses_saved_client() {
     .expect("authorize 2");
     let state = parse_query_param(&authorization.url, "state").expect("state");
     let redirect = parse_query_param(&authorization.url, "redirect_uri").expect("redirect");
-    let _ = reqwest::get(format!("{redirect}?code=other&state={state}&client_id=someone_else")).await;
+    let callback_get = tokio::spawn(async move {
+        reqwest::get(format!("{redirect}?code=other&state={state}&client_id=someone_else")).await
+    });
     let AuthMode::Auto(callback_future) = authorization.mode else { panic!("auto 2") };
     let error = callback_future.await.expect_err("client mismatch");
     assert!(error.contains("returned a different client"), "{error}");
+    let response = callback_get.await.expect("join 2").expect("callback 2");
+    assert_eq!(response.status(), 400);
 }
 
 #[tokio::test]
@@ -1787,11 +1830,21 @@ async fn chatgpt_connector_rejects_missing_token_sharing_scope() {
             "expires_in": 3600
         }),
     ));
-    let _ =
-        reqwest::get(format!("{redirect}?code=cg-code&state={state}&client_id=client_reg_1")).await;
+    // G-234② — the held redirect answers the branded ERROR card (400)
+    // once the flow fails (the sharing-scope check).
+    let callback_get = tokio::spawn(async move {
+        reqwest::get(format!("{redirect}?code=cg-code&state={state}&client_id=client_reg_1"))
+            .await
+            .expect("callback")
+    });
     let AuthMode::Auto(callback_future) = authorization.mode else { panic!("auto") };
     let error = callback_future.await.expect_err("missing sharing scope");
     assert!(error.contains("without token sharing"), "{error}");
+    let callback = callback_get.await.expect("join");
+    assert_eq!(callback.status(), 400);
+    let text = callback.text().await.expect("body");
+    assert!(text.contains("OpenCode couldn't finish connecting to ChatGPT."), "{text}");
+    assert!(text.contains("without token sharing"), "{text}");
 }
 
 #[tokio::test]
@@ -1826,11 +1879,20 @@ async fn chatgpt_connector_rejects_nonce_mismatch() {
             "expires_in": 3600
         }),
     ));
-    let _ =
-        reqwest::get(format!("{redirect}?code=cg-code&state={state}&client_id=client_reg_1")).await;
+    // G-234② — deferred respond: the nonce-mismatch failure answers the
+    // branded error card.
+    let callback_get = tokio::spawn(async move {
+        reqwest::get(format!("{redirect}?code=cg-code&state={state}&client_id=client_reg_1"))
+            .await
+            .expect("callback")
+    });
     let AuthMode::Auto(callback_future) = authorization.mode else { panic!("auto") };
     let error = callback_future.await.expect_err("nonce mismatch");
     assert_eq!(error, "ChatGPT sign-in returned an invalid ID token.");
+    let callback = callback_get.await.expect("join");
+    assert_eq!(callback.status(), 400);
+    let text = callback.text().await.expect("body");
+    assert!(text.contains("invalid ID token"), "{text}");
 }
 
 // -- BE-3b: chatgpt ID-token JWKS verification (chatgpt.ts:439-459) --------------------------
@@ -3734,5 +3796,54 @@ async fn g260_azure_form_omitted_and_token_cached_when_configured() {
     unsafe {
         std::env::remove_var("AZURE_RESOURCE_NAME");
         std::env::set_var("PATH", old_path);
+    }
+}
+
+/// G-234② — the deferred branded page answers an OAuth error redirect
+/// with the shared ERROR card (400) immediately (gitlab.ts:196-203).
+#[tokio::test]
+async fn gitlab_callback_error_redirect_serves_branded_error_card() {
+    let _env = env_guard().await;
+    let _port = gitlab_port_lock().await;
+    if tokio::net::TcpListener::bind(("127.0.0.1", 8080)).await.is_err() {
+        eprintln!("skipping: port 8080 busy (gitlab pins it)");
+        return;
+    }
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::set_var("GITLAB_OAUTH_CLIENT_ID", "test-client-id");
+    }
+    let host = host().await;
+    let attempt = host
+        .oauth_connect("gitlab", "pkce", &answer(&[("instanceUrl", "https://gitlab.com")]), None)
+        .await
+        .expect("connect");
+    let state = parse_query_param(&attempt.url, "state").expect("state");
+    // The listener's accept task races the first GET (bind returns
+    // before accept starts) — retry briefly on connection refused.
+    let mut callback = None;
+    for _ in 0..50 {
+        match reqwest::get(format!(
+            "http://127.0.0.1:8080/callback?error=access_denied&error_description=User+denied&state={state}"
+        ))
+        .await
+        {
+            Ok(response) => {
+                callback = Some(response);
+                break;
+            }
+            Err(_) => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+        }
+    }
+    let callback = callback.expect("callback");
+    assert_eq!(callback.status(), 400);
+    let text = callback.text().await.expect("body");
+    assert!(text.contains("OpenCode couldn't finish connecting to GitLab."), "{text}");
+    assert!(text.contains("User+denied"), "{text}");
+    let status = wait_complete(&host, "gitlab", &attempt, 100).await;
+    assert!(matches!(status, AttemptStatus::Failed { .. }), "{status:?}");
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::remove_var("GITLAB_OAUTH_CLIENT_ID");
     }
 }

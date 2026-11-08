@@ -256,11 +256,13 @@ async fn gitlab_authorize(answer: FormAnswer) -> Result<Authorization, String> {
     let Pkce { verifier, challenge } = gitlab_pkce();
     let state = flows::random_state(32);
     // Fixed port: GitLab matches redirect_uri exactly (gitlab.ts:468-486).
+    // G-234② — the shared branded page with DEFERRED success respond
+    // (gitlab.ts:230-258: the redirect answers only after the exchange).
     let listener = flows::listen_loopback(LoopbackOptions {
         port: GITLAB_CALLBACK_PORT,
         host: "127.0.0.1".into(),
         callback_path: "/callback",
-        page: CallbackPage::Html(flows::success_page("GitLab")),
+        page: CallbackPage::BrandedDeferred { provider: "GitLab".to_owned() },
     })
     .await
     .map_err(|_| {
@@ -281,22 +283,37 @@ async fn gitlab_authorize(answer: FormAnswer) -> Result<Authorization, String> {
         ])
     );
     let callback: BoxFuture<'static, Result<CredentialValue, String>> = Box::pin(async move {
-        let params = listener.wait().await?;
-        callback_error(&params, &state)?;
-        let code = params.get("code").cloned().unwrap_or_default();
-        let tokens = gitlab_exchange(
-            &instance,
-            &client_id,
-            vec![
-                ("grant_type", "authorization_code".to_owned()),
-                ("code", code),
-                ("redirect_uri", GITLAB_REDIRECT.to_owned()),
-                ("code_verifier", verifier),
-            ],
-            true,
-        )
-        .await?;
-        Ok(CredentialValue::OAuth(tokens))
+        let (params, connection) = listener.wait_with_connection().await?;
+        // G-234② — every failure answers the held connection with the
+        // branded error card (gitlab.ts:239-246 respond).
+        let outcome: Result<CredentialValue, String> = async {
+            callback_error(&params, &state)?;
+            let code = params.get("code").cloned().unwrap_or_default();
+            gitlab_exchange(
+                &instance,
+                &client_id,
+                vec![
+                    ("grant_type", "authorization_code".to_owned()),
+                    ("code", code),
+                    ("redirect_uri", GITLAB_REDIRECT.to_owned()),
+                    ("code_verifier", verifier),
+                ],
+                true,
+            )
+            .await
+            .map(CredentialValue::OAuth)
+        }
+        .await;
+        match outcome {
+            Ok(value) => {
+                connection.success().await;
+                Ok(value)
+            }
+            Err(error) => {
+                connection.error(&error).await;
+                Err(error)
+            }
+        }
     });
     Ok(Authorization {
         url,
@@ -846,11 +863,13 @@ async fn snowflake_authorize(answer: FormAnswer) -> Result<Authorization, String
         answer.get("role").and_then(Value::as_str).map(str::trim).unwrap_or_default().to_owned();
     let pkce = flows::pkce_s256_with_bytes(48);
     let state = flows::random_state(32);
+    // G-234② — the shared branded page (snowflake.ts:148-156 answers
+    // the error card / success page at redirect time).
     let listener = flows::listen_loopback(LoopbackOptions {
         port: 0,
         host: "127.0.0.1".into(),
         callback_path: "/",
-        page: CallbackPage::Html(flows::success_page("Snowflake")),
+        page: CallbackPage::Branded { provider: "Snowflake".to_owned() },
     })
     .await
     .map_err(|error| format!("failed to bind loopback listener: {error}"))?;
@@ -1048,7 +1067,8 @@ async fn openai_browser_authorize(_answer: FormAnswer) -> Result<Authorization, 
     let Pkce { verifier, challenge } = openai_pkce();
     let state = flows::random_state(32);
     // Pinned 1455 with fallback 1457 + cancel-probe retries
-    // (openai.ts:119-153).
+    // (openai.ts:119-153). G-234② — the shared branded page
+    // (openai.ts:78-93 answers at redirect time).
     let listener = flows::listen_pinned(
         OPENAI_BROWSER_PORT,
         Some(OPENAI_BROWSER_FALLBACK_PORT),
@@ -1056,7 +1076,7 @@ async fn openai_browser_authorize(_answer: FormAnswer) -> Result<Authorization, 
             port,
             host: "localhost".into(),
             callback_path: "/auth/callback",
-            page: CallbackPage::Html(flows::success_page("ChatGPT")),
+            page: CallbackPage::Branded { provider: "ChatGPT".to_owned() },
         },
         10,
         Duration::from_millis(200),
@@ -1367,11 +1387,14 @@ pub(super) async fn chatgpt_authorize_at(
     let Pkce { verifier, challenge } = openai_pkce();
     let state = flows::random_state(32);
     let nonce = flows::random_state(32);
+    // G-234② — the shared branded page with DEFERRED success respond
+    // (chatgpt.ts:110-171: the redirect answers only after the exchange
+    // and the ID-token verification settle).
     let listener = flows::listen_loopback(LoopbackOptions {
         port: 0,
         host: "127.0.0.1".into(),
         callback_path: "/auth/callback",
-        page: CallbackPage::Html(flows::success_page("ChatGPT")),
+        page: CallbackPage::BrandedDeferred { provider: "ChatGPT".to_owned() },
     })
     .await
     .map_err(|error| format!("failed to bind loopback listener: {error}"))?;
@@ -1404,62 +1427,78 @@ pub(super) async fn chatgpt_authorize_at(
     let url = format!("https://auth.openai.com/api/accounts/authorize?{}", query(&params));
     let saved_client_id = saved_client_id.map(str::to_owned);
     let callback: BoxFuture<'static, Result<CredentialValue, String>> = Box::pin(async move {
-        let params = listener.wait().await?;
-        callback_error(&params, &state)?;
-        // First-time sign-in: the callback carries the registered client's
-        // id (chatgpt.ts:126-131,164-171). G-260② — a saved client wins;
-        // a DIFFERENT returned client rejects the reauthorization.
-        let returned = params.get("client_id").cloned();
-        if let (Some(saved), Some(returned_id)) = (saved_client_id.as_deref(), returned.as_deref())
-        {
-            if saved != returned_id {
+        let (params, connection) = listener.wait_with_connection().await?;
+        // G-234② — every failure answers the held connection with the
+        // branded error card (chatgpt.ts:150-171 respond/tapError).
+        let outcome: Result<CredentialValue, String> = async {
+            callback_error(&params, &state)?;
+            // First-time sign-in: the callback carries the registered client's
+            // id (chatgpt.ts:126-131,164-171). G-260② — a saved client wins;
+            // a DIFFERENT returned client rejects the reauthorization.
+            let returned = params.get("client_id").cloned();
+            if let (Some(saved), Some(returned_id)) =
+                (saved_client_id.as_deref(), returned.as_deref())
+            {
+                if saved != returned_id {
+                    return Err(
+                        "ChatGPT returned a different client than this connection. Connect again."
+                            .into(),
+                    );
+                }
+            }
+            let client_id = saved_client_id
+                .clone()
+                .or(returned)
+                .ok_or("ChatGPT sign-in did not return a client ID. Connect again.")?;
+            let code = params.get("code").cloned().unwrap_or_default();
+            let (access, refresh, id_token, scope, expires_in) = chatgpt_exchange_at(
+                &token_url,
+                vec![
+                    ("grant_type", "authorization_code".to_owned()),
+                    ("client_id", client_id.clone()),
+                    ("code", code),
+                    ("code_verifier", verifier),
+                    ("redirect_uri", redirect),
+                    ("resource", CHATGPT_RESOURCE.to_owned()),
+                ],
+            )
+            .await?;
+            if !scope.split(' ').any(|part| part == CHATGPT_SHARING_SCOPE) {
                 return Err(
-                    "ChatGPT returned a different client than this connection. Connect again."
-                        .into(),
+                    "ChatGPT sign-in finished without token sharing. Sign in again and allow token sharing, or connect OpenAI with an API key.".into(),
                 );
             }
+            if id_token.is_empty() {
+                return Err("ChatGPT sign-in did not return an ID token.".into());
+            }
+            verify_id_token(&id_token, &client_id, &nonce, &jwks_url).await?;
+            let scopes: Vec<Value> = scope
+                .split(' ')
+                .filter(|part| !part.is_empty())
+                .map(|part| Value::String(part.to_owned()))
+                .collect();
+            Ok(CredentialValue::OAuth(OAuthValue {
+                method_id: "chatgpt-token-sharing".into(),
+                access,
+                refresh,
+                expires: now_ms() + (expires_in * 1000.0) as i64,
+                metadata: Some(BTreeMap::from([
+                    ("clientID".to_owned(), Value::String(client_id)),
+                    ("scopes".to_owned(), Value::Array(scopes)),
+                ])),
+            }))
         }
-        let client_id = saved_client_id
-            .clone()
-            .or(returned)
-            .ok_or("ChatGPT sign-in did not return a client ID. Connect again.")?;
-        let code = params.get("code").cloned().unwrap_or_default();
-        let (access, refresh, id_token, scope, expires_in) = chatgpt_exchange_at(
-            &token_url,
-            vec![
-                ("grant_type", "authorization_code".to_owned()),
-                ("client_id", client_id.clone()),
-                ("code", code),
-                ("code_verifier", verifier),
-                ("redirect_uri", redirect),
-                ("resource", CHATGPT_RESOURCE.to_owned()),
-            ],
-        )
-        .await?;
-        if !scope.split(' ').any(|part| part == CHATGPT_SHARING_SCOPE) {
-            return Err(
-                "ChatGPT sign-in finished without token sharing. Sign in again and allow token sharing, or connect OpenAI with an API key.".into(),
-            );
+        .await;
+        match outcome {
+            Ok(value) => {
+                connection.success().await;
+                Ok(value)
+            }
+            Err(error) => {
+                connection.error(&error).await;
+                Err(error)
+            }
         }
-        if id_token.is_empty() {
-            return Err("ChatGPT sign-in did not return an ID token.".into());
-        }
-        verify_id_token(&id_token, &client_id, &nonce, &jwks_url).await?;
-        let scopes: Vec<Value> = scope
-            .split(' ')
-            .filter(|part| !part.is_empty())
-            .map(|part| Value::String(part.to_owned()))
-            .collect();
-        Ok(CredentialValue::OAuth(OAuthValue {
-            method_id: "chatgpt-token-sharing".into(),
-            access,
-            refresh,
-            expires: now_ms() + (expires_in * 1000.0) as i64,
-            metadata: Some(BTreeMap::from([
-                ("clientID".to_owned(), Value::String(client_id)),
-                ("scopes".to_owned(), Value::Array(scopes)),
-            ])),
-        }))
     });
     Ok(Authorization {
         url,

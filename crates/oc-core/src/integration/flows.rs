@@ -143,8 +143,16 @@ pub enum CallbackPage {
     /// oauth page module (`OauthCallbackPage.success`/`.error`,
     /// oauth/page.ts:21-49): an OAuth error redirect (or a missing
     /// code) answers 400 with the error card instead of the success
-    /// page.
+    /// page. Both responses answer at redirect time (snowflake.ts:148-
+    /// 156, openai.ts:78-93).
     Branded { provider: String },
+    /// G-234② — the branded pair whose SUCCESS response is deferred: the
+    /// redirect carries the branded error card immediately on failure,
+    /// but a successful redirect is only answered once the token
+    /// exchange settles (gitlab.ts:230-258, chatgpt.ts:110-171 — the
+    /// held response ends with the success page or the error card for
+    /// the exchange's own failure).
+    BrandedDeferred { provider: String },
     /// The bootstrap page: javascript reads `location.hash`/`location.search`
     /// and POSTs it as JSON to `token_path` (implicit flow — digitalocean.ts:66-69).
     Bootstrap { token_path: String, provider: String },
@@ -173,16 +181,66 @@ impl Default for LoopbackOptions {
 }
 
 /// A running loopback listener: resolves the first callback parameters
-/// (query string for redirects, JSON body for the bootstrap POST-back).
+/// (query string for redirects, JSON body for the bootstrap POST-back)
+/// plus, for deferred pages, the held callback connection.
 pub struct LoopbackListener {
     pub port: u16,
-    hit: tokio::sync::oneshot::Receiver<BTreeMap<String, String>>,
+    hit: tokio::sync::oneshot::Receiver<CallbackHit>,
+}
+
+/// One resolved callback: the parameters and, for G-234② deferred
+/// pages, the still-open connection the flow answers after the
+/// exchange.
+struct CallbackHit {
+    params: BTreeMap<String, String>,
+    connection: Option<CallbackConnection>,
+}
+
+/// G-234② — the held redirect connection of a deferred branded page
+/// (gitlab.ts:230-258, chatgpt.ts:150-171): the flow answers it with
+/// the branded success card once the exchange completes, or the error
+/// card for its failure. Dropping it unanswered closes the stream (the
+/// ref's `onInterrupt` destroys the response).
+pub struct CallbackConnection {
+    stream: tokio::net::TcpStream,
+    provider: String,
+}
+
+impl CallbackConnection {
+    /// Answers with the branded success card (200).
+    pub async fn success(self) {
+        let mut stream = self.stream;
+        let html = crate::mcp::oauth_page::success(Some(&self.provider));
+        write_simple_response(&mut stream, "200 OK", "text/html", html.as_bytes()).await;
+    }
+
+    /// Answers with the branded error card (400).
+    pub async fn error(self, detail: &str) {
+        let mut stream = self.stream;
+        let html = crate::mcp::oauth_page::error(detail, Some(&self.provider));
+        write_simple_response(&mut stream, "400 Bad Request", "text/html", html.as_bytes()).await;
+    }
 }
 
 impl LoopbackListener {
     /// Waits for the callback and returns its parameters.
     pub async fn wait(self) -> Result<BTreeMap<String, String>, String> {
-        self.hit.await.map_err(|_| "callback listener closed".to_owned())
+        self.hit.await.map_err(|_| "callback listener closed".to_owned()).map(|hit| hit.params)
+    }
+
+    /// G-234② — waits for the callback and returns its parameters plus
+    /// the held connection (deferred branded pages only; immediate
+    /// pages answer in the listener and carry no connection).
+    pub async fn wait_with_connection(
+        self,
+    ) -> Result<(BTreeMap<String, String>, CallbackConnection), String> {
+        match self.hit.await {
+            Ok(hit) => hit
+                .connection
+                .map(|connection| (hit.params, connection))
+                .ok_or_else(|| "callback already answered".to_owned()),
+            Err(_) => Err("callback listener closed".into()),
+        }
     }
 }
 
@@ -250,19 +308,20 @@ fn success_page_handrolled(provider: &str) -> String {
 pub async fn listen_loopback(options: LoopbackOptions) -> std::io::Result<LoopbackListener> {
     let listener = tokio::net::TcpListener::bind((options.host.as_str(), options.port)).await?;
     let port = listener.local_addr()?.port();
-    let (tx, rx) = tokio::sync::oneshot::channel::<BTreeMap<String, String>>();
+    let (tx, rx) = tokio::sync::oneshot::channel::<CallbackHit>();
     let callback_path = options.callback_path;
     let page = options.page;
     tokio::spawn(async move {
         let mut tx = Some(tx);
         loop {
-            let Ok((mut stream, _)) = listener.accept().await else { break };
+            let Ok((stream, _)) = listener.accept().await else { break };
             let tx = tx.take();
             let page = page.clone();
             tokio::spawn(async move {
-                let resolved = serve_callback_connection(&mut stream, callback_path, &page).await;
-                if let (Some(tx), Some(params)) = (tx, resolved) {
-                    let _ = tx.send(params);
+                let resolved =
+                    serve_callback_connection(stream, callback_path, &page).await;
+                if let (Some(tx), Some(hit)) = (tx, resolved) {
+                    let _ = tx.send(hit);
                 }
             });
         }
@@ -271,12 +330,13 @@ pub async fn listen_loopback(options: LoopbackOptions) -> std::io::Result<Loopba
 }
 
 /// Serves exactly one HTTP exchange on `stream`; returns the resolved
-/// callback parameters when the exchange carried them.
+/// callback (parameters +, for deferred pages, the held connection)
+/// when the exchange carried them.
 async fn serve_callback_connection(
-    stream: &mut tokio::net::TcpStream,
+    mut stream: tokio::net::TcpStream,
     callback_path: &str,
     page: &CallbackPage,
-) -> Option<BTreeMap<String, String>> {
+) -> Option<CallbackHit> {
     use tokio::io::AsyncReadExt;
     let mut buffer = Vec::with_capacity(2048);
     let mut chunk = [0u8; 2048];
@@ -320,34 +380,53 @@ async fn serve_callback_connection(
     let query_params = parse_query(query);
     let token_path = match page {
         CallbackPage::Bootstrap { token_path, .. } => Some(token_path.as_str()),
-        CallbackPage::Html(_) | CallbackPage::Branded { .. } => None,
+        CallbackPage::Html(_) | CallbackPage::Branded { .. } | CallbackPage::BrandedDeferred { .. } => {
+            None
+        }
     };
     if method == "GET" && path == callback_path {
         // G-234② — an OAuth failure redirect renders the branded ERROR
         // card (400) instead of the success page; the parameters still
         // resolve so the flow fails its validation exactly like before
         // (ref poe.ts:57-64 `callbackError` → `OauthCallbackPage.error`).
-        if let CallbackPage::Branded { provider } = page {
+        let branded_provider = match page {
+            CallbackPage::Branded { provider } | CallbackPage::BrandedDeferred { provider } => {
+                Some(provider.clone())
+            }
+            CallbackPage::Html(_) | CallbackPage::Bootstrap { .. } => None,
+        };
+        if let Some(provider) = branded_provider {
             if let Some(detail) = callback_error_detail(&query_params) {
-                let html = crate::mcp::oauth_page::error(&detail, Some(provider));
-                write_simple_response(stream, "400 Bad Request", "text/html", html.as_bytes())
+                let html = crate::mcp::oauth_page::error(&detail, Some(&provider));
+                write_simple_response(&mut stream, "400 Bad Request", "text/html", html.as_bytes())
                     .await;
-                return Some(query_params);
+                return Some(CallbackHit { params: query_params, connection: None });
             }
         }
-        let html = match page {
-            CallbackPage::Html(html) => html.clone(),
-            CallbackPage::Branded { provider } => crate::mcp::oauth_page::success(Some(&provider)),
-            CallbackPage::Bootstrap { token_path, provider } => bootstrap_page(token_path, provider),
-        };
-        write_simple_response(stream, "200 OK", "text/html", html.as_bytes()).await;
-        if let Some(_token_path) = token_path {
-            // The bootstrap page will POST the token next; only the POST resolves.
-            return None;
+        match page {
+            CallbackPage::Html(html) => {
+                write_simple_response(&mut stream, "200 OK", "text/html", html.as_bytes()).await;
+                Some(CallbackHit { params: query_params, connection: None })
+            }
+            CallbackPage::Branded { provider } => {
+                let html = crate::mcp::oauth_page::success(Some(provider));
+                write_simple_response(&mut stream, "200 OK", "text/html", html.as_bytes()).await;
+                Some(CallbackHit { params: query_params, connection: None })
+            }
+            // G-234② — the held connection: the flow answers after the
+            // exchange (gitlab.ts:230-258, chatgpt.ts:150-171).
+            CallbackPage::BrandedDeferred { provider } => Some(CallbackHit {
+                params: query_params,
+                connection: Some(CallbackConnection { stream, provider: provider.clone() }),
+            }),
+            CallbackPage::Bootstrap { token_path, provider } => {
+                let html = bootstrap_page(token_path, provider);
+                write_simple_response(&mut stream, "200 OK", "text/html", html.as_bytes()).await;
+                // The bootstrap page will POST the token next; only the POST resolves.
+                None
+            }
         }
-        return Some(query_params);
-    }
-    if method == "POST" && token_path.is_some_and(|token_path| path == token_path) {
+    } else if method == "POST" && token_path.is_some_and(|token_path| path == token_path) {
         let body = serde_json::from_slice::<serde_json::Value>(&body_bytes)
             .unwrap_or(serde_json::Value::Null);
         let mut params = BTreeMap::new();
@@ -358,11 +437,12 @@ async fn serve_callback_connection(
                 }
             }
         }
-        write_simple_response(stream, "200 OK", "application/json", br#"{"ok":true}"#).await;
-        return Some(params);
+        write_simple_response(&mut stream, "200 OK", "application/json", br#"{"ok":true}"#).await;
+        Some(CallbackHit { params, connection: None })
+    } else {
+        write_simple_response(&mut stream, "404 Not Found", "text/plain", b"Not found").await;
+        None
     }
-    write_simple_response(stream, "404 Not Found", "text/plain", b"Not found").await;
-    None
 }
 
 /// The OAuth error detail on a failed redirect (ref `callbackError`
