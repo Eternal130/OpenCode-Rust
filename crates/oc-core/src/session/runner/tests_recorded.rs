@@ -484,13 +484,7 @@ async fn g279_drain_observes_shutdown_before_promoting() {
     let (_signal, shutdown) = tokio::sync::watch::channel(true);
     let failure = harness
         .runner
-        .drain(
-            harness.session_id().as_str(),
-            true,
-            None,
-            Promotable::Input,
-            shutdown,
-        )
+        .drain(harness.session_id().as_str(), true, None, Promotable::Input, shutdown)
         .await
         .expect_err("shutdown must interrupt");
     assert!(matches!(failure, RunFailure::Interrupted), "{failure}");

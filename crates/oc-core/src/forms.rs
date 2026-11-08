@@ -186,7 +186,8 @@ impl Forms {
         // G-276① — ref form.ts:145-146: a failed `form.created` publish
         // INVALIDATES the cache entry (onError rollback) — never a
         // registered form nobody heard about.
-        if let Err(error) = self.publish("form.created", serde_json::json!({ "form": form })).await {
+        if let Err(error) = self.publish("form.created", serde_json::json!({ "form": form })).await
+        {
             self.inner.forms.lock().remove(&id);
             return Err(error);
         }
@@ -1252,14 +1253,13 @@ mod g276_tests {
             },
         );
         // The guard must outlive the publishes (dropping detaches).
-        let guard =
-            bus.listen(Arc::new(move |event| {
-                if event.type_ == fail_on {
-                    Err(crate::bus::ListenerError("boom".to_owned()))
-                } else {
-                    Ok(())
-                }
-            }));
+        let guard = bus.listen(Arc::new(move |event| {
+            if event.type_ == fail_on {
+                Err(crate::bus::ListenerError("boom".to_owned()))
+            } else {
+                Ok(())
+            }
+        }));
         (bus, guard)
     }
 

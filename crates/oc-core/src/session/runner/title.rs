@@ -447,7 +447,7 @@ mod tests {
             published: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         drop(guard); // cancellation: the spawned publish runs on the runtime
-        // Let the spawned task run, then collect the aggregate's log.
+                     // Let the spawned task run, then collect the aggregate's log.
         let mut collected: Vec<(String, serde_json::Value)> = Vec::new();
         for _ in 0..50 {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -456,10 +456,8 @@ mod tests {
                 break;
             }
         }
-        let usage_events: Vec<_> = collected
-            .iter()
-            .filter(|(type_, _)| type_ == "session.usage.recorded")
-            .collect();
+        let usage_events: Vec<_> =
+            collected.iter().filter(|(type_, _)| type_ == "session.usage.recorded").collect();
         assert_eq!(usage_events.len(), 1, "exactly one usage publish on drop: {collected:?}");
         assert_eq!(usage_events[0].1["sessionID"], "ses_g279");
         assert_eq!(usage_events[0].1["source"], "title");

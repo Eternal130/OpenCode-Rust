@@ -541,10 +541,7 @@ async fn g275_step_started_carries_snapshot() {
     publisher.start_snapshot_for_test(oc_schema::id::SnapshotId::parse(
         "0123456789abcdef0123456789abcdef01234567",
     ));
-    publisher
-        .publish(&LLMEvent::StepStart { index: 0.0 })
-        .await
-        .unwrap();
+    publisher.publish(&LLMEvent::StepStart { index: 0.0 }).await.unwrap();
     let events = harness.durable_events().await;
     let started = events.iter().find(|(type_, _, _)| type_ == "session.step.started").unwrap();
     assert_eq!(
@@ -567,7 +564,9 @@ async fn g275_step_started_omits_snapshot_when_none() {
     assert!(started.2.get("snapshot").is_none(), "no snapshot key when disabled");
 }
 
-fn metadata(pairs: &[(&str, serde_json::Value)]) -> Option<oc_ai::schema::options::ProviderMetadata> {
+fn metadata(
+    pairs: &[(&str, serde_json::Value)],
+) -> Option<oc_ai::schema::options::ProviderMetadata> {
     let mut outer = oc_ai::schema::options::ProviderMetadata::new();
     let inner = pairs
         .iter()

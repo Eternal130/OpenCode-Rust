@@ -114,10 +114,7 @@ async fn list(
         })
     });
 
-    let data: Vec<Value> = rows
-        .iter()
-        .map(message_row_to_info)
-        .collect::<Result<Vec<_>, _>>()?;
+    let data: Vec<Value> = rows.iter().map(message_row_to_info).collect::<Result<Vec<_>, _>>()?;
     // Empty page: v2 emits explicit nulls (same runtime-probed contract as
     // the session list cursor — see session.rs list handler, 2026-10-19).
     let mut cursor_json = serde_json::Map::new();

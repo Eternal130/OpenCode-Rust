@@ -537,7 +537,9 @@ pub fn session_row_to_info(row: &oc_core::database::schema::SessionRow) -> Resul
     if let Some(model) = decode_json_column("model", row.model.as_deref(), &row.id)? {
         set(map, "model", model);
     }
-    if let Some(permissions) = decode_json_column("permissions", row.permission.as_deref(), &row.id)? {
+    if let Some(permissions) =
+        decode_json_column("permissions", row.permission.as_deref(), &row.id)?
+    {
         set(map, "permissions", permissions);
     }
     if let Some(revert) = decode_json_column("revert", row.revert.as_deref(), &row.id)? {

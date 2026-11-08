@@ -95,8 +95,9 @@ use oc_schema::session_support::FileDiff;
 /// Entries evict when the last holder releases (`Arc::strong_count ==
 /// 1`: only the map itself holds the lock), so the table cannot leak
 /// one entry per visited repository.
-static REPOSITORY_LOCKS: std::sync::LazyLock<DashMap<PathBuf, std::sync::Arc<tokio::sync::Mutex<()>>>> =
-    std::sync::LazyLock::new(DashMap::new);
+static REPOSITORY_LOCKS: std::sync::LazyLock<
+    DashMap<PathBuf, std::sync::Arc<tokio::sync::Mutex<()>>>,
+> = std::sync::LazyLock::new(DashMap::new);
 
 /// G-255 test seam: the concurrency high-water mark observed under the
 /// repository lock (tests assert serialization: max stays 1).
@@ -406,7 +407,8 @@ impl GitSnapshotStore {
         // cloned Arc pins the entry; a task between clone and lock
         // keeps the count > 1, so a fresh inserter can never fork the
         // lock behind a live holder).
-        REPOSITORY_LOCKS.remove_if(&self.git_directory, |_, held| std::sync::Arc::strong_count(held) == 1);
+        REPOSITORY_LOCKS
+            .remove_if(&self.git_directory, |_, held| std::sync::Arc::strong_count(held) == 1);
         result
     }
 
@@ -731,8 +733,8 @@ impl GitSnapshotStore {
             // G-198 — binary detection (ref's numstat "-"): a binary
             // blob on either side yields `{additions: 0, deletions: 0,
             // patch: ""}` (git.ts:560-573), never a garbage text diff.
-            let binary = blob_is_binary(&repo, &from_tree, &path)
-                || blob_is_binary(&repo, &to_tree, &path);
+            let binary =
+                blob_is_binary(&repo, &from_tree, &path) || blob_is_binary(&repo, &to_tree, &path);
             if binary {
                 diffs.push(FileDiff {
                     file: path,
@@ -994,8 +996,10 @@ impl SnapshotService for GitSnapshotStore {
         // G-255 — ref `locked()` wraps the read-side tree ops too.
         let (from, to) = (from.clone(), to.clone());
         let paths = paths.map(|paths| paths.to_vec());
-        self.with_repository_lock(async move { self.diff_blocking(&from, &to, context, paths.as_deref()) })
-            .await
+        self.with_repository_lock(async move {
+            self.diff_blocking(&from, &to, context, paths.as_deref())
+        })
+        .await
     }
 
     async fn restore(&self, files: &BTreeMap<String, SnapshotId>) -> Result<(), SnapshotError> {
