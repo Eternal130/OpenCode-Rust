@@ -603,3 +603,98 @@ async fn events_deadline_fails_with_timeout_reason() {
     );
     assert!(error.message().contains("tr1"), "message names the generation: {}", error.message());
 }
+
+/// G-246: queued protocols whose outputs expire with the poll materialize
+/// their results through the route executor. BFL's `sample` URL is signed
+/// for ten minutes after the result is ready (bfl-images.ts:190-193), so
+/// `result()` downloads it immediately — a plain GET with no route auth —
+/// and the response hands back an owned-bytes asset whose serialized form
+/// carries neither the URL nor any credentials.
+#[tokio::test]
+async fn bfl_result_materializes_the_expiring_sample() {
+    let transport = Arc::new(MockTransport::from_interactions(vec![
+        post(
+            "https://api.bfl.ai/v1/flux-pro-1.1",
+            200,
+            r#"{"id":"t1","polling_url":"https://api.bfl.ai/v1/get_result?id=t1","cost":1.0}"#,
+        ),
+        get(
+            "https://api.bfl.ai/v1/get_result?id=t1",
+            200,
+            r#"{"id":"t1","status":"Ready","cost":2.5,"result":{"sample":"https://delivery.bfl.ai/v1/result/sample","seed":9}}"#,
+        ),
+        get("https://delivery.bfl.ai/v1/result/sample", 200, "owned-bytes"),
+    ]));
+    let route = QueuedMediaRoute::new(
+        Arc::new(oc_ai::media::image::bfl::BlackForestLabsImages),
+        spec(&transport),
+    );
+
+    let request = ImageRequest {
+        model: "flux-pro-1.1".into(),
+        prompt: "a red panda".into(),
+        ..Default::default()
+    };
+    let generation = route.start(&request).await.expect("start submits");
+    let response = generation.result().await.expect("result materializes");
+    assert_eq!(response.images.len(), 1);
+    let oc_ai::schema::media::Source::Bytes { data, .. } = &response.images[0].source else {
+        panic!("sample materialized into owned bytes");
+    };
+    assert_eq!(data.0, b"owned-bytes".to_vec());
+    // text body sniffs no magic bytes → octet-stream
+    assert_eq!(response.images[0].media_type, "application/octet-stream");
+    assert_eq!(response.provider_metadata.as_ref().unwrap()["bfl"]["seed"], json!(9));
+    // the serialized response carries neither the URL nor credentials
+    let serialized = serde_json::to_value(&response).unwrap();
+    assert!(!serialized.to_string().contains("delivery.bfl.ai"), "leaked: {serialized}");
+    assert!(!serialized.to_string().contains("headers"), "leaked: {serialized}");
+
+    // Wire assertions: submit + result read + the signed-URL download.
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 3, "submit + result + download");
+    let download = &requests[2];
+    assert_eq!(download.method, "GET");
+    assert_eq!(download.url, "https://delivery.bfl.ai/v1/result/sample");
+    assert_eq!(
+        download.header("authorization"),
+        None,
+        "the raw executor download carries no route auth"
+    );
+}
+
+/// G-246: a download that the provider refuses fails through the
+/// provider-error taxonomy, not as a corrupt asset (media.ts:242-263 via
+/// the executor's status classification).
+#[tokio::test]
+async fn bfl_result_download_failure_fails_typed() {
+    let transport = Arc::new(MockTransport::from_interactions(vec![
+        post(
+            "https://api.bfl.ai/v1/flux-pro-1.1",
+            200,
+            r#"{"id":"t1","polling_url":"https://api.bfl.ai/v1/get_result?id=t1"}"#,
+        ),
+        get(
+            "https://api.bfl.ai/v1/get_result?id=t1",
+            200,
+            r#"{"id":"t1","status":"Ready","result":{"sample":"https://delivery.bfl.ai/v1/result/gone"}}"#,
+        ),
+        get("https://delivery.bfl.ai/v1/result/gone", 404, "{\"error\":\"expired\"}"),
+    ]));
+    let route = QueuedMediaRoute::new(
+        Arc::new(oc_ai::media::image::bfl::BlackForestLabsImages),
+        spec(&transport),
+    );
+    let request = ImageRequest {
+        model: "flux-pro-1.1".into(),
+        prompt: "a red panda".into(),
+        ..Default::default()
+    };
+    let generation = route.start(&request).await.expect("start submits");
+    let error = generation.result().await.expect_err("download fails typed");
+    assert!(
+        error.message().contains("404"),
+        "provider refusal surfaces: {}",
+        error.message()
+    );
+}

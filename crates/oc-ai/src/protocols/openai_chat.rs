@@ -2138,6 +2138,7 @@ fn media_asset(
         info: None,
         expires_at: None,
         provider_metadata: None,
+        headers: None,
     }
 }
 
@@ -4722,6 +4723,7 @@ mod tests {
                     info: None,
                     expires_at: None,
                     provider_metadata: None,
+                    headers: None,
                 },
                 filename: None,
                 cache: None,
@@ -4771,6 +4773,7 @@ mod tests {
                     info: None,
                     expires_at: None,
                     provider_metadata: None,
+                    headers: None,
                 },
                 filename: None,
                 cache: None,
@@ -4812,6 +4815,7 @@ mod tests {
                         info: None,
                         expires_at: None,
                         provider_metadata: None,
+                        headers: None,
                     },
                     filename: None,
                     cache: None,

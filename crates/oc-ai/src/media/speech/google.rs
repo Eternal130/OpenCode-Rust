@@ -26,11 +26,17 @@ pub fn identity() -> Identity {
 }
 
 /// Gemini 3.8 TTS unary requests answer WAV regardless of the requested
-/// format (google-speech.ts:62-66).
+/// format (google-speech.ts:62-66). The ref test is
+/// `/^gemini-3\.8-.*-tts(?:-|$)/`, so `-tts-*` suffix variants like
+/// `gemini-3.8-flash-tts-preview` match too (G-286②).
 fn is_gemini_38_tts(model: &str) -> bool {
-    let rest = model.strip_prefix("gemini-3.8-").unwrap_or(model);
-    let tts = rest.strip_suffix("-tts").unwrap_or(rest);
-    tts != rest && !tts.is_empty() && !tts.contains('-')
+    let Some(rest) = model.strip_prefix("gemini-3.8-") else {
+        return false;
+    };
+    rest.match_indices("-tts").any(|(at, _)| {
+        let after = at + "-tts".len();
+        rest.len() == after || rest.as_bytes().get(after) == Some(&b'-')
+    })
 }
 
 /// Parser state (google-speech.ts:48-52): the audio accumulator, the
@@ -372,6 +378,26 @@ mod tests {
             Mode::Stream
         ))
         .is_ok());
+    }
+
+    // G-286②: the ref regex `^gemini-3\.8-.*-tts(?:-|$)` also matches
+    // `-tts-*` variants and multi-segment names.
+    #[test]
+    fn gemini_38_tts_matches_the_ref_regex() {
+        assert!(is_gemini_38_tts("gemini-3.8-flash-tts"));
+        assert!(is_gemini_38_tts("gemini-3.8-flash-tts-preview"));
+        assert!(is_gemini_38_tts("gemini-3.8-pro-preview-tts-latest"));
+        assert!(is_gemini_38_tts("gemini-3.8-nano-banana-tts"));
+        assert!(!is_gemini_38_tts("gemini-3.8-flash-ttspreview"));
+        assert!(!is_gemini_38_tts("gemini-3.9-flash-tts"));
+        assert!(!is_gemini_38_tts("gemini-3.8-flash"));
+        assert!(!is_gemini_38_tts("gemini-2.5-flash-preview-tts"));
+
+        // the wav-only rejection follows the same matrix
+        let mut variant = request("gemini-3.8-flash-tts-preview", "x");
+        variant.format = Some("pcm".into());
+        let error = body_from(&Addressed::new(variant, Mode::Generate)).unwrap_err();
+        assert!(error.message().contains("returns WAV by default"));
     }
 
     #[test]

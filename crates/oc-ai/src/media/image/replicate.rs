@@ -236,6 +236,15 @@ pub fn decode_result(
     }
     let predict_time =
         prediction.pointer("/metrics/predict_time").and_then(serde_json::Value::as_f64);
+    // The retention window starts at the prediction's completion, not at
+    // the moment the result was read (replicate-images.ts:143-146; G-246④)
+    // — a missing `completed_at` leaves the asset without a deadline,
+    // exactly like ref's `expiresAt: undefined`.
+    let expires_at = prediction
+        .get("completed_at")
+        .and_then(serde_json::Value::as_str)
+        .and_then(crate::media::utils::parse_epoch_millis)
+        .map(|completed| completed + OUTPUT_RETENTION_MS);
     let mut replicate = std::collections::BTreeMap::new();
     replicate.insert(
         "predictionId".to_string(),
@@ -246,7 +255,7 @@ pub fn decode_result(
     Ok(ImageResponse {
         images: urls
             .into_iter()
-            .map(|url| crate::media::protocol::expiring_url(url, OUTPUT_RETENTION_MS, None, None))
+            .map(|url| media::url(url, None, expires_at))
             .collect(),
         usage: predict_time.map(|seconds| MediaUsage::Compute { seconds }),
         notices: None,
@@ -388,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn decode_result_expires_urls_and_reports_compute() {
+    fn decode_result_expires_urls_from_completion() {
         let identity = identity();
         let auth = BTreeMap::new();
         let token = Token {
@@ -397,15 +406,34 @@ mod tests {
             cancel_url: "https://cancel".into(),
         };
         let context = PollContext { token: &token, auth: &auth };
+        // G-246④: the retention window starts at `completed_at`
+        // (replicate-images.ts:143-146), not at the read.
         let output = TextOutput {
             identity: &identity,
-            body: r#"{"id":"p1","status":"succeeded","output":["https://x/1.png"],"metrics":{"predict_time":4.2}}"#,
+            body: r#"{"id":"p1","status":"succeeded","completed_at":"2026-11-08T10:00:00.500Z","output":["https://x/1.png"],"metrics":{"predict_time":4.2}}"#,
             http: None,
         };
         let response = decode_result(&output, &context).unwrap();
         assert_eq!(response.images.len(), 1);
-        assert!(response.images[0].expires_at.is_some());
+        // 2026-11-08T10:00:00Z = 1794132000000 ms; +500 ms fraction + 1h
+        let completed = crate::media::utils::parse_epoch_millis("2026-11-08T10:00:00.500Z")
+            .expect("parser agrees with itself");
+        assert_eq!(response.images[0].expires_at, Some(completed + OUTPUT_RETENTION_MS));
+        assert_eq!(
+            response.images[0].expires_at,
+            Some(1_794_132_000_500.0 + OUTPUT_RETENTION_MS)
+        );
         assert_eq!(response.usage, Some(MediaUsage::Compute { seconds: 4.2 }));
+
+        // without a completed_at the asset carries no deadline (ref
+        // `expiresAt: undefined`)
+        let output = TextOutput {
+            identity: &identity,
+            body: r#"{"id":"p1","status":"succeeded","output":["https://x/1.png"]}"#,
+            http: None,
+        };
+        let response = decode_result(&output, &context).unwrap();
+        assert_eq!(response.images[0].expires_at, None);
 
         let failed = TextOutput {
             identity: &identity,

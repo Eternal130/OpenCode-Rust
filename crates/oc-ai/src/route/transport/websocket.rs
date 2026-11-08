@@ -1136,7 +1136,12 @@ fn spawn_reader(
 }
 
 /// v2 `poison`: the socket violated the channel protocol — fail the active
-/// exchange, count the stream loss, close the socket.
+/// exchange, count the stream loss, close the socket. Only a poison with
+/// an exchange in flight counts a stream loss (model-transport.ts:178-181
+/// `if (channel.active) { … streamFailure }`): idle-time protocol
+/// failures close the socket without burning the HTTP-fallback budget,
+/// so stray frames while idle cannot pin the session to HTTP early
+/// (G-286⑤).
 async fn poison(this: &Arc<SessionChannel>, channel_id: u64, error: AiError) {
     let mut state = this.state.lock().await;
     let Some(slot) = state.channel.as_mut() else { return };
@@ -1144,8 +1149,11 @@ async fn poison(this: &Arc<SessionChannel>, channel_id: u64, error: AiError) {
         return;
     }
     slot.closing = true;
-    fail_active(slot, error);
-    stream_failure(&mut state);
+    let active = slot.active.is_some();
+    if active {
+        fail_active(slot, error);
+        stream_failure(&mut state);
+    }
     let slot = state.channel.take().expect("slot present");
     drop(state);
     slot.close_socket().await;
@@ -1191,7 +1199,11 @@ async fn terminal_cleanup(
     }
     slot.active = None;
     if !drained {
-        // frames queued behind the terminal observation
+        // frames queued behind the terminal observation — the ref's
+        // `Stream.ensuring` clears `channel.active` *before* poisoning
+        // (model-transport.ts:444-464), so this path never counts a
+        // stream loss either (G-286⑤); the queued frames are dropped
+        // with the queue.
         {
             let mut continuation = lock_continuation(this);
             if continuation.slot == channel_id {
@@ -1210,7 +1222,6 @@ async fn terminal_cleanup(
                 None,
             ),
         );
-        stream_failure(&mut state);
         return;
     }
     state.stream_failures = 0;
@@ -1593,6 +1604,104 @@ mod tests {
         assert_eq!(DEFAULT_IDLE_TIMEOUT, DEFAULT_IDLE_TIMEOUT);
         assert_eq!(DEFAULT_IDLE_TIMEOUT.as_secs(), 1800);
         assert_eq!(MAX_STREAM_FAILURES, 5);
+    }
+
+    fn slot(id: u64, closed: &Arc<std::sync::atomic::AtomicUsize>) -> ChannelSlot {
+        let closed = Arc::clone(closed);
+        let close: CloseFn = Arc::new(move |_code, _reason| {
+            closed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(std::future::ready(()))
+        });
+        let send: SendFn = Arc::new(|_message| {
+            Box::pin(std::future::ready(Ok::<(), AiError>(()))) as SendFuture
+        });
+        ChannelSlot {
+            id,
+            affinity: String::new(),
+            send_text: send,
+            close,
+            http: None,
+            opened_at: std::time::Instant::now(),
+            closing: false,
+            active: None,
+        }
+    }
+
+    /// G-286⑤: poison only counts a stream loss while an exchange is
+    /// active (model-transport.ts:178-181) — an idle-time protocol
+    /// failure closes the socket without advancing the HTTP-fallback
+    /// budget, so stray idle frames cannot pin the session to HTTP early.
+    #[tokio::test]
+    async fn poison_counts_stream_losses_only_with_an_active_exchange() {
+        let connector: Arc<dyn WebSocketConnector> = Arc::new(UnsupportedConnector);
+        let channel = SessionChannel::new(connector, SessionChannelConfig::default());
+        let error = transport_error(
+            "Unsupported binary WebSocket frame",
+            TransportOperation::Read,
+            Some(TransportPhase::Receive),
+            None,
+            Some("message".into()),
+            None,
+        );
+
+        // idle poison: socket closes, counter untouched
+        let closed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        {
+            let mut state = channel.state.lock().await;
+            state.channel = Some(slot(1, &closed));
+        }
+        poison(&channel, 1, error.clone()).await;
+        assert_eq!(closed.load(std::sync::atomic::Ordering::SeqCst), 1, "socket closed");
+        assert!(channel.state.lock().await.channel.is_none(), "slot cleared");
+        assert_eq!(channel.state.lock().await.stream_failures, 0, "idle poison does not count");
+
+        // poison during an exchange: fails the exchange and counts
+        let closed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        {
+            let mut state = channel.state.lock().await;
+            let mut current = slot(2, &closed);
+            current.active = Some(ActiveExchange {
+                sender,
+                delivery: Arc::new(std::sync::Mutex::new(Delivery::SendAttempted)),
+            });
+            state.channel = Some(current);
+        }
+        poison(&channel, 2, error).await;
+        assert_eq!(closed.load(std::sync::atomic::Ordering::SeqCst), 1, "socket closed");
+        let state = channel.state.lock().await;
+        assert_eq!(state.stream_failures, 1, "active poison counts");
+        drop(state);
+        assert!(matches!(
+            receiver_error(&mut receiver).await,
+            AiErrorReason::Transport { .. }
+        ));
+    }
+
+    async fn receiver_error(
+        receiver: &mut tokio::sync::mpsc::UnboundedReceiver<Result<String, AiError>>,
+    ) -> AiErrorReason {
+        match receiver.recv().await {
+            Some(Err(error)) => error.reason,
+            other => panic!("expected the failed exchange, got {other:?}"),
+        }
+    }
+
+    /// A connector that never opens (the poison test builds slots directly).
+    struct UnsupportedConnector;
+
+    #[async_trait]
+    impl WebSocketConnector for UnsupportedConnector {
+        async fn open(&self, _request: WebSocketRequest) -> Result<WebSocketConnection, AiError> {
+            Err(transport_error(
+                "unsupported",
+                TransportOperation::Request,
+                None,
+                None,
+                None,
+                None,
+            ))
+        }
     }
 }
 

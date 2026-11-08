@@ -1685,14 +1685,19 @@ impl crate::route::transport::Transport for BetaHeadersTransport {
 /// Build the Messages API body (port of `fromRequest`).
 pub fn body_from_request(request: &LLMRequest) -> Result<Value, AiError> {
     // Per-provider seam (RW-01): providers with an Anthropic-family body
-    // wrapper (alibaba/zai thinking re-attach, meta web_search remap) build
-    // the generic body with the raw `thinking` option stripped; the hook
-    // then re-attaches the provider's own shape.
+    // wrapper (alibaba/zai thinking re-attach, meta web_search remap) can
+    // build the generic body with the raw `thinking` option stripped; the
+    // hook then re-attaches the provider's own shape. Meta does not strip
+    // — the ref delegates its body build to the generic protocol
+    // (meta-messages.ts:35), so the generic thinking decode/validation
+    // runs there (G-286⑥).
     let provider = request.model.provider.0.as_str();
-    let wrap = crate::customization::for_route(provider).wrap_anthropic_body;
+    let customization = crate::customization::for_route(provider);
+    let wrap = customization.wrap_anthropic_body;
+    let strip = wrap.is_some() && customization.strip_thinking_for_wrap;
     let stripped;
     let raw_thinking;
-    let request: &LLMRequest = if wrap.is_some() {
+    let request: &LLMRequest = if strip {
         let mut next = request.clone();
         raw_thinking =
             next.provider_options.as_mut().and_then(|options| options.remove("thinking"));

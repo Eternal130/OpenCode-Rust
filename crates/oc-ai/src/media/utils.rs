@@ -180,7 +180,10 @@ pub fn append_fields(
             )
         };
         if let (Some(mode), serde_json::Value::Array(items)) = (repeat_arrays, &value) {
-            if !items.is_empty() && items.iter().all(is_scalar) {
+            if items.iter().all(is_scalar) {
+                // An empty scalar array appends nothing — the ref's
+                // `value.forEach` over an empty list is a no-op, not a
+                // JSON "[]" part (media-input.ts:88-89; G-286④).
                 for item in items {
                     form.append_field(
                         if mode == RepeatArrays::Bracket {
@@ -314,6 +317,93 @@ pub fn media_type_extension(media_type: &str) -> Option<&'static str> {
         return Some(extension);
     }
     EXTENSIONS.iter().find(|(_, known)| *known == base).map(|(extension, _)| *extension)
+}
+
+/// `fileMediaType` (media-type.ts): a file's media type is sniffed from
+/// magic bytes, then the path's extension, then
+/// `application/octet-stream`.
+#[must_use]
+pub fn file_media_type(bytes: &[u8], path: &str) -> String {
+    let extension = path.rsplit('.').next().unwrap_or_default().to_ascii_lowercase();
+    detect_media_type(bytes)
+        .or_else(|| {
+            EXTENSIONS.iter().find(|(known, _)| *known == extension).map(|(_, media)| *media)
+        })
+        .unwrap_or("application/octet-stream")
+        .to_string()
+}
+
+/// `Date.parse` for the RFC 3339 timestamps providers stamp on results
+/// (e.g. Replicate's `completed_at`): `YYYY-MM-DDTHH:MM:SS[.fff…][Z|±HH:MM]`
+/// → epoch milliseconds; anything else is `None` (JS `NaN`). Hand-rolled
+/// (days-from-civil) so the media layer needs no time crate.
+#[must_use]
+pub fn parse_epoch_millis(value: &str) -> Option<f64> {
+    let bytes = value.as_bytes();
+    if bytes.len() < 19 {
+        return None;
+    }
+    let digits = |range: std::ops::Range<usize>| -> Option<i64> {
+        let part = value.get(range)?;
+        if !part.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        part.parse().ok()
+    };
+    let year = digits(0..4)?;
+    let month = digits(5..7)?;
+    let day = digits(8..10)?;
+    let hour = digits(11..13)?;
+    let minute = digits(14..16)?;
+    let second = digits(17..19)?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let mut rest = &value[19..];
+    let mut fraction_ms = 0.0;
+    if let Some(fraction) = rest.strip_prefix('.') {
+        let end = fraction.bytes().position(|b| !b.is_ascii_digit()).unwrap_or(fraction.len());
+        if end == 0 {
+            return None;
+        }
+        let mut fraction = &fraction[..end];
+        // keep at most millisecond precision
+        fraction = &fraction[..fraction.len().min(3)];
+        fraction_ms = format!("{fraction:0<3}").parse::<f64>().ok()?;
+        rest = &rest[1 + end..];
+    }
+    let offset_minutes = match rest {
+        "" | "Z" | "z" => 0,
+        other => {
+            let sign = match other.as_bytes().first() {
+                Some(b'+') => 1,
+                Some(b'-') => -1,
+                _ => return None,
+            };
+            let body = &other[1..];
+            let (hours, mins) = body.split_once(':')?;
+            if !hours.bytes().all(|b| b.is_ascii_digit())
+                || !mins.bytes().all(|b| b.is_ascii_digit())
+            {
+                return None;
+            }
+            sign * (hours.parse::<i64>().ok()? * 60 + mins.parse::<i64>().ok()?)
+        }
+    };
+    let days = days_from_civil(year, month, day);
+    let total_seconds = days * 86_400 + hour * 3_600 + minute * 60 + second - offset_minutes * 60;
+    Some(total_seconds as f64 * 1000.0 + fraction_ms)
+}
+
+/// Days since 1970-01-01 (Howard Hinnant's `days_from_civil`).
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let day_of_year =
+        (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
 }
 
 // ===========================================================================
@@ -892,6 +982,67 @@ mod tests {
         assert_eq!(detect_media_type(&[0xff, 0xd8, 0xff, 0xe0]), Some("image/jpeg"));
         assert_eq!(detect_media_type(&[0x1a, 0x45, 0xdf, 0xa3, 0x00]), Some("video/webm"));
         assert_eq!(detect_media_type(&[0x00, 0x01]), None);
+    }
+
+    #[test]
+    fn file_media_type_sniffs_then_falls_back_to_extension() {
+        assert_eq!(file_media_type(&[0x89, 0x50], "a.bin"), "image/png");
+        assert_eq!(file_media_type(b"plain", "notes.md"), "text/markdown");
+        assert_eq!(file_media_type(b"plain", "no-extension"), "application/octet-stream");
+    }
+
+    // G-246④: `Date.parse` for RFC 3339 result stamps.
+    #[test]
+    fn parse_epoch_millis_matches_date_parse() {
+        assert_eq!(parse_epoch_millis("1970-01-01T00:00:00Z"), Some(0.0));
+        assert_eq!(parse_epoch_millis("2026-11-08T10:00:00Z"), Some(1_794_132_000_000.0));
+        assert_eq!(parse_epoch_millis("2026-11-08T10:00:00.500Z"), Some(1_794_132_000_500.0));
+        // fractional seconds shorter than a millisecond pad right
+        assert_eq!(parse_epoch_millis("2026-11-08T10:00:00.5Z"), Some(1_794_132_000_500.0));
+        // numeric offset — same instant as the 10:00:00Z row
+        assert_eq!(parse_epoch_millis("2026-11-08T12:00:00+02:00"), Some(1_794_132_000_000.0));
+        assert_eq!(parse_epoch_millis("2026-11-08T08:00:00-02:00"), Some(1_794_132_000_000.0));
+        // no zone is still an instant for Date.parse (treated as local/UTC)
+        assert!(parse_epoch_millis("2026-11-08T10:00:00").is_some());
+        // malformed → NaN → None
+        assert_eq!(parse_epoch_millis("not-a-date"), None);
+        assert_eq!(parse_epoch_millis("2026-13-08T10:00:00Z"), None);
+        assert_eq!(parse_epoch_millis("2026-11-08"), None);
+    }
+
+    // G-286④: an empty scalar array with `repeatArrays` appends nothing —
+    // the ref `forEach` over an empty list is a no-op, not a "[]" part.
+    #[test]
+    fn append_fields_skips_empty_scalar_arrays() {
+        let mut form = crate::media::body::Form::new();
+        let overlay = serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(
+            serde_json::json!({"empty": [], "full": ["a", "b"], "text": "s"}),
+        )
+        .unwrap();
+        append_fields(&mut form, Vec::new(), Some(&overlay), &[], Some(RepeatArrays::Bracket));
+        let fields: Vec<(String, String)> = form
+            .fields
+            .iter()
+            .filter_map(|(key, value)| match value {
+                crate::media::body::FormValue::Field(text) => Some((key.clone(), text.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            fields,
+            vec![
+                ("full[]".to_string(), "a".to_string()),
+                ("full[]".to_string(), "b".to_string()),
+                ("text".to_string(), "s".to_string()),
+            ],
+            "empty arrays append no part: {fields:?}"
+        );
+
+        // without repeatArrays the empty array falls through to the JSON
+        // branch like any other non-scalar value (ref: `encodeJson([])`)
+        let mut form = crate::media::body::Form::new();
+        append_fields(&mut form, Vec::new(), Some(&overlay), &[], None);
+        assert_eq!(form.fields_json()["empty"], serde_json::json!([]));
     }
 
     #[test]

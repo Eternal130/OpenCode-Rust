@@ -75,7 +75,10 @@ pub fn body_from(request: &ImageRequest) -> Result<Body, AiError> {
         if n > 1 {
             return Err(identity().unsupported(
                 "media.n",
-                "Google Images generates one image per request; call it once per image instead of n={n}",
+                // G-286①: the interpolated count was missing (`{n}` literal).
+                format!(
+                    "Google Images generates one image per request; call it once per image instead of n={n}"
+                ),
             ));
         }
     }
@@ -249,7 +252,19 @@ pub fn decode(
             let candidates_count =
                 value.get("candidatesTokenCount").and_then(serde_json::Value::as_f64);
             let thoughts = value.get("thoughtsTokenCount").and_then(serde_json::Value::as_f64);
+            let cached = value.get("cachedContentTokenCount").and_then(serde_json::Value::as_f64);
             let output = candidates_count.map(|count| count + thoughts.unwrap_or(0.0));
+            // G-286③: details carry the normalized keys plus the raw
+            // provider document under `google` (google-images.ts:243-248);
+            // undefined-valued keys are omitted, never null.
+            let mut details = serde_json::Map::new();
+            if let Some(thoughts) = thoughts {
+                details.insert("reasoningTokens".to_string(), serde_json::json!(thoughts));
+            }
+            if let Some(cached) = cached {
+                details.insert("cacheReadInputTokens".to_string(), serde_json::json!(cached));
+            }
+            details.insert("google".to_string(), value.clone());
             (
                 Some(MediaUsage::Tokens {
                     input: prompt,
@@ -259,12 +274,7 @@ pub fn decode(
                         output,
                         value.get("totalTokenCount").and_then(serde_json::Value::as_f64),
                     ),
-                    details: Some(
-                        serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(
-                            value.clone(),
-                        )
-                        .unwrap_or_default(),
-                    ),
+                    details: Some(details),
                 }),
                 output,
             )
@@ -281,6 +291,12 @@ pub fn decode(
         "promptFeedback".to_string(),
         decoded.get("promptFeedback").cloned().unwrap_or_default(),
     );
+    // G-286③: the per-candidate detail the ref carries
+    // (google-images.ts:133-149): index, finish fields, and the full part
+    // walk (text vs inlineData), undefined keys omitted.
+    google.insert("candidates".to_string(), serde_json::Value::Array(candidate_metadata(
+        &candidates,
+    )));
     let mut metadata = crate::schema::ProviderMetadata::new();
     metadata.insert("google".to_string(), google);
     let _ = context;
@@ -291,6 +307,63 @@ pub fn decode(
         usage: usage_value,
         provider_metadata: Some(metadata),
     })
+}
+
+/// `candidateMetadata` (google-images.ts:133-149): one entry per
+/// candidate with the finish fields and the part walk; keys the provider
+/// omitted are dropped (`undefined` in ref), never null.
+fn candidate_metadata(candidates: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    candidates
+        .iter()
+        .enumerate()
+        .map(|(candidate_index, candidate)| {
+            let mut entry = serde_json::Map::new();
+            entry.insert(
+                "index".to_string(),
+                candidate.get("index").cloned().unwrap_or_else(|| {
+                    serde_json::json!(candidate_index)
+                }),
+            );
+            for key in ["finishReason", "finishMessage", "safetyRatings", "citationMetadata", "groundingMetadata"] {
+                if let Some(value) = candidate.get(key).filter(|value| !value.is_null()) {
+                    entry.insert(key.to_string(), value.clone());
+                }
+            }
+            let parts = candidate
+                .pointer("/content/parts")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let parts: Vec<serde_json::Value> = parts
+                .iter()
+                .map(|part| {
+                    let mut lowered = serde_json::Map::new();
+                    if let Some(inline) = part.get("inlineData") {
+                        lowered.insert("type".to_string(), serde_json::json!("inlineData"));
+                        if let Some(media_type) =
+                            inline.get("mimeType").and_then(serde_json::Value::as_str)
+                        {
+                            lowered.insert("mediaType".to_string(), serde_json::json!(media_type));
+                        }
+                    } else {
+                        lowered.insert("type".to_string(), serde_json::json!("text"));
+                        if let Some(text) = part.get("text") {
+                            lowered.insert("text".to_string(), text.clone());
+                        }
+                    }
+                    if let Some(thought) = part.get("thought") {
+                        lowered.insert("thought".to_string(), thought.clone());
+                    }
+                    if let Some(signature) = part.get("thoughtSignature") {
+                        lowered.insert("thoughtSignature".to_string(), signature.clone());
+                    }
+                    serde_json::Value::Object(lowered)
+                })
+                .collect();
+            entry.insert("parts".to_string(), serde_json::Value::Array(parts));
+            serde_json::Value::Object(entry)
+        })
+        .collect()
 }
 
 /// The protocol object implementing [`InlineProtocol`].
@@ -379,6 +452,8 @@ mod tests {
         let error = body_from(&image_request).unwrap_err();
         assert!(matches!(error.reason, crate::schema::AiErrorReason::UnsupportedOperation { .. }));
         assert!(error.message().contains("one image per request"));
+        // G-286①: the count is interpolated (google-images.ts:105)
+        assert!(error.message().contains("instead of n=3"), "{}", error.message());
     }
 
     #[test]
@@ -406,12 +481,42 @@ mod tests {
             response.provider_metadata.as_ref().unwrap()["google"]["modelVersion"],
             json!("gemini-3-pro")
         );
+        // G-286③: details carry the normalized keys + the provider doc
+        // wrapped under `google` (google-images.ts:243-248).
         assert_eq!(response.usage.as_ref().unwrap().clone(), MediaUsage::Tokens {
             input: Some(5.0),
             output: Some(120.0),
             total: Some(125.0),
-            details: Some(json!({"promptTokenCount": 5, "candidatesTokenCount": 100, "thoughtsTokenCount": 20, "totalTokenCount": 125}).as_object().unwrap().clone()),
+            details: Some(json!({
+                "reasoningTokens": 20,
+                "google": {
+                    "promptTokenCount": 5,
+                    "candidatesTokenCount": 100,
+                    "thoughtsTokenCount": 20,
+                    "totalTokenCount": 125
+                }
+            }).as_object().unwrap().clone()),
         });
+        // G-286③: the response metadata carries the candidate walk,
+        // including thought drafts (google-images.ts:133-149).
+        let candidates = &response.provider_metadata.as_ref().unwrap()["google"]["candidates"];
+        assert_eq!(candidates.as_array().unwrap().len(), 1);
+        assert_eq!(candidates[0]["index"], json!(0));
+        assert_eq!(candidates[0]["finishReason"], json!("STOP"));
+        let parts = candidates[0]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], json!({"type": "inlineData", "mediaType": "image/png"}));
+        assert_eq!(parts[1], json!({"type": "inlineData", "mediaType": "image/png", "thought": true}));
+        // undefined finish fields are omitted, not null
+        assert!(candidates[0].get("safetyRatings").is_none());
+        // absent usage keys stay out of details
+        let document = r#"{"candidates": [{"index": 0, "content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "AQID"}}]}, "finishReason": "STOP"}], "usageMetadata": {"promptTokenCount": 5}}"#;
+        let output = TextOutput { identity: &identity, body: document, http: None };
+        let response = decode(&output, &context).unwrap();
+        let MediaUsage::Tokens { details, .. } = response.usage.unwrap() else { panic!() };
+        let details = details.expect("details present");
+        assert!(details.get("reasoningTokens").is_none(), "absent keys omitted: {details:?}");
+        assert!(details.get("google").is_some());
     }
 
     #[test]

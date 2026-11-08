@@ -2626,6 +2626,51 @@ fn zai_messages_accepts_enabled_thinking_without_a_budget() {
     assert!(body.get("thinking").is_none());
 }
 
+// G-286⑥: meta delegates its body build to the generic protocol
+// (meta-messages.ts:35), so explicit `thinking` options run the generic
+// decode — validation and budget fitting included.
+#[test]
+fn meta_messages_validates_thinking_through_the_generic_path() {
+    // explicit enabled without a budget fails typed, exactly like the
+    // generic Anthropic route
+    let model = provider_model("meta", "llama-4-maverick");
+    let mut request = base_request(model);
+    request.provider_options =
+        Some(serde_json::from_value(json!({"thinking": {"type": "enabled"}})).unwrap());
+    let error = compile(&request).unwrap_err();
+    assert!(
+        error.to_string().contains("requires a budgetTokens"),
+        "unexpected error {error}"
+    );
+
+    // a valid enabled budget lowers (and fits) through the generic path
+    let model = provider_model("meta", "llama-4-maverick");
+    let mut request = base_request(model);
+    request.generation =
+        Some(GenerationOptions { max_tokens: Some(30_000.0), ..Default::default() });
+    request.provider_options = Some(
+        serde_json::from_value(json!({"thinking": {"type": "enabled", "budgetTokens": 20_000}}))
+            .unwrap(),
+    );
+    let body = compile(&request).unwrap();
+    assert_eq!(body["thinking"]["type"], json!("enabled"));
+    assert_eq!(body["thinking"]["budget_tokens"], json!(15_000));
+
+    // adaptive (the route default shape) still passes through untouched
+    let model = provider_model("meta", "llama-4-maverick");
+    let mut request = base_request(model);
+    request.provider_options = Some(
+        serde_json::from_value(json!({"thinking": {"type": "adaptive"}})).unwrap(),
+    );
+    let body = compile(&request).unwrap();
+    assert_eq!(body["thinking"]["type"], json!("adaptive"));
+    // no key when the request carried none
+    let model = provider_model("meta", "llama-4-maverick");
+    let request = base_request(model);
+    let body = compile(&request).unwrap();
+    assert!(body.get("thinking").is_none());
+}
+
 #[test]
 fn unregistered_providers_keep_the_generic_budget_requirement() {
     // ref moonshot/minimax messages routes run the plain Anthropic Messages

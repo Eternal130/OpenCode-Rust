@@ -28,6 +28,7 @@ fn media_part() -> ContentPart {
             info: None,
             expires_at: None,
             provider_metadata: None,
+            headers: None,
         },
         filename: None,
         cache: None,

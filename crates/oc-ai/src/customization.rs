@@ -21,7 +21,9 @@
 //!   hook (RW-01) wraps the built body for the Anthropic-family providers
 //!   with per-provider protocols in the ref: `alibaba`/`zai-coding-plan`
 //!   re-attach `thinking` without Anthropic's mandatory budgetTokens, and
-//!   `meta` remaps `native.meta` web-search tools.
+//!   `meta` remaps `native.meta` web-search tools (meta keeps the generic
+//!   `thinking` handling — see
+//!   [`ProviderCustomization::strip_thinking_for_wrap`], G-286⑥).
 //!
 //! Extension point: to add a customization, either add a `const` entry to
 //! [`static_entries`] (upstream providers) or call [`register`] (tests,
@@ -58,12 +60,21 @@ pub struct ProviderCustomization {
     /// Wrap the request body built by the generic Anthropic Messages
     /// protocol (port of the per-provider `*-messages.ts` body wrappers).
     ///
-    /// When set, the generic body build receives the request with the raw
-    /// `thinking` provider option stripped (so the generic
-    /// "`enabled` requires a budgetTokens" validation and budget fitting
-    /// do not run), and the hook re-attaches the provider's own `thinking`
-    /// shape and/or remaps tools afterwards.
+    /// When set together with [`Self::strip_thinking_for_wrap`], the
+    /// generic body build receives the request with the raw `thinking`
+    /// provider option stripped (so the generic "`enabled` requires a
+    /// budgetTokens" validation and budget fitting do not run), and the
+    /// hook re-attaches the provider's own `thinking` shape and/or remaps
+    /// tools afterwards.
     pub wrap_anthropic_body: Option<fn(&mut AnthropicBodyWrap<'_>) -> Result<(), AiError>>,
+    /// Whether [`Self::wrap_anthropic_body`] replaces the generic
+    /// `thinking` handling: `true` strips the raw option before the
+    /// generic build (alibaba/zai re-attach their own shape); `false`
+    /// (meta) lets the generic decode/fit/validation run — the ref
+    /// delegates Meta's body build to the generic protocol
+    /// (meta-messages.ts:35), so an explicit `enabled` without a budget
+    /// fails typed there (G-286⑥).
+    pub strip_thinking_for_wrap: bool,
 }
 
 /// Context handed to the [`ProviderCustomization::wrap_anthropic_body`] hook.
@@ -101,7 +112,12 @@ impl AnthropicBodyWrap<'_> {
 impl ProviderCustomization {
     /// The no-op customization: every hook unset, generic behavior everywhere.
     pub const fn noop() -> Self {
-        Self { auto_cache_policy: None, chat_metadata_key: None, wrap_anthropic_body: None }
+        Self {
+            auto_cache_policy: None,
+            chat_metadata_key: None,
+            wrap_anthropic_body: None,
+            strip_thinking_for_wrap: false,
+        }
     }
 
     /// Apply the `auto_cache_policy` hook if the entry sets one.
@@ -196,15 +212,13 @@ fn zai_wrap(wrap: &mut AnthropicBodyWrap<'_>) -> Result<(), AiError> {
 /// `meta-messages` body wrap (port of `meta-messages.ts` `fromRequest`):
 /// flatten-tool natives carrying `native.meta` web-search config are re-mapped
 /// to Anthropic's `{ type: "web_search", name: "web_search", user_location }`.
+/// `thinking` is NOT touched here: the ref builds Meta's body through the
+/// generic Anthropic Messages protocol (meta-messages.ts:35), so the
+/// generic decode/fit/validation ran before this wrap — an explicit
+/// `enabled` without a budget fails typed like every generic route
+/// (G-286⑥; G-172's route-default adaptive thinking flows the same way).
 fn meta_wrap(wrap: &mut AnthropicBodyWrap<'_>) -> Result<(), AiError> {
-    // The generic Anthropic Messages protocol handles Meta's `thinking`
-    // option unchanged (meta-messages.ts delegates the body build); re-attach
-    // the raw option the seam stripped (G-172: the route-default adaptive
-    // thinking with the display omitted).
-    if let Some(raw) = wrap.raw_thinking {
-        let raw = raw.clone();
-        wrap.set_thinking(Some(raw));
-    }
+    let _ = wrap.raw_thinking; // always `None` for meta (no stripping)
     let Some(tools) = wrap.body.get_mut("tools").and_then(Value::as_array_mut) else {
         return Ok(());
     };
@@ -311,6 +325,7 @@ const fn static_entries() -> &'static [(&'static str, ProviderCustomization)] {
                 auto_cache_policy: Some(gateway_policy),
                 chat_metadata_key: None,
                 wrap_anthropic_body: None,
+                strip_thinking_for_wrap: false,
             },
         ),
         (
@@ -319,6 +334,7 @@ const fn static_entries() -> &'static [(&'static str, ProviderCustomization)] {
                 auto_cache_policy: Some(gateway_policy),
                 chat_metadata_key: None,
                 wrap_anthropic_body: None,
+                strip_thinking_for_wrap: false,
             },
         ),
         (
@@ -327,6 +343,7 @@ const fn static_entries() -> &'static [(&'static str, ProviderCustomization)] {
                 auto_cache_policy: Some(alibaba_chat_policy),
                 chat_metadata_key: None,
                 wrap_anthropic_body: None,
+                strip_thinking_for_wrap: false,
             },
         ),
         (
@@ -335,6 +352,7 @@ const fn static_entries() -> &'static [(&'static str, ProviderCustomization)] {
                 auto_cache_policy: None,
                 chat_metadata_key: None,
                 wrap_anthropic_body: Some(alibaba_wrap),
+                strip_thinking_for_wrap: true,
             },
         ),
         (
@@ -343,6 +361,7 @@ const fn static_entries() -> &'static [(&'static str, ProviderCustomization)] {
                 auto_cache_policy: None,
                 chat_metadata_key: None,
                 wrap_anthropic_body: Some(zai_wrap),
+                strip_thinking_for_wrap: true,
             },
         ),
         (
@@ -351,6 +370,10 @@ const fn static_entries() -> &'static [(&'static str, ProviderCustomization)] {
                 auto_cache_policy: None,
                 chat_metadata_key: None,
                 wrap_anthropic_body: Some(meta_wrap),
+                // meta-messages.ts delegates the body build to the generic
+                // Anthropic Messages protocol — thinking decode, budget
+                // fit, and validation all run there (G-286⑥).
+                strip_thinking_for_wrap: false,
             },
         ),
     ]
@@ -416,6 +439,7 @@ mod tests {
                 auto_cache_policy: Some(hypothetical_policy),
                 chat_metadata_key: Some("acme"),
                 wrap_anthropic_body: None,
+                strip_thinking_for_wrap: false,
             },
         );
 
