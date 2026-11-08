@@ -194,13 +194,76 @@ impl Catalog {
 
 // -- normalization (models-dev.ts) --------------------------------------------
 
+/// G-258 — the deprecated catalog aliases the ref filters at snapshot-load
+/// time (`plugin/models-dev.ts:94-98`): both are replaced by the canonical
+/// `azure`/`google-vertex` providers (config references canonicalize in
+/// `config/normalize.rs`, so they never resolve through the catalog).
+const FILTERED_PROVIDER_ALIASES: &[&str] = &["azure-cognitive-services", "google-vertex-anthropic"];
+
+/// G-258 — Bedrock catalog entries that require inference profiles on
+/// Bedrock Runtime (`plugin/models-dev.ts:11-25`); serving them without a
+/// profile fails, so the models-dev plugin drops them at load
+/// (`:106-108`). Opus/Sonnet 4.6 support in-region calls in eu-west-2 and
+/// stay available.
+const BEDROCK_PROFILE_ONLY_IDS: &[&str] = &[
+    "amazon.nova-2-lite-v1:0",
+    "anthropic.claude-fable-5",
+    "anthropic.claude-fable-5-1",
+    "anthropic.claude-haiku-4-5-20251001-v1:0",
+    "anthropic.claude-opus-4-1-20250805-v1:0",
+    "anthropic.claude-opus-4-5-20251101-v1:0",
+    "anthropic.claude-opus-4-7",
+    "anthropic.claude-opus-4-8",
+    "anthropic.claude-opus-5",
+    "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-sonnet-5",
+    "deepseek.r1-v1:0",
+    "mistral.pixtral-large-2502-v1:0",
+];
+
+/// G-261 — OpenRouter-specific OpenAI chat aliases that do not work on the
+/// generic path; the ref plugin disables them when present
+/// (`plugin/provider/openrouter.ts:16-28`). Custom providers with matching
+/// ids stay untouched (the plugin keys on the openrouter package).
+const OPENROUTER_DISABLED_MODEL_IDS: &[&str] = &["gpt-5-chat-latest", "openai/gpt-5-chat"];
+
+/// G-285 — catalog providers with chat-completions `prompt_cache_key` body
+/// support but no dedicated AI package; the ref plugin sets
+/// `supportsPromptCacheKey` on every model of these providers
+/// (`plugin/provider/prompt-cache-key.ts:10-23`). Audited per provider;
+/// scoped-only support (fastrouter, frogbot) is deliberately absent.
+const PROMPT_CACHE_KEY_PROVIDERS: &[&str] = &[
+    "abliteration-ai",
+    "aihubmix",
+    "anyapi",
+    "auriko",
+    "edenai",
+    "jalapeno",
+    "llama",
+    "morph",
+    "snowflake-cortex",
+    "tencent-tokenhub",
+    "upstage",
+    "venice",
+];
+
 fn normalize(input: &BTreeMap<String, SourceProvider>) -> Vec<Snapshot> {
-    input.values().map(normalize_provider).collect()
+    // G-258 — the models-dev plugin's snapshot filter (`snapshots()`,
+    // plugin/models-dev.ts:91-113): the two deprecated alias providers
+    // never register, and the profile-only Bedrock ids drop at load. Both
+    // levels apply to the embedded and every refreshed snapshot alike
+    // (the ref memoizes the same filter over each fetched body).
+    input
+        .values()
+        .filter(|item| !FILTERED_PROVIDER_ALIASES.contains(&item.id.as_str()))
+        .map(normalize_provider)
+        .collect()
 }
 
 fn normalize_provider(item: &SourceProvider) -> Snapshot {
     let provider_id = ProviderId::parse(item.id.clone());
     let package = native_package(&item.npm, &item.id, None, None);
+
     let mut settings = None;
     if let Some(api) = &item.api {
         // cloudflare-workers-ai keeps the api out of settings (v2 guard)
@@ -223,11 +286,25 @@ fn normalize_provider(item: &SourceProvider) -> Snapshot {
         body: None,
     };
 
+    let bedrock = item.id == "amazon-bedrock";
     let mut models = Vec::new();
     for model in item.models.values() {
+        // G-258 — profile-only Bedrock ids never register (the ref filters
+        // on `model.modelID ?? model.id`; this port's source models carry
+        // no modelID override, so the id key is authoritative).
+        if bedrock && BEDROCK_PROFILE_ONLY_IDS.contains(&model.id.as_str()) {
+            continue;
+        }
         let base_cost = cost(&model.cost.clone().unwrap_or_default());
         let id = ModelId::parse(model.id.clone());
-        let base = model_info(item, id.clone(), model, ModelInfoOverrides::base(base_cost.clone()));
+        let mut base = model_info(item, id.clone(), model, ModelInfoOverrides::base(base_cost.clone()));
+        // G-261 — the OpenRouter chat aliases stay listed but disabled
+        // (openrouter.ts:19-25 `model.enabled = false`); only the
+        // openrouter provider's own models are touched.
+        if item.id == "openrouter" && OPENROUTER_DISABLED_MODEL_IDS.contains(&model.id.as_str())
+        {
+            base.enabled = false;
+        }
         let supports = supports_from_reasoning_options(&model.reasoning_options);
         let variants = variant::resolve(
             &VariantModel {
@@ -314,7 +391,7 @@ fn model_info(
         settings_rest.insert("provider".to_string(), Value::String(provider_id.0.clone()));
     }
 
-    schema_model::Info {
+    let mut info = schema_model::Info {
         id,
         model_id: ModelId::parse(model.id.clone()),
         provider_id,
@@ -348,7 +425,18 @@ fn model_info(
             input: model.limit.input.map(|value| f64_limit(Some(value))),
             output: f64_limit(model.limit.output),
         },
+    };
+    // G-285 — the prompt-cache-key provider fold: EVERY model of the
+    // listed catalog providers gains `supportsPromptCacheKey`
+    // (prompt-cache-key.ts:28-36 — experimental modes included), merged
+    // over the model's own compatibility like the ref's
+    // `{...draft.compatibility, ...}`.
+    if PROMPT_CACHE_KEY_PROVIDERS.contains(&provider.id.as_str()) {
+        let mut compatibility = info.compatibility.clone().unwrap_or_default();
+        compatibility.supports_prompt_cache_key = Some(true);
+        info.compatibility = Some(compatibility);
     }
+    info
 }
 
 /// v2 `Model.compatibility(model.interleaved)`: a string (or `{field}`) names
@@ -516,10 +604,151 @@ mod tests {
     #[test]
     fn provider_catalog_parse_counts() {
         let catalog = Catalog::embedded();
-        // Pinned parity counts from the committed snapshot (226 providers,
-        // 8390 models + 105 experimental modes).
-        assert_eq!(catalog.provider_count(), 226);
-        assert_eq!(catalog.model_count(), 8495);
+        // Pinned parity counts from the committed snapshot (224 providers —
+        // G-258 drops the azure-cognitive-services/google-vertex-anthropic
+        // aliases — and 8380 models + experimental modes, 115 fewer after
+        // the alias providers and the 13 Bedrock profile-only ids drop).
+        assert_eq!(catalog.provider_count(), 224);
+        assert_eq!(catalog.model_count(), 8380);
+    }
+
+    /// G-258 — the models-dev plugin's two-level snapshot filter
+    /// (`plugin/models-dev.ts:94-109`): the deprecated alias providers
+    /// never register, and the Bedrock inference-profile-only ids drop.
+    #[test]
+    fn provider_catalog_filters_alias_providers_and_bedrock_profile_only_models() {
+        let catalog = Catalog::embedded();
+        // Provider level (models-dev.ts:95-98) — the aliases are replaced
+        // by the canonical azure/google-vertex providers, which remain.
+        for alias in ["azure-cognitive-services", "google-vertex-anthropic"] {
+            assert!(catalog.provider(alias).is_none(), "{alias} must not register");
+        }
+        assert!(catalog.provider("azure").is_some());
+        assert!(catalog.provider("google-vertex").is_some());
+        // Model level (models-dev.ts:11-25,106-108) — the 13 profile-only
+        // Bedrock ids are absent while the in-region Opus/Sonnet 4.6
+        // entries stay available.
+        let bedrock = catalog.provider("amazon-bedrock").expect("bedrock registers");
+        for id in [
+            "amazon.nova-2-lite-v1:0",
+            "anthropic.claude-fable-5",
+            "anthropic.claude-fable-5-1",
+            "anthropic.claude-haiku-4-5-20251001-v1:0",
+            "anthropic.claude-opus-4-1-20250805-v1:0",
+            "anthropic.claude-opus-4-5-20251101-v1:0",
+            "anthropic.claude-opus-4-7",
+            "anthropic.claude-opus-4-8",
+            "anthropic.claude-opus-5",
+            "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "anthropic.claude-sonnet-5",
+            "deepseek.r1-v1:0",
+            "mistral.pixtral-large-2502-v1:0",
+        ] {
+            assert!(catalog.model("amazon-bedrock", id).is_none(), "{id} must not register");
+        }
+        assert!(bedrock
+            .models
+            .iter()
+            .any(|model| model.id.as_str() == "anthropic.claude-opus-4-6-v1"));
+        // The filter applies to every parsed snapshot, not just the
+        // embedded one (the ref re-runs `snapshots()` over each refreshed
+        // body, models-dev.ts:61-66).
+        let synthetic = r#"{
+            "azure-cognitive-services": {
+                "id": "azure-cognitive-services", "name": "Azure Cognitive Services",
+                "npm": "@ai-sdk/openai-compatible", "env": ["AZURE_API_KEY"],
+                "models": {"gpt": {"id": "gpt", "name": "GPT"}}
+            },
+            "amazon-bedrock": {
+                "id": "amazon-bedrock", "name": "Amazon Bedrock",
+                "npm": "@ai-sdk/amazon-bedrock", "env": ["AWS_ACCESS_KEY_ID"],
+                "models": {
+                    "anthropic.claude-opus-5": {"id": "anthropic.claude-opus-5", "name": "Opus 5"},
+                    "anthropic.claude-opus-4-6": {"id": "anthropic.claude-opus-4-6", "name": "Opus 4.6"}
+                }
+            }
+        }"#;
+        let catalog = Catalog::parse(synthetic).expect("parses");
+        assert!(catalog.provider("azure-cognitive-services").is_none());
+        assert!(catalog.model("amazon-bedrock", "anthropic.claude-opus-5").is_none());
+        assert!(catalog.model("amazon-bedrock", "anthropic.claude-opus-4-6").is_some());
+    }
+
+    /// G-261 — the OpenRouter chat aliases stay listed but disabled when
+    /// the snapshot carries them (openrouter.ts:16-28); providers that
+    /// merely share the model id keep them enabled.
+    #[test]
+    fn provider_catalog_disables_openrouter_chat_aliases() {
+        let synthetic = r#"{
+            "openrouter": {
+                "id": "openrouter", "name": "OpenRouter",
+                "npm": "@openrouter/ai-sdk-provider", "env": ["OPENROUTER_API_KEY"],
+                "models": {
+                    "gpt-5-chat-latest": {"id": "gpt-5-chat-latest", "name": "GPT-5 Chat Latest"},
+                    "openai/gpt-5-chat": {"id": "openai/gpt-5-chat", "name": "GPT-5 Chat"},
+                    "other": {"id": "other", "name": "Other"}
+                }
+            },
+            "other-gateway": {
+                "id": "other-gateway", "name": "Other Gateway",
+                "npm": "@ai-sdk/openai-compatible", "api": "https://other.test/v1", "env": [],
+                "models": {"gpt-5-chat-latest": {"id": "gpt-5-chat-latest", "name": "GPT-5 Chat Latest"}}
+            }
+        }"#;
+        let catalog = Catalog::parse(synthetic).expect("parses");
+        for id in ["gpt-5-chat-latest", "openai/gpt-5-chat"] {
+            let model = catalog.model("openrouter", id).expect("still listed");
+            assert!(!model.enabled, "openrouter/{id} must be disabled");
+        }
+        assert!(catalog.model("openrouter", "other").expect("present").enabled);
+        // Custom providers with matching ids stay untouched (the ref
+        // plugin keys on the openrouter package).
+        assert!(catalog.model("other-gateway", "gpt-5-chat-latest").expect("present").enabled);
+    }
+
+    /// G-285 — the prompt-cache-key provider fold: every model of the 12
+    /// listed catalog providers carries `supportsPromptCacheKey`
+    /// (prompt-cache-key.ts:10-23), merged over the model's own
+    /// compatibility.
+    #[test]
+    fn provider_catalog_prompt_cache_key_providers() {
+        let catalog = Catalog::embedded();
+        for id in [
+            "abliteration-ai",
+            "aihubmix",
+            "anyapi",
+            "auriko",
+            "edenai",
+            "jalapeno",
+            "llama",
+            "morph",
+            "snowflake-cortex",
+            "tencent-tokenhub",
+            "upstage",
+            "venice",
+        ] {
+            let provider = catalog.provider(id).unwrap_or_else(|| panic!("{id} in snapshot"));
+            assert!(
+                provider.models.iter().all(|model| model
+                    .compatibility
+                    .as_ref()
+                    .is_some_and(|compat| compat.supports_prompt_cache_key == Some(true))),
+                "{id} models must set supportsPromptCacheKey"
+            );
+        }
+        // Providers outside the list keep their own compatibility.
+        let openai = catalog.provider("openai").expect("openai");
+        assert!(
+            openai
+                .models
+                .iter()
+                .all(|model| model
+                    .compatibility
+                    .as_ref()
+                    .and_then(|compat| compat.supports_prompt_cache_key)
+                    .is_none()),
+            "openai catalog models do not set supportsPromptCacheKey (the chat-lane preset owns it)"
+        );
     }
 
     /// D-05: the flat list is released-descending (model.ts:218-220 —

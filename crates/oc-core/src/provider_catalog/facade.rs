@@ -146,6 +146,10 @@ pub struct ModelConnection {
     /// (azure.ts `AtLeastOne<{resourceName, baseURL}>`).
     pub resource_name: Option<String>,
     pub headers: BTreeMap<String, String>,
+    /// `settings.transport` — the user's explicit session-transport
+    /// choice (G-245: it wins over the openai/xai/azure websocket
+    /// default the ref provider plugins inject).
+    pub transport: Option<oc_schema::provider::Transport>,
 }
 
 impl ModelConnection {
@@ -159,6 +163,7 @@ impl ModelConnection {
             api_key: string("apiKey"),
             resource_name: string("resourceName"),
             headers: BTreeMap::new(),
+            transport: settings.transport,
         }
     }
 
@@ -544,6 +549,21 @@ pub fn language_model_for_model(
         connection,
         model,
     )?;
+    // G-285② — snowflake-cortex's `http.response` rewrite
+    // (snowflake-cortex.ts:221-235): a 400 whose error body says
+    // "conversation complete" is the server's terminal success dressed as
+    // an error; the ref plugin swaps in an empty SSE terminator so the
+    // stream ends cleanly instead of failing.
+    let route = if provider_id == "snowflake-cortex" {
+        route.with(RoutePatch {
+            transport: Some(snowflake_conversation_complete_transport(Arc::clone(
+                &context.transport,
+            ))),
+            ..Default::default()
+        })
+    } else {
+        route
+    };
     // G-171: the gpt-5 family defaults ride the route provider options
     // (openai-options.ts `withOpenAIOptions`), under the model overlays.
     // G-193.3: the VerbosityPlugin textVerbosity "low" default merges
@@ -562,21 +582,28 @@ pub fn language_model_for_model(
             ..Default::default()
         })
     };
-    // Provider header plugins (AUD-10②): the ref cerebras/kilo/nvidia/
-    // llmgateway plugins spread their static sets over `provider.headers`
-    // after resolution, injected headers winning per key. Applied under
-    // the model overlays (which still win per key, matching the ref
-    // spread order plugin → model merge).
-    let mut headers = connection.headers.clone();
-    for (name, value) in plugin_provider_headers(
-        &package,
+    // Provider header plugins (AUD-10② + G-261①/G-285③): the ref
+    // cerebras/kilo/nvidia/llmgateway/openrouter/zenmux/vercel plugins
+    // spread their static sets over `provider.headers` after resolution
+    // (injected headers winning per key — zenmux alone spreads first, so
+    // user headers win). Applied under the model overlays (which still
+    // win per key, matching the ref spread order plugin → model merge).
+    //
+    // The gates read the PROVIDER's package + provider-level baseURL
+    // (`item.provider.package` / `item.provider.settings?.baseURL` —
+    // kilo.ts:9-10, zenmux.ts:9-10), not the per-model npm override: a
+    // zenmux claude model re-pointed at the anthropic messages lane still
+    // carries the openai-compatible provider record in the ref registry,
+    // so the pair still injects. `base_url` here is already the merged
+    // provider-level endpoint (connection override → catalog api).
+    let headers = plugin_provider_headers(
+        package_name(&snapshot.info.package).as_str(),
         base_url.as_deref(),
         snapshot.info.activation,
         context.integration_registered(provider_id),
-        &headers,
-    ) {
-        headers.insert(name, value);
-    }
+        &connection.headers,
+    )
+    .merged_over(&connection.headers);
     // Connection headers ride the route defaults (transport headers) —
     // the seam credential-driven providers (copilot) use for their
     // client headers; model overlays apply after and win per key.
@@ -1153,6 +1180,66 @@ fn azure_catalog_route(
     Ok(route)
 }
 
+/// G-285② — the snowflake-cortex `http.response` builtin
+/// (snowflake-cortex.ts:221-235): the transport wrapped with the
+/// 400-"conversation complete" rewrite, riding the same interception
+/// seam the `session.http.*` hooks use.
+#[must_use]
+fn snowflake_conversation_complete_transport(inner: SharedTransport) -> SharedTransport {
+    oc_ai::route::transport::intercepted(
+        inner,
+        oc_ai::route::transport::HttpInterceptors {
+            on_request: Arc::new(|request| {
+                Box::pin(async move { Ok::<_, String>(request) })
+            }),
+            on_response: Arc::new(|snapshot| {
+                Box::pin(async move {
+                    Ok(snowflake_rewrite_400_conversation_complete(&snapshot)
+                        .unwrap_or(snapshot))
+                })
+            }),
+        },
+    )
+}
+
+/// snowflake-cortex.ts:221-235 — a 400 whose decoded error body
+/// (`message` or `error` key, V1's error-body coercion preserved) says
+/// "conversation complete" (case-insensitive) is rewritten into a 200
+/// SSE terminator: `new Response(body, { headers: { "content-type":
+/// "text/event-stream" } })` defaults to status 200, so the stream ends
+/// as a clean empty completion instead of an error.
+#[must_use]
+pub fn snowflake_rewrite_400_conversation_complete(
+    snapshot: &oc_ai::route::transport::HttpResponseSnapshot,
+) -> Option<oc_ai::route::transport::HttpResponseSnapshot> {
+    if snapshot.status != 400 {
+        return None;
+    }
+    let body = std::str::from_utf8(&snapshot.body).ok()?;
+    let decoded: Value = serde_json::from_str(body).ok()?;
+    // `String(error?.message || error?.error || "")` — JS `||` falls
+    // through nulls (and missing keys).
+    let picked = decoded
+        .get("message")
+        .filter(|value| !value.is_null())
+        .or_else(|| decoded.get("error").filter(|value| !value.is_null()))?;
+    let coerced = match picked {
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    };
+    if !coerced.to_lowercase().contains("conversation complete") {
+        return None;
+    }
+    Some(oc_ai::route::transport::HttpResponseSnapshot {
+        status: 200,
+        headers: BTreeMap::from([(
+            "content-type".to_string(),
+            "text/event-stream".to_string(),
+        )]),
+        body: b"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_vec(),
+    })
+}
+
 /// G-168: the third-party Anthropic Messages lanes' per-package root.
 /// The catalog `api` (settings.baseURL) is the CHAT root; the messages
 /// routes bake their own anthropic root (moonshot.ts:86
@@ -1636,11 +1723,12 @@ pub fn custom_language_model(
         .as_ref()
         .map(|body| serde_json::Map::from_iter(body.iter().map(|(k, v)| (k.clone(), v.clone()))));
     let body = merge_json_records(&[provider_body.as_ref(), model_body.as_ref()]);
-    // Provider header plugins (AUD-10②): custom providers bind through
-    // the openai-compatible package, so a custom provider pointed at the
-    // kilo/nvidia/llmgateway gate URLs gets the same injected sets
-    // (spread under the model overlay, which wins per key like the ref
-    // spread order plugin → model merge).
+    // Provider header plugins (AUD-10② + G-261①/G-285③): custom providers
+    // bind through the openai-compatible package, so a custom provider
+    // pointed at the kilo/nvidia/llmgateway/zenmux gate URLs gets the same
+    // injected sets (spread under the model overlay, which wins per key
+    // like the ref spread order plugin → model merge; zenmux's
+    // user-wins spread only fills keys the provider config left unset).
     //
     // F-10a TODO(activation-gate): `Activation::Enabled` is hardcoded
     // because config-defined custom providers have no catalog snapshot —
@@ -1655,12 +1743,9 @@ pub fn custom_language_model(
         Activation::Enabled,
         context.integration_registered(&custom.id),
         custom.headers.as_ref().unwrap_or(&BTreeMap::new()),
-    );
-    let headers = merge_string_records(&[
-        custom.headers.as_ref(),
-        Some(&plugin_headers),
-        model.headers.as_ref(),
-    ]);
+    )
+    .merged_over(custom.headers.as_ref().unwrap_or(&BTreeMap::new()));
+    let headers = merge_string_records(&[Some(&plugin_headers), model.headers.as_ref()]);
     let http = HttpOptions { body, ..Default::default() };
     let route =
         openai_compatible_chat_configured(Arc::clone(&context.transport), &custom.id, base_url)
@@ -1787,6 +1872,7 @@ fn custom_native_language_model(
             .and_then(|settings| settings.rest.get("resourceName"))
             .and_then(Value::as_str)
             .map(str::to_string),
+        transport: None,
         headers: BTreeMap::new(),
     };
     let route = build_route(
@@ -1810,9 +1896,10 @@ fn custom_native_language_model(
         .as_ref()
         .map(|body| serde_json::Map::from_iter(body.iter().map(|(k, v)| (k.clone(), v.clone()))));
     let body = merge_json_records(&[provider_body.as_ref(), model_body.as_ref()]);
-    // AUD-10②: same provider header plugins as the catalog lane — the
-    // cerebras package match (and the openai-compatible gate URLs) apply
-    // to custom native bindings too.
+    // AUD-10② + G-261①/G-285③: same provider header plugins as the
+    // catalog lane — the cerebras package match (and the
+    // openai-compatible gate URLs) apply to custom native bindings too
+    // (zenmux's user-wins spread only fills unset keys).
     //
     // F-10a TODO(activation-gate): same as the openai-compatible custom
     // lane above — config-defined providers carry no activation state;
@@ -1824,12 +1911,9 @@ fn custom_native_language_model(
         Activation::Enabled,
         context.integration_registered(&custom.id),
         custom.headers.as_ref().unwrap_or(&BTreeMap::new()),
-    );
-    let headers = merge_string_records(&[
-        custom.headers.as_ref(),
-        Some(&plugin_headers),
-        model.headers.as_ref(),
-    ]);
+    )
+    .merged_over(custom.headers.as_ref().unwrap_or(&BTreeMap::new()));
+    let headers = merge_string_records(&[Some(&plugin_headers), model.headers.as_ref()]);
     let http = HttpOptions { body, ..Default::default() };
     let route = route.with(RoutePatch {
         defaults: RouteDefaults {
@@ -1850,10 +1934,163 @@ fn custom_native_language_model(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oc_ai::route::transport::FailingTransport;
+    use oc_ai::route::transport::{FailingTransport, Transport, TransportRequest, TransportResponse};
 
     fn context() -> FacadeContext {
         FacadeContext::new(Arc::new(FailingTransport { message: "facade unit test" }))
+    }
+
+    /// G-285② — the 400 "conversation complete" rewrite unit
+    /// (snowflake-cortex.ts:221-235): matched bodies become the 200 SSE
+    /// terminator; everything else passes through untouched.
+    #[test]
+    fn snowflake_fake_stream_rewrite_variants() {
+        let snapshot = |status: u16, body: &str| oc_ai::route::transport::HttpResponseSnapshot {
+            status,
+            headers: BTreeMap::from([(
+                "content-type".to_string(),
+                "application/json".to_string(),
+            )]),
+            body: body.as_bytes().to_vec(),
+        };
+        // matched: message key, mixed case
+        let rewritten =
+            snowflake_rewrite_400_conversation_complete(&snapshot(
+                400,
+                r#"{"message":"Request failed: Conversation Complete."}"#,
+            ))
+            .expect("matched");
+        assert_eq!(rewritten.status, 200, "new Response() defaults to 200");
+        assert_eq!(
+            rewritten.headers.get("content-type").map(String::as_str),
+            Some("text/event-stream")
+        );
+        assert_eq!(
+            String::from_utf8(rewritten.body).unwrap(),
+            "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+        );
+        // matched: the error key variant
+        assert!(
+            snowflake_rewrite_400_conversation_complete(&snapshot(
+                400,
+                r#"{"error":"...conversation complete..."}"#
+            ))
+            .is_some()
+        );
+        // matched: a non-string message (V1's String() coercion)
+        assert!(
+            snowflake_rewrite_400_conversation_complete(&snapshot(
+                400,
+                r#"{"message":42}"#
+            ))
+            .is_none(),
+            "42 does not contain the phrase"
+        );
+        // not matched: other 400 bodies, other statuses, non-JSON
+        for (status, body) in [
+            (400, r#"{"message":"rate limited"}"#),
+            (400, r#"{"error":{"type":"unknown"}}"#),
+            (400, "not json"),
+            (401, r#"{"message":"conversation complete"}"#),
+            (200, r#"{"message":"conversation complete"}"#),
+        ] {
+            assert!(
+                snowflake_rewrite_400_conversation_complete(&snapshot(status, body)).is_none(),
+                "status {status} body {body} must pass through"
+            );
+        }
+    }
+
+    /// G-285② — end to end over the route pipeline: the snowflake
+    /// catalog binding wraps its transport, so a 400 "conversation
+    /// complete" fake answer parses as the empty SSE terminator and the
+    /// stream finishes cleanly instead of failing with a provider error.
+    #[tokio::test]
+    async fn snowflake_route_ends_cleanly_on_fake_400_conversation_complete() {
+        struct Fake {
+            status: u16,
+            json: &'static str,
+        }
+        #[async_trait::async_trait]
+        impl Transport for Fake {
+            async fn execute(
+                &self,
+                _request: TransportRequest,
+            ) -> Result<TransportResponse, oc_ai::route::transport::TransportError> {
+                // An empty `json` stands for the SSE terminator body.
+                let bytes = if self.json.is_empty() {
+                    b"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_vec()
+                } else {
+                    self.json.as_bytes().to_vec()
+                };
+                use futures::StreamExt as _;
+                Ok(TransportResponse {
+                    status: self.status,
+                    headers: BTreeMap::from([(
+                        "content-type".to_string(),
+                        if self.json.is_empty() {
+                            "text/event-stream".to_string()
+                        } else {
+                            "application/json".to_string()
+                        },
+                    )]),
+                    body: futures::stream::iter(vec![Ok::<_, oc_ai::route::transport::TransportError>(
+                        bytes::Bytes::from(bytes),
+                    )])
+                    .boxed(),
+                })
+            }
+        }
+        let fake = |status: u16, json: &'static str| {
+            Arc::new(Fake { status, json }) as SharedTransport
+        };
+
+        let context = FacadeContext::new(fake(
+            400,
+            r#"{"message":"Request failed: Conversation Complete."}"#,
+        ));
+        let catalog = Catalog::embedded();
+        let snowflake = catalog.provider("snowflake-cortex").expect("snowflake in catalog");
+        let model_id = snowflake.models.first().expect("a model").id.0.clone();
+        let connection = ModelConnection {
+            api_key: Some("sf-key".into()),
+            base_url: Some("https://myorg.snowflakecomputing.com/api/v2/cortex/v1".into()),
+            ..Default::default()
+        };
+        let model =
+            language_model(&context, catalog, "snowflake-cortex", &model_id, &connection)
+                .expect("snowflake binds");
+        let route = Arc::clone(&model.route);
+        let mut request = oc_ai::schema::LLMRequest::new(model);
+        request.messages = vec![oc_ai::schema::Message::user("hi")];
+        use futures::StreamExt as _;
+        let mut events = Box::pin(route.stream(request).await.expect("stream starts"));
+        let mut saw_finish = false;
+        let mut provider_error = false;
+        while let Some(event) = events.next().await {
+            match event {
+                Ok(oc_ai::schema::LLMEvent::Finish { .. }) => saw_finish = true,
+                Ok(_) => {}
+                Err(_) => provider_error = true,
+            }
+        }
+        assert!(saw_finish, "the fake 400 ends as a clean empty completion");
+        assert!(!provider_error, "no provider error surfaces");
+
+        // Contrast: an unrelated 400 body is NOT rewritten — the same
+        // transport seam surfaces the provider error instead.
+        let context = FacadeContext::new(fake(400, r#"{"message":"rate limited"}"#));
+        let catalog = Catalog::embedded();
+        let model =
+            language_model(&context, catalog, "snowflake-cortex", &model_id, &connection)
+                .expect("snowflake binds");
+        let route = Arc::clone(&model.route);
+        let mut request = oc_ai::schema::LLMRequest::new(model);
+        request.messages = vec![oc_ai::schema::Message::user("hi")];
+        assert!(
+            route.stream(request).await.is_err(),
+            "a real 400 still fails the request"
+        );
     }
 
     #[test]
@@ -2207,6 +2444,7 @@ mod tests {
                 api_key: Some("ghu_bound_token".into()),
                 resource_name: None,
                 headers: BTreeMap::new(),
+                transport: None,
             },
         )
         .expect("copilot binds");
@@ -2815,6 +3053,7 @@ mod tests {
                 api_key: Some("test-key".into()),
                 resource_name: None,
                 headers: BTreeMap::new(),
+                transport: None,
             },
         )
         .expect("anthropic binds");

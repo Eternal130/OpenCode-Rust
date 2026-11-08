@@ -1,8 +1,11 @@
-//! AUD-10②: the four ref static header-injection provider plugins
-//! (cerebras/kilo/nvidia/llmgateway) reach the actual wire request when
-//! the resolved package + `settings.baseURL` match, and inject nothing
-//! when they do not. Header values are byte-exact vs
-//! `plugin/provider/{cerebras,kilo,nvidia,llmgateway}.ts` (ref v2.0.24).
+//! AUD-10② + G-261①/G-285③/G-245: the ref static header-injection
+//! provider plugins (cerebras/kilo/nvidia/llmgateway/openrouter/zenmux)
+//! reach the actual wire request when the resolved package +
+//! `settings.baseURL` match, and inject nothing when they do not. Header
+//! values are byte-exact vs `plugin/provider/{cerebras,kilo,nvidia,
+//! llmgateway,openrouter,zenmux}.ts` (ref v2.0.24). The G-245 tests pin
+//! the websocket transport defaults (`plugin/provider/{openai,xai,azure}
+//! .ts`).
 //!
 //! Hermetic: asserted at the route's header-building seam
 //! (`Route::prepare_transport`), never sent.
@@ -90,15 +93,32 @@ async fn resolve(
 }
 
 fn connection(base_url: Option<&str>) -> BTreeMap<String, ModelConnection> {
+    keyed_connection("kilo", base_url, None)
+}
+
+fn keyed_connection(
+    provider: &str,
+    base_url: Option<&str>,
+    transport: Option<oc_schema::provider::Transport>,
+) -> BTreeMap<String, ModelConnection> {
     BTreeMap::from([(
-        "kilo".into(),
+        provider.into(),
         ModelConnection {
             base_url: base_url.map(str::to_string),
             api_key: Some("test-key".into()),
             resource_name: None,
             headers: BTreeMap::new(),
+            transport,
         },
     )])
+}
+
+/// A connection spread over several providers (header tests).
+fn multi_connection(entries: &[(&str, ModelConnection)]) -> BTreeMap<String, ModelConnection> {
+    entries
+        .iter()
+        .map(|(id, connection)| (id.to_string(), connection.clone()))
+        .collect()
 }
 
 #[tokio::test]
@@ -127,16 +147,16 @@ async fn kilo_non_matching_baseurl_injects_nothing() {
 async fn nvidia_gets_billing_origin_default() {
     // nvidia.ts:10-17 — catalog api https://integrate.api.nvidia.com/v1,
     // no user header → default "OpenCode".
-    let mut connections = connection(None);
-    connections.insert(
-        "nvidia".into(),
+    let connections = multi_connection(&[(
+        "nvidia",
         ModelConnection {
             base_url: None,
             api_key: Some("nv-key".into()),
             resource_name: None,
             headers: BTreeMap::new(),
+            transport: None,
         },
-    );
+    )]);
     let resolved = resolve(None, connections, "nvidia", "baai/bge-m3").await;
     assert_header(&resolved, "HTTP-Referer", Some("https://opencode.ai/"));
     assert_header(&resolved, "X-Title", Some("opencode"));
@@ -149,16 +169,16 @@ async fn llmgateway_requires_registered_integration() {
     // is registered under the provider id. A bare context (no integration
     // host) must not inject; the catalog-loaded host registers it (like
     // the ref plugin's Integration registration), unlocking the set.
-    let mut connections = connection(None);
-    connections.insert(
-        "llmgateway".into(),
+    let connections = multi_connection(&[(
+        "llmgateway",
         ModelConnection {
             base_url: None,
             api_key: Some("lgw-key".into()),
             resource_name: None,
             headers: BTreeMap::new(),
+            transport: None,
         },
-    );
+    )]);
     let resolved =
         resolve(None, connections.clone(), "llmgateway", "grok-4-1-fast-reasoning").await;
     assert_eq!(header(&resolved, "X-Source"), None, "unregistered integration must not inject");
@@ -177,9 +197,8 @@ async fn llmgateway_requires_registered_integration() {
 #[tokio::test]
 async fn cerebras_package_gets_third_party_integration_header() {
     // cerebras.ts:9-12 — package match only, no baseURL gate.
-    let mut connections = connection(None);
-    connections.insert(
-        "cerebras".into(),
+    let connections = multi_connection(&[(
+        "cerebras",
         ModelConnection {
             // The ref cerebras package bakes its API base; the plugin has
             // no baseURL gate, any base exercises the package match.
@@ -187,8 +206,9 @@ async fn cerebras_package_gets_third_party_integration_header() {
             api_key: Some("csk-key".into()),
             resource_name: None,
             headers: BTreeMap::new(),
+            transport: None,
         },
-    );
+    )]);
     let resolved = resolve(None, connections, "cerebras", "qwen-3.8-27b").await;
     assert_header(&resolved, "X-Cerebras-3rd-Party-Integration", Some("opencode"));
     // and the other plugin sets stay absent
@@ -198,18 +218,18 @@ async fn cerebras_package_gets_third_party_integration_header() {
 
 #[tokio::test]
 async fn unmatched_providers_get_no_plugin_headers() {
-    // groq: a baked-base openai-family provider — none of the four
-    // plugins' gates can match.
-    let mut connections = connection(None);
-    connections.insert(
-        "groq".into(),
+    // groq: a baked-base openai-family provider — none of the plugin
+    // gates can match.
+    let connections = multi_connection(&[(
+        "groq",
         ModelConnection {
             base_url: None,
             api_key: Some("gsk-key".into()),
             resource_name: None,
             headers: BTreeMap::new(),
+            transport: None,
         },
-    );
+    )]);
     let (host, _dir) = host().await;
     host.update_integration("groq", "Groq");
     let resolved = resolve(Some(host), connections, "groq", "llama-3.3-70b-versatile").await;
@@ -217,4 +237,137 @@ async fn unmatched_providers_get_no_plugin_headers() {
     assert_header(&resolved, "X-Title", None);
     assert_header(&resolved, "X-Source", None);
     assert_header(&resolved, "X-Cerebras-3rd-Party-Integration", None);
+}
+
+/// G-261① — openrouter.ts:9-14: every provider bound to the openrouter
+/// package gets the referer/title pair (package gate only).
+#[tokio::test]
+async fn openrouter_package_gets_referer_and_title() {
+    let connections = keyed_connection("openrouter", None, None);
+    let resolved = resolve(None, connections, "openrouter", "anthropic/claude-sonnet-4.5").await;
+    assert_header(&resolved, "HTTP-Referer", Some("https://opencode.ai/"));
+    assert_header(&resolved, "X-Title", Some("opencode"));
+}
+
+/// G-285③ — zenmux.ts:10-17: the catalog api is exactly
+/// `https://zenmux.ai/api/v1`, so the pair injects — but user headers
+/// win (the ref spreads the injected pair FIRST).
+#[tokio::test]
+async fn zenmux_catalog_baseurl_gets_pair_under_user_headers() {
+    // No user HTTP-Referer: the injected default rides the wire.
+    let connections = keyed_connection("zenmux", None, None);
+    let resolved = resolve(None, connections, "zenmux", "anthropic/claude-sonnet-4.5").await;
+    assert_header(&resolved, "HTTP-Referer", Some("https://opencode.ai/"));
+    assert_header(&resolved, "X-Title", Some("opencode"));
+
+    // A user-set HTTP-Referer survives the zenmux spread (the opposite of
+    // the other plugins' injected-wins order).
+    let connections = multi_connection(&[(
+        "zenmux",
+        ModelConnection {
+            base_url: None,
+            api_key: Some("zenmux-key".into()),
+            resource_name: None,
+            headers: BTreeMap::from([(
+                "HTTP-Referer".to_string(),
+                "https://mine.example/".to_string(),
+            )]),
+            transport: None,
+        },
+    )]);
+    let resolved = resolve(None, connections, "zenmux", "anthropic/claude-sonnet-4.5").await;
+    assert_header(&resolved, "HTTP-Referer", Some("https://mine.example/"));
+    assert_header(&resolved, "X-Title", Some("opencode"));
+}
+
+/// G-245 — the websocket transport defaults: openai/xai default to
+/// `websocket` (openai.ts:262, xai.ts:102), azure only while the
+/// responses channel is usable (azure.ts:358-365); the user's explicit
+/// `settings.transport` wins; every other provider stays HTTP.
+#[tokio::test]
+async fn websocket_transport_defaults() {
+    use oc_schema::provider::Transport;
+
+    // openai — default websocket.
+    let resolved =
+        resolve(None, keyed_connection("openai", None, None), "openai", "gpt-5.5").await;
+    assert_eq!(resolved.transport, Some(Transport::Websocket), "openai defaults to websocket");
+    // xai — default websocket.
+    let resolved =
+        resolve(None, keyed_connection("xai", None, None), "xai", "grok-4.5").await;
+    assert_eq!(resolved.transport, Some(Transport::Websocket), "xai defaults to websocket");
+    // azure — resource name (Azure-native endpoint) → websocket.
+    let connections = multi_connection(&[(
+        "azure",
+        ModelConnection {
+            base_url: None,
+            api_key: Some("az-key".into()),
+            resource_name: Some("my-resource".into()),
+            headers: BTreeMap::new(),
+            transport: None,
+        },
+    )]);
+    let resolved = resolve(None, connections, "azure", "gpt-5.5").await;
+    assert_eq!(
+        resolved.transport,
+        Some(Transport::Websocket),
+        "azure defaults to websocket while Azure-native"
+    );
+    // azure over a non-Azure gateway baseURL → stays HTTP (capable=false).
+    let connections = multi_connection(&[(
+        "azure",
+        ModelConnection {
+            base_url: Some("https://gateway.example.com/v1".into()),
+            api_key: Some("az-key".into()),
+            resource_name: None,
+            headers: BTreeMap::new(),
+            transport: None,
+        },
+    )]);
+    let resolved = resolve(None, connections, "azure", "gpt-5.5").await;
+    assert_eq!(resolved.transport, None, "gateway azure stays on HTTP");
+    // azure over an Azure-native custom baseURL → websocket.
+    let connections = multi_connection(&[(
+        "azure",
+        ModelConnection {
+            base_url: Some("https://my-resource.openai.azure.com/openai".into()),
+            api_key: Some("az-key".into()),
+            resource_name: None,
+            headers: BTreeMap::new(),
+            transport: None,
+        },
+    )]);
+    let resolved = resolve(None, connections, "azure", "gpt-5.5").await;
+    assert_eq!(resolved.transport, Some(Transport::Websocket));
+
+    // Explicit user transport wins over the default (both directions).
+    for provider in ["openai", "xai", "azure"] {
+        let model = match provider {
+            "azure" => "gpt-5.5",
+            "xai" => "grok-4.5",
+            _ => "gpt-5.5",
+        };
+        let connections = multi_connection(&[(
+            provider,
+            ModelConnection {
+                base_url: None,
+                api_key: Some("k".into()),
+                resource_name: (provider == "azure").then(|| "my-resource".to_string()),
+                headers: BTreeMap::new(),
+                transport: Some(Transport::Http),
+            },
+        )]);
+        let resolved = resolve(None, connections, provider, model).await;
+        assert_eq!(
+            resolved.transport,
+            Some(Transport::Http),
+            "{provider}: explicit settings.transport wins"
+        );
+    }
+
+    // Non-defaulted providers stay on HTTP.
+    let resolved =
+        resolve(None, keyed_connection("groq", None, None), "groq", "llama-3.3-70b-versatile")
+            .await;
+    assert_eq!(resolved.transport, None, "groq keeps HTTP");
 }
