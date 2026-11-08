@@ -83,8 +83,8 @@ fn golden_prompt_dock_with_draft() {
 fn golden_permission_dock() {
     let mut footer = pane();
     footer.permission_asked(permission("prm_dock"));
-    assert_eq!(footer.pane_height(), footer_base(FOOTER_HEIGHT) + PERMISSION_ROWS);
-    assert_golden("permission-dock-w80", &footer, 80, footer.pane_height());
+    assert_eq!(footer.pane_height(30), footer_base(FOOTER_HEIGHT) + PERMISSION_ROWS);
+    assert_golden("permission-dock-w80", &footer, 80, footer.pane_height(30));
 }
 
 /// The form blocker grows the dock to `base + FORM_ROWS`.
@@ -92,6 +92,6 @@ fn golden_permission_dock() {
 fn golden_form_dock() {
     let mut footer = pane();
     footer.form_created(question_form("frm_dock"));
-    assert_eq!(footer.pane_height(), footer_base(FOOTER_HEIGHT) + FORM_ROWS);
-    assert_golden("form-dock-w80", &footer, 80, footer.pane_height());
+    assert_eq!(footer.pane_height(30), footer_base(FOOTER_HEIGHT) + FORM_ROWS);
+    assert_golden("form-dock-w80", &footer, 80, footer.pane_height(30));
 }

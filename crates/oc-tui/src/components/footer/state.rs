@@ -34,6 +34,10 @@ pub enum PromptRoute {
     /// `subagent` arm: one child's detail transcript over the
     /// composer).
     Subagent,
+    /// G-272 — the queued-prompts menu (`session.queued_prompts`,
+    /// `<leader>q` / the palette's "View pending prompts" —
+    /// footer.view.tsx:315-318, footer.ts:754).
+    QueuedMenu,
 }
 
 impl PromptRoute {
@@ -166,6 +170,7 @@ impl FooterMachine {
                 PromptRoute::Variant => FooterMode::Variant,
                 PromptRoute::Settings => FooterMode::Settings,
                 PromptRoute::Subagent => FooterMode::Subagent,
+                PromptRoute::QueuedMenu => FooterMode::QueuedMenu,
             },
             FooterView::Permission { .. } => FooterMode::Permission,
             FooterView::Form { .. } => FooterMode::Form,
@@ -187,6 +192,8 @@ pub enum FooterMode {
     /// TUI-17 — the mini subagent inspector (the session-route footer
     /// never routes here; the mini pane renders it directly).
     Subagent,
+    /// G-272 — the mini queued-prompts menu (mini-only route).
+    QueuedMenu,
 }
 
 // ===========================================================================

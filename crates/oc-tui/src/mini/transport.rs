@@ -30,8 +30,9 @@ fn decode_permission(data: &Value) -> PermissionRequest {
     }
 }
 
-/// A form ask decoded from `form.created` (`data.form`).
-fn decode_form(form: &Value) -> FormRequest {
+/// A form ask decoded from `form.created` (`data.form`) — the
+/// `form.list` hydrate rows share the shape (G-272).
+pub(super) fn decode_form(form: &Value) -> FormRequest {
     let text = |key: &str| form.get(key).and_then(Value::as_str).unwrap_or_default().to_owned();
     let fields = form
         .get("fields")
@@ -77,6 +78,17 @@ pub enum Fold {
     Commits(Vec<Commit>),
     /// The running turn finished (`session.execution.*`).
     Idle,
+    /// G-272 — `session.step.ended`'s usage patch (transport.ts:1371-
+    /// 1380): the summed tokens with the step's model (the percent's
+    /// context limit) and the turn's cost.
+    Usage {
+        model: Option<(String, String)>,
+        tokens: u64,
+        cost: Option<f64>,
+    },
+    /// G-272 — the ROOT session's `session.renamed`
+    /// (`input.onSessionTitle`, transport.ts:1036-1039).
+    SessionTitle(String),
 }
 
 /// The per-message text accumulators (`StreamState`: rendered text /
@@ -122,6 +134,12 @@ pub struct TransportState {
     /// G-221 — the streaming parts' tool names (`tool.input.ended`
     /// carries no name; the started event's `name` stands in).
     tool_names: std::collections::HashMap<String, String>,
+    /// G-272 — `state.stepModel` (transport.ts:1073-1076): the
+    /// running step's model (the usage percent's context limit).
+    step_model: Option<(String, String)>,
+    /// G-272 — `state.errors` (transport.ts:1386-1389): the
+    /// assistant messages whose step failure already rendered.
+    error_messages: std::collections::HashSet<String>,
 }
 
 /// G-221 — `FooterQueuedPrompt` (mini/types.ts:92-98 — the text
@@ -203,7 +221,19 @@ impl TransportState {
             // final text (transport.ts:1260-1272).
             "session.tool.input.ended" => self.tool_input_ended(data),
             "session.tool.success" | "session.tool.failed" => self.tool_finished(event_type, data),
-            "session.step.started" | "session.step.ended" | "session.step.failed" => Fold::Ignored,
+            // G-272 — `state.stepModel` + the usage fold
+            // (transport.ts:1073-1081, 1361-1400).
+            "session.step.started" => {
+                let model = data.get("model").cloned().unwrap_or(Value::Null);
+                let provider = text_field(&model, "providerID");
+                let id = text_field(&model, "id");
+                if !provider.is_empty() && !id.is_empty() {
+                    self.step_model = Some((provider, id));
+                }
+                Fold::Ignored
+            }
+            "session.step.ended" => self.step_ended(data),
+            "session.step.failed" => self.step_failed(data),
             // G-221 — the server inbox pending prompts
             // (transport.ts:1040-1072).
             "session.inbox.enqueued" => self.inbox_enqueued(data),
@@ -237,8 +267,58 @@ impl TransportState {
             "session.execution.succeeded"
             | "session.execution.failed"
             | "session.execution.interrupted" => self.execution_ended(event_type, data),
+            // G-272 — the ROOT session's rename
+            // (`input.onSessionTitle?.(event.data.title)`,
+            // transport.ts:1036-1039 — the subagent twin lives in the
+            // tracker).
+            "session.renamed" => Fold::SessionTitle(text_field(data, "title")),
             _ => Fold::Ignored,
         }
+    }
+
+    /// `session.step.ended` (transport.ts:1361-1381): the usage patch
+    /// — the summed tokens (input+output+reasoning+cache.read+
+    /// cache.write) with the step model for the percent's context
+    /// limit, and the cost; `None` when both are zero (the ref's
+    /// `total > 0 || event.data.cost` gate).
+    fn step_ended(&mut self, data: &Value) -> Fold {
+        let tokens = data.get("tokens").cloned().unwrap_or(Value::Null);
+        let number = |key: &str| -> u64 {
+            tokens.get(key).and_then(Value::as_f64).map_or(0.0, f64::round).max(0.0) as u64
+        };
+        let cache = tokens.get("cache").cloned().unwrap_or(Value::Null);
+        let cache_number = |key: &str| -> u64 {
+            cache.get(key).and_then(Value::as_f64).map_or(0.0, f64::round).max(0.0) as u64
+        };
+        let total = number("input")
+            + number("output")
+            + number("reasoning")
+            + cache_number("read")
+            + cache_number("write");
+        let cost = data.get("cost").and_then(Value::as_f64).unwrap_or(0.0);
+        let model = self.step_model.take();
+        if total == 0 && cost == 0.0 {
+            return Fold::Ignored;
+        }
+        Fold::Usage { model, tokens: total, cost: (cost != 0.0).then_some(cost) }
+    }
+
+    /// `session.step.failed` (transport.ts:1383-1400): the error row —
+    /// once per assistant message (`state.errors`), the message of
+    /// the event's error (`errorMessage`).
+    fn step_failed(&mut self, data: &Value) -> Fold {
+        self.step_model = None;
+        let message_id = text_field(data, "assistantMessageID");
+        if !self.error_messages.insert(message_id) {
+            return Fold::Ignored;
+        }
+        let error = data.get("error").cloned().unwrap_or(Value::Null);
+        let message = match &error {
+            Value::String(text) => text.clone(),
+            value => text_field(value, "message"),
+        };
+        let message = if message.is_empty() { "step failed".to_owned() } else { message };
+        Fold::Commit(Commit::error(&message))
     }
 
     fn text_started(&mut self, data: &Value) -> Fold {
@@ -515,6 +595,14 @@ impl TransportState {
     #[must_use]
     pub fn is_running(&self) -> bool {
         self.running
+    }
+
+    /// G-272 — the hydrate's root-active seed (`state.rootActive =
+    /// input.sessionID in active`, transport.ts:988): a session
+    /// still running server-side keeps the footer's running phase
+    /// after a reconnect (the live `execution.*` folds take over).
+    pub fn set_running(&mut self, running: bool) {
+        self.running = running;
     }
 
     /// Did a terminal execution event arrive (`waitForIdle`)?
@@ -1479,7 +1567,11 @@ impl SubagentTracker {
             Fold::Permission(_)
             | Fold::PermissionReplied(_)
             | Fold::Form(_)
-            | Fold::FormRemoved(_) => {}
+            | Fold::FormRemoved(_)
+            // G-272 — the parent-owned folds (usage, the root
+            // session's title) never reach a child transcript.
+            | Fold::Usage { .. }
+            | Fold::SessionTitle(_) => {}
         }
         fold
     }
@@ -1646,6 +1738,88 @@ mod tests {
         match ended {
             Fold::Commit(commit) => assert_eq!(commit.text, "Thinking: all at once"),
             other => panic!("ended folded: {other:?}"),
+        }
+    }
+
+    /// G-272 — the ROOT session's rename (`input.onSessionTitle`,
+    /// transport.ts:1036-1039).
+    #[test]
+    fn session_renamed_folds_the_root_title() {
+        let mut state = TransportState { session_id: "s1".into(), ..Default::default() };
+        let folded = state.fold(&event(
+            "session.renamed",
+            &json!({ "sessionID": "s1", "title": "A fresh title" }),
+        ));
+        assert_eq!(folded, Fold::SessionTitle("A fresh title".to_owned()));
+        // A FOREIGN session's rename never folds.
+        let foreign = state.fold(&event(
+            "session.renamed",
+            &json!({ "sessionID": "other", "title": "Not mine" }),
+        ));
+        assert_eq!(foreign, Fold::Ignored);
+    }
+
+    /// G-272 — the step family (transport.ts:1073-1081, 1361-1400):
+    /// `step.started` records the model, `step.ended` folds the usage
+    /// patch (summed tokens + cost), and `step.failed` renders the
+    /// error row ONCE per assistant message.
+    #[test]
+    fn step_events_fold_usage_and_failure_rows() {
+        let mut state = TransportState { session_id: "s1".into(), ..Default::default() };
+        let started = state.fold(&event(
+            "session.step.started",
+            &json!({ "sessionID": "s1", "model": { "providerID": "p", "id": "m" } }),
+        ));
+        assert_eq!(started, Fold::Ignored);
+        let ended = state.fold(&event(
+            "session.step.ended",
+            &json!({ "sessionID": "s1",
+                     "tokens": { "input": 12000, "output": 300, "reasoning": 50,
+                                 "cache": { "read": 20, "write": 5 } },
+                     "cost": 0.5 }),
+        ));
+        assert_eq!(
+            ended,
+            Fold::Usage {
+                model: Some(("p".to_owned(), "m".to_owned())),
+                tokens: 12375,
+                cost: Some(0.5),
+            }
+        );
+        // Zero tokens and no cost fold nothing.
+        let empty = state.fold(&event(
+            "session.step.ended",
+            &json!({ "sessionID": "s1", "tokens": { "input": 0, "output": 0, "reasoning": 0,
+                                                     "cache": { "read": 0, "write": 0 } } }),
+        ));
+        assert_eq!(empty, Fold::Ignored);
+        // A failed step renders its error row once per message.
+        let failed = state.fold(&event(
+            "session.step.failed",
+            &json!({ "sessionID": "s1", "assistantMessageID": "msg_f",
+                     "error": { "type": "Error", "message": "boom" } }),
+        ));
+        match failed {
+            Fold::Commit(commit) => {
+                assert_eq!(commit.kind, CommitKind::Error);
+                assert_eq!(commit.text, "boom");
+            }
+            other => panic!("failed folded: {other:?}"),
+        }
+        let again = state.fold(&event(
+            "session.step.failed",
+            &json!({ "sessionID": "s1", "assistantMessageID": "msg_f",
+                     "error": { "type": "Error", "message": "boom" } }),
+        ));
+        assert_eq!(again, Fold::Ignored, "the second failure for the same message never re-renders");
+        // A STRING error payload keeps its text.
+        let string_error = state.fold(&event(
+            "session.step.failed",
+            &json!({ "sessionID": "s1", "assistantMessageID": "msg_g", "error": "plain text" }),
+        ));
+        match string_error {
+            Fold::Commit(commit) => assert_eq!(commit.text, "plain text"),
+            other => panic!("failed folded: {other:?}"),
         }
     }
 
