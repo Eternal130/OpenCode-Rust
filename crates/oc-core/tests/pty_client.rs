@@ -1109,6 +1109,81 @@ async fn live_output_flows_after_activate() {
     attachment.detach();
 }
 
+/// G-229① — the CLIENT pump arm forwards the daemon's
+/// `title_changed`/`foreground_process_changed` stream frames. The
+/// daemon + oc-server arms landed in gb9 lane5; this arm is what the
+/// DEFAULT daemon backend's consumers flow through — the old `_ => {}`
+/// here meant the session-title/tab-label chain (`foregroundProcess ??
+/// title`) never saw a value under the default configuration.
+#[tokio::test]
+async fn g229_title_and_foreground_frames_flow_through_the_client_pump() {
+    let (frontend, _bus, state) = prestarted_frontend("g229-pump", FakeConfig::default()).await;
+    *state.replay_bytes.lock() = b"prefix".to_vec();
+    state.chunked_replay.store(false, Ordering::SeqCst);
+    let mut live = state.live_frames.lock();
+    live.push(
+        serde_json::to_vec(&WireResponse::TitleChanged { title: "editor — main".to_owned() })
+            .expect("title json"),
+    );
+    live.push(
+        serde_json::to_vec(&WireResponse::ForegroundProcessChanged {
+            process: Some("vim src/main.rs".to_owned()),
+        })
+        .expect("foreground json"),
+    );
+    live.push(
+        serde_json::to_vec(&WireResponse::ForegroundProcessChanged { process: None })
+            .expect("foreground-clear json"),
+    );
+    drop(live);
+
+    let (events_tx, events_rx) = std::sync::mpsc::channel::<StreamEvent>();
+    let forward = events_tx.clone();
+    let attachment = frontend
+        .attach(
+            &PtyId("pty_persistent_1".to_owned()),
+            AttachInput {
+                cursor: 0,
+                attachment_id: "attach-g229",
+                role: Role::Controller,
+                takeover: false,
+                on_event: Box::new(move |event| {
+                    if matches!(
+                        event,
+                        StreamEvent::TitleChanged { .. } | StreamEvent::ForegroundProcessChanged { .. }
+                    ) {
+                        let _ = forward.send(event);
+                    }
+                }),
+                on_end: Box::new(|| {}),
+            },
+        )
+        .await
+        .expect("attach");
+    assert!(events_rx.try_recv().is_err(), "no events before activate()");
+    attachment.activate();
+    let mut seen = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while seen.len() < 3 {
+        assert!(tokio::time::Instant::now() < deadline, "timed out; seen so far: {seen:?}");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        while let Ok(event) = events_rx.try_recv() {
+            seen.push(event);
+        }
+    }
+    attachment.detach();
+    drop(events_tx);
+    assert_eq!(
+        seen,
+        vec![
+            StreamEvent::TitleChanged { title: "editor — main".to_owned() },
+            StreamEvent::ForegroundProcessChanged { process: Some("vim src/main.rs".to_owned()) },
+            StreamEvent::ForegroundProcessChanged { process: None },
+        ],
+        "both event kinds (and the explicit-null clear) survive the pump"
+    );
+}
+
 async fn attach_with_replay(
     tag: &str,
     replay: Vec<u8>,

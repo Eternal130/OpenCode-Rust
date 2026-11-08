@@ -190,10 +190,27 @@ impl Client {
                 events.push(owner);
                 continue;
             }
-            return match parse_json::<WireResponse>(&frame) {
-                Some(response) => (events, response),
-                None => panic!("unparseable frame: {}", String::from_utf8_lossy(&frame)),
-            };
+            if let Some(response) = parse_json::<WireResponse>(&frame) {
+                // G-229① — async stream-event frames (title/foreground/
+                // resized/controller_changed/exited/replay_complete)
+                // share the connection's ordered writer with exchange
+                // replies and may interleave BEFORE the reply on an
+                // active subscription; they are not the exchange's
+                // answer — keep reading.
+                if matches!(
+                    response,
+                    WireResponse::Resized { .. }
+                        | WireResponse::Exited { .. }
+                        | WireResponse::ControllerChanged { .. }
+                        | WireResponse::TitleChanged { .. }
+                        | WireResponse::ForegroundProcessChanged { .. }
+                        | WireResponse::ReplayComplete { .. }
+                ) {
+                    continue;
+                }
+                return (events, response);
+            }
+            panic!("unparseable frame: {}", String::from_utf8_lossy(&frame));
         }
     }
 

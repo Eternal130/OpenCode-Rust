@@ -842,3 +842,119 @@ async fn persistent_update_requires_valid_size() {
     .await;
     assert_eq!(status, 200, "valid resize: {body}");
 }
+
+// ---------------------------------------------------------------------------
+// G-269 — framed input validation (input_protocol=1)
+// ---------------------------------------------------------------------------
+
+/// Frames one client message: `[type u8][cols u16BE][rows u16BE]` +
+/// payload.
+fn input_frame(kind: u8, cols: u16, rows: u16, payload: &[u8]) -> Vec<u8> {
+    let mut frame = vec![kind];
+    frame.extend_from_slice(&cols.to_be_bytes());
+    frame.extend_from_slice(&rows.to_be_bytes());
+    frame.extend_from_slice(payload);
+    frame
+}
+
+/// G-269 — framed input drops malformed frames on the ref's three
+/// conditions (persistent-pty.ts:213-218: unknown kind, `cols === 0`,
+/// `rows === 0`; plus the <5-byte guard at :212): nothing reaches the
+/// terminal. A valid kind-1 frame's PAYLOAD (not its 5-byte header)
+/// arrives, and in framed mode even a Text message goes through the
+/// same frame parse (ref :202-205 `Buffer.from(message)`) — the header
+/// is never written to the PTY.
+#[tokio::test]
+async fn persistent_framed_input_drops_malformed_frames() {
+    let server = boot().await;
+    let session_id = create_session(&server.client, "g269").await;
+    let (status, created, _) = raw_http(
+        server.addr,
+        "POST",
+        &format!("/api/experimental/session/{session_id}/terminal"),
+        &[("content-type", "application/json")],
+        serde_json::json!({ "title": "g269", "command": "sh", "args": ["-c", "cat; sleep 30"], "env": {} })
+            .to_string()
+            .as_bytes(),
+    )
+    .await;
+    assert_eq!(status, 200, "terminal create: {created}");
+    let pty_id = created["data"]["id"].as_str().expect("pty id").to_owned();
+
+    let (status, socket) = ws_connect(
+        server.addr,
+        &format!("/api/experimental/persistent-pty/{pty_id}/connect?input_protocol=1"),
+        None,
+    )
+    .await
+    .expect("ws");
+    assert_eq!(status, 101);
+    let mut socket = socket.expect("upgraded");
+    while let Some(frame) = socket.recv(std::time::Duration::from_secs(10)).await {
+        if frame.opcode == 0x1 && frame.text().contains("\"replay_complete\"") {
+            break;
+        }
+    }
+
+    // Malformed frames — each carries a distinctive 'x' payload that
+    // must NEVER reach `cat` (all-ASCII so the Text variant is valid
+    // UTF-8 as well).
+    socket
+        .send_binary(&input_frame(2, 80, 24, b"x-kind2\n"))
+        .await
+        .expect("send kind 2");
+    socket
+        .send_binary(&input_frame(1, 0, 24, b"x-cols0\n"))
+        .await
+        .expect("send cols 0");
+    socket
+        .send_binary(&input_frame(1, 80, 0, b"x-rows0\n"))
+        .await
+        .expect("send rows 0");
+    socket.send_binary(&[1, 0, 80]).await.expect("send short");
+    // A malformed frame sent as TEXT goes through the same parse (and
+    // is equally dropped).
+    socket
+        .send_text(std::str::from_utf8(&input_frame(9, 80, 24, b"x-text9\n")).expect("ascii"))
+        .await
+        .expect("send malformed text frame");
+
+    // Valid kind-1 frames — binary and text alike — deliver ONLY the
+    // payload to the terminal.
+    socket
+        .send_binary(&input_frame(1, 80, 24, b"ok-bin\n"))
+        .await
+        .expect("send valid binary frame");
+    socket
+        .send_text(std::str::from_utf8(&input_frame(1, 80, 24, b"ok-text\n")).expect("ascii"))
+        .await
+        .expect("send valid text frame");
+
+    // `cat` echoes in input order: the first echoed bytes are the two
+    // valid payloads — no 'x' bytes, no 5-byte frame headers.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut collected: Vec<u8> = Vec::new();
+    while tokio::time::Instant::now() < deadline {
+        let Some(frame) = socket.recv(std::time::Duration::from_secs(2)).await else { break };
+        if frame.opcode == 0x2 {
+            collected.extend_from_slice(&frame.payload);
+        }
+        let text = b"ok-bin\nok-text\n";
+        if collected.len() >= text.len() && collected.ends_with(text) {
+            break;
+        }
+    }
+    assert!(
+        collected.ends_with(b"ok-bin\nok-text\n"),
+        "both valid payloads echoed in order, collected: {collected:?}"
+    );
+    assert!(
+        !collected.iter().any(|byte| *byte == b'x'),
+        "malformed frame payloads never reached the terminal: {collected:?}"
+    );
+    let header = &input_frame(1, 80, 24, b"")[..5];
+    assert!(
+        !collected.windows(5).any(|window| window == header),
+        "frame headers are stripped (payload-only writes): {collected:?}"
+    );
+}

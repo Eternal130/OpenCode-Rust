@@ -196,6 +196,23 @@ fn utf16_units(text: &str) -> usize {
     text.chars().map(char::len_utf16).sum()
 }
 
+/// G-243② — the byte offset of the `units`-th UTF-16 code unit in
+/// `text` (the inverse of [`utf16_units`]); `None` when `units` is at
+/// or past the end (ref compares against `buffer.length` and replays
+/// nothing, pty.ts:284). A `units` that lands inside a surrogate pair
+/// clamps to the pair's start so the char replays whole (JS could
+/// slice mid-pair; Rust cannot split a `char`).
+fn utf16_byte_offset(text: &str, units: usize) -> Option<usize> {
+    let mut seen = 0usize;
+    for (offset, ch) in text.char_indices() {
+        if seen + ch.len_utf16() > units {
+            return Some(offset);
+        }
+        seen += ch.len_utf16();
+    }
+    (seen >= units).then_some(text.len())
+}
+
 /// G-116③ — the win32 UTF-8 locale overrides (pty.ts:178-180). Pure so
 /// the table is testable on every target; the injection itself is
 /// `#[cfg(windows)]` at the spawn site.
@@ -256,7 +273,16 @@ impl Inner {
         }
         session.buffer.push_str(chunk);
         if session.buffer.len() > BUFFER_LIMIT {
-            let excess_bytes = session.buffer.len() - BUFFER_LIMIT;
+            let mut excess_bytes = session.buffer.len() - BUFFER_LIMIT;
+            // G-243① — a byte-count trim can split a multi-byte UTF-8
+            // codepoint; back off to a char boundary so the drain (and
+            // the prefix scan below) never panics (persistent_pty's
+            // byte buffer does the same backoff, persistent_pty.rs: the
+            // ref slices its JS string which cannot split, pty.ts:219-
+            // 221). The buffer stays at most one char over the limit.
+            while excess_bytes > 0 && !session.buffer.is_char_boundary(excess_bytes) {
+                excess_bytes -= 1;
+            }
             // The buffer cursor moves by the UTF-16 length of the bytes
             // drained (same unit as `cursor`).
             let excess_units: usize =
@@ -798,8 +824,16 @@ impl PtyService {
             let replay = if session.buffer.is_empty() || from >= end as i64 {
                 String::new()
             } else {
-                let offset = ((from as usize).saturating_sub(start)).min(session.buffer.len());
-                session.buffer[offset..].to_string()
+                // G-243② — `from`/`start` are UTF-16 code-unit cursors
+                // (G-116①); convert to a byte offset before slicing the
+                // buffer. Treating the units as a byte index mis-sliced
+                // (or panicked) on multi-byte content; the ref slices in
+                // the same unit it counts (pty.ts:281-286).
+                let units = (from as usize).saturating_sub(start);
+                match utf16_byte_offset(&session.buffer, units) {
+                    Some(offset) => session.buffer[offset..].to_string(),
+                    None => String::new(),
+                }
             };
             (replay, end)
         };
@@ -822,9 +856,11 @@ pub enum AttachError {
     Exited(#[from] ExitedError),
 }
 
+/// The ref lowercases the basename before matching (`name()`,
+/// select.ts:141-144 `path.basename(file).toLowerCase()`).
 fn is_login_shell(command: &str) -> bool {
-    let base = command.rsplit('/').next().unwrap_or(command);
-    matches!(base, "bash" | "zsh" | "sh" | "ksh" | "fish" | "dash")
+    let base = command.rsplit('/').next().unwrap_or(command).to_lowercase();
+    matches!(base.as_str(), "bash" | "zsh" | "sh" | "ksh" | "fish" | "dash")
 }
 
 #[cfg(test)]
@@ -849,7 +885,119 @@ mod tests {
     fn pty_login_shell_detection() {
         assert!(is_login_shell("/bin/bash"));
         assert!(is_login_shell("zsh"));
+        // G-277① — the ref lowercases the basename (select.ts:141-144).
+        assert!(is_login_shell("/bin/BASH"));
+        assert!(is_login_shell("/usr/local/bin/Fish"));
         assert!(!is_login_shell("/usr/bin/env"));
+    }
+
+    /// A session with no backing process — the buffer/attach machinery
+    /// is driveable directly through `on_data` (the G-243 seams).
+    fn synthetic_session(service: &PtyService, id: &str) -> PtyId {
+        let id = PtyId(id.to_string());
+        service.inner.sessions.lock().insert(
+            id.clone(),
+            Session {
+                info: Info {
+                    id: id.clone(),
+                    title: "g243".to_string(),
+                    command: "/bin/sh".to_string(),
+                    args: Vec::new(),
+                    cwd: "/tmp".to_string(),
+                    status: Status::Running,
+                    pid: 0,
+                    exit_code: None,
+                },
+                buffer: String::new(),
+                buffer_cursor: 0,
+                cursor: 0,
+                subscribers: HashMap::new(),
+                ended: HashMap::new(),
+                writer: None,
+                killer: None,
+                resizer: None,
+            },
+        );
+        id
+    }
+
+    /// G-243① — a multi-byte sequence straddling the trim boundary
+    /// trims without splitting a codepoint. The trim drains `excess`
+    /// bytes from the FRONT of the buffer; with é's leading the chunk
+    /// the trim index lands INSIDE the second 'é' (bytes 2..4). The
+    /// old byte-index slice/drain panicked (inside the tokio reader
+    /// task — the stream silently died and the session hung in
+    /// `running`); the ref's JS `slice` can never split
+    /// (pty.ts:219-221).
+    #[tokio::test]
+    async fn g243_buffer_trim_backs_off_to_char_boundary() {
+        let service = PtyService::new(bus().await);
+        let id = synthetic_session(&service, "pty_g243_trim");
+        // "ééé" (2 bytes each) + 'a' run: len = LIMIT+3, excess = 3 —
+        // byte index 3 is the second 'é's continuation byte.
+        let mut chunk = "ééé".to_string();
+        chunk.push_str(&"a".repeat(BUFFER_LIMIT - 3));
+        service.inner.on_data(&id, &chunk);
+
+        let (buffer, buffer_cursor, cursor) = {
+            let sessions = service.inner.sessions.lock();
+            let session = sessions.get(&id).expect("session");
+            (session.buffer.clone(), session.buffer_cursor, session.cursor)
+        };
+        // No split: exactly the first 'é' was drained (a whole char);
+        // the window stays one char over the limit.
+        let mut expected = "éé".to_string();
+        expected.push_str(&"a".repeat(BUFFER_LIMIT - 3));
+        assert_eq!(buffer, expected, "window keeps whole chars only");
+        // Cursor invariant in UTF-16 units: what the window holds is
+        // exactly what the absolute cursors say was not drained.
+        assert_eq!(cursor, BUFFER_LIMIT, "cursor advanced by the chunk's units");
+        assert_eq!(buffer_cursor, 1, "drained exactly one é's worth of units");
+        assert_eq!(cursor - buffer_cursor, utf16_units(&buffer));
+    }
+
+    /// G-243② — `attach({cursor})` replays by UTF-16 code-unit offsets:
+    /// `from`/`start` advance in units (G-116①) but the old code used
+    /// them as BYTE indexes into the buffer — mis-slicing (or panicking
+    /// on) multi-byte content. Ref slices in the same unit it counts
+    /// (pty.ts:281-286).
+    #[tokio::test]
+    async fn g243_attach_replays_from_utf16_cursor_exactly() {
+        let service = PtyService::new(bus().await);
+        let id = synthetic_session(&service, "pty_g243_attach");
+        {
+            let mut sessions = service.inner.sessions.lock();
+            let session = sessions.get_mut(&id).expect("session");
+            // α/β/γ are 1 unit / 2 bytes each; 😀 is 2 units / 4 bytes —
+            // 10 bytes, 5 UTF-16 units.
+            session.buffer.push_str("αβγ😀");
+            session.buffer_cursor = 100;
+            session.cursor = 105;
+        }
+        let attach = |cursor: Option<i64>| {
+            service
+                .attach(&id, cursor, Box::new(|_| {}), Box::new(|_| {}))
+                .expect("attach")
+                .replay
+        };
+        // Past cursor clamps to the retained window start (full replay).
+        assert_eq!(attach(Some(99)), "αβγ😀");
+        assert_eq!(attach(Some(100)), "αβγ😀");
+        // Unit offsets map onto byte offsets: 1 unit in = the second
+        // char (byte 2), NOT byte 1 (the old byte-index path panicked
+        // mid-char here).
+        assert_eq!(attach(Some(101)), "βγ😀");
+        assert_eq!(attach(Some(103)), "😀");
+        // A cursor inside the surrogate pair clamps to the char's start
+        // so it replays whole (JS could slice mid-pair; Rust cannot).
+        assert_eq!(attach(Some(104)), "😀");
+        // At/after the end (and far past it): nothing.
+        assert_eq!(attach(Some(105)), "");
+        assert_eq!(attach(Some(200)), "");
+        // -1 tails from the current end.
+        assert_eq!(attach(Some(-1)), "");
+        // Omitted replays the full retained buffer.
+        assert_eq!(attach(None), "αβγ😀");
     }
 
     #[tokio::test]

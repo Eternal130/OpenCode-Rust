@@ -504,34 +504,32 @@ async fn attach_session(
                 match inbound {
                     Some(Ok(Message::Text(text))) => {
                         let guard = input_lock.clone().lock_owned().await;
-                        shared
-                            .persistent
-                            .write(&pty_id, &text, Some(&attachment_id))
-                            .await
-                            .ok();
+                        if input_protocol {
+                            // G-269 — framed mode parses Text frames
+                            // through the SAME framing as Binary (ref
+                            // :202-205 `Buffer.from(message)` feeds the
+                            // shared parse; only non-framed mode writes
+                            // text directly).
+                            handle_framed(
+                                shared,
+                                &pty_id,
+                                &attachment_id,
+                                text.as_bytes(),
+                            )
+                            .await;
+                        } else {
+                            shared
+                                .persistent
+                                .write(&pty_id, &text, Some(&attachment_id))
+                                .await
+                                .ok();
+                        }
                         drop(guard);
                     }
                     Some(Ok(Message::Binary(bytes))) => {
                         let guard = input_lock.clone().lock_owned().await;
                         if input_protocol {
-                            if let Some(frame) = decode_framed(&bytes) {
-                                match frame.kind {
-                                    0 => {
-                                        shared
-                                            .persistent
-                                            .control(&pty_id, &attachment_id, frame.cols, frame.rows)
-                                            .await
-                                            .ok();
-                                    }
-                                    _ => {
-                                        shared
-                                            .persistent
-                                            .input(&pty_id, &attachment_id, frame.cols, frame.rows, &frame.payload)
-                                            .await
-                                            .ok();
-                                    }
-                                }
-                            }
+                            handle_framed(shared, &pty_id, &attachment_id, &bytes).await;
                         } else {
                             // G-63 — ref :203-216: non-framed binary input
                             // is forwarded byte-for-byte (a lossy UTF-8
@@ -560,17 +558,52 @@ struct FramedInput {
 }
 
 /// `[type u8][cols u16BE][rows u16BE][payload]` — ≥5 bytes; kind 0 is a
-/// control resize, kind 1+ carries input in `payload[5..]` (§3).
+/// control resize, kind 1 carries input in `payload[5..]` (§3).
+/// G-269 — the ref DROPS malformed frames on three conditions
+/// (`if ((type !== 0 && type !== 1) || cols === 0 || rows === 0)
+/// return`, persistent-pty.ts:213-218): unknown kinds (the old `_`
+/// arm treated everything non-zero as input) and zero sizes never
+/// reach `persistent.control/input`.
 fn decode_framed(bytes: &[u8]) -> Option<FramedInput> {
     if bytes.len() < 5 {
         return None;
     }
-    Some(FramedInput {
-        kind: bytes[0],
-        cols: u16::from_be_bytes([bytes[1], bytes[2]]),
-        rows: u16::from_be_bytes([bytes[3], bytes[4]]),
-        payload: bytes[5..].to_vec(),
-    })
+    let kind = bytes[0];
+    let cols = u16::from_be_bytes([bytes[1], bytes[2]]);
+    let rows = u16::from_be_bytes([bytes[3], bytes[4]]);
+    if (kind != 0 && kind != 1) || cols == 0 || rows == 0 {
+        return None;
+    }
+    Some(FramedInput { kind, cols, rows, payload: bytes[5..].to_vec() })
+}
+
+/// G-269 — one framed input message (Binary OR Text in framed mode):
+/// kind 0 → `persistent.control`, kind 1 → `persistent.input`; malformed
+/// frames (the three ref drop conditions above) are silently discarded.
+async fn handle_framed(
+    shared: &std::sync::Arc<pty_state::PtyShared>,
+    pty_id: &PtyId,
+    attachment_id: &str,
+    bytes: &[u8],
+) {
+    if let Some(frame) = decode_framed(bytes) {
+        match frame.kind {
+            0 => {
+                shared
+                    .persistent
+                    .control(pty_id, attachment_id, frame.cols, frame.rows)
+                    .await
+                    .ok();
+            }
+            _ => {
+                shared
+                    .persistent
+                    .input(pty_id, attachment_id, frame.cols, frame.rows, &frame.payload)
+                    .await
+                    .ok();
+            }
+        }
+    }
 }
 
 /// Splits a `WebSocket` into send/receive halves (`WebSocket::split` needs
