@@ -141,13 +141,15 @@ fn opencode_server(answer: &FormAnswer) -> String {
 async fn opencode_authorize(answer: FormAnswer) -> Result<Authorization, String> {
     let server = opencode_server(&answer);
     let http = oc_http::client();
-    let device = flows::request_device_code(
+    // G-244 — JSON body (`send()` schemaBodyJson, opencode.ts:107-113,
+    // 644-650): `supports_org_scope` is a JSON boolean.
+    let device = flows::request_device_code_json(
         &http,
         &format!("{server}/auth/device/code"),
-        vec![
-            ("client_id", OPENCODE_CLIENT_ID.to_owned()),
-            ("supports_org_scope", "true".to_owned()),
-        ],
+        serde_json::json!({
+            "client_id": OPENCODE_CLIENT_ID,
+            "supports_org_scope": true,
+        }),
     )
     .await?;
     // verification_uri_complete resolved against the server root
@@ -163,34 +165,21 @@ async fn opencode_authorize(answer: FormAnswer) -> Result<Authorization, String>
     };
     let interval = device.interval.unwrap_or(5.0);
     let callback: BoxFuture<'static, Result<CredentialValue, String>> = {
-        let http = http.clone();
         let endpoint = format!("{server}/auth/device/token");
+        let server = server.clone();
         Box::pin(async move {
-            flows::run_device_poll(
+            // G-244 — sleep-first polling (opencode.ts:567-570).
+            let decode_http = http.clone();
+            flows::run_device_poll_zen(
                 http,
                 endpoint,
                 OPENCODE_CLIENT_ID.to_owned(),
                 device.device_code,
                 interval,
-                |body| async move {
-                    let access =
-                        body["access_token"].as_str().ok_or("access_token missing")?.to_owned();
-                    let refresh =
-                        body["refresh_token"].as_str().ok_or("refresh_token missing")?.to_owned();
-                    let expires_in = body["expires_in"].as_f64().unwrap_or(3600.0);
-                    let mut metadata = BTreeMap::new();
-                    if let Some(org_id) = body["org_id"].as_str() {
-                        metadata.insert("orgID".to_owned(), Value::String(org_id.to_owned()));
-                        metadata.insert("orgName".to_owned(), Value::String(org_id.to_owned()));
-                    }
-                    Ok(CredentialValue::OAuth(OAuthValue {
-                        method_id: "device".into(),
-                        refresh,
-                        access,
-                        expires: crate::database::migrations::now_ms()
-                            + (expires_in * 1000.0) as i64,
-                        metadata: if metadata.is_empty() { None } else { Some(metadata) },
-                    }))
+                move |body| {
+                    let http = decode_http.clone();
+                    let server = server.clone();
+                    async move { opencode_credential(&http, &server, body).await }
                 },
             )
             .await
@@ -206,6 +195,83 @@ async fn opencode_authorize(answer: FormAnswer) -> Result<Authorization, String>
     })
 }
 
+/// G-244 — the zen credential assembly (opencode.ts:592-623): after the
+/// device exchange, two concurrent GETs (`/api/user`, `/api/orgs`) with
+/// the fresh access token; the org resolves by `org_id` (a listed id
+/// that is absent from `/api/orgs` is a hard error) or the name/id-
+/// sorted first org; metadata records ALL FIVE keys
+/// (server/accountID/email/orgID/orgName) so refresh and the console
+/// config fetch keep hitting the SAME (self-hosted) server.
+async fn opencode_credential(
+    http: &reqwest::Client,
+    server: &str,
+    body: Value,
+) -> Result<CredentialValue, String> {
+    let access = body["access_token"].as_str().ok_or("access_token missing")?.to_owned();
+    let refresh = body["refresh_token"].as_str().ok_or("refresh_token missing")?.to_owned();
+    let expires_in = body["expires_in"].as_f64().unwrap_or(3600.0);
+    // Effect.all(..., { concurrency: 2 }) — the two discovery GETs ride
+    // the same request headers (Accept + User-Agent, bearer token).
+    let headers = |request: reqwest::RequestBuilder| {
+        request
+            .header("Accept", "application/json")
+            .header("User-Agent", flows::app_user_agent())
+            .header("Authorization", format!("Bearer {access}"))
+    };
+    let (user, orgs) = tokio::join!(
+        headers(http.get(format!("{server}/api/user"))).send(),
+        headers(http.get(format!("{server}/api/orgs"))).send(),
+    );
+    let user: Value = user
+        .map_err(|error| format!("request failed: {error}"))?
+        .json()
+        .await
+        .map_err(|error| format!("bad user body: {error}"))?;
+    let orgs: Value = orgs
+        .map_err(|error| format!("request failed: {error}"))?
+        .json()
+        .await
+        .map_err(|error| format!("bad orgs body: {error}"))?;
+    let account_id = user["id"].as_str().ok_or("user id missing")?.to_owned();
+    let email = user["email"].as_str().ok_or("email missing")?.to_owned();
+    let orgs_array = orgs.as_array().ok_or("bad orgs body")?;
+    let mut org_list = Vec::with_capacity(orgs_array.len());
+    for org in orgs_array {
+        let id = org["id"].as_str().ok_or("org id missing")?.to_owned();
+        let name = org["name"].as_str().ok_or("org name missing")?.to_owned();
+        org_list.push((id, name));
+    }
+    // Org resolution (opencode.ts:601-607): `org_id` must match a listed
+    // org; without one the name-then-id sorted first org wins.
+    let org = match body["org_id"].as_str() {
+        Some(org_id) => {
+            let Some(found) = org_list.iter().find(|(id, _)| id == org_id) else {
+                return Err(format!("OpenCode organization not found: {org_id}"));
+            };
+            Some(found.clone())
+        }
+        None => {
+            org_list.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
+            org_list.first().cloned()
+        }
+    };
+    let mut metadata = BTreeMap::new();
+    metadata.insert("server".to_owned(), Value::String(server.to_owned()));
+    metadata.insert("accountID".to_owned(), Value::String(account_id));
+    metadata.insert("email".to_owned(), Value::String(email));
+    if let Some((org_id, org_name)) = org {
+        metadata.insert("orgID".to_owned(), Value::String(org_id));
+        metadata.insert("orgName".to_owned(), Value::String(org_name));
+    }
+    Ok(CredentialValue::OAuth(OAuthValue {
+        method_id: "device".into(),
+        refresh,
+        access,
+        expires: crate::database::migrations::now_ms() + (expires_in * 1000.0) as i64,
+        metadata: Some(metadata),
+    }))
+}
+
 async fn opencode_refresh(value: OAuthValue) -> Result<CredentialValue, String> {
     let server = value
         .metadata
@@ -217,14 +283,15 @@ async fn opencode_refresh(value: OAuthValue) -> Result<CredentialValue, String> 
     let response = http
         .post(format!("{server}/auth/device/token"))
         // G-234① — the ref headers() set (Accept + User-Agent) on the
-        // refresh post too.
+        // refresh post too; G-244 — the body is JSON (opencode.ts:644-650
+        // schemaBodyJson), not form-encoded.
         .header("Accept", "application/json")
         .header("User-Agent", flows::app_user_agent())
-        .form(&[
-            ("grant_type", "refresh_token"),
-            ("refresh_token", value.refresh.as_str()),
-            ("client_id", OPENCODE_CLIENT_ID),
-        ])
+        .json(&serde_json::json!({
+            "grant_type": "refresh_token",
+            "refresh_token": value.refresh,
+            "client_id": OPENCODE_CLIENT_ID,
+        }))
         .send()
         .await
         .map_err(|error| format!("request failed: {error}"))?;

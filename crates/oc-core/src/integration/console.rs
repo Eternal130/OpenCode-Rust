@@ -291,7 +291,14 @@ pub async fn fetch_config(
                 urlencoding::encode(connection),
                 urlencoding::encode(&redirect_to)
             );
-            return Err(ConsoleError::SsoRequired { organization: None, url });
+            // G-244 — `organizationName(value)` (opencode.ts:493-494): the
+            // SSO message names the credential's org, not a hardcoded None.
+            let organization = view
+                .metadata
+                .and_then(|metadata| metadata.get("orgName"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            return Err(ConsoleError::SsoRequired { organization, url });
         }
         return Err(ConsoleError::Http(format!("console returned {status}")));
     }
