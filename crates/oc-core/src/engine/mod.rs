@@ -101,15 +101,15 @@ pub mod warming;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use dashmap::DashMap;
 use oc_schema::id::SessionId;
 use oc_util::determinism::{Clock, IdGen, RngSource, SystemClock, SystemRng, UuidV4IdGen};
 
 use crate::bus::{Bus, BusOptions, Subscription};
-use crate::config::{self, managed_policy, GlobalDirs, Loader};
+use crate::config::{self, GlobalDirs, Loader, managed_policy};
 use crate::database::Database;
 use crate::forms::Forms;
 use crate::hooks::{InternalPlugin, PluginSupervisor};
@@ -122,7 +122,7 @@ use crate::location_services::{GlobalServices, LocationServiceMap};
 use crate::mcp::McpRegistry;
 use crate::permission::{Permission, ReplyInput};
 use crate::provider_catalog::facade::{FacadeContext, ModelConnection};
-use crate::provider_catalog::{providers_from_config, Catalog};
+use crate::provider_catalog::{Catalog, providers_from_config};
 use crate::session::execution::{InterruptOptions, SessionExecution};
 use crate::session::inbox::SessionInbox;
 use crate::session::projector::install_projectors;
@@ -143,7 +143,7 @@ use crate::subagent::ChildExecution;
 use crate::tool::shell::{ShellToolServices, SyntheticPublisher};
 use crate::tool::skill::SkillTable;
 use crate::tool::{
-    self, opencode_tools, question, skill as skill_tool, webfetch, websearch, ToolServices,
+    self, ToolServices, opencode_tools, question, skill as skill_tool, webfetch, websearch,
 };
 use crate::tool_output::ToolOutput;
 use oc_ai::route::SharedTransport;
@@ -1490,9 +1490,9 @@ impl Engine {
             )
             .await;
             let _ = applied; // diagnostics only (boot-trace reads the registry)
-                             // The latest activation updates the guest's ctx.location
-                             // view (the one-guest approximation of v2's per-instance
-                             // hosts) — only when plugins are active for this location.
+            // The latest activation updates the guest's ctx.location
+            // view (the one-guest approximation of v2's per-instance
+            // hosts) — only when plugins are active for this location.
             let active = source.active_plugins(&ops);
             if active.as_ref().is_none_or(|ids| !ids.is_empty()) {
                 source.location_activated(&location.as_path().display().to_string(), &project.id);
@@ -2161,11 +2161,7 @@ impl Engine {
     /// of each requested type (empty slice = everything).
     #[must_use]
     pub fn subscribe(&self, types: &[&str]) -> Subscription {
-        if types.is_empty() {
-            self.bus.subscribe()
-        } else {
-            self.bus.subscribe_types(types)
-        }
+        if types.is_empty() { self.bus.subscribe() } else { self.bus.subscribe_types(types) }
     }
 
     /// Manual compaction: admit a `/compact` item and run it to

@@ -5,9 +5,9 @@
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, Uri};
 use axum::response::Response;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use super::common::{json_location_data, resolve_location, ApiError, SharedState};
+use super::common::{ApiError, SharedState, json_location_data, resolve_location};
 use super::session::services;
 
 pub fn routes() -> axum::Router<SharedState> {

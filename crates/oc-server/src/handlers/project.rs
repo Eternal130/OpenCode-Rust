@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, Uri};
 use axum::response::{IntoResponse, Response};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use super::common::{no_content, resolve_location, ApiError, SharedState};
+use super::common::{ApiError, SharedState, no_content, resolve_location};
 use super::session::{query_field, services};
 use oc_core::project::ProjectEvents as _;
 use oc_core::project::ProjectStore as _;
@@ -1450,11 +1450,7 @@ async fn vcs_diff(
         let Some(reference) = git_merge_base(scope, &base) else {
             return Err(unavailable(&format!("No merge base available for {base}")));
         };
-        if mode == "committed" {
-            (Some(reference), Some("HEAD"))
-        } else {
-            (Some(reference), None)
-        }
+        if mode == "committed" { (Some(reference), Some("HEAD")) } else { (Some(reference), None) }
     };
 
     // File list + stats + untracked (git.ts:344-371 + statusNames).
@@ -1906,7 +1902,8 @@ async fn vcs_init(
     // vcs.ts:47-49 — re-resolve; a directory that STILL has no VCS after a
     // successful init is a 503, never a silent success.
     let resolver = oc_core::project::Resolver::new(
-        std::sync::Arc::clone(&state.engine.projects) as std::sync::Arc<dyn oc_core::project::ProjectStore>,
+        std::sync::Arc::clone(&state.engine.projects)
+            as std::sync::Arc<dyn oc_core::project::ProjectStore>,
         std::sync::Arc::new(oc_core::project::NoEvents),
     );
     let resolved = resolver.resolve(location.as_path()).await;

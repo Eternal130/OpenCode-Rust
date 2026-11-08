@@ -11,14 +11,13 @@
 )]
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
-use axum::http::{header, HeaderMap, StatusCode, Uri};
+use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use oc_core::pty::{CreateInput, UpdateInput};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::common::{
-    json_location_data, no_content, parse_query_field, resolve_location, ApiError,
-    SharedState,
+    ApiError, SharedState, json_location_data, no_content, parse_query_field, resolve_location,
 };
 use super::pty_state;
 

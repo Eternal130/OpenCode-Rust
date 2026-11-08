@@ -8,8 +8,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use super::repository::{
-    cache_identity, cache_path, is_file, is_remote, parse, parse_remote, same, validate_branch,
-    Reference,
+    Reference, cache_identity, cache_path, is_file, is_remote, parse, parse_remote, same,
+    validate_branch,
 };
 use super::repository_cache::{
     CacheError, EnsureInput, MemoryRefreshStore, Refresh, RefreshStore, RepositoryCache,
@@ -683,8 +683,8 @@ fn instructions_restate_the_list_when_entries_change() {
 #[test]
 fn guidance_source_reads_renders_and_removes() {
     use crate::session::runner::context::{
-        instruction_read, reference_guidance_source, render_initial, render_update,
-        InstructionList, ReadOutcome,
+        InstructionList, ReadOutcome, instruction_read, reference_guidance_source, render_initial,
+        render_update,
     };
     use std::collections::BTreeMap;
 
@@ -970,10 +970,7 @@ fn g270_sources_from_config_mirrors_the_config_plugin() {
         ),
         // A path-less document (the global config has no file path):
         // relative paths resolve against the LOCATION directory.
-        config_document(
-            None,
-            serde_json::json!({ "global-ref": "./global" }),
-        ),
+        config_document(None, serde_json::json!({ "global-ref": "./global" })),
     ];
     let sources = ReferenceService::sources_from_config(&entries, location, home);
     let by_name = |name: &str| {
@@ -988,22 +985,38 @@ fn g270_sources_from_config_mirrors_the_config_plugin() {
     // Absolute local path stays.
     assert_eq!(
         by_name("local-abs"),
-        Source::Local(LocalSource { path: PathBuf::from("/abs/docs"), description: None, hidden: None })
+        Source::Local(LocalSource {
+            path: PathBuf::from("/abs/docs"),
+            description: None,
+            hidden: None
+        })
     );
     // Relative resolves against the DOCUMENT's directory (/work).
     assert_eq!(
         by_name("local-rel"),
-        Source::Local(LocalSource { path: PathBuf::from("/work/docs"), description: None, hidden: None })
+        Source::Local(LocalSource {
+            path: PathBuf::from("/work/docs"),
+            description: None,
+            hidden: None
+        })
     );
     // `~` resolves against home.
     assert_eq!(
         by_name("local-home"),
-        Source::Local(LocalSource { path: PathBuf::from("/home/u/refs/x"), description: None, hidden: None })
+        Source::Local(LocalSource {
+            path: PathBuf::from("/home/u/refs/x"),
+            description: None,
+            hidden: None
+        })
     );
     // Path-less document: relative resolves against the location.
     assert_eq!(
         by_name("global-ref"),
-        Source::Local(LocalSource { path: PathBuf::from("/work/global"), description: None, hidden: None })
+        Source::Local(LocalSource {
+            path: PathBuf::from("/work/global"),
+            description: None,
+            hidden: None
+        })
     );
     // Object git entry keeps everything.
     assert_eq!(
@@ -1058,26 +1071,35 @@ fn g270_install_seeds_silently() {
     // install(): bulk seed, no notify (no refresh spawned, entries land
     // alongside each other in one shot).
     service.install(vec![
-        ("seeded".to_owned(), Source::Local(LocalSource {
-            path: PathBuf::from("/docs"),
-            description: None,
-            hidden: None,
-        })),
-        ("second".to_owned(), Source::Local(LocalSource {
-            path: PathBuf::from("/two"),
-            description: None,
-            hidden: None,
-        })),
+        (
+            "seeded".to_owned(),
+            Source::Local(LocalSource {
+                path: PathBuf::from("/docs"),
+                description: None,
+                hidden: None,
+            }),
+        ),
+        (
+            "second".to_owned(),
+            Source::Local(LocalSource {
+                path: PathBuf::from("/two"),
+                description: None,
+                hidden: None,
+            }),
+        ),
     ]);
     assert_eq!(service.sources().len(), 2, "bulk seed landed both entries");
     assert_eq!(service.list().len(), 2);
 
     // A same-name install REPLACES (insert-or-replace editor semantics).
-    service.install(vec![("seeded".to_owned(), Source::Local(LocalSource {
-        path: PathBuf::from("/replaced"),
-        description: Some("replaced".to_owned()),
-        hidden: None,
-    }))]);
+    service.install(vec![(
+        "seeded".to_owned(),
+        Source::Local(LocalSource {
+            path: PathBuf::from("/replaced"),
+            description: Some("replaced".to_owned()),
+            hidden: None,
+        }),
+    )]);
     assert_eq!(service.sources().len(), 2, "no duplicate row");
     let seeded = service.get("seeded").expect("seeded");
     assert_eq!(
@@ -1107,18 +1129,24 @@ async fn g270_apply_notifies_once_per_transform() {
     let service = Arc::new(ReferenceService::with_ensure(PathBuf::from("/repos"), ensure));
 
     service.apply(vec![
-        ("one".to_owned(), Source::Git(GitSource {
-            repository: "owner/one".to_owned(),
-            branch: None,
-            description: None,
-            hidden: None,
-        })),
-        ("two".to_owned(), Source::Git(GitSource {
-            repository: "owner/two".to_owned(),
-            branch: None,
-            description: None,
-            hidden: None,
-        })),
+        (
+            "one".to_owned(),
+            Source::Git(GitSource {
+                repository: "owner/one".to_owned(),
+                branch: None,
+                description: None,
+                hidden: None,
+            }),
+        ),
+        (
+            "two".to_owned(),
+            Source::Git(GitSource {
+                repository: "owner/two".to_owned(),
+                branch: None,
+                description: None,
+                hidden: None,
+            }),
+        ),
     ]);
     // The refresh is forked onto the runtime — give it a tick to land.
     for _ in 0..50 {

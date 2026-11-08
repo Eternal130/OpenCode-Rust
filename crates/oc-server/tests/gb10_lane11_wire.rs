@@ -22,7 +22,7 @@ use oc_core::engine::{Engine, EngineOptions};
 use oc_server::handlers;
 use oc_server::state::{AppState, AuthConfig};
 use oc_util::determinism::{SystemClock, UuidV4IdGen};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use support::request;
 
@@ -77,18 +77,14 @@ fn owned_headers<'a>(headers: &'a [(&'a str, String)]) -> Vec<(&'a str, &'a str)
 }
 async fn get(server: &TestServer, target: &str) -> support::RawResponse {
     let headers = workspace_headers(server);
-    request(server.addr, "GET", target, &owned_headers(&headers), &[])
-        .await
-        .expect("GET")
+    request(server.addr, "GET", target, &owned_headers(&headers), &[]).await.expect("GET")
 }
 
 async fn post_json(server: &TestServer, target: &str, body: &Value) -> support::RawResponse {
     let headers = workspace_headers(server);
     let mut owned = owned_headers(&headers);
     owned.push(("content-type", "application/json"));
-    request(server.addr, "POST", target, &owned, body.to_string().as_bytes())
-        .await
-        .expect("POST")
+    request(server.addr, "POST", target, &owned, body.to_string().as_bytes()).await.expect("POST")
 }
 
 /// The project id the resolver derives for the workspace (same machinery
@@ -163,8 +159,12 @@ async fn credential_first_create_defaults_active_and_label_default() {
     let server = boot().await;
     // No `activate`, no `label` — ref create: label ?? "default", and
     // `activate !== false || !current` makes the FIRST credential active.
-    let response =
-        post_json(&server, "/api/credential", &json!({ "integrationID": "dummy", "value": key_credential("k1") })).await;
+    let response = post_json(
+        &server,
+        "/api/credential",
+        &json!({ "integrationID": "dummy", "value": key_credential("k1") }),
+    )
+    .await;
     assert_eq!(response.status, 200, "{}", response.text());
     let created = response.json()["data"].clone();
     assert_eq!(created["label"], json!("default"), "{created}");
@@ -190,7 +190,8 @@ async fn credential_first_create_defaults_active_and_label_default() {
     let response = get(&server, "/api/credential").await;
     assert_eq!(response.status, 200, "{}", response.text());
     let rows = response.json()["data"].as_array().expect("data").clone();
-    let dummy: Vec<&Value> = rows.iter().filter(|row| row["integrationID"] == json!("dummy")).collect();
+    let dummy: Vec<&Value> =
+        rows.iter().filter(|row| row["integrationID"] == json!("dummy")).collect();
     assert_eq!(dummy.len(), 2, "{rows:?}");
     let k1 = dummy.iter().find(|row| row["label"] == json!("default")).expect("k1");
     let k2 = dummy.iter().find(|row| row["label"] == json!("second")).expect("k2");
@@ -247,11 +248,19 @@ async fn credential_first_create_with_activate_false_is_forced_active() {
 #[tokio::test]
 async fn credential_duplicate_id_conflicts_with_resource() {
     let server = boot().await;
-    let first =
-        post_json(&server, "/api/credential", &json!({ "id": "cred_dup", "integrationID": "dummy", "value": key_credential("k") })).await;
+    let first = post_json(
+        &server,
+        "/api/credential",
+        &json!({ "id": "cred_dup", "integrationID": "dummy", "value": key_credential("k") }),
+    )
+    .await;
     assert_eq!(first.status, 200, "{}", first.text());
-    let second =
-        post_json(&server, "/api/credential", &json!({ "id": "cred_dup", "integrationID": "dummy", "value": key_credential("k") })).await;
+    let second = post_json(
+        &server,
+        "/api/credential",
+        &json!({ "id": "cred_dup", "integrationID": "dummy", "value": key_credential("k") }),
+    )
+    .await;
     assert_eq!(second.status, 409, "{}", second.text());
     let error = second.json();
     assert_eq!(error["_tag"], json!("ConflictError"), "{error}");
@@ -295,8 +304,12 @@ async fn agent_list_returns_every_agent_with_the_default_first() {
     let data = response.json()["data"].as_array().expect("data").clone();
     assert!(!data.is_empty());
     // Default-first (core agent.ts:123-129 puts selectedDefault first).
-    assert_eq!(data[0]["id"], json!("build"), "default agent first: {:?}",
-        data.iter().map(|a| a["id"].clone()).collect::<Vec<_>>());
+    assert_eq!(
+        data[0]["id"],
+        json!("build"),
+        "default agent first: {:?}",
+        data.iter().map(|a| a["id"].clone()).collect::<Vec<_>>()
+    );
     // Hidden agents (title/summary builtins) stay visible — the ref list
     // does NOT filter them.
     assert!(
@@ -337,8 +350,7 @@ async fn reference_list_reads_the_assembled_service() {
             .unwrap_or_else(|| panic!("{name} missing: {data:?}"))
             .clone()
     };
-    let names: Vec<&str> =
-        data.iter().map(|e| e["name"].as_str().unwrap_or_default()).collect();
+    let names: Vec<&str> = data.iter().map(|e| e["name"].as_str().unwrap_or_default()).collect();
 
     // Local: path resolved against the location, description present,
     // hidden omitted.
@@ -346,7 +358,10 @@ async fn reference_list_reads_the_assembled_service() {
     assert_eq!(rel["path"], json!(workspace.join("docs").display().to_string()), "{rel}");
     assert_eq!(rel["description"], json!("Local docs"));
     assert!(rel.get("hidden").is_none(), "hidden omitted: {rel}");
-    assert_eq!(rel["source"], json!({ "type": "local", "path": workspace.join("docs").display().to_string() }));
+    assert_eq!(
+        rel["source"],
+        json!({ "type": "local", "path": workspace.join("docs").display().to_string() })
+    );
 
     // Git: path = the materialized cache path (NOT the URL), source keeps
     // repository/branch; hidden present.
@@ -364,7 +379,10 @@ async fn reference_list_reads_the_assembled_service() {
     assert_eq!(git["path"], json!(expected_cache), "{git}");
     assert_ne!(git["path"], json!("https://127.0.0.1:1/a/b"), "URL never leaks as path");
     assert_eq!(git["hidden"], json!(true));
-    assert_eq!(git["source"], json!({ "type": "git", "repository": "https://127.0.0.1:1/a/b", "branch": "main" }));
+    assert_eq!(
+        git["source"],
+        json!({ "type": "git", "repository": "https://127.0.0.1:1/a/b", "branch": "main" })
+    );
 
     // String shorthand without ./ / ~ is a GIT source.
     let shorthand = by_name("git-shorthand");
@@ -412,8 +430,7 @@ async fn fs_find_returns_location_relative_paths() {
 #[tokio::test]
 async fn vcs_init_unknown_provider_is_a_400_with_provider_field() {
     let server = boot().await;
-    let response =
-        post_json(&server, "/api/vcs/init?provider=darcs", &json!({})).await;
+    let response = post_json(&server, "/api/vcs/init?provider=darcs", &json!({})).await;
     assert_eq!(response.status, 400, "{}", response.text());
     let error = response.json();
     assert_eq!(error["_tag"], json!("InvalidRequestError"), "{error}");
@@ -474,7 +491,11 @@ async fn info_carries_capabilities_only_when_ready() {
     let response = request(server.addr, "GET", "/api/info", &[], &[]).await.expect("info");
     assert_eq!(response.status, 200, "{}", response.text());
     let body = response.json();
-    assert_eq!(body["capabilities"]["persistentPty"], json!(cfg!(not(target_os = "windows"))), "{body}");
+    assert_eq!(
+        body["capabilities"]["persistentPty"],
+        json!(cfg!(not(target_os = "windows"))),
+        "{body}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -510,12 +531,9 @@ async fn ws_status(addr: std::net::SocketAddr, target: &str) -> u16 {
 async fn pty_connect_unresolvable_location_is_a_404_before_upgrade() {
     let server = boot().await;
     // Create a real pty in the workspace.
-    let response = post_json(
-        &server,
-        "/api/pty",
-        &json!({ "command": "sh", "args": ["-c", "sleep 30"] }),
-    )
-    .await;
+    let response =
+        post_json(&server, "/api/pty", &json!({ "command": "sh", "args": ["-c", "sleep 30"] }))
+            .await;
     assert_eq!(response.status, 200, "{}", response.text());
     let pty_id = response.json()["data"]["id"].as_str().expect("pty id").to_owned();
 
@@ -618,7 +636,11 @@ async fn form_duplicate_create_is_a_conflict_error() {
     let second = post_json(&server, &format!("/api/session/{session_id}/form"), &form_body).await;
     assert_eq!(second.status, 409, "{}", second.text());
     let error = second.json();
-    assert_eq!(error["_tag"], json!("ConflictError"), "typed clients classify duplicates as conflicts: {error}");
+    assert_eq!(
+        error["_tag"],
+        json!("ConflictError"),
+        "typed clients classify duplicates as conflicts: {error}"
+    );
     assert_eq!(error["resource"], json!("frm_dup"), "{error}");
     assert_eq!(error["message"], json!("Form already exists: frm_dup"), "{error}");
 }

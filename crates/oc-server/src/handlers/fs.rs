@@ -10,9 +10,9 @@
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, Uri};
 use axum::response::Response;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use super::common::{parse_query_field, ApiError, SharedState};
+use super::common::{ApiError, SharedState, parse_query_field};
 use super::session::{query_field, services};
 
 pub fn routes() -> axum::Router<SharedState> {
@@ -286,7 +286,12 @@ async fn find(
     // build-on-first-miss) — no per-request walk.
     let entries = state
         .fs_index
-        .entries(root_for_entries, budget, exclusions, i64::try_from(super::common::now_ms(&state)).unwrap_or(0))
+        .entries(
+            root_for_entries,
+            budget,
+            exclusions,
+            i64::try_from(super::common::now_ms(&state)).unwrap_or(0),
+        )
         .await;
 
     // REF (filesystem/search.ts): every find path ranks the index
@@ -312,7 +317,10 @@ async fn find(
         scored
             .sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)).then_with(|| a.2.cmp(&b.2)));
         scored.truncate(effective_limit);
-        scored.into_iter().map(|(_, _, _, path, is_dir)| (path.clone(), *is_dir)).collect::<Vec<_>>()
+        scored
+            .into_iter()
+            .map(|(_, _, _, path, is_dir)| (path.clone(), *is_dir))
+            .collect::<Vec<_>>()
     });
     let scored = blocking.await.map_err(|error| {
         crate::errors::debug_cause("fs:unknown_ref", &error);
@@ -367,8 +375,7 @@ fn is_vcs_root(project: &oc_core::project::Resolved, root: &std::path::Path) -> 
     if project.vcs.is_none() {
         return false;
     }
-    let canonical_root =
-        std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     // The resolver's directory is already canonical (config::resolve_path
     // realpaths on success).
     project.directory == canonical_root
@@ -378,11 +385,7 @@ fn is_vcs_root(project: &oc_core::project::Resolved, root: &std::path::Path) -> 
 /// scans (ref's `MAX_SAFE_INTEGER`), the 100k ceiling everywhere
 /// else.
 fn scan_budget(vcs_root: bool, exclusions: &ScanExclusions) -> usize {
-    if vcs_root && !exclusions.home_rooted {
-        usize::MAX
-    } else {
-        SCAN_ENTRY_BUDGET
-    }
+    if vcs_root && !exclusions.home_rooted { usize::MAX } else { SCAN_ENTRY_BUDGET }
 }
 
 /// Sensitive-directory exclusions for a scan (port of
@@ -716,8 +719,8 @@ impl SearchIndex {
             let fresh = now_ms < slot.settled_at + self.refresh_ms;
             let refreshing = slot.refreshing.load(std::sync::atomic::Ordering::Acquire);
             let initialized = slot.settled_at != i64::MIN;
-            let needs_refresher =
-                self.background && !slot.refresher_started.swap(true, std::sync::atomic::Ordering::AcqRel);
+            let needs_refresher = self.background
+                && !slot.refresher_started.swap(true, std::sync::atomic::Ordering::AcqRel);
             (fresh || (refreshing && initialized), needs_refresher)
         };
         if needs_refresher {
@@ -801,7 +804,16 @@ impl SearchIndex {
             let ignore = git2::Repository::discover(&scan_root).ok();
             let mut candidates = Vec::new();
             let mut visited = 0usize;
-            walk(&scan_root, true, true, &exclusions, budget, &mut visited, &mut candidates, ignore.as_ref());
+            walk(
+                &scan_root,
+                true,
+                true,
+                &exclusions,
+                budget,
+                &mut visited,
+                &mut candidates,
+                ignore.as_ref(),
+            );
             candidates
         })
         .await;
@@ -839,10 +851,9 @@ impl SearchIndex {
                 let Some(index) = weak.upgrade() else { break };
                 let Some(slot) = index.slots.get(&root) else { break };
                 let last_used = slot.last_used_ms.load(std::sync::atomic::Ordering::Relaxed);
-                let budget = usize::try_from(
-                    slot.budget.load(std::sync::atomic::Ordering::Relaxed),
-                )
-                .unwrap_or(usize::MAX);
+                let budget =
+                    usize::try_from(slot.budget.load(std::sync::atomic::Ordering::Relaxed))
+                        .unwrap_or(usize::MAX);
                 let exclusions = slot.exclusions.clone();
                 drop(slot);
                 // I1: idle roots are evicted, not walked forever.
@@ -1100,7 +1111,10 @@ mod find_tests {
         );
     }
 
-    fn resolved(directory: &std::path::Path, vcs: Option<oc_core::project::Vcs>) -> oc_core::project::Resolved {
+    fn resolved(
+        directory: &std::path::Path,
+        vcs: Option<oc_core::project::Vcs>,
+    ) -> oc_core::project::Resolved {
         oc_core::project::Resolved {
             previous: None,
             id: "test".to_owned(),
@@ -1233,12 +1247,10 @@ mod index_tests {
         }
         // scan_budget(false, _) = SCAN_ENTRY_BUDGET stand-in of 5:
         // entries beyond the budget are dropped from the INDEX itself.
-        let entries =
-            index.entries(root.path().to_path_buf(), 5, scan(root.path()), 0).await;
+        let entries = index.entries(root.path().to_path_buf(), 5, scan(root.path()), 0).await;
         assert!(entries.len() < 20, "budget truncates the index build: got {}", entries.len());
         // A later query (fresh window) sees the SAME truncated set.
-        let again =
-            index.entries(root.path().to_path_buf(), 5, scan(root.path()), 1_000).await;
+        let again = index.entries(root.path().to_path_buf(), 5, scan(root.path()), 1_000).await;
         assert_eq!(entries.len(), again.len());
     }
 
@@ -1344,19 +1356,15 @@ mod index_tests {
         let root_path = root.path().to_path_buf();
         root.close().expect("remove the root directory");
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-        assert!(
-            !index.slots.contains_key(&root_path),
-            "vanished root must self-evict"
-        );
+        assert!(!index.slots.contains_key(&root_path), "vanished root must self-evict");
         let builds_after_eviction = index.builds();
 
         // And rebuild-on-miss keeps eviction safe: a (re)created root
         // builds a fresh slot on the next request.
         std::fs::create_dir_all(&root_path).expect("recreate");
         std::fs::write(root_path.join("b.txt"), "x").expect("write");
-        let rebuilt = index
-            .entries(root_path.clone(), SCAN_ENTRY_BUDGET, scan(&root_path), 2_000)
-            .await;
+        let rebuilt =
+            index.entries(root_path.clone(), SCAN_ENTRY_BUDGET, scan(&root_path), 2_000).await;
         assert!(names(&rebuilt).contains(&"b.txt".to_owned()));
         assert!(index.builds() > builds_after_eviction);
     }
@@ -1404,9 +1412,7 @@ mod index_tests {
         assert_eq!(wide.len(), 10);
         // A later request supplies a TIGHT budget (fresh window → no
         // rebuild, but the slot's params are updated)…
-        let _ = index
-            .entries(root.path().to_path_buf(), 3, scan(root.path()), 1_010)
-            .await;
+        let _ = index.entries(root.path().to_path_buf(), 3, scan(root.path()), 1_010).await;
         // …so the refresher's next background rebuild uses budget 3.
         index.spawn_refresher(root.path().to_path_buf());
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;

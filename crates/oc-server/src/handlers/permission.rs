@@ -7,10 +7,10 @@ use axum::http::{HeaderMap, Uri};
 use axum::response::Response;
 use oc_schema::id::{PermissionId, SessionId};
 use oc_schema::permission::Request;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::common::{
-    json_data, json_location_data, no_content, resolve_location, ApiError, SharedState,
+    ApiError, SharedState, json_data, json_location_data, no_content, resolve_location,
 };
 use super::session::{query_field, services, session_services};
 
@@ -55,7 +55,11 @@ async fn request_list(
 // GET /api/permission/saved, DELETE /api/permission/saved/:id
 // ---------------------------------------------------------------------------
 
-async fn saved_list(State(state): State<SharedState>, uri: Uri, headers: HeaderMap) -> Result<Response, ApiError> {
+async fn saved_list(
+    State(state): State<SharedState>,
+    uri: Uri,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
     // G-97: the saved-grant family is registered BEFORE the location
     // middleware in the ref protocol (permission.ts:37,49) — it reads the
     // global store directly: no cold-boot service assembly.
