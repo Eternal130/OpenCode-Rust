@@ -700,7 +700,12 @@ fn build_route(
         ProtocolFamily::BedrockMantleChat => {
             let region = bedrock_lane::resolve_region(connection.region.as_deref(), None);
             let auth = bedrock_lane::resolve_auth(
-                &BedrockAuthOptions { api_key: connection.api_key.clone(), ..Default::default() },
+                &BedrockAuthOptions {
+                    api_key: connection.api_key.clone(),
+                    region: connection.region.clone(),
+                    profile: connection.profile.clone(),
+                    ..Default::default()
+                },
                 "bedrock-mantle",
                 "Bedrock Mantle",
             );
@@ -718,7 +723,12 @@ fn build_route(
         ProtocolFamily::BedrockMantleResponses => {
             let region = bedrock_lane::resolve_region(connection.region.as_deref(), None);
             let auth = bedrock_lane::resolve_auth(
-                &BedrockAuthOptions { api_key: connection.api_key.clone(), ..Default::default() },
+                &BedrockAuthOptions {
+                    api_key: connection.api_key.clone(),
+                    region: connection.region.clone(),
+                    profile: connection.profile.clone(),
+                    ..Default::default()
+                },
                 "bedrock-mantle",
                 "Bedrock Mantle",
             );
@@ -736,7 +746,12 @@ fn build_route(
         ProtocolFamily::BedrockMantleMessages => {
             let region = bedrock_lane::resolve_region(connection.region.as_deref(), None);
             let auth = bedrock_lane::resolve_auth(
-                &BedrockAuthOptions { api_key: connection.api_key.clone(), ..Default::default() },
+                &BedrockAuthOptions {
+                    api_key: connection.api_key.clone(),
+                    region: connection.region.clone(),
+                    profile: connection.profile.clone(),
+                    ..Default::default()
+                },
                 "bedrock-mantle",
                 "Bedrock Mantle",
             );
