@@ -936,3 +936,198 @@ fn g231_forced_refspec_lands_non_fast_forward_update() {
     assert_eq!(tracked, upstream, "forced refspec updated the tracking ref");
     assert_eq!(read(&refreshed.local_path.join("README.md")), "rewritten\n");
 }
+
+// ---------------------------------------------------------------------------
+// G-270② — the config-plugin transform (config/plugin/reference.ts:23-66)
+// ---------------------------------------------------------------------------
+
+fn config_document(path: Option<&str>, references: serde_json::Value) -> oc_schema::config::Entry {
+    oc_schema::config::Entry::Document(Box::new(oc_schema::config::Document {
+        info: serde_json::from_value(serde_json::json!({ "references": references }))
+            .expect("config document"),
+        path: path.map(str::to_owned),
+    }))
+}
+
+#[test]
+fn g270_sources_from_config_mirrors_the_config_plugin() {
+    let location = Path::new("/work");
+    let home = Path::new("/home/u");
+    let entries = vec![
+        config_document(
+            Some("/work/opencode.json"),
+            serde_json::json!({
+                "local-abs": { "type": "local", "path": "/abs/docs" },
+                "local-rel": "./docs",
+                "local-home": "~/refs/x",
+                "git-object": { "type": "git", "repository": "owner/repo", "branch": "main", "description": "D", "hidden": true },
+                "git-shorthand": "owner/other",
+                "git-bare-nonsense": "definitely a bad url!!",
+                "bad/name": "./docs",
+                "with space": "./docs",
+                "": "./docs"
+            }),
+        ),
+        // A path-less document (the global config has no file path):
+        // relative paths resolve against the LOCATION directory.
+        config_document(
+            None,
+            serde_json::json!({ "global-ref": "./global" }),
+        ),
+    ];
+    let sources = ReferenceService::sources_from_config(&entries, location, home);
+    let by_name = |name: &str| {
+        sources
+            .iter()
+            .find(|(existing, _)| existing == name)
+            .unwrap_or_else(|| panic!("{name} missing: {sources:?}"))
+            .1
+            .clone()
+    };
+
+    // Absolute local path stays.
+    assert_eq!(
+        by_name("local-abs"),
+        Source::Local(LocalSource { path: PathBuf::from("/abs/docs"), description: None, hidden: None })
+    );
+    // Relative resolves against the DOCUMENT's directory (/work).
+    assert_eq!(
+        by_name("local-rel"),
+        Source::Local(LocalSource { path: PathBuf::from("/work/docs"), description: None, hidden: None })
+    );
+    // `~` resolves against home.
+    assert_eq!(
+        by_name("local-home"),
+        Source::Local(LocalSource { path: PathBuf::from("/home/u/refs/x"), description: None, hidden: None })
+    );
+    // Path-less document: relative resolves against the location.
+    assert_eq!(
+        by_name("global-ref"),
+        Source::Local(LocalSource { path: PathBuf::from("/work/global"), description: None, hidden: None })
+    );
+    // Object git entry keeps everything.
+    assert_eq!(
+        by_name("git-object"),
+        Source::Git(GitSource {
+            repository: "owner/repo".to_owned(),
+            branch: Some("main".to_owned()),
+            description: Some("D".to_owned()),
+            hidden: Some(true),
+        })
+    );
+    // A bare string without ./, /, ~ is a git shorthand.
+    assert_eq!(
+        by_name("git-shorthand"),
+        Source::Git(GitSource {
+            repository: "owner/other".to_owned(),
+            branch: None,
+            description: None,
+            hidden: None,
+        })
+    );
+    // A bare string WITHOUT ./, /, ~ is a git shorthand however
+    // unparsable it looks — classification happens before validation
+    // (list() drops it later).
+    assert_eq!(
+        by_name("git-bare-nonsense"),
+        Source::Git(GitSource {
+            repository: "definitely a bad url!!".to_owned(),
+            branch: None,
+            description: None,
+            hidden: None,
+        })
+    );
+
+    // invalidAlias names are skipped.
+    for skipped in ["bad/name", "with space", ""] {
+        assert!(
+            !sources.iter().any(|(name, _)| name == skipped),
+            "{skipped} must be skipped: {sources:?}"
+        );
+    }
+}
+
+#[test]
+fn g270_install_seeds_silently() {
+    let fixture = with_remote();
+    let repos = fixture.root.join("repos");
+    std::fs::create_dir_all(&repos).unwrap();
+    let (cache, _refresh_store) = daily(&fixture);
+    let service = service(&repos, cache);
+
+    // install(): bulk seed, no notify (no refresh spawned, entries land
+    // alongside each other in one shot).
+    service.install(vec![
+        ("seeded".to_owned(), Source::Local(LocalSource {
+            path: PathBuf::from("/docs"),
+            description: None,
+            hidden: None,
+        })),
+        ("second".to_owned(), Source::Local(LocalSource {
+            path: PathBuf::from("/two"),
+            description: None,
+            hidden: None,
+        })),
+    ]);
+    assert_eq!(service.sources().len(), 2, "bulk seed landed both entries");
+    assert_eq!(service.list().len(), 2);
+
+    // A same-name install REPLACES (insert-or-replace editor semantics).
+    service.install(vec![("seeded".to_owned(), Source::Local(LocalSource {
+        path: PathBuf::from("/replaced"),
+        description: Some("replaced".to_owned()),
+        hidden: None,
+    }))]);
+    assert_eq!(service.sources().len(), 2, "no duplicate row");
+    let seeded = service.get("seeded").expect("seeded");
+    assert_eq!(
+        seeded,
+        Source::Local(LocalSource {
+            path: PathBuf::from("/replaced"),
+            description: Some("replaced".to_owned()),
+            hidden: None,
+        })
+    );
+}
+
+/// apply() = install + ONE notify: with refresh-on-mutation enabled, a
+/// single apply of N git sources results in exactly one forked refresh
+/// pass (the single-transform shape of the ref's config plugin — not one
+/// per entry).
+#[tokio::test]
+async fn g270_apply_notifies_once_per_transform() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let passes = Arc::new(AtomicUsize::new(0));
+    let ensure_passes = Arc::clone(&passes);
+    let ensure: super::EnsureFn = Arc::new(move |_input| {
+        ensure_passes.fetch_add(1, Ordering::SeqCst);
+        Err(CacheError::InvalidBranch { branch: "x".to_owned(), message: "stop".to_owned() })
+    });
+    let service = Arc::new(ReferenceService::with_ensure(PathBuf::from("/repos"), ensure));
+
+    service.apply(vec![
+        ("one".to_owned(), Source::Git(GitSource {
+            repository: "owner/one".to_owned(),
+            branch: None,
+            description: None,
+            hidden: None,
+        })),
+        ("two".to_owned(), Source::Git(GitSource {
+            repository: "owner/two".to_owned(),
+            branch: None,
+            description: None,
+            hidden: None,
+        })),
+    ]);
+    // The refresh is forked onto the runtime — give it a tick to land.
+    for _ in 0..50 {
+        if passes.load(Ordering::SeqCst) > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // ONE refresh pass over both sources = 2 ensure calls. The old
+    // per-entry `add` shape would run pass(one) + pass(one,two) = 3.
+    assert_eq!(passes.load(Ordering::SeqCst), 2, "exactly one refresh pass over both sources");
+}

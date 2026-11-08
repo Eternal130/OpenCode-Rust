@@ -1904,10 +1904,13 @@ async fn g96_context_truncates_at_latest_completed_compaction() {
     assert_eq!(ids, vec!["msg_compaction_1", "msg_post", "msg_compaction_2"], "active window only");
 }
 
-/// G-97: the saved-permission family is registered BEFORE the location
-/// middleware in the ref protocol (permission.ts:37,49) — list/remove must
-/// not resolve or boot the request location: an absent directory is not a
-/// 404 and no location boot-cascade events hit the bus.
+/// G-97 + G-264 layering: the saved-permission family reads the global
+/// store directly — no location boot-cascade (no service assembly, no bus
+/// events). G-264 adds ONE narrow resolution: `saved.list` WITHOUT a
+/// `projectID` derives the request location's project (the ref's
+/// `ctx.query.projectID ?? location.project.id`, permission.ts:87-96) —
+/// that path 404s on an absent directory exactly like the ref's location
+/// middleware; the explicit-query list and the remove stay bypass-shaped.
 #[tokio::test]
 async fn g97_permission_saved_bypasses_location_resolution() {
     let server = boot().await;
@@ -1916,12 +1919,24 @@ async fn g97_permission_saved_bypasses_location_resolution() {
     let http = oc_http::client();
 
     let missing = "/nonexistent/g97/location";
+    // Explicit projectID: no location resolution at all (200, G-97).
     let list = http
-        .get(format!("{base}/api/permission/saved?location%5Bdirectory%5D={missing}"))
+        .get(format!(
+            "{base}/api/permission/saved?projectID=g97-project&location%5Bdirectory%5D={missing}"
+        ))
         .send()
         .await
         .expect("saved list");
-    assert_eq!(list.status(), 200, "no location 404 on saved list");
+    assert_eq!(list.status(), 200, "explicit projectID keeps the G-97 bypass");
+
+    // No projectID (G-264): the default derives from the REQUEST location
+    // — an absent directory is the location-middleware 404.
+    let defaulted = http
+        .get(format!("{base}/api/permission/saved?location%5Bdirectory%5D={missing}"))
+        .send()
+        .await
+        .expect("saved list default");
+    assert_eq!(defaulted.status(), 404, "G-264 default resolves the request location");
 
     let remove = http
         .delete(format!("{base}/api/permission/saved/prm_g97?location%5Bdirectory%5D={missing}"))
