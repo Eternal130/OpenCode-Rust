@@ -13,7 +13,7 @@ use oc_util::determinism::Clock;
 use parking_lot::Mutex;
 
 use super::repository::{
-    Reference, RemoteReference, RepositoryError, cache_path, parse, same, validate_branch,
+    cache_path, parse, same, validate_branch, Reference, RemoteReference, RepositoryError,
 };
 
 /// `refreshInterval` — one day (repository-cache.ts:23).
