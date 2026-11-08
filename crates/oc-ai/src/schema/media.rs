@@ -491,7 +491,9 @@ mod tests {
         headers.insert("authorization".to_string(), "Bearer k".to_string());
         asset.headers = Some(headers);
         let owned = asset
-            .materialize(|_url, _headers| async { Ok(vec![0x89, 0x50, 0x4e, 0x47]) })
+            .materialize(|_url, _headers| {
+                async { Ok(vec![0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) }
+            })
             .await
             .unwrap();
         // PNG magic sniffs the undeclared type (media.ts:273-274).

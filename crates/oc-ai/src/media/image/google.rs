@@ -252,17 +252,18 @@ pub fn decode(
             let candidates_count =
                 value.get("candidatesTokenCount").and_then(serde_json::Value::as_f64);
             let thoughts = value.get("thoughtsTokenCount").and_then(serde_json::Value::as_f64);
-            let cached = value.get("cachedContentTokenCount").and_then(serde_json::Value::as_f64);
             let output = candidates_count.map(|count| count + thoughts.unwrap_or(0.0));
             // G-286③: details carry the normalized keys plus the raw
             // provider document under `google` (google-images.ts:243-248);
             // undefined-valued keys are omitted, never null.
             let mut details = serde_json::Map::new();
-            if let Some(thoughts) = thoughts {
-                details.insert("reasoningTokens".to_string(), serde_json::json!(thoughts));
+            // the raw provider values ride along unchanged (integer JSON
+            // numbers stay integers)
+            if let Some(thoughts) = value.get("thoughtsTokenCount") {
+                details.insert("reasoningTokens".to_string(), thoughts.clone());
             }
-            if let Some(cached) = cached {
-                details.insert("cacheReadInputTokens".to_string(), serde_json::json!(cached));
+            if let Some(cached) = value.get("cachedContentTokenCount") {
+                details.insert("cacheReadInputTokens".to_string(), cached.clone());
             }
             details.insert("google".to_string(), value.clone());
             (
