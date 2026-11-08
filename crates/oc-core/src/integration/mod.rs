@@ -338,6 +338,14 @@ impl IntegrationHost {
         }
     }
 
+    /// G-284④ — `editor.remove` (integration.ts:149,309): deletes a
+    /// registered integration; its methods and OAuth implementations go
+    /// with it (credential rows stay owned by the credential store, as
+    /// in the ref).
+    pub fn remove_integration(&self, id: &str) {
+        self.entries.write().remove(id);
+    }
+
     /// The registry notify (integration.ts:355): transforms publish
     /// `integration.updated`.
     pub async fn notify_updated(&self) {
@@ -564,7 +572,9 @@ impl IntegrationHost {
     }
 
     /// `connection.status` (integration.ts:744-750): set/clear a runtime
-    /// status; notifies `integration.updated`.
+    /// status; notifies `integration.updated`. G-284① — an UNCHANGED
+    /// status never re-notifies (ref `Equal.equals(statuses.get(key),
+    /// input.status)` early return).
     pub async fn connection_status(
         &self,
         integration_id: &str,
@@ -572,6 +582,10 @@ impl IntegrationHost {
         status: Option<ConnectionStatus>,
     ) {
         let key = format!("{integration_id}:{}", connection.connection_key());
+        let current = self.statuses.get(&key).map(|entry| entry.value().clone());
+        if current == status {
+            return;
+        }
         match status {
             Some(status) => {
                 self.statuses.insert(key, status);
