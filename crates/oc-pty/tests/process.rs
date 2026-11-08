@@ -1766,3 +1766,124 @@ async fn pty_d3_i12_bus_events_and_i13_unattached_exit_across_the_boundary() {
 
     frontend.shutdown().await.expect("shutdown");
 }
+
+// ---------------------------------------------------------------------------
+// G-63② / G-277③ — daemon op parity: byte-transparent Write + the
+// default-program fallback chain
+// ---------------------------------------------------------------------------
+
+/// G-63② — the daemon's Write op takes raw bytes. The same API under
+/// the in-process/HTTP backends forwards non-framed binary input
+/// byte-for-byte (`write_bytes`); the old `String::from_utf8` gate made
+/// the daemon backend ERROR on the same payloads (same API, two
+/// behaviors). Non-UTF-8 bytes through Write must arrive at the PTY
+/// verbatim — exactly like the Input op.
+#[tokio::test]
+async fn g63_write_op_accepts_non_utf8_bytes() {
+    let root = temp_root("g63-write");
+    let bus = bus_for_test().await;
+    let launcher = Arc::new(RealLauncher::new(60));
+    let (frontend, _transport) = daemon_frontend(&bus, Arc::clone(&launcher));
+    frontend.set_runtime_dir(&root).expect("set root");
+
+    let info = frontend
+        .create(&session(), create_input("g63w", "cat", &root))
+        .await
+        .expect("create");
+    let log = EventLog::new();
+    let attachment = frontend
+        .attach(&info.id, log.attach_input("g63w-obs", 0))
+        .await
+        .expect("attach");
+    attachment.activate();
+
+    // "héllo" (multibyte UTF-8) + a raw 0xFF byte — not valid UTF-8.
+    let mut payload = "héllo".as_bytes().to_vec();
+    payload.push(0xFF);
+    payload.push(b'\n');
+
+    // The raw wire op (below the frontend's `write(&str)` surface).
+    let registration = registration_of(&frontend);
+    let mut raw = RawClient::connect(&registration).await.expect("raw client");
+    let terminal = wire::parse_terminal_number(&info.id).expect("terminal number");
+    let response = raw
+        .request(WireRequest::Write {
+            id: terminal,
+            attachment_id: None,
+            data_base64: base64::engine::general_purpose::STANDARD.encode(&payload),
+        })
+        .await;
+    assert!(
+        matches!(response, WireResponse::Ok),
+        "Write must accept non-UTF-8 bytes (old gate answered `write payload is not utf-8`): {response:?}"
+    );
+
+    // `cat` echoes the payload verbatim — the tty line discipline only
+    // appends \r (ONLCR); "héllo" + the raw 0xFF byte must appear as
+    // written (a lossy UTF-8 round-trip would emit U+FFFD instead of
+    // 0xFF).
+    let text = "héllo".as_bytes();
+    wait_until(10, "raw echo", || async {
+        let output = log.output.lock().clone();
+        output.windows(text.len() + 1).any(|window| {
+            window[..text.len()] == *text && window[text.len()] == 0xFF
+        })
+    })
+    .await;
+    assert!(
+        !log.output.lock().windows(3).any(|window| window == [0xEF, 0xBF, 0xBD]),
+        "raw 0xFF must not become U+FFFD"
+    );
+    frontend.remove(&info.id).await.expect("cleanup");
+    frontend.shutdown().await.expect("shutdown");
+}
+
+/// G-277③ — the daemon's default program resolves through the
+/// ShellSelect chain (ref index.ts:165 `input.command ??
+/// ShellSelect.environment()`), NOT `$SHELL || /bin/sh`: a dangling
+/// `$SHELL` used to fail the spawn directly. With `$SHELL` pointing at
+/// a nonexistent path the fallback ladder (bash on PATH → /bin/sh)
+/// must take over and the create must succeed.
+///
+/// `set_var` is process-global but safe here (nextest runs each test
+/// in its own process; same precedent as the OPENCODE_PTY_BIN test).
+#[tokio::test]
+async fn g277_default_program_survives_a_dangling_shell() {
+    std::env::set_var("SHELL", "/nonexistent/dangling-shell");
+    let root = temp_root("g277-default");
+    let bus = bus_for_test().await;
+    let launcher = Arc::new(RealLauncher::new(60));
+    let (frontend, _transport) = daemon_frontend(&bus, Arc::clone(&launcher));
+    frontend.set_runtime_dir(&root).expect("set root");
+
+    // command: None → the daemon-side default program (the machine's
+    // injected `default_program` seam, daemon.rs run()).
+    let info = frontend
+        .create(
+            &session(),
+            CreateInput {
+                command: None,
+                args: vec!["-c".to_owned(), "printf G277-DEFAULT".to_owned()],
+                cwd: Some(root.to_string_lossy().into_owned()),
+                title: "g277".to_owned(),
+                env: BTreeMap::new(),
+                size: Some((80, 24)),
+            },
+        )
+        .await
+        .expect("create with the resolved default program");
+
+    wait_for_output(&frontend, &info.id, "G277-DEFAULT".len()).await;
+    let log = EventLog::new();
+    let attachment = frontend
+        .attach(&info.id, log.attach_input("g277-obs", 0))
+        .await
+        .expect("attach");
+    assert!(
+        bytes_contain(&attachment.data, b"G277-DEFAULT"),
+        "the fallback shell ran the command, replay: {:?}",
+        String::from_utf8_lossy(&attachment.data)
+    );
+    frontend.remove(&info.id).await.expect("cleanup");
+    frontend.shutdown().await.expect("shutdown");
+}

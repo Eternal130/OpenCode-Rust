@@ -624,6 +624,45 @@ mod parse_tests {
         assert!(!tmp.path().join("shell").exists());
     }
 
+    /// G-277② — the capture shape is the ref's full regex
+    /// (`/^sh_[0-9a-f]{12}.*\.out$/`, shell.ts:97), not a bare
+    /// `sh_`-prefix + `.out`-extension: non-hex or short ids are NOT
+    /// captures and must never be swept (over-deletion direction).
+    #[test]
+    fn shell_cleanup_requires_the_hex_id_shape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let now = std::time::SystemTime::now();
+        let dir = capture_dir(&tmp, "proj");
+        let stale = std::time::Duration::from_secs(8 * 24 * 60 * 60);
+        let keep = [
+            // Non-hex id (12 z's).
+            dir.join("sh_zzzzzzzzzzzzAAAAAAAAAAAA.out"),
+            // Uppercase hex is NOT in [0-9a-f].
+            dir.join("sh_00000000001FAAAAAAAAAA.out"),
+            // Id shorter than 12 chars.
+            dir.join("sh_abc.out"),
+            dir.join("sh_notes.out"),
+        ];
+        let sweep = dir.join("sh_0123456789ab.out");
+        let sweep_tagged = dir.join("sh_0123456789abexit-tag.out");
+        for path in keep.iter().chain(std::iter::once(&sweep)).chain(std::iter::once(&sweep_tagged))
+        {
+            std::fs::write(path, "stale").unwrap();
+            set_mtime(path, now - stale);
+        }
+
+        crate::shell::cleanup_data_root(
+            tmp.path(),
+            u64::try_from(now.duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()).unwrap(),
+        );
+
+        for path in &keep {
+            assert!(path.exists(), "non-capture name kept: {}", path.display());
+        }
+        assert!(!sweep.exists(), "exact-shape capture swept");
+        assert!(!sweep_tagged.exists(), "`.*` before .out swept too");
+    }
+
     #[tokio::test]
     async fn shell_cleanup_task_runs_a_first_pass_on_spawn() {
         let tmp = tempfile::tempdir().unwrap();

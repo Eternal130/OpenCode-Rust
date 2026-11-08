@@ -1632,6 +1632,19 @@ async fn pump(
             WireResponse::ControllerChanged { attachment_id, generation } => {
                 on_event(StreamEvent::ControllerChanged { attachment_id, generation });
             }
+            // G-229① — the title/foreground frames must reach the
+            // consumer (daemon.ts:116-117). The daemon + oc-server
+            // forward arms landed in gb9 lane5; this client pump arm is
+            // what the DEFAULT daemon backend actually flows through —
+            // dropping here left the session-title/tab-label chain
+            // (store's `foregroundProcess ?? title`) without a data
+            // source.
+            WireResponse::TitleChanged { title } => {
+                on_event(StreamEvent::TitleChanged { title });
+            }
+            WireResponse::ForegroundProcessChanged { process } => {
+                on_event(StreamEvent::ForegroundProcessChanged { process });
+            }
             _ => {}
         }
     }

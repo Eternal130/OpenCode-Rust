@@ -422,10 +422,13 @@ async fn conn_writer(
 }
 
 fn default_program() -> Option<String> {
-    std::env::var("SHELL")
-        .ok()
-        .filter(|shell| !shell.is_empty())
-        .or_else(|| Some("/bin/sh".to_owned()))
+    // G-277③ — resolve through the ShellSelect chain (ref
+    // persistent-pty/index.ts:165 `input.command ??
+    // ShellSelect.environment()`): `$SHELL` only when it actually
+    // resolves (stat/which), else the fallback ladder (darwin zsh →
+    // bash on PATH → /bin/sh). The old `$SHELL || /bin/sh` had no
+    // validation: a dangling `$SHELL` failed the spawn directly.
+    Some(oc_core::shell::select::environment())
 }
 
 fn unix_ms_now() -> u64 {
@@ -673,17 +676,14 @@ async fn handle_request(
                     shutdown: false,
                 };
             };
-            // The machine's `write` takes text (`index.ts:182-192`).
-            let Ok(text) = String::from_utf8(data) else {
-                return Dispatch {
-                    response: Some(wire::WireResponse::Error {
-                        message: "write payload is not utf-8".to_owned(),
-                    }),
-                    shutdown: false,
-                };
-            };
+            // G-63② — the write op takes raw bytes: the same API under
+            // the in-process/HTTP backends forwards non-framed binary
+            // input byte-for-byte (`write_bytes`, persistent-pty.ts:203-
+            // 216); forcing `String::from_utf8` here made the daemon
+            // backend error on the same payloads the other backends
+            // accept (the Input op below already takes bytes).
             let response = match machine
-                .write(&wire::terminal_id(id), &text, attachment_id.as_deref())
+                .write_bytes(&wire::terminal_id(id), &data, attachment_id.as_deref())
                 .await
             {
                 Ok(()) => wire::WireResponse::Ok,

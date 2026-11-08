@@ -38,6 +38,17 @@ pub const RETENTION_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
 /// `Shell.DIRECTORY`.
 pub const DIRECTORY: &str = "shell";
 
+/// The capture-file name shape (ref shell.ts:97
+/// `/^sh_[0-9a-f]{12}.*\.out$/`): `sh_` + exactly 12 lowercase hex id
+/// chars + anything + `.out`. A bare `sh_` prefix + `.out` extension
+/// over-deleted (G-277②) — any coincidental `sh_*.out` file in the
+/// project directory got swept.
+fn is_capture_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("sh_") else { return false };
+    let Some(hex) = rest.get(0..12) else { return false };
+    hex.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')) && rest.ends_with(".out")
+}
+
 /// `Shell.cleanup` (shell.ts:83-117): the hourly retention sweep over the
 /// two-level capture layout `<data>/shell/<projectID>/sh_<id>.out` — drops
 /// capture files whose modification time predates the 7-day cutoff.
@@ -61,9 +72,7 @@ pub fn cleanup_data_root_with_retention(
         for entry in captures.flatten() {
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
-            let is_capture = name.starts_with("sh_")
-                && std::path::Path::new(name).extension() == Some(std::ffi::OsStr::new("out"));
-            if !is_capture {
+            if !is_capture_name(name) {
                 continue;
             }
             let Ok(meta) = entry.metadata() else { continue };
