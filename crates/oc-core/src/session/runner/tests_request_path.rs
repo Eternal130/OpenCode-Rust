@@ -42,6 +42,7 @@ async fn runner_title_generates_once_across_turns() {
                 parent_id: None,
                 project: None,
                 version: "unknown".into(),
+                explicit_defaults: false,
             },
         )
         .await

@@ -421,3 +421,166 @@ fn transfer_export_non_sanitize_path_is_unchanged() {
     assert_eq!(data["info"], info);
     assert_eq!(data["messages"], json!(messages));
 }
+
+// -- G-250: import atomicity + verbatim metadata --------------------------
+
+/// G-250 — a duplicate message id fails the whole import atomically. REF
+/// transfer.ts:110 `db.insert(...).values(messages)` is a bare insert: a
+/// PK violation (message ids are globally unique) fails the Created
+/// publication's commit and rolls back the session row too. The port's
+/// former `INSERT OR REPLACE` silently overwrote the other session's row,
+/// and the former two-transaction split left the half-imported session
+/// behind (a retry then 409'd forever).
+#[tokio::test]
+async fn transfer_import_duplicate_message_id_fails_atomically() {
+    let stack = super::tests::stack().await;
+
+    // First import lands cleanly.
+    import(
+        &stack.store,
+        &stack.bus,
+        &stack.db,
+        ImportInput {
+            data: payload(),
+            location: location_ref(),
+            project: project(),
+            version: "test".to_owned(),
+        },
+    )
+    .await
+    .expect("first import");
+
+    // Second import: different session id, but reuses `msg_user1`.
+    let mut second = payload();
+    second["info"]["id"] = json!("ses_transfer2");
+    second["messages"] = json!([
+        { "id": "msg_user1", "type": "user", "text": "colliding message", "time": { "created": 1_500.0 } },
+    ]);
+    let result = import(
+        &stack.store,
+        &stack.bus,
+        &stack.db,
+        ImportInput {
+            data: second,
+            location: location_ref(),
+            project: project(),
+            version: "test".to_owned(),
+        },
+    )
+    .await;
+    assert!(result.is_err(), "the colliding message id must fail the import: {result:?}");
+
+    // Atomic rollback: the second session row is NOT left behind (a
+    // retry of this import is not poisoned by a 409-causing half import).
+    let leftover = stack.store.get("ses_transfer2").await.expect("read");
+    assert!(leftover.is_none(), "no half-imported session row survives the failure");
+
+    // And the first session's row was not silently overwritten.
+    let messages = stack
+        .store
+        .messages(MessagesInput {
+            session_id: "ses_transfer1".to_owned(),
+            order: Some(ListOrder::Asc),
+            ..Default::default()
+        })
+        .await
+        .expect("messages");
+    let collided = messages.iter().find(|row| row.id == "msg_user1").expect("original row");
+    let data: serde_json::Value = serde_json::from_str(&collided.data).expect("data");
+    assert_eq!(data["text"], json!("hello"), "the original message survives verbatim");
+    assert_eq!(collided.session_id, "ses_transfer1");
+}
+
+/// G-250 — the export's metadata replays verbatim: a missing metadata key
+/// stays missing instead of inheriting the local parent's (ref
+/// transfer.ts:105 publishes `session.created` directly with
+/// `input.data.info.metadata`, bypassing `Session.create`'s
+/// `input.metadata ?? parent?.metadata` inheritance).
+#[tokio::test]
+async fn transfer_import_does_not_inherit_parent_metadata_or_permissions() {
+    let stack = super::tests::stack().await;
+
+    // A parent carrying metadata + permissions.
+    let parent = stack
+        .store
+        .create(
+            &stack.bus,
+            crate::session::store::CreateInput {
+                id: Some(oc_schema::id::SessionId::parse("ses_transfer_parent").unwrap()),
+                location: Some(location_ref()),
+                title: Some("parent".to_owned()),
+                metadata: Some(
+                    [("host".to_owned(), json!("policy-server"))]
+                        .into_iter()
+                        .collect::<oc_schema::session_support::SessionMetadata>(),
+                ),
+                permissions: Some(serde_json::from_value::<oc_schema::permission::Ruleset>(
+                    json!([{ "action": "*", "resource": "*", "effect": "allow" }]),
+                )
+                .unwrap()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create parent");
+    let parent = match parent {
+        crate::session::store::CreateOutcome::Created(row) => row,
+        other => panic!("parent created: {other:?}"),
+    };
+    assert!(parent.metadata.is_some(), "fixture: the parent carries metadata");
+
+    // Import a child whose export has NO metadata and NO permissions.
+    let mut data = payload();
+    data["info"]["id"] = json!("ses_transfer_child");
+    data["info"]["parentID"] = json!("ses_transfer_parent");
+    data["info"].as_object_mut().unwrap().remove("metadata");
+    let row = import(
+        &stack.store,
+        &stack.bus,
+        &stack.db,
+        ImportInput {
+            data,
+            location: location_ref(),
+            project: project(),
+            version: "test".to_owned(),
+        },
+    )
+    .await
+    .expect("import child");
+
+    // Verbatim: absent stays absent — NOT the parent's inherited values.
+    assert!(
+        row.metadata.is_none(),
+        "no metadata inherited from the local parent: {:?}",
+        row.metadata
+    );
+    assert!(row.permission.is_none(), "no permissions inherited from the local parent");
+
+    // Control: a metadata value that IS present replays through.
+    let mut with_metadata = payload();
+    with_metadata["info"]["id"] = json!("ses_transfer_child2");
+    with_metadata["info"]["parentID"] = json!("ses_transfer_parent");
+    with_metadata["info"]["metadata"] = json!({ "exported": true });
+    // Unique message ids: session_message ids are globally unique and the
+    // bare insert must not collide with the first child's rows.
+    with_metadata["messages"] = json!([
+        { "id": "msg_user_child2", "type": "user", "text": "second child", "time": { "created": 1_600.0 } },
+    ]);
+    let row = import(
+        &stack.store,
+        &stack.bus,
+        &stack.db,
+        ImportInput {
+            data: with_metadata,
+            location: location_ref(),
+            project: project(),
+            version: "test".to_owned(),
+        },
+    )
+    .await
+    .expect("import child with metadata");
+    let metadata = row.metadata.expect("metadata replayed");
+    let decoded: oc_schema::session_support::SessionMetadata =
+        serde_json::from_str(&metadata).expect("decode metadata");
+    assert_eq!(decoded.get("exported"), Some(&json!(true)), "the export's own value");
+}

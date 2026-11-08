@@ -339,6 +339,7 @@ async fn create_session(
                 permissions: None,
                 project: None,
                 version: "2".to_string(),
+                explicit_defaults: false,
             },
         )
         .await

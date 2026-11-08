@@ -2420,6 +2420,7 @@ dependencies = [
  "opentelemetry_sdk",
  "parking_lot",
  "rand 0.8.8",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",

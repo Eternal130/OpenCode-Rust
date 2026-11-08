@@ -229,6 +229,7 @@ async fn runner_e2e_parity_prompt_fake_llm_golden_lite() {
                 parent_id: None,
                 project: None,
                 version: "unknown".into(),
+                explicit_defaults: false,
             },
         )
         .await
