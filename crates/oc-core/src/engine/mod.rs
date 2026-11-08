@@ -666,14 +666,22 @@ impl Engine {
         }
         // G-259 — the DigitalOcean routers sync (the ref plugin's
         // `load` + provider transform + its 5-minute repeat,
-        // digitalocean.ts:171-178): spawned ONLY when a browser-OAuth
-        // credential is active; a missing/non-OAuth credential keeps
-        // the sync inert.
+        // digitalocean.ts:171-178): the repeat loop spawns ONLY when a
+        // DigitalOcean credential is stored — the copilot/modal spawn
+        // discipline ("plain boots and tests spawn nothing"); the loop
+        // itself re-resolves per tick, so a removed or type-changed
+        // credential still clears on the schedule.
         let digitalocean_sync =
             Arc::new(crate::provider_catalog::digitalocean_sync::DigitalOceanSync::new(
                 Arc::clone(&facade_transport),
             ));
-        {
+        let has_do_credential = integration
+            .store()
+            .list(crate::provider_catalog::digitalocean_sync::DIGITALOCEAN_PROVIDER_ID)
+            .await
+            .map(|rows| !rows.is_empty())
+            .unwrap_or(false);
+        if has_do_credential {
             let digitalocean_sync = Arc::clone(&digitalocean_sync);
             let catalog = Arc::clone(&catalog);
             let integration = Arc::clone(&integration);
