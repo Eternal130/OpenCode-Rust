@@ -1609,14 +1609,15 @@ pub fn tool_name(server: &str, tool: &str) -> String {
 /// parts; tool errors join the text parts or fall back to the generic
 /// message.
 ///
-/// The permission assert (action = the full namespaced name, resources and
-/// save both `["*"]`) runs in the C1 tool pipeline's execute wrapper, which
-/// owns the session/message context; this executor carries the engine for
-/// that wiring.
+/// NO permission assert runs today: this executor registers through the
+/// bare `register_executor` path (below), bypassing the unified C1 tool
+/// pipeline's execute wrapper — the gap is registered as G-242 (the
+/// `permission` field is carried for that fix: `permission.assert` with
+/// action = the full namespaced name, resources and save both `["*"]`).
 pub struct McpToolExecutor {
     registry: McpRegistry,
     tool: Tool,
-    #[allow(dead_code)] // C1 pipeline: permission.assert(action = namespaced name, ["*"])
+    #[allow(dead_code)] // reserved for G-242: permission.assert(action = namespaced name, ["*"])
     permission: crate::permission::Permission,
 }
 

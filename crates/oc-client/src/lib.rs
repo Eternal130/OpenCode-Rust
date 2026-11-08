@@ -4,7 +4,10 @@
 //! * [`types`] — wire-faithful serde types generated from the pinned
 //!   `openapi.json` (exact field spellings, camelCase incl. `ID` suffixes).
 //! * Namespace modules ([`agent`], [`session`], ...) — one method per
-//!   operation, 1:1 with `oc_server::routes_gen::ROUTES`.
+//!   operation: 142/142 route parity with
+//!   `oc_server::routes_gen::ROUTES` = the v2 SDK's 139 methods plus
+//!   three rust-extra client exposures (G-17 rust-extra family):
+//!   `plugin.install`, `pty.connect`, `persistentPty.connect`.
 //! * [`sse::SseStream`] — v2-parity SSE decoding (16 MiB cap, CRLF
 //!   normalization, heartbeat skip, JSON-in-string double decode).
 //! * [`ClientError`] — declared-error envelope ("spread" fields, `_tag` name,

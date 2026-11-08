@@ -31,8 +31,8 @@ use crate::provider_catalog::{Catalog, Snapshot};
 pub const COPILOT_BASE_URL_FALLBACK: &str = oc_ai::protocols::copilot::COPILOT_BASE_URL;
 
 /// The chat-only alias that conflicts with the Copilot GPT-5 Responses
-/// route (github-copilot.ts:259-268) — hidden ONLY for Copilot, not for
-/// every provider catalog.
+/// route (plugin/provider/github-copilot.ts:236-244) — hidden ONLY for
+/// Copilot, not for every provider catalog.
 pub const HIDDEN_COPILOT_MODEL: &str = "gpt-5-chat-latest";
 
 /// Fold one derived copilot entry into a full `Model.Info`
@@ -107,9 +107,10 @@ pub fn copilot_model_info(entry: &CopilotModelEntry, previous: Option<&schema_mo
     }
 }
 
-/// Hide `gpt-5-chat-latest` (github-copilot.ts:259-268): the chat-only
-/// alias conflicts with the Copilot GPT-5 Responses route, so it is
-/// disabled only for Copilot rather than for every provider catalog.
+/// Hide `gpt-5-chat-latest` (plugin/provider/github-copilot.ts:236-244):
+/// the chat-only alias conflicts with the Copilot GPT-5 Responses route,
+/// so it is disabled only for Copilot rather than for every provider
+/// catalog.
 pub fn hide_conflicting_aliases(models: &mut [schema_model::Info]) {
     for model in models {
         if model.id.as_str() == HIDDEN_COPILOT_MODEL {

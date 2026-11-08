@@ -442,21 +442,24 @@ async fn run_inner(input: RunInput) -> Result<i32, String> {
         thinking: input.thinking,
         format: input.format,
         auto: input.auto,
-        // Ref `attached: options.attached ?? true`: shared servers (explicit
-        // `--server`, managed service) get `attached: true` so global forms
-        // belonging to other sessions are left alone; only the standalone
-        // exclusive server keeps `attached: false`.
+        // Ref `attached: options.attached ?? true` (run.ts:149) is
+        // ALWAYS `true` on the CLI run path — `options.attached` is
+        // never set there, `--standalone` included. Rust intentionally
+        // diverges (G-288①): the standalone exclusive server is
+        // spawned for, and owned by, this run, so it alone gets
+        // `attached: false` to sweep/cancel its global forms.
         attached: attached(input.server.standalone.as_ref()),
     };
     Ok(noninteractive::run_prompt(prompt).await)
 }
 
-/// Ref `ExecutionOptions.attached ?? true` (run.ts:149): a client talking
-/// to a shared server (explicit `--server <url>` target or the managed
-/// background service) must not sweep/cancel global forms that may belong
-/// to other sessions on the same daemon. Only the standalone exclusive
-/// server (spawned for, and owned by, this run) is safe to sweep, so it
-/// keeps `attached: false`.
+/// Ref `attached: options.attached ?? true` (run.ts:149): the CLI run
+/// path never sets `options.attached`, so the ref client is ALWAYS
+/// attached — `--standalone` included — and never sweeps global forms.
+/// Rust intentionally diverges (G-288①): the standalone exclusive
+/// server (spawned for, and owned by, this run) is the one target
+/// whose global forms are safe to sweep, so it alone keeps
+/// `attached: false`.
 fn attached(standalone: Option<&crate::services::standalone::StandaloneServer>) -> bool {
     standalone.is_none()
 }

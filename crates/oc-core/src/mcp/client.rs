@@ -6,9 +6,10 @@
 //!
 //! - **timeouts** — startup 30s, catalog (discovery) 30s, execution 12h,
 //!   terminate 1s (`config.timeout` overrides);
-//! - **transient retry** — `max(exponential 250ms ×4, 2 recursions)` while
-//!   the failure looks transient (HTTP 408/429/5xx except 501, network
-//!   errors carrying an OS error code);
+//! - **transient retry** — up to two more attempts, 250ms then 500ms
+//!   (base 250ms ×2 per hop; the ref's two hops are 250/1000 —
+//!   G-280①) while the failure looks transient (HTTP 408/429/5xx
+//!   except 501, network errors carrying an OS error code);
 //! - **session-expiry detection** — a legacy Streamable HTTP server that no
 //!   longer recognizes `Mcp-Session-Id` answers 404 (or the 400
 //!   "Bad Request: Server not initialized" a freshly restarted
@@ -531,8 +532,8 @@ fn is_transient(chain: &[String]) -> bool {
 type BoxedRequest<T> = Pin<Box<dyn Future<Output = Result<T, RequestError>> + Send>>;
 
 /// The transient-retry loop (client.ts:170-182): up to two more attempts,
-/// 250ms and 500ms later (exponential base 250ms ×4, `recurs(2)`), only
-/// while the failure is transient.
+/// 250ms and 500ms later (base 250ms ×2 per hop — the ref's two hops are
+/// 250/1000, G-280①), only while the failure is transient.
 async fn retrying<T>(mut attempt: impl FnMut() -> BoxedRequest<T>) -> Result<T, RequestError> {
     const DELAYS_MS: [u64; 2] = [250, 500];
     let mut round = 0;
@@ -1504,8 +1505,9 @@ async fn connect_remote(
         .into());
     }
     // Every attempt opens a fresh transport; one retry at the pristine URL
-    // when the codemode param drew a 400/404, plus transient retries while
-    // the startup deadline has not passed.
+    // when the codemode param drew a 400/404, plus transient retries (250ms
+    // then 500ms — base 250ms ×2 per hop; the ref's two hops are 250/1000,
+    // G-280①) while the startup deadline has not passed.
     let deadline = tokio::time::Instant::now()
         + startup_timeout(&ServerConfig::Remote(Box::new(remote.clone())));
     let mut delays: Vec<Duration> = vec![Duration::from_millis(250), Duration::from_millis(500)];

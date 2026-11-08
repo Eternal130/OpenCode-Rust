@@ -21,7 +21,8 @@ pub enum Mode {
     /// TUI-28 — the `/cd` argument trigger
     /// (`argumentAutocomplete: "directory"`, index.tsx:1957): the
     /// directory-recents list (empty query only — the live file
-    /// listing is the async half, not ported).
+    /// listing arrives through G-127's async fetch sink,
+    /// `directory_live_options` below).
     Directory,
 }
 
@@ -512,8 +513,9 @@ impl AutocompleteState {
     }
 
     /// Recompute `options` for the visible mode (command mode filters
-    /// the registry; reference mode has no live file source yet — an
-    /// empty list renders no popup, matching the port's scope).
+    /// the registry; reference mode's live `fs.find` source — G-127's
+    /// async half, `FileFindRow`/`merge_file_rows` below — merges in
+    /// through the fetch sink, so the sync path itself stays empty).
     pub fn sync_options(&mut self, text: &str, caret: usize) {
         self.options = match self.visible {
             Some(Mode::Command) => {
@@ -950,7 +952,8 @@ pub fn directory_recent_value(directory: &str, home: &str) -> String {
 /// display, the `recent` description, the directory flags, and the
 /// two-press destructive delete (`run: directoryRecents.remove`).
 /// Empty-query only (the caller checks; the live file-list half is
-/// the async source, not ported).
+/// the async `fs.find` source — G-127, landed below as `FileFindRow`/
+/// `file_find_options`/`merge_file_rows`).
 #[must_use]
 pub fn directory_recents_options(
     recents: &[RecentDirectory],
