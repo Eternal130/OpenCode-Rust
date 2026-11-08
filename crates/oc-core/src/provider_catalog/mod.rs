@@ -14,8 +14,10 @@
 //! - [`refresh::CatalogService`] — offline-default refresh behind
 //!   [`refresh::CatalogSource`]/[`refresh::CatalogKv`] traits.
 
+pub mod azure_sync;
 pub mod catalog;
 pub mod copilot_sync;
+pub mod digitalocean_sync;
 pub mod facade;
 pub mod local;
 pub mod modal_sync;

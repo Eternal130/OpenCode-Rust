@@ -510,7 +510,11 @@ pub(super) fn azure_token_cache_clear_for_test() {
     azure_token_cache().clear();
 }
 
-async fn azure_cli_token(scope: &str) -> Result<(String, i64), String> {
+/// G-259 — `pub(crate)`: the azure deployment discovery sync
+/// (`provider_catalog::azure_sync`) mints its per-scope tokens through
+/// the same cache.
+pub(crate) async fn azure_cli_token(scope: &str) -> Result<(String, i64), String> {
+
     // G-260④ — a minted token is reused while >5 minutes remain
     // (azure.ts:92-95).
     if let Some(cached) = azure_token_cache().get(scope) {
