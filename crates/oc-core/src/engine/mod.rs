@@ -1730,7 +1730,13 @@ impl Engine {
                 _ = reconcile_shutdown.changed() => {}
             }
         });
-        let _bridge = crate::mcp::McpToolBridge::install(&mcp, &graph.tools, &permission);
+        let _bridge = crate::mcp::McpToolBridge::install(
+            &mcp,
+            &graph.tools,
+            &permission,
+            &graph.hooks,
+            &tool_services,
+        );
 
         let services = Arc::new(LocationServices {
             graph,
