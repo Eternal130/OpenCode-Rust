@@ -35,20 +35,21 @@ use std::sync::Arc;
 use serde::Deserialize;
 use serde_json::Value;
 
-use oc_ai::protocols::alibaba_responses::{alibaba_responses_route, AlibabaResponsesRouteSpec};
+use oc_ai::LanguageModel;
+use oc_ai::protocols::alibaba_responses::{AlibabaResponsesRouteSpec, alibaba_responses_route};
 use oc_ai::protocols::anthropic_messages::{
     alibaba_messages_compatibility, anthropic_messages_route, anthropic_route,
     meta_messages_compatibility, moonshot_messages_compatibility,
     zai_coding_plan_messages_compatibility,
 };
-use oc_ai::protocols::azure::{azure_chat_route, azure_responses_route, AzureConfig};
+use oc_ai::protocols::azure::{AzureConfig, azure_chat_route, azure_responses_route};
 use oc_ai::protocols::bedrock::{self as bedrock_lane, BedrockAuthOptions, MantleMessagesConfig};
-use oc_ai::protocols::cohere_chat::{cohere_route_for_package, CohereConfig};
-use oc_ai::protocols::copilot::{copilot_chat_route, CopilotConfig};
-use oc_ai::protocols::gemini::{google_route, GoogleConfig};
-use oc_ai::protocols::google_interactions::{google_interactions_route, GoogleInteractionsConfig};
-use oc_ai::protocols::meta_responses::{meta_auth, meta_responses_route, MetaResponsesRouteSpec};
-use oc_ai::protocols::mistral_chat::{mistral_route_for_package, MistralConfig};
+use oc_ai::protocols::cohere_chat::{CohereConfig, cohere_route_for_package};
+use oc_ai::protocols::copilot::{CopilotConfig, copilot_chat_route};
+use oc_ai::protocols::gemini::{GoogleConfig, google_route};
+use oc_ai::protocols::google_interactions::{GoogleInteractionsConfig, google_interactions_route};
+use oc_ai::protocols::meta_responses::{MetaResponsesRouteSpec, meta_auth, meta_responses_route};
+use oc_ai::protocols::mistral_chat::{MistralConfig, mistral_route_for_package};
 use oc_ai::protocols::openai_chat::{
     alibaba_chat_compatibility, alibaba_chat_route, cerebras_chat_compatibility,
     cohere_chat_compatibility, deepinfra_chat_compatibility, deepseek_chat_compatibility,
@@ -62,25 +63,24 @@ use oc_ai::protocols::openai_chat::{
 use oc_ai::protocols::openai_compatible::{
     openai_compatible_chat_configured, openai_compatible_responses_route,
 };
-use oc_ai::protocols::openai_responses::{openai_responses_route, OpenAIResponsesRouteSpec};
+use oc_ai::protocols::openai_responses::{OpenAIResponsesRouteSpec, openai_responses_route};
 use oc_ai::protocols::vercel_gateway::{
-    route_for_model as vercel_gateway_route_for_model, VercelGatewayRouteSpec,
+    VercelGatewayRouteSpec, route_for_model as vercel_gateway_route_for_model,
 };
 use oc_ai::protocols::vertex::{
-    vertex_chat_route, vertex_responses_route, vertex_route_for_model, VertexConfig,
-    VertexEndpointConfig,
+    VertexConfig, VertexEndpointConfig, vertex_chat_route, vertex_responses_route,
+    vertex_route_for_model,
 };
-use oc_ai::protocols::vertex_messages::{vertex_messages_route, VertexMessagesConfig};
-use oc_ai::protocols::xai_responses::{xai_auth, xai_responses_route, XaiResponsesRouteSpec};
+use oc_ai::protocols::vertex_messages::{VertexMessagesConfig, vertex_messages_route};
+use oc_ai::protocols::xai_responses::{XaiResponsesRouteSpec, xai_auth, xai_responses_route};
 use oc_ai::route::auth::{self, Secret};
 use oc_ai::route::client::{Route, RouteDefaults, RoutePatch};
 use oc_ai::route::endpoint::EndpointPatch;
 use oc_ai::route::{AuthDefinition, SharedTransport};
 use oc_ai::schema::options::{
-    merge_json_records, merge_string_records, HttpOptions, LanguageModelCompatibility,
-    MaxTokensFieldCompatibility,
+    HttpOptions, LanguageModelCompatibility, MaxTokensFieldCompatibility, merge_json_records,
+    merge_string_records,
 };
-use oc_ai::LanguageModel;
 use oc_schema::model::Info as ModelInfo;
 use oc_schema::provider::{Activation, Settings as ProviderSettings};
 
@@ -571,14 +571,16 @@ pub fn language_model_for_model(
     // which `withOpenAIOptions` forwards identically).
     let mut default_options = gpt5_default_options(model.id.as_str(), &package).unwrap_or_default();
     if verbosity_default(model.model_id.as_str(), &package) {
-        default_options
-            .insert("textVerbosity".to_string(), Value::String("low".to_string()));
+        default_options.insert("textVerbosity".to_string(), Value::String("low".to_string()));
     }
     let route = if default_options.is_empty() {
         route
     } else {
         route.with(RoutePatch {
-            defaults: RouteDefaults { provider_options: Some(default_options), ..Default::default() },
+            defaults: RouteDefaults {
+                provider_options: Some(default_options),
+                ..Default::default()
+            },
             ..Default::default()
         })
     };
@@ -850,27 +852,26 @@ fn build_route(
             // rewrites the anthropic `x-api-key` into the copilot
             // bearer header, github-copilot.ts:344-357 + applyHeaders
             // `anthropic: true`).
-            let base = base_url
-                .clone()
-                .unwrap_or_else(|| crate::provider_catalog::copilot_sync::COPILOT_BASE_URL_FALLBACK.to_string());
+            let base = base_url.clone().unwrap_or_else(|| {
+                crate::provider_catalog::copilot_sync::COPILOT_BASE_URL_FALLBACK.to_string()
+            });
             let token = api_key.or_else(|| {
                 env.iter()
                     .find(|name| name.as_str() == "GITHUB_TOKEN")
                     .map(|name| Secret::Env(name.clone()))
             });
-            Ok(anthropic_messages_route(transport)
-                .with(RoutePatch {
-                    id: Some("copilot-messages".to_string()),
-                    provider: Some(provider_id.to_string()),
-                    provider_metadata_key: Some("copilot".to_string()),
-                    auth: Some(auth::optional(token).bearer()),
-                    endpoint: Some(EndpointPatch {
-                        base_url: Some(format!("{base}/v1")),
-                        path: None,
-                        query: None,
-                    }),
-                    ..Default::default()
-                }))
+            Ok(anthropic_messages_route(transport).with(RoutePatch {
+                id: Some("copilot-messages".to_string()),
+                provider: Some(provider_id.to_string()),
+                provider_metadata_key: Some("copilot".to_string()),
+                auth: Some(auth::optional(token).bearer()),
+                endpoint: Some(EndpointPatch {
+                    base_url: Some(format!("{base}/v1")),
+                    path: None,
+                    query: None,
+                }),
+                ..Default::default()
+            }))
         }
         ProtocolFamily::CopilotChat => Ok(copilot_chat_route(
             transport,
@@ -1189,13 +1190,10 @@ fn snowflake_conversation_complete_transport(inner: SharedTransport) -> SharedTr
     oc_ai::route::transport::intercepted(
         inner,
         oc_ai::route::transport::HttpInterceptors {
-            on_request: Arc::new(|request| {
-                Box::pin(async move { Ok::<_, String>(request) })
-            }),
+            on_request: Arc::new(|request| Box::pin(async move { Ok::<_, String>(request) })),
             on_response: Arc::new(|snapshot| {
                 Box::pin(async move {
-                    Ok(snowflake_rewrite_400_conversation_complete(&snapshot)
-                        .unwrap_or(snapshot))
+                    Ok(snowflake_rewrite_400_conversation_complete(&snapshot).unwrap_or(snapshot))
                 })
             }),
         },
@@ -1438,11 +1436,7 @@ fn baked_chat_base(package: &str) -> Option<&'static str> {
 /// trailing slashes, append `/openai` unless the URL already ends with it.
 fn deepinfra_base_url(url: &str) -> String {
     let root = url.trim_end_matches('/');
-    if root.ends_with("/openai") {
-        root.to_string()
-    } else {
-        format!("{root}/openai")
-    }
+    if root.ends_with("/openai") { root.to_string() } else { format!("{root}/openai") }
 }
 
 /// Provider env fallback chains hardcoded in the TS provider files that the
@@ -1934,7 +1928,9 @@ fn custom_native_language_model(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oc_ai::route::transport::{FailingTransport, Transport, TransportRequest, TransportResponse};
+    use oc_ai::route::transport::{
+        FailingTransport, Transport, TransportRequest, TransportResponse,
+    };
 
     fn context() -> FacadeContext {
         FacadeContext::new(Arc::new(FailingTransport { message: "facade unit test" }))
@@ -1947,19 +1943,15 @@ mod tests {
     fn snowflake_fake_stream_rewrite_variants() {
         let snapshot = |status: u16, body: &str| oc_ai::route::transport::HttpResponseSnapshot {
             status,
-            headers: BTreeMap::from([(
-                "content-type".to_string(),
-                "application/json".to_string(),
-            )]),
+            headers: BTreeMap::from([("content-type".to_string(), "application/json".to_string())]),
             body: body.as_bytes().to_vec(),
         };
         // matched: message key, mixed case
-        let rewritten =
-            snowflake_rewrite_400_conversation_complete(&snapshot(
-                400,
-                r#"{"message":"Request failed: Conversation Complete."}"#,
-            ))
-            .expect("matched");
+        let rewritten = snowflake_rewrite_400_conversation_complete(&snapshot(
+            400,
+            r#"{"message":"Request failed: Conversation Complete."}"#,
+        ))
+        .expect("matched");
         assert_eq!(rewritten.status, 200, "new Response() defaults to 200");
         assert_eq!(
             rewritten.headers.get("content-type").map(String::as_str),
@@ -1979,11 +1971,8 @@ mod tests {
         );
         // matched: a non-string message (V1's String() coercion)
         assert!(
-            snowflake_rewrite_400_conversation_complete(&snapshot(
-                400,
-                r#"{"message":42}"#
-            ))
-            .is_none(),
+            snowflake_rewrite_400_conversation_complete(&snapshot(400, r#"{"message":42}"#))
+                .is_none(),
             "42 does not contain the phrase"
         );
         // not matched: other 400 bodies, other statuses, non-JSON
@@ -2034,16 +2023,18 @@ mod tests {
                             "application/json".to_string()
                         },
                     )]),
-                    body: futures::stream::iter(vec![Ok::<_, oc_ai::route::transport::TransportError>(
-                        bytes::Bytes::from(bytes),
-                    )])
+                    body: futures::stream::iter(vec![Ok::<
+                        _,
+                        oc_ai::route::transport::TransportError,
+                    >(bytes::Bytes::from(
+                        bytes,
+                    ))])
                     .boxed(),
                 })
             }
         }
-        let fake = |status: u16, json: &'static str| {
-            Arc::new(Fake { status, json }) as SharedTransport
-        };
+        let fake =
+            |status: u16, json: &'static str| Arc::new(Fake { status, json }) as SharedTransport;
 
         let context = FacadeContext::new(fake(
             400,
@@ -2057,9 +2048,8 @@ mod tests {
             base_url: Some("https://myorg.snowflakecomputing.com/api/v2/cortex/v1".into()),
             ..Default::default()
         };
-        let model =
-            language_model(&context, catalog, "snowflake-cortex", &model_id, &connection)
-                .expect("snowflake binds");
+        let model = language_model(&context, catalog, "snowflake-cortex", &model_id, &connection)
+            .expect("snowflake binds");
         let route = Arc::clone(&model.route);
         let mut request = oc_ai::schema::LLMRequest::new(model);
         request.messages = vec![oc_ai::schema::Message::user("hi")];
@@ -2081,16 +2071,12 @@ mod tests {
         // transport seam surfaces the provider error instead.
         let context = FacadeContext::new(fake(400, r#"{"message":"rate limited"}"#));
         let catalog = Catalog::embedded();
-        let model =
-            language_model(&context, catalog, "snowflake-cortex", &model_id, &connection)
-                .expect("snowflake binds");
+        let model = language_model(&context, catalog, "snowflake-cortex", &model_id, &connection)
+            .expect("snowflake binds");
         let route = Arc::clone(&model.route);
         let mut request = oc_ai::schema::LLMRequest::new(model);
         request.messages = vec![oc_ai::schema::Message::user("hi")];
-        assert!(
-            route.stream(request).await.is_err(),
-            "a real 400 still fails the request"
-        );
+        assert!(route.stream(request).await.is_err(), "a real 400 still fails the request");
     }
 
     #[test]
@@ -3789,10 +3775,10 @@ mod tests {
             "openai.gpt-5.1",
             "@opencode/ai/providers/amazon-bedrock/mantle/responses"
         ));
-        assert!(!verbosity_default(
-            "gpt-5.1",
-            "@opencode/ai/providers/amazon-bedrock/mantle/responses"
-        ), "no openai. prefix");
+        assert!(
+            !verbosity_default("gpt-5.1", "@opencode/ai/providers/amazon-bedrock/mantle/responses"),
+            "no openai. prefix"
+        );
         // gateways strip `openai/`
         assert!(verbosity_default("openai/gpt-5.1", "@opencode/ai/providers/vercel-ai-gateway"));
         assert!(!verbosity_default("gpt-5.1", "@ai-sdk/gateway"), "no openai/ prefix");
@@ -3813,10 +3799,7 @@ mod tests {
         )
         .expect("gpt-5.3-codex binds");
         let defaults = &model.route.defaults;
-        let options = defaults
-            .provider_options
-            .as_ref()
-            .expect("route provider options");
+        let options = defaults.provider_options.as_ref().expect("route provider options");
         assert_eq!(options.get("textVerbosity"), Some(&serde_json::json!("low")));
         assert_eq!(options.get("reasoningEffort"), Some(&serde_json::json!("medium")));
     }

@@ -115,10 +115,7 @@ fn keyed_connection(
 
 /// A connection spread over several providers (header tests).
 fn multi_connection(entries: &[(&str, ModelConnection)]) -> BTreeMap<String, ModelConnection> {
-    entries
-        .iter()
-        .map(|(id, connection)| (id.to_string(), connection.clone()))
-        .collect()
+    entries.iter().map(|(id, connection)| (id.to_string(), connection.clone())).collect()
 }
 
 #[tokio::test]
@@ -289,12 +286,10 @@ async fn websocket_transport_defaults() {
     use oc_schema::provider::Transport;
 
     // openai — default websocket.
-    let resolved =
-        resolve(None, keyed_connection("openai", None, None), "openai", "gpt-5.5").await;
+    let resolved = resolve(None, keyed_connection("openai", None, None), "openai", "gpt-5.5").await;
     assert_eq!(resolved.transport, Some(Transport::Websocket), "openai defaults to websocket");
     // xai — default websocket.
-    let resolved =
-        resolve(None, keyed_connection("xai", None, None), "xai", "grok-4.5").await;
+    let resolved = resolve(None, keyed_connection("xai", None, None), "xai", "grok-4.5").await;
     assert_eq!(resolved.transport, Some(Transport::Websocket), "xai defaults to websocket");
     // azure — resource name (Azure-native endpoint) → websocket.
     let connections = multi_connection(&[(
