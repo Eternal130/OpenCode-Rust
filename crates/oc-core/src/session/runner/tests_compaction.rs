@@ -1128,3 +1128,160 @@ async fn runner_compaction_error_finish_is_retryable_and_recovers() {
         llm.requests().iter().filter(|request| is_summary_request(request)).count();
     assert_eq!(summary_requests, 2, "the error finish was retried, not terminal");
 }
+
+// -- G-256: token estimation counts UTF-16 code units, not bytes ---------
+
+/// G-256 — ref util/token.ts:5 `Math.round(input.length / 4)` counts
+/// UTF-16 code units (JS `String.length`). Byte-based counting estimated
+/// CJK content ~3x high (4 CJK chars = 12 UTF-8 bytes = 3 tokens by
+/// bytes, 1 token by units), systematically drifting the compaction
+/// trigger threshold. Same shape as the G-106④ codemode.rs fix.
+#[test]
+fn runner_compaction_token_estimate_counts_utf16_units_not_bytes() {
+    // ASCII: units == bytes.
+    assert_eq!(token_estimate("abcd"), 1);
+    assert_eq!(token_estimate("abcdefgh"), 2);
+    // CJK: 4 chars = 12 UTF-8 bytes but 4 UTF-16 units → 1 token, not 3.
+    assert_eq!(token_estimate("你好世界"), 1);
+    assert_eq!(token_estimate("你好世界你好世界"), 2);
+    // Astral plane (emoji): 2 UTF-16 code units per char (surrogate
+    // pair) — a JS `length` of 4 for two emoji.
+    assert_eq!(token_estimate("😀😀"), 1);
+    // Empty input: zero (ref `Math.max(0, …)` clamps; round is never
+    // negative anyway).
+    assert_eq!(token_estimate(""), 0);
+    // Rounding: half rounds away from zero exactly like `Math.round`.
+    assert_eq!(token_estimate("ab"), 1); // 0.5 → 1
+    assert_eq!(token_estimate("a"), 0); // 0.25 → 0
+}
+
+// -- G-252②: the wire reason always stays inside ["auto","manual"] -------
+
+/// G-252② — an overflow-triggered compaction folds its reason to "auto"
+/// on the wire (ref compaction.ts:629 `trigger.reason === "manual" ?
+/// "manual" : "auto"`). Both sides' event schemas only allow
+/// ["auto","manual"] (ref session-event.ts:588; session_message.rs
+/// `CompactionReason`), so the internal "overflow" would break typed
+/// clients and the projected row's strict decode.
+#[tokio::test]
+async fn runner_compaction_overflow_reason_folds_to_auto_on_the_wire() {
+    let llm = TestLlm::new();
+    // Never matches the template headings → the summarize path fails
+    // after the nudge, so the failed publish carries the folded reason.
+    llm.always(oc_ai::testing::text("no template headings here"));
+    let harness = harness_with(llm).await;
+    let session = harness.create_session().await;
+    let loaded = crate::session::runner::context::Loaded {
+        session: session.clone(),
+        agent_id: oc_schema::id::AgentId::parse("build"),
+        agent: super::tests_harness::agent_info("build", None),
+        model: super::tests_harness::test_resolved_model(),
+        initial: String::new(),
+        messages: vec![user("hello overflow")],
+        tools: Vec::new(),
+    };
+    let status = harness
+        .compaction
+        .compact(crate::session::runner::compaction::Trigger {
+            reason: crate::session::runner::compaction::Reason::Overflow,
+            context: loaded,
+            input_id: None,
+        })
+        .await;
+    assert!(
+        matches!(status, crate::session::runner::compaction::CompactStatus::Failed { .. }),
+        "the template-mismatch summary fails: {status:?}"
+    );
+
+    let events = harness.durable_events().await;
+    let failed: Vec<&(String, i64, serde_json::Value)> = events
+        .iter()
+        .filter(|(type_, _, _)| type_ == "session.compaction.failed")
+        .collect();
+    assert_eq!(failed.len(), 1, "exactly one failed event: {events:#?}");
+    // The wire reason is the folded enum value, never "overflow".
+    assert_eq!(failed[0].2["reason"], serde_json::json!("auto"));
+    // Strict decode through the typed event schema succeeds (a typed
+    // client must be able to consume it).
+    let decoded: oc_schema::session_event::CompactionFailed =
+        serde_json::from_value(failed[0].2.clone()).expect("typed decode");
+    assert_eq!(decoded.reason, CompactionReason::Auto);
+
+    // The projected compaction row strictly decodes too (the message
+    // updater consumed the event; the stored row must round-trip).
+    let messages = harness.messages().await;
+    let row = messages
+        .iter()
+        .find(|(_, type_, _)| type_ == "compaction")
+        .expect("projected compaction row");
+    let mut value = row.2.clone();
+    value["id"] = serde_json::json!(row.0);
+    value["type"] = serde_json::json!(row.1);
+    let info: oc_schema::session_message::Info =
+        serde_json::from_value(value).expect("strict row decode");
+    match info {
+        oc_schema::session_message::Info::Compaction(Compaction::Failed { reason, .. }) => {
+            assert_eq!(reason, CompactionReason::Auto);
+        }
+        other => panic!("expected a failed compaction row, got {other:?}"),
+    }
+}
+
+// -- G-252①: exactly one durable failure per failed manual /compact ------
+
+/// G-252① — a failed manual `/compact` publishes `compaction.failed`
+/// exactly ONCE. Pre-fix the compaction service's publish plus the
+/// drain error arm's re-publish produced two durable events (and the
+/// second appended a duplicate failed compaction row: the first had
+/// already consumed the running row). REF compaction.ts:237-243 matchEffect
+/// — the service publish is the only one; llm.ts:137-152 covers only
+/// interrupts and pre-compact setup failures.
+#[tokio::test]
+async fn runner_compaction_manual_failure_publishes_exactly_one_failed_event() {
+    let llm = TestLlm::new();
+    // "ok" has no template headings: the manual summary fails after the
+    // nudge retry. The chat turn itself accepts the same text fine.
+    llm.always(oc_ai::testing::text("ok"));
+    let harness = harness_with(llm).await;
+    harness.create_session().await;
+    harness.admit_prompt("msg_g252_1", "hello there").await;
+    harness.execution.resume(harness.session_id().as_str()).await.unwrap();
+    harness
+        .inbox
+        .admit(
+            "msg_g252_compact",
+            harness.session_id().as_str(),
+            Item::Compaction {
+                payload: oc_schema::session_inbox::CompactionPayload {},
+                delivery: Delivery::Steer,
+            },
+        )
+        .await
+        .unwrap();
+    // The drain surfaces the compaction failure as the turn's error —
+    // the execution exit is a failure, not a panic.
+    let exit = harness.execution.resume(harness.session_id().as_str()).await;
+    assert!(exit.is_err(), "the failed manual compaction fails the drain");
+
+    let events = harness.durable_events().await;
+    let failed: Vec<&(String, i64, serde_json::Value)> = events
+        .iter()
+        .filter(|(type_, _, _)| type_ == "session.compaction.failed")
+        .collect();
+    assert_eq!(
+        failed.len(),
+        1,
+        "exactly one durable compaction.failed (got {}): {events:#?}",
+        failed.len()
+    );
+    assert_eq!(failed[0].2["reason"], serde_json::json!("manual"));
+    assert_eq!(failed[0].2["inputID"], serde_json::json!("msg_g252_compact"));
+
+    // And exactly ONE compaction message row (the updated running row),
+    // not a running row plus a duplicate appended failure.
+    let messages = harness.messages().await;
+    let compaction_rows: Vec<&(String, String, serde_json::Value)> =
+        messages.iter().filter(|(_, type_, _)| type_ == "compaction").collect();
+    assert_eq!(compaction_rows.len(), 1, "one compaction row: {messages:#?}");
+    assert_eq!(compaction_rows[0].2["status"], serde_json::json!("failed"));
+}

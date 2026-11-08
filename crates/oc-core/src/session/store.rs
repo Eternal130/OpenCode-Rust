@@ -98,6 +98,13 @@ pub struct CreateInput {
     /// Caller-resolved project for the session's location.
     pub project: Option<ResolvedProject>,
     pub version: String,
+    /// When `true`, absent `metadata`/`permissions` stay absent instead
+    /// of falling back to the parent's. Transfer import replays the
+    /// export's values verbatim (G-250 — ref transfer.ts:91-106
+    /// publishes `session.created` directly, bypassing `Session.create`'s
+    /// `input.metadata ?? parent?.metadata` inheritance, session.ts:298);
+    /// plain creation keeps the family-uniform default (`false`).
+    pub explicit_defaults: bool,
 }
 
 /// `Session.create` outcome: fresh projection vs existing identity.
@@ -564,11 +571,35 @@ impl SessionStore {
     /// `Session.create` (session.ts:262-318): idempotent `session.created`
     /// publication. Concurrent creation losing the projection race re-reads
     /// the winner (`SessionAlreadyProjected` ⇒ existing identity).
-    #[allow(clippy::too_many_lines)]
     pub async fn create(
         &self,
         bus: &Bus,
         input: CreateInput,
+    ) -> std::result::Result<CreateOutcome, CreateError> {
+        self.create_inner(bus, input, None).await
+    }
+
+    /// [`Self::create`] with a local commit hook attached to the
+    /// `session.created` publication (ref `PublishOptions.commit`,
+    /// transfer.ts:98-140): the projection, the hook's writes and the
+    /// event row commit in ONE transaction — a hook failure (e.g. a
+    /// duplicate imported message id) rolls the whole creation back
+    /// (G-250: session import atomicity).
+    pub async fn create_with_commit(
+        &self,
+        bus: &Bus,
+        input: CreateInput,
+        commit: crate::bus::CommitHook,
+    ) -> std::result::Result<CreateOutcome, CreateError> {
+        self.create_inner(bus, input, Some(commit)).await
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn create_inner(
+        &self,
+        bus: &Bus,
+        input: CreateInput,
+        commit: Option<crate::bus::CommitHook>,
     ) -> std::result::Result<CreateOutcome, CreateError> {
         let session_id = input.id.clone().unwrap_or_default();
         if let Some(recorded) = self.get(session_id.as_str()).await? {
@@ -651,9 +682,11 @@ impl SessionStore {
             data["agent"] = serde_json::Value::String(agent);
         }
         // Children inherit metadata and permissions so host policies
-        // treat the family uniformly.
+        // treat the family uniformly — unless the caller pinned the
+        // input's absence explicitly (G-250 import replay).
         let metadata = match input.metadata {
             Some(metadata) => Some(serde_json::to_value(&metadata)?),
+            None if input.explicit_defaults => None,
             None => parent
                 .as_ref()
                 .and_then(|parent| parent.metadata.clone())
@@ -666,6 +699,7 @@ impl SessionStore {
         }
         let permissions = match input.permissions {
             Some(permissions) => Some(serde_json::to_value(&permissions)?),
+            None if input.explicit_defaults => None,
             None => parent
                 .as_ref()
                 .and_then(|parent| parent.permission.clone())
@@ -684,6 +718,7 @@ impl SessionStore {
             .unwrap_or_else(|| panic!("no session.created definition"));
         let mut options = PublishOptions::default();
         options.location = Some(location.clone());
+        options.commit = commit;
         match bus.publish(def, data, options).await {
             Ok(_) => {}
             Err(err) if crate::session::projector::is_already_projected(&err) => {

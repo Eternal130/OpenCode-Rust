@@ -441,34 +441,48 @@ impl SessionRunner {
                         continue;
                     }
                     Err(error) => {
-                        // Failure ⇒ Compaction.Failed + rethrow.
-                        let failure = match &error {
-                            RunFailure::Interrupted => oc_schema::common::SessionError {
-                                error_type: "aborted".into(),
-                                message: "Compaction cancelled".into(),
-                                status: None,
-                                response: None,
-                            },
-                            other => oc_schema::common::SessionError {
-                                error_type: "compaction.failed".into(),
-                                message: other.to_string(),
-                                status: None,
-                                response: None,
-                            },
-                        };
-                        let _ = self
-                            .bus
-                            .publish(
-                                def("session.compaction.failed"),
-                                serde_json::json!({
-                                    "sessionID": session_id,
-                                    "reason": "manual",
-                                    "inputID": id.as_str(),
-                                    "error": serde_json::to_value(&failure).unwrap_or_default(),
-                                }),
-                                PublishOptions::default(),
-                            )
-                            .await;
+                        // Failure ⇒ Compaction.Failed + rethrow — but
+                        // exactly ONE publish per failed manual /compact
+                        // (G-252①). A `surfaced` failure is one the
+                        // compaction service already published
+                        // (`CompactStatus::Failed` → compaction.rs
+                        // `publish`); re-publishing here doubled the
+                        // durable events and appended a second failed
+                        // compaction row. REF llm.ts:137-152 publishes
+                        // from this arm only for interrupts (the dropped
+                        // compact future never published) and pre-compact
+                        // setup failures (model resolve, history preview).
+                        let service_published =
+                            matches!(error, RunFailure::Failed { surfaced: true, .. });
+                        if !service_published {
+                            let failure = match &error {
+                                RunFailure::Interrupted => oc_schema::common::SessionError {
+                                    error_type: "aborted".into(),
+                                    message: "Compaction cancelled".into(),
+                                    status: None,
+                                    response: None,
+                                },
+                                other => oc_schema::common::SessionError {
+                                    error_type: "compaction.failed".into(),
+                                    message: other.to_string(),
+                                    status: None,
+                                    response: None,
+                                },
+                            };
+                            let _ = self
+                                .bus
+                                .publish(
+                                    def("session.compaction.failed"),
+                                    serde_json::json!({
+                                        "sessionID": session_id,
+                                        "reason": "manual",
+                                        "inputID": id.as_str(),
+                                        "error": serde_json::to_value(&failure).unwrap_or_default(),
+                                    }),
+                                    PublishOptions::default(),
+                                )
+                                .await;
+                        }
                         return Err(error);
                     }
                 }

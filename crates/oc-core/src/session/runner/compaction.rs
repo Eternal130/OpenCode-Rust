@@ -61,12 +61,29 @@ pub enum Reason {
 }
 
 impl Reason {
+    /// The internal trigger name (compaction.ts `Trigger.reason`).
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Reason::Auto => "auto",
             Reason::Overflow => "overflow",
             Reason::Manual => "manual",
+        }
+    }
+
+    /// The WIRE reason (compaction.ts:629): `manual` stays; everything
+    /// else — the internal `overflow` included — folds to `"auto"`. Both
+    /// sides' event schemas only allow `["auto","manual"]` (ref
+    /// session-event.ts:588 Literals; session_message.rs
+    /// `CompactionReason`), so the internal value must never reach an
+    /// event payload: a typed client fails to decode it and the
+    /// projected compaction row's strict decode breaks downstream reads
+    /// (G-252②).
+    #[must_use]
+    pub fn wire(self) -> &'static str {
+        match self {
+            Reason::Manual => "manual",
+            Reason::Auto | Reason::Overflow => "auto",
         }
     }
 }
@@ -750,7 +767,7 @@ impl SessionCompaction {
                 };
                 let mut data = serde_json::json!({
                     "sessionID": session_id,
-                    "reason": reason.as_str(),
+                    "reason": reason.wire(),
                     "error": serde_json::to_value(&error).unwrap_or_default(),
                 });
                 if let Some(input_id) = &input_id {
@@ -768,7 +785,7 @@ impl SessionCompaction {
             Ok(result) => {
                 let mut data = serde_json::json!({
                     "sessionID": session_id,
-                    "reason": reason.as_str(),
+                    "reason": reason.wire(),
                     "model": serde_json::to_value(&model.reference).unwrap_or_default(),
                     "text": result.text,
                     "recent": result.recent,
@@ -976,10 +993,15 @@ pub fn calculate_ceiling(limit: &model::ModelLimit, buffer: Option<i64>) -> f64 
     (window - floor.max(reserve)) as f64
 }
 
-/// `Token.estimate` (util/token.ts): ~4 chars per token.
+/// `Token.estimate` (util/token.ts:5): ~4 chars per token, counting
+/// UTF-16 code units (`input.length`). Byte-based counting overestimated
+/// non-ASCII content ~3x (12 bytes of CJK = 4 chars = 1 token, not 3),
+/// systematically drifting the compaction trigger threshold. G-256 —
+/// same shape as the G-106④ codemode.rs fix; compaction.rs was the
+/// missed second site.
 #[must_use]
 pub fn token_estimate(input: &str) -> i64 {
-    ((input.len() as f64) / 4.0).round() as i64
+    ((input.encode_utf16().count() as f64) / 4.0).round() as i64
 }
 
 /// `estimateContext` (compaction.ts:868-871).

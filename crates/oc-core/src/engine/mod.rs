@@ -2342,11 +2342,22 @@ impl ChildExecution for EngineChildExecution {
 
     async fn interrupt(&self, session_id: &str) {
         if let Some(services) = self.services.get(&self.location) {
+            // G-251 — ref execution.ts:155 defaults the interrupt reason
+            // to "user" (`options?.reason ?? "user"`). Passing
+            // `Default::default()` (reason None) classified the child's
+            // terminal event as reason "shutdown", which both mislabels
+            // the wire event and skips the deliberate-stop cleanup the
+            // settled hook performs for non-shutdown interrupts
+            // (jobs.cancel + claim release, execution.rs settled).
             let _ = services
                 .execution
                 .interrupt(
                     session_id,
-                    InterruptOptions { await_settlement: true, ..Default::default() },
+                    InterruptOptions {
+                        reason: Some(oc_schema::session_event::InterruptReason::User),
+                        await_settlement: true,
+                        ..Default::default()
+                    },
                 )
                 .await;
         }

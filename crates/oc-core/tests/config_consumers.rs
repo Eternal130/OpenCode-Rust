@@ -171,6 +171,7 @@ async fn allow_all_session(engine: &Engine, location: &LocationRef, id: &str) ->
                 parent_id: None,
                 project: None,
                 version: "test".to_string(),
+                explicit_defaults: false,
             },
         )
         .await

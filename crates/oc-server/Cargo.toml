@@ -76,6 +76,10 @@ tonic = { version = "0.13", optional = true, default-features = false }
 [dev-dependencies]
 futures = "0.3"
 tempfile = "3"
+# gb10-lane9 session-gap tests seed `session_message` rows directly inside
+# `engine.db` transactions (G-249 native-checkpoint layouts); same version
+# and features as oc-core's dependency (already in the lock); dev-only.
+rusqlite = { version = "0.32", features = ["bundled"] }
 # Wire tests for the lane-10 gaps drive raw HTTP (permission.saved has no
 # generated client method) on the same unified-TLS reqwest stack.
 oc-http = { workspace = true }

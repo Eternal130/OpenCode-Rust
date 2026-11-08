@@ -445,6 +445,7 @@ async fn create(
             directory: services.project.canonical.to_string_lossy().into_owned(),
         }),
         version: state.version.clone(),
+        explicit_defaults: false,
     };
 
     let row = state.engine.create_session(&location, input).await.map_err(|error| {
@@ -1297,6 +1298,7 @@ async fn command(
                         directory: services.project.canonical.to_string_lossy().into_owned(),
                     }),
                     version: state.version.clone(),
+                    explicit_defaults: false,
                 };
                 let child =
                     state.engine.create_session(&location, input).await.map_err(|error| {
@@ -1445,8 +1447,39 @@ async fn context(
         Some(index) => &rows[index..],
         None => &rows[..],
     };
-    let data: Vec<Value> = rows.iter().map(message_row_to_info).collect();
+    // G-249 — ref store.context (store.ts:179) routes through
+    // SessionHistory.load(boundary "latest") → history.ts:102-107: after
+    // the truncation, the newest NATIVE checkpoint (a completed
+    // compaction carrying providerContext) advances the instruction
+    // epoch, so `system` messages with seq strictly below it drop — the
+    // re-expanded baseline supersedes the chronological instruction
+    // updates before it. (The `replayable` filter from the same pipeline
+    // is a no-op on the "latest" boundary — every checkpoint replays.)
+    let rows: Vec<&oc_core::database::schema::SessionMessageRow> =
+        drop_pre_checkpoint_system_rows(&rows.iter().collect::<Vec<_>>());
+    let data: Vec<Value> = rows.iter().map(|row| message_row_to_info(row)).collect();
     Ok(json_data(Value::Array(data)))
+}
+
+/// history.ts:103-107 — `entries.filter(entry => !(entry.message.type
+/// === "system" && native && entry.seq < native.seq))`: system messages
+/// strictly below the newest native checkpoint drop (the checkpoint's
+/// completion advanced the instruction epoch; its baseline supersedes the
+/// chronological updates recorded before it). G-249.
+fn drop_pre_checkpoint_system_rows<'a>(
+    rows: &[&'a oc_core::database::schema::SessionMessageRow],
+) -> Vec<&'a oc_core::database::schema::SessionMessageRow> {
+    let Some(native_seq) = rows
+        .iter()
+        .rev()
+        .find_map(|row| is_native_checkpoint(row).then_some(row.seq))
+    else {
+        return rows.to_vec();
+    };
+    rows.iter()
+        .copied()
+        .filter(|row| row.type_ != "system" || row.seq >= native_seq)
+        .collect()
 }
 
 /// Completed-compaction probe (`latestCompaction`, history.ts:28):
@@ -1458,6 +1491,24 @@ fn is_completed_compaction(row: &oc_core::database::schema::SessionMessageRow) -
             .and_then(|data| data["status"].as_str().map(str::to_owned))
             .as_deref()
             == Some("completed")
+}
+
+/// Native-checkpoint probe (`SessionProviderContext.isCheckpoint`,
+/// provider-context.ts:47-49): a completed compaction carrying a
+/// provider context — the replacement window whose completion advances
+/// the instruction epoch (history.ts:98-101).
+fn is_native_checkpoint(row: &oc_core::database::schema::SessionMessageRow) -> bool {
+    row.type_ == "compaction"
+        && serde_json::from_str::<Value>(&row.data)
+            .ok()
+            .and_then(|data| {
+                if data["status"].as_str() == Some("completed") {
+                    Some(data.get("providerContext").is_some_and(|context| !context.is_null()))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(false)
 }
 
 async fn diff(
@@ -1975,11 +2026,21 @@ async fn inbox_update(
         &body,
     )?;
     // steer-vs-queue (§3).
-    let result = match body["delivery"].as_str() {
-        Some("queue") => services.inbox.queue(&session_id, &inbox_id).await,
-        _ => services.inbox.steer(&session_id, &inbox_id).await,
+    let steer = body["delivery"].as_str() != Some("queue");
+    let result = if steer {
+        services.inbox.steer(&session_id, &inbox_id).await
+    } else {
+        services.inbox.queue(&session_id, &inbox_id).await
     };
     result.map_err(|error| inbox_error(&error, &inbox_id))?;
+    // G-248 — ref session.ts:134-140: `steerInbox` follows the mutation
+    // with `execution.wake` (scope "steer"); `queueInbox` (:141-145) has
+    // no wake. Without it, an idle session's queue→steer flip sits
+    // undrained until the next arbitrary wake. Fire-and-forget, like the
+    // prompt/synthetic/compact/move wake sites.
+    if steer {
+        services.execution.wake(&session_id, oc_core::session::Promotable::Steer);
+    }
     Ok(no_content())
 }
 
@@ -2857,6 +2918,122 @@ async fn log(
     headers: HeaderMap,
 ) -> Response {
     crate::sse::session_log_response(&state, &uri, &headers, &session_id).await
+}
+
+#[cfg(test)]
+mod g249_tests {
+    use super::{drop_pre_checkpoint_system_rows, is_native_checkpoint};
+    use oc_core::database::schema::SessionMessageRow;
+
+    fn row(id: &str, type_: &str, seq: i64, data: serde_json::Value) -> SessionMessageRow {
+        SessionMessageRow {
+            id: id.to_owned(),
+            session_id: "ses_g249".to_owned(),
+            type_: type_.to_owned(),
+            seq,
+            time_created: 0,
+            time_updated: 0,
+            data: data.to_string(),
+        }
+    }
+
+    fn native_compaction(seq: i64) -> SessionMessageRow {
+        row(
+            "msg_native",
+            "compaction",
+            seq,
+            serde_json::json!({
+                "status": "completed",
+                "reason": "auto",
+                "providerContext": { "version": 1, "messages": [] },
+            }),
+        )
+    }
+
+    /// The filter drops system rows strictly below the newest native
+    /// checkpoint and keeps everything else (ref history.ts:103-107).
+    #[test]
+    fn drops_system_rows_strictly_below_the_newest_native_checkpoint() {
+        let rows = vec![
+            row("sys_old", "system", 1, serde_json::json!({ "text": "stale" })),
+            row("user_1", "user", 2, serde_json::json!({ "text": "hi" })),
+            native_compaction(3),
+            row("sys_new", "system", 4, serde_json::json!({ "text": "fresh" })),
+            row("user_2", "user", 5, serde_json::json!({ "text": "after" })),
+        ];
+        let refs: Vec<&SessionMessageRow> = rows.iter().collect();
+        let kept: Vec<&str> =
+            drop_pre_checkpoint_system_rows(&refs).iter().map(|row| row.id.as_str()).collect();
+        // sys_old (seq 1 < 3, system) drops; the native row itself and
+        // everything at/after it survives; non-system rows below the
+        // checkpoint are the truncation's business, not this filter's.
+        assert_eq!(kept, vec!["user_1", "msg_native", "sys_new", "user_2"], "{kept:?}");
+    }
+
+    /// The NEWEST native checkpoint wins — an earlier one does not
+    /// retire system rows between the two.
+    #[test]
+    fn the_newest_native_checkpoint_bounds_the_filter() {
+        let rows = vec![
+            native_compaction(2),
+            row("sys_mid", "system", 3, serde_json::json!({ "text": "mid" })),
+            row(
+                "msg_native2",
+                "compaction",
+                4,
+                serde_json::json!({
+                    "status": "completed",
+                    "reason": "manual",
+                    "providerContext": { "version": 1, "messages": [] },
+                }),
+            ),
+        ];
+        let refs: Vec<&SessionMessageRow> = rows.iter().collect();
+        let kept: Vec<&str> =
+            drop_pre_checkpoint_system_rows(&refs).iter().map(|row| row.id.as_str()).collect();
+        assert_eq!(kept, vec!["msg_native", "msg_native2"], "{kept:?}");
+    }
+
+    /// No native checkpoint (a local summary, or no compaction at all):
+    /// nothing drops.
+    #[test]
+    fn without_a_native_checkpoint_nothing_drops() {
+        let rows = vec![
+            row("sys_1", "system", 1, serde_json::json!({ "text": "a" })),
+            row(
+                "msg_local",
+                "compaction",
+                2,
+                serde_json::json!({ "status": "completed", "reason": "auto", "summary": "s" }),
+            ),
+            row("sys_2", "system", 3, serde_json::json!({ "text": "b" })),
+        ];
+        let refs: Vec<&SessionMessageRow> = rows.iter().collect();
+        let kept: Vec<&str> =
+            drop_pre_checkpoint_system_rows(&refs).iter().map(|row| row.id.as_str()).collect();
+        assert_eq!(kept, vec!["sys_1", "msg_local", "sys_2"], "{kept:?}");
+    }
+
+    /// A running/failed compaction carrying a providerContext is NOT a
+    /// checkpoint (`status === "completed"` is part of the probe).
+    #[test]
+    fn only_completed_compactions_count_as_checkpoints() {
+        let running = row(
+            "msg_running",
+            "compaction",
+            2,
+            serde_json::json!({ "status": "running", "providerContext": { "version": 1 } }),
+        );
+        assert!(!is_native_checkpoint(&running));
+        let null_context = row(
+            "msg_null",
+            "compaction",
+            3,
+            serde_json::json!({ "status": "completed", "providerContext": null }),
+        );
+        assert!(!is_native_checkpoint(&null_context));
+        assert!(is_native_checkpoint(&native_compaction(4)));
+    }
 }
 
 #[cfg(test)]

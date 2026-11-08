@@ -128,6 +128,7 @@ async fn create_titled_session(engine: &Engine, location: &LocationRef, id: &str
                 parent_id: None,
                 project: None,
                 version: "test".to_string(),
+                explicit_defaults: false,
             },
         )
         .await
@@ -2054,4 +2055,144 @@ fn engine_skills_compat_root_overrides_config_skill_on_collision() {
     let shared = crate::tool::skill::SkillTable::get(&table, "shared").expect("shared skill");
     assert_eq!(shared.name.0, "Compat Shared");
     assert!(shared.content.contains("compat version"), "the compat root wins the collision");
+}
+
+// ===========================================================================
+// G-251: a child-session interrupt settles with reason "user" on the wire
+// ===========================================================================
+
+/// G-251 — the subagent lane interrupts its child through
+/// `EngineChildExecution::interrupt`. REF execution.ts:155 defaults the
+/// interrupt reason to "user" (`options?.reason ?? "user"`); the port's
+/// `Default::default()` (reason None) classified the child's terminal
+/// event as "shutdown" — mislabeled on the wire AND the settled hook's
+/// deliberate-stop cleanup (jobs.cancel + claim release) skipped. The
+/// full chain: parent user-interrupt → subagent tool cancel → child
+/// interrupt → child settles `execution.interrupted {reason:"user"}` and
+/// releases its claim.
+#[tokio::test]
+async fn engine_child_session_interrupt_settles_with_user_reason_on_the_wire() {
+    let llm = TestLlm::new();
+    // Parent turn 1: delegate to the explore subagent (foreground).
+    llm.push([oc_ai::testing::tool(
+        "call_sub_1",
+        "subagent",
+        serde_json::json!({
+            "agent": "explore",
+            "description": "block tester",
+            "prompt": "call the block tool and wait for the interrupt"
+        }),
+    )]);
+    // Child turn 1: call the blocking tool — the child stalls mid-tool.
+    llm.push([oc_ai::testing::tool(
+        "call_block_child",
+        "block",
+        serde_json::json!({ "wait": true }),
+    )]);
+    let (engine, _dir, location) = engine_with(llm).await;
+
+    let services = engine.location(location.clone()).await.expect("assemble");
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let dropped = Arc::new(AtomicUsize::new(0));
+    services.graph.tools.register(ToolRegistration::new(
+        "block",
+        "Blocks until interrupted",
+        serde_json::json!({ "type": "object", "properties": { "wait": { "type": "boolean" } } }),
+    ));
+    services
+        .graph
+        .tools
+        .register_executor("block", Arc::new(BlockingTool { gate, dropped: dropped.clone() }));
+
+    let parent = create_titled_session(&engine, &location, "ses_parent_child_int").await;
+    let prompt_engine = Arc::clone(&engine);
+    let prompt_location = location.clone();
+    let prompt_parent = parent.clone();
+    let prompt = tokio::spawn(async move {
+        let _ = prompt_engine
+            .prompt(&prompt_location, &prompt_parent, "msg_user_delegate", "delegate")
+            .await;
+    });
+
+    // The child session appears with parent_id set; wait for it, then
+    // wait until its blocking tool call is durably recorded.
+    let child = {
+        loop {
+            let found = engine
+                .db
+                .transaction({
+                    let parent_id = parent.to_string();
+                    move |tx| {
+                        let mut statement = tx
+                            .conn()
+                            .prepare("SELECT id FROM session_v2 WHERE parent_id = ?1")?;
+                        let rows = statement
+                            .query_map(rusqlite::params![parent_id], |row| row.get::<_, String>(0))?
+                            .collect::<rusqlite::Result<Vec<_>>>()?;
+                        Ok(rows)
+                    }
+                })
+                .await
+                .expect("child lookup");
+            if let Some(id) = found.into_iter().next() {
+                break SessionId::parse(id).unwrap_or_else(|error| SessionId(error.value));
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    };
+    let pre = wait_for_events(&engine, &child, |events| {
+        events.iter().any(|(type_, _, _)| type_ == "session.tool.called")
+    })
+    .await;
+    assert!(
+        pre.iter().any(|(type_, _, _)| type_ == "session.tool.called"),
+        "the child reached its blocking tool: {pre:#?}"
+    );
+
+    // Interrupt the PARENT as the user: the subagent tool's cancellation
+    // interrupts the child (SubagentJob::interrupt → child execution).
+    let interrupted = engine.interrupt(&location, &parent).await;
+    assert!(interrupted, "the parent execution was interrupted");
+    let _ = prompt.await;
+
+    // The child settles with the "user" reason on the wire — pre-fix this
+    // was "shutdown" (reason None → terminal's unwrap_or(Shutdown)).
+    let events = wait_for_events(&engine, &child, |events| {
+        events.iter().any(|(type_, _, _)| type_ == "session.execution.interrupted")
+    })
+    .await;
+    let child_interrupted = events
+        .iter()
+        .find(|(type_, _, _)| type_ == "session.execution.interrupted")
+        .expect("child terminal interruption");
+    assert_eq!(
+        child_interrupted.2["reason"],
+        serde_json::json!("user"),
+        "the child interrupt defaults to the user reason (ref execution.ts:155): {events:#?}"
+    );
+
+    // A deliberate stop releases the claim: the child's time_suspended is
+    // cleared after settlement (shutdown interrupts keep it).
+    let claim: Option<i64> = {
+        let id = child.to_string();
+        engine
+            .db
+            .transaction(move |tx| {
+                use rusqlite::OptionalExtension as _;
+                let value: Option<i64> = tx
+                    .conn()
+                    .query_row(
+                        "SELECT time_suspended FROM session_v2 WHERE id = ?1",
+                        rusqlite::params![id],
+                        |row| row.get::<_, Option<i64>>(0),
+                    )
+                    .optional()?
+                    .flatten();
+                Ok(value)
+            })
+            .await
+            .expect("claim read")
+    };
+    assert_eq!(claim, None, "the child's claim was released");
+    assert!(dropped.load(Ordering::SeqCst) > 0, "the blocking tool was cancelled");
 }

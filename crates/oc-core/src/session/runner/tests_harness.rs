@@ -374,6 +374,7 @@ impl Harness {
                     parent_id: None,
                     project: None,
                     version: "test".to_string(),
+                    explicit_defaults: false,
                 },
             )
             .await

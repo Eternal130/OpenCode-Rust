@@ -2,24 +2,24 @@
 //!
 //! REF `SessionTransfer.import` (transfer.ts:64-154): reject duplicate ids
 //! (`ImportConflictError`), verify `parentID`, project the session via a
-//! fresh `session.created` publication, then — in that event's commit —
-//! insert the export's settled messages at `seq = 1..n`, reserve the
-//! aggregate sequence past them (`Bus.reserveSequence`) and backfill the
-//! aggregate counters (`cost`, tokens, idle/viewed/archived times) from the
-//! export's `info`.
+//! fresh `session.created` publication whose COMMIT HOOK inserts the
+//! export's settled messages at `seq = 1..n`, reserves the aggregate
+//! sequence past them (`Bus.reserveSequence`) and backfills the aggregate
+//! counters (`cost`, tokens, idle/viewed/archived times) from the export's
+//! `info` — all in the publication's single transaction.
 //!
-//! The port performs the same steps with the same ordering: `store.create`
-//! publishes `session.created` (projecting the row), then one transaction
-//! inserts the message rows, reserves the sequence and updates the
-//! counters. `time_updated` is stamped with the import wall clock
-//! (`importedAt`), exactly like REF.
+//! The port rides the same seam: `store.create_with_commit` attaches the
+//! message insert + sequence reservation + counter backfill to the
+//! `session.created` commit hook (G-250 — projection, messages and
+//! counters commit atomically; a duplicate message id rolls the whole
+//! import back instead of silently overwriting). `time_updated` is
+//! stamped with the import wall clock (`importedAt`), exactly like REF.
 
 use oc_schema::id::SessionId;
 use oc_schema::location;
 use oc_schema::model;
 use oc_schema::permission::Ruleset;
 use oc_schema::session_support::SessionMetadata;
-use rusqlite::OptionalExtension;
 use serde_json::{Map, Value};
 
 use crate::bus::{Bus, BusError};
@@ -70,7 +70,7 @@ pub enum ImportError {
 pub async fn import(
     store: &SessionStore,
     bus: &Bus,
-    db: &Database,
+    _db: &Database,
     input: ImportInput,
 ) -> Result<SessionRow, ImportError> {
     let info = input
@@ -120,33 +120,13 @@ pub async fn import(
     };
 
     // The fresh `session.created` publication projects the row (slug,
-    // location envelope, inherited metadata/permissions).
-    let outcome = store
-        .create(
-            bus,
-            crate::session::store::CreateInput {
-                id: Some(session_id.clone()),
-                parent_id,
-                location: Some(input.location.clone()),
-                title: info.get("title").and_then(Value::as_str).map(str::to_owned),
-                agent: info.get("agent").and_then(Value::as_str).map(str::to_owned),
-                model,
-                metadata,
-                permissions,
-                project: Some(input.project.clone()),
-                version: input.version,
-            },
-        )
-        .await?;
-    let _ = match outcome {
-        CreateOutcome::Created(row) => row,
-        // Lost a concurrent projection race — the existing identity wins
-        // (same mapping as REF's SessionAlreadyProjected catch).
-        CreateOutcome::Existing(_) => {
-            return Err(ImportError::Conflict(session_id.as_str().to_owned()))
-        }
-    };
-
+    // location envelope) and — through its commit hook — inserts the
+    // export's settled messages and backfills the aggregate counters in
+    // the SAME transaction (G-250, ref transfer.ts:98-140: everything
+    // rides `bus.publish(Created, { commit })`). A failure anywhere in
+    // the hook rolls the whole import back, so a crashed or rejected
+    // import never leaves a half-imported session row that a retry
+    // would conflict against.
     let imported_at = crate::database::migrations::now_ms();
     let messages = settled_messages(&input.data);
     let count = i64::try_from(messages.len()).unwrap_or(i64::MAX);
@@ -175,11 +155,16 @@ pub async fn import(
             None => None,
         };
         let time_archived = opt_num_i64(time.get("archived"));
-        db.transaction(move |tx| {
+        // REF transfer.ts:98-140 — the Created event's `commit(seq)`
+        // hook: bare `db.insert` (a duplicate message id fails the
+        // session_message PK and rolls the whole import back — never a
+        // silent `INSERT OR REPLACE` overwrite), `Bus.reserveSequence(
+        // seq + messages.length)`, then the aggregate backfill UPDATE.
+        let commit = Box::new(move |tx: &mut crate::database::Tx<'_>, seq: i64| {
             // Settled messages land at seq = 1..n (REF: `seq: index + 1`).
             for (index, row) in rows.iter().enumerate() {
                 tx.execute(
-                    "INSERT OR REPLACE INTO session_message \
+                    "INSERT INTO session_message \
                      (id, session_id, type, seq, time_created, time_updated, data) \
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                     rusqlite::params![
@@ -196,16 +181,8 @@ pub async fn import(
             if !rows.is_empty() {
                 // `Bus.reserveSequence(db, sessionID, seq + messages.length)`
                 // — the next published event must not collide with the
-                // imported seq range.
-                let seq: i64 = tx
-                    .conn()
-                    .query_row(
-                        "SELECT seq FROM event_sequence WHERE aggregate_id = ?1",
-                        rusqlite::params![id],
-                        |row| row.get(0),
-                    )
-                    .optional()?
-                    .unwrap_or_default();
+                // imported seq range. The event's own allocated `seq`
+                // rides in (the outer commit's upsert is monotonic-max).
                 tx.event_sequence_upsert(&id, seq + count, None)?;
             }
             tx.execute(
@@ -232,8 +209,38 @@ pub async fn import(
                 ],
             )?;
             Ok(())
-        })
-        .await?;
+        });
+        let outcome = store
+            .create_with_commit(
+                bus,
+                crate::session::store::CreateInput {
+                    id: Some(session_id.clone()),
+                    parent_id,
+                    location: Some(input.location.clone()),
+                    title: info.get("title").and_then(Value::as_str).map(str::to_owned),
+                    agent: info.get("agent").and_then(Value::as_str).map(str::to_owned),
+                    model,
+                    metadata,
+                    permissions,
+                    project: Some(input.project.clone()),
+                    version: input.version,
+                    // G-250 — the export's metadata/permissions replay
+                    // verbatim; a missing key stays missing instead of
+                    // inheriting the local parent's (ref transfer.ts:105
+                    // passes the export's value directly).
+                    explicit_defaults: true,
+                },
+                commit,
+            )
+            .await?;
+        let _ = match outcome {
+            CreateOutcome::Created(row) => row,
+            // Lost a concurrent projection race — the existing identity wins
+            // (same mapping as REF's SessionAlreadyProjected catch).
+            CreateOutcome::Existing(_) => {
+                return Err(ImportError::Conflict(session_id.as_str().to_owned()))
+            }
+        };
     }
 
     store
