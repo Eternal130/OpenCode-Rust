@@ -164,18 +164,12 @@ async fn steer_inbox_patch_wakes_the_idle_session_drain() {
                 )
                 .await
                 .expect("message list");
-            messages
-                .data
-                .into_iter()
-                .find(|message| matches!(message, SessionMessageInfo::User(_)))
+            messages.data.into_iter().find(|message| matches!(message, SessionMessageInfo::User(_)))
         }
         .boxed()
     })
     .await;
-    assert!(
-        user_row.is_some(),
-        "the steer PATCH woke the drain and delivered the parked prompt"
-    );
+    assert!(user_row.is_some(), "the steer PATCH woke the drain and delivered the parked prompt");
 }
 
 // ---------------------------------------------------------------------------
@@ -183,7 +177,12 @@ async fn steer_inbox_patch_wakes_the_idle_session_drain() {
 // ---------------------------------------------------------------------------
 
 /// One seeded `session_message` row.
-fn seeded_row(id: &str, type_: &str, seq: i64, data: serde_json::Value) -> (String, String, i64, String) {
+fn seeded_row(
+    id: &str,
+    type_: &str,
+    seq: i64,
+    data: serde_json::Value,
+) -> (String, String, i64, String) {
     (id.to_owned(), type_.to_owned(), seq, data.to_string())
 }
 
@@ -224,7 +223,12 @@ async fn context_drops_system_rows_below_the_native_checkpoint() {
             1,
             serde_json::json!({ "text": "fork baseline instruction", "time": { "created": 1 } }),
         ),
-        seeded_row("msg_user_1", "user", 2, serde_json::json!({ "text": "hello", "time": { "created": 2 } })),
+        seeded_row(
+            "msg_user_1",
+            "user",
+            2,
+            serde_json::json!({ "text": "hello", "time": { "created": 2 } }),
+        ),
         seeded_row(
             "msg_native_compact",
             "compaction",
@@ -301,7 +305,12 @@ async fn context_keeps_system_rows_after_a_local_summary_compaction() {
     let session_id = create_session(client).await;
 
     let rows = vec![
-        seeded_row("msg_user_pre", "user", 1, serde_json::json!({ "text": "old", "time": { "created": 1 } })),
+        seeded_row(
+            "msg_user_pre",
+            "user",
+            1,
+            serde_json::json!({ "text": "old", "time": { "created": 1 } }),
+        ),
         seeded_row(
             "msg_local_compact",
             "compaction",
@@ -320,7 +329,12 @@ async fn context_keeps_system_rows_after_a_local_summary_compaction() {
             3,
             serde_json::json!({ "text": "instruction update", "time": { "created": 3 } }),
         ),
-        seeded_row("msg_user_post", "user", 4, serde_json::json!({ "text": "new", "time": { "created": 4 } })),
+        seeded_row(
+            "msg_user_post",
+            "user",
+            4,
+            serde_json::json!({ "text": "new", "time": { "created": 4 } }),
+        ),
     ];
     let sid = session_id.clone();
     server
@@ -353,5 +367,9 @@ async fn context_keeps_system_rows_after_a_local_summary_compaction() {
             _ => "",
         })
         .collect();
-    assert_eq!(ids, vec!["msg_local_compact", "msg_sys_kept", "msg_user_post"], "no native checkpoint: {ids:?}");
+    assert_eq!(
+        ids,
+        vec!["msg_local_compact", "msg_sys_kept", "msg_user_post"],
+        "no native checkpoint: {ids:?}"
+    );
 }

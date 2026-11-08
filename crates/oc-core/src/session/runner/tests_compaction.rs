@@ -903,7 +903,7 @@ async fn runner_compaction_native_auto_keeps_auto_started_and_ended() {
 /// A completed compaction message; `provider_context: Some(_)` makes it a
 /// checkpoint (native encrypted window).
 fn completed_compaction(checkpoint: bool) -> oc_schema::session_message::Info {
-    use oc_schema::session_support::{ProviderContext, Provenance};
+    use oc_schema::session_support::{Provenance, ProviderContext};
     oc_schema::session_message::Info::Compaction(Compaction::Completed {
         id: mid("msg_c_due"),
         metadata: None,
@@ -961,8 +961,8 @@ async fn runner_compaction_due_waits_for_measured_reply_after_checkpoint() {
     llm.always(oc_ai::testing::text("unused"));
     let harness = harness_with(llm).await;
     let session = harness.create_session().await;
-    let context = |messages: Vec<oc_schema::session_message::Info>| {
-        crate::session::runner::context::Loaded {
+    let context =
+        |messages: Vec<oc_schema::session_message::Info>| crate::session::runner::context::Loaded {
             session: session.clone(),
             agent_id: oc_schema::id::AgentId::parse("build"),
             agent: super::tests_harness::agent_info("build", None),
@@ -970,8 +970,7 @@ async fn runner_compaction_due_waits_for_measured_reply_after_checkpoint() {
             initial: String::new(),
             messages,
             tools: Vec::new(),
-        }
-    };
+        };
 
     // Checkpoint present, no measured reply after it → NOT due, even with
     // the ceiling pinned at one token (estimate far over it).
@@ -1064,8 +1063,8 @@ async fn runner_compaction_summarize_prepares_without_the_session_ws_seam() {
 #[tokio::test]
 async fn runner_compaction_error_finish_is_retryable_and_recovers() {
     use crate::hooks::{fn_hook, HookOptions, RetryDecision, SessionRetryEvent};
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     let llm = TestLlm::new();
     let attempts = Arc::new(AtomicUsize::new(0));
@@ -1194,10 +1193,8 @@ async fn runner_compaction_overflow_reason_folds_to_auto_on_the_wire() {
     );
 
     let events = harness.durable_events().await;
-    let failed: Vec<&(String, i64, serde_json::Value)> = events
-        .iter()
-        .filter(|(type_, _, _)| type_ == "session.compaction.failed")
-        .collect();
+    let failed: Vec<&(String, i64, serde_json::Value)> =
+        events.iter().filter(|(type_, _, _)| type_ == "session.compaction.failed").collect();
     assert_eq!(failed.len(), 1, "exactly one failed event: {events:#?}");
     // The wire reason is the folded enum value, never "overflow".
     assert_eq!(failed[0].2["reason"], serde_json::json!("auto"));
@@ -1264,10 +1261,8 @@ async fn runner_compaction_manual_failure_publishes_exactly_one_failed_event() {
     assert!(exit.is_err(), "the failed manual compaction fails the drain");
 
     let events = harness.durable_events().await;
-    let failed: Vec<&(String, i64, serde_json::Value)> = events
-        .iter()
-        .filter(|(type_, _, _)| type_ == "session.compaction.failed")
-        .collect();
+    let failed: Vec<&(String, i64, serde_json::Value)> =
+        events.iter().filter(|(type_, _, _)| type_ == "session.compaction.failed").collect();
     assert_eq!(
         failed.len(),
         1,
