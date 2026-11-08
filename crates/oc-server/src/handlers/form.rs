@@ -61,6 +61,12 @@ fn form_error(error: FormError) -> ApiError {
             ApiError::form_invalid_answer(error.id.as_str(), error.message)
         }
         FormError::InvalidForm(error) => ApiError::form_invalid(error.message),
+        // G-276① — a failed durable form publish is a server-side
+        // failure (ref propagates the bus error): 500 with a log ref.
+        FormError::Publish(error) => {
+            crate::errors::debug_cause("form:publish", &error);
+            ApiError::unknown_ref()
+        }
     }
 }
 

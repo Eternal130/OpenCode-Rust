@@ -725,3 +725,37 @@ fn decode_utf8(data: &str) -> String {
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn uri_attachment(uri: &str) -> FileAttachment {
+        FileAttachment {
+            name: None,
+            description: None,
+            mention: None,
+            mime: "text/plain".into(),
+            source: FileSource::Uri { uri: uri.into() },
+            data: String::new(),
+        }
+    }
+
+    /// G-279④ — `file:` URIs percent-decode like `fileURLToPath`
+    /// (ref to-llm-message.ts:26-35): `file:///a%20b.txt` → `/a b.txt`.
+    #[test]
+    fn g279_attachment_location_percent_decodes() {
+        let file = uri_attachment("file:///tmp/opencode/a%20b%2Fx.txt");
+        assert_eq!(attachment_location(&file).as_deref(), Some("/tmp/opencode/a b/x.txt"));
+        // Host segment drops; decode still applies.
+        let file = uri_attachment("file://host/dir%3Fquery");
+        assert_eq!(attachment_location(&file).as_deref(), Some("/dir?query"));
+        // Plain paths stay unchanged; malformed escapes pass through.
+        let file = uri_attachment("file:///plain/path.txt");
+        assert_eq!(attachment_location(&file).as_deref(), Some("/plain/path.txt"));
+        let file = uri_attachment("file:///bad/%zz");
+        assert_eq!(attachment_location(&file).as_deref(), Some("/bad/%zz"));
+        // Non-file schemes are None.
+        assert!(attachment_location(&uri_attachment("https://x/y%20z")).is_none());
+    }
+}

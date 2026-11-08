@@ -1054,7 +1054,7 @@ pub fn estimate_prompt(context: &Loaded) -> (i64, i64) {
     (measured as i64, unmeasured.iter().map(|message| estimate_message(message)).sum())
 }
 
-fn tool_entry_of(tool: &crate::location::ToolRegistration) -> ToolEntry {
+pub(crate) fn tool_entry_of(tool: &crate::location::ToolRegistration) -> ToolEntry {
     ToolEntry::Definition(oc_ai::schema::messages::ToolDefinition::new(
         // G-279⑤ — estimation must use the EFFECTIVE (namespaced) name
         // the request actually carries (`registry::effective_name`); the
