@@ -1056,7 +1056,10 @@ pub fn estimate_prompt(context: &Loaded) -> (i64, i64) {
 
 fn tool_entry_of(tool: &crate::location::ToolRegistration) -> ToolEntry {
     ToolEntry::Definition(oc_ai::schema::messages::ToolDefinition::new(
-        tool.name.clone(),
+        // G-279⑤ — estimation must use the EFFECTIVE (namespaced) name
+        // the request actually carries (`registry::effective_name`); the
+        // registered bare name undercounts namespaced tools.
+        crate::tool::registry::effective_name(tool.namespace.as_deref(), &tool.name),
         tool.description.clone(),
         tool.input.clone(),
     ))

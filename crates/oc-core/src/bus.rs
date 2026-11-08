@@ -383,6 +383,36 @@ pub struct ListenGuard {
     listener: Option<Listener>,
 }
 
+/// G-276② — JSON-semantics deep equality for replay identity (ref
+/// bus.ts:349 compares with Node's `isDeepStrictEqual`, where JSON `1`
+/// and `1.0` are the SAME number): serde_json `Value` equality is
+/// representation-sensitive (`u64 1` ≠ `f64 1.0`) and produced false
+/// "Replay diverged" errors on numerically identical payloads. Numbers
+/// compare numerically (exact for integer/integer pairs, f64
+/// otherwise); arrays and objects recurse; everything else uses
+/// `PartialEq`.
+fn json_deep_equal(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+    match (a, b) {
+        (serde_json::Value::Number(x), serde_json::Value::Number(y)) => {
+            match (x.as_i64(), y.as_i64()) {
+                (Some(x_int), Some(y_int)) => x_int == y_int,
+                _ => x.as_f64().is_some_and(|x_float| y.as_f64() == Some(x_float)),
+            }
+        }
+        (serde_json::Value::Array(x), serde_json::Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y.iter()).all(|(x, y)| json_deep_equal(x, y))
+        }
+        (serde_json::Value::Object(x), serde_json::Value::Object(y)) => {
+            x.len() == y.len()
+                && x.iter().all(|(key, value)| {
+                    y.get(key).is_some_and(|other| json_deep_equal(value, other))
+                })
+        }
+        _ => a == b,
+    }
+}
+
+
 impl ListenGuard {
     /// Keeps the listener registered forever.
     pub fn detach(mut self) {
@@ -422,6 +452,17 @@ impl Inner {
             .entry(aggregate_id.to_string())
             .or_insert_with(|| Arc::new(AsyncMutex::new(())))
             .clone()
+    }
+
+    /// G-276③ — lock-table eviction: after a holder releases, an entry
+    /// no other task still holds (Arc strong count 1: only the map)
+    /// drops, so the per-aggregate lock table does not grow one entry
+    /// per session. The wakes table already self-evicts
+    /// (`wake_remove`); this mirrors it. (A task between clone and
+    /// lock keeps the count > 1, so a fresh inserter can never fork
+    /// the lock behind a live holder.)
+    fn evict_lock_if_idle(&self, aggregate_id: &str) {
+        self.locks.remove_if(aggregate_id, |_, held| Arc::strong_count(held) == 1);
     }
 
     fn wake_register(&self, aggregate_id: &str) -> Arc<Notify> {
@@ -615,6 +656,7 @@ impl Bus {
             .await
     }
 
+
     /// Publishes one event (durable or ephemeral) — `bus.ts:507-529` plus
     /// `publishEvent` (:450-484).
     pub async fn publish(
@@ -655,13 +697,15 @@ impl Bus {
             invalid(&event.type_, format!("Expected string aggregate field {}", meta.aggregate))
         })?;
         let lock = self.inner.lock_for(&aggregate_id);
-        let _guard = lock.lock().await;
+        let guard = lock.lock().await;
         let committed = self
             .commit_durable_event(definition, event, None, options.commit, options.persist)
-            .await?;
+            .await;
+        drop(guard);
+        self.inner.evict_lock_if_idle(&aggregate_id);
         // Persist-then-publish: notify only after the commit succeeded.
         // (Unreachable `None`: publishes carry no replay input.)
-        let committed = committed.expect("publish never replays");
+        let committed = committed?.expect("publish never replays");
         let _ = self.inner.notify(&committed.routed, true);
         Ok(committed.event)
     }
@@ -717,13 +761,13 @@ impl Bus {
         }
 
         let lock = self.inner.lock_for(&aggregate_id);
-        let _guard = lock.lock().await;
+        let guard = lock.lock().await;
 
         let tx_inner = Arc::clone(&self.inner);
         let aggregate_for_tx = aggregate_id.clone();
         let persist = self.inner.persist;
         let db = self.inner.db.clone();
-        let record: CommitRecord = db
+        let transaction: std::result::Result<CommitRecord, DbError> = db
             .transaction(move |tx| {
                 let latest: i64 = tx
                     .conn()
@@ -811,8 +855,10 @@ impl Bus {
                 }
                 Ok(CommitRecord { durable_events: queued, routing })
             })
-            .await
-            .map_err(lift_db_error)?;
+            .await;
+        drop(guard);
+        self.inner.evict_lock_if_idle(&aggregate_id);
+        let record: CommitRecord = transaction.map_err(lift_db_error)?;
         // Post-commit: apply routing, wake, notify each in order.
         let resolved = record.routing.apply(&self.inner.sessions);
         self.inner.wake_publish(&aggregate_id);
@@ -937,9 +983,10 @@ impl Bus {
                             id == event.id.as_str()
                                 && type_ == type_version
                                 && created == created_i64
-                                // Deep-equal (v2 replay identity): string equality is only stable without key reordering.
-                                && serde_json::from_str::<serde_json::Value>(&data).ok()
-                                    == Some(event.data.clone())
+                                // Deep-equal (v2 replay identity, isDeepStrictEqual):
+                                // numeric-normalized so `1` == `1.0` (G-276②).
+                                && serde_json::from_str::<serde_json::Value>(&data).ok().as_ref()
+                                    .is_some_and(|stored| json_deep_equal(stored, &event.data))
                         });
                         if identical {
                             if let Some(owner) = &input.owner_id {
@@ -1292,9 +1339,12 @@ impl Bus {
             strict_owner: options.strict_owner,
         };
         let lock = self.inner.lock_for(&aggregate_id);
-        let _guard = lock.lock().await;
+        let guard = lock.lock().await;
         let committed =
-            self.commit_durable_event(definition, payload, Some(input), None, None).await?;
+            self.commit_durable_event(definition, payload, Some(input), None, None).await;
+        drop(guard);
+        self.inner.evict_lock_if_idle(&aggregate_id);
+        let committed = committed?;
         if let Some(committed) = committed {
             if options.publish {
                 let _ = self.inner.notify(&committed.routed, true);

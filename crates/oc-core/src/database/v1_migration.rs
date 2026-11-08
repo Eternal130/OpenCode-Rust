@@ -256,6 +256,14 @@ fn decode_message(row: &SourceMessage) -> Option<Value> {
             s(&value, "modelID")?;
             s(&value, "providerID")?;
             s(&value, "agent")?;
+            // G-276④ — ref SessionV1.Assistant (v1/session.ts:454-490)
+            // also requires `mode: String` and `path: {cwd, root}`; the
+            // handwritten subset skipped them, admitting rows the ref
+            // schema would drop as invalid-message warnings.
+            s(&value, "mode")?;
+            let path = value.get("path")?;
+            s(path, "cwd")?;
+            s(path, "root")?;
             f(&value, "cost")?;
             let tokens = value.get("tokens")?;
             f(tokens, "input")?;
@@ -268,6 +276,27 @@ fn decode_message(row: &SourceMessage) -> Option<Value> {
         _ => return None,
     }
     Some(value)
+}
+
+/// G-276④ — `String.prototype.localeCompare` over the ASCII identifier
+/// domain (ref v1-migration.bun.ts:236/:269 tie-breaks; ICU root
+/// collation): characters compare case-INSENSITIVELY at primary
+/// strength (so `msg_ab` < `msg_AZ`, where byte order says the
+/// opposite); a primary-equal tie prefers lowercase before uppercase.
+/// Non-ASCII bytes fall through the fold unchanged (identifiers are
+/// ASCII `msg_`/`prt_` ids in practice).
+fn locale_compare(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let primary = a
+        .bytes()
+        .map(|byte| byte.to_ascii_lowercase())
+        .cmp(b.bytes().map(|byte| byte.to_ascii_lowercase()));
+    if primary != Ordering::Equal {
+        return primary;
+    }
+    a.bytes()
+        .map(|byte| u8::from(byte.is_ascii_uppercase()))
+        .cmp(b.bytes().map(|byte| u8::from(byte.is_ascii_uppercase())))
 }
 
 // ---------------------------------------------------------------------------
@@ -297,7 +326,11 @@ pub fn transform_session(
             }),
         }
     }
-    decoded_messages.sort_by(|a, b| (a.0.time_created, &a.0.id).cmp(&(b.0.time_created, &b.0.id)));
+    // G-276④ — ref tie-break is `localeCompare` on the id, not byte
+    // order (v1-migration.bun.ts:236).
+    decoded_messages.sort_by(|a, b| {
+        a.0.time_created.cmp(&b.0.time_created).then_with(|| locale_compare(&a.0.id, &b.0.id))
+    });
 
     let message_ids: HashSet<&str> = messages.iter().map(|row| row.id.as_str()).collect();
 
@@ -331,7 +364,8 @@ pub fn transform_session(
             }),
         }
     }
-    decoded_parts.sort_by(|a, b| a.0.id.cmp(&b.0.id));
+    // G-276④ — ref sorts parts by `row.id.localeCompare` (:269).
+    decoded_parts.sort_by(|a, b| locale_compare(&a.0.id, &b.0.id));
 
     // Parts grouped per message (part-id order preserved).
     let mut by_message: HashMap<&str, Vec<&Value>> = HashMap::new();

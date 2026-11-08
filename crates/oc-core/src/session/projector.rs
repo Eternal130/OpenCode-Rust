@@ -399,8 +399,15 @@ pub fn install_projectors(bus: &Bus) {
         enqueue_usage_fanout(&session_id, move || {
             async move {
                 if let Err(err) = publish_usage_updated(&bus, &fanout_session).await {
+                    // G-279② — best-effort fan-out (ref's fiber defect
+                    // just kills the subscription fiber; the port keeps
+                    // subscribing). oc-core has no file-log sink (the
+                    // oc-server `append_server_log` registry is
+                    // server-side only), so stderr carries the line —
+                    // `OPENCODE_PRINT_LOGS=1` surfaces it in daemon
+                    // mode; the failure never panics the fan-out chain.
                     eprintln!(
-                        "[session] usage fan-out failed for {fanout_session} (event {event_id}): {err}"
+                        "opencode: usage fan-out failed for {fanout_session} (event {event_id}): {err}"
                     );
                 }
             }
@@ -1065,15 +1072,15 @@ impl Adapter for TxAdapter<'_, '_> {
     }
 
     fn update_assistant(&mut self, message: &session_message::Info) -> Result<()> {
-        update_message_row(self.tx, &self.session_id, message)
+        update_message_row(self.tx, &self.session_id, self.event.created, message)
     }
 
     fn update_shell(&mut self, message: &session_message::Info) -> Result<()> {
-        update_message_row(self.tx, &self.session_id, message)
+        update_message_row(self.tx, &self.session_id, self.event.created, message)
     }
 
     fn update_compaction(&mut self, message: &session_message::Info) -> Result<()> {
-        update_message_row(self.tx, &self.session_id, message)
+        update_message_row(self.tx, &self.session_id, self.event.created, message)
     }
 
     fn append_message(&mut self, message: &session_message::Info) -> Result<()> {
@@ -1090,6 +1097,7 @@ fn run_updater(tx: &mut Tx<'_>, event: &DurableEvent) -> Result<()> {
 fn update_message_row(
     tx: &mut Tx<'_>,
     session_id: &str,
+    event_created: u64,
     message: &session_message::Info,
 ) -> Result<()> {
     let mut value = serde_json::to_value(message)?;
@@ -1100,10 +1108,22 @@ fn update_message_row(
         object.get("type").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
     object.remove("id");
     object.remove("type");
+    // G-279① — ref `Timestamps.time_updated` is `$onUpdate(() =>
+    // Date.now())` (database/schema.sql.ts:7-9): every message-row UPDATE
+    // advances time_updated. The port pins it to the event's created
+    // time (deterministic under the test clocks; wall-clock-equal for
+    // live events).
     tx.execute(
-        "UPDATE session_message SET type = ?1, time_created = ?2, data = ?3 \
-         WHERE id = ?4 AND session_id = ?5",
-        rusqlite::params![type_, message_time_created(message), value.to_string(), id, session_id],
+        "UPDATE session_message SET type = ?1, time_created = ?2, time_updated = ?3, data = ?4 \
+         WHERE id = ?5 AND session_id = ?6",
+        rusqlite::params![
+            type_,
+            message_time_created(message),
+            i64::try_from(event_created).unwrap_or(0),
+            value.to_string(),
+            id,
+            session_id
+        ],
     )?;
     Ok(())
 }

@@ -17,6 +17,51 @@ const MAX_LENGTH: usize = 100;
 const MAX_CONTEXT_LENGTH: usize = 8_000;
 const MAX_FIRST_MESSAGE_LENGTH: usize = 2_000;
 
+/// G-279③ — ref title.ts:92-93 `Effect.onInterrupt(() => recordUsage)`:
+/// when the title stream is cancelled, usage already recorded from
+/// completed steps still publishes. The port's cancellation is the
+/// spawned title task being dropped (runtime shutdown / task abort);
+/// this guard publishes the accumulated usage from `Drop` (spawned —
+/// no runtime at process teardown is a no-op, the port's AskGuard
+/// precedent).
+struct TitleUsageGuard {
+    bus: Bus,
+    session_id: String,
+    usage: std::sync::Arc<std::sync::Mutex<Option<RecordedUsage>>>,
+    published: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl TitleUsageGuard {
+    async fn publish(bus: &Bus, session_id: &str, recorded: &RecordedUsage) {
+        let data = serde_json::json!({
+            "sessionID": session_id,
+            "source": "title",
+            "cost": recorded.cost.0 .0,
+            "tokens": crate::session::runner::tokens_json(&recorded.tokens),
+        });
+        let def = crate::bus::registry::by_type_latest("session.usage.recorded")
+            .unwrap_or_else(|| panic!("no session.usage.recorded definition"));
+        let _ = bus.publish(def, data, PublishOptions::default()).await;
+    }
+}
+
+impl Drop for TitleUsageGuard {
+    fn drop(&mut self) {
+        if self.published.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+        if let Some(recorded) = self.usage.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                let bus = self.bus.clone();
+                let session_id = self.session_id.clone();
+                handle.spawn(async move {
+                    TitleUsageGuard::publish(&bus, &session_id, &recorded).await;
+                });
+            }
+        }
+    }
+}
+
 /// `isUntitled` — a missing title or the exact root fallback for this
 /// session (session-title-fallback.ts).
 #[must_use]
@@ -100,7 +145,6 @@ impl SessionTitle {
     ) -> Option<String> {
         let mut chunks: Vec<String> = Vec::new();
         let mut failed = false;
-        let mut usage: Option<RecordedUsage> = None;
         let prepared = self
             .requests
             .title(RequestInput {
@@ -126,6 +170,15 @@ impl SessionTitle {
             return Some(title.clone());
         }
         let mut stream = self.llm.stream(prepared.request).await.ok()?;
+        // G-279③ — the accumulated usage publishes even when this
+        // attempt future is dropped mid-stream (ref onInterrupt).
+        let usage_cell = std::sync::Arc::new(std::sync::Mutex::new(None::<RecordedUsage>));
+        let guard = TitleUsageGuard {
+            bus: self.bus.clone(),
+            session_id: session.id.clone(),
+            usage: std::sync::Arc::clone(&usage_cell),
+            published: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
         use futures::StreamExt;
         while let Some(event) = stream.next().await {
             let Ok(event) = event else {
@@ -137,7 +190,8 @@ impl SessionTitle {
                 LLMEvent::TextDelta { text, .. } => chunks.push(text.clone()),
                 LLMEvent::StepFinish { usage: step_usage, .. } => {
                     let step = SessionUsage::record(step_usage.as_ref(), &model.cost);
-                    usage = Some(match usage {
+                    let mut cell = usage_cell.lock().unwrap_or_else(|p| p.into_inner());
+                    *cell = Some(match cell.take() {
                         Some(existing) => SessionUsage::add(&existing, &step),
                         None => step,
                     });
@@ -145,17 +199,13 @@ impl SessionTitle {
                 _ => {}
             }
         }
-        if let Some(recorded) = usage {
-            let data = serde_json::json!({
-                "sessionID": session.id,
-                "source": "title",
-                "cost": recorded.cost.0 .0,
-                "tokens": crate::session::runner::tokens_json(&recorded.tokens),
-            });
-            let def = crate::bus::registry::by_type_latest("session.usage.recorded")
-                .unwrap_or_else(|| panic!("no session.usage.recorded definition"));
-            let _ = self.bus.publish(def, data, PublishOptions::default()).await;
+        let recorded_now = usage_cell.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if let Some(recorded) = recorded_now {
+            TitleUsageGuard::publish(&self.bus, &session.id, &recorded).await;
         }
+        guard.published.store(true, std::sync::atomic::Ordering::Release);
+        *usage_cell.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        drop(guard);
         if failed {
             return None;
         }

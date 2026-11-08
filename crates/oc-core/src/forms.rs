@@ -69,6 +69,10 @@ pub enum FormError {
     InvalidAnswer(#[from] InvalidAnswerError),
     #[error(transparent)]
     InvalidForm(#[from] InvalidFormError),
+    /// G-276① — the durable form event failed to publish (ref form.ts
+    /// propagates the bus failure after rolling the entry back).
+    #[error("Form event publish failed: {0}")]
+    Publish(String),
 }
 
 struct Entry {
@@ -134,11 +138,16 @@ impl Forms {
         });
     }
 
-    async fn publish(&self, type_: &str, data: serde_json::Value) {
+    async fn publish(&self, type_: &str, data: serde_json::Value) -> Result<(), FormError> {
         if let Some(bus) = &self.inner.bus {
             let definition = crate::bus::registry::EventDefinition::ephemeral(type_);
-            let _ = bus.publish(&definition, data, crate::bus::PublishOptions::default()).await;
+            return bus
+                .publish(&definition, data, crate::bus::PublishOptions::default())
+                .await
+                .map(|_| ())
+                .map_err(|error| FormError::Publish(format!("{type_}: {error}")));
         }
+        Ok(())
     }
 
     /// `Form.create`.
@@ -174,7 +183,13 @@ impl Forms {
         if existed {
             return Err(AlreadyExistsError(id).into());
         }
-        self.publish("form.created", serde_json::json!({ "form": form })).await;
+        // G-276① — ref form.ts:145-146: a failed `form.created` publish
+        // INVALIDATES the cache entry (onError rollback) — never a
+        // registered form nobody heard about.
+        if let Err(error) = self.publish("form.created", serde_json::json!({ "form": form })).await {
+            self.inner.forms.lock().remove(&id);
+            return Err(error);
+        }
         let closed = *self.inner.closed.lock();
         if closed {
             let _ = self.cancel(&id, None).await;
@@ -262,20 +277,24 @@ impl Forms {
         if let Some(invalid) = validate_answer(&form.fields, &answer) {
             return Err(InvalidAnswerError { id: id.clone(), message: invalid }.into());
         }
+        // G-276① — ref form.ts:188-194 (`reply`): the durable event
+        // publishes FIRST; the state settles only after a successful
+        // publish (a failed publish leaves the form pending — no state
+        // transition, no watcher notification).
+        self.publish(
+            "form.replied",
+            serde_json::json!({ "id": id.as_str(), "sessionID": form.session_id, "answer": answer }),
+        )
+        .await?;
         let next = State::Answered { answer: answer.clone() };
         {
             let mut forms = self.inner.forms.lock();
             if let Some(entry) = forms.get_mut(id) {
                 entry.state = next.clone();
                 entry.settled_at = Some(self.now_ms());
-                let _ = entry.settled.send(Some(next.clone()));
+                let _ = entry.settled.send(Some(next));
             }
         }
-        self.publish(
-            "form.replied",
-            serde_json::json!({ "id": id.as_str(), "sessionID": form.session_id, "answer": answer }),
-        )
-        .await;
         Ok(())
     }
 
@@ -291,6 +310,13 @@ impl Forms {
             entry.form.session_id.clone()
         };
         let next = State::Cancelled { message: message.map(String::from) };
+        // G-276① — ref form.ts:207-212 (`cancel`): publish first, settle
+        // after a successful publish.
+        self.publish(
+            "form.cancelled",
+            serde_json::json!({ "id": id.as_str(), "sessionID": session_id }),
+        )
+        .await?;
         {
             let mut forms = self.inner.forms.lock();
             if let Some(entry) = forms.get_mut(id) {
@@ -299,11 +325,6 @@ impl Forms {
                 let _ = entry.settled.send(Some(next));
             }
         }
-        self.publish(
-            "form.cancelled",
-            serde_json::json!({ "id": id.as_str(), "sessionID": session_id }),
-        )
-        .await;
         Ok(())
     }
 
@@ -1206,5 +1227,99 @@ mod tests {
                 "expected invalid: {value}"
             );
         }
+    }
+}
+// ---------------------------------------------------------------------------
+// G-276① — publish failure rollback (ref form.ts:145-146, :188-194, :207-212)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod g276_tests {
+    use super::*;
+    use oc_util::determinism::{SequentialIdGen, SystemClock};
+
+    async fn bus_with_failing_listener(fail_on: &'static str) -> crate::bus::Bus {
+        let db = crate::database::Database::open_in_memory().await.expect("db");
+        let bus = crate::bus::Bus::new(
+            db,
+            crate::bus::BusOptions {
+                clock: Arc::new(SystemClock),
+                ids: Arc::new(SequentialIdGen::new()),
+                persist: false,
+                log_read_page_size: 512,
+            },
+        );
+        bus.listen(Arc::new(move |event| {
+            if event.type_ == fail_on {
+                Err(crate::bus::ListenerError("boom".to_owned()))
+            } else {
+                Ok(())
+            }
+        }));
+        bus
+    }
+
+    fn input() -> CreateInput {
+        CreateInput {
+            session_id: "ses_g276".into(),
+            title: "t".into(),
+            metadata: None,
+            fields: vec![Field::String {
+                key: "name".into(),
+                title: None,
+                description: None,
+                required: Some(true),
+                hidden: None,
+                when: None,
+                format: None,
+                min_length: None,
+                max_length: None,
+                pattern: None,
+                placeholder: None,
+                default: None,
+                options: None,
+                custom: None,
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn g276_create_publish_failure_rolls_back_entry() {
+        let forms = Forms::new(Arc::new(SequentialIdGen::new()), Arc::new(SystemClock))
+            .with_bus(bus_with_failing_listener("form.created").await);
+        let error = forms
+            .create_with_id(FormId("frm_g276c".into()), input())
+            .await
+            .expect_err("publish fails");
+        assert!(matches!(error, FormError::Publish(_)), "{error}");
+        // onError → Cache.invalidate: the form is NOT registered.
+        assert!(forms.get(&FormId("frm_g276c".into())).is_err());
+    }
+
+    #[tokio::test]
+    async fn g276_reply_publish_failure_leaves_form_pending() {
+        let forms = Forms::new(Arc::new(SequentialIdGen::new()), Arc::new(SystemClock))
+            .with_bus(bus_with_failing_listener("form.replied").await);
+        let id = FormId("frm_g276r".into());
+        forms.create_with_id(id.clone(), input()).await.expect("create");
+        let reply: Answer = [("name", FormValue::String("v".into()))]
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value))
+            .collect();
+        let error = forms.reply(&id, reply).await.expect_err("publish fails");
+        assert!(matches!(error, FormError::Publish(_)), "{error}");
+        // Publish-first: a failed publish never settles the form.
+        assert_eq!(forms.state(&id).unwrap(), State::Pending);
+    }
+
+    #[tokio::test]
+    async fn g276_cancel_publish_failure_leaves_form_pending() {
+        let forms = Forms::new(Arc::new(SequentialIdGen::new()), Arc::new(SystemClock))
+            .with_bus(bus_with_failing_listener("form.cancelled").await);
+        let id = FormId("frm_g276x".into());
+        forms.create_with_id(id.clone(), input()).await.expect("create");
+        let error = forms.cancel(&id, None).await.expect_err("publish fails");
+        assert!(matches!(error, FormError::Publish(_)), "{error}");
+        assert_eq!(forms.state(&id).unwrap(), State::Pending);
     }
 }
