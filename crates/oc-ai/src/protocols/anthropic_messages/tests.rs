@@ -1727,15 +1727,15 @@ async fn requires_message_stop_before_completing_a_streamed_message() {
 #[tokio::test]
 async fn ignores_unknown_named_sse_events() {
     let body = sse_raw(&[
-            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}",
-            "event: proxy.stats\ndata: not json",
-            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}",
-            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}",
-            "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}",
-            "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}",
-            "event: message_stop\ndata: {\"type\":\"message_stop\"}",
-            "event: proxy.done\ndata: still not json",
-        ]);
+        "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5}}}",
+        "event: proxy.stats\ndata: not json",
+        "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}",
+        "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}",
+        "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}",
+        "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}",
+        "event: message_stop\ndata: {\"type\":\"message_stop\"}",
+        "event: proxy.done\ndata: still not json",
+    ]);
     let response = generate_with(body, base_request(model_of("claude-sonnet-4-5"))).await.unwrap();
     assert_eq!(response.text(), "Hello");
     assert_eq!(
@@ -2638,10 +2638,7 @@ fn meta_messages_validates_thinking_through_the_generic_path() {
     request.provider_options =
         Some(serde_json::from_value(json!({"thinking": {"type": "enabled"}})).unwrap());
     let error = compile(&request).unwrap_err();
-    assert!(
-        error.to_string().contains("requires a budgetTokens"),
-        "unexpected error {error}"
-    );
+    assert!(error.to_string().contains("requires a budgetTokens"), "unexpected error {error}");
 
     // a valid enabled budget lowers (and fits) through the generic path
     let model = provider_model("meta", "llama-4-maverick");
@@ -2659,9 +2656,8 @@ fn meta_messages_validates_thinking_through_the_generic_path() {
     // adaptive (the route default shape) still passes through untouched
     let model = provider_model("meta", "llama-4-maverick");
     let mut request = base_request(model);
-    request.provider_options = Some(
-        serde_json::from_value(json!({"thinking": {"type": "adaptive"}})).unwrap(),
-    );
+    request.provider_options =
+        Some(serde_json::from_value(json!({"thinking": {"type": "adaptive"}})).unwrap());
     let body = compile(&request).unwrap();
     assert_eq!(body["thinking"]["type"], json!("adaptive"));
     // no key when the request carried none

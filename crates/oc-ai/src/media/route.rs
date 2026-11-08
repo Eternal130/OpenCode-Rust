@@ -603,7 +603,9 @@ fn route_materialize(
     transport: &SharedTransport,
 ) -> impl for<'b> Fn(
     &'b crate::schema::media::Asset,
-) -> Pin<Box<dyn Future<Output = Result<crate::schema::media::Asset, AiError>> + Send + 'b>> + Send
+) -> Pin<
+    Box<dyn Future<Output = Result<crate::schema::media::Asset, AiError>> + Send + 'b>,
+> + Send
        + Sync
        + '_ {
     move |asset| Box::pin(materialize_asset(Arc::clone(transport), asset))
@@ -661,8 +663,7 @@ async fn fetch_url(
     let mut buffer: Vec<u8> = Vec::new();
     let mut body = body;
     while let Some(chunk) = body.next().await {
-        let chunk =
-            chunk.map_err(|cause| read_media_failure(url, http.clone(), cause.message))?;
+        let chunk = chunk.map_err(|cause| read_media_failure(url, http.clone(), cause.message))?;
         if buffer.len() + chunk.len() > MAX_DECODE_BODY {
             buffer.extend_from_slice(&chunk[..MAX_DECODE_BODY.saturating_sub(buffer.len())]);
             break;

@@ -295,9 +295,10 @@ pub fn decode(
     // G-286③: the per-candidate detail the ref carries
     // (google-images.ts:133-149): index, finish fields, and the full part
     // walk (text vs inlineData), undefined keys omitted.
-    google.insert("candidates".to_string(), serde_json::Value::Array(candidate_metadata(
-        &candidates,
-    )));
+    google.insert(
+        "candidates".to_string(),
+        serde_json::Value::Array(candidate_metadata(&candidates)),
+    );
     let mut metadata = crate::schema::ProviderMetadata::new();
     metadata.insert("google".to_string(), google);
     let _ = context;
@@ -321,11 +322,18 @@ fn candidate_metadata(candidates: &[serde_json::Value]) -> Vec<serde_json::Value
             let mut entry = serde_json::Map::new();
             entry.insert(
                 "index".to_string(),
-                candidate.get("index").cloned().unwrap_or_else(|| {
-                    serde_json::json!(candidate_index)
-                }),
+                candidate
+                    .get("index")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!(candidate_index)),
             );
-            for key in ["finishReason", "finishMessage", "safetyRatings", "citationMetadata", "groundingMetadata"] {
+            for key in [
+                "finishReason",
+                "finishMessage",
+                "safetyRatings",
+                "citationMetadata",
+                "groundingMetadata",
+            ] {
                 if let Some(value) = candidate.get(key).filter(|value| !value.is_null()) {
                     entry.insert(key.to_string(), value.clone());
                 }
@@ -484,20 +492,28 @@ mod tests {
         );
         // G-286③: details carry the normalized keys + the provider doc
         // wrapped under `google` (google-images.ts:243-248).
-        assert_eq!(response.usage.as_ref().unwrap().clone(), MediaUsage::Tokens {
-            input: Some(5.0),
-            output: Some(120.0),
-            total: Some(125.0),
-            details: Some(json!({
-                "reasoningTokens": 20,
-                "google": {
-                    "promptTokenCount": 5,
-                    "candidatesTokenCount": 100,
-                    "thoughtsTokenCount": 20,
-                    "totalTokenCount": 125
-                }
-            }).as_object().unwrap().clone()),
-        });
+        assert_eq!(
+            response.usage.as_ref().unwrap().clone(),
+            MediaUsage::Tokens {
+                input: Some(5.0),
+                output: Some(120.0),
+                total: Some(125.0),
+                details: Some(
+                    json!({
+                        "reasoningTokens": 20,
+                        "google": {
+                            "promptTokenCount": 5,
+                            "candidatesTokenCount": 100,
+                            "thoughtsTokenCount": 20,
+                            "totalTokenCount": 125
+                        }
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone()
+                ),
+            }
+        );
         // G-286③: the response metadata carries the candidate walk,
         // including thought drafts (google-images.ts:133-149).
         let candidates = &response.provider_metadata.as_ref().unwrap()["google"]["candidates"];
@@ -507,7 +523,10 @@ mod tests {
         let parts = candidates[0]["parts"].as_array().unwrap();
         assert_eq!(parts.len(), 2);
         assert_eq!(parts[0], json!({"type": "inlineData", "mediaType": "image/png"}));
-        assert_eq!(parts[1], json!({"type": "inlineData", "mediaType": "image/png", "thought": true}));
+        assert_eq!(
+            parts[1],
+            json!({"type": "inlineData", "mediaType": "image/png", "thought": true})
+        );
         // undefined finish fields are omitted, not null
         assert!(candidates[0].get("safetyRatings").is_none());
         // absent usage keys stay out of details

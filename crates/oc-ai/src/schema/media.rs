@@ -187,10 +187,7 @@ impl Asset {
             Source::Bytes { data, .. } => Ok(data.0.clone()),
             Source::Base64 { data, .. } => {
                 crate::protocols::shared::decode_base64(data).map_err(|cause| {
-                    invalid_request_cause(
-                        "Media asset contains invalid base64 data",
-                        Some(cause),
-                    )
+                    invalid_request_cause("Media asset contains invalid base64 data", Some(cause))
                 })
             }
             Source::Ref { provider, id, .. } => Err(invalid_request_cause(
@@ -235,10 +232,7 @@ impl Asset {
 /// `fileMediaType`), then `application/octet-stream`.
 pub async fn file(path: &str) -> Result<Asset, AiError> {
     let data = tokio::fs::read(path).await.map_err(|cause| {
-        invalid_request_cause(
-            format!("Failed to read media file {path}"),
-            Some(cause.to_string()),
-        )
+        invalid_request_cause(format!("Failed to read media file {path}"), Some(cause.to_string()))
     })?;
     let media_type = crate::media::utils::file_media_type(&data, path);
     Ok(bytes(data, Some(media_type)))
@@ -248,12 +242,7 @@ pub async fn file(path: &str) -> Result<Asset, AiError> {
 /// shape shared by the runtime asset paths.
 fn invalid_request_cause(message: impl Into<String>, cause: Option<String>) -> AiError {
     AiError::new(AiErrorReason::InvalidRequest {
-        fields: ReasonFields {
-            message: message.into(),
-            body: None,
-            http: None,
-            cause,
-        },
+        fields: ReasonFields { message: message.into(), body: None, http: None, cause },
         parameter: None,
         classification: None,
     })
@@ -446,7 +435,10 @@ mod tests {
     #[tokio::test]
     async fn bytes_decodes_inline_sources_and_fails_refs() {
         let owned = bytes(vec![1, 2, 3], Some("image/png".into()));
-        assert_eq!(owned.bytes(|_url, _headers| async { Ok(Vec::new()) }).await.unwrap(), vec![1, 2, 3]);
+        assert_eq!(
+            owned.bytes(|_url, _headers| async { Ok(Vec::new()) }).await.unwrap(),
+            vec![1, 2, 3]
+        );
 
         let encoded = base64("AQID", "image/png");
         assert_eq!(
@@ -491,8 +483,8 @@ mod tests {
         headers.insert("authorization".to_string(), "Bearer k".to_string());
         asset.headers = Some(headers);
         let owned = asset
-            .materialize(|_url, _headers| {
-                async { Ok(vec![0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) }
+            .materialize(|_url, _headers| async {
+                Ok(vec![0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
             })
             .await
             .unwrap();
