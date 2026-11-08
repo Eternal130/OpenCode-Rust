@@ -1444,10 +1444,7 @@ async fn g276_replay_accepts_numerically_identical_float_spelling() {
     let (bus, _dir) = test_bus(true).await;
     let data_int: serde_json::Value =
         serde_json::from_str(r#"{"sessionID":"ses_g276","title":"one","time":1}"#).unwrap();
-    let published = bus
-        .publish(renamed_def(), data_int, PublishOptions::default())
-        .await
-        .unwrap();
+    let published = bus.publish(renamed_def(), data_int, PublishOptions::default()).await.unwrap();
     // Same event replayed with the number spelled `1.0`: numerically
     // identical → idempotent, NOT a false divergence (G-276②).
     let mut float_spelled = serialized(&published);

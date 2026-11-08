@@ -412,7 +412,6 @@ fn json_deep_equal(a: &serde_json::Value, b: &serde_json::Value) -> bool {
     }
 }
 
-
 impl ListenGuard {
     /// Keeps the listener registered forever.
     pub fn detach(mut self) {
@@ -655,7 +654,6 @@ impl Bus {
             .transaction(move |tx| tx.event_sequence_upsert(&aggregate_id, seq, None))
             .await
     }
-
 
     /// Publishes one event (durable or ephemeral) — `bus.ts:507-529` plus
     /// `publishEvent` (:450-484).

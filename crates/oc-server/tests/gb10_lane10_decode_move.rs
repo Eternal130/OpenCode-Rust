@@ -194,15 +194,10 @@ async fn g253_corrupt_session_column_returns_500_not_silent_drop() {
         .await
         .expect("corrupt the model column");
 
-    let response = support::request(
-        server.addr,
-        "GET",
-        &format!("/api/session/{session_id}"),
-        &[],
-        b"",
-    )
-    .await
-    .expect("raw");
+    let response =
+        support::request(server.addr, "GET", &format!("/api/session/{session_id}"), &[], b"")
+            .await
+            .expect("raw");
     assert_eq!(response.status, 500, "corrupt session column must 500: {}", response.text());
     let envelope = response.json();
     assert_eq!(envelope["message"], "Unexpected server error. Check server logs for details.");
@@ -212,11 +207,7 @@ async fn g253_corrupt_session_column_returns_500_not_silent_drop() {
 // G-254: move destination resolution + workspaceID passthrough
 // ---------------------------------------------------------------------------
 
-async fn post_move(
-    server: &TestServer,
-    session_id: &str,
-    body: &str,
-) -> support::RawResponse {
+async fn post_move(server: &TestServer, session_id: &str, body: &str) -> support::RawResponse {
     support::request(
         server.addr,
         "POST",
@@ -259,8 +250,8 @@ async fn g254_tilde_expansion_and_trim() {
     std::fs::create_dir_all(&dest).expect("dest dir");
 
     // Whitespace around a ~ path: trimmed then expanded.
-    let response = post_move(&server, &session_id, r#"{"directory": "  ~/lane10-tilde-dest  "}"#)
-        .await;
+    let response =
+        post_move(&server, &session_id, r#"{"directory": "  ~/lane10-tilde-dest  "}"#).await;
     assert_eq!(response.status, 204, "tilde+trim move accepted: {}", response.text());
 
     let payload = first_move_payload(&server, &session_id).await;
@@ -307,10 +298,7 @@ async fn g254_relative_directory_resolves_against_session_directory() {
         .engine
         .db
         .transaction(move |tx| {
-            tx.execute(
-                "UPDATE session_v2 SET directory = ?2 WHERE id = ?1",
-                &[&id, &sub_dir],
-            )?;
+            tx.execute("UPDATE session_v2 SET directory = ?2 WHERE id = ?1", &[&id, &sub_dir])?;
             Ok(())
         })
         .await
@@ -322,7 +310,12 @@ async fn g254_relative_directory_resolves_against_session_directory() {
     let response = post_move(&server, &session_id, r#"{"directory": "../lane10-sibling"}"#).await;
     std::env::set_current_dir(&workspace).expect("restore cwd");
 
-    assert_eq!(response.status, 204, "relative move resolves against the session dir: {}", response.text());
+    assert_eq!(
+        response.status,
+        204,
+        "relative move resolves against the session dir: {}",
+        response.text()
+    );
     let payload = first_move_payload(&server, &session_id).await;
     assert_eq!(
         payload["location"]["directory"].as_str().unwrap(),
@@ -345,5 +338,8 @@ async fn g254_workspace_id_passthrough() {
     let response = post_move(&server, &session_id, &body).await;
     assert_eq!(response.status, 204, "move with workspaceID: {}", response.text());
     let payload = first_move_payload(&server, &session_id).await;
-    assert_eq!(payload["location"]["workspaceID"], "wrk_lane10", "workspaceID passthrough: {payload}");
+    assert_eq!(
+        payload["location"]["workspaceID"], "wrk_lane10",
+        "workspaceID passthrough: {payload}"
+    );
 }

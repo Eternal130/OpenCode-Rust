@@ -356,10 +356,7 @@ async fn list(
         })
     });
 
-    let data: Vec<Value> = rows
-        .iter()
-        .map(session_row_to_info)
-        .collect::<Result<Vec<_>, _>>()?;
+    let data: Vec<Value> = rows.iter().map(session_row_to_info).collect::<Result<Vec<_>, _>>()?;
     // Empty page: v2's runtime emits explicit nulls (probed 2026-10-19:
     // `{"data":[],"cursor":{"previous":null,"next":null}}` — the cursor
     // serializer renders undefined as null, not omitted). Non-empty pages
@@ -970,13 +967,17 @@ async fn move_session(
     // destination, not the raw input).
     let path = directory_path.as_path();
     if !path.exists() {
-        return Err(ApiError::invalid_request(format!("Directory does not exist: {directory_display}")));
+        return Err(ApiError::invalid_request(format!(
+            "Directory does not exist: {directory_display}"
+        )));
     }
     if !path.is_dir() {
         return Err(ApiError::invalid_request(format!("Not a directory: {directory_display}")));
     }
     if path.read_dir().is_err() {
-        return Err(ApiError::invalid_request(format!("Directory is unavailable: {directory_display}")));
+        return Err(ApiError::invalid_request(format!(
+            "Directory is unavailable: {directory_display}"
+        )));
     }
 
     // Resolve the destination project, then admit the queued move item.
@@ -1500,10 +1501,8 @@ async fn context(
     // is a no-op on the "latest" boundary — every checkpoint replays.)
     let rows: Vec<&oc_core::database::schema::SessionMessageRow> =
         drop_pre_checkpoint_system_rows(&rows.iter().collect::<Vec<_>>());
-    let data: Vec<Value> = rows
-        .iter()
-        .map(|row| message_row_to_info(row))
-        .collect::<Result<Vec<_>, _>>()?;
+    let data: Vec<Value> =
+        rows.iter().map(|row| message_row_to_info(row)).collect::<Result<Vec<_>, _>>()?;
     Ok(json_data(Value::Array(data)))
 }
 
@@ -2358,10 +2357,8 @@ async fn export(
             ApiError::unknown_ref()
         })?;
     let info = session_row_to_info(&row)?;
-    let message_values: Vec<Value> = messages
-        .iter()
-        .map(message_row_to_info)
-        .collect::<Result<Vec<_>, _>>()?;
+    let message_values: Vec<Value> =
+        messages.iter().map(message_row_to_info).collect::<Result<Vec<_>, _>>()?;
     // G-170: the export routes through the oc-core transfer service —
     // the settled filter + ref sanitize semantics (transfer.ts:60-64,
     // 165-330) — keeping the wire `{info, messages}` shape stable.

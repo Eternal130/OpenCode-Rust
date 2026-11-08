@@ -80,9 +80,10 @@ fn percent_decode_path(input: &str) -> String {
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'%' {
-            if let (Some(high), Some(low)) =
-                (bytes.get(index + 1).copied().and_then(hex_value), bytes.get(index + 2).copied().and_then(hex_value))
-            {
+            if let (Some(high), Some(low)) = (
+                bytes.get(index + 1).copied().and_then(hex_value),
+                bytes.get(index + 2).copied().and_then(hex_value),
+            ) {
                 out.push(high * 16 + low);
                 index += 3;
                 continue;
