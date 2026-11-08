@@ -498,7 +498,7 @@ pub fn decode_message_cursor(input: &str) -> Option<MessageCursor> {
 // ---------------------------------------------------------------------------
 
 /// Maps a `session_v2` row onto the wire `Session.Info` shape.
-pub fn session_row_to_info(row: &oc_core::database::schema::SessionRow) -> Value {
+pub fn session_row_to_info(row: &oc_core::database::schema::SessionRow) -> Result<Value, ApiError> {
     let mut info = json!({
         "id": row.id,
         "projectID": row.project_id,
@@ -515,7 +515,7 @@ pub fn session_row_to_info(row: &oc_core::database::schema::SessionRow) -> Value
             "updated": row.time_updated,
         },
     });
-    let Value::Object(map) = &mut info else { return info };
+    let Value::Object(map) = &mut info else { return Ok(info) };
     let set = |map: &mut serde_json::Map<String, Value>, key: &str, value: Value| {
         map.insert(key.to_owned(), value);
     };
@@ -528,19 +528,19 @@ pub fn session_row_to_info(row: &oc_core::database::schema::SessionRow) -> Value
     if let Some(parent) = &row.parent_id {
         set(map, "parentID", json!(parent));
     }
-    if let Some(metadata) = decode_json_or_none(row.metadata.as_deref()) {
+    if let Some(metadata) = decode_json_column("metadata", row.metadata.as_deref(), &row.id)? {
         set(map, "metadata", metadata);
     }
     if let Some(agent) = &row.agent {
         set(map, "agent", json!(agent));
     }
-    if let Some(model) = decode_json_or_none(row.model.as_deref()) {
+    if let Some(model) = decode_json_column("model", row.model.as_deref(), &row.id)? {
         set(map, "model", model);
     }
-    if let Some(permissions) = decode_json_or_none(row.permission.as_deref()) {
+    if let Some(permissions) = decode_json_column("permissions", row.permission.as_deref(), &row.id)? {
         set(map, "permissions", permissions);
     }
-    if let Some(revert) = decode_json_or_none(row.revert.as_deref()) {
+    if let Some(revert) = decode_json_column("revert", row.revert.as_deref(), &row.id)? {
         set(map, "revert", revert);
     }
     if let Some(path) = &row.path {
@@ -569,22 +569,67 @@ pub fn session_row_to_info(row: &oc_core::database::schema::SessionRow) -> Value
             }
         }
     }
-    info
+    Ok(info)
 }
 
-fn decode_json_or_none(text: Option<&str>) -> Option<Value> {
-    text.filter(|text| !text.is_empty()).and_then(|text| serde_json::from_str(text).ok())
+/// Decodes a JSON-typed session column. G-253: a non-empty column whose
+/// JSON is corrupted must fail the read explicitly (logged cause + 500
+/// UnknownError with a log ref) instead of silently vanishing from the
+/// wire — the ref schema-decodes the whole row (session.ts decode) so a
+/// corrupt column surfaces as a decode failure, never a silent drop.
+fn decode_json_column(
+    column: &str,
+    text: Option<&str>,
+    session_id: &str,
+) -> Result<Option<Value>, ApiError> {
+    let Some(text) = text.filter(|text| !text.is_empty()) else { return Ok(None) };
+    match serde_json::from_str(text) {
+        Ok(value) => Ok(Some(value)),
+        Err(error) => {
+            crate::errors::debug_cause(
+                "session:row_decode",
+                &format!("session {session_id}: corrupt {column} column: {error}"),
+            );
+            Err(ApiError::unknown_ref())
+        }
+    }
 }
 
 /// Maps a `session_message` row onto the wire message shape: merges
 /// `{id, type}` back into the projected `data` JSON.
-pub fn message_row_to_info(row: &oc_core::database::schema::SessionMessageRow) -> Value {
-    let mut data: Value = serde_json::from_str(&row.data).unwrap_or_else(|_| json!({}));
-    if let Value::Object(map) = &mut data {
-        map.insert("id".to_owned(), json!(row.id));
-        map.insert("type".to_owned(), json!(row.type_));
-    }
-    data
+///
+/// G-253: corrupted `data` is an explicit error (logged cause + 500
+/// UnknownError with ref), mirroring ref history.ts:62-77
+/// `decodeMessageRow` → `MessageDecodeError` → session-error.ts
+/// `failedMessageDecode` (logError "failed to decode session message" +
+/// UnknownError "Unexpected server error. Check server logs for
+/// details.") — never a 200 with an `{id,type}`-only empty shell.
+pub fn message_row_to_info(
+    row: &oc_core::database::schema::SessionMessageRow,
+) -> Result<Value, ApiError> {
+    let mut data: Value = serde_json::from_str(&row.data).map_err(|error| {
+        crate::errors::debug_cause(
+            "session:message_decode",
+            &format!(
+                "failed to decode session message: session {} message {}: {error}",
+                row.session_id, row.id
+            ),
+        );
+        ApiError::unknown_ref()
+    })?;
+    let Value::Object(map) = &mut data else {
+        crate::errors::debug_cause(
+            "session:message_decode",
+            &format!(
+                "failed to decode session message: session {} message {}: data is not a JSON object",
+                row.session_id, row.id
+            ),
+        );
+        return Err(ApiError::unknown_ref());
+    };
+    map.insert("id".to_owned(), json!(row.id));
+    map.insert("type".to_owned(), json!(row.type_));
+    Ok(data)
 }
 
 /// Engine error-string → `ApiError` for the revert family (§3):

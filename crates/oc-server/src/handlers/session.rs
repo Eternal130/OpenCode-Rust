@@ -356,7 +356,10 @@ async fn list(
         })
     });
 
-    let data: Vec<Value> = rows.iter().map(session_row_to_info).collect();
+    let data: Vec<Value> = rows
+        .iter()
+        .map(session_row_to_info)
+        .collect::<Result<Vec<_>, _>>()?;
     // Empty page: v2's runtime emits explicit nulls (probed 2026-10-19:
     // `{"data":[],"cursor":{"previous":null,"next":null}}` — the cursor
     // serializer renders undefined as null, not omitted). Non-empty pages
@@ -452,7 +455,7 @@ async fn create(
         crate::errors::debug_cause("session:unknown_ref", &error);
         ApiError::unknown_ref()
     })?;
-    Ok(json_data(session_row_to_info(&row)))
+    Ok(json_data(session_row_to_info(&row)?))
 }
 
 fn opt_value(body: &Value, field: &str) -> Option<Value> {
@@ -500,7 +503,7 @@ async fn get(
     Path(session_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let (_, row) = session_services(&state, &session_id).await?;
-    Ok(json_data(session_row_to_info(&row)))
+    Ok(json_data(session_row_to_info(&row)?))
 }
 
 async fn remove(
@@ -901,6 +904,41 @@ async fn compact(
 // POST /:id/move — 204; directory errors exact (§3)
 // ---------------------------------------------------------------------------
 
+/// G-254 — ref move.ts:75-79 `resolveDestination` destination math:
+/// trim the input, expand a bare `~`/`~/…` against the global home, and
+/// resolve relative paths against the SESSION's current directory (Node
+/// `path.resolve(session.location.directory, expanded)`), including the
+/// lexical `.`/`..` normalization `path.resolve` applies — never the
+/// server process cwd.
+fn resolve_move_directory(
+    state: &SharedState,
+    row: &oc_core::database::schema::SessionRow,
+    directory: &str,
+) -> std::path::PathBuf {
+    let value = directory.trim();
+    let expanded: std::path::PathBuf = if value == "~" {
+        state.engine.home.clone()
+    } else if let Some(rest) = value.strip_prefix("~/") {
+        state.engine.home.join(rest)
+    } else {
+        std::path::PathBuf::from(value)
+    };
+    // `Path::join` follows Node semantics: an absolute right-hand side
+    // replaces the base entirely.
+    let joined = std::path::Path::new(&row.directory).join(expanded);
+    let mut normalized = std::path::PathBuf::new();
+    for component in joined.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other),
+        }
+    }
+    normalized
+}
+
 async fn move_session(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
@@ -921,17 +959,24 @@ async fn move_session(
     // G-233 — the ref error messages carry the offending directory
     // (session.ts:295-301 `... : ${error.directory}`).
     let directory = body["directory"].as_str().unwrap_or_default();
-    let path = std::path::Path::new(directory);
+    // G-254 — ref move.ts:75-79 `resolveDestination`: trim, expand
+    // `~`/`~/x` against the global home, and resolve RELATIVE paths
+    // against the session's CURRENT directory (never the server process
+    // cwd — Node `path.resolve(session.location.directory, expanded)`).
+    let directory_path = resolve_move_directory(&state, &row, directory);
+    let directory_display = directory_path.to_string_lossy().to_string();
     // G-233 — the ref error messages carry the offending directory
-    // (session.ts:295-301 `... : ${error.directory}`).
+    // (session.ts:295-301 `... : ${error.directory}` — the RESOLVED
+    // destination, not the raw input).
+    let path = directory_path.as_path();
     if !path.exists() {
-        return Err(ApiError::invalid_request(format!("Directory does not exist: {directory}")));
+        return Err(ApiError::invalid_request(format!("Directory does not exist: {directory_display}")));
     }
     if !path.is_dir() {
-        return Err(ApiError::invalid_request(format!("Not a directory: {directory}")));
+        return Err(ApiError::invalid_request(format!("Not a directory: {directory_display}")));
     }
     if path.read_dir().is_err() {
-        return Err(ApiError::invalid_request(format!("Directory is unavailable: {directory}")));
+        return Err(ApiError::invalid_request(format!("Directory is unavailable: {directory_display}")));
     }
 
     // Resolve the destination project, then admit the queued move item.
@@ -948,8 +993,13 @@ async fn move_session(
         .filter(|rest| !rest.is_empty());
     let payload = oc_schema::session_inbox::MovePayload {
         location: oc_schema::location::Ref {
-            directory: oc_schema::common::AbsolutePath(directory.to_owned()),
-            workspace_id: None,
+            directory: oc_schema::common::AbsolutePath(directory_display),
+            // G-254 — ref move.ts:84 `workspaceID: input.workspaceID`:
+            // the request payload's workspaceID passes through to the
+            // moved event instead of a hardcoded None.
+            workspace_id: body["workspaceID"]
+                .as_str()
+                .and_then(|id| oc_schema::id::WorkspaceId::parse(id.to_owned()).ok()),
         },
         project_id: oc_schema::id::ProjectId::parse(project.id.clone()),
         subpath: subpath.map(oc_schema::common::RelativePath),
@@ -1137,7 +1187,7 @@ async fn fork(
             ApiError::unknown_ref()
         })?
         .ok_or_else(ApiError::unknown_ref)?;
-    Ok(json_data(session_row_to_info(&fork_row)))
+    Ok(json_data(session_row_to_info(&fork_row)?))
 }
 
 // ---------------------------------------------------------------------------
@@ -1450,7 +1500,10 @@ async fn context(
     // is a no-op on the "latest" boundary — every checkpoint replays.)
     let rows: Vec<&oc_core::database::schema::SessionMessageRow> =
         drop_pre_checkpoint_system_rows(&rows.iter().collect::<Vec<_>>());
-    let data: Vec<Value> = rows.iter().map(|row| message_row_to_info(row)).collect();
+    let data: Vec<Value> = rows
+        .iter()
+        .map(|row| message_row_to_info(row))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(json_data(Value::Array(data)))
 }
 
@@ -2282,7 +2335,7 @@ async fn import(
         }
     })?;
 
-    Ok(json_data(session_row_to_info(&row)))
+    Ok(json_data(session_row_to_info(&row)?))
 }
 
 async fn export(
@@ -2304,8 +2357,11 @@ async fn export(
             crate::errors::debug_cause("session:unknown_ref", &error);
             ApiError::unknown_ref()
         })?;
-    let info = session_row_to_info(&row);
-    let message_values: Vec<Value> = messages.iter().map(message_row_to_info).collect();
+    let info = session_row_to_info(&row)?;
+    let message_values: Vec<Value> = messages
+        .iter()
+        .map(message_row_to_info)
+        .collect::<Result<Vec<_>, _>>()?;
     // G-170: the export routes through the oc-core transfer service —
     // the settled filter + ref sanitize semantics (transfer.ts:60-64,
     // 165-330) — keeping the wire `{info, messages}` shape stable.
