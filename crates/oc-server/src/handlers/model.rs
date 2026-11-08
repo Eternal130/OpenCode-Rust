@@ -197,8 +197,8 @@ pub(crate) async fn location_model_entries(
     }
     let mut data: Vec<(f64, Value)> = Vec::new();
     let mut sync_gate_passed: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-    for (snapshot, model) in
-        catalog.available_models(|name| std::env::var_os(name).is_some() || credential_env.contains(name))
+    for (snapshot, model) in catalog
+        .available_models(|name| std::env::var_os(name).is_some() || credential_env.contains(name))
     {
         let id = snapshot.info.id.as_str();
         if dynamic.contains_key(id) {
@@ -382,7 +382,8 @@ async fn model_default(
             // exact-map miss does NOT fall back to the static record —
             // bind refuses it too — and lands in the available-first
             // fallback below exactly like a static miss.
-            if let Some(synced) = dynamic_sync_snapshot(&state.engine, selection.provider_id.as_str())
+            if let Some(synced) =
+                dynamic_sync_snapshot(&state.engine, selection.provider_id.as_str())
             {
                 synced
                     .models
@@ -876,14 +877,15 @@ mod tests {
                 model: "gpt-5-mini".to_owned(),
             }],
         );
-        engine
-            .digitalocean_sync
-            .seed_for_test(&catalog, "do-token", vec!["alpha".to_owned()]);
+        engine.digitalocean_sync.seed_for_test(&catalog, "do-token", vec!["alpha".to_owned()]);
         let mut remote = std::collections::BTreeMap::new();
         remote.insert("enterprise-only-model".to_owned(), copilot_remote("enterprise-only-model"));
-        engine
-            .copilot_sync
-            .seed_for_test(&catalog, "https://api.githubcopilot.com", "ghu_token", remote);
+        engine.copilot_sync.seed_for_test(
+            &catalog,
+            "https://api.githubcopilot.com",
+            "ghu_token",
+            remote,
+        );
 
         let location = oc_core::location::LocationRef::new(tmp.path().to_owned(), None);
         let entries = location_model_entries(&engine, &location).await;
@@ -977,7 +979,9 @@ mod tests {
             "the static copilot surface lists"
         );
         assert!(
-            !copilot.is_empty() && copilot.iter().any(|model| model["id"] == json!("enterprise-only-model")) == false,
+            !copilot.is_empty()
+                && copilot.iter().any(|model| model["id"] == json!("enterprise-only-model"))
+                    == false,
             "no dynamic-only ids without a sync"
         );
         let digitalocean = provider_entries(&entries, "digitalocean");
@@ -1016,9 +1020,7 @@ mod tests {
         ))
         .await;
         let catalog = engine.catalog_service.get();
-        engine
-            .digitalocean_sync
-            .seed_for_test(&catalog, "do-token", vec!["alpha".to_owned()]);
+        engine.digitalocean_sync.seed_for_test(&catalog, "do-token", vec!["alpha".to_owned()]);
 
         let location = oc_core::location::LocationRef::new(tmp.path().to_owned(), None);
         let entries = location_model_entries(&engine, &location).await;
