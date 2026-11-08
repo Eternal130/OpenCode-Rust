@@ -56,7 +56,15 @@ fn form_error(error: FormError) -> ApiError {
     match error {
         FormError::NotFound(error) => ApiError::form_not_found(error.0.as_str()),
         FormError::AlreadySettled(error) => ApiError::form_already_settled(error.0.as_str()),
-        FormError::AlreadyExists(error) => ApiError::form_already_settled(error.0.as_str()),
+        // G-270⑧ — the CREATE-path duplicate (session.form.create over an
+        // existing id) maps to ConflictError {resource: id, message}
+        // (ref session.ts:663-664), NOT FormAlreadySettled — a typed
+        // client must classify a duplicate CREATE as a 409 conflict, not
+        // a settled-form reply error.
+        FormError::AlreadyExists(error) => ApiError::conflict_resource(
+            format!("Form already exists: {}", error.0),
+            error.0.as_str(),
+        ),
         FormError::InvalidAnswer(error) => {
             ApiError::form_invalid_answer(error.id.as_str(), error.message)
         }

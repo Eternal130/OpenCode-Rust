@@ -26,10 +26,14 @@ async fn list(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
+    // G-270① — ref `Agent.list` (core agent.ts:123-129): EVERY agent
+    // (hidden ones included) with the selected default FIRST — the
+    // registry's `list()` already carries both; the old `!hidden` filter
+    // here hid hidden agents (title/summary/config-defined) from the
+    // wire. The default-first order rides `list()` unchanged.
     let agents = services.graph.agents.list();
     let data: Vec<Value> = agents
         .iter()
-        .filter(|agent| !agent.hidden)
         .map(|agent| serde_json::to_value(agent).unwrap_or_else(|_| json!({})))
         .collect();
     Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(data)))
@@ -109,56 +113,51 @@ async fn reference_list(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
-    let _services = services(&state, &location).await?;
-    // References are config-sourced (`Config.reference`); load the same
-    // snapshot the engine assembled from.
-    let mut loader = oc_core::config::Loader::new(
-        location.as_path().to_path_buf(),
-        oc_core::config::GlobalDirs {
-            config: state.engine.home.join(".config").join("opencode"),
-            home: state.engine.home.clone(),
-        },
-    );
-    // CLI-N4 — the project-config disable switch (v2 Config.configured).
-    crate::server_process_env::configure_loader(&mut loader);
-    let snapshot = loader.load();
-    let mut references: Vec<Value> = Vec::new();
-    for entry in &snapshot.entries {
-        let info = match entry {
-            oc_schema::config::Entry::Document(document) => &document.info,
-            oc_schema::config::Entry::Directory(_) => continue,
-        };
-        let Some(map) = info.references.as_ref() else { continue };
-        for (name, entry) in map {
-            let (source, path, description, hidden) = match entry {
-                oc_schema::config::reference::Entry::Path(path) => {
-                    (json!({ "type": "local", "path": path }), path.clone(), None, None)
-                }
-                oc_schema::config::reference::Entry::Git(git) => (
-                    json!({
+    let services = services(&state, &location).await?;
+    // G-270② — the handler reads the location's assembled reference
+    // service (ref handlers/reference.ts:7 pipes `Reference.Service.list`
+    // straight out). The old hand-rolled config re-assembly here drifted
+    // from the core semantics (ReferenceService::list — validation +
+    // cache_path + invalid-entry dropping, pinned by oc-core
+    // reference::tests): git sources kept their URL as `path`, invalid
+    // entries survived, and description/hidden were always-null.
+    let data: Vec<Value> = services
+        .references
+        .list()
+        .iter()
+        .map(|info| {
+            // Wire shape = the protocol's PublicInfo (groups/reference.ts):
+            // {name, path, description?, hidden?, source} where the PUBLIC
+            // source omits description/hidden.
+            let source = match &info.source {
+                oc_core::reference::Source::Local(local) => json!({
+                    "type": "local",
+                    "path": local.path.to_string_lossy(),
+                }),
+                oc_core::reference::Source::Git(git) => {
+                    let mut value = json!({
                         "type": "git",
                         "repository": git.repository,
-                        "branch": git.branch,
-                    }),
-                    git.repository.clone(),
-                    git.description.clone(),
-                    git.hidden,
-                ),
-                oc_schema::config::reference::Entry::Local(local) => (
-                    json!({ "type": "local", "path": local.path }),
-                    local.path.clone(),
-                    local.description.clone(),
-                    local.hidden,
-                ),
+                    });
+                    if let Some(branch) = &git.branch {
+                        value["branch"] = json!(branch);
+                    }
+                    value
+                }
             };
-            references.push(json!({
-                "name": name,
-                "path": path,
-                "description": description,
-                "hidden": hidden,
+            let mut value = json!({
+                "name": info.name,
+                "path": info.path.to_string_lossy(),
                 "source": source,
-            }));
-        }
-    }
-    Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(references)))
+            });
+            if let Some(description) = &info.description {
+                value["description"] = json!(description);
+            }
+            if let Some(hidden) = info.hidden {
+                value["hidden"] = json!(hidden);
+            }
+            value
+        })
+        .collect();
+    Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(data)))
 }

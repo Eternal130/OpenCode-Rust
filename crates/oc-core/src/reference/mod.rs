@@ -77,6 +77,42 @@ pub struct Info {
     pub source: Source,
 }
 
+/// `validAlias` (config/plugin/reference.ts:51-53): non-empty, and none
+/// of `/`, whitespace, `` ` ``, `,`.
+fn valid_alias(name: &str) -> bool {
+    !name.is_empty() && !name.chars().any(|c| c == '/' || c == '`' || c == ',' || c.is_whitespace())
+}
+
+/// `localPath` (config/plugin/reference.ts:63-66): `~/…` joins `home`,
+/// absolute stays, relative resolves (lexically, Node `path.resolve`)
+/// against the document directory.
+fn local_path(directory: &std::path::Path, home: &std::path::Path, value: &str) -> PathBuf {
+    if let Some(rest) = value.strip_prefix("~/") {
+        let joined = home.join(rest);
+        return lexical_normalize(&joined);
+    }
+    if std::path::Path::new(value).is_absolute() {
+        return PathBuf::from(value);
+    }
+    lexical_normalize(&directory.join(value))
+}
+
+/// Node `path.resolve` lexical half: drop `.` components, apply `..`
+/// without touching the filesystem.
+fn lexical_normalize(input: &std::path::Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in input.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
 /// The injectable materialization seam (the ref reference.test.ts mocks the
 /// whole `RepositoryCache` layer).
 pub type EnsureFn = Arc<
@@ -187,6 +223,101 @@ impl ReferenceService {
     #[must_use]
     pub fn sources(&self) -> Vec<(String, Source)> {
         self.sources.lock().clone()
+    }
+
+    /// Bulk insert-or-replace WITHOUT the notify leg — seeding a fresh
+    /// service from an existing table (e.g. the engine's plugin-applied
+    /// sources when a per-location service is assembled, G-270②).
+    pub fn install(self: &Arc<Self>, entries: Vec<(String, Source)>) {
+        let mut sources = self.sources.lock();
+        for (name, source) in entries {
+            match sources.iter_mut().find(|(existing, _)| *existing == name) {
+                Some(slot) => slot.1 = source,
+                None => sources.push((name, source)),
+            }
+        }
+    }
+
+    /// Bulk insert-or-replace + ONE notify — the shape of ref's single
+    /// `ctx.reference.transform` per config load (G-270②): the config
+    /// plugin applies every document's entries inside one editor call,
+    /// so assembly-time seeding forks ONE refresh and publishes ONE
+    /// `reference.updated`.
+    pub fn apply(self: &Arc<Self>, entries: Vec<(String, Source)>) {
+        self.install(entries);
+        self.notify();
+    }
+
+    /// The config-plugin transform (core config/plugin/reference.ts:23-52,
+    /// G-270②): every document's `references` map → `(name, source)`
+    /// pairs. Mirrors the ref exactly:
+    /// - `validAlias`: a name with `/`, whitespace, `` ` `` or `,` (or an
+    ///   empty one) is skipped;
+    /// - a bare string entry is LOCAL when it starts with `.`, `/` or
+    ///   `~`, and a git shorthand otherwise;
+    /// - `localPath`: `~/…` resolves against `home`, absolute paths stay,
+    ///   relative paths resolve against the DOCUMENT's directory (its
+    ///   `path` dirname) or the location directory for path-less docs.
+    pub fn sources_from_config(
+        entries: &[oc_schema::config::Entry],
+        location: &std::path::Path,
+        home: &std::path::Path,
+    ) -> Vec<(String, Source)> {
+        let mut out = Vec::new();
+        for entry in entries {
+            let oc_schema::config::Entry::Document(document) = entry else { continue };
+            let directory = document
+                .path
+                .as_deref()
+                .map(|path| {
+                    std::path::Path::new(path)
+                        .parent()
+                        .map(std::path::Path::to_path_buf)
+                        .unwrap_or_else(|| location.to_path_buf())
+                })
+                .unwrap_or_else(|| location.to_path_buf());
+            let Some(map) = document.info.references.as_ref() else { continue };
+            for (name, entry) in map {
+                if !valid_alias(name) {
+                    continue;
+                }
+                let (local, git) = match entry {
+                    oc_schema::config::reference::Entry::Path(path) => {
+                        if path.starts_with('.') || path.starts_with('/') || path.starts_with('~') {
+                            (Some(path.as_str()), None)
+                        } else {
+                            (None, Some(path.as_str()))
+                        }
+                    }
+                    oc_schema::config::reference::Entry::Git(git) => (None, Some(git.repository.as_str())),
+                    oc_schema::config::reference::Entry::Local(local) => {
+                        (Some(local.path.as_str()), None)
+                    }
+                };
+                let description = match entry {
+                    oc_schema::config::reference::Entry::Path(_) => None,
+                    oc_schema::config::reference::Entry::Git(git) => git.description.clone(),
+                    oc_schema::config::reference::Entry::Local(local) => local.description.clone(),
+                };
+                let hidden = match entry {
+                    oc_schema::config::reference::Entry::Path(_) => None,
+                    oc_schema::config::reference::Entry::Git(git) => git.hidden,
+                    oc_schema::config::reference::Entry::Local(local) => local.hidden,
+                };
+                let branch = match entry {
+                    oc_schema::config::reference::Entry::Git(git) => git.branch.clone(),
+                    _ => None,
+                };
+                let source = if let Some(path) = local {
+                    Source::Local(LocalSource { path: local_path(&directory, home, path), description, hidden })
+                } else {
+                    let repository = git.unwrap_or_default().to_owned();
+                    Source::Git(GitSource { repository, branch, description, hidden })
+                };
+                out.push((name.clone(), source));
+            }
+        }
+        out
     }
 
     /// `list()` (reference.ts:51-75): every source resolved to an [`Info`];

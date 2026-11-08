@@ -1,9 +1,10 @@
 //! fs handlers (v2 `handlers/fs.ts`, 55 LOC): read (binary octet-stream,
 //! core-detected mime; v2 resolve containment — lexical normalize, then
 //! canonicalize vs the location root, escapes die 500), list/find
-//! (dirs-first, locale-compare, trailing `/` on dirs; list entries are
-//! location-relative like v2, find keeps the registered absolute-shape
-//! gap), and the deliberately-escaping write (raw body, path query).
+//! (dirs-first, locale-compare, trailing `/` on dirs; BOTH carry
+//! location-relative paths like v2 — find's old absolute shape closed
+//! by G-270③), and the deliberately-escaping write (raw body, path
+//! query).
 
 #![allow(clippy::must_use_candidate, clippy::similar_names)]
 use axum::extract::{Path, State};
@@ -273,6 +274,7 @@ async fn find(
     // The index is keyed by canonical root (invalidation: a different
     // canonical root is a different slot).
     let root = std::fs::canonicalize(&root).unwrap_or(root);
+    let root_for_entries = root.clone();
     let exclusions = ScanExclusions::for_root(&root);
     // G-31: VCS-rooted non-home scans are unbounded (ref search.ts:72
     // `location.vcs && !home ? MAX_SAFE_INTEGER : 100_000`); the
@@ -284,7 +286,7 @@ async fn find(
     // build-on-first-miss) — no per-request walk.
     let entries = state
         .fs_index
-        .entries(root, budget, exclusions, i64::try_from(super::common::now_ms(&state)).unwrap_or(0))
+        .entries(root_for_entries, budget, exclusions, i64::try_from(super::common::now_ms(&state)).unwrap_or(0))
         .await;
 
     // REF (filesystem/search.ts): every find path ranks the index
@@ -319,7 +321,22 @@ async fn find(
 
     let data: Vec<Value> = scored
         .into_iter()
-        .map(|(path, is_dir)| entry_json(&path.to_string_lossy(), is_dir))
+        .map(|(path, is_dir)| {
+            // G-270③ — REF find paths are LOCATION-RELATIVE
+            // (`RelativePath`, filesystem/search.ts:44-49), directories
+            // with a trailing separator — not the absolute index paths
+            // this handler used to leak. Relative to the CANONICAL root
+            // (the index key), which equals the location directory up to
+            // symlinks resolved the same way the index build did.
+            let mut relative = path_relative(&root, &path);
+            if relative.is_empty() {
+                relative.push('.');
+            }
+            if is_dir && !relative.ends_with('/') {
+                relative.push('/');
+            }
+            entry_json(&relative, is_dir)
+        })
         .collect();
     Ok(super::common::json_location_data(&location.as_path().to_string_lossy(), Value::Array(data)))
 }

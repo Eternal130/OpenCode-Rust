@@ -43,7 +43,6 @@ struct Row {
     integration_id: Option<String>,
     label: String,
     value: String,
-    active: Option<bool>,
     time_created: i64,
     time_updated: i64,
 }
@@ -53,8 +52,13 @@ async fn read_rows(state: &SharedState) -> Result<Vec<Row>, ApiError> {
     db.transaction(move |tx| {
         let conn = tx.conn();
         let mut statement = conn.prepare(
+            // G-268 — CredentialStore::all's ordering (credential.ts:84-91):
+            // `asc(active), asc(time_created), asc(id)` — the LAST row per
+            // integration is the selected one (active rows sort last;
+            // legacy NULL-active libraries degrade to newest-first, still
+            // last-wins).
             "SELECT id, integration_id, label, value, active, time_created, time_updated \
-             FROM credential ORDER BY integration_id, time_created",
+             FROM credential ORDER BY active ASC, time_created ASC, id ASC",
         )?;
         let rows = statement
             .query_map([], |row| {
@@ -63,7 +67,6 @@ async fn read_rows(state: &SharedState) -> Result<Vec<Row>, ApiError> {
                     integration_id: row.get::<_, Option<String>>(1)?,
                     label: row.get::<_, String>(2)?,
                     value: row.get::<_, String>(3)?,
-                    active: row.get::<_, Option<bool>>(4)?,
                     time_created: row.get::<_, i64>(5)?,
                     time_updated: row.get::<_, i64>(6)?,
                 })
@@ -79,16 +82,29 @@ async fn read_rows(state: &SharedState) -> Result<Vec<Row>, ApiError> {
 }
 
 async fn list(State(state): State<SharedState>) -> Result<Response, ApiError> {
-    let rows = read_rows(&state).await?;
-    // Active flag: per-integration selected-last (§3) — the LAST row of an
-    // integration with `active` set wins.
-    let mut active_by_integration: std::collections::HashMap<String, String> =
+    let mut rows = read_rows(&state).await?;
+    // G-268 — mirror CredentialStore::all + the handler's `entries()`
+    // (handlers/credential.ts:53-63): a row WITHOUT integration_id is
+    // dropped (`stored()` — credential.ts:66-72), a value that does not
+    // decode FAILS the read (never a Null-valued fake row — the G-225
+    // core-store semantics this handler previously bypassed), and the
+    // per-integration `active` flag is the LAST row of the ordering
+    // (`new Map(...)` overwrite — selected-last).
+    rows.retain(|row| row.integration_id.is_some());
+    for row in &rows {
+        if serde_json::from_str::<serde_json::Value>(&row.value).is_err() {
+            crate::errors::debug_cause(
+                "credential:decode",
+                &format!("row {}: value does not decode", row.id),
+            );
+            return Err(ApiError::unknown_ref());
+        }
+    }
+    let mut selected_by_integration: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     for row in &rows {
-        if row.active == Some(true) {
-            if let Some(integration) = &row.integration_id {
-                active_by_integration.insert(integration.clone(), row.id.clone());
-            }
+        if let Some(integration) = row.integration_id.as_deref() {
+            selected_by_integration.insert(integration.to_owned(), row.id.clone());
         }
     }
     let data: Vec<Value> = rows
@@ -96,9 +112,9 @@ async fn list(State(state): State<SharedState>) -> Result<Response, ApiError> {
         .map(|row| {
             let active = row
                 .integration_id
-                .as_ref()
-                .and_then(|integration| active_by_integration.get(integration))
-                .is_some_and(|active_id| *active_id == row.id);
+                .as_deref()
+                .and_then(|integration| selected_by_integration.get(integration))
+                .is_some_and(|selected| selected.as_str() == row.id);
             json!({
                 "id": row.id,
                 "integrationID": row.integration_id,
@@ -106,6 +122,9 @@ async fn list(State(state): State<SharedState>) -> Result<Response, ApiError> {
                 "value": serde_json::from_str::<Value>(&row.value)
                     .unwrap_or(Value::Null),
                 "active": active,
+                // G-270⑩ (recorded wire superset): the port keeps the
+                // `time` block the ref Entry omits — dropping it would
+                // break existing consumers.
                 "time": { "created": row.time_created, "updated": row.time_updated },
             })
         })
@@ -119,26 +138,57 @@ async fn create(
 ) -> Result<Response, ApiError> {
     let id = body["id"].as_str().map(String::from);
     let integration_id = body["integrationID"].as_str().unwrap_or_default().to_owned();
-    let label = body["label"].as_str().unwrap_or_default().to_owned();
+    // G-268 — `label ?? "default"` (credential.ts:109): a MISSING label
+    // defaults; an explicit empty string stays empty.
+    let label = body["label"]
+        .as_str()
+        .map(String::from)
+        .unwrap_or_else(|| "default".to_owned());
     let value = serde_json::to_string(&body["value"]).unwrap_or_else(|_| "null".to_owned());
-    let activate = body["activate"].as_bool().unwrap_or(false);
+    let requested_activate = body["activate"].as_bool();
 
     let db = state.engine.db.clone();
-    let (id, integration_id, label, value, activate) =
-        (id.clone(), integration_id.clone(), label.clone(), value.clone(), activate);
+    let label_for_insert = label.clone();
+    let (id, integration_id, label, value, requested_activate) =
+        (id.clone(), integration_id.clone(), label, value.clone(), requested_activate);
     let inserted = db
         .transaction(move |tx| {
+            // Conflict pre-check mirroring `credential.get(id)`
+            // (credential.ts:101-104 + handlers/credential.ts:20-24): a
+            // row WITHOUT integration_id is invisible to `get` (stored()
+            // drops it) — no conflict here, the insert below then dies on
+            // the PK (500) exactly like the ref's orDie.
             if let Some(explicit) = &id {
-                let existing: std::result::Result<String, _> =
-                    tx.conn().query_row("SELECT id FROM credential WHERE id = ?1", (explicit,), |row| {
-                        row.get(0)
-                    });
-                if existing.is_ok() {
-                    return Ok(None);
+                let existing = tx.conn().query_row(
+                    "SELECT integration_id, value FROM credential WHERE id = ?1",
+                    (explicit,),
+                    |row| {
+                        Ok((
+                            row.get::<_, Option<String>>(0)?,
+                            row.get::<_, String>(1)?,
+                        ))
+                    },
+                );
+                if let Ok((Some(_integration), value)) = existing {
+                    // `get` decodes the value before answering — a row
+                    // with an undecodable value dies (500), never 409.
+                    if serde_json::from_str::<serde_json::Value>(&value).is_err() {
+                        return Ok(None);
+                    }
+                    return Ok(Some(Err(explicit.clone())));
                 }
             }
-            let id = id.unwrap_or_else(|| format!("cred_{}", uuid::Uuid::new_v4().simple()));
-            let now = oc_core::database::migrations::now_ms();
+            // G-268 — CredentialStore::create semantics
+            // (credential.ts:105-168), replicated with local SQL (the
+            // G-117 decision: keep the handler's own statements so the
+            // create/list wire shapes stay byte-identical):
+            //   activate = `activate !== false || !current` — default
+            //   ACTIVE, and a first credential is ALWAYS active (an
+            //   integration without a selected credential would be
+            //   unusable after login).
+            let current: Option<String> =
+                tx.conn().query_row(ACTIVE_PICK_SQL, (&integration_id,), |row| row.get(0)).ok();
+            let activate = requested_activate != Some(false) || current.is_none();
             if activate {
                 tx.execute(
                     // v2's deactivate-others writes `active: false` (0),
@@ -147,20 +197,50 @@ async fn create(
                     "UPDATE credential SET active = 0 WHERE integration_id = ?1",
                     (integration_id.clone(),),
                 )?;
+            } else if let Some(current) = &current {
+                // Legacy rows have no active flag and the newest one is
+                // selected: pin it before inserting a newer inactive row
+                // (credential.ts:128-130).
+                let pinned: Option<bool> = tx
+                    .conn()
+                    .query_row(
+                        "SELECT active FROM credential WHERE id = ?1",
+                        (current,),
+                        |row| row.get(0),
+                    )
+                    .ok();
+                if pinned.is_none() {
+                    tx.execute("UPDATE credential SET active = 1 WHERE id = ?1", (current,))?;
+                }
             }
+            let id = id.unwrap_or_else(|| format!("cred_{}", uuid::Uuid::new_v4().simple()));
+            let now = oc_core::database::migrations::now_ms();
             tx.execute(
                 "INSERT INTO credential (id, integration_id, label, value, active, time_created, time_updated) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-                (id.clone(), integration_id, label, value, activate, now,),
+                (id.clone(), integration_id, label_for_insert, value, activate, now,),
             )?;
-            Ok(Some((id, now)))
+            Ok(Some(Ok((id, now, activate))))
         })
         .await
         .map_err(|error| { crate::errors::debug_cause("credential:unknown_ref", &error); ApiError::unknown_ref() })?;
 
-    let Some((id, now)) = inserted else {
-        let id = body["id"].as_str().unwrap_or_default();
-        return Err(ApiError::conflict(format!("Credential already exists: {id}")));
+    let (id, now, activate) = match inserted {
+        // The pre-check found an existing decodable row: 409 with the
+        // resource (handlers/credential.ts:21-24).
+        Some(Err(existing)) => {
+            return Err(ApiError::conflict_resource(
+                format!("Credential already exists: {existing}"),
+                &existing,
+            ));
+        }
+        // Undecodable existing value: `get` dies before the conflict
+        // answer (500 UnknownError).
+        None => {
+            crate::errors::debug_cause("credential:decode", "existing row value does not decode");
+            return Err(ApiError::unknown_ref());
+        }
+        Some(Ok(created)) => created,
     };
     // credential.ts:160-168 — `credential.updated` always; plus
     // `credential.switched` when the new row was created active.
@@ -176,8 +256,12 @@ async fn create(
     Ok(json_data(json!({
         "id": id,
         "integrationID": body["integrationID"],
-        "label": body["label"].as_str().unwrap_or_default(),
+        "label": label,
         "value": body["value"],
+        // The ref's response reads `entries(list(integrationID))` for the
+        // created id (handlers/credential.ts:26-27): `active` is whether
+        // the row is the integration's SELECTION — exactly the activate
+        // outcome above.
         "active": activate,
         "time": { "created": now, "updated": now },
     })))

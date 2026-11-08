@@ -55,12 +55,32 @@ async fn request_list(
 // GET /api/permission/saved, DELETE /api/permission/saved/:id
 // ---------------------------------------------------------------------------
 
-async fn saved_list(State(state): State<SharedState>, uri: Uri) -> Result<Response, ApiError> {
+async fn saved_list(State(state): State<SharedState>, uri: Uri, headers: HeaderMap) -> Result<Response, ApiError> {
     // G-97: the saved-grant family is registered BEFORE the location
     // middleware in the ref protocol (permission.ts:37,49) — it reads the
-    // global store directly: no location resolution, no cold-boot service
-    // assembly, no 404 on an absent directory.
-    let project_id = query_field(&uri, "projectID");
+    // global store directly: no cold-boot service assembly.
+    let project_id = match query_field(&uri, "projectID") {
+        Some(project) => Some(project),
+        // G-264 — ref `permission.saved.list` defaults the filter to
+        // the REQUEST location's project (permission.ts:87-96
+        // `ctx.query.projectID ?? location.project.id`). The derivation
+        // is deliberately lightweight: resolve the request location
+        // (directory query/header only — same 404 as the location
+        // middleware) and run the project resolver against it, WITHOUT
+        // assembling the location's service bundle (the G-97 decision:
+        // no cold-boot cascade on this route). Events are suppressed
+        // (`NoEvents`) so no `project.updated`/`worktree.resolved`
+        // frames ride a read.
+        None => {
+            let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
+            let resolver = oc_core::project::Resolver::new(
+                std::sync::Arc::clone(&state.engine.projects)
+                    as std::sync::Arc<dyn oc_core::project::ProjectStore>,
+                std::sync::Arc::new(oc_core::project::NoEvents),
+            );
+            Some(resolver.resolve(location.as_path()).await.id)
+        }
+    };
     let rows = state
         .engine
         .db
