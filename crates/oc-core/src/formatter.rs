@@ -1,10 +1,11 @@
 //! Port of `formatter.ts` — the post-write formatting hook point.
 //!
 //! v2 shells out to configured formatter commands (prettier et al.) matched
-//! by extension. The Rust port pins the trait + registry surface and ships a
-//! no-op implementation: tools call [`Formatter::file`] after every write,
-//! and the real command execution plugs into the same seam later
-//! (`TODO(formatter-lane)`).
+//! by extension. The Rust port ships the trait + registry surface AND the
+//! real production implementation — [`BuiltinsFormatter`] (detection +
+//! command execution, `builtins.ts make()` + config overrides), wired at
+//! engine boot; tools call [`Formatter::file`] after every write.
+//! [`NoopFormatter`] remains as the no-op arm for tests/headless use.
 
 //! Lint posture: ports of TS sources keep the mechanical-idiom allows the
 //! runner established (numeric casts, exhaustive tables, ownership queries).

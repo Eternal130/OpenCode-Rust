@@ -129,23 +129,6 @@ impl PromptQueue {
     }
 }
 
-/// The duration label for a finished turn (`Locale.duration` via
-/// `runtime.queue.ts:211`): human units, sub-second shows `<1s`.
-#[must_use]
-pub fn duration_label(elapsed_ms: u128) -> String {
-    if elapsed_ms < 1000 {
-        return "<1s".to_owned();
-    }
-    let seconds = elapsed_ms / 1000;
-    if seconds < 60 {
-        format!("{seconds}s")
-    } else if seconds < 3600 {
-        format!("{}m{}s", seconds / 60, seconds % 60)
-    } else {
-        format!("{}h{}m", seconds / 3600, (seconds % 3600) / 60)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,13 +185,5 @@ mod tests {
         assert_eq!(queue.pop().map(|item| item.text), Some("a".into()));
         assert_eq!(queue.pop().map(|item| item.text), Some("b".into()));
         assert_eq!(queue.pop(), None);
-    }
-
-    #[test]
-    fn duration_labels() {
-        assert_eq!(duration_label(50), "<1s");
-        assert_eq!(duration_label(1500), "1s");
-        assert_eq!(duration_label(65_000), "1m5s");
-        assert_eq!(duration_label(3_600_000), "1h0m");
     }
 }
