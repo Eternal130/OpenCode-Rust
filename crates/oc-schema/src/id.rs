@@ -129,6 +129,11 @@ macro_rules! branded_id {
 
 branded_id! {
     /// `Session.ID` — `ses_…`, generated descending so newer sessions sort first.
+    ///
+    /// G-270⑨ (recorded wire divergence, deliberately kept): the ref's
+    /// `Session.ID` prefix is `ses` (schema/id.ts) — the port's `ses_`
+    /// prefix is a data-compat legacy; changing it would break every
+    /// stored row and client regex.
     SessionId, "Session.ID", check "ses_", generate "ses_{}", descending
 }
 branded_id! {
@@ -145,6 +150,10 @@ branded_id! {
 }
 branded_id! {
     /// `Permission.ID` — `per_…`, ascending.
+    ///
+    /// G-270⑨ (recorded wire divergence, deliberately kept): the ref's
+    /// `Permission.ID` prefix is `per` — the port's `per_` prefix is a
+    /// data-compat legacy (same family as `ses_`).
     PermissionId, "Permission.ID", check "per_", generate "per_{}", ascending
 }
 branded_id! {

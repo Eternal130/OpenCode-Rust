@@ -31,6 +31,11 @@ use crate::tool::Content;
 pub const AGGREGATE: &str = "sessionID";
 
 /// `session.created` (durable v1).
+///
+/// G-270⑩ (recorded wire superset, deliberately kept — G-40 family): the
+/// port's Session.Info carries a `slug` field the ref omits (and the
+/// credential Entry a `time` block — see handlers/credential.rs); the
+/// extra keys ride additive-superset semantics for stored-data compat.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Created {
     #[serde(rename = "sessionID")]

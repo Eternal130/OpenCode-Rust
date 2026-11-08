@@ -1021,6 +1021,30 @@ impl Engine {
                 crate::plugin_apply::apply_plugin_references(&self.references, &reference_defs);
             }
         }
+        // G-270② — the per-location reference table (ref's Reference node
+        // is a location node, reference.ts:124-128): seeded from the
+        // engine's plugin-applied sources, then this location's config
+        // documents apply through ONE transform (the config plugin's
+        // `ctx.reference.transform`, config/plugin/reference.ts:23-52) —
+        // which forks the materialization refresh and publishes
+        // `reference.updated` exactly like a ref location boot.
+        let references = {
+            let service = Arc::new(crate::reference::ReferenceService::new(
+                oc_util::global_roots::resolve().repos(),
+                Arc::clone(&self.clock),
+            ));
+            service.set_bus(Arc::clone(&self.bus));
+            service.install(self.references.sources());
+            let config_sources = crate::reference::ReferenceService::sources_from_config(
+                &loaded.entries,
+                location.as_path(),
+                &self.home,
+            );
+            if !config_sources.is_empty() {
+                service.apply(config_sources);
+            }
+            service
+        };
         let config_documents = Arc::new(crate::config::agent_md::load_documents(&loaded.entries));
 
         // The managed-policy runtime (CONFIG-C7, config/plugin/policy.ts):
@@ -1600,7 +1624,7 @@ impl Engine {
                 Arc::new(move || skills.list())
             },
             references: {
-                let references = Arc::clone(&self.references);
+                let references = Arc::clone(&references);
                 Arc::new(move || references.list())
             },
         };
@@ -1814,6 +1838,7 @@ impl Engine {
             subagents,
             resolver,
             websearch,
+            references,
         });
         let (effective, fresh_won) = self.services.insert(location.clone(), Arc::clone(&services));
         if fresh_won {
@@ -2198,6 +2223,11 @@ pub struct LocationServices {
     /// This location's websearch service (v2 `WebSearch.Service` — the
     /// server's `websearch.*` routes and the `websearch` tool share it).
     pub websearch: Arc<crate::tool::websearch::WebSearch>,
+    /// This location's reference table (v2 `Reference.Service` is a
+    /// location node — G-270②): plugin-applied engine sources plus this
+    /// location's config documents; `GET /api/reference` and the session
+    /// runner's reference face both read it.
+    pub references: Arc<crate::reference::ReferenceService>,
 }
 
 // ===========================================================================

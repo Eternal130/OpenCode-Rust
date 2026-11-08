@@ -17,7 +17,7 @@ use oc_core::pty::{CreateInput, UpdateInput};
 use serde_json::{json, Value};
 
 use super::common::{
-    json_location_data, no_content, parse_query_field, percent_decode, resolve_location, ApiError,
+    json_location_data, no_content, parse_query_field, resolve_location, ApiError,
     SharedState,
 };
 use super::pty_state;
@@ -250,14 +250,13 @@ async fn connect(
     upgrade: WebSocketUpgrade,
 ) -> Response {
     let query = uri.query().unwrap_or_default();
-    let directory =
-        parse_query_field(query, "location[directory]").map(|value| percent_decode(&value));
+    // G-270⑥ — no forged-location fallback: the ref's location middleware
+    // 404s an unresolvable location BEFORE the WS upgrade (and before the
+    // pty lookup); a `location[directory]` query whose directory does not
+    // exist is a 404, never an unvalidated LocationRef riding into the
+    // socket/ticket scopes.
     let location = match resolve_location(&state, query, &headers) {
         Ok(location) => location,
-        Err(_) if directory.is_some() => {
-            let path = std::path::PathBuf::from(directory.clone().unwrap_or_default());
-            oc_core::location::LocationRef::new(path, None)
-        }
         Err(error) => return error.into_response(),
     };
 

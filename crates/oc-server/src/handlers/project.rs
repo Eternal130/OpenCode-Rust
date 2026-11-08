@@ -193,11 +193,37 @@ async fn worktree_list(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
-    let services = services(&state, &location).await?;
+    let _services = services(&state, &location).await?;
     let Some(project_id) = query_field(&uri, "projectID") else {
         return Err(ApiError::invalid_request("projectID is required"));
     };
-    if project_id != services.project.id {
+    // G-270⑦ — ref `Worktree.list` (worktree.ts:330-333) checks the
+    // project ROW (`project(projectID)` → Project.NotFoundError 404) and
+    // then lists the DB rows for that id — it never compares the id
+    // against the CURRENT location's project (another project's tree is
+    // listable from anywhere). The location above still resolves like the
+    // ref's location middleware.
+    let known = state
+        .engine
+        .db
+        .transaction({
+            let project_id = project_id.clone();
+            move |tx| {
+                Ok(tx
+                    .conn()
+                    .query_row("SELECT id FROM project WHERE id = ?1", (project_id,), |row| {
+                        row.get::<_, String>(0)
+                    })
+                    .ok()
+                    .is_some())
+            }
+        })
+        .await
+        .map_err(|error| {
+            crate::errors::debug_cause("project:unknown_ref", &error);
+            ApiError::unknown_ref()
+        })?;
+    if !known {
         return Err(ApiError::project_not_found(&project_id));
     }
     // v2 `Worktree.List` is a BARE ARRAY of `{directory, strategy?}`
@@ -1830,29 +1856,90 @@ async fn vcs_init(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
-    let provider = query_field(&uri, "provider");
-    if let Some(provider) = provider {
-        if provider != "git" {
-            return Err(ApiError::vcs_init_not_supported(&provider));
-        }
+    // G-270④ — ref vcs.ts:21-55 error mapping:
+    //   unknown provider  → 400 InvalidRequestError field:"provider"
+    //   missing directory → 400 InvalidRequestError field:"location"
+    //   existing root     → 409 ConflictError {resource: directory}
+    //   init failure      → 503 ServiceUnavailableError {service}
+    //   registered provider without init → 501 (unreachable with the
+    //   builtin registry — both git and hg plugin providers ship `init`).
+    let provider = query_field(&uri, "provider").unwrap_or_else(|| "git".to_owned());
+    if provider != "git" && provider != "hg" {
+        return Err(crate::errors::invalid_request_message_field(
+            "Unknown VCS provider",
+            "provider",
+        ));
     }
     // The location's services may pre-date the init (cached bundle with
     // vcs = None); the filesystem is the source of truth.
-    if services.project.canonical.join(".git").exists() || services.project.vcs.is_some() {
-        return Err(ApiError::conflict("Repository already exists"));
+    let directory = services.project.canonical.clone();
+    if !directory.is_dir() {
+        return Err(crate::errors::invalid_request_message_field(
+            "Project directory does not exist",
+            "location",
+        ));
     }
-    let output = std::process::Command::new("git")
+    if services.project.vcs.is_some() || marker_at_or_above(&directory) {
+        return Err(ApiError::conflict_resource(
+            "Project already has version control",
+            &directory.to_string_lossy(),
+        ));
+    }
+    let output = std::process::Command::new(&provider)
         .arg("init")
-        .current_dir(services.project.canonical.as_path())
+        .current_dir(&directory)
         .output()
         .map_err(|error| {
-            crate::errors::debug_cause("project:unknown_ref", &error);
-            ApiError::unknown_ref()
+            crate::errors::debug_cause("project:vcs_init_failed", &error);
+            crate::errors::service_unavailable_named("VCS initialization failed", &provider)
         })?;
     if !output.status.success() {
-        return Err(ApiError::unknown_ref());
+        crate::errors::debug_cause(
+            "project:vcs_init_failed",
+            &String::from_utf8_lossy(&output.stderr),
+        );
+        return Err(crate::errors::service_unavailable_named(
+            "VCS initialization failed",
+            &provider,
+        ));
     }
+    // vcs.ts:47-49 — re-resolve; a directory that STILL has no VCS after a
+    // successful init is a 503, never a silent success.
+    let resolver = oc_core::project::Resolver::new(
+        std::sync::Arc::clone(&state.engine.projects) as std::sync::Arc<dyn oc_core::project::ProjectStore>,
+        std::sync::Arc::new(oc_core::project::NoEvents),
+    );
+    let resolved = resolver.resolve(location.as_path()).await;
+    if resolved.vcs.is_none() {
+        return Err(crate::errors::service_unavailable_named(
+            "VCS initialization failed",
+            &provider,
+        ));
+    }
+    // vcs.ts:50-53 — success invalidates the location bundle (the cached
+    // vcs=None services are stale) and announces `worktree.updated`
+    // {projectID}.
+    state.engine.invalidate(&location).await;
+    publish_worktree_updated(&state, &resolved.id).await;
     Ok(no_content())
+}
+
+/// `Project.root`'s marker walk (vcs.ts:179 via project.ts:49-58): a
+/// `.git`/`.hg` marker at or above the directory means the project
+/// already has version control — covers the stale-cached-bundle case
+/// (services assembled before an out-of-band init) and `.hg`, which the
+/// old `.git`-only existence check missed.
+fn marker_at_or_above(directory: &std::path::Path) -> bool {
+    let mut current = directory.to_path_buf();
+    loop {
+        if current.join(".git").exists() || current.join(".hg").exists() {
+            return true;
+        }
+        current = match current.parent() {
+            Some(parent) => parent.to_path_buf(),
+            None => return false,
+        };
+    }
 }
 
 fn git_output(directory: &std::path::Path, args: &[&str]) -> Option<String> {

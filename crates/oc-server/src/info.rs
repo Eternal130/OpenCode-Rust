@@ -28,16 +28,21 @@ pub fn info_response(state: &AppState) -> Response {
         Readiness::Starting | Readiness::Stopping => StatusCode::SERVICE_UNAVAILABLE,
     };
     let urls = connection_urls(state);
-    let body = json!({
+    // G-270⑤ — the NOT-READY info body is process.ts:200-214's minimal
+    // `{version, pid, urls, paths}` (the pre-boot probe); the
+    // `capabilities` block only rides the READY response
+    // (handlers/server.ts:17-26 — the SDK's persistent-PTY gate:
+    // `PersistentPty.available` = `platform !== "win32"`, binary.node.ts:2;
+    // workerd serves false).
+    let mut body = json!({
         "version": state.version,
         "pid": std::process::id(),
         "urls": urls,
         "paths": { "tmp": state.tmp_dir.display().to_string() },
-        // v2 handlers/server.ts:23-32 — the SDK's capability gate for the
-        // persistent-PTY surface (`PersistentPty.available` =
-        // `platform !== "win32"`, binary.node.ts:2; workerd serves false).
-        "capabilities": { "persistentPty": cfg!(not(target_os = "windows")) },
     });
+    if readiness == Readiness::Ready {
+        body["capabilities"] = json!({ "persistentPty": cfg!(not(target_os = "windows")) });
+    }
     let mut response = json_response(status, &body);
     if let Ok(value) = HeaderValue::from_str(BUILD_STAMP) {
         response.headers_mut().insert(BUILD_HEADER, value);
