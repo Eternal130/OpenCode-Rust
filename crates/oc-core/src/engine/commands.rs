@@ -15,8 +15,8 @@
 
 use parking_lot::RwLock;
 
-use crate::config::command_md;
 use crate::config::Loaded;
+use crate::config::command_md;
 
 /// `plugin/command/initialize.txt`, verbatim (G-193.5, ref
 /// plugin/command.ts:8/31-41 — `${path}` substituted at registration).
@@ -193,10 +193,7 @@ pub fn sanitize_command_segment(value: &str) -> String {
 /// commands (ref CommandPlugin's `for (const prompt of loaded.prompts)`
 /// `editor.add` loop). The refresh semantics: replace the whole MCP
 /// slice (`command.reload()` on `mcp.prompts.changed`).
-pub fn sync_mcp_prompt_commands(
-    table: &CommandTable,
-    prompts: &[crate::mcp::registry::Prompt],
-) {
+pub fn sync_mcp_prompt_commands(table: &CommandTable, prompts: &[crate::mcp::registry::Prompt]) {
     table.clear_mcp_commands();
     for prompt in prompts {
         table.insert(CommandRegistration {
@@ -283,7 +280,9 @@ mod tests {
             panic!("init is template-driven");
         };
         assert!(command.template.starts_with("Create or update `AGENTS.md` for this repository."));
-        assert!(command.template.contains("If `AGENTS.md` already exists at `/work/repo`, improve it"));
+        assert!(
+            command.template.contains("If `AGENTS.md` already exists at `/work/repo`, improve it")
+        );
         assert!(command.template.contains("$ARGUMENTS"));
 
         let review = table.get("review").expect("review registered");
@@ -297,8 +296,14 @@ mod tests {
         assert!(command
             .template
             .starts_with("You are a code reviewer. Your job is to review code changes and provide actionable feedback."));
-        assert!(command.template.contains("1. **No arguments (default)**: Review all uncommitted changes"));
-        assert!(command.template.contains("AVOID flattery, do not give any comments that are not helpful to the reader."));
+        assert!(
+            command
+                .template
+                .contains("1. **No arguments (default)**: Review all uncommitted changes")
+        );
+        assert!(command.template.contains(
+            "AVOID flattery, do not give any comments that are not helpful to the reader."
+        ));
 
         // Same-name config command replaced (v2 plugin `editor.add`).
         table.insert(CommandRegistration {
@@ -310,9 +315,7 @@ mod tests {
             }),
         });
         seed_builtin_commands(&table, std::path::Path::new("/work/repo"));
-        let CommandSource::Config(command) = &table.get("init").unwrap().source else {
-            panic!()
-        };
+        let CommandSource::Config(command) = &table.get("init").unwrap().source else { panic!() };
         assert!(command.template.starts_with("Create or update `AGENTS.md`"));
     }
 

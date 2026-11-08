@@ -19,26 +19,22 @@ pub fn register_worktree_guidance(hooks: &crate::hooks::HookRegistry) {
     });
     let guidance_compaction =
         crate::hooks::fn_hook(move |event: &mut crate::hooks::SessionCompactionEvent| {
-            event
-                .context
-                .system
-                .push(oc_ai::schema::messages::SystemPart::new(WORKTREE_GUIDANCE));
+            event.context.system.push(oc_ai::schema::messages::SystemPart::new(WORKTREE_GUIDANCE));
             Ok(())
         });
     // Registrations live for the location lifetime (dropped with the
     // registry when the bundle dies) — the shell description-refresh
     // hooks use the same pattern.
-    std::mem::forget(futures::executor::block_on(hooks.register_session_context(
-        guidance.clone(),
-        crate::hooks::HookOptions::default(),
-    )));
+    std::mem::forget(futures::executor::block_on(
+        hooks.register_session_context(guidance.clone(), crate::hooks::HookOptions::default()),
+    ));
     std::mem::forget(futures::executor::block_on(
         hooks.register_session_generate(guidance, crate::hooks::HookOptions::default()),
     ));
-    std::mem::forget(futures::executor::block_on(hooks.register_session_compaction(
-        guidance_compaction,
-        crate::hooks::HookOptions::default(),
-    )));
+    std::mem::forget(futures::executor::block_on(
+        hooks
+            .register_session_compaction(guidance_compaction, crate::hooks::HookOptions::default()),
+    ));
 }
 
 /// `session_rename` — rename via the session store + `session.renamed`.
@@ -626,11 +622,7 @@ mod tests {
             .await
             .expect("compaction");
         assert!(
-            shaped
-                .context
-                .system
-                .iter()
-                .any(|part| part.text == WORKTREE_GUIDANCE),
+            shaped.context.system.iter().any(|part| part.text == WORKTREE_GUIDANCE),
             "compaction carries the worktree guidance"
         );
     }

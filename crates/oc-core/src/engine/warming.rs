@@ -120,8 +120,7 @@ fn duration_ms(value: &str) -> Option<u64> {
             _ => None,
         }
     }
-    let mut tokens =
-        value.split(|c: char| c == ',' || c.is_whitespace()).filter(|t| !t.is_empty());
+    let mut tokens = value.split(|c: char| c == ',' || c.is_whitespace()).filter(|t| !t.is_empty());
     let mut total: u64 = 0;
     let mut any = false;
     loop {
@@ -154,9 +153,7 @@ pub trait WarmGenerate: Send + Sync {
 #[async_trait::async_trait]
 impl WarmGenerate for SessionGenerate {
     async fn generate(&self, session_id: &str, prompt: &str) -> Result<String, String> {
-        SessionGenerate::generate(self, session_id, prompt)
-            .await
-            .map_err(|error| error.to_string())
+        SessionGenerate::generate(self, session_id, prompt).await.map_err(|error| error.to_string())
     }
 }
 
@@ -236,7 +233,11 @@ impl WarmingRuntime {
     /// not extend the window; every other request slides
     /// `last`/`expires` (warming.ts:82-90) and the FIRST sighting
     /// forks the keep-alive loop (warming.ts:90-101).
-    pub async fn account(self: &Arc<Self>, session_id: &str, messages: &[oc_ai::schema::messages::Message]) {
+    pub async fn account(
+        self: &Arc<Self>,
+        session_id: &str,
+        messages: &[oc_ai::schema::messages::Message],
+    ) {
         // `session.get` + `if (session.parentID) return` — subagent
         // children never warm.
         match self.store.get(session_id).await {
@@ -288,10 +289,8 @@ impl WarmingRuntime {
                 };
                 let now = runtime.now_ms();
                 // warming.ts:37 — `min(last + interval, expires)`.
-                let next = current
-                    .last
-                    .saturating_add(runtime.settings.interval_ms)
-                    .min(current.expires);
+                let next =
+                    current.last.saturating_add(runtime.settings.interval_ms).min(current.expires);
                 if now < next {
                     let wait = next - now;
                     let sleep = (runtime.sleeper)(wait);
@@ -371,16 +370,15 @@ mod tests {
         use oc_schema::config::warming::Info;
         let document = |warming: Option<Warming>| oc_schema::config::Document {
             path: None,
-            info: oc_schema::config::Info {
-                warming,
-                ..Default::default()
-            },
+            info: oc_schema::config::Info { warming, ..Default::default() },
         };
         // Absent → disabled.
         assert!(warming_settings(&[document(None)]).is_none());
         // `true` → defaults.
-        assert_eq!(warming_settings(&[document(Some(Warming::All(true)))]).unwrap(),
-            WarmingSettings::default());
+        assert_eq!(
+            warming_settings(&[document(Some(Warming::All(true)))]).unwrap(),
+            WarmingSettings::default()
+        );
         // `false` → disabled.
         assert!(warming_settings(&[document(Some(Warming::All(false)))]).is_none());
         // Overrides spread over the defaults.
@@ -389,8 +387,7 @@ mod tests {
             interval: Some("1 minute".into()),
             duration: Some("2 minutes".into()),
         };
-        let settings =
-            warming_settings(&[document(Some(Warming::Info(info)))]).expect("settings");
+        let settings = warming_settings(&[document(Some(Warming::Info(info)))]).expect("settings");
         assert_eq!(settings.prompt, "warm me");
         assert_eq!(settings.interval_ms, 60_000);
         assert_eq!(settings.duration_ms, 120_000);
@@ -512,11 +509,7 @@ mod tests {
     impl WarmGenerate for RecordingGenerate {
         async fn generate(&self, session_id: &str, prompt: &str) -> Result<String, String> {
             self.calls.lock().expect("calls").push((session_id.to_string(), prompt.to_string()));
-            if self.fail {
-                Err("boom".to_string())
-            } else {
-                Ok("OK".to_string())
-            }
+            if self.fail { Err("boom".to_string()) } else { Ok("OK".to_string()) }
         }
     }
 
@@ -564,24 +557,14 @@ mod tests {
         settings: WarmingSettings,
         generate: Arc<RecordingGenerate>,
         db: crate::database::Database,
-    ) -> (
-        Arc<WarmingRuntime>,
-        Arc<MutableClock>,
-        Arc<ManualSleep>,
-        tokio::sync::watch::Sender<bool>,
-    ) {
+    ) -> (Arc<WarmingRuntime>, Arc<MutableClock>, Arc<ManualSleep>, tokio::sync::watch::Sender<bool>)
+    {
         let (shutdown_tx, shutdown) = tokio::sync::watch::channel(false);
         let clock = MutableClock::at_epoch();
         let manual = ManualSleep::new();
         let runtime = Arc::new(
-            WarmingRuntime::new(
-                settings,
-                generate,
-                SessionStore::new(db),
-                clock.clone(),
-                shutdown,
-            )
-            .with_sleeper(manual_sleeper(manual.clone())),
+            WarmingRuntime::new(settings, generate, SessionStore::new(db), clock.clone(), shutdown)
+                .with_sleeper(manual_sleeper(manual.clone())),
         );
         // The sender must outlive the loops: a closed channel is the
         // bundle-shutdown signal (the engine keeps it in its shutdown
@@ -597,7 +580,8 @@ mod tests {
     async fn warming_keeps_active_root_session_until_window_expires() {
         let db = crate::database::Database::open_in_memory().await.expect("db");
         seed_root_session(&db, "ses_warm", None).await;
-        let generate = Arc::new(RecordingGenerate { calls: StdMutex::new(Vec::new()), fail: false });
+        let generate =
+            Arc::new(RecordingGenerate { calls: StdMutex::new(Vec::new()), fail: false });
         let (runtime, clock, manual, _shutdown_tx) = runtime_with(
             WarmingSettings { prompt: "warm me".into(), interval_ms: 10, duration_ms: 35 },
             generate.clone(),
@@ -622,7 +606,8 @@ mod tests {
         let db = crate::database::Database::open_in_memory().await.expect("db");
         seed_root_session(&db, "ses_root", None).await;
         seed_root_session(&db, "ses_child", Some("ses_root")).await;
-        let generate = Arc::new(RecordingGenerate { calls: StdMutex::new(Vec::new()), fail: false });
+        let generate =
+            Arc::new(RecordingGenerate { calls: StdMutex::new(Vec::new()), fail: false });
         let (runtime, _clock, _manual, _shutdown_tx) = runtime_with(
             WarmingSettings { prompt: "warm me".into(), interval_ms: 10, duration_ms: 100 },
             generate.clone(),
@@ -686,30 +671,38 @@ mod tests {
     async fn warming_hooks_registered_on_the_registry_account() {
         let db = crate::database::Database::open_in_memory().await.expect("db");
         seed_root_session(&db, "ses_hook", None).await;
-        let generate = Arc::new(RecordingGenerate { calls: StdMutex::new(Vec::new()), fail: false });
+        let generate =
+            Arc::new(RecordingGenerate { calls: StdMutex::new(Vec::new()), fail: false });
         let (runtime, _clock, _manual, _shutdown_tx) = runtime_with(
-            WarmingSettings { prompt: "warm me".into(), interval_ms: 3_600_000, duration_ms: 1_800_000 },
+            WarmingSettings {
+                prompt: "warm me".into(),
+                interval_ms: 3_600_000,
+                duration_ms: 1_800_000,
+            },
             generate,
             db,
         );
         let registry = crate::hooks::HookRegistry::new();
         let account: Arc<dyn crate::hooks::HookHandler<SessionContextEvent>> =
             Arc::new(WarmingAccountHook(Arc::clone(&runtime)));
-        let compaction_hook: Arc<dyn crate::hooks::HookHandler<crate::hooks::SessionCompactionEvent>> =
-            Arc::new(WarmingCompactionHook(Arc::clone(&runtime)));
+        let compaction_hook: Arc<
+            dyn crate::hooks::HookHandler<crate::hooks::SessionCompactionEvent>,
+        > = Arc::new(WarmingCompactionHook(Arc::clone(&runtime)));
         // Registrations live for the test registry's lifetime (their
         // guards dispose on drop).
         let registration_context = registry
             .register_session_context(Arc::clone(&account), crate::hooks::HookOptions::default())
             .await;
-        let registration_generate = registry
-            .register_session_generate(account, crate::hooks::HookOptions::default())
-            .await;
+        let registration_generate =
+            registry.register_session_generate(account, crate::hooks::HookOptions::default()).await;
         let registration_compaction = registry
             .register_session_compaction(compaction_hook, crate::hooks::HookOptions::default())
             .await;
 
-        registry.dispatch_session_generate(event("ses_hook", "via generate")).await.expect("dispatch");
+        registry
+            .dispatch_session_generate(event("ses_hook", "via generate"))
+            .await
+            .expect("dispatch");
         assert!(runtime.tracked("ses_hook").is_some(), "tracked via the generate hook");
         // The compaction dispatch slides the window on the same entry
         // (proves the path ran without double-insert).
