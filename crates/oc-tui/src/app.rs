@@ -3341,6 +3341,9 @@ fn footer_panel_canvas(
 
     match route {
         PromptRoute::Composer | PromptRoute::Subagent => None,
+        // G-272 — the mini-only queued-prompts menu (the session-route
+        // footer never routes here).
+        PromptRoute::QueuedMenu => None,
         PromptRoute::Model => Some(model_panel_canvas(
             &store.server_lists(),
             session_selection

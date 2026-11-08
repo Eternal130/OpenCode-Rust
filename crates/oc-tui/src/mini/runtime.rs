@@ -283,12 +283,24 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
     let active_variant = boot_target
         .as_ref()
         .and_then(|target| preferences.resolve_variant(target));
-    let variants = if input.demo {
-        Vec::new()
+    // G-272 — the boot catalog fetch (`loadCatalog`, runtime.ts:601-
+    // 611 over catalog.shared.ts): the agent list, the model catalog
+    // (the picker's provider shape + the per-model context limits),
+    // and the boot model's variants. Best-effort — an unreachable
+    // catalog means "no variants available", exactly the ref's empty
+    // `variantsFor` arm.
+    let (variants, agents, providers, context_limits) = if input.demo {
+        (Vec::new(), Vec::new(), Vec::new(), std::collections::HashMap::new())
     } else {
-        fetch_model_variants(&input.client, boot_target.as_ref(), &input.target.directory)
-            .await
-            .unwrap_or_default()
+        match fetch_catalog(&input.client, &input.target.directory).await {
+            Some(catalog) => (
+                catalog.variants_for(boot_target.as_ref()),
+                catalog.agents,
+                catalog.providers,
+                catalog.limits,
+            ),
+            None => (Vec::new(), Vec::new(), Vec::new(), std::collections::HashMap::new()),
+        }
     };
     // CONFIG-T4 — `resolveMiniSettings(tuiConfig)` (runtime.ts:197-199
     // via runtime.boot.ts:76-98): the cli.json `mini` section drives
@@ -311,6 +323,25 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
         work_spinner: settings.work_spinner.clone(),
         shell_output: settings.shell_output,
     })?;
+    // G-272 — the catalog lands in the footer (`applyCatalog` →
+    // `footer.event({ type: "catalog", agents })`, runtime.ts:575-
+    // 590): the agent/model panels read it.
+    lifecycle.pane.agents = agents.clone();
+    lifecycle.pane.providers = providers.clone();
+    lifecycle.pane.variants = variants.clone();
+    lifecycle.pane.active_variant = active_variant.clone();
+    // G-272 — the settings panel's entry state (CONFIG-T4's resolved
+    // knobs; the runtime's gates stay authoritative).
+    lifecycle.pane.settings_summary = crate::components::footer::state::MiniSettings {
+        thinking: if settings.thinking { "show" } else { "hide" },
+        tools: if settings.tools { "show" } else { "hide" },
+        shell_output: if settings.shell_output { "show" } else { "hide" },
+        turn_summary: if settings.turn_summary { "show" } else { "hide" },
+        footer: if settings.footer { "show" } else { "hide" },
+        splash: if settings.splash { "show" } else { "hide" },
+        work_spinner: "block-soft-slide",
+        mono: settings.mono,
+    };
     let client = input.client.clone();
     let session_id = input.target.session_id.clone();
 
@@ -336,6 +367,12 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
         )
         .await;
         shown = true;
+    } else if input.target.resume {
+        // G-272 — the hydrate's blocker sweep runs on EVERY connect
+        // (`hydrate`, transport.ts:952-1004): `--no-replay` skips the
+        // transcript render, never the pending permission/form
+        // restoration.
+        hydrate_blockers(&mut lifecycle, &client, &session_id, &mut transport).await;
     }
 
     // The stream transport (`ensureStream`, `runtime.ts:776-831`):
@@ -393,6 +430,10 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
         boot_target,
         variants,
         active_variant,
+        agents,
+        providers,
+        context_limits,
+        needs_catalog: false,
     };
 
     // The initial input submits first (`runPromptQueue`'s
@@ -424,6 +465,30 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
                 &runtime.settings,
             )
             .await;
+            // G-272 — every (re)connect refreshes the catalogs
+            // (`void refreshCatalog(attempt)` after hydrate,
+            // transport.ts:1517).
+            runtime.needs_catalog = true;
+        }
+        // G-272 — a catalog event (provider/model/agent/command/…
+        // `.updated`, credential.switched) re-fetches the catalogs
+        // (`refreshCatalog` → `requestCatalogRefresh`,
+        // transport.ts:1009-1014 → runtime.ts:690-733).
+        while runtime.needs_catalog {
+            runtime.needs_catalog = false;
+            if !runtime.demo {
+                if let Some(catalog) =
+                    fetch_catalog(&runtime.client, &runtime.directory.clone()).await
+                {
+                    runtime.variants = catalog.variants_for(runtime.boot_target.as_ref());
+                    runtime.agents = catalog.agents;
+                    runtime.providers = catalog.providers;
+                    runtime.context_limits = catalog.limits;
+                    runtime.lifecycle.pane.agents = runtime.agents.clone();
+                    runtime.lifecycle.pane.providers = runtime.providers.clone();
+                    runtime.lifecycle.pane.variants = runtime.variants.clone();
+                }
+            }
         }
         runtime.drain_queue().await;
         // G-181③ — the resize watch (ADR-0018's ≤50 ms TIOCGWINSZ
@@ -497,6 +562,21 @@ struct Runtime {
     /// G-181① — `state.activeVariant`, resolved from the persisted
     /// preference at boot (`resolveVariant`, runtime.ts:204-207).
     active_variant: Option<String>,
+    /// G-272 — the agent catalog (`state.agents` via
+    /// `loadRunAgents`, runtime.ts:592-611): the footer's agent
+    /// panel + `agentColor` source.
+    agents: Vec<crate::components::footer::panels::RunAgent>,
+    /// G-272 — the model catalog's picker shape (`state.providers`,
+    /// `loadRunProviders`): the footer's model panel.
+    providers: Vec<crate::components::footer::panels::RunProvider>,
+    /// G-272 — `provider/model → limit.context` (the usage percent's
+    /// denominator, `input.contextLimit?.(state.stepModel)`,
+    /// transport.ts:1368).
+    context_limits: std::collections::HashMap<(String, String), u64>,
+    /// G-272 — a catalog event arrived (`catalogEvents` →
+    /// `refreshCatalog`, transport.ts:383-392, 1009-1014): the loop
+    /// re-fetches the catalogs.
+    needs_catalog: bool,
 }
 
 impl Runtime {
@@ -604,6 +684,9 @@ impl Runtime {
                     }
                     CycleVariantDecision::Cycle { next, status, label } => {
                         self.active_variant = next.clone();
+                        // G-272 — the variant panel's `current` marker
+                        // follows the cycle.
+                        self.lifecycle.pane.active_variant = next.clone();
                         if let Some(target) = &self.boot_target {
                             self.preferences.save_variant(target, next.as_deref());
                         }
@@ -632,6 +715,32 @@ impl Runtime {
                 }
                 StreamMessage::Event(event) => event,
             };
+            // G-272 — `catalogEvents` (transport.ts:383-392, 1009-
+            // 1014): a catalog mutation at THIS location re-fetches
+            // the catalogs (`input.location && event.location &&
+            // event.location.directory !== input.location.directory`
+            // returns — a missing location passes).
+            if let Some(kind) = event.get("type").and_then(Value::as_str) {
+                if matches!(
+                    kind,
+                    "provider.updated"
+                        | "model.updated"
+                        | "integration.updated"
+                        | "credential.switched"
+                        | "agent.updated"
+                        | "command.updated"
+                        | "skill.updated"
+                        | "reference.updated"
+                ) {
+                    let directory = event
+                        .pointer("/location/directory")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    if directory.is_empty() || directory == self.directory {
+                        self.needs_catalog = true;
+                    }
+                }
+            }
             // TUI-17 — the tracker folds EVERY event (child sessions
             // and the parent's subagent tool calls included); a
             // changed tab/detail refreshes the pane's snapshot.
@@ -673,16 +782,46 @@ impl Runtime {
                     }
                 }
                 Fold::Idle => {}
+                // G-272 — `session.step.ended`'s usage patch
+                // (transport.ts:1361-1381): the statusline's context/
+                // cost groups (footer.view.tsx:213-218, 493-500).
+                Fold::Usage { model, tokens, cost } => {
+                    let percent = model.as_ref().and_then(|model| {
+                        let limit = self.context_limits.get(model).copied().unwrap_or(0);
+                        if limit == 0 {
+                            return None;
+                        }
+                        // `Math.round((total / limit) * 100)`
+                        // (transport.ts:1376).
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                        let ratio = (tokens as f64 / limit as f64) * 100.0;
+                        Some((ratio + 0.5) as u32)
+                    });
+                    self.lifecycle.pane.usage =
+                        Some(super::lifecycle::UsageInfo { tokens, percent, cost });
+                }
+                // G-272 — the ROOT session's rename
+                // (`input.onSessionTitle`, transport.ts:1036-1039).
+                Fold::SessionTitle(title) => {
+                    self.session_title = Some(title);
+                }
             }
             // G-221 — `syncPending` (transport.ts:582-590): the
             // footer's `queued.prompts` view follows the transport's
             // pending list after every event (the dirty-check push —
             // the statusline's `N pending` group, footer.view.tsx:
-            // 246).
+            // 246). G-272 — the queued MENU rides the same push (the
+            // row texts).
             let queued = self.transport.pending_prompts().len();
             if queued != self.queued_synced {
                 self.queued_synced = queued;
                 self.lifecycle.pane.queued_pending = queued;
+                self.lifecycle.pane.queued_prompts = self
+                    .transport
+                    .pending_prompts()
+                    .iter()
+                    .map(|prompt| prompt.text.clone())
+                    .collect();
             }
             if self.transport.is_terminated() {
                 self.turn_idle = true;
@@ -915,6 +1054,60 @@ async fn replay_history(
             .collect::<Vec<_>>();
         transport.seed_pending(&values);
         lifecycle.pane.queued_pending = transport.pending_prompts().len();
+        lifecycle.pane.queued_prompts =
+            transport.pending_prompts().iter().map(|prompt| prompt.text.clone()).collect();
+    }
+    // G-272 — the hydrate's blocker sweep (`hydrate`,
+    // transport.ts:952-1004): the PARALLEL permission.list +
+    // form.list + session.active the ref issues beside the message
+    // walk — pending asks remount as footer blockers
+    // (`syncBlockers`) and a still-running session keeps the running
+    // phase (`state.rootActive`).
+    hydrate_blockers(lifecycle, client, session_id, transport).await;
+}
+
+/// G-272 — the hydrate's parallel blocker fetch (`hydrate`,
+/// transport.ts:952-1004): `permission.list` + `form.list` +
+/// `session.active` → the footer machine's blocker queues and the
+/// root-active phase. A blocker that re-mounts here behaves exactly
+/// like its live event (the machine dedups by id).
+async fn hydrate_blockers(
+    lifecycle: &mut Lifecycle,
+    client: &Client,
+    session_id: &str,
+    transport: &mut TransportState,
+) {
+    // Bind the API handles (the futures must outlive the builders).
+    let session = client.session();
+    let forms_api = session.form();
+    let (permissions, forms, active) = tokio::join!(
+        session.permission_list(session_id),
+        forms_api.list(session_id),
+        session.active(),
+    );
+    if let Ok(permissions) = permissions {
+        for wire in &permissions {
+            // The wire row IS the footer request shape (sessionID/
+            // action/resources/save/source line up; `message` is
+            // presentation-only and ignored).
+            if let Ok(request) =
+                serde_json::to_value(wire).and_then(|value| serde_json::from_value(value))
+            {
+                lifecycle.pane.permission_asked(request);
+            }
+        }
+    }
+    if let Ok(forms) = forms {
+        for wire in &forms {
+            if let Ok(value) = serde_json::to_value(wire) {
+                lifecycle.pane.form_created(super::transport::decode_form(&value));
+            }
+        }
+    }
+    if let Ok(active) = active {
+        // `state.rootActive = input.sessionID in active` (the
+        // post-hydrate `write([], { phase: "running" })`).
+        transport.set_running(active.contains_key(session_id));
     }
 }
 
@@ -1109,6 +1302,11 @@ fn footer_key_from_spec(spec: &str) -> Option<FooterKey> {
     match spec {
         "ctrl+c" => Some(FooterKey::CtrlC),
         "ctrl+t" => Some(FooterKey::CtrlT),
+        // G-272 — the panel-family keys (`command.palette.show`'s
+        // ctrl+p and the `<leader>` = ctrl+x chord,
+        // config/keybind.ts:41,57,131).
+        "ctrl+p" => Some(FooterKey::CtrlP),
+        "ctrl+x" => Some(FooterKey::CtrlX),
         "return" => Some(FooterKey::Enter),
         "escape" => Some(FooterKey::Escape),
         "backspace" => Some(FooterKey::Backspace),
@@ -1136,33 +1334,113 @@ fn parse_model_label(label: &str) -> Option<super::model_pref::ModelPreferenceMo
     })
 }
 
-/// G-181① — `variantsFor(providers, model)` (runtime.ts:142-147):
-/// the boot model's variant ids from the server's model catalog
-/// (`model.list` at the session location — the ref fills
-/// `state.providers` through `refreshCatalog`, runtime.ts:621).
-/// Best-effort: an unreachable catalog yields an error the caller
-/// drops to "no variants available".
-async fn fetch_model_variants(
-    client: &Client,
-    target: Option<&super::model_pref::ModelPreferenceModel>,
-    directory: &str,
-) -> Option<Vec<String>> {
-    let target = target?;
-    let query = oc_client::types::ModelListQuery {
-        location: Some(oc_client::types::QueryLocation {
-            directory: Some(directory.to_owned()),
-        }),
+/// G-272 — the catalog snapshot (`fetchCatalog` + `loadCatalog`,
+/// runtime.ts:592-611 over catalog.shared.ts): the agent list
+/// (`loadRunAgents`), the model catalog as the picker's provider
+/// shape (`loadRunProviders` → `runProviders`), and the per-model
+/// context limits (the usage percent's denominator). Best-effort: an
+/// unreachable catalog yields `None` (the caller drops to empty —
+/// "no variants available" / no limits / no agents).
+struct CatalogSnapshot {
+    agents: Vec<crate::components::footer::panels::RunAgent>,
+    providers: Vec<crate::components::footer::panels::RunProvider>,
+    limits: std::collections::HashMap<(String, String), u64>,
+    models: Vec<oc_client::types::ModelInfo>,
+}
+
+impl CatalogSnapshot {
+    /// G-181① — `variantsFor(providers, model)` (runtime.ts:142-147):
+    /// the target model's variant ids.
+    fn variants_for(
+        &self,
+        target: Option<&super::model_pref::ModelPreferenceModel>,
+    ) -> Vec<String> {
+        let Some(target) = target else { return Vec::new() };
+        self.models
+            .iter()
+            .find(|model| {
+                model.provider_id == target.provider_id && model.model_id == target.model_id
+            })
+            .map(|model| model.variants.iter().map(|variant| variant.id.clone()).collect())
+            .unwrap_or_default()
+    }
+}
+
+/// `defaultCost` (catalog.shared.ts:24-28): the un-tiered cost (else
+/// the first), zero when every tier is free.
+fn default_cost(model: &oc_client::types::ModelInfo) -> f64 {
+    let Some(picked) = model
+        .cost
+        .iter()
+        .find(|cost| cost.tier.is_none())
+        .or_else(|| model.cost.first())
+    else {
+        return 0.0;
     };
-    let page = client.model().list(&query).await.ok()?;
-    Some(
-        page.data
-            .iter()
-            .find(|model| model.provider_id == target.provider_id && model.model_id == target.model_id)?
-            .variants
-            .iter()
-            .map(|variant| variant.id.clone())
-            .collect(),
-    )
+    if model.cost.iter().all(|cost| cost.input == 0.0) {
+        0.0
+    } else {
+        picked.input
+    }
+}
+
+async fn fetch_catalog(client: &Client, directory: &str) -> Option<CatalogSnapshot> {
+    let location = || {
+        Some(oc_client::types::QueryLocation { directory: Some(directory.to_owned()) })
+    };
+    let model_query =
+        oc_client::types::ModelListQuery { location: location() };
+    let agent_query =
+        oc_client::types::AgentListQuery { location: location() };
+    let model_api = client.model();
+    let agent_api = client.agent();
+    let (models, agents) =
+        tokio::join!(model_api.list(&model_query), agent_api.list(&agent_query));
+    // `loadCatalog` catches each list independently (runtime.ts:601-
+    // 611) — a failing list degrades to empty, never kills the rest.
+    let models = models.map(|page| page.data).unwrap_or_default();
+    let agents = agents
+        .map(|page| {
+            page.data
+                .iter()
+                .map(|agent| crate::components::footer::panels::RunAgent {
+                    id: agent.id.clone(),
+                    name: agent.name.clone(),
+                    description: agent.description.clone(),
+                    mode: agent.mode.as_str().to_owned(),
+                    hidden: agent.hidden,
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    // `runProviders` (catalog.shared.ts:47-76): group the models per
+    // provider (provider.list is not needed — an id-only group stands
+    // in for a provider the list omits).
+    let mut providers: Vec<crate::components::footer::panels::RunProvider> = Vec::new();
+    let mut limits = std::collections::HashMap::new();
+    for model in &models {
+        let run_model = crate::components::footer::panels::RunModel {
+            id: model.model_id.clone(),
+            name: model.name.clone(),
+            cost_input: default_cost(model),
+            deprecated: model.status == oc_client::types::ModelInfoStatus::Deprecated,
+        };
+        match providers.iter_mut().find(|provider| provider.id == model.provider_id) {
+            Some(entry) => entry.models.push(run_model),
+            None => providers.push(crate::components::footer::panels::RunProvider {
+                id: model.provider_id.clone(),
+                name: model.provider_id.clone(),
+                models: vec![run_model],
+            }),
+        }
+        if model.limit.context > 0 {
+            limits.insert(
+                (model.provider_id.clone(), model.model_id.clone()),
+                u64::try_from(model.limit.context).unwrap_or(0),
+            );
+        }
+    }
+    Some(CatalogSnapshot { agents, providers, limits, models })
 }
 
 /// G-181① — the `onCycleVariant` decision (`runtime.ts:293-310`):

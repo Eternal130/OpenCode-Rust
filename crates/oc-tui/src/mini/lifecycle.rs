@@ -109,6 +109,12 @@ pub enum FooterKey {
     CtrlC,
     /// G-181① — `variant.cycle`'s ctrl+t (config/keybind.ts:174).
     CtrlT,
+    /// G-272 — `command.palette.show`'s ctrl+p (config/keybind.ts:57).
+    CtrlP,
+    /// G-272 — the leader key (`<leader>` = ctrl+x,
+    /// config/keybind.ts:41): `<leader>q` opens the queued menu
+    /// (`session.queued_prompts`, config/keybind.ts:131).
+    CtrlX,
 }
 
 /// The side effects a keypress produced — the runtime seams
@@ -186,6 +192,50 @@ pub struct FooterPane {
     /// `queued.prompts` view — the statusline's `N pending` group,
     /// `footer.view.tsx:246`).
     pub queued_pending: usize,
+    /// G-272 — the queued prompts' TEXTS (the queued-menu's rows —
+    /// the count only feeds the statusline).
+    pub queued_prompts: Vec<String>,
+    /// G-272 — `state.usage` (footer.view.tsx:213-218): the
+    /// statusline's context/cost groups.
+    pub usage: Option<UsageInfo>,
+    /// G-272 — the agent catalog (`state.agents`, the agent panel +
+    /// `agentColor` source).
+    pub agents: Vec<crate::components::footer::panels::RunAgent>,
+    /// G-272 — the model catalog's picker shape (`state.providers`,
+    /// the model panel).
+    pub providers: Vec<crate::components::footer::panels::RunProvider>,
+    /// G-272 — the current model's variants (`state.variants`, the
+    /// variant panel).
+    pub variants: Vec<String>,
+    /// G-272 — the active variant (the variant panel's `current`
+    /// marker).
+    pub active_variant: Option<String>,
+    /// G-272 — the open panel's search state (query + selected row).
+    pub panel: PanelState,
+    /// G-272 — the leader key is armed (ctrl+x seen; the next key
+    /// completes the chord).
+    leader_armed: bool,
+    /// G-272 — the resolved display settings (CONFIG-T4) as the
+    /// settings panel's entry state (the runtime's gates stay
+    /// authoritative).
+    pub settings_summary: crate::components::footer::state::MiniSettings,
+}
+
+/// G-272 — `state.usage` (footer.view.tsx:213-218): the summed step
+/// tokens with the context percent and the cost.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UsageInfo {
+    pub tokens: u64,
+    pub percent: Option<u32>,
+    pub cost: Option<f64>,
+}
+
+/// G-272 — the panel routes' shared search state (the `PanelShell`'s
+/// query + the select controller).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PanelState {
+    pub query: String,
+    pub selected: usize,
 }
 
 /// RD-19 — the launch row's state (`footer.view.tsx:709-725`): the
@@ -232,6 +282,15 @@ impl FooterPane {
             subagent_selected: None,
             subagent_scroll: 0,
             queued_pending: 0,
+            queued_prompts: Vec::new(),
+            usage: None,
+            agents: Vec::new(),
+            providers: Vec::new(),
+            variants: Vec::new(),
+            active_variant: None,
+            panel: PanelState::default(),
+            leader_armed: false,
+            settings_summary: crate::components::footer::state::resolve_mini_settings(),
         }
     }
 
@@ -308,6 +367,8 @@ impl FooterPane {
             FooterKey::Down => "down".to_owned(),
             FooterKey::CtrlC => "ctrl+c".to_owned(),
             FooterKey::CtrlT => "ctrl+t".to_owned(),
+            FooterKey::CtrlP => "ctrl+p".to_owned(),
+            FooterKey::CtrlX => "ctrl+x".to_owned(),
             FooterKey::Tab => "tab".to_owned(),
             FooterKey::PageUp => "pageup".to_owned(),
             FooterKey::PageDown => "pagedown".to_owned(),
@@ -353,6 +414,9 @@ impl FooterPane {
         match key {
             FooterKey::Up => state = form_move(&state, request, -1),
             FooterKey::Down => state = form_move(&state, request, 1),
+            // G-272 — the panel-family keys never reach a form body
+            // (the blocker owns every key); consumed without effect.
+            FooterKey::CtrlP | FooterKey::CtrlX => {}
             FooterKey::Enter => {
                 if textual || state.editing {
                     let (next, reply) = form_commit_input(&state, request, &draft);
@@ -425,9 +489,28 @@ impl FooterPane {
         if self.machine.route == crate::components::footer::PromptRoute::Subagent {
             return self.press_subagent(key);
         }
+        // G-272 — a picker panel owns keys while its route is open
+        // (the PanelShell's input + the select controller:
+        // esc closes, up/down move, printables filter, enter runs).
+        if self.machine.route.is_panel() {
+            return self.press_panel(key);
+        }
         let mut effects = Vec::new();
         match key {
             FooterKey::Printable(char) => {
+                // G-272 — `<leader>q` completes (`session.queued_
+                // prompts`, config/keybind.ts:131): q over an armed
+                // leader opens the queued menu when rows exist; any
+                // other key consumes the chord and types.
+                if self.leader_armed {
+                    self.leader_armed = false;
+                    if char == 'q' {
+                        if !self.queued_prompts.is_empty() {
+                            self.open_panel(crate::components::footer::PromptRoute::QueuedMenu);
+                        }
+                        return effects;
+                    }
+                }
                 self.draft.push(char);
                 // Typing clears armed counters (`handleInputClear`,
                 // `footer.ts:861-868`).
@@ -481,6 +564,13 @@ impl FooterPane {
             // (footer.view.tsx:569-575: enabled when
             // `route().type === "composer"`): fires `onCycleVariant`.
             FooterKey::CtrlT => effects.push(FooterEffect::CycleVariant),
+            // G-272 — `command.palette.show` (ctrl+p,
+            // config/keybind.ts:57; footer.view.tsx:561-577's layer
+            // is composer-route-only).
+            FooterKey::CtrlP => self.open_panel(crate::components::footer::PromptRoute::Command),
+            // G-272 — the leader key (`<leader>` = ctrl+x): the chord
+            // completes on the NEXT key.
+            FooterKey::CtrlX => self.leader_armed = true,
             FooterKey::Up => effects.push(FooterEffect::HistoryUp),
             FooterKey::Down => {
                 // TUI-17 — `session.child.first` over tracked
@@ -505,6 +595,180 @@ impl FooterPane {
         effects
     }
 
+    /// G-272 — open a picker route with a fresh panel state
+    /// (`openRoute`, footer.view.tsx:282-285).
+    pub fn open_panel(&mut self, route: crate::components::footer::PromptRoute) {
+        self.machine.open_route(route);
+        self.panel = PanelState::default();
+        self.leader_armed = false;
+    }
+
+    /// The open panel's UNFILTERED entry list (`RunCommandMenuBody.
+    /// entries` / the picker bodies' builders).
+    #[must_use]
+    pub fn panel_all_entries(&self) -> Vec<crate::components::footer::state::FooterMenuItem> {
+        use crate::components::footer::state::{
+            agent_entries, command_menu_entries, model_entries, variant_entries, FooterMenuItem,
+        };
+        let running = self
+            .subagent_children
+            .iter()
+            .filter(|child| child.status == super::transport::SubagentStatus::Running)
+            .count();
+        let entries = match self.machine.route {
+            crate::components::footer::PromptRoute::Command => command_menu_entries(
+                self.subagent_children.len(),
+                running,
+                self.queued_prompts.len(),
+                &self.variants,
+                "ctrl+t",
+            ),
+            crate::components::footer::PromptRoute::Agent => agent_entries(&self.agents, None),
+            crate::components::footer::PromptRoute::Model => {
+                let current = self.model_label.as_deref().and_then(|label| {
+                    label.split_once('/').and_then(|(provider, model)| {
+                        (!provider.is_empty() && !model.is_empty()).then_some((provider, model))
+                    })
+                });
+                model_entries(&self.providers, current)
+            }
+            crate::components::footer::PromptRoute::Variant => {
+                variant_entries(&self.variants, self.active_variant.as_deref())
+            }
+            crate::components::footer::PromptRoute::QueuedMenu => self
+                .queued_prompts
+                .iter()
+                .map(|text| FooterMenuItem {
+                    display: text.clone(),
+                    ..FooterMenuItem::default()
+                })
+                .collect(),
+            crate::components::footer::PromptRoute::Settings => {
+                crate::components::footer::state::settings_entries(&self.settings_summary)
+            }
+            crate::components::footer::PromptRoute::Composer
+            | crate::components::footer::PromptRoute::Subagent => Vec::new(),
+        };
+        entries
+    }
+
+    /// The open panel's QUERY-FILTERED entry list (the count the
+    /// select controller moves through).
+    #[must_use]
+    pub fn panel_entries(&self) -> Vec<crate::components::footer::state::FooterMenuItem> {
+        use crate::components::footer::state::fuzzy_matches;
+        self.panel_all_entries()
+            .into_iter()
+            .filter(|item| fuzzy_matches(item, &self.panel.query))
+            .collect()
+    }
+
+    /// G-272 — a picker panel's keys (the PanelShell: esc closes,
+    /// up/down move through the FILTERED list, printables/backspace
+    /// edit the query, ctrl+u clears it, enter runs the entry —
+    /// footer.command.tsx:228-259).
+    fn press_panel(&mut self, key: FooterKey) -> Vec<FooterEffect> {
+        use crate::components::footer::state::{move_selection_clamp, reconcile_selection};
+        let mut effects = Vec::new();
+        let count = self.panel_entries().len();
+        match key {
+            FooterKey::Escape | FooterKey::CtrlC => {
+                // closePanel → the composer (footer.view.tsx:320-322).
+                self.machine.close_panel();
+                self.panel = PanelState::default();
+            }
+            FooterKey::Up => {
+                self.panel.selected =
+                    move_selection_clamp(self.panel.selected, count, -1);
+            }
+            FooterKey::Down => {
+                self.panel.selected = move_selection_clamp(self.panel.selected, count, 1);
+            }
+            FooterKey::Backspace => {
+                self.panel.query.pop();
+                self.panel.selected = reconcile_selection(self.panel.selected, count);
+            }
+            FooterKey::Printable(char) => {
+                if char == 'u' && self.leader_armed {
+                    // ctrl+u clears the query (footer.command.tsx:254).
+                    self.leader_armed = false;
+                    self.panel.query.clear();
+                    self.panel.selected = 0;
+                } else {
+                    self.leader_armed = false;
+                    self.panel.query.push(char);
+                    self.panel.selected = reconcile_selection(self.panel.selected, count);
+                }
+            }
+            FooterKey::Enter => {
+                let entries = self.panel_entries();
+                if let Some(entry) = entries.get(self.panel.selected.min(entries.len().saturating_sub(1)))
+                {
+                    effects.extend(self.run_panel_entry(entry));
+                }
+            }
+            FooterKey::Tab
+            | FooterKey::PageUp
+            | FooterKey::PageDown
+            | FooterKey::CtrlT
+            | FooterKey::CtrlP
+            | FooterKey::CtrlX => {}
+        }
+        effects
+    }
+
+    /// G-272 — run one command entry (`pick`, footer.command.tsx:
+    /// 526-590): the route/effect subset the mini runtime carries;
+    /// the model/agent/variant SELECTION rows need the per-turn
+    /// switch seams (out of this lane's scope) and stay inert.
+    fn run_panel_entry(
+        &mut self,
+        entry: &crate::components::footer::state::FooterMenuItem,
+    ) -> Vec<FooterEffect> {
+        match entry.display.as_str() {
+            "Switch agent" => {
+                self.open_panel(crate::components::footer::PromptRoute::Agent);
+            }
+            "Switch model" => {
+                self.open_panel(crate::components::footer::PromptRoute::Model);
+            }
+            "Switch model variant" => {
+                self.open_panel(crate::components::footer::PromptRoute::Variant);
+            }
+            "View pending prompts" => {
+                if !self.queued_prompts.is_empty() {
+                    self.open_panel(crate::components::footer::PromptRoute::QueuedMenu);
+                }
+            }
+            "View subagents" => {
+                if !self.subagent_children.is_empty() {
+                    self.machine.route = crate::components::footer::PromptRoute::Subagent;
+                    self.subagent_selected = self
+                        .subagent_children
+                        .iter()
+                        .rev()
+                        .find(|child| child.status == super::transport::SubagentStatus::Running)
+                        .or_else(|| self.subagent_children.last())
+                        .map(|child| child.session_id.clone());
+                    self.subagent_scroll = 0;
+                }
+            }
+            "Variant cycle" => return vec![FooterEffect::CycleVariant],
+            "Compact session" => return vec![FooterEffect::Submit("/compact".to_owned())],
+            "New session" => return vec![FooterEffect::Submit("/new".to_owned())],
+            "Settings" => {
+                self.open_panel(crate::components::footer::PromptRoute::Settings);
+            }
+            "Exit" => return vec![FooterEffect::Close],
+            // "Open editor" / "Show status" / "Clear screen" need
+            // surfaces outside this lane (the external-editor seam,
+            // the status dialog, the split-footer replay reset) — the
+            // rows list, the filter and esc keep working.
+            _ => {}
+        }
+        Vec::new()
+    }
+
     /// The statusline hint while an exit/interrupt is armed
     /// (`footer.view.tsx:402-408`: `Press ${key} again to ${action}`).
     #[must_use]
@@ -516,6 +780,75 @@ impl FooterPane {
             return Some("esc again to interrupt".to_owned());
         }
         None
+    }
+
+    /// G-272 — a picker panel's body over the composer (the route's
+    /// `PanelShell`: title/count/search frame rows + the FILTERED
+    /// entry list with the select controller's highlight —
+    /// footer.command.tsx's shell, `applyHeight`'s panel arm).
+    #[must_use]
+    fn render_panel_body(&self, width: usize, height: usize) -> crate::render::Frame {
+        use crate::components::footer::canvas::Canvas;
+        use crate::components::footer::panel::{
+            footer_panel_layout, render_panel_shell, FooterMenuState,
+        };
+        use crate::components::footer::state::{fuzzy_matches, PANEL_LIST_ROWS};
+        let route = self.machine.route;
+        let (title, count_visible, hint, grouped, background, header_color, empty) = match route {
+            crate::components::footer::PromptRoute::Command => {
+                ("Commands", true, None, true, true, true, "No results found")
+            }
+            crate::components::footer::PromptRoute::Agent => {
+                ("Select agent", true, None, false, true, false, "No agents found")
+            }
+            crate::components::footer::PromptRoute::Model => {
+                ("Select model", true, None, true, false, true, "No results found")
+            }
+            crate::components::footer::PromptRoute::Variant => {
+                ("Select variant", true, None, false, true, false, "No results found")
+            }
+            crate::components::footer::PromptRoute::Settings => (
+                "Settings",
+                false,
+                Some("left/right change"),
+                true,
+                true,
+                true,
+                "No settings found",
+            ),
+            _ => ("Pending prompts", true, None, false, true, false, "No pending prompts"),
+        };
+        let all = self.panel_all_entries();
+        let filtered: Vec<_> = all
+            .iter()
+            .filter(|item| fuzzy_matches(item, &self.panel.query))
+            .cloned()
+            .collect();
+        let menu = FooterMenuState { selected: self.panel.selected, offset: 0 };
+        let mut canvas = Canvas::new(width, height);
+        let layout = footer_panel_layout(height.max(3), PANEL_LIST_ROWS);
+        render_panel_shell(
+            &mut canvas,
+            0,
+            title,
+            count_visible,
+            filtered.len(),
+            all.len(),
+            &self.panel.query,
+            "Search",
+            hint,
+            &filtered,
+            &menu,
+            layout,
+            grouped,
+            background,
+            header_color.then_some(self.theme.muted),
+            empty,
+            &self.theme,
+            width,
+            height,
+        );
+        crate::components::footer::solid::finish(canvas)
     }
 
     /// The inspector's key handling (footer.subagent.tsx:115-146).
@@ -560,6 +893,7 @@ impl FooterPane {
             // G-181① — `variant.cycle`'s layer is composer-route-only;
             // the inspector consumes the key without effect.
             FooterKey::CtrlT => {}
+            FooterKey::CtrlP | FooterKey::CtrlX => {}
             FooterKey::Printable(_) => {}
         }
         effects
@@ -575,9 +909,13 @@ impl FooterPane {
     /// The footer pane height for the active view (`applyHeight`,
     /// `footer.ts:740-760`): blockers grow the dock over the composer
     /// base (`PERMISSION_ROWS`/`FORM_ROWS`, `footer.ts:117-118`);
-    /// TUI-17 — the inspector adds its 14 rows.
+    /// TUI-17 — the inspector adds its 14 rows; G-272 — the picker
+    /// panels take `1 + panel.frame + panel.limit`
+    /// (`footerPanelLayout`, footer.ts:752-753) and the queued menu
+    /// `1 + rows` (footer.ts:754-755).
     #[must_use]
-    pub fn pane_height(&self) -> usize {
+    pub fn pane_height(&self, term_height: usize) -> usize {
+        use crate::components::footer::state::PANEL_LIST_ROWS;
         // RD-19 — the launch row grows the dock by one
         // (`footer.ts:762`'s `desired + (this.startup() ? 1 : 0)`).
         let startup = usize::from(self.startup.is_some());
@@ -585,13 +923,23 @@ impl FooterPane {
             + match self.machine.view {
                 FooterView::Permission { .. } => footer_base(FOOTER_HEIGHT) + PERMISSION_ROWS,
                 FooterView::Form { .. } => footer_base(FOOTER_HEIGHT) + FORM_ROWS,
-                FooterView::Prompt => {
-                    if self.machine.route == crate::components::footer::PromptRoute::Subagent {
-                        footer_base(FOOTER_HEIGHT) + super::footer_subagent::SUBAGENT_INSPECTOR_ROWS
-                    } else {
-                        FOOTER_HEIGHT
+                FooterView::Prompt => match self.machine.route {
+                    crate::components::footer::PromptRoute::Subagent => {
+                        footer_base(FOOTER_HEIGHT)
+                            + super::footer_subagent::SUBAGENT_INSPECTOR_ROWS
                     }
-                }
+                    crate::components::footer::PromptRoute::QueuedMenu => {
+                        1 + self.queued_prompts.len().max(1)
+                    }
+                    route if route.is_panel() => {
+                        let layout = crate::components::footer::panel::footer_panel_layout(
+                            term_height,
+                            PANEL_LIST_ROWS,
+                        );
+                        1 + layout.frame + layout.limit
+                    }
+                    _ => FOOTER_HEIGHT,
+                },
             }
     }
 
@@ -693,6 +1041,12 @@ impl FooterPane {
                         );
                     }
                 }
+                // G-272 — a picker panel owns the body while its route
+                // is open (the command/agent/model/variant/settings/
+                // queued panels over the composer).
+                if self.machine.route.is_panel() {
+                    return self.render_panel_body(width, height);
+                }
                 // The composer base: rail + transparent textarea with
                 // the live draft, statusline below.
                 let running = self
@@ -724,6 +1078,15 @@ impl FooterPane {
                         .unwrap_or_else(|| "Default model".to_owned()),
                     command_shortcut: "ctrl+p".to_owned(),
                     status_detail,
+                    // G-272 — the usage groups (footer.view.tsx:213-
+                    // 218, 493-500): `formatContextUsage` + the USD
+                    // cost; EMPTY renders nothing.
+                    context: self.usage.as_ref().map(format_context_usage).unwrap_or_default(),
+                    cost: self
+                        .usage
+                        .as_ref()
+                        .and_then(|usage| usage.cost.map(|cost| format!("${cost:.2}")))
+                        .unwrap_or_default(),
                 };
                 // CONFIG-T4 — the busy statusline (`footer.view.tsx:210`
                 // + `:978-988`): while a turn runs, the status text
@@ -794,6 +1157,24 @@ fn blank_statusline_details(frame: &mut crate::render::Frame) {
         for cell in row.iter_mut() {
             *cell = crate::render::Cell::default();
         }
+    }
+}
+
+/// G-272 — `formatContextUsage` (util/session.ts:75-78 over
+/// `Locale.number`): `18`, `3.4K`, `1.2M` — with the percent,
+/// `18 (0%)`.
+fn format_context_usage(usage: &UsageInfo) -> String {
+    #[allow(clippy::cast_precision_loss)]
+    let number = if usage.tokens >= 1_000_000 {
+        format!("{:.1}M", usage.tokens as f64 / 1_000_000.0)
+    } else if usage.tokens >= 1_000 {
+        format!("{:.1}K", usage.tokens as f64 / 1_000.0)
+    } else {
+        usage.tokens.to_string()
+    };
+    match usage.percent {
+        Some(percent) => format!("{number} ({percent}%)"),
+        None => number,
     }
 }
 
@@ -1379,7 +1760,7 @@ impl Lifecycle {
     /// region re-arms whenever the pane's height changes. DECSTBM
     /// homes the cursor (the next park re-positions anyway).
     fn reconcile_scrollback_region(&mut self) -> Result<(), String> {
-        let pane = self.pane.pane_height().clamp(1, self.height);
+        let pane = self.pane.pane_height(self.height).clamp(1, self.height);
         let bottom = self
             .height
             .saturating_sub(pane.max(FOOTER_HEIGHT))
@@ -1412,7 +1793,7 @@ impl Lifecycle {
     /// `set_footer_height` (renderer.ts:1768-1772) — the dock grows
     /// upward, the buffers rebuild, and the frame repaints fully.
     pub fn draw_footer(&mut self) -> Result<(), String> {
-        let pane_height = self.pane.pane_height().clamp(1, self.height);
+        let pane_height = self.pane.pane_height(self.height).clamp(1, self.height);
         let footer_frame = self.pane.render_frame(self.width, pane_height);
         // Skip identical repaints (the renderer's dirty check — a
         // no-change draw only emits cursor noise), unless a
@@ -1686,14 +2067,14 @@ mod tests {
     #[test]
     fn startup_row_grows_the_pane_and_renders_the_one_shot() {
         let mut footer = pane();
-        assert_eq!(footer.pane_height(), super::super::FOOTER_HEIGHT);
+        assert_eq!(footer.pane_height(30), super::super::FOOTER_HEIGHT);
         footer.startup = Some(StartupRow {
             since: std::time::Instant::now(),
             label: "▪ oc mini".to_owned(),
             metadata: " v2.0.24 · ~".to_owned(),
         });
-        assert_eq!(footer.pane_height(), super::super::FOOTER_HEIGHT + 1);
-        let frame = footer.render_frame(80, footer.pane_height());
+        assert_eq!(footer.pane_height(30), super::super::FOOTER_HEIGHT + 1);
+        let frame = footer.render_frame(80, footer.pane_height(30));
         assert_eq!(frame.cells.len(), super::super::FOOTER_HEIGHT + 1);
         // Cell 0: the SEED_LAUNCH spinner (a young age is an outline).
         assert_eq!(frame.cells[0][0].ch, '\u{25ab}');
@@ -1726,7 +2107,7 @@ mod tests {
             label: "oc m".to_owned(),
             metadata: String::new(),
         });
-        let frame = footer.render_frame(80, footer.pane_height());
+        let frame = footer.render_frame(80, footer.pane_height(30));
         let text: String = frame.cells[0].iter().map(|cell| cell.ch).collect();
         assert!(text.starts_with("oc m"), "{text}");
     }
@@ -1763,10 +2144,10 @@ mod tests {
     #[test]
     fn pane_heights_match_the_reference_mounts() {
         let mut footer = pane();
-        assert_eq!(footer.pane_height(), super::super::FOOTER_HEIGHT);
+        assert_eq!(footer.pane_height(30), super::super::FOOTER_HEIGHT);
         footer.permission_asked(permission("p1"));
         assert_eq!(
-            footer.pane_height(),
+            footer.pane_height(30),
             footer_base(super::super::FOOTER_HEIGHT) + PERMISSION_ROWS,
             "3 + PERMISSION_ROWS(12)"
         );
@@ -1778,7 +2159,7 @@ mod tests {
             fields: vec![crate::components::footer::FormField::text("k", "Label")],
         });
         assert_eq!(
-            footer.pane_height(),
+            footer.pane_height(30),
             footer_base(super::super::FOOTER_HEIGHT) + FORM_ROWS,
             "3 + FORM_ROWS(14)"
         );
@@ -1810,6 +2191,136 @@ mod tests {
         assert_eq!(footer.press(FooterKey::CtrlT), vec![FooterEffect::CycleVariant]);
         // The draft is untouched.
         assert_eq!(footer.draft, "");
+    }
+
+    /// G-272 — `command.palette.show` (ctrl+p, config/keybind.ts:57):
+    /// the command route opens over the composer, the panel's keys
+    /// own the footer (up/down/query/enter), and an entry re-routes.
+    #[test]
+    fn ctrl_p_opens_the_command_palette_and_entries_route() {
+        use crate::components::footer::PromptRoute;
+        let mut footer = pane();
+        assert!(footer.press(FooterKey::CtrlP).is_empty());
+        assert_eq!(footer.machine.route, PromptRoute::Command, "the palette route opens");
+        // The composer's history key never fires inside the panel
+        // (up clamps at 0).
+        assert!(footer.press(FooterKey::Up).is_empty());
+        // The entries: with no subagents/queued/variants the base
+        // commands list (footer.command.tsx:416-524).
+        let displays: Vec<String> =
+            footer.panel_entries().iter().map(|item| item.display.clone()).collect();
+        assert!(displays.contains(&"Switch agent".to_owned()));
+        assert!(displays.contains(&"Settings".to_owned()));
+        assert!(!displays.contains(&"View pending prompts".to_owned()), "no queued rows");
+        assert!(!displays.contains(&"Switch model variant".to_owned()), "no variants");
+        // Down x4 lands on "Switch agent" (Open editor, Show status,
+        // Compact session, New session precede it); enter re-routes.
+        for _ in 0..4 {
+            footer.press(FooterKey::Down);
+        }
+        assert!(footer.press(FooterKey::Enter).is_empty());
+        assert_eq!(footer.machine.route, PromptRoute::Agent, "the entry routed to agent");
+        // Esc closes the panel (closePanel → composer).
+        footer.press(FooterKey::Escape);
+        assert_eq!(footer.machine.route, PromptRoute::Composer);
+        assert_eq!(footer.panel, PanelState::default(), "the panel state resets");
+    }
+
+    /// G-272 — the panel's search (the PanelShell's query): the
+    /// filter narrows the list and the count label follows.
+    #[test]
+    fn panel_query_filters_the_entries() {
+        use crate::components::footer::PromptRoute;
+        let mut footer = pane();
+        footer.press(FooterKey::CtrlP);
+        for ch in "settings".chars() {
+            footer.press(FooterKey::Printable(ch));
+        }
+        let entries = footer.panel_entries();
+        assert!(
+            entries.iter().all(|item| item.display == "Settings"),
+            "only Settings survives: {entries:?}"
+        );
+        // Enter runs it: the Settings route opens.
+        footer.press(FooterKey::Enter);
+        assert_eq!(footer.machine.route, PromptRoute::Settings);
+        // Backspace edits the query; esc returns to the composer.
+        footer.press(FooterKey::Backspace);
+        footer.press(FooterKey::Escape);
+        assert_eq!(footer.machine.route, PromptRoute::Composer);
+    }
+
+    /// G-272 — `<leader>q` (`session.queued_prompts`,
+    /// config/keybind.ts:131 — the leader is ctrl+x): the chord opens
+    /// the queued menu only when rows exist; any other key consumes
+    /// the chord and types.
+    #[test]
+    fn leader_q_opens_the_queued_menu() {
+        use crate::components::footer::PromptRoute;
+        let mut footer = pane();
+        // Without queued prompts the chord is a no-op.
+        footer.press(FooterKey::CtrlX);
+        footer.press(FooterKey::Printable('q'));
+        assert_eq!(footer.machine.route, PromptRoute::Composer);
+        assert_eq!(footer.draft, "", "q never typed through the chord");
+        // With rows the menu opens and lists them.
+        footer.queued_prompts = vec!["first queued".into(), "second queued".into()];
+        footer.queued_pending = 2;
+        footer.press(FooterKey::CtrlX);
+        footer.press(FooterKey::Printable('q'));
+        assert_eq!(footer.machine.route, PromptRoute::QueuedMenu);
+        let entries = footer.panel_entries();
+        assert_eq!(entries.len(), 2, "the queued rows list: {entries:?}");
+        assert_eq!(entries[0].display, "first queued");
+        // Any OTHER key after the leader consumes the chord.
+        footer.press(FooterKey::Escape);
+        footer.press(FooterKey::CtrlX);
+        footer.press(FooterKey::Printable('x'));
+        assert_eq!(footer.machine.route, PromptRoute::Composer);
+        assert_eq!(footer.draft, "x", "the non-q key typed into the draft");
+    }
+
+    /// G-272 — the command entries' effects: the slash rows submit and
+    /// Exit closes (footer.command.tsx:526-590's `pick`).
+    #[test]
+    fn command_entries_submit_slash_rows_and_exit() {
+        use crate::components::footer::PromptRoute;
+        let mut footer = pane();
+        footer.press(FooterKey::CtrlP);
+        for ch in "compact".chars() {
+            footer.press(FooterKey::Printable(ch));
+        }
+        let effects = footer.press(FooterKey::Enter);
+        assert_eq!(effects, vec![FooterEffect::Submit("/compact".to_owned())]);
+        assert_eq!(footer.machine.route, PromptRoute::Command, "a slash row keeps the panel");
+        // "Exit" closes the footer.
+        footer.press(FooterKey::Escape);
+        footer.press(FooterKey::CtrlP);
+        for ch in "exit".chars() {
+            footer.press(FooterKey::Printable(ch));
+        }
+        assert_eq!(footer.press(FooterKey::Enter), vec![FooterEffect::Close]);
+    }
+
+    /// G-272 — the usage groups on the statusline
+    /// (`formatContextUsage` + the cost, footer.view.tsx:213-218):
+    /// `18 (0%)`-style context and `$0.01`-style cost.
+    #[test]
+    fn usage_renders_context_and_cost_groups() {
+        let mut footer = pane();
+        footer.agent = Some("Build".into());
+        footer.model_label = Some("gpt-5".into());
+        footer.usage = Some(UsageInfo { tokens: 12300, percent: Some(10), cost: Some(0.0134) });
+        let frame = footer.render_frame(80, super::super::FOOTER_HEIGHT);
+        let grid = frame.text_grid();
+        assert!(grid[1].contains("12.3K (10%)"), "the context group: {:?}", grid[1]);
+        assert!(grid[1].contains("$0.01"), "the cost group: {:?}", grid[1]);
+        // No percent (no context limit): the bare number.
+        footer.usage = Some(UsageInfo { tokens: 42, percent: None, cost: None });
+        let frame = footer.render_frame(80, super::super::FOOTER_HEIGHT);
+        let grid = frame.text_grid();
+        assert!(grid[1].contains("42"), "the bare token count: {:?}", grid[1]);
+        assert!(!grid[1].contains('$'), "no cost group without a cost: {:?}", grid[1]);
     }
 
     #[test]

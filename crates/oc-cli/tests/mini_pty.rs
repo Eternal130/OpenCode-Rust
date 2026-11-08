@@ -35,6 +35,10 @@ struct Stub {
     prompts: Arc<Mutex<Vec<String>>>,
     /// permission replies received (request ids).
     replies: Arc<Mutex<Vec<String>>>,
+    /// G-272 — catalog fetches received (paths, query-stripped).
+    catalog_requests: Arc<Mutex<Vec<String>>>,
+    /// G-272 — the SSE event feed (tests push catalog events).
+    events: tokio::sync::broadcast::Sender<String>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -64,9 +68,16 @@ async fn start_stub(mode: PromptMode) -> Stub {
     let output = Arc::new(Mutex::new(Vec::new()));
     let prompts = Arc::new(Mutex::new(Vec::new()));
     let replies = Arc::new(Mutex::new(Vec::new()));
+    let catalog_requests = Arc::new(Mutex::new(Vec::new()));
     let mode_storage = Arc::new(Mutex::new(mode));
 
-    let server = Stub { port, prompts: Arc::clone(&prompts), replies: Arc::clone(&replies) };
+    let server = Stub {
+        port,
+        prompts: Arc::clone(&prompts),
+        replies: Arc::clone(&replies),
+        catalog_requests: Arc::clone(&catalog_requests),
+        events: events_tx.clone(),
+    };
 
     tokio::spawn(async move {
         // Every /api/event connection subscribes to the broadcast and
@@ -78,9 +89,19 @@ async fn start_stub(mode: PromptMode) -> Stub {
             let output = Arc::clone(&output);
             let prompts = Arc::clone(&prompts);
             let replies = Arc::clone(&replies);
+            let catalog_requests = Arc::clone(&catalog_requests);
             let mode = Arc::clone(&mode_storage);
             tokio::spawn(async move {
-                serve_connection(&mut socket, sub_tx, &output, &prompts, &replies, &mode).await;
+                serve_connection(
+                    &mut socket,
+                    sub_tx,
+                    &output,
+                    &prompts,
+                    &replies,
+                    &catalog_requests,
+                    &mode,
+                )
+                .await;
             });
         }
     });
@@ -115,6 +136,7 @@ async fn serve_connection(
     output: &Arc<Mutex<Vec<u8>>>,
     prompts: &Arc<Mutex<Vec<String>>>,
     replies: &Arc<Mutex<Vec<String>>>,
+    catalog_requests: &Arc<Mutex<Vec<String>>>,
     mode: &Arc<Mutex<PromptMode>>,
 ) {
     let head = read_request(socket).await;
@@ -168,6 +190,31 @@ async fn serve_connection(
         respond_json(socket, &body).await;
         return;
     }
+    // G-272 — the boot/event catalog fetches (`loadCatalog` +
+    // `refreshCatalog`, runtime.ts:601-611, 690-733): the agent list
+    // (an id/name/mode-only row the client can decode) and the model
+    // catalog (one model with a context limit + two variants).
+    if method == "GET" && (path_only == "/api/agent" || path_only == "/api/model") {
+        catalog_requests.lock().expect("lock").push(path_only.clone());
+        let body = if path_only == "/api/agent" {
+            serde_json::json!({ "data": [
+                { "id": "build", "name": "Build", "hidden": false, "mode": "primary",
+                  "permissions": [],
+                  "request": { "body": {}, "headers": {}, "settings": {} } },
+            ], "location": { "directory": "/tmp/opencode/mini-pty" } })
+        } else {
+            serde_json::json!({ "data": [
+                { "id": "stub-1", "modelID": "stub-1", "name": "Stub Model",
+                  "providerID": "stub", "enabled": true, "status": "active", "cost": [],
+                  "variants": [ { "id": "high" }, { "id": "low" } ],
+                  "capabilities": { "input": ["text"], "output": ["text"], "tools": true },
+                  "limit": { "context": 120000, "output": 8192 },
+                  "time": { "released": 1 } },
+            ], "location": { "directory": "/tmp/opencode/mini-pty" } })
+        };
+        respond_json(socket, &body.to_string()).await;
+        return;
+    }
     if method == "GET" && path_only == format!("/api/session/{SESSION_ID}/message") {
         // G-221 — the replay fixtures (skill/shell/compaction
         // messages, newest first — the client fetches desc and the
@@ -202,6 +249,42 @@ async fn serve_connection(
             return;
         }
         respond_json(socket, r#"{"data":[]}"#).await;
+        return;
+    }
+    // G-272 — the hydrate's blocker sweep (`hydrate`,
+    // stream-v2.transport.ts:952-1004): the parallel permission /
+    // form / active lists a reconnect (or boot) issues.
+    if method == "GET" && path_only == format!("/api/session/{SESSION_ID}/permission") {
+        if *mode.lock().expect("lock") == PromptMode::HydrateBlockers {
+            let body = serde_json::json!({ "data": [
+                { "id": "prm_hy", "sessionID": SESSION_ID, "action": "bash",
+                  "resources": ["bash(echo blocked)"] },
+            ] });
+            respond_json(socket, &body.to_string()).await;
+            return;
+        }
+        respond_json(socket, r#"{"data":[]}"#).await;
+        return;
+    }
+    if method == "GET" && path_only == format!("/api/session/{SESSION_ID}/form") {
+        if *mode.lock().expect("lock") == PromptMode::HydrateBlockers {
+            let body = serde_json::json!({ "data": [
+                { "id": "frm_hy", "sessionID": SESSION_ID, "title": "Confirm hydrate",
+                  "fields": [ { "key": "note", "type": "string", "title": "Note" } ] },
+            ] });
+            respond_json(socket, &body.to_string()).await;
+            return;
+        }
+        respond_json(socket, r#"{"data":[]}"#).await;
+        return;
+    }
+    if method == "GET" && path_only == "/api/session/active" {
+        if *mode.lock().expect("lock") == PromptMode::HydrateBlockers {
+            let body = serde_json::json!({ "data": { SESSION_ID: { "time": { "created": 1 } } } });
+            respond_json(socket, &body.to_string()).await;
+            return;
+        }
+        respond_json(socket, r#"{"data":{}}"#).await;
         return;
     }
     if method == "POST" && path_only == format!("/api/session/{SESSION_ID}/prompt") {
@@ -406,8 +489,15 @@ fn emit_turn_script(
         // G-241 — the multi-delta shape every other script lacks: TWO
         // deltas for one part (the second must NOT re-print the
         // first) and a final text LONGER than the streamed chunks
-        // (the tail must arrive via the ended suffix).
+        // (the tail must arrive via the ended suffix). G-272 — the
+        // step family rides the same turn: the usage patch (tokens +
+        // cost over the step model's context limit) and the
+        // step.failed error row.
         PromptMode::MultiDelta => {
+            event(
+                "session.step.started",
+                serde_json::json!({ "sessionID": SESSION_ID, "model": { "providerID": "stub", "id": "stub-1" } }),
+            );
             event(
                 "session.text.started",
                 serde_json::json!({ "sessionID": SESSION_ID, "messageID": "msg_stub_1", "partID": "prt_text" }),
@@ -424,6 +514,18 @@ fn emit_turn_script(
                 "session.text.ended",
                 serde_json::json!({ "sessionID": SESSION_ID, "messageID": "msg_stub_1", "partID": "prt_text",
                                      "text": "Stub streams twice and finishes." }),
+            );
+            event(
+                "session.step.ended",
+                serde_json::json!({ "sessionID": SESSION_ID, "assistantMessageID": "msg_stub_1",
+                                     "tokens": { "input": 12000, "output": 300, "reasoning": 0,
+                                                 "cache": { "read": 0, "write": 0 } },
+                                     "cost": 0.0134 }),
+            );
+            event(
+                "session.step.failed",
+                serde_json::json!({ "sessionID": SESSION_ID, "assistantMessageID": "msg_step_fail",
+                                     "error": { "type": "Error", "message": "Stub step exploded" } }),
             );
             event("session.execution.succeeded", session);
         }
@@ -918,6 +1020,43 @@ async fn mini_pty_g221_replay_hydrates_blocks_and_pending() {
     assert_eq!(code, 0);
 }
 
+// -- G-272: the hydrate restores pending blockers -------------------------
+
+/// G-272 — a reconnect/boot hydrate restores the PENDING permission
+/// and form (`hydrate`'s parallel `permission.list` + `form.list` +
+/// `session.active` → `syncBlockers`, stream-v2.transport.ts:952-
+/// 1004): the permission body mounts at boot, and after the reply
+/// the queued form takes the footer (permission precedence).
+#[tokio::test(flavor = "multi_thread")]
+async fn mini_pty_hydrate_restores_pending_permission_and_form() {
+    let stub = start_stub(PromptMode::HydrateBlockers).await;
+    let mut mini = MiniPty::spawn_replay(stub.port, &[], r#"{ "mini": { "tools": "show", "mono": true } }"#);
+
+    // The hydrate mounts the pending permission BEFORE any prompt.
+    assert!(
+        mini.wait_for("Permission required", Duration::from_secs(30)),
+        "the hydrated permission body mounted: {}",
+        mini.output()
+    );
+    // Enter allows once — the reply releases the permission and the
+    // hydrated form becomes the footer's blocker. (Mid-string
+    // needle: the dock's diff repaints can drop a run's leading
+    // glyph.)
+    mini.type_text("\r");
+    assert!(
+        mini.wait_for("ydrate", Duration::from_secs(30)),
+        "the hydrated form body mounted after the permission reply: {}",
+        mini.output()
+    );
+    assert!(
+        stub.replies.lock().expect("lock").iter().any(|id| id.contains("prm_hy")),
+        "the hydrated permission's reply reached the server"
+    );
+
+    mini.exit_sequence();
+    mini.finish();
+}
+
 // -- G-241: the multi-delta text stream ----------------------------------
 
 /// G-241 — a turn with TWO text deltas for one part and a final
@@ -948,9 +1087,147 @@ async fn mini_pty_multi_delta_streams_once_and_ends_with_the_tail() {
         1,
         "the second delta prints only its own chunk: {output}"
     );
+    // G-272 — the usage groups on the statusline (12300 tokens over
+    // the stub model's 120000 context = 10%; $0.0134 → $0.01).
+    // (Mid-run needles: the dock's diff repaints can drop a run's
+    // leading glyph.)
+    assert!(
+        mini.wait_for("2.3K (10%)", Duration::from_secs(30)),
+        "the context-usage group: {}",
+        mini.output()
+    );
+    assert!(
+        mini.output().contains("0.01"),
+        "the cost group: {}",
+        mini.output()
+    );
+    // G-272 — the step.failed error row (once per assistant message).
+    assert!(
+        mini.wait_for("Stub step exploded", Duration::from_secs(30)),
+        "the step failure's error row: {}",
+        mini.output()
+    );
 
     mini.exit_sequence();
     mini.wait_for("opencode mini -s ses_min_stub", Duration::from_secs(20));
     let code = mini.finish();
     assert_eq!(code, 0);
+}
+
+// -- G-272: the footer route family + catalog -----------------------------
+
+/// G-272 — ctrl+p opens the command palette over the composer
+/// (`command.palette.show`, config/keybind.ts:57): the panel's title
+/// and entries render, the query filters, and esc returns to the
+/// composer.
+#[tokio::test(flavor = "multi_thread")]
+async fn mini_pty_ctrl_p_opens_the_command_palette() {
+    let stub = start_stub(PromptMode::PlainReply).await;
+    let mut mini = MiniPty::spawn(stub.port, &[]);
+
+    assert!(mini.wait_for("oc mini", Duration::from_secs(30)), "boot");
+    // A prompt first (the exit splash only prints once a turn
+    // rendered — `showExit = shown && sessionID`).
+    mini.type_text("hello stub\r");
+    assert!(
+        mini.wait_for("Stub says hello.", Duration::from_secs(30)),
+        "the stub's reply landed: {}",
+        mini.output()
+    );
+    mini.type_text("\x10"); // ctrl+p
+    assert!(
+        mini.wait_for("Commands", Duration::from_secs(10)),
+        "the command palette mounted: {}",
+        mini.output()
+    );
+    assert!(
+        mini.output().contains("Switch agent"),
+        "the palette lists the agent route entry: {}",
+        mini.output()
+    );
+    // The query filters (PanelShell's search row) — asserted through
+    // BEHAVIOR (the byte stream's diff repaints can drop a run's
+    // leading glyph, so the count label's "1" is not byte-stable):
+    // filter to "exit" and run it — the footer closes with the exit
+    // splash. (The query/count rendering itself is unit-pinned.)
+    mini.type_text("exit");
+    mini.type_text("\r");
+    // (Mid-string needle: the dock's diff repaints can drop a run's
+    // leading glyph.)
+    assert!(
+        mini.wait_for("mini -s ses_min_stub", Duration::from_secs(20)),
+        "the filtered Exit entry ran and closed the footer: {}",
+        mini.output()
+    );
+    let code = mini.finish();
+    assert_eq!(code, 0, "clean exit via the palette");
+}
+
+/// G-272 — the boot catalog fetch and the `agent.updated` refresh
+/// (`loadCatalog` + `refreshCatalog`, runtime.ts:601-611, 690-733):
+/// the agent + model lists are fetched at boot and RE-fetched when a
+/// catalog event lands for this location.
+#[tokio::test(flavor = "multi_thread")]
+async fn mini_pty_catalog_fetches_at_boot_and_refreshes_on_events() {
+    let stub = start_stub(PromptMode::PlainReply).await;
+    let mut mini = MiniPty::spawn(stub.port, &[]);
+
+    assert!(mini.wait_for("oc mini", Duration::from_secs(30)), "boot");
+    // The boot fetch hit both lists.
+    let boot_deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < boot_deadline {
+        let requests = stub.catalog_requests.lock().expect("lock").clone();
+        if requests.iter().filter(|path| *path == "/api/agent").count() >= 1
+            && requests.iter().filter(|path| *path == "/api/model").count() >= 1
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let boot_requests = stub.catalog_requests.lock().expect("lock").clone();
+    assert!(
+        boot_requests.iter().any(|path| path == "/api/agent")
+            && boot_requests.iter().any(|path| path == "/api/model"),
+        "the boot catalog fetched agent + model lists: {boot_requests:?}"
+    );
+    // A catalog event in THIS location triggers the refresh
+    // (transport.ts:1009-1014's location filter).
+    let before = stub.catalog_requests.lock().expect("lock").len();
+    let _ = stub.events.send(
+        serde_json::json!({
+            "type": "agent.updated",
+            "location": { "directory": "/tmp/opencode/mini-pty" },
+        })
+        .to_string(),
+    );
+    let refresh_deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < refresh_deadline {
+        if stub.catalog_requests.lock().expect("lock").len() > before {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let after = stub.catalog_requests.lock().expect("lock").clone();
+    assert!(
+        after.len() > before,
+        "agent.updated re-fetched the catalogs: {after:?}"
+    );
+    // A FOREIGN location's event never refreshes.
+    let before = after.len();
+    let _ = stub.events.send(
+        serde_json::json!({
+            "type": "agent.updated",
+            "location": { "directory": "/tmp/opencode/elsewhere" },
+        })
+        .to_string(),
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        stub.catalog_requests.lock().expect("lock").len(),
+        before,
+        "a foreign location's catalog event never refreshes"
+    );
+
+    mini.exit_sequence();
+    mini.finish();
 }

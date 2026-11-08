@@ -50,6 +50,11 @@ pub struct StatuslineInput<'a> {
     pub agent: Option<&'a str>,
     pub model: Option<&'a str>,
     pub provider: Option<&'a str>,
+    /// G-272 — the context-usage group (`formatContextUsage`,
+    /// footer.view.tsx:493-499's `context` cell).
+    pub context: Option<&'a str>,
+    /// G-272 — the cost group (footer.view.tsx:500).
+    pub cost: Option<&'a str>,
     pub menu: Option<(&'a str, &'a str)>,
     pub status: Option<&'a str>,
 }
@@ -77,6 +82,12 @@ pub fn footer_statusline_policy(input: &StatuslineInput<'_>, width: usize) -> Ve
     }
     if let Some(provider) = input.provider {
         selected.push(group("provider", provider, StatusTone::Muted));
+    }
+    if let Some(context) = input.context {
+        selected.push(group("context", context, StatusTone::Muted));
+    }
+    if let Some(cost) = input.cost {
+        selected.push(group("cost", cost, StatusTone::Muted));
     }
     if let Some((key, label)) = input.menu {
         selected.push(action("menu", key, label));
@@ -106,6 +117,12 @@ pub struct PromptIdleState {
     /// TUI-17 — the statusline's status detail (the `N subagents`
     /// group, footer.view.tsx:247); EMPTY renders nothing.
     pub status_detail: String,
+    /// G-272 — the context-usage group (`18 (0%)`,
+    /// `formatContextUsage`); EMPTY renders nothing.
+    pub context: String,
+    /// G-272 — the cost group (`money.format`, footer.view.tsx:218);
+    /// EMPTY renders nothing.
+    pub cost: String,
 }
 
 impl Default for PromptIdleState {
@@ -115,6 +132,8 @@ impl Default for PromptIdleState {
             model_label: "gpt-5".into(),
             command_shortcut: "ctrl+p".into(),
             status_detail: String::new(),
+            context: String::new(),
+            cost: String::new(),
         }
     }
 }
@@ -159,6 +178,8 @@ pub(crate) fn prompt_idle_canvas(
                 model: Some(&state.model_label),
                 menu: Some((state.command_shortcut.as_str(), "menu")),
                 status: (!state.status_detail.is_empty()).then_some(state.status_detail.as_str()),
+                context: (!state.context.is_empty()).then_some(state.context.as_str()),
+                cost: (!state.cost.is_empty()).then_some(state.cost.as_str()),
                 provider: None,
             },
             width,
