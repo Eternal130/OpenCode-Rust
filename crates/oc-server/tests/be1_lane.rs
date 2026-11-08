@@ -6,8 +6,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use oc_client::types::*;
 use oc_client::Client;
+use oc_client::types::*;
 use oc_core::engine::{Engine, EngineOptions};
 use oc_server::handlers;
 use oc_server::state::{AppState, AuthConfig};
@@ -219,13 +219,7 @@ async fn credential_times(server: &TestServer, id: &str) -> (i64, i64, i64) {
                 .query_row(
                     "SELECT active, time_created, time_updated FROM credential WHERE id = ?1",
                     [&id],
-                    |row| {
-                        Ok((
-                            row.get::<_, i64>(0)?,
-                            row.get::<_, i64>(1)?,
-                            row.get::<_, i64>(2)?,
-                        ))
-                    },
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
                 )
                 .expect("credential row"))
         })
@@ -306,8 +300,7 @@ async fn be1_credential_update_activate_keep_time_updated_stable() {
         .await
         .expect("label update");
     let listed = client.credential().list().await.expect("list after update");
-    let second_listed =
-        listed.iter().find(|entry| entry.id == second.id).expect("second listed");
+    let second_listed = listed.iter().find(|entry| entry.id == second.id).expect("second listed");
     assert_eq!(second_listed.label, "renamed", "label edit lands");
     assert_eq!(second_listed.integration_id, "github", "integration unchanged");
     assert!(!second_listed.active, "selection unchanged by a label edit");
@@ -438,13 +431,15 @@ async fn be1_sse_tui_frames_pass_the_public_filter() {
 #[tokio::test]
 async fn be1_sse_filesystem_changed_and_branch_updated_on_head_move() {
     let workspace = tempfile::tempdir().expect("workspace");
-    assert!(std::process::Command::new("git")
-        .args(["init", "-b", "main"])
-        .current_dir(workspace.path())
-        .output()
-        .expect("git init")
-        .status
-        .success());
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(workspace.path())
+            .output()
+            .expect("git init")
+            .status
+            .success()
+    );
     let server = boot(workspace.path().to_path_buf()).await;
     // The announcer's branch subscription (the production shell starts
     // this; the bare test harness does not).
@@ -461,13 +456,15 @@ async fn be1_sse_filesystem_changed_and_branch_updated_on_head_move() {
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
     let mut stream = feed(&server.state).subscribe();
-    assert!(std::process::Command::new("git")
-        .args(["checkout", "-b", "feature-lane-be1"])
-        .current_dir(workspace.path())
-        .output()
-        .expect("git checkout")
-        .status
-        .success());
+    assert!(
+        std::process::Command::new("git")
+            .args(["checkout", "-b", "feature-lane-be1"])
+            .current_dir(workspace.path())
+            .output()
+            .expect("git checkout")
+            .status
+            .success()
+    );
 
     let changed =
         expect_frame(&mut stream, "\"type\":\"filesystem.changed\"", "filesystem.changed").await;

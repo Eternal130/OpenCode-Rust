@@ -30,7 +30,7 @@ use crate::engine::{Engine, EngineOptions};
 use crate::location::LocationRef;
 
 use crate::session::runner::tests_harness::{
-    fixed_clock, test_resolved_model, FixedResolver, TestLlmClient,
+    FixedResolver, TestLlmClient, fixed_clock, test_resolved_model,
 };
 
 /// The child-session first-prompt prefix (subagent.ts:209-212) — the

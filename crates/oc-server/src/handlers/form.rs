@@ -10,10 +10,10 @@ use axum::response::Response;
 use oc_core::forms::{CreateInput, FormError};
 use oc_schema::form::{Answer, Fields};
 use oc_schema::id::FormId;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::common::{
-    json_data, json_location_data, no_content, resolve_location, ApiError, SharedState,
+    ApiError, SharedState, json_data, json_location_data, no_content, resolve_location,
 };
 use super::session::{query_field, services, session_services};
 

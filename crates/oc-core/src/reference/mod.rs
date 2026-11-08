@@ -17,11 +17,11 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::bus::{registry, PublishOptions};
+use crate::bus::{PublishOptions, registry};
 
 pub use repository::{
-    cache_path, parse, parse_remote, same, validate_branch, FileReference, Reference,
-    RemoteReference,
+    FileReference, Reference, RemoteReference, cache_path, parse, parse_remote, same,
+    validate_branch,
 };
 use repository_cache::{EnsureInput, Refresh, RepositoryCache};
 
@@ -289,7 +289,9 @@ impl ReferenceService {
                             (None, Some(path.as_str()))
                         }
                     }
-                    oc_schema::config::reference::Entry::Git(git) => (None, Some(git.repository.as_str())),
+                    oc_schema::config::reference::Entry::Git(git) => {
+                        (None, Some(git.repository.as_str()))
+                    }
                     oc_schema::config::reference::Entry::Local(local) => {
                         (Some(local.path.as_str()), None)
                     }
@@ -309,7 +311,11 @@ impl ReferenceService {
                     _ => None,
                 };
                 let source = if let Some(path) = local {
-                    Source::Local(LocalSource { path: local_path(&directory, home, path), description, hidden })
+                    Source::Local(LocalSource {
+                        path: local_path(&directory, home, path),
+                        description,
+                        hidden,
+                    })
                 } else {
                     let repository = git.unwrap_or_default().to_owned();
                     Source::Git(GitSource { repository, branch, description, hidden })

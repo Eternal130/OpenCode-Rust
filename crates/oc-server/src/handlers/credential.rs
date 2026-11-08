@@ -5,9 +5,9 @@
 #![allow(clippy::must_use_candidate, clippy::similar_names)]
 use axum::extract::{Path, State};
 use axum::response::Response;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use super::common::{json_data, no_content, ApiError, SharedState};
+use super::common::{ApiError, SharedState, json_data, no_content};
 
 /// Publishes one of v2's global credential frames
 /// (`credential.updated` / `credential.switched`, credential.ts:160-316 —
@@ -22,12 +22,10 @@ async fn publish_global(state: &SharedState, type_: &str, data: Value) {
 
 /// v2's per-integration "active" pick: top row by
 /// `desc(active), desc(time_created), desc(id)` (credential.ts:186-192).
-const ACTIVE_PICK_SQL: &str =
-    "SELECT id FROM credential WHERE integration_id = ?1 ORDER BY active DESC, time_created DESC, id DESC LIMIT 1";
+const ACTIVE_PICK_SQL: &str = "SELECT id FROM credential WHERE integration_id = ?1 ORDER BY active DESC, time_created DESC, id DESC LIMIT 1";
 /// v2's replacement pick after the active credential is removed:
 /// `desc(time_created), desc(id)` (credential.ts:287-293).
-const REPLACEMENT_PICK_SQL: &str =
-    "SELECT id FROM credential WHERE integration_id = ?1 ORDER BY time_created DESC, id DESC LIMIT 1";
+const REPLACEMENT_PICK_SQL: &str = "SELECT id FROM credential WHERE integration_id = ?1 ORDER BY time_created DESC, id DESC LIMIT 1";
 
 pub fn routes() -> axum::Router<SharedState> {
     axum::Router::new()
@@ -140,10 +138,7 @@ async fn create(
     let integration_id = body["integrationID"].as_str().unwrap_or_default().to_owned();
     // G-268 — `label ?? "default"` (credential.ts:109): a MISSING label
     // defaults; an explicit empty string stays empty.
-    let label = body["label"]
-        .as_str()
-        .map(String::from)
-        .unwrap_or_else(|| "default".to_owned());
+    let label = body["label"].as_str().map(String::from).unwrap_or_else(|| "default".to_owned());
     let value = serde_json::to_string(&body["value"]).unwrap_or_else(|_| "null".to_owned());
     let requested_activate = body["activate"].as_bool();
 
