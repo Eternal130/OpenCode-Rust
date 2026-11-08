@@ -274,6 +274,34 @@ impl CatalogModelResolver {
             .unwrap_or_default()
     }
 
+    /// G-245 — the provider's effective session transport: the user's
+    /// explicit `settings.transport` (the config connection overlay) wins,
+    /// then the catalog snapshot's own settings, then the baked plugin
+    /// defaults — `websocket` for openai/xai unconditionally
+    /// (`plugin/provider/openai.ts:262`, `xai.ts:102` inject
+    /// `transport ?? "websocket"`), for azure only while the responses
+    /// WebSocket is usable (`plugin/provider/azure.ts:358-365` gates on
+    /// `responsesWebSocketCapable`, `:539-546`). Every other provider
+    /// stays on HTTP unless configured.
+    fn effective_transport(&self, provider_id: &str) -> Option<oc_schema::provider::Transport> {
+        let catalog = self.catalog();
+        let snapshot = catalog.provider(provider_id)?;
+        if let Some(transport) = self
+            .connection_for(provider_id)
+            .transport
+            .or_else(|| snapshot.info.settings.as_ref().and_then(|settings| settings.transport))
+        {
+            return Some(transport);
+        }
+        let connection = self.connection_for(provider_id);
+        match provider_id {
+            "openai" | "xai" => Some(oc_schema::provider::Transport::Websocket),
+            "azure" => azure_responses_websocket_capable(snapshot, &connection)
+                .then_some(oc_schema::provider::Transport::Websocket),
+            _ => None,
+        }
+    }
+
     /// Binds one reference, returning the bound model, its catalog info,
     /// and the CANONICAL reference (the configured provider/model keys —
     /// v2 records the selected catalog identity on assistant messages,
@@ -595,13 +623,11 @@ impl ModelResolver for CatalogModelResolver {
     ) -> Result<ResolvedModel, ModelError> {
         let (model, info, canonical) = self.bind(reference)?;
         // REF model-resolver.ts:397 — `transport: provider?.settings?.transport`
-        // (the provider plugins default openai/xai/azure to "websocket";
-        // omitted means HTTP). RV-P1: the session runner consults this.
-        let transport = self
-            .catalog()
-            .provider(&canonical.provider_id.0)
-            .and_then(|snapshot| snapshot.info.settings.as_ref())
-            .and_then(|settings| settings.transport);
+        // plus the provider plugins' websocket defaults (G-245: openai and
+        // xai inject `transport ?? "websocket"` at provider-transform time,
+        // azure only when the responses WebSocket is usable). RV-P1: the
+        // session runner consults this to offer the WS session channel.
+        let transport = self.effective_transport(&canonical.provider_id.0);
         let mut resolved = resolved_from(model, info, &canonical);
         resolved.transport = transport;
         Ok(resolved)
@@ -847,6 +873,54 @@ fn has_configured_auth(
     }
     provider_settings.as_ref().is_some_and(|settings| has_key(&settings.rest))
         || model_settings.as_ref().is_some_and(|settings| has_key(&settings.rest))
+}
+
+/// G-245 — `responsesWebSocketCapable` (`plugin/provider/azure.ts:
+/// 539-546`): the responses package only, no deployment-based URLs, the
+/// `v1` API version, and an Azure-native base URL when one is set. The
+/// settings the check reads are the merged provider settings — in this
+/// port the catalog snapshot's own settings plus the user connection
+/// overlay (`baseURL`); the catalog carries no `apiVersion`/
+/// `useDeploymentBasedUrls`, so those arms only bite for snapshot data.
+fn azure_responses_websocket_capable(
+    snapshot: &crate::provider_catalog::Snapshot,
+    connection: &ModelConnection,
+) -> bool {
+    if snapshot.info.package != "@opencode/ai/providers/azure/responses" {
+        return false;
+    }
+    let rest = snapshot
+        .info
+        .settings
+        .as_ref()
+        .map(|settings| &settings.rest);
+    let key = |name: &str| rest.and_then(|rest| rest.get(name));
+    if key("useDeploymentBasedUrls") == Some(&Value::Bool(true)) {
+        return false;
+    }
+    if let Some(api_version) = key("apiVersion").and_then(Value::as_str) {
+        if api_version != "v1" {
+            return false;
+        }
+    }
+    // `typeof settings?.baseURL !== "string"` → capable; else the
+    // `^https://[^/]+\.openai\.azure\.com(?:/|$)` (case-insensitive)
+    // host check — unanchored on the right, so any path after the host
+    // stays Azure-native. The user connection's baseURL is the explicit
+    // setting.
+    connection.base_url.as_deref().map_or(true, azure_openai_base_url)
+}
+
+/// The Azure-native base-URL check (`azure.ts:546` regex, case-insensitive):
+/// `https://<resource>.openai.azure.com` — the pattern is unanchored on
+/// the right, so any path following the host still matches.
+fn azure_openai_base_url(url: &str) -> bool {
+    let lowered = url.to_ascii_lowercase();
+    let Some(rest) = lowered.strip_prefix("https://") else {
+        return false;
+    };
+    let host = rest.split('/').next().unwrap_or_default();
+    host.ends_with(".openai.azure.com") && host.len() > ".openai.azure.com".len()
 }
 
 fn map_provider(
@@ -1812,6 +1886,7 @@ mod local_discovery_tests {
                 api_key: None,
                 resource_name: None,
                 headers: BTreeMap::new(),
+                transport: None,
             },
         );
         map
@@ -1891,6 +1966,7 @@ mod local_discovery_tests {
                 api_key: None,
                 resource_name: None,
                 headers: BTreeMap::new(),
+                transport: None,
             },
         );
         discovery.refresh(&connections).await;

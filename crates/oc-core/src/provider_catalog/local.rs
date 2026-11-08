@@ -603,6 +603,7 @@ mod tests {
                 api_key: key.map(str::to_owned),
                 resource_name: None,
                 headers: BTreeMap::new(),
+                transport: None,
             },
         );
         map
@@ -753,6 +754,7 @@ mod tests {
                 api_key: None,
                 resource_name: None,
                 headers: BTreeMap::new(),
+                transport: None,
             },
         );
         discovery.refresh(&connections).await;
@@ -796,6 +798,7 @@ mod tests {
                 api_key: None,
                 resource_name: None,
                 headers: BTreeMap::new(),
+                transport: None,
             },
         );
         discovery.refresh(&connections).await;
@@ -822,6 +825,7 @@ mod tests {
                 api_key: None,
                 resource_name: None,
                 headers: BTreeMap::new(),
+                transport: None,
             },
         );
         assert!(!discovery.refresh(&connections).await, "no change on outage");

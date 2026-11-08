@@ -72,19 +72,29 @@ pub fn providers_from_config(loaded: &Loaded) -> ConfigProviders {
                             .and_then(|names| names.first())
                             .and_then(|name| std::env::var(name).ok())
                     });
+                // G-245: an explicit `settings.transport` also lands in the
+                // connection overlay — the user's session-transport choice
+                // wins over the openai/xai/azure websocket default the
+                // resolver bakes (ref provider plugins inject
+                // `transport ?? "websocket"` AFTER config merges,
+                // openai.ts:262/xai.ts:102).
+                let transport = settings.transport;
                 // CRED-A4: every apiKey/baseURL lands as a connection
                 // overlay for the provider id — apiKey-only entries are
                 // no longer dropped, and catalog-matching ids take the
                 // overlay without rebinding to openai-compatible. Later
                 // documents merge per key (v2 foldSettings /
                 // mergeOverlay, plugin/provider/configured.ts:14-18).
-                if base_url.is_some() || api_key.is_some() {
+                if base_url.is_some() || api_key.is_some() || transport.is_some() {
                     let entry = out.connections.entry(id.clone()).or_default();
                     if base_url.is_some() {
                         entry.base_url.clone_from(&base_url);
                     }
                     if api_key.is_some() {
                         entry.api_key.clone_from(&api_key);
+                    }
+                    if transport.is_some() {
+                        entry.transport = transport;
                     }
                 }
                 // The openai-compatible custom binding only covers

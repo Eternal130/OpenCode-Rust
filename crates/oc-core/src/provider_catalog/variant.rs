@@ -897,7 +897,10 @@ fn vercel_gateway(model: &VariantModel, support: &Support) -> Vec<Variant> {
 }
 
 // One function per TS protocol, kept whole for diff-ability against
-// variant.ts (119 lines vs 100 budget).
+// variant.ts (119 lines vs 100 budget). sap_ai_core/gitlab(_anthropic)
+// are G-17② dead: their aisdk: dispatch entries are parked until the
+// npm-install bridge lands (see the PROTOCOLS table note).
+#[allow(dead_code)]
 #[allow(clippy::too_many_lines)]
 fn sap_ai_core(model: &VariantModel, support: &Support) -> Vec<Variant> {
     let id = &model.model_id;
@@ -1012,6 +1015,7 @@ fn sap_ai_core(model: &VariantModel, support: &Support) -> Vec<Variant> {
     }
 }
 
+#[allow(dead_code)]
 fn gitlab_anthropic(model: &VariantModel, support: &Support) -> Vec<Variant> {
     let info = claude_info(model);
     let disabled = || Overlay::settings(settings_map(&[("thinking", json!({"type": "disabled"}))]));
@@ -1062,6 +1066,7 @@ fn gitlab_anthropic(model: &VariantModel, support: &Support) -> Vec<Variant> {
     }
 }
 
+#[allow(dead_code)]
 fn gitlab(model: &VariantModel, support: &Support) -> Vec<Variant> {
     let id = model.model_id.to_lowercase();
     if id.starts_with("duo-workflow") {
@@ -1134,8 +1139,12 @@ pub fn protocol(package: &str) -> Option<ProtocolFn> {
         "@opencode/ai/providers/cloudflare-ai-gateway" => cloudflare_ai_gateway,
         "@opencode/ai/providers/vercel-ai-gateway" => vercel_gateway,
         "aisdk:@ai-sdk/gateway" => vercel_gateway,
-        "aisdk:@jerome-benoit/sap-ai-provider-v2" => sap_ai_core,
-        "aisdk:gitlab-ai-provider" => gitlab,
+        // G-17② — the sap-ai-core/gitlab aisdk: shims dispatch NOTHING:
+        // the facade cannot bind `aisdk:` packages in this port (no
+        // npm-install bridge), so variants for them would surface in the
+        // catalog UI and fail 100% of selections at bind time. The
+        // sap_ai_core/gitlab protocol functions stay below (dead, kept
+        // whole against variant.ts) for the bridge's arrival.
         _ => return None,
     })
 }
@@ -1206,6 +1215,27 @@ mod tests {
             provider_id: "test".into(),
             model_id: model_id.into(),
             limit_output: output,
+        }
+    }
+
+    /// G-17② — the unbound aisdk: shims (sap-ai-core/gitlab) dispatch no
+    /// variants: the facade cannot bind them, so listed variants would
+    /// fail every selection at bind time.
+    #[test]
+    fn provider_variant_aisdk_shims_ship_nothing() {
+        for (package, model_id) in [
+            ("aisdk:@jerome-benoit/sap-ai-provider-v2", "anthropic-claude-4-5"),
+            ("aisdk:gitlab-ai-provider", "claude-4-5"),
+        ] {
+            let model = model(package, model_id, 64_000);
+            assert!(
+                resolve(&model, &[Support::Effort { values: None }]).is_empty(),
+                "{package} must not produce variants"
+            );
+            assert!(
+                resolve(&model, &[Support::Toggle]).is_empty(),
+                "{package} must not produce toggle variants"
+            );
         }
     }
 

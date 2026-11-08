@@ -404,7 +404,7 @@ mod tests {
             Arc::clone(&clock) as Arc<dyn Clock>,
         );
 
-        assert_eq!(service.get().provider_count(), 226, "starts on the embedded snapshot");
+        assert_eq!(service.get().provider_count(), 224, "starts on the embedded snapshot");
         assert_eq!(
             service.refresh(false).await.unwrap(),
             RefreshOutcome::Updated,
@@ -526,7 +526,7 @@ mod tests {
         );
         assert!(!service.populate_from_cache().await);
         assert_eq!(kv.get(CACHE_KEY).await, None, "corrupt entry removed");
-        assert_eq!(service.get().provider_count(), 226, "snapshot floor holds");
+        assert_eq!(service.get().provider_count(), 224, "snapshot floor holds");
 
         // `adopt` — the embedder-provided catalog becomes the source.
         service.adopt(Catalog::empty());
@@ -578,7 +578,7 @@ mod tests {
     #[tokio::test]
     async fn provider_refresh_offline_engine_stays_on_frozen_snapshot() {
         // v2 degradation: fetch failures are logged and ignored — the
-        // catalog keeps serving the frozen snapshot (226 providers).
+        // catalog keeps serving the frozen snapshot (224 providers).
         let dir = tempfile::TempDir::new().expect("tempdir");
         let engine = crate::engine::Engine::boot(crate::engine::EngineOptions {
             catalog_fetch: true,
@@ -588,8 +588,8 @@ mod tests {
         })
         .await;
         assert!(engine.catalog_service.refresh(false).await.is_err(), "offline fetch fails");
-        assert_eq!(engine.catalog_service.get().provider_count(), 226, "frozen snapshot");
-        assert_eq!(engine.catalog.provider_count(), 226, "engine snapshot unchanged");
+        assert_eq!(engine.catalog_service.get().provider_count(), 224, "frozen snapshot");
+        assert_eq!(engine.catalog.provider_count(), 224, "engine snapshot unchanged");
         assert_eq!(engine.catalog_service.version(), 0, "no invalidation");
     }
 }
