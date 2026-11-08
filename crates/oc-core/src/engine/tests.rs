@@ -61,8 +61,8 @@
 )]
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use oc_ai::testing::TestLlm;
@@ -72,7 +72,7 @@ use crate::engine::{Engine, EngineOptions};
 use crate::location::{LocationRef, ToolExecute, ToolRegistration, ToolRunFailure, ToolRunResult};
 
 use crate::session::runner::tests_harness::{
-    fixed_clock, parity_text_response, test_resolved_model, FixedResolver, TestLlmClient,
+    FixedResolver, TestLlmClient, fixed_clock, parity_text_response, test_resolved_model,
 };
 
 /// Boots an engine over a sandboxed project with a scripted LLM and the
@@ -747,11 +747,13 @@ fn engine_builtin_skills_seed_the_table() {
     let opencode =
         crate::tool::skill::SkillTable::get(&table, "opencode").expect("built-in opencode");
     assert_eq!(opencode.name.0, "OpenCode");
-    assert!(opencode
-        .description
-        .as_deref()
-        .unwrap_or_default()
-        .starts_with("Use this skill for any question about OpenCode itself"));
+    assert!(
+        opencode
+            .description
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("Use this skill for any question about OpenCode itself")
+    );
     assert_eq!(opencode.path.as_str(), "/builtin/opencode.md");
     assert_eq!(opencode.content, crate::engine::skills::builtin::OPENCODE_MD);
     assert_eq!(opencode.auto_invoke, None);
@@ -764,11 +766,19 @@ fn engine_builtin_skills_seed_the_table() {
     let content = &report.content;
     assert!(content.starts_with(crate::engine::skills::builtin::REPORT_MD));
     assert!(content.contains("## Runtime Diagnostics Snapshot"));
-    assert!(content
-        .contains(&format!("- opencode version: {}", crate::engine::skills::builtin::APP_VERSION)));
+    assert!(
+        content.contains(&format!(
+            "- opencode version: {}",
+            crate::engine::skills::builtin::APP_VERSION
+        ))
+    );
     assert_eq!(crate::engine::skills::builtin::APP_VERSION, "2.0.24");
-    assert!(content
-        .contains(&format!("- install/channel: {}", crate::engine::skills::builtin::APP_CHANNEL)));
+    assert!(
+        content.contains(&format!(
+            "- install/channel: {}",
+            crate::engine::skills::builtin::APP_CHANNEL
+        ))
+    );
     assert!(content.contains("- OS: "));
     assert!(content.contains("- Terminal: "));
     assert!(content.contains("- Shell: "));
@@ -1026,10 +1036,12 @@ async fn per_location_overlay_two_projects_resolve_their_own() {
 
     // Explicit refs resolve on their own project and NOT on the sibling's
     // (the overlay is per-location, the engine-level bindings are empty).
-    assert!(alpha_services
-        .resolver
-        .resolve_selected(&overlay_row(None), &model_ref("alpha-probe", "alpha-one"))
-        .is_ok());
+    assert!(
+        alpha_services
+            .resolver
+            .resolve_selected(&overlay_row(None), &model_ref("alpha-probe", "alpha-one"))
+            .is_ok()
+    );
     assert!(
         alpha_services
             .resolver
@@ -1037,10 +1049,12 @@ async fn per_location_overlay_two_projects_resolve_their_own() {
             .is_err(),
         "beta's provider is not visible at alpha"
     );
-    assert!(beta_services
-        .resolver
-        .resolve_selected(&overlay_row(None), &model_ref("beta-probe", "beta-one"))
-        .is_ok());
+    assert!(
+        beta_services
+            .resolver
+            .resolve_selected(&overlay_row(None), &model_ref("beta-probe", "beta-one"))
+            .is_ok()
+    );
 
     // A pinned model takes the same per-location path.
     let mut pinned = overlay_row(Some(model_ref("beta-probe", "beta-one")));
@@ -1188,10 +1202,12 @@ async fn per_location_overlay_daemon_booted_at_a_serves_b() {
     assert_eq!(resolved.reference.provider_id.0, "remote-probe");
     assert_eq!(resolved.reference.id.0, "remote-one");
     // The boot-time (engine-level) provider stays reachable at B.
-    assert!(services_b
-        .resolver
-        .resolve_selected(&overlay_row(None), &model_ref("boot-probe", "boot-one"))
-        .is_ok());
+    assert!(
+        services_b
+            .resolver
+            .resolve_selected(&overlay_row(None), &model_ref("boot-probe", "boot-one"))
+            .is_ok()
+    );
 }
 
 // ===========================================================================
@@ -1252,10 +1268,12 @@ async fn per_location_overlay_resolves_case_mismatched_provider_reference() {
     assert_eq!(resolved.model.id.as_str(), "glm-5.3", "the route model id is canonical");
 
     // An exact-case reference still resolves unchanged.
-    assert!(services
-        .resolver
-        .resolve_selected(&overlay_row(None), &model_ref("own", "glm-5.3"))
-        .is_ok());
+    assert!(
+        services
+            .resolver
+            .resolve_selected(&overlay_row(None), &model_ref("own", "glm-5.3"))
+            .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -1637,15 +1655,23 @@ fn engine_seeds_global_external_directory_allows() {
     use oc_schema::permission::Effect;
 
     let allows = |id: &str, action: &str, resource: &str| {
-        let agent = registry.get(&oc_schema::id::AgentId::parse(id)).unwrap_or_else(|| panic!("{id}"));
-        crate::permission::evaluate(action, resource, &[agent.permissions.clone()]).effect == Effect::Allow
+        let agent =
+            registry.get(&oc_schema::id::AgentId::parse(id)).unwrap_or_else(|| panic!("{id}"));
+        crate::permission::evaluate(action, resource, &[agent.permissions.clone()]).effect
+            == Effect::Allow
     };
 
     // The four global globs resolve Allow for build, general, explore
     // and plan (ref seeds them for EVERY agent).
     for id in ["build", "general", "explore", "plan", "compaction"] {
-        assert!(allows(id, "external_directory", "/data/opencode/shell/ses_1/sh_1"), "{id} shell output");
-        assert!(allows(id, "external_directory", "/data/opencode/tool-output/to_1"), "{id} tool output");
+        assert!(
+            allows(id, "external_directory", "/data/opencode/shell/ses_1/sh_1"),
+            "{id} shell output"
+        );
+        assert!(
+            allows(id, "external_directory", "/data/opencode/tool-output/to_1"),
+            "{id} tool output"
+        );
         assert!(allows(id, "external_directory", "/tmp/opencode/x"), "{id} tmp");
         assert!(allows(id, "external_directory", "/config/opencode/opencode.json"), "{id} config");
     }
@@ -1762,11 +1788,7 @@ fn engine_seeds_plan_agent() {
     assert_effect("question", "*", Effect::Allow);
     assert_effect("edit", "src/main.rs", Effect::Deny);
     assert_effect("edit", "/home/test/.opencode/plan/outline.md", Effect::Allow);
-    assert_effect(
-        "external_directory",
-        "/home/test/.opencode/plan/outline.md",
-        Effect::Allow,
-    );
+    assert_effect("external_directory", "/home/test/.opencode/plan/outline.md", Effect::Allow);
     // the base default survives: external directories outside the plan
     // directory still ask
     assert_effect("external_directory", "/etc", Effect::Ask);
@@ -2012,10 +2034,12 @@ fn engine_skills_compat_root_overrides_config_skill_on_collision() {
     let mut with_document = loaded.clone();
     with_document.entries.push(oc_schema::config::Entry::Document(Box::new(
         oc_schema::config::Document {
-            info: serde_json::from_value(serde_json::from_value::<serde_json::Value>(
-                serde_json::json!({ "skills": ["./config-skills"] }),
+            info: serde_json::from_value(
+                serde_json::from_value::<serde_json::Value>(
+                    serde_json::json!({ "skills": ["./config-skills"] }),
+                )
+                .expect("json"),
             )
-            .expect("json"))
             .expect("info"),
             path: None,
         },

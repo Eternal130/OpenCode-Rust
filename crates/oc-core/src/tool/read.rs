@@ -814,11 +814,7 @@ async fn alternate_path(files: &dyn crate::environment::Files, absolute: &Path) 
             matches.push(dir.join(name));
         }
     }
-    if matches.len() == 1 {
-        matches.pop()
-    } else {
-        None
-    }
+    if matches.len() == 1 { matches.pop() } else { None }
 }
 
 async fn run(
@@ -871,7 +867,7 @@ async fn run(
                     .await
                 {
                     Ok(ReadOutput::ListPage { .. }) => {
-                        return Err(missing(files.as_ref(), &path, &requested.absolute).await)
+                        return Err(missing(files.as_ref(), &path, &requested.absolute).await);
                     }
                     Ok(output) => (
                         output,
@@ -885,7 +881,7 @@ async fn run(
                         ),
                     ),
                     Err(ReadError::NotFound(_)) => {
-                        return Err(missing(files.as_ref(), &path, &requested.absolute).await)
+                        return Err(missing(files.as_ref(), &path, &requested.absolute).await);
                     }
                     Err(error) => return Err(leaf_failure(files.as_ref(), &path, error).await),
                 }

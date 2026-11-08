@@ -93,23 +93,23 @@ pub mod instructions;
 pub mod resolver;
 pub mod skills;
 pub mod skills_url;
-pub mod warming;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_subagent_flow;
+pub mod warming;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use dashmap::DashMap;
 use oc_schema::id::SessionId;
 use oc_util::determinism::{Clock, IdGen, RngSource, SystemClock, SystemRng, UuidV4IdGen};
 
 use crate::bus::{Bus, BusOptions, Subscription};
-use crate::config::{self, managed_policy, GlobalDirs, Loader};
+use crate::config::{self, GlobalDirs, Loader, managed_policy};
 use crate::database::Database;
 use crate::forms::Forms;
 use crate::hooks::{InternalPlugin, PluginSupervisor};
@@ -122,7 +122,7 @@ use crate::location_services::{GlobalServices, LocationServiceMap};
 use crate::mcp::McpRegistry;
 use crate::permission::{Permission, ReplyInput};
 use crate::provider_catalog::facade::{FacadeContext, ModelConnection};
-use crate::provider_catalog::{providers_from_config, Catalog};
+use crate::provider_catalog::{Catalog, providers_from_config};
 use crate::session::execution::{InterruptOptions, SessionExecution};
 use crate::session::inbox::SessionInbox;
 use crate::session::projector::install_projectors;
@@ -132,7 +132,9 @@ use crate::session::runner::drain::SessionRunner;
 use crate::session::runner::model_request::{AppMetadata, SessionModelRequest};
 use crate::session::runner::prompt_prepare::PromptPrepare;
 use crate::session::runner::title::SessionTitle;
-use crate::session::runner::{LlmClient, ModelResolver, ResolvedModel, RouteLlmClient, SessionGenerate};
+use crate::session::runner::{
+    LlmClient, ModelResolver, ResolvedModel, RouteLlmClient, SessionGenerate,
+};
 use crate::session::store::{CreateInput, ListInput, MessagesInput, SessionStore};
 use crate::session::subagent_job::SubagentJob;
 use crate::shell::Shell;
@@ -141,7 +143,7 @@ use crate::subagent::ChildExecution;
 use crate::tool::shell::{ShellToolServices, SyntheticPublisher};
 use crate::tool::skill::SkillTable;
 use crate::tool::{
-    self, opencode_tools, question, skill as skill_tool, webfetch, websearch, ToolServices,
+    self, ToolServices, opencode_tools, question, skill as skill_tool, webfetch, websearch,
 };
 use crate::tool_output::ToolOutput;
 use oc_ai::route::SharedTransport;
@@ -561,24 +563,19 @@ impl Engine {
                 // the sync — it never blocks boot or competes with the
                 // models-dev loop's first tick.
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                let base_url = binding
-                    .base_url
-                    .clone()
-                    .unwrap_or_else(|| {
-                        crate::provider_catalog::copilot_sync::COPILOT_BASE_URL_FALLBACK.to_string()
-                    });
-                copilot_sync
-                    .refresh(&catalog, base_url, binding.api_key, useragent)
-                    .await;
+                let base_url = binding.base_url.clone().unwrap_or_else(|| {
+                    crate::provider_catalog::copilot_sync::COPILOT_BASE_URL_FALLBACK.to_string()
+                });
+                copilot_sync.refresh(&catalog, base_url, binding.api_key, useragent).await;
             });
         }
         // G-209 — the live Modal `/models` sync (the ref plugin's
         // `load()` + provider transform): spawned ONLY when a Modal
         // API key exists (credential binding or MODAL_PROXY_TOKEN);
         // no key → inert, the static modal catalog serves unchanged.
-        let modal_sync = Arc::new(crate::provider_catalog::modal_sync::ModalSync::new(
-            Arc::clone(&facade_transport),
-        ));
+        let modal_sync = Arc::new(crate::provider_catalog::modal_sync::ModalSync::new(Arc::clone(
+            &facade_transport,
+        )));
         if let Some(api_key) = integration
             .credential_bindings()
             .get(crate::provider_catalog::modal_sync::MODAL_PROVIDER_ID)
@@ -1112,9 +1109,7 @@ impl Engine {
             let registration = hooks
                 .register_session_title(
                     Arc::new(hook),
-                    crate::hooks::HookOptions {
-                        provider_id: Some("github-copilot".to_string()),
-                    },
+                    crate::hooks::HookOptions { provider_id: Some("github-copilot".to_string()) },
                 )
                 .await;
             hooks.keep(registration);
@@ -1471,9 +1466,9 @@ impl Engine {
             )
             .await;
             let _ = applied; // diagnostics only (boot-trace reads the registry)
-                             // The latest activation updates the guest's ctx.location
-                             // view (the one-guest approximation of v2's per-instance
-                             // hosts) — only when plugins are active for this location.
+            // The latest activation updates the guest's ctx.location
+            // view (the one-guest approximation of v2's per-instance
+            // hosts) — only when plugins are active for this location.
             let active = source.active_plugins(&ops);
             if active.as_ref().is_none_or(|ids| !ids.is_empty()) {
                 source.location_activated(&location.as_path().display().to_string(), &project.id);
@@ -2141,11 +2136,7 @@ impl Engine {
     /// of each requested type (empty slice = everything).
     #[must_use]
     pub fn subscribe(&self, types: &[&str]) -> Subscription {
-        if types.is_empty() {
-            self.bus.subscribe()
-        } else {
-            self.bus.subscribe_types(types)
-        }
+        if types.is_empty() { self.bus.subscribe() } else { self.bus.subscribe_types(types) }
     }
 
     /// Manual compaction: admit a `/compact` item and run it to
@@ -2242,9 +2233,7 @@ impl SessionInterruptor for EngineInterruptor {
     async fn active_owners(&self, location: &LocationRef) -> bool {
         // The sweeper's post-interrupt re-check: after the owners settled,
         // only NEWLY admitted work keeps the location occupied.
-        self.services
-            .get(location)
-            .is_some_and(|services| !services.execution.active().is_empty())
+        self.services.get(location).is_some_and(|services| !services.execution.active().is_empty())
     }
 }
 
@@ -2718,19 +2707,16 @@ fn websearch_plugin(inputs: &Arc<PluginInputs>) -> InternalPlugin {
             Arc::new(websearch::DisableHook { search: Arc::clone(&inputs.websearch) });
         // Registrations live for the location lifetime (dropped with the
         // graph) — the same pattern the subagent description hook uses.
-        std::mem::forget(futures::executor::block_on(hooks.register_session_context(
-            disable,
-            crate::hooks::HookOptions::default(),
-        )));
+        std::mem::forget(futures::executor::block_on(
+            hooks.register_session_context(disable, crate::hooks::HookOptions::default()),
+        ));
         std::mem::forget(futures::executor::block_on(
             hooks.register_session_generate(disable_generate, crate::hooks::HookOptions::default()),
         ));
-        std::mem::forget(futures::executor::block_on(
-            hooks.register_session_compaction(
-                disable_compaction,
-                crate::hooks::HookOptions::default(),
-            ),
-        ));
+        std::mem::forget(futures::executor::block_on(hooks.register_session_compaction(
+            disable_compaction,
+            crate::hooks::HookOptions::default(),
+        )));
         Ok(())
     })
 }
@@ -3007,8 +2993,10 @@ fn seed_builtin_agents(
     // except the plan directory.
     let mut plan = oc_schema::agent::Info::default_for(oc_schema::id::AgentId::parse("plan"));
     plan.name = oc_schema::id::AgentName::parse("Plan");
-    plan.description =
-        Some("Read-only agent for exploring the codebase and planning work before implementation.".into());
+    plan.description = Some(
+        "Read-only agent for exploring the codebase and planning work before implementation."
+            .into(),
+    );
     plan.mode = oc_schema::agent::Mode::Primary;
     plan.permissions.extend(globals.iter().cloned());
     plan.permissions.push(rule("question", "*", oc_schema::permission::Effect::Allow));
@@ -3025,7 +3013,8 @@ fn seed_builtin_agents(
     ));
     agents.set(plan);
 
-    let mut compaction = agent_info("compaction", "Compaction", oc_schema::agent::Mode::Primary, true);
+    let mut compaction =
+        agent_info("compaction", "Compaction", oc_schema::agent::Mode::Primary, true);
     compaction.permissions.extend(globals.iter().cloned());
     agents.set(compaction);
     // title/summary: the globals seed BEFORE the mutator's deny-all

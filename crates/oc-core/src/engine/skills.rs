@@ -415,11 +415,7 @@ fn scan_directory(directory: &Path) -> Vec<Skill> {
     // `<dir>/<skill>/nested/SKILL.md`); the walk does not follow
     // symlinks, matching the ref's fs.scan default. A top-level
     // SKILL.md matches BOTH globs — the sort+dedup below keeps one.
-    for entry in walkdir::WalkDir::new(directory)
-        .min_depth(1)
-        .into_iter()
-        .flatten()
-    {
+    for entry in walkdir::WalkDir::new(directory).min_depth(1).into_iter().flatten() {
         if entry.file_type().is_file() && entry.file_name() == std::ffi::OsStr::new("SKILL.md") {
             files.push(entry.into_path());
         }

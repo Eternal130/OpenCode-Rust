@@ -309,15 +309,25 @@ async fn tool_edit_readback_failure_fails_the_call() {
             crate::environment::LocalFiles.read(path, range).await
         }
 
-        async fn write(&self, path: &str, bytes: &[u8]) -> Result<(), crate::environment::FilesError> {
+        async fn write(
+            &self,
+            path: &str,
+            bytes: &[u8],
+        ) -> Result<(), crate::environment::FilesError> {
             crate::environment::LocalFiles.write(path, bytes).await
         }
 
-        async fn stat(&self, path: &str) -> Result<crate::environment::FileInfo, crate::environment::FilesError> {
+        async fn stat(
+            &self,
+            path: &str,
+        ) -> Result<crate::environment::FileInfo, crate::environment::FilesError> {
             crate::environment::LocalFiles.stat(path).await
         }
 
-        async fn list(&self, path: &str) -> Result<Vec<crate::environment::DirEntry>, crate::environment::FilesError> {
+        async fn list(
+            &self,
+            path: &str,
+        ) -> Result<Vec<crate::environment::DirEntry>, crate::environment::FilesError> {
             crate::environment::LocalFiles.list(path).await
         }
 
@@ -357,10 +367,7 @@ async fn tool_edit_readback_failure_fails_the_call() {
     );
     // The write itself landed (the mutation succeeded before the
     // read-back); the point is the explicit failure, not a rollback.
-    assert_eq!(
-        std::fs::read_to_string(harness.dir.join("flaky.txt")).unwrap(),
-        "after\nrest\n"
-    );
+    assert_eq!(std::fs::read_to_string(harness.dir.join("flaky.txt")).unwrap(), "after\nrest\n");
 }
 
 #[tokio::test]
@@ -1950,7 +1957,7 @@ fn rg_deps(
 
 #[tokio::test]
 async fn rg_resolve_order_env_path_cache_download() {
-    use crate::tool::ripgrep_runner::{resolve_with, RgSource};
+    use crate::tool::ripgrep_runner::{RgSource, resolve_with};
     let tmp = tempfile::tempdir_in("/tmp/opencode").unwrap();
     let global_bin = tmp.path().join("bin");
     std::fs::create_dir_all(&global_bin).unwrap();
@@ -2000,7 +2007,7 @@ async fn rg_resolve_order_env_path_cache_download() {
 #[tokio::test]
 async fn rg_resolve_downloads_extracts_and_caches() {
     use crate::tool::ripgrep_runner::{
-        platform_config, resolve_with, RgError, RgSource, RG_VERSION,
+        RG_VERSION, RgError, RgSource, platform_config, resolve_with,
     };
     let Some(config) = platform_config() else {
         return; // platform without a managed artifact
@@ -2100,9 +2107,9 @@ fn rg_platform_map_matches_ref_rows() {
     // Filename/URL shapes (binary.ts:120-121).
     let config = platform_config_for("x86_64", "linux").unwrap();
     assert_eq!(config.filename(), format!("ripgrep-15.1.0-{}.tar.gz", config.platform));
-    assert!(config
-        .url()
-        .starts_with("https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/"));
+    assert!(
+        config.url().starts_with("https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/")
+    );
 }
 
 #[tokio::test]
@@ -2166,17 +2173,16 @@ async fn read_zero_limit_is_falsy_and_reads_the_default_page() {
     let size = body.len() as u64;
     let path = PathBuf::from("/tmp/opencode/fake-zero-limit.txt");
     let mut calls = 0;
-    let outcome =
-        read_file_with(size, &path, "zero.txt", None, Some(0), None, |start, len| {
-            calls += 1;
-            let start = start as usize;
-            let end = (start + len).min(body.len());
-            let chunk = body[start..end].to_vec();
-            Box::pin(async move { Ok(chunk) })
-                as BoxFuture<'_, Result<Vec<u8>, crate::tool::read::ReadError>>
-        })
-        .await
-        .unwrap();
+    let outcome = read_file_with(size, &path, "zero.txt", None, Some(0), None, |start, len| {
+        calls += 1;
+        let start = start as usize;
+        let end = (start + len).min(body.len());
+        let chunk = body[start..end].to_vec();
+        Box::pin(async move { Ok(chunk) })
+            as BoxFuture<'_, Result<Vec<u8>, crate::tool::read::ReadError>>
+    })
+    .await
+    .unwrap();
     match &outcome {
         crate::tool::read::ReadOutput::TextPage { content, offset, next, truncated, .. } => {
             assert_eq!(*offset, 1, "no offset reads as 1");
@@ -2241,7 +2247,7 @@ async fn read_large_file_chunked_memory_shape() {
 
 #[tokio::test]
 async fn read_prefetched_first_chunk_is_not_reread() {
-    use crate::tool::read::{read_file_with, ReadError};
+    use crate::tool::read::{ReadError, read_file_with};
     use futures::future::BoxFuture;
     // read_file's dir-detection/size probe already fetched chunk 0; the
     // pipeline must consume it instead of re-reading (one round trip per
@@ -2273,7 +2279,7 @@ async fn read_prefetched_first_chunk_is_not_reread() {
 
 #[tokio::test]
 async fn read_binary_detection_covers_only_the_consumed_page() {
-    use crate::tool::read::{read_file_with, ReadError, ReadOutput};
+    use crate::tool::read::{ReadError, ReadOutput, read_file_with};
     use futures::future::BoxFuture;
     // 70 KiB text file (single first chunk) with a NUL deep inside —
     // ref read-filesystem.ts:151-209: the binary flag is computed over

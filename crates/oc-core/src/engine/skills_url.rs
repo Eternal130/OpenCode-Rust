@@ -240,11 +240,7 @@ async fn pull_skill(client: &reqwest::Client, skill: PlannedSkill) -> Option<Pat
             // fetch above already happened).
         }
     }
-    if eligible(&skill.root, &skill.name) {
-        Some(skill.root)
-    } else {
-        None
-    }
+    if eligible(&skill.root, &skill.name) { Some(skill.root) } else { None }
 }
 
 /// `SKILL.md` or `{name}.md` present under `root` (discovery.ts:169-170,
@@ -554,7 +550,7 @@ fn sha1_hex(value: &str) -> String {
 mod tests {
     use super::*;
     use parking_lot::Mutex;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::collections::BTreeMap;
     use std::sync::Arc;
     use std::sync::MutexGuard;

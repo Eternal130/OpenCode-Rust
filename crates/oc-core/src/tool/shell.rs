@@ -9,9 +9,9 @@ use std::sync::Arc;
 use crate::env::SessionEnv;
 use crate::jobs::{BlockResult, Jobs, Recovery, RunError, StartInput};
 use crate::permission::{AssertInput, PermissionError};
-use crate::shell::{result as shell_result, select, Shell};
+use crate::shell::{Shell, result as shell_result, select};
 use crate::tool::{
-    permission_cause, BuiltinTool, ToolExecuteWithContext, ToolFailure, ToolOutcome, ToolServices,
+    BuiltinTool, ToolExecuteWithContext, ToolFailure, ToolOutcome, ToolServices, permission_cause,
 };
 
 /// `ShellTool.name`.
@@ -424,61 +424,62 @@ impl ToolExecuteWithContext for ShellExecute {
                 armed: true,
             };
 
-            let notify_when_done =
-                |job_id: String, shell_info: oc_schema::shell::Info, command: String| {
-                    let jobs = deps.jobs.clone();
-                    let synthetic = Arc::clone(&deps.synthetic);
-                    let session_id = context.session_id.to_string();
-                    tokio::spawn(async move {
-                        let wait = jobs.wait(&job_id, None).await;
-                        let Some(job_info) = wait.info else { return };
-                        if job_info.status == crate::jobs::Status::Running {
-                            return;
+            let notify_when_done = |job_id: String,
+                                    shell_info: oc_schema::shell::Info,
+                                    command: String| {
+                let jobs = deps.jobs.clone();
+                let synthetic = Arc::clone(&deps.synthetic);
+                let session_id = context.session_id.to_string();
+                tokio::spawn(async move {
+                    let wait = jobs.wait(&job_id, None).await;
+                    let Some(job_info) = wait.info else { return };
+                    if job_info.status == crate::jobs::Status::Running {
+                        return;
+                    }
+                    let state = match job_info.status {
+                        crate::jobs::Status::Completed => "completed",
+                        crate::jobs::Status::Error => "error",
+                        crate::jobs::Status::Cancelled => "cancelled",
+                        crate::jobs::Status::Running => return,
+                    };
+                    // G-267① — ref shell.ts:164: the completed
+                    // notification carries the FULL output
+                    // (`output = info.status === "completed" ?
+                    // await settled : undefined`), so
+                    // `ShellResult.notification` merges
+                    // exit/truncated/timeout/signal into the metadata
+                    // (shell/result.rs:101-107); error/cancelled pass
+                    // `None` exactly like the ref's `undefined`.
+                    let output = completed_notification_output(state, job_info.output.as_deref());
+                    let text = match (&job_info.output, state) {
+                        (Some(payload), "completed") => decode_messages(payload),
+                        (Some(payload), _) => payload.clone(),
+                        (None, "error") => {
+                            job_info.error.clone().unwrap_or_else(|| "Command failed".into())
                         }
-                        let state = match job_info.status {
-                            crate::jobs::Status::Completed => "completed",
-                            crate::jobs::Status::Error => "error",
-                            crate::jobs::Status::Cancelled => "cancelled",
-                            crate::jobs::Status::Running => return,
-                        };
-                        // G-267① — ref shell.ts:164: the completed
-                        // notification carries the FULL output
-                        // (`output = info.status === "completed" ?
-                        // await settled : undefined`), so
-                        // `ShellResult.notification` merges
-                        // exit/truncated/timeout/signal into the metadata
-                        // (shell/result.rs:101-107); error/cancelled pass
-                        // `None` exactly like the ref's `undefined`.
-                        let output = completed_notification_output(state, job_info.output.as_deref());
-                        let text = match (&job_info.output, state) {
-                            (Some(payload), "completed") => decode_messages(payload),
-                            (Some(payload), _) => payload.clone(),
-                            (None, "error") => {
-                                job_info.error.clone().unwrap_or_else(|| "Command failed".into())
-                            }
-                            (None, _) => "Cancelled".to_string(),
-                        };
-                        let notification =
-                            shell_result::notification(shell_result::NotificationInput {
-                                shell_id: shell_info.id.as_str(),
-                                job_id: Some(&job_id),
-                                command: &command,
-                                state,
-                                text: &text,
-                                output: output.as_ref(),
-                            });
-                        synthetic.publish(
-                            &session_id,
-                            &command,
-                            &notification.text,
-                            notification.metadata,
-                            job_info.notification_id.as_deref(),
-                        );
-                        if let Some(notification_id) = &job_info.notification_id {
-                            jobs.complete_background(notification_id).await;
-                        }
-                    });
-                };
+                        (None, _) => "Cancelled".to_string(),
+                    };
+                    let notification =
+                        shell_result::notification(shell_result::NotificationInput {
+                            shell_id: shell_info.id.as_str(),
+                            job_id: Some(&job_id),
+                            command: &command,
+                            state,
+                            text: &text,
+                            output: output.as_ref(),
+                        });
+                    synthetic.publish(
+                        &session_id,
+                        &command,
+                        &notification.text,
+                        notification.metadata,
+                        job_info.notification_id.as_deref(),
+                    );
+                    if let Some(notification_id) = &job_info.notification_id {
+                        jobs.complete_background(notification_id).await;
+                    }
+                });
+            };
 
             if background {
                 deps.jobs.background(&job.id).await;
@@ -544,19 +545,22 @@ fn decode_messages(payload: &str) -> String {
 /// settled run output for `completed` jobs (decoded from the job's
 /// serialized [`ShellToolOutput`] — the `settled` deferred's value),
 /// `None` for error/cancelled (the ref's `undefined`).
-fn completed_notification_output(state: &str, payload: Option<&str>) -> Option<shell_result::Output> {
+fn completed_notification_output(
+    state: &str,
+    payload: Option<&str>,
+) -> Option<shell_result::Output> {
     if state != "completed" {
         return None;
     }
-    payload
-        .and_then(|payload| serde_json::from_str::<ShellToolOutput>(payload).ok())
-        .map(|decoded| shell_result::Output {
+    payload.and_then(|payload| serde_json::from_str::<ShellToolOutput>(payload).ok()).map(
+        |decoded| shell_result::Output {
             output: decoded.output,
             truncated: decoded.truncated,
             exit: decoded.exit,
             signal: decoded.signal,
             timeout: decoded.timeout,
-        })
+        },
+    )
 }
 
 /// The `Effect.onInterrupt` translation: future-drop (the runner's
