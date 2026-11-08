@@ -70,12 +70,23 @@ impl LocationRef {
     }
 }
 
-/// Forward-slash normalization: `\` → `/` (a no-op on POSIX inputs, where
-/// backslash is a legal filename character — v2 tolerates the same
-/// ambiguity in its path columns).
+/// Forward-slash normalization — G-276⑤: the ref normalizes `\` → `/`
+/// only on win32 (`storagePath`, database/path.ts:6-8); on POSIX a
+/// backslash is a legal filename character and passes through
+/// untouched. The port previously normalized unconditionally (the
+/// comment above self-reported the deviation); now cfg-gated to match
+/// the ref per-platform semantics. Pure-logic function: not test-gated
+/// per the G-116③ precedent.
 fn normalize_directory(path: &Path) -> PathBuf {
-    let text = path.to_string_lossy().replace('\\', "/");
-    PathBuf::from(text)
+    #[cfg(windows)]
+    {
+        let text = path.to_string_lossy().replace('\\', "/");
+        PathBuf::from(text)
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_path_buf()
+    }
 }
 
 impl fmt::Display for LocationRef {
@@ -1034,13 +1045,21 @@ mod tests {
 
     #[test]
     fn location_ref_normalizes_backslashes() {
+        // G-276⑤ — ref storagePath normalizes `\`→`/` only on win32
+        // (database/path.ts:6-8): on POSIX a backslash is a legal
+        // filename character, so the two spellings are DIFFERENT
+        // locations (per-platform assertion; G-116③ precedent).
         let a = LocationRef::new(PathBuf::from("/repo\\work"), None);
         let b = LocationRef::new(PathBuf::from("/repo/work"), None);
-        assert_eq!(a, b);
-        // equal keys must hash equal — HashSet roundtrip
-        let mut set = std::collections::HashSet::new();
-        set.insert(a);
-        assert!(set.contains(&b));
+        if cfg!(windows) {
+            assert_eq!(a, b);
+            // equal keys must hash equal — HashSet roundtrip
+            let mut set = std::collections::HashSet::new();
+            set.insert(a);
+            assert!(set.contains(&b));
+        } else {
+            assert_ne!(a, b, "POSIX: backslash is a filename character, not a separator");
+        }
     }
 
     #[test]

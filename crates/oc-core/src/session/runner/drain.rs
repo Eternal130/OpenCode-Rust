@@ -505,17 +505,39 @@ impl SessionRunner {
             // 7. Ready path: prepare prompts (the `session.prompt` +
             //    `@skill` seam fires here — before delivery and the
             //    model turn), prepare context, promote, fork titles,
-            //    load.
-            self.prepare_session_prompts(session_id).await?;
-            let selected = self.context.prepare_context(session_id).await?;
-            let promoted = self
-                .inbox
-                .promote(
-                    session_id,
-                    if entering && !continuing { promotable } else { Promotable::Steer },
-                )
-                .await
-                .map_err(|error| RunFailure::Defect(format!("promote failed: {error}")))?;
+            //    load. G-279⑥ — ref wraps this whole section in
+            //    `restore(...)` (llm.ts:160-175): the uninterruptible
+            //    boundary loop becomes interruptible for the ready
+            //    section, so a shutdown waiting during context
+            //    preparation is observed here instead of after the
+            //    model stream starts (the outer UNWIND_TIMEOUT stays
+            //    as the last-resort backstop).
+            let mut shutdown_watch = shutdown.clone();
+            // An already-signaled shutdown does not wait for a change
+            // event (watch::changed only fires on transitions).
+            if *shutdown_watch.borrow_and_update() {
+                return Err(RunFailure::Interrupted);
+            }
+            let ready = tokio::select! {
+                changed = shutdown_watch.changed() => {
+                    let _ = changed;
+                    return Err(RunFailure::Interrupted);
+                }
+                ready = async {
+                    self.prepare_session_prompts(session_id).await?;
+                    let selected = self.context.prepare_context(session_id).await?;
+                    let promoted = self
+                        .inbox
+                        .promote(
+                            session_id,
+                            if entering && !continuing { promotable } else { Promotable::Steer },
+                        )
+                        .await
+                        .map_err(|error| RunFailure::Defect(format!("promote failed: {error}")))?;
+                    Ok::<_, RunFailure>((selected, promoted))
+                } => ready?,
+            };
+            let (selected, promoted) = ready;
             // A control admitted during context preparation owns this
             // boundary.
             if promoted.is_none() {
@@ -529,7 +551,13 @@ impl SessionRunner {
                 }
                 step = 1;
             }
-            let loaded = self.context.load(&selected).await?;
+            let loaded = tokio::select! {
+                changed = shutdown_watch.changed() => {
+                    let _ = changed;
+                    return Err(RunFailure::Interrupted);
+                }
+                loaded = self.context.load(&selected) => loaded?,
+            };
             return Ok(Boundary::Ready(Box::new(loaded), step));
         }
     }

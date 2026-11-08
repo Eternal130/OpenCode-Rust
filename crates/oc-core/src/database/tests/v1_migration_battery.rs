@@ -89,7 +89,9 @@ fn seed_legacy(conn: &rusqlite::Connection) {
             "parentID": "msg_u1",
             "modelID": "claude-sonnet-4-5",
             "providerID": "anthropic",
+            "mode": "primary",
             "agent": "build",
+            "path": { "cwd": "/tmp/opencode/project", "root": "/tmp/opencode/project" },
             "cost": 0.01,
             "tokens": {
                 "input": 10, "output": 5, "reasoning": 0,

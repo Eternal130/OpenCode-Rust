@@ -43,7 +43,11 @@ fn provider_metadata(provider: &str, state: Option<&Record>) -> Option<ProviderM
     Some(metadata)
 }
 
-/// `attachmentLocation` — a `file:` URI → local path.
+/// `attachmentLocation` — a `file:` URI → local path (ref
+/// to-llm-message.ts:26-35: `URL.parse` + `fileURLToPath`). G-279④:
+/// the path is percent-DECODED (`file:///a%20b.txt` → `/a b.txt` —
+/// `fileURLToPath` semantics); malformed `%` sequences pass through
+/// raw (the port's decodeURIComponent convention).
 fn attachment_location(file: &FileAttachment) -> Option<String> {
     let FileSource::Uri { uri } = &file.source else { return None };
     let rest = uri.strip_prefix("file://")?;
@@ -55,10 +59,39 @@ fn attachment_location(file: &FileAttachment) -> Option<String> {
         rest[index..].to_string()
     };
     if path.is_empty() {
-        None
-    } else {
-        Some(path)
+        return None;
     }
+    Some(percent_decode_path(&path))
+}
+
+/// G-279④ — `%XX` decoding over the URI path (fileURLToPath). Invalid
+/// sequences stay literal.
+fn percent_decode_path(input: &str) -> String {
+    fn hex_value(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if let (Some(high), Some(low)) =
+                (bytes.get(index + 1).copied().and_then(hex_value), bytes.get(index + 2).copied().and_then(hex_value))
+            {
+                out.push(high * 16 + low);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn attachment_label(file: &FileAttachment) -> String {

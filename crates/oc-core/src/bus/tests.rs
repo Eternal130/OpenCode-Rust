@@ -1413,3 +1413,66 @@ async fn bus_event_wire_shape() {
         "Event.Payload wire shape"
     );
 }
+
+// ---------------------------------------------------------------------------
+// G-276②③ — JSON-numeric replay identity + per-aggregate lock eviction
+// ---------------------------------------------------------------------------
+
+#[test]
+fn g276_json_deep_equal_treats_1_and_1_0_as_the_same_number() {
+    use serde_json::json;
+    // Node's isDeepStrictEqual (ref bus.ts:349) compares JSON numbers
+    // numerically: 1 === 1.0. serde_json's PartialEq does not.
+    assert_ne!(json!(1), json!(1.0), "precondition: Value eq is representation-sensitive");
+    assert!(super::json_deep_equal(&json!(1), &json!(1.0)));
+    assert!(super::json_deep_equal(&json!(1.0), &json!(1)));
+    assert!(super::json_deep_equal(&json!(2.5), &json!(2.5)));
+    assert!(!super::json_deep_equal(&json!(1), &json!(1.5)));
+    assert!(!super::json_deep_equal(&json!(1), &json!(2)));
+    // Structural recursion with nested numeric normalization.
+    assert!(super::json_deep_equal(
+        &json!({ "sessionID": "ses_1", "count": 3, "nested": { "ratio": 0.5 } }),
+        &json!({ "nested": { "ratio": 0.5 }, "count": 3.0, "sessionID": "ses_1" }),
+    ));
+    // Real divergence still detected (value, not representation).
+    assert!(!super::json_deep_equal(&json!({ "v": 1 }), &json!({ "v": 2 })));
+    assert!(!super::json_deep_equal(&json!({ "v": 1 }), &json!({ "w": 1 })));
+}
+
+#[tokio::test]
+async fn g276_replay_accepts_numerically_identical_float_spelling() {
+    let (bus, _dir) = test_bus(true).await;
+    let data_int: serde_json::Value =
+        serde_json::from_str(r#"{"sessionID":"ses_g276","title":"one","time":1}"#).unwrap();
+    let published = bus
+        .publish(renamed_def(), data_int, PublishOptions::default())
+        .await
+        .unwrap();
+    // Same event replayed with the number spelled `1.0`: numerically
+    // identical → idempotent, NOT a false divergence (G-276②).
+    let mut float_spelled = serialized(&published);
+    float_spelled.data =
+        serde_json::from_str(r#"{"sessionID":"ses_g276","title":"one","time":1.0}"#).unwrap();
+    bus.replay(float_spelled, ReplayOptions::default())
+        .await
+        .expect("1.0 vs 1 must replay idempotently");
+    assert_eq!(event_rows(&bus, "ses_g276").await.len(), 1, "no duplicates");
+}
+
+#[tokio::test]
+async fn g276_aggregate_locks_evict_after_publish() {
+    let (bus, _dir) = test_bus(true).await;
+    bus.publish(renamed_def(), renamed_data("ses_e1", "a"), PublishOptions::default())
+        .await
+        .unwrap();
+    bus.publish(renamed_def(), renamed_data("ses_e2", "b"), PublishOptions::default())
+        .await
+        .unwrap();
+    assert!(
+        bus.inner.locks.is_empty(),
+        "per-aggregate lock entries must self-evict (G-276③); still holding {}",
+        bus.inner.locks.iter().count()
+    );
+    // The wakes table is the precedent (wake_remove evicts).
+    assert!(bus.inner.wakes.is_empty());
+}
