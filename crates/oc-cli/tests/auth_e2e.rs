@@ -114,6 +114,11 @@ async fn mock_idp() -> MockIdp {
                         "org_id": "org_e2e"
                     })
                 }
+            } else if path == "/api/user" {
+                // G-244 — the zen credential's discovery GETs.
+                serde_json::json!({"id": "user_e2e", "email": "e2e@opencode.test"})
+            } else if path == "/api/orgs" {
+                serde_json::json!([{"id": "org_e2e", "name": "E2E Org"}])
             } else {
                 serde_json::json!({"error": "not_found"})
             };
@@ -220,13 +225,13 @@ async fn oc_auth_login_list_logout_end_to_end() {
         .await
         .expect("auth list 2");
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    assert!(stdout.contains("org_e2e"), "credential label missing: {stdout}");
+    assert!(stdout.contains("E2E Org"), "credential label missing: {stdout}");
 
     // auth logout — removes the credential (label as the picker arg).
     let output = run_command(
         &binary,
         &sandbox.project,
-        &["auth", "logout", "opencode", "org_e2e", "--server", &server_url],
+        &["auth", "logout", "opencode", "E2E Org", "--server", &server_url],
     )
     .output()
     .await
@@ -240,5 +245,5 @@ async fn oc_auth_login_list_logout_end_to_end() {
         .await
         .expect("auth list 3");
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    assert!(!stdout.contains("org_e2e"), "credential should be gone: {stdout}");
+    assert!(!stdout.contains("E2E Org"), "credential should be gone: {stdout}");
 }
