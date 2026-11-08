@@ -857,6 +857,10 @@ fn input_frame(kind: u8, cols: u16, rows: u16, payload: &[u8]) -> Vec<u8> {
     frame
 }
 
+fn bytes_contain(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|window| window == needle)
+}
+
 /// G-269 — framed input drops malformed frames on the ref's three
 /// conditions (persistent-pty.ts:213-218: unknown kind, `cols === 0`,
 /// `rows === 0`; plus the <5-byte guard at :212): nothing reaches the
@@ -896,26 +900,26 @@ async fn persistent_framed_input_drops_malformed_frames() {
         }
     }
 
-    // Malformed frames — each carries a distinctive 'x' payload that
+    // Malformed frames — each carries a distinctive 'q' payload that
     // must NEVER reach `cat` (all-ASCII so the Text variant is valid
-    // UTF-8 as well).
+    // UTF-8 as well; 'q' appears in no valid payload below).
     socket
-        .send_binary(&input_frame(2, 80, 24, b"x-kind2\n"))
+        .send_binary(&input_frame(2, 80, 24, b"q-kind2\n"))
         .await
         .expect("send kind 2");
     socket
-        .send_binary(&input_frame(1, 0, 24, b"x-cols0\n"))
+        .send_binary(&input_frame(1, 0, 24, b"q-cols0\n"))
         .await
         .expect("send cols 0");
     socket
-        .send_binary(&input_frame(1, 80, 0, b"x-rows0\n"))
+        .send_binary(&input_frame(1, 80, 0, b"q-rows0\n"))
         .await
         .expect("send rows 0");
     socket.send_binary(&[1, 0, 80]).await.expect("send short");
     // A malformed frame sent as TEXT goes through the same parse (and
     // is equally dropped).
     socket
-        .send_text(std::str::from_utf8(&input_frame(9, 80, 24, b"x-text9\n")).expect("ascii"))
+        .send_text(std::str::from_utf8(&input_frame(9, 80, 24, b"q-text9\n")).expect("ascii"))
         .await
         .expect("send malformed text frame");
 
@@ -930,8 +934,9 @@ async fn persistent_framed_input_drops_malformed_frames() {
         .await
         .expect("send valid text frame");
 
-    // `cat` echoes in input order: the first echoed bytes are the two
-    // valid payloads — no 'x' bytes, no 5-byte frame headers.
+    // `cat` echoes each valid payload (the tty's own echo + cat's copy —
+    // each may appear twice, with \n rendered \r\n); wait for the LAST
+    // payload's echo, then drain a short quiet window before asserting.
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
     let mut collected: Vec<u8> = Vec::new();
     while tokio::time::Instant::now() < deadline {
@@ -939,22 +944,39 @@ async fn persistent_framed_input_drops_malformed_frames() {
         if frame.opcode == 0x2 {
             collected.extend_from_slice(&frame.payload);
         }
-        let text = b"ok-bin\nok-text\n";
-        if collected.len() >= text.len() && collected.ends_with(text) {
+        if bytes_contain(&collected, b"ok-text") {
             break;
         }
     }
     assert!(
-        collected.ends_with(b"ok-bin\nok-text\n"),
-        "both valid payloads echoed in order, collected: {collected:?}"
+        bytes_contain(&collected, b"ok-text"),
+        "the text-frame payload echoed, collected: {:?}",
+        String::from_utf8_lossy(&collected)
+    );
+    // Quiet-window drain: any straggler echo (cat's second copy) lands
+    // here; malformed frames would surface as 'x' bytes or headers.
+    let quiet = tokio::time::Instant::now() + std::time::Duration::from_millis(400);
+    while tokio::time::Instant::now() < quiet {
+        if let Some(frame) = socket.recv(std::time::Duration::from_millis(100)).await {
+            if frame.opcode == 0x2 {
+                collected.extend_from_slice(&frame.payload);
+            }
+        }
+    }
+    assert!(
+        bytes_contain(&collected, b"ok-bin"),
+        "the binary-frame payload echoed: {:?}",
+        String::from_utf8_lossy(&collected)
     );
     assert!(
-        !collected.iter().any(|byte| *byte == b'x'),
-        "malformed frame payloads never reached the terminal: {collected:?}"
+        !collected.iter().any(|byte| *byte == b'q'),
+        "malformed frame payloads never reached the terminal: {:?}",
+        String::from_utf8_lossy(&collected)
     );
     let header = &input_frame(1, 80, 24, b"")[..5];
     assert!(
         !collected.windows(5).any(|window| window == header),
-        "frame headers are stripped (payload-only writes): {collected:?}"
+        "frame headers are stripped (payload-only writes): {:?}",
+        String::from_utf8_lossy(&collected)
     );
 }

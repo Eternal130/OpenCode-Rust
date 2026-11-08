@@ -511,7 +511,7 @@ async fn attach_session(
                             // shared parse; only non-framed mode writes
                             // text directly).
                             handle_framed(
-                                shared,
+                                &shared,
                                 &pty_id,
                                 &attachment_id,
                                 text.as_bytes(),
@@ -529,7 +529,7 @@ async fn attach_session(
                     Some(Ok(Message::Binary(bytes))) => {
                         let guard = input_lock.clone().lock_owned().await;
                         if input_protocol {
-                            handle_framed(shared, &pty_id, &attachment_id, &bytes).await;
+                            handle_framed(&shared, &pty_id, &attachment_id, &bytes).await;
                         } else {
                             // G-63 — ref :203-216: non-framed binary input
                             // is forwarded byte-for-byte (a lossy UTF-8
@@ -581,7 +581,7 @@ fn decode_framed(bytes: &[u8]) -> Option<FramedInput> {
 /// kind 0 → `persistent.control`, kind 1 → `persistent.input`; malformed
 /// frames (the three ref drop conditions above) are silently discarded.
 async fn handle_framed(
-    shared: &std::sync::Arc<pty_state::PtyShared>,
+    shared: &pty_state::PtyShared,
     pty_id: &PtyId,
     attachment_id: &str,
     bytes: &[u8],
