@@ -1757,7 +1757,7 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
             // `require` global — never a tool failure). The guest
             // enforces the identical rule on its side of the wire.
             if scan_program(code).is_some() {
-                let mut metadata = serde_json::Map::new();
+                let mut metadata = BTreeMap::new();
                 metadata.insert("toolCalls".to_string(), Value::Array(Vec::new()));
                 metadata.insert("error".to_string(), Value::Bool(true));
                 return Ok(super::ToolOutcome {
