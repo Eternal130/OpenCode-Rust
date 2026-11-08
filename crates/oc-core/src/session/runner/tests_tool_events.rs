@@ -27,6 +27,7 @@ pub(crate) fn publisher(harness: &Harness, message: &str) -> LlmEventPublisher {
         "parityfake",
         0,
         None,
+        None,
     )
 }
 
@@ -524,4 +525,103 @@ async fn runner_publisher_overflow_error_is_parkable() {
         error
     };
     assert!(crate::session::runner::is_context_overflow_failure(&classified));
+}
+
+// ---------------------------------------------------------------------------
+// G-275 — event payload parity (publish-llm-event.ts:103-110, :161, :189)
+// ---------------------------------------------------------------------------
+
+/// G-275① — the attempt's start snapshot rides `session.step.started`
+/// (ref publish-llm-event.ts:108 `snapshot: input.snapshot`).
+#[tokio::test]
+async fn g275_step_started_carries_snapshot() {
+    let harness = harness().await;
+    harness.create_session().await;
+    let mut publisher = publisher(&harness, "msg_snap");
+    publisher.start_snapshot_for_test(oc_schema::id::SnapshotId::parse(
+        "0123456789abcdef0123456789abcdef01234567",
+    ));
+    publisher
+        .publish(&LLMEvent::StepStart { index: 0.0 })
+        .await
+        .unwrap();
+    let events = harness.durable_events().await;
+    let started = events.iter().find(|(type_, _, _)| type_ == "session.step.started").unwrap();
+    assert_eq!(
+        started.2["snapshot"],
+        serde_json::json!("0123456789abcdef0123456789abcdef01234567"),
+        "step.started must carry the start snapshot"
+    );
+}
+
+/// G-275① — snapshots disabled (None): the key stays omitted, matching
+/// the optional schema column (session_event.rs:321-322).
+#[tokio::test]
+async fn g275_step_started_omits_snapshot_when_none() {
+    let harness = harness().await;
+    harness.create_session().await;
+    let mut publisher = publisher(&harness, "msg_nosnap");
+    publisher.publish(&LLMEvent::StepStart { index: 0.0 }).await.unwrap();
+    let events = harness.durable_events().await;
+    let started = events.iter().find(|(type_, _, _)| type_ == "session.step.started").unwrap();
+    assert!(started.2.get("snapshot").is_none(), "no snapshot key when disabled");
+}
+
+fn metadata(pairs: &[(&str, serde_json::Value)]) -> Option<oc_ai::schema::options::ProviderMetadata> {
+    let mut outer = oc_ai::schema::options::ProviderMetadata::new();
+    let inner = pairs
+        .iter()
+        .map(|(key, value)| (key.to_string(), value.clone()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    outer.insert("parityfake".to_string(), inner);
+    Some(outer)
+}
+
+/// G-275② — fragment state MERGES across delta and end events (ref
+/// publish-llm-event.ts:161 `{...current.state, ...state}` and :189):
+/// partial states carried by later fragments must not drop the fields
+/// earlier fragments contributed.
+#[tokio::test]
+async fn g275_fragment_provider_state_merges() {
+    let harness = harness().await;
+    harness.create_session().await;
+    let mut publisher = publisher(&harness, "msg_merge");
+    publisher
+        .publish(&LLMEvent::TextStart {
+            id: "t1".into(),
+            provider_metadata: metadata(&[("first", serde_json::json!(1))]),
+        })
+        .await
+        .unwrap();
+    publisher
+        .publish(&LLMEvent::TextDelta {
+            id: "t1".into(),
+            text: "he".into(),
+            provider_metadata: metadata(&[("second", serde_json::json!(2))]),
+        })
+        .await
+        .unwrap();
+    publisher
+        .publish(&LLMEvent::TextDelta {
+            id: "t1".into(),
+            text: "llo".into(),
+            provider_metadata: metadata(&[("third", serde_json::json!(3))]),
+        })
+        .await
+        .unwrap();
+    publisher
+        .publish(&LLMEvent::TextEnd {
+            id: "t1".into(),
+            text: None,
+            provider_metadata: metadata(&[("fourth", serde_json::json!(4))]),
+        })
+        .await
+        .unwrap();
+    let events = harness.durable_events().await;
+    let ended = events.iter().find(|(type_, _, _)| type_ == "session.text.ended").unwrap();
+    assert_eq!(
+        ended.2["state"],
+        serde_json::json!({ "first": 1, "second": 2, "third": 3, "fourth": 4 }),
+        "fragment state must merge (delta + end), not replace"
+    );
 }

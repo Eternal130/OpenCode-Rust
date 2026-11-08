@@ -79,9 +79,32 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use dashmap::DashMap;
 use oc_schema::common::RelativePath;
 use oc_schema::id::SnapshotId;
 use oc_schema::session_support::FileDiff;
+
+/// G-255 — per-repository serialization (ref git.ts:170-172
+/// `locks.withLock(repository.gitDirectory)` wrapping the tree
+/// capture/write/restore entrypoints): operations on the SAME bare
+/// store must serialize across ALL `GitSnapshotStore` instances — two
+/// sessions in one repository share `<data>/snapshot/<project>/<hash>`
+/// and concurrent capture/restore could otherwise interleave tree
+/// writes and stat-cache sidecar updates.
+///
+/// Entries evict when the last holder releases (`Arc::strong_count ==
+/// 1`: only the map itself holds the lock), so the table cannot leak
+/// one entry per visited repository.
+static REPOSITORY_LOCKS: std::sync::LazyLock<DashMap<PathBuf, std::sync::Arc<tokio::sync::Mutex<()>>>> =
+    std::sync::LazyLock::new(DashMap::new);
+
+/// G-255 test seam: the concurrency high-water mark observed under the
+/// repository lock (tests assert serialization: max stays 1).
+#[cfg(test)]
+pub(crate) static LOCK_MAX_CONCURRENCY: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+#[cfg(test)]
+static LOCK_ACTIVE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Untracked-file cap (`maximumUntrackedFileBytes`).
 pub const MAX_UNTRACKED_FILE_BYTES: u64 = 2 * 1024 * 1024;
@@ -302,6 +325,15 @@ fn apply_snapshot_config(repo: &git2::Repository) -> Result<(), git2::Error> {
     Ok(())
 }
 
+/// G-255 test seam: the process-wide repository lock for `dir`.
+#[cfg(test)]
+pub(crate) fn repository_lock_for_test(dir: &Path) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    REPOSITORY_LOCKS
+        .entry(dir.to_path_buf())
+        .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
+
 impl GitSnapshotStore {
     /// Opens (creating) the store for `worktree` under `data_root`.
     /// `scope` is the location directory relative to the worktree (`"."`
@@ -342,6 +374,37 @@ impl GitSnapshotStore {
     #[must_use]
     pub fn git_directory(&self) -> &Path {
         &self.git_directory
+    }
+
+    /// G-255 — serialize store operations per git directory (ref
+    /// git.ts:170-172 `locked()`): every mutating or reading tree op
+    /// for this store runs under the process-wide repository lock, so
+    /// two sessions sharing a repository cannot interleave
+    /// capture/write/restore. The entry self-evicts when this is the
+    /// last holder (see [`REPOSITORY_LOCKS`]).
+    async fn with_repository_lock<T>(&self, operation: impl std::future::Future<Output = T>) -> T {
+        let lock = REPOSITORY_LOCKS
+            .entry(self.git_directory.clone())
+            .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
+            .clone();
+        let guard = lock.lock().await;
+        #[cfg(test)]
+        {
+            let active = LOCK_ACTIVE.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            LOCK_MAX_CONCURRENCY.fetch_max(active, std::sync::atomic::Ordering::SeqCst);
+        }
+        let result = operation.await;
+        #[cfg(test)]
+        {
+            LOCK_ACTIVE.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        drop(guard);
+        // Eviction: safe only when no other task cloned the Arc (a
+        // cloned Arc pins the entry; a task between clone and lock
+        // keeps the count > 1, so a fresh inserter can never fork the
+        // lock behind a live holder).
+        REPOSITORY_LOCKS.remove_if(&self.git_directory, |_, held| std::sync::Arc::strong_count(held) == 1);
+        result
     }
 
     fn enabled(&self) -> bool {
@@ -892,14 +955,18 @@ impl SnapshotService for GitSnapshotStore {
         if !self.enabled_gate() {
             return None;
         }
-        match self.capture_blocking() {
-            Ok(id) => Some(id),
-            Err(error) => {
-                *self.last_error.lock().unwrap_or_else(|p| p.into_inner()) =
-                    Some(error.to_string());
-                None
+        // G-255 — capture runs under the per-repository lock.
+        self.with_repository_lock(async {
+            match self.capture_blocking() {
+                Ok(id) => Some(id),
+                Err(error) => {
+                    *self.last_error.lock().unwrap_or_else(|p| p.into_inner()) =
+                        Some(error.to_string());
+                    None
+                }
             }
-        }
+        })
+        .await
     }
 
     async fn files(
@@ -907,7 +974,9 @@ impl SnapshotService for GitSnapshotStore {
         from: &SnapshotId,
         to: &SnapshotId,
     ) -> Result<Vec<RelativePath>, SnapshotError> {
-        self.files_blocking(from, to)
+        // G-255 — ref `locked()` wraps the read-side tree ops too.
+        let (from, to) = (from.clone(), to.clone());
+        self.with_repository_lock(async move { self.files_blocking(&from, &to) }).await
     }
 
     async fn diff(
@@ -919,11 +988,17 @@ impl SnapshotService for GitSnapshotStore {
     ) -> Result<Vec<FileDiff>, SnapshotError> {
         // `--unified=${input.context ?? 3}` (ref git.ts:535).
         let context = context.unwrap_or(super::tool::file_diff::GIT_DEFAULT_CONTEXT as u32);
-        self.diff_blocking(from, to, context, paths)
+        // G-255 — ref `locked()` wraps the read-side tree ops too.
+        let (from, to) = (from.clone(), to.clone());
+        let paths = paths.map(|paths| paths.to_vec());
+        self.with_repository_lock(async move { self.diff_blocking(&from, &to, context, paths.as_deref()) })
+            .await
     }
 
     async fn restore(&self, files: &BTreeMap<String, SnapshotId>) -> Result<(), SnapshotError> {
-        self.restore_blocking(files)
+        // G-255 — restore runs under the per-repository lock.
+        let files = files.clone();
+        self.with_repository_lock(async move { self.restore_blocking(&files) }).await
     }
 
     fn configure(&self, enabled: bool) {

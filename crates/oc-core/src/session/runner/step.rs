@@ -210,6 +210,9 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
         input.model.reference.clone(),
         input.model.provider_metadata_key().to_string(),
         u64::try_from(deps.clock.unix_ms().max(0)).unwrap_or_default(),
+        // G-275① — the captured start snapshot rides step.started
+        // (ref step.ts:80 `snapshot: startSnapshot`).
+        start_snapshot.clone(),
         deps.progress_log.clone(),
     );
     let tools_disabled = matches!(input.prepared.request.tool_choice, Some(ToolChoice::None {}));

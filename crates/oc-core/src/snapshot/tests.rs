@@ -862,3 +862,91 @@ mod g219 {
         assert_eq!(result, 0, "utimensat");
     }
 }
+
+// ---------------------------------------------------------------------------
+// G-255 — per-repository serialization (ref git.ts:170-172)
+// ---------------------------------------------------------------------------
+
+/// Two store instances over the SAME worktree (two sessions in one
+/// repository) share the git directory, so concurrent capture/restore
+/// must serialize: the lock-seam high-water mark never exceeds 1.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn g255_same_repository_operations_serialize() {
+    let (tmp, worktree, _) = temp_project();
+    std::fs::write(worktree.join("a.txt"), "a\n").expect("write a");
+    std::fs::write(worktree.join("b.txt"), "b\n").expect("write b");
+    // Two sessions → two store instances, one bare repository.
+    let session_a = std::sync::Arc::new(store(tmp.path(), &worktree, "."));
+    let session_b = std::sync::Arc::new(store(tmp.path(), &worktree, "."));
+
+    let baseline = session_a.capture().await.expect("baseline");
+    crate::snapshot::LOCK_MAX_CONCURRENCY.store(0, std::sync::atomic::Ordering::SeqCst);
+
+    let mut tasks = tokio::task::JoinSet::new();
+    for round in 0..8u32 {
+        let a = std::sync::Arc::clone(&session_a);
+        let b = std::sync::Arc::clone(&session_b);
+        let worktree = worktree.clone();
+        let tree = baseline.clone();
+        tasks.spawn(async move {
+            match round % 4 {
+                0 | 1 => {
+                    std::fs::write(worktree.join(format!("t{round}.txt")), "t\n").expect("t");
+                    a.capture().await.expect("capture under lock")
+                }
+                2 => {
+                    let mut files = BTreeMap::new();
+                    files.insert("a.txt".to_string(), tree);
+                    b.restore(&files).await.expect("restore under lock");
+                    oc_schema::id::SnapshotId::parse("0000000000000000000000000000000000000000")
+                }
+                _ => {
+                    std::fs::write(worktree.join("a.txt"), "a edited\n").expect("edit");
+                    let next = b.capture().await.expect("capture b");
+                    a.files(&tree, &next).await.expect("files under lock");
+                    next
+                }
+            }
+        });
+    }
+    while let Some(result) = tasks.join_next().await {
+        result.expect("task panicked");
+    }
+    let _ = session_a;
+    let _ = session_b;
+    assert_eq!(
+        crate::snapshot::LOCK_MAX_CONCURRENCY.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "same-repository snapshot ops must serialize (G-255)"
+    );
+    // The lock table evicts its entry once quiet (no per-repository leak).
+    assert!(
+        super::REPOSITORY_LOCKS.is_empty(),
+        "repository lock table must self-evict, still holds {} entries",
+        super::REPOSITORY_LOCKS.iter().count()
+    );
+}
+
+/// Distinct repositories do NOT contend: two different git directories
+/// can hold their locks simultaneously.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn g255_distinct_repositories_run_concurrently() {
+    use std::sync::Arc;
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let first = barrier.clone();
+    let second = barrier.clone();
+
+    let hold = |barrier: Arc<tokio::sync::Barrier>, dir: &'static str| async move {
+        let lock = super::repository_lock_for_test(Path::new(dir));
+        let _guard = lock.lock().await;
+        // Both tasks inside their (different) locks at once — the
+        // barrier only releases when both are holding, proving no
+        // cross-repository contention.
+        let _ = barrier.wait().await;
+    };
+    let (a, b) = tokio::join!(
+        hold(first, "/tmp/opencode/g255-repo-one"),
+        hold(second, "/tmp/opencode/g255-repo-two")
+    );
+    (a, b);
+}

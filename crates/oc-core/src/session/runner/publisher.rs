@@ -119,8 +119,17 @@ impl Fragments {
         entry.1.push(value.to_string());
         entry.3.push_str(value);
         entry.4.get_or_insert_with(std::time::Instant::now);
-        if state.is_some() {
-            entry.2 = state;
+        if let Some(state) = state {
+            // G-275② — ref publish-llm-event.ts:161: a fragment delta
+            // carrying (partial) provider state MERGES into the
+            // accumulated state (`current.state = { ...current.state,
+            // ...state }`); wholesale replacement dropped fields that
+            // earlier fragments had set by the time Text.Ended
+            // published.
+            match &mut entry.2 {
+                Some(existing) => existing.extend(state),
+                None => entry.2 = Some(state),
+            }
         }
         Ok(entry.0)
     }
@@ -180,7 +189,20 @@ impl Fragments {
         };
         let joined = values.join("");
         let text = value.map(str::to_string).unwrap_or(joined);
-        let state = state.or(existing);
+        // G-275② — ref publish-llm-event.ts:189: the end event's state
+        // MERGES over the accumulated fragment state (`{ ...
+        // current.state, ...state }`); `state.or(existing)` replaced the
+        // whole record, so an end carrying partial state dropped the
+        // fields earlier fragments had contributed.
+        let state = match (existing, state) {
+            (Some(existing), Some(state)) => {
+                let mut merged = existing;
+                merged.extend(state);
+                Some(merged)
+            }
+            (existing, None) => existing,
+            (None, Some(state)) => Some(state),
+        };
         // An unpublished pending batch flushes with the end (v2's `end`
         // interrupts the timer and publishes before `ended`).
         let trailing = (!pending.is_empty()).then_some(pending);
@@ -258,6 +280,9 @@ pub struct LlmEventPublisher {
     model: model::Ref,
     provider_metadata_key: String,
     started: u64,
+    /// G-275① — the attempt's start snapshot (ref
+    /// publish-llm-event.ts:23,108: rides `session.step.started`).
+    start_snapshot: Option<SnapshotId>,
     // -- single-writer record ------------------------------------------------
     step_started: bool,
     provider_failed: bool,
@@ -283,6 +308,7 @@ impl LlmEventPublisher {
         model: model::Ref,
         provider_metadata_key: impl Into<String>,
         started: u64,
+        start_snapshot: Option<SnapshotId>,
         progress_log: Option<ProgressLog>,
     ) -> Self {
         Self {
@@ -293,6 +319,7 @@ impl LlmEventPublisher {
             model,
             provider_metadata_key: provider_metadata_key.into(),
             started,
+            start_snapshot,
             step_started: false,
             provider_failed: false,
             output_started: false,
@@ -348,9 +375,22 @@ impl LlmEventPublisher {
         let mut data = self.base();
         data["agent"] = serde_json::json!(self.agent.as_str());
         data["model"] = serde_json::to_value(&self.model).unwrap_or_default();
+        // G-275① — ref publish-llm-event.ts:103-110: the attempt's
+        // start snapshot rides `session.step.started` (omitted when
+        // snapshots are disabled — the schema column is optional,
+        // session_event.rs:321-322).
+        if let Some(snapshot) = &self.start_snapshot {
+            data["snapshot"] = serde_json::json!(snapshot.as_str());
+        }
         data["started"] = serde_json::json!(self.started);
         self.publish_type("session.step.started", data, PublishOptions::default()).await?;
         Ok(self.assistant_message_id.clone())
+    }
+
+    /// G-275① test seam: set the start snapshot before the first event.
+    #[cfg(test)]
+    pub(crate) fn start_snapshot_for_test(&mut self, snapshot: SnapshotId) {
+        self.start_snapshot = Some(snapshot);
     }
 
     fn require_assistant(&self, what: &str) -> PublishResult<()> {
