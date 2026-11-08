@@ -105,6 +105,11 @@ async fn mock_idp(
                 let body = token_bodies[token_index.min(token_bodies.len() - 1)].clone();
                 token_index += 1;
                 (body, 200)
+            } else if path == "/api/user" {
+                // G-244 — the zen credential's discovery GETs.
+                (json!({"id": "route_user", "email": "route@opencode.test"}), 200)
+            } else if path == "/api/orgs" {
+                (json!([{"id": "org_route", "name": "Route Org"}]), 200)
             } else {
                 (json!({"error": "not_found"}), 404)
             };
@@ -301,19 +306,19 @@ async fn zen_oauth_flow_round_trip_via_routes() {
     let ConnectionInfo::CredentialInfo(credential) = &info.data.connections[0] else {
         panic!("credential connection")
     };
-    assert_eq!(credential.label, "org_route");
+    assert_eq!(credential.label, "Route Org");
     assert_eq!(credential.method.as_str(), "oauth");
 
-    // The mock saw the v2 request shapes (client_id + device grant).
+    // The mock saw the v2 request shapes (G-244: JSON bodies — client_id +
+    // boolean org scope on the device request, the device grant on the
+    // poll, and the discovery GETs).
     let log = std::fs::read_to_string("/tmp/opencode/be3-mock-requests.log").unwrap_or_default();
     assert!(log.contains("/auth/device/code"), "{log}");
-    assert!(log.contains("client_id=opencode-cli"), "{log}");
-    assert!(log.contains("supports_org_scope=true"), "{log}");
-    assert!(
-        log.contains("urn:ietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code")
-            || log.contains("grant_type=urn"),
-        "{log}"
-    );
+    assert!(log.contains("\"client_id\":\"opencode-cli\""), "{log}");
+    assert!(log.contains("\"supports_org_scope\":true"), "{log}");
+    assert!(log.contains("\"grant_type\":\"urn:ietf:params:oauth:grant-type:device_code\""), "{log}");
+    assert!(log.contains("/api/user"), "{log}");
+    assert!(log.contains("/api/orgs"), "{log}");
 
     // Unknown attempt → 404 IntegrationAttemptNotFoundError.
     let error = server
