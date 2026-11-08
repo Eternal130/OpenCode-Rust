@@ -312,12 +312,12 @@ fn decode_thinking(value: &Value) -> Result<Thinking, AiError> {
                 (Some(other), _) | (None, Some(other)) => {
                     return Err(option_error(format!(
                         "Expected a number for budgetTokens, received {other}"
-                    )))
+                    )));
                 }
                 (None, None) => {
                     return Err(option_error(
                         "thinking { type: \"enabled\" } requires a budgetTokens (or budget_tokens) number",
-                    ))
+                    ));
                 }
             };
             let (display, block_binding) = decode_thinking_fields(object)?;

@@ -1612,9 +1612,8 @@ mod tests {
             closed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Box::pin(std::future::ready(()))
         });
-        let send: SendFn = Arc::new(|_message| {
-            Box::pin(std::future::ready(Ok::<(), AiError>(()))) as SendFuture
-        });
+        let send: SendFn =
+            Arc::new(|_message| Box::pin(std::future::ready(Ok::<(), AiError>(()))) as SendFuture);
         ChannelSlot {
             id,
             affinity: String::new(),
@@ -1672,10 +1671,7 @@ mod tests {
         let state = channel.state.lock().await;
         assert_eq!(state.stream_failures, 1, "active poison counts");
         drop(state);
-        assert!(matches!(
-            receiver_error(&mut receiver).await,
-            AiErrorReason::Transport { .. }
-        ));
+        assert!(matches!(receiver_error(&mut receiver).await, AiErrorReason::Transport { .. }));
     }
 
     async fn receiver_error(
@@ -1693,14 +1689,7 @@ mod tests {
     #[async_trait]
     impl WebSocketConnector for UnsupportedConnector {
         async fn open(&self, _request: WebSocketRequest) -> Result<WebSocketConnection, AiError> {
-            Err(transport_error(
-                "unsupported",
-                TransportOperation::Request,
-                None,
-                None,
-                None,
-                None,
-            ))
+            Err(transport_error("unsupported", TransportOperation::Request, None, None, None, None))
         }
     }
 }

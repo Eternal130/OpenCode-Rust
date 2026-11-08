@@ -253,10 +253,7 @@ pub fn decode_result(
     let mut metadata = crate::schema::ProviderMetadata::new();
     metadata.insert("replicate".to_string(), replicate);
     Ok(ImageResponse {
-        images: urls
-            .into_iter()
-            .map(|url| media::url(url, None, expires_at))
-            .collect(),
+        images: urls.into_iter().map(|url| media::url(url, None, expires_at)).collect(),
         usage: predict_time.map(|seconds| MediaUsage::Compute { seconds }),
         notices: None,
         provider_metadata: Some(metadata),
@@ -419,10 +416,7 @@ mod tests {
         let completed = crate::media::utils::parse_epoch_millis("2026-11-08T10:00:00.500Z")
             .expect("parser agrees with itself");
         assert_eq!(response.images[0].expires_at, Some(completed + OUTPUT_RETENTION_MS));
-        assert_eq!(
-            response.images[0].expires_at,
-            Some(1_794_132_000_500.0 + OUTPUT_RETENTION_MS)
-        );
+        assert_eq!(response.images[0].expires_at, Some(1_794_132_000_500.0 + OUTPUT_RETENTION_MS));
         assert_eq!(response.usage, Some(MediaUsage::Compute { seconds: 4.2 }));
 
         // without a completed_at the asset carries no deadline (ref

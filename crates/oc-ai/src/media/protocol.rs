@@ -473,9 +473,7 @@ pub trait QueuedProtocol: MediaProtocolBase {
 /// The route's `materialize` (media-protocol.ts:99): download one `url`
 /// asset's bytes through the route executor and return an owned-bytes
 /// asset (inline sources come back unchanged).
-pub type Materialize<'r> = dyn for<'b> Fn(
-        &'b Asset,
-    ) -> Pin<Box<dyn Future<Output = Result<Asset, AiError>> + Send + 'b>>
+pub type Materialize<'r> = dyn for<'b> Fn(&'b Asset) -> Pin<Box<dyn Future<Output = Result<Asset, AiError>> + Send + 'b>>
     + Send
     + Sync
     + 'r;
@@ -652,7 +650,11 @@ mod tests {
         assert_eq!(asset.expires_at, Some(86_401_000.0));
         assert_eq!(asset.media_type, "video/mp4");
         assert_eq!(
-            asset.headers.as_ref().and_then(|headers| headers.get("authorization")).map(String::as_str),
+            asset
+                .headers
+                .as_ref()
+                .and_then(|headers| headers.get("authorization"))
+                .map(String::as_str),
             Some("Bearer k")
         );
         // the serde face stays credential-free

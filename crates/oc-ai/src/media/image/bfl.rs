@@ -550,7 +550,9 @@ mod tests {
     async fn result_images_materialize_through_the_route_closure() {
         fn owned_materialize() -> impl for<'b> Fn(
             &'b media::Asset,
-        ) -> Pin<Box<dyn Future<Output = Result<media::Asset, AiError>> + Send + 'b>> {
+        ) -> Pin<
+            Box<dyn Future<Output = Result<media::Asset, AiError>> + Send + 'b>,
+        > {
             |_asset| {
                 let owned = media::bytes(vec![1, 2, 3], Some("image/png".into()));
                 Box::pin(std::future::ready(Ok(owned)))
@@ -567,10 +569,8 @@ mod tests {
         };
         let response = decode_result(&ready, &context).unwrap();
         let materialize = owned_materialize();
-        let response = BlackForestLabsImages
-            .materialize_result(response, &materialize)
-            .await
-            .unwrap();
+        let response =
+            BlackForestLabsImages.materialize_result(response, &materialize).await.unwrap();
         assert_eq!(response.images.len(), 1);
         assert_eq!(
             response.images[0]

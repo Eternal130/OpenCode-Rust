@@ -337,9 +337,11 @@ fn url_building_layers_queries() {
 /// finish event, collected by the modality collect fn.
 #[tokio::test]
 async fn stream_generate_collects_the_finish_event() {
-    let transport = Arc::new(MockTransport::from_interactions(vec![
-        post("https://api.openai.com/v1/audio/speech", 200, "data: {\"type\":\"speech.audio.delta\",\"audio\":\"AQID\"}\n\ndata: {\"type\":\"speech.audio.done\",\"usage\":{\"input_tokens\":2,\"total_tokens\":3}}\n\n"),
-    ]));
+    let transport = Arc::new(MockTransport::from_interactions(vec![post(
+        "https://api.openai.com/v1/audio/speech",
+        200,
+        "data: {\"type\":\"speech.audio.delta\",\"audio\":\"AQID\"}\n\ndata: {\"type\":\"speech.audio.done\",\"usage\":{\"input_tokens\":2,\"total_tokens\":3}}\n\n",
+    )]));
     let mut spec = MediaRouteSpec::new(shared(&transport));
     spec.auth = Some(auth::Definition::bearer(Secret::Value("oai".into())));
     let route = StreamMediaRoute::new(Arc::new(OpenAISpeech), spec, collect_speech_response);
