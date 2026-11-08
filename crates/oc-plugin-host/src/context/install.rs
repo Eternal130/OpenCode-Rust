@@ -317,6 +317,62 @@ pub fn resolve_subpath_entry(package_root: &Path, subpath: &str) -> Result<PathB
     Err(format!("no {subpath} entrypoint found for {}", package_root.display()))
 }
 
+/// The nearest enclosing package root for an entry: the closest
+/// ancestor directory holding a `package.json` (ref `Host.resolve`
+/// probes subpaths against the package; the tui companion loader walks
+/// the same way).
+pub fn package_root(entry: &Path) -> Option<PathBuf> {
+    let mut root = entry.parent()?;
+    loop {
+        if root.join("package.json").is_file() {
+            return Some(root.to_path_buf());
+        }
+        root = root.parent()?;
+    }
+}
+
+/// `Host.resolve`'s feature entrypoints (host.ts:41-43): the `tui` and
+/// `rpc` subpaths — `exports["./<subpath>"]` plus classic
+/// `<root>/<subpath>.<ext>` / `<root>/<subpath>/index.<ext>` resolution.
+/// Unlike the server probe there is NO `main`/`index.js` fallback: only
+/// the subpath's own file counts (G-280③ — ref resolves `pkg/tui` /
+/// `dir/tui` through Node resolution and swallows
+/// `ERR_PACKAGE_PATH_NOT_EXPORTED`, so a main-only package advertises
+/// neither feature).
+#[must_use]
+pub fn probe_feature_entry(entry: &Path, subpath: &str) -> Option<PathBuf> {
+    let root = package_root(entry)?;
+    let manifest = std::fs::read_to_string(root.join("package.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+    if let Some(export) = manifest
+        .as_ref()
+        .and_then(|manifest| manifest.get("exports"))
+        .and_then(Value::as_object)
+        .and_then(|exports| exports.get(subpath))
+    {
+        let mut candidates: Vec<String> = Vec::new();
+        collect_export_paths(export, &mut candidates);
+        for candidate in candidates {
+            let path = root.join(candidate);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+    }
+    for extension in ["js", "mjs", "ts"] {
+        let file = root.join(format!("{subpath}.{extension}"));
+        if file.is_file() {
+            return Some(file);
+        }
+        let index = root.join(subpath).join(format!("index.{extension}"));
+        if index.is_file() {
+            return Some(index);
+        }
+    }
+    None
+}
+
 /// One `exports` clause → importable relative paths (strings and
 /// condition objects, `import`/`default` preferred).
 fn collect_export_paths(entry: &Value, out: &mut Vec<String>) {
@@ -454,6 +510,86 @@ mod tests {
             .unwrap();
         let entry = resolve_entry(&pkg).expect("entry resolves");
         assert!(entry.ends_with("dist/index.js"), "{}", entry.display());
+    }
+
+    /// G-280③ — the feature entrypoints (host.ts:41-43): `./tui` and
+    /// `./rpc` resolve from their OWN subpath only — no `main`/`index`
+    /// fallback (ref swallows ERR_PACKAGE_PATH_NOT_EXPORTED, so a
+    /// main-only package advertises neither feature).
+    #[test]
+    fn g280_probe_feature_entry_detects_tui_and_rpc_subpaths() {
+        let pkg = g280_package(
+            "exports",
+            &serde_json::json!({
+                ".": { "import": "./dist/index.js" },
+                "./server": { "import": "./dist/server/index.js" },
+                "./tui": { "import": "./dist/tui2.js" },
+                "./rpc": { "import": "./dist/rpc.js" },
+            }),
+        );
+        std::fs::write(pkg.join("dist/tui2.js"), "export default {}").unwrap();
+        std::fs::write(pkg.join("dist/rpc.js"), "export default {}").unwrap();
+        let entry = resolve_entry(&pkg).expect("server entry");
+        let tui = probe_feature_entry(&entry, "./tui").expect("tui entry");
+        assert!(tui.ends_with("dist/tui2.js"), "{}", tui.display());
+        let rpc = probe_feature_entry(&entry, "./rpc").expect("rpc entry");
+        assert!(rpc.ends_with("dist/rpc.js"), "{}", rpc.display());
+        // A subpath the package does not ship → None (no fallback).
+        assert!(probe_feature_entry(&entry, "./hook").is_none());
+    }
+
+    /// G-280③ — the classic-resolution half: a package without an
+    /// exports map still advertises `tui`/`rpc` when the subpath files
+    /// exist (`<root>/rpc.js`, `<root>/tui/index.mjs`), and a main-only
+    /// package advertises NEITHER (the loader probe's main fallback is
+    /// deliberately absent here).
+    #[test]
+    fn g280_probe_feature_entry_classic_files_without_main_fallback() {
+        let pkg = g280_package("main-only", &serde_json::json!(null));
+        std::fs::write(
+            pkg.join("package.json"),
+            serde_json::to_string(&serde_json::json!({
+                "name": "demo-plugin",
+                "version": "1.0.0",
+                "main": "./dist/index.js",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let entry = resolve_entry(&pkg).expect("main entry");
+        assert!(probe_feature_entry(&entry, "./tui").is_none(), "main must not fake a tui feature");
+        assert!(probe_feature_entry(&entry, "./rpc").is_none(), "main must not fake an rpc feature");
+        // Classic files turn the features on.
+        std::fs::write(pkg.join("rpc.js"), "export default {}").unwrap();
+        std::fs::create_dir_all(pkg.join("tui")).unwrap();
+        std::fs::write(pkg.join("tui/index.mjs"), "export default {}").unwrap();
+        assert!(probe_feature_entry(&entry, "./rpc").is_some());
+        assert!(probe_feature_entry(&entry, "./tui").is_some());
+    }
+
+    /// A uniquely-named package fixture for the G-280③ probes (the
+    /// shared `package_with_exports` helper keys its tempdir by the
+    /// exports JSON length — parallel tests would collide).
+    fn g280_package(tag: &str, exports: &Value) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ocph-g280-{tag}-{}-{}",
+            std::process::id(),
+            exports.to_string().len()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let pkg = dir.join("demo-plugin");
+        std::fs::create_dir_all(pkg.join("dist/server")).unwrap();
+        let mut manifest = serde_json::json!({
+            "name": "demo-plugin",
+            "version": "1.0.0",
+        });
+        if !exports.is_null() {
+            manifest["exports"] = exports.clone();
+        }
+        std::fs::write(pkg.join("package.json"), manifest.to_string()).unwrap();
+        std::fs::write(pkg.join("dist/server/index.js"), "export default {}").unwrap();
+        std::fs::write(pkg.join("dist/index.js"), "export default {}").unwrap();
+        pkg
     }
 
     #[test]

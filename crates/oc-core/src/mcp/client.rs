@@ -531,11 +531,13 @@ fn is_transient(chain: &[String]) -> bool {
 
 type BoxedRequest<T> = Pin<Box<dyn Future<Output = Result<T, RequestError>> + Send>>;
 
-/// The transient-retry loop (client.ts:170-182): up to two more attempts,
-/// 250ms and 500ms later (base 250ms ×2 per hop — the ref's two hops are
-/// 250/1000, G-280①), only while the failure is transient.
-async fn retrying<T>(mut attempt: impl FnMut() -> BoxedRequest<T>) -> Result<T, RequestError> {
-    const DELAYS_MS: [u64; 2] = [250, 500];
+/// The transient-retry loop (client.ts:169-182): "Two more attempts,
+/// 250 ms and 1 s later, while the failure is transient and the
+/// deadline has not passed" — `Schedule.max([exponential(250ms, 4),
+/// recurs(2)])` (G-280①): the exponential arm proposes 250/1000/4000…,
+/// `recurs(2)` bounds it to two hops, `max` picks the proposed delay.
+pub(super) async fn retrying<T>(mut attempt: impl FnMut() -> BoxedRequest<T>) -> Result<T, RequestError> {
+    const DELAYS_MS: [u64; 2] = [250, 1000];
     let mut round = 0;
     loop {
         match attempt().await {
@@ -1506,11 +1508,11 @@ async fn connect_remote(
     }
     // Every attempt opens a fresh transport; one retry at the pristine URL
     // when the codemode param drew a 400/404, plus transient retries (250ms
-    // then 500ms — base 250ms ×2 per hop; the ref's two hops are 250/1000,
-    // G-280①) while the startup deadline has not passed.
+    // then 1s — `max([exponential(250ms, 4), recurs(2)])`, G-280①) while
+    // the startup deadline has not passed.
     let deadline = tokio::time::Instant::now()
         + startup_timeout(&ServerConfig::Remote(Box::new(remote.clone())));
-    let mut delays: Vec<Duration> = vec![Duration::from_millis(250), Duration::from_millis(500)];
+    let mut delays: Vec<Duration> = vec![Duration::from_millis(250), Duration::from_millis(1000)];
     let open = |url: reqwest::Url| {
         let client = client.clone();
         async move {
