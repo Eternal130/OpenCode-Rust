@@ -143,9 +143,23 @@ pub struct FormField {
     pub hidden: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<Vec<FormSelectOption>>,
-    /// `when` visibility conditions (`{key, op:"eq", value}`).
+    /// `when` visibility conditions (`{key, op:"eq"|"neq", value}`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub when: Option<Vec<FormCondition>>,
+    /// G-260③ — `StringField.format` (schema form.ts:53):
+    /// "email" | "uri" | "date" | "date-time".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    /// G-260③ — `StringField.minLength` (schema form.ts:54).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_length: Option<usize>,
+    /// G-260③ — `StringField.maxLength` (schema form.ts:55).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_length: Option<usize>,
+    /// G-260③ — `StringField.custom` (schema form.ts:60): options are a
+    /// closed set unless the field accepts custom values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

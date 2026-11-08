@@ -1290,33 +1290,34 @@ impl IntegrationHost {
     }
 }
 
-/// v2's `Form.validateFields`/`validateAnswer` subset: required fields
-/// must be answered (respecting `when` conditions and defaults); pattern
-/// fields must match.
+/// v2's `Form.validateAnswer` (form.ts:238-263): unknown answer keys
+/// reject; required fields must be answered when active (a declared
+/// `default` satisfies — the rust host never fills defaults itself);
+/// inactive fields are unanswerable; each answered field runs the
+/// per-type checks (`validateField`, form.ts:305-360).
 fn validate_form(form: &[FormField], answer: &FormAnswer) -> Option<String> {
-    for field in form {
-        if !field_visible(field, answer) {
-            continue;
+    // Unknown form field (form.ts:240-242).
+    for key in answer.keys() {
+        if !form.iter().any(|field| field.key == *key) {
+            return Some(format!("Unknown form field: {key}"));
         }
-        let provided = answer.get(&field.key);
+    }
+    for field in form {
+        let active = field_visible(field, answer);
+        let provided = answer.get(&field.key).filter(|value| !value.is_null());
         match provided {
-            None | Some(Value::Null) => {
-                if field.default.is_none() && field.required {
-                    return Some(format!("Missing required field: {}", field.key));
+            None => {
+                if active && field.required && field.default.is_none() {
+                    return Some(format!("Missing required form field: {}", field.key));
                 }
             }
             Some(value) => {
-                if field.required
-                    && value.as_str().is_none_or(str::is_empty)
-                    && field.default.is_none()
-                {
-                    return Some(format!("Missing required field: {}", field.key));
+                // Inactive fields are unanswerable (form.ts:251).
+                if !active {
+                    return Some(format!("Form field is not active: {}", field.key));
                 }
-                if let (Some(pattern), Some(text)) = (&field.pattern, value.as_str()) {
-                    let regex = regex::Regex::new(pattern).ok()?;
-                    if !regex.is_match(text) {
-                        return Some(format!("Invalid value for field: {}", field.key));
-                    }
+                if let Some(invalid) = validate_field(field, value) {
+                    return Some(invalid);
                 }
             }
         }
@@ -1324,12 +1325,136 @@ fn validate_form(form: &[FormField], answer: &FormAnswer) -> Option<String> {
     None
 }
 
-/// `when` visibility conditions (all must match).
+/// The string-field checks (form.ts:305-360, G-260③): required-empty,
+/// minLength/maxLength, pattern (with the invalid-pattern rejection),
+/// email/uri/date/date-time formats, and the options closed set unless
+/// `custom`.
+fn validate_field(field: &FormField, value: &Value) -> Option<String> {
+    if field.type_ != "string" {
+        return None;
+    }
+    let Some(text) = value.as_str() else {
+        return Some(format!("Expected string for form field: {}", field.key));
+    };
+    if field.required && text.is_empty() && field.default.is_none() {
+        return Some(format!("Missing required form field: {}", field.key));
+    }
+    let length = text.chars().count();
+    if field.min_length.is_some_and(|min| length < min) {
+        return Some(format!("Form field is too short: {}", field.key));
+    }
+    if field.max_length.is_some_and(|max| length > max) {
+        return Some(format!("Form field is too long: {}", field.key));
+    }
+    if let Some(pattern) = &field.pattern {
+        match regex::Regex::new(pattern) {
+            Ok(regex) => {
+                if !regex.is_match(text) {
+                    return Some(format!("Form field does not match pattern: {}", field.key));
+                }
+            }
+            Err(_) => return Some(format!("Form field has invalid pattern: {}", field.key)),
+        }
+    }
+    match field.format.as_deref() {
+        Some("email") => {
+            if !is_email(text) {
+                return Some(format!("Expected email for form field: {}", field.key));
+            }
+        }
+        Some("uri") => {
+            if reqwest::Url::parse(text).is_err() {
+                return Some(format!("Expected uri for form field: {}", field.key));
+            }
+        }
+        Some("date") => {
+            if !is_date(text) {
+                return Some(format!("Expected date for form field: {}", field.key));
+            }
+        }
+        Some("date-time") => {
+            if !is_date_time(text) {
+                return Some(format!("Expected date-time for form field: {}", field.key));
+            }
+        }
+        _ => {}
+    }
+    if let Some(options) = &field.options {
+        if !field.custom.unwrap_or(false) && !options.iter().any(|option| option.value == text) {
+            return Some(format!("Invalid option for form field: {}", field.key));
+        }
+    }
+    None
+}
+
+/// form.ts:362-366 `isDate`: `YYYY-MM-DD` that round-trips as a real
+/// calendar date.
+fn is_date(text: &str) -> bool {
+    let Some((year, month, day)) = (|| {
+        let mut parts = text.split('-');
+        let year: i32 = parts.next()?.parse().ok()?;
+        let month: u32 = parts.next()?.parse().ok()?;
+        let day: u32 = parts.next()?.parse().ok()?;
+        parts.next().is_none().then_some((year, month, day))
+    })() else {
+        return false;
+    };
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let month_len = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=12).contains(&month) && (1..=month_len).contains(&day)
+}
+
+/// form.ts:368-370 `isDateTime`: any string `Date` parses — in practice
+/// the ISO-8601 (`YYYY-MM-DD[THH:MM:SS[.f][Z]]`) and RFC-1123 shapes
+/// the surface emits. Full timestamps go through the azure seam's
+/// `chrono_naive` (providers_enterprise.rs); a bare date round-trips a
+/// JS `Date` too.
+fn is_date_time(text: &str) -> bool {
+    is_date(text)
+        || text
+            .parse::<providers_enterprise::chrono_naive::NaiveDateTime>()
+            .is_ok()
+}
+
+/// form.ts:329 email shape: `^[^\s@]+@[^\s@]+\.[^\s@]+$`.
+fn is_email(text: &str) -> bool {
+    let Some((local, rest)) = text.split_once('@') else { return false };
+    let Some((domain, tld)) = rest.split_once('.') else { return false };
+    !local.is_empty()
+        && !domain.is_empty()
+        && !tld.is_empty()
+        && !text.contains(char::is_whitespace)
+}
+
+/// `when` visibility conditions (all must match; form.ts:267-279): an
+/// unanswered referenced field is FALSE for both ops (matches() returns
+/// false before any inversion — hiding a field falsifies every
+/// condition referencing it); `eq` hits on value equality (array
+/// answers test membership), `neq` inverts a MATCHED value. G-260③ —
+/// the previous port only recognized `op == "eq"`, so a `neq`-
+/// conditioned field was judged invisible and silently hidden.
 fn field_visible(field: &FormField, answer: &FormAnswer) -> bool {
     field.when.as_ref().is_none_or(|conditions| {
         conditions.iter().all(|condition| {
-            condition.op == "eq"
-                && answer.get(&condition.key).is_some_and(|value| *value == condition.value)
+            match answer.get(&condition.key) {
+                None | Some(Value::Null) => false,
+                Some(Value::Array(items)) => {
+                    let neq = condition.op == "neq";
+                    let hit = items.iter().any(|item| *item == condition.value);
+                    if neq { !hit } else { hit }
+                }
+                Some(value) => {
+                    let neq = condition.op == "neq";
+                    let hit = *value == condition.value;
+                    if neq { !hit } else { hit }
+                }
+            }
         })
     })
 }

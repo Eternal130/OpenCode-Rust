@@ -418,17 +418,14 @@ pub fn to_custom_providers(config: &ConsoleConfig) -> Vec<CustomProvider> {
             if models.is_empty() {
                 return None;
             }
-            // Provider admission: a provider-level baseURL OR any model's
-            // baseURL satisfies the endpoint requirement (the openai-
-            // compatible binding needs one; the resolver falls back to the
-            // catalog base at bind).
-            if base_url.is_empty()
-                && !models
-                    .iter()
-                    .any(|model| model.base_url.as_deref().is_some_and(|url| !url.is_empty()))
-            {
-                return None;
-            }
+            // G-260⑤ — no endpoint admission filter: the ref merges a
+            // baseURL-less console provider onto its catalog base
+            // (opencode.ts:245-261 `providers.get(canonical ?? id)`
+            // source + `Object.assign`), and the resolver fills the
+            // provider endpoint from the catalog at bind
+            // (`console_catalog_base_url`, resolver.rs). Dropping the
+            // whole entry here silenced every override that only edits
+            // capabilities/costs.
             Some(CustomProvider {
                 id: id.clone(),
                 name: provider.name.clone().unwrap_or_else(|| id.clone()),

@@ -103,6 +103,10 @@ fn install_gitlab(host: &IntegrationHost) {
         hidden: false,
         options: None,
         when: None,
+        format: None,
+        min_length: None,
+        max_length: None,
+        custom: None,
     }];
     host.update_method(
         "gitlab",
@@ -303,18 +307,33 @@ async fn gitlab_authorize(answer: FormAnswer) -> Result<Authorization, String> {
     })
 }
 
-async fn gitlab_refresh(value: OAuthValue) -> Result<CredentialValue, String> {
+/// `pub(super)` — the G-260① single-flight retention is unit-tested
+/// directly against the exchange mock.
+pub(super) async fn gitlab_refresh(value: OAuthValue) -> Result<CredentialValue, String> {
     let (instance, client_id) = gitlab_metadata(&value);
     // GitLab rotates the refresh token on every refresh; concurrent
     // resolves of the same token share one exchange (gitlab.ts:440-460 —
     // coarse keyed single-flight).
     let key = format!("{instance}\0{}", value.refresh);
     let lock = gitlab_refresh_locks()
-        .entry(key)
+        .entry(key.clone())
         .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
         .clone();
     let _guard = lock.lock().await;
-    gitlab_exchange(
+    // G-260① — successful refreshes are RETAINED for 60s
+    // (gitlab.ts:50-51 refreshRetention): a caller that read the
+    // credential just before the rotated token was stored reuses the
+    // result instead of spending the already-used refresh token (which
+    // GitLab answers invalid_grant — misread as revoked). Failures are
+    // never retained (gitlab.ts:453-454) so the next caller retries.
+    let now = now_ms();
+    gitlab_refresh_results().retain(|_, entry| entry.until > now);
+    if let Some(entry) = gitlab_refresh_results().get(&key) {
+        let retained = entry.value.clone();
+        drop(entry);
+        return Ok(CredentialValue::OAuth(retained));
+    }
+    match gitlab_exchange(
         &instance,
         &client_id,
         vec![
@@ -325,7 +344,34 @@ async fn gitlab_refresh(value: OAuthValue) -> Result<CredentialValue, String> {
         false,
     )
     .await
-    .map(CredentialValue::OAuth)
+    {
+        Ok(tokens) => {
+            gitlab_refresh_results().insert(
+                key,
+                GitlabRefreshResult { until: now_ms() + GITLAB_REFRESH_RETENTION_MS, value: tokens.clone() },
+            );
+            Ok(CredentialValue::OAuth(tokens))
+        }
+        Err(error) => {
+            gitlab_refresh_results().remove(&key);
+            Err(error)
+        }
+    }
+}
+
+/// G-260① — one retained refresh result (gitlab.ts:50 `refreshing` map).
+struct GitlabRefreshResult {
+    until: i64,
+    value: OAuthValue,
+}
+
+/// gitlab.ts:51 `refreshRetention = 60_000`.
+const GITLAB_REFRESH_RETENTION_MS: i64 = 60_000;
+
+fn gitlab_refresh_results() -> &'static dashmap::DashMap<String, GitlabRefreshResult> {
+    static RESULTS: std::sync::OnceLock<dashmap::DashMap<String, GitlabRefreshResult>> =
+        std::sync::OnceLock::new();
+    RESULTS.get_or_init(dashmap::DashMap::new)
 }
 
 fn gitlab_refresh_locks() -> &'static dashmap::DashMap<String, Arc<tokio::sync::Mutex<()>>> {
@@ -364,25 +410,50 @@ fn query(pairs: &[(&str, &str)]) -> String {
 // ---------------------------------------------------------------------------
 
 const AZURE_COGNITIVE_SCOPE: &str = "https://cognitiveservices.azure.com/.default";
+/// G-260④ — azure.ts:72-105 `token(scope)`: a minted CLI token is
+/// reused while more than 5 minutes remain.
+const AZURE_TOKEN_CACHE_MARGIN_MS: i64 = 5 * 60_000;
+
+/// `resolveResourceName` without config settings (azure.ts:473-477): the
+/// env-declared resource. G-260④ — a configured (env) resource short-
+/// circuits the form exactly like the ref's `form()` (azure.ts:121-133);
+/// the config-settings half of the ref's short-circuit (a configured
+/// `resourceName`/`baseURL`) is out of reach here because the host's
+/// install path carries no config — bounded deviation, see the report.
+fn azure_configured_resource() -> Option<String> {
+    ["AZURE_RESOURCE_NAME", "AZURE_COGNITIVE_SERVICES_RESOURCE_NAME"]
+        .iter()
+        .find_map(|name| std::env::var(name).ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
 
 fn install_azure(host: &IntegrationHost) {
     host.update_integration("azure", "Azure");
-    let form = vec![FormField {
-        type_: "string".into(),
-        key: "resourceName".into(),
-        title: Some("Enter Azure Resource Name".into()),
-        description: None,
-        placeholder: Some("e.g. my-models".into()),
-        default: None,
-        pattern: None,
-        required: true,
-        hidden: false,
-        options: None,
-        when: None,
-    }];
+    // G-260④ — `form()` (azure.ts:121-133): omitted once a resource is
+    // configured.
+    let form = azure_configured_resource().is_none().then(|| {
+        vec![FormField {
+            type_: "string".into(),
+            key: "resourceName".into(),
+            title: Some("Enter Azure Resource Name".into()),
+            description: None,
+            placeholder: Some("e.g. my-models".into()),
+            default: None,
+            pattern: None,
+            required: true,
+            hidden: false,
+            options: None,
+            when: None,
+            format: None,
+            min_length: None,
+            max_length: None,
+            custom: None,
+        }]
+    });
     host.update_method(
         "azure",
-        Method::Key { label: Some("API key".into()), form: Some(form.clone()) },
+        Method::Key { label: Some("API key".into()), form: form.clone() },
         None,
     );
     // Registered only when the CLI exists (azure.ts:124: `which("az")`).
@@ -394,7 +465,7 @@ fn install_azure(host: &IntegrationHost) {
         Method::OAuth {
             id: "azure-cli".into(),
             label: "Microsoft Entra ID (Azure CLI)".into(),
-            form: Some(form),
+            form,
         },
         Some(OAuthImplementation {
             authorize: Arc::new(|answer| Box::pin(azure_authorize(answer))),
@@ -404,7 +475,34 @@ fn install_azure(host: &IntegrationHost) {
     );
 }
 
-async fn azure_cli_token() -> Result<(String, i64), String> {
+/// G-260④ — the per-scope minted-token cache entry (azure.ts:72).
+struct AzureCachedToken {
+    access: String,
+    expires: i64,
+}
+
+fn azure_token_cache() -> &'static dashmap::DashMap<String, AzureCachedToken> {
+    static CACHE: std::sync::OnceLock<dashmap::DashMap<String, AzureCachedToken>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(dashmap::DashMap::new)
+}
+
+/// Test seam: the per-scope cache is process-global; tests that mint
+/// through a fake `az` clear it first so counts are exact.
+pub(super) fn azure_token_cache_clear_for_test() {
+    azure_token_cache().clear();
+}
+
+async fn azure_cli_token(scope: &str) -> Result<(String, i64), String> {
+    // G-260④ — a minted token is reused while >5 minutes remain
+    // (azure.ts:92-95).
+    if let Some(cached) = azure_token_cache().get(scope) {
+        if cached.expires - now_ms() > AZURE_TOKEN_CACHE_MARGIN_MS {
+            let token = (cached.access.clone(), cached.expires);
+            drop(cached);
+            return Ok(token);
+        }
+    }
     let output = tokio::time::timeout(
         Duration::from_secs(10),
         tokio::process::Command::new("az")
@@ -412,7 +510,7 @@ async fn azure_cli_token() -> Result<(String, i64), String> {
                 "account",
                 "get-access-token",
                 "--scope",
-                AZURE_COGNITIVE_SCOPE,
+                scope,
                 "--output",
                 "json",
             ])
@@ -423,7 +521,13 @@ async fn azure_cli_token() -> Result<(String, i64), String> {
     .map_err(|_| "Azure CLI token request timed out".to_owned())?
     .map_err(|error| format!("Azure CLI failed to start: {error}"))?;
     if !output.status.success() {
-        return Err("Sign in with `az login` before continuing.".into());
+        // G-260④ — the ref surfaces the AppProcessError message
+        // (process.ts:50-58 `Command failed (exit N): …: stderr`), not a
+        // hardcoded az-login hint.
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        let code = output.status.code().unwrap_or(-1);
+        let detail = if stderr.is_empty() { String::new() } else { format!(": {stderr}") };
+        return Err(format!("Command failed (exit {code}): az account get-access-token{detail}"));
     }
     let body: Value = serde_json::from_slice(&output.stdout)
         .map_err(|_| "Azure CLI returned invalid JSON".to_owned())?;
@@ -437,6 +541,8 @@ async fn azure_cli_token() -> Result<(String, i64), String> {
         .map(|seconds| (seconds * 1000.0) as i64)
         .or_else(|| body["expiresOn"].as_str().and_then(chrono_parse_rfc2822_or_iso))
         .ok_or("Azure CLI returned an invalid token expiration")?;
+    azure_token_cache()
+        .insert(scope.to_owned(), AzureCachedToken { access: access.clone(), expires });
     Ok((access, expires))
 }
 
@@ -472,7 +578,8 @@ fn chrono_parse_rfc2822_or_iso(text: &str) -> Option<i64> {
 /// A tiny date-parse seam (no chrono in tree): RFC-3339
 /// `YYYY-MM-DDTHH:MM:SS[.fff][Z]` and RFC-1123
 /// `Fri, 17 Oct 2026 01:02:03 GMT` into epoch seconds (days-from-civil).
-mod chrono_naive {
+/// `pub(super)` — the form validator's `date-time` format reuses it.
+pub(super) mod chrono_naive {
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub struct NaiveDateTime {
         seconds: i64,
@@ -557,10 +664,13 @@ async fn azure_authorize(answer: FormAnswer) -> Result<Authorization, String> {
         .filter(|name| !name.is_empty())
         .map(str::to_owned);
     let callback: BoxFuture<'static, Result<CredentialValue, String>> = Box::pin(async move {
-        let Some(resource_name) = resource else {
+        // G-260④ — the answer falls back to the configured resource
+        // (azure.ts:155-158 `answer.resourceName ||
+        // resolveResourceName(configured)`).
+        let Some(resource_name) = resource.or_else(azure_configured_resource) else {
             return Err("Azure resource name is required".into());
         };
-        let (access, expires) = azure_cli_token().await?;
+        let (access, expires) = azure_cli_token(AZURE_COGNITIVE_SCOPE).await?;
         Ok(CredentialValue::OAuth(OAuthValue {
             method_id: "azure-cli".into(),
             refresh: "azure-cli".into(),
@@ -581,7 +691,7 @@ async fn azure_authorize(answer: FormAnswer) -> Result<Authorization, String> {
 }
 
 async fn azure_refresh(value: OAuthValue) -> Result<CredentialValue, String> {
-    let (access, expires) = azure_cli_token().await?;
+    let (access, expires) = azure_cli_token(AZURE_COGNITIVE_SCOPE).await?;
     Ok(CredentialValue::OAuth(OAuthValue { access, expires, ..value }))
 }
 
@@ -605,6 +715,10 @@ fn install_snowflake(host: &IntegrationHost) {
         hidden: false,
         options: None,
         when: None,
+        format: None,
+        min_length: None,
+        max_length: None,
+        custom: None,
     }];
     let mut oauth_form = account_form.clone();
     oauth_form.push(FormField {
@@ -619,6 +733,10 @@ fn install_snowflake(host: &IntegrationHost) {
         hidden: false,
         options: None,
         when: None,
+        format: None,
+        min_length: None,
+        max_length: None,
+        custom: None,
     });
     host.update_method(
         "snowflake-cortex",
@@ -1108,11 +1226,21 @@ fn openai_pkce() -> Pkce {
 
 const CHATGPT_REGISTRATION_CLIENT_ID: &str = "dynamic_agent_client";
 const CHATGPT_TOKEN_URL: &str = "https://auth.openai.com/api/accounts/oauth/token";
+const CHATGPT_JWKS_URL: &str = "https://auth.openai.com/.well-known/jwks.json";
 const CHATGPT_RESOURCE: &str = "https://api.openai.com/v1";
 const CHATGPT_SHARING_SCOPE: &str = "chatgpt.tokens.use.direct";
+/// G-260② — the stable agent host id's KV key (chatgpt.ts:100-104
+/// `chatgpt-agent-host-id`, plugin storage).
+const CHATGPT_HOST_ID_KEY: &str = "chatgpt-agent-host-id";
 
 fn install_chatgpt(host: &IntegrationHost) {
     host.update_integration("openai", "OpenAI");
+    // G-260② — the authorize closure captures the store + db: the flow
+    // reuses the stable agent host id and the active connection's
+    // registered client instead of registering a new client every
+    // reauthorization (chatgpt.ts:91-107).
+    let store = host.store().clone();
+    let db = Arc::clone(host.database());
     host.update_method(
         "openai",
         Method::OAuth {
@@ -1121,11 +1249,82 @@ fn install_chatgpt(host: &IntegrationHost) {
             form: None,
         },
         Some(OAuthImplementation {
-            authorize: Arc::new(|answer| Box::pin(chatgpt_authorize(answer))),
+            authorize: Arc::new(move |answer| {
+                let store = store.clone();
+                let db = Arc::clone(&db);
+                Box::pin(async move {
+                    let host_id = chatgpt_agent_host_id(&db).await;
+                    let saved_client_id = chatgpt_saved_client_id(&store).await;
+                    chatgpt_authorize_at(
+                        answer,
+                        CHATGPT_TOKEN_URL,
+                        CHATGPT_JWKS_URL,
+                        &host_id,
+                        saved_client_id.as_deref(),
+                    )
+                    .await
+                })
+            }),
             refresh: Some(Arc::new(|value| Box::pin(chatgpt_refresh(value)))),
             label: None,
         }),
     );
+}
+
+/// G-260② — the stable agent host id (chatgpt.ts:100-104): a persisted
+/// `urn:uuid:` value generated once and reused by every sign-in.
+async fn chatgpt_agent_host_id(db: &Arc<crate::database::Database>) -> String {
+    let existing = db
+        .transaction(|tx| tx.kv_get(CHATGPT_HOST_ID_KEY))
+        .await
+        .ok()
+        .flatten()
+        .and_then(|value| value.as_str().map(String::from))
+        .filter(|value| !value.is_empty());
+    if let Some(existing) = existing {
+        return existing;
+    }
+    let host_id = format!("urn:uuid:{}", random_uuid_v4());
+    let stored = host_id.clone();
+    let _ = db
+        .transaction(move |tx| tx.kv_set(CHATGPT_HOST_ID_KEY, &Value::String(stored)))
+        .await;
+    host_id
+}
+
+/// RFC 4122 v4 shaped from 16 random bytes (the ref's `crypto.randomUUID`).
+fn random_uuid_v4() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
+}
+
+/// G-260② — reauthorization reuses the connection's registered client
+/// (chatgpt.ts:234 `savedClientID`): the newest stored
+/// chatgpt-token-sharing credential's `clientID` metadata.
+async fn chatgpt_saved_client_id(store: &super::credential::CredentialStore) -> Option<String> {
+    let stored = store.list("openai").await.ok()?;
+    stored
+        .iter()
+        .rev()
+        .filter_map(|row| {
+            let CredentialValue::OAuth(oauth) = &row.value else { return None };
+            (oauth.method_id == "chatgpt-token-sharing")
+                .then(|| oauth.metadata.as_ref().and_then(|m| m.get("clientID")))
+                .flatten()
+        })
+        .find_map(|value| value.as_str().map(String::from))
 }
 
 async fn chatgpt_exchange(
@@ -1155,20 +1354,15 @@ pub(super) async fn chatgpt_exchange_at(
     ))
 }
 
-async fn chatgpt_authorize(_answer: FormAnswer) -> Result<Authorization, String> {
-    chatgpt_authorize_at(
-        FormAnswer::new(),
-        CHATGPT_TOKEN_URL,
-        &format!("{OPENAI_ISSUER}/.well-known/jwks.json"),
-    )
-    .await
-}
-
-/// The connector with explicit token + JWKS URLs (test seams).
+/// The connector with explicit token + JWKS URLs and the G-260②
+/// reauthorization identity (test seams): `host_id` is the stable agent
+/// host id, `saved_client_id` the connection's registered client.
 pub(super) async fn chatgpt_authorize_at(
     _answer: FormAnswer,
     token_url: &str,
     jwks_url: &str,
+    host_id: &str,
+    saved_client_id: Option<&str>,
 ) -> Result<Authorization, String> {
     let Pkce { verifier, challenge } = openai_pkce();
     let state = flows::random_state(32);
@@ -1186,29 +1380,48 @@ pub(super) async fn chatgpt_authorize_at(
     let jwks_url = jwks_url.to_owned();
     let scope =
         format!("openid profile email offline_access resource.invoke {CHATGPT_SHARING_SCOPE}");
-    let url = format!(
-        "https://auth.openai.com/api/accounts/authorize?{}",
-        query(&[
-            ("client_id", CHATGPT_REGISTRATION_CLIENT_ID),
-            ("agent_name_hint", "OpenCode"),
-            ("response_type", "code"),
-            ("redirect_uri", redirect.as_str()),
-            ("scope", scope.as_str()),
-            ("resource", CHATGPT_RESOURCE),
-            ("state", state.as_str()),
-            ("nonce", nonce.as_str()),
-            ("code_challenge_method", "S256"),
-            ("code_challenge", challenge.as_str()),
-        ])
-    );
+    // G-260② — authorizeURL (chatgpt.ts:509-531): a saved client id takes
+    // precedence (no agent_name_hint); the stable agent host id rides
+    // every request either way.
+    let mut params: Vec<(&str, &str)> = vec![(
+        "client_id",
+        saved_client_id.unwrap_or(CHATGPT_REGISTRATION_CLIENT_ID),
+    )];
+    if saved_client_id.is_none() {
+        params.push(("agent_name_hint", "OpenCode"));
+    }
+    params.push(("ext_agent_host_id", host_id));
+    params.extend([
+        ("response_type", "code"),
+        ("redirect_uri", redirect.as_str()),
+        ("scope", scope.as_str()),
+        ("resource", CHATGPT_RESOURCE),
+        ("state", state.as_str()),
+        ("nonce", nonce.as_str()),
+        ("code_challenge_method", "S256"),
+        ("code_challenge", challenge.as_str()),
+    ]);
+    let url = format!("https://auth.openai.com/api/accounts/authorize?{}", query(&params));
+    let saved_client_id = saved_client_id.map(str::to_owned);
     let callback: BoxFuture<'static, Result<CredentialValue, String>> = Box::pin(async move {
         let params = listener.wait().await?;
         callback_error(&params, &state)?;
         // First-time sign-in: the callback carries the registered client's
-        // id (chatgpt.ts:126-131,164-171).
-        let client_id = params
-            .get("client_id")
-            .cloned()
+        // id (chatgpt.ts:126-131,164-171). G-260② — a saved client wins;
+        // a DIFFERENT returned client rejects the reauthorization.
+        let returned = params.get("client_id").cloned();
+        if let (Some(saved), Some(returned_id)) = (saved_client_id.as_deref(), returned.as_deref())
+        {
+            if saved != returned_id {
+                return Err(
+                    "ChatGPT returned a different client than this connection. Connect again."
+                        .into(),
+                );
+            }
+        }
+        let client_id = saved_client_id
+            .clone()
+            .or(returned)
             .ok_or("ChatGPT sign-in did not return a client ID. Connect again.")?;
         let code = params.get("code").cloned().unwrap_or_default();
         let (access, refresh, id_token, scope, expires_in) = chatgpt_exchange_at(

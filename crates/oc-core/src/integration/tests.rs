@@ -1216,8 +1216,7 @@ async fn gitlab_bundled_client_rejected_off_gitlab_com() {
 }
 
 #[tokio::test]
-async fn gitlab_refresh_rotates_via_mock() {
-    let mock = MockOAuth::start(vec![(
+async fn gitlab_refresh_rotates_via_mock() {    let mock = MockOAuth::start(vec![(
         "/oauth/token",
         vec![json!({"access_token": "gl-rotated", "refresh_token": "gl-rotated-refresh", "expires_in": 7200})],
     )])
@@ -1251,6 +1250,47 @@ async fn gitlab_refresh_rotates_via_mock() {
     assert!(requests.contains("grant_type=refresh_token"), "{requests}");
     assert!(requests.contains("refresh_token=gl-old-refresh"), "{requests}");
     assert!(requests.contains("client_id=legacy-client"), "{requests}");
+}
+
+/// G-260① — the keyed single-flight RETAINS a successful refresh for
+/// 60s (gitlab.ts:50-51): concurrent and immediately-following callers
+/// holding the ALREADY-ROTATED refresh token reuse the result instead
+/// of re-exchanging (which GitLab would answer invalid_grant — misread
+/// as revoked).
+#[tokio::test]
+async fn gitlab_refresh_single_flight_retains_success() {
+    let mock = MockOAuth::start(vec![(
+        "/oauth/token",
+        vec![json!({"access_token": "gl-rotated", "refresh_token": "gl-next", "expires_in": 7200})],
+    )])
+    .await;
+    let value = OAuthValue {
+        method_id: "pkce".into(),
+        refresh: format!("gl-shared-{}", mock.base),
+        access: "gl-old".into(),
+        expires: crate::database::migrations::now_ms() - 1000,
+        metadata: Some(BTreeMap::from([
+            ("instanceUrl".to_owned(), Value::String(mock.base.clone())),
+            ("clientID".to_owned(), Value::String("legacy-client".into())),
+        ])),
+    };
+    // Concurrent second consumer + a follow-up within the retention
+    // window: ONE exchange total.
+    let (first, second) = tokio::join!(
+        super::providers_enterprise::gitlab_refresh(value.clone()),
+        super::providers_enterprise::gitlab_refresh(value.clone()),
+    );
+    let first = first.expect("first refresh");
+    let second = second.expect("second refresh");
+    assert_eq!(first, second);
+    let third = super::providers_enterprise::gitlab_refresh(value).await.expect("third");
+    assert_eq!(third, first);
+    let exchanges = mock
+        .requests()
+        .iter()
+        .filter(|request| request.contains("grant_type=refresh_token"))
+        .count();
+    assert_eq!(exchanges, 1, "the rotated token is never spent twice");
 }
 
 // -- BE-3b: azure CLI ---------------------------------------------------------------
@@ -1578,13 +1618,21 @@ async fn chatgpt_connector_round_trip_against_mock() {
         BTreeMap::new(),
         &format!("{}/oauth/token", mock.base),
         &format!("{}/.well-known/jwks.json", mock.base),
+        &CHATGPT_TEST_HOST_ID,
+        None,
     )
     .await
     .expect("authorize");
     // The authorize URL carries the dynamic-client registration params
-    // (chatgpt.ts:498-519).
+    // (chatgpt.ts:498-531) — G-260②: the stable agent host id rides the
+    // request; agent_name_hint only when no saved client exists.
     assert!(authorization.url.contains("client_id=dynamic_agent_client"), "{}", authorization.url);
     assert!(authorization.url.contains("agent_name_hint=OpenCode"), "{}", authorization.url);
+    assert!(
+        authorization.url.contains("ext_agent_host_id=urn%3Auuid%3A"),
+        "{}",
+        authorization.url
+    );
     assert!(authorization.url.contains("nonce="), "{}", authorization.url);
     assert!(authorization.url.contains("chatgpt.tokens.use.direct"), "{}", authorization.url);
     let state = parse_query_param(&authorization.url, "state").expect("state");
@@ -1636,6 +1684,79 @@ async fn chatgpt_connector_round_trip_against_mock() {
     assert!(requests.contains("resource=https%3A%2F%2Fapi.openai.com%2Fv1"), "{requests}");
 }
 
+/// G-260② — reauthorization reuses the connection's registered client
+/// (chatgpt.ts:107,165-171): a saved client id takes precedence in the
+/// authorize URL (no agent_name_hint), a callback without one still
+/// completes, and a DIFFERENT returned client rejects the attempt.
+#[tokio::test]
+async fn chatgpt_reauthorization_reuses_saved_client() {
+    let mock = SlotMock::start().await;
+    let authorization = super::providers_enterprise::chatgpt_authorize_at(
+        BTreeMap::new(),
+        &format!("{}/oauth/token", mock.base),
+        &format!("{}/.well-known/jwks.json", mock.base),
+        &CHATGPT_TEST_HOST_ID,
+        Some("client_reg_1"),
+    )
+    .await
+    .expect("authorize");
+    assert!(
+        authorization.url.contains("client_id=client_reg_1"),
+        "{}",
+        authorization.url
+    );
+    assert!(
+        !authorization.url.contains("agent_name_hint"),
+        "no registration hint when a saved client exists: {}",
+        authorization.url
+    );
+    let state = parse_query_param(&authorization.url, "state").expect("state");
+    let nonce = parse_query_param(&authorization.url, "nonce").expect("nonce");
+    let redirect = parse_query_param(&authorization.url, "redirect_uri").expect("redirect");
+    mock.serve("/.well-known/jwks.json", jwks_document("sign-in", SIGNING_KEY_N));
+    let id_token =
+        signed_id_token(&valid_claims(&nonce, "client_reg_1", 9_999_999_999), "sign-in", SIGNING_KEY_PEM);
+    *mock.slot.lock() = Some((
+        200,
+        json!({
+            "access_token": "cg-access",
+            "refresh_token": "cg-refresh",
+            "id_token": id_token,
+            "scope": "openid offline_access chatgpt.tokens.use.direct",
+            "expires_in": 3600
+        }),
+    ));
+
+    // The callback omits client_id — the saved client completes the flow.
+    let _ = reqwest::get(format!("{redirect}?code=cg-code&state={state}")).await;
+    let AuthMode::Auto(callback_future) = authorization.mode else { panic!("auto") };
+    let value = callback_future.await.expect("callback value");
+    let CredentialValue::OAuth(oauth) = value else { panic!() };
+    assert_eq!(
+        oauth.metadata.as_ref().expect("metadata")["clientID"],
+        "client_reg_1",
+        "the saved client id persists"
+    );
+
+    // A DIFFERENT returned client rejects the reauthorization.
+    let mock = SlotMock::start().await;
+    let authorization = super::providers_enterprise::chatgpt_authorize_at(
+        BTreeMap::new(),
+        &format!("{}/oauth/token", mock.base),
+        &format!("{}/.well-known/jwks.json", mock.base),
+        &CHATGPT_TEST_HOST_ID,
+        Some("client_reg_1"),
+    )
+    .await
+    .expect("authorize 2");
+    let state = parse_query_param(&authorization.url, "state").expect("state");
+    let redirect = parse_query_param(&authorization.url, "redirect_uri").expect("redirect");
+    let _ = reqwest::get(format!("{redirect}?code=other&state={state}&client_id=someone_else")).await;
+    let AuthMode::Auto(callback_future) = authorization.mode else { panic!("auto 2") };
+    let error = callback_future.await.expect_err("client mismatch");
+    assert!(error.contains("returned a different client"), "{error}");
+}
+
 #[tokio::test]
 async fn chatgpt_connector_rejects_missing_token_sharing_scope() {
     let mock = SlotMock::start().await;
@@ -1643,6 +1764,8 @@ async fn chatgpt_connector_rejects_missing_token_sharing_scope() {
         BTreeMap::new(),
         &format!("{}/oauth/token", mock.base),
         &format!("{}/.well-known/jwks.json", mock.base),
+        &CHATGPT_TEST_HOST_ID,
+        None,
     )
     .await
     .expect("authorize");
@@ -1678,6 +1801,8 @@ async fn chatgpt_connector_rejects_nonce_mismatch() {
         BTreeMap::new(),
         &format!("{}/oauth/token", mock.base),
         &format!("{}/.well-known/jwks.json", mock.base),
+        &CHATGPT_TEST_HOST_ID,
+        None,
     )
     .await
     .expect("authorize");
@@ -1709,6 +1834,9 @@ async fn chatgpt_connector_rejects_nonce_mismatch() {
 }
 
 // -- BE-3b: chatgpt ID-token JWKS verification (chatgpt.ts:439-459) --------------------------
+
+/// G-260② — the stable agent host id fixture for the authorize seam.
+const CHATGPT_TEST_HOST_ID: &str = "urn:uuid:00000000-1111-4222-8333-444444444444";
 
 /// The single v2 failure surface (chatgpt.ts:457): every verification
 /// failure — signature, issuer, audience, expiry, nonce, subject —
@@ -2582,11 +2710,12 @@ fn console_projection_carries_merge_fields() {
     assert_eq!(model.base_url.as_deref(), Some("https://model.acme.test/v1"));
 }
 
-/// A model-level `settings.baseURL` satisfies provider admission
-/// (opencode.ts:273-281): the provider survives projection without a
-/// provider-level baseURL, and one without any endpoint still drops.
+/// G-260⑤ — endpoint-less providers survive projection: the ref merges
+/// a baseURL-less console provider onto its catalog base
+/// (opencode.ts:245-261); a model-level `settings.baseURL` still rides
+/// the model (precedence applies at bind, opencode.ts:273-281).
 #[test]
-fn console_projection_model_base_url_satisfies_admission() {
+fn console_projection_keeps_endpoint_less_providers() {
     let config: super::console::ConsoleConfig = serde_json::from_value(json!({
         "providers": {
             "model-endpoint": {
@@ -2602,8 +2731,8 @@ fn console_projection_model_base_url_satisfies_admission() {
     let providers = super::console::to_custom_providers(&config);
     assert_eq!(
         providers.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
-        vec!["model-endpoint"],
-        "only the provider with a model-level baseURL survives; none drops"
+        vec!["model-endpoint", "no-endpoint"],
+        "both providers survive; the resolver merges the catalog base at bind"
     );
     let provider = &providers[0];
     assert_eq!(provider.base_url, "", "no provider-level baseURL");
@@ -3394,4 +3523,216 @@ async fn g234_loopback_bootstrap_is_the_shared_page() {
     assert!(text.contains("Finishing sign-in"), "branded pending card: {text}");
     assert!(text.contains("Completing your xAI authorization."));
     assert!(text.contains("var TOKEN_URL=new URL(\"/callback/token\",window.location.origin).href;"));
+}
+
+// -- G-260③: host-side form validation (ref form.ts:238-360) ------------------------
+
+fn form_field(key: &str, required: bool) -> super::types::FormField {
+    super::types::FormField {
+        type_: "string".into(),
+        key: key.into(),
+        title: None,
+        description: None,
+        placeholder: None,
+        default: None,
+        pattern: None,
+        required,
+        hidden: false,
+        options: None,
+        when: None,
+        format: None,
+        min_length: None,
+        max_length: None,
+        custom: None,
+    }
+}
+
+/// G-260③ (MANDATED) — `neq` conditions: a field conditioned `neq` on
+/// another is visible exactly when the values DIFFER; the old port only
+/// recognized `op == "eq"`, so every `neq`-conditioned field was judged
+/// invisible and silently hidden.
+#[test]
+fn g260_field_visible_handles_neq() {
+    let mut field = form_field("advanced", false);
+    field.when = Some(vec![super::types::FormCondition {
+        key: "plan".into(),
+        op: "neq".into(),
+        value: Value::String("free".into()),
+    }]);
+    let form = vec![form_field("plan", false), field];
+    // plan=free → neq fails → invisible: answering it rejects.
+    let mut answer: FormAnswer = FormAnswer::new();
+    answer.insert("plan".into(), Value::String("free".into()));
+    answer.insert("advanced".into(), Value::String("yes".into()));
+    assert_eq!(
+        super::validate_form(&form, &answer),
+        Some("Form field is not active: advanced".to_owned())
+    );
+    // plan=pro → neq holds → visible and answerable.
+    let mut answer: FormAnswer = FormAnswer::new();
+    answer.insert("plan".into(), Value::String("pro".into()));
+    answer.insert("advanced".into(), Value::String("yes".into()));
+    assert_eq!(super::validate_form(&form, &answer), None);
+    // An UNANSWERED referenced field is false for both ops (form.ts:273).
+    let mut answer: FormAnswer = FormAnswer::new();
+    answer.insert("advanced".into(), Value::String("yes".into()));
+    assert_eq!(
+        super::validate_form(&form, &answer),
+        Some("Form field is not active: advanced".to_owned())
+    );
+}
+
+/// Unknown answer keys reject (form.ts:240-242).
+#[test]
+fn g260_unknown_form_field_rejects() {
+    let mut answer: FormAnswer = FormAnswer::new();
+    answer.insert("nope".into(), Value::String("x".into()));
+    assert_eq!(
+        super::validate_form(&[form_field("known", false)], &answer),
+        Some("Unknown form field: nope".to_owned())
+    );
+}
+
+/// The options closed set (form.ts:335-337) — open with `custom: true`.
+#[test]
+fn g260_options_form_a_closed_set() {
+    let mut field = form_field("region", true);
+    field.options = Some(vec![super::types::FormSelectOption {
+        label: "EU".into(),
+        value: "eu".into(),
+        description: None,
+    }]);
+    let mut answer: FormAnswer = FormAnswer::new();
+    answer.insert("region".into(), Value::String("mars".into()));
+    assert_eq!(
+        super::validate_form(&[field.clone()], &answer),
+        Some("Invalid option for form field: region".to_owned())
+    );
+    field.custom = Some(true);
+    assert_eq!(super::validate_form(&[field], &answer), None);
+}
+
+/// minLength + format checks (form.ts:317-331), pattern message included.
+#[test]
+fn g260_min_length_format_and_pattern_checks() {
+    let mut field = form_field("name", true);
+    field.min_length = Some(3);
+    let mut answer: FormAnswer = FormAnswer::new();
+    answer.insert("name".into(), Value::String("ab".into()));
+    assert_eq!(
+        super::validate_form(&[field.clone()], &answer),
+        Some("Form field is too short: name".to_owned())
+    );
+
+    field.min_length = None;
+    field.format = Some("email".into());
+    answer.insert("name".into(), Value::String("not-an-email".into()));
+    assert_eq!(
+        super::validate_form(&[field.clone()], &answer),
+        Some("Expected email for form field: name".to_owned())
+    );
+    answer.insert("name".into(), Value::String("a@b.co".into()));
+    assert_eq!(super::validate_form(&[field.clone()], &answer), None);
+
+    field.format = Some("uri".into());
+    answer.insert("name".into(), Value::String("not a uri".into()));
+    assert_eq!(
+        super::validate_form(&[field.clone()], &answer),
+        Some("Expected uri for form field: name".to_owned())
+    );
+
+    field.format = None;
+    field.pattern = Some(r"^v\d+$".into());
+    assert_eq!(
+        super::validate_form(&[field.clone()], &answer),
+        Some("Form field does not match pattern: name".to_owned())
+    );
+}
+
+/// Required-missing keeps the ref message; a declared default satisfies.
+#[test]
+fn g260_required_message_and_default_satisfaction() {
+    let mut answer: FormAnswer = FormAnswer::new();
+    assert_eq!(
+        super::validate_form(&[form_field("token", true)], &answer),
+        Some("Missing required form field: token".to_owned())
+    );
+    let mut defaulted = form_field("token", true);
+    defaulted.default = Some(Value::String("fallback".into()));
+    assert_eq!(super::validate_form(&[defaulted], &answer), None);
+}
+
+// -- G-260④: azure form short-circuit + token cache -------------------------------
+
+#[tokio::test]
+async fn g260_azure_form_omitted_and_token_cached_when_configured() {
+    let _env = env_guard().await;
+    // A fake `az` that COUNTS invocations.
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let counter = dir.path().join("count");
+    let expires_on = crate::database::migrations::now_ms() / 1000 + 3600;
+    let counter_path = counter.display().to_string();
+    std::fs::write(
+        dir.path().join("az"),
+        format!(
+            "#!/bin/sh\nprintf x >> {counter_path}\necho '{{\"accessToken\":\"az-cached\",\"expires_on\":{expires_on}}}'"
+        ),
+    )
+    .expect("write az");
+    #[allow(unsafe_code)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            dir.path().join("az"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("chmod");
+    }
+    let old_path = std::env::var("PATH").unwrap_or_default();
+    // G-260④ — a configured resource omits the form (azure.ts:121-133).
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::set_var("AZURE_RESOURCE_NAME", "my-models");
+        std::env::set_var("PATH", format!("{}:{old_path}", dir.path().display()));
+    }
+    super::providers_enterprise::azure_token_cache_clear_for_test();
+    let host = host().await;
+    let info = host.get("azure").await.expect("get").expect("present");
+    assert!(
+        info.methods.iter().any(|method| matches!(
+            method,
+            super::types::Method::Key { form: None, .. }
+        )),
+        "the key method carries no form once the resource is configured"
+    );
+
+    // No answer at all: the env-configured resource satisfies the flow
+    // (azure.ts:155-158).
+    let attempt = host
+        .oauth_connect("azure", "azure-cli", &FormAnswer::new(), None)
+        .await
+        .expect("connect");
+    let status = wait_complete(&host, "azure", &attempt, 200).await;
+    assert!(matches!(status, AttemptStatus::Complete { .. }), "{status:?}");
+    let active = host.connection_active("azure").await.expect("active").expect("some");
+    let resolved = host.connection_resolve(&active).await.expect("resolve").expect("value");
+    let CredentialValue::OAuth(oauth) = resolved else { panic!() };
+    assert_eq!(oauth.access, "az-cached");
+    assert_eq!(oauth.metadata.as_ref().unwrap()["resourceName"], "my-models");
+
+    // G-260④ — the per-scope cache: a SECOND mint within 5 minutes runs
+    // `az` exactly once total (azure.ts:92-105).
+    let attempt = host
+        .oauth_connect("azure", "azure-cli", &FormAnswer::new(), None)
+        .await
+        .expect("connect 2");
+    let status = wait_complete(&host, "azure", &attempt, 200).await;
+    assert!(matches!(status, AttemptStatus::Complete { .. }), "{status:?}");
+    let invocations = std::fs::read_to_string(&counter).unwrap_or_default();
+    assert_eq!(invocations.len(), 1, "one `az` run across both mints");
+    #[allow(unsafe_code)]
+    unsafe {
+        std::env::remove_var("AZURE_RESOURCE_NAME");
+        std::env::set_var("PATH", old_path);
+    }
 }

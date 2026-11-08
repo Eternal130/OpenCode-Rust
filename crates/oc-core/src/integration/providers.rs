@@ -107,6 +107,10 @@ fn install_opencode(host: &IntegrationHost) {
         hidden: true,
         options: None,
         when: None,
+        format: None,
+        min_length: None,
+        max_length: None,
+        custom: None,
     }];
     host.update_method(
         "opencode",
@@ -372,6 +376,10 @@ fn install_github_copilot(host: &IntegrationHost) {
                 },
             ]),
             when: None,
+            format: None,
+            min_length: None,
+            max_length: None,
+            custom: None,
         },
         FormField {
             type_: "string".into(),
@@ -389,6 +397,10 @@ fn install_github_copilot(host: &IntegrationHost) {
                 op: "eq".into(),
                 value: "enterprise".into(),
             }]),
+            format: None,
+            min_length: None,
+            max_length: None,
+            custom: None,
         },
     ];
     host.update_method(
