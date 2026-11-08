@@ -115,6 +115,33 @@ fn console_model_json(
     (released, entry)
 }
 
+/// G-259 — the provider ids the dynamic credential-gated syncs own
+/// (G-167 copilot, G-209 modal, G-259 azure/digitalocean): when a sync
+/// has state, its merged snapshot replaces the static catalog record
+/// for that id at the SAME tier `bind` replaces it
+/// (resolver.rs `bind`'s snapshot-replacement chain) — the four ids
+/// are distinct, so the resolution order never competes.
+const DYNAMIC_SYNC_PROVIDER_IDS: &[&str] = &["github-copilot", "modal", "azure", "digitalocean"];
+
+/// G-259 — the live merged snapshot of whichever dynamic sync owns
+/// `provider_id`, if it has synced state (no credential / not yet
+/// refreshed → `None`, the static catalog serves). Resolution reads
+/// the SAME state through the resolver's `with_*_sync` handles; this
+/// is the listing-side accessor keeping `/api/model` in parity with
+/// `bind`.
+fn dynamic_sync_snapshot(
+    engine: &oc_core::engine::Engine,
+    provider_id: &str,
+) -> Option<oc_core::provider_catalog::Snapshot> {
+    match provider_id {
+        "github-copilot" => engine.copilot_sync.state().map(|state| state.merged.clone()),
+        "modal" => engine.modal_sync.state().map(|state| state.merged.clone()),
+        "azure" => engine.azure_sync.state().map(|state| state.merged.clone()),
+        "digitalocean" => engine.digitalocean_sync.state().map(|state| state.merged.clone()),
+        _ => None,
+    }
+}
+
 /// The location's ordered model entries — exactly what
 /// [`model_list`] serves: `Model.available()` sorted by
 /// `time.released` DESCENDING (core model.ts:218-220) over the
@@ -148,11 +175,56 @@ pub(crate) async fn location_model_entries(
             credential_env.extend(snapshot.environment.iter().cloned());
         }
     }
-    let mut data: Vec<(f64, Value)> = catalog
-        .available_models(|name| std::env::var_os(name).is_some() || credential_env.contains(name))
-        .into_iter()
-        .map(|(snapshot, model)| (model.time.released.0, model_json(snapshot, model)))
-        .collect();
+    // G-259 — the dynamic credential-gated syncs ride the SAME listing
+    // seam `bind` reads: when a sync has state for its provider id, its
+    // merged snapshot REPLACES the static catalog record's models in
+    // the listing exactly like the resolver's snapshot replacement —
+    // azure's narrowing REMOVES undeployed models from the listing (the
+    // "shows everything, fails on selection" defect), and the copilot/
+    // modal/digitalocean merges add their dynamic models. The
+    // replacement sits at the CATALOG tier — below config customs and
+    // console providers exactly like bind's branch order (a config
+    // custom with a catalog id falls through to the catalog path with
+    // its settings merged, CRED-A4, so its own entries still list
+    // alongside the synced catalog surface). Offline (no synced state)
+    // the static records list unchanged.
+    let mut dynamic: std::collections::BTreeMap<&str, oc_core::provider_catalog::Snapshot> =
+        std::collections::BTreeMap::new();
+    for &id in DYNAMIC_SYNC_PROVIDER_IDS {
+        if let Some(snapshot) = dynamic_sync_snapshot(engine, id) {
+            dynamic.insert(id, snapshot);
+        }
+    }
+    let mut data: Vec<(f64, Value)> = Vec::new();
+    let mut sync_gate_passed: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    for (snapshot, model) in
+        catalog.available_models(|name| std::env::var_os(name).is_some() || credential_env.contains(name))
+    {
+        let id = snapshot.info.id.as_str();
+        if dynamic.contains_key(id) {
+            // The provider lists (it passed the availability gate), but
+            // its STATIC models defer to the synced snapshot below.
+            sync_gate_passed.insert(id);
+            continue;
+        }
+        data.push((model.time.released.0, model_json(snapshot, model)));
+    }
+    for (id, synced) in &dynamic {
+        if !sync_gate_passed.contains(id) {
+            continue; // unavailable offline — the listing stays exactly today's
+        }
+        for model in &synced.models {
+            // The catalog tier's per-model filters (available_models'
+            // loop) apply to the synced surface identically.
+            if matches!(model.status, oc_schema::model::Status::Deprecated) {
+                continue;
+            }
+            if !model.capabilities.output.iter().any(|item| item == "text") {
+                continue;
+            }
+            data.push((model.time.released.0, model_json(synced, model)));
+        }
+    }
     let configured = crate::boot::location_custom_providers(engine, location);
     // RF-01 — running local providers (ollama/lmstudio/vllm runtime
     // discovery): the discovered inventory REPLACES a config custom
@@ -303,17 +375,33 @@ async fn model_default(
                 .map(|model| console_model_json(&provider, model, &catalog).1)
         } else {
             let catalog = state.engine.catalog_service.get();
-            catalog
-                .providers()
-                .iter()
-                .find(|snapshot| snapshot.info.id.0 == selection.provider_id.as_str())
-                .and_then(|snapshot| {
-                    snapshot
-                        .models
-                        .iter()
-                        .find(|model| model.id.0 == selection.model.as_str())
-                        .map(|model| model_json(snapshot, model))
-                })
+            // G-259 — a dynamic-synced provider renders its default
+            // through the SAME synced snapshot the listing serves
+            // (listing/bind parity: azure's narrowed surface must not
+            // serve an undeployed model's static entry). A synced
+            // exact-map miss does NOT fall back to the static record —
+            // bind refuses it too — and lands in the available-first
+            // fallback below exactly like a static miss.
+            if let Some(synced) = dynamic_sync_snapshot(&state.engine, selection.provider_id.as_str())
+            {
+                synced
+                    .models
+                    .iter()
+                    .find(|model| model.id.0 == selection.model.as_str())
+                    .map(|model| model_json(&synced, model))
+            } else {
+                catalog
+                    .providers()
+                    .iter()
+                    .find(|snapshot| snapshot.info.id.0 == selection.provider_id.as_str())
+                    .and_then(|snapshot| {
+                        snapshot
+                            .models
+                            .iter()
+                            .find(|model| model.id.0 == selection.model.as_str())
+                            .map(|model| model_json(snapshot, model))
+                    })
+            }
         };
         let default = match resolved {
             Some(value) => Some(value),
@@ -706,5 +794,334 @@ mod tests {
         let payload: Value = serde_json::from_slice(&bytes).expect("envelope json");
         assert_eq!(payload["data"]["providerID"], json!("ollama"));
         assert_eq!(payload["data"]["id"], json!("llama3"));
+    }
+
+    // ------------------------------------------------------------------
+    // G-259 — the dynamic credential-gated syncs (G-167 copilot, G-209
+    // modal, G-259 azure/digitalocean) riding the listing seam.
+    // ------------------------------------------------------------------
+
+    /// Scrub ambient vars that would arm boot-time sync spawns (the
+    /// azure discovery needs a resource NAME; modal reads its token
+    /// synchronously at boot), then arm the listing's availability
+    /// gate for the synced providers (their env credential vars —
+    /// none of these alone arms a spawn: copilot needs a stored
+    /// binding, DO a stored credential, azure a resource name).
+    fn arm_sync_listing_env() {
+        for name in
+            ["AZURE_RESOURCE_NAME", "AZURE_COGNITIVE_SERVICES_RESOURCE_NAME", "MODAL_PROXY_TOKEN"]
+        {
+            std::env::remove_var(name);
+        }
+        std::env::set_var("AZURE_API_KEY", "test-key");
+        std::env::set_var("GITHUB_TOKEN", "test-token");
+        std::env::set_var("DIGITALOCEAN_ACCESS_TOKEN", "test-token");
+    }
+
+    fn copilot_remote(id: &str) -> oc_ai::protocols::copilot::CopilotRemoteModel {
+        serde_json::from_value(json!({
+            "model_picker_enabled": true,
+            "id": id,
+            "name": format!("Model {id}"),
+            "version": format!("{id}-2026-03-05"),
+            "supported_endpoints": ["/chat/completions"],
+            "capabilities": {
+                "family": "test-family",
+                "limits": { "max_output_tokens": 4096, "max_prompt_tokens": 100_000 },
+                "supports": { "tool_calls": true }
+            }
+        }))
+        .expect("remote model decodes")
+    }
+
+    fn provider_entries<'a>(entries: &'a [Value], provider: &str) -> Vec<&'a Value> {
+        entries
+            .iter()
+            .filter(|model| model.get("providerID").and_then(Value::as_str) == Some(provider))
+            .collect()
+    }
+
+    /// The catalog tier's per-model filters (available_models' loop)
+    /// over a static snapshot — the offline expectation.
+    fn listable_static(snapshot: &oc_core::provider_catalog::Snapshot) -> usize {
+        snapshot
+            .models
+            .iter()
+            .filter(|model| !matches!(model.status, oc_schema::model::Status::Deprecated))
+            .filter(|model| model.capabilities.output.iter().any(|item| item == "text"))
+            .count()
+    }
+
+    /// G-259 — seeded sync states ride `/api/model`'s listing exactly
+    /// like `bind`: azure's narrowed snapshot REPLACES the static azure
+    /// models (only the deployed id lists, keyed by deployment name
+    /// with the catalog model's facts), the copilot merge lists its
+    /// dynamic-only model, and the DigitalOcean merge ADDS its `router:*`
+    /// entry over the static surface.
+    #[tokio::test]
+    async fn dynamic_syncs_ride_the_listing_seam() {
+        arm_sync_listing_env();
+        let tmp = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let engine = oc_core::engine::Engine::boot(oc_core::engine::EngineOptions::new(
+            tmp.path().to_owned(),
+            tmp.path().to_owned(),
+        ))
+        .await;
+        let catalog = engine.catalog_service.get();
+        engine.azure_sync.seed_for_test(
+            &catalog,
+            "test-resource",
+            vec![oc_core::provider_catalog::azure_sync::AzureDeployment {
+                name: "prod-mini".to_owned(),
+                model: "gpt-5-mini".to_owned(),
+            }],
+        );
+        engine
+            .digitalocean_sync
+            .seed_for_test(&catalog, "do-token", vec!["alpha".to_owned()]);
+        let mut remote = std::collections::BTreeMap::new();
+        remote.insert("enterprise-only-model".to_owned(), copilot_remote("enterprise-only-model"));
+        engine
+            .copilot_sync
+            .seed_for_test(&catalog, "https://api.githubcopilot.com", "ghu_token", remote);
+
+        let location = oc_core::location::LocationRef::new(tmp.path().to_owned(), None);
+        let entries = location_model_entries(&engine, &location).await;
+
+        // azure: the narrowed surface — ONE entry, the deployment name,
+        // carrying the catalog model's facts (azure.ts:513-529).
+        let azure = provider_entries(&entries, "azure");
+        assert_eq!(azure.len(), 1, "only the deployed model lists, not the whole catalog");
+        let prod = azure[0];
+        assert_eq!(prod["id"], json!("prod-mini"));
+        assert_eq!(prod["modelID"], json!("prod-mini"));
+        let static_mini = catalog
+            .provider("azure")
+            .and_then(|snapshot| snapshot.models.iter().find(|m| m.id.as_str() == "gpt-5-mini"))
+            .expect("gpt-5-mini in the static catalog");
+        assert!(prod["name"].as_str().unwrap_or_default().ends_with("(prod-mini)"));
+        assert_eq!(prod["limit"]["context"], json!(static_mini.limit.context));
+        assert_eq!(
+            provider_entries(&entries, "azure")
+                .iter()
+                .any(|model| model["id"] == json!("gpt-5-mini")),
+            false,
+            "an undeployed catalog model is GONE from the listing (the gap's defect)"
+        );
+
+        // github-copilot: the merged dynamic surface — the dynamic-only
+        // model lists, the static-only ids do not.
+        let copilot = provider_entries(&entries, "github-copilot");
+        assert_eq!(copilot.len(), 1, "the seeded remote listing replaces the static surface");
+        assert_eq!(copilot[0]["id"], json!("enterprise-only-model"));
+        assert_eq!(copilot[0]["name"], json!("Model enterprise-only-model"));
+
+        // digitalocean: the merge ADDS router:alpha over the static
+        // surface (digitalocean.ts:158-170) — the ref entry shape rides
+        // model_json so limits/capabilities/settings carry.
+        let router = entries
+            .iter()
+            .find(|model| {
+                model.get("providerID").and_then(Value::as_str) == Some("digitalocean")
+                    && model.get("id").and_then(Value::as_str) == Some("router:alpha")
+            })
+            .expect("router:alpha lists");
+        assert_eq!(router["name"], json!("alpha"));
+        assert_eq!(router["family"], json!("digitalocean-inference-routers"));
+        assert_eq!(router["limit"]["context"], json!(128_000));
+        assert_eq!(router["limit"]["output"], json!(8_192));
+        assert_eq!(router["settings"]["baseURL"], json!("https://inference.do-ai.run/v1"));
+        assert!(
+            provider_entries(&entries, "digitalocean")
+                .iter()
+                .any(|model| model["id"] == json!("deepseek-3.2")),
+            "the static digitalocean surface stays (the merge adds, never removes)"
+        );
+
+        // No collateral damage: the zen tier still lists.
+        assert!(
+            !provider_entries(&entries, "opencode").is_empty(),
+            "the keyless zen tier is unaffected"
+        );
+    }
+
+    /// G-259 — offline inertness: without a synced state the listing is
+    /// EXACTLY today's — the static azure/copilot surfaces list in full
+    /// (same counts as the catalog tier's filters), no dynamic ids.
+    #[tokio::test]
+    async fn offline_listing_unchanged_without_sync_state() {
+        arm_sync_listing_env();
+        let tmp = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let engine = oc_core::engine::Engine::boot(oc_core::engine::EngineOptions::new(
+            tmp.path().to_owned(),
+            tmp.path().to_owned(),
+        ))
+        .await;
+        let catalog = engine.catalog_service.get();
+        let location = oc_core::location::LocationRef::new(tmp.path().to_owned(), None);
+        let entries = location_model_entries(&engine, &location).await;
+
+        let azure = provider_entries(&entries, "azure");
+        assert_eq!(
+            azure.len(),
+            listable_static(catalog.provider("azure").expect("azure in catalog")),
+            "the full static azure surface lists (no narrowing without a credential)"
+        );
+        assert!(azure.iter().any(|model| model["id"] == json!("gpt-5-mini")));
+        assert!(azure.iter().any(|model| model["id"] == json!("prod-mini")) == false);
+
+        let copilot = provider_entries(&entries, "github-copilot");
+        assert_eq!(
+            copilot.len(),
+            listable_static(catalog.provider("github-copilot").expect("copilot in catalog")),
+            "the static copilot surface lists"
+        );
+        assert!(
+            !copilot.is_empty() && copilot.iter().any(|model| model["id"] == json!("enterprise-only-model")) == false,
+            "no dynamic-only ids without a sync"
+        );
+        let digitalocean = provider_entries(&entries, "digitalocean");
+        assert!(
+            digitalocean.iter().all(|model| model["id"] != json!("router:alpha")),
+            "no router entries without a credential"
+        );
+    }
+
+    /// G-259 — precedence vs a config custom with the same provider id:
+    /// bind's branch order keeps a catalog-id custom at the catalog
+    /// tier (CRED-A4 — its settings merge onto the catalog record, the
+    /// custom is NOT a separate resolution branch), so the listing
+    /// shows the custom's OWN entries alongside the SYNCED catalog
+    /// surface for that id (never the static one).
+    #[tokio::test]
+    async fn config_custom_rides_alongside_the_synced_catalog_tier() {
+        arm_sync_listing_env();
+        let tmp = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        std::fs::write(
+            tmp.path().join("opencode.json"),
+            r#"{
+                "providers": {
+                    "digitalocean": {
+                        "package": "@opencode/ai/providers/openai-compatible",
+                        "settings": { "baseURL": "http://127.0.0.1:9/v1" },
+                        "models": { "my-gateway": { "name": "My Gateway" } }
+                    }
+                }
+            }"#,
+        )
+        .expect("write config");
+        let engine = oc_core::engine::Engine::boot(oc_core::engine::EngineOptions::new(
+            tmp.path().to_owned(),
+            tmp.path().to_owned(),
+        ))
+        .await;
+        let catalog = engine.catalog_service.get();
+        engine
+            .digitalocean_sync
+            .seed_for_test(&catalog, "do-token", vec!["alpha".to_owned()]);
+
+        let location = oc_core::location::LocationRef::new(tmp.path().to_owned(), None);
+        let entries = location_model_entries(&engine, &location).await;
+
+        // The config custom's own entry lists with its configured name.
+        let gateway = entries
+            .iter()
+            .find(|model| {
+                model.get("providerID").and_then(Value::as_str) == Some("digitalocean")
+                    && model.get("id").and_then(Value::as_str) == Some("my-gateway")
+            })
+            .expect("the config custom's model lists");
+        assert_eq!(gateway["name"], json!("My Gateway"));
+
+        // The catalog tier for the SAME id serves the SYNCED surface:
+        // router:alpha (sync-only) lists, the static models ride the
+        // merge unchanged.
+        assert!(
+            entries.iter().any(|model| {
+                model.get("providerID").and_then(Value::as_str) == Some("digitalocean")
+                    && model.get("id").and_then(Value::as_str) == Some("router:alpha")
+            }),
+            "the synced catalog tier lists the router"
+        );
+        assert!(
+            entries.iter().any(|model| {
+                model.get("providerID").and_then(Value::as_str) == Some("digitalocean")
+                    && model.get("id").and_then(Value::as_str) == Some("deepseek-3.2")
+            }),
+            "the static models ride the synced snapshot's merge"
+        );
+    }
+
+    /// G-259 — `/api/model/default` parity: a synced provider's default
+    /// renders through the synced snapshot (a deployment-name selection
+    /// serves the narrowed entry), and a selection of an undeployed
+    /// model is an exact-map miss that falls back to the FIRST
+    /// available text model of the same ordering — never the static
+    /// record's entry.
+    #[tokio::test]
+    async fn model_default_serves_the_synced_snapshot() {
+        arm_sync_listing_env();
+        let tmp = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        std::fs::write(tmp.path().join("opencode.json"), r#"{ "model": "azure/prod-mini" }"#)
+            .expect("write config");
+        let engine = oc_core::engine::Engine::boot(oc_core::engine::EngineOptions::new(
+            tmp.path().to_owned(),
+            tmp.path().to_owned(),
+        ))
+        .await;
+        let catalog = engine.catalog_service.get();
+        engine.azure_sync.seed_for_test(
+            &catalog,
+            "test-resource",
+            vec![oc_core::provider_catalog::azure_sync::AzureDeployment {
+                name: "prod-mini".to_owned(),
+                model: "gpt-5-mini".to_owned(),
+            }],
+        );
+
+        let state = std::sync::Arc::new(crate::state::AppState::new(
+            engine,
+            crate::state::AuthConfig { password: None },
+            "test".to_owned(),
+            std::sync::Arc::new(oc_util::determinism::UuidV4IdGen),
+            std::sync::Arc::new(oc_util::determinism::SystemClock),
+        ));
+        let uri: Uri = format!(
+            "http://localhost/api/model/default?location[directory]={}",
+            tmp.path().display()
+        )
+        .parse()
+        .expect("request uri");
+        let response = model_default(State(state.clone()), uri.clone(), HeaderMap::new())
+            .await
+            .expect("model.default responds");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let payload: Value = serde_json::from_slice(&bytes).expect("envelope json");
+        assert_eq!(payload["data"]["providerID"], json!("azure"));
+        assert_eq!(payload["data"]["id"], json!("prod-mini"));
+        assert_eq!(payload["data"]["modelID"], json!("prod-mini"));
+
+        // The undeployed selection is a MISS against the synced
+        // snapshot: v2's available-first fallback (model.ts:260-266),
+        // never the undeployed model's static entry.
+        std::fs::write(tmp.path().join("opencode.json"), r#"{ "model": "azure/gpt-5-mini" }"#)
+            .expect("rewrite config");
+        let response = model_default(State(state.clone()), uri.clone(), HeaderMap::new())
+            .await
+            .expect("model.default responds");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let payload: Value = serde_json::from_slice(&bytes).expect("envelope json");
+        let data = &payload["data"];
+        assert!(
+            !(data["providerID"] == json!("azure") && data["id"] == json!("gpt-5-mini")),
+            "the undeployed static entry never serves: {data}"
+        );
+        let location = oc_core::location::LocationRef::new(tmp.path().to_owned(), None);
+        let expected = location_model_entries(&state.engine, &location)
+            .await
+            .into_iter()
+            .find(supports_text)
+            .expect("an available text model exists");
+        assert_eq!(data, &expected, "the miss falls back to the first available text model");
     }
 }
