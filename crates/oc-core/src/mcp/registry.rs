@@ -1603,21 +1603,22 @@ pub fn tool_name(server: &str, tool: &str) -> String {
     format!("{}_{}", namespace(server), namespace(tool))
 }
 
-/// The executor bound to one MCP tool (tool/mcp.ts:49-117): `mcp.callTool`
-/// with structured-output preference (`structuredContent` → JSON-parsed
+/// The executor bound to one MCP tool (tool/mcp.ts:49-117): the execute
+/// closure FIRST asserts permission (`permission.assert` with
+/// action = the full namespaced name, resources and save both `["*"]`,
+/// mcp.ts:51-63 — G-242), then runs `mcp.callTool` with
+/// structured-output preference (`structuredContent` → JSON-parsed
 /// text when the server declares no schema → raw text); media → file
 /// parts; tool errors join the text parts or fall back to the generic
 /// message.
 ///
-/// NO permission assert runs today: this executor registers through the
-/// bare `register_executor` path (below), bypassing the unified C1 tool
-/// pipeline's execute wrapper — the gap is registered as G-242 (the
-/// `permission` field is carried for that fix: `permission.assert` with
-/// action = the full namespaced name, resources and save both `["*"]`).
+/// Registered through the unified C1 pipeline wrapper
+/// (`pipeline_executor_with_output`, G-242): the before/after hooks,
+/// `decodeInput`, and `normalizeContent` run around this leaf exactly
+/// like ref's `editor.add` registration (mcp.ts:43 → tool.ts:150).
 pub struct McpToolExecutor {
     registry: McpRegistry,
     tool: Tool,
-    #[allow(dead_code)] // reserved for G-242: permission.assert(action = namespaced name, ["*"])
     permission: crate::permission::Permission,
 }
 
@@ -1705,6 +1706,69 @@ impl ToolExecute for McpToolExecutor {
     }
 }
 
+/// G-242 — the pipeline leaf surface (ref registers the execute closure
+/// through `editor.add`, mcp.ts:43, i.e. the unified pipeline wraps this
+/// leaf): permission.assert FIRST (mcp.ts:51-63), then the raw callTool
+/// logic above. Ask rules park the call exactly like ref; deny surfaces
+/// as the permission failure; declines tunnel as interrupts.
+impl crate::tool::ToolExecuteWithContext for McpToolExecutor {
+    fn execute<'a>(
+        &'a self,
+        _services: &'a crate::tool::ToolServices,
+        input: &'a serde_json::Value,
+        context: &'a crate::location::ToolCallContext,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<crate::tool::ToolOutcome, crate::tool::ToolFailure>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        use crate::permission::AssertInput;
+
+        Box::pin(async move {
+            // mcp.ts:51-63: action = `{server}_{tool}` (the namespaced
+            // name), resources and save both `["*"]`, source = the
+            // invoking tool call.
+            self.permission
+                .assert(AssertInput {
+                    id: None,
+                    session_id: context.session_id.clone(),
+                    agent: Some(context.agent.clone()),
+                    action: tool_name(&self.tool.server, &self.tool.name),
+                    resources: vec!["*".to_string()],
+                    save: Some(vec!["*".to_string()]),
+                    metadata: None, // ref `metadata: {}` — see G-191's mapping note
+                    source: Some(oc_schema::permission::Source::Tool {
+                        message_id: context.message_id.clone(),
+                        id: context.call_id.clone(),
+                    }),
+                })
+                .await
+                .map_err(|error| crate::tool::ToolFailure {
+                    // The pipeline's `visible_message` unwraps the cause
+                    // (deny → BlockedError text, decline → interrupt);
+                    // the blanket matches ref's foreign-error coercion
+                    // (`Unable to execute ${name}`, mcp.ts:115).
+                    message: format!(
+                        "Unable to execute {}",
+                        tool_name(&self.tool.server, &self.tool.name)
+                    ),
+                    cause: Some(crate::tool::permission_cause(&error)),
+                })?;
+            ToolExecute::execute_with_context(self, input, context)
+                .await
+                .map(|result| crate::tool::ToolOutcome {
+                    content: result.content,
+                    metadata: result.metadata,
+                    output: result.output,
+                })
+                .map_err(crate::tool::subagent::run_failure_to_failure)
+        })
+    }
+}
+
 /// The MCP → tool-registry bridge (tool/mcp.ts): one shared registration
 /// refresh, driven by `mcp.tools.changed` with a 100ms debounce; the
 /// initial registration flushes before the first read (`flush`).
@@ -1716,12 +1780,16 @@ pub struct McpToolBridge {
 impl McpToolBridge {
     /// Installs the bridge against a tool registry. Wholly-denied tools
     /// are dropped by `ToolRegistryState::snapshot` at read time, matching
-    /// v2's snapshot filtering.
+    /// v2's snapshot filtering. The executors register through the
+    /// unified pipeline wrapper (G-242 — ref `editor.add`, mcp.ts:43):
+    /// before/after hooks, decodeInput, encodeOutput, normalizeContent.
     #[must_use]
     pub fn install(
         registry: &McpRegistry,
         tools: &Arc<ToolRegistryState>,
         permission: &crate::permission::Permission,
+        hooks: &Arc<crate::hooks::HookRegistry>,
+        services: &Arc<crate::tool::ToolServices>,
     ) -> McpToolBridge {
         let (flush_tx, flush_rx) = tokio::sync::watch::channel(false);
         // Initial registration: register once after initial discovery; only
@@ -1731,9 +1799,11 @@ impl McpToolBridge {
             let registry = registry.clone();
             let tools = Arc::clone(tools);
             let permission = permission.clone();
+            let hooks = Arc::clone(hooks);
+            let services = Arc::clone(services);
             let owned = Arc::clone(&owned);
             async move {
-                Self::sync(&registry, &tools, &permission, &owned);
+                Self::sync(&registry, &tools, &permission, &hooks, &services, &owned);
                 let _ = flush_tx.send(true);
             }
         };
@@ -1754,6 +1824,8 @@ impl McpToolBridge {
             let registry = registry.clone();
             let tools = Arc::clone(tools);
             let permission = permission.clone();
+            let hooks = Arc::clone(hooks);
+            let services = Arc::clone(services);
             let owned = Arc::clone(&owned);
             async move {
                 while signal_rx.recv().await.is_some() {
@@ -1766,7 +1838,7 @@ impl McpToolBridge {
                             _ = signal_rx.recv() => {},
                         }
                     }
-                    Self::sync(&registry, &tools, &permission, &owned);
+                    Self::sync(&registry, &tools, &permission, &hooks, &services, &owned);
                 }
             }
         };
@@ -1774,10 +1846,13 @@ impl McpToolBridge {
         McpToolBridge { flush: flush_rx }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn sync(
         registry: &McpRegistry,
         tools: &ToolRegistryState,
         permission: &crate::permission::Permission,
+        hooks: &Arc<crate::hooks::HookRegistry>,
+        services: &Arc<crate::tool::ToolServices>,
         owned: &SyncMutex<std::collections::BTreeSet<String>>,
     ) {
         let discovered = registry.tools();
@@ -1785,7 +1860,7 @@ impl McpToolBridge {
         // `options.namespace = server` — the registry derives the
         // effective `server_tool` name and the `server.tool` Code Mode
         // path. The `{server}_{tool}` form is the PERMISSION ACTION
-        // (mcp.ts:17), asserted below.
+        // (mcp.ts:17), asserted by the executor's leaf (G-242).
         let current: std::collections::BTreeSet<String> =
             discovered.iter().map(|tool| tool.name.clone()).collect();
         // Remove bridge-owned registrations that left the catalog; other
@@ -1807,10 +1882,26 @@ impl McpToolBridge {
                 tool.input_schema.clone(),
             );
             registration.namespace = Some(namespace(&tool.server));
-            registration.permission = Some(action);
+            registration.permission = Some(action.clone());
             registration.codemode = tool.codemode_enabled();
             tools.register(registration);
-            tools.register_executor(name.clone(), Arc::new(executor));
+            // G-242 — the pipeline wrap (`editor.add` → tool.ts:150):
+            // hooks + decodeInput + normalizeContent around the leaf's
+            // permission assert + callTool. G-230's MCP face: a server
+            // DECLARED `outputSchema` enters the `encodeOutput` path
+            // (`tool.outputSchema` ≠ undefined, mcp.ts:48); undeclared
+            // stays the accept-all pass-through fallback.
+            tools.register_executor(
+                name.clone(),
+                crate::tool::registry::pipeline_executor_with_output(
+                    &action,
+                    tool.input_schema.clone(),
+                    tool.output_schema.clone(),
+                    Arc::new(executor),
+                    services,
+                    hooks,
+                ),
+            );
             owned.lock().insert(name);
         }
     }

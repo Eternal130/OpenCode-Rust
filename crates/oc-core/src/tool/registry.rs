@@ -226,9 +226,11 @@ struct PipelineExecutor {
     /// not ported those declarations — the compat survey found 14
     /// builtin tools returning `output` with no declaration, so the
     /// die rule would break all of them (the fallback is the honest
-    /// scope until the declarations land; MCP tools declare their
-    /// server's `outputSchema` on their own executor path,
-    /// mcp/registry.rs).
+    /// scope until the declarations land). The MCP bridge is the one
+    /// surface that DOES declare: a server-declared `outputSchema`
+    /// flows through `pipeline_executor_with_output` (G-242, the
+    /// mcp.ts:48 `tool.outputSchema` half), undeclared stays `None`
+    /// (the `?? {}` accept-all fallback).
     output_schema: Option<serde_json::Value>,
     leaf: Arc<dyn super::ToolExecuteWithContext>,
     services: Arc<ToolServices>,

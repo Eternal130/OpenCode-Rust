@@ -1680,7 +1680,15 @@ async fn mcp_tool_bridge_registers_namespaced_tools_and_flushes() {
 
     let tools = Arc::new(crate::location::ToolRegistryState::new());
     let permission = test_permission(&bus);
-    let bridge = super::registry::McpToolBridge::install(&registry, &tools, &permission);
+    let hooks = Arc::new(crate::hooks::HookRegistry::new());
+    let services = test_services(&permission);
+    let bridge = super::registry::McpToolBridge::install(
+        &registry,
+        &tools,
+        &permission,
+        &hooks,
+        &services,
+    );
     bridge.flush().await;
     assert_eq!(tools.list().len(), 1);
     let registration = tools.list().remove(0);
@@ -1695,41 +1703,388 @@ async fn mcp_tool_bridge_registers_namespaced_tools_and_flushes() {
     registry.shutdown().await;
 }
 
+// ---------------------------------------------------------------------------
+// G-242 — the permission gate + pipeline wrap on MCP tool executors
+// ---------------------------------------------------------------------------
+
+fn g242_context() -> crate::location::ToolCallContext {
+    crate::location::ToolCallContext {
+        session_id: oc_schema::id::SessionId("ses_g242".into()),
+        agent: oc_schema::id::AgentId::parse("build"),
+        message_id: "msg_1".into(),
+        call_id: "call_1".into(),
+    }
+}
+
+/// The shared G-242 fixture: a connected scripted `alpha` server exposing
+/// `echo` (free-form input, scripted `pong` answer) and `gated` (a
+/// required input field, no scripted answer) plus `shaped` (a declared
+/// outputSchema), bridged into a tool registry through the pipeline.
+async fn g242_fixture(
+    bus: &crate::bus::Bus,
+    rules: Option<oc_schema::permission::Ruleset>,
+) -> (
+    McpRegistry,
+    Arc<crate::location::ToolRegistryState>,
+    Arc<crate::hooks::HookRegistry>,
+    crate::permission::Permission,
+    tokio::sync::broadcast::Receiver<oc_schema::misc_events::PermissionEvent>,
+) {
+    let mut servers = BTreeMap::new();
+    servers.insert("alpha".to_string(), local_config());
+    let mut calls = BTreeMap::new();
+    calls.insert(
+        "echo".to_string(),
+        serde_json::json!({
+            "content": [{ "type": "text", "text": "pong" }],
+            "isError": false,
+        }),
+    );
+    calls.insert(
+        "shaped".to_string(),
+        serde_json::json!({
+            "content": [{ "type": "text", "text": "ok" }],
+            "structuredContent": { "answer": 42 },
+            "isError": false,
+        }),
+    );
+    calls.insert(
+        "badshape".to_string(),
+        serde_json::json!({
+            "content": [{ "type": "text", "text": "ok" }],
+            "structuredContent": { "answer": "lots" },
+            "isError": false,
+        }),
+    );
+    let script = Script { calls, ..Script::new() };
+    script.tools.lock().push(serde_json::json!({
+        "name": "echo",
+        "description": "Echo",
+        "inputSchema": { "type": "object", "properties": {} },
+    }));
+    script.tools.lock().push(serde_json::json!({
+        "name": "gated",
+        "description": "Gated",
+        "inputSchema": {
+            "type": "object",
+            "properties": { "q": { "type": "string" } },
+            "required": ["q"],
+        },
+    }));
+    let shape = serde_json::json!({
+        "type": "object",
+        "properties": { "answer": { "type": "number" } },
+        "required": ["answer"],
+    });
+    for name in ["shaped", "badshape"] {
+        script.tools.lock().push(serde_json::json!({
+            "name": name,
+            "description": name,
+            "inputSchema": { "type": "object", "properties": {} },
+            "outputSchema": shape,
+        }));
+    }
+    let registry = registry_with(bus, scripted_connector(move || script.clone()), servers);
+    registry.reconcile().await;
+    wait_for_status(&registry, "alpha", Status::Connected).await;
+
+    let tools = Arc::new(crate::location::ToolRegistryState::new());
+    let (permission, rx) = test_permission_with_rules(bus, rules);
+    let hooks = Arc::new(crate::hooks::HookRegistry::new());
+    let services = test_services(&permission);
+    let bridge = super::registry::McpToolBridge::install(
+        &registry,
+        &tools,
+        &permission,
+        &hooks,
+        &services,
+    );
+    bridge.flush().await;
+    (registry, tools, hooks, permission, rx)
+}
+
+/// G-242 (ref tool/mcp.ts:51-63): an agent ruleset ASK rule on the
+/// namespaced action parks the MCP tool call until the user approves —
+/// previously ask rules never intercepted MCP tools at all.
+#[tokio::test]
+async fn g242_ask_rule_parks_mcp_tool_execution_until_reply() {
+    let (_db, bus) = test_bus().await;
+    let rules = vec![oc_schema::permission::Rule {
+        action: "alpha_echo".into(),
+        resource: "*".into(),
+        effect: oc_schema::permission::Effect::Ask,
+    }];
+    let (registry, tools, _hooks, permission, mut rx) = g242_fixture(&bus, Some(rules)).await;
+
+    let executor = tools.executor("echo").expect("pipeline executor registered");
+    let spawned = tokio::spawn(async move {
+        executor
+            .execute_with_context(&serde_json::json!({}), &g242_context())
+            .await
+    });
+    // The assert parks on an `alpha_echo` ask with ref's exact shape:
+    // resources ["*"], save ["*"] (mcp.ts:53-54).
+    let asked = match tokio::time::timeout(Duration::from_secs(5), rx.recv()).await {
+        Ok(Ok(oc_schema::misc_events::PermissionEvent::Asked(env))) => env.data,
+        other => panic!("expected permission.asked, got {other:?}"),
+    };
+    assert_eq!(asked.action, "alpha_echo");
+    assert_eq!(asked.resources, vec!["*".to_string()]);
+    assert_eq!(asked.save, Some(vec!["*".to_string()]));
+    // The call must not have completed while parked.
+    assert!(
+        !spawned.is_finished(),
+        "the MCP call stays parked while the ask is pending"
+    );
+    // Approving "once" releases the parked call; the tool then runs.
+    permission
+        .reply(crate::permission::ReplyInput {
+            request_id: asked.id,
+            reply: oc_schema::permission::Reply::Once,
+            message: None,
+        })
+        .await
+        .expect("reply");
+    let result = spawned.await.expect("join").expect("tool runs after approval");
+    match &result.content[0] {
+        oc_schema::tool::Content::Text { text } => assert_eq!(text, "pong"),
+        other => panic!("expected text part, got {other:?}"),
+    }
+    registry.shutdown().await;
+}
+
+/// G-242 deny leg: a deny rule on the namespaced action rejects the call
+/// with the permission failure (never reaching the server).
+#[tokio::test]
+async fn g242_deny_rule_rejects_mcp_tool_execution() {
+    let (_db, bus) = test_bus().await;
+    let rules = vec![
+        oc_schema::permission::Rule {
+            action: "*".into(),
+            resource: "*".into(),
+            effect: oc_schema::permission::Effect::Allow,
+        },
+        oc_schema::permission::Rule {
+            action: "alpha_echo".into(),
+            resource: "*".into(),
+            effect: oc_schema::permission::Effect::Deny,
+        },
+    ];
+    let (registry, tools, _hooks, _permission, _rx) = g242_fixture(&bus, Some(rules)).await;
+    let executor = tools.executor("echo").expect("pipeline executor registered");
+    let failure = executor
+        .execute_with_context(&serde_json::json!({}), &g242_context())
+        .await
+        .expect_err("denied");
+    match failure {
+        crate::location::ToolRunFailure::PermissionRejected { message, .. } => {
+            assert_eq!(message, "Permission denied: alpha_echo");
+        }
+        other => panic!("expected PermissionRejected, got {other:?}"),
+    }
+    registry.shutdown().await;
+}
+
+/// G-242 pipeline leg (ref registers MCP tools through `editor.add`,
+/// mcp.ts:43): `tool.execute.before`/`after` fire under the effective
+/// name and `decodeInput` rejects bad arguments BEFORE the leaf (the
+/// scripted `gated` tool has no call answer — reaching the server would
+/// answer differently).
+#[tokio::test]
+async fn g242_pipeline_hooks_and_decode_wrap_mcp_tools() {
+    let (_db, bus) = test_bus().await;
+    let (registry, tools, hooks, _permission, _rx) = g242_fixture(&bus, None).await;
+
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let before_seen = Arc::clone(&seen);
+    let scope = crate::hooks::HookScope::new();
+    scope.track(
+        hooks
+            .register_tool_execute_before(
+                crate::hooks::fn_hook(
+                    move |event: &mut crate::hooks::ToolExecuteBeforeEvent| {
+                        before_seen
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .push(format!("before:{}", event.tool));
+                        Ok(())
+                    },
+                ),
+                crate::hooks::HookOptions::default(),
+            )
+            .await,
+    );
+    let after_seen = Arc::clone(&seen);
+    scope.track(
+        hooks
+            .register_tool_execute_after(
+                crate::hooks::fn_hook(
+                    move |event: &mut crate::hooks::ToolExecuteAfterEvent| {
+                        let phase = match event.outcome {
+                            crate::hooks::ToolOutcome::Completed { .. } => "after",
+                            crate::hooks::ToolOutcome::Error { .. } => "after-error",
+                        };
+                        after_seen
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .push(format!("{phase}:{}", event.tool));
+                        Ok(())
+                    },
+                ),
+                crate::hooks::HookOptions::default(),
+            )
+            .await,
+    );
+
+    // Success leg: allow rules (none configured) → the tool answers.
+    let result = tools
+        .executor("echo")
+        .expect("executor")
+        .execute_with_context(&serde_json::json!({}), &g242_context())
+        .await
+        .expect("echo runs");
+    match &result.content[0] {
+        oc_schema::tool::Content::Text { text } => assert_eq!(text, "pong"),
+        other => panic!("expected text part, got {other:?}"),
+    }
+    // Decode leg: the required `q` is missing — the pipeline's
+    // decodeInput fires before the leaf (ref's exact issue message).
+    let failure = tools
+        .executor("gated")
+        .expect("executor")
+        .execute_with_context(&serde_json::json!({}), &g242_context())
+        .await
+        .expect_err("decode fails");
+    assert!(
+        failure.message().starts_with("Invalid arguments for tool \"alpha_gated\""),
+        "got: {}",
+        failure.message()
+    );
+
+    let observed = seen.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+    assert_eq!(
+        observed,
+        vec![
+            "before:alpha_echo".to_string(),
+            "after:alpha_echo".to_string(),
+            // The before hook fires first, decodeInput rejects next —
+            // the leaf (and the server) is never reached for `gated`,
+            // and the error leg still fires the after hook.
+            "before:alpha_gated".to_string(),
+            "after-error:alpha_gated".to_string(),
+        ]
+    );
+    registry.shutdown().await;
+}
+
+/// G-242's G-230 face (mcp.ts:48 `output: tool.outputSchema ?? {}`): a
+/// server-DECLARED outputSchema enters the pipeline's `encodeOutput`
+/// path — matching structured content passes, mismatching content fails
+/// with the validation message; the undeclared `echo` stays the
+/// accept-all pass-through.
+#[tokio::test]
+async fn g242_declared_output_schema_enters_encode_output() {
+    let (_db, bus) = test_bus().await;
+    let (registry, tools, _hooks, _permission, _rx) = g242_fixture(&bus, None).await;
+
+    let result = tools
+        .executor("shaped")
+        .expect("executor")
+        .execute_with_context(&serde_json::json!({}), &g242_context())
+        .await
+        .expect("valid structured output passes encodeOutput");
+    assert_eq!(result.output, Some(serde_json::json!({ "answer": 42 })));
+
+    let failure = tools
+        .executor("badshape")
+        .expect("executor")
+        .execute_with_context(&serde_json::json!({}), &g242_context())
+        .await
+        .expect_err("mismatching output fails encodeOutput");
+    assert!(
+        failure.message().contains("Tool returned an invalid value for its output schema"),
+        "got: {}",
+        failure.message()
+    );
+    registry.shutdown().await;
+}
+
 fn test_permission(_bus: &crate::bus::Bus) -> crate::permission::Permission {
+    test_permission_with_rules(_bus, None).0
+}
+
+/// G-242 — the same builder with an agent ruleset (ask/deny legs of the
+/// MCP tool permission gate), plus the asked-event receiver.
+fn test_permission_with_rules(
+    _bus: &crate::bus::Bus,
+    rules: Option<oc_schema::permission::Ruleset>,
+) -> (
+    crate::permission::Permission,
+    tokio::sync::broadcast::Receiver<oc_schema::misc_events::PermissionEvent>,
+) {
     use crate::permission::*;
     let ids: Arc<dyn oc_util::determinism::IdGen> =
         Arc::new(oc_util::determinism::SequentialIdGen::new());
-    Permission::new(
+    struct RulesResolver(Option<oc_schema::permission::Ruleset>);
+    #[async_trait::async_trait]
+    impl RuleResolver for RulesResolver {
+        async fn resolve(
+            &self,
+            _session_id: &oc_schema::id::SessionId,
+            _agent: Option<&oc_schema::id::AgentId>,
+        ) -> Result<
+            (Option<oc_schema::permission::Ruleset>, Option<oc_schema::permission::Ruleset>),
+            crate::permission::PermissionError,
+        > {
+            Ok((self.0.clone(), None))
+        }
+    }
+    let sink = Arc::new(BroadcastEventSink::new(8));
+    let rx = sink.subscribe();
+    let permission = Permission::new(
         ids,
         Arc::new(oc_util::determinism::FixedClock::epoch()),
-        Arc::new(crate::permission::BroadcastEventSink::new(8)),
+        sink,
         Arc::new(crate::permission::saved::MemorySavedGrantStore::new(
             Arc::new(oc_util::determinism::SequentialIdGen::new()),
             Arc::new(oc_util::determinism::FixedClock::epoch()),
         )),
-        Arc::new(FixedRules),
+        Arc::new(RulesResolver(rules)),
         oc_schema::id::ProjectId::global(),
         None,
-    )
+    );
+    (permission, rx)
 }
 
-use crate::permission::RuleResolver;
-
-#[derive(Default)]
-struct FixedRules;
-
-#[async_trait::async_trait]
-impl RuleResolver for FixedRules {
-    async fn resolve(
-        &self,
-        _session_id: &oc_schema::id::SessionId,
-        _agent: Option<&oc_schema::id::AgentId>,
-    ) -> Result<
-        (Option<oc_schema::permission::Ruleset>, Option<oc_schema::permission::Ruleset>),
-        crate::permission::PermissionError,
-    > {
-        Ok((None, None))
-    }
+/// A minimal `ToolServices` for the pipeline-wrapped bridge (the MCP
+/// leaf never touches it; the pipeline only threads it through).
+fn test_services(permission: &crate::permission::Permission) -> Arc<crate::tool::ToolServices> {
+    let dir = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).expect("home");
+    let access = crate::file_access::FileAccess::new(
+        permission.clone(),
+        dir.path().to_path_buf(),
+        dir.path().to_path_buf(),
+        home.clone(),
+    );
+    let services = crate::tool::ToolServices {
+        directory: dir.path().to_path_buf(),
+        project_directory: dir.path().to_path_buf(),
+        home: home.clone(),
+        access,
+        permission: permission.clone(),
+        mutation: Arc::new(crate::file_mutation::FileMutation::new(
+            dir.path().to_path_buf(),
+            home,
+        )),        files: Arc::new(crate::environment::LocalFiles),
+        formatter: Arc::new(crate::formatter::NoopFormatter::new()),
+        instructions: None,
+        db: None,
+        bus: None,
+    };
+    std::mem::forget(dir); // keep the tempdir for the test's lifetime
+    Arc::new(services)
 }
 
 // ---------------------------------------------------------------------------
