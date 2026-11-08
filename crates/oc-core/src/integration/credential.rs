@@ -29,6 +29,7 @@ pub enum StoreError {
     Decode(String),
 }
 
+#[derive(Clone)]
 pub struct CredentialStore {
     db: Arc<Database>,
     bus: Arc<Bus>,
