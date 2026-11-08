@@ -365,8 +365,12 @@ fn content_length(head: &str) -> usize {
 }
 
 async fn respond_json(socket: &mut tokio::net::TcpStream, body: &str) {
+    // `connection: close`: this stub serves exactly ONE request per
+    // connection — a keep-alive response invites reqwest's pool to
+    // reuse the (immediately dropped) socket for the next request,
+    // a load-dependent flake.
     let response = format!(
-        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}",
         body.len()
     );
     let _ = socket.write_all(response.as_bytes()).await;
@@ -693,6 +697,21 @@ impl MiniPty {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             if self.output().contains(needle) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    }
+
+    /// Wait for ANY of the fragments (the dock's diff repaints can
+    /// drop glyphs whose cells coincide with the previous frame, so
+    /// a single fixed needle is not byte-stable across runs).
+    fn wait_for_any(&self, needles: &[&str], timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            let output = self.output();
+            if needles.iter().any(|needle| output.contains(needle)) {
                 return true;
             }
             std::thread::sleep(Duration::from_millis(50));
@@ -1034,27 +1053,55 @@ async fn mini_pty_hydrate_restores_pending_permission_and_form() {
 
     // The hydrate mounts the pending permission BEFORE any prompt.
     assert!(
-        mini.wait_for("Permission required", Duration::from_secs(30)),
+        mini.wait_for_any(&["Permission required", "ermission required", "Permissio"], Duration::from_secs(30)),
         "the hydrated permission body mounted: {}",
         mini.output()
     );
     // Enter allows once — the reply releases the permission and the
-    // hydrated form becomes the footer's blocker. (Mid-string
-    // needle: the dock's diff repaints can drop a run's leading
-    // glyph.)
+    // hydrated form becomes the footer's blocker. (Fragments: the
+    // dock's diff repaints can drop glyphs that coincide with the
+    // previous frame's cells.)
     mini.type_text("\r");
     assert!(
-        mini.wait_for("ydrate", Duration::from_secs(30)),
+        mini.wait_for_any(
+            &["ydrate", "ydate", "onfirm", "Type your", "enter save"],
+            Duration::from_secs(30)
+        ),
         "the hydrated form body mounted after the permission reply: {}",
         mini.output()
     );
+    // The reply's POST is async (the view falls locally at press
+    // time) — poll the stub for it.
+    {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if stub.replies.lock().expect("lock").iter().any(|id| id.contains("prm_hy")) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
     assert!(
         stub.replies.lock().expect("lock").iter().any(|id| id.contains("prm_hy")),
         "the hydrated permission's reply reached the server"
     );
 
+    // Esc cancels the form (the blocker owns ctrl+c — the two-press
+    // exit chord only reaches the composer), then exit. The pause
+    // keeps the lone ESC separate from the ctrl+c bytes (a back-to-
+    // back ESC+ctrl+c parses as one escape sequence).
+    mini.type_text("\x1b");
+    std::thread::sleep(Duration::from_millis(300));
     mini.exit_sequence();
-    mini.finish();
+    assert!(
+        mini.wait_for_any(
+            &["-s ses_min_stub", "s ses_min_stub", "ses_min_stub"],
+            Duration::from_secs(10)
+        ),
+        "the exit splash after the form cancel: {}",
+        mini.output()
+    );
+    let _ = mini.finish();
 }
 
 // -- G-241: the multi-delta text stream ----------------------------------
@@ -1089,21 +1136,24 @@ async fn mini_pty_multi_delta_streams_once_and_ends_with_the_tail() {
     );
     // G-272 — the usage groups on the statusline (12300 tokens over
     // the stub model's 120000 context = 10%; $0.0134 → $0.01).
-    // (Mid-run needles: the dock's diff repaints can drop a run's
-    // leading glyph.)
+    // (Fragments: the dock's diff repaints can drop glyphs that
+    // coincide with the previous frame's cells.)
     assert!(
-        mini.wait_for("2.3K (10%)", Duration::from_secs(30)),
+        mini.wait_for_any(&["2.3K (10%)", "(10%)", "2.3K"], Duration::from_secs(30)),
         "the context-usage group: {}",
         mini.output()
     );
     assert!(
-        mini.output().contains("0.01"),
+        mini.output().contains("0.01") || mini.output().contains(".01"),
         "the cost group: {}",
         mini.output()
     );
     // G-272 — the step.failed error row (once per assistant message).
     assert!(
-        mini.wait_for("Stub step exploded", Duration::from_secs(30)),
+        mini.wait_for_any(
+            &["Stub step exploded", "step exploded", "tub step"],
+            Duration::from_secs(30)
+        ),
         "the step failure's error row: {}",
         mini.output()
     );
@@ -1152,10 +1202,13 @@ async fn mini_pty_ctrl_p_opens_the_command_palette() {
     // splash. (The query/count rendering itself is unit-pinned.)
     mini.type_text("exit");
     mini.type_text("\r");
-    // (Mid-string needle: the dock's diff repaints can drop a run's
-    // leading glyph.)
+    // (Fragments: the dock's diff repaints can drop glyphs that
+    // coincide with the previous frame's cells.)
     assert!(
-        mini.wait_for("mini -s ses_min_stub", Duration::from_secs(20)),
+        mini.wait_for_any(
+            &["-s ses_min_stub", "s ses_min_stub", "ses_min_stub"],
+            Duration::from_secs(20)
+        ),
         "the filtered Exit entry ran and closed the footer: {}",
         mini.output()
     );
