@@ -268,7 +268,10 @@ pub fn expiring_url(
     expiring_url_at(url, now_millis(), retention_ms, media_type, headers)
 }
 
-/// `expiringUrl` with an injected clock (test seam).
+/// `expiringUrl` with an injected clock (test seam). Download headers ride
+/// the runtime-only [`Asset::headers`] sidecar — never the serde face, so
+/// a serialized asset cannot leak credentials (media.ts:207-213; the
+/// pre-G-246 shape wrote them into `providerMetadata.route.headers`).
 #[must_use]
 pub fn expiring_url_at(
     url: impl Into<String>,
@@ -277,18 +280,9 @@ pub fn expiring_url_at(
     media_type: Option<String>,
     headers: Option<&BTreeMap<String, String>>,
 ) -> Asset {
-    let mut asset = media::url(url, media_type.clone(), Some(now + retention_ms));
+    let mut asset = media::url(url, media_type, Some(now + retention_ms));
     if let Some(headers) = headers.filter(|headers| !headers.is_empty()) {
-        let mut namespace = std::collections::BTreeMap::new();
-        namespace.insert(
-            "headers".to_string(),
-            serde_json::Value::Object(
-                headers.iter().map(|(k, v)| (k.clone(), serde_json::json!(v))).collect(),
-            ),
-        );
-        let mut metadata = asset.provider_metadata.take().unwrap_or_default();
-        metadata.insert("route".to_string(), namespace);
-        asset.provider_metadata = Some(metadata);
+        asset.headers = Some(headers.clone());
     }
     asset
 }
@@ -456,7 +450,35 @@ pub trait QueuedProtocol: MediaProtocolBase {
     /// Decode a persisted token; a value this protocol's codec rejects
     /// fails typed at the resume boundary (route/media.ts:224-242).
     fn decode_token(&self, raw: &serde_json::Value) -> Result<Self::Token, AiError>;
+
+    /// Pull result assets that expire too soon to hand back into owned
+    /// bytes through the route's [`Materialize`] closure (the ref decodes
+    /// call `context.materialize`, media-protocol.ts:96-100; decoders here
+    /// are sync so the route runs this hook straight after
+    /// [`Self::decode_result`]). The default returns the response
+    /// unchanged — only protocols whose outputs die with the poll (BFL's
+    /// ten-minute `sample` URLs) override it. G-246.
+    fn materialize_result<'a>(
+        &'a self,
+        response: Self::Response,
+        materialize: &'a Materialize<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<Self::Response, AiError>> + Send + 'a>> {
+        Box::pin(async move {
+            let _ = materialize;
+            Ok(response)
+        })
+    }
 }
+
+/// The route's `materialize` (media-protocol.ts:99): download one `url`
+/// asset's bytes through the route executor and return an owned-bytes
+/// asset (inline sources come back unchanged).
+pub type Materialize<'r> = dyn for<'b> Fn(
+        &'b Asset,
+    ) -> Pin<Box<dyn Future<Output = Result<Asset, AiError>> + Send + 'b>>
+    + Send
+    + Sync
+    + 'r;
 
 /// A queued protocol's cancel endpoint (media-protocol.ts:139-147).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -614,8 +636,10 @@ mod tests {
         assert_eq!(fields.message, "The provider response ended unexpectedly.");
     }
 
+    // G-246: download credentials ride the runtime-only `headers` sidecar;
+    // the serialized asset carries no trace of them (media.ts:207-213).
     #[test]
-    fn expiring_url_sets_deadline_and_optional_headers() {
+    fn expiring_url_sets_deadline_and_sidecar_headers() {
         let mut headers = BTreeMap::new();
         headers.insert("authorization".to_string(), "Bearer k".to_string());
         let asset = expiring_url_at(
@@ -628,9 +652,17 @@ mod tests {
         assert_eq!(asset.expires_at, Some(86_401_000.0));
         assert_eq!(asset.media_type, "video/mp4");
         assert_eq!(
-            asset.provider_metadata.as_ref().unwrap()["route"]["headers"]["authorization"],
-            serde_json::json!("Bearer k")
+            asset.headers.as_ref().and_then(|headers| headers.get("authorization")).map(String::as_str),
+            Some("Bearer k")
         );
+        // the serde face stays credential-free
+        assert!(asset.provider_metadata.is_none());
+        let json = serde_json::to_value(&asset).unwrap();
+        assert!(json.get("headers").is_none(), "leaked: {json}");
+        assert!(!json.to_string().contains("Bearer k"));
+        // without headers the sidecar stays empty
+        let bare = expiring_url_at("https://x/v.mp4", 1.0, 1.0, None, None);
+        assert_eq!(bare.headers, None);
     }
 
     #[test]

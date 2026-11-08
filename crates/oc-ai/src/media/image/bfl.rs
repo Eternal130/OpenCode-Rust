@@ -4,6 +4,8 @@
 //! submit; a settled result cost supersedes it.
 
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::media::body::{merge_records, Body};
 use crate::media::model::{ImageRequest, ImageResponse, PollContext, Snapshot, Started, Status};
@@ -251,8 +253,9 @@ pub fn decode_status(
 }
 
 /// `decodeResult` (bfl-images.ts:174-198). The `sample` URL expires 10
-/// minutes after the result is ready, so the route materializes it (the
-/// returned asset stays a `url` here; downloading is route-side).
+/// minutes after the result is ready, so the returned asset is pulled
+/// into owned bytes at the route boundary
+/// ([`QueuedProtocol::materialize_result`], ref `context.materialize`).
 pub fn decode_result(
     output: &TextOutput,
     context: &PollContext<Token>,
@@ -283,14 +286,14 @@ pub fn decode_result(
     let cost = value.get("cost").and_then(serde_json::Value::as_f64).or(context.token.cost);
     let mut bfl = std::collections::BTreeMap::new();
     bfl.insert("id".to_string(), serde_json::json!(context.token.id));
-    bfl.insert(
-        "seed".to_string(),
-        result.get("seed").filter(|v| !v.is_null()).cloned().unwrap_or(serde_json::Value::Null),
-    );
-    bfl.insert(
-        "prompt".to_string(),
-        result.get("prompt").filter(|v| !v.is_null()).cloned().unwrap_or(serde_json::Value::Null),
-    );
+    // `seed`/`prompt` are `?? undefined` in ref — absent keys, never nulls
+    // (bfl-images.ts:195, G-286③).
+    if let Some(seed) = result.get("seed").filter(|v| !v.is_null()) {
+        bfl.insert("seed".to_string(), seed.clone());
+    }
+    if let Some(prompt) = result.get("prompt").filter(|v| !v.is_null()) {
+        bfl.insert("prompt".to_string(), prompt.clone());
+    }
     if let Some(fields) = result.as_object() {
         for (key, field) in fields {
             if key != "sample" && key != "seed" && key != "prompt" {
@@ -373,6 +376,24 @@ impl QueuedProtocol for BlackForestLabsImages {
     fn decode_token(&self, raw: &serde_json::Value) -> Result<Token, AiError> {
         serde_json::from_value(raw.clone()).map_err(|error| {
             identity().frame_error("failed to decode the generation token", error.to_string())
+        })
+    }
+
+    /// `sample` is a signed URL that expires ten minutes after the result
+    /// is ready, so decode materializes it (bfl-images.ts:190-193): every
+    /// image goes through the route's [`Materialize`] closure and the
+    /// response hands back owned bytes. G-246.
+    fn materialize_result<'a>(
+        &'a self,
+        mut response: ImageResponse,
+        materialize: &'a crate::media::protocol::Materialize<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<ImageResponse, AiError>> + Send + 'a>> {
+        Box::pin(async move {
+            let images = std::mem::take(&mut response.images);
+            for image in &images {
+                response.images.push(materialize(image).await?);
+            }
+            Ok(response)
         })
     }
 }
@@ -494,6 +515,18 @@ mod tests {
         assert_eq!(response.provider_metadata.as_ref().unwrap()["bfl"]["seed"], json!(9));
         assert_eq!(response.provider_metadata.as_ref().unwrap()["bfl"]["extra"], json!(true));
 
+        // G-286③: absent `seed`/`prompt` omit the keys (ref `?? undefined`),
+        // they never serialize as null.
+        let bare = TextOutput {
+            identity: &identity,
+            body: r#"{"id":"t1","status":"Ready","result":{"sample":"https://s/1.png"}}"#,
+            http: None,
+        };
+        let response = decode_result(&bare, &context).unwrap();
+        let bfl = response.provider_metadata.as_ref().unwrap()["bfl"].clone();
+        assert!(bfl.get("seed").is_none(), "seed key omitted: {bfl:?}");
+        assert!(bfl.get("prompt").is_none(), "prompt key omitted: {bfl:?}");
+
         let moderated = TextOutput {
             identity: &identity,
             body: r#"{"id":"t1","status":"Content Moderated"}"#,
@@ -509,5 +542,41 @@ mod tests {
         };
         let error = decode_result(&pending, &context).unwrap_err();
         assert!(error.message().contains("has not finished"));
+    }
+
+    // G-246: the ten-minute `sample` URL is pulled into owned bytes at the
+    // route boundary (`context.materialize`, bfl-images.ts:190-193).
+    #[tokio::test]
+    async fn result_images_materialize_through_the_route_closure() {
+        fn owned_materialize() -> impl for<'b> Fn(
+            &'b media::Asset,
+        ) -> Pin<Box<dyn Future<Output = Result<media::Asset, AiError>> + Send + 'b>> {
+            |_asset| {
+                let owned = media::bytes(vec![1, 2, 3], Some("image/png".into()));
+                Box::pin(std::future::ready(Ok(owned)))
+            }
+        }
+        let identity = identity();
+        let auth = BTreeMap::new();
+        let token = Token { id: "t1".into(), polling_url: "https://poll".into(), cost: None };
+        let context = PollContext { token: &token, auth: &auth };
+        let ready = TextOutput {
+            identity: &identity,
+            body: r#"{"id":"t1","status":"Ready","result":{"sample":"https://s/1.png"}}"#,
+            http: None,
+        };
+        let response = decode_result(&ready, &context).unwrap();
+        let materialize = owned_materialize();
+        let response = BlackForestLabsImages
+            .materialize_result(response, &materialize)
+            .await
+            .unwrap();
+        assert_eq!(response.images.len(), 1);
+        assert_eq!(
+            response.images[0]
+                .bytes(|_url, _headers| async { unreachable!("already owned") })
+                .await,
+            Ok(vec![1, 2, 3])
+        );
     }
 }

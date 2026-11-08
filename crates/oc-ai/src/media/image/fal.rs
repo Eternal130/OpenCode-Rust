@@ -155,7 +155,12 @@ pub fn decode_result(
     }
     let mut fal = std::collections::BTreeMap::new();
     fal.insert("requestId".to_string(), serde_json::json!(context.token.request_id));
-    fal.insert("seed".to_string(), seed.clone().unwrap_or(serde_json::Value::Null));
+    // `seed: seed ?? undefined` in ref — the key is omitted when the
+    // result carried none, never serialized as null (fal-images.ts:134,
+    // G-286③).
+    if let Some(seed) = seed {
+        fal.insert("seed".to_string(), seed);
+    }
     if let Some(fields) = value.as_object() {
         for (key, field) in fields {
             if key != "images" && key != "seed" && key != "has_nsfw_concepts" {
@@ -355,5 +360,15 @@ mod tests {
         assert_eq!(response.provider_metadata.as_ref().unwrap()["fal"]["requestId"], json!("req1"));
         assert_eq!(response.provider_metadata.as_ref().unwrap()["fal"]["seed"], json!(7));
         assert_eq!(response.provider_metadata.as_ref().unwrap()["fal"]["extra"], json!("kept"));
+
+        // G-286③: a result without `seed` omits the key (ref `?? undefined`)
+        let output = TextOutput {
+            identity: &identity,
+            body: r#"{"images":[{"url":"https://x/2.png","content_type":"image/png"}]}"#,
+            http: None,
+        };
+        let response = decode_result(&output, &context).unwrap();
+        let fal = response.provider_metadata.as_ref().unwrap()["fal"].clone();
+        assert!(fal.get("seed").is_none(), "seed key omitted: {fal:?}");
     }
 }

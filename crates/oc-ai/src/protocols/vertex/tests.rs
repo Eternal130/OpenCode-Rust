@@ -216,6 +216,7 @@ fn image_attachments_lower_through_the_shared_gemini_protocol() {
                     info: None,
                     expires_at: None,
                     provider_metadata: None,
+                    headers: None,
                 },
                 filename: None,
                 cache: None,

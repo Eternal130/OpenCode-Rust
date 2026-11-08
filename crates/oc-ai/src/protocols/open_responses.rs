@@ -1513,9 +1513,15 @@ fn item_id_prefix(kind: &str) -> &'static str {
 }
 
 /// An item without an id adopts the id already open in its output slot,
-/// otherwise a locally minted one (port of `resolveItem`). Minted ids are
-/// deterministic 32-char hex shapes standing in for the TS UUID mint; each
-/// mint advances the parser's counter.
+/// otherwise a locally minted one (port of `resolveItem`). Bounded
+/// deviation (G-286⑦, record-only): the ref mints
+/// `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`
+/// (open-responses.ts:941-951); the port mints the same wire shape —
+/// prefix + 32 hex chars — deterministically from the parser's counter,
+/// so minted ids are unique within one response stream but predictable
+/// across replays. Ids stay opaque tokens on the wire (clients key items
+/// by them), so the determinism has no wire-compat effect; each mint
+/// advances the parser's counter exactly where TS draws a fresh UUID.
 fn resolve_item(state: &mut ParserState, item: &StreamItem, index: Option<u64>) -> StreamItem {
     let mut resolved = item.clone();
     let id =

@@ -427,11 +427,18 @@ mod tests {
         let response = decode_result(&output, &context).unwrap();
         assert_eq!(response.videos.len(), 1);
         assert!(response.videos[0].expires_at.is_some());
+        // G-246: the poll's auth headers ride the runtime-only sidecar —
+        // downloads carry them per-request, serialization never sees them.
         assert_eq!(
-            response.videos[0].provider_metadata.as_ref().unwrap()["route"]["headers"]
-                ["x-goog-api-key"],
-            json!("k")
+            response.videos[0]
+                .headers
+                .as_ref()
+                .and_then(|headers| headers.get("x-goog-api-key"))
+                .map(String::as_str),
+            Some("k")
         );
+        let json = serde_json::to_value(&response).unwrap();
+        assert!(!json.to_string().contains("x-goog-api-key"), "leaked: {json}");
         assert_eq!(
             response.notices.as_ref().unwrap()[0].message,
             "Google Veo filtered media: SAFETY"

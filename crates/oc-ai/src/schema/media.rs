@@ -5,12 +5,17 @@
 //! The asset type stays because messages/events carry media parts, and
 //! protocols branch on `source.type` (`requireInlineMedia` / `mediaUrl` /
 //! `mediaReference` — see [`crate::protocols::shared`]). Downloading `url`
-//! sources and dereferencing `ref` sources belong to future media lanes; this
-//! type only describes and inline-decodes.
+//! sources runs through the caller-supplied `fetch` seam of
+//! [`Asset::bytes`]/[`Asset::materialize`] (the route layer wires its
+//! transport there, G-246); `ref` sources fail typed.
+
+use std::collections::BTreeMap;
+use std::future::Future;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::errors::{AiError, AiErrorReason, ReasonFields};
 use super::ids::ProviderId;
 use super::options::ProviderMetadata;
 
@@ -106,7 +111,8 @@ pub struct Inline {
 }
 
 /// A media asset: serializable source plus derived metadata (port of
-/// `Media.Asset`, minus the effectful byte cache/download paths).
+/// `Media.Asset`; the effectful byte cache of the ref is a documented
+/// divergence — see [`Asset::bytes`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Asset {
@@ -120,6 +126,12 @@ pub struct Asset {
     pub expires_at: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_metadata: Option<ProviderMetadata>,
+    /// Transient download credentials for `url` sources (media.ts:117-118,
+    /// 208-213): runtime-only, never part of the serde face — a persisted
+    /// asset cannot leak credentials and cannot be downloaded again after
+    /// a round-trip; materialize before persisting. G-246.
+    #[serde(skip)]
+    pub headers: Option<BTreeMap<String, String>>,
 }
 
 impl Asset {
@@ -158,6 +170,93 @@ impl Asset {
             _ => None,
         }
     }
+
+    /// Decoded payload (media.ts:149-164): `bytes` sources return their
+    /// data, `base64` sources decode, and `url` sources download through
+    /// `fetch` carrying the transient [`Asset::headers`]; `ref` sources
+    /// fail typed because the provider handle is not dereferenceable
+    /// here. Divergence (G-246): the ref caches downloaded bytes on the
+    /// instance (`#bytes`); the port re-downloads on every call — assets
+    /// are plain data with no interior mutability.
+    pub async fn bytes<F, Fut>(&self, fetch: F) -> Result<Vec<u8>, AiError>
+    where
+        F: FnOnce(String, BTreeMap<String, String>) -> Fut,
+        Fut: Future<Output = Result<Vec<u8>, AiError>>,
+    {
+        match &self.source {
+            Source::Bytes { data, .. } => Ok(data.0.clone()),
+            Source::Base64 { data, .. } => {
+                crate::protocols::shared::decode_base64(data).map_err(|cause| {
+                    invalid_request_cause(
+                        "Media asset contains invalid base64 data",
+                        Some(cause),
+                    )
+                })
+            }
+            Source::Ref { provider, id, .. } => Err(invalid_request_cause(
+                format!("Cannot materialize provider ref {}:{}", provider.0, id),
+                None,
+            )),
+            Source::Url { url, .. } => {
+                let headers = self.headers.clone().unwrap_or_default();
+                fetch(url.clone(), headers).await
+            }
+        }
+    }
+
+    /// Pull `url` sources into owned bytes before the URL expires
+    /// (media.ts:192-200); inline sources return themselves. The fresh
+    /// asset keeps `info`/`provider_metadata` and sniffs an undeclared
+    /// media type from magic bytes (the `Media.bytes` derive,
+    /// media.ts:273-274); the transient headers do not carry over.
+    pub async fn materialize<F, Fut>(&self, fetch: F) -> Result<Asset, AiError>
+    where
+        F: FnOnce(String, BTreeMap<String, String>) -> Fut,
+        Fut: Future<Output = Result<Vec<u8>, AiError>>,
+    {
+        match &self.source {
+            Source::Bytes { .. } | Source::Base64 { .. } => Ok(self.clone()),
+            Source::Url { media_type, .. } | Source::Ref { media_type, .. } => {
+                let data = self.bytes(fetch).await?;
+                let media_type = media_type
+                    .clone()
+                    .or_else(|| crate::media::utils::detect_media_type(&data).map(str::to_string));
+                let mut asset = bytes(data, media_type);
+                asset.info = self.info.clone();
+                asset.provider_metadata = self.provider_metadata.clone();
+                Ok(asset)
+            }
+        }
+    }
+}
+
+/// `Media.file` (media.ts:305-313): read a file and sniff its media type
+/// from magic bytes, then the path extension (media-type.ts
+/// `fileMediaType`), then `application/octet-stream`.
+pub async fn file(path: &str) -> Result<Asset, AiError> {
+    let data = tokio::fs::read(path).await.map_err(|cause| {
+        invalid_request_cause(
+            format!("Failed to read media file {path}"),
+            Some(cause.to_string()),
+        )
+    })?;
+    let media_type = crate::media::utils::file_media_type(&data, path);
+    Ok(bytes(data, Some(media_type)))
+}
+
+/// `invalid(message, cause)` (media.ts:98-99): the typed constructor-error
+/// shape shared by the runtime asset paths.
+fn invalid_request_cause(message: impl Into<String>, cause: Option<String>) -> AiError {
+    AiError::new(AiErrorReason::InvalidRequest {
+        fields: ReasonFields {
+            message: message.into(),
+            body: None,
+            http: None,
+            cause,
+        },
+        parameter: None,
+        classification: None,
+    })
 }
 
 /// A provider-side partial result such as stripped audio or a moderated
@@ -206,6 +305,7 @@ pub fn bytes(data: Vec<u8>, media_type: Option<String>) -> Asset {
         info: None,
         expires_at: None,
         provider_metadata: None,
+        headers: None,
     }
 }
 
@@ -217,6 +317,7 @@ pub fn base64(data: impl Into<String>, media_type: impl Into<String>) -> Asset {
         info: None,
         expires_at: None,
         provider_metadata: None,
+        headers: None,
     }
 }
 
@@ -228,6 +329,7 @@ pub fn url(value: impl Into<String>, media_type: Option<String>, expires_at: Opt
         source: Source::Url { url: value.into(), media_type, expires_at: expires },
         info: None,
         provider_metadata: None,
+        headers: None,
     }
 }
 
@@ -242,6 +344,7 @@ pub fn reference(
         source: Source::Ref { provider: ProviderId::new(provider), id: id.into(), media_type },
         info: None,
         provider_metadata: None,
+        headers: None,
     }
 }
 
@@ -319,5 +422,111 @@ mod tests {
         let back: Asset = serde_json::from_value(json).unwrap();
         assert_eq!(back, asset);
         assert_eq!(back.kind(), Kind::Document);
+    }
+
+    // G-246: transient download credentials never reach the serde face —
+    // a persisted asset cannot leak them (media.ts:208-213).
+    #[test]
+    fn transient_headers_never_serialize() {
+        let mut headers = BTreeMap::new();
+        headers.insert("x-goog-api-key".to_string(), "secret".to_string());
+        let mut asset = url("https://v/1.mp4", Some("video/mp4".into()), Some(1.0));
+        asset.headers = Some(headers);
+        let json = serde_json::to_value(&asset).unwrap();
+        assert!(json.get("headers").is_none(), "asset JSON carries no headers: {json}");
+        let rendered = json.to_string();
+        assert!(!rendered.contains("secret") && !rendered.contains("x-goog-api-key"));
+        // A round-trip drops them: the deserialized asset cannot re-download.
+        let back: Asset = serde_json::from_value(json).unwrap();
+        assert_eq!(back.headers, None);
+        assert_eq!(back.url(), Some("https://v/1.mp4"));
+    }
+
+    // G-246: `bytes()`/`materialize()` runtime semantics (media.ts:149-200).
+    #[tokio::test]
+    async fn bytes_decodes_inline_sources_and_fails_refs() {
+        let owned = bytes(vec![1, 2, 3], Some("image/png".into()));
+        assert_eq!(owned.bytes(|_url, _headers| async { Ok(Vec::new()) }).await.unwrap(), vec![1, 2, 3]);
+
+        let encoded = base64("AQID", "image/png");
+        assert_eq!(
+            encoded.bytes(|_url, _headers| async { Ok(Vec::new()) }).await.unwrap(),
+            vec![1, 2, 3]
+        );
+
+        let broken = base64("!!", "image/png");
+        let error = broken.bytes(|_url, _headers| async { Ok(Vec::new()) }).await.unwrap_err();
+        assert!(error.message().contains("invalid base64 data"), "{}", error.message());
+
+        let handle = reference("openai", "file_123", None);
+        let error = handle.bytes(|_url, _headers| async { Ok(Vec::new()) }).await.unwrap_err();
+        assert!(error.message().contains("Cannot materialize provider ref openai:file_123"));
+    }
+
+    #[tokio::test]
+    async fn bytes_downloads_url_sources_with_the_transient_headers() {
+        let mut headers = BTreeMap::new();
+        headers.insert("authorization".to_string(), "Bearer k".to_string());
+        let mut asset = url("https://v/1.mp4", Some("video/mp4".into()), None);
+        asset.headers = Some(headers);
+        let seen = asset
+            .bytes(|url, headers| async move {
+                assert_eq!(url, "https://v/1.mp4");
+                assert_eq!(headers.get("authorization").map(String::as_str), Some("Bearer k"));
+                Ok(vec![9, 9])
+            })
+            .await
+            .unwrap();
+        assert_eq!(seen, vec![9, 9]);
+    }
+
+    #[tokio::test]
+    async fn materialize_owns_url_sources_and_keeps_metadata() {
+        let mut asset = url("https://s/1.png", None, Some(123.0));
+        asset.info = Some(Info { width: Some(64.0), ..Info::default() });
+        let mut metadata = crate::schema::options::ProviderMetadata::new();
+        metadata.insert("x".to_string(), BTreeMap::new());
+        asset.provider_metadata = Some(metadata);
+        let mut headers = BTreeMap::new();
+        headers.insert("authorization".to_string(), "Bearer k".to_string());
+        asset.headers = Some(headers);
+        let owned = asset
+            .materialize(|_url, _headers| async { Ok(vec![0x89, 0x50, 0x4e, 0x47]) })
+            .await
+            .unwrap();
+        // PNG magic sniffs the undeclared type (media.ts:273-274).
+        assert_eq!(owned.media_type, "image/png");
+        assert!(matches!(owned.source, Source::Bytes { .. }));
+        assert_eq!(owned.info.as_ref().and_then(|info| info.width), Some(64.0));
+        assert!(owned.provider_metadata.is_some());
+        // the fresh asset carries no deadline and no credentials
+        assert_eq!(owned.expires_at, None);
+        assert_eq!(owned.headers, None);
+        assert!(serde_json::to_value(&owned).unwrap().get("headers").is_none());
+
+        // inline sources materialize to themselves
+        let inline = base64("AQID", "image/png");
+        let owned = inline
+            .materialize(|_url, _headers| async { panic!("inline sources never fetch") })
+            .await
+            .unwrap();
+        assert_eq!(owned, inline);
+    }
+
+    #[tokio::test]
+    async fn file_reads_and_sniffs() {
+        let path = "/tmp/opencode/gb10-lane6-file-asset-test.png";
+        tokio::fs::write(path, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2])
+            .await
+            .unwrap();
+        let asset = file(path).await.unwrap();
+        assert_eq!(asset.media_type, "image/png");
+        // extension fallback when the magic bytes are unknown
+        let plain = "/tmp/opencode/gb10-lane6-file-asset-test.md";
+        tokio::fs::write(plain, "plain markdown").await.unwrap();
+        let asset = file(plain).await.unwrap();
+        assert_eq!(asset.media_type, "text/markdown");
+        let missing = file("/tmp/opencode/gb10-lane6-definitely-missing.bin").await;
+        assert!(missing.is_err());
     }
 }

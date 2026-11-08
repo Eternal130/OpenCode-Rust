@@ -592,6 +592,103 @@ async fn status_failure(http: HttpContext, body: transport::ByteStream) -> AiErr
 }
 
 // ---------------------------------------------------------------------------
+// Result materialization (route/media.ts:181-196 + media.ts:242-263)
+// ---------------------------------------------------------------------------
+
+/// The route's `materialize` closure (route/media.ts:182-183): one `url`
+/// asset pulled into owned bytes through the shared transport, carrying
+/// the asset's transient headers — per-request credentials that never
+/// appear on the serialized asset (G-246).
+fn route_materialize(
+    transport: &SharedTransport,
+) -> impl for<'b> Fn(
+    &'b crate::schema::media::Asset,
+) -> Pin<Box<dyn Future<Output = Result<crate::schema::media::Asset, AiError>> + Send + 'b>> + Send
+       + Sync
+       + '_ {
+    move |asset| Box::pin(materialize_asset(Arc::clone(transport), asset))
+}
+
+/// [`crate::schema::media::Asset::materialize`] over the route transport:
+/// the fetch leg is a plain GET (the ref executor is raw — no route auth
+/// or deployment headers; media.ts:242-263).
+async fn materialize_asset(
+    transport: SharedTransport,
+    asset: &crate::schema::media::Asset,
+) -> Result<crate::schema::media::Asset, AiError> {
+    let fetch = |url: String, headers: BTreeMap<String, String>| {
+        let transport = Arc::clone(&transport);
+        async move { fetch_url(transport, &url, &headers).await }
+    };
+    asset.materialize(fetch).await
+}
+
+/// The download leg: GET `url` with the transient headers under the v2
+/// timeout budgets; non-2xx fails through the provider-error taxonomy
+/// (the executor's `statusError`), body-read failures as
+/// `InvalidProviderOutput` naming the URL (media.ts:253-260).
+async fn fetch_url(
+    transport: SharedTransport,
+    url: &str,
+    headers: &BTreeMap<String, String>,
+) -> Result<Vec<u8>, AiError> {
+    let request = TransportRequest {
+        method: "GET".to_string(),
+        url: url.to_string(),
+        headers: headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        body: Bytes::new(),
+    };
+    let started = tokio::time::Instant::now();
+    let response = transport::timeouts::execute_with_timeouts(
+        Arc::clone(&transport),
+        request,
+        TimeoutBudget::from_http_options(None),
+    )
+    .await
+    .map_err(TransportError::into_ai_error)?;
+    let TransportResponse { status, headers: response_headers, body } = response;
+    let http = HttpContext { url: url.to_string(), status, headers: response_headers.clone() };
+    if status >= 400 {
+        return Err(status_failure(http, body).await);
+    }
+    let body = transport::timeouts::body_with_timeouts(
+        body,
+        TimeoutBudget::from_http_options(None),
+        started,
+        url,
+        http.clone(),
+    );
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut body = body;
+    while let Some(chunk) = body.next().await {
+        let chunk =
+            chunk.map_err(|cause| read_media_failure(url, http.clone(), cause.message))?;
+        if buffer.len() + chunk.len() > MAX_DECODE_BODY {
+            buffer.extend_from_slice(&chunk[..MAX_DECODE_BODY.saturating_sub(buffer.len())]);
+            break;
+        }
+        buffer.extend_from_slice(&chunk);
+    }
+    Ok(buffer)
+}
+
+/// The download's body-read failure (media.ts:253-260): an
+/// `InvalidProviderOutput` naming the URL, with the HTTP context and the
+/// transport cause.
+fn read_media_failure(url: &str, http: HttpContext, cause: String) -> AiError {
+    AiError::new(AiErrorReason::InvalidProviderOutput {
+        fields: crate::schema::ReasonFields {
+            message: format!("Failed to read media from {url}"),
+            body: None,
+            http: Some(http),
+            cause: Some(cause),
+        },
+        classification: None,
+        route: None,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Inline routes (route/media.ts:121-139)
 // ---------------------------------------------------------------------------
 
@@ -975,13 +1072,18 @@ impl<P: QueuedProtocol> Generation<P> {
 
     /// The terminal result. A `result()` read before the generation
     /// finished is caller misuse and fails typed through the protocol's
-    /// `pending` error.
+    /// `pending` error. Protocols whose outputs expire with the poll
+    /// (BFL) pull them into owned bytes here through the route's
+    /// `materialize` closure (route/media.ts:181-196 hands decoders
+    /// `materialize` over the executor; G-246).
     pub async fn result(&self) -> Result<P::Response, AiError> {
         let decoded = self.poll_read(&self.route.protocol.result_path(&self.token)).await?;
         let identity = self.route.protocol.identity();
         let output = decoded.text_output(&identity);
         let context = crate::media::model::PollContext { token: &self.token, auth: &decoded.auth };
-        self.route.protocol.decode_result(&output, &context)
+        let response = self.route.protocol.decode_result(&output, &context)?;
+        let materialize = route_materialize(&self.route.core.transport);
+        self.route.protocol.materialize_result(response, &materialize).await
     }
 
     /// Cancel the generation (`cancel` never retries). Providers whose
