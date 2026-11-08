@@ -986,7 +986,8 @@ mod tests {
 
     #[test]
     fn file_media_type_sniffs_then_falls_back_to_extension() {
-        assert_eq!(file_media_type(&[0x89, 0x50], "a.bin"), "image/png");
+        let png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+        assert_eq!(file_media_type(&png, "a.bin"), "image/png");
         assert_eq!(file_media_type(b"plain", "notes.md"), "text/markdown");
         assert_eq!(file_media_type(b"plain", "no-extension"), "application/octet-stream");
     }

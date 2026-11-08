@@ -693,8 +693,8 @@ async fn bfl_result_download_failure_fails_typed() {
     let generation = route.start(&request).await.expect("start submits");
     let error = generation.result().await.expect_err("download fails typed");
     assert!(
-        error.message().contains("404"),
-        "provider refusal surfaces: {}",
+        error.message().contains("expired"),
+        "provider refusal surfaces with the provider's message: {}",
         error.message()
     );
 }
