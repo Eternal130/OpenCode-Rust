@@ -264,12 +264,18 @@ impl TransportState {
         let Some(update) = self.fragments.delta(&fragment, &delta) else {
             return Fold::Ignored;
         };
+        let _ = update;
         let accumulated = self.texts.entry(key.clone()).or_default();
         accumulated.push_str(&delta);
+        // G-241 — the commit carries the CHUNK, never the
+        // reconciler's accumulated text (`text: event.data.delta`,
+        // transport.ts:1180): the mono writer is append-only (no
+        // per-part row replacement), so a cumulative commit would
+        // re-print the whole prefix on every delta.
         Fold::Commit(Commit {
             kind: CommitKind::Assistant,
             phase: Phase::Progress,
-            text: update.text,
+            text: delta,
             message_id: message_id(data),
             part_id: Some(key),
             ..Commit::default()
@@ -297,16 +303,26 @@ impl TransportState {
         };
         // G-68 — the part closes at the reconciler's `end` (the
         // committed text snaps to the final text verbatim).
-        self.fragments.end(&fragment, &text);
+        let update = self.fragments.end(&fragment, &text);
         self.texts.remove(&key);
-        Fold::Commit(Commit {
-            kind: CommitKind::Assistant,
-            phase: Phase::Final,
-            text,
-            message_id: message_id(data),
-            part_id: Some(key),
-            ..Commit::default()
-        })
+        // G-241 — `ended` replays only the UNSEEN suffix as a
+        // progress commit (transport.ts:1197-1207): the writer
+        // already printed the streamed chunks, and the Assistant
+        // Final body renders empty (entry.body.ts) — a full-text
+        // final would either duplicate the prefix or (when the
+        // server's final is longer than the stream delivered) drop
+        // the tail for good.
+        match text.get(update.previous.len()..).filter(|suffix| !suffix.is_empty()) {
+            Some(suffix) => Fold::Commit(Commit {
+                kind: CommitKind::Assistant,
+                phase: Phase::Progress,
+                text: suffix.to_owned(),
+                message_id: message_id(data),
+                part_id: Some(key),
+                ..Commit::default()
+            }),
+            None => Fold::Ignored,
+        }
     }
 
     fn reasoning_delta(&mut self, data: &Value) -> Fold {
@@ -319,10 +335,20 @@ impl TransportState {
         };
         let accumulated = self.reasons.entry(key.clone()).or_default();
         accumulated.push_str(&delta);
+        // G-241 — the FIRST chunk of a part carries the `Thinking: `
+        // mark, later chunks are the bare incremental delta
+        // (`update.previous ? delta : `Thinking: ${delta}``,
+        // transport.ts:1224) — the same append-only rule as
+        // `text_delta`.
+        let text = if update.previous.is_empty() {
+            format!("Thinking: {delta}")
+        } else {
+            delta
+        };
         Fold::Commit(Commit {
             kind: CommitKind::Reasoning,
             phase: Phase::Progress,
-            text: update.text,
+            text,
             message_id: message_id(data),
             part_id: Some(key),
             ..Commit::default()
@@ -344,16 +370,29 @@ impl TransportState {
         } else {
             event_text
         };
-        self.fragments.end(&fragment, &text);
+        let update = self.fragments.end(&fragment, &text);
         self.reasons.remove(&key);
-        Fold::Commit(Commit {
-            kind: CommitKind::Reasoning,
-            phase: Phase::Final,
-            text,
-            message_id: message_id(data),
-            part_id: Some(key),
-            ..Commit::default()
-        })
+        // G-241 — the unseen suffix (transport.ts:1237-1247): the
+        // `Thinking: ` mark rides the FIRST run (no streamed chunk
+        // arrived — the mark would otherwise never print).
+        match text.get(update.previous.len()..).filter(|suffix| !suffix.is_empty()) {
+            Some(suffix) => {
+                let body = if update.previous.is_empty() {
+                    format!("Thinking: {suffix}")
+                } else {
+                    suffix.to_owned()
+                };
+                Fold::Commit(Commit {
+                    kind: CommitKind::Reasoning,
+                    phase: Phase::Progress,
+                    text: body,
+                    message_id: message_id(data),
+                    part_id: Some(key),
+                    ..Commit::default()
+                })
+            }
+            None => Fold::Ignored,
+        }
     }
 
     fn tool_started(&mut self, data: &Value) -> Fold {
@@ -839,6 +878,18 @@ impl TransportState {
         visible: bool,
     ) -> super::fragment::FragmentUpdate {
         self.fragments.project(&fragment_ref(message_id, kind, ordinal), text, visible)
+    }
+
+    /// The part's committed text (`state.fragments.value`) — the
+    /// close-of-part assertion seam.
+    #[must_use]
+    pub fn part_value(&self, message_id: &str, part_id: &str) -> Option<String> {
+        self.fragments
+            .value(&FragmentRef {
+                message_id: message_id.to_owned(),
+                part_id: part_id.to_owned(),
+            })
+            .map(str::to_owned)
     }
 
     /// The reconnect replay's row re-admission (transport.ts:1697-
@@ -1488,6 +1539,9 @@ mod tests {
             &json!({ "sessionID": "s1", "messageID": "m1", "partID": "p1", "delta": "Hello " }),
         ));
         match delta {
+            // G-241 — every delta commit carries its CHUNK (the
+            // writer is append-only; a cumulative commit would
+            // re-print the prefix per delta, transport.ts:1180).
             Fold::Commit(commit) => assert_eq!(commit.text, "Hello "),
             other => panic!("delta folded: {other:?}"),
         }
@@ -1496,18 +1550,103 @@ mod tests {
             &json!({ "sessionID": "s1", "messageID": "m1", "partID": "p1", "delta": "world" }),
         ));
         match delta {
-            Fold::Commit(commit) => assert_eq!(commit.text, "Hello world"),
+            Fold::Commit(commit) => assert_eq!(commit.text, "world"),
             other => panic!("delta folded: {other:?}"),
         }
+        // An ended WITHOUT the final text keeps the committed text —
+        // nothing new to replay (transport.ts:1197's length check).
         let ended = state.fold(&event(
             "session.text.ended",
             &json!({ "sessionID": "s1", "messageID": "m1", "partID": "p1" }),
         ));
+        assert_eq!(ended, Fold::Ignored);
+        assert!(!state.is_running());
+    }
+
+    /// G-241 — the multi-delta shape against the ref: two chunks
+    /// commit incrementally, and `text.ended` with a final LONGER
+    /// than the stream replays only the unseen suffix.
+    #[test]
+    fn text_ended_replays_the_unseen_suffix() {
+        let mut state = TransportState { session_id: "s1".into(), ..Default::default() };
+        state.fold(&event(
+            "session.text.started",
+            &json!({ "sessionID": "s1", "messageID": "m1", "partID": "p1" }),
+        ));
+        state.fold(&event(
+            "session.text.delta",
+            &json!({ "sessionID": "s1", "messageID": "m1", "partID": "p1", "delta": "Hello " }),
+        ));
+        state.fold(&event(
+            "session.text.delta",
+            &json!({ "sessionID": "s1", "messageID": "m1", "partID": "p1", "delta": "world" }),
+        ));
+        // The server's final extends the streamed accumulation: only
+        // the tail lands (transport.ts:1197-1207).
+        let ended = state.fold(&event(
+            "session.text.ended",
+            &json!({ "sessionID": "s1", "messageID": "m1", "partID": "p1", "text": "Hello world and more." }),
+        ));
         match ended {
-            Fold::Commit(commit) => assert_eq!(commit.phase, Phase::Final),
+            Fold::Commit(commit) => {
+                assert_eq!(commit.text, " and more.");
+                assert_eq!(commit.phase, Phase::Progress, "the suffix is a progress row");
+            }
             other => panic!("ended folded: {other:?}"),
         }
-        assert!(!state.is_running());
+        // A SECOND ended never replays again (the reconciler closed).
+        let again = state.fold(&event(
+            "session.text.ended",
+            &json!({ "sessionID": "s1", "messageID": "m1", "partID": "p1", "text": "Hello world and more." }),
+        ));
+        assert_eq!(again, Fold::Ignored);
+    }
+
+    /// G-241 — the reasoning twin: the first chunk carries the
+    /// `Thinking: ` mark, later chunks are bare, and the ended suffix
+    /// keeps the mark when no chunk ever arrived.
+    #[test]
+    fn reasoning_stream_is_incremental_with_the_thinking_mark() {
+        let mut state = TransportState { session_id: "s1".into(), ..Default::default() };
+        state.fold(&event(
+            "session.reasoning.started",
+            &json!({ "sessionID": "s1", "messageID": "m1", "partID": "r1" }),
+        ));
+        let first = state.fold(&event(
+            "session.reasoning.delta",
+            &json!({ "sessionID": "s1", "messageID": "m1", "partID": "r1", "delta": "deep" }),
+        ));
+        match first {
+            Fold::Commit(commit) => assert_eq!(commit.text, "Thinking: deep"),
+            other => panic!("delta folded: {other:?}"),
+        }
+        let second = state.fold(&event(
+            "session.reasoning.delta",
+            &json!({ "sessionID": "s1", "messageID": "m1", "partID": "r1", "delta": " thought" }),
+        ));
+        match second {
+            Fold::Commit(commit) => assert_eq!(commit.text, " thought"),
+            other => panic!("delta folded: {other:?}"),
+        }
+        let ended = state.fold(&event(
+            "session.reasoning.ended",
+            &json!({ "sessionID": "s1", "messageID": "m1", "partID": "r1", "text": "deep thought done" }),
+        ));
+        match ended {
+            Fold::Commit(commit) => assert_eq!(commit.text, " done"),
+            other => panic!("ended folded: {other:?}"),
+        }
+        // No chunk ever arrived: the ended carries the whole text
+        // under the mark (transport.ts:1242).
+        let mut quiet = TransportState { session_id: "s1".into(), ..Default::default() };
+        let ended = quiet.fold(&event(
+            "session.reasoning.ended",
+            &json!({ "sessionID": "s1", "messageID": "m2", "partID": "r2", "text": "all at once" }),
+        ));
+        match ended {
+            Fold::Commit(commit) => assert_eq!(commit.text, "Thinking: all at once"),
+            other => panic!("ended folded: {other:?}"),
+        }
     }
 
     /// G-68 — the reconciler at the transport seam: a delta a prior
@@ -1525,27 +1664,24 @@ mod tests {
             &json!({ "sessionID": "s1", "messageID": "m1", "partID": "text:0", "delta": "two " }),
         ));
         assert_eq!(covered, Fold::Ignored, "a covered chunk never commits");
-        // ... past the projection the delta appends.
+        // ... past the projection the delta appends (its CHUNK —
+        // G-241, the accumulated text lives in the reconciler).
         let fresh = state.fold(&event(
             "session.text.delta",
             &json!({ "sessionID": "s1", "messageID": "m1", "partID": "text:0", "delta": " four" }),
         ));
         match fresh {
-            Fold::Commit(commit) => assert_eq!(commit.text, "one two three four"),
+            Fold::Commit(commit) => assert_eq!(commit.text, " four"),
             other => panic!("delta folded: {other:?}"),
         }
-        // The part closes at the server's final text.
+        // The part closes at the server's final text — a SHORTER
+        // final replays nothing (G-241's suffix rule).
         let ended = state.fold(&event(
             "session.text.ended",
             &json!({ "sessionID": "s1", "messageID": "m1", "partID": "text:0", "text": "FINAL" }),
         ));
-        match ended {
-            Fold::Commit(commit) => {
-                assert_eq!(commit.text, "FINAL");
-                assert_eq!(commit.phase, Phase::Final);
-            }
-            other => panic!("ended folded: {other:?}"),
-        }
+        assert_eq!(ended, Fold::Ignored);
+        assert_eq!(state.part_value("m1", "text:0"), Some("FINAL".to_owned()));
     }
 
     /// G-68 — the restore modes over the transport seam: `append`
@@ -1614,7 +1750,9 @@ mod tests {
 
     /// G-68 (fix #5) — an `ended` WITHOUT the final text preserves the
     /// committed prefix: a projection's full text (whose covered
-    /// chunks the stream consumed) still lands in the final commit.
+    /// chunks the stream consumed) stays the part's committed value.
+    /// G-241 — the display side: the projection already printed that
+    /// text, so the ended commits NOTHING new (no suffix ⇒ Ignored).
     #[test]
     fn ended_without_text_preserves_the_projected_prefix() {
         let mut state = TransportState { session_id: "s1".into(), ..Default::default() };
@@ -1627,26 +1765,23 @@ mod tests {
             )),
             Fold::Ignored
         );
-        // ...and closes with NO final text: the commit carries the
-        // FULL committed (projected) text, not just streamed chunks.
+        // ...and closes with NO final text: the part's committed
+        // value keeps the FULL projected text (never just the
+        // streamed chunks), and the writer re-prints nothing.
         let ended = state.fold(&event(
             "session.text.ended",
             &json!({ "sessionID": "s1", "messageID": "m1", "partID": "text:0" }),
         ));
-        match ended {
-            Fold::Commit(commit) => assert_eq!(commit.text, "one two three"),
-            other => panic!("ended folded: {other:?}"),
-        }
+        assert_eq!(ended, Fold::Ignored, "an ended equal to the committed text replays nothing");
+        assert_eq!(state.part_value("m1", "text:0"), Some("one two three".to_owned()));
         // The reasoning arm keeps the same guarantee.
         state.project_part("m1", "reasoning", 0, "think", true);
         let ended = state.fold(&event(
             "session.reasoning.ended",
             &json!({ "sessionID": "s1", "messageID": "m1", "partID": "reasoning:0" }),
         ));
-        match ended {
-            Fold::Commit(commit) => assert_eq!(commit.text, "think"),
-            other => panic!("reasoning ended folded: {other:?}"),
-        }
+        assert_eq!(ended, Fold::Ignored);
+        assert_eq!(state.part_value("m1", "reasoning:0"), Some("think".to_owned()));
     }
 
     #[test]

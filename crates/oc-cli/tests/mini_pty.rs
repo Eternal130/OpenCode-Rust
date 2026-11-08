@@ -48,6 +48,13 @@ enum PromptMode {
     /// skill/shell/compaction messages and the inbox list one queued
     /// row.
     G221Replay,
+    /// G-241 — a multi-delta text turn: TWO text deltas for one part
+    /// and a final LONGER than the streamed accumulation.
+    MultiDelta,
+    /// G-272 — the hydrate path with PENDING blockers: the permission
+    /// and form lists serve one row each and `session.active` marks
+    /// the session running.
+    HydrateBlockers,
 }
 
 async fn start_stub(mode: PromptMode) -> Stub {
@@ -396,8 +403,33 @@ fn emit_turn_script(
             );
             event("session.execution.succeeded", session);
         }
+        // G-241 — the multi-delta shape every other script lacks: TWO
+        // deltas for one part (the second must NOT re-print the
+        // first) and a final text LONGER than the streamed chunks
+        // (the tail must arrive via the ended suffix).
+        PromptMode::MultiDelta => {
+            event(
+                "session.text.started",
+                serde_json::json!({ "sessionID": SESSION_ID, "messageID": "msg_stub_1", "partID": "prt_text" }),
+            );
+            event(
+                "session.text.delta",
+                serde_json::json!({ "sessionID": SESSION_ID, "messageID": "msg_stub_1", "partID": "prt_text", "delta": "Stub streams " }),
+            );
+            event(
+                "session.text.delta",
+                serde_json::json!({ "sessionID": SESSION_ID, "messageID": "msg_stub_1", "partID": "prt_text", "delta": "twice" }),
+            );
+            event(
+                "session.text.ended",
+                serde_json::json!({ "sessionID": SESSION_ID, "messageID": "msg_stub_1", "partID": "prt_text",
+                                     "text": "Stub streams twice and finishes." }),
+            );
+            event("session.execution.succeeded", session);
+        }
         // The G-221 live script returned above.
         PromptMode::G221Live => {}
+        PromptMode::HydrateBlockers => {}
     }
 }
 
@@ -880,6 +912,43 @@ async fn mini_pty_g221_replay_hydrates_blocks_and_pending() {
         "the post-replay turn: {}",
         mini.output()
     );
+    mini.exit_sequence();
+    mini.wait_for("opencode mini -s ses_min_stub", Duration::from_secs(20));
+    let code = mini.finish();
+    assert_eq!(code, 0);
+}
+
+// -- G-241: the multi-delta text stream ----------------------------------
+
+/// G-241 — a turn with TWO text deltas for one part and a final
+/// LONGER than the streamed accumulation: the full text renders ONCE
+/// (the second delta never re-prints the prefix) and the ended suffix
+/// completes the tail (the append-only mono writer,
+/// stream-v2.transport.ts:1169-1207).
+#[tokio::test(flavor = "multi_thread")]
+async fn mini_pty_multi_delta_streams_once_and_ends_with_the_tail() {
+    let stub = start_stub(PromptMode::MultiDelta).await;
+    let mut mini = MiniPty::spawn(stub.port, &[]);
+
+    assert!(mini.wait_for("oc mini", Duration::from_secs(30)), "boot");
+    mini.type_text("stream it\r");
+    assert!(
+        mini.wait_for(" and finishes.", Duration::from_secs(30)),
+        "the ended suffix completed the server's longer final: {}",
+        mini.output()
+    );
+    let output = mini.output();
+    assert_eq!(
+        output.matches("Stub streams").count(),
+        1,
+        "the prefix prints exactly once (a cumulative delta would repeat it): {output}"
+    );
+    assert_eq!(
+        output.matches("twice").count(),
+        1,
+        "the second delta prints only its own chunk: {output}"
+    );
+
     mini.exit_sequence();
     mini.wait_for("opencode mini -s ses_min_stub", Duration::from_secs(20));
     let code = mini.finish();

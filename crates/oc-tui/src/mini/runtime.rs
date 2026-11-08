@@ -1516,7 +1516,8 @@ mod tests {
         assert_eq!(commits[1].part_id.as_deref(), Some("text:0"));
 
         // The projection covers the live stream: covered deltas fold
-        // to Ignored, the tail appends, the final commit keeps all.
+        // to Ignored, the tail's CHUNK appends (G-241), the final
+        // text closes the part.
         let covered = transport.fold(&serde_json::json!({
             "type": "session.text.delta",
             "data": { "sessionID": "s1", "messageID": "msg_a1", "partID": "text:0", "delta": "one two " },
@@ -1528,7 +1529,7 @@ mod tests {
         }));
         match tail {
             super::super::transport::Fold::Commit(commit) => {
-                assert_eq!(commit.text, "one two three four")
+                assert_eq!(commit.text, " four", "the delta commits its chunk")
             }
             other => panic!("tail folded: {other:?}"),
         }
@@ -1536,12 +1537,9 @@ mod tests {
             "type": "session.text.ended",
             "data": { "sessionID": "s1", "messageID": "msg_a1", "partID": "text:0" },
         }));
-        match ended {
-            super::super::transport::Fold::Commit(commit) => {
-                assert_eq!(commit.text, "one two three four", "the final keeps the projection");
-            }
-            other => panic!("ended folded: {other:?}"),
-        }
+        // G-241 — an ended equal to the committed text replays
+        // nothing (the rows already printed).
+        assert_eq!(ended, super::super::transport::Fold::Ignored);
 
         // A re-replay of the SAME message never double-prints: the
         // committed prefix swallows the projection.
