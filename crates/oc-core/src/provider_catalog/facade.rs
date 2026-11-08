@@ -145,6 +145,17 @@ pub struct ModelConnection {
     /// `settings.resourceName` — the Azure resource-name helper input
     /// (azure.ts `AtLeastOne<{resourceName, baseURL}>`).
     pub resource_name: Option<String>,
+    /// G-262② — `settings.region` (bedrock: explicit AWS region; flows
+    /// to the auth options, defaulting to the env chain then
+    /// us-east-1).
+    pub region: Option<String>,
+    /// G-262② — `settings.profile` (bedrock: shared-config profile for
+    /// the AWS default credential chain).
+    pub profile: Option<String>,
+    /// G-262② — `settings.endpoint` (bedrock private/VPC endpoint;
+    /// migrates to the base URL once, under an explicit `baseURL` —
+    /// amazon-bedrock.ts:48-52).
+    pub endpoint: Option<String>,
     pub headers: BTreeMap<String, String>,
     /// `settings.transport` — the user's explicit session-transport
     /// choice (G-245: it wins over the openai/xai/azure websocket
@@ -162,6 +173,9 @@ impl ModelConnection {
             base_url: string("baseURL"),
             api_key: string("apiKey"),
             resource_name: string("resourceName"),
+            region: string("region"),
+            profile: string("profile"),
+            endpoint: string("endpoint"),
             headers: BTreeMap::new(),
             transport: settings.transport,
         }
@@ -665,18 +679,26 @@ fn build_route(
     let api_key = connection.secret();
     match family {
         ProtocolFamily::BedrockConverse => {
+            // G-262② — the AmazonBedrockPlugin settings chain
+            // (amazon-bedrock.ts:40-52): `region`/`profile` ride the auth
+            // options (region resolution: settings → credentials → env →
+            // us-east-1), and a configured `endpoint` (private/VPC
+            // endpoint) migrates to the base URL once, under an explicit
+            // `baseURL`.
             let auth = bedrock_lane::BedrockAuthOptions {
                 api_key: connection.api_key.clone(),
+                region: connection.region.clone(),
+                profile: connection.profile.clone(),
                 ..Default::default()
             };
             let mut route = bedrock_lane::bedrock_converse_route(transport, auth);
-            if let Some(base_url) = base_url {
+            if let Some(base_url) = base_url.clone().or(connection.endpoint.clone()) {
                 route = with_base_url(route, Some(base_url));
             }
             Ok(route)
         }
         ProtocolFamily::BedrockMantleChat => {
-            let region = bedrock_lane::resolve_region(None, None);
+            let region = bedrock_lane::resolve_region(connection.region.as_deref(), None);
             let auth = bedrock_lane::resolve_auth(
                 &BedrockAuthOptions { api_key: connection.api_key.clone(), ..Default::default() },
                 "bedrock-mantle",
@@ -694,7 +716,7 @@ fn build_route(
             }))
         }
         ProtocolFamily::BedrockMantleResponses => {
-            let region = bedrock_lane::resolve_region(None, None);
+            let region = bedrock_lane::resolve_region(connection.region.as_deref(), None);
             let auth = bedrock_lane::resolve_auth(
                 &BedrockAuthOptions { api_key: connection.api_key.clone(), ..Default::default() },
                 "bedrock-mantle",
@@ -712,7 +734,7 @@ fn build_route(
             }))
         }
         ProtocolFamily::BedrockMantleMessages => {
-            let region = bedrock_lane::resolve_region(None, None);
+            let region = bedrock_lane::resolve_region(connection.region.as_deref(), None);
             let auth = bedrock_lane::resolve_auth(
                 &BedrockAuthOptions { api_key: connection.api_key.clone(), ..Default::default() },
                 "bedrock-mantle",
@@ -1866,6 +1888,9 @@ fn custom_native_language_model(
             .and_then(|settings| settings.rest.get("resourceName"))
             .and_then(Value::as_str)
             .map(str::to_string),
+        region: None,
+        profile: None,
+        endpoint: None,
         transport: None,
         headers: BTreeMap::new(),
     };
@@ -2264,6 +2289,73 @@ mod tests {
         );
     }
 
+    /// G-262② — the bedrock settings chain (amazon-bedrock.ts:40-52): a
+    /// configured `endpoint` (private/VPC) migrates to the route base
+    /// URL once — under an explicit `baseURL` — and `region` rides the
+    /// endpoint (defaulting us-east-1 with nothing configured).
+    #[test]
+    fn provider_facade_bedrock_settings_endpoint_region_profile() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        let bedrock = catalog.provider("amazon-bedrock").expect("bedrock in catalog");
+        let plain = bedrock
+            .models
+            .iter()
+            .find(|model| {
+                model.package.as_deref().unwrap_or(&bedrock.info.package)
+                    == "@opencode/ai/providers/amazon-bedrock"
+            })
+            .expect("a plain converse bedrock model exists");
+        let bind = |connection: &ModelConnection| {
+            language_model(&context, catalog, "amazon-bedrock", plain.id.as_str(), connection)
+                .expect("bedrock binds")
+        };
+
+        // endpoint → baseURL migration, region rides the (unused) default
+        // host since the explicit endpoint wins, profile rides auth.
+        let model = bind(&ModelConnection {
+            endpoint: Some("https://bedrock.internal.corp".into()),
+            region: Some("eu-central-1".into()),
+            profile: Some("corp".into()),
+            ..Default::default()
+        });
+        assert_eq!(
+            model.route.endpoint.base_url.as_deref(),
+            Some("https://bedrock.internal.corp"),
+            "settings.endpoint migrates to the base URL"
+        );
+
+        // region flows into the converse host; nothing configured →
+        // us-east-1 (the plugin's explicit default, amazon-bedrock.ts:42).
+        let model = bind(&ModelConnection {
+            region: Some("eu-central-1".into()),
+            ..Default::default()
+        });
+        assert_eq!(
+            model.route.endpoint.base_url.as_deref(),
+            Some("https://bedrock-runtime.eu-central-1.amazonaws.com"),
+            "settings.region rides the endpoint"
+        );
+        let model = bind(&ModelConnection::default());
+        assert_eq!(
+            model.route.endpoint.base_url.as_deref(),
+            Some("https://bedrock-runtime.us-east-1.amazonaws.com"),
+            "region defaults to us-east-1"
+        );
+
+        // An explicit baseURL wins over the migrated endpoint.
+        let model = bind(&ModelConnection {
+            base_url: Some("https://explicit.example".into()),
+            endpoint: Some("https://ignored.internal".into()),
+            ..Default::default()
+        });
+        assert_eq!(
+            model.route.endpoint.base_url.as_deref(),
+            Some("https://explicit.example"),
+            "explicit baseURL wins over endpoint migration"
+        );
+    }
+
     /// BE-4 item 2: Vertex native models bind through the aiplatform
     /// deployment with the access token from the connection (the ADC
     /// credential binding) as the bearer.
@@ -2429,6 +2521,9 @@ mod tests {
                 base_url: None,
                 api_key: Some("ghu_bound_token".into()),
                 resource_name: None,
+                region: None,
+                profile: None,
+                endpoint: None,
                 headers: BTreeMap::new(),
                 transport: None,
             },
@@ -3038,6 +3133,9 @@ mod tests {
                 base_url: Some("https://api.anthropic.test".into()),
                 api_key: Some("test-key".into()),
                 resource_name: None,
+                region: None,
+                profile: None,
+                endpoint: None,
                 headers: BTreeMap::new(),
                 transport: None,
             },
@@ -3511,6 +3609,9 @@ mod tests {
             &model_id,
             &ModelConnection {
                 resource_name: Some("my-res".into()),
+                region: None,
+                profile: None,
+                endpoint: None,
                 api_key: Some("az-key-1".into()),
                 ..Default::default()
             },
@@ -3577,6 +3678,9 @@ mod tests {
             &info,
             &ModelConnection {
                 resource_name: Some("chat-res".into()),
+                region: None,
+                profile: None,
+                endpoint: None,
                 api_key: Some("az-key-2".into()),
                 ..Default::default()
             },

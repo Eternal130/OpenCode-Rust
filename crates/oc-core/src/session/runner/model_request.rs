@@ -661,8 +661,19 @@ impl SessionModelRequest {
         // titles and generate keep the provider default.
         let mut options = serde_json::Map::new();
         if matches!(kind, RequestKind::Primary | RequestKind::Compaction) {
-            let limit = output_limit(&model.limit, kind, input.input_tokens);
-            options.insert("maxTokens".into(), serde_json::json!(limit));
+            // G-262① — the openai provider's `omitOutputLimit` hooks
+            // (plugin/provider/openai.ts:316-322) delete
+            // `options.maxTokens` from EVERY `session.context` /
+            // `session.compaction` event for the openai provider,
+            // unconditionally (not just under a ChatGPT credential):
+            // the ChatGPT backend rejects a requested output limit and
+            // OpenAI counts one against rate limits. Never inserting it
+            // leaves the same observable state the ref's internal
+            // plugin hooks produce.
+            if model.reference.provider_id.as_str() != "openai" {
+                let limit = output_limit(&model.limit, kind, input.input_tokens);
+                options.insert("maxTokens".into(), serde_json::json!(limit));
+            }
         }
 
         // The `session.{context,compaction,title,generate}` hook.
