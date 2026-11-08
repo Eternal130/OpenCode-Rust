@@ -438,6 +438,27 @@ async fn post_form_json(
     Ok((status, body))
 }
 
+/// G-244 — POST with a JSON body (the zen Console's `send()`,
+/// opencode.ts:644-650 `schemaBodyJson`); Accept + User-Agent headers,
+/// JSON response.
+async fn post_json_body(
+    http: &Http,
+    endpoint: &str,
+    body: &Value,
+) -> Result<(reqwest::StatusCode, Value), String> {
+    let response = http
+        .post(endpoint)
+        .header("Accept", "application/json")
+        .header("User-Agent", app_user_agent())
+        .json(body)
+        .send()
+        .await
+        .map_err(|error| format!("request failed: {error}"))?;
+    let status = response.status();
+    let body = response.json::<Value>().await.unwrap_or(Value::Null);
+    Ok((status, body))
+}
+
 /// G-234① — `App.useragent(app)` (app.ts:24-26). The static provider
 /// flows carry no host app handle, so the detected app identity stands
 /// in (the same shape the engine stamps everywhere else).
@@ -456,6 +477,25 @@ pub async fn request_device_code(
     let fields: Vec<(&str, &str)> =
         fields.iter().map(|(key, value)| (*key, value.as_str())).collect();
     let (status, body) = post_form_json(http, endpoint, &fields).await?;
+    device_code_from_response(status, body)
+}
+
+/// G-244 — the device-code request with a JSON body (the zen Console's
+/// `send()`, opencode.ts:644-650 `schemaBodyJson`: booleans stay JSON
+/// booleans, not form strings).
+pub async fn request_device_code_json(
+    http: &Http,
+    endpoint: &str,
+    body: serde_json::Value,
+) -> Result<DeviceCode, String> {
+    let (status, body) = post_json_body(http, endpoint, &body).await?;
+    device_code_from_response(status, body)
+}
+
+fn device_code_from_response(
+    status: reqwest::StatusCode,
+    body: Value,
+) -> Result<DeviceCode, String> {
     if !status.is_success() {
         let error = body["error"].as_str().unwrap_or("unknown");
         let description = body["error_description"].as_str().unwrap_or("");
@@ -541,6 +581,44 @@ where
                 let next_ms = if next > 0.0 { (next * 1000.0) as u64 } else { interval + 5000 };
                 tokio::time::sleep(Duration::from_millis(next_ms + margin)).await;
             }
+        }
+    }
+}
+
+/// G-244 — the zen Console poll loop (opencode.ts:567-590): the ref
+/// SLEEPS the interval before the FIRST poll and between polls (no
+/// safety margin — unlike copilot/xai), `slow_down` grows the wait by
+/// a fixed +5s, and the token POST carries a JSON body.
+pub async fn run_device_poll_zen<F, Fut>(
+    http: Http,
+    endpoint: String,
+    client_id: String,
+    device_code: String,
+    interval_seconds: f64,
+    decode: F,
+) -> Result<super::types::CredentialValue, String>
+where
+    F: Fn(Value) -> Fut,
+    Fut: std::future::Future<Output = Result<super::types::CredentialValue, String>>,
+{
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let mut wait_ms = (interval_seconds.max(0.0) * 1000.0) as u64;
+    loop {
+        tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+        let body = serde_json::json!({
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            "device_code": device_code,
+            "client_id": client_id,
+        });
+        let (_status, body) = post_json_body(&http, &endpoint, &body).await?;
+        if body["access_token"].as_str().is_some_and(|token| !token.is_empty()) {
+            return decode(body).await;
+        }
+        match body["error"].as_str().unwrap_or_default() {
+            "authorization_pending" => {}
+            // Duration.sum(wait, seconds(5)) — cumulative back-off.
+            "slow_down" => wait_ms += 5000,
+            other => return Err(format!("Device authorization failed: {other}")),
         }
     }
 }

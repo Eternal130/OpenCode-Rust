@@ -615,6 +615,17 @@ async fn zen_device_flow_round_trip_against_mock() {
                 json!({"access_token": "zen-access", "refresh_token": "zen-refresh", "expires_in": 3600, "org_id": "org_9"}),
             ],
         ),
+        (
+            "/api/user",
+            vec![json!({"id": "user_77", "email": "dev@acme.test"})],
+        ),
+        (
+            "/api/orgs",
+            vec![json!([
+                {"id": "org_1", "name": "Zeta Corp"},
+                {"id": "org_9", "name": "Acme Corp"}
+            ])],
+        ),
     ])
     .await;
 
@@ -642,24 +653,36 @@ async fn zen_device_flow_round_trip_against_mock() {
         Ok(AttemptStatus::Complete { .. })
     ));
 
-    // Request shapes (opencode.ts:96-99, 30-37): client_id + org scope on
-    // the device request; the device grant on the poll.
+    // Request shapes (opencode.ts:107-113, 567-590, G-244): the device
+    // and poll posts carry JSON bodies — client_id + org scope on the
+    // device request (supports_org_scope a boolean), the device grant on
+    // the poll.
     let requests = mock.requests().join("\n");
-    assert!(requests.contains("client_id=opencode-cli"), "{requests}");
-    assert!(requests.contains("supports_org_scope=true"), "{requests}");
-    assert!(requests.contains("grant_type=urn"), "{requests}");
-    assert!(requests.contains("device_code=dev-123"), "{requests}");
+    assert!(requests.contains("\"client_id\":\"opencode-cli\""), "{requests}");
+    assert!(requests.contains("\"supports_org_scope\":true"), "{requests}");
+    assert!(requests.contains("\"grant_type\":\"urn:ietf:params:oauth:grant-type:device_code\""), "{requests}");
+    assert!(requests.contains("\"device_code\":\"dev-123\""), "{requests}");
+    // The two discovery GETs ride the fresh bearer (opencode.ts:592-600).
+    assert!(requests.contains("authorization: Bearer zen-access"), "{requests}");
 
-    // The credential: label derives from orgName (opencode.ts:152-164).
+    // The credential (G-244, opencode.ts:608-621): label derives from the
+    // org NAME resolved through /api/orgs (never the raw org_id), and the
+    // metadata records the full five-key set.
     let info = host.get("opencode").await.expect("get").expect("present");
     let ConnectionInfo::Credential { label, method, .. } = &info.connections[0] else { panic!() };
-    assert_eq!(label, "org_9");
+    assert_eq!(label, "Acme Corp");
     assert_eq!(method, "oauth");
     let active = host.connection_active("opencode").await.expect("active").expect("some");
     let resolved = host.connection_resolve(&active).await.expect("resolve").expect("value");
     let CredentialValue::OAuth(oauth) = resolved else { panic!() };
     assert_eq!(oauth.access, "zen-access");
     assert_eq!(oauth.refresh, "zen-refresh");
+    let metadata = oauth.metadata.expect("metadata");
+    assert_eq!(metadata.get("server").and_then(Value::as_str), Some(mock.base.as_str()));
+    assert_eq!(metadata.get("accountID").and_then(Value::as_str), Some("user_77"));
+    assert_eq!(metadata.get("email").and_then(Value::as_str), Some("dev@acme.test"));
+    assert_eq!(metadata.get("orgID").and_then(Value::as_str), Some("org_9"));
+    assert_eq!(metadata.get("orgName").and_then(Value::as_str), Some("Acme Corp"));
 }
 
 #[tokio::test]
@@ -818,11 +841,156 @@ async fn zen_refresh_round_trip_against_mock() {
     let CredentialValue::OAuth(oauth) = resolved else { panic!() };
     assert_eq!(oauth.access, "rotated-access");
     assert_eq!(oauth.refresh, "rotated-refresh");
-    // Refresh request shape (opencode.ts:115-123): refresh grant + client id.
+    // Refresh request shape (opencode.ts:130-136 + G-244 JSON encoding,
+    // :644-650): refresh grant + client id in a JSON body.
     let requests = mock.requests().join("\n");
-    assert!(requests.contains("grant_type=refresh_token"), "{requests}");
-    assert!(requests.contains("refresh_token=old-refresh"), "{requests}");
-    assert!(requests.contains("client_id=opencode-cli"), "{requests}");
+    assert!(requests.contains("\"grant_type\":\"refresh_token\""), "{requests}");
+    assert!(requests.contains("\"refresh_token\":\"old-refresh\""), "{requests}");
+    assert!(requests.contains("\"client_id\":\"opencode-cli\""), "{requests}");
+}
+
+/// G-244 end-to-end: a device login against a (self-hosted) answer.server
+/// records `metadata.server`, so a later refresh of the expired token hits
+/// THAT server — not the default `https://opencode.ai/console`.
+#[tokio::test]
+async fn zen_device_login_then_refresh_hits_answer_server() {
+    let mock = MockOAuth::start(vec![
+        (
+            "/auth/device/code",
+            vec![json!({
+                "device_code": "dev-e2e",
+                "user_code": "E2E-0001",
+                "verification_uri": "/verify",
+                "expires_in": 900,
+                "interval": 0
+            })],
+        ),
+        (
+            "/auth/device/token",
+            vec![
+                json!({"access_token": "first-access", "refresh_token": "first-refresh", "expires_in": 3600}),
+                json!({"access_token": "second-access", "refresh_token": "second-refresh", "expires_in": 3600}),
+            ],
+        ),
+        ("/api/user", vec![json!({"id": "u1", "email": "u@t.test"})]),
+        ("/api/orgs", vec![json!([{"id": "o1", "name": "One"}])]),
+    ])
+    .await;
+    let host = host().await;
+    let attempt = host
+        .oauth_connect("opencode", "device", &answer(&[("server", mock.base.as_str())]), None)
+        .await
+        .expect("connect");
+    let status = wait_complete(&host, "opencode", &attempt, 400).await;
+    assert!(matches!(status, AttemptStatus::Complete { .. }), "{status:?}");
+
+    // Expire the stored credential; resolving refreshes through
+    // metadata.server (the mock), never the official console.
+    let active = host.connection_active("opencode").await.expect("active").expect("some");
+    let ConnectionInfo::Credential { id, .. } = &active else { panic!() };
+    let stored = host.store().get(id).await.expect("get").expect("some");
+    let CredentialValue::OAuth(mut oauth) = stored.value else { panic!() };
+    oauth.expires = crate::database::migrations::now_ms() - 1000;
+    host.store()
+        .update(id, None, Some(&CredentialValue::OAuth(oauth.clone())))
+        .await
+        .expect("expire");
+    let resolved = host.connection_resolve(&active).await.expect("resolve").expect("value");
+    let CredentialValue::OAuth(rotated) = resolved else { panic!() };
+    assert_eq!(rotated.access, "second-access");
+    assert_eq!(rotated.refresh, "second-refresh");
+    // The metadata (incl. server) survives the rotation.
+    assert_eq!(
+        rotated.metadata.as_ref().and_then(|m| m.get("server")).and_then(Value::as_str),
+        Some(mock.base.as_str())
+    );
+    // Exactly one refresh grant reached the mock — a fallback to
+    // opencode.ai would never appear here.
+    let refreshes = mock
+        .requests()
+        .iter()
+        .filter(|request| request.contains("\"grant_type\":\"refresh_token\""))
+        .count();
+    assert_eq!(refreshes, 1);
+}
+
+/// G-244 org resolution (opencode.ts:601-607): a token `org_id` absent
+/// from `/api/orgs` fails the login; without one the name-then-id
+/// sorted first org wins.
+#[tokio::test]
+async fn zen_org_resolution_matches_org_id_or_sorts_by_name() {
+    let mock = MockOAuth::start(vec![
+        (
+            "/auth/device/code",
+            vec![json!({
+                "device_code": "dev-org",
+                "user_code": "ORG-0001",
+                "verification_uri": "/verify",
+                "expires_in": 900,
+                "interval": 0
+            })],
+        ),
+        (
+            "/auth/device/token",
+            vec![json!({"access_token": "a", "refresh_token": "r", "expires_in": 3600, "org_id": "org_missing"})],
+        ),
+        ("/api/user", vec![json!({"id": "u1", "email": "u@t.test"})]),
+        ("/api/orgs", vec![json!([{"id": "org_1", "name": "A"}])]),
+    ])
+    .await;
+    let host = host().await;
+    let attempt = host
+        .oauth_connect("opencode", "device", &answer(&[("server", mock.base.as_str())]), None)
+        .await
+        .expect("connect");
+    let status = wait_complete(&host, "opencode", &attempt, 400).await;
+    match status {
+        AttemptStatus::Failed { message, .. } => {
+            assert!(message.contains("OpenCode organization not found: org_missing"), "{message}");
+        }
+        other => panic!("expected failed, got {other:?}"),
+    }
+
+    // No org_id → the sorted-first org (name then id).
+    let mock = MockOAuth::start(vec![
+        (
+            "/auth/device/code",
+            vec![json!({
+                "device_code": "dev-org2",
+                "user_code": "ORG-0002",
+                "verification_uri": "/verify",
+                "expires_in": 900,
+                "interval": 0
+            })],
+        ),
+        (
+            "/auth/device/token",
+            vec![json!({"access_token": "a2", "refresh_token": "r2", "expires_in": 3600})],
+        ),
+        (
+            "/api/user",
+            vec![json!({"id": "u2", "email": "u2@t.test"})],
+        ),
+        (
+            "/api/orgs",
+            vec![json!([
+                {"id": "z-org", "name": "Beta"},
+                {"id": "a-org", "name": "Beta"},
+                {"id": "m-org", "name": "Alpha"}
+            ])],
+        ),
+    ])
+    .await;
+    let attempt = host
+        .oauth_connect("opencode", "device", &answer(&[("server", mock.base.as_str())]), None)
+        .await
+        .expect("connect 2");
+    let status = wait_complete(&host, "opencode", &attempt, 400).await;
+    assert!(matches!(status, AttemptStatus::Complete { .. }), "{status:?}");
+    let info = host.get("opencode").await.expect("get").expect("present");
+    let ConnectionInfo::Credential { label, .. } = &info.connections[0] else { panic!() };
+    // "Alpha" sorts before "Beta"; the id tie-break picks a-org.
+    assert_eq!(label, "Alpha");
 }
 
 #[tokio::test]
@@ -2028,7 +2196,12 @@ async fn console_refresh_reports_sso_required_status() {
         refresh: "r".into(),
         access: "console-access".into(),
         expires: crate::database::migrations::now_ms() + 3_600_000,
-        metadata: Some(BTreeMap::from([("server".to_owned(), Value::String(mock.base.clone()))])),
+        metadata: Some(BTreeMap::from([
+            ("server".to_owned(), Value::String(mock.base.clone())),
+            // G-244 — the SSO message names the credential's org
+            // (opencode.ts:69-70 organizationName, :493-494).
+            ("orgName".to_owned(), Value::String("Acme Corp".into())),
+        ])),
     });
     host.store()
         .create(credential::CreateInput {
@@ -2046,7 +2219,11 @@ async fn console_refresh_reports_sso_required_status() {
         panic!("expected a reported status, got {:?}", info.connections)
     };
     assert_eq!(status.status, "needs_auth");
-    assert!(status.message.contains("Sign in with SSO"), "{}", status.message);
+    assert!(
+        status.message.contains("Sign in with SSO again to use Acme Corp"),
+        "{}",
+        status.message
+    );
     let expected_url = format!("{}/auth/sso/conn_42/start?redirectTo=%2F", mock.base);
     assert_eq!(status.url.as_deref(), Some(expected_url.as_str()));
 }
