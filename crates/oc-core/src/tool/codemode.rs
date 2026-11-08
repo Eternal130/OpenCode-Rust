@@ -1177,6 +1177,242 @@ impl ExecutionLimits {
     }
 }
 
+// ---------------------------------------------------------------------------
+// G-247 — the module-loading scan (import()/require)
+// ---------------------------------------------------------------------------
+
+/// G-247 — the rejection text for a program that tries to load a
+/// module. The ref's confined interpreter is structurally incapable of
+/// it: its evaluator has no `ImportExpression` arm (interpreter.ts's
+/// switch falls through to `unsupportedSyntax`) and `globals.ts`
+/// defines no `require`. The guest runs real JavaScript, so the same
+/// contract — the verbatim-ref description (tool.ts:64) "Imports,
+/// direct filesystem access, and timers are unavailable" — is
+/// enforced by statically scanning the program source before it
+/// compiles, here at the tool entry AND in the guest (host.js
+/// `scanProgramSource`, the identical rule).
+pub const MODULE_LOADING_REJECTED: &str =
+    "Code Mode programs cannot use import()/require — the sandbox forbids module loading.";
+
+/// Words after which a `/` opens a regex literal (operand position),
+/// not a division — the scanner's lexer heuristic.
+const REGEX_KEYWORDS: [&str; 14] = [
+    "return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "case", "do", "else",
+    "yield", "await", "throw",
+];
+
+/// Characters after which a `/` opens a regex (operator/punctuation —
+/// an operand is expected). Everything else (identifier end, `)`,
+/// `]`, `}`, a string/template/regex end) reads as division.
+const REGEX_OPENERS: [char; 19] = [
+    '(', '[', '{', ',', ';', ':', '=', '!', '?', '&', '|', '+', '-', '*', '%', '^', '~', '<', '>',
+];
+
+/// What the scan found in a program source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModuleLoadToken {
+    /// A dynamic `import(...)` call expression.
+    Import,
+    /// A `require` identifier — call or bare reference.
+    Require,
+}
+
+fn is_ident_start(c: char) -> bool {
+    c.is_ascii_alphabetic() || c == '_' || c == '$'
+}
+
+fn is_ident_part(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '$'
+}
+
+/// G-247 — scan a Code Mode program source for module-loading tokens.
+///
+/// Token-level approximation: line/block comments, string bodies
+/// (`'…'`/`"…"`), template bodies (`` `…` `` with `${…}`
+/// interpolations scanned as code — an `import()` hiding inside one
+/// is still caught), and regex literals (operator-position heuristic)
+/// are stripped before matching; then:
+///
+/// * a dynamic `import` followed by `(` (whitespace/comments between
+///   allowed) rejects — EXCEPT a `.`-preceded property call
+///   (`obj.import(…)`: reserved words are legal property names, and a
+///   property call never loads a module — this keeps a catalog tool
+///   literally named `import` callable);
+/// * a `require` identifier rejects in ANY position, `.`-prefixed
+///   included (`globalThis.require(…)` is a live module-loading face
+///   on require-capable hosts). Pinned false-positive surface: dot
+///   access to a property named `require` (`tools.ns.require(…)`);
+///   the bracket form `tools.ns["require"](…)` stays legal (the name
+///   is a string literal).
+///
+/// Static `import … from` declarations need no rule: a Function-body
+/// cannot carry them (SyntaxError at compile, exactly like the ref
+/// where the node does not exist).
+pub fn scan_program(code: &str) -> Option<ModuleLoadToken> {
+    let chars: Vec<char> = code.chars().collect();
+    let len = chars.len();
+    let mut i = 0usize;
+
+    // Lexer contexts: `in_template` + the stack of contexts to return
+    // to (`Code` = a template closing returns to code; `Tpl` = an
+    // interpolation's matching `}` returns to the template).
+    #[derive(Clone, Copy, PartialEq)]
+    enum Ret {
+        Code,
+        Tpl,
+    }
+    let mut in_template = false;
+    let mut stack: Vec<Ret> = Vec::new();
+    let mut depth = 0usize; // brace depth of the current code region
+    let mut prev_code = '\0'; // last significant char of the current code region
+    let mut prev_regex_keyword = false; // last word was return/typeof/…
+
+    while i < len {
+        let c = chars[i];
+        if in_template {
+            match c {
+                '\\' => i += 2,
+                '`' => {
+                    in_template = false;
+                    stack.pop();
+                    prev_code = '`';
+                    prev_regex_keyword = false;
+                    i += 1;
+                }
+                '$' if chars.get(i + 1) == Some(&'{') => {
+                    stack.push(Ret::Tpl);
+                    in_template = false;
+                    depth = 0;
+                    prev_code = '\0';
+                    prev_regex_keyword = false;
+                    i += 2;
+                }
+                _ => i += 1,
+            }
+            continue;
+        }
+        // Whitespace and comments are invisible to the token stream.
+        if c.is_whitespace() {
+            i += 1;
+        } else if c == '/' && chars.get(i + 1) == Some(&'/') {
+            while i < len && chars[i] != '\n' {
+                i += 1;
+            }
+        } else if c == '/' && chars.get(i + 1) == Some(&'*') {
+            i += 2;
+            while i + 1 < len && !(chars[i] == '*' && chars[i + 1] == '/') {
+                i += 1;
+            }
+            i = (i + 2).min(len);
+        } else if c == '"' || c == '\'' {
+            i += 1;
+            while i < len && chars[i] != c {
+                if chars[i] == '\\' {
+                    i += 1;
+                }
+                i += 1;
+            }
+            i += 1;
+            prev_code = '"';
+            prev_regex_keyword = false;
+        } else if c == '`' {
+            stack.push(Ret::Code);
+            in_template = true;
+            i += 1;
+        } else if c == '/'
+            && (prev_code == '\0' || prev_regex_keyword || REGEX_OPENERS.contains(&prev_code))
+        {
+            // Regex literal: skip to the closing `/`, honoring escapes
+            // and character classes; a newline means it was never a
+            // regex (an unterminated literal is a SyntaxError anyway).
+            i += 1;
+            let mut in_class = false;
+            while i < len {
+                let r = chars[i];
+                if r == '\\' {
+                    i += 2;
+                    continue;
+                }
+                if r == '\n' {
+                    break;
+                }
+                if in_class {
+                    if r == ']' {
+                        in_class = false;
+                    }
+                } else if r == '[' {
+                    in_class = true;
+                } else if r == '/' {
+                    break;
+                }
+                i += 1;
+            }
+            i += 1;
+            while i < len && is_ident_part(chars[i]) {
+                i += 1; // flags (gimsuy…)
+            }
+            prev_code = '_';
+            prev_regex_keyword = false;
+        } else if is_ident_start(c) {
+            let start = i;
+            i += 1;
+            while i < len && is_ident_part(chars[i]) {
+                i += 1;
+            }
+            let word: String = chars[start..i].iter().collect();
+            match word.as_str() {
+                "require" => return Some(ModuleLoadToken::Require),
+                "import" if prev_code != '.' => {
+                    // Dynamic import iff the next significant token is
+                    // `(`. (A `.`-preceded `import` is a property
+                    // call — see the doc comment.)
+                    let mut j = i;
+                    loop {
+                        while j < len && chars[j].is_whitespace() {
+                            j += 1;
+                        }
+                        if chars.get(j) == Some(&'/') && chars.get(j + 1) == Some(&'*') {
+                            j += 2;
+                            while j + 1 < len && !(chars[j] == '*' && chars[j + 1] == '/') {
+                                j += 1;
+                            }
+                            j = (j + 2).min(len);
+                            continue;
+                        }
+                        break;
+                    }
+                    if chars.get(j) == Some(&'(') {
+                        return Some(ModuleLoadToken::Import);
+                    }
+                }
+                _ => {}
+            }
+            prev_regex_keyword = REGEX_KEYWORDS.contains(&word.as_str());
+            prev_code = chars[i - 1];
+        } else if c == '{' {
+            depth += 1;
+            prev_code = c;
+            prev_regex_keyword = false;
+            i += 1;
+        } else if c == '}' {
+            if depth > 0 {
+                depth -= 1;
+            } else if stack.last() == Some(&Ret::Tpl) {
+                stack.pop();
+                in_template = true;
+            }
+            prev_code = c;
+            prev_regex_keyword = false;
+            i += 1;
+        } else {
+            prev_code = c;
+            prev_regex_keyword = false;
+            i += 1;
+        }
+    }
+    None
+}
+
 /// Deepest nesting a value may have when it crosses to or from the
 /// host (`MAX_VALUE_DEPTH`, interpreter/limits.ts:13; the boundary
 /// walk in data.ts:53 counts the root at depth 0 and throws entering
@@ -1513,6 +1749,23 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
                 Ok(limits) => limits,
                 Err(message) => return Err(super::ToolFailure::message(message)),
             };
+            // G-247 — the module-loading scan at the tool entry:
+            // `import()`/`require` reject BEFORE the program runs,
+            // surfacing as the program's error (exactly the ref's
+            // shape, where the confined interpreter fails the program
+            // on the unsupported `ImportExpression` node / the missing
+            // `require` global — never a tool failure). The guest
+            // enforces the identical rule on its side of the wire.
+            if scan_program(code).is_some() {
+                let mut metadata = serde_json::Map::new();
+                metadata.insert("toolCalls".to_string(), Value::Array(Vec::new()));
+                metadata.insert("error".to_string(), Value::Bool(true));
+                return Ok(super::ToolOutcome {
+                    content: vec![Content::Text { text: MODULE_LOADING_REJECTED.to_string() }],
+                    metadata: Some(metadata),
+                    output: None,
+                });
+            }
             let registry = Arc::clone(&self.registry);
             let call_context = context.clone();
             // ToolRuntime.make's admission counter (tool-runtime.ts:
@@ -2720,5 +2973,172 @@ mod limits_tests {
             ..RunOutcome::default()
         };
         assert_eq!(format_result(&failed), "boom\n\nLogs:\nbefore");
+    }
+}
+
+/// G-247 — the module-loading scan (`import()`/`require`): token-level
+/// acceptance/rejection corpus (comments, strings, template bodies,
+/// regex literals stripped; `${…}` interpolations scanned as code),
+/// plus the executor leaf's rejection surface (the program fails with
+/// the scan's error text and the runtime never runs).
+#[cfg(test)]
+mod g247_tests {
+    use super::super::tests::{call, harness_for_codemode};
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn scan_rejects_module_loading() {
+        let rejected: &[(&str, ModuleLoadToken)] = &[
+            // Dynamic import — the direct escape the gap entry cites.
+            (r#"await import("node:fs")"#, ModuleLoadToken::Import),
+            (r#"return import("node:child_process").then(m => m.spawn("id"))"#, ModuleLoadToken::Import),
+            // Whitespace/newline variants between `import` and `(`.
+            (r#"import ("node:fs")"#, ModuleLoadToken::Import),
+            ("import\n(\n'node:fs'\n)", ModuleLoadToken::Import),
+            // A block comment between `import` and `(` is still a call.
+            (r#"import/*g247*/("node:fs")"#, ModuleLoadToken::Import),
+            // Template specifier — the call shape is what flags.
+            ("return import(`node:fs`);", ModuleLoadToken::Import),
+            // Hiding inside a template interpolation.
+            (r#"return `fs: ${import("node:fs")}`;"#, ModuleLoadToken::Import),
+            // …and inside a NESTED interpolation.
+            (r#"return `a ${ `b ${ require("fs") } c` } d`;"#, ModuleLoadToken::Require),
+            // require — call, bare reference, and property positions
+            // (globalThis.require is a live module-loading face on
+            // require-capable hosts).
+            (r#"const fs = require("node:fs")"#, ModuleLoadToken::Require),
+            ("const r = require;", ModuleLoadToken::Require),
+            (r#"return globalThis.require("fs")"#, ModuleLoadToken::Require),
+            ("x?.require", ModuleLoadToken::Require),
+            // Inside a block — position does not matter.
+            (r#"if (x) { await import("node:fs"); }"#, ModuleLoadToken::Import),
+        ];
+        for (code, expected) in rejected {
+            assert_eq!(
+                scan_program(code),
+                Some(*expected),
+                "must reject: {code}"
+            );
+        }
+    }
+
+    #[test]
+    fn scan_accepts_legal_programs() {
+        let accepted: &[&str] = &[
+            // Plain programs.
+            "return 1 + 1;",
+            r#"const r = await tools.greet({ name: "x" }); return r;"#,
+            // The words inside STRING bodies never flag.
+            r#"return "require is just a word: require(\"fs\")";"#,
+            r#"return 'import("node:fs") was rejected';"#,
+            // …inside COMMENTS.
+            "// import(\"node:fs\") would be rejected — but not here\nreturn 7;",
+            "/* require(\"fs\") */ return 8;",
+            // Template bodies (no interpolation) are string content.
+            "return `require(\"fs\") untouchable`;",
+            // Word boundaries: longer identifiers containing the token.
+            "const importer = 1, my_require = 2, required = 3; return importer + my_require + required;",
+            // Property calls never load modules: reserved words are
+            // legal property names (`obj.import(…)`).
+            "const box = { import: (x) => x }; return box.import(41);",
+            // The bracket form keeps a `require`-named path callable
+            // (the name is a string literal).
+            r#"return tools["require"]({ x: 1 });"#,
+            // Regex literals are skipped (operator-position heuristic).
+            r#"const re = /require\(/; return re.test("require(");"#,
+            r#"const f = () => /import\(/.test("x"); return f;"#,
+            // Division after operands reads as division, not regex.
+            "const ratio = width / 2 / scale; return ratio;",
+            // A static import DECLARATION carries no call shape (and a
+            // Function body cannot hold one — SyntaxError at compile,
+            // exactly like the ref's missing node).
+            r#"import fs from "node:fs";"#,
+            "import.meta.url",
+            // Escapes inside strings keep the lexer anchored.
+            r#"const s = "escaped \" quote and ' solo"; return s.length;"#,
+            "const t = `back \\` tick`; return t;",
+            // A regex character class containing a slash.
+            r#"const re = /a[/]b/; return re.source;"#,
+        ];
+        for code in accepted {
+            assert_eq!(scan_program(code), None, "must accept: {code}");
+        }
+    }
+
+    #[test]
+    fn scan_rejection_text_is_pinned() {
+        assert_eq!(
+            MODULE_LOADING_REJECTED,
+            "Code Mode programs cannot use import()/require — the sandbox forbids module loading."
+        );
+    }
+
+    /// The executor leaf rejects before the runtime: the scan's error
+    /// is the program's OUTPUT (error metadata), never a tool failure,
+    /// and the runtime is never invoked.
+    #[tokio::test]
+    async fn g247_leaf_rejects_module_loading_before_the_runtime() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let harness = harness_for_codemode().await;
+        let state = Arc::new(ToolRegistryState::new());
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        let invoked = Arc::new(AtomicBool::new(false));
+        struct ProbeRuntime(Arc<AtomicBool>);
+        #[async_trait]
+        impl CodeModeRuntime for ProbeRuntime {
+            async fn evaluate(
+                &self,
+                _code: &str,
+                _catalog: &[CatalogEntry],
+                _call: ToolCallFn,
+            ) -> RunOutcome {
+                self.0.store(true, Ordering::SeqCst);
+                RunOutcome { value: Some(json!("runtime ran")), ..RunOutcome::default() }
+            }
+        }
+        register_code_mode(
+            &state,
+            &hooks,
+            &harness.services,
+            Arc::new(ProbeRuntime(Arc::clone(&invoked))),
+            std::time::Duration::from_secs(5),
+        );
+
+        for code in [
+            r#"await import("node:fs")"#,
+            r#"return require("fs").readFileSync("/etc/hostname", "utf8");"#,
+            "return globalThis.require(\"child_process\");",
+        ] {
+            let result = call(&state, EXECUTE_NAME, json!({ "code": code }))
+                .await
+                .expect("the rejection is the program's output, not a tool failure");
+            let text = match &result.content[0] {
+                Content::Text { text } => text.clone(),
+                Content::File { .. } => String::new(),
+            };
+            assert_eq!(text, MODULE_LOADING_REJECTED, "code: {code}");
+            let metadata = result.metadata.expect("metadata");
+            assert_eq!(metadata.get("error"), Some(&json!(true)));
+            assert_eq!(metadata.get("toolCalls"), Some(&json!([])));
+        }
+        assert!(!invoked.load(Ordering::SeqCst), "the runtime must not run for rejected programs");
+
+        // A legal program mentioning `require` inside a string still
+        // reaches the runtime.
+        let result = call(
+            &state,
+            EXECUTE_NAME,
+            json!({ "code": r#"return "the word require stays legal in strings";"# }),
+        )
+        .await
+        .expect("legal program runs");
+        let text = match &result.content[0] {
+            Content::Text { text } => text.clone(),
+            Content::File { .. } => String::new(),
+        };
+        assert_eq!(text, "runtime ran");
+        assert!(invoked.load(Ordering::SeqCst));
     }
 }
