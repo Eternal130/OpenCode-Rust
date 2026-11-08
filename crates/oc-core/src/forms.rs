@@ -1238,7 +1238,9 @@ mod g276_tests {
     use super::*;
     use oc_util::determinism::{SequentialIdGen, SystemClock};
 
-    async fn bus_with_failing_listener(fail_on: &'static str) -> crate::bus::Bus {
+    async fn bus_with_failing_listener(
+        fail_on: &'static str,
+    ) -> (crate::bus::Bus, crate::bus::ListenGuard) {
         let db = crate::database::Database::open_in_memory().await.expect("db");
         let bus = crate::bus::Bus::new(
             db,
@@ -1249,14 +1251,16 @@ mod g276_tests {
                 log_read_page_size: 512,
             },
         );
-        bus.listen(Arc::new(move |event| {
-            if event.type_ == fail_on {
-                Err(crate::bus::ListenerError("boom".to_owned()))
-            } else {
-                Ok(())
-            }
-        }));
-        bus
+        // The guard must outlive the publishes (dropping detaches).
+        let guard =
+            bus.listen(Arc::new(move |event| {
+                if event.type_ == fail_on {
+                    Err(crate::bus::ListenerError("boom".to_owned()))
+                } else {
+                    Ok(())
+                }
+            }));
+        (bus, guard)
     }
 
     fn input() -> CreateInput {
@@ -1285,8 +1289,9 @@ mod g276_tests {
 
     #[tokio::test]
     async fn g276_create_publish_failure_rolls_back_entry() {
-        let forms = Forms::new(Arc::new(SequentialIdGen::new()), Arc::new(SystemClock))
-            .with_bus(bus_with_failing_listener("form.created").await);
+        let (bus, _listener_guard) = bus_with_failing_listener("form.created").await;
+        let forms =
+            Forms::new(Arc::new(SequentialIdGen::new()), Arc::new(SystemClock)).with_bus(bus);
         let error = forms
             .create_with_id(FormId("frm_g276c".into()), input())
             .await
@@ -1298,8 +1303,9 @@ mod g276_tests {
 
     #[tokio::test]
     async fn g276_reply_publish_failure_leaves_form_pending() {
-        let forms = Forms::new(Arc::new(SequentialIdGen::new()), Arc::new(SystemClock))
-            .with_bus(bus_with_failing_listener("form.replied").await);
+        let (bus, _listener_guard) = bus_with_failing_listener("form.replied").await;
+        let forms =
+            Forms::new(Arc::new(SequentialIdGen::new()), Arc::new(SystemClock)).with_bus(bus);
         let id = FormId("frm_g276r".into());
         forms.create_with_id(id.clone(), input()).await.expect("create");
         let reply: Answer = [("name", FormValue::String("v".into()))]
@@ -1314,8 +1320,9 @@ mod g276_tests {
 
     #[tokio::test]
     async fn g276_cancel_publish_failure_leaves_form_pending() {
-        let forms = Forms::new(Arc::new(SequentialIdGen::new()), Arc::new(SystemClock))
-            .with_bus(bus_with_failing_listener("form.cancelled").await);
+        let (bus, _listener_guard) = bus_with_failing_listener("form.cancelled").await;
+        let forms =
+            Forms::new(Arc::new(SequentialIdGen::new()), Arc::new(SystemClock)).with_bus(bus);
         let id = FormId("frm_g276x".into());
         forms.create_with_id(id.clone(), input()).await.expect("create");
         let error = forms.cancel(&id, None).await.expect_err("publish fails");

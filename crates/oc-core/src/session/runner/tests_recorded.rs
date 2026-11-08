@@ -466,3 +466,37 @@ fn unused_record(_: Record) {}
 
 #[allow(dead_code)]
 fn unused_failure_marker(_: RunFailure, _: &Harness) {}
+
+// ---------------------------------------------------------------------------
+// G-279⑥ — advance_to_step observes an already-signaled shutdown at the
+// ready boundary (ref llm.ts:160-175 restore-wrapped ready section).
+// ---------------------------------------------------------------------------
+
+/// With shutdown already signaled, the drain returns `Interrupted`
+/// BEFORE the ready path promotes/delivers anything — pre-fix the
+/// pending prompt was delivered into the transcript first and the
+/// interrupt only landed at the model stream.
+#[tokio::test]
+async fn g279_drain_observes_shutdown_before_promoting() {
+    let harness = harness().await;
+    harness.create_session().await;
+    harness.admit_prompt("msg_sd", "interrupt before the turn").await;
+    let (_signal, shutdown) = tokio::sync::watch::channel(true);
+    let failure = harness
+        .runner
+        .drain(
+            harness.session_id().as_str(),
+            true,
+            None,
+            Promotable::Input,
+            shutdown,
+        )
+        .await
+        .expect_err("shutdown must interrupt");
+    assert!(matches!(failure, RunFailure::Interrupted), "{failure}");
+    let messages = harness.messages().await;
+    assert!(
+        messages.is_empty(),
+        "nothing delivered — the interrupt lands at the ready boundary: {messages:?}"
+    );
+}

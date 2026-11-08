@@ -702,6 +702,7 @@ impl Bus {
             .commit_durable_event(definition, event, None, options.commit, options.persist)
             .await;
         drop(guard);
+        drop(lock);
         self.inner.evict_lock_if_idle(&aggregate_id);
         // Persist-then-publish: notify only after the commit succeeded.
         // (Unreachable `None`: publishes carry no replay input.)
@@ -857,6 +858,7 @@ impl Bus {
             })
             .await;
         drop(guard);
+        drop(lock);
         self.inner.evict_lock_if_idle(&aggregate_id);
         let record: CommitRecord = transaction.map_err(lift_db_error)?;
         // Post-commit: apply routing, wake, notify each in order.
@@ -1343,6 +1345,7 @@ impl Bus {
         let committed =
             self.commit_durable_event(definition, payload, Some(input), None, None).await;
         drop(guard);
+        drop(lock);
         self.inner.evict_lock_if_idle(&aggregate_id);
         let committed = committed?;
         if let Some(committed) = committed {

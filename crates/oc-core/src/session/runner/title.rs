@@ -400,3 +400,70 @@ fn truncate_chars_from(value: &str, max: usize) -> String {
     let start = value.chars().count() - max;
     value.chars().skip(start).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// G-279③ — ref title.ts:92-93 `onInterrupt(() => recordUsage)`:
+    /// dropping the attempt mid-stream (an already-accumulated usage)
+    /// still publishes `session.usage.recorded` from the guard's Drop.
+
+    async fn read_durable(bus: &crate::bus::Bus) -> Vec<(String, serde_json::Value)> {
+        use futures::StreamExt as _;
+        let mut stream = bus.log(crate::bus::LogInput {
+            aggregate_id: "ses_g279".into(),
+            after: None,
+            follow: false,
+        });
+        let mut out = Vec::new();
+        while let Some(item) = stream.next().await {
+            if let Ok(crate::bus::LogItem::Event(event)) = item {
+                if event.seq().is_some() {
+                    out.push((event.type_.clone(), event.data));
+                }
+            }
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn g279_title_usage_publishes_on_drop() {
+        let db = crate::database::Database::open_in_memory().await.expect("db");
+        let bus = crate::bus::Bus::new(
+            db,
+            crate::bus::BusOptions {
+                clock: Arc::new(oc_util::determinism::SystemClock),
+                ids: Arc::new(oc_util::determinism::SequentialIdGen::new()),
+                persist: true,
+                log_read_page_size: 512,
+            },
+        );
+        let usage = Arc::new(std::sync::Mutex::new(Some(RecordedUsage::default())));
+        let guard = TitleUsageGuard {
+            bus: bus.clone(),
+            session_id: "ses_g279".into(),
+            usage: Arc::clone(&usage),
+            published: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+        drop(guard); // cancellation: the spawned publish runs on the runtime
+        // Let the spawned task run, then collect the aggregate's log.
+        let mut collected: Vec<(String, serde_json::Value)> = Vec::new();
+        for _ in 0..50 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            collected = read_durable(&bus).await;
+            if !collected.is_empty() {
+                break;
+            }
+        }
+        let usage_events: Vec<_> = collected
+            .iter()
+            .filter(|(type_, _)| type_ == "session.usage.recorded")
+            .collect();
+        assert_eq!(usage_events.len(), 1, "exactly one usage publish on drop: {collected:?}");
+        assert_eq!(usage_events[0].1["sessionID"], "ses_g279");
+        assert_eq!(usage_events[0].1["source"], "title");
+        // The guard consumed the cell: no double publish on a later drop.
+        assert!(usage.lock().unwrap_or_else(|p| p.into_inner()).is_none());
+    }
+}

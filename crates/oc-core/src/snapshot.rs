@@ -399,6 +399,9 @@ impl GitSnapshotStore {
             LOCK_ACTIVE.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
         }
         drop(guard);
+        // Drop our clone FIRST: eviction is safe only when no other task
+        // holds the Arc (strong count 1 = only the map).
+        drop(lock);
         // Eviction: safe only when no other task cloned the Arc (a
         // cloned Arc pins the entry; a task between clone and lock
         // keeps the count > 1, so a fresh inserter can never fork the

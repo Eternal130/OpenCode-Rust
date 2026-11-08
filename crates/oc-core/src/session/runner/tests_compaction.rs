@@ -1280,3 +1280,23 @@ async fn runner_compaction_manual_failure_publishes_exactly_one_failed_event() {
     assert_eq!(compaction_rows.len(), 1, "one compaction row: {messages:#?}");
     assert_eq!(compaction_rows[0].2["status"], serde_json::json!("failed"));
 }
+
+/// G-279⑤ — estimation uses the EFFECTIVE (namespaced) tool name the
+/// request carries (`registry::effective_name`), not the registered
+/// bare name (ref compaction.ts:931-937 estimates the request's tools).
+#[test]
+fn g279_estimate_uses_effective_tool_name() {
+    let tool = crate::location::ToolRegistration {
+        name: "create".into(),
+        description: "create a thing".into(),
+        input: serde_json::json!({ "type": "object", "properties": {} }),
+        namespace: Some("slack.admin".into()),
+        permission: None,
+        codemode: true,
+    };
+    let entry = crate::session::runner::compaction::tool_entry_of(&tool);
+    let oc_ai::schema::messages::ToolEntry::Definition(definition) = &entry else {
+        panic!("definition entry")
+    };
+    assert_eq!(definition.name, "slack_admin_create", "effective name");
+}
