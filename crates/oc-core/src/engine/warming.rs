@@ -120,16 +120,22 @@ fn duration_ms(value: &str) -> Option<u64> {
             _ => None,
         }
     }
+    let mut tokens =
+        value.split(|c: char| c == ',' || c.is_whitespace()).filter(|t| !t.is_empty());
     let mut total: u64 = 0;
     let mut any = false;
-    for token in value.split(|c: char| c == ',' || c.is_whitespace()).filter(|t| !t.is_empty()) {
+    loop {
+        let Some(token) = tokens.next() else { break };
+        // `"500ms"` carries its unit; `"4" "minutes"` splits across
+        // tokens (effect's `DurationFromString` accepts both).
         let split = token
             .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
             .unwrap_or(token.len());
-        let (number, unit) = token.split_at(split);
-        if number.is_empty() || unit.is_empty() {
+        let (number, suffix) = token.split_at(split);
+        if number.is_empty() {
             return None;
         }
+        let unit = if suffix.is_empty() { tokens.next()? } else { suffix };
         let parsed: f64 = number.parse().ok()?;
         let millis = unit_millis(unit)? as f64;
         total = total.saturating_add((parsed * millis) as u64);
@@ -558,8 +564,13 @@ mod tests {
         settings: WarmingSettings,
         generate: Arc<RecordingGenerate>,
         db: crate::database::Database,
-    ) -> (Arc<WarmingRuntime>, Arc<MutableClock>, Arc<ManualSleep>) {
-        let (_shutdown_tx, shutdown) = tokio::sync::watch::channel(false);
+    ) -> (
+        Arc<WarmingRuntime>,
+        Arc<MutableClock>,
+        Arc<ManualSleep>,
+        tokio::sync::watch::Sender<bool>,
+    ) {
+        let (shutdown_tx, shutdown) = tokio::sync::watch::channel(false);
         let clock = MutableClock::at_epoch();
         let manual = ManualSleep::new();
         let runtime = Arc::new(
@@ -572,7 +583,10 @@ mod tests {
             )
             .with_sleeper(manual_sleeper(manual.clone())),
         );
-        (runtime, clock, manual)
+        // The sender must outlive the loops: a closed channel is the
+        // bundle-shutdown signal (the engine keeps it in its shutdown
+        // map; tests keep it here).
+        (runtime, clock, manual, shutdown_tx)
     }
 
     /// Config active + root session active → keep-alive generates fire
@@ -584,7 +598,7 @@ mod tests {
         let db = crate::database::Database::open_in_memory().await.expect("db");
         seed_root_session(&db, "ses_warm", None).await;
         let generate = Arc::new(RecordingGenerate { calls: StdMutex::new(Vec::new()), fail: false });
-        let (runtime, clock, manual) = runtime_with(
+        let (runtime, clock, manual, _shutdown_tx) = runtime_with(
             WarmingSettings { prompt: "warm me".into(), interval_ms: 10, duration_ms: 35 },
             generate.clone(),
             db,
@@ -609,7 +623,7 @@ mod tests {
         seed_root_session(&db, "ses_root", None).await;
         seed_root_session(&db, "ses_child", Some("ses_root")).await;
         let generate = Arc::new(RecordingGenerate { calls: StdMutex::new(Vec::new()), fail: false });
-        let (runtime, _clock, _manual) = runtime_with(
+        let (runtime, _clock, _manual, _shutdown_tx) = runtime_with(
             WarmingSettings { prompt: "warm me".into(), interval_ms: 10, duration_ms: 100 },
             generate.clone(),
             db,
@@ -654,7 +668,7 @@ mod tests {
         let db = crate::database::Database::open_in_memory().await.expect("db");
         seed_root_session(&db, "ses_fail", None).await;
         let generate = Arc::new(RecordingGenerate { calls: StdMutex::new(Vec::new()), fail: true });
-        let (runtime, clock, manual) = runtime_with(
+        let (runtime, clock, manual, _shutdown_tx) = runtime_with(
             WarmingSettings { prompt: "warm me".into(), interval_ms: 10, duration_ms: 25 },
             generate.clone(),
             db,
@@ -673,7 +687,7 @@ mod tests {
         let db = crate::database::Database::open_in_memory().await.expect("db");
         seed_root_session(&db, "ses_hook", None).await;
         let generate = Arc::new(RecordingGenerate { calls: StdMutex::new(Vec::new()), fail: false });
-        let (runtime, _clock, _manual) = runtime_with(
+        let (runtime, _clock, _manual, _shutdown_tx) = runtime_with(
             WarmingSettings { prompt: "warm me".into(), interval_ms: 3_600_000, duration_ms: 1_800_000 },
             generate,
             db,
@@ -683,18 +697,17 @@ mod tests {
             Arc::new(WarmingAccountHook(Arc::clone(&runtime)));
         let compaction_hook: Arc<dyn crate::hooks::HookHandler<crate::hooks::SessionCompactionEvent>> =
             Arc::new(WarmingCompactionHook(Arc::clone(&runtime)));
-        registry
+        // Registrations live for the test registry's lifetime (their
+        // guards dispose on drop).
+        let registration_context = registry
             .register_session_context(Arc::clone(&account), crate::hooks::HookOptions::default())
-            .await
-            .dispose_sync();
-        registry
+            .await;
+        let registration_generate = registry
             .register_session_generate(account, crate::hooks::HookOptions::default())
-            .await
-            .dispose_sync();
-        registry
+            .await;
+        let registration_compaction = registry
             .register_session_compaction(compaction_hook, crate::hooks::HookOptions::default())
-            .await
-            .dispose_sync();
+            .await;
 
         registry.dispatch_session_generate(event("ses_hook", "via generate")).await.expect("dispatch");
         assert!(runtime.tracked("ses_hook").is_some(), "tracked via the generate hook");
@@ -708,5 +721,8 @@ mod tests {
             .await
             .expect("dispatch compaction");
         assert!(runtime.tracked("ses_hook").is_some(), "compaction slides the same entry");
+        drop(registration_context);
+        drop(registration_generate);
+        drop(registration_compaction);
     }
 }
