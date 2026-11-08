@@ -666,22 +666,21 @@ impl Engine {
         }
         // G-259 — the DigitalOcean routers sync (the ref plugin's
         // `load` + provider transform + its 5-minute repeat,
-        // digitalocean.ts:171-178): the repeat loop spawns ONLY when a
+        // digitalocean.ts:171-178): the repeat loop runs ONLY when a
         // DigitalOcean credential is stored — the copilot/modal spawn
-        // discipline ("plain boots and tests spawn nothing"); the loop
-        // itself re-resolves per tick, so a removed or type-changed
-        // credential still clears on the schedule.
+        // discipline ("plain boots and tests spawn nothing"). The
+        // credential pre-check runs INSIDE the deferred task (never an
+        // extra await in boot's critical section — an added boot yield
+        // lets the boot-spawned models-dev refresh publish race ahead
+        // of boot's tail, the workspace-merge regression the copilot
+        // spawn's 1s deferral guards); the loop itself re-resolves per
+        // tick, so a removed or type-changed credential still clears
+        // on the schedule.
         let digitalocean_sync =
             Arc::new(crate::provider_catalog::digitalocean_sync::DigitalOceanSync::new(
                 Arc::clone(&facade_transport),
             ));
-        let has_do_credential = integration
-            .store()
-            .list(crate::provider_catalog::digitalocean_sync::DIGITALOCEAN_PROVIDER_ID)
-            .await
-            .map(|rows| !rows.is_empty())
-            .unwrap_or(false);
-        if has_do_credential {
+        {
             let digitalocean_sync = Arc::clone(&digitalocean_sync);
             let catalog = Arc::clone(&catalog);
             let integration = Arc::clone(&integration);
@@ -690,6 +689,15 @@ impl Engine {
                 // Stay out of boot's critical section, then repeat on
                 // the ref's 5-minute schedule.
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                let has_credential = integration
+                    .store()
+                    .list(crate::provider_catalog::digitalocean_sync::DIGITALOCEAN_PROVIDER_ID)
+                    .await
+                    .map(|rows| !rows.is_empty())
+                    .unwrap_or(false);
+                if !has_credential {
+                    return; // no credential — the sync stays inert
+                }
                 loop {
                     match crate::provider_catalog::digitalocean_sync::resolve_digitalocean_credential(
                         &integration,
