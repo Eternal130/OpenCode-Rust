@@ -996,12 +996,12 @@ async fn move_session(
                 ApiError::unknown_ref()
             })?;
             let orphan = source_unavailable
-                && latest
+                && latest.as_ref().is_some_and(|latest| {
+                    latest.directory == row.directory && latest.workspace_id == row.workspace_id
+                })
+                && booted
                     .as_ref()
-                    .is_some_and(|latest| {
-                        latest.directory == row.directory && latest.workspace_id == row.workspace_id
-                    })
-                && booted.as_ref().is_none_or(|services| !services.execution.is_active(&session_id));
+                    .is_none_or(|services| !services.execution.is_active(&session_id));
             if orphan {
                 // Cancel every queued move inside the lock, then publish
                 // Moved directly (ref move.ts:134-147) — the orphan never
@@ -1047,11 +1047,7 @@ async fn move_session(
             })?;
             services
                 .inbox
-                .admit(
-                    &message_id,
-                    &session_id,
-                    Item::Move_ { payload, delivery },
-                )
+                .admit(&message_id, &session_id, Item::Move_ { payload, delivery })
                 .await
                 .map_err(|error| inbox_error(&error, &message_id))?;
             Ok(())
@@ -1208,10 +1204,7 @@ async fn command(
             let parsed = oc_core::config::command_md::parse_arguments(&text);
             let mut args = std::collections::BTreeMap::new();
             for (index, argument) in arguments.iter().enumerate() {
-                args.insert(
-                    argument.clone(),
-                    parsed.get(index).cloned().unwrap_or_default(),
-                );
+                args.insert(argument.clone(), parsed.get(index).cloned().unwrap_or_default());
             }
             let result = services
                 .mcp
@@ -1469,17 +1462,12 @@ async fn context(
 fn drop_pre_checkpoint_system_rows<'a>(
     rows: &[&'a oc_core::database::schema::SessionMessageRow],
 ) -> Vec<&'a oc_core::database::schema::SessionMessageRow> {
-    let Some(native_seq) = rows
-        .iter()
-        .rev()
-        .find_map(|row| is_native_checkpoint(row).then_some(row.seq))
+    let Some(native_seq) =
+        rows.iter().rev().find_map(|row| is_native_checkpoint(row).then_some(row.seq))
     else {
         return rows.to_vec();
     };
-    rows.iter()
-        .copied()
-        .filter(|row| row.type_ != "system" || row.seq >= native_seq)
-        .collect()
+    rows.iter().copied().filter(|row| row.type_ != "system" || row.seq >= native_seq).collect()
 }
 
 /// Completed-compaction probe (`latestCompaction`, history.ts:28):

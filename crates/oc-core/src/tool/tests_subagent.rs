@@ -905,12 +905,10 @@ async fn g191_subagent_tool_runs_through_the_pipeline() {
     scope.track(
         hooks
             .register_tool_execute_before(
-                crate::hooks::fn_hook(
-                    move |event: &mut crate::hooks::ToolExecuteBeforeEvent| {
-                        before_seen.lock().push(format!("before:{}", event.tool));
-                        Ok(())
-                    },
-                ),
+                crate::hooks::fn_hook(move |event: &mut crate::hooks::ToolExecuteBeforeEvent| {
+                    before_seen.lock().push(format!("before:{}", event.tool));
+                    Ok(())
+                }),
                 crate::hooks::HookOptions::default(),
             )
             .await,
@@ -919,16 +917,14 @@ async fn g191_subagent_tool_runs_through_the_pipeline() {
     scope.track(
         hooks
             .register_tool_execute_after(
-                crate::hooks::fn_hook(
-                    move |event: &mut crate::hooks::ToolExecuteAfterEvent| {
-                        let phase = match event.outcome {
-                            crate::hooks::ToolOutcome::Completed { .. } => "after",
-                            crate::hooks::ToolOutcome::Error { .. } => "after-error",
-                        };
-                        after_seen.lock().push(format!("{phase}:{}", event.tool));
-                        Ok(())
-                    },
-                ),
+                crate::hooks::fn_hook(move |event: &mut crate::hooks::ToolExecuteAfterEvent| {
+                    let phase = match event.outcome {
+                        crate::hooks::ToolOutcome::Completed { .. } => "after",
+                        crate::hooks::ToolOutcome::Error { .. } => "after-error",
+                    };
+                    after_seen.lock().push(format!("{phase}:{}", event.tool));
+                    Ok(())
+                }),
                 crate::hooks::HookOptions::default(),
             )
             .await,
@@ -963,6 +959,10 @@ async fn g191_subagent_tool_runs_through_the_pipeline() {
     let observed = seen.lock().clone();
     assert_eq!(
         observed,
-        vec!["before:subagent".to_string(), "before:subagent".to_string(), "after-error:subagent".to_string()]
+        vec![
+            "before:subagent".to_string(),
+            "before:subagent".to_string(),
+            "after-error:subagent".to_string()
+        ]
     );
 }

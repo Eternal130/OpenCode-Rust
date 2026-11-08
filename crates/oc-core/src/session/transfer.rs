@@ -412,9 +412,11 @@ fn sanitize_info(info: &Value) -> Value {
             location.insert("directory".to_owned(), Value::String(format!("/{directory}")));
         }
     }
-    if let Some(files) = map.get_mut("revert").and_then(Value::as_object_mut).and_then(|revert| {
-        revert.get_mut("files").and_then(Value::as_array_mut)
-    }) {
+    if let Some(files) = map
+        .get_mut("revert")
+        .and_then(Value::as_object_mut)
+        .and_then(|revert| revert.get_mut("files").and_then(Value::as_array_mut))
+    {
         for (index, file) in files.iter_mut().enumerate() {
             let Some(file) = file.as_object_mut() else { continue };
             let index = index.to_string();
@@ -452,9 +454,10 @@ fn sanitize_message(message: &Value) -> Value {
                     }
                 }
             }
-            for (key, name_kind, mention_kind) in
-                [("agents", "agent-name", "agent-mention"), ("skills", "skill-name", "skill-mention")]
-            {
+            for (key, name_kind, mention_kind) in [
+                ("agents", "agent-name", "agent-mention"),
+                ("skills", "skill-name", "skill-mention"),
+            ] {
                 if let Some(items) = map.get_mut(key).and_then(Value::as_array_mut) {
                     for (index, item) in items.iter_mut().enumerate() {
                         let Some(item) = item.as_object_mut() else { continue };
@@ -463,7 +466,8 @@ fn sanitize_message(message: &Value) -> Value {
                         if key == "skills" {
                             redact_key(item, "text", "skill", &index);
                         }
-                        if let Some(mention) = item.get_mut("mention").and_then(Value::as_object_mut)
+                        if let Some(mention) =
+                            item.get_mut("mention").and_then(Value::as_object_mut)
                         {
                             redact_key(mention, "text", mention_kind, &index);
                         }

@@ -662,9 +662,8 @@ impl super::ToolExecuteWithContext for SubagentTool {
         context: &'a ToolCallContext,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<
-                    Output = Result<super::ToolOutcome, super::ToolFailure>,
-                > + Send
+            dyn std::future::Future<Output = Result<super::ToolOutcome, super::ToolFailure>>
+                + Send
                 + 'a,
         >,
     > {
@@ -685,9 +684,7 @@ impl super::ToolExecuteWithContext for SubagentTool {
 /// pipeline's decline/permission classification intact).
 pub fn run_failure_to_failure(failure: ToolRunFailure) -> super::ToolFailure {
     match failure {
-        ToolRunFailure::Error { message, .. } => {
-            super::ToolFailure { message, cause: None }
-        }
+        ToolRunFailure::Error { message, .. } => super::ToolFailure { message, cause: None },
         ToolRunFailure::PermissionRejected { message, .. } => super::ToolFailure {
             cause: Some(super::FailureCause::Permission { message: message.clone() }),
             message,

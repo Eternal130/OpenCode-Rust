@@ -246,8 +246,7 @@ fn transfer_export_filters_settled_messages_on_both_paths() {
 
 #[test]
 fn transfer_export_sanitize_redacts_info_fields() {
-    let data =
-        crate::session::transfer::export_data(&export_info(), &[], true);
+    let data = crate::session::transfer::export_data(&export_info(), &[], true);
     let info = &data["info"];
     assert_eq!(info["title"], json!("[redacted:session-title:ses_exp1]"));
     assert_eq!(info["metadata"], json!({ "redacted": "session-metadata:ses_exp1" }));
@@ -319,8 +318,7 @@ fn transfer_export_sanitize_redacts_each_message_type() {
             "summary": "kept summary", "recent": "kept recent",
         }),
     ];
-    let data =
-        crate::session::transfer::export_data(&export_info(), &messages, true);
+    let data = crate::session::transfer::export_data(&export_info(), &messages, true);
     let messages = data["messages"].as_array().unwrap();
     let by_id = |id: &str| {
         messages
@@ -416,8 +414,7 @@ fn transfer_export_non_sanitize_path_is_unchanged() {
     let messages = vec![json!({
         "id": "msg_plain", "type": "user", "text": "plain", "metadata": { "k": "v" }
     })];
-    let data =
-        crate::session::transfer::export_data(&info, &messages, false);
+    let data = crate::session::transfer::export_data(&info, &messages, false);
     assert_eq!(data["info"], info);
     assert_eq!(data["messages"], json!(messages));
 }
@@ -514,10 +511,12 @@ async fn transfer_import_does_not_inherit_parent_metadata_or_permissions() {
                         .into_iter()
                         .collect::<oc_schema::session_support::SessionMetadata>(),
                 ),
-                permissions: Some(serde_json::from_value::<oc_schema::permission::Ruleset>(
-                    json!([{ "action": "*", "resource": "*", "effect": "allow" }]),
-                )
-                .unwrap()),
+                permissions: Some(
+                    serde_json::from_value::<oc_schema::permission::Ruleset>(
+                        json!([{ "action": "*", "resource": "*", "effect": "allow" }]),
+                    )
+                    .unwrap(),
+                ),
                 ..Default::default()
             },
         )
