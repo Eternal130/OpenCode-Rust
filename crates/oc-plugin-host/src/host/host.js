@@ -228,9 +228,13 @@ function shieldCallback(fn) {
     }
   };
 }
+// Module-scope native timers: the SA-F16 shield wrappers below
+// replace globalThis.set*, and the Code Mode window (G-247) replaces
+// them again with throwing placeholders — internal uses (the Code
+// Mode soft-timeout race) must keep scheduling on the real ones.
+const nativeSetInterval = globalThis.setInterval.bind(globalThis);
+const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
 {
-  const nativeSetInterval = globalThis.setInterval.bind(globalThis);
-  const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
   globalThis.setInterval = (fn, ms, ...args) =>
     typeof fn === "function" ? nativeSetInterval(shieldCallback(fn), ms, ...args) : nativeSetInterval(fn, ms, ...args);
   globalThis.setTimeout = (fn, ms, ...args) =>
@@ -2107,8 +2111,16 @@ async function handleToolExecute({ name, input }) {
 // ExecutionLimits (timeoutMs between event-loop turns, the tool-call
 // admission counter, the output bound, the depth guard) are enforced
 // here; a wedged guest (sync loop — not interruptible in-process) is
-// killed by the supervisor at the limits-aligned deadline. Imports and
-// timers remain reachable inside the sandbox, a documented divergence.
+// killed by the supervisor at the limits-aligned deadline. G-247:
+// module loading and timers are OUT of the sandbox — the program
+// source is statically scanned for `import(`/`require` before it
+// compiles (scanProgramSource below; the oc-core leaf applies the
+// identical rule at the tool entry), and setTimeout/setInterval/
+// setImmediate are swapped to throwing placeholders for the run's
+// duration. The ref's confined interpreter has neither (no
+// ImportExpression node, no require/timer globals), so the
+// verbatim-ref tool description ("Imports, direct filesystem access,
+// and timers are unavailable") is enforced, not just declared.
 // ---------------------------------------------------------------------------
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
@@ -2452,6 +2464,179 @@ function codemodeFetch(input, init = {}) {
 // a finishing frame restores only when it is the last live one.
 const codemodeCaptureStack = [];
 
+// G-247 — the module-loading scan (guest side; the oc-core leaf runs
+// the IDENTICAL rule at the tool entry — crates/oc-core/src/tool/
+// codemode.rs `scan_program`, pinned by tests on both sides). The ref
+// confined interpreter is structurally incapable of module loading
+// (its evaluator has no ImportExpression arm; globals.ts defines no
+// `require`), so the contract of the verbatim-ref description
+// (tool.ts:64 "Imports, direct filesystem access, and timers are
+// unavailable") is enforced here with a static token scan:
+//
+//   * line/block comments, string bodies ('…'/"…"), template bodies
+//     (with ${…} interpolations scanned as CODE — a hiding import()
+//     is still caught), and regex literals (operator-position
+//     heuristic) are stripped first;
+//   * a dynamic `import` + `(` rejects, EXCEPT a `.`-preceded
+//     property call (obj.import(…) — reserved words are legal
+//     property names and a property call never loads a module);
+//   * a `require` identifier rejects in ANY position, `.`-prefixed
+//     included (globalThis.require is a live module-loading face on
+//     require-capable hosts). Pinned false-positive surface: dot
+//     access to a property named `require`; the bracket form
+//     tools.ns["require"](…) stays legal (the name is a string).
+//
+// Static `import … from` needs no rule: a Function body cannot carry
+// one (SyntaxError at compile — same observable as the ref's missing
+// node). Known limit of a static scan (the adjudicated option ①):
+// runtime-built code (`new Function(...)`, eval) could still smuggle
+// the tokens; those faces are reported as follow-up.
+const CODEMODE_MODULE_LOADING_REJECTED =
+  "Code Mode programs cannot use import()/require — the sandbox forbids module loading.";
+
+function scanProgramSource(code) {
+  const len = code.length;
+  let i = 0;
+  // Lexer contexts: inTemplate + the stack of contexts to return to
+  // ("code" = a template closing returns to code; "tpl" = an
+  // interpolation's matching `}` returns to the template).
+  let inTemplate = false;
+  const stack = [];
+  let depth = 0; // brace depth of the current code region
+  let prevCode = "\0"; // last significant char of the current code region
+  let prevRegexKeyword = false; // last word was return/typeof/…
+  const idStart = /[A-Za-z_$]/;
+  const idPart = /[A-Za-z0-9_$]/;
+  const REGEX_KEYWORDS = new Set([
+    "return", "typeof", "instanceof", "in", "of", "new", "delete", "void",
+    "case", "do", "else", "yield", "await", "throw",
+  ]);
+  const regexAllowedAfter = (c) => "([{,;=:?!&|+-*%^~<>".includes(c);
+  while (i < len) {
+    const c = code[i];
+    if (inTemplate) {
+      if (c === "\\") {
+        i += 2;
+      } else if (c === "`") {
+        inTemplate = false;
+        stack.pop();
+        prevCode = "`";
+        prevRegexKeyword = false;
+        i += 1;
+      } else if (c === "$" && code[i + 1] === "{") {
+        stack.push("tpl");
+        inTemplate = false;
+        depth = 0;
+        prevCode = "\0";
+        prevRegexKeyword = false;
+        i += 2;
+      } else {
+        i += 1;
+      }
+      continue;
+    }
+    if (/\s/.test(c)) {
+      i += 1;
+    } else if (c === "/" && code[i + 1] === "/") {
+      while (i < len && code[i] !== "\n") i += 1;
+    } else if (c === "/" && code[i + 1] === "*") {
+      i += 2;
+      while (i + 1 < len && !(code[i] === "*" && code[i + 1] === "/")) i += 1;
+      i = Math.min(i + 2, len);
+    } else if (c === '"' || c === "'") {
+      i += 1;
+      while (i < len && code[i] !== c) {
+        if (code[i] === "\\") i += 1;
+        i += 1;
+      }
+      i += 1;
+      prevCode = '"';
+      prevRegexKeyword = false;
+    } else if (c === "`") {
+      stack.push("code");
+      inTemplate = true;
+      i += 1;
+    } else if (c === "/" && (prevCode === "\0" || prevRegexKeyword || regexAllowedAfter(prevCode))) {
+      // Regex literal: skip to the closing `/`, honoring escapes and
+      // character classes; a newline means it was never a regex (an
+      // unterminated literal is a SyntaxError anyway).
+      i += 1;
+      let inClass = false;
+      while (i < len) {
+        const r = code[i];
+        if (r === "\\") {
+          i += 2;
+          continue;
+        }
+        if (r === "\n") break;
+        if (inClass) {
+          if (r === "]") inClass = false;
+        } else if (r === "[") inClass = true;
+        else if (r === "/") break;
+        i += 1;
+      }
+      i += 1;
+      while (i < len && idPart.test(code[i])) i += 1; // flags
+      prevCode = "_";
+      prevRegexKeyword = false;
+    } else if (idStart.test(c)) {
+      let j = i + 1;
+      while (j < len && idPart.test(code[j])) j += 1;
+      const word = code.slice(i, j);
+      if (word === "require") return "require";
+      if (word === "import" && prevCode !== ".") {
+        // Dynamic import iff the next significant token is `(` (a
+        // `.`-preceded `import` is a property call — see above).
+        let k = j;
+        for (;;) {
+          while (k < len && /\s/.test(code[k])) k += 1;
+          if (code[k] === "/" && code[k + 1] === "*") {
+            k += 2;
+            while (k + 1 < len && !(code[k] === "*" && code[k + 1] === "/")) k += 1;
+            k = Math.min(k + 2, len);
+            continue;
+          }
+          break;
+        }
+        if (code[k] === "(") return "import";
+      }
+      prevRegexKeyword = REGEX_KEYWORDS.has(word);
+      prevCode = word[word.length - 1];
+      i = j;
+    } else if (c === "{") {
+      depth += 1;
+      prevCode = c;
+      prevRegexKeyword = false;
+      i += 1;
+    } else if (c === "}") {
+      if (depth > 0) depth -= 1;
+      else if (stack[stack.length - 1] === "tpl") {
+        stack.pop();
+        inTemplate = true;
+      }
+      prevCode = c;
+      prevRegexKeyword = false;
+      i += 1;
+    } else {
+      prevCode = c;
+      prevRegexKeyword = false;
+      i += 1;
+    }
+  }
+  return null;
+}
+
+// G-247 — the timer placeholders swapped in for the program's
+// duration: the ref interpreter's globals carry no timers at all, so
+// "timers are unavailable" (tool.ts:64) is enforced by making the
+// scheduling calls throw. The guest's OWN soft-timeout race arms on
+// the module-scope native binding, so limits keep working.
+function codemodeTimerDisabled(name) {
+  return () => {
+    throw new Error(`Code Mode programs cannot use ${name} — timers are unavailable in the sandbox.`);
+  };
+}
+
 async function handleCodemodeEvaluate({ code, tools, token, limits }) {
   // resolveExecutionLimits (codemode.ts:133-137, called at make()):
   // throws the ref's RangeError text for invalid budgets — before any
@@ -2459,6 +2644,12 @@ async function handleCodemodeEvaluate({ code, tools, token, limits }) {
   const resolved = resolveExecutionLimits(limits);
   if (typeof code !== "string" || code.length === 0) {
     return { ok: false, error: "Code Mode execution requires a `code` string" };
+  }
+  // G-247 — scan before compile: a program that would load a module
+  // never runs (the leaf applies the same rule at the tool entry, so
+  // both faces reject identically).
+  if (scanProgramSource(code) !== null) {
+    return { ok: false, error: CODEMODE_MODULE_LOADING_REJECTED, calls: [] };
   }
   const calls = [];
   const logs = [];
@@ -2478,7 +2669,16 @@ async function handleCodemodeEvaluate({ code, tools, token, limits }) {
   // restores chain correctly through the stack below.
   codemodeFetch.__codemodeWrapper = true;
   codemodeFetch.__raw = globalThis.__rawFetch;
-  const frame = { savedConsole, savedFetch };
+  // G-247 — timers join the swapped surface: the scheduling globals
+  // become throwing placeholders for the program's duration (the ref
+  // interpreter has no timer globals at all). Restore rides the
+  // capture frame, so overlapping evaluations nest correctly.
+  const savedTimers = {};
+  for (const name of ["setTimeout", "setInterval", "setImmediate"]) {
+    savedTimers[name] = globalThis[name];
+    globalThis[name] = codemodeTimerDisabled(name);
+  }
+  const frame = { savedConsole, savedFetch, savedTimers };
   codemodeCaptureStack.push(frame);
   const catalog = Array.isArray(tools) ? tools : [];
   const evaluationToken = typeof token === "number" && Number.isFinite(token) ? token : 0;
@@ -2492,12 +2692,14 @@ async function handleCodemodeEvaluate({ code, tools, token, limits }) {
   // between steps): async hangs resolve with the ref's TimeoutExceeded
   // message; a sync loop cannot be interrupted in-process — the
   // supervisor's deadline kill covers that (see request_codemode_kill).
+  // G-247: the race arms on the module-scope NATIVE timer — the
+  // globalThis placeholder swapped in above is the program's view.
   if (resolved.timeoutMs !== undefined) {
     let timer;
     program = Promise.race([
       program,
       new Promise((_resolve, reject) => {
-        timer = setTimeout(
+        timer = nativeSetTimeout(
           () => reject(new Error(`Execution timed out after ${resolved.timeoutMs}ms.`)),
           resolved.timeoutMs,
         );
@@ -2561,10 +2763,11 @@ function withCodemodeLogs(result, logs) {
   return result;
 }
 
-// Restore the NDJSON-rerouted console and the raw Bun fetch after a
-// Code Mode program settles (the sandbox swaps live only for the run).
-// Overlapping evaluations: a finishing frame drops itself and restores
-// the globals only when no other capture is still live.
+// Restore the NDJSON-rerouted console, the raw Bun fetch, and the
+// native timers after a Code Mode program settles (the sandbox swaps
+// live only for the run). Overlapping evaluations: a finishing frame
+// drops itself and restores the globals only when no other capture is
+// still live.
 function restoreCodemodeConsole(frame) {
   const index = codemodeCaptureStack.indexOf(frame);
   if (index !== -1) codemodeCaptureStack.splice(index, 1);
@@ -2574,6 +2777,12 @@ function restoreCodemodeConsole(frame) {
   }
   globalThis.fetch = frame.savedFetch;
   delete globalThis.__rawFetch;
+  // G-247 — the timer placeholders go back to the shielded natives.
+  if (frame.savedTimers) {
+    for (const [name, saved] of Object.entries(frame.savedTimers)) {
+      globalThis[name] = saved;
+    }
+  }
 }
 
 async function handleHookDispatch({ pluginId, domain, name, event }) {
