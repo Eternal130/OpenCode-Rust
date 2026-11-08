@@ -285,13 +285,60 @@ async fn tool_decode_issues_format_is_exact() {
 /// the whole call (`Unable to edit ${path}`, edit.ts:219-223) — the
 /// previous `unwrap_or_default()` reported success with a
 /// whole-file-deletion diff. Same shape as the G-90 patch fix.
+///
+/// The edit flow reads the ORIGINAL (read #1), writes via
+/// `FileMutation` (not the `Files` seam), then reads back (read #2) —
+/// failing the SECOND read simulates the lost read-back.
 #[tokio::test]
 async fn tool_edit_readback_failure_fails_the_call() {
-    let files = Arc::new(ResyncFailsFiles {
-        armed: std::sync::atomic::AtomicBool::new(false),
-        fail_after: std::sync::atomic::AtomicUsize::new(0),
-    });
-    let harness = harness_with_files(allow_all(), files).await;
+    struct FailSecondRead {
+        reads: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::environment::Files for FailSecondRead {
+        async fn read(
+            &self,
+            path: &str,
+            range: Option<crate::environment::Range>,
+        ) -> Result<crate::environment::ReadResult, crate::environment::FilesError> {
+            let seen = self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if seen >= 1 {
+                return Err(crate::environment::FilesError::failed(path, "read-back unavailable"));
+            }
+            crate::environment::LocalFiles.read(path, range).await
+        }
+
+        async fn write(&self, path: &str, bytes: &[u8]) -> Result<(), crate::environment::FilesError> {
+            crate::environment::LocalFiles.write(path, bytes).await
+        }
+
+        async fn stat(&self, path: &str) -> Result<crate::environment::FileInfo, crate::environment::FilesError> {
+            crate::environment::LocalFiles.stat(path).await
+        }
+
+        async fn list(&self, path: &str) -> Result<Vec<crate::environment::DirEntry>, crate::environment::FilesError> {
+            crate::environment::LocalFiles.list(path).await
+        }
+
+        async fn remove(&self, path: &str) -> Result<(), crate::environment::FilesError> {
+            crate::environment::LocalFiles.remove(path).await
+        }
+
+        async fn r#move(&self, from: &str, to: &str) -> Result<(), crate::environment::FilesError> {
+            crate::environment::LocalFiles.r#move(from, to).await
+        }
+
+        async fn mkdir(&self, path: &str) -> Result<(), crate::environment::FilesError> {
+            crate::environment::LocalFiles.mkdir(path).await
+        }
+    }
+
+    let harness = harness_with_files(
+        allow_all(),
+        Arc::new(FailSecondRead { reads: std::sync::atomic::AtomicUsize::new(0) }),
+    )
+    .await;
     std::fs::write(harness.dir.join("flaky.txt"), "before\nrest\n").expect("write");
     let failure = call(
         &harness.tools,
@@ -300,8 +347,11 @@ async fn tool_edit_readback_failure_fails_the_call() {
     )
     .await
     .expect_err("read-back failure must fail the edit");
+    // The model-visible message is the nested error (`visible_message`
+    // unwraps the cause over the blanket, ref to-session-error.ts:60-66);
+    // the blanket "Unable to edit {path}" rides the failure metadata.
     assert!(
-        error_message(&failure).starts_with("Unable to edit flaky.txt"),
+        error_message(&failure).contains("read-back unavailable"),
         "failure message: {}",
         error_message(&failure)
     );

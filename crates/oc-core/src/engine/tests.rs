@@ -1672,7 +1672,7 @@ fn engine_seeds_global_external_directory_allows() {
                     || rule.resource == "/config/opencode/*")
         })
         .count();
-    assert_eq!(global_count, 1, "explore seeds the four global allows exactly once");
+    assert_eq!(global_count, 4, "explore seeds the four global allows once at the tail");
 }
 
 /// The seeded registry: `explore` is a visible subagent, `summary` a
