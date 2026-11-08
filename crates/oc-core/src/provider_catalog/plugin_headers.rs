@@ -241,8 +241,13 @@ mod tests {
     fn zenmux_exact_baseurl_injects_under_user_headers() {
         let user =
             BTreeMap::from([("HTTP-Referer".to_string(), "https://mine.example/".to_string())]);
-        let injection =
-            plugin_provider_headers(OPENAI_COMPATIBLE, Some("https://zenmux.ai/api/v1"), Activation::Auto, false, &user);
+        let injection = plugin_provider_headers(
+            OPENAI_COMPATIBLE,
+            Some("https://zenmux.ai/api/v1"),
+            Activation::Auto,
+            false,
+            &user,
+        );
         assert_eq!(injection.headers, pair(false));
         assert!(injection.user_headers_win, "zenmux spreads the pair first");
         let merged = injection.merged_over(&user);
@@ -260,9 +265,15 @@ mod tests {
             Some("https://other.test/api/v1"),
         ] {
             assert!(
-                plugin_provider_headers(OPENAI_COMPATIBLE, base, Activation::Enabled, false, &existing())
-                    .headers
-                    .is_empty(),
+                plugin_provider_headers(
+                    OPENAI_COMPATIBLE,
+                    base,
+                    Activation::Enabled,
+                    false,
+                    &existing()
+                )
+                .headers
+                .is_empty(),
                 "base {base:?} must not inject"
             );
         }
@@ -286,13 +297,7 @@ mod tests {
     /// the LOWERCASE pair (vercel.ts:13).
     #[test]
     fn vercel_aisdk_package_gets_lowercase_pair() {
-        let injection = plugin_provider_headers(
-            VERCEL,
-            None,
-            Activation::Auto,
-            false,
-            &existing(),
-        );
+        let injection = plugin_provider_headers(VERCEL, None, Activation::Auto, false, &existing());
         assert_eq!(injection.headers, pair(true));
         assert!(!injection.user_headers_win);
         // No other package name injects the lowercase pair.
@@ -349,15 +354,17 @@ mod tests {
 
     #[test]
     fn kilo_requires_the_openai_compatible_package() {
-        assert!(plugin_provider_headers(
-            "@opencode/ai/providers/openai/chat",
-            Some("https://api.kilo.ai/api/gateway"),
-            Activation::Enabled,
-            false,
-            &existing(),
-        )
-        .headers
-        .is_empty());
+        assert!(
+            plugin_provider_headers(
+                "@opencode/ai/providers/openai/chat",
+                Some("https://api.kilo.ai/api/gateway"),
+                Activation::Enabled,
+                false,
+                &existing(),
+            )
+            .headers
+            .is_empty()
+        );
     }
 
     #[test]

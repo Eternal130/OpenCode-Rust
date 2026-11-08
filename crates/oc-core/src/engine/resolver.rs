@@ -64,12 +64,12 @@ use oc_ai::route::client::RoutePatch;
 use oc_ai::schema::options::{merge_json_records, merge_string_records};
 
 use crate::database::schema::SessionRow;
+use crate::provider_catalog::Catalog;
 use crate::provider_catalog::facade::{
-    custom_language_model, language_model_for_model, CustomModel, CustomProvider, FacadeContext,
-    ModelConnection,
+    CustomModel, CustomProvider, FacadeContext, ModelConnection, custom_language_model,
+    language_model_for_model,
 };
 use crate::provider_catalog::native::package_name;
-use crate::provider_catalog::Catalog;
 use crate::session::runner::{ModelError, ModelResolver, ResolvedModel};
 
 /// The production resolver: catalog + user connections + custom
@@ -512,8 +512,7 @@ impl CatalogModelResolver {
         // G-209 — the live Modal `/models` sync: the derived dynamic
         // snapshot replaces the static modal record for resolution
         // (the ref provider transform, modal.ts:55-66).
-        let modal_state = if provider_id == crate::provider_catalog::modal_sync::MODAL_PROVIDER_ID
-        {
+        let modal_state = if provider_id == crate::provider_catalog::modal_sync::MODAL_PROVIDER_ID {
             self.modal.as_ref().and_then(|sync| sync.state())
         } else {
             None
@@ -522,9 +521,9 @@ impl CatalogModelResolver {
             Some(state) => &state.merged,
             None => match &modal_state {
                 Some(state) => &state.merged,
-                None => catalog
-                    .provider(&provider_id)
-                    .ok_or_else(|| ModelError::Unavailable(provider_id.clone(), reference.id.0.clone()))?,
+                None => catalog.provider(&provider_id).ok_or_else(|| {
+                    ModelError::Unavailable(provider_id.clone(), reference.id.0.clone())
+                })?,
             },
         };
         let base_info = snapshot
@@ -889,11 +888,7 @@ fn azure_responses_websocket_capable(
     if snapshot.info.package != "@opencode/ai/providers/azure/responses" {
         return false;
     }
-    let rest = snapshot
-        .info
-        .settings
-        .as_ref()
-        .map(|settings| &settings.rest);
+    let rest = snapshot.info.settings.as_ref().map(|settings| &settings.rest);
     let key = |name: &str| rest.and_then(|rest| rest.get(name));
     if key("useDeploymentBasedUrls") == Some(&Value::Bool(true)) {
         return false;
@@ -1825,8 +1820,8 @@ mod console_merge_tests {
 #[cfg(test)]
 mod local_discovery_tests {
     use super::*;
-    use crate::provider_catalog::local::test_support::http_mock;
     use crate::provider_catalog::local::LocalDiscovery;
+    use crate::provider_catalog::local::test_support::http_mock;
     use oc_ai::route::transport::reqwest_transport::ReqwestTransport;
 
     fn catalog() -> Arc<Catalog> {
