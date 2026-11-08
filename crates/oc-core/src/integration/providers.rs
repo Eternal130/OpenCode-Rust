@@ -457,19 +457,26 @@ fn copilot_urls(domain: &str) -> (String, String, String) {
     (format!("{base}/login/device/code"), format!("{base}/login/oauth/access_token"), api)
 }
 
-fn copilot_entitlement_error(user: &Value) -> Option<String> {
-    // github-copilot.ts copilotEntitlementError: an explicit false or a
-    // limited-signup block denies login; a missing field never does.
-    if user["chat_enabled"].as_bool() == Some(false) {
-        return Some("GitHub Copilot not enabled on your account".into());
+/// `pub(super)` — unit-tested directly (G-284③ dual messages).
+pub(super) fn copilot_entitlement_error(user: &Value) -> Option<String> {
+    // github-copilot.ts:365-371 copilotEntitlementError: ONLY an explicit
+    // `chat_enabled === false` denies (first), and the message picks by
+    // `can_signup_for_limited`. G-284③ — the self-made
+    // `error.contains("copilot")` branch could reverse-reject (any
+    // account whose lookup error mentions copilot) and is gone.
+    if user["chat_enabled"].as_bool() != Some(false) {
+        return None;
     }
-    if user["error"].as_str().is_some_and(|error| error.contains("copilot")) {
-        return Some(format!(
-            "GitHub Copilot entitlement error: {}",
-            user["error"].as_str().unwrap_or_default()
-        ));
+    if user["can_signup_for_limited"].as_bool() == Some(true) {
+        return Some(
+            "This GitHub account is not signed up for GitHub Copilot. Sign up for Copilot Free at https://github.com/features/copilot/plans and connect again."
+                .into(),
+        );
     }
-    None
+    Some(
+        "This GitHub account does not have GitHub Copilot access. It needs an active Copilot subscription or a seat assigned by an organization."
+            .into(),
+    )
 }
 
 async fn copilot_authorize(answer: FormAnswer) -> Result<Authorization, String> {
@@ -629,14 +636,20 @@ async fn xai_authorize(_answer: FormAnswer) -> Result<Authorization, String> {
                 |body| async move {
                     let access =
                         body["access_token"].as_str().ok_or("access_token missing")?.to_owned();
-                    let refresh = body["refresh_token"].as_str().unwrap_or_default().to_owned();
-                    let expires_in = body["expires_in"].as_f64().unwrap_or(3600.0);
+                    // G-284② — a missing refresh_token is a hard error at
+                    // login (xai.ts:190-199: both the response token and
+                    // any fallback absent → fail, never store empty).
+                    let refresh = body["refresh_token"]
+                        .as_str()
+                        .filter(|token| !token.is_empty())
+                        .ok_or("xAI token response is missing refresh_token")?
+                        .to_owned();
+                    let expires = xai_token_expiration(body["expires_in"].as_f64(), &access);
                     Ok(CredentialValue::OAuth(OAuthValue {
                         method_id: "device".into(),
                         refresh,
                         access,
-                        expires: crate::database::migrations::now_ms()
-                            + (expires_in * 1000.0) as i64,
+                        expires,
                         metadata: None,
                     }))
                 },
@@ -651,6 +664,25 @@ async fn xai_authorize(_answer: FormAnswer) -> Result<Authorization, String> {
             .map(|seconds| crate::database::migrations::now_ms() + (seconds * 1000.0) as i64),
         mode: AuthMode::Auto(callback),
     })
+}
+
+/// G-284② — `tokenExpiration` (xai.ts:217-228): `expires_in` (positive)
+/// wins; otherwise the access token's JWT `exp` claim; otherwise
+/// now + 3600s.
+/// `pub(super)` — unit-tested directly (G-284② JWT exp fallback).
+pub(super) fn xai_token_expiration(expires_in: Option<f64>, access_token: &str) -> i64 {
+    if let Some(expires_in) = expires_in.filter(|seconds| *seconds > 0.0) {
+        return crate::database::migrations::now_ms() + (expires_in * 1000.0) as i64;
+    }
+    if let Some(exp) = flows::jwt_claims(access_token)
+        .as_ref()
+        .and_then(|claims| claims.get("exp"))
+        .and_then(Value::as_f64)
+        .filter(|exp| *exp > 0.0)
+    {
+        return (exp * 1000.0) as i64;
+    }
+    crate::database::migrations::now_ms() + 3_600_000
 }
 
 async fn xai_refresh(value: OAuthValue) -> Result<CredentialValue, String> {
@@ -674,14 +706,25 @@ async fn xai_refresh(value: OAuthValue) -> Result<CredentialValue, String> {
     }
     let token: Value = response.json().await.map_err(|error| format!("bad token body: {error}"))?;
     let access = token["access_token"].as_str().ok_or("access_token missing")?.to_owned();
-    let refresh = token["refresh_token"].as_str().unwrap_or(&value.refresh).to_owned();
-    let expires_in = token["expires_in"].as_f64().unwrap_or(3600.0);
+    // G-284② — `credential(methodID, tokens, value.refresh, …)`
+    // (xai.ts:121,190-199): the rotated token falls back to the CURRENT
+    // refresh; both absent is a hard error, never a silent empty store.
+    let refresh = token["refresh_token"]
+        .as_str()
+        .filter(|token| !token.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| value.refresh.clone());
+    if refresh.is_empty() {
+        return Err("xAI token response is missing refresh_token".into());
+    }
+    let expires = xai_token_expiration(token["expires_in"].as_f64(), &access);
     Ok(CredentialValue::OAuth(OAuthValue {
         method_id: value.method_id,
         refresh,
         access,
-        expires: crate::database::migrations::now_ms() + (expires_in * 1000.0) as i64,
-        metadata: None,
+        expires,
+        // xai.ts:121 — the credential metadata carries across refreshes.
+        metadata: value.metadata,
     }))
 }
 

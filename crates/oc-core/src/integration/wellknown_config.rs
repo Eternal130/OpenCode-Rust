@@ -29,6 +29,11 @@ pub struct Manifest {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ManifestAuth {
+    /// G-284⑤ — `WellKnown.Auth.command` (wellknown.ts:13-16): the login
+    /// command registered as the integration's `login` command method
+    /// (wellknown/plugin.ts:16-31).
+    #[serde(default)]
+    pub command: Vec<String>,
     #[serde(default)]
     pub env: Option<String>,
 }
@@ -162,6 +167,23 @@ impl crate::integration::IntegrationHost {
                 continue;
             };
             let Some(auth) = manifest.auth else { continue };
+            // G-284⑤ — wellknown/plugin.ts:16-31: every source with auth
+            // registers its integration (name = origin hostname) and the
+            // manifest's `auth.command` as the `login` command method.
+            let hostname = reqwest::Url::parse(&origin)
+                .ok()
+                .and_then(|url| url.host_str().map(String::from))
+                .unwrap_or_else(|| origin.clone());
+            self.update_integration(&origin, &hostname);
+            self.update_method(
+                &origin,
+                crate::integration::types::Method::Command {
+                    id: "login".into(),
+                    label: "Log in".into(),
+                    command: auth.command.clone(),
+                },
+                None,
+            );
             // v2 takes the LAST credential of the asc-ordered list
             // (the newest) and only KEY credentials (config.ts:149-151).
             let Ok(stored) = self.store().list(&origin).await else { continue };
@@ -196,9 +218,15 @@ impl crate::integration::IntegrationHost {
                         if let Ok(remote_config) = response.json::<Value>().await {
                             // A Config record (provider id → json) or the
                             // whole body — both are valid documents
-                            // (wellknown.ts:92-95).
+                            // (wellknown.ts:92-95). G-284⑤ — a nested
+                            // `config` key that is itself a config record
+                            // WINS over the whole body (wellknown.ts:95-96).
                             if remote_config.is_object() {
-                                push(&mut documents, &remote_config);
+                                let preferred = remote_config
+                                    .get("config")
+                                    .filter(|nested| nested.is_object())
+                                    .unwrap_or(&remote_config);
+                                push(&mut documents, preferred);
                             }
                         }
                     }

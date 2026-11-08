@@ -827,11 +827,35 @@ async fn copilot_entitlement_denial_fails_the_attempt() {
     }
     match host.oauth_status("github-copilot", &attempt.attempt_id).await {
         Ok(AttemptStatus::Failed { message, .. }) => {
-            assert!(message.contains("not enabled"), "{message}");
+            // G-284③ — the ref's no-access message (github-copilot.ts:
+            // 370-371), no can_signup_for_limited on this account.
+            assert!(message.contains("does not have GitHub Copilot access"), "{message}");
+            assert!(message.contains("active Copilot subscription"), "{message}");
         }
         other => panic!("expected failed, got {other:?}"),
     }
     assert!(host.connection_active("github-copilot").await.expect("active").is_none());
+}
+
+/// G-284③ — the dual entitlement messages (github-copilot.ts:365-371):
+/// `can_signup_for_limited` picks the sign-up hint, and an error payload
+/// mentioning "copilot" NEVER denies on its own (the removed self-made
+/// branch could reverse-reject).
+#[test]
+fn copilot_entitlement_dual_messages_and_no_reverse_reject() {
+    let signup = json!({"chat_enabled": false, "can_signup_for_limited": true});
+    assert_eq!(
+        super::providers::copilot_entitlement_error(&signup).as_deref(),
+        Some("This GitHub account is not signed up for GitHub Copilot. Sign up for Copilot Free at https://github.com/features/copilot/plans and connect again.")
+    );
+    let no_access = json!({"chat_enabled": false});
+    assert!(super::providers::copilot_entitlement_error(&no_access)
+        .is_some_and(|message| message.contains("does not have GitHub Copilot access")));
+    // chat_enabled !== false short-circuits BEFORE anything else.
+    let enabled = json!({"chat_enabled": true, "error": "copilot quota exceeded"});
+    assert_eq!(super::providers::copilot_entitlement_error(&enabled), None);
+    let absent = json!({"error": "copilot unreachable"});
+    assert_eq!(super::providers::copilot_entitlement_error(&absent), None);
 }
 
 #[tokio::test]
@@ -3846,4 +3870,177 @@ async fn gitlab_callback_error_redirect_serves_branded_error_card() {
     unsafe {
         std::env::remove_var("GITLAB_OAUTH_CLIENT_ID");
     }
+}
+
+// -- G-284: integration five small items ---------------------------------------------
+
+/// G-284① — `connection.status` dedups an unchanged status (ref
+/// integration.ts:744-746 `Equal.equals` skip): no `integration.updated`
+/// notify fires for a repeat.
+#[tokio::test]
+async fn g284_connection_status_dedups_unchanged() {
+    use futures::StreamExt as _;
+    let (host, bus) = host_with_bus().await;
+    let mut subscription = bus.subscribe_type("integration.updated");
+    // Drain whatever arrived before the probe window.
+    async fn drain(
+        subscription: &mut crate::bus::Subscription,
+        settle: u64,
+    ) -> usize {
+        let mut seen = 0;
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_millis(settle), subscription.next())
+                .await
+            {
+                Ok(Some(_)) => seen += 1,
+                _ => break,
+            }
+        }
+        seen
+    }
+    host.connect_key("anthropic", "sk-dedup", &BTreeMap::new(), None).await.expect("key");
+    let _ = drain(&mut subscription, 100).await;
+
+    let active = host.connection_active("anthropic").await.expect("active").expect("some");
+    let status = super::types::ConnectionStatus {
+        status: "needs_auth".into(),
+        message: "reconnect".into(),
+        url: None,
+    };
+    host.connection_status("anthropic", &active, Some(status.clone())).await;
+    let first = drain(&mut subscription, 150).await;
+    assert_eq!(first, 1, "the first status reports");
+
+    // A REPEAT of the same status never notifies.
+    host.connection_status("anthropic", &active, Some(status)).await;
+    let repeat = drain(&mut subscription, 150).await;
+    assert_eq!(repeat, 0, "unchanged status skipped");
+
+    // A DIFFERENT status still notifies.
+    let other = super::types::ConnectionStatus {
+        status: "needs_auth".into(),
+        message: "different".into(),
+        url: None,
+    };
+    host.connection_status("anthropic", &active, Some(other)).await;
+    assert_eq!(drain(&mut subscription, 150).await, 1, "changed status notifies");
+
+    // Clearing twice: only the first clear notifies.
+    host.connection_status("anthropic", &active, None).await;
+    assert_eq!(drain(&mut subscription, 150).await, 1, "the clear reports");
+    host.connection_status("anthropic", &active, None).await;
+    assert_eq!(drain(&mut subscription, 150).await, 0, "repeat clear skipped");
+}
+
+/// G-284④ — `editor.remove` (integration.ts:149,309): the integration
+/// and its methods disappear from the registry.
+#[tokio::test]
+async fn g284_remove_integration_drops_the_registry_entry() {
+    let host = host().await;
+    assert!(host.has_integration("anthropic"));
+    host.remove_integration("anthropic");
+    assert!(!host.has_integration("anthropic"));
+    let gone = host.get("anthropic").await.expect("get");
+    assert!(gone.is_none(), "get no longer lists it: {gone:?}");
+    // Removing an unknown id is a no-op.
+    host.remove_integration("never-was");
+    assert!(host.has_integration("opencode"));
+}
+
+/// G-284② — xAI expiration falls back to the access token's JWT `exp`
+/// claim when `expires_in` is absent (xai.ts:217-228).
+#[test]
+fn g284_xai_expiration_jwt_fallback() {
+    // expires_in wins when positive.
+    let now = crate::database::migrations::now_ms();
+    let with_expires = super::providers::xai_token_expiration(Some(120.0), "no-jwt");
+    assert!((with_expires - now - 120_000).abs() < 5_000);
+    // A JWT exp claim (seconds) fills the absence.
+    let claims = format!("{{\"exp\":{}}}", now / 1000 + 900);
+    let token = fake_jwt(&claims);
+    let from_jwt = super::providers::xai_token_expiration(None, &token);
+    assert!((from_jwt - (now + 900_000)).abs() < 5_000);
+    // Neither → now + 3600s.
+    let neither = super::providers::xai_token_expiration(Some(0.0), "not-a-jwt");
+    assert!((neither - now - 3_600_000).abs() < 5_000);
+}
+
+/// G-284⑤ — the manifest's `auth.command` registers the integration's
+/// `login` command method (wellknown/plugin.ts:16-31), and a remote
+/// body with a NESTED `config` key prefers the nested record
+/// (wellknown.ts:95-96).
+#[tokio::test]
+async fn g284_wellknown_registers_login_command_and_prefers_nested_config() {
+    use crate::config::WellknownSource as _;
+    // The remote body nests the real config under `config`.
+    let remote = MockOAuth::start(vec![(
+        "/remote.json",
+        vec![json!({ "config": { "acme-nested": { "npm": "@acme/nested" } } })],
+    )])
+    .await;
+    let manifest = json!({
+        "auth": { "command": ["acme", "login"], "env": "ACME_TOKEN" },
+        "remote_config": { "url": format!("{}/remote.json", remote.base) }
+    });
+    let manifest_server = MockOAuth::start(vec![("/.well-known/opencode", vec![manifest])]).await;
+
+    let host = host().await;
+    let origin = manifest_server.base.clone();
+    host.database()
+        .transaction(move |tx| {
+            tx.kv_set(
+                super::wellknown_config::WELLKNOWN_SOURCES_KEY,
+                &Value::Array(vec![Value::String(origin.clone())]),
+            )
+        })
+        .await
+        .expect("kv set");
+    let key = CredentialValue::Key(super::types::KeyValue {
+        key: "ACME".into(),
+        metadata: None,
+        configuration: None,
+    });
+    host.store()
+        .create(credential::CreateInput {
+            id: None,
+            integration_id: &manifest_server.base,
+            label: Some("acme"),
+            value: &key,
+            activate: None,
+        })
+        .await
+        .expect("create");
+
+    host.refresh_wellknown_documents().await;
+    // The integration registered: hostname name + the login command
+    // method built from manifest.auth.command.
+    let info = host.get(&manifest_server.base).await.expect("get").expect("present");
+    let host_name = reqwest::Url::parse(&manifest_server.base)
+        .expect("url")
+        .host_str()
+        .expect("host")
+        .to_owned();
+    assert_eq!(info.name, host_name, "integration name = origin hostname");
+    let login = info
+        .methods
+        .iter()
+        .find_map(|method| match method {
+            super::types::Method::Command { id, label, command } if id == "login" => {
+                Some((label.clone(), command.clone()))
+            }
+            _ => None,
+        })
+        .expect("the login command method registered");
+    assert_eq!(login.0, "Log in");
+    assert_eq!(login.1, vec!["acme".to_owned(), "login".to_owned()]);
+
+    // The nested config key won over the wrapper body.
+    let source = super::wellknown_config::HostWellknownSource::new(std::sync::Arc::clone(
+        host.wellknown_documents(),
+    ));
+    let documents = source.documents(&|_| None);
+    assert_eq!(documents.len(), 1);
+    let text = &documents[0].text;
+    assert!(text.contains("acme-nested"), "{text}");
+    assert!(!text.contains("\"config\""), "the wrapper is not the document: {text}");
 }
