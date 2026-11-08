@@ -8,6 +8,39 @@ use crate::tool::{BuiltinTool, ToolExecuteWithContext, ToolFailure, ToolOutcome,
 /// The worktree guidance system part pushed on every context build.
 pub const WORKTREE_GUIDANCE: &str = "When you create a worktree outside the current working directory and intend to use it as your primary working directory, consider using `execute` to call `tools.opencode.session_move` and make the worktree the session's working directory.";
 
+/// G-266③ — ref tool/plugin/opencode.ts:71-81: the guidance rides one
+/// hook registered on `session.context`, `session.generate` AND
+/// `session.compaction` — every request surface sees the
+/// `session_move` migration hint.
+pub fn register_worktree_guidance(hooks: &crate::hooks::HookRegistry) {
+    let guidance = crate::hooks::fn_hook(move |event: &mut crate::hooks::SessionContextEvent| {
+        event.system.push(oc_ai::schema::messages::SystemPart::new(WORKTREE_GUIDANCE));
+        Ok(())
+    });
+    let guidance_compaction =
+        crate::hooks::fn_hook(move |event: &mut crate::hooks::SessionCompactionEvent| {
+            event
+                .context
+                .system
+                .push(oc_ai::schema::messages::SystemPart::new(WORKTREE_GUIDANCE));
+            Ok(())
+        });
+    // Registrations live for the location lifetime (dropped with the
+    // registry when the bundle dies) — the shell description-refresh
+    // hooks use the same pattern.
+    std::mem::forget(futures::executor::block_on(hooks.register_session_context(
+        guidance.clone(),
+        crate::hooks::HookOptions::default(),
+    )));
+    std::mem::forget(futures::executor::block_on(
+        hooks.register_session_generate(guidance, crate::hooks::HookOptions::default()),
+    ));
+    std::mem::forget(futures::executor::block_on(hooks.register_session_compaction(
+        guidance_compaction,
+        crate::hooks::HookOptions::default(),
+    )));
+}
+
 /// `session_rename` — rename via the session store + `session.renamed`.
 pub struct SessionRenameExecute {
     pub store: crate::session::store::SessionStore,
@@ -554,6 +587,53 @@ pub fn models_tool(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// G-266③ — ref opencode.ts:71-81: the worktree guidance is
+    /// appended to the system parts on EVERY context/generate/
+    /// compaction event (the previously dead `WORKTREE_GUIDANCE`
+    /// constant's runtime).
+    #[tokio::test]
+    async fn tool_opencode_worktree_guidance_rides_all_three_hooks() {
+        let hooks = crate::hooks::HookRegistry::new();
+        super::register_worktree_guidance(&hooks);
+        let base_event = || crate::hooks::SessionContextEvent {
+            session_id: oc_schema::id::SessionId::parse("ses_guidance").expect("id"),
+            agent: oc_schema::id::AgentId::parse("build"),
+            model: oc_schema::model::Ref {
+                provider_id: oc_schema::id::ProviderId::parse("p"),
+                id: oc_schema::id::ModelId::parse("m"),
+                variant: None,
+            },
+            system: Vec::new(),
+            messages: Vec::new(),
+            options: Default::default(),
+            tools: Default::default(),
+        };
+        for shaped in [
+            hooks.dispatch_session_context(base_event()).await.expect("context"),
+            hooks.dispatch_session_generate(base_event()).await.expect("generate"),
+        ] {
+            assert!(
+                shaped.system.iter().any(|part| part.text == WORKTREE_GUIDANCE),
+                "context/generate carry the worktree guidance"
+            );
+        }
+        let shaped = hooks
+            .dispatch_session_compaction(crate::hooks::SessionCompactionEvent {
+                context: base_event(),
+                result: None,
+            })
+            .await
+            .expect("compaction");
+        assert!(
+            shaped
+                .context
+                .system
+                .iter()
+                .any(|part| part.text == WORKTREE_GUIDANCE),
+            "compaction carries the worktree guidance"
+        );
+    }
 
     fn catalog() -> crate::provider_catalog::catalog::Catalog {
         crate::provider_catalog::catalog::Catalog::parse(

@@ -1612,14 +1612,76 @@ async fn engine_e2e_global_agents_md_backcompat_reads_the_suffixed_dir() {
 // Builtin agent seeding (G-01/G-02 — ref plugin/agent.ts:99-148)
 // ===========================================================================
 
+/// Deterministic roots for the agent-seed tests (G-265 — the four
+/// global external_directory allows derive from them).
+fn test_roots() -> oc_util::global_roots::Roots {
+    oc_util::global_roots::Roots {
+        home: std::path::PathBuf::from("/home/test"),
+        data: std::path::PathBuf::from("/data/opencode"),
+        cache: std::path::PathBuf::from("/cache/opencode"),
+        config: std::path::PathBuf::from("/config/opencode"),
+        state: std::path::PathBuf::from("/state/opencode"),
+        tmp: std::path::PathBuf::from("/tmp/opencode"),
+    }
+}
+
+/// G-265 (ref agent.ts:59-83): every seeded agent carries the four
+/// global `external_directory` allows, and under findLast they beat the
+/// baseline ask — build/explore read shell output, tool output, tmp and
+/// config files without a permission prompt, while unrelated external
+/// directories still ask; title/summary keep deny-all effective.
+#[test]
+fn engine_seeds_global_external_directory_allows() {
+    let registry = Arc::new(crate::location::AgentRegistry::new());
+    super::seed_builtin_agents(&registry, &std::path::Path::new("/home/test"), &test_roots());
+    use oc_schema::permission::Effect;
+
+    let allows = |id: &str, action: &str, resource: &str| {
+        let agent = registry.get(&oc_schema::id::AgentId::parse(id)).unwrap_or_else(|| panic!("{id}"));
+        crate::permission::evaluate(action, resource, &[agent.permissions.clone()]).effect == Effect::Allow
+    };
+
+    // The four global globs resolve Allow for build, general, explore
+    // and plan (ref seeds them for EVERY agent).
+    for id in ["build", "general", "explore", "plan", "compaction"] {
+        assert!(allows(id, "external_directory", "/data/opencode/shell/ses_1/sh_1"), "{id} shell output");
+        assert!(allows(id, "external_directory", "/data/opencode/tool-output/to_1"), "{id} tool output");
+        assert!(allows(id, "external_directory", "/tmp/opencode/x"), "{id} tmp");
+        assert!(allows(id, "external_directory", "/config/opencode/opencode.json"), "{id} config");
+    }
+    // Unrelated external directories still ask (the baseline ask stays
+    // effective where the globals do not match).
+    assert!(!allows("build", "external_directory", "/etc"));
+    assert!(!allows("explore", "external_directory", "/etc"));
+    // title/summary: the trailing deny-all still wins (the globals seed
+    // before it, mirroring the ref update-seed order).
+    assert!(!allows("title", "external_directory", "/tmp/opencode/x"));
+    assert!(!allows("summary", "external_directory", "/data/opencode/shell/ses_1/sh_1"));
+    // The ruleset carries exactly the four global allow rules (no
+    // duplicates for explore's tail re-append).
+    let explore = registry.get(&oc_schema::id::AgentId::parse("explore")).expect("explore");
+    let global_count = explore
+        .permissions
+        .iter()
+        .filter(|rule| {
+            rule.action == "external_directory"
+                && rule.effect == Effect::Allow
+                && (rule.resource.starts_with("/data/opencode/shell/")
+                    || rule.resource.starts_with("/data/opencode/tool-output/")
+                    || rule.resource == "/tmp/opencode/*"
+                    || rule.resource == "/config/opencode/*")
+        })
+        .count();
+    assert_eq!(global_count, 1, "explore seeds the four global allows exactly once");
+}
+
 /// The seeded registry: `explore` is a visible subagent, `summary` a
 /// hidden primary; both are retrievable and carry their verbatim
 /// prompts.
 #[test]
 fn engine_seeds_explore_and_summary_agents() {
     let registry = Arc::new(crate::location::AgentRegistry::new());
-    super::seed_builtin_agents(&registry, &std::path::Path::new("/home/test"));
-
+    super::seed_builtin_agents(&registry, &std::path::Path::new("/home/test"), &test_roots());
     let explore = registry.get(&oc_schema::id::AgentId::parse("explore")).expect("explore seeded");
     let summary = registry.get(&oc_schema::id::AgentId::parse("summary")).expect("summary seeded");
     assert!(matches!(explore.mode, oc_schema::agent::Mode::Subagent));
@@ -1647,7 +1709,7 @@ fn engine_seeds_explore_and_summary_agents() {
 #[test]
 fn engine_explore_permissions_gate_mutating_tools() {
     let registry = Arc::new(crate::location::AgentRegistry::new());
-    super::seed_builtin_agents(&registry, &std::path::Path::new("/home/test"));
+    super::seed_builtin_agents(&registry, &std::path::Path::new("/home/test"), &test_roots());
     let explore = registry.get(&oc_schema::id::AgentId::parse("explore")).expect("explore");
     use oc_schema::permission::Effect;
     let rulesets = [explore.permissions.clone()];
@@ -1680,7 +1742,7 @@ fn engine_explore_permissions_gate_mutating_tools() {
 #[test]
 fn engine_seeds_plan_agent() {
     let registry = Arc::new(crate::location::AgentRegistry::new());
-    super::seed_builtin_agents(&registry, std::path::Path::new("/home/test"));
+    super::seed_builtin_agents(&registry, std::path::Path::new("/home/test"), &test_roots());
     let plan = registry.get(&oc_schema::id::AgentId::parse("plan")).expect("plan seeded");
     assert!(matches!(plan.mode, oc_schema::agent::Mode::Primary));
     assert!(!plan.hidden);

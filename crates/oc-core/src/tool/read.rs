@@ -405,8 +405,13 @@ pub async fn read_file(
             actual: crate::environment::FileType::Directory,
             ..
         }) => {
+            // G-266② — JS `page.offset || 1` / `page.limit || 2000`
+            // (read-filesystem.ts:292-293): zero offset/limit are falsy
+            // and read as 1 / the 2000-line default.
             let paged_offset = offset.filter(|value| *value > 0).unwrap_or(1);
-            let paged_limit = limit.map_or(MAX_READ_LINES as u64, |v| v.min(MAX_READ_LINES as u64));
+            let paged_limit = limit
+                .filter(|value| *value > 0)
+                .map_or(MAX_READ_LINES as u64, |v| v.min(MAX_READ_LINES as u64));
             return list_page(files.as_ref(), path, paged_offset, paged_limit).await;
         }
         Err(error) => return Err(read_error(path)(error.into())),
@@ -458,8 +463,14 @@ where
     F: FnMut(u64, usize) -> futures::future::BoxFuture<'a, Result<Vec<u8>, ReadError>> + 'a,
 {
     // JS `page.offset || 1` — a zero offset is falsy and reads as 1.
+    // G-266② — `page.limit || MAX_READ_LINES` (read-filesystem.ts:177):
+    // a zero limit is falsy too and reads as the 2000-line default
+    // (`Some(0)` previously produced an empty page plus a truncated
+    // paging hint — an invalid pagination loop).
     let paged_offset = offset.filter(|value| *value > 0).unwrap_or(1);
-    let paged_limit = limit.map_or(MAX_READ_LINES as u64, |v| v.min(MAX_READ_LINES as u64));
+    let paged_limit = limit
+        .filter(|value| *value > 0)
+        .map_or(MAX_READ_LINES as u64, |v| v.min(MAX_READ_LINES as u64));
 
     let first = match first_chunk {
         Some(first) => first,
