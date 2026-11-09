@@ -166,6 +166,7 @@ fn json_to_form_value(value: &Value) -> FormValue {
 /// ref form.ts `answerField`: the interactive prompt per field type.
 /// `Ok(None)` = SKIPPED (the ref `skip` symbol → `undefined`): the key
 /// is left out of the answer entirely (G-282⑥).
+#[allow(clippy::too_many_lines)] // the ref's per-field-type interactive walk, ported 1:1
 fn answer_field(field: &Value) -> Result<Option<FormValue>, String> {
     crate::handlers::auth::require_interactive(
         "Authentication form input requires an interactive terminal",
@@ -269,11 +270,13 @@ fn answer_field(field: &Value) -> Result<Option<FormValue>, String> {
             let min = field.get("minItems").and_then(Value::as_i64);
             let max = field.get("maxItems").and_then(Value::as_i64);
             if let Some(min) = min {
+                #[allow(clippy::cast_possible_wrap)] // wire i64 bound vs the picked list length
                 if (selected.len() as i64) < min {
                     return Err(format!("Select at least {min}"));
                 }
             }
             if let Some(max) = max {
+                #[allow(clippy::cast_possible_wrap)] // wire i64 bound vs the picked list length
                 if (selected.len() as i64) > max {
                     return Err(format!("Select at most {max}"));
                 }
@@ -584,7 +587,7 @@ mod tests {
         assert_eq!(answer.get("enabled"), Some(&FormValue::Boolean(true)));
         assert!(matches!(
             answer.get("count"),
-            Some(FormValue::FormValueVariant2(oc_client::types::FormValueVariant2::Number(number))) if *number == 3.0
+            Some(FormValue::FormValueVariant2(oc_client::types::FormValueVariant2::Number(number))) if (*number - 3.0).abs() < f64::EPSILON
         ));
     }
 
@@ -670,7 +673,7 @@ mod tests {
         let fields = vec![string_field("secret", json!({ "hidden": true }))];
         let answer = answer_form(Some(&fields), &[]).unwrap().expect("answer");
         assert!(
-            answer.get("secret").is_none(),
+            !answer.contains_key("secret"),
             "hidden without default: key absent, got {answer:?}"
         );
         // Required + hidden + no default is a validation failure (ref

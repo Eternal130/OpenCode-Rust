@@ -1360,13 +1360,7 @@ mod tests {
     /// Credential.Switched → `reload()`).
     #[tokio::test]
     async fn boot_credential_switched_reloads_config_and_invalidates_locations() {
-        let root = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
-        let project = root.path().join("proj");
-        std::fs::create_dir_all(&project).expect("project dir");
-        std::fs::write(project.join("opencode.json"), r#"{"shell": "one"}"#)
-            .expect("project config");
-        let home = root.path().join("home");
-        std::fs::create_dir_all(&home).expect("home");
+        use futures::StreamExt as _;
         struct FetchEnv(Option<String>);
         impl Drop for FetchEnv {
             fn drop(&mut self) {
@@ -1376,6 +1370,13 @@ mod tests {
                 }
             }
         }
+        let root = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let project = root.path().join("proj");
+        std::fs::create_dir_all(&project).expect("project dir");
+        std::fs::write(project.join("opencode.json"), r#"{"shell": "one"}"#)
+            .expect("project config");
+        let home = root.path().join("home");
+        std::fs::create_dir_all(&home).expect("home");
         let prior_fetch = std::env::var("OPENCODE_CATALOG_FETCH").ok();
         std::env::set_var("OPENCODE_CATALOG_FETCH", "0");
         let _env = Env::redirect_into(&home);
@@ -1426,7 +1427,6 @@ mod tests {
 
         // The event-driven reload changed entries → the bridge published
         // `config.updated` and invalidated the live location graph.
-        use futures::StreamExt as _;
         let event = tokio::time::timeout(std::time::Duration::from_secs(10), subscription.next())
             .await
             .expect("config.updated within deadline")

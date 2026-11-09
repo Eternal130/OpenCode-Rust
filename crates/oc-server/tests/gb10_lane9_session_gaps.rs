@@ -27,7 +27,6 @@ mod support;
 
 struct TestServer {
     client: Client,
-    addr: std::net::SocketAddr,
     state: Arc<AppState>,
     _workspace: tempfile::TempDir,
     _data: tempfile::TempDir,
@@ -61,7 +60,7 @@ async fn boot() -> TestServer {
         axum::serve(listener, router).await.expect("server");
     });
     let client = Client::new(&format!("http://{addr}")).expect("client");
-    TestServer { client, addr, state, _workspace: dir, _data: data }
+    TestServer { client, state, _workspace: dir, _data: data }
 }
 
 async fn create_session(client: &Client) -> String {
@@ -181,7 +180,7 @@ fn seeded_row(
     id: &str,
     type_: &str,
     seq: i64,
-    data: serde_json::Value,
+    data: &serde_json::Value,
 ) -> (String, String, i64, String) {
     (id.to_owned(), type_.to_owned(), seq, data.to_string())
 }
@@ -221,19 +220,19 @@ async fn context_drops_system_rows_below_the_native_checkpoint() {
             "msg_sys_baseline",
             "system",
             1,
-            serde_json::json!({ "text": "fork baseline instruction", "time": { "created": 1 } }),
+            &serde_json::json!({ "text": "fork baseline instruction", "time": { "created": 1 } }),
         ),
         seeded_row(
             "msg_user_1",
             "user",
             2,
-            serde_json::json!({ "text": "hello", "time": { "created": 2 } }),
+            &serde_json::json!({ "text": "hello", "time": { "created": 2 } }),
         ),
         seeded_row(
             "msg_native_compact",
             "compaction",
             40,
-            serde_json::json!({
+            &serde_json::json!({
                 "status": "completed",
                 "reason": "auto",
                 "summary": "checkpoint",
@@ -246,13 +245,13 @@ async fn context_drops_system_rows_below_the_native_checkpoint() {
             "msg_sys_after",
             "system",
             41,
-            serde_json::json!({ "text": "post-checkpoint instruction", "time": { "created": 41 } }),
+            &serde_json::json!({ "text": "post-checkpoint instruction", "time": { "created": 41 } }),
         ),
         seeded_row(
             "msg_user_2",
             "user",
             42,
-            serde_json::json!({ "text": "after the checkpoint", "time": { "created": 42 } }),
+            &serde_json::json!({ "text": "after the checkpoint", "time": { "created": 42 } }),
         ),
     ];
     let sid = session_id.clone();
@@ -309,13 +308,13 @@ async fn context_keeps_system_rows_after_a_local_summary_compaction() {
             "msg_user_pre",
             "user",
             1,
-            serde_json::json!({ "text": "old", "time": { "created": 1 } }),
+            &serde_json::json!({ "text": "old", "time": { "created": 1 } }),
         ),
         seeded_row(
             "msg_local_compact",
             "compaction",
             2,
-            serde_json::json!({
+            &serde_json::json!({
                 "status": "completed",
                 "reason": "auto",
                 "summary": "local summary",
@@ -327,13 +326,13 @@ async fn context_keeps_system_rows_after_a_local_summary_compaction() {
             "msg_sys_kept",
             "system",
             3,
-            serde_json::json!({ "text": "instruction update", "time": { "created": 3 } }),
+            &serde_json::json!({ "text": "instruction update", "time": { "created": 3 } }),
         ),
         seeded_row(
             "msg_user_post",
             "user",
             4,
-            serde_json::json!({ "text": "new", "time": { "created": 4 } }),
+            &serde_json::json!({ "text": "new", "time": { "created": 4 } }),
         ),
     ];
     let sid = session_id.clone();

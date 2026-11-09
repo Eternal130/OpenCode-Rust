@@ -538,7 +538,6 @@ async fn check(target: Option<&str>, server: &ServerParams) -> i32 {
             .unwrap_or(target_id);
         rows.push(PluginRow {
             runtime: "Server",
-            target: target_id.to_owned(),
             name: name.to_owned(),
             version: item.get("version").and_then(Value::as_str).map(str::to_owned),
             outdated: item.get("outdated").and_then(Value::as_bool).unwrap_or(false),
@@ -569,7 +568,6 @@ async fn check(target: Option<&str>, server: &ServerParams) -> i32 {
         };
         rows.push(PluginRow {
             runtime: "TUI",
-            target: tui_target.clone(),
             name: tui_target,
             version: Some(version),
             outdated,
@@ -588,7 +586,6 @@ async fn check(target: Option<&str>, server: &ServerParams) -> i32 {
         let message = format!("package is not installed: {tui_target}");
         rows.push(PluginRow {
             runtime: "TUI",
-            target: tui_target.clone(),
             name: tui_target,
             version: None,
             outdated: false,
@@ -611,7 +608,6 @@ async fn check(target: Option<&str>, server: &ServerParams) -> i32 {
 /// One merged inventory row (ref plugin/inventory.ts `Item`).
 struct PluginRow {
     runtime: &'static str,
-    target: String,
     name: String,
     version: Option<String>,
     outdated: bool,
@@ -632,6 +628,7 @@ fn display_version(version: &str) -> String {
 /// ref inventory.ts `format`: per-runtime sections, each row
 /// `  name version (update available|current|check failed)`.
 fn format_plugin_rows(rows: &[PluginRow]) -> String {
+    use std::fmt::Write as _; // format_push_string: write! into the existing String
     let mut out = String::new();
     for runtime in ["Server", "TUI"] {
         let section: Vec<&PluginRow> = rows.iter().filter(|row| row.runtime == runtime).collect();
@@ -651,12 +648,13 @@ fn format_plugin_rows(rows: &[PluginRow]) -> String {
                 "current"
             };
             let version = row.version.as_deref().map(display_version).unwrap_or_default();
-            out.push_str(&format!("\n  {name} {version} ({status})", name = row.name));
+            let _ = write!(out, "\n  {} {version} ({status})", row.name);
         }
     }
     out
 }
 
+#[allow(clippy::too_many_lines)] // the ref's plugin update walk, ported 1:1
 async fn update(target: Option<&str>, server: &ServerParams) -> i32 {
     let resolved = match connect(server, None).await {
         Ok(resolved) => resolved,
@@ -810,7 +808,6 @@ mod tests {
     ) -> PluginRow {
         PluginRow {
             runtime,
-            target: name.to_owned(),
             name: name.to_owned(),
             version: version.map(str::to_owned),
             outdated,

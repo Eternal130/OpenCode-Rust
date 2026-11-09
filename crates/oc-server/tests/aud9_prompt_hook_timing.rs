@@ -31,7 +31,8 @@ struct TestServer {
     client: Client,
     addr: std::net::SocketAddr,
     state: Arc<AppState>,
-    workspace: tempfile::TempDir,
+    /// Keeps the chdir'd workspace alive for the server's lifetime.
+    _workspace: tempfile::TempDir,
     _data: tempfile::TempDir,
 }
 
@@ -57,7 +58,7 @@ async fn boot() -> TestServer {
         axum::serve(listener, router).await.expect("server");
     });
     let client = Client::new(&format!("http://{addr}")).expect("client");
-    TestServer { client, addr, state, workspace: dir, _data: data }
+    TestServer { client, addr, state, _workspace: dir, _data: data }
 }
 
 async fn create_session(client: &Client) -> String {

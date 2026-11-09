@@ -10,6 +10,7 @@
 
 use std::sync::Arc;
 
+use futures::{FutureExt as _, StreamExt as _};
 use oc_client::error::ClientError;
 use oc_client::types::*;
 use oc_client::Client;
@@ -23,7 +24,7 @@ struct TestServer {
     bus: std::sync::Arc<oc_core::bus::Bus>,
     db: std::sync::Arc<oc_core::database::Database>,
     state: Arc<AppState>,
-    _workspace: Option<tempfile::TempDir>,
+    workspace: Option<tempfile::TempDir>,
     _data: tempfile::TempDir,
 }
 
@@ -42,7 +43,7 @@ async fn boot_with(password: Option<String>) -> TestServer {
     // existing struct convention.
     #[allow(clippy::used_underscore_binding)]
     {
-        server._workspace = Some(dir);
+        server.workspace = Some(dir);
     }
     server
 }
@@ -71,7 +72,7 @@ async fn boot_at(workspace: &std::path::Path, password: Option<String>) -> TestS
         axum::serve(listener, router).await.expect("server");
     });
     let client = Client::new(&format!("http://{addr}")).expect("client");
-    TestServer { client, bus, db, state, _workspace: None, _data: data }
+    TestServer { client, bus, db, state, workspace: None, _data: data }
 }
 
 fn create_body(title: &str) -> SessionCreateBody {
@@ -96,7 +97,7 @@ impl TestServer {
     /// Pins the workspace tempdir for the server's lifetime (tests that
     /// `boot_at` into their own directory).
     fn workspace_is(&mut self, dir: tempfile::TempDir) {
-        self._workspace = Some(dir);
+        self.workspace = Some(dir);
     }
 }
 
@@ -1947,7 +1948,6 @@ async fn g97_permission_saved_bypasses_location_resolution() {
 
     // No boot cascade: the requests above must not have assembled the
     // (invalid) location, so no events were published while it ran.
-    use futures::{FutureExt as _, StreamExt as _};
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     let next = subscription.next().now_or_never();
     assert!(next.is_none(), "no bus events during saved-permission requests");

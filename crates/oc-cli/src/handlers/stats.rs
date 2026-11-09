@@ -165,6 +165,7 @@ fn local_timezone(zone: &jiff::tz::TimeZone) -> String {
 #[allow(clippy::cast_possible_truncation)]
 fn stdout_columns() -> i64 {
     #[repr(C)]
+    #[allow(clippy::struct_field_names)] // mirrors libc's struct winsize field names
     struct Winsize {
         ws_row: u16,
         ws_col: u16,
@@ -173,7 +174,9 @@ fn stdout_columns() -> i64 {
     }
     let mut size = Winsize { ws_row: 0, ws_col: 0, ws_xpixel: 0, ws_ypixel: 0 };
     // SAFETY: a winsize out-param ioctl on the stdout fd.
-    if unsafe { libc::ioctl(1, libc::TIOCGWINSZ, &mut size) } == 0 && size.ws_col > 0 {
+    #[allow(unsafe_code)] // libc ioctl FFI
+    let fetched = unsafe { libc::ioctl(1, libc::TIOCGWINSZ, &mut size) } == 0 && size.ws_col > 0;
+    if fetched {
         i64::from(size.ws_col)
     } else {
         80
@@ -369,6 +372,8 @@ fn activity_calendar(
     max_weeks: i64,
     zone: &jiff::tz::TimeZone,
 ) -> Calendar {
+    const MONTHS: [&str; 12] =
+        ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     let ordinal = |time: i64| {
         // `Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) /
         // 86_400_000` — the LOCAL calendar date as a day ordinal (the
@@ -424,22 +429,27 @@ fn activity_calendar(
                     0
                 } else {
                     let index = levels.iter().position(|level| *level == steps).unwrap_or(0);
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    #[allow(
+                        clippy::cast_possible_truncation,
+                        clippy::cast_sign_loss,
+                        clippy::cast_precision_loss
+                    )]
                     let level = (((index + 1) as f64 / levels.len() as f64) * 4.0).ceil() as i32;
-                    level.max(1).min(4)
+                    level.clamp(1, 4)
                 };
             }
             column
         })
         .collect();
 
-    const MONTHS: [&str; 12] =
-        ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     // Thursday (offset +3) identifies the month owning a week.
     let mut labeled: Vec<(usize, String)> = Vec::new();
     for week in 0..count {
         let anchor = (start + week * 7 + 3).min(to).max(from);
         let (_, month, _) = civil_from_days(anchor);
+        // `month` is 1..=12 from `civil_from_days`; the clamp keeps
+        // the index in-range for defensive months.
+        #[allow(clippy::cast_sign_loss)]
         let label = MONTHS[(month - 1).clamp(0, 11) as usize].to_owned();
         if labeled.last().is_none_or(|(_, previous): &(usize, String)| *previous != label) {
             labeled.push((usize::try_from(week).unwrap_or(0), label));
@@ -524,6 +534,7 @@ fn format_duration(value: f64) -> String {
 
 /// `metricCount` (stats.ts:306-308): the number in the primary color.
 fn metric_count(value: i64, noun: &str, color: bool, palette: &Palette) -> String {
+    #[allow(clippy::cast_precision_loss)] // the ref formats i64 counts as JS numbers
     metric_count_f64(value as f64, noun, color, palette)
 }
 
@@ -561,6 +572,7 @@ fn render_activity(
     palette: &Palette,
     zone: &jiff::tz::TimeZone,
 ) -> Vec<String> {
+    const WEEKDAYS: [&str; 7] = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
     let primary = format!("1;{}", palette.primary);
     let calendar = activity_calendar(activity, from, to, width - 4, zone);
     let dim = |value: &str| style(value, "2", color);
@@ -576,10 +588,10 @@ fn render_activity(
             };
             format!("{text:<span$}")
         })
-        .collect::<String>()
+        .collect::<Vec<String>>()
+        .concat()
         .trim_end()
         .to_owned();
-    const WEEKDAYS: [&str; 7] = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
     let heading_text = if calendar.clipped {
         format!("activity · last {} weeks", calendar.weeks.len())
     } else {
@@ -612,6 +624,7 @@ fn render_activity(
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+#[allow(clippy::fn_params_excessive_bools)] // the v2 stats flag surface, mirrored
 fn render(
     stats: &Value,
     label: &str,
@@ -888,7 +901,7 @@ mod tests {
         assert_eq!(format_number(999.0), "999");
         // `toLocaleString("en-US")` groupings (G-155 ④).
         assert_eq!(locale_string(1234), "1,234");
-        assert_eq!(locale_string(1234567), "1,234,567");
+        assert_eq!(locale_string(1_234_567), "1,234,567");
         assert_eq!(locale_string(999), "999");
         assert_eq!(locale_string(0), "0");
         assert_eq!(locale_string(-1234), "-1,234");

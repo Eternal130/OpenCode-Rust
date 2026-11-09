@@ -130,6 +130,7 @@ async fn start_stub(mode: PromptMode) -> Stub {
     server
 }
 
+#[allow(clippy::too_many_lines)] // the stub server's full protocol walk
 async fn serve_connection(
     socket: &mut tokio::net::TcpStream,
     sub_tx: tokio::sync::broadcast::Sender<String>,
@@ -208,7 +209,7 @@ async fn serve_connection(
                   "providerID": "stub", "enabled": true, "status": "active", "cost": [],
                   "variants": [ { "id": "high" }, { "id": "low" } ],
                   "capabilities": { "input": ["text"], "output": ["text"], "tools": true },
-                  "limit": { "context": 120000, "output": 8192 },
+                  "limit": { "context": 120_000, "output": 8192 },
                   "time": { "released": 1 } },
             ], "location": { "directory": "/tmp/opencode/mini-pty" } })
         };
@@ -569,9 +570,9 @@ fn emit_turn_script(
             );
             event("session.execution.succeeded", session);
         }
-        // The G-221 live script returned above.
-        PromptMode::G221Live => {}
-        PromptMode::HydrateBlockers => {}
+        // The G-221 live script + the hydrate-blockers script both
+        // returned their full payload above.
+        PromptMode::G221Live | PromptMode::HydrateBlockers => {}
     }
 }
 
@@ -600,6 +601,7 @@ impl MiniPty {
         Self::spawn_full(port, extra, cli_json, true)
     }
 
+    #[allow(clippy::too_many_lines)] // pty spawn: fd setup + child wiring in one POSIX sequence
     fn spawn_full(port: u16, extra: &[&str], cli_json: &str, replay: bool) -> Self {
         let master = unsafe {
             let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);

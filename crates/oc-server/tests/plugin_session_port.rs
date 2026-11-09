@@ -65,6 +65,7 @@ impl Sandbox {
 /// answers the v2 no-model error; the command arm routes unknown
 /// commands to the v2-shaped not-found error.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // one end-to-end domain walk; helper split deferred
 async fn engine_session_port_covers_the_v2_domain() {
     let box_ = sandbox("domain");
     box_.redirect_env();

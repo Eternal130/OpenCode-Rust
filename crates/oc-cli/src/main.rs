@@ -70,7 +70,8 @@ async fn main() {
     if tui || matches!(cli.command, Some(Commands::Serve { .. })) {
         let _ = services::autoupdate::spawn_background_update_check(tui);
     }
-    let code = dispatch(cli).await;
+    // `dispatch`'s future is large; box it (clippy::large_futures).
+    let code = Box::pin(dispatch(cli)).await;
     std::process::exit(code);
 }
 

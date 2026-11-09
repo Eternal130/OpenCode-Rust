@@ -1244,7 +1244,10 @@ mod index_tests {
     struct FakeClock(std::sync::Mutex<i64>);
     impl Clock for FakeClock {
         fn now(&self) -> std::time::SystemTime {
-            std::time::UNIX_EPOCH + std::time::Duration::from_millis(*self.0.lock().unwrap() as u64)
+            // test clock: stepped epoch ms (never negative in these fixtures)
+            #[allow(clippy::cast_sign_loss)]
+            let ms = *self.0.lock().unwrap() as u64;
+            std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms)
         }
     }
 

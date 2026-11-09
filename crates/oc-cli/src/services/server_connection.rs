@@ -36,7 +36,7 @@ impl Endpoint {
             Some(password) => {
                 use base64::Engine as _;
                 let encoded = base64::engine::general_purpose::STANDARD
-                    .encode(format!("{}:{password}", self.username()));
+                    .encode(format!("{}:{password}", Self::BASIC_AUTH_USERNAME));
                 vec![("authorization", format!("Basic {encoded}"))]
             }
             None => Vec::new(),
@@ -44,16 +44,14 @@ impl Endpoint {
     }
 
     /// The basic-auth username (`"opencode"`; v2 hardcodes it).
-    fn username(&self) -> &'static str {
-        "opencode"
-    }
+    const BASIC_AUTH_USERNAME: &'static str = "opencode";
 
     /// `Service.headers(endpoint)` → a configured SDK client.
     #[must_use]
     pub fn client(&self) -> HttpClient {
         let mut client = HttpClient::new(&self.url).expect("valid endpoint url");
         if let Some(password) = &self.password {
-            client = client.with_basic_auth(self.username(), Some(password.clone()));
+            client = client.with_basic_auth(Self::BASIC_AUTH_USERNAME, Some(password.clone()));
         }
         client
     }

@@ -108,6 +108,7 @@ pub async fn upgrade(target: Option<&str>, method: Option<&str>) -> i32 {
 /// `--force` skips the confirmation prompt (non-TTY without either is
 /// an error, v2's `requireInteractive` message).
 #[allow(clippy::fn_params_excessive_bools)] // the v2 flag surface, mirrored
+#[allow(clippy::too_many_lines)] // the v2 removal walk, ported 1:1
 pub async fn uninstall(dry_run: bool, keep_config: bool, keep_data: bool, force: bool) -> i32 {
     let plan = crate::services::updater::removal_plan(keep_config, keep_data);
     let services = crate::services::updater::registration_files();
@@ -266,7 +267,8 @@ pub async fn acp() -> i32 {
 /// [`crate::mini::run_mini`] (the `runMini` port) over the resolved
 /// server endpoint.
 pub async fn mini(input: crate::mini::MiniInput, server: &crate::cli::ServerParams) -> i32 {
-    crate::mini::run_mini(input, server).await
+    // `run_mini`'s future is large; box it (clippy::large_futures).
+    Box::pin(crate::mini::run_mini(input, server)).await
 }
 
 /// `opencode models` — `provider/model` lines, sorted.

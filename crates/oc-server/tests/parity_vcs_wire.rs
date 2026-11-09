@@ -30,6 +30,7 @@ use serde_json::Value;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 use futures::StreamExt as _;
+use std::os::unix::fs::PermissionsExt as _;
 
 struct TestServer {
     client: Client,
@@ -57,12 +58,15 @@ fn git(dir: &std::path::Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+// The BOOT_LOCK guard intentionally spans the boot awaits (serialize
+// the process-global set_current_dir critical section).
+#[allow(clippy::await_holding_lock)]
 async fn boot(workspace: std::path::PathBuf) -> TestServer {
     // `set_current_dir` is process-global while the engine captures its
     // launch directory at boot — serialize the critical section so
     // parallel tests cannot boot in another test's workspace.
     static BOOT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = BOOT_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let guard = BOOT_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let data = tempfile::tempdir().expect("data tempdir");
     std::env::set_current_dir(&workspace).expect("chdir to workspace");
     let engine =
@@ -74,7 +78,7 @@ async fn boot(workspace: std::path::PathBuf) -> TestServer {
         Arc::new(UuidV4IdGen),
         Arc::new(SystemClock),
     ));
-    drop(_guard);
+    drop(guard);
     let router = handlers::mount(Arc::clone(&state));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("ephemeral bind");
     let addr = listener.local_addr().expect("addr");
@@ -891,7 +895,6 @@ esac
         ),
     )
     .expect("write fake hg");
-    use std::os::unix::fs::PermissionsExt as _;
     let mut permissions = std::fs::metadata(&script).expect("stat fake hg").permissions();
     permissions.set_mode(0o755);
     std::fs::set_permissions(&script, permissions).expect("chmod fake hg");
