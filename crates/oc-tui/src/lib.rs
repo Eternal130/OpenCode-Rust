@@ -49,6 +49,9 @@ mod opentui_emit_diff_tests;
 pub mod golden_tests;
 pub mod home_golden_tests;
 pub mod image_codec;
+/// G-271④ — the integration connect methods' `form` answer flow
+/// (`formAnswer`, dialog-integration.tsx:777-787 + util/form.ts).
+pub mod integration_form;
 #[cfg(test)]
 mod image_display_tests;
 pub mod image_view;

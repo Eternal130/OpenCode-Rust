@@ -38,6 +38,7 @@ use crate::mini::model_pref;
 use crate::reactive::{Effect, Runtime, Signal};
 use crate::theme::{ThemeRegistry, ThemeState};
 use oc_tui_core::scroll::{FollowState, ScrollCommand, ScrollDriver};
+use oc_client::types::FormValue;
 
 /// How many bus-event ids the replay-dedup window remembers (the F2
 /// contract — see [`Store::ingest_all`] and `data.rs`).
@@ -349,6 +350,11 @@ pub enum DialogKind {
     /// authorization-code prompt (`integration.oauth.complete`); the
     /// attempt's URL + instructions ride the store's attempt state.
     IntegrationCode { integration_id: String },
+    /// G-271④ — the method form's current field (`formAnswer`'s
+    /// walk, dialog-integration.tsx:777-812): renders as a select or
+    /// a prompt per the field kind; the state machine lives in the
+    /// store's `integration_form`.
+    IntegrationForm { integration_id: String },
     /// `OAuthAuto`/`CommandPending`'s waiting view (the 500 ms
     /// status poll): URL + instructions rows while the worker polls.
     IntegrationPending { integration_id: String },
@@ -1504,6 +1510,11 @@ pub struct Store {
     /// mount's storm guard: one attach per selection until the
     /// snapshot lands).
     terminal_pending_attach: std::cell::RefCell<std::collections::HashSet<String>>,
+    /// G-271① — the staged `session-terminal-selection` writes
+    /// (last-wins per session); the run loop's drain persists the
+    /// batch once per pass (the model-ring dirty pattern — the pick
+    /// itself never touches the channel storage on the pump thread).
+    terminal_selection_outbox: std::cell::RefCell<Vec<(String, Option<String>)>>,
     route: Signal<Route>,
     dialogs: Signal<Vec<DialogEntry>>,
     theme: Signal<ThemeState>,
@@ -1923,6 +1934,16 @@ pub struct Store {
     /// The accounts view's two-press delete (`deleting` signal,
     /// dialog-integration.tsx:161).
     integration_deleting: Signal<Option<String>>,
+    /// G-271③ — the pending auto-connect target (DialogMcp's
+    /// needs_auth jump): consumed when the `integration.list` refetch
+    /// lands — the row routes into its connect flow (the
+    /// `autoConnect` effect, dialog-integration.tsx:96-108).
+    integration_auto_connect_id: std::cell::RefCell<Option<String>>,
+    /// G-271④ — the live form walk (`formAnswer`'s state machine).
+    integration_form: std::cell::RefCell<Option<crate::integration_form::IntegrationFormState>>,
+    /// G-271④ — the completed walk's answer staged for the key
+    /// method's prompt (the API-key POST carries it).
+    integration_key_answer: std::cell::RefCell<Option<crate::integration_form::IntegrationFormAnswer>>,
     /// Lane FINAL: the sessions dialog's two-press delete (`toDelete`,
     /// dialog-session-list.tsx:161).
     session_delete_armed: Signal<Option<String>>,
@@ -2069,12 +2090,17 @@ impl RevertSink for RecordingRevertSink {
 
 /// One non-env connect method (`connectMethods`,
 /// dialog-integration.tsx:58-62 — env methods filtered, key first).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// G-271④: `Eq` dropped — the form fields carry float defaults.
+#[derive(Debug, Clone, PartialEq)]
 pub struct IntegrationMethod {
     pub id: String,
     /// `key` | `oauth` | `command`.
     pub kind: &'static str,
     pub label: String,
+    /// G-271④ — the method's `form` fields (key/oauth connect's
+    /// `formAnswer` walk, dialog-integration.tsx:312-317/513-518);
+    /// empty = the connect proceeds without an answer.
+    pub form: Vec<crate::integration_form::IntegrationFormField>,
 }
 
 /// One stored credential connection (`credentialConnections`).
@@ -2089,7 +2115,7 @@ pub struct IntegrationAccount {
 /// One `integration.list` row, pre-shaped for the dialog
 /// (`integrationOptions`'s sort + category derivation,
 /// dialog-integration.tsx:30-56,102-128).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct IntegrationRow {
     pub id: String,
     pub name: String,
@@ -2136,8 +2162,21 @@ pub struct IntegrationAttempt {
 /// loop fetcher.
 pub trait IntegrationSink {
     fn list(&self);
-    fn connect_key(&self, integration_id: &str, key: &str);
-    fn oauth_connect(&self, integration_id: &str, method_id: &str);
+    /// G-271④ — the key connect carries the walked form answer when
+    /// the method declared one (`...(props.answer ? { answer } : {})`,
+    /// dialog-integration.tsx:482-487).
+    fn connect_key(
+        &self,
+        integration_id: &str,
+        key: &str,
+        answer: Option<&crate::integration_form::IntegrationFormAnswer>,
+    );
+    fn oauth_connect(
+        &self,
+        integration_id: &str,
+        method_id: &str,
+        answer: Option<&crate::integration_form::IntegrationFormAnswer>,
+    );
     fn oauth_complete(&self, integration_id: &str, attempt_id: &str, code: &str);
     fn command_connect(&self, integration_id: &str, method_id: &str);
     /// The esc path while an attempt is live (`onCleanup`'s cancel).
@@ -2152,8 +2191,8 @@ pub struct NoIntegrationSink;
 
 impl IntegrationSink for NoIntegrationSink {
     fn list(&self) {}
-    fn connect_key(&self, _integration_id: &str, _key: &str) {}
-    fn oauth_connect(&self, _integration_id: &str, _method_id: &str) {}
+    fn connect_key(&self, _integration_id: &str, _key: &str, _answer: Option<&crate::integration_form::IntegrationFormAnswer>) {}
+    fn oauth_connect(&self, _integration_id: &str, _method_id: &str, _answer: Option<&crate::integration_form::IntegrationFormAnswer>) {}
     fn oauth_complete(&self, _integration_id: &str, _attempt_id: &str, _code: &str) {}
     fn command_connect(&self, _integration_id: &str, _method_id: &str) {}
     fn cancel(&self, _integration_id: &str, _attempt_id: &str, _kind: &'static str) {}
@@ -2162,11 +2201,22 @@ impl IntegrationSink for NoIntegrationSink {
 }
 
 /// One recorded [`IntegrationSink`] call.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// G-271④: `Eq` dropped — the form answer carries float values.
+#[derive(Debug, Clone, PartialEq)]
 pub enum IntegrationCall {
     List,
-    ConnectKey { integration_id: String, key: String },
-    OauthConnect { integration_id: String, method_id: String },
+    /// G-271④ — the walked form answer rides the connect (`None`
+    /// when the method declared no fields).
+    ConnectKey {
+        integration_id: String,
+        key: String,
+        answer: Option<crate::integration_form::IntegrationFormAnswer>,
+    },
+    OauthConnect {
+        integration_id: String,
+        method_id: String,
+        answer: Option<crate::integration_form::IntegrationFormAnswer>,
+    },
     OauthComplete { integration_id: String, attempt_id: String, code: String },
     CommandConnect { integration_id: String, method_id: String },
     Cancel { integration_id: String, attempt_id: String, kind: &'static str },
@@ -2184,16 +2234,28 @@ impl IntegrationSink for RecordingIntegrationSink {
     fn list(&self) {
         self.calls.borrow_mut().push(IntegrationCall::List);
     }
-    fn connect_key(&self, integration_id: &str, key: &str) {
+    fn connect_key(
+        &self,
+        integration_id: &str,
+        key: &str,
+        answer: Option<&crate::integration_form::IntegrationFormAnswer>,
+    ) {
         self.calls.borrow_mut().push(IntegrationCall::ConnectKey {
             integration_id: integration_id.to_owned(),
             key: key.to_owned(),
+            answer: answer.cloned(),
         });
     }
-    fn oauth_connect(&self, integration_id: &str, method_id: &str) {
+    fn oauth_connect(
+        &self,
+        integration_id: &str,
+        method_id: &str,
+        answer: Option<&crate::integration_form::IntegrationFormAnswer>,
+    ) {
         self.calls.borrow_mut().push(IntegrationCall::OauthConnect {
             integration_id: integration_id.to_owned(),
             method_id: method_id.to_owned(),
+            answer: answer.cloned(),
         });
     }
     fn oauth_complete(&self, integration_id: &str, attempt_id: &str, code: &str) {
@@ -2443,6 +2505,12 @@ pub struct McpServerRow {
     pub status: &'static str,
     /// The failed/`needs_auth` error text (`DialogMcp`'s details view).
     pub error: Option<String>,
+    /// G-271③ — `server.integrationID` (mcp.list's wire row): an
+    /// auth-gated server whose sign-in rides the integration flow —
+    /// the dialog's toggle jumps to `DialogIntegration
+    /// {autoConnect}`` instead of `mcp.connect` (dialog-mcp.tsx:
+    /// 103-105,117-119).
+    pub integration_id: Option<String>,
 }
 
 /// The open plugin route page (PLUG-TUI-SLOT's router surface): the
@@ -3896,6 +3964,7 @@ impl Store {
             terminal_panes: std::cell::RefCell::new(std::collections::HashMap::new()),
             terminal_sink: std::cell::RefCell::new(Rc::new(NoTerminals)),
             terminal_pending_attach: std::cell::RefCell::new(std::collections::HashSet::new()),
+            terminal_selection_outbox: std::cell::RefCell::new(Vec::new()),
             route,
             dialogs,
             theme,
@@ -4026,6 +4095,9 @@ impl Store {
             integration_attempt,
             integration_error,
             integration_deleting,
+            integration_auto_connect_id: std::cell::RefCell::new(None),
+            integration_form: std::cell::RefCell::new(None),
+            integration_key_answer: std::cell::RefCell::new(None),
             session_delete_armed,
             pending_compactions,
             history_loading,
@@ -5329,7 +5401,15 @@ impl Store {
 
     /// Submitting a row (v2's `onSelect` → `selectWorkspace`): close
     /// and navigate home at the directory.
-    pub fn select_worktree(&self, _directory: &str) {
+    pub fn select_worktree(&self, directory: &str) {
+        // G-271② — `route.navigate({type: "home", location:
+        // {directory}})` (move.tsx:113-114): the home route carries
+        // the SELECTED directory, so the next session is created
+        // there — the port's G-34 `set_home_location` seam is the
+        // home route's location (the shared cell the prompt sink
+        // reads at submission). Ignoring it left new sessions in the
+        // launch directory after a worktree pick.
+        self.set_home_location(Some(directory.to_owned()));
         self.clear_dialogs();
         self.navigate(Route::Home);
     }
@@ -5501,6 +5581,49 @@ impl Store {
         self.request_redraw();
     }
 
+    /// G-229① — the attach stream's `title_changed` frame folds into
+    /// the registry row (context/session-terminals' label source —
+    /// the `foregroundProcess ?? title` chain, terminals-tab.tsx:105;
+    /// the daemon-side scanner landed in gb9 lane5, the WS consumer
+    /// arm now feeds it live instead of waiting for the next
+    /// `persistentPty.list` refresh).
+    pub fn set_terminal_title(&self, pty_id: &str, title: &str) {
+        let mut changed = false;
+        self.terminal_registry.update(|registry| {
+            for entry in registry.iter_mut() {
+                if let Some(record) = entry.terminals.iter_mut().find(|row| row.id == pty_id) {
+                    if record.title != title {
+                        record.title = title.to_owned();
+                        changed = true;
+                    }
+                }
+            }
+        });
+        if changed {
+            self.request_redraw();
+        }
+    }
+
+    /// G-229① — the attach stream's `foreground_process_changed`
+    /// frame (`None` = the daemon's explicit null: no foreground
+    /// process — the label falls back to the title).
+    pub fn set_terminal_foreground(&self, pty_id: &str, process: Option<String>) {
+        let mut changed = false;
+        self.terminal_registry.update(|registry| {
+            for entry in registry.iter_mut() {
+                if let Some(record) = entry.terminals.iter_mut().find(|row| row.id == pty_id) {
+                    if record.foreground_process != process {
+                        record.foreground_process = process.clone();
+                        changed = true;
+                    }
+                }
+            }
+        });
+        if changed {
+            self.request_redraw();
+        }
+    }
+
     /// `selectedTerminalID` (the persisted per-session pick).
     #[must_use]
     pub fn selected_terminal(&self, session_id: &str) -> Option<String> {
@@ -5531,39 +5654,39 @@ impl Store {
             // attach request — the render self-heal must not fire a
             // second chain before the snapshot lands.
             self.terminal_pending_attach.borrow_mut().insert(pty.to_owned());
-            if let Ok(storage) = crate::storage::ChannelStorage::open_default_migrated() {
-                let mut doc = storage
-                    .read("session-terminal-selection")
-                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-                if let Some(sessions) =
-                    doc.get_mut("sessions").and_then(|value| value.as_object_mut())
-                {
-                    sessions
-                        .insert(session_id.to_owned(), serde_json::Value::String(pty.to_owned()));
-                    let _ = storage.write("session-terminal-selection", &doc);
-                }
-            }
+            // G-271① — the persistence moved OFF the synchronous
+            // path: the selection STAGES here and the run loop's
+            // drain writes the storage doc once per batch (the
+            // model-ring dirty pattern). The old inline
+            // open+read+write ran on every pick on the pump thread.
+            self.stage_terminal_selection_persist(session_id, Some(pty.to_owned()));
         } else {
             let was_selected =
                 self.terminal_selection.get().is_some_and(|(session, _)| session == session_id);
             self.terminal_selection.set(None);
             self.terminal_focus_right.set(false);
             if was_selected {
-                if let Ok(storage) = crate::storage::ChannelStorage::open_default_migrated() {
-                    let mut doc = storage
-                        .read("session-terminal-selection")
-                        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-                    if let Some(sessions) =
-                        doc.get_mut("sessions").and_then(|value| value.as_object_mut())
-                    {
-                        sessions.insert(session_id.to_owned(), serde_json::Value::Null);
-                        let _ = storage.write("session-terminal-selection", &doc);
-                    }
-                }
+                self.stage_terminal_selection_persist(session_id, None);
             }
         }
         self.terminal_sink.borrow().select(session_id, pty_id);
         self.request_redraw();
+    }
+
+    /// G-271① — stage one `sessions[sessionID]` write (last-wins per
+    /// session); the run loop drains the batch into the
+    /// `session-terminal-selection` doc.
+    fn stage_terminal_selection_persist(&self, session_id: &str, pty_id: Option<String>) {
+        let mut outbox = self.terminal_selection_outbox.borrow_mut();
+        outbox.retain(|(session, _)| session != session_id);
+        outbox.push((session_id.to_owned(), pty_id));
+    }
+
+    /// G-271① — the run loop's persistence drain: the staged
+    /// selections (empty = nothing to write; each session appears at
+    /// most once, last pick wins).
+    pub fn take_terminal_selection_persist(&self) -> Vec<(String, Option<String>)> {
+        std::mem::take(&mut *self.terminal_selection_outbox.borrow_mut())
     }
 
     /// Restore a persisted selection at boot (the storage doc's
@@ -7922,9 +8045,32 @@ impl Store {
         self.integration_sink.borrow().list();
     }
 
+    /// G-271③ — the DialogMcp needs_auth jump: mount the integration
+    /// dialog over a fresh `integration.list` and route the target
+    /// row into its connect flow when the list lands
+    /// (`DialogIntegration {integrationID, autoConnect}`,
+    /// dialog-mcp.tsx:103-105 → dialog-integration.tsx:96-108).
+    pub fn integration_auto_connect(&self, integration_id: &str) {
+        *self.integration_auto_connect_id.borrow_mut() = Some(integration_id.to_owned());
+        self.integration_list.set(IntegrationListState::Loading);
+        self.integration_sink.borrow().list();
+        self.replace_dialog(DialogKind::Integration, DialogSize::Medium);
+    }
+
     /// The loop fetcher's `integration.list` result.
     pub fn integration_list_loaded(&self, rows: Vec<IntegrationRow>) {
+        // G-271③ — the pending auto-connect consumes the load (the
+        // `autoConnect` effect re-runs as the resource resolves,
+        // dialog-integration.tsx:96-108): the found row routes into
+        // its connect flow; a missing row leaves the plain list (the
+        // ref's filtered empty view).
+        let auto_connect = self.integration_auto_connect_id.borrow_mut().take();
         self.integration_list.set(IntegrationListState::Loaded(rows));
+        if let Some(id) = auto_connect {
+            if self.integration_row(&id).is_some() {
+                self.integration_select(&id);
+            }
+        }
     }
 
     /// A failed `integration.list`.
@@ -8026,10 +8172,17 @@ impl Store {
 
     /// `openMethod` (dialog-integration.tsx:285-303): key → the API-key
     /// prompt; command → the pending view; oauth → `oauth.connect`.
+    /// G-271④ — a key/oauth method WITH form fields runs the
+    /// `formAnswer` walk first (beginKey :312-317 / beginOAuth
+    /// :513-518); the answer rides the connect.
     pub fn integration_method_open(&self, id: &str, method: &IntegrationMethod) {
         self.integration_error.set(None);
         match method.kind {
             "key" => {
+                if !method.form.is_empty() {
+                    self.integration_form_begin(id, &method.id, "key", method);
+                    return;
+                }
                 let title = if method.label.is_empty() {
                     let name = self.integration_row(id).map_or_else(String::new, |row| row.name);
                     format!("Connect {name}")
@@ -8047,7 +8200,11 @@ impl Store {
                 self.update_dialog(|top| top.value.clear());
             }
             "oauth" => {
-                self.integration_sink.borrow().oauth_connect(id, &method.id);
+                if !method.form.is_empty() {
+                    self.integration_form_begin(id, &method.id, "oauth", method);
+                    return;
+                }
+                self.integration_sink.borrow().oauth_connect(id, &method.id, None);
             }
             "command" => {
                 self.integration_sink.borrow().command_connect(id, &method.id);
@@ -8056,14 +8213,286 @@ impl Store {
         }
     }
 
+    /// G-271④ — mount the form walk over the method's fields (the
+    /// `formAnswer` loop as a dialog state machine; a walk whose
+    /// every field was hidden/invalid completes immediately).
+    fn integration_form_begin(
+        &self,
+        id: &str,
+        method_id: &str,
+        method_kind: &'static str,
+        method: &IntegrationMethod,
+    ) {
+        let state = crate::integration_form::IntegrationFormState::new(
+            id,
+            method_id,
+            method_kind,
+            method.form.clone(),
+        );
+        let done = state.current().is_none();
+        *self.integration_form.borrow_mut() = Some(state);
+        if done {
+            self.integration_form_complete();
+            return;
+        }
+        self.replace_dialog(
+            DialogKind::IntegrationForm { integration_id: id.to_owned() },
+            DialogSize::Medium,
+        );
+        self.integration_form_seed_prompt();
+    }
+
+    /// Seed the prompt-style dialog's input with the field's default
+    /// (`textAnswer`'s `initial`, dialog-integration.tsx:861-863).
+    fn integration_form_seed_prompt(&self) {
+        let initial = self.integration_form.borrow().as_ref().and_then(|state| {
+            state.current().map(|field| match &field.default_value {
+                Some(oc_client::types::FormValue::String(text)) => text.clone(),
+                Some(oc_client::types::FormValue::Boolean(flag)) => flag.to_string(),
+                Some(oc_client::types::FormValue::FormValueVariant2(
+                    oc_client::types::FormValueVariant2::Number(number),
+                )) => crate::integration_form::format_js_number(*number),
+                _ => String::new(),
+            })
+        });
+        if let Some(initial) = initial {
+            self.update_dialog(move |top| {
+                top.value = initial;
+            });
+        } else {
+            self.update_dialog(|top| top.value.clear());
+        }
+    }
+
+    /// The walk completed: fire the connect with the collected answer
+    /// (oauth) or stage it for the key prompt (key).
+    fn integration_form_complete(&self) {
+        let Some(state) = self.integration_form.borrow_mut().take() else { return };
+        let answer = state.answer.clone();
+        match state.method_kind {
+            "oauth" => {
+                self.integration_sink
+                    .borrow()
+                    .oauth_connect(&state.integration_id, &state.method_id, Some(&answer));
+            }
+            _ => {
+                // beginKey's second half: the API-key prompt mounts
+                // over the walked answer (:319-325).
+                *self.integration_key_answer.borrow_mut() = Some(answer);
+                let name = self
+                    .integration_row(&state.integration_id)
+                    .map_or_else(String::new, |row| row.name);
+                let title = if state.method_id == "key" && name.is_empty() {
+                    "Connect".to_owned()
+                } else if state.method_id == "key" {
+                    format!("Connect {name}")
+                } else {
+                    name
+                };
+                self.replace_dialog(
+                    DialogKind::IntegrationKey {
+                        integration_id: state.integration_id.clone(),
+                        method_id: state.method_id.clone(),
+                        title,
+                    },
+                    DialogSize::Medium,
+                );
+                self.update_dialog(|top| top.value.clear());
+            }
+        }
+    }
+
+    /// The live form walk's state (the dialog's render source).
+    #[must_use]
+    pub fn integration_form(
+        &self,
+    ) -> Option<crate::integration_form::IntegrationFormState> {
+        self.integration_form.borrow().clone()
+    }
+
+    /// Remount the walk's dialog for the next field (a fresh select
+    /// state + prompt seed — v2's `dialog.replace` per fieldAnswer).
+    fn integration_form_remount(&self) {
+        let id = self
+            .integration_form
+            .borrow()
+            .as_ref()
+            .map(|state| state.integration_id.clone());
+        if let Some(id) = id {
+            self.replace_dialog(
+                DialogKind::IntegrationForm { integration_id: id },
+                DialogSize::Medium,
+            );
+            self.integration_form_seed_prompt();
+        }
+        self.request_redraw();
+    }
+
+    /// Record the current field's answer and step the walk (complete
+    /// → the connect fires; else the dialog remounts).
+    fn integration_form_step(&self, key: &str, value: Option<FormValue>) {
+        let advanced = {
+            let mut state = self.integration_form.borrow_mut();
+            let Some(walk) = state.as_mut() else { return };
+            walk.record(key, value);
+            !walk.advance()
+        };
+        if advanced {
+            self.integration_form_complete();
+        } else {
+            self.integration_form_remount();
+        }
+    }
+
+    /// G-271④ — one select-kind row submit on the mounted field
+    /// (`selectAnswer`/`multiselectAnswer`/`externalAnswer`'s
+    /// choices; the row values are the dialog's own markers).
+    pub fn integration_form_select(&self, value: &str) {
+        // The walk's borrow ends before the self-calls (the RefCell
+        // would otherwise double-borrow through the step helpers).
+        enum Step {
+            Idle,
+            Remount,
+            Redraw,
+            Advance { key: String, value: Option<FormValue> },
+            Error(String),
+        }
+        let step = {
+            let mut guard = self.integration_form.borrow_mut();
+            let Some(state) = guard.as_mut() else { return };
+            let Some(field) = state.fields.get(state.index).cloned() else { return };
+            match value {
+                // selectAnswer's Skip (`!field.required`).
+                "form:skip" => Step::Advance { key: field.key, value: None },
+                // The custom arm switches the field to the text prompt.
+                "form:custom" => {
+                    state.custom_active = true;
+                    state.error = None;
+                    Step::Remount
+                }
+                // multiselect's Continue (`selected` as the answer).
+                "form:continue" => {
+                    let selected = FormValue::Array(state.multiselect.clone());
+                    match crate::integration_form::validate_value(&field, Some(&selected)) {
+                        Some(error) => Step::Error(error),
+                        None => Step::Advance { key: field.key, value: Some(selected) },
+                    }
+                }
+                // multiselect's row toggle (`formToggleMultiselect`).
+                _ if value.starts_with("form:toggle:") => {
+                    let item = value.trim_start_matches("form:toggle:").to_owned();
+                    state.multiselect =
+                        crate::integration_form::toggle_multiselect(&state.multiselect, &item);
+                    state.error = None;
+                    Step::Redraw
+                }
+                // boolean Yes/No (`form:yes`/`form:no` markers).
+                "form:yes" | "form:no" => Step::Advance {
+                    key: field.key,
+                    value: Some(FormValue::Boolean(value == "form:yes")),
+                },
+                // external's Open link / I finished (externalAnswer's
+                // OPEN/`true` rows; "I finished" needs a prior open).
+                "form:open" => {
+                    if let Some(url) = field.url.clone() {
+                        if let Err(error) = crate::components::dialog::open_path(&url) {
+                            crate::keymap::log_skip(&error);
+                        }
+                        state.external_opened = true;
+                    }
+                    Step::Redraw
+                }
+                "form:done" => {
+                    if state.external_opened {
+                        Step::Advance { key: field.key, value: Some(FormValue::Boolean(true)) }
+                    } else {
+                        Step::Error("Open the link first".to_owned())
+                    }
+                }
+                // An option row (string-with-options): the row's value.
+                _ => {
+                    let picked = value.trim_start_matches("form:opt:").to_owned();
+                    let candidate = FormValue::String(picked);
+                    match crate::integration_form::validate_value(&field, Some(&candidate)) {
+                        Some(error) => Step::Error(error),
+                        None => Step::Advance { key: field.key, value: Some(candidate) },
+                    }
+                }
+            }
+        };
+        match step {
+            Step::Idle => {}
+            Step::Remount => self.integration_form_remount(),
+            Step::Redraw => self.request_redraw(),
+            Step::Advance { key, value } => self.integration_form_step(&key, value),
+            Step::Error(message) => {
+                if let Some(state) = self.integration_form.borrow_mut().as_mut() {
+                    state.error = Some(message);
+                }
+                self.request_redraw();
+            }
+        }
+    }
+
+    /// G-271④ — the text prompt's confirm (`textAnswer`'s
+    /// `onConfirm`: trim, empty+optional → undefined, number parse,
+    /// then `formValidateValue`).
+    pub fn integration_form_text(&self, text: &str) {
+        let outcome = {
+            let mut guard = self.integration_form.borrow_mut();
+            let Some(state) = guard.as_mut() else { return };
+            let Some(field) = state.fields.get(state.index).cloned() else { return };
+            let trimmed = text.trim();
+            let candidate: Option<FormValue> = if trimmed.is_empty() && !field.required {
+                None
+            } else {
+                match field.kind {
+                    crate::integration_form::IntegrationFieldKind::Number
+                    | crate::integration_form::IntegrationFieldKind::Integer => {
+                        match trimmed.parse::<f64>() {
+                            Ok(number) => Some(FormValue::FormValueVariant2(
+                                oc_client::types::FormValueVariant2::Number(number),
+                            )),
+                            Err(_) => Some(FormValue::String(trimmed.to_owned())),
+                        }
+                    }
+                    _ => Some(FormValue::String(trimmed.to_owned())),
+                }
+            };
+            match crate::integration_form::validate_value(&field, candidate.as_ref()) {
+                Some(error) => Err(error),
+                None => Ok((field.key, candidate)),
+            }
+        };
+        match outcome {
+            Ok((key, value)) => self.integration_form_step(&key, value),
+            Err(error) => {
+                if let Some(state) = self.integration_form.borrow_mut().as_mut() {
+                    state.error = Some(error);
+                }
+                self.request_redraw();
+            }
+        }
+    }
+
+    /// G-271④ — esc during the walk cancels the whole connect
+    /// (`CANCELLED` propagates out of `formAnswer` — beginKey/
+    /// beginOAuth both return without connecting).
+    pub fn integration_form_cancel(&self) {
+        *self.integration_form.borrow_mut() = None;
+        *self.integration_key_answer.borrow_mut() = None;
+    }
+
     /// `KeyMethod`'s confirm (dialog-integration.tsx:489-500): empty
     /// keys never submit (the `DialogPrompt` guard); the POST rides the
-    /// sink, the result lands through the loop fetcher.
+    /// sink, the result lands through the loop fetcher. G-271④ — a
+    /// staged form answer rides the POST.
     pub fn integration_key_submit(&self, id: &str, key: &str) {
         if key.is_empty() {
             return;
         }
-        self.integration_sink.borrow().connect_key(id, key);
+        let answer = self.integration_key_answer.borrow_mut().take();
+        self.integration_sink.borrow().connect_key(id, key, answer.as_ref());
     }
 
     /// `OAuthStarting`'s result (dialog-integration.tsx:548-568): a
@@ -8970,6 +9399,16 @@ impl Store {
         };
         if row.status == "pending" {
             return;
+        }
+        // G-271③ — an auth-gated server with an integration jumps
+        // INTO the integration flow (dialog-mcp.tsx:117-119: toggle →
+        // select → `DialogIntegration {integrationID, autoConnect}`);
+        // `mcp.connect` would just re-fail with the same needs_auth.
+        if row.status == "needs_auth" {
+            if let Some(integration) = row.integration_id.clone() {
+                self.integration_auto_connect(&integration);
+                return;
+            }
         }
         let connect = row.status != "connected";
         let sink = self.mcp_toggle_sink.borrow().clone();
@@ -16428,5 +16867,428 @@ mod g128_tests {
             store.advance_clock(tick * 100);
         }
         assert_eq!(store.vertical_tabs_width(200), 30, "settled on the target");
+    }
+}
+
+// -- G-229①/G-271①: the terminal registry's live label + the selection drain --
+
+#[cfg(test)]
+mod g229_terminal_tests {
+    use super::*;
+
+    #[test]
+    fn title_and_foreground_events_update_the_label_live() {
+        let store = Store::new(crate::reactive::Runtime::new());
+        store.set_terminals(
+            "s1",
+            vec![TerminalRecord {
+                id: "p1".to_owned(),
+                title: "bash".to_owned(),
+                foreground_process: None,
+            }],
+        );
+        // The label chain (`foregroundProcess ?? title`,
+        // terminals-tab.tsx:105): the title shows until a foreground
+        // process lands.
+        assert_eq!(store.terminals("s1")[0].label(), "bash");
+        // G-229① — the WS `foreground_process_changed` frame flips the
+        // label to the process.
+        store.set_terminal_foreground("p1", Some("cargo nextest".to_owned()));
+        assert_eq!(store.terminals("s1")[0].label(), "cargo nextest");
+        // The title still tracks underneath (a later list() refresh
+        // would reconcile to the same row).
+        store.set_terminal_title("p1", "server");
+        assert_eq!(store.terminals("s1")[0].title, "server");
+        assert_eq!(store.terminals("s1")[0].label(), "cargo nextest");
+        // The explicit null clears the process — the label falls back
+        // to the title.
+        store.set_terminal_foreground("p1", None);
+        assert_eq!(store.terminals("s1")[0].label(), "server");
+    }
+
+    #[test]
+    fn title_and_foreground_events_ignore_unknown_terminals() {
+        let store = Store::new(crate::reactive::Runtime::new());
+        store.set_terminals(
+            "s1",
+            vec![TerminalRecord {
+                id: "p1".to_owned(),
+                title: "bash".to_owned(),
+                foreground_process: None,
+            }],
+        );
+        // A stale frame for a removed pty never touches the registry.
+        store.set_terminal_title("gone", "nope");
+        store.set_terminal_foreground("gone", Some("x".to_owned()));
+        assert_eq!(store.terminals("s1")[0].title, "bash");
+        assert_eq!(store.terminals("s1")[0].foreground_process, None);
+        // A repeated no-op frame leaves the row as-is.
+        store.set_terminal_title("p1", "bash");
+        assert_eq!(store.terminals("s1")[0].title, "bash");
+    }
+}
+
+// -- G-271①: the terminal-selection persistence drain -------------------------
+
+#[cfg(test)]
+mod g271_select_terminal_tests {
+    use super::*;
+
+    #[test]
+    fn select_terminal_stages_and_the_drain_takes_the_last_pick() {
+        let store = Store::new(crate::reactive::Runtime::new());
+        // The pick stages — no synchronous storage touch happens in
+        // select_terminal itself (G-271①: the old code opened+read+
+        // wrote ChannelStorage on the pump thread per pick).
+        store.select_terminal("s1", Some("p1"));
+        store.select_terminal("s1", Some("p2"));
+        store.select_terminal("s2", Some("q1"));
+        let staged = store.take_terminal_selection_persist();
+        assert_eq!(
+            staged,
+            vec![
+                ("s1".to_owned(), Some("p2".to_owned())),
+                ("s2".to_owned(), Some("q1".to_owned())),
+            ],
+            "last pick wins per session, arrival order kept"
+        );
+        assert!(store.take_terminal_selection_persist().is_empty(), "drained once");
+        // A deselect stages the explicit null (v2's
+        // `sessions[sessionID] = null`).
+        store.select_terminal("s2", None);
+        assert_eq!(
+            store.take_terminal_selection_persist(),
+            vec![("s2".to_owned(), None)]
+        );
+    }
+}
+
+// -- G-271②: the worktree pick wires the home location ------------------------
+
+#[cfg(test)]
+mod g271_worktree_tests {
+    use super::*;
+
+    #[test]
+    fn select_worktree_sets_the_home_location_to_the_picked_directory() {
+        let store = Store::new(crate::reactive::Runtime::new());
+        assert_eq!(store.home_location(), None, "the launch default");
+        store.select_worktree("/repo/.worktrees/feat");
+        // G-271② — the pick navigates home AT the directory
+        // (move.tsx:113-114): the home submission creates its session
+        // there via the G-34 seam.
+        assert_eq!(store.home_location().as_deref(), Some("/repo/.worktrees/feat"));
+        assert_eq!(store.route(), Route::Home);
+        assert!(store.top_dialog().is_none(), "the dialog closed");
+    }
+}
+
+// -- G-271③: the DialogMcp needs_auth → integration auto-connect jump ---------
+
+#[cfg(test)]
+mod g271_mcp_auth_tests {
+    use super::*;
+
+    fn row(name: &str, status: &'static str, integration: Option<&str>) -> McpServerRow {
+        McpServerRow {
+            name: name.to_owned(),
+            status,
+            error: Some("auth required".to_owned()),
+            integration_id: integration.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn needs_auth_with_integration_jumps_into_the_connect_flow() {
+        let store = Store::new(crate::reactive::Runtime::new());
+        let sink = std::rc::Rc::new(RecordingMcpToggleSink::default());
+        store.set_mcp_toggle_sink(sink.clone());
+        let integrations = std::rc::Rc::new(RecordingIntegrationSink::default());
+        store.set_integration_sink(integrations.clone());
+        store.set_mcp_servers(vec![row("github", "needs_auth", Some("github"))]);
+
+        // The toggle never POSTs mcp.connect (it would re-fail with
+        // the same needs_auth — dialog-mcp.tsx:117-119 routes to
+        // select → DialogIntegration {autoConnect}).
+        store.mcp_toggle("github");
+        assert!(sink.calls.borrow().is_empty(), "no mcp.connect POST");
+        assert_eq!(
+            integrations.calls.borrow().as_slice(),
+            &[IntegrationCall::List],
+            "the jump refetches integration.list"
+        );
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Integration));
+
+        // The autoConnect effect (dialog-integration.tsx:96-108): the
+        // landed row routes into its connect flow — credentials would
+        // manage; a bare method row opens the method prompt directly.
+        store.integration_list_loaded(vec![IntegrationRow {
+            id: "github".into(),
+            name: "GitHub".into(),
+            category: "Popular",
+            methods: vec![IntegrationMethod {
+                id: "key".into(),
+                kind: "key",
+                label: String::new(),
+                form: Vec::new(),
+            }],
+            accounts: Vec::new(),
+            summary: String::new(),
+            sign_in_required: false,
+        }]);
+        assert!(
+            matches!(store.top_dialog().unwrap().kind, DialogKind::IntegrationKey { .. }),
+            "the single key method opened directly"
+        );
+    }
+
+    #[test]
+    fn needs_auth_without_integration_keeps_the_http_toggle() {
+        let store = Store::new(crate::reactive::Runtime::new());
+        let sink = std::rc::Rc::new(RecordingMcpToggleSink::default());
+        store.set_mcp_toggle_sink(sink.clone());
+        store.set_mcp_servers(vec![
+            row("plain", "needs_auth", None),
+            row("ok", "connected", None),
+        ]);
+        // No integrationID: the ref falls through to mcp.connect
+        // (dialog-mcp.tsx:121-124).
+        store.mcp_toggle("plain");
+        store.mcp_toggle("ok");
+        let calls = sink.calls.borrow().clone();
+        assert_eq!(
+            calls,
+            vec![
+                ("plain".to_owned(), true),
+                ("ok".to_owned(), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn auto_connect_missing_row_leaves_the_plain_list() {
+        let store = Store::new(crate::reactive::Runtime::new());
+        let integrations = std::rc::Rc::new(RecordingIntegrationSink::default());
+        store.set_integration_sink(integrations.clone());
+        store.set_mcp_servers(vec![row("ghost", "needs_auth", Some("not-listed"))]);
+        store.mcp_toggle("ghost");
+        // The fetched list does not carry the target id: the pending
+        // jump drops and the list dialog stays (the ref's filtered
+        // empty view).
+        store.integration_list_loaded(Vec::new());
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Integration));
+        // A later list load no longer auto-routes (the pending id was
+        // consumed once).
+        store.integration_list_loaded(vec![IntegrationRow {
+            id: "not-listed".into(),
+            name: "Late".into(),
+            category: "Services",
+            methods: vec![IntegrationMethod {
+                id: "key".into(),
+                kind: "key",
+                label: String::new(),
+                form: Vec::new(),
+            }],
+            accounts: Vec::new(),
+            summary: String::new(),
+            sign_in_required: false,
+        }]);
+        assert!(
+            matches!(store.top_dialog().unwrap().kind, DialogKind::Integration),
+            "the consumed jump never re-fires"
+        );
+    }
+}
+
+// -- G-271④: the method form's answer walk -------------------------------------
+
+#[cfg(test)]
+mod g271_form_tests {
+    use super::*;
+    use crate::integration_form::{
+        IntegrationFieldKind, IntegrationFormField,
+    };
+
+    fn field(key: &str, kind: IntegrationFieldKind, required: bool) -> IntegrationFormField {
+        IntegrationFormField {
+            key: key.to_owned(),
+            label: key.to_owned(),
+            kind,
+            description: None,
+            placeholder: None,
+            required,
+            hidden: false,
+            custom: false,
+            options: Vec::new(),
+            default_value: None,
+            format: None,
+            min_length: None,
+            max_length: None,
+            minimum: None,
+            maximum: None,
+            min_items: None,
+            max_items: None,
+            when: Vec::new(),
+            url: None,
+        }
+    }
+
+    fn method_with_form(kind: &'static str, fields: Vec<IntegrationFormField>) -> IntegrationMethod {
+        IntegrationMethod {
+            id: if kind == "key" { "key".to_owned() } else { "oauth-1".to_owned() },
+            kind,
+            label: String::new(),
+            form: fields,
+        }
+    }
+
+    #[test]
+    fn key_method_form_walks_then_the_answer_rides_the_post() {
+        let store = Store::new(crate::reactive::Runtime::new());
+        let sink = std::rc::Rc::new(RecordingIntegrationSink::default());
+        store.set_integration_sink(sink.clone());
+        store.integration_list_loaded(vec![IntegrationRow {
+            id: "linear".into(),
+            name: "Linear".into(),
+            category: "Services",
+            methods: vec![method_with_form(
+                "key",
+                vec![
+                    field("workspace", IntegrationFieldKind::Text, true),
+                    field("email", IntegrationFieldKind::Text, false),
+                ],
+            )],
+            accounts: Vec::new(),
+            summary: String::new(),
+            sign_in_required: false,
+        }]);
+
+        // The method open mounts the WALK (not the key prompt).
+        store.integration_select("linear");
+        assert!(
+            matches!(store.top_dialog().unwrap().kind, DialogKind::IntegrationForm { .. }),
+            "the form walk opened first"
+        );
+        // The first field renders as the prompt.
+        assert!(store.integration_form().is_some_and(|state| state.prompt_style()));
+
+        // An invalid answer keeps the walk open with the error.
+        store.integration_form_text("");
+        assert!(
+            store.integration_form().is_some_and(|state| state.error.is_some()),
+            "required field rejects the empty answer"
+        );
+
+        // A valid answer advances; the optional field skips via the
+        // empty answer (the key stays absent).
+        store.integration_form_text("acme");
+        assert!(store.integration_form().is_some_and(|state| state.error.is_none()));
+        store.integration_form_text("");
+        // The walk completed → the API-key prompt mounts with the
+        // staged answer.
+        assert!(
+            matches!(store.top_dialog().unwrap().kind, DialogKind::IntegrationKey { .. }),
+            "the key prompt mounts after the walk"
+        );
+
+        // The POST carries the walked answer (only the answered keys).
+        store.integration_key_submit("linear", "lin_api_x");
+        let call = sink.calls
+            .borrow()
+            .iter()
+            .find(|call| matches!(call, IntegrationCall::ConnectKey { .. }))
+            .cloned()
+            .expect("the key POST fired");
+        match &call {
+            IntegrationCall::ConnectKey { integration_id, key, answer } => {
+                assert_eq!(integration_id, "linear");
+                assert_eq!(key, "lin_api_x");
+                let answer = answer.as_ref().expect("the walked answer rides the POST");
+                assert_eq!(
+                    answer.get("workspace"),
+                    Some(&FormValue::String("acme".to_owned()))
+                );
+                assert!(!answer.contains_key("email"), "the skipped optional stays absent");
+            }
+            other => panic!("expected ConnectKey, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn oauth_method_form_fires_the_connect_with_the_answer() {
+        let store = Store::new(crate::reactive::Runtime::new());
+        let sink = std::rc::Rc::new(RecordingIntegrationSink::default());
+        store.set_integration_sink(sink.clone());
+        let mut org = field("org", IntegrationFieldKind::Text, true);
+        org.kind = IntegrationFieldKind::Boolean;
+        org.default_value = Some(FormValue::Boolean(false));
+        store.integration_list_loaded(vec![IntegrationRow {
+            id: "gh".into(),
+            name: "GitHub".into(),
+            category: "Popular",
+            methods: vec![method_with_form("oauth", vec![org])],
+            accounts: Vec::new(),
+            summary: String::new(),
+            sign_in_required: false,
+        }]);
+
+        store.integration_select("gh");
+        assert!(
+            matches!(store.top_dialog().unwrap().kind, DialogKind::IntegrationForm { .. }),
+            "the oauth method walks its form first"
+        );
+        // The boolean field renders as select rows; the No answer
+        // records + completes the walk → oauth.connect fires with the
+        // answer.
+        assert!(!store.integration_form().is_some_and(|state| state.prompt_style()));
+        store.integration_form_select("form:no");
+        let call = sink.calls.borrow()[0].clone();
+        match &call {
+            IntegrationCall::OauthConnect { integration_id, method_id, answer } => {
+                assert_eq!(integration_id, "gh");
+                assert_eq!(method_id, "oauth-1");
+                assert_eq!(
+                    answer.as_ref().and_then(|map| map.get("org")),
+                    Some(&FormValue::Boolean(false))
+                );
+            }
+            other => panic!("expected OauthConnect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn form_escape_cancels_without_a_post() {
+        let store = Store::new(crate::reactive::Runtime::new());
+        let sink = std::rc::Rc::new(RecordingIntegrationSink::default());
+        store.set_integration_sink(sink.clone());
+        store.integration_list_loaded(vec![IntegrationRow {
+            id: "linear".into(),
+            name: "Linear".into(),
+            category: "Services",
+            methods: vec![method_with_form(
+                "key",
+                vec![field("workspace", IntegrationFieldKind::Text, true)],
+            )],
+            accounts: Vec::new(),
+            summary: String::new(),
+            sign_in_required: false,
+        }]);
+        store.integration_select("linear");
+        assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::IntegrationForm { .. }));
+        // Esc cancels the walk (formAnswer's CANCELLED): no connect
+        // POST ever fires.
+        store.integration_form_cancel();
+        store.clear_dialogs();
+        assert!(store.integration_form().is_none());
+        assert!(
+            sink.calls.borrow().iter().all(|call| {
+                !matches!(
+                    call,
+                    IntegrationCall::ConnectKey { .. } | IntegrationCall::OauthConnect { .. }
+                )
+            }),
+            "no connect POST fired: {:?}",
+            sink.calls.borrow()
+        );
     }
 }

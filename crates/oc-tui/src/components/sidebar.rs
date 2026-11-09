@@ -1117,6 +1117,7 @@ mod surf1_tests {
                     name: format!("srv{index}"),
                     status,
                     error: None,
+                integration_id: None,
                 })
                 .collect::<Vec<_>>()
         };
@@ -1135,6 +1136,7 @@ mod surf1_tests {
             name: "auth".into(),
             status: "needs_auth",
             error: None,
+        integration_id: None,
         });
         let widget = SidebarMcpWidget { servers: bad, open: true };
         assert_eq!(widget.counts(), (0, 2));
@@ -1156,11 +1158,13 @@ mod surf1_tests {
                             name: "github".into(),
                             status: "connected",
                             error: None,
+                        integration_id: None,
                         },
                         crate::store::McpServerRow {
                             name: "broken".into(),
                             status: "failed",
                             error: Some("ECONNREFUSED".into()),
+                        integration_id: None,
                         },
                     ],
                     open: true,

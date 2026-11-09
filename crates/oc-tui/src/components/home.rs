@@ -897,8 +897,8 @@ mod surf2_home_tests {
 
         let healthy = Store::new(Runtime::new());
         healthy.set_mcp_servers(vec![
-            McpServerRow { name: "a".into(), status: "connected", error: None },
-            McpServerRow { name: "b".into(), status: "connected", error: None },
+            McpServerRow { name: "a".into(), status: "connected", error: None , integration_id: None },
+            McpServerRow { name: "b".into(), status: "connected", error: None , integration_id: None },
         ]);
         let frame = home_frame(&healthy, &styles, (80, 30));
         let footer = frame.text_grid()[28].trim_start().to_owned();
@@ -908,8 +908,8 @@ mod surf2_home_tests {
 
         let failing = Store::new(Runtime::new());
         failing.set_mcp_servers(vec![
-            McpServerRow { name: "a".into(), status: "connected", error: None },
-            McpServerRow { name: "b".into(), status: "failed", error: Some("boom".into()) },
+            McpServerRow { name: "a".into(), status: "connected", error: None , integration_id: None },
+            McpServerRow { name: "b".into(), status: "failed", error: Some("boom".into()) , integration_id: None },
         ]);
         let frame = home_frame(&failing, &styles, (80, 30));
         let footer = frame.text_grid()[28].trim_start().to_owned();
