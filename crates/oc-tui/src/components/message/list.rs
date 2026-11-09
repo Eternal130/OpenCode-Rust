@@ -638,9 +638,7 @@ fn tool_cell(
 ) -> RowRender {
     let mut state = state.clone();
     let shell_id = state.metadata.get("shellID").cloned().unwrap_or_default();
-    if !shell_id.is_empty()
-        && (state.status != ToolStatus::Completed || state.output.is_none())
-    {
+    if !shell_id.is_empty() && (state.status != ToolStatus::Completed || state.output.is_none()) {
         if let Some(live) = options.shell_live.get(&shell_id) {
             state.output = Some(live.clone());
         }

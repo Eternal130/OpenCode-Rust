@@ -701,7 +701,7 @@ impl ChromeTree {
         self.family_containers.iter().filter(|(_, index, _)| *index == 0).count()
     }
 
-#[allow(clippy::too_many_arguments)] // the argument set mirrors the ref call shape
+    #[allow(clippy::too_many_arguments)] // the argument set mirrors the ref call shape
     /// Sync (or first-mount) one chrome-family surface: the wrapper
     /// box keyed by the surface name, absolutely positioned at the
     /// imperative rect; rect/background changes patch via `set_prop`

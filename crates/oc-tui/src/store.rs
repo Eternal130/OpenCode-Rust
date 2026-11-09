@@ -4502,7 +4502,7 @@ impl Store {
         }
     }
 
-#[allow(clippy::cast_precision_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
+    #[allow(clippy::cast_precision_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// The persisted vertical-rail width (TUI-3 — the `layout`
     /// storage doc's `verticalTabsWidth`, seeded at boot). Width
     /// changes JUMP (config seeds and the test paths read the exact
@@ -4514,7 +4514,7 @@ impl Store {
         }
     }
 
-#[allow(clippy::cast_precision_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
+    #[allow(clippy::cast_precision_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// G-128 — the rail-resize SMOOTH transition (the ref's pane
     /// resize eases to the committed width instead of snapping):
     /// animate the width spring to `width` on the pump tick. The
@@ -4563,7 +4563,7 @@ impl Store {
         crate::components::session::clamp_session_pane_width(preferred, content_width)
     }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// The live vertical-rail width (clamped against the CURRENT
     /// terminal width — `clampSessionTabsWidth`, ui/layout.ts:12-17).
     /// G-128: while the width spring moves, the ANIMATED value
@@ -6632,7 +6632,7 @@ impl Store {
         self.clock.get()
     }
 
-#[allow(clippy::cast_precision_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
+    #[allow(clippy::cast_precision_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// Advance the clock to `now_ms`. Monotonic: a smaller/equal value
     /// is a no-op (no signal write ⇒ no redraw — render-on-tick only
     /// when the clock actually advances, frozen at 0 in tests).
@@ -7403,7 +7403,7 @@ impl Store {
         *self.sidebar_scroll.borrow()
     }
 
-#[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
+    #[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// G-102 — the wheel step for one scroll event (rows, always ≥0):
     /// the live `scroll.acceleration` / `scroll.speed` config drives
     /// `util/scroll.ts`'s model selection — the macOS accel streak
@@ -12750,7 +12750,7 @@ impl Store {
         }
     }
 
-#[allow(clippy::cast_precision_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
+    #[allow(clippy::cast_precision_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     #[allow(clippy::too_many_lines)] // one match over the event alphabet
     #[allow(clippy::too_many_lines)] // the SSE reducer table (one arm per event)
     fn reduce_event(&self, event: &BusEvent) {
@@ -16646,7 +16646,6 @@ fn installation_events_notify_the_banner() {
 /// submission seam (skip dismisses; confirm marks Installing).
 #[test]
 fn update_command_opens_the_dialog_with_actions() {
-
     use crate::components::command_palette::CommandDispatcher as _;
     let store = Store::new(Runtime::new());
     let mut dispatcher = crate::components::command_palette::StoreDispatcher;
@@ -16705,7 +16704,6 @@ fn update_dialog_focuses_the_confirm_button() {
 
 #[test]
 fn six_wire_classes_project_from_events() {
-
     let store = Store::new(Runtime::new());
     store.open_tab("s1", None);
     let events = [

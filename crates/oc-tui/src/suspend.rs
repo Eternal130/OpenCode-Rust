@@ -92,7 +92,7 @@ pub fn suspend_cycle() {}
 mod tests {
     use super::*;
 
-#[allow(clippy::cast_possible_wrap)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
+    #[allow(clippy::cast_possible_wrap)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// The signal cycle against an OWN child process (its own process
     /// group — the parent's group is never signaled): the child
     /// stops itself, the parent continues it, the child reports the
@@ -101,8 +101,10 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn child_suspends_and_resumes() {
-        let markers =
-            std::env::var("OC_SUSPEND_MARKERS").map_or_else(|_| std::env::temp_dir().join(format!("oc-suspend-{}", std::process::id())), std::path::PathBuf::from);
+        let markers = std::env::var("OC_SUSPEND_MARKERS").map_or_else(
+            |_| std::env::temp_dir().join(format!("oc-suspend-{}", std::process::id())),
+            std::path::PathBuf::from,
+        );
         let _ = std::fs::remove_dir_all(&markers);
         std::fs::create_dir_all(&markers).expect("markers dir");
         if std::env::var("OC_SUSPEND_CHILD").is_ok() {

@@ -146,9 +146,7 @@ fn grid(width: usize, height: usize, rows: &[&str]) -> Frame {
                 .map(|ch| Cell { ch, attrs: 0, fg: CellColor::Default, bg: CellColor::Default })
                 .collect::<Vec<_>>()
         })
-        .chain(
-            std::iter::repeat_n(vec![Cell::default(); width], height.saturating_sub(rows.len())),
-        )
+        .chain(std::iter::repeat_n(vec![Cell::default(); width], height.saturating_sub(rows.len())))
         .collect();
     Frame { cells, width, height, clusters: None }
 }

@@ -1116,8 +1116,6 @@ pub fn mount_solid_bar_clock(
     strip_mount(inputs, left, top);
 }
 
-
-
 /// The glow cell ranges of this frame's layout — the strip-local
 /// `[x, x + width)` spans of visible glowing tabs (leading overflow
 /// marker included). The old path paints these as `Fill`s with
@@ -1262,9 +1260,9 @@ fn paint_inputs(inputs: StripInputs) -> Frame {
 
 #[cfg(test)]
 mod tests {
-    use crate::render::CellColor;
     use super::*;
     use crate::components::session_tabs::TabStatus;
+    use crate::render::CellColor;
     use crate::store::SessionTab;
 
     fn view(id: &str, title: &str, status: TabStatus) -> TabView {

@@ -843,7 +843,7 @@ impl Frecency {
         store
     }
 
-#[allow(clippy::cast_precision_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
+    #[allow(clippy::cast_precision_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// `calculateFrecency` (frecency.tsx:33-36):
     /// `frequency / (1 + Δdays)` where Δdays is the days since
     /// `lastOpen`; an absent path scores 0.
@@ -1485,7 +1485,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-#[allow(clippy::cast_possible_wrap)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
+    #[allow(clippy::cast_possible_wrap)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// RE-03 — compaction at >1000 (frecency.tsx:63-71): the 1001st
     /// update rewrites the file with the `lastOpen`-descending top
     /// 1000 (the oldest entry dropped).

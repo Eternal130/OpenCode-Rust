@@ -276,7 +276,7 @@ impl TransportState {
         }
     }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// `session.step.ended` (transport.ts:1361-1381): the usage patch
     /// — the summed tokens (input+output+reasoning+cache.read+
     /// cache.write) with the step model for the percent's context

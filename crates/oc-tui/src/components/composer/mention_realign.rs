@@ -166,7 +166,6 @@ fn assign_mentions(
         best
     }
 
-
     #[derive(Clone)]
     struct Solved {
         matches: usize,

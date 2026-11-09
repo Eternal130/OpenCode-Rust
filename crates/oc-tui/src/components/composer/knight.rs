@@ -434,7 +434,7 @@ mod tests {
         assert_eq!(wrapped, first, "the cycle wraps modulo 54 frames");
     }
 
-#[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
+    #[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// G-49a — the frame index is derived from ELAPSED TIME at
     /// render (`elapsed_ms/40 % frames.len()`), so the ref's 40 ms
     /// interval MATH holds at any repaint rate: consecutive 40 ms

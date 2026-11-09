@@ -5202,7 +5202,7 @@ mod tests {
         assert_eq!(*opened.borrow(), "https://opencode.ai/docs");
     }
 
-#[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
+    #[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
     /// The six dead session commands act through the sink.
     #[test]
     fn final_six_session_commands_act() {
