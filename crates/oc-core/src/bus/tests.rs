@@ -1476,7 +1476,7 @@ async fn g276_aggregate_locks_evict_after_publish() {
 
 /// G-222 — `sdk.plugin.updated` `{}` (plugin/sdk.ts:9 `SdkPlugins.Updated`):
 /// the SDK plugin registration notify. Round-trip: the event is registered
-/// in the schema (by_type), publishes as an ephemeral `{}` frame, and reaches
+/// in the schema (`by_type`), publishes as an ephemeral `{}` frame, and reaches
 /// both the live and the typed subscriber (the supervisor's reload trigger
 /// leg, plugin/supervisor.ts:213, relies on exactly this shape).
 #[tokio::test]

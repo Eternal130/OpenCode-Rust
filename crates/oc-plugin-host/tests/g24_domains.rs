@@ -55,6 +55,7 @@ impl VcsPort for MockVcsPort {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // single end-to-end domain fixture test
 fn g24_domains_register_and_round_trip() {
     let sandbox = common::sandbox("gdomains");
     let entry = common::copy_fixture(&sandbox, "gdomains.ts");

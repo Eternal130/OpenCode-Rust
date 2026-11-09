@@ -113,7 +113,7 @@ mod tests {
     }
 
     /// RW-T1: direct serde of `PermissionSaved` emits the ref wire key
-    /// `projectID` (permission-saved.ts:16), not snake_case.
+    /// `projectID` (permission-saved.ts:16), not `snake_case`.
     #[test]
     fn permission_saved_wire_camel_case() {
         let saved = PermissionSaved {

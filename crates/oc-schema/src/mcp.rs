@@ -298,7 +298,7 @@ mod tests {
         for lit in ["auto", "legacy", "2026-07-28"] {
             let parsed: Protocol = serde_json::from_value(serde_json::json!(lit))
                 .unwrap_or_else(|e| panic!("{lit} must round-trip: {e}"));
-            assert_eq!(serde_json::to_value(&parsed).unwrap(), serde_json::json!(lit));
+            assert_eq!(serde_json::to_value(parsed).unwrap(), serde_json::json!(lit));
         }
         assert!(
             serde_json::from_value::<Protocol>(serde_json::json!("Auto")).is_err(),
@@ -307,7 +307,7 @@ mod tests {
     }
 
     /// RW-T1: direct serde of `ResourceTemplate` emits the ref wire key
-    /// `uriTemplate` (mcp.ts:112), not snake_case.
+    /// `uriTemplate` (mcp.ts:112), not `snake_case`.
     #[test]
     fn resource_template_wire_camel_case() {
         let template = ResourceTemplate {

@@ -2841,6 +2841,7 @@ pub struct EngineTerminalPort {
 
 #[async_trait]
 impl oc_plugin_host::TerminalPort for EngineTerminalPort {
+    #[allow(clippy::large_futures)] // passthrough to the pty port; Box::pin churn not warranted at one call site
     async fn read(&self, session_id: &str, lines: Option<u32>) -> Result<Value, String> {
         let session_id = oc_schema::id::SessionId::parse(session_id).map_err(|e| e.to_string())?;
         let result = self.pty.read(&session_id, lines).await.map_err(|error| error.to_string())?;
@@ -2872,6 +2873,7 @@ impl EngineTerminalSlot {
 
 #[async_trait]
 impl oc_plugin_host::TerminalPort for EngineTerminalSlot {
+    #[allow(clippy::large_futures)] // passthrough to the pty port; Box::pin churn not warranted at one call site
     async fn read(&self, session_id: &str, lines: Option<u32>) -> Result<Value, String> {
         self.port()?.read(session_id, lines).await
     }
