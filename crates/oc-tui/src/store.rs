@@ -1103,6 +1103,11 @@ impl SessionListSink for RecordingSessionListSink {
 /// commit path — `prompt/index.tsx` `prepareAgent`/`commitModel`, the
 /// mini footer's `admitPromptTurn`). Tests record; production calls
 /// oc-client.
+
+/// G-287① — the production sink seams (one bit per `set_*_sink`).
+const PRODUCTION_SINK_MASK: u16 =
+    (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 8);
+
 pub trait SelectionSink {
     fn switch_model(&self, session_id: &str, model: &ModelSelection);
     fn switch_agent(&self, session_id: &str, agent: &str);
@@ -1569,6 +1574,12 @@ pub struct Store {
     autocomplete_fetch_sink: std::cell::RefCell<Rc<dyn autocomplete::AutocompleteFetchSink>>,
     /// The engine prompt API stub submissions forward to.
     prompt_sink: std::rc::Rc<dyn PromptSink>,
+    /// G-287① — the production-wiring bits (one per Http seam): each
+    /// `set_*_sink` marks its bit; the app wiring's closing
+    /// [`Store::debug_assert_production_sinks`] verifies every seam
+    /// got its production sink (debug builds only — the recording
+    /// defaults stay silent no-ops for tests).
+    sinks_wired: Cell<u16>,
     /// The server selection API (model/agent switch POSTs).
     selection_sink: Rc<dyn SelectionSink>,
     /// G-200① — the `session.viewed` ack (POST session.view).
@@ -4065,6 +4076,7 @@ impl Store {
             session_list_sink: std::cell::RefCell::new(Rc::new(NoSessionListRefresh)),
             config_model: std::cell::RefCell::new(None),
             selection_sink: Rc::new(RecordingSelectionSink::default()),
+            sinks_wired: Cell::new(0),
             session_view_sink: Rc::new(NoSessionView),
             clipboard_sink: Rc::new(crate::clipboard::RecordingClipboardSink::default()),
             clipboard_source: Rc::new(crate::clipboard::CoreClipboardSource::new()),
@@ -4952,6 +4964,7 @@ impl Store {
     /// wires the oc-client call).
     pub fn set_prompt_sink(&mut self, sink: std::rc::Rc<dyn PromptSink>) {
         self.prompt_sink = sink;
+        self.sinks_wired.set(self.sinks_wired.get() | (1 << 0));
     }
 
     /// The composer rail's agent color (`local.agent.color(agent)`):
@@ -5130,6 +5143,7 @@ impl Store {
     /// Swap the worktree sink.
     pub fn set_worktree_sink(&self, sink: Rc<dyn WorktreeSink>) {
         *self.worktree_sink.borrow_mut() = sink;
+        self.sinks_wired.set(self.sinks_wired.get() | (1 << 1));
     }
 
     // -- G-29: the plugin manager's server flows --------------------------
@@ -5137,6 +5151,7 @@ impl Store {
     /// Swap the plugin-server sink (production: the oc-client worker).
     pub fn set_plugin_server_sink(&self, sink: Rc<dyn PluginServerSink>) {
         *self.plugin_server_sink.borrow_mut() = sink;
+        self.sinks_wired.set(self.sinks_wired.get() | (1 << 2));
     }
 
     /// G-127 — install the autocomplete async-fetch seam (the run
@@ -5493,11 +5508,13 @@ impl Store {
     /// Swap the server selection sink.
     pub fn set_selection_sink(&mut self, sink: Rc<dyn SelectionSink>) {
         self.selection_sink = sink;
+        self.sinks_wired.set(self.sinks_wired.get() | (1 << 3));
     }
 
     /// G-200① — install the `session.viewed` ack sink.
     pub fn set_session_view_sink(&mut self, sink: Rc<dyn SessionViewSink>) {
         self.session_view_sink = sink;
+        self.sinks_wired.set(self.sinks_wired.get() | (1 << 4));
     }
 
     /// The selection state (per-session model/agent drafts).
@@ -7912,11 +7929,13 @@ impl Store {
     /// `resume: true`).
     pub fn set_interrupt_sink(&self, sink: Rc<dyn InterruptSink>) {
         *self.interrupt_sink.borrow_mut() = sink;
+        self.sinks_wired.set(self.sinks_wired.get() | (1 << 5));
     }
 
     /// Swap the shell control sink (the production HTTP impl).
     pub fn set_shell_sink(&self, sink: Rc<dyn ShellControlSink>) {
         *self.shell_sink.borrow_mut() = sink;
+        self.sinks_wired.set(self.sinks_wired.get() | (1 << 6));
     }
 
     /// The shell output viewer's content (`DialogShellOutput`'s
@@ -9703,11 +9722,28 @@ impl Store {
     /// calls instead of `POST`ing).
     pub fn set_inbox_sink(&self, sink: Rc<dyn InboxSink>) {
         *self.inbox_sink.borrow_mut() = sink;
+        self.sinks_wired.set(self.sinks_wired.get() | (1 << 7));
     }
 
     /// Swap the older-history load seam (`loadMore`).
     pub fn set_transcript_sink(&self, sink: Rc<dyn TranscriptSink>) {
         *self.transcript_sink.borrow_mut() = sink;
+        self.sinks_wired.set(self.sinks_wired.get() | (1 << 8));
+    }
+
+    /// G-287① — the "production sinks are wired" debug assert: the
+    /// app wiring installs every Http seam through its `set_*_sink`
+    /// setter; a missed setter leaves the recording default silently
+    /// swallowing calls. Debug builds fail loudly at boot instead.
+    /// (`PRODUCTION_SINK_MASK` — release builds skip the check.)
+    pub fn debug_assert_production_sinks(&self) {
+        debug_assert_eq!(
+            self.sinks_wired.get(),
+            PRODUCTION_SINK_MASK,
+            "production sinks not fully wired: mask {:#b} of {:#b} — a set_*_sink call is missing at app wiring",
+            self.sinks_wired.get(),
+            PRODUCTION_SINK_MASK
+        );
     }
 
     /// TUI-TD07 — `<leader>return` over an ACTIVE turn (v2's queue
@@ -10202,10 +10238,22 @@ impl Store {
     /// Push a dialog entry (kind + size + fresh content state).
     pub fn open_dialog(&self, kind: DialogKind, size: DialogSize) {
         let theme_initial = self.theme_dialog_initial(&kind);
+        // G-287② — DialogUpdate's initial focus rests on the CONFIRM
+        // button (`setActive(max(0, buttons.length - 1))`,
+        // dialog-update.tsx:65): the confirm is the row model's last
+        // row (state row + Skip + confirm).
+        let select = if matches!(kind, DialogKind::Update) {
+            let mut select = SelectState::default();
+            select.selected =
+                crate::components::update::dialog_initial_selection(&self.update_dialog_state());
+            select
+        } else {
+            SelectState::default()
+        };
         let entry = DialogEntry {
             kind,
             size,
-            select: SelectState::default(),
+            select,
             value: String::new(),
             theme_initial,
         };
@@ -10219,10 +10267,20 @@ impl Store {
     /// becomes the only one.
     pub fn replace_dialog(&self, kind: DialogKind, size: DialogSize) {
         let theme_initial = self.theme_dialog_initial(&kind);
+        // G-287② — DialogUpdate's initial focus rests on the CONFIRM
+        // button (dialog-update.tsx:65 — see open_dialog).
+        let select = if matches!(kind, DialogKind::Update) {
+            let mut select = SelectState::default();
+            select.selected =
+                crate::components::update::dialog_initial_selection(&self.update_dialog_state());
+            select
+        } else {
+            SelectState::default()
+        };
         let entry = DialogEntry {
             kind,
             size,
-            select: SelectState::default(),
+            select,
             value: String::new(),
             theme_initial,
         };
@@ -16414,6 +16472,31 @@ fn installation_events_notify_the_banner() {
 /// submission seam (skip dismisses; confirm marks Installing).
 #[test]
 fn update_command_opens_the_dialog_with_actions() {
+    /// G-287② — the update dialog's INITIAL focus rests on the
+    /// CONFIRM button (`setActive(max(0, buttons().length - 1))`,
+    /// dialog-update.tsx:65): [state row, Skip, Update] → row 2.
+    #[test]
+    fn update_dialog_focuses_the_confirm_button() {
+        let store = Store::new(Runtime::new());
+        store.set_update_dialog(crate::components::update::UpdateDialogState::Available(
+            "2.0.25".to_owned(),
+        ));
+        store.replace_dialog(DialogKind::Update, DialogSize::Medium);
+        let selected = store
+            .top_dialog()
+            .map(|entry| entry.select.selected)
+            .unwrap_or_default();
+        assert_eq!(selected, 2, "the confirm row (Update) starts focused");
+        // No confirm (up-to-date) → Skip.
+        store.set_update_dialog(crate::components::update::UpdateDialogState::Current);
+        store.open_dialog(DialogKind::Update, DialogSize::Medium);
+        let selected = store
+            .top_dialog()
+            .map(|entry| entry.select.selected)
+            .unwrap_or_default();
+        assert_eq!(selected, 1, "Skip starts focused without a confirm");
+    }
+
     use crate::components::command_palette::CommandDispatcher as _;
     let store = Store::new(Runtime::new());
     let mut dispatcher = crate::components::command_palette::StoreDispatcher;

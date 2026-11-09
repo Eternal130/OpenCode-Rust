@@ -366,7 +366,9 @@ pub struct AutocompleteState {
     /// autocomplete.tsx:629-638): the ctrl+d id whose SECOND press
     /// runs the delete.
     confirming: Option<String>,
-    last_query: Option<String>,
+    /// G-287⑨ — the accept path re-reads the trigger query (its
+    /// `#N-N` line range reattaches to the accepted file chip).
+    pub(super) last_query: Option<String>,
     /// RE-03 — the `@file` frecency store (frecency.tsx's provider on
     /// the popup): ranks the reference rows (score × (1 + frecency))
     /// and records accepts of path-carrying options.
@@ -1552,7 +1554,61 @@ pub struct FileFindRow {
 
 /// G-127 — strip a `path#12-34` line-range suffix
 /// (`parseFileLineRange(...).base`, prompt/parse.ts): the fuzzy-find
-/// query is the path half only.
+/// query is the path half only. G-287⑨ — the full parse port: the
+/// `#N`/`#N-N`/`#N-` suffix validates against
+/// `/^(\d+)(?:-(\d*))?$/` (an invalid suffix keeps the whole input
+/// as the base — the hash only strips on a MATCH, parse.ts:1-13),
+/// and `end` only survives when `start < end` (the `#5-3` collapse).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FileLineRange {
+    pub start_line: u32,
+    pub end_line: Option<u32>,
+}
+
+/// G-287⑨ — `parseFileLineRange` (prompt/parse.ts:1-13).
+#[must_use]
+pub fn parse_file_line_range(input: &str) -> (String, Option<FileLineRange>) {
+    let Some(hash) = input.rfind('#') else {
+        return (input.to_owned(), None);
+    };
+    let base = input[..hash].to_owned();
+    let suffix = &input[hash + 1..];
+    let Some((start, end)) = suffix.split_once('-') else {
+        // `#N` alone.
+        return match start_end_line(suffix, None) {
+            Some(range) => (base, Some(range)),
+            None => (base, None),
+        };
+    };
+    let range = start_end_line(start, Some(end));
+    match range {
+        Some(range) => (base, Some(range)),
+        None => (base, None),
+    }
+}
+
+/// The validated `{startLine, endLine}` pair: digits only; `end`
+/// survives just when it parsed AND `start < end` (parse.ts:7-8).
+fn start_end_line(start: &str, end: Option<&str>) -> Option<FileLineRange> {
+    let start_line = parse_line_number(start)?;
+    let end_line = match end {
+        Some("") => None, // `#N-` — the open-ended `\d*` empty match.
+        Some(text) => {
+            let end = parse_line_number(text)?;
+            (start_line < end).then_some(end)
+        }
+        None => None,
+    };
+    Some(FileLineRange { start_line, end_line })
+}
+
+fn parse_line_number(text: &str) -> Option<u32> {
+    (!text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| text.parse::<u32>().ok())
+        .flatten()
+}
+
+/// G-127 — the query base (see [`parse_file_line_range`]).
 #[must_use]
 pub fn file_query_base(query: &str) -> &str {
     match query.rfind('#') {
@@ -1754,6 +1810,36 @@ impl AutocompleteFetchSink for NoopAutocompleteFetchSink {
         assert_eq!(file_query_base("src/lib.rs#12-40"), "src/lib.rs");
         assert_eq!(file_query_base("src/lib.rs"), "src/lib.rs");
         assert_eq!(file_query_base(""), "");
+    }
+
+    /// G-287⑨ — `parseFileLineRange` (prompt/parse.ts:1-13): the
+    /// suffix validates as `#N` / `#N-N` / `#N-`; `end` survives only
+    /// when `start < end` (the `#5-3` collapse); a non-matching
+    /// suffix keeps the hash-stripped base with NO range.
+    #[test]
+    fn line_ranges_parse_and_validate() {
+        let (base, range) = parse_file_line_range("src/lib.rs#12-40");
+        assert_eq!(base, "src/lib.rs");
+        assert_eq!(
+            range,
+            Some(FileLineRange { start_line: 12, end_line: Some(40) })
+        );
+        // Single line.
+        let (_, range) = parse_file_line_range("a.rs#7");
+        assert_eq!(range, Some(FileLineRange { start_line: 7, end_line: None }));
+        // Open-ended.
+        let (_, range) = parse_file_line_range("a.rs#7-");
+        assert_eq!(range, Some(FileLineRange { start_line: 7, end_line: None }));
+        // Inverted range collapses to start-only.
+        let (_, range) = parse_file_line_range("a.rs#5-3");
+        assert_eq!(range, Some(FileLineRange { start_line: 5, end_line: None }));
+        // Non-numeric / non-suffix hashes: no range, base still strips.
+        let (base, range) = parse_file_line_range("src#main");
+        assert_eq!(base, "src");
+        assert_eq!(range, None);
+        let (base, range) = parse_file_line_range("no-hash");
+        assert_eq!(base, "no-hash");
+        assert_eq!(range, None);
     }
 
     #[test]

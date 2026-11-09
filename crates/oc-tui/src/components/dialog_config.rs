@@ -402,7 +402,10 @@ pub fn settings_table() -> Vec<SettingDef> {
             title: "Copy behavior",
             category: "Terminal",
             path: "terminal.copy",
-            default: "select",
+            // G-287④ — the platform default (dialog-config.tsx):
+            // win32 defaults to "manual" (the Windows clipboard
+            // helper), everything else "select".
+            default: if cfg!(windows) { "manual" } else { "select" },
             values: Some(&["manual", "select"]),
             labels: None,
             step: None,

@@ -147,6 +147,12 @@ pub struct App {
     /// `ErrorComponent` mode (auditB #9): a caught render panic swapped
     /// the frame for the crash fallback — every key exits.
     pub error_mode: Option<String>,
+    /// G-287⑤ — the captured panic stack for the crash screen's
+    /// stack section (`ErrorComponent`'s `props.error.stack`).
+    pub error_stack: Option<String>,
+    /// G-287⑤ — the version the crash footer shows
+    /// (`OpenCode {app.version}`, error-component.tsx:279).
+    pub version: String,
     /// The applied keybind override set (re-merged when the store's
     /// config-reload signal changes).
     applied_keybinds: Vec<crate::keymap::KeybindOverride>,
@@ -209,6 +215,8 @@ impl App {
             last_pointer: None,
             exit_requested: false,
             error_mode: None,
+            error_stack: None,
+            version: env!("CARGO_PKG_VERSION").to_owned(),
             applied_keybinds: Vec::new(),
             plugin_owned: Vec::new(),
             plugin_themes: Vec::new(),
@@ -8412,6 +8420,10 @@ pub async fn run_with_size(
         loop_fetch_tx.clone(),
         client.clone(),
     )));
+    // G-287① — the "production sinks are wired" debug assert: every
+    // Http seam above installed through its setter; a missed setter
+    // would leave the recording default silently swallowing calls.
+    app.store.debug_assert_production_sinks();
     let mut persisted_tabs = app.store.tabs().tabs.clone();
 
     // Lane/chrome #4: the footer location's vcs lookup — one request
@@ -10030,7 +10042,14 @@ pub async fn run_with_size(
             // rendering the fallback, never the route); the panic hook
             // already restored the terminal (this thread owns it).
             let mut frame = if let Some(message) = app.error_mode.clone() {
-                crate::components::update::error_component_frame(app.size, &message)
+                // G-287⑤ — the sticky crash frame carries the stack
+                // + version (`ErrorComponent`'s sections).
+                crate::components::update::error_component_frame_with(
+                    app.size,
+                    &message,
+                    app.error_stack.as_deref(),
+                    &app.version,
+                )
             } else {
                 let frame_result =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| app.frame()));
@@ -10046,7 +10065,16 @@ pub async fn run_with_size(
                             .unwrap_or_else(|| "render panic".to_owned());
                         crate::keymap::log_skip(&format!("render panic: {message}"));
                         app.error_mode = Some(message.clone());
-                        crate::components::update::error_component_frame(app.size, &message)
+                        // G-287⑤ — capture the panic stack for the
+                        // crash screen's stack section + the issue
+                        // report (`error.stack`).
+                        app.error_stack = Some(std::backtrace::Backtrace::force_capture().to_string());
+                        crate::components::update::error_component_frame_with(
+                            app.size,
+                            &message,
+                            app.error_stack.as_deref(),
+                            &app.version,
+                        )
                     }
                 }
             };
