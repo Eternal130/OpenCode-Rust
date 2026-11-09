@@ -80,16 +80,22 @@ pub fn handle_dialog_key(
     // The prompt-style inputs (not selects): rename, worktree-name,
     // the integration key/code entry.
     let is_prompt_kind = |kind: &DialogKind| {
-        matches!(
-            kind,
+        match kind {
+            // G-271④ — the form walk's dialog flips per field: the
+            // textual kinds (and the custom arm) take the prompt
+            // input, the rest the select pipeline.
+            DialogKind::IntegrationForm { .. } => store
+                .integration_form()
+                .is_some_and(|state| state.prompt_style()),
             DialogKind::SessionRename { .. }
-                | DialogKind::WorktreeName
-                | DialogKind::IntegrationKey { .. }
-                | DialogKind::IntegrationCode { .. }
-                | DialogKind::BtwPrompt
-                | DialogKind::PluginInstall
-                | DialogKind::Prompt { .. }
-        )
+            | DialogKind::WorktreeName
+            | DialogKind::IntegrationKey { .. }
+            | DialogKind::IntegrationCode { .. }
+            | DialogKind::BtwPrompt
+            | DialogKind::PluginInstall
+            | DialogKind::Prompt { .. } => true,
+            _ => false,
+        }
     };
     let is_select = match &entry.kind {
         // The rename + worktree-name dialogs + the connect-flow
@@ -113,6 +119,11 @@ pub fn handle_dialog_key(
         | DialogKind::Alert { .. }
         | DialogKind::Confirm { .. }
         | DialogKind::Pair => false,
+        // G-271④ — the form walk flips with the current field (the
+        // textual kinds take the prompt input).
+        DialogKind::IntegrationForm { .. } => {
+            !store.integration_form().is_some_and(|state| state.prompt_style())
+        }
         // A rows-only plugin dialog is static (like help: printables
         // pass through, only the close bindings act); the rest — the
         // palette, theme list, server lists, worktrees, the
@@ -198,6 +209,11 @@ pub fn handle_dialog_key(
             DialogKind::IntegrationPending { .. } | DialogKind::IntegrationCode { .. }
         ) {
             store.integration_cancel_active();
+        }
+        // G-271④ — esc during the form walk cancels the connect
+        // (formAnswer's CANCELLED propagates — no POST fires).
+        if matches!(entry.kind, DialogKind::IntegrationForm { .. }) {
+            store.integration_form_cancel();
         }
         store.close_dialog();
         return DialogKeyOutcome::Closed;
@@ -932,6 +948,8 @@ fn option_dialog_records_rows(
     plugin: Option<&crate::store::PluginDialogContent>,
 ) -> bool {
     match kind {
+        // G-271④ — the form walk's select-style fields own rows.
+        DialogKind::IntegrationForm { .. } => true,
         DialogKind::Update
         | DialogKind::CommandPalette
         | DialogKind::QueuedPrompts
@@ -1648,6 +1666,16 @@ pub fn execute_submission(
         Some(DialogKind::Mcp) => {
             let server = store.mcp_servers().into_iter().find(|server| server.name == value);
             if let Some(server) = server {
+                // G-271③ — an auth-gated server with an integration
+                // enters the integration flow instead of the error
+                // details (dialog-mcp.tsx:96,103-105 — `focusedError`
+                // is suppressed for these rows too).
+                if server.status == "needs_auth" {
+                    if let Some(integration) = server.integration_id.clone() {
+                        store.integration_auto_connect(&integration);
+                        return crate::components::command_palette::Dispatch::Handled;
+                    }
+                }
                 if server.error.is_some() {
                     store.replace_dialog(
                         DialogKind::McpError { name: server.name },
@@ -1897,6 +1925,12 @@ pub fn execute_submission(
         Some(DialogKind::IntegrationPending { .. }) => {
             return crate::components::command_palette::Dispatch::Handled;
         }
+        // G-271④ — the form walk's select rows (the row values are
+        // the dialog's own markers; the walk steps in the store).
+        Some(DialogKind::IntegrationForm { .. }) => {
+            store.integration_form_select(value);
+            return crate::components::command_palette::Dispatch::Handled;
+        }
         // -- TUI-8: DialogSkill's `onSelect` (dialog-skill.tsx:36-41
         // + prompt/index.tsx:583-605): insert `@{skill} ` at the
         // composer's caret and close.
@@ -1949,7 +1983,7 @@ pub fn execute_submission(
 /// xdg-open only on Linux (no npm-open cross-platform matrix; the
 /// ref's openPath passes any path through unvalidated — so does
 /// this).
-fn open_path(directory: &str) -> Result<(), String> {
+pub(crate) fn open_path(directory: &str) -> Result<(), String> {
     std::process::Command::new("xdg-open")
         .arg(directory)
         .stdin(std::process::Stdio::null())

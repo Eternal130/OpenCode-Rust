@@ -2310,6 +2310,13 @@ impl App {
                 crate::store::DialogKind::IntegrationKey { integration_id, .. } => {
                     self.store.integration_key_submit(integration_id, value);
                 }
+                // G-271④ — the form walk's text prompt confirm
+                // (`textAnswer`'s onConfirm, dialog-integration.tsx:
+                // 866-877): trim, optional-empty → undefined, number
+                // parse, then `formValidateValue`.
+                crate::store::DialogKind::IntegrationForm { .. } => {
+                    self.store.integration_form_text(value);
+                }
                 // `OAuthCode`'s confirm (dialog-integration.tsx:
                 // 704-718) — `oauth.complete` with the entered code.
                 crate::store::DialogKind::IntegrationCode { integration_id } => {
@@ -4159,7 +4166,12 @@ pub fn spawn_server_lists(
                             }
                             _ => None,
                         };
-                        crate::store::McpServerRow { name: server.name.clone(), status, error }
+                        crate::store::McpServerRow {
+                            name: server.name.clone(),
+                            status,
+                            error,
+                            integration_id: server.integration_id.clone(),
+                        }
                     })
                     .collect::<Vec<_>>()
             })
@@ -5219,15 +5231,19 @@ pub enum LoopRequest {
     /// refetch — v2's `data.project.sync()`).
     ProjectList,
     /// `integration.connect.key` (+ the connected refetch chain).
+    /// G-271④ — the walked form answer rides the body.
     IntegrationConnectKey {
         integration_id: String,
         key: String,
+        answer: Option<crate::integration_form::IntegrationFormAnswer>,
     },
     /// `integration.oauth.connect` (code mode returns the attempt for
-    /// entry; auto polls `oauth.status` until settled).
+    /// entry; auto polls `oauth.status` until settled). G-271④ — the
+    /// walked form answer rides the body.
     IntegrationOauthConnect {
         integration_id: String,
         method_id: String,
+        answer: Option<crate::integration_form::IntegrationFormAnswer>,
     },
     /// `integration.oauth.complete`.
     IntegrationOauthComplete {
@@ -5425,6 +5441,18 @@ pub enum LoopFetch {
     TerminalController {
         pty_id: String,
         controller: bool,
+    },
+    /// G-229① — the attach stream's `title_changed` frame (the
+    /// registry row's title; the picker's label source).
+    TerminalTitle {
+        pty_id: String,
+        title: String,
+    },
+    /// G-229① — the attach stream's `foreground_process_changed`
+    /// frame (`None` = the explicit null).
+    TerminalForeground {
+        pty_id: String,
+        process: Option<String>,
     },
     TerminalFailure {
         pty_id: String,
@@ -6001,7 +6029,7 @@ pub fn spawn_loop_fetcher(
                         let _ = tx.send(LoopFetch::ProjectList(result));
                     });
                 }
-                LoopRequest::IntegrationConnectKey { integration_id, key } => {
+                LoopRequest::IntegrationConnectKey { integration_id, key, answer } => {
                     let client = client.clone();
                     let tx = tx.clone();
                     tokio::spawn(async move {
@@ -6014,6 +6042,8 @@ pub fn spawn_loop_fetcher(
                                 &oc_client::types::IntegrationConnectKeyQuery { location: None },
                                 &oc_client::types::IntegrationConnectKeyBody {
                                     key,
+                                    // G-271④ — the walked form answer.
+                                    answer,
                                     ..Default::default()
                                 },
                             )
@@ -6022,7 +6052,7 @@ pub fn spawn_loop_fetcher(
                         let _ = tx.send(LoopFetch::IntegrationKeyResult { name, result });
                     });
                 }
-                LoopRequest::IntegrationOauthConnect { integration_id, method_id } => {
+                LoopRequest::IntegrationOauthConnect { integration_id, method_id, answer } => {
                     let client = client.clone();
                     let tx = tx.clone();
                     tokio::spawn(async move {
@@ -6035,6 +6065,8 @@ pub fn spawn_loop_fetcher(
                                 &oc_client::types::IntegrationOauthConnectQuery { location: None },
                                 &oc_client::types::IntegrationOauthConnectBody {
                                     method_id,
+                                    // G-271④ — the walked form answer.
+                                    answer,
                                     ..Default::default()
                                 },
                             )
@@ -6474,6 +6506,17 @@ fn shape_integration_rows(
                             id: "key".to_owned(),
                             kind: "key",
                             label: inner.label.clone().unwrap_or_default(),
+                            // G-271④ — the key method's form fields.
+                            form: inner
+                                .form
+                                .as_deref()
+                                .map(|fields| {
+                                    fields
+                                        .iter()
+                                        .map(crate::integration_form::field_from_wire)
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
                         })
                     }
                     oc_client::types::IntegrationMethod::OAuthMethod(inner) => {
@@ -6481,6 +6524,17 @@ fn shape_integration_rows(
                             id: inner.id.clone(),
                             kind: "oauth",
                             label: inner.label.clone(),
+                            // G-271④ — the oauth method's form fields.
+                            form: inner
+                                .form
+                                .as_deref()
+                                .map(|fields| {
+                                    fields
+                                        .iter()
+                                        .map(crate::integration_form::field_from_wire)
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
                         })
                     }
                     oc_client::types::IntegrationMethod::CommandMethod(inner) => {
@@ -6488,6 +6542,7 @@ fn shape_integration_rows(
                             id: inner.id.clone(),
                             kind: "command",
                             label: inner.label.clone(),
+                            form: Vec::new(),
                         })
                     }
                     oc_client::types::IntegrationMethod::EnvMethod(_) => None,
@@ -6637,16 +6692,28 @@ impl crate::store::IntegrationSink for HttpIntegrationSink {
     fn list(&self) {
         let _ = self.tx.send(LoopRequest::IntegrationList);
     }
-    fn connect_key(&self, integration_id: &str, key: &str) {
+    fn connect_key(
+        &self,
+        integration_id: &str,
+        key: &str,
+        answer: Option<&crate::integration_form::IntegrationFormAnswer>,
+    ) {
         let _ = self.tx.send(LoopRequest::IntegrationConnectKey {
             integration_id: integration_id.to_owned(),
             key: key.to_owned(),
+            answer: answer.cloned(),
         });
     }
-    fn oauth_connect(&self, integration_id: &str, method_id: &str) {
+    fn oauth_connect(
+        &self,
+        integration_id: &str,
+        method_id: &str,
+        answer: Option<&crate::integration_form::IntegrationFormAnswer>,
+    ) {
         let _ = self.tx.send(LoopRequest::IntegrationOauthConnect {
             integration_id: integration_id.to_owned(),
             method_id: method_id.to_owned(),
+            answer: answer.cloned(),
         });
     }
     fn oauth_complete(&self, integration_id: &str, attempt_id: &str, code: &str) {
@@ -7154,6 +7221,37 @@ async fn attach_terminal(
                                 let _ = tx.send(LoopFetch::TerminalController {
                                     pty_id: pty_id.clone(),
                                     controller,
+                                });
+                            }
+                            // G-229① — the title/foreground frames the
+                            // daemon scanner emits (daemon.ts:97-98):
+                            // fold them into the registry row so the
+                            // picker's `foregroundProcess ?? title`
+                            // label updates live (the list() refresh
+                            // stays the full-snapshot source).
+                            Some("title_changed") => {
+                                if let Some(title) =
+                                    message.get("title").and_then(serde_json::Value::as_str)
+                                {
+                                    let _ = tx.send(LoopFetch::TerminalTitle {
+                                        pty_id: pty_id.clone(),
+                                        title: title.to_owned(),
+                                    });
+                                }
+                            }
+                            Some("foreground_process_changed") => {
+                                // The daemon keeps the explicit null
+                                // (`NullOr` wire): a missing key and an
+                                // explicit null both mean "none".
+                                let process = match message.get("process") {
+                                    Some(serde_json::Value::String(process)) => {
+                                        Some(process.clone())
+                                    }
+                                    _ => None,
+                                };
+                                let _ = tx.send(LoopFetch::TerminalForeground {
+                                    pty_id: pty_id.clone(),
+                                    process,
                                 });
                             }
                             _ => {}
@@ -9056,6 +9154,31 @@ pub async fn run_with_size(
         {
             repository.write(&ring.document);
         }
+        // G-271① — the terminal-selection persistence drain (the
+        // model-ring pattern): the staged picks persist as one batch —
+        // one open+read+write per pass, never on the pick path.
+        {
+            let staged = app.store.take_terminal_selection_persist();
+            if !staged.is_empty() {
+                if let Ok(storage) = crate::storage::ChannelStorage::open_default_migrated() {
+                    let mut doc = storage
+                        .read("session-terminal-selection")
+                        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                    if let Some(sessions) =
+                        doc.get_mut("sessions").and_then(|value| value.as_object_mut())
+                    {
+                        for (session_id, pty_id) in staged {
+                            let value = match pty_id {
+                                Some(pty) => serde_json::Value::String(pty),
+                                None => serde_json::Value::Null,
+                            };
+                            sessions.insert(session_id, value);
+                        }
+                        let _ = storage.write("session-terminal-selection", &doc);
+                    }
+                }
+            }
+        }
         // The external editor (<leader>e / /editor): suspend → $EDITOR
         // over the focused draft → resume → replace on success (a
         // non-zero exit keeps the old draft per v2). The stderr guard
@@ -9417,6 +9540,14 @@ pub async fn run_with_size(
                 }
                 LoopFetch::TerminalController { pty_id, controller } => {
                     app.store.terminal_pane_controller(&pty_id, controller);
+                }
+                // G-229① — the title/foreground frames patch the
+                // registry row (the picker's live label).
+                LoopFetch::TerminalTitle { pty_id, title } => {
+                    app.store.set_terminal_title(&pty_id, &title);
+                }
+                LoopFetch::TerminalForeground { pty_id, process } => {
+                    app.store.set_terminal_foreground(&pty_id, process);
                 }
                 LoopFetch::TerminalFailure { pty_id, message } => {
                     app.store.terminal_pane_failure(&pty_id, &message);
@@ -14389,12 +14520,14 @@ fn mcp_failure_transitions_toast_once() {
         name: "github".to_owned(),
         status: "connected",
         error: None,
+    integration_id: None,
     }]);
     assert!(app.store.toasts().current().is_none(), "healthy servers never toast");
     app.store.set_mcp_servers(vec![crate::store::McpServerRow {
         name: "github".to_owned(),
         status: "failed",
         error: Some("connect ECONNREFUSED".to_owned()),
+    integration_id: None,
     }]);
     let toast = app.store.toasts().current().expect("the failure toasted").clone();
     assert_eq!(toast.title.as_deref(), Some("MCP server failed: github"));
@@ -14407,6 +14540,7 @@ fn mcp_failure_transitions_toast_once() {
         name: "github".to_owned(),
         status: "failed",
         error: Some("connect ECONNREFUSED".to_owned()),
+    integration_id: None,
     }]);
     assert!(app.store.toasts().current().is_none(), "the same status never re-toasts");
 }
@@ -14423,11 +14557,12 @@ fn home_footer_chips_are_clickable() {
         title: Some("Restored".to_owned()),
     }]);
     app.store.set_mcp_servers(vec![
-        crate::store::McpServerRow { name: "fs".to_owned(), status: "connected", error: None },
+        crate::store::McpServerRow { name: "fs".to_owned(), status: "connected", error: None , integration_id: None },
         crate::store::McpServerRow {
             name: "broken".to_owned(),
             status: "failed",
             error: Some("boom".to_owned()),
+        integration_id: None,
         },
     ]);
     app.store.set_plugins_failed(2);

@@ -27,6 +27,7 @@ use crate::store::{
     new_session_location, DialogKind, DialogSize, DiffSource, ListState, ModelSelection, Route,
     ServerAgent, Store,
 };
+use oc_client::types::FormValue;
 use oc_tui_core::scroll::ScrollCommand;
 
 /// G-101 — the workspace file-changes rows' window (ref
@@ -1037,6 +1038,110 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             if let Some(error) = store.integration_error() {
                 props.hints.push(error);
             }
+            props
+        }
+        // G-271④ — the form walk's current field (dialog-
+        // integration.tsx:777-1010): textual fields render the
+        // prompt-style input; boolean/option/multiselect/external
+        // render their select rows.
+        DialogKind::IntegrationForm { .. } => {
+            let Some(state) = store.integration_form() else {
+                return SelectProps::new("Connect", Vec::new());
+            };
+            let Some(field) = state.current() else {
+                return SelectProps::new("Connect", Vec::new());
+            };
+            let mut props = SelectProps::new(field.label.clone(), Vec::new());
+            if let Some(description) = &field.description {
+                props.hints.push(description.clone());
+            }
+            if let Some(error) = &state.error {
+                props.hints.push(error.clone());
+            }
+            if state.prompt_style() {
+                let placeholder = field
+                    .placeholder
+                    .clone()
+                    .unwrap_or_else(|| "Answer".to_owned());
+                props.placeholder = placeholder;
+                return props;
+            }
+            let mut options = Vec::new();
+            match field.kind {
+                // selectAnswer (:817-829): Yes/No ordered per the
+                // default, plus the optional Skip row.
+                crate::integration_form::IntegrationFieldKind::Boolean => {
+                    let yes =
+                        SelectOption::titled("Yes", "form:yes");
+                    let no = SelectOption::titled("No", "form:no");
+                    if field.default_value == Some(FormValue::Boolean(false)) {
+                        options.push(no);
+                        options.push(yes);
+                    } else {
+                        options.push(yes);
+                        options.push(no);
+                    }
+                }
+                // multiselectAnswer (:903-948): the [x] toggle rows,
+                // the custom arm, Continue (the invalid hint rides its
+                // description).
+                crate::integration_form::IntegrationFieldKind::Multiselect => {
+                    for option in &field.options {
+                        let marked =
+                            state.multiselect.iter().any(|item| *item == option.value);
+                        options.push(
+                            SelectOption::titled(
+                                format!("[{}] {}", if marked { "x" } else { " " }, option.label),
+                                format!("form:toggle:{}", option.value),
+                            ),
+                        );
+                    }
+                    if field.custom {
+                        options.push(
+                            SelectOption::titled("Type your own answer", "form:custom"),
+                        );
+                    }
+                    let invalid = crate::integration_form::validate_value(
+                        field,
+                        Some(&FormValue::Array(state.multiselect.clone())),
+                    );
+                    options.push(
+                        SelectOption::titled("Continue", "form:continue")
+                            .described(invalid.unwrap_or_default()),
+                    );
+                }
+                // externalAnswer (:971-1000): Open link / I finished.
+                crate::integration_form::IntegrationFieldKind::External => {
+                    options.push(SelectOption::titled(
+                        if state.external_opened { "Open link again" } else { "Open link" },
+                        "form:open",
+                    ));
+                    options
+                        .push(SelectOption::titled("I finished", "form:done"));
+                }
+                // selectAnswer's option rows (+ custom + Skip).
+                _ => {
+                    for option in &field.options {
+                        options.push(
+                            SelectOption::titled(
+                                option.label.clone(),
+                                format!("form:opt:{}", option.value),
+                            ),
+                        );
+                    }
+                    if field.custom {
+                        options.push(
+                            SelectOption::titled("Type your own answer", "form:custom"),
+                        );
+                    }
+                }
+            }
+            if !field.required
+                && field.kind != crate::integration_form::IntegrationFieldKind::Multiselect
+            {
+                options.push(SelectOption::titled("Skip", "form:skip"));
+            }
+            props.options = options;
             props
         }
         // The pending view (`OAuthAuto`/`CommandPending`): the URL +
@@ -3766,11 +3871,12 @@ mod tests {
 
         // /mcps — the live rows with status footers (dialog-mcp.tsx).
         store.set_mcp_servers(vec![
-            McpServerRow { name: "beta".into(), status: "connected", error: None },
+            McpServerRow { name: "beta".into(), status: "connected", error: None , integration_id: None },
             McpServerRow {
                 name: "alpha".into(),
                 status: "failed",
                 error: Some("spawn failed".into()),
+            integration_id: None,
             },
         ]);
         assert_eq!(dispatcher.dispatch(&store, "mcp.list", None), Dispatch::Handled);
@@ -3895,9 +4001,9 @@ mod tests {
         let sink = std::rc::Rc::new(RecordingMcpToggleSink::default());
         store.set_mcp_toggle_sink(sink.clone());
         store.set_mcp_servers(vec![
-            McpServerRow { name: "on".into(), status: "connected", error: None },
-            McpServerRow { name: "off".into(), status: "failed", error: Some("x".into()) },
-            McpServerRow { name: "wait".into(), status: "pending", error: None },
+            McpServerRow { name: "on".into(), status: "connected", error: None , integration_id: None },
+            McpServerRow { name: "off".into(), status: "failed", error: Some("x".into()) , integration_id: None },
+            McpServerRow { name: "wait".into(), status: "pending", error: None , integration_id: None },
         ]);
         store.mcp_toggle("on");
         store.mcp_toggle("off");
@@ -4740,6 +4846,7 @@ mod tests {
                 id: "key".into(),
                 kind: "key",
                 label: "API key".into(),
+            form: Vec::new(),
             }],
             accounts: Vec::new(),
             summary: String::new(),
@@ -4761,7 +4868,8 @@ mod tests {
             sink.calls.borrow()[1],
             crate::store::IntegrationCall::ConnectKey {
                 integration_id: "anthropic".into(),
-                key: "sk-test".into()
+                key: "sk-test".into(),
+                answer: None,
             }
         );
         // The connected event: toast + clear + refetch.
@@ -4788,6 +4896,7 @@ mod tests {
                 id: "oauth-browser".into(),
                 kind: "oauth",
                 label: "Browser".into(),
+            form: Vec::new(),
             }],
             accounts: Vec::new(),
             summary: String::new(),

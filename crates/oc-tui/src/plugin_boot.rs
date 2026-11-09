@@ -1162,7 +1162,12 @@ pub async fn fetch_mcp_rows(client: &Client) -> Option<Vec<McpServerRow>> {
                     oc_client::types::McpServerStatus::NeedsAuth(auth) => Some(auth.error.clone()),
                     _ => None,
                 };
-                McpServerRow { name: server.name.clone(), status, error }
+                McpServerRow {
+                    name: server.name.clone(),
+                    status,
+                    error,
+                    integration_id: server.integration_id.clone(),
+                }
             })
             .collect(),
     )
