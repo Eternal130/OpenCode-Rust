@@ -1719,7 +1719,7 @@ cli.rs:33-76 六个 `global=true` flag（--print-logs/--standalone/--server/--au
 ### G-287 ✅ TUI 🟢 小项族（打包）
 ① Recording sink 默认桩无"生产已装配"debug_assert。② DialogUpdate 按钮模型列表行 vs ref 横向按钮+焦点循环（化妆级；标题六态已对齐 update.rs:140-157）。③ 终端右 pane 无拖拽调宽。④ terminal.copy 默认值平台无关化（dialog_config.rs:404-406 恒 "select"；ref win32→"manual"，修法 cfg!(windows)）。⑤ 崩溃屏三行文本（update.rs:176+ vs ref 258 行 Copy report/issue 链接/stack）。⑥ 模型选择器 Favorites/Recent 分区与搜索期收藏优先（G-135 修写路径，dialog 渲染面缺）。⑦ DialogOpen attention 排序+ses_ 直查（noMatch 提示已在）。⑧ 超链接渲染（markdown.rs:181-184 hyperlinks_supported:false，缝在光栅未接）。⑨ parseFileLineRange 的 #N-N 校验残边（query-base 已随 G-127 落地）。⑩ transcript 共享 E1 walk O(all-rows)+40ms 临时预算（solid 路径 Wave-B 窗口化已落；登记性能债并澄清 frame_budget_tests 注释）。
 
-- 2026-11-09 第十八轮勘注：①②④⑤⑥⑦⑨⑩ 落地（⑩ 为登记性注释）；③ 终端 pane 拖拽调宽登记（成本裁决，基建在）；**⑧ OSC-8 超链接搁置**：光栅能力已在（opentui-core frame.rs OSC-8 编码），开启即改渲染金帧=oracle 重钉事件（规范 2.2#8 stop-and-escalate），待升级裁决后开启。
+- 2026-11-09 第十八轮勘注：①②④⑤⑥⑦⑨⑩ 落地（⑩ 为登记性注释）；③ 终端 pane 拖拽调宽登记（成本裁决，基建在）；**⑧ OSC-8 超链接已于同日收口 ✅**（用户批准重钉后 gb10-lane18 `229d64b2` 落地：seam 改探针驱动（upstream `ctx.capabilities?.hyperlinks`，headless 默认 false）+ 发射器 interned link-id 包裹；headless profile 保持 caps=off → 金帧字节级不变，**批准的重钉实际未用到（0 帧变化）**；差分 127 IDENTICAL 不变；点击路径核验已在位。有界偏离：OSC-8 矩形取 transcript OpenLink hit rows 而非 Frame link 字段）。
 ### G-288 ✅ CLI/client 🟢 小项族（打包）
 ① run --standalone 会清扫取消 global 表单（run/mod.rs:460-462 vs ref run.ts:149 恒 attached；:445-453 注释误引 ref，🧹 一并修）。② session import --directory 不绝对化（session.rs:323-326 vs ref path.resolve）。③ pair --url 带路径保留 base path（ref new URL 绝对路径替换；反代场景 rust 行为更合理——注释钉定或对齐）。④ acp 失败原因平文（acp/mod.rs:137 vs ref code/signal/MiB 细化）。⑤ uninstall 无条件自删二进制（misc.rs:224-229 vs ref curl 安装仅打印提示——破坏性命令更激进）。⑥ service set cors 接受带 path 的 origin（service_config.rs:313-320 已拒尾斜杠但 trim 不掉 path；ref url.origin!==origin 连 path 拒）。⑦ UnexpectedStatus body 无上限（transport.rs:242-244 vs ref 仅 status；cap 64KiB 或对齐）。⑧ with_part 乱序 ordinal 丢弃（store.rs 仅 seen==ordinal 补建；SSE 有序前提下安全，跨连接乱序边界可能少一段文本）。
 
@@ -1809,6 +1809,7 @@ rust dialog.rs:211-232 注释自declare 有意决策（clear-and-stay 会吞掉 
 ## 登记与搁置（第十八轮）
 
 - **G-287⑧ 搁置（唯一）**：OSC-8 超链接渲染——光栅能力已在（opentui-core frame.rs OSC-8 编码），端口现对 headless-golden parity 钉 off；开启即改渲染金帧=**oracle 重钉事件（规范 2.2#8 stop-and-escalate）**，按制度禁擅自重冻结，待用户批准重钉后开启。
+  - 补记（2026-11-09 当日）：用户批准重钉后 lane18 落地——探针驱动启用使 headless profile 保持 caps=off，金帧字节级不变（0 帧），批准的重钉未用到；G-287⑧ 就此 ✅（commit `229d64b2`，差分 127 IDENTICAL 不变）。
 - **G-289 ℹ️ / G-290 ℹ️ 正式入册**（条目内已附登记注）：单 bun guest 架构与 ctrl+c 清空关闭均为文档化决策，登记不改码。
 - **G-272⑩ 样式化滚动回写 surface**：登记有界偏离（mini mono 直写惯例，G-68/G-134 同族；ref ≈1410 行 renderable 层）。
 - **G-287③ 终端 pane 拖拽调宽**：登记成本裁决（persistence+pointer seam 基建在）。
@@ -1826,4 +1827,4 @@ rust dialog.rs:211-232 注释自declare 有意决策（clear-and-stay 会吞掉 
 
 ## 第十八轮判定
 
-G-241..G-288 全部 ✅（含登记子项：G-270⑨⑩/G-286⑦/G-288③ 记录性钉定；G-272⑩/G-287③ 有界；G-285② 半边缓置）；G-289/G-290 维持 ℹ️（登记入册）；G-287⑧ 搁置待 oracle 重钉批准。三条勘注残臂（G-229①/G-63②/G-234②）全部闭环。现存未关闭项=既有文档化决策族（G-12/G-16/G-17/G-28/G-32/G-38/G-39/G-40/G-49/G-161①/G-163/G-164/G-200②/G-211/G-212/G-238/G-239/G-240）+ 本轮新增登记/搁置项。**无上游阻挡项**（无 opentui-rust 未移植功能依赖；G-287⑧ 为流程性搁置非能力缺失）。
+G-241..G-288 全部 ✅（含登记子项：G-270⑨⑩/G-286⑦/G-288③ 记录性钉定；G-272⑩/G-287③ 有界；G-285② 半边缓置）；G-289/G-290 维持 ℹ️（登记入册）；G-287⑧ 已于同日经用户批准后收口 ✅（探针驱动启用，重钉实际未用到，见登记节补记）。三条勘注残臂（G-229①/G-63②/G-234②）全部闭环。现存未关闭项=既有文档化决策族（G-12/G-16/G-17/G-28/G-32/G-38/G-39/G-40/G-49/G-161①/G-163/G-164/G-200②/G-211/G-212/G-238/G-239/G-240）+ 本轮新增登记/搁置项。**无上游阻挡项**（无 opentui-rust 未移植功能依赖；G-287⑧ 为流程性搁置非能力缺失）。
