@@ -1473,3 +1473,35 @@ async fn g276_aggregate_locks_evict_after_publish() {
     // The wakes table is the precedent (wake_remove evicts).
     assert!(bus.inner.wakes.is_empty());
 }
+
+/// G-222 — `sdk.plugin.updated` `{}` (plugin/sdk.ts:9 `SdkPlugins.Updated`):
+/// the SDK plugin registration notify. Round-trip: the event is registered
+/// in the schema (by_type), publishes as an ephemeral `{}` frame, and reaches
+/// both the live and the typed subscriber (the supervisor's reload trigger
+/// leg, plugin/supervisor.ts:213, relies on exactly this shape).
+#[tokio::test]
+async fn sdk_plugin_updated_round_trips_as_ephemeral_empty_frame() {
+    let (bus, _dir) = test_bus(false).await;
+
+    let definition = super::by_type("sdk.plugin.updated")
+        .unwrap_or_else(|| panic!("sdk.plugin.updated must be registered in the event schema"));
+    assert!(definition.durable.is_none(), "ephemeral notify carries no envelope");
+
+    let mut live = bus.subscribe();
+    let mut typed = bus.subscribe_type("sdk.plugin.updated");
+
+    let event = bus
+        .publish(definition, serde_json::json!({}), PublishOptions::default())
+        .await
+        .expect("sdk.plugin.updated publishes");
+
+    assert_eq!(event.type_, "sdk.plugin.updated");
+    assert_eq!(event.data, serde_json::json!({}), "empty payload");
+    assert!(event.durable.is_none(), "ephemeral");
+
+    let received = timeout_next(&mut live).await;
+    assert_eq!(received.id, event.id, "live stream sees the notify");
+    let typed_received = timeout_next(&mut typed).await;
+    assert_eq!(typed_received.type_, "sdk.plugin.updated", "typed reload leg wired");
+    assert_eq!(typed_received.data, serde_json::json!({}));
+}
