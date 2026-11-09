@@ -2359,6 +2359,13 @@ fn build_inputs(
         DialogKind::IntegrationKey { .. } | DialogKind::IntegrationCode { .. } => {
             Family::ConnectPrompt
         }
+        // G-271④ — the form walk's textual fields reuse the connect
+        // prompt family (dynamic title + the field's placeholder +
+        // description/error rows); the select-style fields carry
+        // option rows and fall to the generic Select family below.
+        DialogKind::IntegrationForm { .. } if props.options.is_empty() => {
+            Family::ConnectPrompt
+        }
         DialogKind::Help => Family::Help,
         DialogKind::TabMenu { .. } => Family::Menu,
         DialogKind::Plugin { .. } if plugin.is_some_and(|content| !content.is_select()) => {
