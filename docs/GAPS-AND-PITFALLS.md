@@ -1712,14 +1712,14 @@ cli.rs:33-76 六个 `global=true` flag（--print-logs/--standalone/--server/--au
 ### G-285 ✅ provider 三小项（打包）
 ① prompt-cache-key 11 家目录商 supportsPromptCacheKey 置位缺失（ref prompt-cache-key.ts 的 abliteration-ai/aihubmix/…/upstage；交集仅 venice 已覆盖——G-121/171/175 均不含，grep 零命中）。② snowflake 400 "conversation complete" 假流响应改写缺失（ref snowflake-cortex.ts:222-235 http.response hook；401→刷新 retry 半边待取证）。③ zenmux/vercel 的 http-referer/x-title 头（并入 G-261 修复亦可）。
 
-- 2026-11-09 第十八轮勘注：①③✅、② 的假流响应改写已落地；**401→刷新 retry 半边缓置**——需内建 retry-hook 脚手架（Authentication 现分类为不可重试，oc-ai provider_error.rs:271-289），取证见 gb10-lane7 report。
+- 2026-11-09 第十八轮勘注：①③✅、② 的假流响应改写已落地；**401→刷新 retry 半边已于同日收口 ✅**（gb10-lane19 `29f9858f`：取证裁定 ref snowflake-cortex.ts:236-246 为 retry-hook 形状（401+attempt==2+browser-OAuth+无 env token→强制刷新→延迟 0 重试一次）；落地为 auth_retry_401 transport seam + IntegrationHost::connection_force_refresh + snowflake 接线，Authentication 全局分类未动；有界偏离：刷新失败回显原始 401 而非 ref 的 orDie 流杀）。
 ### G-286 ✅ 媒体/WS 七小项（打包）
 ① google-images n>1 错误消息漏 format!（google.rs:77 字面 {n}，一行）。② google-speech 3.8-tts 漏 `-tts-*` 后缀变体（google.rs:30-33 strip_suffix vs ref 正则）。③ MediaUsage details 缺 provider 包裹+google 丢 candidates 明细+bfl/fal null 字段序列化为 null（ref 省略键）。④ append_fields 空数组追加 "[]"（utils.rs:180-183/:199 vs ref 无操作）。⑤ SessionChannel poison 无 active 也计数（websocket.rs:1140-1152 vs ref model-transport.ts:178-181——更快永久 HTTP 固化；Interceptor/指标缺失附注）。⑥ meta-messages thinking raw 直挂绕过 budget 校验（customization.rs:199-207 vs ref 委托泛型；G-172 修的是路由默认，显式 enabled 无 budget 的校验差距残留）。⑦ open-responses minted id 确定性计数 vs randomUUID（open_responses.rs:1449-1527 代码自注；记录性）。
 
 ### G-287 ✅ TUI 🟢 小项族（打包）
 ① Recording sink 默认桩无"生产已装配"debug_assert。② DialogUpdate 按钮模型列表行 vs ref 横向按钮+焦点循环（化妆级；标题六态已对齐 update.rs:140-157）。③ 终端右 pane 无拖拽调宽。④ terminal.copy 默认值平台无关化（dialog_config.rs:404-406 恒 "select"；ref win32→"manual"，修法 cfg!(windows)）。⑤ 崩溃屏三行文本（update.rs:176+ vs ref 258 行 Copy report/issue 链接/stack）。⑥ 模型选择器 Favorites/Recent 分区与搜索期收藏优先（G-135 修写路径，dialog 渲染面缺）。⑦ DialogOpen attention 排序+ses_ 直查（noMatch 提示已在）。⑧ 超链接渲染（markdown.rs:181-184 hyperlinks_supported:false，缝在光栅未接）。⑨ parseFileLineRange 的 #N-N 校验残边（query-base 已随 G-127 落地）。⑩ transcript 共享 E1 walk O(all-rows)+40ms 临时预算（solid 路径 Wave-B 窗口化已落；登记性能债并澄清 frame_budget_tests 注释）。
 
-- 2026-11-09 第十八轮勘注：①②④⑤⑥⑦⑨⑩ 落地（⑩ 为登记性注释）；③ 终端 pane 拖拽调宽登记（成本裁决，基建在）；**⑧ OSC-8 超链接已于同日收口 ✅**（用户批准重钉后 gb10-lane18 `229d64b2` 落地：seam 改探针驱动（upstream `ctx.capabilities?.hyperlinks`，headless 默认 false）+ 发射器 interned link-id 包裹；headless profile 保持 caps=off → 金帧字节级不变，**批准的重钉实际未用到（0 帧变化）**；差分 127 IDENTICAL 不变；点击路径核验已在位。有界偏离：OSC-8 矩形取 transcript OpenLink hit rows 而非 Frame link 字段）。
+- 2026-11-09 第十八轮勘注：①②④⑤⑥⑦⑨⑩ 落地（⑩ 为登记性注释）；③ 终端 pane 拖拽调宽已于同日收口 ✅（gb10-lane19 `998bf2e4`：手柄命中/拖拽跟随/clamp/<300ms 双击复位/paneWidth 持久化+boot 恢复（含 legacy terminalWidth）；默认渲染字节级不变）；**⑧ OSC-8 超链接已于同日收口 ✅**（用户批准重钉后 gb10-lane18 `229d64b2` 落地：seam 改探针驱动（upstream `ctx.capabilities?.hyperlinks`，headless 默认 false）+ 发射器 interned link-id 包裹；headless profile 保持 caps=off → 金帧字节级不变，**批准的重钉实际未用到（0 帧变化）**；差分 127 IDENTICAL 不变；点击路径核验已在位。有界偏离：OSC-8 矩形取 transcript OpenLink hit rows 而非 Frame link 字段）。
 ### G-288 ✅ CLI/client 🟢 小项族（打包）
 ① run --standalone 会清扫取消 global 表单（run/mod.rs:460-462 vs ref run.ts:149 恒 attached；:445-453 注释误引 ref，🧹 一并修）。② session import --directory 不绝对化（session.rs:323-326 vs ref path.resolve）。③ pair --url 带路径保留 base path（ref new URL 绝对路径替换；反代场景 rust 行为更合理——注释钉定或对齐）。④ acp 失败原因平文（acp/mod.rs:137 vs ref code/signal/MiB 细化）。⑤ uninstall 无条件自删二进制（misc.rs:224-229 vs ref curl 安装仅打印提示——破坏性命令更激进）。⑥ service set cors 接受带 path 的 origin（service_config.rs:313-320 已拒尾斜杠但 trim 不掉 path；ref url.origin!==origin 连 path 拒）。⑦ UnexpectedStatus body 无上限（transport.rs:242-244 vs ref 仅 status；cap 64KiB 或对齐）。⑧ with_part 乱序 ordinal 丢弃（store.rs 仅 seen==ordinal 补建；SSE 有序前提下安全，跨连接乱序边界可能少一段文本）。
 
@@ -1813,10 +1813,12 @@ rust dialog.rs:211-232 注释自declare 有意决策（clear-and-stay 会吞掉 
 - **G-289 ℹ️ / G-290 ℹ️ 正式入册**（条目内已附登记注）：单 bun guest 架构与 ctrl+c 清空关闭均为文档化决策，登记不改码。
 - **G-272⑩ 样式化滚动回写 surface**：登记有界偏离（mini mono 直写惯例，G-68/G-134 同族；ref ≈1410 行 renderable 层）。
 - **G-287③ 终端 pane 拖拽调宽**：登记成本裁决（persistence+pointer seam 基建在）。
+  - 补记（2026-11-09 同日）：用户批准收口后 lane19 落地 ✅（`998bf2e4`）。
 - **G-285② snowflake 401→刷新 retry**：缓置（需内建 retry-hook 脚手架；Authentication 现分类不可重试，oc-ai provider_error.rs:271-289）。
+  - 补记（2026-11-09 同日）：用户批准收口后 lane19 落地 ✅（`29f9858f`，取证=ref retry-hook 形状，Authentication 分类未动）。
 - **G-247 残余面**：`Bun.file/Bun.spawn/process/Function/eval` guest 可达（静态扫描方案①固有边界）；结构性隔离（无 import 能力域/深度 wrapper）登记为后续工程项。
 - **Deferred minors**：MCP decode-failure 腿不发 tool.execute.after（ref tool.ts:130-137 发；g191 钉定的既有形状）；worktree.list 排序未对齐 ref（未立项面）；engine 不消费 OPENCODE_DISABLE_PROJECT_CONFIG（既有）；repo-wide `cargo fmt --check` 在 main 有 ~160 文件历史漂移（各 lane 仅 fmt 自身文件，勿全仓 fmt）；`node_modules` find-skip 无 ref 引据（保留+登记）。
-- **flake 观察**：oc-pty `second_subscribe` 族多次 try-1 重试即过（gb10-lane10/lane16/lane17 三见）——入观察名单，复发三次以上再议白名单。
+- **flake 观察**：oc-pty `second_subscribe` 族多次 try-1 重试即过（gb10-lane10/lane16/lane17 三见）——入观察名单，复发三次以上再议白名单。补记（lane19）：`provider_refresh_engine_boot_loop_updates_and_publishes` 一次高负载 try-1 红（隔离 0.5s PASS、复跑 FLAKY→pass）——并入观察名单。
 
 ## 勘误/勘注（第十八轮）
 
@@ -1827,4 +1829,4 @@ rust dialog.rs:211-232 注释自declare 有意决策（clear-and-stay 会吞掉 
 
 ## 第十八轮判定
 
-G-241..G-288 全部 ✅（含登记子项：G-270⑨⑩/G-286⑦/G-288③ 记录性钉定；G-272⑩/G-287③ 有界；G-285② 半边缓置）；G-289/G-290 维持 ℹ️（登记入册）；G-287⑧ 已于同日经用户批准后收口 ✅（探针驱动启用，重钉实际未用到，见登记节补记）。三条勘注残臂（G-229①/G-63②/G-234②）全部闭环。现存未关闭项=既有文档化决策族（G-12/G-16/G-17/G-28/G-32/G-38/G-39/G-40/G-49/G-161①/G-163/G-164/G-200②/G-211/G-212/G-238/G-239/G-240）+ 本轮新增登记/搁置项。**无上游阻挡项**（无 opentui-rust 未移植功能依赖；G-287⑧ 为流程性搁置非能力缺失）。
+G-241..G-288 全部 ✅（含登记子项：G-270⑨⑩/G-286⑦/G-288③ 记录性钉定；G-272⑩ 有界；G-287③/G-285② 当日经用户批准补收口 ✅，见登记节补记）；G-289/G-290 维持 ℹ️（登记入册）；G-287⑧ 已于同日经用户批准后收口 ✅（探针驱动启用，重钉实际未用到，见登记节补记）。三条勘注残臂（G-229①/G-63②/G-234②）全部闭环。现存未关闭项=既有文档化决策族（G-12/G-16/G-17/G-28/G-32/G-38/G-39/G-40/G-49/G-161①/G-163/G-164/G-200②/G-211/G-212/G-238/G-239/G-240）+ 本轮新增登记/搁置项。**无上游阻挡项**（无 opentui-rust 未移植功能依赖；G-287⑧ 为流程性搁置非能力缺失）。
