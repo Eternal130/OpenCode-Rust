@@ -292,9 +292,12 @@ pub fn render_session(
     // terminal takes the right pane over the sidebar (the precedence
     // chain's `selectedTerminal()` leg).
     let terminal_pane = store.terminal_pane_mounted(session_id);
+    // G-287③ — the right pane's width follows the persisted/preferred
+    // value (`paneResize.size()`, session-frame.tsx:45-56): the
+    // default stays the equal split; the drag-resize seeds the store.
     let terminal_width = terminal_pane
         .as_ref()
-        .map(|_| clamp_session_pane_width(width.saturating_sub(shift) / 2, content_width));
+        .map(|_| store.session_pane_width(content_width));
     let sidebar_shown = terminal_pane.is_none() && store.sidebar_shown(session_id, content_width);
     // The session column's padding (v2's prompt mounts inside
     // paddingLeft/Right 2): the composer `┃` and footer paste at x2.
@@ -1012,7 +1015,7 @@ pub fn render_session_composed(
 /// `clampSessionPaneWidth` (ui/layout.ts:22-26): the pane keeps the
 /// equal split when both minima cannot fit; `max(min(24, half),
 /// min(width, max(half, total − 44)))`.
-fn clamp_session_pane_width(width: usize, total: usize) -> usize {
+pub(crate) fn clamp_session_pane_width(width: usize, total: usize) -> usize {
     let half = (total / 2).max(1);
     width.min(half.max(total.saturating_sub(44))).max(24.min(half))
 }

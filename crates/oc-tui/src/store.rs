@@ -1483,6 +1483,12 @@ pub struct Store {
     /// [`crate::components::session_tabs_rail::clamp_session_tabs_
     /// width`]).
     vertical_tabs_width: Signal<usize>,
+    /// G-287③ — the session right pane's persisted width (the `layout`
+    /// storage doc's `paneWidth ?? terminalWidth`,
+    /// session-frame.tsx:42-56 — default the equal split
+    /// `max(1, floor(panels.width()/2))`, clamped per read by
+    /// `clampSessionPaneWidth`).
+    session_pane_width: Signal<Option<usize>>,
     /// G-143 — `tabs.indicators === "numbers"` (the indicator slot's
     /// mode; the strip renders the tab ordinal instead of status
     /// glyphs).
@@ -4001,6 +4007,10 @@ impl Store {
             update_dialog,
         } = signals;
         let shell_view = Signal::new(&runtime, None);
+        // G-287③ — the right pane's width (None = the equal-split
+        // default; seeded at boot from the `layout` doc, fed by the
+        // pane-resize drag).
+        let session_pane_width = Signal::new(&runtime, None::<usize>);
         // G-29 — the plugin manager's server rows (not part of the
         // redraw-effect watcher set: the setters request redraws).
         let server_plugins = Signal::new(&runtime, Vec::<ServerPluginRow>::new());
@@ -4012,6 +4022,7 @@ impl Store {
             tabs_layout,
             tabs_numbers,
             vertical_tabs_width,
+            session_pane_width,
             session_costs,
             session_history,
             terminal_available,
@@ -4516,6 +4527,32 @@ impl Store {
                 ));
             }
         }
+    }
+
+    /// G-287③ — the right pane's persisted width (`layout` doc's
+    /// `paneWidth`, session-frame.tsx:42-56): `None` = the equal-split
+    /// default. The drag seeds the live value immediately (the ref's
+    /// `setPreferredSize` — the pane follows the pointer exactly).
+    pub fn set_session_pane_width(&self, width: Option<usize>) {
+        self.session_pane_width.set(width);
+    }
+
+    /// G-287③ — the preferred (unclamped) pane width, for tests and
+    /// persistence assertions.
+    #[must_use]
+    pub fn session_pane_width_preferred(&self) -> Option<usize> {
+        self.session_pane_width.get()
+    }
+
+    /// G-287③ — the live right-pane width (`size()`'s read side,
+    /// session-frame.tsx:21 + ui/layout.ts:22-26): the preferred value
+    /// (default `max(1, floor(content/2))` — `defaultPaneWidth`,
+    /// session-frame.tsx:41) clamped by `clampSessionPaneWidth`.
+    #[must_use]
+    pub fn session_pane_width(&self, content_width: usize) -> usize {
+        let preferred =
+            self.session_pane_width.get().unwrap_or((content_width / 2).max(1));
+        crate::components::session::clamp_session_pane_width(preferred, content_width)
     }
 
     /// The live vertical-rail width (clamped against the CURRENT
