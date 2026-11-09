@@ -693,3 +693,208 @@ fn hook_transport_error(message: String) -> TransportError {
 pub fn intercepted(inner: SharedTransport, intercepts: HttpInterceptors) -> SharedTransport {
     Arc::new(InterceptedTransport { inner, intercepts })
 }
+
+// ---------------------------------------------------------------------------
+// The 401 refresh-retry seam (G-285② — v2's provider `retry` hook, the
+// snowflake-cortex shape, plugin/provider/snowflake-cortex.ts:236-246)
+// ---------------------------------------------------------------------------
+
+/// The refresh consult: returns the freshly issued bearer token, or
+/// `None` when the gate declined (no qualifying credential, a refresh
+/// failure, an env-token override) — `None` leaves the 401 to the
+/// normal Authentication classification.
+pub type AuthRefresh =
+    Arc<dyn Fn() -> futures::future::BoxFuture<'static, Option<String>> + Send + Sync>;
+
+/// The 401-refresh-retry transport (G-285② — the route-layer shape of
+/// snowflake-cortex's `retry` hook, snowflake-cortex.ts:236-246): a 401
+/// answer consults [`AuthRefresh`]; a fresh token re-issues the SAME
+/// request exactly ONCE with the rewritten `Authorization` header
+/// (`event.decision = { retry: true, delay: 0 }`), every other outcome
+/// returns the original response untouched. The refresh gate itself
+/// (provider, credential shape, env override) lives with the caller —
+/// the seam stays provider-agnostic.
+struct AuthRetry401Transport {
+    inner: SharedTransport,
+    refresh: AuthRefresh,
+}
+
+#[async_trait]
+impl Transport for AuthRetry401Transport {
+    async fn execute(
+        &self,
+        request: TransportRequest,
+    ) -> Result<TransportResponse, TransportError> {
+        let first = self.inner.execute(request.clone()).await?;
+        if first.status != 401 {
+            return Ok(first);
+        }
+        // `attempt !== 2` gate: exactly one refresh-retry per executed
+        // request — a second 401 (or a declined gate) falls through.
+        let Some(token) = (self.refresh)().await else {
+            return Ok(first);
+        };
+        let mut retry = request;
+        let value = format!("Bearer {token}");
+        let mut replaced = false;
+        for (name, header) in retry.headers.iter_mut() {
+            if name.eq_ignore_ascii_case("authorization") {
+                *header = value.clone();
+                replaced = true;
+            }
+        }
+        if !replaced {
+            retry.headers.push(("authorization".to_owned(), value));
+        }
+        self.inner.execute(retry).await
+    }
+}
+
+/// Wrap `inner` with the G-285② 401 refresh-retry ([`AuthRetry401Transport`]).
+#[must_use]
+pub fn auth_retry_401(inner: SharedTransport, refresh: AuthRefresh) -> SharedTransport {
+    Arc::new(AuthRetry401Transport { inner, refresh })
+}
+
+#[cfg(test)]
+mod auth_retry_tests {
+    use super::*;
+    use futures::StreamExt as _;
+
+    /// A scripted transport: answers with the queued statuses in order
+    /// (repeating the last), recording every request's authorization
+    /// header. Status 0 stands for a transport failure.
+    struct Scripted {
+        statuses: std::sync::Mutex<Vec<u16>>,
+        auths: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl Transport for Scripted {
+        async fn execute(
+            &self,
+            request: TransportRequest,
+        ) -> Result<TransportResponse, TransportError> {
+            self.auths
+                .lock()
+                .unwrap()
+                .push(request.header("authorization").unwrap_or("<none>").to_owned());
+            let status = {
+                let mut queue = self.statuses.lock().unwrap();
+                if queue.len() > 1 {
+                    queue.remove(0)
+                } else {
+                    queue[0]
+                }
+            };
+            if status == 0 {
+                return Err(TransportError::connection("boom", TransportOperation::Request));
+            }
+            Ok(TransportResponse {
+                status,
+                headers: BTreeMap::new(),
+                body: futures::stream::iter(vec![Ok::<_, TransportError>(Bytes::new())]).boxed(),
+            })
+        }
+    }
+
+    fn request() -> TransportRequest {
+        TransportRequest {
+            method: "POST".into(),
+            url: "https://api.test/v1".into(),
+            headers: vec![("Authorization".into(), "Bearer stale".into())],
+            body: Bytes::new(),
+        }
+    }
+
+    fn refresh_returning(token: Option<&'static str>) -> AuthRefresh {
+        let token = token.map(str::to_owned);
+        Arc::new(move || {
+            let token = token.clone();
+            Box::pin(async move { token })
+        })
+    }
+
+    /// G-285② — a 401 consults the refresh seam and re-issues the SAME
+    /// request once with the rewritten bearer (snowflake-cortex.ts:236-246
+    /// — `{ retry: true, delay: 0 }`).
+    #[tokio::test]
+    async fn refreshes_once_and_retries_with_the_new_bearer() {
+        let scripted = Arc::new(Scripted {
+            statuses: std::sync::Mutex::new(vec![401, 200]),
+            auths: std::sync::Mutex::new(vec![]),
+        });
+        let transport =
+            auth_retry_401(Arc::clone(&scripted) as SharedTransport, refresh_returning(Some("fresh")));
+        let response = transport.execute(request()).await.expect("execute");
+        assert_eq!(response.status, 200, "the retry's answer surfaces");
+        assert_eq!(
+            *scripted.auths.lock().unwrap(),
+            vec!["Bearer stale".to_owned(), "Bearer fresh".to_owned()],
+            "exactly one retry with the refreshed bearer"
+        );
+    }
+
+    /// A declined gate (`None` — no qualifying credential / env token)
+    /// leaves the original 401 untouched: no retry, the normal
+    /// Authentication classification applies.
+    #[tokio::test]
+    async fn declined_gate_returns_the_original_401() {
+        let scripted = Arc::new(Scripted {
+            statuses: std::sync::Mutex::new(vec![401]),
+            auths: std::sync::Mutex::new(vec![]),
+        });
+        let transport =
+            auth_retry_401(Arc::clone(&scripted) as SharedTransport, refresh_returning(None));
+        let response = transport.execute(request()).await.expect("execute");
+        assert_eq!(response.status, 401, "the 401 passes through");
+        assert_eq!(scripted.auths.lock().unwrap().len(), 1, "no retry was issued");
+    }
+
+    /// Exactly-once discipline: a retry that 401s again never triggers a
+    /// second refresh/retry (the ref's `attempt !== 2` gate).
+    #[tokio::test]
+    async fn a_second_401_does_not_retry_again() {
+        let scripted = Arc::new(Scripted {
+            statuses: std::sync::Mutex::new(vec![401, 401, 200]),
+            auths: std::sync::Mutex::new(vec![]),
+        });
+        let transport =
+            auth_retry_401(Arc::clone(&scripted) as SharedTransport, refresh_returning(Some("fresh")));
+        let response = transport.execute(request()).await.expect("execute");
+        assert_eq!(response.status, 401, "the second 401 surfaces");
+        assert_eq!(scripted.auths.lock().unwrap().len(), 2, "no third request");
+    }
+
+    /// Non-401 statuses (and transport failures) never consult the seam.
+    #[tokio::test]
+    async fn only_401_consults_the_refresh_seam() {
+        let scripted = Arc::new(Scripted {
+            statuses: std::sync::Mutex::new(vec![400]),
+            auths: std::sync::Mutex::new(vec![]),
+        });
+        let transport =
+            auth_retry_401(Arc::clone(&scripted) as SharedTransport, refresh_returning(Some("fresh")));
+        let response = transport.execute(request()).await.expect("execute");
+        assert_eq!(response.status, 400);
+        assert_eq!(scripted.auths.lock().unwrap().len(), 1);
+    }
+
+    /// A request without an authorization header gains one on the retry.
+    #[tokio::test]
+    async fn the_retry_gains_an_authorization_header_when_absent() {
+        let scripted = Arc::new(Scripted {
+            statuses: std::sync::Mutex::new(vec![401, 200]),
+            auths: std::sync::Mutex::new(vec![]),
+        });
+        let transport =
+            auth_retry_401(Arc::clone(&scripted) as SharedTransport, refresh_returning(Some("fresh")));
+        let bare = TransportRequest { headers: vec![], ..request() };
+        let response = transport.execute(bare).await.expect("execute");
+        assert_eq!(response.status, 200);
+        assert_eq!(
+            *scripted.auths.lock().unwrap(),
+            vec!["<none>".to_owned(), "Bearer fresh".to_owned()]
+        );
+    }
+}

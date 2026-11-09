@@ -569,10 +569,34 @@ pub fn language_model_for_model(
     // an error; the ref plugin swaps in an empty SSE terminator so the
     // stream ends cleanly instead of failing.
     let route = if provider_id == "snowflake-cortex" {
+        let mut transport =
+            snowflake_conversation_complete_transport(Arc::clone(&context.transport));
+        // G-285② — snowflake-cortex's `retry` hook
+        // (snowflake-cortex.ts:236-246): a 401 refreshes the saved
+        // browser-OAuth credential and re-issues the request once
+        // (`event.decision = { retry: true, delay: 0 }`, the
+        // `attempt !== 2` gate making it exactly-once). The port rides
+        // the route-layer transport seam; the env-token override
+        // (`envToken()`, :239 + the method's refresh guard :101)
+        // declines the gate, and the Authentication classification is
+        // untouched for every other 401.
+        if let Some(host) = context.integrations.clone() {
+            let refresh: oc_ai::route::transport::AuthRefresh = Arc::new(move || {
+                let host = Arc::clone(&host);
+                Box::pin(async move {
+                    if snowflake_env_token_override(
+                        std::env::var("SNOWFLAKE_CORTEX_TOKEN").ok(),
+                        std::env::var("SNOWFLAKE_CORTEX_PAT").ok(),
+                    ) {
+                        return None;
+                    }
+                    host.connection_force_refresh("snowflake-cortex", "browser").await
+                })
+            });
+            transport = oc_ai::route::transport::auth_retry_401(transport, refresh);
+        }
         route.with(RoutePatch {
-            transport: Some(snowflake_conversation_complete_transport(Arc::clone(
-                &context.transport,
-            ))),
+            transport: Some(transport),
             ..Default::default()
         })
     } else {
@@ -1216,6 +1240,14 @@ fn azure_catalog_route(
             .with(RoutePatch { provider: Some(provider_id.to_string()), ..Default::default() }));
     }
     Ok(route)
+}
+
+/// G-285② — the snowflake env-token override (`envToken()`,
+/// snowflake-cortex.ts:268-270): an env token wins over the saved
+/// OAuth login, so the 401 refresh-retry gate declines (the method's
+/// own refresh guard returns the value unchanged, :100-101).
+fn snowflake_env_token_override(token: Option<String>, pat: Option<String>) -> bool {
+    token.is_some() || pat.is_some()
 }
 
 /// G-285② — the snowflake-cortex `http.response` builtin
@@ -2117,6 +2149,191 @@ mod tests {
         let mut request = oc_ai::schema::LLMRequest::new(model);
         request.messages = vec![oc_ai::schema::Message::user("hi")];
         assert!(route.stream(request).await.is_err(), "a real 400 still fails the request");
+    }
+
+    /// G-285② — the 401→refresh→retry-once half (snowflake-cortex's
+    /// `retry` hook, snowflake-cortex.ts:236-246) end to end over the
+    /// route pipeline: the snowflake catalog binding wraps its transport
+    /// with the auth-retry seam over the integration host's forced
+    /// refresh, so a 401 against the saved browser-OAuth credential
+    /// refreshes, re-issues once with the new bearer, and the stream
+    /// finishes cleanly; without the host (or after a declined gate)
+    /// the same 401 still fails as a provider error.
+    #[tokio::test]
+    async fn snowflake_401_refreshes_and_retries_once_through_the_route() {
+        use futures::StreamExt as _;
+        use futures::future::BoxFuture;
+
+        // A transport that 401s every bearer except the refreshed one
+        // (then answers the empty SSE terminator), recording the auths.
+        struct Gate {
+            auths: std::sync::Mutex<Vec<String>>,
+        }
+        #[async_trait::async_trait]
+        impl Transport for Gate {
+            async fn execute(
+                &self,
+                request: TransportRequest,
+            ) -> Result<TransportResponse, oc_ai::route::transport::TransportError> {
+                let auth = request.header("authorization").unwrap_or("<none>").to_owned();
+                self.auths.lock().unwrap().push(auth.clone());
+                if auth == "Bearer refreshed-from-stale" {
+                    return Ok(TransportResponse {
+                        status: 200,
+                        headers: BTreeMap::from([(
+                            "content-type".to_string(),
+                            "text/event-stream".to_string(),
+                        )]),
+                        body: futures::stream::iter(vec![Ok::<
+                            _,
+                            oc_ai::route::transport::TransportError,
+                        >(bytes::Bytes::from(
+                            b"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_vec(),
+                        ))])
+                        .boxed(),
+                    });
+                }
+                Ok(TransportResponse {
+                    status: 401,
+                    headers: BTreeMap::from([(
+                        "content-type".to_string(),
+                        "application/json".to_string(),
+                    )]),
+                    body: futures::stream::iter(vec![Ok::<
+                        _,
+                        oc_ai::route::transport::TransportError,
+                    >(bytes::Bytes::from(
+                        r#"{"message":"Session no longer active. Reauthenticate."}"#.as_bytes().to_vec(),
+                    ))])
+                    .boxed(),
+                })
+            }
+        }
+
+        // The integration host with the saved browser-OAuth credential
+        // whose refresh mints the new bearer.
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let db = Arc::new(
+            crate::database::Database::open_file(dir.path().join("t.db")).await.expect("db"),
+        );
+        std::mem::forget(dir);
+        let bus = Arc::new(crate::bus::Bus::new(
+            (*db).clone(),
+            crate::bus::BusOptions { persist: false, ..crate::bus::BusOptions::deterministic() },
+        ));
+        let host = crate::integration::IntegrationHost::new(
+            db,
+            bus,
+            crate::provider_catalog::catalog::Catalog::embedded(),
+            "opencode-test",
+        );
+        let browser = crate::integration::types::CredentialValue::OAuth(
+            crate::integration::types::OAuthValue {
+                method_id: "browser".into(),
+                refresh: "r1".into(),
+                access: "stale".into(),
+                expires: crate::database::migrations::now_ms() + 3_600_000,
+                metadata: None,
+            },
+        );
+        host.store()
+            .create(crate::integration::credential::CreateInput {
+                id: None,
+                integration_id: "snowflake-cortex",
+                label: None,
+                value: &browser,
+                activate: None,
+            })
+            .await
+            .expect("create");
+        host.update_integration("snowflake-cortex", "Snowflake Cortex");
+        host.update_method(
+            "snowflake-cortex",
+            crate::integration::types::Method::OAuth {
+                id: "browser".into(),
+                label: "Login with Snowflake (External Browser)".into(),
+                form: None,
+            },
+            Some(crate::integration::OAuthImplementation {
+                authorize: Arc::new(|_answer| {
+                    Box::pin(async { Err("unused".to_string()) })
+                        as BoxFuture<'static, Result<
+                            crate::integration::Authorization,
+                            String,
+                        >>
+                }),
+                refresh: Some(Arc::new(|value: crate::integration::types::OAuthValue| {
+                    Box::pin(async move {
+                        Ok(crate::integration::types::CredentialValue::OAuth(
+                            crate::integration::types::OAuthValue {
+                                access: format!("refreshed-from-{}", value.access),
+                                ..value
+                            },
+                        ))
+                    })
+                })),
+                label: None,
+            }),
+        );
+
+        let gate = Arc::new(Gate { auths: std::sync::Mutex::new(vec![]) });
+        let context =
+            FacadeContext::new(Arc::clone(&gate) as SharedTransport).with_integrations(host);
+        let catalog = Catalog::embedded();
+        let snowflake = catalog.provider("snowflake-cortex").expect("snowflake in catalog");
+        let model_id = snowflake.models.first().expect("a model").id.0.clone();
+        let connection = ModelConnection {
+            api_key: Some("stale".into()),
+            base_url: Some("https://myorg.snowflakecomputing.com/api/v2/cortex/v1".into()),
+            ..ModelConnection::default()
+        };
+        let model = language_model(&context, catalog, "snowflake-cortex", &model_id, &connection)
+            .expect("snowflake binds");
+        let route = Arc::clone(&model.route);
+        let mut request = oc_ai::schema::LLMRequest::new(model);
+        request.messages = vec![oc_ai::schema::Message::user("hi")];
+        let mut events = Box::pin(route.stream(request).await.expect("stream starts"));
+        let mut saw_finish = false;
+        let mut provider_error = false;
+        while let Some(event) = events.next().await {
+            match event {
+                Ok(oc_ai::schema::LLMEvent::Finish { .. }) => saw_finish = true,
+                Ok(_) => {}
+                Err(_) => provider_error = true,
+            }
+        }
+        assert!(saw_finish, "the refreshed retry's answer ends the stream");
+        assert!(!provider_error, "no provider error surfaces");
+        assert_eq!(
+            *gate.auths.lock().unwrap(),
+            vec!["Bearer stale".to_owned(), "Bearer refreshed-from-stale".to_owned()],
+            "exactly one refresh-retry with the new bearer"
+        );
+
+        // Contrast: without the integration host the same 401 is NOT
+        // retried — the provider error surfaces (the Authentication
+        // classification is unchanged for every non-gated 401).
+        let gate = Arc::new(Gate { auths: std::sync::Mutex::new(vec![]) });
+        let context = FacadeContext::new(Arc::clone(&gate) as SharedTransport);
+        let catalog = Catalog::embedded();
+        let model = language_model(&context, catalog, "snowflake-cortex", &model_id, &connection)
+            .expect("snowflake binds");
+        let route = Arc::clone(&model.route);
+        let mut request = oc_ai::schema::LLMRequest::new(model);
+        request.messages = vec![oc_ai::schema::Message::user("hi")];
+        assert!(route.stream(request).await.is_err(), "the ungated 401 still fails");
+        assert_eq!(gate.auths.lock().unwrap().len(), 1, "no retry without the host");
+    }
+
+    /// G-285② — the env-token override gate (pure half of
+    /// `envToken()`, snowflake-cortex.ts:268-270): any env token
+    /// declines the refresh-retry gate.
+    #[test]
+    fn snowflake_env_token_override_gate() {
+        assert!(!snowflake_env_token_override(None, None));
+        assert!(snowflake_env_token_override(Some("pat".into()), None));
+        assert!(snowflake_env_token_override(None, Some("tok".into())));
+        assert!(snowflake_env_token_override(Some("a".into()), Some("b".into())));
     }
 
     #[test]

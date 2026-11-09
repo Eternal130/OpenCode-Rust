@@ -533,6 +533,39 @@ impl IntegrationHost {
         }
     }
 
+    /// G-285② — the 401 forced-refresh seam (snowflake-cortex's `retry`
+    /// hook, snowflake-cortex.ts:236-246): the active CREDENTIAL
+    /// connection whose value is an OAuth token of `method_id` with a
+    /// refresh implementation refreshes NOW (no expiry margin — the
+    /// token was just REJECTED, `connection.resolve`'s 5-minute gate
+    /// does not apply) and persists, returning the new access token.
+    /// `None` = the gate declined (no active credential connection, a
+    /// non-OAuth value, the wrong method, or no refresh
+    /// implementation); the caller leaves the 401 to its normal
+    /// classification. A refresh failure also declines (`None`) — the
+    /// ref `Effect.orDie` shape would kill the whole stream on a
+    /// failed refresh; the port surfaces the original 401 instead.
+    pub async fn connection_force_refresh(
+        &self,
+        integration_id: &str,
+        method_id: &str,
+    ) -> Option<String> {
+        let active = self.connection_active(integration_id).await.ok()??;
+        let ConnectionInfo::Credential { id, .. } = active else { return None };
+        let stored = self.store.get(&id).await.ok()??;
+        let CredentialValue::OAuth(oauth) = &stored.value else { return None };
+        if oauth.method_id != method_id {
+            return None;
+        }
+        let (_, implementation) = self.implementation(integration_id, method_id)?;
+        let refresh = implementation.refresh.as_ref()?;
+        let refreshed = refresh(oauth.clone()).await.ok()?;
+        let CredentialValue::OAuth(fresh) = &refreshed else { return None };
+        let access = fresh.access.clone();
+        let _ = self.store.update(&id, None, Some(&refreshed)).await;
+        Some(access)
+    }
+
     /// `connection.key` (integration.ts:715-738): validate the answer
     /// against the key method's form, store the secret.
     pub async fn connect_key(
