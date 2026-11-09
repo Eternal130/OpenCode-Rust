@@ -295,14 +295,7 @@ fn render_spec(
         }
         BlockSpec::Blockquote { content, border_color, margin_bottom } => {
             let mut body = Vec::new();
-            render_spec(
-                content,
-                content_width.saturating_sub(2),
-                0,
-                styles,
-                &mut body,
-                fence_counter,
-            );
+            render_spec(content, content_width.saturating_sub(2), 0, styles, &mut body, fence_counter);
             let border = border_color
                 .and_then(rgba_to_style_color)
                 .map_or(styles.quote_border, |color| styles.quote_border.fg(color));
@@ -429,14 +422,7 @@ fn render_list(
             if index > 0 && item.child_margins_top.get(index).is_some_and(|m| *m > 0) {
                 body.push(MarkdownLine(Vec::new()));
             }
-            render_spec(
-                child,
-                width.saturating_sub(marker_width),
-                0,
-                styles,
-                &mut body,
-                fence_counter,
-            );
+            render_spec(child, width.saturating_sub(marker_width), 0, styles, &mut body, fence_counter);
         }
         for (row, line) in body.into_iter().enumerate() {
             let mut runs = Vec::new();

@@ -29,8 +29,9 @@ fn image_identity(file: &Value) -> Option<(String, String)> {
     if !mime.starts_with("image/") || mention.is_empty() {
         return None;
     }
-    let opt =
-        |value: &str| (!value.is_empty()).then(|| serde_json::Value::String(value.to_owned()));
+    let opt = |value: &str| {
+        (!value.is_empty()).then(|| serde_json::Value::String(value.to_owned()))
+    };
     let name = text("name");
     let description = text("description");
     let metadata = serde_json::Value::Array(vec![

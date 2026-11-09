@@ -76,7 +76,11 @@ fn pty_chrome_rail_rect_follows_terminal_resize() {
             let deadline = std::time::Instant::now() + Duration::from_secs(6);
             loop {
                 let grid = driver.grid_now();
-                let found = (0..20).any(|y| (0..60).any(|x| grid.cell(x, y).ch == '┃'));
+                let found = (0..20).any(|y| {
+                    (0..60).any(|x| {
+                        grid.cell(x, y).ch == '┃'
+                    })
+                });
                 if found {
                     break;
                 }

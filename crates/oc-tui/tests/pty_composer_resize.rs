@@ -89,9 +89,12 @@ fn wait_composer(driver: &mut vt_harness::HarnessHandle, cols: usize, rows: usiz
     let deadline = std::time::Instant::now() + Duration::from_secs(8);
     loop {
         let grid = driver.grid_now();
-        let rail = (0..grid.rows.min(rows)).any(|y| (0..cols).any(|x| grid.cell(x, y).ch == '┃'));
-        let transition =
-            (0..grid.rows.min(rows)).any(|y| (0..cols).any(|x| grid.cell(x, y).ch == '╹'));
+        let rail = (0..grid.rows.min(rows)).any(|y| {
+            (0..cols).any(|x| grid.cell(x, y).ch == '┃')
+        });
+        let transition = (0..grid.rows.min(rows)).any(|y| {
+            (0..cols).any(|x| grid.cell(x, y).ch == '╹')
+        });
         if rail && transition {
             return true;
         }

@@ -117,7 +117,7 @@ pub fn progress_count(progress: &MigrationProgress) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    
     use crate::reactive::Runtime;
     use crate::render::{Cell, CellColor, Frame};
     use crate::store::Store;

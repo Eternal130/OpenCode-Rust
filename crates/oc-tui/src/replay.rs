@@ -80,8 +80,7 @@ fn string_array(value: Option<&serde_json::Value>) -> Vec<String> {
 /// armed by its recorded server-side flow (ask 1 before step 0, ask 2
 /// once the once-reply resolves, after step 2) — the pump cannot
 /// fabricate SSE events itself.
-pub(crate) fn arm_scenario(script: &str, app: &mut App, before_step: usize) {
-    if script != "permission-once-always-deny" {
+pub(crate) fn arm_scenario(script: &str, app: &mut App, before_step: usize) {    if script != "permission-once-always-deny" {
         return;
     }
     let request = |id: &str| crate::components::footer::PermissionRequest {
@@ -449,16 +448,7 @@ mod tests {
         assert_eq!(pump.store.prompt_draft("s1").text, "hi");
         pump.press("enter");
         assert!(pump.store.prompt_draft("s1").is_empty(), "submitted");
-        assert_eq!(
-            pump.store
-                .composer("s1")
-                .history
-                .entries
-                .iter()
-                .map(|entry| entry.text.clone())
-                .collect::<Vec<_>>(),
-            vec!["hi".to_owned()]
-        );
+        assert_eq!(pump.store.composer("s1").history.entries.iter().map(|entry| entry.text.clone()).collect::<Vec<_>>(), vec!["hi".to_owned()]);
         pump.press("up");
         assert_eq!(pump.store.prompt_draft("s1").text, "hi", "history restored");
         pump.press("down");

@@ -44,17 +44,17 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use opentui_core::styled_text::{StyledText, TextChunk};
 use opentui_core::Rgba;
+use opentui_core::styled_text::{StyledText, TextChunk};
 use opentui_solid::builder::ForItemSource;
 use opentui_solid::element::ForItem;
 use opentui_solid::element::PropValue;
 use opentui_solid::reactive::Reactive;
-use opentui_solid::{box_, for_list, map, text, Element, Signal};
+use opentui_solid::{Element, Signal, box_, for_list, map, text};
 
 use super::canvas::{Canvas, CanvasOp, FILL_BG};
 use crate::components::chrome_solid::{
-    composite_chrome_tree, family_wrapper_live, mount_family_wrapper, reset_hub, ChromeStamp,
+    ChromeStamp, composite_chrome_tree, family_wrapper_live, mount_family_wrapper, reset_hub,
 };
 use crate::render::{CellColor, Frame};
 
@@ -123,69 +123,74 @@ fn shape_ops(ops: &[CanvasOp]) -> Option<(Vec<FooterUnit>, Vec<ChromeStamp>)> {
     // paint order (a later span REPLACES an earlier glyph).
     let mut glyphs: std::collections::HashMap<(usize, usize), (char, CellColor, u32)> =
         std::collections::HashMap::new();
-    let note_span =
-        |x: usize,
-         y: usize,
-         spans: &[super::canvas::Span],
-         glyphs: &mut std::collections::HashMap<(usize, usize), (char, CellColor, u32)>| {
-            let mut x = x;
-            for span in spans {
-                for atom in crate::wrap::flatten(&span.text, crate::style::Style::new()) {
-                    glyphs.insert(
-                        (x, y),
-                        (atom.text.chars().next().unwrap_or(' '), span.fg, u32::from(span.bold)),
-                    );
-                    x += atom.width.max(1);
-                }
+    let note_span = |x: usize,
+                     y: usize,
+                     spans: &[super::canvas::Span],
+                     glyphs: &mut std::collections::HashMap<(usize, usize), (char, CellColor, u32)>| {
+        let mut x = x;
+        for span in spans {
+            for atom in crate::wrap::flatten(&span.text, crate::style::Style::new()) {
+                glyphs.insert(
+                    (x, y),
+                    (
+                        atom.text.chars().next().unwrap_or(' '),
+                        span.fg,
+                        u32::from(span.bold),
+                    ),
+                );
+                x += atom.width.max(1);
             }
-        };
-    let restore_chunks =
-        |x0: usize,
-         y: usize,
-         w: usize,
-         glyphs: &std::collections::HashMap<(usize, usize), (char, CellColor, u32)>,
-         bg: CellColor|
-         -> Vec<(usize, StyledText)> {
-            // Contiguous runs of surviving glyphs, each one text element
-            // (explicit chunk bg = the fill's bg).
-            let Some(rgba_bg) = rgba(bg) else { return Vec::new() };
-            let mut runs: Vec<(usize, StyledText)> = Vec::new();
-            let mut index = x0;
+        }
+    };
+    let restore_chunks = |x0: usize,
+                          y: usize,
+                          w: usize,
+                          glyphs: &std::collections::HashMap<
+        (usize, usize),
+        (char, CellColor, u32),
+    >,
+                          bg: CellColor|
+     -> Vec<(usize, StyledText)> {
+        // Contiguous runs of surviving glyphs, each one text element
+        // (explicit chunk bg = the fill's bg).
+        let Some(rgba_bg) = rgba(bg) else { return Vec::new() };
+        let mut runs: Vec<(usize, StyledText)> = Vec::new();
+        let mut index = x0;
+        while index < x0 + w {
+            let Some(&(_ch, fg, attrs)) = glyphs.get(&(index, y)) else {
+                index += 1;
+                continue;
+            };
+            let start = index;
+            let mut chars = String::new();
+            let run_fg = fg;
+            let run_attrs = attrs;
             while index < x0 + w {
-                let Some(&(_ch, fg, attrs)) = glyphs.get(&(index, y)) else {
-                    index += 1;
-                    continue;
-                };
-                let start = index;
-                let mut chars = String::new();
-                let run_fg = fg;
-                let run_attrs = attrs;
-                while index < x0 + w {
-                    match glyphs.get(&(index, y)) {
-                        Some(&(_, next_fg, next_attrs))
-                            if next_fg == run_fg && next_attrs == run_attrs =>
-                        {
-                            chars.push(glyphs[&(index, y)].0);
-                            index += 1;
-                        }
-                        Some(_) | None => break,
+                match glyphs.get(&(index, y)) {
+                    Some(&(_, next_fg, next_attrs))
+                        if next_fg == run_fg && next_attrs == run_attrs =>
+                    {
+                        chars.push(glyphs[&(index, y)].0);
+                        index += 1;
                     }
-                }
-                if let Some(rgba_fg) = rgba(run_fg) {
-                    runs.push((
-                        start,
-                        StyledText::new(vec![TextChunk {
-                            text: chars,
-                            fg: Some(rgba_fg),
-                            bg: Some(rgba_bg),
-                            attributes: run_attrs,
-                            link: None,
-                        }]),
-                    ));
+                    Some(_) | None => break,
                 }
             }
-            runs
-        };
+            if let Some(rgba_fg) = rgba(run_fg) {
+                runs.push((
+                    start,
+                    StyledText::new(vec![TextChunk {
+                        text: chars,
+                        fg: Some(rgba_fg),
+                        bg: Some(rgba_bg),
+                        attributes: run_attrs,
+                        link: None,
+                    }]),
+                ));
+            }
+        }
+        runs
+    };
     let mut units: Vec<FooterUnit> = Vec::with_capacity(ops.len());
     let mut stamps: Vec<ChromeStamp> = Vec::new();
     for (index, op) in ops.iter().enumerate() {
@@ -195,7 +200,11 @@ fn shape_ops(ops: &[CanvasOp]) -> Option<(Vec<FooterUnit>, Vec<ChromeStamp>)> {
                     // A transparent region: the tree paints nothing;
                     // the seam stamp resets blank cells' bg to Default
                     // (the retired bridge's fixup, verbatim).
-                    stamps.push(ChromeStamp::Transparent { left: *x, top: *y, width: *w });
+                    stamps.push(ChromeStamp::Transparent {
+                        left: *x,
+                        top: *y,
+                        width: *w,
+                    });
                 } else {
                     let Some(color) = rgba(*bg) else { return None };
                     units.push(FooterUnit {
@@ -207,8 +216,9 @@ fn shape_ops(ops: &[CanvasOp]) -> Option<(Vec<FooterUnit>, Vec<ChromeStamp>)> {
                 }
                 // The surviving glyphs ride OVER the fill (the old
                 // `fill_bg`'s bg-only merge).
-                for (run, (start, content)) in
-                    restore_chunks(*x, *y, *w, &glyphs, *bg).into_iter().enumerate()
+                for (run, (start, content)) in restore_chunks(*x, *y, *w, &glyphs, *bg)
+                    .into_iter()
+                    .enumerate()
                 {
                     units.push(FooterUnit {
                         key: format!("r{index}.{run}"),
@@ -312,11 +322,10 @@ fn unit_element(inputs: &Signal<Vec<FooterUnit>>, key: &str) -> Element {
                 dyn_num(map(inputs.clone(), {
                     let key = key.clone();
                     move |units: &Vec<FooterUnit>| {
-                        units.iter().find(|unit| unit.key == key).map_or(0, |unit| {
-                            match &unit.body {
-                                UnitBody::Fill { width, .. } => *width,
-                                UnitBody::Text(_) => 0,
-                            }
+                        units.iter().find(|unit| unit.key == key).map_or(0, |unit| match &unit.body
+                        {
+                            UnitBody::Fill { width, .. } => *width,
+                            UnitBody::Text(_) => 0,
                         })
                     }
                 })),
@@ -538,17 +547,17 @@ pub(crate) fn first_divergence(old: &Frame, solid: &Frame) -> Option<(usize, usi
 
 #[cfg(test)]
 mod tests {
-    use super::super::form::{form_body_canvas, FormBodyState};
-    use super::super::form_authorization::{form_authorization_canvas, FormAuthorizationState};
+    use super::super::form::{FormBodyState, form_body_canvas};
+    use super::super::form_authorization::{FormAuthorizationState, form_authorization_canvas};
     use super::super::panel::{FooterMenuState, PANEL_LIST_ROWS};
     use super::super::panels::{MiniSettings, RunAgent, RunModel, RunProvider};
     use super::super::permission::{
-        create_permission_body_state, permission_body_canvas, reject_field_canvas,
         PermissionBodyState, PermissionOption, PermissionRequest, PermissionStage,
+        create_permission_body_state, permission_body_canvas, reject_field_canvas,
     };
-    use super::super::prompt_idle::{prompt_idle_canvas, PromptIdleState};
+    use super::super::prompt_idle::{PromptIdleState, prompt_idle_canvas};
     use super::super::state::{
-        resolve_mini_settings, FieldKind, FormField, FormOption, FormRequest,
+        FieldKind, FormField, FormOption, FormRequest, resolve_mini_settings,
     };
     use super::super::theme::FooterTheme;
     use super::*;
@@ -892,7 +901,10 @@ mod tests {
             mount_footer_ops(canvas.ops(), 80, 16, 0, 8);
         }
         let hub = crate::components::chrome_solid::hub_for(80, 24);
-        assert!(hub.borrow_mut().flush_if_pending(), "a pending sync batch flushes exactly once");
+        assert!(
+            hub.borrow_mut().flush_if_pending(),
+            "a pending sync batch flushes exactly once"
+        );
         assert!(
             !hub.borrow_mut().flush_if_pending(),
             "a second flush with no intervening sync is a no-op (no double raster)"
@@ -919,8 +931,8 @@ mod tests {
             // The wrapper covers its rect: some mount row carries the
             // body's ink, and the rows OUTSIDE the rect stay blank
             // (the hole rule — the base survives untouched).
-            let inside_ink =
-                (top..top + height).any(|y| (0..width).any(|x| frame.cell(y, x).ch != ' '));
+            let inside_ink = (top..top + height)
+                .any(|y| (0..width).any(|x| frame.cell(y, x).ch != ' '));
             assert!(inside_ink, "the body painted at {width}x{height}");
             for y in (0..top).chain(top + height..24) {
                 for x in 0..width {

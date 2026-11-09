@@ -71,17 +71,19 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use opentui_core::styled_text::{StyledText, TextChunk};
 use opentui_core::Rgba;
+use opentui_core::styled_text::{StyledText, TextChunk};
 use opentui_solid::builder::ForItemSource;
 use opentui_solid::element::{Children, ForItem, PropValue};
 use opentui_solid::reactive::Reactive;
-use opentui_solid::{box_, for_list, map, text, Element, Signal};
+use opentui_solid::{Element, Signal, box_, for_list, map, text};
 
-use crate::components::chrome_solid::{family_wrapper_live, mount_family_wrapper, ChromeStamp};
+use crate::components::chrome_solid::{
+    ChromeStamp, family_wrapper_live, mount_family_wrapper,
+};
 use crate::components::composer::autocomplete::popup_height;
 use crate::components::composer::render::{
-    caret_cell, footer_plan, layout_draft_lines, palette, truncate_width, PromptView,
+    PromptView, caret_cell, footer_plan, layout_draft_lines, palette, truncate_width,
 };
 use crate::render::{CellColor, Frame};
 use crate::theme::ThemeState;
@@ -933,7 +935,10 @@ fn bridge_stamps(view: &PromptView, inputs: &ComposerInputs, width: usize) -> Ve
         for offset in range {
             let (row, col) = caret_cell(view.draft, inner, offset);
             if row < inputs.textarea_rows {
-                stamps.push(ChromeStamp::Swap { left: 1 + pad + col, top: inputs.top + 1 + row });
+                stamps.push(ChromeStamp::Swap {
+                    left: 1 + pad + col,
+                    top: inputs.top + 1 + row,
+                });
             }
         }
     }
@@ -1000,8 +1005,8 @@ pub fn composer_mount(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::composer::render::{FooterHints, MetadataLine};
     use crate::components::composer::PromptDraft;
+    use crate::components::composer::render::{FooterHints, MetadataLine};
     use crate::theme::ThemeState;
 
     fn draft(text: &str) -> PromptDraft {
@@ -1143,7 +1148,10 @@ mod tests {
         build("ab");
         build("abc");
         let hub = crate::components::chrome_solid::hub_for(80, 24);
-        assert!(hub.borrow_mut().flush_if_pending(), "a pending sync batch flushes exactly once");
+        assert!(
+            hub.borrow_mut().flush_if_pending(),
+            "a pending sync batch flushes exactly once"
+        );
         assert!(
             !hub.borrow_mut().flush_if_pending(),
             "a second flush with no intervening sync is a no-op (no double raster)"

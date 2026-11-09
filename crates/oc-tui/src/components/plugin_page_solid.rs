@@ -22,12 +22,7 @@ fn clip_run(text: &str, x: usize, bound_col: usize) -> String {
 /// (D2.2): absolute text units over a transparent background,
 /// covering the screen (the caller blanks the base — today's
 /// full-screen paste).
-pub fn mount_plugin_page_solid(
-    title: &str,
-    rows: &[String],
-    styles: &ThemeStyles,
-    size: (u16, u16),
-) {
+pub fn mount_plugin_page_solid(title: &str, rows: &[String], styles: &ThemeStyles, size: (u16, u16)) {
     let (width, height) = (usize::from(size.0), usize::from(size.1));
     let units = plugin_page_units(title, rows, styles, width, height);
     chrome_mount("plugin_page", 0, 0, width.max(1), height.max(1), CellColor::Default, &units, &[]);
@@ -55,13 +50,7 @@ pub fn plugin_page_solid_frame(
 }
 
 /// The unit walk (the old painter's own geometry, verbatim).
-fn plugin_page_units(
-    title: &str,
-    rows: &[String],
-    styles: &ThemeStyles,
-    width: usize,
-    height: usize,
-) -> Vec<ChromeUnit> {
+fn plugin_page_units(title: &str, rows: &[String], styles: &ThemeStyles, width: usize, height: usize) -> Vec<ChromeUnit> {
     let text = styles.text.fg.map_or(CellColor::Default, CellColor::from);
     let muted = styles.text_muted.fg.map_or(CellColor::Default, CellColor::from);
     let mut units = Vec::new();

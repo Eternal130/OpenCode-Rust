@@ -21,8 +21,8 @@
 //! state-dump action).
 
 use crate::store::Store;
-use crate::style::Color;
 use crate::theme::ThemeStyles;
+use crate::style::Color;
 
 /// The panel order on the bar (ref devtools-bar.tsx's tabs).
 pub const PANEL_IDS: &[&str] = &["server", "theme", "tools", "ui"];
