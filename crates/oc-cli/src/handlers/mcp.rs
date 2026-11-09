@@ -122,11 +122,12 @@ pub(crate) fn read_config_json_pub(path: &std::path::Path) -> Result<Value, Stri
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => "{}".to_owned(),
         Err(error) => return Err(error.to_string()),
     };
-    // json5 = the loader's JSONC tolerance class: comments, trailing
-    // commas, relaxed quoting (v2 reads configs with jsonc-parser's
-    // `parse(..., { allowTrailingComma: true })`).
-    json5::from_str(&text)
-        .map_err(|error| format!("Invalid configuration {}: {error}", path.display()))
+    // The loader's JSONC tolerance class (G-281①): comments + trailing
+    // commas exactly (v2 reads configs with jsonc-parser's
+    // `parse(..., { allowTrailingComma: true })`); json5's wider laxness
+    // (single quotes, unquoted keys, …) rejects like the main loader.
+    oc_core::config::jsonc_parse::parse_jsonc(&text)
+        .map_err(|_| format!("Invalid configuration {}: rejected malformed JSON or JSONC document", path.display()))
 }
 
 /// Public re-export for the plugin config editor.

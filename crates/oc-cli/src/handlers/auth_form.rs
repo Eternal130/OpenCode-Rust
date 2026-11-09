@@ -45,23 +45,40 @@ pub fn answer_form(
             continue;
         }
         let provided = supplied.iter().find(|(supplied_key, _)| supplied_key == &key);
-        let value = match provided {
-            Some((_, provided)) => supplied_answer(field, &key, provided)?,
+        let value: Option<FormValue> = match provided {
+            Some((_, provided)) => Some(supplied_answer(field, &key, provided)?),
             // Hidden non-external fields take their default without
-            // prompting (ref: `field.hidden ? field.default`).
+            // prompting (ref: `field.hidden ? field.default`); a hidden
+            // field with NO default stays unwritten (ref `undefined`).
             None if field_type(field) != "external"
                 && field.get("hidden").and_then(Value::as_bool).unwrap_or(false) =>
             {
-                json_to_form_value(field.get("default").unwrap_or(&Value::Null))
+                field.get("default").map(|default| json_to_form_value(default))
             }
             None => answer_field(field)?,
         };
         if field_type(field) != "external" {
-            if let Some(invalid) = validate_value(field, &value) {
+            // ref validates even a skipped (`undefined`) value — the only
+            // failure there is required-ness; supplied values run the
+            // full formValidateValue.
+            let invalid = match &value {
+                Some(value) => validate_value(field, value),
+                None if field.get("required").and_then(Value::as_bool).unwrap_or(false) => {
+                    Some("Required".to_owned())
+                }
+                None => None,
+            };
+            if let Some(invalid) = invalid {
                 return Err(format!("{key}: {invalid}"));
             }
         }
-        answer.insert(key, value);
+        // G-282⑥ — ref `if (value !== undefined) answer[field.key] =
+        // value` (form.ts:46-47): a SKIPPED field (boolean Skip, string
+        // options Skip, empty optional text) leaves the key OUT of the
+        // answer instead of writing "".
+        if let Some(value) = value {
+            answer.insert(key, value);
+        }
     }
     Ok(Some(answer))
 }
@@ -147,7 +164,9 @@ fn json_to_form_value(value: &Value) -> FormValue {
 }
 
 /// ref form.ts `answerField`: the interactive prompt per field type.
-fn answer_field(field: &Value) -> Result<FormValue, String> {
+/// `Ok(None)` = SKIPPED (the ref `skip` symbol → `undefined`): the key
+/// is left out of the answer entirely (G-282⑥).
+fn answer_field(field: &Value) -> Result<Option<FormValue>, String> {
     crate::handlers::auth::require_interactive(
         "Authentication form input requires an interactive terminal",
     )?;
@@ -170,7 +189,7 @@ fn answer_field(field: &Value) -> Result<FormValue, String> {
             if !acknowledged {
                 return Err(format!("{message} is required"));
             }
-            Ok(FormValue::Boolean(true))
+            Ok(Some(FormValue::Boolean(true)))
         }
         "boolean" => {
             if required {
@@ -180,7 +199,7 @@ fn answer_field(field: &Value) -> Result<FormValue, String> {
                     .default(default)
                     .interact()
                     .map_err(|e| e.to_string())?;
-                Ok(FormValue::Boolean(value))
+                Ok(Some(FormValue::Boolean(value)))
             } else {
                 // Yes / No / Skip (ref select with the skip symbol).
                 let items = vec!["Yes".to_owned(), "No".to_owned(), "Skip".to_owned()];
@@ -195,9 +214,11 @@ fn answer_field(field: &Value) -> Result<FormValue, String> {
                     .default(default)
                     .interact_opt()
                 {
-                    Ok(Some(0)) => Ok(FormValue::Boolean(true)),
-                    Ok(Some(1)) => Ok(FormValue::Boolean(false)),
-                    Ok(_) => Ok(FormValue::String(String::new())), // skipped: no value
+                    Ok(Some(0)) => Ok(Some(FormValue::Boolean(true))),
+                    Ok(Some(1)) => Ok(Some(FormValue::Boolean(false))),
+                    // G-282⑥ — ref `if (value === skip) return undefined`
+                    // (form.ts:95): the KEY is not written, not "".
+                    Ok(_) => Ok(None),
                     Err(error) => Err(error.to_string()),
                 }
             }
@@ -257,7 +278,7 @@ fn answer_field(field: &Value) -> Result<FormValue, String> {
                     return Err(format!("Select at most {max}"));
                 }
             }
-            Ok(FormValue::Array(selected))
+            Ok(Some(FormValue::Array(selected)))
         }
         // string-with-options: a picker (plus custom/skip).
         other
@@ -291,27 +312,34 @@ fn answer_field(field: &Value) -> Result<FormValue, String> {
                 .map_err(|error| error.to_string())?;
             match picked {
                 Some(index) if index < options.len() => {
-                    Ok(FormValue::String(options[index].1.clone()))
+                    Ok(Some(FormValue::String(options[index].1.clone())))
                 }
                 Some(index) if custom && index == options.len() => {
                     let typed = prompt_text(field)?;
-                    Ok(FormValue::String(typed))
+                    Ok(Some(FormValue::String(typed)))
                 }
-                Some(_) => Ok(FormValue::String(String::new())), // skip
+                // G-282⑥ — Skip leaves the key unwritten (form.ts:127
+                // `if (value === skip) return undefined`).
+                Some(_) => Ok(None),
                 None => Err("Cancelled".to_owned()),
             }
         }
         _ => {
             let typed = prompt_text(field)?;
+            // G-282⑥ — ref `if (!value && !field.required) return
+            // undefined` (form.ts:143): an EMPTY optional text answer
+            // leaves the key out, not "".
             if typed.is_empty() && !required {
-                return Ok(FormValue::String(String::new()));
+                return Ok(None);
             }
             if field_type == "string" {
-                Ok(FormValue::String(typed))
+                Ok(Some(FormValue::String(typed)))
             } else {
                 // number/integer: convert like ref `Number(value)`.
-                Ok(FormValue::FormValueVariant2(oc_client::types::FormValueVariant2::Number(
-                    typed.parse::<f64>().map_err(|_| format!("{message}: Expected a number"))?,
+                Ok(Some(FormValue::FormValueVariant2(
+                    oc_client::types::FormValueVariant2::Number(
+                        typed.parse::<f64>().map_err(|_| format!("{message}: Expected a number"))?,
+                    ),
                 )))
             }
         }
@@ -633,6 +661,27 @@ mod tests {
         let fields = vec![string_field("secret", json!({ "hidden": true, "default": "dflt" }))];
         let answer = answer_form(Some(&fields), &[]).unwrap().expect("answer");
         assert_eq!(answer.get("secret"), Some(&FormValue::String("dflt".to_owned())));
+    }
+
+    /// G-282⑥ — a hidden field with NO default leaves the key out (ref
+    /// `field.hidden ? field.default` → `undefined` → not written), and
+    /// an empty OPTIONAL supplied value still writes "" (only the
+    /// interactive skip/empty paths omit the key).
+    #[test]
+    fn hidden_field_without_default_is_omitted() {
+        let fields = vec![string_field("secret", json!({ "hidden": true }))];
+        let answer = answer_form(Some(&fields), &[]).unwrap().expect("answer");
+        assert!(
+            answer.get("secret").is_none(),
+            "hidden without default: key absent, got {answer:?}"
+        );
+        // Required + hidden + no default is a validation failure (ref
+        // formValidateValue on undefined).
+        let fields = vec![string_field("secret", json!({ "hidden": true, "required": true }))];
+        assert_eq!(
+            answer_form(Some(&fields), &[]).unwrap_err(),
+            "secret: Required"
+        );
     }
 
     /// Required empty string answers are rejected post-validate.

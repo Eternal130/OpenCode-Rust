@@ -81,6 +81,35 @@ fn repository_keeps_file_references_distinct() {
     assert!(matches!(unsupported, super::repository::RepositoryError::UnsupportedLocal(_)));
 }
 
+/// G-278③ — `file://host/path` is REJECTED (ref `fileURLToPath` throws
+/// ERR_INVALID_FILE_URL_HOST → parse returns undefined); the host never
+/// becomes a path segment.
+#[test]
+fn repository_rejects_file_urls_with_a_host() {
+    assert!(parse("file://example.com/repo").is_none());
+    assert!(parse("file://localhost/repo").is_some(), "localhost authority is allowed");
+    // Percent-escapes decode; encoded separators reject.
+    let reference = parse("file:///tmp/my%20repo").unwrap();
+    assert!(matches!(&reference, super::repository::Reference::File(file) if file.path == PathBuf::from("/tmp/my repo")));
+    assert!(parse("file:///a%2Fb").is_none());
+}
+
+/// G-278③ — the file path folds `.`/`..` LEXICALLY (ref
+/// `path.normalize(fileURLToPath(url))`); the filesystem is never
+/// touched, so the cachePath key is stable text even for nonexistent
+/// or symlinked paths.
+#[test]
+fn repository_file_paths_normalize_lexically() {
+    let reference = parse("file:///tmp/a/../b/repo.git").unwrap();
+    let super::repository::Reference::File(file) = &reference else { panic!() };
+    assert_eq!(file.path, PathBuf::from("/tmp/b/repo.git"), ".. folds lexically");
+    assert_eq!(file.repo, "repo");
+    // A nonexistent path parses identically (no canonicalize).
+    let missing = parse("file:///definitely/not/here/../here").unwrap();
+    let super::repository::Reference::File(file) = &missing else { panic!() };
+    assert_eq!(file.path, PathBuf::from("/definitely/not/here"));
+}
+
 #[test]
 fn repository_rejects_unsafe_references_and_branches() {
     use super::repository::RepositoryError;
