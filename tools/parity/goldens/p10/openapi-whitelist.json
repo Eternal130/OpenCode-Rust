@@ -1,3 +1,5 @@
 {
-  "whitelist": []
+  "whitelist": [
+    "path only in candidate: /api/plugin/install"
+  ]
 }
