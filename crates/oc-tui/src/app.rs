@@ -142,6 +142,15 @@ pub struct App {
     /// pane-resize.ts:75 — a second click within 300 ms resets the
     /// rail to the default width).
     rail_boundary_click: Option<std::time::Instant>,
+    /// G-287③ — the session right pane's resize interaction (the
+    /// session frame's `paneResize`, session-frame.tsx:45-56 +
+    /// ui/pane-resize.ts): `Some(moved)` while a handle press holds
+    /// the drag, else None.
+    pane_resizing: Option<bool>,
+    /// G-287③ — the pane handle's last boundary click
+    /// (`lastBoundaryClick`, pane-resize.ts:75 — a second click within
+    /// 300 ms resets the pane to the default equal split).
+    pane_boundary_click: Option<std::time::Instant>,
     /// Whether the exit command fired (the run loop's teardown gate).
     pub exit_requested: bool,
     /// `ErrorComponent` mode (auditB #9): a caught render panic swapped
@@ -207,6 +216,8 @@ impl App {
             strip_drag: None,
             rail_resizing: None,
             rail_boundary_click: None,
+            pane_resizing: None,
+            pane_boundary_click: None,
             rename_requests: Vec::new(),
             autoaccept: false,
             auto_approved: std::collections::HashSet::new(),
@@ -670,6 +681,14 @@ impl App {
                         self.screen_selection.clear();
                     }
                     self.store.request_redraw();
+                    return;
+                }
+                // G-287③ — the pane resize's captured release
+                // (`finish`, pane-resize.ts:31-39,64-77): the drag
+                // binds on the parent, so it continues outside the
+                // handle and commits wherever the pointer released.
+                if self.pane_resizing.is_some() {
+                    self.pane_release(col, width);
                     return;
                 }
                 // A modal dialog's option rows submit on release
@@ -1333,6 +1352,39 @@ impl App {
                         }
                     }
                 }
+                // G-287③ — the session right pane's resize handle press
+                // (the `PaneResizeHandle`'s `onMouseDown`,
+                // pane-resize.ts:49-64 — the session frame mounts the
+                // handle when `rightPane() === "terminal"`,
+                // session-frame.tsx:381-384): the boundary
+                // double-click (<300 ms) resets the pane to the default
+                // equal split instead.
+                if self.store.dialogs().is_empty()
+                    && !self.permission_live()
+                    && self.pane_boundary_cols().is_some_and(|(left, len)| {
+                        col >= left && col < left + len
+                    })
+                {
+                    if let Some(last) = self.pane_boundary_click {
+                        if last.elapsed() < std::time::Duration::from_millis(300) {
+                            self.pane_boundary_click = None;
+                            self.pane_resizing = None;
+                            // `commit(options.defaultValue())` — the
+                            // reset persists too (pane-resize.ts:56).
+                            let rail = self.store.vertical_rail_width(width).unwrap_or(0);
+                            let content_width = width - rail;
+                            let default = crate::components::session::clamp_session_pane_width(
+                                (content_width / 2).max(1),
+                                content_width,
+                            );
+                            self.commit_pane_width(default);
+                            return;
+                        }
+                    }
+                    self.pane_boundary_click = Some(std::time::Instant::now());
+                    self.pane_resizing = Some(false);
+                    return;
+                }
                 // The drag arm (session-tabs.tsx:1680-1681): a left
                 // press on a tab captures it as the drag source (the
                 // ✕'s own press never arms — it stops propagation,
@@ -1359,7 +1411,10 @@ impl App {
                 // TUI-16 — the drag extends the screen selection
                 // (unless a UI drag — the rail resize or the tab
                 // reorder — owns the pointer).
-                if self.rail_resizing.is_none() && self.strip_drag.is_none() {
+                if self.rail_resizing.is_none()
+                    && self.strip_drag.is_none()
+                    && self.pane_resizing.is_none()
+                {
                     self.screen_selection.drag(col, row);
                 }
                 // TUI-3 — the rail's resize drag (`onMouseDrag`,
@@ -1376,6 +1431,23 @@ impl App {
                     }
                     self.store.set_vertical_tabs_width(next);
                     self.store.set_rail_handle_hot(true);
+                    self.store.request_redraw();
+                    return;
+                }
+                // G-287③ — the pane resize drag (`onMouseDrag`,
+                // pane-resize.ts:66-72): `fromMouse = dimensions().width
+                // - event.x - 1` (the pane rides to the frame's right
+                // edge), clamped; the release commits + persists.
+                if let Some(resizing) = self.pane_resizing.as_mut() {
+                    *resizing = true;
+                    self.pane_boundary_click = None;
+                    let rail = self.store.vertical_rail_width(width).unwrap_or(0);
+                    let content_width = width - rail;
+                    let next = crate::components::session::clamp_session_pane_width(
+                        width.saturating_sub(col).saturating_sub(1).max(1),
+                        content_width,
+                    );
+                    self.store.set_session_pane_width(Some(next));
                     self.store.request_redraw();
                     return;
                 }
@@ -2840,7 +2912,61 @@ impl App {
         self.store.set_rail_handle_hot(false);
         self.store.request_redraw();
         if let Ok(storage) = crate::storage::ChannelStorage::open_default_migrated() {
-            let doc = serde_json::json!({ "verticalTabsWidth": width });
+            // G-287③ — the `layout` doc is one storage document
+            // holding BOTH widths (verticalTabsWidth + paneWidth); the
+            // write merges so one commit never clobbers the other.
+            let mut doc = storage.read("layout").unwrap_or_else(|| serde_json::json!({}));
+            doc["verticalTabsWidth"] = serde_json::json!(width);
+            let _ = storage.write("layout", &doc);
+        }
+    }
+
+    /// G-287③ — the pane handle's 2 boundary columns
+    /// (`PaneResizeHandle`: `left = availableWidth - size - 1`,
+    /// width 2 — session-frame.tsx:383 + pane-resize-handle.tsx:17),
+    /// absolute (rail-shifted). None when the terminal pane is not
+    /// the right pane or the boundary cannot fit.
+    fn pane_boundary_cols(&self) -> Option<(usize, usize)> {
+        let Route::Session { session_id, .. } = self.store.route() else {
+            return None;
+        };
+        self.store.terminal_pane_mounted(&session_id)?;
+        let width = usize::from(self.size.0);
+        let rail = self.store.vertical_rail_width(width).unwrap_or(0);
+        let content_width = width - rail;
+        let pane = self.store.session_pane_width(content_width);
+        if pane >= content_width {
+            return None;
+        }
+        Some((rail + content_width - pane - 1, 2))
+    }
+
+    /// G-287③ — the pane resize's release (`finish`, pane-resize.ts:
+    /// 31-39 + 64-77): a drag commits `fromMouse` clamped + persisted;
+    /// a click without a drag leaves the boundary-click arm (the
+    /// double-press reset).
+    fn pane_release(&mut self, col: usize, width: usize) {
+        if let Some(moved) = self.pane_resizing.take() {
+            if moved {
+                let rail = self.store.vertical_rail_width(width).unwrap_or(0);
+                let content_width = width - rail;
+                let next = crate::components::session::clamp_session_pane_width(
+                    width.saturating_sub(col).saturating_sub(1).max(1),
+                    content_width,
+                );
+                self.commit_pane_width(next);
+            }
+        }
+    }
+
+    /// G-287③ — persist a pane-width commit (`onCommit` — the `layout`
+    /// doc's `paneWidth`, session-frame.tsx:51-55) and apply it live.
+    fn commit_pane_width(&mut self, width: usize) {
+        self.store.set_session_pane_width(Some(width));
+        self.store.request_redraw();
+        if let Ok(storage) = crate::storage::ChannelStorage::open_default_migrated() {
+            let mut doc = storage.read("layout").unwrap_or_else(|| serde_json::json!({}));
+            doc["paneWidth"] = serde_json::json!(width);
             let _ = storage.write("layout", &doc);
         }
     }
@@ -8259,6 +8385,18 @@ pub async fn run_with_size(
                     .unwrap_or(crate::components::session_tabs_rail::SESSION_SIDEBAR_WIDTH),
             );
         }
+        // G-287③ — the session right pane's persisted width (the same
+        // `layout` doc's `paneWidth ?? terminalWidth` — the legacy key
+        // is the ref's migration fallback, session-frame.tsx:42-56;
+        // the drag commit and the boundary reset write the same shape).
+        if let Some(width) = storage
+            .read("layout")
+            .as_ref()
+            .and_then(|doc| doc.get("paneWidth").or_else(|| doc.get("terminalWidth")))
+            .and_then(serde_json::Value::as_u64)
+        {
+            app.store.set_session_pane_width(usize::try_from(width).ok());
+        }
         // TUI-4 — the persisted per-session terminal selection
         // (`useStorage().store("session-terminal-selection")`,
         // session-terminals.tsx:22-25): restore the picks; the pane
@@ -12015,6 +12153,85 @@ fn mouse_vertical_rail_tabs_search_and_resize() {
         ),
         "the ⌕ release opened the Sessions dialog"
     );
+}
+
+/// G-287③ — the session right pane's drag-resize (the session frame's
+/// `paneResize` over `createPaneResize`, session-frame.tsx:45-56 +
+/// ui/pane-resize.ts): the handle press at the pane's left boundary
+/// arms the drag, the drag follows `dimensions().width - event.x - 1`
+/// clamped (`clampSessionPaneWidth`), the release commits, and the
+/// boundary double-click resets to the default equal split.
+#[test]
+fn mouse_terminal_pane_drag_resize_and_reset() {
+    use crate::input_term::{MouseButton, MouseEventKind};
+    let mut app = App::new((80, 24));
+    app.store.open_tab("s1", Some("Alpha".to_owned()));
+    app.store.navigate(Route::session("s1".to_owned()));
+    app.store.set_terminal_available(true);
+    app.store.restore_terminal_selection("s1", Some("pty_1"));
+    assert_eq!(app.store.terminal_pane_mounted("s1").as_deref(), Some("pty_1"));
+
+    // Default: the equal split (defaultPaneWidth = max(1, floor(80/2)),
+    // clamped) — the boundary handle sits at cols [39, 40].
+    assert_eq!(app.store.session_pane_width(80), 40);
+    assert_eq!(app.pane_boundary_cols(), Some((39, 2)));
+
+    // The drag: press on the boundary, drag left, release — the width
+    // follows `width - col - 1` clamped.
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 39, 5));
+    app.mouse_event(&mouse(MouseEventKind::Drag(MouseButton::Left), 69, 5));
+    // fromMouse = 80 - 69 - 1 = 10 → clamped to 24 (the 24/half floor).
+    assert_eq!(app.store.session_pane_width_preferred(), Some(24));
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 69, 5));
+    assert_eq!(app.store.session_pane_width_preferred(), Some(24), "the release commits");
+    assert_eq!(app.store.session_pane_width(80), 24);
+    // The boundary moved with the pane (80 - 24 - 1 = 55).
+    assert_eq!(app.pane_boundary_cols(), Some((55, 2)));
+
+    // A press OUTSIDE the boundary never arms the pane drag.
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 10, 5));
+    assert!(app.pane_resizing.is_none(), "an off-handle press does not arm");
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 10, 5));
+
+    // The boundary double-click (<300 ms) resets to the default split
+    // (commit(defaultValue()), pane-resize.ts:52-59).
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 55, 5));
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 55, 5));
+    assert_eq!(app.store.session_pane_width_preferred(), Some(24), "a click alone keeps the width");
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 55, 5));
+    assert_eq!(app.store.session_pane_width_preferred(), Some(40), "the double press resets");
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 55, 5));
+
+    // Without a mounted terminal pane there is no boundary at all.
+    app.store.select_terminal("s1", None);
+    assert_eq!(app.pane_boundary_cols(), None);
+}
+
+/// G-287③ — the pane drag's clamp edges (`clampSessionPaneWidth`,
+/// ui/layout.ts:22-26): the floor is `min(24, half)` and the ceiling
+/// `max(half, total - 44)` — on 80 cols: [24, 40].
+#[test]
+fn terminal_pane_width_clamp_edges() {
+    use crate::input_term::{MouseButton, MouseEventKind};
+    let mut app = App::new((80, 24));
+    app.store.open_tab("s1", Some("Alpha".to_owned()));
+    app.store.navigate(Route::session("s1".to_owned()));
+    app.store.set_terminal_available(true);
+    app.store.restore_terminal_selection("s1", Some("pty_1"));
+
+    // Dragging to the far right edge: fromMouse = 80 - 79 - 1 = 0 →
+    // the 24 floor.
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 39, 5));
+    app.mouse_event(&mouse(MouseEventKind::Drag(MouseButton::Left), 79, 5));
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 79, 5));
+    assert_eq!(app.store.session_pane_width_preferred(), Some(24));
+
+    // Dragging to the far left: fromMouse = 79 → the half ceiling.
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 55, 5));
+    app.mouse_event(&mouse(MouseEventKind::Drag(MouseButton::Left), 0, 5));
+    assert_eq!(app.store.session_pane_width_preferred(), Some(40));
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 0, 5));
+    assert_eq!(app.store.session_pane_width_preferred(), Some(40));
 }
 
 /// dogfood2 bug 1 — the strip is a POINTER surface on the HOME route
