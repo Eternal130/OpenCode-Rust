@@ -431,6 +431,6 @@ mod tests {
         let huge = "x".repeat(20_000);
         let url = build_issue_report("boom", &huge, "2.0.24");
         assert!(url.len() <= 6000, "the trim holds: {}", url.len());
-        assert!(url.contains("%E2%80%A6%20(truncated)"), "the truncation marker: …");
+        assert!(url.contains("%E2%80%A6%20%28truncated%29"), "the truncation marker: … (truncated)");
     }
 }
