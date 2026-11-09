@@ -22,7 +22,12 @@ pub fn success(provider: Provider<'_>) -> String {
             status: "success",
             headline: "Authorization successful",
             message: match provider {
-                Some(provider) => format!("OpenCode is now connected to {provider}."),
+                // G-283①: escape the provider like the error/bootstrap
+                // arms (page.ts:28 `escapeHtml(provider)`); render_card
+                // interpolates `message` raw.
+                Some(provider) => {
+                    format!("OpenCode is now connected to {}.", escape_html(provider))
+                }
                 None => "OpenCode is now authorized.".to_owned(),
             },
             detail: None,
@@ -352,6 +357,16 @@ mod tests {
     fn oauth_page_no_provider_strings() {
         assert!(success(None).contains("OpenCode is now authorized."));
         assert!(error("x", None).contains("OpenCode couldn't complete authorization."));
+    }
+
+    /// G-283① — the success arm escapes the provider like error/bootstrap
+    /// (ref page.ts:28 `escapeHtml(provider)`): a hostile provider name
+    /// must not inject markup into the connected card.
+    #[test]
+    fn oauth_page_success_escapes_provider() {
+        let page = success(Some("prov<&>ider \"x\""));
+        assert!(page.contains("OpenCode is now connected to prov&lt;&amp;&gt;ider &quot;x&quot;."));
+        assert!(!page.contains("prov<&>ider"));
     }
 }
 
