@@ -11,6 +11,12 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Fingerprint parity for artifact consumers: the archive build compiles
+  # with debuginfo stripped (dee2ab7a). Every job that runs cargo against
+  # the shipped target/ must resolve the SAME profile, or cargo declares
+  # every unit stale and relinks the whole workspace on the runner —
+  # the ubuntu-26.04 disk-death of run 42674936717 (linker SIGBUS).
+  CARGO_PROFILE_DEV_DEBUG: "0"
 
 jobs:
   guards:
@@ -117,8 +123,6 @@ jobs:
       # unaffected, #[track_caller] is compiled in).
       - name: Build workspace test binaries (debug)
         run: cargo nextest run --workspace --locked --no-run
-        env:
-          CARGO_PROFILE_DEV_DEBUG: "0"
 
       # (release build REMOVED 2026-10-19: a 20-min opt-level-3 chain that
       # cache eviction kept re-cold-starting. frame_budget now runs in

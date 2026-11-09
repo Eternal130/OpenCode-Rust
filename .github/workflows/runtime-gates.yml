@@ -165,6 +165,12 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Fingerprint parity for artifact consumers: the archive build compiles
+  # with debuginfo stripped (dee2ab7a). Every job that runs cargo against
+  # the shipped target/ must resolve the SAME profile, or cargo declares
+  # every unit stale and relinks the whole workspace on the runner —
+  # the ubuntu-26.04 disk-death class of run 42674936717 (linker SIGBUS).
+  CARGO_PROFILE_DEV_DEBUG: "0"
   # The pinned v2.0.24 reference source (docs/parity-baseline.md:
   # /opt/opencode-ref @ e7a34f09bf). Runners fetch this tarball the same
   # way release.yml fetches APP_REF for the web UI.
@@ -216,8 +222,6 @@ jobs:
       # env!("CARGO_BIN_EXE_*") absolute paths; see ci.yml's note.
       - name: Build workspace test binaries (debug)
         run: cargo nextest run --workspace --locked --no-run
-        env:
-          CARGO_PROFILE_DEV_DEBUG: "0"
 
       - name: Prune non-relocatable artifacts
         run: rm -rf target/debug/incremental target/release/incremental
