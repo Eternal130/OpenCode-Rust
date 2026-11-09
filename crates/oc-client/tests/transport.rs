@@ -284,6 +284,22 @@ async fn undeclared_status_is_unexpected() {
     );
 }
 
+/// G-288⑦ — the diagnostic body of an undeclared status is capped at
+/// 64 KiB (ref reads no body at all; the cap bounds the port's extra).
+#[tokio::test]
+async fn unexpected_status_body_is_capped_at_64k() {
+    let huge = "x".repeat(1024 * 1024);
+    let mock =
+        spawn_mock(move |_, _, stream| stream.write_all(&json_response(502, &huge)));
+    let c = client(&mock.url());
+    let err = c.server().info().await.expect_err("huge body");
+    let ClientError::UnexpectedStatus { status, body } = &err else {
+        panic!("expected UnexpectedStatus, got {err:?}")
+    };
+    assert_eq!(*status, 502);
+    assert_eq!(body.len(), 64 * 1024, "body clamped to the 64 KiB cap");
+}
+
 #[tokio::test]
 async fn declared_error_with_non_json_body() {
     let mock = spawn_mock(|_, _, stream| {

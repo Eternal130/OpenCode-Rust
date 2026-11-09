@@ -60,6 +60,36 @@ impl StandaloneServer {
         }
     }
 
+    /// G-288④ — the ref's failure detail (acp.ts:37-40
+    /// `server exited unexpectedly (${reason})`): `code N` for a normal
+    /// exit, `signal N` when killed. Polled after the EOF flag; `None`
+    /// when the status cannot be observed (no child / not yet reaped).
+    pub fn exit_reason(&self) -> Option<String> {
+        let child = self.child.as_ref()?;
+        // EOF may precede the kernel's final wait state by a hair — poll
+        // briefly before giving up.
+        for _ in 0..100 {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    if let Some(code) = status.code() {
+                        return Some(format!("code {code}"));
+                    }
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::process::ExitStatusExt as _;
+                        if let Some(signal) = status.signal() {
+                            return Some(format!("signal {signal}"));
+                        }
+                    }
+                    return None;
+                }
+                Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+                Err(_) => return None,
+            }
+        }
+        None
+    }
+
     fn exited_flag(&self) -> bool {
         self.exited.load(std::sync::atomic::Ordering::Acquire)
     }

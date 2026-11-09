@@ -132,9 +132,28 @@ pub async fn run() -> i32 {
     let failure = tokio::select! {
         outcome = serve => match outcome {
             Ok(()) => None,
-            Err(error) => Some(format!("acp connection failed: {error}")),
+            // G-288④ — the capped-transport abort reports the MiB budget
+            // like ref's MessageTooLargeError arm (acp.ts:31-32).
+            Err(error) => {
+                let text = error.to_string();
+                if text.contains("message too large") {
+                    Some(format!(
+                        "incoming message exceeded the {} MiB limit",
+                        transport::MAX_MESSAGE_BYTES / 1024 / 1024
+                    ))
+                } else {
+                    Some(format!("acp connection failed: {text}"))
+                }
+            }
         },
-        () = server_exited => Some("server exited unexpectedly".to_owned()),
+        () = server_exited => {
+            // G-288④ — ref appends the exit detail: `code N` / `signal N`
+            // (acp.ts:37-40); unknown keeps the bare message.
+            match server.exit_reason() {
+                Some(reason) => Some(format!("server exited unexpectedly ({reason})")),
+                None => Some("server exited unexpectedly".to_owned()),
+            }
+        }
     };
     // Exit directly: dropping the standalone guard would wait on the
     // server's graceful shutdown (acp.ts:45-49).

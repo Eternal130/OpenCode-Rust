@@ -15,20 +15,25 @@ fn location_query() -> oc_client::types::QueryLocation {
     }
 }
 
-pub async fn run(command: &McpCommands) -> i32 {
+/// G-274 — the parsed global `--standalone`/`--server` flags ride along:
+/// ref declares `ServerParams` per consumer command and never on `mcp`
+/// (an unknown flag there is a parse error); the port accepts the flags
+/// globally (rust-extra), so they must be THREADED THROUGH instead of
+/// silently dropped — `mcp list --server URL` hits URL.
+pub async fn run(command: &McpCommands, server: &crate::cli::ServerParams) -> i32 {
     match command {
-        McpCommands::List => list().await,
+        McpCommands::List => list(server).await,
         McpCommands::Add { name, command, url, header, env, global, force } => {
             add(name, command, url.as_deref(), header.as_deref(), env.as_deref(), *global, *force)
                 .await
         }
-        McpCommands::Auth { name } => auth(name.as_deref()).await,
-        McpCommands::Logout { name } => logout(name).await,
+        McpCommands::Auth { name } => auth(name.as_deref(), server).await,
+        McpCommands::Logout { name } => logout(name, server).await,
     }
 }
 
-async fn list() -> i32 {
-    let resolved = match connect(&crate::cli::ServerParams::default(), None).await {
+async fn list(server: &crate::cli::ServerParams) -> i32 {
+    let resolved = match connect(server, None).await {
         Ok(resolved) => resolved,
         Err(code) => return code,
     };
@@ -319,8 +324,8 @@ async fn add(
 /// OAuth-capable remote MCP servers (ref `mcpAuthChoices`). `Ok(None)`
 /// = nothing configured (the guidance block printed); `Err` = the
 /// connect/list/selector failed (code already printed).
-async fn auth_interactive_choice() -> Result<Option<String>, i32> {
-    let resolved = match connect(&crate::cli::ServerParams::default(), None).await {
+async fn auth_interactive_choice(server: &crate::cli::ServerParams) -> Result<Option<String>, i32> {
+    let resolved = match connect(server, None).await {
         Ok(resolved) => resolved,
         Err(code) => return Err(code),
     };
@@ -374,7 +379,7 @@ async fn auth_interactive_choice() -> Result<Option<String>, i32> {
 }
 
 #[allow(clippy::too_many_lines)]
-async fn auth(name: Option<&str>) -> i32 {
+async fn auth(name: Option<&str>, server: &crate::cli::ServerParams) -> i32 {
     // G-151①: no name → interactive selector over the configured
     // OAuth-capable remote MCP servers (ref mcpAuthChoices; non-TTY
     // still demands a name).
@@ -387,7 +392,7 @@ async fn auth(name: Option<&str>) -> i32 {
                 eprintln!("Error: {message}");
                 return 1;
             }
-            match auth_interactive_choice().await {
+            match auth_interactive_choice(server).await {
                 Ok(Some(selected)) => selected,
                 Ok(None) => {
                     println!("└  Done");
@@ -398,7 +403,7 @@ async fn auth(name: Option<&str>) -> i32 {
         }
     };
     println!("◆ Authenticate an MCP server");
-    let resolved = match connect(&crate::cli::ServerParams::default(), None).await {
+    let resolved = match connect(server, None).await {
         Ok(resolved) => resolved,
         Err(code) => return code,
     };
@@ -614,8 +619,8 @@ fn resolve_remote_config(name: &str) -> Option<Box<oc_schema::mcp::RemoteConfig>
     None
 }
 
-async fn logout(name: &str) -> i32 {
-    let resolved = match connect(&crate::cli::ServerParams::default(), None).await {
+async fn logout(name: &str, server: &crate::cli::ServerParams) -> i32 {
+    let resolved = match connect(server, None).await {
         Ok(resolved) => resolved,
         Err(code) => return code,
     };
@@ -940,6 +945,66 @@ mod tests {
         assert_eq!(
             server,
             json!({"type": "remote", "url": "https://example.com/sse", "headers": {"A": "B"}})
+        );
+    }
+
+    // --- G-274: `mcp list --server URL` must hit the URL ----------------
+
+    /// One-request-per-connection HTTP stub answering the two calls the
+    /// `--server` resolve path makes: `GET /api/info` (health probe) and
+    /// `GET /api/mcp?location=…` (the actual list). Paths are recorded.
+    async fn stub_server() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen_for_task = std::sync::Arc::clone(&seen);
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let seen = std::sync::Arc::clone(&seen_for_task);
+                tokio::spawn(async move {
+                    use tokio::io::AsyncReadExt as _;
+                    use tokio::io::AsyncWriteExt as _;
+                    let mut buf = [0_u8; 4096];
+                    let Ok(read) = socket.read(&mut buf).await else { return };
+                    let head = String::from_utf8_lossy(&buf[..read]).into_owned();
+                    let path =
+                        head.lines().next().unwrap_or_default().split(' ').nth(1).unwrap_or("");
+                    seen.lock().unwrap().push(path.to_owned());
+                    let body = if path.starts_with("/api/info") {
+                        r#"{"paths":{"tmp":"/tmp"},"pid":1,"urls":[],"version":"9.9.9-stub"}"#
+                    } else {
+                        r#"{"data":[],"location":{"directory":"/tmp"}}"#
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        (format!("http://{addr}"), seen)
+    }
+
+    /// G-274 — the global `--server` flag is THREADED THROUGH the mcp
+    /// family instead of silently ignored: `run` with
+    /// `ServerParams { server: Some(url) }` probes and lists against the
+    /// stub URL (previously `ServerParams::default()` queried the local
+    /// background service, swallowing the user's intent).
+    #[tokio::test]
+    async fn mcp_list_server_flag_hits_the_url() {
+        let (url, seen) = stub_server().await;
+        let params = crate::cli::ServerParams { standalone: false, server: Some(url) };
+        let code = run(&McpCommands::List, &params).await;
+        assert_eq!(code, 0, "mcp list --server <stub> succeeds");
+        let requests = seen.lock().unwrap().clone();
+        assert!(
+            requests.iter().any(|path| path.starts_with("/api/info")),
+            "the --server health probe hit the stub: {requests:?}"
+        );
+        assert!(
+            requests.iter().any(|path| path.starts_with("/api/mcp")),
+            "the mcp list call hit the stub: {requests:?}"
         );
     }
 }

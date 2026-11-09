@@ -618,7 +618,16 @@ async fn uninstall_dry_run_lists_and_force_removes() {
     assert!(!home.join(".cache/opencode-rust").exists(), "cache removed");
     assert!(!home.join(".local/state/opencode-rust").exists(), "state removed");
     assert!(home.join(".config/opencode-rust/opencode.json").exists(), "config kept");
-    assert!(!installed.exists(), "binary self-unlinked");
+    // G-288⑤ — ref never unlinks the binary itself (uninstall.ts
+    // prints the manual rm hint for curl installs; the package command
+    // handles managed installs; an undetectable install warns). The
+    // unknown-method install here must survive.
+    assert!(installed.exists(), "binary is never self-unlinked");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Could not detect the installation method"),
+        "unknown-method warning prints: {stdout}"
+    );
 }
 
 #[tokio::test]

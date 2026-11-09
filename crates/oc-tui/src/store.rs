@@ -13752,8 +13752,20 @@ fn with_part(
             false
         })
         .or_else(|| {
-            // Not present yet: append only when this is the next ordinal.
-            (seen == ordinal).then(|| {
+            // Not present yet: append when this is the next ordinal, or
+            // GAP-FILL a skip (G-288⑧ — ref keys parts by the explicit
+            // `kind:ordinal` id (rows.ts:276-292), so an out-of-order
+            // ordinal still lands its text; the positional port pads the
+            // missing ordinals with empty parts so the delta is not
+            // dropped — a later event for a padded ordinal fills it in
+            // place, and empty text parts render nothing).
+            (seen <= ordinal).then(|| {
+                for _ in seen..ordinal {
+                    parts.push(match kind {
+                        "text" => Part::Text { text: String::new(), time: PartTime::default() },
+                        _ => Part::Reasoning { text: String::new(), time: PartTime::default() },
+                    });
+                }
                 parts.push(match kind {
                     "text" => Part::Text { text: String::new(), time: PartTime::default() },
                     _ => Part::Reasoning { text: String::new(), time: PartTime::default() },
@@ -14961,6 +14973,43 @@ mod tests {
             serde_json::json!({ "sessionID": "s", "assistantMessageID": "a", "delta": "  " }),
         ))]);
         assert!(store.messages("s").is_empty(), "no message from whitespace deltas");
+    }
+
+    /// G-288⑧ — an out-of-order ordinal (a skip, e.g. across a
+    /// reconnect) GAP-FILLS instead of dropping the delta: ref keys
+    /// parts by `kind:ordinal` so any arrival order lands; the
+    /// positional port pads the hole with an empty part that a later
+    /// ordinal-1 event fills in place.
+    #[test]
+    fn out_of_order_ordinal_gap_fills() {
+        let store = Store::new(Runtime::new());
+        // ordinal 0 first, then a jump straight to ordinal 2.
+        for (ordinal, delta) in [(0, "first "), (2, "third answer")] {
+            store.ingest_all([Ingest::Event(BusEvent::new(
+                "session.text.delta",
+                serde_json::json!({
+                    "sessionID": "s", "assistantMessageID": "a",
+                    "ordinal": ordinal, "delta": delta
+                }),
+            ))]);
+        }
+        let Message::Assistant { parts, .. } = &store.messages("s")[0] else { panic!() };
+        assert_eq!(parts.len(), 3, "the skip padded ordinal 1: {parts:?}");
+        assert_eq!(parts[0].text(), "first ");
+        assert_eq!(parts[1].text(), "", "the padded hole renders nothing");
+        assert_eq!(parts[2].text(), "third answer");
+        // The late ordinal-1 event fills the hole in place.
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "session.text.delta",
+            serde_json::json!({
+                "sessionID": "s", "assistantMessageID": "a",
+                "ordinal": 1, "delta": "second "
+            }),
+        ))]);
+        let Message::Assistant { parts, .. } = &store.messages("s")[0] else { panic!() };
+        assert_eq!(parts.len(), 3, "no new part for the filled ordinal");
+        assert_eq!(parts[1].text(), "second ");
+        assert_eq!(parts[2].text(), "third answer");
     }
 
     #[test]
