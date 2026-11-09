@@ -77,13 +77,19 @@ fn goldens() -> std::path::PathBuf {
 #[test]
 fn replay_corpus_emission_is_pinned() {
     let dir = goldens();
-    let scripts = std::fs::read_dir(dir.join("replay"))
+    let mut scripts = std::fs::read_dir(dir.join("replay"))
         .expect("replay corpus")
         .filter_map(|entry| {
             let path = entry.ok()?.path();
             (path.extension().is_some_and(|e| e == "json")).then_some(path)
         })
         .collect::<Vec<_>>();
+    // Deterministic order: read_dir yields inode order (machine-specific —
+    // a fresh CI checkout digests differently than a long-lived dev tree),
+    // and the shared emitter below carries cross-script state (the G-287⑧
+    // link-id intern pool), which makes the emission bytes order-sensitive.
+    // Sort by path so the pinned digest is machine-independent.
+    scripts.sort();
     assert!(!scripts.is_empty(), "the replay corpus must be present");
     let mut emitter = OpentuiEmitter::new(100, 30);
     let mut digest: u64 = 0;
@@ -131,7 +137,7 @@ fn replay_corpus_emission_is_pinned() {
     }
     assert!(compared > 10, "the corpus must exercise real frames ({compared})");
     // PINNED (lane D4.2, commit 41783d2a's differential proof).
-    assert_eq!(digest, 0x3bdb_d28c_1166_a117, "the corpus emission bytes drifted");
+    assert_eq!(digest, 0xc663_d48d_7af3_8a77, "the corpus emission bytes drifted");
 }
 
 // -- the emitter vocabulary -------------------------------------------------

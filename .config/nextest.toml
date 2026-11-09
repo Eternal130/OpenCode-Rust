@@ -65,6 +65,14 @@ retries = 2
 filter = 'test(pty_d3)'
 retries = 2
 
+# oc-pty daemon subscribe family: spawn-contention class — 4th sighting
+# (3x local gb10 lanes + ci run 42680920204 TRY-1 fail / TRY-2 pass in
+# 2.0s); per the registry's flake-observation rule this graduates to a
+# retry bump instead of whitelist-only treatment.
+[[profile.default.overrides]]
+filter = 'test(subscribe_)'
+retries = 2
+
 # The invariant fuzzer drives the real binary through long key
 # sequences: same serialized PTY class, and the 3-seed smoke needs a
 # wider slow-timeout than the 60s default (it is one test fn).
