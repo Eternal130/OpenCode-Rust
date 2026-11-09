@@ -94,6 +94,12 @@ pub struct MarkdownStyles {
     /// Fingerprint of the syntax map (the styled cache's key salt —
     /// a theme switch invalidates every cached pipeline render).
     syntax_hash: u64,
+    /// G-287⑧ — `ctx.capabilities?.hyperlinks === true` upstream
+    /// (Markdown.ts:385-390): the terminal probe's OSC-8 verdict.
+    /// `false` until the probe answers (upstream's headless/testing
+    /// default, testing/terminal-capabilities.ts:23) — the seam this
+    /// port used to pin statically at `false`.
+    hyperlinks_supported: bool,
 }
 
 fn ot_rgba(color: Color) -> Option<opentui_core::Rgba> {
@@ -162,7 +168,20 @@ impl MarkdownStyles {
                 }
                 hash.finish()
             },
+            hyperlinks_supported: false,
         }
+    }
+
+    /// G-287⑧ — set the OSC-8 hyperlink capability (the terminal
+    /// probe's `Capabilities.hyperlinks`; upstream resolves it live
+    /// off the renderer's capability events, Markdown.ts:385-390 —
+    /// the port threads the store's probed snapshot through the
+    /// transcript walk). `false` (the default) is upstream's
+    /// headless/no-probe profile.
+    #[must_use]
+    pub fn with_hyperlinks(mut self, supported: bool) -> Self {
+        self.hyperlinks_supported = supported;
+        self
     }
 
     /// The `MarkdownOptions` v2's `TextPart` passes.
@@ -173,15 +192,24 @@ impl MarkdownStyles {
             bg: ot_rgba(self.background.bg.unwrap_or(Color::Reset)),
             conceal: Some(true),
             conceal_code: None,
-            // Lane KM (auditA #9): stays `false` — v2's headless
-            // profile parity (enabling it shifts the pipeline's
-            // conceal/highlight resolution; golden-pinned). LABELED
-            // markdown links still carry `link: {url}` chunks (the
-            // detect-links filter keeps label≠url ranges without
-            // hyperlink raster support); the transcript's hit walk
-            // reads those for clickable rects. Bare URLs need the
-            // OSC-8 profile — registered limitation.
-            hyperlinks_supported: false,
+            // G-287⑧ — the OSC-8 seam, now probe-driven (upstream
+            // `ctx.capabilities?.hyperlinks === true`, Markdown.ts:
+            // 385-390): `false` until the terminal probe reports
+            // hyperlink support (the headless/testing profile — the
+            // goldens' capture state, TS's own headless default in
+            // testing/terminal-capabilities.ts:23), `true` on a
+            // capable terminal (kitty/wezterm/ghostty/alacritty/
+            // foot/iterm — terminal/probe.rs `isHyperlinkTerm`).
+            //
+            // TRUE conceals the `](url)` tail of label≠url links
+            // (Markdown.ts:637-646 pushes the ` (url)` chunks ONLY
+            // when hyperlinks are unsupported — the URL stays visible
+            // on terminals that cannot click); both label AND bare
+            // URL runs carry `link: {url}` chunks in either state
+            // (`detectLinks` is not capability-gated) — the
+            // transcript hit walk reads those for clickable rects and
+            // the emitter wraps them in OSC-8 when the probe said yes.
+            hyperlinks_supported: self.hyperlinks_supported,
             // ref v2's TextPart passes `tableOptions{style:"grid",
             // cellPaddingX:1}` (index.tsx:2059/message-parts.tsx:188)
             // — grid style is the coalesced default, the X padding is
@@ -828,6 +856,78 @@ pub fn markdown_frame_fixture() -> String {
 mod tests {
     use super::*;
     use crate::theme::ThemeState;
+
+    // G-287⑧ — render link-bearing sources in both hyperlinks states.
+    fn render_with(source: &str, width: usize, hyperlinks: bool) -> Vec<MarkdownLine> {
+        render_markdown(source, width, &styles().with_hyperlinks(hyperlinks))
+    }
+
+    fn links_of(line: &MarkdownLine) -> Vec<Option<String>> {
+        line.0.iter().map(|span| span.link.clone()).collect()
+    }
+
+    /// G-287⑧ fallback face (Markdown.ts:637-646): without OSC-8
+    /// capability the label≠url link keeps its ` (url)` tail VISIBLE
+    /// (a terminal that cannot click must still read the URL), and
+    /// BOTH the label and the tail carry `link` chunks (detectLinks
+    /// is not capability-gated — the hit walk arms rects either way).
+    #[test]
+    fn unsupported_hyperlinks_keep_the_url_tail_visible() {
+        let lines = render_with("see [docs](https://example.com) here", 60, false);
+        assert_eq!(lines.len(), 1, "{:?}", lines.iter().map(MarkdownLine::text).collect::<Vec<_>>());
+        assert_eq!(lines[0].text(), "see docs (https://example.com) here");
+        let links = links_of(&lines[0]);
+        // The label run and the visible URL run both link.
+        assert!(links.iter().any(|l| l.as_deref() == Some("https://example.com")));
+    }
+
+    /// G-287⑧ enabled face: with OSC-8 support the `](url)` tail
+    /// conceals (upstream pushes the tail chunks only when hyperlinks
+    /// are unsupported) — visible text is the label, which carries
+    /// the `link` chunk the raster wraps in OSC-8.
+    #[test]
+    fn supported_hyperlinks_conceal_the_url_tail() {
+        let lines = render_with("see [docs](https://example.com) here", 60, true);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text(), "see docs here");
+        let links = links_of(&lines[0]);
+        assert_eq!(
+            links.iter().filter(|l| l.is_some()).count(),
+            1,
+            "exactly the label run links: {links:?}"
+        );
+        assert!(links.contains(&Some("https://example.com".to_owned())));
+    }
+
+    /// A label==url autolink (`[url](url)`) conceals the tail only
+    /// under hyperlink support (the pipeline's pinned tree-sitter
+    /// shape: the conceal rewrite's label≠url guard keeps the tail
+    /// otherwise — detect-links.ts:68's non-normalized label side).
+    #[test]
+    fn autolink_label_equals_url_conceals_only_when_supported() {
+        let off = render_with("[https://same.io](https://same.io)", 60, false);
+        assert_eq!(off.len(), 1);
+        assert_eq!(off[0].text(), "https://same.io (https://same.io)");
+        let on = render_with("[https://same.io](https://same.io)", 60, true);
+        assert_eq!(on.len(), 1);
+        assert_eq!(on[0].text(), "https://same.io");
+    }
+
+    /// Bare URLs carry `link` chunks in BOTH states (detectLinks'
+    /// content scan is not capability-gated) — the OSC-8 profile only
+    /// decides the raster emission, never the chunk links.
+    #[test]
+    fn bare_url_links_in_both_states() {
+        for flag in [false, true] {
+            let lines = render_with("bare link https://example.org/x end", 60, flag);
+            assert_eq!(lines.len(), 1, "flag={flag}");
+            assert_eq!(lines[0].text(), "bare link https://example.org/x end", "flag={flag}");
+            assert!(
+                links_of(&lines[0]).contains(&Some("https://example.org/x".to_owned())),
+                "flag={flag}"
+            );
+        }
+    }
 
     fn styles() -> MarkdownStyles {
         MarkdownStyles::from_theme(&ThemeState::v2_dark().styles())

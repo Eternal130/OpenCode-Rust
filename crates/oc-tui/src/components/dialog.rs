@@ -1214,8 +1214,10 @@ fn btw_answer_window_rows(terminal: (u16, u16)) -> usize {
 fn btw_answer_scroll_max(store: &Store, answer: &str, terminal: (u16, u16)) -> usize {
     let width = usize::from(terminal.0).max(1);
     let inner = width.min(crate::store::DialogSize::Large.width()).saturating_sub(6).max(1);
-    let styles =
-        crate::components::message::markdown::MarkdownStyles::from_theme(&store.theme().styles());
+    let styles = crate::components::message::markdown::MarkdownStyles::from_theme(
+        &store.theme().styles(),
+    )
+    .with_hyperlinks(store.hyperlinks_supported());
     let lines = crate::components::message::markdown::render_markdown(answer, inner, &styles);
     lines.len().saturating_sub(btw_answer_window_rows(terminal))
 }
@@ -1232,8 +1234,10 @@ fn btw_answer_rows(
     let DialogKind::BtwAnswer { answer, .. } = kind else { return Vec::new() };
     let width = usize::from(terminal.0).max(1);
     let inner = width.min(crate::store::DialogSize::Large.width()).saturating_sub(6).max(1);
-    let styles =
-        crate::components::message::markdown::MarkdownStyles::from_theme(&store.theme().styles());
+    let styles = crate::components::message::markdown::MarkdownStyles::from_theme(
+        &store.theme().styles(),
+    )
+    .with_hyperlinks(store.hyperlinks_supported());
     crate::components::message::markdown::render_markdown(answer, inner, &styles)
         .iter()
         .map(|line| {

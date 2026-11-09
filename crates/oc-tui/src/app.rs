@@ -10041,6 +10041,10 @@ pub async fn run_with_size(
             // exits. The fallback is STICKY (the broken store keeps
             // rendering the fallback, never the route); the panic hook
             // already restored the terminal (this thread owns it).
+            // G-287⑧ — the OSC-8 link rects of the frame being built
+            // (armed below only on the normal render path + a
+            // hyperlink-capable probe).
+            let mut frame_links: Vec<crate::render::FrameLinkRect> = Vec::new();
             let mut frame = if let Some(message) = app.error_mode.clone() {
                 // G-287⑤ — the sticky crash frame carries the stack
                 // + version (`ErrorComponent`'s sections).
@@ -10054,7 +10058,35 @@ pub async fn run_with_size(
                 let frame_result =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| app.frame()));
                 match frame_result {
-                    Ok(frame) => frame,
+                    Ok(frame) => {
+                        // G-287⑧ — this frame's OSC-8 link rects: the
+                        // transcript walk just armed the `OpenLink`
+                        // hit rows (the link runs' own glyph extents in
+                        // screen space — the same rects the mouse
+                        // release uses). Only the normal render path
+                        // arms them, and only under the probe's
+                        // hyperlink verdict — a non-OSC-8 terminal
+                        // keeps plain text (upstream's raster gate).
+                        if app.store.hyperlinks_supported() {
+                            frame_links = app
+                                .store
+                                .transcript_hit_rows()
+                                .into_iter()
+                                .filter_map(|row| match row.action {
+                                    crate::store::TranscriptHitAction::OpenLink { url } => {
+                                        Some(crate::render::FrameLinkRect {
+                                            x: row.x,
+                                            y: row.y,
+                                            width: row.width,
+                                            url,
+                                        })
+                                    }
+                                    _ => None,
+                                })
+                                .collect();
+                        }
+                        frame
+                    }
                     Err(payload) => {
                         let message = payload
                             .downcast_ref::<String>()
@@ -10123,7 +10155,9 @@ pub async fn run_with_size(
             // the session terminal's output writer (a no-op frame
             // writes nothing).
             let emission = match session_terminal.lock() {
-                Ok(mut session) => emitter.emit(session.output(), &frame),
+                Ok(mut session) => {
+                    emitter.emit_with_links(session.output(), &frame, &frame_links)
+                }
                 Err(_) => Err(std::io::Error::other("session terminal lock poisoned")),
             };
             if emission.is_err() {
@@ -10225,7 +10259,14 @@ pub async fn run_with_size(
             // `protocol="auto"`; a new snapshot repaints so the image
             // strip switches protocol immediately.
             Some(TermEvent::Capabilities(capabilities)) => {
+                let hyperlinks = capabilities.hyperlinks;
                 app.store.set_graphics_capabilities(Some(*capabilities));
+                // G-287⑧ — the same snapshot's OSC-8 verdict drives the
+                // markdown hyperlink seam (`ctx.capabilities?.hyperlinks
+                // === true`, Markdown.ts:385-390): a capable terminal
+                // flips the seam (the repaint below re-renders the
+                // transcript with concealed `](url)` tails + OSC-8).
+                app.store.set_hyperlinks_supported(hyperlinks);
                 redraw_at = 0;
             }
             // Bracketed paste (R-07): resolve attachment file paths →
