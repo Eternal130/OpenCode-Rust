@@ -87,7 +87,9 @@ pub struct Atom {
 /// each. [`merged_cells`] subtracts those merges.
 #[must_use]
 pub fn display_width(text: &str) -> usize {
-    text.width().saturating_sub(merged_cells(text)).saturating_sub(text_emoji_narrowed_cells(text))
+    text.width()
+        .saturating_sub(merged_cells(text))
+        .saturating_sub(text_emoji_narrowed_cells(text))
 }
 
 /// Cluster-aware display width of one grapheme cluster — the same
@@ -144,7 +146,9 @@ fn text_emoji_narrow(cluster: &str) -> bool {
     if !emoji_base(base as u32) {
         return false;
     }
-    if cluster.contains('\u{FE0F}') || cluster.contains('\u{20E3}') || cluster.contains('\u{200D}')
+    if cluster.contains('\u{FE0F}')
+        || cluster.contains('\u{20E3}')
+        || cluster.contains('\u{200D}')
     {
         return false;
     }

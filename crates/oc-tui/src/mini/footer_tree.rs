@@ -25,13 +25,13 @@
 
 use std::rc::Rc;
 
-use opentui_core::styled_text::{StyledText, TextChunk};
 use opentui_core::Rgba;
+use opentui_core::styled_text::{StyledText, TextChunk};
 use opentui_solid::builder::ForItemSource;
 use opentui_solid::element::ForItem;
 use opentui_solid::element::PropValue;
 use opentui_solid::reactive::Reactive;
-use opentui_solid::{box_, for_list, map, text, Element, Signal};
+use opentui_solid::{Element, Signal, box_, for_list, map, text};
 
 use crate::render::{Cell, CellColor, Frame};
 
@@ -79,8 +79,7 @@ pub(crate) fn frame_rows(frame: &Frame) -> Vec<FooterRowUnit> {
         let mut chunks: Vec<TextChunk> = Vec::new();
         let mut run: Option<(String, Option<Rgba>, Option<Rgba>, u32)> = None;
         let flush =
-            |chunks: &mut Vec<TextChunk>,
-             run: &mut Option<(String, Option<Rgba>, Option<Rgba>, u32)>| {
+            |chunks: &mut Vec<TextChunk>, run: &mut Option<(String, Option<Rgba>, Option<Rgba>, u32)>| {
                 if let Some((text, fg, bg, attributes)) = run.take() {
                     chunks.push(TextChunk { text, fg, bg, attributes, link: None });
                 }
@@ -129,11 +128,7 @@ pub(crate) fn frame_rows(frame: &Frame) -> Vec<FooterRowUnit> {
                 chunks.push(TextChunk { text, fg, bg, attributes, link: None });
             }
         }
-        units.push(FooterRowUnit {
-            key: format!("row{y}"),
-            top: y,
-            content: StyledText::new(chunks),
-        });
+        units.push(FooterRowUnit { key: format!("row{y}"), top: y, content: StyledText::new(chunks) });
     }
     units
 }
@@ -196,10 +191,7 @@ fn footer_root(rows: &Signal<Vec<FooterRowUnit>>, geometry: &Signal<(usize, usiz
         source: map(rows.clone(), |units: &Vec<FooterRowUnit>| {
             units
                 .iter()
-                .map(|unit| ForItem {
-                    key: unit.key.clone(),
-                    value: PropValue::Str(unit.key.clone()),
-                })
+                .map(|unit| ForItem { key: unit.key.clone(), value: PropValue::Str(unit.key.clone()) })
                 .collect::<Vec<ForItem>>()
         }),
     };
@@ -285,8 +277,7 @@ mod tests {
         // "ab" + the gap's default space + "c" — the trailing padding
         // trimmed; the gap keeps the run going as a default chunk.
         assert_eq!(chunks.len(), 3, "{chunks:?}");
-        assert_eq!(chunks[0].text, "ab");
-        assert_eq!(chunks[0].fg, Some(Rgba::rgb(255, 0, 0)));
+        assert_eq!(chunks[0].text, "ab");        assert_eq!(chunks[0].fg, Some(Rgba::rgb(255, 0, 0)));
         assert_eq!(chunks[1].text, " ");
         assert_eq!(chunks[1].fg, None);
         assert_eq!(chunks[2].text, "c");

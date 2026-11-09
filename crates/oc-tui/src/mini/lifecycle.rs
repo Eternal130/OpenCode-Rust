@@ -70,7 +70,8 @@ use std::io::Write as _;
 use std::time::{Duration, Instant};
 
 use opentui_core::renderer::{
-    create_cli_renderer, CliRendererConfig, ExternalOutputMode, RendererTerminalSession, ScreenMode,
+    create_cli_renderer, CliRendererConfig, ExternalOutputMode,
+    RendererTerminalSession, ScreenMode,
 };
 use opentui_core::scrollback::ScrollbackSnapshot;
 
@@ -637,7 +638,10 @@ impl FooterPane {
             crate::components::footer::PromptRoute::QueuedMenu => self
                 .queued_prompts
                 .iter()
-                .map(|text| FooterMenuItem { display: text.clone(), ..FooterMenuItem::default() })
+                .map(|text| FooterMenuItem {
+                    display: text.clone(),
+                    ..FooterMenuItem::default()
+                })
                 .collect(),
             crate::components::footer::PromptRoute::Settings => {
                 crate::components::footer::state::settings_entries(&self.settings_summary)
@@ -674,7 +678,8 @@ impl FooterPane {
                 self.panel = PanelState::default();
             }
             FooterKey::Up => {
-                self.panel.selected = move_selection_clamp(self.panel.selected, count, -1);
+                self.panel.selected =
+                    move_selection_clamp(self.panel.selected, count, -1);
             }
             FooterKey::Down => {
                 self.panel.selected = move_selection_clamp(self.panel.selected, count, 1);
@@ -697,8 +702,7 @@ impl FooterPane {
             }
             FooterKey::Enter => {
                 let entries = self.panel_entries();
-                if let Some(entry) =
-                    entries.get(self.panel.selected.min(entries.len().saturating_sub(1)))
+                if let Some(entry) = entries.get(self.panel.selected.min(entries.len().saturating_sub(1)))
                 {
                     effects.extend(self.run_panel_entry(entry));
                 }
@@ -815,8 +819,11 @@ impl FooterPane {
             _ => ("Pending prompts", true, None, false, true, false, "No pending prompts"),
         };
         let all = self.panel_all_entries();
-        let filtered: Vec<_> =
-            all.iter().filter(|item| fuzzy_matches(item, &self.panel.query)).cloned().collect();
+        let filtered: Vec<_> = all
+            .iter()
+            .filter(|item| fuzzy_matches(item, &self.panel.query))
+            .cloned()
+            .collect();
         let menu = FooterMenuState { selected: self.panel.selected, offset: 0 };
         let mut canvas = Canvas::new(width, height);
         let layout = footer_panel_layout(height.max(3), PANEL_LIST_ROWS);
@@ -918,7 +925,8 @@ impl FooterPane {
                 FooterView::Form { .. } => footer_base(FOOTER_HEIGHT) + FORM_ROWS,
                 FooterView::Prompt => match self.machine.route {
                     crate::components::footer::PromptRoute::Subagent => {
-                        footer_base(FOOTER_HEIGHT) + super::footer_subagent::SUBAGENT_INSPECTOR_ROWS
+                        footer_base(FOOTER_HEIGHT)
+                            + super::footer_subagent::SUBAGENT_INSPECTOR_ROWS
                     }
                     crate::components::footer::PromptRoute::QueuedMenu => {
                         1 + self.queued_prompts.len().max(1)
@@ -1055,8 +1063,7 @@ impl FooterPane {
                     status_detail = format!("{} pending", self.queued_pending);
                 }
                 if running > 0 {
-                    let subagents =
-                        format!("{running} subagent{}", if running == 1 { "" } else { "s" });
+                    let subagents = format!("{running} subagent{}", if running == 1 { "" } else { "s" });
                     status_detail = if status_detail.is_empty() {
                         subagents
                     } else {
@@ -1298,10 +1305,16 @@ fn serialize_atoms_row(atoms: &[crate::wrap::Atom], width: usize) -> String {
         if last_style != Some(atom.style) {
             sequence.push_str("\x1b[0m");
             if let Some(color) = atom.style.fg {
-                crate::render::ansi::emit_fg(&mut sequence, crate::render::CellColor::from(color));
+                crate::render::ansi::emit_fg(
+                    &mut sequence,
+                    crate::render::CellColor::from(color),
+                );
             }
             if let Some(color) = atom.style.bg {
-                crate::render::ansi::emit_bg(&mut sequence, crate::render::CellColor::from(color));
+                crate::render::ansi::emit_bg(
+                    &mut sequence,
+                    crate::render::CellColor::from(color),
+                );
             }
             crate::render::ansi::apply_attributes(&mut sequence, atom.style.add_modifier.bits());
             last_style = Some(atom.style);
@@ -1318,8 +1331,10 @@ fn serialize_atoms_row(atoms: &[crate::wrap::Atom], width: usize) -> String {
 /// The mini terminal session — opentui's `Terminal` over the real
 /// tty + stdout (the main app's [`crate::app::SessionTerminal`]
 /// shape).
-pub type MiniTerminal =
-    opentui_core::terminal::Terminal<opentui_core::terminal::UnixTty, std::io::Stdout>;
+pub type MiniTerminal = opentui_core::terminal::Terminal<
+    opentui_core::terminal::UnixTty,
+    std::io::Stdout,
+>;
 
 /// D2.3 — the renderer's terminal-session handle (the same adapter
 /// the main app installs, `app.rs`'s `RendererSessionHandle`): the
@@ -1367,7 +1382,10 @@ impl RendererTerminalSession for MiniSessionHandle {
     }
 
     fn is_torn_down(&self) -> bool {
-        self.session.lock().map(|session| session.is_torn_down()).unwrap_or(true)
+        self.session
+            .lock()
+            .map(|session| session.is_torn_down())
+            .unwrap_or(true)
     }
 }
 
@@ -1464,7 +1482,8 @@ impl Lifecycle {
             let Ok(mut session) = session.lock() else {
                 return Err("mini session terminal lock poisoned".to_owned());
             };
-            let (columns, rows) = session.tty().window_size().map_err(|e| e.to_string())?;
+            let (columns, rows) =
+                session.tty().window_size().map_err(|e| e.to_string())?;
             (usize::from(columns).max(1), usize::from(rows).max(1))
         };
         // Split-footer mode never enters the alternate screen — the
@@ -1742,7 +1761,10 @@ impl Lifecycle {
     /// homes the cursor (the next park re-positions anyway).
     fn reconcile_scrollback_region(&mut self) -> Result<(), String> {
         let pane = self.pane.pane_height(self.height).clamp(1, self.height);
-        let bottom = self.height.saturating_sub(pane.max(FOOTER_HEIGHT)).max(1);
+        let bottom = self
+            .height
+            .saturating_sub(pane.max(FOOTER_HEIGHT))
+            .max(1);
         if bottom != self.region_bottom {
             self.region_bottom = bottom;
             self.transcript_row = self.transcript_row.min(bottom);
@@ -1754,7 +1776,10 @@ impl Lifecycle {
 
     /// One raw write through the lifecycle's single writer.
     fn write_raw(&mut self, bytes: &[u8]) -> Result<(), String> {
-        self.out.write_all(bytes).and_then(|()| self.out.flush()).map_err(|error| error.to_string())
+        self.out
+            .write_all(bytes)
+            .and_then(|()| self.out.flush())
+            .map_err(|error| error.to_string())
     }
 
     /// Paint the footer pane into the screen's bottom rows — D4.1c:
@@ -1805,7 +1830,8 @@ impl Lifecycle {
             // repaints every band row (the retired force flag's
             // full-paint semantics; set_footer_height already rebuilt
             // the buffers on a height change).
-            let (width, height) = (self.solid.renderer.width(), self.solid.renderer.height());
+            let (width, height) =
+                (self.solid.renderer.width(), self.solid.renderer.height());
             self.solid.renderer.current_render_buffer =
                 opentui_core::buffer::OptimizedBuffer::new(width, height);
         }
@@ -1903,10 +1929,8 @@ impl Lifecycle {
         // (renderOffset/renderHeight) from the new terminal size, so
         // the next draw fully repaints the dock at the new
         // width/height.
-        self.solid.resize(
-            u32::try_from(self.width).unwrap_or(u32::MAX),
-            u32::try_from(self.height).unwrap_or(u32::MAX),
-        );
+        self.solid
+            .resize(u32::try_from(self.width).unwrap_or(u32::MAX), u32::try_from(self.height).unwrap_or(u32::MAX));
         // The transcript band re-arms at the new height (the flush's
         // region reconcile; the dock repaint follows).
         self.region_bottom = 0;
@@ -2142,8 +2166,7 @@ mod tests {
     }
 
     #[test]
-    fn two_press_exit_and_draft_clear() {
-        let mut footer = pane();
+    fn two_press_exit_and_draft_clear() {        let mut footer = pane();
         let _ = footer.press(FooterKey::Printable('h'));
         let effects = footer.press(FooterKey::CtrlC);
         assert!(effects.is_empty(), "no effect on a draft clear");

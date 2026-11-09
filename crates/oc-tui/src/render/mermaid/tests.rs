@@ -444,8 +444,8 @@ fn route_for(
 
 #[test]
 fn horizontal_fan_out_edges_share_a_bus_lane() {
-    let diagram =
-        parse_mermaid_flowchart_diagram("flowchart LR\n  A --> B\n  A --> C").expect("parses");
+    let diagram = parse_mermaid_flowchart_diagram("flowchart LR\n  A --> B\n  A --> C")
+        .expect("parses");
     let layout = crate::render::mermaid::flowchart::layout::layout_flowchart_diagram(
         &diagram,
         &FlowchartRenderOptions::default(),
@@ -467,8 +467,8 @@ fn horizontal_fan_out_edges_share_a_bus_lane() {
 
 #[test]
 fn horizontal_fan_in_edges_share_a_bus_lane() {
-    let diagram =
-        parse_mermaid_flowchart_diagram("flowchart LR\n  B --> A\n  C --> A").expect("parses");
+    let diagram = parse_mermaid_flowchart_diagram("flowchart LR\n  B --> A\n  C --> A")
+        .expect("parses");
     let layout = crate::render::mermaid::flowchart::layout::layout_flowchart_diagram(
         &diagram,
         &FlowchartRenderOptions::default(),
@@ -490,8 +490,8 @@ fn horizontal_fan_in_edges_share_a_bus_lane() {
 
 #[test]
 fn vertical_fan_out_edges_share_a_bus_lane() {
-    let diagram =
-        parse_mermaid_flowchart_diagram("flowchart TD\n  A --> B\n  A --> C").expect("parses");
+    let diagram = parse_mermaid_flowchart_diagram("flowchart TD\n  A --> B\n  A --> C")
+        .expect("parses");
     let layout = crate::render::mermaid::flowchart::layout::layout_flowchart_diagram(
         &diagram,
         &FlowchartRenderOptions::default(),
@@ -513,8 +513,8 @@ fn vertical_fan_out_edges_share_a_bus_lane() {
 
 #[test]
 fn vertical_fan_in_edges_share_a_bus_lane() {
-    let diagram =
-        parse_mermaid_flowchart_diagram("flowchart TD\n  B --> A\n  C --> A").expect("parses");
+    let diagram = parse_mermaid_flowchart_diagram("flowchart TD\n  B --> A\n  C --> A")
+        .expect("parses");
     let layout = crate::render::mermaid::flowchart::layout::layout_flowchart_diagram(
         &diagram,
         &FlowchartRenderOptions::default(),
@@ -596,34 +596,22 @@ fn context_width_bounds_the_rendered_diagram() {
     let clamped = super::render_mermaid_block(
         source,
         &palette,
-        &super::MermaidRenderOptions { context_width: Some(30), ..Default::default() },
+        &super::MermaidRenderOptions {
+            context_width: Some(30),
+            ..Default::default()
+        },
     )
     .expect("clamped render parses");
     assert!(
-        clamped.rows.iter().any(|row| row
-            .iter()
-            .map(|span| span.text.chars().count())
-            .sum::<usize>()
-            > 0),
+        clamped.rows.iter().any(|row| row.iter().map(|span| span.text.chars().count()).sum::<usize>() > 0),
         "clamped render must produce rows"
     );
-    let clamped_width = clamped
-        .rows
-        .iter()
-        .map(|row| row.iter().map(|span| span.text.chars().count()).sum::<usize>())
-        .max()
-        .unwrap_or(0);
-    let wide_width = wide
-        .rows
-        .iter()
-        .map(|row| row.iter().map(|span| span.text.chars().count()).sum::<usize>())
-        .max()
-        .unwrap_or(0);
+    let clamped_width =
+        clamped.rows.iter().map(|row| row.iter().map(|span| span.text.chars().count()).sum::<usize>()).max().unwrap_or(0);
+    let wide_width =
+        wide.rows.iter().map(|row| row.iter().map(|span| span.text.chars().count()).sum::<usize>()).max().unwrap_or(0);
     assert!(clamped_width <= 30, "context width must bound the render: {clamped_width}");
-    assert!(
-        wide_width > 30 || clamped_width < wide_width,
-        "clamping should actually change the layout: wide={wide_width} clamped={clamped_width}"
-    );
+    assert!(wide_width > 30 || clamped_width < wide_width, "clamping should actually change the layout: wide={wide_width} clamped={clamped_width}");
 }
 
 #[test]
@@ -643,12 +631,7 @@ fn truncated_partial_source_renders_instead_of_falling_back() {
     let Some(diagram) = rendered else {
         panic!("truncated retry must render the parseable prefix");
     };
-    let text = diagram
-        .rows
-        .iter()
-        .map(|row| row.iter().map(|span| span.text.as_str()).collect::<String>())
-        .collect::<Vec<_>>()
-        .join("\n");
+    let text = diagram.rows.iter().map(|row| row.iter().map(|span| span.text.as_str()).collect::<String>()).collect::<Vec<_>>().join("\n");
     assert!(text.contains('A') && text.contains('B'), "prefix nodes must render: {text}");
 }
 

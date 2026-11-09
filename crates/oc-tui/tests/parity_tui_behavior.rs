@@ -311,8 +311,7 @@ fn ui_dialog_prompt() {
     let outcome = dialog_layer(&store, "q");
     assert_eq!(outcome, DialogKeyOutcome::Consumed);
     assert_eq!(
-        store.top_dialog().expect("still open").value,
-        "default-xq",
+        store.top_dialog().expect("still open").value, "default-xq",
         "the char appended after the seeded text"
     );
 

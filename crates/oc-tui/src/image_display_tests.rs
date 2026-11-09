@@ -95,7 +95,9 @@ fn kitty_terminal_receives_transmit_and_placement_over_the_placeholder_rect() {
     assert_eq!(resolve_protocol(Some(&cap)), ImageRenderProtocol::Kitty);
     let mut wire = Vec::new();
     let mut frame = ImageFrame::new();
-    frame.render(&mut wire, std::slice::from_ref(&placement), Some(&cap), 80, 24).expect("emit");
+    frame
+        .render(&mut wire, std::slice::from_ref(&placement), Some(&cap), 80, 24)
+        .expect("emit");
     let text = String::from_utf8(wire.clone()).unwrap();
     assert!(text.contains("\x1b_Ga=t,f=100,i=1,"), "transmit head: {text:?}");
     assert!(text.contains("\x1b[3;6H\x1b_Ga=p,i=1,p=1,c=12,r=6,"), "placement: {text:?}");
@@ -120,7 +122,9 @@ fn sixel_terminal_transcodes_png_to_sixel() {
     assert!(text.contains('┌'), "placeholder box beneath the sixel escape");
 
     let mut wire = Vec::new();
-    ImageFrame::new().render(&mut wire, &transcript.images, Some(&cap), 80, 24).expect("emit");
+    ImageFrame::new()
+        .render(&mut wire, &transcript.images, Some(&cap), 80, 24)
+        .expect("emit");
     let text = String::from_utf8(wire).unwrap();
     assert!(text.starts_with("\x1b[3;6H\x1bP"), "CUP + DCS: {text:?}");
     assert!(text.ends_with("\x1b\\"), "ST terminator");
@@ -165,7 +169,9 @@ fn plain_terminal_renders_blocks_cells_deterministically() {
     assert_eq!((flipped.ch, flipped.fg, flipped.bg), ('▄', black, green));
     // Nothing emits on the wire.
     let mut wire = Vec::new();
-    ImageFrame::new().render(&mut wire, &transcript.images, None, 80, 24).expect("emit");
+    ImageFrame::new()
+        .render(&mut wire, &transcript.images, None, 80, 24)
+        .expect("emit");
     assert!(wire.is_empty());
 }
 

@@ -513,10 +513,7 @@ impl Row {
             Self::Entry(_) => Vec::new(),
             Self::Group { kind, children, pending, .. } => {
                 if matches!(kind, GroupKind::Exploration | GroupKind::Activity) {
-                    children
-                        .iter()
-                        .flat_map(Self::part_refs)
-                        .collect::<Vec<_>>()
+                    children.iter().flat_map(Self::part_refs).collect::<Vec<_>>()
                         .into_iter()
                         .filter(|r#ref| !pending.contains(r#ref))
                         .collect()
@@ -1039,11 +1036,7 @@ pub struct ActivityItem {
 /// as one "tool" (the ref's own fallback when the call list is
 /// empty, :76-77).
 #[must_use]
-pub fn activity_summary(
-    items: &[ActivityItem],
-    instructions: usize,
-    closed: bool,
-) -> (String, bool) {
+pub fn activity_summary(items: &[ActivityItem], instructions: usize, closed: bool) -> (String, bool) {
     let mut command = 0usize;
     let mut edit = 0usize;
     let mut thought = 0usize;
@@ -1429,8 +1422,7 @@ mod tests {
             },
         ];
         let mut rows = reduce_rows(&messages, &std::collections::HashSet::<String>::new());
-        let pending: std::collections::HashSet<String> =
-            ["t-blocked".to_owned()].into_iter().collect();
+        let pending: std::collections::HashSet<String> = ["t-blocked".to_owned()].into_iter().collect();
         partition_pending(&mut rows, &pending);
         let Row::Group { children, pending: blocked, .. } = &rows[1] else {
             panic!("expected exploration group, got {:?}", rows[1]);
@@ -1449,10 +1441,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(
-            child_ids,
-            vec!["t-read".to_owned(), "t-grep".to_owned(), "t-blocked".to_owned()]
-        );
+        assert_eq!(child_ids, vec!["t-read".to_owned(), "t-grep".to_owned(), "t-blocked".to_owned()]);
         // Including-pending walk still reaches every ref.
         assert_eq!(rows[1].part_refs_including_pending().len(), 3);
     }

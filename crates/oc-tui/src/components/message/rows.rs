@@ -720,8 +720,7 @@ pub fn assistant_footer_row_ext(
 pub fn retry_footer_row(label: &str, theme: &ThemeStyles, width: usize) -> RowRender {
     let style = Style::new().fg(theme.warning).bg(theme.background);
     let label_width = width.saturating_sub(ROW_PADDING_LEFT);
-    let atoms =
-        crate::wrap::flatten_spans(&[StyledSpan { text: label.to_owned(), style, link: None }]);
+    let atoms = crate::wrap::flatten_spans(&[StyledSpan { text: label.to_owned(), style, link: None }]);
     let placed = wrap_atoms(&atoms, label_width)
         .into_iter()
         .enumerate()
@@ -1612,8 +1611,7 @@ mod tests {
         // thumb height = clamp(h/4, 4..8); width = height * 2.
         assert_eq!(strip_options(true).thumb_height(), 6);
         assert_eq!(
-            ImageStripOptions { enabled: true, capabilities: None, terminal_rows: 8 }
-                .thumb_height(),
+            ImageStripOptions { enabled: true, capabilities: None, terminal_rows: 8 }.thumb_height(),
             4
         );
         assert_eq!(

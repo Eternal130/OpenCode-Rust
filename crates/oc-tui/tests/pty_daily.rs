@@ -2547,20 +2547,24 @@ fn mini_split_footer_transcript_scroll_keeps_dock() {
             let grid = h.grid_now();
             // Exactly ONE dock rail row: the dock is never clobbered
             // by the scroll and never ghosts mid-screen.
-            let rails = (0..grid.rows).filter(|&row| grid.row_text(row).starts_with('┃')).count();
+            let rails = (0..grid.rows)
+                .filter(|&row| grid.row_text(row).starts_with('┃'))
+                .count();
             assert_eq!(rails, 1, "one dock rail row (no clobber, no ghost)");
             // The statusline keeps its bottom anchor inside the
             // dock band (the reserved footer rows).
             assert!(
-                (grid.rows - FOOTER_ROWS..grid.rows)
-                    .any(|row| { grid.row_text(row).contains("ctrl+p menu") }),
+                (grid.rows - FOOTER_ROWS..grid.rows).any(|row| {
+                    grid.row_text(row).contains("ctrl+p menu")
+                }),
                 "the composer statusline stays in the dock band"
             );
             // The transcript rows above the dock carry the reply's
             // tail (the newest rows sit just above the dock).
             assert!(
-                (grid.rows - 8..grid.rows - 4)
-                    .any(|row| { grid.row_text(row).contains("scroll row 05") }),
+                (grid.rows - 8..grid.rows - 4).any(|row| {
+                    grid.row_text(row).contains("scroll row 05")
+                }),
                 "the transcript tail sits just above the dock"
             );
             Ok(())
@@ -2618,10 +2622,8 @@ fn mini_split_footer_frame_rides_the_renderer_pump() {
             // + the composer statusline sit in the bottom rows.
             let grid = wait_grid(
                 h,
-                |g| {
-                    (g.rows - FOOTER_ROWS..g.rows)
-                        .any(|row| g.row_text(row).contains("ctrl+p menu"))
-                },
+                |g| (g.rows - FOOTER_ROWS..g.rows)
+                    .any(|row| g.row_text(row).contains("ctrl+p menu")),
                 Duration::from_secs(5),
             )?;
             assert_eq!(
@@ -2658,7 +2660,10 @@ fn mini_new_session_factory() {
             h.write(b"/new\r");
             wait_grid(
                 h,
-                |g| (0..g.rows).any(|row| g.row_text(row).contains("new session ses_alpha")),
+                |g| {
+                    (0..g.rows)
+                        .any(|row| g.row_text(row).contains("new session ses_alpha"))
+                },
                 Duration::from_secs(10),
             )
             .map_err(|error| format!("the /new factory never landed its system row: {error}"))?;

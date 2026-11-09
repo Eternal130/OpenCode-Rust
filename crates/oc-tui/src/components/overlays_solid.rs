@@ -79,8 +79,9 @@ pub(crate) fn mount_overlay_surface(
 ) {
     let key = (width, height);
     let rebuild = !family_wrapper_live(family)
-        || OVERLAY_SURFACES
-            .with_borrow(|slot| !matches!(slot.get(family), Some(entry) if entry.key == key));
+        || OVERLAY_SURFACES.with_borrow(|slot| {
+            !matches!(slot.get(family), Some(entry) if entry.key == key)
+        });
     let (content, content_key) = if rebuild {
         let signal = Signal::new(ChromeInputs { items: items.to_vec() });
         let element = surface_element(&signal, width, height);
@@ -90,10 +91,7 @@ pub(crate) fn mount_overlay_surface(
         (Some(element), Some(format!("{family}-content@{width}x{height}")))
     } else {
         OVERLAY_SURFACES.with_borrow_mut(|slot| {
-            slot.get_mut(family)
-                .expect("checked above")
-                .signal
-                .set(ChromeInputs { items: items.to_vec() });
+            slot.get_mut(family).expect("checked above").signal.set(ChromeInputs { items: items.to_vec() });
         });
         (None, None)
     };
@@ -141,12 +139,7 @@ pub(crate) fn reconnecting_geometry(width: usize, height: usize) -> (usize, usiz
 /// `blend_to_black` walk, byte for byte (glyphs and non-RGB
 /// backgrounds survive; the box's keep-rect is exactly the rect the
 /// old box paste overwrote after the dim).
-pub(crate) fn mount_reconnecting_solid(
-    styles: &ThemeStyles,
-    elapsed_ms: u64,
-    width: usize,
-    height: usize,
-) {
+pub(crate) fn mount_reconnecting_solid(styles: &ThemeStyles, elapsed_ms: u64, width: usize, height: usize) {
     if width == 0 || height == 0 {
         return;
     }
@@ -164,31 +157,25 @@ pub(crate) fn mount_reconnecting_solid(
             key: format!("recon.bg@{row}"),
             left,
             top: top + row,
-            body: super::chrome_solid::ChromeBody::Text(vec![
-                super::chrome_solid::ChromeChunk::new(" ".repeat(box_w), fg_base, raised, 0),
-            ]),
+            body: super::chrome_solid::ChromeBody::Text(vec![super::chrome_solid::ChromeChunk::new(
+                " ".repeat(box_w),
+                fg_base,
+                raised,
+                0,
+            )]),
         });
     }
     // The headline + copy runs, clipped to the box interior (the
     // narrow-frame tail chars stay a post-seam paint: the old paste
     // loop clipped them out and the follow-up walk re-inked them over
     // the dimmed base).
-    let headline: String = format!("{} Connection lost…", spinner_frame(elapsed_ms))
-        .chars()
-        .take(box_w.saturating_sub(2))
-        .collect();
+    let headline: String =
+        format!("{} Connection lost…", spinner_frame(elapsed_ms)).chars().take(box_w.saturating_sub(2)).collect();
     units.extend(chrome_run_units("recon.head", left + 2, top + 1, &headline, fg_base, raised, 0));
     let copy = "Reconnecting to the server automatically.";
-    let copy_clipped: String = copy.chars().take(box_w.saturating_sub(2)).collect();
-    units.extend(chrome_run_units(
-        "recon.copy",
-        left + 2,
-        top + 2,
-        &copy_clipped,
-        fg_muted,
-        raised,
-        0,
-    ));
+    let copy_clipped: String =
+        copy.chars().take(box_w.saturating_sub(2)).collect();
+    units.extend(chrome_run_units("recon.copy", left + 2, top + 2, &copy_clipped, fg_muted, raised, 0));
     // The scrim: a DimBg stamp over the whole screen minus the box
     // (the stamp dims the composited frame — tree pixels AND the
     // hand-painted holes — the box's opaque pixels excluded exactly
@@ -241,7 +228,11 @@ pub(crate) fn paint_reconnecting_tail(frame: &mut Frame, styles: &ThemeStyles, w
 /// reconnecting scrim + box over a LIVE frame, composite, then the
 /// tail — the bytes the old `overlay_reconnecting_solid` painter
 /// produced, by construction.
-pub fn reconnecting_over_frame(frame: &mut Frame, styles: &ThemeStyles, elapsed_ms: u64) {
+pub fn reconnecting_over_frame(
+    frame: &mut Frame,
+    styles: &ThemeStyles,
+    elapsed_ms: u64,
+) {
     let width = frame.width;
     let height = frame.height;
     crate::components::chrome_solid::reset_hub();
@@ -278,7 +269,10 @@ pub fn mount_startup_loading_solid(
         left: 0,
         top: 0,
         body: super::chrome_solid::ChromeBody::Text(vec![super::chrome_solid::ChromeChunk::new(
-            pill, fg_muted, raised, 0,
+            pill,
+            fg_muted,
+            raised,
+            0,
         )]),
     }];
     mount_overlay_surface(
@@ -319,9 +313,12 @@ pub fn mount_migration_solid(
             key: format!("mig.bg@{row}"),
             left: 0,
             top: row,
-            body: super::chrome_solid::ChromeBody::Text(vec![
-                super::chrome_solid::ChromeChunk::new(" ".repeat(box_width), fg_base, raised, 0),
-            ]),
+            body: super::chrome_solid::ChromeBody::Text(vec![super::chrome_solid::ChromeChunk::new(
+                " ".repeat(box_width),
+                fg_base,
+                raised,
+                0,
+            )]),
         });
     }
     units.extend(chrome_run_units("mig.rail", 0, 0, "▎", info, raised, 0));

@@ -21,9 +21,7 @@ mod vt_harness;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use vt_harness::{
-    pty_lock, run_tui, sandbox_env, standard_sessions, FakeLlm, LiveHarness, WORDMARK,
-};
+use vt_harness::{pty_lock, run_tui, sandbox_env, standard_sessions, FakeLlm, LiveHarness, WORDMARK};
 
 #[test]
 fn pty_console_strip_follows_terminal_resize() {

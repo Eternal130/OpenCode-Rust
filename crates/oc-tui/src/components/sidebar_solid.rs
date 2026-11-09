@@ -59,14 +59,16 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use opentui_core::styled_text::{StyledText, TextChunk};
 use opentui_core::Rgba;
+use opentui_core::styled_text::{StyledText, TextChunk};
 use opentui_solid::builder::ForItemSource;
 use opentui_solid::element::{Children, ForItem, PropValue};
 use opentui_solid::reactive::Reactive;
-use opentui_solid::{box_, for_list, map, text, Element, Signal};
+use opentui_solid::{Element, Signal, box_, for_list, map, text};
 
-use crate::components::chrome_solid::{family_wrapper_live, mount_family_wrapper, ChromeStamp};
+use crate::components::chrome_solid::{
+    ChromeStamp, family_wrapper_live, mount_family_wrapper,
+};
 use crate::components::session_tabs::SESSION_SIDEBAR_WIDTH;
 use crate::components::sidebar::SidebarView;
 use crate::layout::{Placed, PlacedLine};
@@ -637,7 +639,8 @@ pub fn paint_solid_sidebar_pane(
     }
     crate::components::chrome_solid::reset_hub();
     sidebar_mount(view, theme, height, scroll, 0, 0, None);
-    let mut frame = crate::components::chrome_solid::blank_frame(SESSION_SIDEBAR_WIDTH, height);
+    let mut frame =
+        crate::components::chrome_solid::blank_frame(SESSION_SIDEBAR_WIDTH, height);
     crate::components::chrome_solid::composite_chrome_tree(&mut frame);
     frame
 }
@@ -726,7 +729,11 @@ mod tests {
         crate::components::chrome_solid::composite_chrome_tree(&mut frame);
         for y in 0..24 {
             for x in 0..SESSION_SIDEBAR_WIDTH {
-                assert_eq!(frame.cells[5 + y][50 + x], pane.cells[y][x], "pane cell ({x},{y})");
+                assert_eq!(
+                    frame.cells[5 + y][50 + x],
+                    pane.cells[y][x],
+                    "pane cell ({x},{y})"
+                );
             }
         }
         for (y, row) in frame.cells.iter().enumerate() {
@@ -800,10 +807,7 @@ mod tests {
         }
         // Outside the scrim rect the base is untouched.
         assert_eq!(frame.cells[0][0], before.cells[0][0]);
-        assert_eq!(
-            frame.cells[frame_height - 1][width - 1],
-            before.cells[frame_height - 1][width - 1]
-        );
+        assert_eq!(frame.cells[frame_height - 1][width - 1], before.cells[frame_height - 1][width - 1]);
     }
 
     /// The visibility rule stays the old module's (auto > 120, hide

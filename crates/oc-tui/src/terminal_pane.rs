@@ -44,11 +44,7 @@ use opentui_core::renderables::embedded_terminal::{
 /// conversion; only the hue/chroma terms the palette matching needs.
 fn rgb_to_oklch(red: f64, green: f64, blue: f64) -> (f64, f64, f64) {
     let srgb_to_linear = |value: f64| -> f64 {
-        if value <= 0.04045 {
-            value / 12.92
-        } else {
-            ((value + 0.055) / 1.055).powf(2.4)
-        }
+        if value <= 0.04045 { value / 12.92 } else { ((value + 0.055) / 1.055).powf(2.4) }
     };
     let linear_red = srgb_to_linear(red);
     let linear_green = srgb_to_linear(green);
@@ -365,7 +361,11 @@ impl TerminalPaneState {
         if stroke.alt {
             // The ghostty encoder's legacyAltPrefix is off in the port;
             // the pane's contract prefixes ESC (and ignores ctrl).
-            let plain = KeyStroke { alt: false, ctrl: false, ..stroke.clone() };
+            let plain = KeyStroke {
+                alt: false,
+                ctrl: false,
+                ..stroke.clone()
+            };
             let mut bytes = self.encode_stroke(&plain)?;
             bytes.insert(0, 0x1b);
             return Some(bytes);
