@@ -108,6 +108,7 @@ enum UnitBody {
     Fill { width: usize, color: Rgba },
 }
 
+#[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
 /// Shape the Canvas op stream into the wrapper's paint units plus
 /// the seam stamps (transparent `clear_bg` rects — the retired
 /// bridge's post-copy fixup, kept as stamps so the tree stays
@@ -197,7 +198,7 @@ fn shape_ops(ops: &[CanvasOp]) -> Option<(Vec<FooterUnit>, Vec<ChromeStamp>)> {
                     // (the retired bridge's fixup, verbatim).
                     stamps.push(ChromeStamp::Transparent { left: *x, top: *y, width: *w });
                 } else {
-                    let Some(color) = rgba(*bg) else { return None };
+                    let color = rgba(*bg)?;
                     units.push(FooterUnit {
                         key: format!("f{index}"),
                         left: *x,
@@ -247,11 +248,9 @@ fn shape_ops(ops: &[CanvasOp]) -> Option<(Vec<FooterUnit>, Vec<ChromeStamp>)> {
     Some((units, stamps))
 }
 
-/// The defensive fallback was retired with the seam's frame-overlay
-/// slot (D3.2): the op stream never carries a non-RGB color.
-// ---------------------------------------------------------------------------
-// the element tree
-// ---------------------------------------------------------------------------
+// The defensive fallback was retired with the seam's frame-overlay
+// slot (D3.2): the op stream never carries a non-RGB color.
+// -- the element tree ------------------------------------------------------
 
 /// `dyn_(src, to PropValue::Num)` — a usize-valued dynamic prop.
 fn dyn_num<S>(source: S) -> Rc<dyn opentui_solid::DynPropSource>
@@ -490,7 +489,7 @@ pub(crate) fn mount_footer_ops(
 /// of its own rect) — same raster, same cell semantics, by
 /// construction.
 #[must_use]
-pub fn finish(canvas: Canvas) -> Frame {
+pub fn finish(canvas: &Canvas) -> Frame {
     let (width, height) = canvas.dims();
     ops_frame(canvas.ops(), width, height)
 }

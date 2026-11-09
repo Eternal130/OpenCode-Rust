@@ -48,7 +48,6 @@
 use crate::render::Frame;
 use crate::style::Color;
 use crate::theme::ThemeStyles;
-use std::fmt::Write as _; // format_push_string: write! into the existing String
 
 /// `MIN_SPLIT_WIDTH` — the patch pane needs this many columns before
 /// the split view is offered.
@@ -1000,11 +999,12 @@ mod tests {
 #[cfg(test)]
 mod g130_tests {
     use super::*;
+    use std::fmt::Write as _; // format_push_string: write! into the existing String
 
     fn added_patch(lines: usize, marker: bool) -> String {
         let mut patch = format!("--- /dev/null\n+++ b/big.txt\n@@ -0,0 +1,{lines} @@\n");
         for index in 0..lines {
-            let _ = write!(patch, "+line {index}\n");
+            let _ = writeln!(patch, "+line {index}");
         }
         if marker {
             // replace the final newline with the no-newline marker

@@ -759,6 +759,7 @@ fn mermaid_last_good_with<R>(
     LAST_GOOD.with_borrow_mut(f)
 }
 
+#[allow(clippy::cast_possible_wrap)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// SURF-LATEX-MERMAID: the `mermaid` code-block renderer
 /// (`packages/merman/src/markdown.ts`, `createMermaidCodeBlockRenderer`).
 ///
@@ -895,9 +896,9 @@ mod tests {
             lines.iter().map(MarkdownLine::text).collect::<Vec<_>>()
         );
         assert_eq!(lines[0].text(), "see docs (https://example.com) here");
-        let links = links_of(&lines[0]);
+        let found = links_of(&lines[0]);
         // The label run and the visible URL run both link.
-        assert!(links.iter().any(|l| l.as_deref() == Some("https://example.com")));
+        assert!(found.iter().any(|l| l.as_deref() == Some("https://example.com")));
     }
 
     /// G-287⑧ enabled face: with OSC-8 support the `](url)` tail
@@ -909,13 +910,13 @@ mod tests {
         let lines = render_with("see [docs](https://example.com) here", 60, true);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].text(), "see docs here");
-        let links = links_of(&lines[0]);
+        let found = links_of(&lines[0]);
         assert_eq!(
-            links.iter().filter(|l| l.is_some()).count(),
+            found.iter().filter(|l| l.is_some()).count(),
             1,
-            "exactly the label run links: {links:?}"
+            "exactly the label run links: {found:?}"
         );
-        assert!(links.contains(&Some("https://example.com".to_owned())));
+        assert!(found.contains(&Some("https://example.com".to_owned())));
     }
 
     /// A label==url autolink (`[url](url)`) conceals the tail only

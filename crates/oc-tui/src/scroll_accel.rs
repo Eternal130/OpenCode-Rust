@@ -48,6 +48,7 @@ impl MacOsScrollAccel {
         Self::default()
     }
 
+#[allow(clippy::cast_precision_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// The multiplier for this event (the core `tick`, default opts).
     #[must_use]
     pub fn tick(&mut self, now_ms: i64) -> f64 {
@@ -103,6 +104,7 @@ impl ScrollAcceleration {
         Self::CustomSpeed(CustomSpeedScroll { speed: speed.unwrap_or(3.0) })
     }
 
+#[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// The wheel step (rows, whole numbers — a fractional row cannot
     /// move a cell grid; the ref's scrollbox keeps the fraction in its
     /// own accumulator, a bounded deviation documented here).

@@ -72,6 +72,7 @@ pub enum Verbosity {
 }
 
 /// Render options for the transcript.
+#[allow(clippy::struct_excessive_bools)] // option flags mirror index.tsx's Options
 #[derive(Debug, Clone)]
 pub struct TranscriptOptions {
     pub thinking_mode: ThinkingMode,
@@ -637,7 +638,9 @@ fn tool_cell(
 ) -> RowRender {
     let mut state = state.clone();
     let shell_id = state.metadata.get("shellID").cloned().unwrap_or_default();
-    if !shell_id.is_empty() && !(state.status == ToolStatus::Completed && state.output.is_some()) {
+    if !shell_id.is_empty()
+        && (state.status != ToolStatus::Completed || state.output.is_none())
+    {
         if let Some(live) = options.shell_live.get(&shell_id) {
             state.output = Some(live.clone());
         }
@@ -1054,7 +1057,8 @@ fn group_row(
                                 active: time.completed.is_none() && !completed,
                                 visible_thought: !text.trim().is_empty(),
                             },
-                            _ => return None,
+                            // Text parts never contribute to the activity row.
+                            Part::Text { .. } => return None,
                         })
                     })
                     .collect();
@@ -1772,7 +1776,7 @@ mod surf1_tests {
         assert!(text.contains("hi"), "the output preview: {text}");
     }
 
-    use crate::components::message::model::{GroupKind, PartTime, ToolState, ToolStatus, UserFile};
+    use crate::components::message::model::{PartTime, ToolState, ToolStatus, UserFile};
     fn assistant_with(parts: Vec<Part>) -> Message {
         Message::Assistant {
             id: "a1".into(),
@@ -1812,8 +1816,7 @@ mod surf1_tests {
                 state,
             }]),
         ];
-        let mut options = TranscriptOptions::default();
-        options.group_exploration = false;
+        let mut options = TranscriptOptions { group_exploration: false, ..Default::default() };
         options.image_strip.enabled = true;
         options.image_strip.terminal_rows = 24;
         let transcript = render_transcript(&messages, &options, &theme, 80);

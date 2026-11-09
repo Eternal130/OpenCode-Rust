@@ -33,7 +33,7 @@ pub fn render_form_body(
     height: usize,
     theme: &FooterTheme,
 ) -> Frame {
-    super::solid::finish(form_body_canvas(request, state, width, height, theme))
+    super::solid::finish(&form_body_canvas(request, state, width, height, theme))
 }
 
 /// [`render_form_body`]'s canvas (the parity tests' op source).

@@ -82,6 +82,7 @@ fn session_search_typed_hook(store: &Store) {
 // The modal layer is inherently a key-by-key walk (escape → ctrl+c →
 // input → per-kind actions → the select commands); the R-05 worktree
 // actions pushed it past the lint budget.
+#[allow(clippy::cast_possible_wrap)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 #[allow(clippy::too_many_lines)]
 pub fn handle_dialog_key(
     store: &Store,
@@ -913,14 +914,11 @@ pub fn mount_dialog_layer(
     theme: &crate::theme::ThemeState,
     terminal: (u16, u16),
 ) -> Option<DialogLayerPaint> {
-    let entry = match store.top_dialog() {
-        Some(entry) => entry,
-        // No dialog: no dismissal surface (the ask's rects must not
-        // outlive the view).
-        None => {
-            store.set_dialog_frame_rect(None);
-            return None;
-        }
+    // No dialog: no dismissal surface (the ask's rects must not
+    // outlive the view).
+    let Some(entry) = store.top_dialog() else {
+        store.set_dialog_frame_rect(None);
+        return None;
     };
     if store.focus() != Focus::Dialog {
         store.set_dialog_frame_rect(None);
@@ -1400,7 +1398,7 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
         // route base is the blank screen (today's page frame WAS the
         // base; the tree's opaque page background covers it at the
         // composite seam below).
-        crate::components::stats_page_solid::mount_stats_page_solid(view, &styles, route_size);
+        crate::components::stats_page_solid::mount_stats_page_solid(&view, &styles, route_size);
         crate::components::chrome_solid::blank_frame(
             usize::from(route_size.0).max(1),
             usize::from(route_size.1).max(1),

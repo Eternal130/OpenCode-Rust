@@ -20,7 +20,7 @@
 use crate::components::diff_viewer::{
     diff_layout, DiffFile, DiffView, DiffViewerOptions, PatchRow,
 };
-use crate::render::{Cell, CellColor, Frame};
+use crate::render::Frame;
 use crate::store::{DiffPhase, DiffSource, DiffViewerLive, Store};
 use crate::theme::ThemeStyles;
 
@@ -114,15 +114,6 @@ fn clamp_scroll(scroll: usize, content_height: usize, viewport: usize) -> usize 
     scroll.min(content_height.saturating_sub(viewport))
 }
 
-fn muted_fg(styles: &ThemeStyles) -> CellColor {
-    let color = styles.text_muted.fg.or(styles.text.fg).unwrap_or(crate::style::Color::Reset);
-    CellColor::from(color)
-}
-
-fn plain_frame(width: usize, height: usize) -> Frame {
-    Frame { cells: vec![vec![Cell::default(); width]; height], width, height, clusters: None }
-}
-
 /// TUI-10: the inline diff images' screen hit rects — `(x, y, width,
 /// height, uri)`.
 pub type DiffImageHit = (usize, usize, usize, usize, String);
@@ -141,7 +132,7 @@ pub fn render_diff_mount(
     let live = store.diff_viewer();
     let (frame, hits) = match &live.phase {
         DiffPhase::Loading => crate::components::diff_viewer_solid::route_frame(
-            crate::components::diff_viewer_solid::DiffBody::Loading,
+            &crate::components::diff_viewer_solid::DiffBody::Loading,
             styles,
             width,
             height,
@@ -154,7 +145,7 @@ pub fn render_diff_mount(
             let needs_base = matches!(live.mode, DiffSource::Branch | DiffSource::Committed)
                 && live.base.is_none();
             crate::components::diff_viewer_solid::route_frame(
-                crate::components::diff_viewer_solid::DiffBody::Failed { needs_base },
+                &crate::components::diff_viewer_solid::DiffBody::Failed { needs_base },
                 styles,
                 width,
                 height,
@@ -162,7 +153,7 @@ pub fn render_diff_mount(
             )
         }
         DiffPhase::Unavailable => crate::components::diff_viewer_solid::route_frame(
-            crate::components::diff_viewer_solid::DiffBody::Unavailable,
+            &crate::components::diff_viewer_solid::DiffBody::Unavailable,
             styles,
             width,
             height,
@@ -170,7 +161,7 @@ pub fn render_diff_mount(
         ),
         DiffPhase::Loaded(files) if files.is_empty() => {
             crate::components::diff_viewer_solid::route_frame(
-                crate::components::diff_viewer_solid::DiffBody::Empty,
+                &crate::components::diff_viewer_solid::DiffBody::Empty,
                 styles,
                 width,
                 height,
@@ -190,7 +181,7 @@ pub fn render_diff_mount(
                 viewport_height: height,
             };
             crate::components::diff_viewer_solid::route_frame(
-                crate::components::diff_viewer_solid::DiffBody::Loaded {
+                &crate::components::diff_viewer_solid::DiffBody::Loaded {
                     files,
                     state: &live.viewer,
                     options: &options,

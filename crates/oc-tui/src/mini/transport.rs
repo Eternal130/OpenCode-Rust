@@ -276,6 +276,7 @@ impl TransportState {
         }
     }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// `session.step.ended` (transport.ts:1361-1381): the usage patch
     /// — the summed tokens (input+output+reasoning+cache.read+
     /// cache.write) with the step model for the percent's context
@@ -1303,6 +1304,7 @@ fn shell_output_text(output: &Value) -> String {
     joined
 }
 
+#[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// `Shell exited with code ${shell.exit}` (transport.ts:366): the
 /// exit renders without a fractional tail (`0`, not `0.0`).
 fn exit_label(exit: &Value) -> String {
@@ -1396,7 +1398,7 @@ pub fn prepare_prompt_body(prompt: &super::queue::RunPrompt) -> SessionPromptBod
                 inline.push(text);
             }
             if let Some(mut file) = file {
-                file.description.clone_from(&description);
+                file.description.clone_from(description);
                 attachments.files.push(file);
             }
         }
@@ -2534,7 +2536,7 @@ mod tests {
         let late = state.fold(&event(
             "session.shell.ended",
             &json!({ "sessionID": "s1", "shell": { "id": "shl_4", "command": "cat big.log", "status": "exited", "exit": 0 },
-                     "output": { "output": "tail", "cursor": 4, "size": 1048576, "truncated": false } }),
+                     "output": { "output": "tail", "cursor": 4, "size": 1_048_576, "truncated": false } }),
         ));
         match late {
             Fold::Commits(commits) => {

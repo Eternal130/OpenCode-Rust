@@ -41,6 +41,7 @@ pub fn token_total(tokens: &TokenUsageInfo) -> f64 {
     tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
 }
 
+#[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// `statsNumber` (stats-data.ts:16-18): `Intl.NumberFormat("en-US",
 /// { notation: "compact", maximumFractionDigits: 1 })` — the tier
 /// bump is the formatter's own rounding (`999,999 → "1M"`, not
@@ -72,6 +73,7 @@ pub fn stats_number(value: f64) -> String {
     text
 }
 
+#[allow(clippy::cast_precision_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// `statsMetrics` (stats-data.ts:4-14): tokens first (the poster's
 /// big number), then the three footer metrics.
 #[must_use]
@@ -84,6 +86,7 @@ pub fn stats_metrics(stats: &SessionStatsInfo) -> [(&'static str, f64); 4] {
     ]
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// Days-from-epoch → `(year, month 1-12, day 1-31)` (Howard Hinnant's
 /// `civil_from_days` — the UTC ordinals the ref derives through
 /// `Date`/`toISOString`).
@@ -154,6 +157,7 @@ pub struct ActivityCalendarView {
     pub clipped: bool,
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap, clippy::cast_precision_loss, clippy::cast_sign_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 #[must_use]
 pub fn activity_calendar(
     activity: &[SessionStatsActivity],
@@ -322,6 +326,7 @@ fn big_number_width(number: &str) -> Option<usize> {
     Some(glyphs.iter().map(|width| width + 2).sum::<usize>().saturating_sub(2))
 }
 
+#[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// The header's date range (`Intl.DateTimeFormat("en-US", {month:
 /// "short", year: "numeric"}).formatRange`): same month "Jan 2025",
 /// same year "Jan – Dec 2025", else "Jan 2025 – Oct 2026".
@@ -396,6 +401,8 @@ fn month_label_row(calendar: &ActivityCalendarView) -> String {
     row
 }
 
+#[allow(clippy::cast_sign_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
+#[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
 /// `StatsPoster`'s layout (stats.tsx:30-137) as the line model the
 /// solid renderer paints. `size` is the terminal size; `timezone` is
 /// the local zone name the calendar buckets by (the same name the
@@ -505,12 +512,10 @@ pub fn stats_poster(stats: &SessionStatsInfo, size: (u16, u16), timezone: &str) 
         let mut row = vec![(x, Run::new(format!("{letter}   "), RunStyle::Muted))];
         for (index, week) in calendar.weeks.iter().enumerate() {
             let cell = &week[day];
-            let (glyph, style) = if cell.level < 0 {
-                ("  ", RunStyle::Muted)
-            } else if cell.level == 0 {
-                ("\u{b7} ", RunStyle::Shade(0))
-            } else {
-                ("\u{25a0} ", RunStyle::Shade(cell.level.min(4) as usize))
+            let (glyph, style) = match cell.level {
+                ..=-1 => ("  ", RunStyle::Muted),
+                0 => ("\u{b7} ", RunStyle::Shade(0)),
+                1.. => ("\u{25a0} ", RunStyle::Shade(cell.level.min(4) as usize)),
             };
             row.push((x + 8 + index * 2, Run::new(glyph, style)));
         }
@@ -568,6 +573,7 @@ mod tests {
         SessionStatsActivity { date: date.to_owned(), steps }
     }
 
+#[allow(clippy::cast_precision_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// `2026-01-01T00:00:00Z` in epoch ms — a Thursday.
     fn ms(year: i64, month: u32, day: u32) -> f64 {
         (days_from_civil(year, month, day) * 86_400_000) as f64
@@ -668,6 +674,7 @@ mod tests {
         assert_eq!(calendar.weeks[1][6].level, -1);
     }
 
+#[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// F1 (ref1): the calendar buckets by the LOCAL day (the ref
     /// extracts `getFullYear/getMonth/getDate` — activity-calendar.ts
     /// :8-11). An instant at 23:30 local is already the NEXT UTC day;

@@ -150,8 +150,8 @@ fn image_commit(
 /// `freshImages(commits)`: the dedup filter — a `(messageID, partID)`
 /// pair commits at most once per transport (`state.imageIDs`).
 #[must_use]
-pub fn fresh_images(
-    image_ids: &mut std::collections::HashSet<String>,
+pub fn fresh_images<S: std::hash::BuildHasher>(
+    image_ids: &mut std::collections::HashSet<String, S>,
     commits: Vec<Commit>,
 ) -> Vec<Commit> {
     commits

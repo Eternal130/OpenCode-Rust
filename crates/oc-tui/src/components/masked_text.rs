@@ -200,7 +200,7 @@ mod tests {
         let end = 20;
         // t=0: progress 0, front = -8 — every column is right of the
         // front ⇒ strength 1 (fully at the backdrop).
-        assert!(fade_strengths(0, end, 0.0, None, end).iter().all(|&s| s == 1.0));
+        assert!(fade_strengths(0, end, 0.0, None, end).iter().all(|&s| (s - 1.0).abs() < f64::EPSILON));
         // t=100 (coast(0.5) = 0.5): front = -8 + 0.5·36 = 10 —
         // column 0 (distance 10/8 ⇒ clamped 1 ⇒ smootherstep 1) is
         // fully faded IN (strength 0), column 19 still hidden (1).

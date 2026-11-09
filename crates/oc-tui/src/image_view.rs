@@ -80,6 +80,7 @@ pub fn drawable(protocol: ImageRenderProtocol, png: &[u8]) -> bool {
     }
 }
 
+#[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// Aspect-fit `cols × rows` inside `max_cols × max_rows` (fit mode,
 /// cell aspect 2 when the pixel resolution is unknown — opentui's
 /// `getFittedSize`). Zero inputs return `(0, 0)`.
@@ -95,6 +96,7 @@ pub fn fit_cells(src_w: usize, src_h: usize, max_cols: usize, max_rows: usize) -
     (cols as usize, rows as usize)
 }
 
+#[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// Rasterize a decoded image into `cols × rows` block cells through
 /// opentui's native blocks lane (`drawImage` reserves, then
 /// `materializeImageFallbacks` folds the quadrant markers into glyph
@@ -279,6 +281,7 @@ fn occluded(placements: &[ImagePlacement], width: u16, height: u16) -> bool {
     false
 }
 
+#[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// Build the opentui image for the resolved protocol. Kitty keeps the
 /// encoded PNG (`f=100` passthrough); sixel materializes the decoded
 /// RGBA (`raw()` is the encoder's input).

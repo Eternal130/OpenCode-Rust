@@ -424,6 +424,7 @@ fn default_fg(styles: &ThemeStyles) -> Rgba {
         .unwrap_or(Rgba::rgb(255, 255, 255))
 }
 
+#[allow(clippy::cast_possible_wrap)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 fn build_loaded(
     files: &[DiffFile],
     state: &DiffViewerState,
@@ -949,7 +950,7 @@ thread_local! {
 }
 
 fn build(
-    body: DiffBody<'_>,
+    body: &DiffBody<'_>,
     styles: &ThemeStyles,
     width: usize,
     height: usize,
@@ -961,7 +962,7 @@ fn build(
             styles,
             width,
             height,
-            if needs_base {
+            if *needs_base {
                 "Could not load diff. Choose a base branch from Diff source, or select Uncommitted."
             } else {
                 "Could not load diff. Reopen the diff viewer to try again."
@@ -985,7 +986,7 @@ fn build(
 /// Mount (or sync) the diff route's family subtree into the shared
 /// tree. Returns the inline image hit rects (screen coordinates).
 pub(crate) fn mount_diff_route(
-    body: DiffBody<'_>,
+    body: &DiffBody<'_>,
     styles: &ThemeStyles,
     width: usize,
     height: usize,
@@ -1033,7 +1034,7 @@ pub(crate) fn twin_loaded(
     reset_hub();
     DIFF_KEY.with_borrow_mut(|slot| *slot = None);
     let hits =
-        mount_diff_route(DiffBody::Loaded { files, state, options }, styles, width, height, 0);
+        mount_diff_route(&DiffBody::Loaded { files, state, options }, styles, width, height, 0);
     let mut frame = blank_frame(width.max(1), height.max(1));
     composite_chrome_tree(&mut frame);
     (frame, hits)
@@ -1042,7 +1043,7 @@ pub(crate) fn twin_loaded(
 /// The route's frame source: mount with the live scroll and compose
 /// the family pixels into the route's blank base.
 pub(crate) fn route_frame(
-    body: DiffBody<'_>,
+    body: &DiffBody<'_>,
     styles: &ThemeStyles,
     width: usize,
     height: usize,

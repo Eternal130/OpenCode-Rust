@@ -1253,21 +1253,21 @@ fn pty_composer_selection_paints_inverted_cells() {
         let colors = |column: u16| {
             screen.cell(row, column).map(|cell| (cell.fgcolor(), cell.bgcolor())).expect("cell")
         };
-        let (_, prefix_bg) = colors(col);
-        let (prefix_fg, _) = colors(col + 1);
+        let (_, prompt_pair_bg) = colors(col);
+        let (text_pair_fg, _) = colors(col + 1);
         // The selected tail inverts: each selected cell's bg is the
         // text fg and its fg is the prompt bg (the resting prefix's
         // pair, swapped). All four selected cells agree.
         for offset in 4u16..8 {
             let (fg, bg) = colors(col + offset);
-            assert_eq!(bg, prefix_fg, "selected bg = the text fg (offset {offset})");
-            assert_eq!(fg, prefix_bg, "selected fg = the prompt bg (offset {offset})");
+            assert_eq!(bg, text_pair_fg, "selected bg = the text fg (offset {offset})");
+            assert_eq!(fg, prompt_pair_bg, "selected fg = the prompt bg (offset {offset})");
         }
         // The unselected prefix keeps the resting paint (no inversion).
         for offset in 0u16..4 {
             let (fg, bg) = colors(col + offset);
-            assert_eq!(fg, prefix_fg, "prefix fg unchanged (offset {offset})");
-            assert_eq!(bg, prefix_bg, "prefix bg unchanged (offset {offset})");
+            assert_eq!(fg, text_pair_fg, "prefix fg unchanged (offset {offset})");
+            assert_eq!(bg, prompt_pair_bg, "prefix bg unchanged (offset {offset})");
         }
         // Exit (ctrl+c clears the selection draft, then the app-level
         // exit — paced, the app consumes one chord per redraw tick).

@@ -50,7 +50,7 @@ pub fn render_permission_body(
     height: usize,
     theme: &FooterTheme,
 ) -> Frame {
-    super::solid::finish(permission_body_canvas(request, state, width, height, theme))
+    super::solid::finish(&permission_body_canvas(request, state, width, height, theme))
 }
 
 /// [`render_permission_body`]'s canvas (the parity tests' op source).
@@ -271,7 +271,7 @@ pub fn render_reject_field(
     height: usize,
     theme: &FooterTheme,
 ) -> Frame {
-    super::solid::finish(reject_field_canvas(placeholder_visible, width, height, theme))
+    super::solid::finish(&reject_field_canvas(placeholder_visible, width, height, theme))
 }
 
 /// [`render_reject_field`]'s canvas (the parity tests' op source).

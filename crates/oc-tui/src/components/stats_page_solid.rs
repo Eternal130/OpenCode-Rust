@@ -84,7 +84,7 @@ fn paint_line(
 /// The full page: the loading line, the error fallback, or the
 /// painted poster. `loaded` receives the poster model when the
 /// resource resolved.
-pub fn mount_stats_page_solid(phase: StatsPhaseView<'_>, styles: &ThemeStyles, size: (u16, u16)) {
+pub fn mount_stats_page_solid(phase: &StatsPhaseView<'_>, styles: &ThemeStyles, size: (u16, u16)) {
     let (width, height) = (usize::from(size.0), usize::from(size.1));
     let bg = page_bg(styles);
     match phase {
@@ -120,7 +120,7 @@ pub fn mount_stats_page_solid(phase: StatsPhaseView<'_>, styles: &ThemeStyles, s
 #[cfg(test)]
 #[must_use]
 pub(crate) fn stats_page_solid_frame(
-    phase: StatsPhaseView<'_>,
+    phase: &StatsPhaseView<'_>,
     styles: &ThemeStyles,
     size: (u16, u16),
 ) -> crate::render::Frame {
@@ -147,7 +147,6 @@ fn mount_stats(
 /// The painted poster: rows stacked with the model's own gap rows,
 /// the block centered in the terminal (the scrollbox's centered
 /// content; paddingTop/Bottom 1).
-#[must_use]
 pub fn mount_poster_solid(poster: &Poster, styles: &ThemeStyles, size: (u16, u16)) {
     let (width, height) = (usize::from(size.0), usize::from(size.1));
     let bg = page_bg(styles);
@@ -219,7 +218,7 @@ mod tests {
         let stats = fixture();
         let poster = super::super::stats_page::stats_poster(&stats, (120, 40), "UTC");
         let frame =
-            stats_page_solid_frame(StatsPhaseView::Loaded(&poster), &theme.styles(), (120, 40));
+            stats_page_solid_frame(&StatsPhaseView::Loaded(&poster), &theme.styles(), (120, 40));
         let grid = frame.text_grid();
         let all = grid.join("\n");
         assert!(all.contains("opencode / stats"), "the header title");
@@ -237,9 +236,9 @@ mod tests {
     #[test]
     fn page_paints_loading_and_error_states() {
         let theme = ThemeState::v2_dark();
-        let loading = stats_page_solid_frame(StatsPhaseView::Loading, &theme.styles(), (80, 24));
+        let loading = stats_page_solid_frame(&StatsPhaseView::Loading, &theme.styles(), (80, 24));
         assert!(loading.text_grid().join("\n").contains("Gathering your stats…"));
-        let failed = stats_page_solid_frame(StatsPhaseView::Failed, &theme.styles(), (80, 24));
+        let failed = stats_page_solid_frame(&StatsPhaseView::Failed, &theme.styles(), (80, 24));
         assert!(failed
             .text_grid()
             .join("\n")

@@ -551,6 +551,7 @@ pub(crate) struct PaneCell {
     pub bg: CellColor,
 }
 
+#[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// The VT grid as paint cells (the pane's whole box) — the engine's
 /// composed `OptimizedBuffer` walked cell-by-cell with the paint
 /// semantics (`rgba_color`/`paint_attrs`, the box's trailing blank

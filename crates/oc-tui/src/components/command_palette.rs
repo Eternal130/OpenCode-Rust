@@ -1977,6 +1977,7 @@ fn home_directory() -> String {
     std::env::var("HOME").unwrap_or_default()
 }
 
+#[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
 /// The model picker's props from the store's `model.list` state
 /// (`component/dialog-model.tsx`): non-deprecated rows, the "Free"
 /// footer (`cost.length > 0 && every input zero`), `providerID/modelID`
@@ -5201,6 +5202,7 @@ mod tests {
         assert_eq!(*opened.borrow(), "https://opencode.ai/docs");
     }
 
+#[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
     /// The six dead session commands act through the sink.
     #[test]
     fn final_six_session_commands_act() {

@@ -148,7 +148,7 @@ pub fn render_prompt_idle(
     height: usize,
     theme: &FooterTheme,
 ) -> Frame {
-    super::solid::finish(prompt_idle_canvas(state, width, height, theme))
+    super::solid::finish(&prompt_idle_canvas(state, width, height, theme))
 }
 
 /// [`render_prompt_idle`]'s canvas (the parity tests' op source).

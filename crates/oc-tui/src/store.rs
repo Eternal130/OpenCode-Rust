@@ -2809,8 +2809,11 @@ impl DiffSink for NoDiffSink {
 /// The recording sink (tests).
 #[derive(Default)]
 pub struct RecordingDiffSink {
-    pub calls: std::cell::RefCell<Vec<(DiffSource, Option<String>, Option<String>, u64)>>,
+    pub calls: std::cell::RefCell<Vec<DiffSinkCall>>,
 }
+
+/// One recorded fetch: source, base label, head ref, monotonic stamp.
+type DiffSinkCall = (DiffSource, Option<String>, Option<String>, u64);
 
 impl DiffSink for RecordingDiffSink {
     fn fetch(
@@ -4499,6 +4502,7 @@ impl Store {
         }
     }
 
+#[allow(clippy::cast_precision_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// The persisted vertical-rail width (TUI-3 — the `layout`
     /// storage doc's `verticalTabsWidth`, seeded at boot). Width
     /// changes JUMP (config seeds and the test paths read the exact
@@ -4510,6 +4514,7 @@ impl Store {
         }
     }
 
+#[allow(clippy::cast_precision_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// G-128 — the rail-resize SMOOTH transition (the ref's pane
     /// resize eases to the committed width instead of snapping):
     /// animate the width spring to `width` on the pump tick. The
@@ -4558,6 +4563,7 @@ impl Store {
         crate::components::session::clamp_session_pane_width(preferred, content_width)
     }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// The live vertical-rail width (clamped against the CURRENT
     /// terminal width — `clampSessionTabsWidth`, ui/layout.ts:12-17).
     /// G-128: while the width spring moves, the ANIMATED value
@@ -5803,13 +5809,13 @@ impl Store {
     /// G-229① — the attach stream's `foreground_process_changed`
     /// frame (`None` = the daemon's explicit null: no foreground
     /// process — the label falls back to the title).
-    pub fn set_terminal_foreground(&self, pty_id: &str, process: Option<String>) {
+    pub fn set_terminal_foreground(&self, pty_id: &str, process: Option<&str>) {
         let mut changed = false;
         self.terminal_registry.update(|registry| {
             for entry in registry.iter_mut() {
                 if let Some(record) = entry.terminals.iter_mut().find(|row| row.id == pty_id) {
-                    if record.foreground_process != process {
-                        record.foreground_process.clone_from(&process);
+                    if record.foreground_process.as_deref() != process {
+                        record.foreground_process = process.map(str::to_owned);
                         changed = true;
                     }
                 }
@@ -5969,7 +5975,6 @@ impl Store {
     /// width/height; the content grid is `width-2` —
     /// terminal-pane.tsx:289). A selection without a live state
     /// re-requests the attach (the self-healing mount).
-    #[must_use]
     pub fn terminal_pane_sync(&self, session_id: &str, size: (u16, u16), left: usize, top: usize) {
         let Some(pty) = self.terminal_pane_mounted(session_id) else { return };
         let mut panes = self.terminal_panes.borrow_mut();
@@ -6627,6 +6632,7 @@ impl Store {
         self.clock.get()
     }
 
+#[allow(clippy::cast_precision_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// Advance the clock to `now_ms`. Monotonic: a smaller/equal value
     /// is a no-op (no signal write ⇒ no redraw — render-on-tick only
     /// when the clock actually advances, frozen at 0 in tests).
@@ -7397,6 +7403,7 @@ impl Store {
         *self.sidebar_scroll.borrow()
     }
 
+#[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// G-102 — the wheel step for one scroll event (rows, always ≥0):
     /// the live `scroll.acceleration` / `scroll.speed` config drives
     /// `util/scroll.ts`'s model selection — the macOS accel streak
@@ -8561,7 +8568,6 @@ impl Store {
         // The walk's borrow ends before the self-calls (the RefCell
         // would otherwise double-borrow through the step helpers).
         enum Step {
-            Idle,
             Remount,
             Redraw,
             Advance { key: String, value: Option<FormValue> },
@@ -8631,7 +8637,6 @@ impl Store {
             }
         };
         match step {
-            Step::Idle => {}
             Step::Remount => self.integration_form_remount(),
             Step::Redraw => self.request_redraw(),
             Step::Advance { key, value } => self.integration_form_step(&key, value),
@@ -10306,10 +10311,12 @@ impl Store {
         // dialog-update.tsx:65): the confirm is the row model's last
         // row (state row + Skip + confirm).
         let select = if matches!(kind, DialogKind::Update) {
-            let mut select = SelectState::default();
-            select.selected =
-                crate::components::update::dialog_initial_selection(&self.update_dialog_state());
-            select
+            SelectState {
+                selected: crate::components::update::dialog_initial_selection(
+                    &self.update_dialog_state(),
+                ),
+                ..SelectState::default()
+            }
         } else {
             SelectState::default()
         };
@@ -10327,10 +10334,12 @@ impl Store {
         // G-287② — DialogUpdate's initial focus rests on the CONFIRM
         // button (dialog-update.tsx:65 — see open_dialog).
         let select = if matches!(kind, DialogKind::Update) {
-            let mut select = SelectState::default();
-            select.selected =
-                crate::components::update::dialog_initial_selection(&self.update_dialog_state());
-            select
+            SelectState {
+                selected: crate::components::update::dialog_initial_selection(
+                    &self.update_dialog_state(),
+                ),
+                ..SelectState::default()
+            }
         } else {
             SelectState::default()
         };
@@ -12741,6 +12750,7 @@ impl Store {
         }
     }
 
+#[allow(clippy::cast_precision_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     #[allow(clippy::too_many_lines)] // one match over the event alphabet
     #[allow(clippy::too_many_lines)] // the SSE reducer table (one arm per event)
     fn reduce_event(&self, event: &BusEvent) {
@@ -17212,6 +17222,7 @@ fn pending_permission_part_ids_read_the_tool_source() {
     assert!(store.pending_permission_part_ids("s1").is_empty());
 }
 
+#[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// G-273① — the mention chip's name (`normalizeMentionPath` +
 /// `createFilePart`'s filename, autocomplete.tsx:244-259/318-328):
 /// `{path}#{start}` or `{path}#{start}-{end}` (the end only when it
@@ -17299,7 +17310,7 @@ mod g229_terminal_tests {
         assert_eq!(store.terminals("s1")[0].label(), "bash");
         // G-229① — the WS `foreground_process_changed` frame flips the
         // label to the process.
-        store.set_terminal_foreground("p1", Some("cargo nextest".to_owned()));
+        store.set_terminal_foreground("p1", Some("cargo nextest"));
         assert_eq!(store.terminals("s1")[0].label(), "cargo nextest");
         // The title still tracks underneath (a later list() refresh
         // would reconcile to the same row).
@@ -17325,7 +17336,7 @@ mod g229_terminal_tests {
         );
         // A stale frame for a removed pty never touches the registry.
         store.set_terminal_title("gone", "nope");
-        store.set_terminal_foreground("gone", Some("x".to_owned()));
+        store.set_terminal_foreground("gone", Some("x"));
         assert_eq!(store.terminals("s1")[0].title, "bash");
         assert_eq!(store.terminals("s1")[0].foreground_process, None);
         // A repeated no-op frame leaves the row as-is.

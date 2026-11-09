@@ -344,6 +344,7 @@ mod tests {
         out
     }
 
+#[allow(clippy::too_many_arguments)] // the argument set mirrors the ref call shape
     /// Hermetic PNG crafter for arbitrary depth / color type /
     /// interlace / palette fixtures: `stream` is the already-laid-out
     /// filtered byte stream (filter bytes included, Adam7 passes in

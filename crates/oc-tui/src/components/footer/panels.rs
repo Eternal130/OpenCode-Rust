@@ -78,7 +78,7 @@ fn panel_frame_canvas(
 
 /// The five pickers' dispatch: the panel frame through the family's
 /// headless twin seam (`reset_hub` + mount + composite — D2.2).
-fn panel_frame_finish(canvas: Canvas) -> Frame {
+fn panel_frame_finish(canvas: &Canvas) -> Frame {
     super::solid::finish(canvas)
 }
 
@@ -86,7 +86,8 @@ fn panel_frame_finish(canvas: Canvas) -> Frame {
 /// `RUN_COMMAND_PANEL_ROWS + 1` in the corpus.
 #[must_use]
 pub fn render_command_menu(width: usize, height: usize, theme: &FooterTheme) -> Frame {
-    panel_frame_finish(command_menu_canvas(width, height, theme))
+    let canvas = command_menu_canvas(width, height, theme);
+    panel_frame_finish(&canvas)
 }
 
 /// [`render_command_menu`]'s canvas (the parity tests' op source).
@@ -123,7 +124,7 @@ pub fn render_model_select(
     height: usize,
     theme: &FooterTheme,
 ) -> Frame {
-    panel_frame_finish(model_select_canvas(providers, current, width, height, theme))
+    panel_frame_finish(&model_select_canvas(providers, current, width, height, theme))
 }
 
 /// [`render_model_select`]'s canvas (the parity tests' op source).
@@ -165,7 +166,7 @@ pub fn render_agent_select(
     height: usize,
     theme: &FooterTheme,
 ) -> Frame {
-    panel_frame_finish(agent_select_canvas(agents, current, width, height, theme))
+    panel_frame_finish(&agent_select_canvas(agents, current, width, height, theme))
 }
 
 /// [`render_agent_select`]'s canvas (the parity tests' op source).
@@ -206,7 +207,7 @@ pub fn render_variant_select(
     height: usize,
     theme: &FooterTheme,
 ) -> Frame {
-    panel_frame_finish(variant_select_canvas(variants, current, width, height, theme))
+    panel_frame_finish(&variant_select_canvas(variants, current, width, height, theme))
 }
 
 /// [`render_variant_select`]'s canvas (the parity tests' op source).
@@ -246,7 +247,7 @@ pub fn render_settings(
     height: usize,
     theme: &FooterTheme,
 ) -> Frame {
-    panel_frame_finish(settings_canvas(settings, width, height, theme))
+    panel_frame_finish(&settings_canvas(settings, width, height, theme))
 }
 
 /// [`render_settings`]'s canvas (the parity tests' op source).

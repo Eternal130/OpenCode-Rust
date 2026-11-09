@@ -1109,7 +1109,7 @@ impl FooterPane {
             width,
             height,
         );
-        crate::components::footer::solid::finish(canvas)
+        crate::components::footer::solid::finish(&canvas)
     }
 
     /// The inspector's key handling (footer.subagent.tsx:115-146).
@@ -1256,6 +1256,7 @@ impl FooterPane {
         row
     }
 
+#[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
     /// The view body beneath the launch row (the previous
     /// `render_frame` dispatch).
     #[must_use]
@@ -1704,6 +1705,7 @@ pub struct Lifecycle {
 }
 
 impl Lifecycle {
+#[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
     /// Boot the renderer (`createRuntimeLifecycle`,
     /// `runtime.lifecycle.ts:152-205`): the split-footer terminal
     /// session + renderer, entry splash, first footer paint.

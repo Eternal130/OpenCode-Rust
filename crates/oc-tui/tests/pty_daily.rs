@@ -1996,7 +1996,8 @@ fn run_mini_test<T: Send + 'static>(
         reconnect: None,
     };
     let finished = runtime.block_on(async {
-        tokio::time::timeout(Duration::from_secs(90), oc_tui::mini::runtime::run(input)).await
+        // `run`'s future is large; box it (clippy::large_futures).
+        tokio::time::timeout(Duration::from_secs(90), Box::pin(oc_tui::mini::runtime::run(input))).await
     });
     fake.stop();
     // The driver's outcome first (its failure text explains a runtime

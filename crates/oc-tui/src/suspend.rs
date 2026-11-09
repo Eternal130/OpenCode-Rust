@@ -57,6 +57,7 @@ extern "C" fn on_continue(_signal: i32) {
 /// return to the caller (the terminal restore still applies).
 #[cfg(unix)]
 pub fn suspend_cycle() {
+    #[allow(unsafe_code)] // signal/kill are libc FFI
     unsafe {
         // The resume latch first (`process.once("SIGCONT")`).
         CONTINUED.store(false, Ordering::SeqCst);
@@ -91,6 +92,7 @@ pub fn suspend_cycle() {}
 mod tests {
     use super::*;
 
+#[allow(clippy::cast_possible_wrap)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// The signal cycle against an OWN child process (its own process
     /// group — the parent's group is never signaled): the child
     /// stops itself, the parent continues it, the child reports the
@@ -106,6 +108,7 @@ mod tests {
         if std::env::var("OC_SUSPEND_CHILD").is_ok() {
             // CHILD: own process group, then the real cycle. Marker
             // files speak for the stdout the harness owns.
+            #[allow(unsafe_code)] // setpgid is libc FFI
             unsafe {
                 libc::setpgid(0, 0);
             }
@@ -136,6 +139,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         assert!(announced, "child must announce the stop first");
+        #[allow(unsafe_code)] // waitpid on our own child is libc FFI
         unsafe {
             // Wait until the child is actually stopped (WUNTRACED poll
             // on our OWN child — allowed), then continue it.
@@ -145,7 +149,7 @@ mod tests {
                 if waited == pid && libc::WIFSTOPPED(status) {
                     break;
                 }
-                assert!(waited != pid, "child settled before continue: status {status}")
+                assert!(waited != pid, "child settled before continue: status {status}");
             }
             libc::kill(pid, libc::SIGCONT);
         }

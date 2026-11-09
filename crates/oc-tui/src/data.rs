@@ -619,7 +619,7 @@ pub fn tool_images_from_content(
             oc_client::types::ToolContent::FileContent(file) => {
                 image_user_file(&file.mime, &file.uri, file.name.clone())
             }
-            _ => None,
+            oc_client::types::ToolContent::TextContent(_) => None,
         })
         .collect()
 }
@@ -784,6 +784,7 @@ fn assistant_snapshot_stats(
 #[must_use]
 // One arm per wire message kind (the SURF-1 compaction/skill arms
 // pushed it past the budget).
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 #[allow(clippy::too_many_lines)]
 pub fn message_from_info(
     info: &SessionMessageInfo,

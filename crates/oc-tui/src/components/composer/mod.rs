@@ -276,6 +276,7 @@ impl HistoryEntry {
         })
     }
 
+#[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// Tolerant decode (`parsePromptInfo` + the `DeepMutable` pick):
     /// unknown shapes degrade to the text-only entry; a non-string
     /// `text` or non-array `pasted` rejects the line entirely.
@@ -2248,8 +2249,7 @@ mod tests {
         let mut history = PromptHistory::open(&dir);
         assert_eq!(history.entries, [] as [crate::components::composer::HistoryEntry; 0]);
         for index in 0..60 {
-            let mut draft = PromptDraft::default();
-            draft.text = format!("prompt {index}");
+            let draft = PromptDraft { text: format!("prompt {index}"), ..Default::default() };
             history = history.push(&draft);
         }
         assert_eq!(history.entries.len(), PROMPT_HISTORY_LIMIT);

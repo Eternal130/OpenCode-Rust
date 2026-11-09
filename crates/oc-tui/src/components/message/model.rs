@@ -72,6 +72,7 @@ pub fn deduplicate_visible_files(files: &[UserFile]) -> Vec<UserFile> {
 }
 
 /// One assistant content part.
+#[allow(clippy::large_enum_variant)] // Tool mirrors the wire part 1:1; boxing would ripple through every transcript site
 #[derive(Debug, Clone, PartialEq)]
 pub enum Part {
     Text {
@@ -849,7 +850,10 @@ fn project_entries(projections: Vec<Projection>) -> Vec<Row> {
 /// and activity groups carry the blocked refs as `pending` — the
 /// collapsed summary's `groupRefs` excludes them and the header
 /// renders them below (`PendingEntries`).
-pub fn partition_pending(rows: &mut [Row], pending: &std::collections::HashSet<String>) {
+pub fn partition_pending<S: std::hash::BuildHasher>(
+    rows: &mut [Row],
+    pending: &std::collections::HashSet<String, S>,
+) {
     if pending.is_empty() {
         return;
     }

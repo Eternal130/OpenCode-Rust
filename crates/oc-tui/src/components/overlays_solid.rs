@@ -39,7 +39,6 @@ use crate::theme::ThemeStyles;
 /// family's 5 — today's paste order frozen: console < which-key <
 /// sidebar (in-tree at 3) < footer (4) < toast < pill < migration < scrim).
 pub(crate) const OVERLAYS_CONSOLE: usize = 6;
-pub(crate) const OVERLAYS_WHICH_KEY: usize = 7;
 pub(crate) const OVERLAYS_TOAST: usize = 8;
 pub(crate) const OVERLAYS_STARTUP_PILL: usize = 9;
 pub(crate) const OVERLAYS_MIGRATION: usize = 10;

@@ -152,7 +152,7 @@ fn hex(color: Color) -> String {
     match color {
         Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
         Color::Indexed(i) => format!("#idx{i}"),
-        _ => "-".to_owned(),
+        Color::Reset => "-".to_owned(),
     }
 }
 

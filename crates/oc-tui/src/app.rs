@@ -3785,6 +3785,7 @@ pub enum WorktreeEvent {
     },
 }
 
+#[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
 /// The Worktrees dialog's production seam: a spawned worker owning
 /// the oc-client calls (the dialog actions send requests; results
 /// arrive as [`WorktreeEvent`]s the pump applies to the store —
@@ -6655,6 +6656,7 @@ pub fn spawn_loop_fetcher(
     (req_tx, rx)
 }
 
+#[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
 /// `integrationOptions` + the row derivation (dialog-integration.
 /// tsx:48-74, 102-128): mcp-sourced first, then the priority map,
 /// then name; `connectMethods` filters env; the footer/gutter inputs
@@ -7469,11 +7471,10 @@ impl crate::store::SessionListSink for HttpSessionListSink {
 /// 117-128): one `vcs.base` resolution per directory, shared across
 /// the viewer's mode changes until the viewer closes (the ref's Map
 /// is per-component-instance; the invalidation on close mirrors it).
-fn diff_base_cache(
-) -> &'static std::sync::Mutex<std::collections::HashMap<String, Option<(String, String)>>> {
-    static CACHE: std::sync::OnceLock<
-        std::sync::Mutex<std::collections::HashMap<String, Option<(String, String)>>>,
-    > = std::sync::OnceLock::new();
+type DiffBaseCache = std::sync::Mutex<std::collections::HashMap<String, Option<(String, String)>>>;
+
+fn diff_base_cache() -> &'static DiffBaseCache {
+    static CACHE: std::sync::OnceLock<DiffBaseCache> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
@@ -9758,7 +9759,7 @@ pub async fn run_with_size(
                     app.store.set_terminal_title(&pty_id, &title);
                 }
                 LoopFetch::TerminalForeground { pty_id, process } => {
-                    app.store.set_terminal_foreground(&pty_id, process);
+                    app.store.set_terminal_foreground(&pty_id, process.as_deref());
                 }
                 LoopFetch::TerminalFailure { pty_id, message } => {
                     app.store.terminal_pane_failure(&pty_id, &message);

@@ -353,6 +353,7 @@ impl TuiPluginRuntime {
         PluginProjection { owned, themes: projection.themes }
     }
 
+#[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
     /// Resolve + materialize the snapshot's UI slot claims
     /// (PLUG-TUI-SLOT): the pure router buckets the claims
     /// (`plugin_slots::resolve_slots` — the ref's structure.ts

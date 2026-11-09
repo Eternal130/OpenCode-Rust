@@ -126,27 +126,28 @@ fn when_from_wire(when: Option<&Vec<oc_client::types::FormWhen>>) -> Vec<Integra
 
 /// The number-typed wire unions (`Infinity`/`NaN` literals collapse to
 /// `None` — they never validate as finite numbers anyway).
-fn finite(value: &Option<oc_client::types::FormNumberFieldDefault>) -> Option<f64> {
+fn finite(value: Option<&oc_client::types::FormNumberFieldDefault>) -> Option<f64> {
     match value {
         Some(oc_client::types::FormNumberFieldDefault::Number(number)) => Some(*number),
         _ => None,
     }
 }
 
-fn finite_minimum(value: &Option<oc_client::types::FormNumberFieldMinimum>) -> Option<f64> {
+fn finite_minimum(value: Option<&oc_client::types::FormNumberFieldMinimum>) -> Option<f64> {
     match value {
         Some(oc_client::types::FormNumberFieldMinimum::Number(number)) => Some(*number),
         _ => None,
     }
 }
 
-fn finite_maximum(value: &Option<oc_client::types::FormNumberFieldMaximum>) -> Option<f64> {
+fn finite_maximum(value: Option<&oc_client::types::FormNumberFieldMaximum>) -> Option<f64> {
     match value {
         Some(oc_client::types::FormNumberFieldMaximum::Number(number)) => Some(*number),
         _ => None,
     }
 }
 
+#[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
 /// Shape one wire field (the dialog's row source).
 #[must_use]
 pub fn field_from_wire(field: &FormField) -> IntegrationFormField {
@@ -187,14 +188,14 @@ pub fn field_from_wire(field: &FormField) -> IntegrationFormField {
             hidden: inner.hidden.unwrap_or(false),
             custom: false,
             options: Vec::new(),
-            default_value: finite(&inner.default).map(|number| {
+            default_value: finite(inner.default.as_ref()).map(|number| {
                 FormValue::FormValueVariant2(oc_client::types::FormValueVariant2::Number(number))
             }),
             format: None,
             min_length: None,
             max_length: None,
-            minimum: finite_minimum(&inner.minimum),
-            maximum: finite_maximum(&inner.maximum),
+            minimum: finite_minimum(inner.minimum.as_ref()),
+            maximum: finite_maximum(inner.maximum.as_ref()),
             min_items: None,
             max_items: None,
             when: when_from_wire(inner.when.as_ref()),
@@ -341,6 +342,7 @@ fn value_to_string(value: &FormValue) -> String {
     }
 }
 
+#[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// JS number → string (integers print bare, fractions as-is).
 pub(crate) fn format_js_number(number: f64) -> String {
     if number.fract() == 0.0 && number.abs() < 1e15 {
@@ -350,6 +352,8 @@ pub(crate) fn format_js_number(number: f64) -> String {
     }
 }
 
+#[allow(clippy::cast_possible_wrap)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
+#[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
 /// `formValidateValue` (util/form.ts:66-105) — the port skips the
 /// `pattern` check (a `RegExp` the TUI crate has no engine for; the
 /// server re-validates) — bounded deviation, G-271④.
