@@ -30,8 +30,8 @@ use crate::components::message::rows::locale_number;
 use crate::components::session_tabs::SESSION_SIDEBAR_WIDTH;
 use crate::layout::{Placed, PlacedLine, StyledSpan};
 use crate::render::Fill;
-use crate::theme::ThemeStyles;
 use crate::style::{Modifier, Style};
+use crate::theme::ThemeStyles;
 
 /// `wide()` in `session-frame.tsx`: the pane is `auto`-shown only
 /// above this session-pane width.
@@ -341,11 +341,7 @@ fn shimmer_fg(
 /// Wrap one paragraph at [`CARD_TEXT_WIDTH`] through the shared wrap
 /// seam (breaking spaces that fit stay as trailing cells — pinned by
 /// the card's `providers to ` / `including ` lines).
-fn wrap_card_line(
-    text: &str,
-    fg: crate::style::Color,
-    bg: crate::style::Color,
-) -> Vec<PlacedLine> {
+fn wrap_card_line(text: &str, fg: crate::style::Color, bg: crate::style::Color) -> Vec<PlacedLine> {
     let style = Style::new().fg(fg).bg(bg);
     crate::wrap::wrap_atoms(&crate::wrap::flatten(text, style), CARD_TEXT_WIDTH)
         .iter()
@@ -1117,7 +1113,7 @@ mod surf1_tests {
                     name: format!("srv{index}"),
                     status,
                     error: None,
-                integration_id: None,
+                    integration_id: None,
                 })
                 .collect::<Vec<_>>()
         };
@@ -1136,7 +1132,7 @@ mod surf1_tests {
             name: "auth".into(),
             status: "needs_auth",
             error: None,
-        integration_id: None,
+            integration_id: None,
         });
         let widget = SidebarMcpWidget { servers: bad, open: true };
         assert_eq!(widget.counts(), (0, 2));
@@ -1158,13 +1154,13 @@ mod surf1_tests {
                             name: "github".into(),
                             status: "connected",
                             error: None,
-                        integration_id: None,
+                            integration_id: None,
                         },
                         crate::store::McpServerRow {
                             name: "broken".into(),
                             status: "failed",
                             error: Some("ECONNREFUSED".into()),
-                        integration_id: None,
+                            integration_id: None,
                         },
                     ],
                     open: true,

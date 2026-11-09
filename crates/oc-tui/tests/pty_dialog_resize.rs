@@ -20,7 +20,9 @@ mod vt_harness;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use vt_harness::{pty_lock, run_tui, sandbox_env, standard_sessions, FakeLlm, LiveHarness, WORDMARK};
+use vt_harness::{
+    pty_lock, run_tui, sandbox_env, standard_sessions, FakeLlm, LiveHarness, WORDMARK,
+};
 
 #[test]
 fn pty_dialog_palette_rect_follows_terminal_resize() {
@@ -93,8 +95,8 @@ fn wait_palette(driver: &mut vt_harness::HarnessHandle, cols: usize) -> bool {
             let row = grid.content_rect(0, *y, cols, 1);
             row.contains("Commands") && row.trim_start().starts_with("Commands")
         });
-        let esc = (0..grid.rows)
-            .any(|y| grid.content_rect(0, y, cols, 1).trim_end().ends_with("esc"));
+        let esc =
+            (0..grid.rows).any(|y| grid.content_rect(0, y, cols, 1).trim_end().ends_with("esc"));
         if let (Some(_), true) = (title, esc) {
             return true;
         }

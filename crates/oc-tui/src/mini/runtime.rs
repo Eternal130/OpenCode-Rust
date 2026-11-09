@@ -50,9 +50,7 @@ const RECONNECT_DELAY: Duration = Duration::from_millis(250);
 /// stream-v2.transport.ts:1533-1539). `None` when the endpoint is
 /// non-managed (ref leaves `reconnect` undefined there).
 pub type ReconnectFactory = std::sync::Arc<
-    dyn Fn() -> futures::future::BoxFuture<'static, Option<oc_client::Client>>
-        + Send
-        + Sync,
+    dyn Fn() -> futures::future::BoxFuture<'static, Option<oc_client::Client>> + Send + Sync,
 >;
 
 /// G-181④ — the stream pump's private message vocabulary: a live SSE
@@ -275,14 +273,9 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
     // model and its catalog variants (best-effort — an unreachable
     // catalog means "no variants available", exactly the ref's empty-
     // `variantsFor` arm).
-    let boot_target = input
-        .target
-        .model_label
-        .as_deref()
-        .and_then(parse_model_label);
-    let active_variant = boot_target
-        .as_ref()
-        .and_then(|target| preferences.resolve_variant(target));
+    let boot_target = input.target.model_label.as_deref().and_then(parse_model_label);
+    let active_variant =
+        boot_target.as_ref().and_then(|target| preferences.resolve_variant(target));
     // G-272 — the boot catalog fetch (`loadCatalog`, runtime.ts:601-
     // 611 over catalog.shared.ts): the agent list, the model catalog
     // (the picker's provider shape + the per-model context limits),
@@ -862,15 +855,18 @@ impl Runtime {
                 if self.demo {
                     self.lifecycle.append(Commit::system("new sessions unavailable"));
                 } else {
-                    match create_session(&self.client, &self.directory, self.lifecycle.pane.agent.as_deref())
-                        .await
+                    match create_session(
+                        &self.client,
+                        &self.directory,
+                        self.lifecycle.pane.agent.as_deref(),
+                    )
+                    .await
                     {
                         Ok(new_id) => {
                             self.session_id = new_id.clone();
                             self.session_title = None;
                             self.transport = TransportState::new(&new_id);
-                            self.subagents =
-                                super::transport::SubagentTracker::new(&new_id);
+                            self.subagents = super::transport::SubagentTracker::new(&new_id);
                             self.queue = PromptQueue::new(true);
                             self.history = PromptHistory::new();
                             self.pending.clear();
@@ -883,8 +879,7 @@ impl Runtime {
                             self.lifecycle.pane.queued_pending = 0;
                             // `footer.append({ kind: "system", text:
                             // `new session ${sessionID}` })`.
-                            self.lifecycle
-                                .append(Commit::system(&format!("new session {new_id}")));
+                            self.lifecycle.append(Commit::system(&format!("new session {new_id}")));
                         }
                         Err(error) => {
                             // The ref's failure arm: the phase hint +
@@ -1048,10 +1043,8 @@ async fn replay_history(
     // (a later `delivered` knows the row's text) and the footer's
     // `queued.prompts` view syncs (`syncPending`).
     if let Ok(items) = client.session().inbox().list(session_id).await {
-        let values = items
-            .iter()
-            .filter_map(|item| serde_json::to_value(item).ok())
-            .collect::<Vec<_>>();
+        let values =
+            items.iter().filter_map(|item| serde_json::to_value(item).ok()).collect::<Vec<_>>();
         transport.seed_pending(&values);
         lifecycle.pane.queued_pending = transport.pending_prompts().len();
         lifecycle.pane.queued_prompts =
@@ -1184,7 +1177,9 @@ fn replay_message_commits(
     if matches!(kind, "skill" | "shell" | "compaction") {
         match kind {
             "skill" => {
-                commits.extend(transport.replay_skill_message(&message_id, &text_field_of(value, "name")));
+                commits.extend(
+                    transport.replay_skill_message(&message_id, &text_field_of(value, "name")),
+                );
             }
             "shell" => {
                 commits.extend(transport.replay_shell_message(value));
@@ -1369,11 +1364,8 @@ impl CatalogSnapshot {
 /// `defaultCost` (catalog.shared.ts:24-28): the un-tiered cost (else
 /// the first), zero when every tier is free.
 fn default_cost(model: &oc_client::types::ModelInfo) -> f64 {
-    let Some(picked) = model
-        .cost
-        .iter()
-        .find(|cost| cost.tier.is_none())
-        .or_else(|| model.cost.first())
+    let Some(picked) =
+        model.cost.iter().find(|cost| cost.tier.is_none()).or_else(|| model.cost.first())
     else {
         return 0.0;
     };
@@ -1385,17 +1377,13 @@ fn default_cost(model: &oc_client::types::ModelInfo) -> f64 {
 }
 
 async fn fetch_catalog(client: &Client, directory: &str) -> Option<CatalogSnapshot> {
-    let location = || {
-        Some(oc_client::types::QueryLocation { directory: Some(directory.to_owned()) })
-    };
-    let model_query =
-        oc_client::types::ModelListQuery { location: location() };
-    let agent_query =
-        oc_client::types::AgentListQuery { location: location() };
+    let location =
+        || Some(oc_client::types::QueryLocation { directory: Some(directory.to_owned()) });
+    let model_query = oc_client::types::ModelListQuery { location: location() };
+    let agent_query = oc_client::types::AgentListQuery { location: location() };
     let model_api = client.model();
     let agent_api = client.agent();
-    let (models, agents) =
-        tokio::join!(model_api.list(&model_query), agent_api.list(&agent_query));
+    let (models, agents) = tokio::join!(model_api.list(&model_query), agent_api.list(&agent_query));
     // `loadCatalog` catches each list independently (runtime.ts:601-
     // 611) — a failing list degrades to empty, never kills the rest.
     let models = models.map(|page| page.data).unwrap_or_default();
@@ -1522,9 +1510,7 @@ async fn create_session(
         .session()
         .create(&oc_client::types::SessionCreateBody {
             agent: agent.map(str::to_owned),
-            location: Some(oc_client::types::LocationPublicRef {
-                directory: directory.to_owned(),
-            }),
+            location: Some(oc_client::types::LocationPublicRef { directory: directory.to_owned() }),
             ..Default::default()
         })
         .await
@@ -1542,8 +1528,14 @@ mod tests {
     /// override-less boot keeps the label unchanged.
     #[test]
     fn model_preference_binds_at_boot() {
-        let dir = std::env::temp_dir().join(format!("oc-mini-boot-{}-{}", std::process::id(), std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_nanos()));
+        let dir = std::env::temp_dir().join(format!(
+            "oc-mini-boot-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos()
+        ));
         let preferences = ModelPreferenceRepository::new(dir.join("model.json"));
         let target = super::super::model_pref::ModelPreferenceModel {
             provider_id: "anthropic".into(),
@@ -1563,7 +1555,10 @@ mod tests {
             bind_model_preference(&preferences, Some("anthropic/claude")).as_deref(),
             Some("anthropic/claude")
         );
-        assert_eq!(bind_model_preference(&preferences, Some("label-only")).as_deref(), Some("label-only"));
+        assert_eq!(
+            bind_model_preference(&preferences, Some("label-only")).as_deref(),
+            Some("label-only")
+        );
         assert_eq!(bind_model_preference(&preferences, Some("/")).as_deref(), Some("/"));
         assert_eq!(bind_model_preference(&preferences, None), None);
         let _ = std::fs::remove_dir_all(dir);
@@ -1603,10 +1598,7 @@ mod tests {
         let variants: Vec<String> = vec!["default".into(), "fast".into(), "think".into()];
 
         // No model → notice; model without variants → notice.
-        assert_eq!(
-            cycle_variant_decision(None, None, &variants),
-            CycleVariantDecision::NoVariants
-        );
+        assert_eq!(cycle_variant_decision(None, None, &variants), CycleVariantDecision::NoVariants);
         assert_eq!(
             cycle_variant_decision(Some(&target), None, &[]),
             CycleVariantDecision::NoVariants
@@ -1681,7 +1673,9 @@ mod tests {
     async fn reconnect_swaps_the_client_instance() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        async fn spawn_sse_server() -> (String, tokio::task::JoinHandle<()>, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        async fn spawn_sse_server(
+        ) -> (String, tokio::task::JoinHandle<()>, std::sync::Arc<std::sync::atomic::AtomicUsize>)
+        {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
             let addr = listener.local_addr().expect("addr");
             let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));

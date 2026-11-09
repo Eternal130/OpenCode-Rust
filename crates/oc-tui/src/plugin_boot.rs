@@ -482,10 +482,7 @@ impl TuiPluginRuntime {
                         // instead of only the log seam.
                         store.toast_show(crate::components::toast::ToastOptions {
                             title: Some("Plugin".to_owned()),
-                            message: format!(
-                                "{} crashed in {}: {error}",
-                                claim.plugin, path
-                            ),
+                            message: format!("{} crashed in {}: {error}", claim.plugin, path),
                             variant: "error",
                             ..crate::components::toast::ToastOptions::info("")
                         });

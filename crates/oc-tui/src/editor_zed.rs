@@ -129,11 +129,14 @@ pub fn resolve_zed_selection(db_path: &Path, cwd: &Path) -> ZedSelectionResult {
     if byte_ranges.is_empty() {
         return ZedSelectionResult::Unavailable;
     }
-    // The contents: the db row, else the file on disk.
+    // The contents: the db row, else the file on disk. G-273③ — the
+    // FAILED query also falls back to readFile (editor-zed.ts:63-67:
+    // `contents.type === "contents" && contents.contents != null` is
+    // the only non-fallback arm — a failed query used to abandon the
+    // selection entirely).
     let text = match query_zed_contents(&connection, row.editor_id, row.workspace_id) {
         Ok(Some(contents)) => Some(contents),
-        Ok(None) => std::fs::read_to_string(&buffer_path).ok(),
-        Err(()) => return ZedSelectionResult::Unavailable,
+        Ok(None) | Err(()) => std::fs::read_to_string(&buffer_path).ok(),
     };
     let Some(text) = text else {
         return ZedSelectionResult::Unavailable;
@@ -642,5 +645,46 @@ mod tests {
         assert_eq!(selection.ranges[1].text, "w");
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// G-273③ — a FAILED contents query falls back to reading the
+    /// buffer file (editor-zed.ts:63-67: only a present, non-null db
+    /// row wins; the old Err arm abandoned the selection).
+    #[test]
+    fn failed_contents_query_falls_back_to_read_file() {
+        let dir = std::env::temp_dir().join(format!("oc-zed-err-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let db_path = dir.join("db.sqlite");
+        let connection = rusqlite::Connection::open(&db_path).expect("open");
+        // No `contents` column: the active-editor query (buffer_path
+        // only) succeeds, the contents query FAILS.
+        connection
+            .execute_batch(&format!(
+                "create table items (item_id integer primary key, kind text, pane_id integer, workspace_id integer, active integer);
+                 create table panes (pane_id integer, workspace_id integer, active integer);
+                 create table workspaces (workspace_id integer primary key, paths text, timestamp text);
+                 create table editors (item_id integer, workspace_id integer, buffer_path text);
+                 create table editor_selections (editor_id integer, workspace_id integer, start integer, end integer);
+                 insert into workspaces values (1, '[\"{0}\"]', '2026-01-02T00:00:00Z');
+                 insert into panes values (10, 1, 1);
+                 insert into items values (100, 'Editor', 10, 1, 1);
+                 insert into editors values (100, 1, '{0}/notes.md');
+                 insert into editor_selections values (100, 1, 0, 6);",
+                dir.display()
+            ))
+            .expect("schema");
+        drop(connection);
+        // The buffer file ON DISK carries the text.
+        std::fs::write(dir.join("notes.md"), "héllo wörld").expect("buffer");
+        let result = resolve_zed_selection(&db_path, &dir);
+        let ZedSelectionResult::Selection(selection) = result else {
+            panic!("the read-file fallback kept the selection, got {result:?}");
+        };
+        // Bytes 0..6 of "héllo wörld" = "héllo" (the multi-byte é
+        // spans bytes 1..3).
+        assert_eq!(selection.ranges[0].text, "héllo");
+        assert_eq!(selection.ranges[0].end_line, 1);
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -35,8 +35,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use opentui_core::Rgba;
 use opentui_core::styled_text::{StyledText, TextChunk};
+use opentui_core::Rgba;
 use opentui_solid::builder::ForItemSource;
 use opentui_solid::element::{ForItem, PropValue};
 use opentui_solid::reactive::Reactive;
@@ -614,9 +614,8 @@ mod tests {
             // D4.1a: the mount lives in the shared-tree hub — the
             // wrapper stays mounted across the twin's frames (the
             // selection move patched in place, no rebuild).
-            let mounted = usize::from(
-                crate::components::chrome_solid::family_wrapper_live("picker"),
-            );
+            let mounted =
+                usize::from(crate::components::chrome_solid::family_wrapper_live("picker"));
             previous_mount = Some(mounted);
         }
         assert_eq!(previous_mount, Some(1), "the mount survived the churn");

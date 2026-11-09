@@ -528,8 +528,7 @@ impl PaletteProvider for CachedPaletteProvider {
 fn tint(base: Rgba, overlay: Rgba, alpha: f64) -> Rgba {
     let [br, bg_, bb, _] = base.floats();
     let [or_, og, ob, _] = overlay.floats();
-    let channel =
-        |b: f64, o: f64| ((b + (o - b) * alpha) * 255.0).round().clamp(0.0, 255.0) as u8;
+    let channel = |b: f64, o: f64| ((b + (o - b) * alpha) * 255.0).round().clamp(0.0, 255.0) as u8;
     Rgba::from_ints(channel(br, or_), channel(bg_, og), channel(bb, ob), 255)
 }
 
@@ -562,9 +561,7 @@ fn generate_gray_scale(bg: Rgba, is_dark: bool) -> Vec<Rgba> {
             luminance * (1.0 - factor * 0.4)
         };
         let ratio = if luminance == 0.0 { 0.0 } else { next / luminance };
-        let channel = |value: f64| {
-            ((value * ratio).min(255.0).max(0.0)).floor() as u8
-        };
+        let channel = |value: f64| ((value * ratio).min(255.0).max(0.0)).floor() as u8;
         grays[i] = Rgba::from_ints(channel(bg_r), channel(bg_g), channel(bg_b), 255);
     }
     grays
@@ -575,7 +572,11 @@ fn generate_muted_text_color(bg: Rgba, is_dark: bool) -> Rgba {
     let [r, g, b, _] = bg.to_ints();
     let luminance = 0.299 * f64::from(r) + 0.587 * f64::from(g) + 0.114 * f64::from(b);
     let gray = if is_dark {
-        if luminance < 10.0 { 180.0 } else { (160.0 + luminance * 0.3).floor().min(200.0) }
+        if luminance < 10.0 {
+            180.0
+        } else {
+            (160.0 + luminance * 0.3).floor().min(200.0)
+        }
     } else if luminance > 245.0 {
         75.0
     } else {
@@ -592,11 +593,10 @@ fn generate_muted_text_color(bg: Rgba, is_dark: bool) -> Rgba {
 /// (`theme/index.ts parseTheme`).
 #[must_use]
 pub fn generate_system(colors: &TerminalColors, mode: Mode) -> Option<ThemeDocument> {
-    let bg_hex = colors.default_background.clone().or_else(|| colors.palette.first().cloned().flatten())?;
-    let fg_hex = colors
-        .default_foreground
-        .clone()
-        .or_else(|| colors.palette.get(7).cloned().flatten())?;
+    let bg_hex =
+        colors.default_background.clone().or_else(|| colors.palette.first().cloned().flatten())?;
+    let fg_hex =
+        colors.default_foreground.clone().or_else(|| colors.palette.get(7).cloned().flatten())?;
     let bg = Rgba::from_hex(&bg_hex)?;
     let fg = Rgba::from_hex(&fg_hex)?;
     let is_dark = mode == Mode::Dark;
@@ -1015,20 +1015,17 @@ mod generate_system_tests {
         assert_eq!(hex(theme.tokens.markdown.link), "#458588"); // blue (slot 4)
         assert_eq!(hex(theme.tokens.markdown.emphasis), "#d79921");
         assert_eq!(hex(theme.tokens.markdown.text), "#ebdbb2"); // foreground
-        // Gray scale stepping 40% from the #282828 background.
+                                                                // Gray scale stepping 40% from the #282828 background.
         assert_eq!(hex(theme.tokens.border.base), "#5a5a5a"); // grays[7]
         assert_eq!(hex(theme.tokens.background.raised.base), "#363636"); // grays[2] panel
         assert_eq!(theme.tokens.background.base.a, 0); // ref keeps the terminal bg
-        // Muted text: floor(160 + 40 * 0.3) = 172.
+                                                       // Muted text: floor(160 + 40 * 0.3) = 172.
         assert_eq!(hex(theme.tokens.text.muted), "#acacac");
         // Diff tinting at the dark 0.22 alpha.
         assert_eq!(hex(theme.tokens.diff.background.added), "#414025");
         assert_eq!(hex(theme.tokens.diff.background.removed), "#4c2726");
         assert_eq!(hex(theme.tokens.diff.background.context), "#363636");
-        assert_eq!(
-            hex(theme.tokens.diff.line_number.background.added),
-            "#4c4b30"
-        );
+        assert_eq!(hex(theme.tokens.diff.line_number.background.added), "#4c4b30");
         assert_eq!(hex(theme.tokens.diff.highlight.added), "#b8bb26"); // greenBright
     }
 
@@ -1037,8 +1034,16 @@ mod generate_system_tests {
         let mut colors = sample_colors();
         // Only the background/foreground survive; everything else drops
         // to `ansiToRgba(index)`.
-        colors.palette = vec![Some("#282828".into()), None, None, None, None, None, None,
-            Some("#ebdbb2".into())];
+        colors.palette = vec![
+            Some("#282828".into()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("#ebdbb2".into()),
+        ];
         let theme = resolved(&colors, Mode::Dark);
         let hex = |color: Rgba| color.hex();
         assert_eq!(hex(theme.tokens.syntax.keyword), "#800080"); // ansi(5)
@@ -1064,7 +1069,11 @@ mod generate_system_tests {
         assert!(!bare.set_system_theme(&TerminalColors::default(), Mode::Dark));
         let fallback = bare.resolve("system", Mode::Dark).expect("fallback resolves");
         assert_ne!(
-            resolve_theme_document(fallback.document(), Some(Mode::Dark)).unwrap().tokens.syntax.keyword,
+            resolve_theme_document(fallback.document(), Some(Mode::Dark))
+                .unwrap()
+                .tokens
+                .syntax
+                .keyword,
             Rgba::from_hex("#b16286").unwrap()
         );
     }
@@ -1107,4 +1116,3 @@ mod generate_system_tests {
         assert_eq!(bare.get("system").expect("slot").origin, ThemeOrigin::Builtin);
     }
 }
-

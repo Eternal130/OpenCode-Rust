@@ -53,11 +53,11 @@ fn toast_tree_units(
     }];
     let content_x = 3; // rail + paddingLeft 2 (panel-local)
     let content_right = panel_width.saturating_sub(4); // last content column
-    // Clip a chrome_cluster_units run at the right rail: atoms whose
-    // first cell is at (or past) the rail column are dropped (the
-    // old composite's col loop never took them; the rail paint owns
-    // the column). A WIDE atom straddling the rail stays in the tree
-    // (dropping it would lose the interior ink at its origin).
+                                                       // Clip a chrome_cluster_units run at the right rail: atoms whose
+                                                       // first cell is at (or past) the rail column are dropped (the
+                                                       // old composite's col loop never took them; the rail paint owns
+                                                       // the column). A WIDE atom straddling the rail stays in the tree
+                                                       // (dropping it would lose the interior ink at its origin).
     let clip_rail = |units: Vec<ChromeUnit>| -> Vec<ChromeUnit> {
         units.into_iter().filter(|unit| unit.left < right).collect()
     };
@@ -192,8 +192,9 @@ pub fn paint_toast_rails(
         }
         if let Some(slot) = frame.cells.get_mut(row).and_then(|line| line.get_mut(right)) {
             let bg = rail_bg.unwrap_or(slot.bg);
-            let (ch, fg, attrs) = right_rail_cell(toast, pending, theme, panel_width - 1, row - top)
-                .unwrap_or(('┃', border, 0));
+            let (ch, fg, attrs) =
+                right_rail_cell(toast, pending, theme, panel_width - 1, row - top)
+                    .unwrap_or(('┃', border, 0));
             *slot = Cell { ch, attrs, fg, bg };
         }
     }

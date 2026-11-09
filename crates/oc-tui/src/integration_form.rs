@@ -104,15 +104,15 @@ fn when_from_wire(when: Option<&Vec<oc_client::types::FormWhen>>) -> Vec<Integra
             .map(|entry| IntegrationWhen {
                 key: entry.key.clone(),
                 value: match &entry.value {
-                    oc_client::types::FormWhenValue::String(value) => FormValue::String(value.clone()),
+                    oc_client::types::FormWhenValue::String(value) => {
+                        FormValue::String(value.clone())
+                    }
                     oc_client::types::FormWhenValue::Boolean(value) => FormValue::Boolean(*value),
                     oc_client::types::FormWhenValue::FormWhenValueVariant2(
                         oc_client::types::FormWhenValueVariant2::Number(value),
-                    ) => {
-                        FormValue::FormValueVariant2(oc_client::types::FormValueVariant2::Number(
-                            *value,
-                        ))
-                    }
+                    ) => FormValue::FormValueVariant2(oc_client::types::FormValueVariant2::Number(
+                        *value,
+                    )),
                     oc_client::types::FormWhenValue::FormWhenValueVariant2(_) => {
                         FormValue::String(String::new())
                     }
@@ -211,11 +211,11 @@ pub fn field_from_wire(field: &FormField) -> IntegrationFormField {
             custom: false,
             options: Vec::new(),
             default_value: match &inner.default {
-                Some(oc_client::types::FormIntegerFieldDefault::Number(number)) => Some(
-                    FormValue::FormValueVariant2(oc_client::types::FormValueVariant2::Number(
+                Some(oc_client::types::FormIntegerFieldDefault::Number(number)) => {
+                    Some(FormValue::FormValueVariant2(oc_client::types::FormValueVariant2::Number(
                         *number,
-                    )),
-                ),
+                    )))
+                }
                 _ => None,
             },
             format: None,
@@ -281,10 +281,7 @@ pub fn field_from_wire(field: &FormField) -> IntegrationFormField {
         },
         FormField::ExternalField(inner) => IntegrationFormField {
             key: inner.key.clone(),
-            label: inner
-                .title
-                .clone()
-                .unwrap_or_else(|| inner.url.clone()),
+            label: inner.title.clone().unwrap_or_else(|| inner.url.clone()),
             kind: IntegrationFieldKind::External,
             description: inner.description.clone(),
             placeholder: None,
@@ -357,10 +354,7 @@ pub(crate) fn format_js_number(number: f64) -> String {
 /// `pattern` check (a RegExp the TUI crate has no engine for; the
 /// server re-validates) — bounded deviation, G-271④.
 #[must_use]
-pub fn validate_value(
-    field: &IntegrationFormField,
-    value: Option<&FormValue>,
-) -> Option<String> {
+pub fn validate_value(field: &IntegrationFormField, value: Option<&FormValue>) -> Option<String> {
     let Some(value) = value else {
         return field.required.then(|| "Answer required".to_owned());
     };
@@ -498,13 +492,14 @@ fn valid_email(text: &str) -> bool {
 
 /// `new URL(value)` — scheme://rest with a non-empty rest.
 fn valid_url(text: &str) -> bool {
-    text.split_once("://")
-        .is_some_and(|(scheme, rest)| {
-            !scheme.is_empty()
-                && scheme.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '+' || ch == '-' || ch == '.')
-                && !rest.is_empty()
-                && !rest.contains(char::is_whitespace)
-        })
+    text.split_once("://").is_some_and(|(scheme, rest)| {
+        !scheme.is_empty()
+            && scheme
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '+' || ch == '-' || ch == '.')
+            && !rest.is_empty()
+            && !rest.contains(char::is_whitespace)
+    })
 }
 
 /// `^\d{4}-\d{2}-\d{2}$` + a real calendar date.
@@ -635,8 +630,7 @@ impl IntegrationFormState {
     #[must_use]
     pub fn prompt_style(&self) -> bool {
         self.current().is_some_and(|field| {
-            self.custom_active
-                || (field.kind.is_textual() && field.options.is_empty())
+            self.custom_active || (field.kind.is_textual() && field.options.is_empty())
         })
     }
 
@@ -750,10 +744,7 @@ mod tests {
             validate_value(&field, Some(&FormValue::String("nope".into()))).as_deref(),
             Some("Expected an email address")
         );
-        assert_eq!(
-            validate_value(&field, Some(&FormValue::String("a@b.co".into()))),
-            None
-        );
+        assert_eq!(validate_value(&field, Some(&FormValue::String("a@b.co".into()))), None);
         // Integer.
         let mut number = text_field("n", false);
         number.kind = IntegrationFieldKind::Integer;
@@ -765,10 +756,7 @@ mod tests {
         assert_eq!(validate_value(&number, Some(&three)), None);
         let mut bounded = number.clone();
         bounded.maximum = Some(2.0);
-        assert_eq!(
-            validate_value(&bounded, Some(&three)).as_deref(),
-            Some("Must be at most 2")
-        );
+        assert_eq!(validate_value(&bounded, Some(&three)).as_deref(), Some("Must be at most 2"));
     }
 
     #[test]
@@ -788,10 +776,7 @@ mod tests {
         // A hit → active; an ARRAY answer tests membership.
         answer.insert("mode".to_owned(), FormValue::String("org".into()));
         assert!(field_active(&field, &answer));
-        answer.insert(
-            "mode".to_owned(),
-            FormValue::Array(vec!["x".into(), "org".into()]),
-        );
+        answer.insert("mode".to_owned(), FormValue::Array(vec!["x".into(), "org".into()]));
         assert!(field_active(&field, &answer));
         // neq flips the hit.
         field.when[0].equal = false;
@@ -810,28 +795,18 @@ mod tests {
             equal: true,
         }];
         let prompt = text_field("token", true);
-        let mut state = IntegrationFormState::new(
-            "github",
-            "key",
-            "key",
-            vec![hidden, inactive, prompt],
-        );
+        let mut state =
+            IntegrationFormState::new("github", "key", "key", vec![hidden, inactive, prompt]);
         // The hidden field's default landed in the answer; the
         // inactive field skipped; the prompt field is current.
-        assert_eq!(
-            state.answer.get("region"),
-            Some(&FormValue::String("us".into()))
-        );
+        assert_eq!(state.answer.get("region"), Some(&FormValue::String("us".into())));
         let current = state.current().expect("the token field");
         assert_eq!(current.key, "token");
         assert!(state.prompt_style());
         // Answering it completes the walk.
         state.record("token", Some(FormValue::String("sekrit".into())));
         assert!(!state.advance(), "the walk is done");
-        assert_eq!(
-            state.answer.get("token"),
-            Some(&FormValue::String("sekrit".into()))
-        );
+        assert_eq!(state.answer.get("token"), Some(&FormValue::String("sekrit".into())));
     }
 
     #[test]
@@ -844,11 +819,7 @@ mod tests {
                 label: "Repo".into(),
                 description: None,
             },
-            IntegrationFieldOption {
-                value: "org".into(),
-                label: "Org".into(),
-                description: None,
-            },
+            IntegrationFieldOption { value: "org".into(), label: "Org".into(), description: None },
         ];
         field.default_value = Some(FormValue::Array(vec!["repo".into()]));
         let mut state = IntegrationFormState::new("github", "oauth-x", "oauth", vec![field]);

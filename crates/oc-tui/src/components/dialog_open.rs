@@ -499,13 +499,46 @@ pub fn execute_open_selection(
 /// ("Today" for the current day), the timestamped fallback title, the
 /// outside-project footer basename, and the armed two-press delete's
 /// confirm title.
+///
+/// G-271⑤ — the rows source follows the ref's `sessions()` memo
+/// (:79-93): a NON-empty filter renders the debounced server search's
+/// rows (the latest while a new query settles, the LOCAL history —
+/// pre-filtered by the query — before the first result or on error);
+/// an empty filter lists the open-time snapshot. The dialog itself
+/// never re-filters (`skipFilter`, :212).
 #[must_use]
 #[allow(clippy::too_many_lines)] // one row builder, v2's memo shape
-pub fn session_list_options(store: &Store) -> Vec<SelectOption> {
+pub fn session_list_options(store: &Store, filter: &str) -> Vec<SelectOption> {
     let now = wall_now_ms();
     let armed = store.session_delete_armed();
-    let mut sessions: Vec<crate::data::SessionSnapshot> =
-        store.session_history().into_iter().filter(|session| session.parent_id.is_none()).collect();
+    let query = filter.trim().to_lowercase();
+    let mut sessions: Vec<crate::data::SessionSnapshot> = match store.session_search_rows(filter) {
+        Some(rows) => rows,
+        None => {
+            let local: Vec<crate::data::SessionSnapshot> = store
+                .session_history()
+                .into_iter()
+                .filter(|session| session.parent_id.is_none())
+                .filter(|session| {
+                    // localSessions' substring (:71-73) — only the
+                    // LOCAL fallback filters; the server rows
+                    // arrive pre-searched.
+                    query.is_empty() || {
+                        let title = with_timestamped_fallback(
+                            store
+                                .session_title(&session.id)
+                                .as_deref()
+                                .or(session.title.as_deref()),
+                            session.parent_id.as_deref(),
+                            session.time_created,
+                        );
+                        title.to_lowercase().contains(&query)
+                    }
+                })
+                .collect();
+            local
+        }
+    };
     sessions.sort_by(|a, b| {
         b.time_updated.unwrap_or_default().total_cmp(&a.time_updated.unwrap_or_default())
     });

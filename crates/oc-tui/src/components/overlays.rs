@@ -46,12 +46,7 @@ pub fn mount_state_overlays(store: &Store, styles: &ThemeStyles, width: usize, h
 /// console < permission@3 < toast < pill < migration <
 /// scrim). NOT mounting a surface this frame unmounts its wrapper at
 /// the seam (the old painters' visibility branches).
-pub fn mount_overlays_family(
-    store: &Store,
-    styles: &ThemeStyles,
-    width: usize,
-    height: usize,
-) {
+pub fn mount_overlays_family(store: &Store, styles: &ThemeStyles, width: usize, height: usize) {
     // TUI-29 — the renderer console (`renderer.console`'s strip at
     // the top of the screen, over the app).
     if store.console_open() {
@@ -304,10 +299,7 @@ mod tests {
         store.set_connection(crate::data::ConnectionState::Connected);
         // The console strip (rows 0..12, blank-underlaid).
         crate::components::console_solid::mount_console_overlay(
-            &[
-                "console fixture line".to_owned(),
-                "second line".to_owned(),
-            ],
+            &["console fixture line".to_owned(), "second line".to_owned()],
             &styles,
             80,
         );
@@ -323,12 +315,7 @@ mod tests {
         crate::components::chrome_solid::composite_chrome_tree(&mut frame);
         // The post-seam half (render_app's tail): the rails.
         crate::components::toast_solid::paint_toast_rails(
-            &mut frame,
-            &toast,
-            0,
-            &footer,
-            &tokens,
-            None,
+            &mut frame, &toast, 0, &footer, &tokens, None,
         );
         let grid = frame.text_grid();
         // The console title rides the top border (row 0, the family's

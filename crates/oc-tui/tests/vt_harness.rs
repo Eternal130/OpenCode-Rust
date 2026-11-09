@@ -160,12 +160,7 @@ impl Grid {
     /// Reassemble a grid from saved parts (the scan-A/B corpus loader:
     /// cell digests plus the full-contents sidecar).
     #[must_use]
-    pub fn from_parts(
-        cols: usize,
-        rows: usize,
-        cells: Vec<VtCell>,
-        contents: Vec<String>,
-    ) -> Self {
+    pub fn from_parts(cols: usize, rows: usize, cells: Vec<VtCell>, contents: Vec<String>) -> Self {
         Self { cols, rows, cells, contents }
     }
 

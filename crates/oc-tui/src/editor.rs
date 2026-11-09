@@ -122,7 +122,10 @@ fn spawn_editor(
     let mut command = std::process::Command::new(program);
     command.args(parts);
     command.arg(file);
-    if let Some(cwd) = cwd.filter(|dir| dir.is_dir()) {
+    // G-273④ — the ref gates on existsSync (editor.ts:25: a path
+    // that EXISTS wins, file or not — is_dir() dropped existing-file
+    // cwds to the process cwd).
+    if let Some(cwd) = cwd.filter(|dir| dir.exists()) {
         command.current_dir(cwd);
     }
     command.status().map_err(|error| EditorError::Io(format!("spawn {program:?}: {error}")))
@@ -232,6 +235,21 @@ mod tests {
             let _ = open_editor("old", None, || {}, || resumed.set(resumed.get() + 1));
             assert_eq!(resumed.get(), 1);
         });
+
+        // G-273④ — the cwd gate is `existsSync` (editor.ts:25): a
+        // path that exists as a FILE is still handed to the spawn
+        // (which then fails like the ref's ENOTDIR child error); a
+        // NON-existent path falls back to the process cwd.
+        {
+            let script = stub_editor("cwd", r#"printf '.' > "$DRAFT""#);
+            std::env::set_var("EDITOR", &script);
+            let result =
+                open_editor("x", Some(std::path::Path::new("/definitely/not/here")), || {}, || {});
+            assert_eq!(result, Ok(Some(".".to_owned())), "a missing cwd falls back");
+            let file_cwd = script.clone();
+            let result = open_editor("x", Some(&file_cwd), || {}, || {});
+            assert!(result.is_err(), "the file cwd surfaces the spawn failure");
+        }
     }
 
     /// `normalizePromptContent`: one trailing newline drops only for

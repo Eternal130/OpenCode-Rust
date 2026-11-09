@@ -40,11 +40,11 @@
 use crate::style::{Modifier, Style};
 use parity::tui_frame as pf;
 
-use crate::components::session_tabs::{ADD_TAB_WIDTH, TabStatus, TabView};
+use crate::components::session_tabs::{TabStatus, TabView, ADD_TAB_WIDTH};
 use crate::components::session_tabs_solid::paint_solid_bar;
 use crate::components::tool_rows::render_tool_wrap;
 use crate::layout::{BoxSpec, LayoutTree, StyledSpan};
-use crate::render::{Frame, paint_placed, serialize_canonical};
+use crate::render::{paint_placed, serialize_canonical, Frame};
 use crate::store::{SessionTab, Unread};
 use crate::theme::ThemeState;
 use taffy::AvailableSpace;
@@ -330,7 +330,7 @@ fn layout_tool_wrap_plain_leaves(
     fixture: &[crate::components::tool_rows::ToolRowFixture],
     theme: &crate::theme::ThemeStyles,
 ) -> Vec<crate::layout::Placed> {
-    use crate::components::tool_rows::{BOX_WIDTH, ICON_WIDTH, row_style};
+    use crate::components::tool_rows::{row_style, BOX_WIDTH, ICON_WIDTH};
     let mut tree = LayoutTree::new();
     let wrappers: Vec<_> = fixture
         .iter()
@@ -484,11 +484,11 @@ fn markdown_bold_spans_wrap_boundaries_at_80_and_40() {
 
 // -- 7.2 wave 1 Lane A: dialog goldens ---------------------------------------
 
-use crate::components::command_palette::{PaletteCommand, palette_options};
+use crate::components::command_palette::{palette_options, PaletteCommand};
 use crate::components::dialog::render_overlay_with;
 use crate::components::dialog_select::{
-    DialogStyles, SelectAction, SelectOption, SelectProps, SelectState, frame_from_view,
-    render_select,
+    frame_from_view, render_select, DialogStyles, SelectAction, SelectOption, SelectProps,
+    SelectState,
 };
 use crate::store::{DialogEntry, DialogKind, DialogSize};
 

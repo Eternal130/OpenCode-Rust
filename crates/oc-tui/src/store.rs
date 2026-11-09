@@ -37,8 +37,8 @@ use crate::keymap::KeybindOverride;
 use crate::mini::model_pref;
 use crate::reactive::{Effect, Runtime, Signal};
 use crate::theme::{ThemeRegistry, ThemeState};
-use oc_tui_core::scroll::{FollowState, ScrollCommand, ScrollDriver};
 use oc_client::types::FormValue;
+use oc_tui_core::scroll::{FollowState, ScrollCommand, ScrollDriver};
 
 /// How many bus-event ids the replay-dedup window remembers (the F2
 /// contract — see [`Store::ingest_all`] and `data.rs`).
@@ -1019,6 +1019,20 @@ impl TerminalRecord {
     }
 }
 
+/// G-271⑤ — the sessions dialog's server-search state
+/// (`searchResults`, dialog-session-list.tsx:40-78).
+#[derive(Debug, Clone, Default)]
+pub struct SessionSearchState {
+    /// The settled (or in-flight) query.
+    pub query: String,
+    /// The latest server rows (`None` = never searched).
+    pub rows: Option<Vec<crate::data::SessionSnapshot>>,
+    /// `searchResults.loading`.
+    pub in_flight: bool,
+    /// The settled fetch FAILED (the memo's local fallback).
+    pub error: bool,
+}
+
 /// One session's terminal list (the registry's per-session entry).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalListed {
@@ -1552,8 +1566,7 @@ pub struct Store {
     plugin_server_sink: std::cell::RefCell<Rc<dyn PluginServerSink>>,
     /// G-127: the composer autocomplete's async fetch seam
     /// (`fs.find` for `@` references + `fs.list` for `/cd`).
-    autocomplete_fetch_sink:
-        std::cell::RefCell<Rc<dyn autocomplete::AutocompleteFetchSink>>,
+    autocomplete_fetch_sink: std::cell::RefCell<Rc<dyn autocomplete::AutocompleteFetchSink>>,
     /// The engine prompt API stub submissions forward to.
     prompt_sink: std::rc::Rc<dyn PromptSink>,
     /// The server selection API (model/agent switch POSTs).
@@ -1592,8 +1605,7 @@ pub struct Store {
     /// `motion` spring): the pane-resize smooth transition, sampled
     /// on the 100 ms pump tick (`advance_clock`) — see
     /// [`oc_tui_core::animation`].
-    rail_width_spring:
-        std::cell::RefCell<Option<oc_tui_core::animation::Animatable>>,
+    rail_width_spring: std::cell::RefCell<Option<oc_tui_core::animation::Animatable>>,
     /// Attention (bell + pending marker) — see `attention.rs`.
     attention: Cell<AttentionState>,
     /// The attention engine (R-06): OS notifications + sounds behind
@@ -1941,9 +1953,19 @@ pub struct Store {
     integration_auto_connect_id: std::cell::RefCell<Option<String>>,
     /// G-271④ — the live form walk (`formAnswer`'s state machine).
     integration_form: std::cell::RefCell<Option<crate::integration_form::IntegrationFormState>>,
+    /// G-271⑤ — the sessions dialog's server search state
+    /// (`searchResults`, dialog-session-list.tsx:40-78): the settled
+    /// query + the latest server rows (`None` = never searched — the
+    /// local history renders) + the error flag (the memo's local
+    /// fallback).
+    session_search: std::cell::RefCell<SessionSearchState>,
+    /// G-271⑤ — the debounce outbox: the typed query + the last
+    /// keystroke's instant (`createDebouncedSignal("", 150)`).
+    session_search_pending: std::cell::RefCell<Option<(String, std::time::Instant)>>,
     /// G-271④ — the completed walk's answer staged for the key
     /// method's prompt (the API-key POST carries it).
-    integration_key_answer: std::cell::RefCell<Option<crate::integration_form::IntegrationFormAnswer>>,
+    integration_key_answer:
+        std::cell::RefCell<Option<crate::integration_form::IntegrationFormAnswer>>,
     /// Lane FINAL: the sessions dialog's two-press delete (`toDelete`,
     /// dialog-session-list.tsx:161).
     session_delete_armed: Signal<Option<String>>,
@@ -2191,8 +2213,20 @@ pub struct NoIntegrationSink;
 
 impl IntegrationSink for NoIntegrationSink {
     fn list(&self) {}
-    fn connect_key(&self, _integration_id: &str, _key: &str, _answer: Option<&crate::integration_form::IntegrationFormAnswer>) {}
-    fn oauth_connect(&self, _integration_id: &str, _method_id: &str, _answer: Option<&crate::integration_form::IntegrationFormAnswer>) {}
+    fn connect_key(
+        &self,
+        _integration_id: &str,
+        _key: &str,
+        _answer: Option<&crate::integration_form::IntegrationFormAnswer>,
+    ) {
+    }
+    fn oauth_connect(
+        &self,
+        _integration_id: &str,
+        _method_id: &str,
+        _answer: Option<&crate::integration_form::IntegrationFormAnswer>,
+    ) {
+    }
     fn oauth_complete(&self, _integration_id: &str, _attempt_id: &str, _code: &str) {}
     fn command_connect(&self, _integration_id: &str, _method_id: &str) {}
     fn cancel(&self, _integration_id: &str, _attempt_id: &str, _kind: &'static str) {}
@@ -2217,9 +2251,20 @@ pub enum IntegrationCall {
         method_id: String,
         answer: Option<crate::integration_form::IntegrationFormAnswer>,
     },
-    OauthComplete { integration_id: String, attempt_id: String, code: String },
-    CommandConnect { integration_id: String, method_id: String },
-    Cancel { integration_id: String, attempt_id: String, kind: &'static str },
+    OauthComplete {
+        integration_id: String,
+        attempt_id: String,
+        code: String,
+    },
+    CommandConnect {
+        integration_id: String,
+        method_id: String,
+    },
+    Cancel {
+        integration_id: String,
+        attempt_id: String,
+        kind: &'static str,
+    },
     Activate(String),
     Remove(String),
 }
@@ -2342,12 +2387,7 @@ impl Default for ExportOptionsState {
     fn default() -> Self {
         // index.tsx:1213 seeds `defaultThinking: true`; tools/sanitize
         // start true/false (dialog-export-options.tsx:26-29).
-        Self {
-            format: ExportFormat::Markdown,
-            thinking: true,
-            tools: true,
-            sanitize: false,
-        }
+        Self { format: ExportFormat::Markdown, thinking: true, tools: true, sanitize: false }
     }
 }
 
@@ -4098,6 +4138,8 @@ impl Store {
             integration_auto_connect_id: std::cell::RefCell::new(None),
             integration_form: std::cell::RefCell::new(None),
             integration_key_answer: std::cell::RefCell::new(None),
+            session_search: std::cell::RefCell::new(SessionSearchState::default()),
+            session_search_pending: std::cell::RefCell::new(None),
             session_delete_armed,
             pending_compactions,
             history_loading,
@@ -5099,10 +5141,7 @@ impl Store {
 
     /// G-127 — install the autocomplete async-fetch seam (the run
     /// loop wires the HTTP impl; tests keep the no-op default).
-    pub fn set_autocomplete_fetch_sink(
-        &self,
-        sink: Rc<dyn autocomplete::AutocompleteFetchSink>,
-    ) {
+    pub fn set_autocomplete_fetch_sink(&self, sink: Rc<dyn autocomplete::AutocompleteFetchSink>) {
         *self.autocomplete_fetch_sink.borrow_mut() = sink;
     }
 
@@ -5115,9 +5154,7 @@ impl Store {
     /// G-127 — fire the `/cd` `directoryAutocomplete` list
     /// (autocomplete.tsx:336).
     pub fn autocomplete_directory_list(&self, query: &str, directory: String, home: String) {
-        self.autocomplete_fetch_sink
-            .borrow()
-            .directory_list(query, directory, home);
+        self.autocomplete_fetch_sink.borrow().directory_list(query, directory, home);
     }
 
     /// The current server plugin rows (the plugins dialog's `server:`
@@ -5581,6 +5618,82 @@ impl Store {
         self.request_redraw();
     }
 
+    /// G-271⑤ — one typed keystroke on the sessions dialog's filter
+    /// (`setFilter` + `setSearch(query)`, dialog-session-list.tsx:
+    /// 213-216: the debounced signal re-arms on every update).
+    pub fn session_search_typed(&self, filter: &str) {
+        *self.session_search_pending.borrow_mut() =
+            Some((filter.trim().to_owned(), std::time::Instant::now()));
+    }
+
+    /// G-271⑤ — the run loop's debounce drain: the query once 150 ms
+    /// passed since the LAST keystroke (the ref's
+    /// `createDebouncedSignal("", 150)`), `None` while the window
+    /// keeps extending.
+    pub fn take_due_session_search(&self) -> Option<String> {
+        let mut pending = self.session_search_pending.borrow_mut();
+        let due = pending
+            .as_ref()
+            .is_some_and(|(_, at)| at.elapsed() >= std::time::Duration::from_millis(150));
+        due.then(|| pending.take().map(|(query, _)| query).unwrap_or_default())
+    }
+
+    /// G-271⑤ — `session.list {search}` landed: the settled query +
+    /// the parent-only rows (the dialog filters `!session.parentID`
+    /// client-side, :190-192) or the error flag (the memo's local
+    /// fallback).
+    pub fn session_search_loaded(
+        &self,
+        query: String,
+        result: Result<Vec<crate::data::SessionSnapshot>, String>,
+    ) {
+        let mut state = self.session_search.borrow_mut();
+        state.query = query;
+        state.in_flight = false;
+        match result {
+            Ok(rows) => {
+                state.error = false;
+                state.rows = Some(rows.into_iter().filter(|row| row.parent_id.is_none()).collect());
+            }
+            Err(_) => {
+                // `result.error` → the memo returns the LOCAL list.
+                state.error = true;
+            }
+        }
+        drop(state);
+        self.request_redraw();
+    }
+
+    /// G-271⑤ — the search request left (the in-flight flag for the
+    /// memo's `searchResults.loading` arm).
+    pub fn session_search_started(&self, query: &str) {
+        let mut state = self.session_search.borrow_mut();
+        state.query = query.to_owned();
+        state.in_flight = true;
+    }
+
+    /// The rows the sessions dialog renders for `filter` (the ref's
+    /// `sessions()` memo, dialog-session-list.tsx:79-93): `None` =
+    /// the LOCAL history (pre-first-search or the error fallback —
+    /// the caller pre-filters it by the query).
+    #[must_use]
+    pub fn session_search_rows(&self, filter: &str) -> Option<Vec<crate::data::SessionSnapshot>> {
+        let state = self.session_search.borrow();
+        let query = filter.trim();
+        if query.is_empty() {
+            // An empty query lists the open-time snapshot (the ref
+            // re-searches with `search` absent — the F13 refresh
+            // covers it, bounded).
+            return None;
+        }
+        if state.error && state.query == query {
+            return None;
+        }
+        // Debounce pending or request in flight → the LATEST rows
+        // (`searchResults.latest?.sessions ?? local`).
+        state.rows.clone()
+    }
+
     /// G-229① — the attach stream's `title_changed` frame folds into
     /// the registry row (context/session-terminals' label source —
     /// the `foregroundProcess ?? title` chain, terminals-tab.tsx:105;
@@ -5774,13 +5887,7 @@ impl Store {
     /// terminal-pane.tsx:289). A selection without a live state
     /// re-requests the attach (the self-healing mount).
     #[must_use]
-    pub fn terminal_pane_sync(
-        &self,
-        session_id: &str,
-        size: (u16, u16),
-        left: usize,
-        top: usize,
-    ) {
+    pub fn terminal_pane_sync(&self, session_id: &str, size: (u16, u16), left: usize, top: usize) {
         let Some(pty) = self.terminal_pane_mounted(session_id) else { return };
         let mut panes = self.terminal_panes.borrow_mut();
         if !panes.contains_key(&pty) {
@@ -5887,10 +5994,7 @@ impl Store {
     /// Apply the active theme's palette to every mounted pane's opentui
     /// engine (G-141; the attach no longer feeds OSC bytes into the
     /// PTY).
-    pub fn terminal_pane_apply_theme(
-        &self,
-        palette: &crate::terminal_pane::TerminalThemePalette,
-    ) {
+    pub fn terminal_pane_apply_theme(&self, palette: &crate::terminal_pane::TerminalThemePalette) {
         let mut panes = self.terminal_panes.borrow_mut();
         if panes.is_empty() {
             return;
@@ -7034,6 +7138,33 @@ impl Store {
         }
     }
 
+    /// G-273① — the IDE socket's `at_mentioned` notification
+    /// (context/editor.ts:242-246 → the composer's
+    /// `insertFileMention`, autocomplete.tsx:763-765/298-306):
+    /// normalize the path against the current location
+    /// (`normalizeMentionPath`, :318-328 — relative when the file sits
+    /// under it, else absolute), fold the line span into the
+    /// `path#start[-end]` chip name (`createFilePart`, :244-259), and
+    /// insert it into the FOCUSED composer (the mounted prompt).
+    pub fn apply_editor_mention(&self, mention: &crate::editor_ide::EditorMention) {
+        let base = self.home_location().unwrap_or_else(|| {
+            std::env::current_dir().map(|path| path.display().to_string()).unwrap_or_default()
+        });
+        let name =
+            mention_chip_name(&mention.file_path, mention.line_start, mention.line_end, &base);
+        if name.is_empty() {
+            return;
+        }
+        let key = match self.route() {
+            Route::Session { session_id, .. } => session_id,
+            Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
+        };
+        let mut composer = self.composer(&key);
+        composer.insert_file_mention(&name);
+        self.set_composer(&key, &composer);
+        self.request_redraw();
+    }
+
     /// `editorContext()` (index.tsx:225-228): the selection unless the
     /// clear command dismissed exactly this key.
     #[must_use]
@@ -7810,10 +7941,7 @@ impl Store {
     /// (marker included).
     #[must_use]
     pub fn inline_shell_display(&self, shell_id: &str) -> Option<String> {
-        self.inline_shells
-            .borrow()
-            .get(shell_id)
-            .map(InlineShellStream::display)
+        self.inline_shells.borrow().get(shell_id).map(InlineShellStream::display)
     }
 
     /// G-184 — the run loop's 1s poll targets: every RUNNING shell
@@ -7839,7 +7967,8 @@ impl Store {
                     if !running {
                         continue;
                     }
-                    if let Some(shell_id) = state.metadata.get("shellID").filter(|id| !id.is_empty())
+                    if let Some(shell_id) =
+                        state.metadata.get("shellID").filter(|id| !id.is_empty())
                     {
                         let cursor =
                             self.inline_shells.borrow().get(shell_id).map_or(0, |s| s.cursor);
@@ -7866,7 +7995,10 @@ impl Store {
     /// (`pendingPermissions()`, rows.ts:102-107): the permission
     /// requests whose `source.type === "tool"`.
     #[must_use]
-    pub fn pending_permission_part_ids(&self, session_id: &str) -> std::collections::HashSet<String> {
+    pub fn pending_permission_part_ids(
+        &self,
+        session_id: &str,
+    ) -> std::collections::HashSet<String> {
         self.footer
             .get()
             .permissions
@@ -8271,9 +8403,11 @@ impl Store {
         let answer = state.answer.clone();
         match state.method_kind {
             "oauth" => {
-                self.integration_sink
-                    .borrow()
-                    .oauth_connect(&state.integration_id, &state.method_id, Some(&answer));
+                self.integration_sink.borrow().oauth_connect(
+                    &state.integration_id,
+                    &state.method_id,
+                    Some(&answer),
+                );
             }
             _ => {
                 // beginKey's second half: the API-key prompt mounts
@@ -8304,20 +8438,14 @@ impl Store {
 
     /// The live form walk's state (the dialog's render source).
     #[must_use]
-    pub fn integration_form(
-        &self,
-    ) -> Option<crate::integration_form::IntegrationFormState> {
+    pub fn integration_form(&self) -> Option<crate::integration_form::IntegrationFormState> {
         self.integration_form.borrow().clone()
     }
 
     /// Remount the walk's dialog for the next field (a fresh select
     /// state + prompt seed — v2's `dialog.replace` per fieldAnswer).
     fn integration_form_remount(&self) {
-        let id = self
-            .integration_form
-            .borrow()
-            .as_ref()
-            .map(|state| state.integration_id.clone());
+        let id = self.integration_form.borrow().as_ref().map(|state| state.integration_id.clone());
         if let Some(id) = id {
             self.replace_dialog(
                 DialogKind::IntegrationForm { integration_id: id },
@@ -9839,13 +9967,9 @@ impl Store {
             provider_id: provider_id.to_owned(),
             model_id: model_id.to_owned(),
         };
-        let enabled = self
-            .model_ring
-            .get()
-            .document
-            .favorite
-            .iter()
-            .all(|item| model_pref::model_preference_key(item) != model_pref::model_preference_key(&model));
+        let enabled = self.model_ring.get().document.favorite.iter().all(|item| {
+            model_pref::model_preference_key(item) != model_pref::model_preference_key(&model)
+        });
         self.model_ring.update(|ring| {
             ring.document.favorite =
                 model_pref::favorite_models(&model, &ring.document.favorite, enabled);
@@ -10054,7 +10178,8 @@ impl Store {
         self.navigate(Route::session_with_prompt(session_id, prompt));
     }
 
-    pub fn push_dialog(&self, kind: DialogKind) {        let theme_initial = self.theme_dialog_initial(&kind);
+    pub fn push_dialog(&self, kind: DialogKind) {
+        let theme_initial = self.theme_dialog_initial(&kind);
         let entry = DialogEntry {
             kind,
             size: DialogSize::default(),
@@ -10820,7 +10945,7 @@ impl Store {
         let request_id = match kind {
             DialogKind::Alert { request_id, .. }
             | DialogKind::Confirm { request_id, .. }
-            | DialogKind::Prompt { request_id, .. } => { *request_id }
+            | DialogKind::Prompt { request_id, .. } => *request_id,
             _ => None,
         };
         if let Some(id) = request_id {
@@ -12292,7 +12417,14 @@ impl Store {
                     tap.publish(&event);
                 }
             }
-            Ingest::Resync { sessions: mut sessions, unread, messages, cursors, permissions, forms } => {
+            Ingest::Resync {
+                sessions: mut sessions,
+                unread,
+                messages,
+                cursors,
+                permissions,
+                forms,
+            } => {
                 // A resync only happens after a successful subscribe —
                 // the stream is attached, the client is connected
                 // (SURF-2: servers that never emit the `server.
@@ -13792,10 +13924,8 @@ fn message_from_event(event: &BusEvent) -> Option<Message> {
                                     .join("\n")
                             })
                             .filter(|text| !text.is_empty());
-                        state.input_json = part
-                            .pointer("/state/input")
-                            .cloned()
-                            .filter(|value| !value.is_null());
+                        state.input_json =
+                            part.pointer("/state/input").cloned().filter(|value| !value.is_null());
                         state.images = crate::data::tool_images_from_json_content(
                             part.pointer("/state/content"),
                         );
@@ -14301,10 +14431,11 @@ mod tests {
         store.replace_dialog(DialogKind::Open, DialogSize::Large);
         let before = crate::components::dialog_open::open_menu_props(&store);
         assert!(before.options.iter().any(|option| option.value == "ses:s1"));
-        assert!(before
-            .options
-            .iter()
-            .any(|option| option.footer.as_deref().is_some_and(|footer| footer.contains("oldroot"))),
+        assert!(
+            before.options.iter().any(|option| option
+                .footer
+                .as_deref()
+                .is_some_and(|footer| footer.contains("oldroot"))),
             "the pre-move footer shows the old directory: {:?}",
             before.options.iter().map(|option| &option.footer).collect::<Vec<_>>()
         );
@@ -15845,7 +15976,9 @@ mod tests {
 
         // close: back to the parent, the explicit open flag folds.
         dispatcher.dispatch(&store, "composer.close", None);
-        assert!(matches!(store.route(), Route::Session { ref session_id, .. } if session_id == "s1"));
+        assert!(
+            matches!(store.route(), Route::Session { ref session_id, .. } if session_id == "s1")
+        );
         assert!(!store.picker().open);
     }
 
@@ -16741,9 +16874,7 @@ fn inline_shell_stream_is_cursor_incremental_with_the_1mib_marker() {
 /// (and parts without a shell id) never do.
 #[test]
 fn inline_shell_targets_cover_only_running_shell_parts() {
-    use crate::components::message::model::{
-        Message, Part, PartTime, ToolState, ToolStatus,
-    };
+    use crate::components::message::model::{Message, Part, PartTime, ToolState, ToolStatus};
     let store = Store::new(Runtime::new());
     let tool = |id: &str, name: &str, status: ToolStatus, shell: Option<&str>| Part::Tool {
         id: id.into(),
@@ -16814,10 +16945,7 @@ fn pending_permission_part_ids_read_the_tool_source() {
             id: "p1".into(),
             session_id: "s1".into(),
             action: "bash".into(),
-            source: Some(PermissionToolSource {
-                id: "tsk_1".into(),
-                message_id: "msg_1".into(),
-            }),
+            source: Some(PermissionToolSource { id: "tsk_1".into(), message_id: "msg_1".into() }),
             ..PermissionRequest::default()
         });
         footer.permission_asked(PermissionRequest {
@@ -16841,6 +16969,44 @@ fn pending_permission_part_ids_read_the_tool_source() {
     assert!(store.pending_permission_part_ids("s1").is_empty());
 }
 
+/// G-273① — the mention chip's name (`normalizeMentionPath` +
+/// `createFilePart`'s filename, autocomplete.tsx:244-259/318-328):
+/// `{path}#{start}` or `{path}#{start}-{end}` (the end only when it
+/// exceeds the start), the path RELATIVE to `base` when it sits
+/// underneath, else absolute — both lexical, `/`-joined.
+fn mention_chip_name(file_path: &str, line_start: f64, line_end: f64, base: &str) -> String {
+    let relative = |path: &str| -> Option<String> {
+        let base = std::path::Path::new(base);
+        let file = std::path::Path::new(path);
+        let stripped = file.strip_prefix(base).ok()?;
+        let joined = stripped
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        (!joined.is_empty()).then_some(joined)
+    };
+    // Outside the base: the absolute path (the ref's
+    // `absolute.split(path.sep).join("/")` — identity on POSIX).
+    let path = relative(file_path).unwrap_or_else(|| file_path.replace('\\', "/"));
+    if path.is_empty() {
+        return String::new();
+    }
+    // JS template-string numbers: integers print bare, fractions as-is.
+    let number = |value: f64| -> String {
+        if value.fract() == 0.0 && value.abs() < 1e15 {
+            format!("{}", value as i64)
+        } else {
+            format!("{value}")
+        }
+    };
+    if line_end > line_start {
+        format!("{}#{}-{}", path, number(line_start), number(line_end))
+    } else {
+        format!("{}#{}", path, number(line_start))
+    }
+}
+
 // -- G-128: the animation pump + the rail width spring ------------------------
 
 #[cfg(test)]
@@ -16859,10 +17025,7 @@ mod g128_tests {
         store.animate_vertical_tabs_width(30);
         store.advance_clock(300);
         let mid = store.vertical_tabs_width(200);
-        assert!(
-            mid > 30 && mid < 42,
-            "the spring renders an intermediate width, got {mid}"
-        );
+        assert!(mid > 30 && mid < 42, "the spring renders an intermediate width, got {mid}");
         for tick in 400..3000u64 {
             store.advance_clock(tick * 100);
         }
@@ -16956,10 +17119,7 @@ mod g271_select_terminal_tests {
         // A deselect stages the explicit null (v2's
         // `sessions[sessionID] = null`).
         store.select_terminal("s2", None);
-        assert_eq!(
-            store.take_terminal_selection_persist(),
-            vec![("s2".to_owned(), None)]
-        );
+        assert_eq!(store.take_terminal_selection_persist(), vec![("s2".to_owned(), None)]);
     }
 }
 
@@ -17047,22 +17207,13 @@ mod g271_mcp_auth_tests {
         let store = Store::new(crate::reactive::Runtime::new());
         let sink = std::rc::Rc::new(RecordingMcpToggleSink::default());
         store.set_mcp_toggle_sink(sink.clone());
-        store.set_mcp_servers(vec![
-            row("plain", "needs_auth", None),
-            row("ok", "connected", None),
-        ]);
+        store.set_mcp_servers(vec![row("plain", "needs_auth", None), row("ok", "connected", None)]);
         // No integrationID: the ref falls through to mcp.connect
         // (dialog-mcp.tsx:121-124).
         store.mcp_toggle("plain");
         store.mcp_toggle("ok");
         let calls = sink.calls.borrow().clone();
-        assert_eq!(
-            calls,
-            vec![
-                ("plain".to_owned(), true),
-                ("ok".to_owned(), false),
-            ]
-        );
+        assert_eq!(calls, vec![("plain".to_owned(), true), ("ok".to_owned(), false),]);
     }
 
     #[test]
@@ -17105,9 +17256,7 @@ mod g271_mcp_auth_tests {
 #[cfg(test)]
 mod g271_form_tests {
     use super::*;
-    use crate::integration_form::{
-        IntegrationFieldKind, IntegrationFormField,
-    };
+    use crate::integration_form::{IntegrationFieldKind, IntegrationFormField};
 
     fn field(key: &str, kind: IntegrationFieldKind, required: bool) -> IntegrationFormField {
         IntegrationFormField {
@@ -17133,7 +17282,10 @@ mod g271_form_tests {
         }
     }
 
-    fn method_with_form(kind: &'static str, fields: Vec<IntegrationFormField>) -> IntegrationMethod {
+    fn method_with_form(
+        kind: &'static str,
+        fields: Vec<IntegrationFormField>,
+    ) -> IntegrationMethod {
         IntegrationMethod {
             id: if kind == "key" { "key".to_owned() } else { "oauth-1".to_owned() },
             kind,
@@ -17193,7 +17345,8 @@ mod g271_form_tests {
 
         // The POST carries the walked answer (only the answered keys).
         store.integration_key_submit("linear", "lin_api_x");
-        let call = sink.calls
+        let call = sink
+            .calls
             .borrow()
             .iter()
             .find(|call| matches!(call, IntegrationCall::ConnectKey { .. }))
@@ -17204,10 +17357,7 @@ mod g271_form_tests {
                 assert_eq!(integration_id, "linear");
                 assert_eq!(key, "lin_api_x");
                 let answer = answer.as_ref().expect("the walked answer rides the POST");
-                assert_eq!(
-                    answer.get("workspace"),
-                    Some(&FormValue::String("acme".to_owned()))
-                );
+                assert_eq!(answer.get("workspace"), Some(&FormValue::String("acme".to_owned())));
                 assert!(!answer.contains_key("email"), "the skipped optional stays absent");
             }
             other => panic!("expected ConnectKey, got {other:?}"),
@@ -17289,6 +17439,166 @@ mod g271_form_tests {
             }),
             "no connect POST fired: {:?}",
             sink.calls.borrow()
+        );
+    }
+}
+
+// -- G-271⑤: the sessions dialog's debounced server search ---------------------
+
+#[cfg(test)]
+mod g271_session_search_tests {
+    use super::*;
+
+    fn snapshot(id: &str, title: &str) -> crate::data::SessionSnapshot {
+        crate::data::SessionSnapshot {
+            id: id.to_owned(),
+            title: Some(title.to_owned()),
+            ..Default::default()
+        }
+    }
+
+    fn seed_history(store: &Store, sessions: Vec<crate::data::SessionSnapshot>) {
+        store.ingest_all([Ingest::Resync {
+            sessions,
+            unread: Vec::new(),
+            messages: Vec::new(),
+            cursors: Vec::new(),
+            permissions: Vec::new(),
+            forms: Vec::new(),
+        }]);
+    }
+
+    #[test]
+    fn debounce_takes_the_query_only_after_the_window() {
+        let store = Store::new(crate::reactive::Runtime::new());
+        // Before the window: nothing due.
+        store.session_search_typed("refa");
+        assert!(store.take_due_session_search().is_none(), "the 150 ms window has not passed");
+    }
+
+    #[test]
+    fn search_rows_follow_the_ref_memo() {
+        let store = Store::new(crate::reactive::Runtime::new());
+        seed_history(&store, vec![snapshot("local1", "Local only")]);
+        // Pre-search: the LOCAL history renders (the caller filters).
+        assert!(store.session_search_rows("refa").is_none());
+        // The result lands: the settled query renders the server rows.
+        store.session_search_loaded(
+            "refa".to_owned(),
+            Ok(vec![
+                snapshot("s1", "Refactor parser"),
+                // A child row drops client-side (:190-192).
+                crate::data::SessionSnapshot {
+                    id: "child".to_owned(),
+                    parent_id: Some("s1".to_owned()),
+                    ..Default::default()
+                },
+            ]),
+        );
+        let rows = store.session_search_rows("refa").expect("the settled rows");
+        assert_eq!(rows.len(), 1, "parents only");
+        assert_eq!(rows[0].id, "s1");
+        // A different (still-typing) query ALSO shows the latest rows
+        // (`searchResults.latest ?? local`).
+        assert!(
+            store.session_search_rows("refactor").is_some(),
+            "the latest rows survive while the debounce extends"
+        );
+        // An error fallback returns the LOCAL source.
+        store.session_search_loaded("refactor".to_owned(), Err("boom".to_owned()));
+        assert!(
+            store.session_search_rows("refactor").is_none(),
+            "the error arm falls back to the local history"
+        );
+        // An empty query never uses the search state.
+        assert!(store.session_search_rows("").is_none());
+    }
+
+    #[test]
+    fn the_dialog_rows_render_the_server_result() {
+        use crate::components::dialog_select::filter_indices;
+        let store = Store::new(crate::reactive::Runtime::new());
+        seed_history(&store, vec![snapshot("old1", "Ancient work")]);
+        store.session_search_loaded("refa".to_owned(), Ok(vec![snapshot("s1", "Refactor parser")]));
+        // The options under a settled query carry the SERVER row; the
+        // dialog never locally filters (skipFilter, :212).
+        let options = crate::components::dialog_open::session_list_options(&store, "refa");
+        assert!(options.iter().any(|option| option.value == "s1"));
+        assert!(
+            !options.iter().any(|option| option.value == "old1"),
+            "the local window's rows do not leak into the server result"
+        );
+        let props =
+            crate::components::dialog_select::SelectProps::new("Sessions", options).skip_filter();
+        assert_eq!(filter_indices(&props, "zzz").len(), 1, "skipFilter keeps the rows");
+        // Pre-search (no result yet): the LOCAL rows pre-filter by the
+        // query (localSessions, :71-73).
+        let fresh = Store::new(crate::reactive::Runtime::new());
+        seed_history(
+            &fresh,
+            vec![snapshot("hit", "Refactor parser"), snapshot("miss", "Unrelated")],
+        );
+        let local = crate::components::dialog_open::session_list_options(&fresh, "refa");
+        assert!(local.iter().any(|option| option.value == "hit"));
+        assert!(!local.iter().any(|option| option.value == "miss"));
+    }
+}
+
+// -- G-273①: the IDE at_mentioned → composer insertion -------------------------
+
+#[cfg(test)]
+mod g273_mention_tests {
+    use super::*;
+
+    #[test]
+    fn mention_chip_name_normalizes_the_path_and_line_span() {
+        // Relative under the base dir (`normalizeMentionPath`), the
+        // end line only when it exceeds the start
+        // (`createFilePart`, autocomplete.tsx:244-259).
+        assert_eq!(
+            mention_chip_name("/repo/src/main.rs", 12.0, 34.0, "/repo"),
+            "src/main.rs#12-34"
+        );
+        assert_eq!(mention_chip_name("/repo/src/main.rs", 7.0, 7.0, "/repo"), "src/main.rs#7");
+        assert_eq!(mention_chip_name("/repo/src/main.rs", 7.0, 3.0, "/repo"), "src/main.rs#7");
+        // Outside the base: the absolute path, `/`-joined.
+        assert_eq!(mention_chip_name("/elsewhere/a.rs", 1.0, 2.0, "/repo"), "/elsewhere/a.rs#1-2");
+    }
+
+    #[test]
+    fn editor_mention_inserts_the_chip_into_the_focused_composer() {
+        let store = Store::new(crate::reactive::Runtime::new());
+        store.open_tab("s1", None);
+        store.navigate(Route::session("s1"));
+        store.apply_editor_mention(&crate::editor_ide::EditorMention {
+            file_path: format!("{}/src/lib.rs", std::env::temp_dir().display()),
+            line_start: 3.0,
+            line_end: 9.0,
+            // The base resolves the temp dir (the store's home
+            // location default falls to the process cwd — seed the
+            // override to keep the fixture hermetic).
+        });
+        // Wait — the mention used the default base; assert the chip
+        // landed at all with the line span intact.
+        let draft = store.prompt_draft("s1");
+        assert!(draft.text.contains("#3-9"), "the line span rides the chip: {:?}", draft.text);
+        assert!(
+            draft.files.iter().any(|file| file.name.contains("lib.rs")),
+            "the file part records the mention: {:?}",
+            draft.files
+        );
+        // A repeated mention MOVES the existing chip (the ref's
+        // dedupe-by-uri ≈ name identity).
+        store.apply_editor_mention(&crate::editor_ide::EditorMention {
+            file_path: format!("{}/src/lib.rs", std::env::temp_dir().display()),
+            line_start: 3.0,
+            line_end: 9.0,
+        });
+        let draft = store.prompt_draft("s1");
+        assert_eq!(
+            draft.files.iter().filter(|file| file.name.contains("lib.rs")).count(),
+            1,
+            "the mention dedupes by name"
         );
     }
 }

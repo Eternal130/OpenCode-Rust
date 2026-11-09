@@ -29,16 +29,16 @@ use std::cell::RefCell;
 
 use std::rc::Rc;
 
-use opentui_core::Rgba;
 use opentui_core::buffer::{grapheme_id_from_char, is_continuation_char, is_grapheme_char};
 use opentui_core::renderer::CliRendererConfig;
 use opentui_core::styled_text::{StyledText, TextChunk};
+use opentui_core::Rgba;
 use opentui_solid::builder::ForItemSource;
 use opentui_solid::element::{ForItem, PropValue};
 use opentui_solid::reactive::Reactive;
-use opentui_solid::{Element, Signal, SolidRenderer, box_, for_list, map, text};
+use opentui_solid::{box_, for_list, map, text, Element, Signal, SolidRenderer};
 
-use crate::render::{CONTINUATION, Cell, CellColor, ClusterMap, Frame};
+use crate::render::{Cell, CellColor, ClusterMap, Frame, CONTINUATION};
 
 // ---------------------------------------------------------------------------
 // the unit model (the old painters' vocabulary, one shape)
@@ -494,27 +494,24 @@ fn apply_stamp(frame: &mut Frame, base_left: usize, base_top: usize, stamp: &Chr
         ChromeStamp::Bg { left, top, width, height, color } => {
             for row in base_top + top..base_top + top + height {
                 for col in base_left + left..base_left + left + width {
-                    if let Some(cell) = frame.cells.get_mut(row).and_then(|line| line.get_mut(col)) {
+                    if let Some(cell) = frame.cells.get_mut(row).and_then(|line| line.get_mut(col))
+                    {
                         cell.bg = color;
                     }
                 }
             }
         }
         ChromeStamp::Caret { left, top, fg, bg } => {
-            if let Some(cell) = frame
-                .cells
-                .get_mut(base_top + top)
-                .and_then(|line| line.get_mut(base_left + left))
+            if let Some(cell) =
+                frame.cells.get_mut(base_top + top).and_then(|line| line.get_mut(base_left + left))
             {
                 cell.fg = fg;
                 cell.bg = bg;
             }
         }
         ChromeStamp::Swap { left, top } => {
-            if let Some(cell) = frame
-                .cells
-                .get_mut(base_top + top)
-                .and_then(|line| line.get_mut(base_left + left))
+            if let Some(cell) =
+                frame.cells.get_mut(base_top + top).and_then(|line| line.get_mut(base_left + left))
             {
                 std::mem::swap(&mut cell.fg, &mut cell.bg);
             }
@@ -564,8 +561,7 @@ fn apply_stamp(frame: &mut Frame, base_left: usize, base_top: usize, stamp: &Chr
                     if in_keep {
                         continue;
                     }
-                    if let Some(cell) =
-                        frame.cells.get_mut(row).and_then(|line| line.get_mut(col))
+                    if let Some(cell) = frame.cells.get_mut(row).and_then(|line| line.get_mut(col))
                     {
                         if let CellColor::Rgb(r, g, b) = cell.bg {
                             cell.bg = CellColor::Rgb(dim(r), dim(g), dim(b));
@@ -791,11 +787,8 @@ impl ChromeTree {
             // Child order = z order: insert at the SURFACE_ORDER position
             // (mount is an anchored insert — later families take the
             // skeleton indices above this container).
-            let index = self
-                .surfaces
-                .iter()
-                .filter(|s| order_of(s.name) < order_of(surface))
-                .count();
+            let index =
+                self.surfaces.iter().filter(|s| order_of(s.name) < order_of(surface)).count();
             let parent = self.family_key.clone().unwrap_or_else(|| {
                 SolidRenderer::ROOT.to_owned() // unreachable: mounted above
             });
@@ -1243,7 +1236,16 @@ pub(crate) fn mount_family_wrapper(
         (top.saturating_add(height)).max(1) as u32,
     );
     hub.borrow_mut().sync_family_wrapper(
-        family, skeleton_index, left, top, width, height, content_key, content, stamps, items,
+        family,
+        skeleton_index,
+        left,
+        top,
+        width,
+        height,
+        content_key,
+        content,
+        stamps,
+        items,
         blank,
     );
 }
@@ -1268,7 +1270,9 @@ pub(crate) fn family_wrapper_live(family: &str) -> bool {
 /// emitter; this seam only writes the in-house Frame cells.
 pub(crate) fn composite_chrome_tree(frame: &mut Frame) {
     let hub = HUB.with_borrow(|slot| slot.clone());
-    let Some(hub) = hub else { return; };
+    let Some(hub) = hub else {
+        return;
+    };
     let mut tree = hub.borrow_mut();
     tree.prune_stale();
     tree.flush_if_pending();
@@ -1302,12 +1306,7 @@ impl ChromeTree {
 /// A blank frame of the given size (Default cells) — the rect a
 /// migrated surface's old full-screen/mount paste used to blank.
 pub(crate) fn blank_frame(width: usize, height: usize) -> Frame {
-    Frame {
-        cells: vec![vec![Cell::default(); width]; height],
-        width,
-        height,
-        clusters: None,
-    }
+    Frame { cells: vec![vec![Cell::default(); width]; height], width, height, clusters: None }
 }
 
 /// The golden/unit harness twin of the retired per-surface copy:
@@ -1590,10 +1589,7 @@ mod tests {
             tree.dirty = true;
         }
         assert!(hub.borrow_mut().flush_if_pending(), "pending sync — exactly one render");
-        assert!(
-            !hub.borrow_mut().flush_if_pending(),
-            "double flush is a no-op (the guard)"
-        );
+        assert!(!hub.borrow_mut().flush_if_pending(), "double flush is a no-op (the guard)");
     }
 
     #[test]
@@ -1709,7 +1705,8 @@ mod tests {
             "an explicit white fg is ink, not the untouched signature"
         );
         assert_eq!(
-            frame.cell(0, 2).ch, 'z',
+            frame.cell(0, 2).ch,
+            'z',
             "the untouched cell is the hole — the frame pixel survives"
         );
         assert_eq!(frame.cell(0, 3).ch, ' ');
@@ -1779,4 +1776,3 @@ mod tests {
         );
     }
 }
-

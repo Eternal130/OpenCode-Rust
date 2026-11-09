@@ -21,7 +21,11 @@ use crate::theme::ThemeStyles;
 /// The console box's shaping (surface-local): the same walk the old
 /// painter ran, now feeding the tree mount.
 #[must_use]
-pub fn console_units(lines: &[String], styles: &ThemeStyles, width: u16) -> (usize, usize, Vec<ChromeUnit>) {
+pub fn console_units(
+    lines: &[String],
+    styles: &ThemeStyles,
+    width: u16,
+) -> (usize, usize, Vec<ChromeUnit>) {
     let width = usize::from(width).max(6);
     let height = super::console::CONSOLE_ROWS.min(lines.len() + 2);
     let rows = height.max(2);
