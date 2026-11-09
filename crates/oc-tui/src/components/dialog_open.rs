@@ -263,6 +263,14 @@ fn path_relative(from: &str, to: &str) -> String {
     }
 }
 
+
+/// G-287⑦ — the direct-lookup id pattern
+/// (`/^ses_[0-9A-Za-z]{26}$/`, dialog-open.tsx:144).
+fn is_session_id(value: &str) -> bool {
+    let Some(id) = value.strip_prefix("ses_") else { return false };
+    id.len() == 26 && id.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
 // -- the Open menu (dialog-open.tsx) -----------------------------------------
 
 /// The Open dialog's recents cap (`RECENT_LIMIT`).
@@ -286,22 +294,40 @@ pub fn open_menu_props(store: &Store) -> SelectProps {
 
     // The sessions memo (:160-175): parents only, deduped, newest
     // first; the live registry title wins (data.session.get).
+    // G-287⑦ — the attention-first sort (dialog-open.tsx:168-174):
+    // sessions with a pending permission/form blocker sort ahead of
+    // the recency order (`attentionByID`, `sessionTabs.status().
+    // attention` — the port's per-session blocker lists carry the
+    // same signal).
+    let footer = store.footer();
+    let attention: std::collections::HashSet<&str> = footer
+        .permissions
+        .iter()
+        .map(|request| request.session_id.as_str())
+        .chain(footer.forms.iter().map(|form| form.session_id.as_str()))
+        .collect();
     let mut sessions: Vec<crate::data::SessionSnapshot> =
         store.session_history().into_iter().filter(|session| session.parent_id.is_none()).collect();
     sessions.sort_by(|a, b| {
-        b.time_updated.unwrap_or_default().total_cmp(&a.time_updated.unwrap_or_default())
+        let attention_a = attention.contains(a.id.as_str());
+        let attention_b = attention.contains(b.id.as_str());
+        attention_b
+            .cmp(&attention_a)
+            .then_with(|| {
+                b.time_updated.unwrap_or_default().total_cmp(&a.time_updated.unwrap_or_default())
+            })
     });
 
     // The recents memo (:203-207): an empty filter hides what the tab
-    // strip already shows; typing widens to every session. (The
-    // attention-first sort rides the tab state the port tracks per
-    // tab, not per history row — the recents keep newest-first.)
+    // strip already shows; typing widens to every session. G-287⑦ —
+    // the window keeps every attention row visible
+    // (`max(RECENT_LIMIT, attentionCount)`).
     let recents: Vec<crate::data::SessionSnapshot> = sessions
         .into_iter()
         .filter(|session| {
             !open_tabs.contains(&session.id) || Some(&session.id) != current_session.as_ref()
         })
-        .take(RECENT_LIMIT)
+        .take(RECENT_LIMIT.max(attention.len()))
         .collect();
 
     let mut options: Vec<SelectOption> = Vec::new();
@@ -343,6 +369,26 @@ pub fn open_menu_props(store: &Store) -> SelectProps {
                 .with_footer(footer)
                 .with_search(format!("{} {}", session.id, directory)),
         );
+    }
+
+    // G-287⑦ — the `ses_` direct lookup (`matched`,
+    // dialog-open.tsx:141-148): a query that IS a session id offers a
+    // direct-open row ahead of the recents. (The ref validates the id
+    // through `session.get` before showing the row — the port defers
+    // validation to the open itself, `select_tab` resolves or
+    // no-ops.)
+    if let Some(filter) = store
+        .top_dialog()
+        .map(|entry| entry.select.filter.trim().to_owned())
+        .filter(|filter| is_session_id(filter))
+    {
+        options.insert(
+            0,
+            SelectOption::titled(format!("Open session {filter}"), format!("ses:{filter}"))
+                .categorized("Sessions")
+                .with_search(filter.clone()),
+        );
+        has_sessions = true;
     }
 
     // The projects memo (:238-271): non-root canonicals, deduped,

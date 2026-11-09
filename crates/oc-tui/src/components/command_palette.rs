@@ -2001,6 +2001,15 @@ pub fn model_list_props(store: &Store, title: &'static str) -> SelectProps {
             .find(|provider| provider.id == id)
             .map_or_else(|| id.to_owned(), |provider| provider.name.clone())
     };
+    // G-287⑥ — `local.model.favorite()/recent()`
+    // (dialog-model.tsx:32-33): the sections render on an EMPTY query
+    // while connected; a typed query prioritizes favorites instead
+    // (`prioritizeFavorites`, dialog-model.tsx:106-112).
+    let filter = store
+        .top_dialog()
+        .map(|entry| entry.select.filter.trim().to_owned())
+        .unwrap_or_default();
+    let ring = store.model_ring();
     let options = match &lists.models {
         ListState::Loading => vec![status_option("Loading models…")],
         ListState::Failed(error) => vec![status_option(&format!("Models unavailable: {error}"))],
@@ -2010,7 +2019,64 @@ pub fn model_list_props(store: &Store, title: &'static str) -> SelectProps {
             // The dialog's browse mode sorts its full option list with
             // `sortModelOptions(…, connected())` — connected → grouped.
             sort_model_options(&mut rows, connected, &provider_name);
-            rows.iter()
+            let is_pinned = |provider: &str, model: &str| -> bool {
+                ring.document.favorite.iter().any(|favorite| {
+                    favorite.provider_id == provider && favorite.model_id == model
+                })
+            };
+            let show_sections = connected && filter.is_empty();
+            let favorite_of = |provider: &str, model: &str| -> bool {
+                ring.document.favorite.iter().any(|favorite| {
+                    favorite.provider_id == provider && favorite.model_id == model
+                })
+            };
+            let mut options: Vec<SelectOption> = Vec::new();
+            if show_sections {
+                // `toOptions(favorites, "Favorites")` + the recents
+                // minus favorites (dialog-model.tsx:58-63).
+                let mut pinned_row = |category: &str, provider: &str, model: &str| -> Option<SelectOption> {
+                    let row = rows.iter().find(|row| {
+                        row.provider_id == provider && row.id == model
+                    })?;
+                    let title = if row.name.is_empty() { row.id.clone() } else { row.name.clone() };
+                    let mut option = SelectOption::titled(title, format!("{provider}/{model}"))
+                        .categorized(category)
+                        .with_search(format!("{provider} {model}"));
+                    if row.free {
+                        option = option.with_footer("Free");
+                    }
+                    Some(option)
+                };
+                for favorite in &ring.document.favorite {
+                    if let Some(option) =
+                        pinned_row("Favorites", &favorite.provider_id, &favorite.model_id)
+                    {
+                        options.push(option);
+                    }
+                }
+                for recent in &ring.document.recent {
+                    if is_pinned(&recent.provider_id, &recent.model_id) {
+                        continue;
+                    }
+                    if let Some(option) =
+                        pinned_row("Recent", &recent.provider_id, &recent.model_id)
+                    {
+                        options.push(option);
+                    }
+                }
+            }
+            let skip_sections = |row: &&crate::store::ServerModel| -> bool {
+                // With sections shown the pinned rows LEAVE the main
+                // list (dialog-model.tsx:91-104's filter).
+                show_sections
+                    && (is_pinned(&row.provider_id, &row.id)
+                        || ring.document.recent.iter().any(|recent| {
+                            recent.provider_id == row.provider_id && recent.model_id == row.id
+                        }))
+            };
+            let mut main: Vec<SelectOption> = rows
+                .iter()
+                .filter(|row| !skip_sections(row))
                 .map(|model| {
                     let title =
                         if model.name.is_empty() { model.id.clone() } else { model.name.clone() };
@@ -2022,12 +2088,28 @@ pub fn model_list_props(store: &Store, title: &'static str) -> SelectProps {
                     if connected {
                         option = option.categorized(provider_name(&model.provider_id));
                     }
+                    // G-287⑥ — the "(Favorite)" marker on the main
+                    // rows (dialog-model.tsx:73-75).
+                    if favorite_of(&model.provider_id, &model.id) {
+                        option.description = Some("(Favorite)".to_owned());
+                    }
                     if model.free {
                         option = option.with_footer("Free");
                     }
                     option
                 })
-                .collect()
+                .collect();
+            // G-287⑥ — during a search the favorites come first
+            // (`prioritizeFavorites`, dialog-model.tsx:176-183).
+            if !filter.is_empty() {
+                main.sort_by_key(|option| {
+                    let value = option.value.clone();
+                    let (provider, model) = value.split_once('/').unwrap_or((&value, ""));
+                    !favorite_of(provider, model)
+                });
+            }
+            options.extend(main);
+            options
         }
     };
     let mut props = SelectProps::new(title, options);
@@ -4468,6 +4550,60 @@ mod tests {
         let props = model_list_props(&store, "Select model");
         assert!(props.options[0].title.contains("Models unavailable"));
         assert!(props.options[0].title.contains("503"));
+    }
+
+    /// G-287⑥ — the Favorites/Recent sections (dialog-model.tsx:
+    /// 32-63/91-112): on an empty query the favorites lead, the
+    /// favorites-minus recents follow, the pinned rows LEAVE the main
+    /// list, and the remaining favorites carry "(Favorite)"; during a
+    /// search the favorites come first.
+    #[test]
+    fn model_list_sections_and_favorite_priority() {
+        let store = Store::new(Runtime::new());
+        store.set_models(
+            ListState::Loaded(vec![
+                model("anthropic", "claude", "Claude", true, false),
+                model("opencode", "grok-code", "Grok Code", false, false),
+                model("custom", "local-1", "Local One", false, false),
+            ]),
+            vec![
+                ServerProvider { id: "anthropic".into(), name: "Anthropic".into() },
+                ServerProvider { id: "opencode".into(), name: "OpenCode".into() },
+                ServerProvider { id: "custom".into(), name: "Custom".into() },
+            ],
+        );
+        store.set_integration_connected(true);
+        store.model_toggle_favorite("anthropic", "claude");
+        store.model_add_recent("anthropic", "claude");
+        store.model_add_recent("custom", "local-1");
+        // The dialog reads the live filter through the top entry.
+        store.replace_dialog(
+            DialogKind::ServerList { command: "model.list", title: "Select model" },
+            DialogSize::Medium,
+        );
+        let props = model_list_props(&store, "Select model");
+        let categories: Vec<&str> =
+            props.options.iter().filter_map(|option| option.category.as_deref()).collect();
+        assert_eq!(
+            categories,
+            vec!["Favorites", "Recent", "OpenCode"],
+            "favorites lead, the un-pinned recent follows, the main list drops both: {categories:?}"
+        );
+        assert_eq!(props.options[0].title, "Claude", "the favorite row leads");
+        assert_eq!(props.options[0].value, "anthropic/claude");
+        assert_eq!(props.options[1].title, "Local One", "recent (non-favorite) second");
+        assert_eq!(props.options[2].title, "Grok Code", "the main list keeps the rest");
+        // A typed query drops the sections and prioritizes favorites.
+        store.update_dialog(|top| top.select.filter = "o".to_owned());
+        let props = model_list_props(&store, "Select model");
+        assert!(
+            !props.options.iter().any(|option| option.category.as_deref() == Some("Favorites")),
+            "sections hide under a query"
+        );
+        let claude = props.options.iter().position(|option| option.value == "anthropic/claude");
+        let grok = props.options.iter().position(|option| option.value == "opencode/grok-code");
+        let (claude, grok) = (claude.expect("claude matches"), grok.expect("grok matches"));
+        assert!(claude < grok, "the favorite outranks the non-favorite in search: {claude} < {grok}");
     }
 
     /// D-05 — `sortModelOptions` ported verbatim from

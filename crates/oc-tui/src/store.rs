@@ -14662,6 +14662,75 @@ mod tests {
         assert_eq!(store.top_dialog().unwrap().select.filter, "gru");
     }
 
+    /// G-287⑦ — the Open menu's attention sort + the ses_ direct
+    /// lookup (dialog-open.tsx:141-148/168-174): a session with a
+    /// pending permission leads the recents; a query that IS a
+    /// session id offers a direct-open row first.
+    #[test]
+    fn open_menu_sorts_attention_first_and_offers_ses_direct() {
+        let store = Store::new(Runtime::new());
+        store.ingest_all([Ingest::Resync {
+            sessions: vec![
+                SessionSnapshot {
+                    id: "ses_newer".to_owned(),
+                    title: Some("Newer".to_owned()),
+                    time_updated: Some(2000.0),
+                    ..Default::default()
+                },
+                SessionSnapshot {
+                    id: "ses_older".to_owned(),
+                    title: Some("Older".to_owned()),
+                    time_updated: Some(1000.0),
+                    ..Default::default()
+                },
+            ],
+            unread: Vec::new(),
+            messages: Vec::new(),
+            cursors: Vec::new(),
+            permissions: Vec::new(),
+            forms: Vec::new(),
+        }]);
+        store.replace_dialog(DialogKind::Open, DialogSize::Large);
+        let props = crate::components::dialog_open::open_menu_props(&store);
+        let order: Vec<&str> = props.options.iter().map(|option| option.value.as_str()).collect();
+        assert!(order.iter().position(|value| *value == "ses:ses_newer")
+            < order.iter().position(|value| *value == "ses:ses_older"));
+        // A pending permission flips the order (attention first).
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "permission.asked",
+            serde_json::json!({
+                "id": "p1",
+                "sessionID": "ses_older",
+                "action": "read",
+                "resources": ["src/index.ts"],
+            }),
+        ))]);
+        let props = crate::components::dialog_open::open_menu_props(&store);
+        let order: Vec<&str> = props.options.iter().map(|option| option.value.as_str()).collect();
+        assert!(
+            order.iter().position(|value| *value == "ses:ses_older")
+                < order.iter().position(|value| *value == "ses:ses_newer"),
+            "the attention row leads: {order:?}"
+        );
+        // A ses_ id query offers the direct-open row.
+        let id = "ses_".to_owned() + &"ABCDEFGHJKLMNOPQRSTUVXYZabcde".chars().take(26).collect::<String>();
+        store.update_dialog(|entry| entry.select.filter = id.clone());
+        let props = crate::components::dialog_open::open_menu_props(&store);
+        assert_eq!(
+            props.options[0].value, format!("ses:{id}"),
+            "the direct row leads: {:?}",
+            props.options.iter().map(|option| &option.value).collect::<Vec<_>>()
+        );
+        assert!(props.options[0].title.contains("Open session"));
+        // A NON-id query does not spawn the row.
+        store.update_dialog(|entry| entry.select.filter = "newer".to_owned());
+        let props = crate::components::dialog_open::open_menu_props(&store);
+        assert!(!props
+            .options
+            .iter()
+            .any(|option| option.title.contains("Open session ")));
+    }
+
     #[test]
     fn permission_events_drive_the_footer_view() {
         let store = Store::new(Runtime::new());
