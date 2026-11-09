@@ -265,7 +265,7 @@ mod tests {
 
     /// RW followup: `Revert`/`RevertV1.part_id` ride the ref wire key
     /// `partID` (session-revert.ts) — TS-era rows decode faithfully, with
-    /// snake_case alias tolerance for early port-written rows.
+    /// `snake_case` alias tolerance for early port-written rows.
     #[test]
     fn revert_part_id_wire() {
         let revert = Revert {
