@@ -461,6 +461,125 @@ async fn command_attempt_failure_carries_message() {
 
 // -- refresh ------------------------------------------------------------------
 
+/// G-285② — the 401 forced-refresh seam (`connection_force_refresh`,
+/// the port of snowflake-cortex's `retry` hook gate,
+/// snowflake-cortex.ts:236-246): only an OAuth credential of the exact
+/// method with a refresh implementation refreshes (no expiry margin —
+/// the token was just rejected); the refreshed value persists, and a
+/// refresh failure declines (`None`) instead of erroring.
+#[tokio::test]
+async fn force_refresh_gates_on_credential_shape_and_persists() {
+    let host = host().await;
+    let browser = CredentialValue::OAuth(OAuthValue {
+        method_id: "browser".into(),
+        refresh: "r1".into(),
+        access: "rejected".into(),
+        // Far-future expiry: the forced refresh ignores the margin by
+        // design (a fresh-looking token still 401'd server-side).
+        expires: crate::database::migrations::now_ms() + 3_600_000,
+        metadata: None,
+    });
+    host.store()
+        .create(credential::CreateInput {
+            id: None,
+            integration_id: "snowflake-cortex",
+            label: None,
+            value: &browser,
+            activate: None,
+        })
+        .await
+        .expect("create");
+    host.update_integration("snowflake-cortex", "Snowflake Cortex");
+    host.update_method(
+        "snowflake-cortex",
+        Method::OAuth { id: "browser".into(), label: "Browser".into(), form: None },
+        Some(OAuthImplementation {
+            authorize: Arc::new(|_answer| {
+                Box::pin(async { Err("unused".to_string()) })
+                    as BoxFuture<'static, Result<Authorization, String>>
+            }),
+            refresh: Some(Arc::new(|value: OAuthValue| {
+                Box::pin(async move {
+                    Ok(CredentialValue::OAuth(OAuthValue {
+                        access: format!("refreshed-from-{}", value.access),
+                        ..value
+                    }))
+                })
+            })),
+            label: None,
+        }),
+    );
+
+    // Gate: the wrong method id declines without touching the store.
+    assert!(
+        host.connection_force_refresh("snowflake-cortex", "key").await.is_none(),
+        "a non-matching method id declines"
+    );
+
+    // Gate: an unregistered integration declines.
+    assert!(host.connection_force_refresh("missing", "browser").await.is_none());
+
+    // The forced refresh: no expiry margin, the new token returns and
+    // persists.
+    let access = host
+        .connection_force_refresh("snowflake-cortex", "browser")
+        .await
+        .expect("refreshed");
+    assert_eq!(access, "refreshed-from-rejected");
+    let active = host
+        .connection_active("snowflake-cortex")
+        .await
+        .expect("active")
+        .expect("some");
+    let ConnectionInfo::Credential { id, .. } = active else { panic!() };
+    let stored = host.store().get(&id).await.expect("get").expect("stored");
+    let CredentialValue::OAuth(persisted) = stored.value else { panic!() };
+    assert_eq!(persisted.access, "refreshed-from-rejected");
+}
+
+/// G-285② — a refresh implementation that FAILS declines the gate
+/// (`None`): the caller leaves the original 401 to its classification.
+#[tokio::test]
+async fn force_refresh_declines_when_the_refresh_fails() {
+    let host = host().await;
+    let browser = CredentialValue::OAuth(OAuthValue {
+        method_id: "browser".into(),
+        refresh: "revoked".into(),
+        access: "rejected".into(),
+        expires: 0,
+        metadata: None,
+    });
+    host.store()
+        .create(credential::CreateInput {
+            id: None,
+            integration_id: "failer",
+            label: None,
+            value: &browser,
+            activate: None,
+        })
+        .await
+        .expect("create");
+    host.update_integration("failer", "Failing");
+    host.update_method(
+        "failer",
+        Method::OAuth { id: "browser".into(), label: "Browser".into(), form: None },
+        Some(OAuthImplementation {
+            authorize: Arc::new(|_answer| {
+                Box::pin(async { Err("unused".to_string()) })
+                    as BoxFuture<'static, Result<Authorization, String>>
+            }),
+            refresh: Some(Arc::new(|_value: OAuthValue| {
+                Box::pin(async { Err("refresh rejected".to_string()) })
+            })),
+            label: None,
+        }),
+    );
+    assert!(
+        host.connection_force_refresh("failer", "browser").await.is_none(),
+        "a failed refresh declines instead of erroring"
+    );
+}
+
 #[tokio::test]
 async fn resolve_refreshes_expiring_oauth_token() {
     let host = host().await;
