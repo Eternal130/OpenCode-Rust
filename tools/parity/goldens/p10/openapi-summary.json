@@ -1,5 +1,7 @@
 {
-  "differences": [],
+  "differences": [
+    "path only in candidate: /api/plugin/install"
+  ],
   "operations": 141,
   "paths": 117,
   "pinned": {
@@ -8,9 +10,11 @@
   },
   "schemas": 256,
   "served": {
-    "byte_identical_to_pinned": true,
-    "sha256": "0612418392961ef22f0337ce0e1e520270917665fc85f29c4af1c94d1e1873ee"
+    "byte_identical_to_pinned": false,
+    "sha256": "5165970367be69ae9e46000c74a55c530f2bcaaceb6aecfa4a333c6bf9233d60"
   },
   "stale_whitelist_entries": [],
-  "whitelist": []
+  "whitelist": [
+    "path only in candidate: /api/plugin/install"
+  ]
 }
