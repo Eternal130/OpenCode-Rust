@@ -31,7 +31,14 @@ fn session_seamed(store: &crate::store::Store, theme: &ThemeState) -> crate::ren
 /// and in CI's release-profile run of this test). Debug builds only
 /// REPORT the number — they are 10-50× slower and would make the guard
 /// flaky, while the release number is the one users feel.
-const FRAME_BUDGET_MS: u128 = 40; // TEMP: 19ms local-release, CI runners measure higher (shared CPU) (800 msgs, O(all-rows) layout); Wave B windowing targets 5ms (asserted in release only)
+// G-287⑩ — REGISTERED DEBT (round-17 registry, GAPS-AND-PITFALLS
+// 第十七轮): the transcript's shared E1 walk is O(all-rows) per frame
+// on the non-solid path — the solid path's Wave-B visible-rows
+// windowing landed, this legacy walk keeps the 40 ms TEMP ceiling
+// until the windowing covers it. The ceiling is the registered
+// regression guard for that debt, not a final budget; do not tighten
+// without closing the walk.
+const FRAME_BUDGET_MS: u128 = 40;
 
 // Machine-speed scaling for the budget gates. The nominal budget is the
 // dev box (16-core) release number; CI runners are ~2x slower (shared,

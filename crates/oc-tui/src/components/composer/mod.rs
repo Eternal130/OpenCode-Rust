@@ -1750,8 +1750,30 @@ impl Composer {
                         if let Some(path) = option.path.clone() {
                             self.autocomplete.frecency.update(&path, autocomplete::now_ms());
                         }
+                        // G-287⑨ — the query's line range reattaches
+                        // (`createFilePart`: `path#start[-end]` when
+                        // the range validated and the row is a file,
+                        // prompt/autocomplete.tsx:244-258).
                         let name = option.display.trim_start_matches('@');
-                        self.insert_text(&format!("@{name} "));
+                        let suffix = self
+                            .autocomplete
+                            .last_query
+                            .as_deref()
+                            .and_then(|query| autocomplete::parse_file_line_range(query).1)
+                            .map(|range| {
+                                let mut text = format!("#{}", range.start_line);
+                                if let Some(end) = range.end_line {
+                                    text.push_str(&format!("-{end}"));
+                                }
+                                text
+                            })
+                            .filter(|_| option.reference.is_none() && option.path.is_some());
+                        match suffix {
+                            Some(suffix) => {
+                                self.insert_text(&format!("@{name}{suffix} "));
+                            }
+                            None => self.insert_text(&format!("@{name} ")),
+                        }
                         KeyOutcome::Edited
                     }
                 }

@@ -167,12 +167,43 @@ pub fn dialog_confirm(state: &UpdateDialogState) -> Option<&'static str> {
     }
 }
 
+/// G-287② — the dialog's INITIAL focus (`createEffect(()
+/// => setActive(Math.max(0, buttons().length - 1))`,
+/// dialog-update.tsx:65): the cursor rests on the CONFIRM button when
+/// one exists (Update/Restart), else Skip — the port's row model
+/// puts the state row first, so the confirm is the LAST row.
+#[must_use]
+pub fn dialog_initial_selection(state: &UpdateDialogState) -> usize {
+    match dialog_confirm(state) {
+        Some(_) => 2, // [state row, Skip, confirm]
+        None => 1,    // [state row, Skip]
+    }
+}
+
 /// The crash-fallback screen (auditB #9 — v2's `ErrorComponent`):
 /// the frame the run loop paints when the render path itself failed
 /// (a caught panic — the terminal stays up, the user reads the error
 /// and exits). No store access: a broken store is the crash cause.
+/// G-287⑤ — the ref's structure (error-component.tsx:27-283): the
+/// "OpenCode crashed" headline, the error panel, the horizontal
+/// action row (c Copy report / r Restart / q Quit — the port's crash
+/// loop only wires q/escape to exit; the labels still document the
+/// ref's model), the stack section, and the version footer.
 #[must_use]
 pub fn error_component_frame(size: (u16, u16), message: &str) -> Frame {
+    error_component_frame_with(size, message, None, "")
+}
+
+/// G-287⑤ — [`error_component_frame`] with the stack + version the
+/// ref renders (`{stack || "No stack trace available."}` and
+/// `OpenCode {version}`, error-component.tsx:169-172/277-279).
+#[must_use]
+pub fn error_component_frame_with(
+    size: (u16, u16),
+    message: &str,
+    stack: Option<&str>,
+    version: &str,
+) -> Frame {
     let (width, height) = (usize::from(size.0), usize::from(size.1));
     let mut cells: Vec<Vec<Cell>> = vec![vec![Cell::default(); width.max(1)]; height.max(1)];
     let mut put = |row: usize, text: &str| {
@@ -185,11 +216,95 @@ pub fn error_component_frame(size: (u16, u16), message: &str) -> Frame {
             }
         }
     };
-    put(1, "Something went wrong");
+    put(1, "OpenCode crashed");
+    // The subtext row renders when the screen is tall enough
+    // (`showSubtext = height >= 18`).
+    if height >= 18 {
+        put(2, "An unexpected error stopped the session.");
+    }
     let detail = crate::wrap::take_width(message, width.saturating_sub(4).max(8));
-    put(3, &detail);
+    put(4, &detail);
+    // The actions row (the ref's horizontal buttons, focused Copy
+    // report first): the key letters mirror the ref's labels.
+    put(6, "c Copy report   r Restart   q Quit");
+    // The stack section: the first lines that fit above the footer
+    // (the ref scrollboxes the trace; the crash frame is static — a
+    // bounded deviation, the panic path paints once).
+    let stack_text = stack.filter(|text| !text.is_empty()).unwrap_or("No stack trace available.");
+    put(8, "Stack trace");
+    for (index, line) in stack_text.lines().take(height.saturating_sub(12)).enumerate() {
+        put(9 + index, &crate::wrap::take_width(line, width.saturating_sub(4).max(8)));
+    }
+    if !version.is_empty() && height >= 20 {
+        put(
+            height.saturating_sub(3),
+            &crate::wrap::take_width(
+                &format!("Copy the report and open a GitHub issue to help us fix this. OpenCode {version}"),
+                width.saturating_sub(4).max(8),
+            ),
+        );
+    }
     put(height.saturating_sub(2), "Press escape to exit.");
     Frame { cells, width, height, clusters: None }
+}
+
+/// G-287⑤ — `buildIssueURL` (error-component.tsx:285-322): the
+/// pre-filled bug-report issue URL (title/version + the description
+/// carrying the error + stack). The binary search trims the stack
+/// until the ENCODED URL fits 6000 chars — the port measures
+/// percent-encoded lengths (the reserved set escaped).
+#[must_use]
+pub fn build_issue_report(message: &str, stack: &str, version: &str) -> String {
+    const MAX_URL_LENGTH: usize = 6000;
+    const MARKER: &str = "\n… (truncated)";
+    let encode = |text: &str| {
+        // Minimal form-encoding: the URL-unsafe reserved set + the
+        // query delimiters.
+        let mut out = String::new();
+        for byte in text.bytes() {
+            match byte {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    out.push(byte as char);
+                }
+                b' ' => out.push_str("%20"),
+                _ => out.push_str(&format!("%{byte:02X}")),
+            }
+        }
+        out
+    };
+    let prefix = format!(
+        "https://github.com/anomalyco/opencode/issues/new?template=bug-report.yml&title={}&opencode-version={}",
+        encode(&format!("TUI crash: {message}")),
+        encode(version)
+    );
+    let body_of = |stack_text: &str| {
+        format!(
+            "The OpenCode TUI crashed with an unexpected error.\n\n**Error:** {message}\n\n**Stack trace:**\n```\n{stack_text}\n```"
+        )
+    };
+    let url_len = |stack_text: &str| prefix.len() + "&description=".len() + encode(&body_of(stack_text)).len();
+    let mut stack_text = stack.to_owned();
+    if url_len(&stack_text) > MAX_URL_LENGTH {
+        // Largest char-safe stack prefix whose encoded URL (with the
+        // marker) still fits (the ref's binary search,
+        // error-component.tsx:312-320).
+        let cut_points: Vec<usize> = std::iter::once(0)
+            .chain(stack.char_indices().map(|(at, _)| at))
+            .collect();
+        let mut lo = 0usize;
+        let mut hi = cut_points.len() - 1;
+        while lo < hi {
+            let mid = (lo + hi + 1) / 2;
+            let cut = format!("{}{MARKER}", &stack[..cut_points[mid]]);
+            if url_len(&cut) <= MAX_URL_LENGTH {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        stack_text = format!("{}{MARKER}", &stack[..cut_points[lo]]);
+    }
+    format!("{prefix}&description={}", encode(&body_of(&stack_text)))
 }
 
 #[cfg(test)]
@@ -270,10 +385,52 @@ mod tests {
     fn error_component_paints_rows() {
         let frame = error_component_frame((40, 8), "index outside of buffer");
         let grid = frame.text_grid();
-        assert!(grid[1].contains("Something went wrong"), "{grid:?}");
-        assert!(grid[3].contains("index outside"), "{grid:?}");
+        assert!(grid[1].contains("OpenCode crashed"), "{grid:?}");
+        assert!(grid[4].contains("index outside"), "{grid:?}");
         assert!(grid[6].contains("Press escape"), "{grid:?}");
         let tiny = error_component_frame((10, 6), "way too long detail message to fit");
         assert_eq!(tiny.text_grid().len(), 6);
+    }
+
+    /// G-287⑤ — the crash screen's ref structure: the action row, the
+    /// stack section, the version footer.
+    #[test]
+    fn crash_screen_carries_actions_stack_and_version() {
+        let frame = error_component_frame_with(
+            (80, 24),
+            "index outside of buffer",
+            Some("at app::frame (app.rs:100)\n   at render (render.rs:9)"),
+            "2.0.24",
+        );
+        let grid = frame.text_grid();
+        assert!(grid[1].contains("OpenCode crashed"), "{grid:?}");
+        assert!(grid[2].contains("unexpected error"), "subtext at >=18 rows");
+        assert!(grid[6].contains("c Copy report"), "the action row: {grid:?}");
+        assert!(grid[6].contains("r Restart"));
+        assert!(grid[6].contains("q Quit"));
+        assert!(grid[8].contains("Stack trace"));
+        assert!(grid[9].contains("at app::frame"), "the stack rows");
+        assert!(
+            grid[21].contains("GitHub issue") && grid[21].contains("2.0.24"),
+            "the version footer: {grid:?}"
+        );
+        // A missing stack shows the ref's placeholder.
+        let frame = error_component_frame_with((80, 24), "boom", None, "");
+        assert!(frame.text_grid()[9].contains("No stack trace available."));
+    }
+
+    /// G-287⑤ — `buildIssueURL`: the report carries the error + stack
+    /// and the huge-stack trim keeps the URL under 6000 chars.
+    #[test]
+    fn issue_report_trims_huge_stacks() {
+        let url = build_issue_report("boom", "at frame (x.rs:1)", "2.0.24");
+        assert!(url.starts_with("https://github.com/anomalyco/opencode/issues/new?template=bug-report.yml"));
+        assert!(url.contains("TUI%20crash%3A%20boom") || url.contains("TUI%20crash"));
+        assert!(url.contains("at%20frame%20"), "the stack rides the body");
+        assert!(url.len() <= 6000);
+        let huge = "x".repeat(20_000);
+        let url = build_issue_report("boom", &huge, "2.0.24");
+        assert!(url.len() <= 6000, "the trim holds: {}", url.len());
+        assert!(url.contains("%E2%80%A6%20(truncated)"), "the truncation marker: …");
     }
 }
