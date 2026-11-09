@@ -1048,7 +1048,7 @@ impl McpRegistry {
                         .arguments
                         .iter()
                         .flatten()
-                        .map(|argument| argument.name.to_string())
+                        .map(|argument| argument.name.clone())
                         .collect(),
                 })
                 .collect(),

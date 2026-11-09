@@ -1,7 +1,7 @@
 //! Vercel AI Gateway (port of `providers/vercel-ai-gateway.ts`).
 //!
 //! One provider, three routes — Anthropic Messages, Open Responses, and
-//! OpenAI Chat — each wrapped by the [`GatewayProtocol`] seam
+//! `OpenAI` Chat — each wrapped by the [`GatewayProtocol`] seam
 //! (`utils/gateway-protocol.ts`): `providerOptions.gateway` rides the
 //! request body, and the gateway's `provider_metadata.gateway`
 //! usage/cost accounting is merged into the finish events. Each model

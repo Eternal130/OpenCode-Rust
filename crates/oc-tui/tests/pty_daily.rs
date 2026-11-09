@@ -2570,7 +2570,7 @@ fn mini_split_footer_transcript_scroll_keeps_dock() {
 
 /// D4.1c — the footer domain rides the renderer's ROOT tree: the
 /// dock's frame bytes leave through the terminal pump exit wrapped in
-/// the `?2026` synchronized-update envelope (the retired GridEmitter
+/// the `?2026` synchronized-update envelope (the retired `GridEmitter`
 /// dock channel wrote bare SGR), the footer content still paints in
 /// the bottom band, and a transcript write never flushes the band
 /// (no full-screen clear, no alternate screen).

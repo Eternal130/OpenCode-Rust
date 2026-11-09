@@ -541,6 +541,7 @@ async fn post_json_body(
 /// G-234① — `App.useragent(app)` (app.ts:24-26). The static provider
 /// flows carry no host app handle, so the detected app identity stands
 /// in (the same shape the engine stamps everywhere else).
+#[must_use]
 pub fn app_user_agent() -> String {
     crate::session::runner::model_request::useragent(
         &crate::session::runner::model_request::AppMetadata::detected(),
@@ -556,7 +557,7 @@ pub async fn request_device_code(
     let fields: Vec<(&str, &str)> =
         fields.iter().map(|(key, value)| (*key, value.as_str())).collect();
     let (status, body) = post_form_json(http, endpoint, &fields).await?;
-    device_code_from_response(status, body)
+    device_code_from_response(status, &body)
 }
 
 /// G-244 — the device-code request with a JSON body (the zen Console's
@@ -568,12 +569,12 @@ pub async fn request_device_code_json(
     body: serde_json::Value,
 ) -> Result<DeviceCode, String> {
     let (status, body) = post_json_body(http, endpoint, &body).await?;
-    device_code_from_response(status, body)
+    device_code_from_response(status, &body)
 }
 
 fn device_code_from_response(
     status: reqwest::StatusCode,
-    body: Value,
+    body: &Value,
 ) -> Result<DeviceCode, String> {
     if !status.is_success() {
         let error = body["error"].as_str().unwrap_or("unknown");

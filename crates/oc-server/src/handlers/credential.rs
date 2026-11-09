@@ -93,7 +93,7 @@ async fn list(State(state): State<SharedState>) -> Result<Response, ApiError> {
         if serde_json::from_str::<serde_json::Value>(&row.value).is_err() {
             crate::errors::debug_cause(
                 "credential:decode",
-                &format!("row {}: value does not decode", row.id),
+                format!("row {}: value does not decode", row.id),
             );
             return Err(ApiError::unknown_ref());
         }
@@ -138,7 +138,7 @@ async fn create(
     let integration_id = body["integrationID"].as_str().unwrap_or_default().to_owned();
     // G-268 — `label ?? "default"` (credential.ts:109): a MISSING label
     // defaults; an explicit empty string stays empty.
-    let label = body["label"].as_str().map(String::from).unwrap_or_else(|| "default".to_owned());
+    let label = body["label"].as_str().map_or_else(|| "default".to_owned(), String::from);
     let value = serde_json::to_string(&body["value"]).unwrap_or_else(|_| "null".to_owned());
     let requested_activate = body["activate"].as_bool();
 

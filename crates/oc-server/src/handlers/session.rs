@@ -549,15 +549,15 @@ async fn update(
     // renames, else `SessionTitle.generate()` re-derives the title
     // from history and publishes its own `session.renamed`).
     if let Some(title) = body.get("title").and_then(Value::as_str) {
-        if !title.is_empty() {
+        if title.is_empty() {
+            services.runner.regenerate_title(&session_id).await;
+        } else {
             publish_session_event(
                 &services,
                 "session.renamed",
                 json!({ "sessionID": session_id, "title": title }),
             )
             .await?;
-        } else {
-            services.runner.regenerate_title(&session_id).await;
         }
     }
     if body.get("metadata").is_some() {
@@ -1092,7 +1092,7 @@ async fn move_session(
             let services = booted.as_ref().ok_or_else(|| {
                 crate::errors::debug_cause(
                     "session:move_source_unavailable",
-                    &"the source location failed to boot",
+                    "the source location failed to boot",
                 );
                 ApiError::unknown_ref()
             })?;
@@ -2995,7 +2995,7 @@ mod g249_tests {
     /// checkpoint and keeps everything else (ref history.ts:103-107).
     #[test]
     fn drops_system_rows_strictly_below_the_newest_native_checkpoint() {
-        let rows = vec![
+        let rows = [
             row("sys_old", "system", 1, serde_json::json!({ "text": "stale" })),
             row("user_1", "user", 2, serde_json::json!({ "text": "hi" })),
             native_compaction(3),
@@ -3015,7 +3015,7 @@ mod g249_tests {
     /// retire system rows between the two.
     #[test]
     fn the_newest_native_checkpoint_bounds_the_filter() {
-        let rows = vec![
+        let rows = [
             native_compaction(2),
             row("sys_mid", "system", 3, serde_json::json!({ "text": "mid" })),
             row(
@@ -3039,7 +3039,7 @@ mod g249_tests {
     /// nothing drops.
     #[test]
     fn without_a_native_checkpoint_nothing_drops() {
-        let rows = vec![
+        let rows = [
             row("sys_1", "system", 1, serde_json::json!({ "text": "a" })),
             row(
                 "msg_local",

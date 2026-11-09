@@ -190,12 +190,11 @@ fn paint_body(
         // ` No {active|inactive} subagents` / ` No shell commands` —
         // the text carries its own leading space and starts at the
         // content column (no row padding).
-        let label = match state.tab {
-            PickerTab::Shell => " No shell commands".to_owned(),
-            _ => {
-                let which = if state.filter_active { "active" } else { "inactive" };
-                format!(" No {which} subagents")
-            }
+        let label = if state.tab == PickerTab::Shell {
+            " No shell commands".to_owned()
+        } else {
+            let which = if state.filter_active { "active" } else { "inactive" };
+            format!(" No {which} subagents")
         };
         placed.push(Placed {
             x: left,

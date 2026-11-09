@@ -31,7 +31,7 @@ async fn env_guard() -> tokio::sync::MutexGuard<'static, ()> {
 }
 
 /// G-234② — the two gitlab tests pin loopback 8080 and nextest runs
-/// every test in its OWN process, so the in-process ENV_TEST_LOCK
+/// every test in its OWN process, so the in-process `ENV_TEST_LOCK`
 /// cannot serialize their fixed-port listeners. They contend through
 /// flock(2) instead (the lock auto-releases when a process dies).
 async fn gitlab_port_lock() -> std::fs::File {
@@ -1423,7 +1423,7 @@ async fn gitlab_refresh_rotates_via_mock() {
 /// G-260① — the keyed single-flight RETAINS a successful refresh for
 /// 60s (gitlab.ts:50-51): concurrent and immediately-following callers
 /// holding the ALREADY-ROTATED refresh token reuse the result instead
-/// of re-exchanging (which GitLab would answer invalid_grant — misread
+/// of re-exchanging (which GitLab would answer `invalid_grant` — misread
 /// as revoked).
 #[tokio::test]
 async fn gitlab_refresh_single_flight_retains_success() {
@@ -1786,7 +1786,7 @@ async fn chatgpt_connector_round_trip_against_mock() {
         BTreeMap::new(),
         &format!("{}/oauth/token", mock.base),
         &format!("{}/.well-known/jwks.json", mock.base),
-        &CHATGPT_TEST_HOST_ID,
+        CHATGPT_TEST_HOST_ID,
         None,
     )
     .await
@@ -1855,7 +1855,7 @@ async fn chatgpt_connector_round_trip_against_mock() {
 
 /// G-260② — reauthorization reuses the connection's registered client
 /// (chatgpt.ts:107,165-171): a saved client id takes precedence in the
-/// authorize URL (no agent_name_hint), a callback without one still
+/// authorize URL (no `agent_name_hint`), a callback without one still
 /// completes, and a DIFFERENT returned client rejects the attempt.
 #[tokio::test]
 async fn chatgpt_reauthorization_reuses_saved_client() {
@@ -1864,7 +1864,7 @@ async fn chatgpt_reauthorization_reuses_saved_client() {
         BTreeMap::new(),
         &format!("{}/oauth/token", mock.base),
         &format!("{}/.well-known/jwks.json", mock.base),
-        &CHATGPT_TEST_HOST_ID,
+        CHATGPT_TEST_HOST_ID,
         Some("client_reg_1"),
     )
     .await
@@ -1917,7 +1917,7 @@ async fn chatgpt_reauthorization_reuses_saved_client() {
         BTreeMap::new(),
         &format!("{}/oauth/token", mock.base),
         &format!("{}/.well-known/jwks.json", mock.base),
-        &CHATGPT_TEST_HOST_ID,
+        CHATGPT_TEST_HOST_ID,
         Some("client_reg_1"),
     )
     .await
@@ -1941,7 +1941,7 @@ async fn chatgpt_connector_rejects_missing_token_sharing_scope() {
         BTreeMap::new(),
         &format!("{}/oauth/token", mock.base),
         &format!("{}/.well-known/jwks.json", mock.base),
-        &CHATGPT_TEST_HOST_ID,
+        CHATGPT_TEST_HOST_ID,
         None,
     )
     .await
@@ -1988,7 +1988,7 @@ async fn chatgpt_connector_rejects_nonce_mismatch() {
         BTreeMap::new(),
         &format!("{}/oauth/token", mock.base),
         &format!("{}/.well-known/jwks.json", mock.base),
-        &CHATGPT_TEST_HOST_ID,
+        CHATGPT_TEST_HOST_ID,
         None,
     )
     .await
@@ -3027,7 +3027,7 @@ async fn wellknown_documents_skip_sources_without_key_credentials() {
     let source = super::wellknown_config::HostWellknownSource::new(std::sync::Arc::clone(
         host.wellknown_documents(),
     ));
-    assert!(source.documents(&|_| None).is_empty());
+    assert_eq!(source.documents(&|_| None).len(), 0);
 }
 
 #[tokio::test]
@@ -3504,7 +3504,7 @@ async fn g225_row_without_integration_id_is_skipped() {
 // value across activation switches and label/value edits.
 // ===========================================================================
 
-/// (active, time_created, time_updated) for one credential row.
+/// (active, `time_created`, `time_updated`) for one credential row.
 async fn row_times(db: &Arc<crate::database::Database>, id: &str) -> (i64, i64, i64) {
     let id = id.to_owned();
     let db = db.clone();
@@ -3621,7 +3621,7 @@ async fn g117_activate_and_update_never_touch_time_updated() {
 // ===========================================================================
 
 /// ① — the outbound device-code POST carries `Accept: application/json`
-/// and the app User-Agent (ref headers(), github-copilot.ts:376-385).
+/// and the app User-Agent (ref `headers()`, github-copilot.ts:376-385).
 #[tokio::test]
 async fn g234_device_post_carries_accept_and_user_agent() {
     let mock = MockOAuth::start(vec![(
@@ -3651,6 +3651,7 @@ async fn g234_device_post_carries_accept_and_user_agent() {
 /// (400) both answer the shared page module's HTML.
 #[tokio::test]
 async fn g234_loopback_serves_branded_success_and_error_pages() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     async fn get(url: &str) -> (String, String) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let mut stream = tokio::net::TcpStream::connect(url).await.expect("connect");
@@ -3688,7 +3689,6 @@ async fn g234_loopback_serves_branded_success_and_error_pages() {
     let mut stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", listener.port))
         .await
         .expect("connect 2");
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     stream
         .write_all(b"GET /callback?error=access_denied&error_description=nope HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
         .await
@@ -3862,7 +3862,7 @@ fn g260_min_length_format_and_pattern_checks() {
 /// Required-missing keeps the ref message; a declared default satisfies.
 #[test]
 fn g260_required_message_and_default_satisfaction() {
-    let mut answer: FormAnswer = FormAnswer::new();
+    let answer: FormAnswer = FormAnswer::new();
     assert_eq!(
         super::validate_form(&[form_field("token", true)], &answer),
         Some("Missing required form field: token".to_owned())
@@ -3998,24 +3998,19 @@ async fn gitlab_callback_error_redirect_serves_branded_error_card() {
 #[tokio::test]
 async fn g284_connection_status_dedups_unchanged() {
     use futures::StreamExt as _;
-    let (host, bus) = host_with_bus().await;
-    let mut subscription = bus.subscribe_type("integration.updated");
     // Drain whatever arrived before the probe window.
     async fn drain(subscription: &mut crate::bus::Subscription, settle: u64) -> usize {
         let mut seen = 0;
-        loop {
-            match tokio::time::timeout(
-                std::time::Duration::from_millis(settle),
-                subscription.next(),
-            )
-            .await
-            {
-                Ok(Some(_)) => seen += 1,
-                _ => break,
-            }
+        while let Ok(Some(_)) =
+            tokio::time::timeout(std::time::Duration::from_millis(settle), subscription.next())
+                .await
+        {
+            seen += 1;
         }
         seen
     }
+    let (host, bus) = host_with_bus().await;
+    let mut subscription = bus.subscribe_type("integration.updated");
     host.connect_key("anthropic", "sk-dedup", &BTreeMap::new(), None).await.expect("key");
     let _ = drain(&mut subscription, 100).await;
 

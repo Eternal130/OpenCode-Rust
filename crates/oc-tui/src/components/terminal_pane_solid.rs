@@ -116,10 +116,7 @@ fn row_element(inputs: &Signal<TermInputs>, index: usize) -> Element {
             "content",
             opentui_solid::dyn_(
                 map(inputs, move |inputs: &TermInputs| {
-                    inputs
-                        .rows
-                        .get(index)
-                        .map_or_else(|| StyledText::new(Vec::new()), |row| row_styled(row))
+                    inputs.rows.get(index).map_or_else(|| StyledText::new(Vec::new()), row_styled)
                 }),
                 |value: &StyledText| PropValue::Styled(value.clone()),
             ),

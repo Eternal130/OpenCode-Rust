@@ -320,7 +320,7 @@ pub fn field_active(field: &IntegrationFormField, answer: &IntegrationFormAnswer
                 // guards stringify (JS template semantics: booleans
                 // lowercase, numbers plain).
                 let expected = value_to_string(other);
-                items.iter().any(|item| *item == expected)
+                items.contains(&expected)
             }
             (value, expected) => value == expected,
         };
@@ -351,7 +351,7 @@ pub(crate) fn format_js_number(number: f64) -> String {
 }
 
 /// `formValidateValue` (util/form.ts:66-105) — the port skips the
-/// `pattern` check (a RegExp the TUI crate has no engine for; the
+/// `pattern` check (a `RegExp` the TUI crate has no engine for; the
 /// server re-validates) — bounded deviation, G-271④.
 #[must_use]
 pub fn validate_value(field: &IntegrationFormField, value: Option<&FormValue>) -> Option<String> {
@@ -403,10 +403,8 @@ pub fn validate_value(field: &IntegrationFormField, value: Option<&FormValue>) -
                         return Some("Expected a date (YYYY-MM-DD)".to_owned());
                     }
                 }
-                Some("date-time") => {
-                    if !valid_date_time(text) {
-                        return Some("Expected a date and time".to_owned());
-                    }
+                Some("date-time") if !valid_date_time(text) => {
+                    return Some("Expected a date and time".to_owned());
                 }
                 _ => {}
             }
@@ -490,7 +488,7 @@ fn valid_email(text: &str) -> bool {
         && !domain.contains(char::is_whitespace)
 }
 
-/// `new URL(value)` — scheme://rest with a non-empty rest.
+/// `new URL(value)` — <scheme://rest> with a non-empty rest.
 fn valid_url(text: &str) -> bool {
     text.split_once("://").is_some_and(|(scheme, rest)| {
         !scheme.is_empty()
@@ -664,7 +662,7 @@ impl IntegrationFormState {
             }
             if field.kind == IntegrationFieldKind::Multiselect {
                 self.multiselect = match &field.default_value {
-                    Some(FormValue::Array(items)) => items.iter().cloned().collect(),
+                    Some(FormValue::Array(items)) => items.clone(),
                     _ => Vec::new(),
                 };
             }

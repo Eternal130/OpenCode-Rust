@@ -59,7 +59,7 @@ pub fn composer_statusline(store: &Store, session_id: &str) -> (String, String) 
 /// affordance). `active` marks the active tab (None on the home
 /// route — no pill). D4.1a: the strip rides the shared chrome tree
 /// at the old paste site `(left, top)` — no Frame comes back; the
-/// pixels land at render_app's composite seam.
+/// pixels land at `render_app`'s composite seam.
 ///
 /// On the HOME route the strip appends the `New session` pseudo-tab
 /// and SELECTS it (`items = [...ordered, NEW_SESSION_TAB]` +
@@ -159,7 +159,7 @@ pub fn mount_live_tabs_bar(
         store.tabs_indicator_config(),
         left,
         top,
-    )
+    );
 }
 
 /// TUI-3 — the vertical rail's live mount over the store's tab list
@@ -170,7 +170,7 @@ pub fn mount_live_tabs_bar(
 /// (hover / add hover / the compact search + handle highlights).
 /// D2.2: the rail + its tooltip mount into the shared chrome tree at
 /// the content column's left edge; returns the tooltip row (None when
-/// not hovered). No Frame comes back — the pixels land at render_app's
+/// not hovered). No Frame comes back — the pixels land at `render_app`'s
 /// composite seam.
 pub fn mount_live_rail(
     store: &Store,
@@ -1320,7 +1320,7 @@ fn queued_dock_units(
 
 /// The queued-prompt dock's ONLY mount entry (D4.1a): a chrome-family
 /// surface at the old paste site — no Frame comes back; the pixels
-/// land at render_app's composite seam.
+/// land at `render_app`'s composite seam.
 fn mount_queued_dock(
     queued: &[crate::store::QueuedPrompt],
     width: usize,
@@ -1415,10 +1415,10 @@ fn composer_footer_hints(
         // unresolved — at `interval={40}`, blocks style,
         // inactiveFactor 0.6, minAlpha 0.3).
         spinner: if store.session_running(session_id) && !shell {
-            let color = store
-                .composer_rail_color(session_id)
-                .map(style_color_to_rgba)
-                .unwrap_or_else(|| style_color_to_rgba(store.theme().styles().border));
+            let color = store.composer_rail_color(session_id).map_or_else(
+                || style_color_to_rgba(store.theme().styles().border),
+                style_color_to_rgba,
+            );
             let options = crate::components::composer::knight::KnightOptions {
                 color,
                 inactive_factor: 0.6,

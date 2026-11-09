@@ -1034,6 +1034,9 @@ fn normalize_compaction(
     }
 }
 
+/// Monolithic port of the ref's experimental normalizer; helper split
+/// deferred (function is a 1:1 mirror of config/experimental.ts).
+#[allow(clippy::too_many_lines)]
 fn normalize_experimental(
     input: &Json,
     encoded: &mut Vec<(String, Json)>,

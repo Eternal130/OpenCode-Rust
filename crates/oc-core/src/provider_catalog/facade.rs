@@ -585,8 +585,8 @@ pub fn language_model_for_model(
                 let host = Arc::clone(&host);
                 Box::pin(async move {
                     if snowflake_env_token_override(
-                        std::env::var("SNOWFLAKE_CORTEX_TOKEN").ok(),
-                        std::env::var("SNOWFLAKE_CORTEX_PAT").ok(),
+                        std::env::var("SNOWFLAKE_CORTEX_TOKEN").ok().as_deref(),
+                        std::env::var("SNOWFLAKE_CORTEX_PAT").ok().as_deref(),
                     ) {
                         return None;
                     }
@@ -1243,7 +1243,7 @@ fn azure_catalog_route(
 /// snowflake-cortex.ts:268-270): an env token wins over the saved
 /// OAuth login, so the 401 refresh-retry gate declines (the method's
 /// own refresh guard returns the value unchanged, :100-101).
-fn snowflake_env_token_override(token: Option<String>, pat: Option<String>) -> bool {
+fn snowflake_env_token_override(token: Option<&str>, pat: Option<&str>) -> bool {
     token.is_some() || pat.is_some()
 }
 
@@ -1416,18 +1416,18 @@ fn openai_model_id(model_id: &str, package: &str) -> Option<String> {
 /// versions + base/mini/nano shapes (unset minors stay out until their
 /// support is known).
 fn supports_verbosity(id: &str) -> bool {
-    if id.contains("gpt-6") {
-        return true;
-    }
-    if id.contains("-chat") || id.contains("-image") {
-        return false;
-    }
     static MINORS: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::Regex::new(r"(?:^|[/.])gpt-5\.[1-6](?:[.:-]|$)").unwrap()
     });
     static BASE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::Regex::new(r"(?:^|[/.])gpt-5(?:-(?:mini|nano)(?:[.:-]|$)|$)").unwrap()
     });
+    if id.contains("gpt-6") {
+        return true;
+    }
+    if id.contains("-chat") || id.contains("-image") {
+        return false;
+    }
     MINORS.is_match(id) || BASE.is_match(id)
 }
 
@@ -2067,6 +2067,7 @@ mod tests {
     /// stream finishes cleanly instead of failing with a provider error.
     #[tokio::test]
     async fn snowflake_route_ends_cleanly_on_fake_400_conversation_complete() {
+        use futures::StreamExt as _;
         struct Fake {
             status: u16,
             json: &'static str,
@@ -2077,13 +2078,13 @@ mod tests {
                 &self,
                 _request: TransportRequest,
             ) -> Result<TransportResponse, oc_ai::route::transport::TransportError> {
+                use futures::StreamExt as _;
                 // An empty `json` stands for the SSE terminator body.
                 let bytes = if self.json.is_empty() {
                     b"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_vec()
                 } else {
                     self.json.as_bytes().to_vec()
                 };
-                use futures::StreamExt as _;
                 Ok(TransportResponse {
                     status: self.status,
                     headers: BTreeMap::from([(
@@ -2124,7 +2125,6 @@ mod tests {
         let route = Arc::clone(&model.route);
         let mut request = oc_ai::schema::LLMRequest::new(model);
         request.messages = vec![oc_ai::schema::Message::user("hi")];
-        use futures::StreamExt as _;
         let mut events = Box::pin(route.stream(request).await.expect("stream starts"));
         let mut saw_finish = false;
         let mut provider_error = false;
@@ -2330,9 +2330,9 @@ mod tests {
     #[test]
     fn snowflake_env_token_override_gate() {
         assert!(!snowflake_env_token_override(None, None));
-        assert!(snowflake_env_token_override(Some("pat".into()), None));
-        assert!(snowflake_env_token_override(None, Some("tok".into())));
-        assert!(snowflake_env_token_override(Some("a".into()), Some("b".into())));
+        assert!(snowflake_env_token_override(Some("pat"), None));
+        assert!(snowflake_env_token_override(None, Some("tok")));
+        assert!(snowflake_env_token_override(Some("a"), Some("b")));
     }
 
     #[test]
@@ -3796,6 +3796,7 @@ mod tests {
 
     /// Rebind a catalog model under a different package (the model-level
     /// `package` config path — opencode.ts:272).
+    #[expect(dead_code)] // opencode.ts:272 model-level `package` rebinding; wiring lands with the model-config lane
     fn model_as_package(
         catalog: &Catalog,
         provider_id: &str,
@@ -4061,7 +4062,8 @@ mod tests {
         // predicate is a substring test (`gpt-5-chat`) — `gpt-5.2-chat-*`
         // does NOT match it and keeps the defaults (asserted by the
         // predicate rows above); the catalog's `gpt-5-pro` is excluded.
-        for excluded in ["gpt-5-pro"] {
+        {
+            let excluded = "gpt-5-pro";
             let model = language_model(
                 &context,
                 catalog,

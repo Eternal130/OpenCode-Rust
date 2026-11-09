@@ -14,7 +14,7 @@
 //!   D2.2 overlays lane: a family wrapper at skeleton index 9
 //!   (today's frame-tail z, above every dialog pixel; ref zIndex
 //!   5000).
-//! * **The paste_frame overlays** (renderer console / toast): the
+//! * **The `paste_frame` overlays** (renderer console / toast): the
 //! overlays family's first seats — mounted here
 //! from the live store, before `render_app`'s compositor seam.
 

@@ -502,8 +502,7 @@ impl TuiConfig {
             debug_turn_tokens: value
                 .get("debug")
                 .and_then(|debug| debug.get("turn_tokens"))
-                .map(|flag| flag != &Value::Bool(false) && !flag.is_null())
-                .unwrap_or(false),
+                .is_some_and(|flag| flag != &Value::Bool(false) && !flag.is_null()),
             session_markdown_source: value
                 .get("session")
                 .and_then(|session| session.get("markdown"))

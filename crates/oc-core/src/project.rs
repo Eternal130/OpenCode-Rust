@@ -267,21 +267,18 @@ impl ProjectStore for MemoryProjectStore {
 
     async fn claim_worktree(&self, row: &WorktreeRow, replace: bool) -> bool {
         let mut worktrees = self.worktrees.lock().unwrap_or_else(unpoison);
-        match worktrees.iter_mut().find(|existing| {
+        if let Some(existing) = worktrees.iter_mut().find(|existing| {
             existing.project_id == row.project_id && existing.directory == row.directory
         }) {
-            Some(existing) => {
-                // setWhere: claim only unowned rows unless replace.
-                if !(replace || (row.strategy.is_some() && existing.strategy.is_none())) {
-                    return false;
-                }
-                existing.strategy.clone_from(&row.strategy);
-                true
+            // setWhere: claim only unowned rows unless replace.
+            if !(replace || (row.strategy.is_some() && existing.strategy.is_none())) {
+                return false;
             }
-            None => {
-                worktrees.push(row.clone());
-                true
-            }
+            existing.strategy.clone_from(&row.strategy);
+            true
+        } else {
+            worktrees.push(row.clone());
+            true
         }
     }
 
@@ -1097,7 +1094,7 @@ pub mod worktree_strategy {
     /// The per-location registry (strategies.ts:48-65): git seeded by
     /// default and selected; `add` would delete+set+select (plugin
     /// strategies register via `GuestWorktreeStrategy` — see
-    /// plugin_apply.rs and oc-server/plugins.rs).
+    /// `plugin_apply.rs` and oc-server/plugins.rs).
     pub struct StrategyRegistry {
         strategies: Vec<Box<dyn Strategy>>,
     }
@@ -1112,7 +1109,10 @@ pub mod worktree_strategy {
         /// Lookup by id (worktree.ts getStrategy).
         #[must_use]
         pub fn get(&self, id: &str) -> Option<&dyn Strategy> {
-            self.strategies.iter().find(|strategy| strategy.id() == id).map(|s| s.as_ref())
+            self.strategies
+                .iter()
+                .find(|strategy| strategy.id() == id)
+                .map(std::convert::AsRef::as_ref)
         }
 
         /// The selected strategy id (the last registered).
@@ -1131,8 +1131,9 @@ pub mod worktree_strategy {
         }
 
         /// Discovery order (worktree.ts:285): registration order reversed.
+        #[must_use]
         pub fn discovery_order(&self) -> Vec<&dyn Strategy> {
-            self.strategies.iter().rev().map(|s| s.as_ref()).collect()
+            self.strategies.iter().rev().map(std::convert::AsRef::as_ref).collect()
         }
     }
 

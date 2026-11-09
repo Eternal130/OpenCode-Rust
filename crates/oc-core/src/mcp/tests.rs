@@ -266,6 +266,7 @@ fn mock_pair(script: Script) -> (MockTransport, Mock) {
 }
 
 #[allow(clippy::unnecessary_wraps)] // the `_` request arm has no response
+#[allow(clippy::too_many_lines)] // scripted mock responder; 1:1 with the fixture scripts
 fn respond(
     request: &ClientRequest,
     id: RequestId,
@@ -280,10 +281,10 @@ fn respond(
                 .offers
                 .lock()
                 .push(serde_json::to_value(request).expect("initialize offer serializes"));
-            let protocol_version = script
-                .initialize_version
-                .map(str::to_owned)
-                .unwrap_or_else(|| rmcp::model::ProtocolVersion::V_2025_11_25.to_string());
+            let protocol_version = script.initialize_version.map_or_else(
+                || rmcp::model::ProtocolVersion::V_2025_11_25.to_string(),
+                str::to_owned,
+            );
             response(
                 serde_json::json!({
                         // The mock echoes the client's offered version back —
@@ -727,7 +728,7 @@ async fn mcp_client_auto_negotiates_modern_discover() {
         connect_mock_config(script, &protocol_config(Some(oc_schema::mcp::Protocol::Auto)))
             .await
             .expect("modern discover connect");
-    assert!(connection.tools().await.expect("tools").is_empty());
+    assert_eq!(connection.tools().await.expect("tools").len(), 0);
     assert!(offers.lock().is_empty(), "no legacy initialize was sent");
     let discovers = discovers.lock();
     assert_eq!(discovers.len(), 1, "exactly one discover probe");
@@ -750,7 +751,7 @@ async fn mcp_client_auto_negotiates_older_declared_version() {
         connect_mock_config(script, &protocol_config(Some(oc_schema::mcp::Protocol::Auto)))
             .await
             .expect("older declared version negotiates");
-    assert!(connection.tools().await.expect("tools").is_empty());
+    assert_eq!(connection.tools().await.expect("tools").len(), 0);
 }
 
 #[tokio::test]
@@ -764,7 +765,7 @@ async fn mcp_client_auto_falls_back_to_legacy_initialize() {
         connect_mock_config(script, &protocol_config(Some(oc_schema::mcp::Protocol::Auto)))
             .await
             .expect("legacy fallback connect");
-    assert!(connection.tools().await.expect("tools").is_empty());
+    assert_eq!(connection.tools().await.expect("tools").len(), 0);
     let offers = offers.lock();
     assert_eq!(offers.len(), 1, "the fallback sent one initialize");
     assert_eq!(
@@ -783,7 +784,7 @@ async fn mcp_client_legacy_mode_accepts_server_declared_older_version() {
         connect_mock_config(script, &protocol_config(Some(oc_schema::mcp::Protocol::Legacy)))
             .await
             .expect("legacy handshake against an old server");
-    assert!(connection.tools().await.expect("tools").is_empty());
+    assert_eq!(connection.tools().await.expect("tools").len(), 0);
 }
 
 #[tokio::test]
@@ -797,7 +798,7 @@ async fn mcp_client_pin_requires_the_declared_version() {
         connect_mock_config(script, &protocol_config(Some(oc_schema::mcp::Protocol::Dated)))
             .await
             .expect("pinned version connect");
-    assert!(connection.tools().await.expect("tools").is_empty());
+    assert_eq!(connection.tools().await.expect("tools").len(), 0);
 }
 
 #[tokio::test]
@@ -1555,10 +1556,7 @@ async fn mcp_registry_recovers_and_replays_after_session_expiry() {
                 true,
             )
             .await
-            .map(|connection| {
-                connection.mark_session_attached();
-                connection
-            })
+            .inspect(super::client::Connection::mark_session_attached)
         })
     });
     let registry = registry_with(&bus, connector, servers);
@@ -1843,7 +1841,9 @@ async fn g242_ask_rule_parks_mcp_tool_execution_until_reply() {
     let result = spawned.await.expect("join").expect("tool runs after approval");
     match &result.content[0] {
         oc_schema::tool::Content::Text { text } => assert_eq!(text, "pong"),
-        other => panic!("expected text part, got {other:?}"),
+        other @ oc_schema::tool::Content::File { .. } => {
+            panic!("expected text part, got {other:?}")
+        }
     }
     registry.shutdown().await;
 }
@@ -1900,7 +1900,7 @@ async fn g242_pipeline_hooks_and_decode_wrap_mcp_tools() {
                 crate::hooks::fn_hook(move |event: &mut crate::hooks::ToolExecuteBeforeEvent| {
                     before_seen
                         .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .push(format!("before:{}", event.tool));
                     Ok(())
                 }),
@@ -1919,7 +1919,7 @@ async fn g242_pipeline_hooks_and_decode_wrap_mcp_tools() {
                     };
                     after_seen
                         .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .push(format!("{phase}:{}", event.tool));
                     Ok(())
                 }),
@@ -1937,7 +1937,9 @@ async fn g242_pipeline_hooks_and_decode_wrap_mcp_tools() {
         .expect("echo runs");
     match &result.content[0] {
         oc_schema::tool::Content::Text { text } => assert_eq!(text, "pong"),
-        other => panic!("expected text part, got {other:?}"),
+        other @ oc_schema::tool::Content::File { .. } => {
+            panic!("expected text part, got {other:?}")
+        }
     }
     // Decode leg: the required `q` is missing — the pipeline's
     // decodeInput fires before the leaf (ref's exact issue message).
@@ -1953,7 +1955,7 @@ async fn g242_pipeline_hooks_and_decode_wrap_mcp_tools() {
         failure.message()
     );
 
-    let observed = seen.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+    let observed = seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
     // The decode-failure leg fires `before` but not `after` — the
     // pipeline's decode early-return (pinned by the g191 test; ref
     // tool.ts:130-137 DOES fire after-error on decode failures — a
@@ -2082,7 +2084,7 @@ async fn g280_transient_retry_hops_are_250ms_then_1s() {
     // A non-transient failure never retries.
     let counter = Arc::new(std::sync::atomic::AtomicU32::new(0));
     let counter_for_fatal = Arc::clone(&counter);
-    let failure = retrying(move || {
+    let _failure = retrying(move || {
         let counter = Arc::clone(&counter_for_fatal);
         let attempt: Attempt = Box::pin(async move {
             counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -2095,8 +2097,8 @@ async fn g280_transient_retry_hops_are_250ms_then_1s() {
     assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
-fn test_permission(_bus: &crate::bus::Bus) -> crate::permission::Permission {
-    test_permission_with_rules(_bus, None).0
+fn test_permission(bus: &crate::bus::Bus) -> crate::permission::Permission {
+    test_permission_with_rules(bus, None).0
 }
 
 /// G-242 — the same builder with an agent ruleset (ask/deny legs of the
@@ -2255,7 +2257,7 @@ async fn mcp_elicitation_empty_schema_accepts_without_creating_forms() {
         })
         .await;
     assert_eq!(result.action, super::elicitation::ElicitationAction::Accept);
-    assert!(result.content.is_empty());
+    assert_eq!(result.content.len(), 0);
     assert!(forms.asked.lock().is_empty(), "no form for an empty schema");
 }
 
@@ -2478,7 +2480,7 @@ fn mcp_elicitation_field_conversion_rules() {
 }
 
 /// G-280② — `number` keeps its own wire kind (ref mcp/index.ts:800-807
-/// `type: property.type`; schema form.ts NumberField vs IntegerField):
+/// `type: property.type`; schema form.ts `NumberField` vs IntegerField):
 /// collapsing it onto Integer made float elicitation answers impossible
 /// to input.
 #[test]

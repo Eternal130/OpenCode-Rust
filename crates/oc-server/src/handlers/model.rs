@@ -842,7 +842,7 @@ mod tests {
             .collect()
     }
 
-    /// The catalog tier's per-model filters (available_models' loop)
+    /// The catalog tier's per-model filters (`available_models`' loop)
     /// over a static snapshot — the offline expectation.
     fn listable_static(snapshot: &oc_core::provider_catalog::Snapshot) -> usize {
         snapshot
@@ -857,7 +857,7 @@ mod tests {
     /// like `bind`: azure's narrowed snapshot REPLACES the static azure
     /// models (only the deployed id lists, keyed by deployment name
     /// with the catalog model's facts), the copilot merge lists its
-    /// dynamic-only model, and the DigitalOcean merge ADDS its `router:*`
+    /// dynamic-only model, and the `DigitalOcean` merge ADDS its `router:*`
     /// entry over the static surface.
     #[tokio::test]
     async fn dynamic_syncs_ride_the_listing_seam() {
@@ -903,11 +903,10 @@ mod tests {
             .expect("gpt-5-mini in the static catalog");
         assert!(prod["name"].as_str().unwrap_or_default().ends_with("(prod-mini)"));
         assert_eq!(prod["limit"]["context"], json!(static_mini.limit.context));
-        assert_eq!(
-            provider_entries(&entries, "azure")
+        assert!(
+            !provider_entries(&entries, "azure")
                 .iter()
                 .any(|model| model["id"] == json!("gpt-5-mini")),
-            false,
             "an undeployed catalog model is GONE from the listing (the gap's defect)"
         );
 
@@ -970,7 +969,7 @@ mod tests {
             "the full static azure surface lists (no narrowing without a credential)"
         );
         assert!(azure.iter().any(|model| model["id"] == json!("gpt-5-mini")));
-        assert!(azure.iter().any(|model| model["id"] == json!("prod-mini")) == false);
+        assert!(!azure.iter().any(|model| model["id"] == json!("prod-mini")));
 
         let copilot = provider_entries(&entries, "github-copilot");
         assert_eq!(
@@ -980,8 +979,7 @@ mod tests {
         );
         assert!(
             !copilot.is_empty()
-                && copilot.iter().any(|model| model["id"] == json!("enterprise-only-model"))
-                    == false,
+                && !copilot.iter().any(|model| model["id"] == json!("enterprise-only-model")),
             "no dynamic-only ids without a sync"
         );
         let digitalocean = provider_entries(&entries, "digitalocean");

@@ -75,7 +75,7 @@ pub const PACKAGE_ENV: &str = "OPENCODE_PACKAGE";
 /// overridable for tests/air-gapped mirrors, mirroring
 /// [`RELEASE_URL_ENV`]).
 pub const INSTALLER_URL_ENV: &str = "OPENCODE_INSTALLER_URL";
-/// The official OpenCode installer script (v2 `curl` method source).
+/// The official `OpenCode` installer script (v2 `curl` method source).
 pub const DEFAULT_INSTALLER_URL: &str = "https://opencode.ai/v2/install";
 
 /// The default package the package-manager methods install (v2's
@@ -95,7 +95,7 @@ pub fn package_name() -> String {
     if let Some(name) = std::env::var(PACKAGE_ENV).ok().filter(|value| !value.is_empty()) {
         return name;
     }
-    if let Some(exe) = std::env::current_exe().ok() {
+    if let Ok(exe) = std::env::current_exe() {
         if let Some(installed) = installed_package(&exe) {
             return installed;
         }
@@ -465,7 +465,7 @@ pub fn installer_commands(
     (download, run)
 }
 
-/// `curl` method: run the official OpenCode installer (v2 parity —
+/// `curl` method: run the official `OpenCode` installer (v2 parity —
 /// download `https://opencode.ai/v2/install` and execute it with
 /// `bash <installer> --version <version> --no-modify-path`). Unlike
 /// `github` this does NOT use the `OPENCODE_RELEASE_URL` tarball:
@@ -570,7 +570,7 @@ pub fn release_target() -> String {
 
 /// The upgrade lock's key (ref updater.ts:131,399 —
 /// `flock.acquire("cli-upgrade", …)`): one upgrade at a time across
-/// every OpenCode process on the machine.
+/// every `OpenCode` process on the machine.
 pub const CLI_UPGRADE_LOCK: &str = "cli-upgrade";
 
 /// The ref waits up to 15 minutes for the lock ("longer than the
@@ -578,7 +578,7 @@ pub const CLI_UPGRADE_LOCK: &str = "cli-upgrade";
 /// treats 15 minutes as the lock's TTL instead: a held-and-fresh lock
 /// makes the second upgrade skip cleanly, a lock older than the TTL is
 /// stale (its holder is gone or wedged) and is taken over.
-pub const CLI_UPGRADE_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+pub const CLI_UPGRADE_TTL: std::time::Duration = std::time::Duration::from_mins(15);
 
 /// The outcome of trying to enter the upgrade critical section.
 #[derive(Debug)]
@@ -1421,14 +1421,14 @@ mod tests {
         // STALE takeover: backdate the lock file past the TTL while it
         // is still held — the holder is gone/wedged, the next acquire
         // unlinks and relocks.
-        set_mtime_past(&second.path(), CLI_UPGRADE_TTL + std::time::Duration::from_secs(60));
+        set_mtime_past(second.path(), CLI_UPGRADE_TTL + std::time::Duration::from_secs(60));
         drop(second);
         // Re-hold a fresh lock, then age it past the TTL (held + stale).
         let held = match acquire_cli_upgrade_lock_at(&path).expect("acquire") {
             UpgradeLock::Acquired(lock) => lock,
             UpgradeLock::Held => panic!("lock was released"),
         };
-        set_mtime_past(&held.path(), CLI_UPGRADE_TTL + std::time::Duration::from_secs(1));
+        set_mtime_past(held.path(), CLI_UPGRADE_TTL + std::time::Duration::from_secs(1));
         match acquire_cli_upgrade_lock_at(&path).expect("stale acquire") {
             UpgradeLock::Acquired(_) => {}
             UpgradeLock::Held => panic!("a stale lock must be taken over"),
@@ -1499,7 +1499,6 @@ mod tests {
         assert!(removal_command("curl", "@opencode-ai/cli").is_none());
         assert!(removal_command("brew", "opencode").is_none());
     }
-    use super::*;
 
     /// G-99: `curl` must route to the official installer script and
     /// `github` to the release download — never share a body.

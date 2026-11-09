@@ -2059,7 +2059,7 @@ async fn rg_resolve_downloads_extracts_and_caches() {
     std::fs::create_dir_all(&inner).unwrap();
     std::fs::write(inner.join("rg"), b"#!/bin/sh\necho fake-rg\n").unwrap();
     set_executable(&inner.join("rg"));
-    let archive = tmp.path().join(&config.filename().replace('/', "_"));
+    let archive = tmp.path().join(config.filename().replace('/', "_"));
     let status = std::process::Command::new("tar")
         .arg("-czf")
         .arg(&archive)
@@ -2115,10 +2115,8 @@ async fn rg_resolve_downloads_extracts_and_caches() {
     // Empty download body is rejected verbatim (binary.ts:128).
     let empty = tempfile::tempdir_in("/tmp/opencode").unwrap();
     let error =
-        resolve_with(&rg_deps(None, None, empty.path().join("bin")), |url: String| async move {
-            Ok(match url.as_str() {
-                _ => Vec::new(),
-            })
+        resolve_with(&rg_deps(None, None, empty.path().join("bin")), |_url: String| async move {
+            Ok(Vec::new())
         })
         .await
         .expect_err("empty download");
@@ -2153,9 +2151,8 @@ async fn tool_grep_exit_two_tolerated_with_partial_results() {
     // (permission/config failures) falls through to the row result, so
     // matches already streamed are returned instead of a hard error.
     let dir = shim_dir();
-    let fixture = concat!(
-        "{\"type\":\"match\",\"data\":{\"path\":{\"text\":\"./target.txt\"},\"lines\":{\"text\":\"needle\\n\"},\"line_number\":1,\"absolute_offset\":0,\"submatches\":[{\"match\":{\"text\":\"needle\"},\"start\":0,\"end\":6}]}}\n"
-    );
+    let fixture =
+        "{\"type\":\"match\",\"data\":{\"path\":{\"text\":\"./target.txt\"},\"lines\":{\"text\":\"needle\\n\"},\"line_number\":1,\"absolute_offset\":0,\"submatches\":[{\"match\":{\"text\":\"needle\"},\"start\":0,\"end\":6}]}}\n";
     let fixture_file = dir.join("partial-fixture.out");
     std::fs::write(&fixture_file, fixture).unwrap();
     let fixture_display = fixture_file.display();

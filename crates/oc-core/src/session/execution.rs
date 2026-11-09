@@ -1018,8 +1018,7 @@ impl ExecutionHooks {
                 "assistant" => {
                     let finish_error = data.get("finish").is_some_and(|finish| {
                         serde_json::from_value::<oc_schema::common::FinishReason>(finish.clone())
-                            .map(|reason| reason == oc_schema::common::FinishReason::Error)
-                            .unwrap_or(false)
+                            .is_ok_and(|reason| reason == oc_schema::common::FinishReason::Error)
                     });
                     if finish_error {
                         return oc_schema::id::MessageId::parse(row.id.clone()).ok();

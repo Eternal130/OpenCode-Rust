@@ -409,7 +409,9 @@ impl IntegrationHost {
     /// `integration.list` (integration.ts:685-690): all integrations with
     /// connections, sorted by name.
     pub async fn list(&self) -> Result<Vec<IntegrationInfo>, HostError> {
-        let inventory: Vec<(String, String, Option<BTreeMap<String, Value>>, Vec<Method>)> = self
+        /// One integration's method inventory row (name, icon, methods).
+        type InventoryRow = (String, String, Option<BTreeMap<String, Value>>, Vec<Method>);
+        let inventory: Vec<InventoryRow> = self
             .entries
             .read()
             .iter()
@@ -743,7 +745,7 @@ impl IntegrationHost {
             let integration = integration_id.to_owned();
             tokio::spawn(async move {
                 let outcome = tokio::select! {
-                    _ = cancel.cancelled() => return,
+                    () = cancel.cancelled() => return,
                     outcome = callback => outcome.map_err(IntegrationError::Authorization),
                 };
                 host.settle(&attempt, &integration, outcome).await;
@@ -833,7 +835,7 @@ impl IntegrationHost {
             return Ok(());
         };
         let outcome = tokio::select! {
-            _ = cancel.cancelled() => return Ok(()),
+            () = cancel.cancelled() => return Ok(()),
             outcome = callback => outcome.map_err(IntegrationError::Authorization),
         };
         self.settle(attempt_id, integration_id, outcome).await;
@@ -950,6 +952,9 @@ impl IntegrationHost {
         clippy::unused_async_trait_impl,
         reason = "async surface parity with integration.ts"
     )]
+    /// Monolithic port of the ref's connection command dispatch
+    /// (integration command flows); helper split deferred.
+    #[allow(clippy::too_many_lines)]
     pub async fn command_connect(
         self: &Arc<Self>,
         integration_id: &str,
@@ -1059,7 +1064,7 @@ impl IntegrationHost {
             // attempt (the ref's `Scope.close` — integration.ts:823); the
             // removed entry makes any late settle a no-op.
             let status = tokio::select! {
-                _ = cancel.cancelled() => {
+                () = cancel.cancelled() => {
                     let _ = child.kill().await;
                     let _ = stderr_task.await;
                     let _ = stdout_task.await;
@@ -1419,10 +1424,8 @@ fn validate_field(field: &FormField, value: &Value) -> Option<String> {
                 return Some(format!("Expected date for form field: {}", field.key));
             }
         }
-        Some("date-time") => {
-            if !is_date_time(text) {
-                return Some(format!("Expected date-time for form field: {}", field.key));
-            }
+        Some("date-time") if !is_date_time(text) => {
+            return Some(format!("Expected date-time for form field: {}", field.key));
         }
         _ => {}
     }
@@ -1460,7 +1463,7 @@ fn is_date(text: &str) -> bool {
 /// form.ts:368-370 `isDateTime`: any string `Date` parses — in practice
 /// the ISO-8601 (`YYYY-MM-DD[THH:MM:SS[.f][Z]]`) and RFC-1123 shapes
 /// the surface emits. Full timestamps go through the azure seam's
-/// `chrono_naive` (providers_enterprise.rs); a bare date round-trips a
+/// `chrono_naive` (`providers_enterprise.rs`); a bare date round-trips a
 /// JS `Date` too.
 fn is_date_time(text: &str) -> bool {
     is_date(text) || text.parse::<providers_enterprise::chrono_naive::NaiveDateTime>().is_ok()
@@ -1477,7 +1480,7 @@ fn is_email(text: &str) -> bool {
 }
 
 /// `when` visibility conditions (all must match; form.ts:267-279): an
-/// unanswered referenced field is FALSE for both ops (matches() returns
+/// unanswered referenced field is FALSE for both ops (`matches()` returns
 /// false before any inversion — hiding a field falsifies every
 /// condition referencing it); `eq` hits on value equality (array
 /// answers test membership), `neq` inverts a MATCHED value. G-260③ —
@@ -1489,7 +1492,7 @@ fn field_visible(field: &FormField, answer: &FormAnswer) -> bool {
             None | Some(Value::Null) => false,
             Some(Value::Array(items)) => {
                 let neq = condition.op == "neq";
-                let hit = items.iter().any(|item| *item == condition.value);
+                let hit = items.contains(&condition.value);
                 if neq {
                     !hit
                 } else {

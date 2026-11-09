@@ -37,7 +37,7 @@ fn toast_tree_units(
     theme: &FooterTheme,
     feedback: &ResolvedThemeTokens,
 ) -> (usize, usize, usize, Vec<ChromeUnit>) {
-    let border = feedback_color(feedback, toast.variant);
+    let _border = feedback_color(feedback, toast.variant);
     let message_width = display_width(&toast.message);
     let title_width = toast.title.as_deref().map_or(0, display_width);
     let (_left, panel_width, _top) = toast_geometry(message_width, title_width, usize::MAX);

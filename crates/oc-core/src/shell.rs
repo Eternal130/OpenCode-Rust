@@ -46,7 +46,8 @@ pub const DIRECTORY: &str = "shell";
 fn is_capture_name(name: &str) -> bool {
     let Some(rest) = name.strip_prefix("sh_") else { return false };
     let Some(hex) = rest.get(0..12) else { return false };
-    hex.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')) && rest.ends_with(".out")
+    hex.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        && rest.to_ascii_lowercase().ends_with(".out")
 }
 
 /// `Shell.cleanup` (shell.ts:83-117): the hourly retention sweep over the

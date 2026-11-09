@@ -814,8 +814,6 @@ impl HookRegistry {
         &self.transforms
     }
 
-    /// Count of live registrations across every hook point (diagnostics).
-    #[must_use]
     /// Registrations on the `tool.execute.before` point (builtin repair
     /// hook + guest plugins).
     #[must_use]

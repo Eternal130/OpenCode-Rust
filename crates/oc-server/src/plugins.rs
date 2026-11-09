@@ -110,7 +110,7 @@ pub struct PluginBoot {
     pub terminal_slot: Arc<EngineTerminalSlot>,
     /// The integration-port slot (G-64; filled after `Engine::boot`).
     pub integration_slot: Arc<EngineIntegrationSlot>,
-    /// G-222 — serializes the reload passes: the ConfigReloadBridge's
+    /// G-222 — serializes the reload passes: the `ConfigReloadBridge`'s
     /// config leg and the [`PluginSupervisor`]'s fs/timer/sdk legs share
     /// it (the ref merges all four trigger sources into ONE supervisor
     /// queue, supervisor.ts:196-237; the lock is the port's equivalent).
@@ -640,7 +640,7 @@ pub fn refresh_after_config_change(boot: &PluginBoot, loaded: &Loaded) {
 const SUPERVISOR_DEBOUNCE_MS: u64 = 100;
 /// The ref's periodic reload (supervisor.ts:211:
 /// `Stream.fromEffectRepeat(Effect.sleep("24 hours"))`).
-const SUPERVISOR_PERIOD: Duration = Duration::from_secs(24 * 60 * 60);
+const SUPERVISOR_PERIOD: Duration = Duration::from_hours(24);
 
 /// One serialized reload pass — the full [`refresh_after_config_change`]
 /// pipeline (drop-in rescan → add/remove diff → digest reload) under the
@@ -715,7 +715,7 @@ impl PluginSupervisor {
             loop {
                 tokio::select! {
                     _ = timer_shutdown.changed() => break,
-                    _ = tokio::time::sleep(SUPERVISOR_PERIOD) => timer.notify(),
+                    () = tokio::time::sleep(SUPERVISOR_PERIOD) => timer.notify(),
                 }
             }
         });
@@ -1361,7 +1361,7 @@ impl LocationPluginSource for HostPluginSource {
 
     /// G-24 — plugin-registered websearch providers
     /// (`ctx.websearch.transform`): the engine's `assemble` merges them
-    /// into every location's WebSearch registry (the execute closure
+    /// into every location's `WebSearch` registry (the execute closure
     /// stays in the guest).
     fn websearch_providers(&self) -> Vec<oc_core::plugin_apply::PluginWebsearchProviderDef> {
         self.host
@@ -2008,7 +2008,7 @@ impl EngineSessionPort {
                 let expanded = oc_core::config::command_md::evaluate_template_shell(
                     &command.template,
                     text,
-                    &self.location.as_path().to_path_buf(),
+                    self.location.as_path(),
                     services.commands.config_shell().as_deref(),
                 )
                 .await?;
@@ -2392,7 +2392,7 @@ impl EnginePermissionSlot {
 }
 
 /// The engine-backed [`oc_plugin_host::WebsearchPort`] (G-24 —
-/// `ctx.websearch.providers/query` over the boot location's WebSearch
+/// `ctx.websearch.providers/query` over the boot location's `WebSearch`
 /// service).
 pub struct EngineWebsearchPort {
     pub engine: Arc<Engine>,
@@ -2489,7 +2489,7 @@ impl EngineWebsearchSlot {
 /// The engine-backed [`oc_plugin_host::VcsPort`] (G-24 —
 /// `ctx.vcs.get/base` over the boot location's resolved project; the
 /// git adapter's branch/base shapes mirror handlers/project.rs's
-/// vcs_get/vcs_base).
+/// `vcs_get/vcs_base`).
 pub struct EngineVcsPort {
     pub engine: Arc<Engine>,
     pub location: LocationRef,
@@ -2623,14 +2623,14 @@ impl oc_plugin_host::ProviderPort for EngineProviderPort {
 
     async fn get(&self, id: &str) -> Result<Value, String> {
         let catalog = self.engine.catalog_service.get();
-        Ok(catalog.provider(id).map(Self::snapshot_json).unwrap_or(Value::Null))
+        Ok(catalog.provider(id).map_or(Value::Null, Self::snapshot_json))
     }
 
     async fn reload(&self) -> Result<(), String> {
         // `provider.reload` (ref providers.reload): a fresh catalog
         // refresh; a failure surfaces (the next location assembly
         // reads the live service catalog either way).
-        self.engine.catalog_service.refresh(true).await.map(|_| ()).map_err(|e| e)
+        self.engine.catalog_service.refresh(true).await.map(|_| ())
     }
 }
 
@@ -2709,19 +2709,18 @@ impl oc_plugin_host::ModelPort for EngineModelPort {
         Ok(entries
             .into_iter()
             .find(|entry| entry.get("id").and_then(Value::as_str).is_some())
-            .map(|entry| {
+            .map_or(Value::Null, |entry| {
                 serde_json::json!({
                     "providerID": entry.get("providerID").cloned().unwrap_or(Value::Null),
                     "modelID": entry.get("id").cloned().unwrap_or(Value::Null),
                 })
-            })
-            .unwrap_or(Value::Null))
+            }))
     }
 
     async fn reload(&self) -> Result<(), String> {
         // `model.reload` — the catalog refresh `provider.reload` drives
         // (the model rows derive from it).
-        self.engine.catalog_service.refresh(true).await.map(|_| ()).map_err(|e| e)
+        self.engine.catalog_service.refresh(true).await.map(|_| ())
     }
 }
 
@@ -2842,18 +2841,16 @@ impl oc_plugin_host::TerminalPort for EngineTerminalPort {
     async fn read(&self, session_id: &str, lines: Option<u32>) -> Result<Value, String> {
         let session_id = oc_schema::id::SessionId::parse(session_id).map_err(|e| e.to_string())?;
         let result = self.pty.read(&session_id, lines).await.map_err(|error| error.to_string())?;
-        Ok(result
-            .map(|read| {
-                serde_json::json!({
-                    "id": read.pty_id,
-                    "title": read.title,
-                    "cwd": read.cwd,
-                    "foregroundProcess": read.foreground_process,
-                    "text": read.screen.text,
-                    "cursor": { "x": read.screen.cursor.0, "y": read.screen.cursor.1 },
-                })
+        Ok(result.map_or(Value::Null, |read| {
+            serde_json::json!({
+                "id": read.pty_id,
+                "title": read.title,
+                "cwd": read.cwd,
+                "foregroundProcess": read.foreground_process,
+                "text": read.screen.text,
+                "cursor": { "x": read.screen.cursor.0, "y": read.screen.cursor.1 },
             })
-            .unwrap_or(Value::Null))
+        }))
     }
 }
 

@@ -860,7 +860,7 @@ fn build_loaded(
 
 /// The diff rows' CONTENT backgrounds (the wrapper's cleared
 /// `line_colors_content` pass, restored as screen-exact fills behind
-/// the DiffRenderable). One entry per visual row; unified carries one
+/// the `DiffRenderable`). One entry per visual row; unified carries one
 /// side, split carries `[left, right]` (an empty pairing side is the
 /// card's context color).
 fn row_backgrounds(hunk: &Hunk, view: DiffView, diff: &crate::theme::DiffStyles) -> Vec<Vec<Rgba>> {

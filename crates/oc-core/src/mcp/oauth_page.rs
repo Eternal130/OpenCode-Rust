@@ -3,7 +3,7 @@
 //! fully self-contained HTML string with no external assets, so they work
 //! offline and drop into the loopback listener's raw HTTP writer.
 //!
-//! The visual language mirrors the OpenCode app: the design tokens are a
+//! The visual language mirrors the `OpenCode` app: the design tokens are a
 //! curated subset of the OC-2 semantic tokens in
 //! `packages/ui/src/styles/theme.css`, and the wordmark is the same
 //! geometry as `packages/ui/src/components/logo.tsx`.
@@ -16,9 +16,9 @@ const AUTO_CLOSE_SCRIPT: &str = "setTimeout(function(){try{window.close()}catch(
 /// `OauthCallbackPage.success` — the connected card (page.ts:26-36).
 #[must_use]
 pub fn success(provider: Provider<'_>) -> String {
-    render_document(RenderDocument {
+    render_document(&RenderDocument {
         title: "Authorization successful",
-        body: render_card(RenderCard {
+        body: render_card(&RenderCard {
             status: "success",
             headline: "Authorization successful",
             message: match provider {
@@ -41,9 +41,9 @@ pub fn success(provider: Provider<'_>) -> String {
 /// (page.ts:38-49).
 #[must_use]
 pub fn error(detail: &str, provider: Provider<'_>) -> String {
-    render_document(RenderDocument {
+    render_document(&RenderDocument {
         title: "Authorization failed",
-        body: render_card(RenderCard {
+        body: render_card(&RenderCard {
             status: "error",
             headline: "Authorization failed",
             message: match provider {
@@ -66,9 +66,9 @@ pub fn error(detail: &str, provider: Provider<'_>) -> String {
 /// (the ref's `bootstrapScript`, page.ts:114-137).
 #[must_use]
 pub fn bootstrap(token_path: &str, provider: Provider<'_>) -> String {
-    render_document(RenderDocument {
+    render_document(&RenderDocument {
         title: "Finishing sign-in",
-        body: render_card(RenderCard {
+        body: render_card(&RenderCard {
             status: "pending",
             headline: "Finishing sign-in",
             message: match provider {
@@ -124,7 +124,7 @@ struct RenderCard<'a> {
     footnote: &'a str,
 }
 
-fn render_card(input: RenderCard<'_>) -> String {
+fn render_card(input: &RenderCard<'_>) -> String {
     let detail = input.detail.map(str::trim).filter(|detail| !detail.is_empty());
     let detail_attr = if detail.is_some() { "" } else { " hidden" };
     let detail_body = detail.map(escape_html).unwrap_or_default();
@@ -154,7 +154,7 @@ struct RenderDocument<'a> {
     script: Option<&'a str>,
 }
 
-fn render_document(input: RenderDocument<'_>) -> String {
+fn render_document(input: &RenderDocument<'_>) -> String {
     let script = match input.script {
         Some(script) => format!("\n    <script>{script}</script>"),
         None => String::new(),
@@ -174,7 +174,7 @@ fn render_document(input: RenderDocument<'_>) -> String {
   </body>
 </html>"#,
         title = escape_html(input.title),
-        styles = &*STYLES,
+        styles = *STYLES,
         body = input.body,
         script = script,
     )
@@ -193,7 +193,7 @@ fn escape_html(value: &str) -> String {
 // Curated subset of OC-2 tokens (packages/ui/src/styles/theme.css). Default
 // is light; dark applies via prefers-color-scheme. The [data-theme]
 // selectors let a host force a scheme without changing the default.
-const LIGHT_VARS: &str = r#"
+const LIGHT_VARS: &str = r"
     --oc-bg: #f8f8f8;
     --oc-card: #fcfcfc;
     --oc-text-strong: #171717;
@@ -207,9 +207,9 @@ const LIGHT_VARS: &str = r#"
     --oc-error: #ed4831;
     --oc-detail-bg: #fff8f6;
     --oc-detail-border: #fdc3b7;
-    --oc-shadow: 0 16px 48px -6px rgba(0,0,0,.10), 0 6px 12px -2px rgba(0,0,0,.05), 0 1px 2px rgba(0,0,0,.06);"#;
+    --oc-shadow: 0 16px 48px -6px rgba(0,0,0,.10), 0 6px 12px -2px rgba(0,0,0,.05), 0 1px 2px rgba(0,0,0,.06)";
 
-const DARK_VARS: &str = r#"
+const DARK_VARS: &str = r"
     --oc-bg: #101010;
     --oc-card: #161616;
     --oc-text-strong: rgba(255,255,255,.936);
@@ -223,7 +223,7 @@ const DARK_VARS: &str = r#"
     --oc-error: #fc533a;
     --oc-detail-bg: #28110c;
     --oc-detail-border: #6a1206;
-    --oc-shadow: 0 16px 48px -6px rgba(0,0,0,.55), 0 6px 12px -2px rgba(0,0,0,.35), 0 1px 2px rgba(0,0,0,.4);"#;
+    --oc-shadow: 0 16px 48px -6px rgba(0,0,0,.55), 0 6px 12px -2px rgba(0,0,0,.35), 0 1px 2px rgba(0,0,0,.4)";
 
 static STYLES: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     r#"

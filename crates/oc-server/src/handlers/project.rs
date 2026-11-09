@@ -729,7 +729,7 @@ async fn worktree_remove(
             crate::errors::debug_cause("worktree:unknown_ref", &error);
             ApiError::unknown_ref()
         })?;
-    let Some(project) = project else {
+    let Some(_project) = project else {
         return Err(ApiError::project_not_found(&project_id));
     };
 
@@ -786,7 +786,7 @@ async fn worktree_remove(
         })
         .await
         .map_err(|error| {
-            crate::errors::debug_cause("worktree:remove", &format!("{error:?}"));
+            crate::errors::debug_cause("worktree:remove", format!("{error:?}"));
             strategy_error(error)
         })?;
 
@@ -910,9 +910,9 @@ fn synthesized_patch(file: &str, content: &str, marker: char) -> String {
     }
     let mut out = empty_patch(file);
     let (old, new) = if marker == '+' {
-        (format!("0,0"), format!("1,{}", lines.len()))
+        ("0,0".to_string(), format!("1,{}", lines.len()))
     } else {
-        (format!("1,{}", lines.len()), format!("0,0"))
+        (format!("1,{}", lines.len()), "0,0".to_string())
     };
     out.push_str(&format!("@@ -{old} +{new} @@\n"));
     for line in lines {
@@ -972,11 +972,14 @@ fn hg_diff_against(scope: &std::path::Path, rev: Option<&str>, context: i64) -> 
             None if item.code == "?" => std::fs::read(scope.join(&item.file))
                 .ok()
                 .filter(|content| content.len() <= MAX_PATCH_BYTES)
-                .map(|content| add_patch(&item.file, &String::from_utf8_lossy(&content)))
-                .unwrap_or_else(|| empty_patch(&item.file)),
-            None if item.code == "!" => hg_cat(scope, rev.unwrap_or("."), &item.file)
-                .map(|content| delete_patch(&item.file, &content))
-                .unwrap_or_else(|| empty_patch(&item.file)),
+                .map_or_else(
+                    || empty_patch(&item.file),
+                    |content| add_patch(&item.file, &String::from_utf8_lossy(&content)),
+                ),
+            None if item.code == "!" => hg_cat(scope, rev.unwrap_or("."), &item.file).map_or_else(
+                || empty_patch(&item.file),
+                |content| delete_patch(&item.file, &content),
+            ),
             None => empty_patch(&item.file),
         };
         let (additions, deletions) = count_patch(&patch);
@@ -1896,7 +1899,7 @@ async fn vcs_init(
     if !output.status.success() {
         crate::errors::debug_cause(
             "project:vcs_init_failed",
-            &String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stderr),
         );
         return Err(crate::errors::service_unavailable_named(
             "VCS initialization failed",

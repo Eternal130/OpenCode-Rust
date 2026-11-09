@@ -113,6 +113,7 @@ pub struct FileRefreshStore {
 }
 
 impl FileRefreshStore {
+    #[must_use]
     pub fn new(repos_root: &Path) -> Self {
         Self {
             path: repos_root.join(".repository-cache.json"),
@@ -168,6 +169,9 @@ impl RepositoryCache {
     }
 
     /// `ensure` (repository-cache.ts:128-222).
+    /// Monolithic port of the ref's ensure (freshness + clone + stamp);
+    /// helper split deferred.
+    #[allow(clippy::too_many_lines)]
     pub fn ensure(&self, input: &EnsureInput) -> Result<CacheResult, CacheError> {
         if let Some(branch) = &input.branch {
             validate_branch(branch).map_err(|error| CacheError::InvalidBranch {
@@ -307,8 +311,7 @@ impl RepositoryCache {
                 let target = branch.clone().or_else(|| current_branch(&existing));
                 let reference = target
                     .as_deref()
-                    .map(|target| format!("origin/{target}"))
-                    .unwrap_or_else(|| "HEAD".to_owned());
+                    .map_or_else(|| "HEAD".to_owned(), |target| format!("origin/{target}"));
                 git_at(&existing, &["reset", "--hard", &reference]).map_err(|error| {
                     CacheError::ResetFailed { repository: repository.clone(), message: error }
                 })?;

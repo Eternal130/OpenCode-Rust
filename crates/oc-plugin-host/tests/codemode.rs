@@ -643,7 +643,7 @@ fn codemode_console_output_captured_into_result_logs() {
     let run = host
         .codemode_evaluate("return 1;", &[], Duration::from_secs(5))
         .expect("program completes");
-    assert!(run.logs.is_empty());
+    assert_eq!(run.logs, [] as [std::string::String; 0]);
 
     host.shutdown();
 }

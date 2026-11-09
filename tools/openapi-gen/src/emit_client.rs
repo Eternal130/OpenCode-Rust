@@ -284,9 +284,9 @@ fn emit_method(out: &mut String, info: &OpInfo) {
     }
 
     out.push_str(&format!("    /// {}\n", notes.join("\n    /// ")));
-    out.push_str(&format!(
-        "    /// Per-request options (signal/headers/on-activity): see `_with_options`.\n"
-    ));
+    out.push_str(
+        "    /// Per-request options (signal/headers/on-activity): see `_with_options`.\n",
+    );
     // rustfmt drops the trailing comma for zero-arg signatures; the
     // `options` tail always follows `&self`, so it always carries a comma
     // on the `_with_options` signature, while the wrapper (last param may
@@ -294,8 +294,7 @@ fn emit_method(out: &mut String, info: &OpInfo) {
     let self_arg = if sig.is_empty() { "        &self\n" } else { "        &self,\n" };
     let self_arg_opts = "        &self,\n";
     out.push_str(&format!(
-        "    pub async fn {}(\n{}{}        options: &crate::transport::RequestOptions,\n    ) -> Result<{}, crate::ClientError> {{\n",
-        opts_name, self_arg_opts, sig, ret
+        "    pub async fn {opts_name}(\n{self_arg_opts}{sig}        options: &crate::transport::RequestOptions,\n    ) -> Result<{ret}, crate::ClientError> {{\n"
     ));
 
     if let Some(q) = &types.query_struct {
@@ -361,6 +360,10 @@ fn emit_method(out: &mut String, info: &OpInfo) {
         sig,
         ret,
         opts_name,
-        args.iter().map(|a| format!("            {a},\n")).collect::<Vec<_>>().join(""),
+        args.iter().fold(String::new(), |mut acc, a| {
+            use std::fmt::Write as _;
+            let _ = writeln!(acc, "            {a},");
+            acc
+        }),
     ));
 }

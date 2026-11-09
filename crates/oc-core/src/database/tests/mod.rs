@@ -519,7 +519,7 @@ async fn kv_scan_db(tag: &str) -> (Database, tempfile::TempDir) {
 async fn kv_scan_empty_store_returns_no_entries_and_no_cursor() {
     let (db, _dir) = kv_scan_db("kv-scan-empty").await;
     let page = db.kv_scan("", None, 100).await.unwrap();
-    assert!(page.entries.is_empty());
+    assert_eq!(page.entries.len(), 0);
     assert_eq!(page.next, None);
 }
 
@@ -578,7 +578,7 @@ async fn kv_scan_exhaustion_returns_no_next() {
 
     // Cursor past the last key yields an empty final page.
     let tail = db.kv_scan("x", Some("x1"), 1000).await.unwrap();
-    assert!(tail.entries.is_empty());
+    assert_eq!(tail.entries.len(), 0);
     assert_eq!(tail.next, None);
 }
 

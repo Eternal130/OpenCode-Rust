@@ -157,9 +157,10 @@ fn validate(
         let matches = expected.iter().any(|expected| matches_type(expected.as_str(), value));
         if !matches {
             let expected = expected.join(" | ");
-            let message = custom_message(schema)
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("Expected {expected}, received {}", type_name(value)));
+            let message = custom_message(schema).map_or_else(
+                || format!("Expected {expected}, received {}", type_name(value)),
+                str::to_string,
+            );
             issues.push(Issue {
                 path: if path.is_empty() { "root".to_string() } else { path.to_string() },
                 message,
@@ -167,12 +168,13 @@ fn validate(
             return;
         }
     }
-    if let Some(min_length) = object.get("minLength").and_then(|v| v.as_u64()) {
+    if let Some(min_length) = object.get("minLength").and_then(serde_json::Value::as_u64) {
         if let serde_json::Value::String(text) = value {
             if (text.chars().count() as u64) < min_length {
-                let message = custom_message(schema)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| format!("must NOT have fewer than {min_length} characters"));
+                let message = custom_message(schema).map_or_else(
+                    || format!("must NOT have fewer than {min_length} characters"),
+                    str::to_string,
+                );
                 issues.push(Issue {
                     path: if path.is_empty() { "root".to_string() } else { path.to_string() },
                     message,
@@ -180,12 +182,13 @@ fn validate(
             }
         }
     }
-    if let Some(max_length) = object.get("maxLength").and_then(|v| v.as_u64()) {
+    if let Some(max_length) = object.get("maxLength").and_then(serde_json::Value::as_u64) {
         if let serde_json::Value::String(text) = value {
             if (text.chars().count() as u64) > max_length {
-                let message = custom_message(schema)
-                    .map(str::to_string)
-                    .unwrap_or_else(|| format!("must NOT have more than {max_length} characters"));
+                let message = custom_message(schema).map_or_else(
+                    || format!("must NOT have more than {max_length} characters"),
+                    str::to_string,
+                );
                 issues.push(Issue {
                     path: if path.is_empty() { "root".to_string() } else { path.to_string() },
                     message,
@@ -198,9 +201,10 @@ fn validate(
             // Invalid pattern → lenient skip (no schema error surface).
             if let Ok(regex) = regex::Regex::new(pattern) {
                 if !regex.is_match(text) {
-                    let message = custom_message(schema)
-                        .map(str::to_string)
-                        .unwrap_or_else(|| format!("must match pattern \"{pattern}\""));
+                    let message = custom_message(schema).map_or_else(
+                        || format!("must match pattern \"{pattern}\""),
+                        str::to_string,
+                    );
                     issues.push(Issue {
                         path: if path.is_empty() { "root".to_string() } else { path.to_string() },
                         message,
@@ -209,7 +213,7 @@ fn validate(
             }
         }
     }
-    if let Some(minimum) = object.get("minimum").and_then(|v| v.as_f64()) {
+    if let Some(minimum) = object.get("minimum").and_then(serde_json::Value::as_f64) {
         if let serde_json::Value::Number(number) = value {
             if let Some(n) = number.as_f64() {
                 if n < minimum {
@@ -221,7 +225,7 @@ fn validate(
             }
         }
     }
-    if let Some(maximum) = object.get("maximum").and_then(|v| v.as_f64()) {
+    if let Some(maximum) = object.get("maximum").and_then(serde_json::Value::as_f64) {
         if let serde_json::Value::Number(number) = value {
             if let Some(n) = number.as_f64() {
                 if n > maximum {
@@ -298,7 +302,7 @@ fn validate(
             }
         }
         serde_json::Value::Array(items) => {
-            if let Some(min_items) = object.get("minItems").and_then(|v| v.as_u64()) {
+            if let Some(min_items) = object.get("minItems").and_then(serde_json::Value::as_u64) {
                 if (items.len() as u64) < min_items {
                     issues.push(Issue {
                         path: if path.is_empty() { "root".to_string() } else { path.to_string() },
@@ -306,7 +310,7 @@ fn validate(
                     });
                 }
             }
-            if let Some(max_items) = object.get("maxItems").and_then(|v| v.as_u64()) {
+            if let Some(max_items) = object.get("maxItems").and_then(serde_json::Value::as_u64) {
                 if (items.len() as u64) > max_items {
                     issues.push(Issue {
                         path: if path.is_empty() { "root".to_string() } else { path.to_string() },
@@ -314,7 +318,7 @@ fn validate(
                     });
                 }
             }
-            if object.get("uniqueItems").and_then(|v| v.as_bool()) == Some(true) {
+            if object.get("uniqueItems").and_then(serde_json::Value::as_bool) == Some(true) {
                 let mut seen = Vec::with_capacity(items.len());
                 if items.iter().any(|item| {
                     let dup = seen.contains(item);

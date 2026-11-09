@@ -4686,7 +4686,7 @@ mod tests {
         let (route, _transport) = scripted_route(&[]);
         let model = chat_model(&route);
         let media = |media_type: &str, data: &str| ContentPart::Media {
-            media: crate::schema::media::base64(data, media_type),
+            media: Box::new(crate::schema::media::base64(data, media_type)),
             filename: None,
             cache: None,
             metadata: None,
@@ -4713,7 +4713,7 @@ mod tests {
         request.messages = vec![Message::new(
             MessageRole::User,
             vec![ContentPart::Media {
-                media: crate::schema::media::Asset {
+                media: Box::new(crate::schema::media::Asset {
                     source: crate::schema::media::Source::Url {
                         url: url.to_string(),
                         media_type: Some("image/png".into()),
@@ -4724,7 +4724,7 @@ mod tests {
                     expires_at: None,
                     provider_metadata: None,
                     headers: None,
-                },
+                }),
                 filename: None,
                 cache: None,
                 metadata: None,
@@ -4745,7 +4745,7 @@ mod tests {
         request.messages = vec![Message::new(
             MessageRole::User,
             vec![ContentPart::Media {
-                media: crate::schema::media::base64("AAECAw==", "audio/mpeg"),
+                media: Box::new(crate::schema::media::base64("AAECAw==", "audio/mpeg")),
                 filename: None,
                 cache: None,
                 metadata: None,
@@ -4763,7 +4763,7 @@ mod tests {
         request.messages = vec![Message::new(
             MessageRole::User,
             vec![ContentPart::Media {
-                media: crate::schema::media::Asset {
+                media: Box::new(crate::schema::media::Asset {
                     source: crate::schema::media::Source::Url {
                         url: "https://example.com/report.pdf".into(),
                         media_type: Some("application/pdf".into()),
@@ -4774,7 +4774,7 @@ mod tests {
                     expires_at: None,
                     provider_metadata: None,
                     headers: None,
-                },
+                }),
                 filename: None,
                 cache: None,
                 metadata: None,
@@ -4799,14 +4799,14 @@ mod tests {
             vec![
                 ContentPart::text("Summarize these."),
                 ContentPart::Media {
-                    media: crate::schema::media::base64("JVBERi0=", "application/pdf"),
+                    media: Box::new(crate::schema::media::base64("JVBERi0=", "application/pdf")),
                     filename: Some("report.pdf".into()),
                     cache: None,
                     metadata: None,
                     provider_metadata: None,
                 },
                 ContentPart::Media {
-                    media: crate::schema::media::Asset {
+                    media: Box::new(crate::schema::media::Asset {
                         source: crate::schema::media::Source::Base64 {
                             data: "JVBERi0=".into(),
                             media_type: "application/pdf".into(),
@@ -4816,7 +4816,7 @@ mod tests {
                         expires_at: None,
                         provider_metadata: None,
                         headers: None,
-                    },
+                    }),
                     filename: None,
                     cache: None,
                     metadata: None,

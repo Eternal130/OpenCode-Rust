@@ -1,6 +1,6 @@
 //! Lane TB — the oc-tui production-tree capturer.
 //!
-//! Walks the SETTLED mounted shared tree (the chrome_solid hub's
+//! Walks the SETTLED mounted shared tree (the `chrome_solid` hub's
 //! `SolidRenderer`, i.e. the real production renderable tree every
 //! migrated family mounts into) after a headless frame build
 //! (`reset_hub` → drive the store to a target state → `render_app`)
@@ -69,6 +69,7 @@ pub fn capture_app_state(
 /// `composite_chrome_tree`) for the state being captured — the walk
 /// reads the hub's post-flush renderable tree. Returns `None` when no
 /// hub is installed (nothing mounted).
+#[must_use]
 pub fn capture_tree_scenario(
     name: &str,
     source: &str,

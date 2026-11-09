@@ -369,6 +369,7 @@ mod tests {
     /// The event filter passes only the `rpc.<id>.<event>` frames.
     #[tokio::test]
     async fn filter_rpc_events_selects_only_the_definition_event() {
+        use futures::StreamExt;
         let source = futures::stream::iter([
             Ok(crate::bus_event::BusEventFrame::decode(&json!({
                 "type": "server.connected"
@@ -389,7 +390,6 @@ mod tests {
         ]);
         let mut filtered =
             crate::rpc_typed::filter_rpc_events(source, "rpc.demo.updated".to_owned());
-        use futures::StreamExt;
         let first = filtered.next().await.expect("matching frame").expect("ok");
         assert_eq!(first.type_, "rpc.demo.updated");
         assert!(filtered.next().await.is_none(), "non-matching frames are skipped");

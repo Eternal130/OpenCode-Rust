@@ -393,7 +393,7 @@ async fn get_session(
 }
 
 /// `FSUtil.resolve`: `path.resolve(windowsPath(input))` lexically
-/// (against the process cwd), then realpath with a NotFound fallback
+/// (against the process cwd), then realpath with a `NotFound` fallback
 /// to the lexical result.
 fn fs_util_resolve(input: &str) -> std::path::PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -517,7 +517,7 @@ mod tests {
     }
 
     /// G-159: `FSUtil.resolve` — lexical absolutize + `..` collapse
-    /// first, realpath with a NotFound fallback to the lexical result.
+    /// first, realpath with a `NotFound` fallback to the lexical result.
     #[test]
     fn fs_util_resolve_normalizes_lexically() {
         let cwd = std::env::current_dir().expect("cwd");

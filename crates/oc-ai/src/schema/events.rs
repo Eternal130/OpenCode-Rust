@@ -705,7 +705,7 @@ impl ResponseState {
             }
             LLMEvent::Media { media, provider_metadata, .. } => {
                 self.push_content(ContentPart::Media {
-                    media: media.clone(),
+                    media: Box::new(media.clone()),
                     filename: None,
                     cache: None,
                     metadata: None,

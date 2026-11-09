@@ -157,7 +157,7 @@ pub struct WatchHub {
     /// G-281③ — ref wires per-file updates over `PubSub.unbounded`
     /// (config.ts:243) and reload requests over `PubSub.sliding(1)`
     /// (:244): a notify storm must never DROP an update (the
-    /// ChangePublishers' per-file notifications are lossy-sensitive),
+    /// `ChangePublishers`' per-file notifications are lossy-sensitive),
     /// and reload coalescing happens in the debounce loop. The old
     /// `sync_channel(1024) + try_send` dropped both under storms.
     tx: std::sync::mpsc::Sender<HubEvent>,

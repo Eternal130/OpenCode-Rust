@@ -429,7 +429,7 @@ async fn plugin_install(
     if let Some(boot) = state.plugins.clone() {
         let boot_target = target.clone();
         let _ = tokio::task::spawn_blocking(move || {
-            crate::plugins::activate_installed_plugin(&boot, &boot_target)
+            crate::plugins::activate_installed_plugin(&boot, &boot_target);
         })
         .await;
     }

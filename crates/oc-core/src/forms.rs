@@ -831,8 +831,7 @@ fn is_offset(rest: &str) -> bool {
         _ => return false,
     };
     let shape_ok = match digits.len() {
-        2 => is_digits(digits),
-        4 => is_digits(digits),
+        2 | 4 => is_digits(digits),
         5 => is_digits(&digits[..2]) && is_digits(&digits[3..]),
         _ => false,
     };

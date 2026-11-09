@@ -524,8 +524,8 @@ mod tests {
         };
         let response = decode_result(&bare, &context).unwrap();
         let bfl = response.provider_metadata.as_ref().unwrap()["bfl"].clone();
-        assert!(bfl.get("seed").is_none(), "seed key omitted: {bfl:?}");
-        assert!(bfl.get("prompt").is_none(), "prompt key omitted: {bfl:?}");
+        assert!(!bfl.contains_key("seed"), "seed key omitted: {bfl:?}");
+        assert!(!bfl.contains_key("prompt"), "prompt key omitted: {bfl:?}");
 
         let moderated = TextOutput {
             identity: &identity,

@@ -257,20 +257,17 @@ async fn select_session_for_export(client: &oc_client::Client) -> Result<ExportP
         .default(0)
         .max_length(10)
         .interact_opt();
-    match picked {
-        Ok(Some(index)) => {
-            eprintln!("◇ Exporting session...");
-            Ok(ExportPick::Picked(items[index].0.clone()))
-        }
-        _ => {
-            eprintln!("Cancelled");
-            Ok(ExportPick::Cancelled)
-        }
+    if let Ok(Some(index)) = picked {
+        eprintln!("◇ Exporting session...");
+        Ok(ExportPick::Picked(items[index].0.clone()))
+    } else {
+        eprintln!("Cancelled");
+        Ok(ExportPick::Cancelled)
     }
 }
 
 /// `Schema.decodeUnknownEffect(SessionTransfer.Data)` (import.ts:25-26):
-/// validate the imported structure against the SessionTransfer shape —
+/// validate the imported structure against the `SessionTransfer` shape —
 /// top-level `info` (Session.Info) and `messages` (array) required.
 fn validate_transfer(data: &serde_json::Value) -> Result<(), String> {
     serde_json::from_value::<oc_schema::session::TransferData>(data.clone())
@@ -326,7 +323,7 @@ async fn import(server: &ServerParams, file: &str, directory: Option<&str>) -> i
     // path.resolve — never the raw flag text.
     let directory = directory.map_or_else(
         || std::env::current_dir().map(|path| path.display().to_string()).unwrap_or_default(),
-        |directory| resolve_directory(directory),
+        resolve_directory,
     );
     let location = match client
         .location()
@@ -411,7 +408,7 @@ mod tests {
     use super::{format_local_time, resolve_directory, validate_transfer};
     use serde_json::json;
 
-    /// A minimal valid SessionTransfer payload (the export endpoint's
+    /// A minimal valid `SessionTransfer` payload (the export endpoint's
     /// shape): `{info: Session.Info, messages: []}`.
     fn transfer() -> serde_json::Value {
         let info = oc_schema::session::Info {
@@ -445,7 +442,7 @@ mod tests {
             .expect("serializes")
     }
 
-    /// import.ts:25-26 — the payload must match the SessionTransfer
+    /// import.ts:25-26 — the payload must match the `SessionTransfer`
     /// schema shape before anything is imported.
     #[test]
     fn session_import_accepts_a_well_formed_transfer() {
@@ -470,7 +467,7 @@ mod tests {
             "messages": [],
         }))
         .expect_err("bad info");
-        assert!(!error.is_empty());
+        assert_ne!(error, "");
     }
 
     /// `toLocaleString` parity: TZ env pins the zone (each nextest test

@@ -114,7 +114,7 @@ pub async fn generate_object(
 /// the same engine the tool decode pipeline uses) so the full keyword set
 /// — `oneOf`/`anyOf`/`allOf`, `$defs` + `$ref`, string/numeric/array
 /// bounds, `pattern`, `additionalProperties`, `uniqueItems` — is enforced
-/// like the ref's Effect JsonSchema decode. Boolean schemas (`true`
+/// like the ref's Effect `JsonSchema` decode. Boolean schemas (`true`
 /// accepts anything / `false` forbids everything) are handled here since
 /// the shared engine only walks object schemas.
 fn validate_json_schema(value: &Value, schema: &Value, path: &str) -> Result<(), String> {
@@ -369,7 +369,7 @@ mod tests {
     }
 
     /// G-100 — the output validator enforces the full keyword set of the
-    /// shared engine (mirroring the ref's Effect JsonSchema decode):
+    /// shared engine (mirroring the ref's Effect `JsonSchema` decode):
     /// one valid + one invalid case per newly covered keyword.
     #[test]
     fn validator_covers_one_of_any_of_all_of() {

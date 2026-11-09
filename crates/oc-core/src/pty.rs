@@ -216,6 +216,7 @@ fn utf16_byte_offset(text: &str, units: usize) -> Option<usize> {
 /// G-116③ — the win32 UTF-8 locale overrides (pty.ts:178-180). Pure so
 /// the table is testable on every target; the injection itself is
 /// `#[cfg(windows)]` at the spawn site.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn win32_utf8_locale_overrides() -> [(&'static str, &'static str); 3] {
     [("LC_ALL", "C.UTF-8"), ("LC_CTYPE", "C.UTF-8"), ("LANG", "C.UTF-8")]
 }
@@ -252,7 +253,7 @@ impl Inner {
         // offender, keep serving the rest (pty.ts:206-212 try/catch +
         // `subscribers.delete(token)`).
         let mut panicked = Vec::new();
-        for (token, subscriber) in session.subscribers.iter_mut() {
+        for (token, subscriber) in &mut session.subscribers {
             if !subscriber.active {
                 subscriber.pending.push(chunk.to_string());
                 continue;
@@ -530,9 +531,8 @@ impl PtyService {
     /// Spawns through the service's default provisioner (the local
     /// portable-pty driver); per-location callers use
     /// [`PtyService::create_with`] with the Environment-resolved spawner.
-    #[must_use]
     pub fn create(&self, input: &CreateInput) -> std::io::Result<Info> {
-        self.create_with(self.spawner.clone(), input)
+        self.create_with(&self.spawner, input)
     }
 
     /// `Pty.create` over an explicit PTY provisioner — the G-1
@@ -541,7 +541,7 @@ impl PtyService {
     #[allow(clippy::too_many_lines)] // mirrors pty.ts create: spawn, wire, publish
     pub fn create_with(
         &self,
-        spawner: Arc<dyn PtySpawner>,
+        spawner: &Arc<dyn PtySpawner>,
         input: &CreateInput,
     ) -> std::io::Result<Info> {
         let id = self.next_id();
@@ -576,7 +576,7 @@ impl PtyService {
         let (cols, rows) = input.size.unwrap_or((80, 24));
         // G-1 — spawn through the Environment `pty` seam (the local
         // driver wraps the previous portable-pty spawn verbatim).
-        let spawned = spawner.spawn(PtySpawnRequest {
+        let spawn_out = spawner.spawn(PtySpawnRequest {
             command: command.clone(),
             args: args.clone(),
             cwd: cwd.clone(),
@@ -584,7 +584,7 @@ impl PtyService {
             cols,
             rows,
         })?;
-        let crate::environment::pty::PtySpawned { reader, writer, master, mut child } = spawned;
+        let crate::environment::pty::PtySpawned { reader, writer, master, mut child } = spawn_out;
         let killer = child.clone_killer();
         let pid = child.process_id().unwrap_or(0);
 

@@ -567,7 +567,6 @@ async fn snapshot_store_id_is_stable_across_symlinked_worktree_paths() {
 // diffing, and non-ASCII paths must round-trip raw.
 mod g30_config {
     use super::*;
-    use crate::snapshot::SnapshotService as _;
 
     /// Serializes env mutation (HOME changes must not race the other
     /// snapshot tests in this binary).
@@ -575,6 +574,7 @@ mod g30_config {
     type Mutex = std::sync::Mutex<()>;
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard serializes HOME mutation across awaits by design
     async fn snapshot_store_pins_core_config_over_a_hostile_global() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let home = tempfile::tempdir_in("/tmp/opencode").expect("home");
@@ -858,6 +858,7 @@ mod g219 {
         let cpath = std::ffi::CString::new(path.as_os_str().as_bytes()).expect("path");
         // SAFETY: utimensat with a valid path pointer and a two-timespec
         // array (atime, mtime).
+        #[allow(unsafe_code)] // contained utimensat(2) on a path this test created
         let result = unsafe { libc::utimensat(libc::AT_FDCWD, cpath.as_ptr(), times.as_ptr(), 0) };
         assert_eq!(result, 0, "utimensat");
     }
@@ -944,9 +945,8 @@ async fn g255_distinct_repositories_run_concurrently() {
         // cross-repository contention.
         let _ = barrier.wait().await;
     };
-    let (a, b) = tokio::join!(
+    let _ = tokio::join!(
         hold(first, "/tmp/opencode/g255-repo-one"),
         hold(second, "/tmp/opencode/g255-repo-two")
     );
-    (a, b);
 }

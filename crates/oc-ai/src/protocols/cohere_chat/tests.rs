@@ -170,7 +170,7 @@ fn cohere_rejects_unsupported_media() {
     let request = LLMRequest::new(model(&route)).with_message(Message::new(
         MessageRole::User,
         vec![ContentPart::Media {
-            media: media::base64("Zm9v", "audio/wav"),
+            media: Box::new(media::base64("Zm9v", "audio/wav")),
             filename: None,
             cache: None,
             metadata: None,

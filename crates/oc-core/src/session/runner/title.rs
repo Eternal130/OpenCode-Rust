@@ -408,7 +408,6 @@ mod tests {
     /// G-279③ — ref title.ts:92-93 `onInterrupt(() => recordUsage)`:
     /// dropping the attempt mid-stream (an already-accumulated usage)
     /// still publishes `session.usage.recorded` from the guard's Drop.
-
     async fn read_durable(bus: &crate::bus::Bus) -> Vec<(String, serde_json::Value)> {
         use futures::StreamExt as _;
         let mut stream = bus.log(crate::bus::LogInput {

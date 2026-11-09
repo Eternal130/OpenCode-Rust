@@ -170,7 +170,7 @@ fn attachment_metadata(file: &FileAttachment) -> BTreeMap<String, serde_json::Va
 
 fn media_part(file: &FileAttachment) -> ContentPart {
     ContentPart::Media {
-        media: media_base64(file.data.clone(), file.mime.clone()),
+        media: Box::new(media_base64(file.data.clone(), file.mime.clone())),
         filename: file.name.clone(),
         cache: None,
         metadata: file.description.as_ref().map(|description| {

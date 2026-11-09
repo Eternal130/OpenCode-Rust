@@ -1040,10 +1040,10 @@ mod tests {
 
         #[async_trait::async_trait]
         impl SearchProvider for StubProvider {
-            fn id(&self) -> &str {
+            fn id(&self) -> &'static str {
                 "stub"
             }
-            fn name(&self) -> &str {
+            fn name(&self) -> &'static str {
                 "Stub"
             }
             async fn execute(&self, query: &str) -> Result<Vec<WebSearchResult>, ProviderError> {
@@ -1306,7 +1306,7 @@ mod tests {
                 )
                 .await,
         );
-        let mut dispatched = crate::hooks::SessionContextEvent {
+        let dispatched = crate::hooks::SessionContextEvent {
             session_id: SessionId::parse("ses_1").expect("session"),
             agent: AgentId::parse("build"),
             model: ModelRef {
@@ -1370,10 +1370,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl SearchProvider for RateLimitedProvider {
-        fn id(&self) -> &str {
+        fn id(&self) -> &'static str {
             "exa"
         }
-        fn name(&self) -> &str {
+        fn name(&self) -> &'static str {
             "Exa"
         }
         async fn execute(&self, _query: &str) -> Result<Vec<WebSearchResult>, ProviderError> {

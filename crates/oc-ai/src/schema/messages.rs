@@ -137,7 +137,7 @@ pub enum ContentPart {
     },
     #[serde(rename = "media")]
     Media {
-        media: Asset,
+        media: Box<Asset>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         filename: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -104,7 +104,7 @@ fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
     let year = if month <= 2 { year - 1 } else { year };
     let era = year.div_euclid(400);
     let yoe = year.rem_euclid(400);
-    let mp = if month > 2 { month - 3 } else { month + 9 } as i64;
+    let mp = i64::from(if month > 2 { month - 3 } else { month + 9 });
     let doy = (153 * mp + 2) / 5 + i64::from(day) - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     era * 146_097 + doe - 719_468
@@ -379,8 +379,7 @@ pub fn year_start_ms(now_ms: i64) -> i64 {
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(0))
-        .unwrap_or(0)
+        .map_or(0, |duration| i64::try_from(duration.as_millis()).unwrap_or(0))
 }
 
 /// The calendar's month-label row (stats.tsx:96-101): the 4-space
@@ -399,7 +398,7 @@ fn month_label_row(calendar: &ActivityCalendarView) -> String {
 /// `StatsPoster`'s layout (stats.tsx:30-137) as the line model the
 /// solid renderer paints. `size` is the terminal size; `timezone` is
 /// the local zone name the calendar buckets by (the same name the
-/// SessionStats fetch sends).
+/// `SessionStats` fetch sends).
 #[must_use]
 pub fn stats_poster(stats: &SessionStatsInfo, size: (u16, u16), timezone: &str) -> Poster {
     let width = (usize::from(size.0).saturating_sub(8)).clamp(12, 110);

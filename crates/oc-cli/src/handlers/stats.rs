@@ -223,8 +223,7 @@ fn stats_range(
     }
     let now_year = jiff::Timestamp::from_millisecond(now_ms)
         .ok()
-        .map(|instant| i64::from(instant.to_zoned(zone.clone()).year()))
-        .unwrap_or(2026);
+        .map_or(2026, |instant| i64::from(instant.to_zoned(zone.clone()).year()));
     let year = i64::from(year.unwrap_or(u32::try_from(now_year).unwrap_or(2026)));
     let from = local_january_first(year, zone);
     let next_year = local_january_first(year + 1, zone);
@@ -255,8 +254,7 @@ fn local_january_first(year: i64, zone: &jiff::tz::TimeZone) -> i64 {
     jiff::civil::date(i16::try_from(year).unwrap_or(2026), 1, 1)
         .at(0, 0, 0, 0)
         .to_zoned(zone.clone())
-        .map(|zoned| zoned.timestamp().as_millisecond())
-        .unwrap_or_else(|_| unix_ms_from_civil(year, 1, 1))
+        .map_or_else(|_| unix_ms_from_civil(year, 1, 1), |zoned| zoned.timestamp().as_millisecond())
 }
 
 fn unix_ms_from_civil(year: i64, month: i64, day: i64) -> i64 {
@@ -377,12 +375,10 @@ fn activity_calendar(
         // activity instants are re-read in the local zone; the server
         // buckets by the requested timezone, which is the same one).
         let zone = zone.clone();
-        let (y, m, d) = jiff::Timestamp::from_millisecond(time)
-            .map(|instant| {
-                let zoned = instant.to_zoned(zone);
-                (i64::from(zoned.year()), i64::from(zoned.month()), i64::from(zoned.day()))
-            })
-            .unwrap_or((1970, 1, 1));
+        let (y, m, d) = jiff::Timestamp::from_millisecond(time).map_or((1970, 1, 1), |instant| {
+            let zoned = instant.to_zoned(zone);
+            (i64::from(zoned.year()), i64::from(zoned.month()), i64::from(zoned.day()))
+        });
         (unix_ms_from_civil(y, m, d) - unix_ms_from_civil(1970, 1, 1)) / 86_400_000
     };
     let from = ordinal(from);
@@ -445,7 +441,7 @@ fn activity_calendar(
         let anchor = (start + week * 7 + 3).min(to).max(from);
         let (_, month, _) = civil_from_days(anchor);
         let label = MONTHS[(month - 1).clamp(0, 11) as usize].to_owned();
-        if labeled.last().map_or(true, |(_, previous): &(usize, String)| *previous != label) {
+        if labeled.last().is_none_or(|(_, previous): &(usize, String)| *previous != label) {
             labeled.push((usize::try_from(week).unwrap_or(0), label));
         }
     }
@@ -483,7 +479,7 @@ fn locale_string(value: i64) -> String {
     let digits = value.unsigned_abs().to_string();
     let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
             grouped.push(',');
         }
         grouped.push(digit);
@@ -578,7 +574,7 @@ fn render_activity(
             } else {
                 String::new()
             };
-            format!("{text:<span$}", span = span)
+            format!("{text:<span$}")
         })
         .collect::<String>()
         .trim_end()

@@ -189,15 +189,10 @@ pub(crate) fn validate_external_binary(path: &Path) -> Result<(), String> {
         )
     })?;
     let uid = nix_uid();
-    binary_safety_decision(
-        meta.file_type().is_symlink(),
-        meta.is_file(),
-        u32::try_from(meta.uid()).unwrap_or(u32::MAX),
-        uid,
-    )
-    .map_err(|reason| {
-        format!("Unsafe OPENCODE_PTY_BIN executable ({reason}): {}", path.display())
-    })?;
+    binary_safety_decision(meta.file_type().is_symlink(), meta.is_file(), meta.uid(), uid)
+        .map_err(|reason| {
+            format!("Unsafe OPENCODE_PTY_BIN executable ({reason}): {}", path.display())
+        })?;
     if meta.permissions().mode() & 0o111 == 0 {
         return Err(format!(
             "OPENCODE_PTY_BIN is not executable (missing +x bit): {}",
@@ -210,7 +205,12 @@ pub(crate) fn validate_external_binary(path: &Path) -> Result<(), String> {
 #[cfg(unix)]
 fn nix_uid() -> u32 {
     // process.getuid() — the REAL uid, matching binary.bun.ts:72.
-    u32::try_from(unsafe { libc::getuid() }).unwrap_or(u32::MAX)
+    // SAFETY: getuid(2) cannot fail and touches no memory (uid_t is
+    // u32 on every supported target; binary.bun.ts:72 getuid()).
+    #[allow(unsafe_code)]
+    unsafe {
+        libc::getuid() as u32
+    }
 }
 
 #[cfg(not(unix))]
@@ -2088,7 +2088,7 @@ mod g240_tests {
         make_executable(&file);
         std::os::unix::fs::chown(&file, Some(1), Some(1)).expect("chown");
         let meta = std::fs::symlink_metadata(&file).expect("meta");
-        assert_ne!(u32::try_from(meta.uid()).unwrap_or(0), nix_uid());
+        assert_ne!(meta.uid(), nix_uid());
         let error = validate_external_binary(&file).expect_err("foreign owner rejected");
         assert!(error.contains("owned by another user"), "{error}");
     }

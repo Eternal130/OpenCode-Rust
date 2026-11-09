@@ -71,8 +71,7 @@ fn pty_footer_permission_rect_follows_terminal_resize() {
                     }
                 }
                 return Err(format!(
-                    "the permission body never re-laid at 60 cols after SIGWINCH: {:?}",
-                    rows
+                    "the permission body never re-laid at 60 cols after SIGWINCH: {rows:?}"
                 ));
             }
             Ok(())

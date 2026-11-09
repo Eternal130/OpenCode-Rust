@@ -29,7 +29,7 @@ pub struct Options {
 /// `server-process.ts:174-175`): stdio's ready line is the entire
 /// contract; the FOREGROUND default prints the generated password when
 /// none came from the environment. G-213 — SERVICE mode never prints
-/// the password: it is persisted into ServiceConfig, and daemon stdout
+/// the password: it is persisted into `ServiceConfig`, and daemon stdout
 /// lands in journald/desktop logs.
 fn startup_announcement(
     mode: &Mode,
@@ -287,7 +287,7 @@ mod tests {
     }
 
     /// G-213 — service-mode daemon stdout lands in journald/desktop logs;
-    /// the password lives in ServiceConfig and must never be printed.
+    /// the password lives in `ServiceConfig` and must never be printed.
     #[test]
     fn announcement_service_mode_never_prints_password() {
         let lines = startup_announcement(&Mode::Service, None, "pw-secret", "http://x");

@@ -1,5 +1,5 @@
-//! DigitalOcean inference-router discovery (G-259; port of
-//! `plugin/provider/digitalocean.ts:114-180`): when a DigitalOcean
+//! `DigitalOcean` inference-router discovery (G-259; port of
+//! `plugin/provider/digitalocean.ts:114-180`): when a `DigitalOcean`
 //! browser-OAuth credential exists, list the account's model routers
 //! (`/v2/gen-ai/models/routers`) and inject each as a `router:*` model
 //! entry on the digitalocean provider — the credential-driven model
@@ -52,7 +52,6 @@ pub const DIGITALOCEAN_ROUTER_PREFIX: &str = "router:";
 /// row must carry a non-empty string name — one bad row fails the
 /// whole response (the ref's `schemaBodyJson` throws and the previous
 /// inventory is retained, provider-digitalocean.test.ts:138-143).
-#[must_use]
 pub fn parse_routers_response(body: &str) -> Result<Vec<String>, String> {
     let value: serde_json::Value = serde_json::from_str(body)
         .map_err(|error| format!("DigitalOcean routers response is not JSON: {error}"))?;
@@ -91,7 +90,7 @@ pub fn router_model_info(provider: &ProviderInfo, router: &str) -> schema_model:
         family: Some(DIGITALOCEAN_ROUTER_FAMILY.to_owned()),
         package: Some(provider.package.clone()),
         settings: provider.settings.as_ref().map(|settings| schema_model::Settings {
-            compaction: settings.compaction.clone(),
+            compaction: settings.compaction,
             rest: settings.rest.clone(),
         }),
         capabilities: Capabilities {
@@ -136,7 +135,7 @@ pub struct DigitalOceanSyncState {
     pub merged: Snapshot,
 }
 
-/// The synced DigitalOcean surface shared by the resolver (router
+/// The synced `DigitalOcean` surface shared by the resolver (router
 /// injection): refreshed by the engine against the resolved browser
 /// OAuth credential and repeated every 5 minutes
 /// (digitalocean.ts:171-178). A non-OAuth (or expired-token) state
@@ -213,7 +212,7 @@ impl DigitalOceanSync {
                     ("Accept".to_owned(), "application/json".to_owned()),
                     ("User-Agent".to_owned(), user_agent.to_owned()),
                 ],
-                body: Default::default(),
+                body: bytes::Bytes::default(),
             }),
         )
         .await
@@ -247,7 +246,7 @@ impl DigitalOceanSync {
 fn now_millis() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as i64)
+        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or_default())
         .unwrap_or_default()
 }
 

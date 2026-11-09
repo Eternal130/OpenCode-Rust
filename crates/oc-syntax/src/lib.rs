@@ -80,7 +80,7 @@ pub struct StyledSpan {
 
 /// Highlight one fenced code block for a filetype — the test-only
 /// engine harness (the runtime path is oc-tui's
-/// `components::syntax::highlight` over opentui's TreeSitterClient).
+/// `components::syntax::highlight` over opentui's `TreeSitterClient`).
 ///
 /// `block` is the block's content **without** trailing newline(s);
 /// `filetype` is the fence info string (`"rust"`, `"rs"`, `"ts"`, … —

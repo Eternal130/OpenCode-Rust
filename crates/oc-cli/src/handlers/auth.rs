@@ -146,8 +146,7 @@ fn method_selector_label(method: &Value) -> String {
         method
             .get("label")
             .and_then(Value::as_str)
-            .map(str::to_owned)
-            .unwrap_or_else(|| "API key".to_owned())
+            .map_or_else(|| "API key".to_owned(), str::to_owned)
     } else {
         method.get("label").and_then(Value::as_str).unwrap_or_default().to_owned()
     }
@@ -157,9 +156,7 @@ fn method_selector_label(method: &Value) -> String {
 /// key method's label — `method.label ?? \`Enter your ${name} API key\``
 /// (empty-string labels are kept, matching `??` nullish semantics).
 fn key_method_prompt(method_label: Option<&str>, integration_name: &str) -> String {
-    method_label
-        .map(str::to_owned)
-        .unwrap_or_else(|| format!("Enter your {integration_name} API key"))
+    method_label.map_or_else(|| format!("Enter your {integration_name} API key"), str::to_owned)
 }
 
 /// G-283⑤ — the well-known discovery probe (ref login.ts:63-65
@@ -374,7 +371,7 @@ async fn login(
             return 1;
         }
         let items: Vec<String> =
-            choices.iter().map(|choice| choice.display()).collect::<Vec<_>>().to_vec();
+            choices.iter().map(LoginChoice::display).collect::<Vec<_>>().clone();
         println!("◇ Select integration");
         match Select::new()
             .with_prompt("Select integration")
@@ -432,11 +429,8 @@ async fn login(
                 }
                 // G-283②: selector rows prefer the method label ("API
                 // key" only as the key-method fallback).
-                let labels: Vec<String> = methods
-                    .iter()
-                    .map(|method| method_selector_label(method))
-                    .collect::<Vec<_>>()
-                    .to_vec();
+                let labels: Vec<String> =
+                    methods.iter().map(method_selector_label).collect::<Vec<_>>().clone();
                 if let Ok(Some(index)) = Select::new()
                     .with_prompt("Select login method")
                     .items(&labels)
@@ -844,14 +838,13 @@ async fn resolve_account(
     .map_err(|message| error_message(&message))?;
     let client = resolved.endpoint.client();
     let integrations = load_integrations(&client).await?;
-    let integration = match target {
-        Some(target) => resolve_integration(&integrations, target)?,
-        None => {
-            require_interactive(
-                "Pass an integration ID or name when running without an interactive terminal",
-            )?;
-            choose_integration(&integrations)?
-        }
+    let integration = if let Some(target) = target {
+        resolve_integration(&integrations, target)?
+    } else {
+        require_interactive(
+            "Pass an integration ID or name when running without an interactive terminal",
+        )?;
+        choose_integration(&integrations)?
     };
     if credential.is_none() {
         require_interactive(
@@ -995,7 +988,7 @@ async fn export(server: &ServerParams, target: Option<&str>) -> i32 {
 /// server call: an entry that fails the credential schema (notably a
 /// `value` that is neither a valid oauth nor key credential) rejects
 /// the WHOLE package — no degrade-to-empty-Key import. The entry
-/// index + serde cause approximate the ref ParseError tree
+/// index + serde cause approximate the ref `ParseError` tree
 /// (identifier `Credential.Entry`).
 fn parse_import_payload(text: &str) -> Result<Vec<oc_client::types::CredentialEntry>, String> {
     let values: Vec<Value> =
@@ -1157,7 +1150,7 @@ fn login_choices(integrations: &[Value]) -> Vec<LoginChoice> {
             } else {
                 "Services"
             };
-            let rank = if is_mcp { 0 } else { 1 };
+            let rank = usize::from(!is_mcp);
             let connected = integration
                 .get("connections")
                 .and_then(Value::as_array)
@@ -1182,7 +1175,7 @@ mod tests {
     use super::{
         choose_credential, choose_integration, connect_methods, credential_integrations,
         is_wellknown_url, key_method_prompt, login_choices, open_url, parse_import_payload,
-        require_interactive, resolve_account, util,
+        resolve_account, util,
     };
     use crate::cli::ServerParams;
     use serde_json::json;

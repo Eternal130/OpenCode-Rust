@@ -70,8 +70,7 @@ fn pty_console_strip_follows_terminal_resize() {
                     }
                 }
                 return Err(format!(
-                    "the console strip never re-laid at 60 cols after SIGWINCH: {:?}",
-                    rows
+                    "the console strip never re-laid at 60 cols after SIGWINCH: {rows:?}"
                 ));
             }
             Ok(())

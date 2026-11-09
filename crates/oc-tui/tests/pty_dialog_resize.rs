@@ -65,8 +65,7 @@ fn pty_dialog_palette_rect_follows_terminal_resize() {
                     }
                 }
                 return Err(format!(
-                    "the palette never re-laid at 60 cols after SIGWINCH: {:?}",
-                    rows
+                    "the palette never re-laid at 60 cols after SIGWINCH: {rows:?}"
                 ));
             }
             Ok(())

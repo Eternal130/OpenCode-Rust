@@ -248,7 +248,7 @@ const PALETTE_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_mil
 /// document for the `system` slot.
 #[must_use]
 pub fn query_terminal_palette() -> Option<crate::theme::TerminalColors> {
-    use std::io::{IsTerminal, Read as _, Write as _};
+    use std::io::{IsTerminal, Write as _};
     if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
         return None; // headless: fallback
     }

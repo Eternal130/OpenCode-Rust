@@ -182,8 +182,8 @@ pub fn from_request(request: &LLMRequest) -> Result<Value, AiError> {
 // =============================================================================
 
 /// The `alibaba-responses` protocol: the Open Responses baseline plus the
-/// hosted tool item completion (web_search / web_extractor /
-/// code_interpreter).
+/// hosted tool item completion (`web_search` / `web_extractor` /
+/// `code_interpreter`).
 pub struct AlibabaResponsesProtocol;
 
 impl AlibabaResponsesProtocol {

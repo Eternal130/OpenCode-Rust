@@ -8,7 +8,7 @@
 //! generation), appends the target to the global configuration, and
 //! activates it so `plugin.list` shows it immediately.
 //!
-//! Hermetic: sandboxed HOME/config/cache (the plugins_production
+//! Hermetic: sandboxed HOME/config/cache (the `plugins_production`
 //! pattern), pre-staged install generations under the v2 cache layout,
 //! an `npm view` shim ahead of the real npm on PATH, no network.
 
@@ -54,7 +54,7 @@ fn stage_generation(home: &Path, package: &str, version: &str, stamp: &str) {
     .expect("entry");
 }
 
-/// The `npm view <pkg> version` shim (the plugin_update_http pattern):
+/// The `npm view <pkg> version` shim (the `plugin_update_http` pattern):
 /// answers with the current `registry-version.txt` and logs every
 /// invocation.
 fn npm_shim(root: &Path, registry_version: &str) -> PathBuf {

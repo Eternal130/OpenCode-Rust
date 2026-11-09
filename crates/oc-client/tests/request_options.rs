@@ -1,6 +1,6 @@
 //! G-197: middleware-declared 404 parity + per-request `RequestOptions`.
 //!
-//! * 404 parity: the OpenAPI export strips middleware error unions, so 45
+//! * 404 parity: the `OpenAPI` export strips middleware error unions, so 45
 //!   operations (every group wired with `locationMiddleware` in
 //!   `packages/protocol/src/client.ts`) gained `LocationNotFoundError` 404
 //!   via the generator overlay (`tools/openapi-gen/src/lib.rs`). A 404 from

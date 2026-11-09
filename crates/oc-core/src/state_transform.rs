@@ -310,9 +310,9 @@ mod tests {
             }),
         ];
         let (state, failures) = run_agent_transforms(&base(), &transforms).expect("ok");
-        assert!(failures.is_empty());
+        assert_eq!(failures.len(), 0);
         assert_eq!(
-            state.agents.iter().next().map(|a| a.system.clone().unwrap_or_default()),
+            state.agents.first().map(|a| a.system.clone().unwrap_or_default()),
             Some("base build+a+b".to_owned())
         );
         assert_eq!(state.default, Some(AgentId::parse("reviewer")));
@@ -346,7 +346,7 @@ mod tests {
         assert_eq!(failures[0].cause, "a2 exploded");
         // b's edit survived on a FRESH candidate (no "+a1").
         assert_eq!(
-            state.agents.iter().next().map(|a| a.system.clone().unwrap_or_default()),
+            state.agents.first().map(|a| a.system.clone().unwrap_or_default()),
             Some("base build+b".to_owned())
         );
     }
@@ -376,7 +376,7 @@ mod tests {
             Ok(())
         })];
         let (state, failures) = run_agent_transforms(&base(), &transforms).expect("ok");
-        assert!(failures.is_empty());
+        assert_eq!(failures.len(), 0);
         assert_eq!(state.agents.len(), 1);
         assert_eq!(state.agents[0].id, AgentId::parse("reviewer"));
         assert_eq!(state.default, Some(AgentId::parse("reviewer")));

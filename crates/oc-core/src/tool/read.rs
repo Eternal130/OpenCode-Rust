@@ -284,8 +284,7 @@ fn text_page(bytes: &[u8], eof: bool, offset: u64, limit: u64) -> Option<PageRes
         return None;
     }
 
-    let consumed_lines =
-        if next.is_none() { available.len() } else { (next.unwrap() - 1) as usize };
+    let consumed_lines = next.map_or(available.len(), |next| (next - 1) as usize);
     let consumed = if consumed_lines == 0 {
         0
     } else {
@@ -296,7 +295,12 @@ fn text_page(bytes: &[u8], eof: bool, offset: u64, limit: u64) -> Option<PageRes
 
 /// `textLeaf` — newline count of a chunk.
 fn newline_count(bytes: &[u8]) -> u64 {
-    bytes.iter().filter(|&&byte| byte == b'\n').count() as u64
+    // naive count is intentional here (text-leaf chunk sizing); the
+    // bytecount dependency is not warranted for this one call site
+    // (clippy::naive_bytecount).
+    #[allow(clippy::naive_bytecount)]
+    let count = bytes.iter().filter(|&&byte| byte == b'\n').count();
+    count as u64
 }
 
 /// `nthNewline` — byte index just past the `count`-th `\n`.

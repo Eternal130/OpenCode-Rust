@@ -90,7 +90,7 @@ pub fn warming_settings(documents: &[oc_schema::config::Document]) -> Option<War
         Warming::Info(info) => {
             let mut settings = WarmingSettings::default();
             if let Some(prompt) = &info.prompt {
-                settings.prompt = prompt.clone();
+                settings.prompt.clone_from(prompt);
             }
             if let Some(interval) = info.interval.as_deref().and_then(duration_ms) {
                 settings.interval_ms = interval;
@@ -123,8 +123,7 @@ fn duration_ms(value: &str) -> Option<u64> {
     let mut tokens = value.split(|c: char| c == ',' || c.is_whitespace()).filter(|t| !t.is_empty());
     let mut total: u64 = 0;
     let mut any = false;
-    loop {
-        let Some(token) = tokens.next() else { break };
+    while let Some(token) = tokens.next() {
         // `"500ms"` carries its unit; `"4" "minutes"` splits across
         // tokens (effect's `DurationFromString` accepts both).
         let split = token
@@ -136,8 +135,16 @@ fn duration_ms(value: &str) -> Option<u64> {
         }
         let unit = if suffix.is_empty() { tokens.next()? } else { suffix };
         let parsed: f64 = number.parse().ok()?;
+        // intentional u64<->f64 crossings (unit table x user number);
+        // magnitudes are tiny (ms), precision/truncation is immaterial
+        // (clippy::cast_precision_loss / cast_possible_truncation).
+        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
         let millis = unit_millis(unit)? as f64;
-        total = total.saturating_add((parsed * millis) as u64);
+        // intentional f64->u64 crossing (values are ms magnitudes)
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let product = (parsed * millis) as u64;
+        total = total.saturating_add(product);
         any = true;
     }
     any.then_some(total)

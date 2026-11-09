@@ -348,7 +348,7 @@ fn decode_value(value_text: Option<&str>, id: &str) -> Result<CredentialValue, S
     )
 }
 
-/// One raw `credential` table row (id, integration_id, label, value,
+/// One raw `credential` table row (id, `integration_id`, label, value,
 /// active) — decoding happens outside the rusqlite closure so a decode
 /// failure can carry [`StoreError::Decode`] (G-225).
 type RawCredentialRow = (String, Option<String>, String, Option<String>, Option<bool>);
@@ -357,7 +357,7 @@ fn raw_credential_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawCredential
     Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
 }
 
-/// `storedRows` (credential.ts:66-78): a row WITHOUT integration_id is
+/// `storedRows` (credential.ts:66-78): a row WITHOUT `integration_id` is
 /// skipped; a value that does not decode FAILS the read (never a fake
 /// empty-key credential — G-225).
 fn stored_credentials(rows: Vec<RawCredentialRow>) -> Result<Vec<StoredCredential>, StoreError> {

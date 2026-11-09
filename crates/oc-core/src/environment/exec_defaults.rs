@@ -34,11 +34,7 @@ metadata=$(stat {flags} -c '%F{TAB}%s{TAB}%Y' -- "$1" 2>&1) || {{
     *) printf '%s' "$metadata" >&2; exit {FAILED} ;;
   esac
 }}
-"#,
-        flags = flags,
-        TAB = TAB,
-        NOT_FOUND = NOT_FOUND,
-        FAILED = FAILED
+"#
     )
 }
 
@@ -112,12 +108,12 @@ impl ExecDefaults {
     ) -> Result<ProcessOutput, FilesError> {
         let mut env = std::collections::BTreeMap::new();
         env.insert("LC_ALL".to_string(), "C".to_string());
-        let mut argv =
+        let mut command_args =
             vec!["-c".to_string(), script.to_string(), "sh".to_string(), path.to_string()];
-        argv.extend(args.iter().cloned());
+        command_args.extend(args.iter().cloned());
         let command = CommandSpec {
             command: "sh".to_string(),
-            args: argv,
+            args: command_args,
             env,
             extend_env: true,
             stdin,
@@ -173,7 +169,7 @@ impl Files for ExecDefaults {
 
     async fn list(&self, path: &str) -> Result<Vec<DirEntry>, FilesError> {
         let result = self.run(path, &list_script(), &[], None).await?;
-        classify(path, &result, |stdout| parse_list(stdout))
+        classify(path, &result, parse_list)
     }
 
     async fn remove(&self, path: &str) -> Result<(), FilesError> {
@@ -279,7 +275,7 @@ fn parse_type(value: &str) -> FileType {
 fn parse_list(bytes: &[u8]) -> Result<Vec<DirEntry>, FilesError> {
     let mut fields: Vec<&[u8]> = bytes.split(|byte| *byte == 0).collect();
     fields.pop();
-    if fields.len() % 2 != 0 {
+    if !fields.len().is_multiple_of(2) {
         return Err(FilesError::failed("", "Invalid find output"));
     }
     let mut entries = Vec::with_capacity(fields.len() / 2);

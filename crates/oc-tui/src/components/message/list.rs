@@ -1033,7 +1033,7 @@ fn group_row(
                     .filter_map(|(message_id, part_id)| {
                         let message = messages.iter().find(|m| m.id() == message_id.as_str())?;
                         let Message::Assistant { parts, .. } = message else { return None };
-                        Some(match resolve_part(parts, &part_id)? {
+                        Some(match resolve_part(parts, part_id)? {
                             Part::Tool { name, state, .. } => {
                                 let running = !matches!(
                                     state.status,
@@ -1081,7 +1081,7 @@ fn group_row(
                 .filter_map(|(message_id, part_id)| {
                     let message = messages.iter().find(|m| m.id() == message_id.as_str())?;
                     let Message::Assistant { parts, .. } = message else { return None };
-                    let Part::Tool { name, .. } = resolve_part(parts, &part_id)? else {
+                    let Part::Tool { name, .. } = resolve_part(parts, part_id)? else {
                         return None;
                     };
                     Some(canonical_tool_name(name).to_owned())

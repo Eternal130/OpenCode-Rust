@@ -60,7 +60,7 @@ pub fn suspend_cycle() {
     unsafe {
         // The resume latch first (`process.once("SIGCONT")`).
         CONTINUED.store(false, Ordering::SeqCst);
-        libc::signal(libc::SIGCONT, on_continue as usize);
+        libc::signal(libc::SIGCONT, on_continue as *const () as usize);
         // The stop must actually stop: default `SIGTSTP`.
         libc::signal(libc::SIGTSTP, libc::SIG_DFL);
         // Stop OUR OWN process group (pid 0 = self group — the ref's
@@ -75,7 +75,7 @@ pub fn suspend_cycle() {
             }
             let request = libc::timespec { tv_sec: 0, tv_nsec: 10_000_000 };
             let mut remaining = libc::timespec { tv_sec: 0, tv_nsec: 0 };
-            libc::nanosleep(&request, &mut remaining);
+            libc::nanosleep(&raw const request, &raw mut remaining);
         }
         // Restore both dispositions (the continue handler is
         // one-shot in the ref; `SIGTSTP` is normally not delivered —

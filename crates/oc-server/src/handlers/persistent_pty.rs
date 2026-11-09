@@ -202,7 +202,7 @@ async fn update(
                 "Expected size.{key} to be a positive integer, received undefined"
             ))),
             Some(value @ Value::Number(_)) => match value.as_u64().filter(|n| *n > 0) {
-                Some(n) if n <= u16::MAX as u64 => Ok(n as u16),
+                Some(n) if u16::try_from(n).is_ok() => Ok(n as u16),
                 _ => Err(reject(format!(
                     "Expected size.{key} to be a positive integer, received {value}"
                 ))),

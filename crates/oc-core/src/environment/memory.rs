@@ -51,12 +51,12 @@ impl Node {
 fn now_ms() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs_f64() * 1_000.0)
-        .unwrap_or(0.0)
+        .map_or(0.0, |duration| duration.as_secs_f64() * 1_000.0)
 }
 
 /// `path.posix.resolve("/", value)` — lexical normalization to an absolute
 /// POSIX path.
+#[must_use]
 pub fn normalize(value: &str) -> String {
     let mut parts: Vec<&str> = Vec::new();
     for part in value.split('/') {
@@ -195,7 +195,7 @@ impl MemoryFs {
     }
 
     /// Extra test helper: create a symlink at `path` pointing at `target`.
-    pub async fn symlink(&self, target: &str, path: &str) -> Result<(), FilesError> {
+    pub fn symlink(&self, target: &str, path: &str) -> Result<(), FilesError> {
         let mut nodes = self.nodes.lock();
         Self::require_parent(&nodes, path)?;
         let key = resolve_key(&nodes, path, false).unwrap_or_else(|| normalize(path));
@@ -216,9 +216,8 @@ impl Files for MemoryFs {
 
     async fn read(&self, value: &str, range: Option<Range>) -> Result<ReadResult, FilesError> {
         let nodes = self.nodes.lock();
-        let original = match Self::lookup(&nodes, value) {
-            None => return Err(FilesError::NotFound { path: value.to_string() }),
-            Some(node) => node,
+        let Some(original) = Self::lookup(&nodes, value) else {
+            return Err(FilesError::NotFound { path: value.to_string() });
         };
         if original.kind() == FileType::Directory {
             return Err(FilesError::WrongKind {
@@ -227,9 +226,8 @@ impl Files for MemoryFs {
             });
         }
         let resolved = resolve_key(&nodes, value, true).and_then(|key| nodes.get(&key).cloned());
-        let node = match resolved {
-            None => return Err(FilesError::NotFound { path: value.to_string() }),
-            Some(node) => node,
+        let Some(node) = resolved else {
+            return Err(FilesError::NotFound { path: value.to_string() });
         };
         if node.kind() != FileType::File {
             return Err(FilesError::WrongKind { path: value.to_string(), actual: node.kind() });
@@ -238,8 +236,10 @@ impl Files for MemoryFs {
         let slice = match range {
             None => bytes.clone(),
             Some(range) => {
-                let start = (range.offset as usize).min(bytes.len());
-                let end = start.saturating_add(range.length as usize).min(bytes.len());
+                let start = usize::try_from(range.offset).unwrap_or(usize::MAX).min(bytes.len());
+                let end = start
+                    .saturating_add(usize::try_from(range.length).unwrap_or(usize::MAX))
+                    .min(bytes.len());
                 bytes[start..end].to_vec()
             }
         };
@@ -269,9 +269,8 @@ impl Files for MemoryFs {
     async fn list(&self, value: &str) -> Result<Vec<DirEntry>, FilesError> {
         let nodes = self.nodes.lock();
         let target = resolve_key(&nodes, value, true).unwrap_or_else(|| normalize(value));
-        let node = match nodes.get(&target) {
-            None => return Err(FilesError::NotFound { path: value.to_string() }),
-            Some(node) => node,
+        let Some(node) = nodes.get(&target) else {
+            return Err(FilesError::NotFound { path: value.to_string() });
         };
         if node.kind() != FileType::Directory {
             return Err(FilesError::WrongKind { path: value.to_string(), actual: node.kind() });
@@ -362,11 +361,13 @@ impl Default for MemoryDriver {
 }
 
 impl MemoryDriver {
+    #[must_use]
     pub fn new() -> Self {
         MemoryDriver { fs: Arc::new(MemoryFs::new()) }
     }
 
     /// The `Driver` view: failing spawner + in-memory `Files` overrides.
+    #[must_use]
     pub fn driver(&self) -> Driver {
         Driver {
             spawner: self.fs.clone(),
@@ -381,7 +382,7 @@ impl MemoryDriver {
     }
 
     /// Extra helper: `symlink(target, path)`.
-    pub async fn symlink(&self, target: &str, path: &str) -> Result<(), FilesError> {
-        self.fs.symlink(target, path).await
+    pub fn symlink(&self, target: &str, path: &str) -> Result<(), FilesError> {
+        self.fs.symlink(target, path)
     }
 }

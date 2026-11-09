@@ -226,7 +226,7 @@ fn meta_wrap(wrap: &mut AnthropicBodyWrap<'_>) -> Result<(), AiError> {
         let Some(native) = wrap.tool_natives.get(index).copied().flatten() else {
             continue;
         };
-        // Ref decodes `native.meta` with the WebSearch schema — a missing
+        // Ref decodes `native.meta` with the `WebSearch` schema — a missing
         // `meta` is an invalid request, not a silently-kept generic tool
         // (meta-messages.ts:38-42).
         let meta = native
@@ -479,10 +479,18 @@ mod tests {
 mod rw01_tests {
     use super::*;
 
-    /// RW-01: the wrap_anthropic_body hook reaches the Anthropic-family
+    /// RW-01: the `wrap_anthropic_body` hook reaches the Anthropic-family
     /// providers with body wrappers, and everyone else keeps the no-op.
     #[test]
     fn anthropic_body_wrap_registry_entries() {
+        // runtime registration can still set the hook (extension point);
+        // the Result shape is demanded by the wrap_anthropic_body
+        // fn-pointer signature (clippy::unnecessary_wraps is a mismatch
+        // against that fixed signature here, not a real finding).
+        #[allow(clippy::unnecessary_wraps)]
+        fn wrap(_: &mut AnthropicBodyWrap<'_>) -> Result<(), crate::schema::AiError> {
+            Ok(())
+        }
         assert!(for_route("alibaba").wrap_anthropic_body.is_some());
         assert!(for_route("zai-coding-plan").wrap_anthropic_body.is_some());
         assert!(for_route("meta").wrap_anthropic_body.is_some());
@@ -491,12 +499,8 @@ mod rw01_tests {
         assert_eq!(for_route("moonshotai"), ProviderCustomization::noop());
         assert_eq!(for_route("minimax"), ProviderCustomization::noop());
         assert_eq!(for_route("anthropic"), ProviderCustomization::noop());
-        assert_eq!(for_route("openrouter").wrap_anthropic_body, None);
-        assert_eq!(for_route("alibaba-chat").wrap_anthropic_body, None);
-        // runtime registration can still set the hook (extension point)
-        fn wrap(_: &mut AnthropicBodyWrap<'_>) -> Result<(), crate::schema::AiError> {
-            Ok(())
-        }
+        assert!(for_route("openrouter").wrap_anthropic_body.is_none());
+        assert!(for_route("alibaba-chat").wrap_anthropic_body.is_none());
         register(
             "acme-anthropic",
             ProviderCustomization {
@@ -530,7 +534,7 @@ mod rw2fix_tests {
     }
 
     /// RW2 fix: a flatten-tool `native` without `meta` is an invalid
-    /// request (ref decodes `native.meta` with the WebSearch schema —
+    /// request (ref decodes `native.meta` with the `WebSearch` schema —
     /// meta-messages.ts:38-42), not a silently-kept generic tool.
     #[test]
     fn meta_wrap_errors_on_missing_native_meta() {

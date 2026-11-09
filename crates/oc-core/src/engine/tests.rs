@@ -1640,7 +1640,8 @@ fn engine_seeds_global_external_directory_allows() {
     let allows = |id: &str, action: &str, resource: &str| {
         let agent =
             registry.get(&oc_schema::id::AgentId::parse(id)).unwrap_or_else(|| panic!("{id}"));
-        crate::permission::evaluate(action, resource, &[agent.permissions.clone()]).effect
+        crate::permission::evaluate(action, resource, std::slice::from_ref(&agent.permissions))
+            .effect
             == Effect::Allow
     };
 

@@ -32,7 +32,7 @@ pub enum ClientError {
     #[error("transport: {0}")]
     Transport(#[from] reqwest::Error),
     /// A per-request cancellation signal fired (v2 `AbortSignal` abort; the
-    /// ref surfaces it as `Transport`/AbortError, reqwest cannot).
+    /// ref surfaces it as `Transport`/`AbortError`, reqwest cannot).
     #[error("request cancelled")]
     Cancelled,
     /// The configured base URL cannot be parsed.

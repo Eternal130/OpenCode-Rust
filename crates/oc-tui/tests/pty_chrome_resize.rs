@@ -66,8 +66,7 @@ fn pty_chrome_rail_rect_follows_terminal_resize() {
                     }
                 }
                 return Err(format!(
-                    "the rail tab row never re-laid at 60 cols after SIGWINCH: {:?}",
-                    rows
+                    "the rail tab row never re-laid at 60 cols after SIGWINCH: {rows:?}"
                 ));
             }
             // The composer border re-flowed INTO the 60-column frame

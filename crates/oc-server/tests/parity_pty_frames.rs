@@ -960,7 +960,7 @@ async fn persistent_framed_input_drops_malformed_frames() {
         String::from_utf8_lossy(&collected)
     );
     assert!(
-        !collected.iter().any(|byte| *byte == b'q'),
+        !collected.contains(&b'q'),
         "malformed frame payloads never reached the terminal: {:?}",
         String::from_utf8_lossy(&collected)
     );

@@ -17,9 +17,9 @@
 //! emits. The buffers then swap exactly like `render()`'s tail — the
 //! harness's proven technique (the B3b grid-emitter differential
 //! gate, green since lane B3b on the same mapping; the harness now
-//! lives on as the pinned digests of opentui_emit_diff_tests).
+//! lives on as the pinned digests of `opentui_emit_diff_tests`).
 //!
-//! Byte parity with the retired GridEmitter (deleted this lane) is
+//! Byte parity with the retired `GridEmitter` (deleted this lane) is
 //! pinned by the differential proof and the frozen digests of
 //! `opentui_emit_diff_tests` on the golden replay corpus: the same
 //! frame sequences through both
@@ -357,7 +357,7 @@ fn touched_rows(
         }
         if !touched[y] {
             // cluster-aware row equality: same-symbol sidecar entries
-            let changed = frame.clusters.as_ref().map_or(false, |m| {
+            let changed = frame.clusters.as_ref().is_some_and(|m| {
                 m.range((y, 0)..(y + 1, 0)).any(|(key, symbol)| {
                     prev_clusters.get(key).map(String::as_str) != Some(symbol.as_str())
                 })
@@ -365,7 +365,7 @@ fn touched_rows(
                 && frame
                     .clusters
                     .as_ref()
-                    .map_or(true, |m| m.range((y, 0)..(y + 1, 0)).next().is_none());
+                    .is_none_or(|m| m.range((y, 0)..(y + 1, 0)).next().is_none());
             touched[y] = changed;
         }
     }

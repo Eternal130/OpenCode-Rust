@@ -1554,7 +1554,7 @@ impl Inner {
         if let Some(title) = live.osc.feed(chunk) {
             if live.osc_title.as_deref() != Some(title.as_str()) {
                 live.osc_title = Some(title.clone());
-                live.info.title = title.clone();
+                live.info.title.clone_from(&title);
                 let title_event = StreamEvent::TitleChanged { title };
                 for subscriber in live.subscribers.values_mut() {
                     if subscriber.active {
@@ -1880,6 +1880,7 @@ struct LiveShadow {
 fn foreground_process_of_pty(master_fd: std::os::unix::io::RawFd) -> Option<String> {
     let mut pgid: libc::pid_t = 0;
     // SAFETY: TIOCGPGRP writes a pid_t through a valid pointer.
+    #[allow(unsafe_code)] // contained ioctl(2) probe on our own master fd
     let result = unsafe { libc::ioctl(master_fd, libc::TIOCGPGRP, &mut pgid) };
     if result != 0 || pgid <= 0 {
         return None;
@@ -1907,10 +1908,10 @@ fn foreground_scan_by_pgid(pgid: libc::pid_t) -> Option<String> {
     let entries = std::fs::read_dir("/proc").ok()?;
     for entry in entries.flatten() {
         let name = entry.file_name();
-        let Some(pid) = name.to_str().and_then(|text| text.parse::<libc::pid_t>().ok()) else {
+        let Some(proc_pid) = name.to_str().and_then(|text| text.parse::<libc::pid_t>().ok()) else {
             continue;
         };
-        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { continue };
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{proc_pid}/stat")) else { continue };
         let Some(rest) = stat.rsplit_once(')').map(|(_, rest)| rest) else { continue };
         // rest starts with " <state> <ppid> <pgrp> ..." — fields 3,4,5
         // after the comm; pgrp is the third token of `rest`.
@@ -1952,11 +1953,7 @@ impl OscTitleScanner {
         let mut last_title: Option<String> = None;
         let bytes = std::mem::take(&mut work);
         let mut rest: &[u8] = &bytes;
-        loop {
-            let Some(start) = rest.iter().position(|byte| *byte == 0x1b) else {
-                rest = &[];
-                break;
-            };
+        while let Some(start) = rest.iter().position(|byte| *byte == 0x1b) {
             let after_esc = &rest[start + 1..];
             if after_esc.first() != Some(&b']') {
                 // Some other escape: skip ESC + one byte (CSI/ESC-family
@@ -1993,10 +1990,9 @@ impl OscTitleScanner {
                 if tail.len() <= PARTIAL_LIMIT {
                     self.partial = tail.to_vec();
                 }
-                rest = &[];
                 break;
             };
-            let payload = &after_esc[1..1 + end];
+            let payload = &after_esc[1..=end];
             if let Some(title) = parse_title_osc(payload) {
                 last_title = Some(title);
             }
@@ -2453,7 +2449,7 @@ mod tests {
 
     /// G-229② — removeVisibleExit (ref index.ts:311-324, driven from a
     /// subscriber's `exited` at :329-338): an exit with ZERO attachments
-    /// keeps the exited entry (mark_exited only); an ATTACHED terminal's
+    /// keeps the exited entry (`mark_exited` only); an ATTACHED terminal's
     /// exit publishes `persistent-pty.removed`.
     #[tokio::test]
     async fn hosted_event_sink_fires_exit_removed_without_subscribers() {
@@ -2948,7 +2944,7 @@ mod tests {
         assert_eq!(typed, terminal_wire_json(&info));
     }
 
-    /// RW2 fix: the OUTPUT_LIMIT trim must back up to a UTF-8 char
+    /// RW2 fix: the `OUTPUT_LIMIT` trim must back up to a UTF-8 char
     /// boundary — draining by an arbitrary byte count can split a
     /// multi-byte codepoint and replay invalid UTF-8 (ref trims its
     /// string buffer — pty.ts:219-221).
@@ -3045,7 +3041,7 @@ mod tests {
     }
 
     /// G-229① — a child emitting an OSC 0/2 title publishes
-    /// TitleChanged and updates the terminal's title (own child process
+    /// `TitleChanged` and updates the terminal's title (own child process
     /// only).
     #[tokio::test]
     async fn g229_title_changed_publishes_from_own_child() {

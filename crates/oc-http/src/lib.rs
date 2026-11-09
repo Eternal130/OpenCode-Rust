@@ -30,6 +30,7 @@ use std::sync::Arc;
 /// Verifies server certificates with `rustls-platform-verifier` (OS trust
 /// store), matching the reqwest 0.13 stack. Falls back to the webpki root
 /// set when the platform verifier is unavailable.
+#[must_use]
 pub fn platform_tls_config() -> rustls::ClientConfig {
     // Match the workspace rustls default (aws-lc-rs when both providers
     // are compiled in, same as the reqwest 0.13 stack).
@@ -68,6 +69,7 @@ pub fn builder() -> reqwest::ClientBuilder {
 /// `reqwest::Client` with the platform verifier (G-26) attached.
 ///
 /// Drop-in replacement for `reqwest::Client::new()` on the 0.12 stack.
+#[must_use]
 pub fn client() -> reqwest::Client {
     builder().build().expect("oc-http: reqwest client with platform verifier")
 }

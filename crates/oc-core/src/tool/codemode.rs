@@ -3068,7 +3068,7 @@ mod g247_tests {
             r#"const s = "escaped \" quote and ' solo"; return s.length;"#,
             "const t = `back \\` tick`; return t;",
             // A regex character class containing a slash.
-            r#"const re = /a[/]b/; return re.source;"#,
+            r"const re = /a[/]b/; return re.source;",
         ];
         for code in accepted {
             assert_eq!(scan_program(code), None, "must accept: {code}");

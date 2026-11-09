@@ -125,7 +125,11 @@ fn is_text(bytes: &[u8]) -> bool {
         return false;
     }
     let controls = bytes.iter().filter(|byte| **byte < 9 || (**byte > 13 && **byte < 32)).count();
-    controls as f64 / bytes.len() as f64 <= 0.3
+    // ratio over counts: intentional usize->f64 (clippy::cast_precision_loss)
+    #[allow(clippy::cast_precision_loss)]
+    {
+        controls as f64 / bytes.len() as f64 <= 0.3
+    }
 }
 
 /// `attachmentLabel` (prompt.ts:206-208) — the data URL is the whole
@@ -147,10 +151,10 @@ fn decode_data_url(uri: &str, label: &str) -> Result<Vec<u8>, AttachmentError> {
     let Some(comma) = uri.find(',') else { return Err(invalid()) };
     let metadata = &uri[5..comma];
     let payload = &uri[comma + 1..];
-    let base64_encoded = metadata.split(';').any(|part| part.to_ascii_lowercase() == "base64");
+    let base64_encoded = metadata.split(';').any(|part| part.eq_ignore_ascii_case("base64"));
     if !base64_encoded {
         // decodeURIComponent: strict UTF-8 percent-decoding.
-        return percent_decode(payload).ok_or_else(invalid).map(|text| text.into_bytes());
+        return percent_decode(payload).ok_or_else(invalid).map(std::string::String::into_bytes);
     }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(payload.as_bytes())
@@ -198,7 +202,10 @@ struct Resolved {
 fn positive_int(value: Option<&str>) -> Option<usize> {
     let value = value?;
     let parsed: i64 = value.parse().ok()?;
-    u64::try_from(parsed).ok().filter(|parsed| *parsed > 0).map(|parsed| parsed as usize)
+    u64::try_from(parsed)
+        .ok()
+        .filter(|parsed| *parsed > 0)
+        .and_then(|parsed| usize::try_from(parsed).ok())
 }
 
 /// `fileURLToPath` for the Unix paths the server accepts: percent-decode,
@@ -304,7 +311,7 @@ fn read_file_attachment(uri: &str) -> Result<Resolved, AttachmentError> {
         return Err(AttachmentError::NotAFile { uri: uri.to_string() });
     }
     // The stat-time size cap (:192-196) names the uri, not the label.
-    if info.len() as usize > MAX_ATTACHMENT_BYTES {
+    if usize::try_from(info.len()).unwrap_or(usize::MAX) > MAX_ATTACHMENT_BYTES {
         return Err(AttachmentError::TooLarge {
             label: uri.to_string(),
             limit: MAX_ATTACHMENT_BYTES,
@@ -354,7 +361,7 @@ pub fn materialize_attachment(
     let content = if mime == "text/plain" && resolved.start.is_some() {
         let text = String::from_utf8_lossy(&resolved.bytes);
         let lines: Vec<&str> = text.split('\n').collect();
-        let from = resolved.start.map(|start| start.saturating_sub(1)).unwrap_or(0);
+        let from = resolved.start.map_or(0, |start| start.saturating_sub(1));
         let to = resolved.end.unwrap_or(lines.len()).min(lines.len());
         let from = from.min(to);
         lines[from..to].join("\n").into_bytes()

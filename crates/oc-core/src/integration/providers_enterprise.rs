@@ -509,6 +509,7 @@ fn azure_token_cache() -> &'static dashmap::DashMap<String, AzureCachedToken> {
 
 /// Test seam: the per-scope cache is process-global; tests that mint
 /// through a fake `az` clear it first so counts are exact.
+#[cfg(test)]
 pub(super) fn azure_token_cache_clear_for_test() {
     azure_token_cache().clear();
 }
@@ -1316,7 +1317,11 @@ fn random_uuid_v4() -> String {
     rand::thread_rng().fill_bytes(&mut bytes);
     bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
     bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10
-    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    let hex: String = bytes.iter().fold(String::new(), |mut out, byte| {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{byte:02x}");
+        out
+    });
     format!("{}-{}-{}-{}-{}", &hex[0..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..32])
 }
 

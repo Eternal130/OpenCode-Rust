@@ -629,6 +629,9 @@ pub fn apply_plugin_websearch_providers(
 /// register without an implementation (the ref's methodImplementation
 /// env/command arms). Malformed registrations are skipped (contained,
 /// like the agents arm). Returns the applied count.
+/// Monolithic port of the plugin integration-method apply pipeline;
+/// helper split deferred.
+#[allow(clippy::too_many_lines)]
 pub fn apply_plugin_integration_methods(
     integration: &crate::integration::IntegrationHost,
     dispatcher: &Arc<dyn GuestHookDispatcher>,
@@ -650,8 +653,7 @@ pub fn apply_plugin_integration_methods(
         let Some(method_value) = registration.get("method") else { continue };
         let Ok(method) = serde_json::from_value::<Method>(method_value.clone()) else {
             eprintln!(
-                "opencode plugin-apply: skipping malformed integration method {:?}",
-                integration_id
+                "opencode plugin-apply: skipping malformed integration method {integration_id:?}"
             );
             continue;
         };
@@ -673,10 +675,8 @@ pub fn apply_plugin_integration_methods(
                 Box::pin(async move {
                     let event =
                         serde_json::json!({ "integrationID": integration_id, "answer": answer });
-                    let reply = dispatcher
-                        .dispatch(&plugin_id, "integration", "authorize", event)
-                        .await
-                        .map_err(|message| message)?;
+                    let reply =
+                        dispatcher.dispatch(&plugin_id, "integration", "authorize", event).await?;
                     let Some(result) = reply.get("result") else {
                         return Err("integration authorize: no result".to_owned());
                     };
@@ -703,8 +703,7 @@ pub fn apply_plugin_integration_methods(
                                 }
                                 let reply = dispatcher
                                     .dispatch(&plugin_id, "integration", "callback", event)
-                                    .await
-                                    .map_err(|message| message)?;
+                                    .await?;
                                 serde_json::from_value::<CredentialValue>(
                                     reply.get("credential").cloned().unwrap_or(Value::Null),
                                 )
@@ -760,8 +759,7 @@ pub fn apply_plugin_integration_methods(
                             serde_json::json!({ "integrationID": integration_id, "credential": credential });
                         let reply = dispatcher
                             .dispatch(&plugin_id, "integration", "refresh", event)
-                            .await
-                            .map_err(|message| message)?;
+                            .await?;
                         serde_json::from_value::<CredentialValue>(
                             reply.get("credential").cloned().unwrap_or(Value::Null),
                         )
@@ -1110,7 +1108,7 @@ async fn register_guest_hook(
             permission_from_json
         ),
         "aisdk.sdk" => {
-            point!(register_aisdk_sdk, "aisdk", "sdk", aisdk_sdk_to_json, aisdk_sdk_from_json)
+            point!(register_aisdk_sdk, "aisdk", "sdk", aisdk_sdk_to_json, aisdk_sdk_from_json);
         }
         "aisdk.language" => point!(
             register_aisdk_language,
@@ -2114,8 +2112,8 @@ mod wire {
 
     /// The JSON view of one opaque sdk handle, when it IS JSON (a
     /// previous guest swap); native handles cross as nothing.
-    fn sdk_handle_json(handle: &Option<crate::hooks::SdkHandle>) -> Option<Value> {
-        let handle = handle.as_ref()?;
+    fn sdk_handle_json(handle: Option<&crate::hooks::SdkHandle>) -> Option<Value> {
+        let handle = handle?;
         handle.clone().downcast::<Value>().ok().map(|boxed| (*boxed).clone())
     }
 
@@ -2159,7 +2157,7 @@ mod wire {
             model: event.model.clone(),
             package: event.package.clone(),
             options: event.options.clone(),
-            sdk: sdk_handle_json(&event.sdk),
+            sdk: sdk_handle_json(event.sdk.as_ref()),
         })
     }
 
@@ -2187,7 +2185,7 @@ mod wire {
     pub fn aisdk_language_to_json(event: &AisdkLanguageEvent) -> Value {
         encode(&AisdkLanguageEventWire {
             model: event.model.clone(),
-            sdk: sdk_handle_json(&event.sdk),
+            sdk: sdk_handle_json(event.sdk.as_ref()),
             options: event.options.clone(),
         })
     }
@@ -2648,8 +2646,8 @@ mod guest_hook_domain_tests {
         }
     }
 
-    /// Arc<MockGuest> → dispatcher shim (MockGuest itself is the
-    /// impl; this works around the CoerceUnsized split).
+    /// Arc<MockGuest> → dispatcher shim (`MockGuest` itself is the
+    /// impl; this works around the `CoerceUnsized` split).
     struct MockGuestShim(Arc<MockGuest>);
 
     #[async_trait::async_trait]
@@ -2749,7 +2747,7 @@ mod guest_hook_domain_tests {
 
     /// aisdk.language: the JSON fields mutate; the non-serializable
     /// `language` handle rides through untouched (documented
-    /// divergence — a LanguageModel carries a live route).
+    /// divergence — a `LanguageModel` carries a live route).
     #[tokio::test]
     async fn aisdk_language_round_trips() {
         let hooks = Arc::new(HookRegistry::new());

@@ -1096,7 +1096,7 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                 crate::integration_form::IntegrationFieldKind::Multiselect => {
                     for option in &field.options {
                         let marked =
-                            state.multiselect.iter().any(|item| *item == option.value);
+                            state.multiselect.contains(&option.value);
                         options.push(
                             SelectOption::titled(
                                 format!("[{}] {}", if marked { "x" } else { " " }, option.label),
@@ -2034,9 +2034,9 @@ pub fn model_list_props(store: &Store, title: &'static str) -> SelectProps {
             if show_sections {
                 // `toOptions(favorites, "Favorites")` + the recents
                 // minus favorites (dialog-model.tsx:58-63).
-                let mut pinned_row = |category: &str,
-                                      provider: &str,
-                                      model: &str|
+                let pinned_row = |category: &str,
+                                  provider: &str,
+                                  model: &str|
                  -> Option<SelectOption> {
                     let row =
                         rows.iter().find(|row| row.provider_id == provider && row.id == model)?;
@@ -3602,7 +3602,7 @@ impl CommandDispatcher for StoreDispatcher {
                 if let Some(agent) = store.agent_cycle(direction) {
                     match store.route() {
                         Route::Session { session_id, .. } => {
-                            store.select_agent(&session_id, &agent)
+                            store.select_agent(&session_id, &agent);
                         }
                         Route::Home => store.stage_agent(crate::app::HOME_PROMPT_KEY, &agent),
                     }
@@ -3614,7 +3614,7 @@ impl CommandDispatcher for StoreDispatcher {
                 if let Some(model) = store.model_cycle_recent(direction) {
                     match store.route() {
                         Route::Session { session_id, .. } => {
-                            store.select_model(&session_id, &model)
+                            store.select_model(&session_id, &model);
                         }
                         Route::Home => store.stage_model(crate::app::HOME_PROMPT_KEY, model),
                     }
@@ -3626,7 +3626,7 @@ impl CommandDispatcher for StoreDispatcher {
                 match store.model_cycle_favorite(direction) {
                     Some(model) => match store.route() {
                         Route::Session { session_id, .. } => {
-                            store.select_model(&session_id, &model)
+                            store.select_model(&session_id, &model);
                         }
                         Route::Home => store.stage_model(crate::app::HOME_PROMPT_KEY, model),
                     },

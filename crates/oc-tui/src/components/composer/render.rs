@@ -293,7 +293,7 @@ pub struct PromptView<'a> {
     /// editing engine's `selection()`). `None`/empty paints nothing
     /// (every golden stays byte-exact); `Some` paints the range's
     /// cells with the ref's DEFAULT selection styling — the fg/bg
-    /// swap (EditBufferRenderable's no-selectionBg branch,
+    /// swap (`EditBufferRenderable`'s no-selectionBg branch,
     /// editor.rs's INVERSE-after-selection rule: opaque line bg
     /// becomes the fg) — since the upstream prompt mount sets NO
     /// `selectionBg`/`selectionFg` (prompt/index.tsx never passes

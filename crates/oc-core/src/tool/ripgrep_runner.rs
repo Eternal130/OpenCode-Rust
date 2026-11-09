@@ -371,7 +371,7 @@ async fn tempfile_in(base: PathBuf) -> Result<PathBuf, RgError> {
         let candidate = base.join(format!("ripgrep-{suffix}"));
         match tokio::fs::create_dir(&candidate).await {
             Ok(()) => return Ok(candidate),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(RgError::Io(error.to_string())),
         }
     }

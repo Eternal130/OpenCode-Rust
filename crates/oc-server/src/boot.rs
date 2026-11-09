@@ -640,7 +640,7 @@ async fn local_discovery_loop(
         };
         let connections = providers_from_config(&loaded).connections;
         if engine.local.refresh(&connections).await {
-            let _ = crate::announce::publish_empty(&engine, "model.updated", &location).await;
+            let () = crate::announce::publish_empty(&engine, "model.updated", &location).await;
         }
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
     }

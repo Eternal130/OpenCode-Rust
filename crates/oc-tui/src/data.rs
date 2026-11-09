@@ -180,6 +180,7 @@ pub struct SessionSnapshot {
 
 /// The wire `SessionInfo` → snapshot mapping (the resync fetch and
 /// G-271⑤'s `session.list {search}` rows share it).
+#[must_use]
 pub fn session_snapshot_from(session: oc_client::types::SessionInfo) -> SessionSnapshot {
     SessionSnapshot {
         id: session.id,

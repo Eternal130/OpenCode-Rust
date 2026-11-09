@@ -243,7 +243,7 @@ async fn prepare(
     let workdir =
         crate::environment::files::type_following(&*services.files, &invocation.cwd).await;
     match workdir {
-        Ok(kind) if kind == crate::environment::files::FileType::Directory => {}
+        Ok(crate::environment::files::FileType::Directory) => {}
         Ok(_) => {
             return Err(ToolFailure {
                 message: format!("Unable to execute command: {}", invocation.command),
@@ -800,8 +800,8 @@ mod tests {
             status: Some("completed".into()),
         };
         let metadata = tool_result(&plain).metadata.expect("metadata");
-        assert!(metadata.get("signal").is_none(), "signal omitted when unset");
-        assert!(metadata.get("timeout").is_none(), "timeout omitted when unset");
+        assert!(!metadata.contains_key("signal"), "signal omitted when unset");
+        assert!(!metadata.contains_key("timeout"), "timeout omitted when unset");
     }
 
     #[test]

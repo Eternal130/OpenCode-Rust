@@ -341,10 +341,10 @@ fn to_message(item: &Value, request: &LLMRequest, key: &str) -> Result<Message, 
         let part_metadata = detail.map(|detail| provider_meta(key, json!({ "detail": detail })));
         if part_kind == "input_image" {
             content.push(ContentPart::Media {
-                media: replay_media(
+                media: Box::new(replay_media(
                     part.get("image_url").and_then(Value::as_str).unwrap_or_default(),
                     "image/*",
-                ),
+                )),
                 filename: None,
                 cache: None,
                 metadata: None,
@@ -355,10 +355,10 @@ fn to_message(item: &Value, request: &LLMRequest, key: &str) -> Result<Message, 
         let file_url = part.get("file_url").and_then(Value::as_str);
         let file_data = part.get("file_data").and_then(Value::as_str);
         content.push(ContentPart::Media {
-            media: replay_media(
+            media: Box::new(replay_media(
                 file_url.or(file_data).unwrap_or_default(),
                 "application/octet-stream",
-            ),
+            )),
             filename: part.get("filename").and_then(Value::as_str).map(str::to_string),
             cache: None,
             metadata: None,

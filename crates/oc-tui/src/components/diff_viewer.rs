@@ -111,10 +111,8 @@ pub fn split_added_patch(patch: &str, size: usize) -> Option<Vec<AddedPatchChunk
     let body = &patch[offset..];
     let mut lines: Vec<String> =
         body.strip_suffix('\n').unwrap_or(body).split('\n').map(str::to_owned).collect();
-    let marker = lines
-        .last()
-        .filter(|last| last.starts_with("\\ No newline at end of file"))
-        .map(|last| last.clone());
+    let marker =
+        lines.last().filter(|last| last.starts_with("\\ No newline at end of file")).cloned();
     if marker.is_some() {
         lines.pop();
     }
@@ -330,7 +328,7 @@ impl DiffFile {
     /// over [`VIRTUAL_MIN_LINES`] renders as
     /// [`VIRTUAL_CHUNK_LINES`]-line chunks, each its own valid
     /// `-0,0` hunk (huge added files chunk like the ref's virtualized
-    /// PatchDiff; bounded deviation G-130: the Rust viewer renders
+    /// `PatchDiff`; bounded deviation G-130: the Rust viewer renders
     /// the chunk list directly — no lazy mount window, the ROW set is
     /// identical).
     #[must_use]
@@ -637,12 +635,12 @@ pub fn render_diff_viewer_with_hits(
     theme: &ThemeStyles,
     width: usize,
     height: usize,
-    mut image_hits: Option<&mut Vec<crate::components::diff_viewer_mount::DiffImageHit>>,
+    image_hits: Option<&mut Vec<crate::components::diff_viewer_mount::DiffImageHit>>,
 ) -> Frame {
     let (frame, hits) = crate::components::diff_viewer_solid::twin_loaded(
         files, state, options, theme, width, height,
     );
-    if let Some(out) = image_hits.as_deref_mut() {
+    if let Some(out) = image_hits {
         out.extend(hits);
     }
     frame

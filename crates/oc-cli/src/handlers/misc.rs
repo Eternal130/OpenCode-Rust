@@ -206,10 +206,7 @@ pub async fn uninstall(dry_run: bool, keep_config: bool, keep_data: bool, force:
                     Ok(output) if output.status.success() => println!("Package removed"),
                     Ok(output) => {
                         println!("Package manager uninstall failed");
-                        errors.push(format!(
-                            "{}",
-                            String::from_utf8_lossy(&output.stderr).trim_end()
-                        ));
+                        errors.push(String::from_utf8_lossy(&output.stderr).trim_end().to_string());
                         eprintln!("Warning: Run manually: {}", command.join(" "));
                     }
                     Err(error) => {
@@ -556,7 +553,7 @@ fn redact_config_inner(value: serde_json::Value, headers: bool) -> serde_json::V
                     None
                 };
                 let redacted = redacted.unwrap_or_else(|| {
-                    redact_config_inner(value, headers || key.to_ascii_lowercase() == "headers")
+                    redact_config_inner(value, headers || key.eq_ignore_ascii_case("headers"))
                 });
                 (key, redacted)
             }))

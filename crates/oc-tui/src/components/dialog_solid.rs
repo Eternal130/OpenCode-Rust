@@ -2117,6 +2117,7 @@ const DIALOG_SKELETON_INDEX: usize = 5;
 /// when the mount key changes. The backdrop is NOT applied here — the
 /// scrim must dim the composited frame pixels (all families below),
 /// so it rides [`DialogSeat::scrim_around`] after the seam.
+#[must_use]
 pub fn mount_dialog_tree(
     entry: &DialogEntry,
     props: &SelectProps,
@@ -2546,7 +2547,7 @@ fn build_inputs(
                 .iter()
                 .skip(sidecar.btw_scroll)
                 .take(window_rows)
-                .map(|row| row.plain_text())
+                .map(opentui_core::StyledText::plain_text)
                 .collect();
             let btw_styled: Vec<StyledText> = sidecar
                 .btw_rows

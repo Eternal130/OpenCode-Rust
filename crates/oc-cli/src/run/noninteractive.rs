@@ -1407,7 +1407,6 @@ mod tests {
     // never blocks the short JSON calls. Every raw request (headers+body)
     // is recorded for assertion.
 
-    use std::fmt::Write as _;
     use std::io::{Read as _, Write as _};
     use std::net::{TcpListener, TcpStream};
 

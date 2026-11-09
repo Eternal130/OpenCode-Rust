@@ -86,7 +86,7 @@ pub fn parse(input: &str) -> Option<Reference> {
             && !parts[0].contains(char::is_whitespace)
             && !parts[1].contains(char::is_whitespace)
         {
-            return build_remote(&parts[0].to_owned(), &[parts[1].to_owned()], None, None)
+            return build_remote(parts[0], &[parts[1].to_owned()], None, None)
                 .map(Reference::Remote);
         }
     }
@@ -101,8 +101,7 @@ pub fn parse(input: &str) -> Option<Reference> {
             return build_remote(&direct[0], &direct[1..], None, None).map(Reference::Remote);
         }
         if direct.len() == 2 {
-            return build_remote(&"github.com".to_owned(), &direct, None, None)
-                .map(Reference::Remote);
+            return build_remote("github.com", &direct, None, None).map(Reference::Remote);
         }
     }
 
@@ -239,13 +238,16 @@ fn build_remote(
     Some(RemoteReference {
         owner: segments.first().filter(|_| segments.len() == 2).cloned(),
         repo: segments.last().cloned().unwrap_or_default(),
-        remote: remote.map(str::to_owned).unwrap_or_else(|| {
-            if github {
-                github_remote(&repository_path)
-            } else {
-                format!("https://{host}/{repository_path}.git")
-            }
-        }),
+        remote: remote.map_or_else(
+            || {
+                if github {
+                    github_remote(&repository_path)
+                } else {
+                    format!("https://{host}/{repository_path}.git")
+                }
+            },
+            str::to_owned,
+        ),
         label: if github && segments.len() == 2 {
             repository_path.clone()
         } else {
@@ -300,7 +302,7 @@ fn build_file(rest: &str, remote: &str) -> Option<Reference> {
     if segments.is_empty() {
         return None;
     }
-    let repo = trim_git_suffix(segments.last().map(String::as_str).unwrap_or(""));
+    let repo = trim_git_suffix(segments.last().map_or("", String::as_str));
     Some(Reference::File(FileReference {
         segments,
         repo,
@@ -379,5 +381,5 @@ fn safe_segment(input: &str) -> bool {
 }
 
 fn percent_decode(input: &str) -> String {
-    urlencoding::decode(input).map(|value| value.into_owned()).unwrap_or_else(|_| input.to_owned())
+    urlencoding::decode(input).map_or_else(|_| input.to_owned(), std::borrow::Cow::into_owned)
 }

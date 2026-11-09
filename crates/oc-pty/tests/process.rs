@@ -1835,14 +1835,14 @@ async fn g63_write_op_accepts_non_utf8_bytes() {
 }
 
 /// G-277③ — the daemon's default program resolves through the
-/// ShellSelect chain (ref index.ts:165 `input.command ??
+/// `ShellSelect` chain (ref index.ts:165 `input.command ??
 /// ShellSelect.environment()`), NOT `$SHELL || /bin/sh`: a dangling
 /// `$SHELL` used to fail the spawn directly. With `$SHELL` pointing at
 /// a nonexistent path the fallback ladder (bash on PATH → /bin/sh)
 /// must take over and the create must succeed.
 ///
 /// `set_var` is process-global but safe here (nextest runs each test
-/// in its own process; same precedent as the OPENCODE_PTY_BIN test).
+/// in its own process; same precedent as the `OPENCODE_PTY_BIN` test).
 #[tokio::test]
 async fn g277_default_program_survives_a_dangling_shell() {
     std::env::set_var("SHELL", "/nonexistent/dangling-shell");

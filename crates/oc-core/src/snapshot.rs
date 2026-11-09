@@ -529,7 +529,7 @@ impl GitSnapshotStore {
         // cached entry reuses its oid, skipping the read + blob write —
         // steady-state capture is O(changed) reads like `git add --all`
         // (snapshot.ts:425-436).
-        let mut cache = self.load_stat_cache();
+        let cache = self.load_stat_cache();
         let mut next_cache = StatCache::default();
         let mut stack: Vec<PathBuf> = vec![scope_path.clone()];
         while let Some(dir) = stack.pop() {

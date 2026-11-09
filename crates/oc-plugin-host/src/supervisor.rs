@@ -173,7 +173,7 @@ impl Default for SupervisorConfig {
 
 /// G-148 — the display name for `ctx.plugin.list` rows: the entry's
 /// package name when a package.json sits at/above it, else the entry
-/// file stem (ref PluginInfo carries the full source record; the
+/// file stem (ref `PluginInfo` carries the full source record; the
 /// bounded projection keeps id/name/version/active).
 fn plugin_display_name(entry: &str) -> String {
     plugin_package_field(entry, "name").unwrap_or_else(|| {
@@ -409,79 +409,13 @@ impl Shared {
             //    transform tables follow the same merge.
             "websearch.transform" | "worktree.transform" | "provider.transform"
             | "reference.transform" | "vcs.transform" | "model.transform" => {
-                let mut registrations =
-                    self.registrations.write().expect("registrations poisoned");
-                let plugin_id = params.get("pluginId").and_then(Value::as_str).unwrap_or("?");
-                match method {
-                    "websearch.transform" => registrations.merge_websearch_providers(
-                        plugin_id,
-                        params.get("providers").and_then(Value::as_array).cloned().unwrap_or_default().as_slice(),
-                    ),
-                    "provider.transform" => registrations.merge_providers(
-                        plugin_id,
-                        params.get("providers").and_then(Value::as_array).cloned().unwrap_or_default().as_slice(),
-                    ),
-                    "reference.transform" => registrations.merge_references(
-                        plugin_id,
-                        params.get("references").and_then(Value::as_array).cloned().unwrap_or_default().as_slice(),
-                    ),
-                    "vcs.transform" => registrations.merge_vcs_providers(
-                        plugin_id,
-                        params.get("providers").and_then(Value::as_array).cloned().unwrap_or_default().as_slice(),
-                    ),
-                    // G-147 — the model editor's whole derived override
-                    // table (base models come from the port; only the
-                    // overrides cross here).
-                    "model.transform" => registrations.merge_models(
-                        plugin_id,
-                        params.get("models").and_then(Value::as_array).cloned().unwrap_or_default().as_slice(),
-                    ),
-                    _ => registrations.merge_worktree_strategies(
-                        plugin_id,
-                        params.get("strategies").and_then(Value::as_array).cloned().unwrap_or_default().as_slice(),
-                    ),
-                }
-                Some(protocol::response(id, Value::Null))
+                Some(answer_registration_transform(self, id, method, params))
             }
             // -- G-24: `ctx.integration.method.update` — the v2
             //    IntegrationMethodRegistration lands in the snapshot
-            //    (the engine applies it into the IntegrationHost).
-            "integration.method.update" => {
-                if let Some(registration) = params.get("args") {
-                    let plugin_id =
-                        params.get("pluginId").and_then(Value::as_str).unwrap_or("?").to_owned();
-                    let mut registrations =
-                        self.registrations.write().expect("registrations poisoned");
-                    if registration.get("integrationID").and_then(Value::as_str).is_some() {
-                        registrations.upsert_integration_method(&plugin_id, registration);
-                        return Some(protocol::response(id, Value::Null));
-                    }
-                }
-                Some(protocol::error_response(id, "integration.method.update requires args.integrationID"))
-            }
-            "hook.register" => {
-                let hook = crate::registrations::PluginHook {
-                    plugin_id: params
-                        .get("pluginId")
-                        .and_then(Value::as_str)
-                        .unwrap_or("?")
-                        .to_owned(),
-                    domain: params
-                        .get("domain")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_owned(),
-                    name: params.get("name").and_then(Value::as_str).unwrap_or_default().to_owned(),
-                };
-                if hook.domain.is_empty() || hook.name.is_empty() {
-                    return Some(protocol::error_response(
-                        id,
-                        "hook.register requires domain+name",
-                    ));
-                }
-                self.registrations.write().expect("registrations poisoned").add_hook(hook);
-                Some(protocol::response(id, Value::Null))
-            }
+            //    (the engine applies it into the `IntegrationHost`).
+            "integration.method.update" => Some(answer_integration_method_update(self, id, params)),
+            "hook.register" => Some(answer_hook_register(self, id, params)),
             // -- PLUG-D14: `ctx.rpc.register(definition, handlers)` —
             //    the definition lands in the native registry (method
             //    names gate dispatch); the handlers stay in the guest.
@@ -528,23 +462,7 @@ impl Shared {
             // -- G-148: `ctx.plugin.list` — the loaded plugin table
             //    (id/name/version/active), answered inline from the
             //    registration snapshot.
-            "plugin.list" => {
-                let registrations = self.registrations.read().expect("registrations poisoned");
-                let plugins: Vec<Value> = registrations
-                    .plugins
-                    .values()
-                    .map(|status| {
-                        let entry = status.entry.to_string_lossy().into_owned();
-                        serde_json::json!({
-                            "id": status.plugin_id,
-                            "name": plugin_display_name(&entry),
-                            "version": plugin_package_field(&entry, "version").map(Value::String).unwrap_or(Value::Null),
-                            "active": matches!(status.state, crate::registrations::PluginState::Active),
-                        })
-                    })
-                    .collect();
-                Some(protocol::response(id, json!({ "value": plugins })))
-            }
+            "plugin.list" => Some(answer_plugin_list(self, id)),
             // -- G-64: `ctx.reference.list/reload` over the engine's
             //    reference registry (async off the reader).
             "reference.list" | "reference.reload" => {
@@ -624,20 +542,30 @@ impl Shared {
                 log_guest(params);
                 Some(protocol::response(id, Value::Null))
             }
-            other => {
-                if let Some(method) = other.strip_prefix("session.") {
-                    if !SESSION_METHODS.contains(&method) {
-                        return Some(protocol::error_response(
-                            id,
-                            &format!("unknown session method {method:?}"),
-                        ));
-                    }
-                    self.answer_session_async(id, method, params);
-                    return None;
-                }
-                Some(protocol::error_response(id, &format!("unknown host method {other:?}")))
-            }
+            other => self.answer_guest_fallback(id, other, params),
         }
+    }
+
+    /// Trailing [`Self::answer_guest`] fallback: `session.*` methods ride
+    /// the session port (async off the reader); anything else is an
+    /// unknown-host-method error.
+    fn answer_guest_fallback(
+        self: &Arc<Self>,
+        id: u64,
+        other: &str,
+        params: &Value,
+    ) -> Option<String> {
+        if let Some(method) = other.strip_prefix("session.") {
+            if !SESSION_METHODS.contains(&method) {
+                return Some(protocol::error_response(
+                    id,
+                    &format!("unknown session method {method:?}"),
+                ));
+            }
+            self.answer_session_async(id, method, params);
+            return None;
+        }
+        Some(protocol::error_response(id, &format!("unknown host method {other:?}")))
     }
 
     /// The async `ctx.storage.*` path (PLUG-D18): spawn the port call
@@ -777,7 +705,7 @@ impl Shared {
         });
     }
 
-    /// The async `ctx.websearch.*` path (G-24): the engine's WebSearch
+    /// The async `ctx.websearch.*` path (G-24): the engine's `WebSearch`
     /// service answers off the reader (deadlock rule 1).
     fn answer_websearch_async(self: &Arc<Self>, id: u64, method: &str, params: &Value) {
         let Some(handle) = self.runtime_handle.clone() else {
@@ -888,15 +816,12 @@ impl Shared {
             self.reply_inline(id, "plugin host runtime unavailable");
             return;
         };
-        let port = match self.config.provider_port.clone() {
-            Some(port) => port,
-            None => {
-                self.reply_inline(
-                    id,
-                    &format!("provider.{method}: no provider registry attached to the plugin host"),
-                );
-                return;
-            }
+        let Some(port) = self.config.provider_port.clone() else {
+            self.reply_inline(
+                id,
+                &format!("provider.{method}: no provider registry attached to the plugin host"),
+            );
+            return;
         };
         let method = method.to_owned();
         let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
@@ -935,15 +860,12 @@ impl Shared {
             self.reply_inline(id, "plugin host runtime unavailable");
             return;
         };
-        let port = match self.config.model_port.clone() {
-            Some(port) => port,
-            None => {
-                self.reply_inline(
-                    id,
-                    &format!("model.{method}: no model catalog attached to the plugin host"),
-                );
-                return;
-            }
+        let Some(port) = self.config.model_port.clone() else {
+            self.reply_inline(
+                id,
+                &format!("model.{method}: no model catalog attached to the plugin host"),
+            );
+            return;
         };
         let method = method.to_owned();
         let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
@@ -974,17 +896,12 @@ impl Shared {
             self.reply_inline(id, "plugin host runtime unavailable");
             return;
         };
-        let port = match self.config.reference_port.clone() {
-            Some(port) => port,
-            None => {
-                self.reply_inline(
-                    id,
-                    &format!(
-                        "reference.{method}: no reference registry attached to the plugin host"
-                    ),
-                );
-                return;
-            }
+        let Some(port) = self.config.reference_port.clone() else {
+            self.reply_inline(
+                id,
+                &format!("reference.{method}: no reference registry attached to the plugin host"),
+            );
+            return;
         };
         let method = method.to_owned();
         let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
@@ -1018,15 +935,12 @@ impl Shared {
             self.reply_inline(id, "plugin host runtime unavailable");
             return;
         };
-        let port = match self.config.terminal_port.clone() {
-            Some(port) => port,
-            None => {
-                self.reply_inline(
-                    id,
-                    &format!("{method}: no terminal service attached to the plugin host"),
-                );
-                return;
-            }
+        let Some(port) = self.config.terminal_port.clone() else {
+            self.reply_inline(
+                id,
+                &format!("{method}: no terminal service attached to the plugin host"),
+            );
+            return;
         };
         let method = method.to_owned();
         let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
@@ -1045,22 +959,19 @@ impl Shared {
     }
 
     /// G-64 — the async `ctx.integration.*` passthrough (the ref's
-    /// method channel over the engine's IntegrationHost).
+    /// method channel over the engine's `IntegrationHost`).
     fn answer_integration_async(self: &Arc<Self>, id: u64, method: &str, params: &Value) {
         let args = params.get("args").cloned().unwrap_or(Value::Null);
         let Some(handle) = self.runtime_handle.clone() else {
             self.reply_inline(id, "plugin host runtime unavailable");
             return;
         };
-        let port = match self.config.integration_port.clone() {
-            Some(port) => port,
-            None => {
-                self.reply_inline(
-                    id,
-                    &format!("{method}: no integration service attached to the plugin host"),
-                );
-                return;
-            }
+        let Some(port) = self.config.integration_port.clone() else {
+            self.reply_inline(
+                id,
+                &format!("{method}: no integration service attached to the plugin host"),
+            );
+            return;
         };
         // The ref method name: `integration.oauth.connect` →
         // `oauth.connect` (the IntegrationHost port's keys).
@@ -1329,6 +1240,117 @@ fn answer_wave1(shared: &Shared, id: u64, method: &str, params: &Value) -> Strin
 /// The transform-domain materialization arms (`agent/mcp/skill/tool.transform`):
 /// the guest sends the whole derived table; the merge keeps
 /// provenance. Registration-time only.
+/// G-24 registration-time transform merges (websearch/worktree/provider/
+/// reference/vcs/model) — same synchronous shape as the wave-2 domains in
+/// [`answer_transform`]; the closures stay in the guest.
+/// G-147 — the model editor's whole derived override table (base models
+/// come from the port; only the overrides cross here).
+fn answer_registration_transform(shared: &Shared, id: u64, method: &str, params: &Value) -> String {
+    let plugin_id = params.get("pluginId").and_then(Value::as_str).unwrap_or("?");
+    let mut registrations = shared.registrations.write().expect("registrations poisoned");
+    match method {
+        "websearch.transform" => registrations.merge_websearch_providers(
+            plugin_id,
+            params
+                .get("providers")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .as_slice(),
+        ),
+        "provider.transform" => registrations.merge_providers(
+            plugin_id,
+            params
+                .get("providers")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .as_slice(),
+        ),
+        "reference.transform" => registrations.merge_references(
+            plugin_id,
+            params
+                .get("references")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .as_slice(),
+        ),
+        "vcs.transform" => registrations.merge_vcs_providers(
+            plugin_id,
+            params
+                .get("providers")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .as_slice(),
+        ),
+        "model.transform" => registrations.merge_models(
+            plugin_id,
+            params.get("models").and_then(Value::as_array).cloned().unwrap_or_default().as_slice(),
+        ),
+        _ => registrations.merge_worktree_strategies(
+            plugin_id,
+            params
+                .get("strategies")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .as_slice(),
+        ),
+    }
+    protocol::response(id, Value::Null)
+}
+
+/// G-24: `ctx.integration.method.update` — the v2
+/// `IntegrationMethodRegistration` lands in the snapshot (the engine
+/// applies it into the `IntegrationHost`).
+fn answer_integration_method_update(shared: &Shared, id: u64, params: &Value) -> String {
+    if let Some(registration) = params.get("args") {
+        let plugin_id = params.get("pluginId").and_then(Value::as_str).unwrap_or("?").to_owned();
+        let mut registrations = shared.registrations.write().expect("registrations poisoned");
+        if registration.get("integrationID").and_then(Value::as_str).is_some() {
+            registrations.upsert_integration_method(&plugin_id, registration);
+            return protocol::response(id, Value::Null);
+        }
+    }
+    protocol::error_response(id, "integration.method.update requires args.integrationID")
+}
+
+fn answer_hook_register(shared: &Shared, id: u64, params: &Value) -> String {
+    let hook = crate::registrations::PluginHook {
+        plugin_id: params.get("pluginId").and_then(Value::as_str).unwrap_or("?").to_owned(),
+        domain: params.get("domain").and_then(Value::as_str).unwrap_or_default().to_owned(),
+        name: params.get("name").and_then(Value::as_str).unwrap_or_default().to_owned(),
+    };
+    if hook.domain.is_empty() || hook.name.is_empty() {
+        return protocol::error_response(id, "hook.register requires domain+name");
+    }
+    shared.registrations.write().expect("registrations poisoned").add_hook(hook);
+    protocol::response(id, Value::Null)
+}
+
+/// G-148: `ctx.plugin.list` — the loaded plugin table
+/// (id/name/version/active), answered inline from the registration
+/// snapshot.
+fn answer_plugin_list(shared: &Shared, id: u64) -> String {
+    let registrations = shared.registrations.read().expect("registrations poisoned");
+    let plugins: Vec<Value> = registrations
+        .plugins
+        .values()
+        .map(|status| {
+            let entry = status.entry.to_string_lossy().into_owned();
+            serde_json::json!({
+                "id": status.plugin_id,
+                "name": plugin_display_name(&entry),
+                "version": plugin_package_field(&entry, "version").map_or(Value::Null, Value::String),
+                "active": matches!(status.state, crate::registrations::PluginState::Active),
+            })
+        })
+        .collect();
+    protocol::response(id, json!({ "value": plugins }))
+}
+
 fn answer_transform(shared: &Shared, id: u64, method: &str, params: &Value) -> String {
     let plugin_id = params.get("pluginId").and_then(Value::as_str).unwrap_or("?");
     let mut registrations = shared.registrations.write().expect("registrations poisoned");

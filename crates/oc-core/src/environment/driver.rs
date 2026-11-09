@@ -62,6 +62,7 @@ pub struct Driver {
 }
 
 /// `makeFiles(driver) = { ...execDefaults(driver.spawner), ...driver.overrides }`.
+#[must_use]
 pub fn make_files(driver: &Driver) -> Arc<dyn Files> {
     match &driver.overrides {
         Some(overrides) => overrides.clone(),

@@ -19,7 +19,7 @@ fn transport() -> SharedTransport {
 
 fn media_part() -> ContentPart {
     ContentPart::Media {
-        media: crate::schema::Asset {
+        media: Box::new(crate::schema::Asset {
             source: crate::schema::media::Source::Base64 {
                 data: "aGk=".into(),
                 media_type: "image/png".into(),
@@ -29,7 +29,7 @@ fn media_part() -> ContentPart {
             expires_at: None,
             provider_metadata: None,
             headers: None,
-        },
+        }),
         filename: None,
         cache: None,
         metadata: None,

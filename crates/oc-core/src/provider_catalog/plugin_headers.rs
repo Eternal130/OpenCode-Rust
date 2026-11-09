@@ -287,8 +287,7 @@ mod tests {
             &user
         )
         .headers
-        .get("X-Title")
-        .is_some());
+        .contains_key("X-Title"));
     }
 
     /// G-285③ — vercel keys on the aisdk @ai-sdk/vercel package and injects

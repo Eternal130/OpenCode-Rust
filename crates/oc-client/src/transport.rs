@@ -21,7 +21,7 @@ const MAX_UNEXPECTED_BODY_BYTES: usize = 64 * 1024;
 ///
 /// Mirrors `packages/client/src/promise/generated/client.ts`:
 /// `signal` races the request (abort surfaces as [`ClientError::Cancelled`]
-/// rather than the ref's `Transport`/AbortError — reqwest cannot fabricate
+/// rather than the ref's `Transport`/`AbortError` — reqwest cannot fabricate
 /// the transport error), `headers` are merged last, `on_activity` fires per
 /// SSE chunk including keepalive comments that yield no frame.
 #[derive(Clone, Default)]
@@ -227,7 +227,7 @@ impl Client {
             // checks the token first so a pre-cancelled signal never sends.
             Some(token) => tokio::select! {
                 biased;
-                _ = token.cancelled() => Err(ClientError::Cancelled),
+                () = token.cancelled() => Err(ClientError::Cancelled),
                 response = future => response.map_err(ClientError::from),
             },
             None => future.await.map_err(ClientError::from),

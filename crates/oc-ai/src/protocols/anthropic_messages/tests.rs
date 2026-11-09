@@ -523,7 +523,7 @@ fn rejects_non_text_chronological_system_update_content() {
             Message::new(
                 MessageRole::System,
                 vec![ContentPart::Media {
-                    media: crate::schema::media::base64("AAECAw==", "image/png"),
+                    media: Box::new(crate::schema::media::base64("AAECAw==", "image/png")),
                     filename: None,
                     cache: None,
                     metadata: None,
@@ -1240,14 +1240,17 @@ fn continues_a_conversation_with_user_media_content() {
             vec![
                 ContentPart::text("What is in this image?"),
                 ContentPart::Media {
-                    media: crate::schema::media::base64("AAECAw==", "image/png"),
+                    media: Box::new(crate::schema::media::base64("AAECAw==", "image/png")),
                     filename: None,
                     cache: None,
                     metadata: None,
                     provider_metadata: None,
                 },
                 ContentPart::Media {
-                    media: crate::schema::media::base64("JVBERi0xLjQ=", "application/pdf"),
+                    media: Box::new(crate::schema::media::base64(
+                        "JVBERi0xLjQ=",
+                        "application/pdf",
+                    )),
                     filename: Some("report.pdf".into()),
                     cache: None,
                     metadata: None,

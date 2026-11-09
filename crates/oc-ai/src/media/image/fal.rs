@@ -369,6 +369,6 @@ mod tests {
         };
         let response = decode_result(&output, &context).unwrap();
         let fal = response.provider_metadata.as_ref().unwrap()["fal"].clone();
-        assert!(fal.get("seed").is_none(), "seed key omitted: {fal:?}");
+        assert!(!fal.contains_key("seed"), "seed key omitted: {fal:?}");
     }
 }

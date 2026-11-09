@@ -642,11 +642,11 @@ pub fn handle_dialog_key(
         let max = btw_answer_scroll_max(store, answer, terminal);
         let (key, mods) = (stroke.key.as_str(), (stroke.ctrl, stroke.alt));
         match (key, mods) {
-            ("up", (false, false)) | ("k", (false, false)) => {
+            ("up" | "k", (false, false)) => {
                 store.btw_scroll_by(-1, max);
                 return DialogKeyOutcome::Consumed;
             }
-            ("down", (false, false)) | ("j", (false, false)) => {
+            ("down" | "j", (false, false)) => {
                 store.btw_scroll_by(1, max);
                 return DialogKeyOutcome::Consumed;
             }
@@ -900,7 +900,7 @@ pub fn render_overlay(
     }
 }
 
-/// The live dialog layer's mount phase (render_app calls this BEFORE
+/// The live dialog layer's mount phase (`render_app` calls this BEFORE
 /// the compositor seam so the `surface-dialogs` wrapper — skeleton
 /// index 4, above footer — seats in the same walk/flush batch). Does
 /// everything the old end-of-frame `render_overlay` did EXCEPT paint:

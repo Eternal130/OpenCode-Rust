@@ -64,7 +64,7 @@ const REMOVE_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 ///
 /// Transport close has no separate call here: the drain's interrupt
 /// cleanup already closes the session's model transport channel
-/// (`runner/drain.rs` close_transport on unwind), and the bounded idle
+/// (`runner/drain.rs` `close_transport` on unwind), and the bounded idle
 /// wait below waits out that cleanup before deletion proceeds. The bus
 /// map cleanup (`bus.remove(sessionID)` in the ref) is covered by the
 /// routing layer's reaction to `session.deleted`.
