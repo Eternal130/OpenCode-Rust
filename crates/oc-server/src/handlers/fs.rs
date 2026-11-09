@@ -480,12 +480,16 @@ fn fuzzy_score(query: &[char], target: &str) -> Option<i64> {
     for (index, character) in chars.iter().enumerate() {
         if matched < query.len() && *character == query[matched] {
             score += 1;
+            // char-index arithmetic against a running i64 cursor
+            #[allow(clippy::cast_possible_wrap)]
             let index = index as i64;
             if index == previous + 1 {
                 score += 4;
             }
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let previous_char = (index - 1) as usize;
             let boundary =
-                index == 0 || matches!(chars[(index - 1) as usize], '/' | '-' | '_' | ' ' | '.');
+                index == 0 || matches!(chars[previous_char], '/' | '-' | '_' | ' ' | '.');
             if boundary {
                 score += 3;
             }
@@ -497,7 +501,11 @@ fn fuzzy_score(query: &[char], target: &str) -> Option<i64> {
         return None;
     }
     // Prefer tighter matches (fuzzysort's "closer spread" heuristic).
-    Some(score - (chars.len() as i64 - query.len() as i64) / 8)
+    // fuzzysort's spread heuristic: intentional usize->i64 crossings
+    #[allow(clippy::cast_possible_wrap)]
+    {
+        Some(score - (chars.len() as i64 - query.len() as i64) / 8)
+    }
 }
 
 /// REF (search.ts ranking): fuzzysort.go in the ripgrep fallback, then
@@ -512,6 +520,7 @@ fn fuzzy_score(query: &[char], target: &str) -> Option<i64> {
 /// The budget counts ENTRIES VISITED (read from a directory), not
 /// candidates pushed: with `type=file` over huge trees of directories,
 /// counting pushes would leave the walk unbounded.
+#[allow(clippy::too_many_arguments)] // walk filters mirror the ref fs walk options
 fn walk(
     directory: &std::path::Path,
     want_files: bool,

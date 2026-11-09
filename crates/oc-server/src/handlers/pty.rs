@@ -106,7 +106,7 @@ async fn create(
             .as_object()
             .and_then(|size| Some((size["cols"].as_u64()? as u16, size["rows"].as_u64()? as u16))),
     };
-    let info = shared.pty.create_with(spawner, &input).map_err(|error| {
+    let info = shared.pty.create_with(&spawner, &input).map_err(|error| {
         crate::errors::debug_cause("pty:unknown_ref", &error);
         ApiError::unknown_ref()
     })?;

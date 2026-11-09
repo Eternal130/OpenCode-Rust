@@ -63,8 +63,8 @@ async fn saved_list(
     // G-97: the saved-grant family is registered BEFORE the location
     // middleware in the ref protocol (permission.ts:37,49) — it reads the
     // global store directly: no cold-boot service assembly.
-    let project_id = match query_field(&uri, "projectID") {
-        Some(project) => Some(project),
+    let project_id = if let Some(project) = query_field(&uri, "projectID") {
+        Some(project)
         // G-264 — ref `permission.saved.list` defaults the filter to
         // the REQUEST location's project (permission.ts:87-96
         // `ctx.query.projectID ?? location.project.id`). The derivation
@@ -75,15 +75,14 @@ async fn saved_list(
         // no cold-boot cascade on this route). Events are suppressed
         // (`NoEvents`) so no `project.updated`/`worktree.resolved`
         // frames ride a read.
-        None => {
-            let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
-            let resolver = oc_core::project::Resolver::new(
-                std::sync::Arc::clone(&state.engine.projects)
-                    as std::sync::Arc<dyn oc_core::project::ProjectStore>,
-                std::sync::Arc::new(oc_core::project::NoEvents),
-            );
-            Some(resolver.resolve(location.as_path()).await.id)
-        }
+    } else {
+        let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
+        let resolver = oc_core::project::Resolver::new(
+            std::sync::Arc::clone(&state.engine.projects)
+                as std::sync::Arc<dyn oc_core::project::ProjectStore>,
+            std::sync::Arc::new(oc_core::project::NoEvents),
+        );
+        Some(resolver.resolve(location.as_path()).await.id)
     };
     let rows = state
         .engine

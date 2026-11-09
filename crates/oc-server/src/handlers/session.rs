@@ -936,6 +936,7 @@ fn resolve_move_directory(
     normalized
 }
 
+#[allow(clippy::too_many_lines)] // session.move handler; 1:1 with the ref route
 async fn move_session(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,

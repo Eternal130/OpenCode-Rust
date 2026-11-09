@@ -120,7 +120,8 @@ pub async fn run(config: DaemonConfig) -> i32 {
         // drops them while ownerless — same-user trust boundary).
         let _ = owner_events_tx.send((type_.to_owned(), data));
     });
-    let machine = PersistentPty::hosted(sink).with_default_program(Arc::new(default_program));
+    let machine =
+        PersistentPty::hosted(sink).with_default_program(Arc::new(|| Some(default_program())));
 
     // Claim: mkdir <root>/<name> (0700), flock(service.lock, EX|NB),
     // write service.json (§5.1). A lock held by a live predecessor is
@@ -421,14 +422,14 @@ async fn conn_writer(
     let _ = write_half.shutdown().await;
 }
 
-fn default_program() -> Option<String> {
+fn default_program() -> String {
     // G-277③ — resolve through the ShellSelect chain (ref
     // persistent-pty/index.ts:165 `input.command ??
     // ShellSelect.environment()`): `$SHELL` only when it actually
     // resolves (stat/which), else the fallback ladder (darwin zsh →
     // bash on PATH → /bin/sh). The old `$SHELL || /bin/sh` had no
     // validation: a dangling `$SHELL` failed the spawn directly.
-    Some(oc_core::shell::select::environment())
+    oc_core::shell::select::environment()
 }
 
 fn unix_ms_now() -> u64 {

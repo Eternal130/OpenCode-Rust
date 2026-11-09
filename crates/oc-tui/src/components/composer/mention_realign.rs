@@ -56,7 +56,7 @@ pub(crate) fn realign_mentions(
             continue;
         }
         if let Some(group) = texts.iter().position(|text| text == &mention.text) {
-            groups[group].push(index)
+            groups[group].push(index);
         } else {
             texts.push(mention.text.clone());
             groups.push(vec![index]);
