@@ -281,7 +281,8 @@ mod tests {
     #[test]
     fn surface_matches_the_golden_region() {
         let theme_state = crate::theme::ThemeState::v2_dark();
-        let footer = crate::components::footer::FooterTheme::from_resolved(&theme_state.resolved.tokens);
+        let footer =
+            crate::components::footer::FooterTheme::from_resolved(&theme_state.resolved.tokens);
         let frame = crate::components::toast_solid::toast_over_blank_frame(
             &notice(),
             0,
