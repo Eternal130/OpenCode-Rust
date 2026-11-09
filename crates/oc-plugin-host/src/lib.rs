@@ -155,7 +155,7 @@ pub struct PluginHostConfig {
     /// permission machinery. `None` declines every call.
     pub permission_port: Option<Arc<dyn PermissionPort>>,
     /// `ctx.websearch.providers/query` routing target (G-24): the
-    /// engine's WebSearch service. `None` declines every call.
+    /// engine's `WebSearch` service. `None` declines every call.
     pub websearch_port: Option<Arc<dyn WebsearchPort>>,
     /// `ctx.vcs.get/base` routing target (G-24): the engine's vcs
     /// adapters. `None` declines every call.
@@ -173,7 +173,7 @@ pub struct PluginHostConfig {
     /// persistent pty. `None` declines every call.
     pub terminal_port: Option<Arc<dyn TerminalPort>>,
     /// `ctx.integration.*` routing target (G-64): the engine's
-    /// IntegrationHost. `None` declines every call.
+    /// `IntegrationHost`. `None` declines every call.
     pub integration_port: Option<Arc<dyn IntegrationPort>>,
     /// Config-sourced plugin options keyed by entry path (`ctx.options`,
     /// v2 plugin `{package, options}` entries).

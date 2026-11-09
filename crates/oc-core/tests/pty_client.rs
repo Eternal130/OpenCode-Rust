@@ -1116,6 +1116,7 @@ async fn live_output_flows_after_activate() {
 /// here meant the session-title/tab-label chain (`foregroundProcess ??
 /// title`) never saw a value under the default configuration.
 #[tokio::test]
+#[allow(clippy::await_holding_lock)] // the seeded guard drops before the first await; lint spans the whole fn
 async fn g229_title_and_foreground_frames_flow_through_the_client_pump() {
     let (frontend, _bus, state) = prestarted_frontend("g229-pump", FakeConfig::default()).await;
     *state.replay_bytes.lock() = b"prefix".to_vec();

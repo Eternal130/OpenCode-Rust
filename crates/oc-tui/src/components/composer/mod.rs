@@ -275,7 +275,7 @@ impl HistoryEntry {
         })
     }
 
-    /// Tolerant decode (`parsePromptInfo` + the DeepMutable pick):
+    /// Tolerant decode (`parsePromptInfo` + the `DeepMutable` pick):
     /// unknown shapes degrade to the text-only entry; a non-string
     /// `text` or non-array `pasted` rejects the line entirely.
     #[must_use]
@@ -305,7 +305,7 @@ impl HistoryEntry {
                             mention: item
                                 .get("mention")
                                 .and_then(serde_json::Value::as_str)
-                                .map(|label| label.to_owned()),
+                                .map(std::borrow::ToOwned::to_owned),
                         })
                     })
                     .collect::<Vec<_>>()

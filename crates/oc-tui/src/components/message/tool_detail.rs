@@ -438,7 +438,7 @@ fn apply_patch_block(state: &ToolState, theme: &ThemeStyles, width: usize) -> Ro
             "delete" => vec![vec![text_at(
                 0,
                 0,
-                format!("-{} line{}", file.deletions, if file.deletions != 1 { "s" } else { "" }),
+                format!("-{} line{}", file.deletions, if file.deletions == 1 { "" } else { "s" }),
                 Style::new().fg(theme.diff.text_removed).bg(theme.background),
             )]],
             _ => patch_hunk_rows(
@@ -464,7 +464,7 @@ fn apply_patch_block(state: &ToolState, theme: &ThemeStyles, width: usize) -> Ro
             None => card_render,
         });
     }
-    card.unwrap_or_else(|| RowRender::default())
+    card.unwrap_or_default()
 }
 
 /// The edit block (`Edit` + `BlockTool` + `PatchDiff`,
@@ -561,7 +561,7 @@ fn parse_diagnostics(state: &ToolState, file_path: &str) -> Vec<(usize, usize, S
 fn diagnostic_row(label: &str, theme: &ThemeStyles, width: usize) -> RowRender {
     let style = Style::new().fg(theme.error).bg(theme.background);
     let label_width = width.saturating_sub(ROW_PADDING_LEFT);
-    let atoms = crate::wrap::flatten(&label, style);
+    let atoms = crate::wrap::flatten(label, style);
     let placed = crate::wrap::wrap_atoms(&atoms, label_width)
         .into_iter()
         .enumerate()
@@ -766,9 +766,9 @@ fn parse_question_answers(metadata: Option<&serde_json::Value>) -> Option<Vec<Ve
 }
 
 /// G-183 — the `question` tool (`Question`, index.tsx:3421-3458):
-/// answered → a `# Questions` BlockTool of Q/A pairs (question muted,
+/// answered → a `# Questions` `BlockTool` of Q/A pairs (question muted,
 /// answer base, `(no answer)` fallback); pending → the
-/// `Asking questions…` InlineTool / `Asked N question(s)`.
+/// `Asking questions…` `InlineTool` / `Asked N question(s)`.
 fn question_block(
     state: &ToolState,
     clock_ms: u64,
@@ -780,34 +780,31 @@ fn question_block(
     let questions = parse_questions(state.input_json.as_ref());
     let answers = parse_question_answers(state.metadata_json.as_ref());
     let count = questions.len();
-    match answers {
-        Some(answers) => {
-            let mut rows: Vec<Vec<Placed>> = vec![vec![text_at(0, 0, "# Questions", muted)]];
-            for (index, question) in questions.iter().enumerate() {
-                let answer = answers.get(index).map(|answer| {
-                    if answer.is_empty() {
-                        "(no answer)".to_owned()
-                    } else {
-                        answer.join(", ")
-                    }
-                });
-                rows.push(vec![text_at(0, 0, question.clone(), muted)]);
-                rows.push(vec![text_at(
-                    0,
-                    0,
-                    answer.unwrap_or_else(|| "(no answer)".to_owned()),
-                    Style::new().fg(base).bg(theme.background),
-                )]);
-            }
-            block_from_rows(&rows, theme, width)
+    if let Some(answers) = answers {
+        let mut rows: Vec<Vec<Placed>> = vec![vec![text_at(0, 0, "# Questions", muted)]];
+        for (index, question) in questions.iter().enumerate() {
+            let answer = answers.get(index).map(|answer| {
+                if answer.is_empty() {
+                    "(no answer)".to_owned()
+                } else {
+                    answer.join(", ")
+                }
+            });
+            rows.push(vec![text_at(0, 0, question.clone(), muted)]);
+            rows.push(vec![text_at(
+                0,
+                0,
+                answer.unwrap_or_else(|| "(no answer)".to_owned()),
+                Style::new().fg(base).bg(theme.background),
+            )]);
         }
-        None => {
-            let label = format!("Asked {count} question{}", if count != 1 { "s" } else { "" });
-            if matches!(state.status, ToolStatus::Running | ToolStatus::Streaming) {
-                running_tool_row("Asking questions…", clock_ms, theme, width)
-            } else {
-                completed_tool_row('→', &label, theme, width)
-            }
+        block_from_rows(&rows, theme, width)
+    } else {
+        let label = format!("Asked {count} question{}", if count == 1 { "" } else { "s" });
+        if matches!(state.status, ToolStatus::Running | ToolStatus::Streaming) {
+            running_tool_row("Asking questions…", clock_ms, theme, width)
+        } else {
+            completed_tool_row('→', &label, theme, width)
         }
     }
 }

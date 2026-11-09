@@ -42,23 +42,20 @@ use crate::location::LocationRef;
 /// `Environment.Service` equivalent: resolves the per-location execution
 /// plane. A location with a `workspaceID` binds to that workspace's driver;
 /// otherwise the host filesystem driver is used.
+#[derive(Default)]
 pub struct Environment {
     workspace: Option<Arc<WorkspaceService>>,
 }
 
-impl Default for Environment {
-    fn default() -> Self {
-        Environment { workspace: None }
-    }
-}
-
 impl Environment {
     /// Host-only environment (no workspace service attached).
+    #[must_use]
     pub fn local() -> Self {
         Environment::default()
     }
 
     /// Environment with workspace connectivity.
+    #[must_use]
     pub fn with_workspace(workspace: Arc<WorkspaceService>) -> Self {
         Environment { workspace: Some(workspace) }
     }

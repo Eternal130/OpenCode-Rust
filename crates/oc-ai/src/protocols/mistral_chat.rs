@@ -393,7 +393,7 @@ fn lower_tool_results(
             }
             let asset = tool_file_asset(item);
             let media_part = ContentPart::Media {
-                media: asset,
+                media: Box::new(asset),
                 filename: None,
                 cache: None,
                 metadata: None,

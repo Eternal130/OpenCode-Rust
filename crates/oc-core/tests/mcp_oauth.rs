@@ -1019,7 +1019,9 @@ async fn oauth_concurrent_refreshes_share_one_token_call() {
             assert_eq!(access, "stub-access-2");
             assert_eq!(tokens.access_token, "stub-access-2");
         }
-        other => panic!("the expired token must have refreshed: {other:?}"),
+        other @ PreparedToken::Fresh { .. } => {
+            panic!("the expired token must have refreshed: {other:?}")
+        }
     }
     assert_eq!(
         stub.state.lock().refresh_grants,
@@ -1168,7 +1170,10 @@ async fn g110_callback_iss_mismatch_is_rejected() {
     let error = callback.await.expect("callback task").expect_err("the exchange is refused");
     assert!(error.contains("issuer mismatch"), "{error}");
     // The stub's token endpoint never saw a grant.
-    assert!(stub.state.lock().code_grants.is_empty());
+    assert_eq!(
+        stub.state.lock().code_grants,
+        [] as [(std::string::String, std::string::String); 0]
+    );
 }
 
 /// G-110② (control): a MATCHING `iss` (the discovered issuer) passes.

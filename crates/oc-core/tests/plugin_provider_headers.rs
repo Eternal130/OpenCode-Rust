@@ -53,7 +53,7 @@ fn assert_header(resolved: &ResolvedModel, name: &str, expected: Option<&str>) {
     );
 }
 
-async fn resolve(
+fn resolve(
     integrations: Option<Arc<IntegrationHost>>,
     connections: BTreeMap<String, ModelConnection>,
     provider: &str,
@@ -124,7 +124,7 @@ fn multi_connection(entries: &[(&str, ModelConnection)]) -> BTreeMap<String, Mod
 #[tokio::test]
 async fn kilo_gateway_baseurl_gets_referer_and_title() {
     // kilo.ts:10-12 — the catalog api is https://api.kilo.ai/api/gateway.
-    let resolved = resolve(None, connection(None), "kilo", "sao10k/l3-lunaris-8b").await;
+    let resolved = resolve(None, connection(None), "kilo", "sao10k/l3-lunaris-8b");
     assert_header(&resolved, "HTTP-Referer", Some("https://opencode.ai/"));
     assert_header(&resolved, "X-Title", Some("opencode"));
     assert_header(&resolved, "authorization", Some("Bearer test-key"));
@@ -137,8 +137,7 @@ async fn kilo_non_matching_baseurl_injects_nothing() {
         connection(Some("https://api.kilo.ai/api/gateway/v1")),
         "kilo",
         "sao10k/l3-lunaris-8b",
-    )
-    .await;
+    );
     assert_header(&resolved, "HTTP-Referer", None);
     assert_header(&resolved, "X-Title", None);
 }
@@ -160,7 +159,7 @@ async fn nvidia_gets_billing_origin_default() {
             transport: None,
         },
     )]);
-    let resolved = resolve(None, connections, "nvidia", "baai/bge-m3").await;
+    let resolved = resolve(None, connections, "nvidia", "baai/bge-m3");
     assert_header(&resolved, "HTTP-Referer", Some("https://opencode.ai/"));
     assert_header(&resolved, "X-Title", Some("opencode"));
     assert_header(&resolved, "X-BILLING-INVOKE-ORIGIN", Some("OpenCode"));
@@ -185,8 +184,7 @@ async fn llmgateway_requires_registered_integration() {
             transport: None,
         },
     )]);
-    let resolved =
-        resolve(None, connections.clone(), "llmgateway", "grok-4-1-fast-reasoning").await;
+    let resolved = resolve(None, connections.clone(), "llmgateway", "grok-4-1-fast-reasoning");
     assert_eq!(header(&resolved, "X-Source"), None, "unregistered integration must not inject");
 
     let (host, _dir) = host().await;
@@ -194,7 +192,7 @@ async fn llmgateway_requires_registered_integration() {
         host.has_integration("llmgateway"),
         "catalog registers the llmgateway integration (ref plugin parity)"
     );
-    let resolved = resolve(Some(host), connections, "llmgateway", "grok-4-1-fast-reasoning").await;
+    let resolved = resolve(Some(host), connections, "llmgateway", "grok-4-1-fast-reasoning");
     assert_header(&resolved, "HTTP-Referer", Some("https://opencode.ai/"));
     assert_header(&resolved, "X-Title", Some("opencode"));
     assert_header(&resolved, "X-Source", Some("opencode"));
@@ -218,7 +216,7 @@ async fn cerebras_package_gets_third_party_integration_header() {
             transport: None,
         },
     )]);
-    let resolved = resolve(None, connections, "cerebras", "qwen-3.8-27b").await;
+    let resolved = resolve(None, connections, "cerebras", "qwen-3.8-27b");
     assert_header(&resolved, "X-Cerebras-3rd-Party-Integration", Some("opencode"));
     // and the other plugin sets stay absent
     assert_header(&resolved, "HTTP-Referer", None);
@@ -244,7 +242,7 @@ async fn unmatched_providers_get_no_plugin_headers() {
     )]);
     let (host, _dir) = host().await;
     host.update_integration("groq", "Groq");
-    let resolved = resolve(Some(host), connections, "groq", "llama-3.3-70b-versatile").await;
+    let resolved = resolve(Some(host), connections, "groq", "llama-3.3-70b-versatile");
     assert_header(&resolved, "HTTP-Referer", None);
     assert_header(&resolved, "X-Title", None);
     assert_header(&resolved, "X-Source", None);
@@ -256,7 +254,7 @@ async fn unmatched_providers_get_no_plugin_headers() {
 #[tokio::test]
 async fn openrouter_package_gets_referer_and_title() {
     let connections = keyed_connection("openrouter", None, None);
-    let resolved = resolve(None, connections, "openrouter", "anthropic/claude-sonnet-4.5").await;
+    let resolved = resolve(None, connections, "openrouter", "anthropic/claude-sonnet-4.5");
     assert_header(&resolved, "HTTP-Referer", Some("https://opencode.ai/"));
     assert_header(&resolved, "X-Title", Some("opencode"));
 }
@@ -268,7 +266,7 @@ async fn openrouter_package_gets_referer_and_title() {
 async fn zenmux_catalog_baseurl_gets_pair_under_user_headers() {
     // No user HTTP-Referer: the injected default rides the wire.
     let connections = keyed_connection("zenmux", None, None);
-    let resolved = resolve(None, connections, "zenmux", "anthropic/claude-sonnet-4.5").await;
+    let resolved = resolve(None, connections, "zenmux", "anthropic/claude-sonnet-4.5");
     assert_header(&resolved, "HTTP-Referer", Some("https://opencode.ai/"));
     assert_header(&resolved, "X-Title", Some("opencode"));
 
@@ -290,7 +288,7 @@ async fn zenmux_catalog_baseurl_gets_pair_under_user_headers() {
             transport: None,
         },
     )]);
-    let resolved = resolve(None, connections, "zenmux", "anthropic/claude-sonnet-4.5").await;
+    let resolved = resolve(None, connections, "zenmux", "anthropic/claude-sonnet-4.5");
     assert_header(&resolved, "HTTP-Referer", Some("https://mine.example/"));
     assert_header(&resolved, "X-Title", Some("opencode"));
 }
@@ -304,10 +302,10 @@ async fn websocket_transport_defaults() {
     use oc_schema::provider::Transport;
 
     // openai — default websocket.
-    let resolved = resolve(None, keyed_connection("openai", None, None), "openai", "gpt-5.5").await;
+    let resolved = resolve(None, keyed_connection("openai", None, None), "openai", "gpt-5.5");
     assert_eq!(resolved.transport, Some(Transport::Websocket), "openai defaults to websocket");
     // xai — default websocket.
-    let resolved = resolve(None, keyed_connection("xai", None, None), "xai", "grok-4.5").await;
+    let resolved = resolve(None, keyed_connection("xai", None, None), "xai", "grok-4.5");
     assert_eq!(resolved.transport, Some(Transport::Websocket), "xai defaults to websocket");
     // azure — resource name (Azure-native endpoint) → websocket.
     let connections = multi_connection(&[(
@@ -323,7 +321,7 @@ async fn websocket_transport_defaults() {
             transport: None,
         },
     )]);
-    let resolved = resolve(None, connections, "azure", "gpt-5.5").await;
+    let resolved = resolve(None, connections, "azure", "gpt-5.5");
     assert_eq!(
         resolved.transport,
         Some(Transport::Websocket),
@@ -343,7 +341,7 @@ async fn websocket_transport_defaults() {
             transport: None,
         },
     )]);
-    let resolved = resolve(None, connections, "azure", "gpt-5.5").await;
+    let resolved = resolve(None, connections, "azure", "gpt-5.5");
     assert_eq!(resolved.transport, None, "gateway azure stays on HTTP");
     // azure over an Azure-native custom baseURL → websocket.
     let connections = multi_connection(&[(
@@ -359,13 +357,12 @@ async fn websocket_transport_defaults() {
             transport: None,
         },
     )]);
-    let resolved = resolve(None, connections, "azure", "gpt-5.5").await;
+    let resolved = resolve(None, connections, "azure", "gpt-5.5");
     assert_eq!(resolved.transport, Some(Transport::Websocket));
 
     // Explicit user transport wins over the default (both directions).
     for provider in ["openai", "xai", "azure"] {
         let model = match provider {
-            "azure" => "gpt-5.5",
             "xai" => "grok-4.5",
             _ => "gpt-5.5",
         };
@@ -382,7 +379,7 @@ async fn websocket_transport_defaults() {
                 transport: Some(Transport::Http),
             },
         )]);
-        let resolved = resolve(None, connections, provider, model).await;
+        let resolved = resolve(None, connections, provider, model);
         assert_eq!(
             resolved.transport,
             Some(Transport::Http),
@@ -392,7 +389,6 @@ async fn websocket_transport_defaults() {
 
     // Non-defaulted providers stay on HTTP.
     let resolved =
-        resolve(None, keyed_connection("groq", None, None), "groq", "llama-3.3-70b-versatile")
-            .await;
+        resolve(None, keyed_connection("groq", None, None), "groq", "llama-3.3-70b-versatile");
     assert_eq!(resolved.transport, None, "groq keeps HTTP");
 }

@@ -891,7 +891,7 @@ const COMPOSER_SKELETON_INDEX: usize = 2;
 
 /// The mounted composer's reactive state, kept across frames so
 /// height-stable frames patch content dyn-props in place (the M2
-/// rule); a MountKey change rebuilds the wrapper's content subtree.
+/// rule); a `MountKey` change rebuilds the wrapper's content subtree.
 struct ComposerEntry {
     signal: Signal<ComposerInputs>,
     key: MountKey,

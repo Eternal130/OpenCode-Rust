@@ -237,7 +237,7 @@ async fn handlers_session_create_get_remove_round_trip() {
 }
 
 /// G-79: DELETE removes the whole descendant tree (ref session.ts:367-377)
-/// — no orphaned children with a dangling parent_id.
+/// — no orphaned children with a dangling `parent_id`.
 #[tokio::test]
 async fn handlers_session_remove_deletes_descendants() {
     let server = boot().await;
@@ -1631,7 +1631,7 @@ async fn handlers_misc_documented_shapes() {
 // ---------------------------------------------------------------------------
 
 /// Seeds a projected `session_message` row directly (the store has no
-/// test insert API — same pattern as parity_http_contract's seed).
+/// test insert API — same pattern as `parity_http_contract`'s seed).
 async fn seed_session_message(server: &TestServer, session_id: &str, id: &str, time: i64) {
     let (session, message_id) = (session_id.to_owned(), id.to_owned());
     server

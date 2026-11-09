@@ -134,7 +134,7 @@ impl schemars::JsonSchema for OAuthValue {
 
     fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
         use schemars::schema::{InstanceType, Schema, SchemaObject, SubschemaValidation};
-        let config: Schema = gen.subschema_for::<OAuthConfig>().into();
+        let config: Schema = gen.subschema_for::<OAuthConfig>();
         let literal_false = Schema::Object(SchemaObject {
             instance_type: Some(InstanceType::Boolean.into()),
             ..Default::default()

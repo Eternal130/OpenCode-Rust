@@ -560,9 +560,10 @@ impl SessionModelRequest {
                             metadata,
                             provider_metadata,
                         } => {
+                            let media = *media;
                             if media.kind() != oc_ai::schema::media::Kind::Image {
                                 return ContentPart::Media {
-                                    media,
+                                    media: Box::new(media),
                                     filename,
                                     cache,
                                     metadata,
@@ -571,7 +572,7 @@ impl SessionModelRequest {
                             }
                             let Some(inline) = media.inline() else {
                                 return ContentPart::Media {
-                                    media,
+                                    media: Box::new(media),
                                     filename,
                                     cache,
                                     metadata,
@@ -587,14 +588,14 @@ impl SessionModelRequest {
                                         normalized.mime
                                     };
                                     ContentPart::Media {
-                                        media: oc_ai::schema::media::Asset {
+                                        media: Box::new(oc_ai::schema::media::Asset {
                                             source: oc_ai::schema::media::Source::Base64 {
                                                 data: normalized.base64,
                                                 media_type: mime.clone(),
                                             },
                                             media_type: mime,
                                             ..media
-                                        },
+                                        }),
                                         filename,
                                         cache,
                                         metadata,
@@ -791,7 +792,7 @@ impl SessionModelRequest {
         let mut language_model = model.model.clone();
         let mut provider_options = provider_options;
         let mut sdk_handle: Option<crate::hooks::SdkHandle> = None;
-        let mut package = format!("@ai-sdk/{}", model.reference.provider_id.as_str());
+        let package = format!("@ai-sdk/{}", model.reference.provider_id.as_str());
         if self.hooks.has_aisdk_sdk(None) {
             let event = crate::hooks::AisdkSdkEvent {
                 model: aisdk_model_info(model),
@@ -804,9 +805,6 @@ impl SessionModelRequest {
                 .dispatch_aisdk_sdk(event)
                 .await
                 .map_err(|err| ModelError::Resolver(err.to_string()))?;
-            if !shaped.package.is_empty() {
-                package = shaped.package;
-            }
             sdk_handle = shaped.sdk;
         }
         if self.hooks.has_aisdk_language(None) {
@@ -1557,9 +1555,8 @@ mod route_guard_tests {
             "parityfake",
             "opaque-window",
         )])];
-        let error = match service.prepare(RequestKind::Primary, input(&model, window)).await {
-            Ok(_) => panic!("incompatible rewrite must die"),
-            Err(error) => error,
+        let Err(error) = service.prepare(RequestKind::Primary, input(&model, window)).await else {
+            panic!("incompatible rewrite must die")
         };
         assert!(
             error.to_string().contains(
@@ -1828,7 +1825,7 @@ mod http_interceptor_tests {
             method: "POST".into(),
             url: "https://raw.example/v1".into(),
             headers: vec![("x-raw".into(), "1".into())],
-            body: Default::default(),
+            body: bytes::Bytes::default(),
         })
         .await
         .expect("request interceptor");

@@ -166,6 +166,7 @@ fn path_contains(parent: &Path, child: &Path) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Ref `argsRegex`: `[Image N]`, quoted, or bare tokens.
+#[must_use]
 pub fn parse_arguments(input: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut rest = input.trim();
@@ -351,7 +352,7 @@ async fn run_shell_block(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    let mut child = command.spawn().map_err(|error| fail(error.to_string()))?;
+    let child = command.spawn().map_err(|error| fail(error.to_string()))?;
     let output = child.wait_with_output().await.map_err(|error| fail(error.to_string()))?;
     if !output.status.success() {
         return Err(fail(format!(

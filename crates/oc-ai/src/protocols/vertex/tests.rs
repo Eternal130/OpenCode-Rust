@@ -207,7 +207,7 @@ fn image_attachments_lower_through_the_shared_gemini_protocol() {
         vec![
             ContentPart::text("what is this"),
             ContentPart::Media {
-                media: crate::schema::Asset {
+                media: Box::new(crate::schema::Asset {
                     source: crate::schema::media::Source::Base64 {
                         data: "aGk=".into(),
                         media_type: "image/png".into(),
@@ -217,7 +217,7 @@ fn image_attachments_lower_through_the_shared_gemini_protocol() {
                     expires_at: None,
                     provider_metadata: None,
                     headers: None,
-                },
+                }),
                 filename: None,
                 cache: None,
                 metadata: None,

@@ -116,7 +116,7 @@ use crate::permission::Permission;
 
 /// `Ripgrep` binary acquisition — see the [`ripgrep_runner`] module
 /// (port of `ripgrep/binary.ts`).
-
+///
 /// The runner-level `context.progress` channel (v2 step.ts:96
 /// `progress: (update) => publisher.progress(call.id, update)`): the
 /// payload is the metadata record; the invocation context carries the

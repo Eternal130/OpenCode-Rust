@@ -958,7 +958,7 @@ fn pty_kitty_handshake_and_teardown_bytes() {
 /// D2.1b (e1) — destroy-under-load: the exit chord lands while the
 /// render loop is mid-cadence (the clock keeps the pump drawing a
 /// frame every ~100 ms tick). The flipped teardown rides the LIVE
-/// CliRenderer's `destroy()` (which drives the attached session's
+/// `CliRenderer`'s `destroy()` (which drives the attached session's
 /// `Terminal::teardown` through the shared-slot handle — the lock
 /// discipline's first real exercise). Must exit cleanly, with the
 /// full teardown epilogue at the tail and no interleaved garbage
@@ -1060,7 +1060,7 @@ fn pty_destroy_under_load_exits_cleanly() {
 }
 
 /// `ErrorComponent` (auditB #9): a render-path crash mid-run is CAUGHT
-/// — the fallback screen paints (G-287⑤: "OpenCode crashed" + the
+/// — the fallback screen paints (G-287⑤: "`OpenCode` crashed" + the
 /// detail, error-component.tsx:63),
 /// the crash-restore sequence fired on the pty (this thread owns the
 /// terminal), and any key exits cleanly (the teardown repeats are

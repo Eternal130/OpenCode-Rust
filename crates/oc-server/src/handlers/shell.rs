@@ -48,8 +48,7 @@ async fn create(
     let cwd = body["cwd"]
         .as_str()
         .filter(|value| !value.is_empty())
-        .map(String::from)
-        .unwrap_or_else(|| location.as_path().to_string_lossy().into_owned());
+        .map_or_else(|| location.as_path().to_string_lossy().into_owned(), String::from);
     let input = oc_schema::shell::CreateInput {
         command: body["command"].as_str().unwrap_or_default().to_owned(),
         cwd: Some(cwd),

@@ -81,7 +81,6 @@ fn resolve_color(
     chain: &mut Vec<String>,
 ) -> Result<Option<Rgba>, ThemeError> {
     match value {
-        Json::Null => Err(ThemeError("Invalid V1 theme color".into())),
         Json::String(s) => {
             if s == "transparent" || s == "none" {
                 return Ok(Some(Rgba::TRANSPARENT));

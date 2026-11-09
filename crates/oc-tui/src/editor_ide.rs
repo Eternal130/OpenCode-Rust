@@ -175,7 +175,7 @@ pub fn decode_selection(params: &serde_json::Value) -> Option<ZedSelection> {
         let position = value.as_object()?;
         let coordinate = |key: &str| -> Option<u32> {
             let number = position.get(key)?.as_f64()?;
-            (number >= 0.0 && number.fract() == 0.0).then(|| number as u32)
+            (number >= 0.0 && number.fract() == 0.0).then_some(number as u32)
         };
         Some((coordinate("line")?, coordinate("character")?))
     };
@@ -224,7 +224,7 @@ fn contains(folder: &str, directory: &Path) -> bool {
 }
 
 /// Absolute, `.`/`..`-component-free path (path.resolve's lexical
-/// equivalent — mirrors editor_zed's helper).
+/// equivalent — mirrors `editor_zed`'s helper).
 fn resolve_path_buf(value: &Path) -> PathBuf {
     let absolute = if value.is_absolute() {
         value.to_path_buf()
@@ -258,6 +258,7 @@ fn resolve_path(value: &str) -> String {
 /// status + `scheduleReconnect`, :177-186) — the task keeps polling
 /// for locks like the ref. Emits every decoded `selection_changed`
 /// selection and `at_mentioned` mention (G-273①).
+#[must_use]
 pub fn spawn_ide_socket() -> Option<tokio::sync::mpsc::Receiver<IdeSocketEvent>> {
     let home = std::env::var("HOME").ok();
     let directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));

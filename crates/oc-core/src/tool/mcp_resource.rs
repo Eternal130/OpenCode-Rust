@@ -333,7 +333,6 @@ impl ToolExecute for ReadMcpResourceTool {
 }
 
 /// Installs both tools — see the pipeline register above (G-191).
-
 #[cfg(test)]
 mod tests {
     use super::*;

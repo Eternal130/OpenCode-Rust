@@ -125,7 +125,6 @@ pub struct AzureDeployment {
 /// `decodeResourceDeployment` (azure.ts:36-38, 253-258): a
 /// `{data: [...]}` body keeps only `status === "succeeded"` rows with
 /// non-empty `id`/`model`; one malformed row never discards the batch.
-#[must_use]
 pub fn parse_resource_deployments(body: &str) -> Result<Vec<AzureDeployment>, String> {
     let value: Value = serde_json::from_str(body)
         .map_err(|error| format!("Azure deployments response is not JSON: {error}"))?;
@@ -147,7 +146,6 @@ pub fn parse_resource_deployments(body: &str) -> Result<Vec<AzureDeployment>, St
 /// One management deployments page (azure.ts:39-42, 204-234): the
 /// `provisioningState === "Succeeded"` deployments plus the optional
 /// `nextLink` for the next page.
-#[must_use]
 pub fn parse_management_deployments_page(
     body: &str,
 ) -> Result<(Vec<AzureDeployment>, Option<String>), String> {
@@ -177,7 +175,6 @@ pub fn parse_management_deployments_page(
 
 /// The Resource Graph response (azure.ts:52-53, 199-201): the first
 /// `data[].id`, if any.
-#[must_use]
 pub fn parse_resource_graph_response(body: &str) -> Result<Option<String>, String> {
     let value: Value = serde_json::from_str(body)
         .map_err(|error| format!("Azure Resource Graph response is not JSON: {error}"))?;
@@ -418,7 +415,7 @@ pub async fn resolve_azure_discovery_input(
                         auth: AzureAuth::Entra { management, resource: data_plane },
                     })
                 }
-                _ => None,
+                CredentialValue::OAuth(_) => None,
             }
         }
         // An env connection resolves to a key credential
@@ -578,14 +575,13 @@ impl AzureSync {
         // Hoisted out of a `match` scrutinee: a parking_lot guard is
         // not Send, so it must not live across the lookup await.
         let cached = self.resource_ids.lock().get(&key).cloned();
-        let id = match cached {
-            Some(id) => id,
-            None => {
-                let found =
-                    self.find_resource(endpoints, resource, management_token, user_agent).await?;
-                self.resource_ids.lock().insert(key.clone(), found.clone());
-                found
-            }
+        let id = if let Some(id) = cached {
+            id
+        } else {
+            let found =
+                self.find_resource(endpoints, resource, management_token, user_agent).await?;
+            self.resource_ids.lock().insert(key.clone(), found.clone());
+            found
         };
         let result = self
             .paginate_management_deployments(
@@ -691,7 +687,7 @@ impl AzureSync {
             method: "GET".to_owned(),
             url: url.to_owned(),
             headers,
-            body: Default::default(),
+            body: bytes::Bytes::default(),
         })
         .await
     }
@@ -733,7 +729,7 @@ impl AzureSync {
     }
 }
 
-/// The `new URL(x).origin` subset the port needs: scheme://host[:port].
+/// The `new URL(x).origin` subset the port needs: <scheme://host>[:port].
 fn url_origin(url: &str) -> Option<String> {
     let (scheme, rest) = url.split_once("://")?;
     if scheme != "http" && scheme != "https" {

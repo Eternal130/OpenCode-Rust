@@ -500,7 +500,6 @@ async fn execute_patch(
         let current = crate::file_mutation::read_text(services.files.as_ref(), absolute)
             .await
             .map_err(|error| {
-                let error = std::io::Error::from(error);
                 fail(
                     &format!("Failed to read {}", absolute.display()),
                     &error_message(&error),
@@ -512,7 +511,6 @@ async fn execute_patch(
                 .await
                 .map(|content| content.text)
                 .map_err(|error| {
-                    let error = std::io::Error::from(error);
                     fail(
                         &format!("Failed to sync {}", absolute.display()),
                         &error_message(&error),

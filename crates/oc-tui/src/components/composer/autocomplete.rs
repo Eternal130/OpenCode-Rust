@@ -1136,8 +1136,7 @@ pub fn rank_reference_options(
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as i64)
-        .unwrap_or(0)
+        .map_or(0, |duration| duration.as_millis() as i64)
 }
 
 /// The popup geometry (`height()`): `min(10, count, max(1, anchor_y))`.

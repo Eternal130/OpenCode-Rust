@@ -524,7 +524,9 @@ async fn transfer_import_does_not_inherit_parent_metadata_or_permissions() {
         .expect("create parent");
     let parent = match parent {
         crate::session::store::CreateOutcome::Created(row) => row,
-        other => panic!("parent created: {other:?}"),
+        other @ crate::session::store::CreateOutcome::Existing(_) => {
+            panic!("parent created: {other:?}")
+        }
     };
     assert!(parent.metadata.is_some(), "fixture: the parent carries metadata");
 

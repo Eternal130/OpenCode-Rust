@@ -172,7 +172,7 @@ pub struct HomeView<'a> {
     pub update: Option<(String, String, bool)>,
     /// RE-04 — the banner's fade-in inputs (fade-in-text.tsx): the
     /// store clock and the notice's mount stamp (`clock − since`
-    /// drives the 200 ms left-to-right FadeInText sweep; a frozen
+    /// drives the 200 ms left-to-right `FadeInText` sweep; a frozen
     /// clock pins the frame, and golden fixtures carry no notice so
     /// their bytes never move).
     pub update_clock_ms: u64,

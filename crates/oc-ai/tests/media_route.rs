@@ -599,7 +599,7 @@ async fn events_deadline_fails_with_timeout_reason() {
     }
     let error = final_error.expect("stream must fail at the deadline");
     assert!(
-        matches!(&error.reason, AiErrorReason::Timeout { timeout_ms: Some(ms), .. } if *ms == 50.0),
+        matches!(&error.reason, AiErrorReason::Timeout { timeout_ms: Some(ms), .. } if (*ms - 50.0).abs() < f64::EPSILON),
         "expected a Timeout reason with the budget in ms, got {:?}",
         error.reason
     );

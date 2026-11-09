@@ -164,10 +164,10 @@ impl ExaProvider {
 
 #[async_trait::async_trait]
 impl SearchProvider for ExaProvider {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "exa"
     }
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Exa"
     }
     async fn execute(&self, query: &str) -> Result<Vec<WebSearchResult>, ProviderError> {
@@ -253,7 +253,7 @@ fn parse_iso_datetime(value: &str) -> Option<u64> {
     // a zone word (GMT/UTC treated as +0000 like V8's fallback).
     let (clock, offset_minutes) = split_offset(rest)?;
     let (hour, minute, second) = parse_clock(clock)?;
-    Some(days_to_millis(days, hour, minute, second, offset_minutes)?)
+    days_to_millis(days, hour, minute, second, offset_minutes)
 }
 
 /// `(clock, offset-minutes)` — an unrecognized trailing token (a named
@@ -325,12 +325,11 @@ fn parse_loose_date(value: &str) -> Option<u64> {
             let day: i64 = tokens[1].trim_matches(',').parse().ok()?;
             let year: i64 = tokens[2].parse().ok()?;
             (day, month, year, tokens.get(3..))
-        } else if let Some(month) = month_number(tokens[1].trim_matches(',')) {
+        } else {
+            let month = month_number(tokens[1].trim_matches(','))?;
             let day: i64 = tokens[0].parse().ok()?;
             let year: i64 = tokens[2].parse().ok()?;
             (day, month, year, tokens.get(3..))
-        } else {
-            return None;
         }
     } else {
         return None;
@@ -353,7 +352,7 @@ fn is_weekday_prefix(word: &str) -> bool {
     lowered.len() >= 3
         && ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
             .iter()
-            .any(|day| lowered == &day[..3] || *day == lowered)
+            .any(|day| lowered == day[..3] || *day == lowered)
 }
 
 /// Month number for a full or 3-letter English month name.
@@ -444,6 +443,7 @@ impl TavilyProvider {
     }
 
     /// G-224③ — stamp the engine's app identity (`App.useragent`).
+    #[must_use]
     pub fn with_user_agent(mut self, user_agent: impl Into<String>) -> Self {
         self.user_agent = user_agent.into();
         self
@@ -452,10 +452,10 @@ impl TavilyProvider {
 
 #[async_trait::async_trait]
 impl SearchProvider for TavilyProvider {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "tavily"
     }
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Tavily"
     }
     async fn execute(&self, query: &str) -> Result<Vec<WebSearchResult>, ProviderError> {
@@ -533,10 +533,10 @@ impl FirecrawlProvider {
 
 #[async_trait::async_trait]
 impl SearchProvider for FirecrawlProvider {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "firecrawl"
     }
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Firecrawl"
     }
     async fn execute(&self, query: &str) -> Result<Vec<WebSearchResult>, ProviderError> {
@@ -597,10 +597,10 @@ impl ParallelProvider {
 
 #[async_trait::async_trait]
 impl SearchProvider for ParallelProvider {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "parallel"
     }
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "Parallel"
     }
     async fn execute(&self, query: &str) -> Result<Vec<WebSearchResult>, ProviderError> {
@@ -667,10 +667,10 @@ impl TinyFishProvider {
 
 #[async_trait::async_trait]
 impl SearchProvider for TinyFishProvider {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "tinyfish"
     }
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "TinyFish"
     }
     async fn execute(&self, query: &str) -> Result<Vec<WebSearchResult>, ProviderError> {

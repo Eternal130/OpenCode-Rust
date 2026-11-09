@@ -113,7 +113,7 @@ fn atom_width(cluster: &str) -> usize {
 /// * the cluster must measure 2 (`width !== 2` returns early);
 /// * `eastAsianWidth(codePoint) === 2` is excluded — proxied by
 ///   `width_cjk() == Some(2)`: every EAW Wide/Fullwidth codepoint is
-///   wide in the CJK measure (and so are Emoji_Presentation
+///   wide in the CJK measure (and so are `Emoji_Presentation`
 ///   codepoints, which the ref's `emojiPresentation` check also
 ///   excludes — one proxy covers both ref exclusions);
 /// * the base must be an emoji — the ref regex
@@ -125,7 +125,7 @@ fn atom_width(cluster: &str) -> usize {
 /// * VS16 (`FE0F`), keycap (`20E3`) and ZWJ anywhere abort.
 ///
 /// Empirical note (probed against unicode-width 0.2): the library
-/// assigns 2 only to EAW W/F or Emoji_Presentation codepoints, so the
+/// assigns 2 only to EAW W/F or `Emoji_Presentation` codepoints, so the
 /// rule's firing set is empty for plain clusters today — `❤` already
 /// measures 1 like the ref. The guard chain is ported anyway so any
 /// cluster a future width table measures as 2 narrows exactly like

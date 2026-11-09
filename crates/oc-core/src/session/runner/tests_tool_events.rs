@@ -564,16 +564,14 @@ async fn g275_step_started_omits_snapshot_when_none() {
     assert!(started.2.get("snapshot").is_none(), "no snapshot key when disabled");
 }
 
-fn metadata(
-    pairs: &[(&str, serde_json::Value)],
-) -> Option<oc_ai::schema::options::ProviderMetadata> {
+fn metadata(pairs: &[(&str, serde_json::Value)]) -> oc_ai::schema::options::ProviderMetadata {
     let mut outer = oc_ai::schema::options::ProviderMetadata::new();
     let inner = pairs
         .iter()
         .map(|(key, value)| (key.to_string(), value.clone()))
         .collect::<std::collections::BTreeMap<_, _>>();
     outer.insert("parityfake".to_string(), inner);
-    Some(outer)
+    outer
 }
 
 /// G-275② — fragment state MERGES across delta and end events (ref
@@ -588,7 +586,7 @@ async fn g275_fragment_provider_state_merges() {
     publisher
         .publish(&LLMEvent::TextStart {
             id: "t1".into(),
-            provider_metadata: metadata(&[("first", serde_json::json!(1))]),
+            provider_metadata: Some(metadata(&[("first", serde_json::json!(1))])),
         })
         .await
         .unwrap();
@@ -596,7 +594,7 @@ async fn g275_fragment_provider_state_merges() {
         .publish(&LLMEvent::TextDelta {
             id: "t1".into(),
             text: "he".into(),
-            provider_metadata: metadata(&[("second", serde_json::json!(2))]),
+            provider_metadata: Some(metadata(&[("second", serde_json::json!(2))])),
         })
         .await
         .unwrap();
@@ -604,7 +602,7 @@ async fn g275_fragment_provider_state_merges() {
         .publish(&LLMEvent::TextDelta {
             id: "t1".into(),
             text: "llo".into(),
-            provider_metadata: metadata(&[("third", serde_json::json!(3))]),
+            provider_metadata: Some(metadata(&[("third", serde_json::json!(3))])),
         })
         .await
         .unwrap();
@@ -612,7 +610,7 @@ async fn g275_fragment_provider_state_merges() {
         .publish(&LLMEvent::TextEnd {
             id: "t1".into(),
             text: None,
-            provider_metadata: metadata(&[("fourth", serde_json::json!(4))]),
+            provider_metadata: Some(metadata(&[("fourth", serde_json::json!(4))])),
         })
         .await
         .unwrap();

@@ -247,7 +247,7 @@ pub fn structured_fallback_rows(meta: &str) -> Vec<String> {
     };
     // `Object.keys(value).length === 0 → undefined` — an empty (or
     // non-object) meta renders nothing.
-    if value.as_object().is_none_or(|object| object.is_empty()) {
+    if value.as_object().is_none_or(serde_json::Map::is_empty) {
         return Vec::new();
     }
     let content = serde_json::to_string_pretty(&value).unwrap_or_default();

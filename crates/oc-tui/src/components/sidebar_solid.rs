@@ -545,7 +545,7 @@ fn sidebar_content(
 /// inside `render_app`). `left`/`top` are the OLD pane paste site (the
 /// imperative source); `scrim_width` is `Some(frame_width)` for the
 /// ≤120 manual-open overlay, whose wrapper takes the full scrim rect
-/// and carries a `70/255` DimBg stamp (the pane rect is its keep-rect
+/// and carries a `70/255` `DimBg` stamp (the pane rect is its keep-rect
 /// — the old dim-then-paste net bytes).
 #[allow(clippy::too_many_arguments)] // the family mount seam (rect/pane/scrim)
 pub fn sidebar_mount(

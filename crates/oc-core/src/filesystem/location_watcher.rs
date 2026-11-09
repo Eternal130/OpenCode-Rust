@@ -252,8 +252,7 @@ async fn pump(
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             match tokio::time::timeout(remaining, subscription.recv()).await {
                 Ok(Some(next)) => update = next,
-                Ok(None) => break,
-                Err(_) => break,
+                Ok(None) | Err(_) => break,
             }
         }
         publish_changed(&bus, Some(&schema_ref), &update).await;

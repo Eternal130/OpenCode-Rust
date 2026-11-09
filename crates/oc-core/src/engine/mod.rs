@@ -844,7 +844,7 @@ impl Engine {
         // global repos cache root, with the hourly refresh sweep
         // (reference.ts:111-112).
         let references = Arc::new(crate::reference::ReferenceService::new(
-            oc_util::global_roots::resolve().repos(),
+            &oc_util::global_roots::resolve().repos(),
             Arc::clone(&options.clock),
         ));
         // F-5: the reference registry notify leg publishes
@@ -1147,7 +1147,7 @@ impl Engine {
         // `reference.updated` exactly like a ref location boot.
         let references = {
             let service = Arc::new(crate::reference::ReferenceService::new(
-                oc_util::global_roots::resolve().repos(),
+                &oc_util::global_roots::resolve().repos(),
                 Arc::clone(&self.clock),
             ));
             service.set_bus(Arc::clone(&self.bus));
@@ -2141,6 +2141,9 @@ impl Engine {
     /// session at the next safe boundary (the drain's Move handling).
     /// G-108①: delivery defaults to steer (`input.delivery ?? "steer"`,
     /// ref move.ts:127) — previously hardcoded Queue.
+    /// 8 params mirror the ref's session.move inbox call shape (opencode.ts
+    /// session.move) — bundling would diverge from the engine API surface.
+    #[allow(clippy::too_many_arguments)]
     pub async fn move_session(
         &self,
         location: &LocationRef,

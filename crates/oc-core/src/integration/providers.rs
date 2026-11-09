@@ -247,17 +247,14 @@ async fn opencode_credential(
     }
     // Org resolution (opencode.ts:601-607): `org_id` must match a listed
     // org; without one the name-then-id sorted first org wins.
-    let org = match body["org_id"].as_str() {
-        Some(org_id) => {
-            let Some(found) = org_list.iter().find(|(id, _)| id == org_id) else {
-                return Err(format!("OpenCode organization not found: {org_id}"));
-            };
-            Some(found.clone())
-        }
-        None => {
-            org_list.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
-            org_list.first().cloned()
-        }
+    let org = if let Some(org_id) = body["org_id"].as_str() {
+        let Some(found) = org_list.iter().find(|(id, _)| id == org_id) else {
+            return Err(format!("OpenCode organization not found: {org_id}"));
+        };
+        Some(found.clone())
+    } else {
+        org_list.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
+        org_list.first().cloned()
     };
     let mut metadata = BTreeMap::new();
     metadata.insert("server".to_owned(), Value::String(server.to_owned()));
@@ -712,8 +709,7 @@ async fn xai_refresh(value: OAuthValue) -> Result<CredentialValue, String> {
     let refresh = token["refresh_token"]
         .as_str()
         .filter(|token| !token.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| value.refresh.clone());
+        .map_or_else(|| value.refresh.clone(), str::to_owned);
     if refresh.is_empty() {
         return Err("xAI token response is missing refresh_token".into());
     }

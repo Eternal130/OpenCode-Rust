@@ -3,7 +3,7 @@
 //!   project when `projectID` is absent.
 //! - G-268 — credential create/list parity with the core store
 //!   (first-credential activation, label default, selected-last listing,
-//!   decode-fail-the-read, duplicate-id ConflictError).
+//!   decode-fail-the-read, duplicate-id `ConflictError`).
 //! - G-270① — agent.list returns EVERY agent with the default first.
 //! - G-270② — reference.list reads the assembled per-location service.
 //! - G-270③ — fs.find returns location-relative paths.
@@ -12,7 +12,7 @@
 //! - G-270⑤ — /api/info carries `capabilities` only when ready.
 //! - G-270⑥ — pty.connect 404s an unresolvable location pre-upgrade.
 //! - G-270⑦ — worktree.list serves any KNOWN project's rows.
-//! - G-270⑧ — a duplicate form create id is ConflictError.
+//! - G-270⑧ — a duplicate form create id is `ConflictError`.
 
 mod support;
 
@@ -302,7 +302,7 @@ async fn agent_list_returns_every_agent_with_the_default_first() {
     let response = get(&server, "/api/agent").await;
     assert_eq!(response.status, 200, "{}", response.text());
     let data = response.json()["data"].as_array().expect("data").clone();
-    assert!(!data.is_empty());
+    assert_ne!(data, [] as [serde_json::Value; 0]);
     // Default-first (core agent.ts:123-129 puts selectedDefault first).
     assert_eq!(
         data[0]["id"],

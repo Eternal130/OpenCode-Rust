@@ -208,7 +208,7 @@ pub struct Revert {
 pub struct RevertV1 {
     #[serde(rename = "messageID")]
     pub message_id: MessageId,
-    /// Legacy TS-era wire key `partID` (session-revert.ts RevertV1).
+    /// Legacy TS-era wire key `partID` (session-revert.ts `RevertV1`).
     #[serde(
         rename = "partID",
         alias = "part_id",

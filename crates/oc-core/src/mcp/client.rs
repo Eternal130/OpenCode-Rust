@@ -457,15 +457,15 @@ pub(super) fn transport_http_error<'a>(
 ) -> Option<&'a rmcp::transport::streamable_http_client::StreamableHttpError<reqwest13::Error>> {
     let mut node: Option<&(dyn std::error::Error + '_)> = Some(error);
     while let Some(current) = node {
-        if let Some(typed) = current.downcast_ref::<rmcp::ServiceError>() {
-            if let rmcp::ServiceError::TransportSend(dynamic) = typed {
-                if let Some(inner) = dynamic
-                    .error
-                    .downcast_ref::<rmcp::transport::streamable_http_client::StreamableHttpError<
-                    reqwest13::Error,
-                >>() {
-                    return Some(inner);
-                }
+        if let Some(rmcp::ServiceError::TransportSend(dynamic)) =
+            current.downcast_ref::<rmcp::ServiceError>()
+        {
+            if let Some(inner) = dynamic
+                .error
+                .downcast_ref::<rmcp::transport::streamable_http_client::StreamableHttpError<
+                reqwest13::Error,
+            >>() {
+                return Some(inner);
             }
         }
         if let Some(direct) = current
@@ -759,6 +759,7 @@ impl Connection {
     /// a negotiated session id. The real observing client only runs on
     /// the streamable HTTP transport; scripted/mock transports route
     /// through [`connect_with_transport`] and default to NOT attached.
+    #[cfg(test)] // test-only attachment marker (mock transports)
     pub(crate) fn mark_session_attached(&self) {
         self.session_attached.store(true, std::sync::atomic::Ordering::SeqCst);
     }
@@ -1647,10 +1648,16 @@ fn unsupported_protocol_message(
     else {
         return None;
     };
-    let supported =
-        server_supported.iter().map(|version| version.as_str()).collect::<Vec<_>>().join(", ");
-    let offered =
-        client_supported.iter().map(|version| version.as_str()).collect::<Vec<_>>().join(", ");
+    let supported = server_supported
+        .iter()
+        .map(rmcp::model::ProtocolVersion::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let offered = client_supported
+        .iter()
+        .map(rmcp::model::ProtocolVersion::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
     Some(format!(
         "Unsupported protocol version for \"{server}\": the client offered {offered}, \
          the server supports {supported}. \

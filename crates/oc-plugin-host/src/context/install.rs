@@ -321,6 +321,7 @@ pub fn resolve_subpath_entry(package_root: &Path, subpath: &str) -> Result<PathB
 /// ancestor directory holding a `package.json` (ref `Host.resolve`
 /// probes subpaths against the package; the tui companion loader walks
 /// the same way).
+#[must_use]
 pub fn package_root(entry: &Path) -> Option<PathBuf> {
     let mut root = entry.parent()?;
     loop {
@@ -514,7 +515,7 @@ mod tests {
 
     /// G-280③ — the feature entrypoints (host.ts:41-43): `./tui` and
     /// `./rpc` resolve from their OWN subpath only — no `main`/`index`
-    /// fallback (ref swallows ERR_PACKAGE_PATH_NOT_EXPORTED, so a
+    /// fallback (ref swallows `ERR_PACKAGE_PATH_NOT_EXPORTED`, so a
     /// main-only package advertises neither feature).
     #[test]
     fn g280_probe_feature_entry_detects_tui_and_rpc_subpaths() {

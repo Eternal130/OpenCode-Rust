@@ -101,7 +101,7 @@ pub fn mount_stats_page_solid(phase: StatsPhaseView<'_>, styles: &ThemeStyles, s
                 bg,
                 0,
             );
-            mount_stats("stats_page", width, height, bg, &units)
+            mount_stats("stats_page", width, height, bg, &units);
         }
         StatsPhaseView::Failed => {
             let line = "Could not load stats. Reopen /stats to try again.";
@@ -109,7 +109,7 @@ pub fn mount_stats_page_solid(phase: StatsPhaseView<'_>, styles: &ThemeStyles, s
             let y = height / 2;
             let units =
                 chrome_run_units("stats.error", x, y, line, CellColor::from(styles.error), bg, 0);
-            mount_stats("stats_page", width, height, bg, &units)
+            mount_stats("stats_page", width, height, bg, &units);
         }
         StatsPhaseView::Loaded(poster) => mount_poster_solid(poster, styles, size),
     }
@@ -158,7 +158,7 @@ pub fn mount_poster_solid(poster: &Poster, styles: &ThemeStyles, size: (u16, u16
     for (offset, line) in poster.lines.iter().enumerate() {
         paint_line(&mut units, line, x0, y0 + offset, poster.width, styles);
     }
-    mount_stats("stats_poster", width, height, bg, &units)
+    mount_stats("stats_poster", width, height, bg, &units);
 }
 
 /// The page's three render states (the resource's shape,

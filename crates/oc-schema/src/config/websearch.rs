@@ -89,7 +89,7 @@ impl schemars::JsonSchema for WebSearchSelection {
 
     fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
         use schemars::schema::{InstanceType, Schema, SchemaObject, SubschemaValidation};
-        let info: Schema = gen.subschema_for::<Info>().into();
+        let info: Schema = gen.subschema_for::<Info>();
         let literal_false = Schema::Object(SchemaObject {
             instance_type: Some(InstanceType::Boolean.into()),
             ..Default::default()

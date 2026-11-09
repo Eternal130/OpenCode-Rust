@@ -1,4 +1,4 @@
-//! AUD-03 (HTTP FormLocation "global" escape hatch): the session-scoped
+//! AUD-03 (HTTP `FormLocation` "global" escape hatch): the session-scoped
 //! form routes resolve `sessionID === "global"` straight to the request's
 //! location (ref server/src/middleware/form-location.ts:27-38) instead of
 //! the session table, so MCP elicitation forms stored under the sentinel

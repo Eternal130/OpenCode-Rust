@@ -735,9 +735,10 @@ impl Tx<'_> {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        let mut entries: Vec<KvEntry> = Vec::with_capacity(rows.len().min(limit as usize));
+        let mut entries: Vec<KvEntry> =
+            Vec::with_capacity(rows.len().min(usize::try_from(limit).unwrap_or(usize::MAX)));
         for (key, encoded) in rows {
-            if entries.len() == limit as usize {
+            if entries.len() == usize::try_from(limit).unwrap_or(usize::MAX) {
                 return Ok(KvScanResult {
                     next: entries.last().map(|entry| entry.key.clone()),
                     entries,

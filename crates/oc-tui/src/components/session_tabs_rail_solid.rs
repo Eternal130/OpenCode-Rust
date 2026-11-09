@@ -148,6 +148,7 @@ fn shape(
 /// stamp (the old `paint_rail_handle_hot` row walk, keeping ch/fg).
 /// The compact hover tooltip mounts beside it at `left + width`.
 /// Returns the tooltip row (None when not hovered).
+#[must_use]
 pub fn mount_vertical_rail_solid(
     inputs: &RailInputs,
     geometry: &RailGeometry,

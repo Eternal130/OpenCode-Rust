@@ -216,7 +216,7 @@ mod tests {
             ]
         );
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        assert!(names().is_empty());
+        assert_eq!(names().len(), 0);
     }
 
     #[test]
@@ -230,7 +230,7 @@ mod tests {
         #[cfg(target_os = "windows")]
         assert_eq!(paths.len(), WIN32_HOME.len());
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        assert!(paths.is_empty());
+        assert_eq!(paths.len(), 0);
     }
 
     #[test]

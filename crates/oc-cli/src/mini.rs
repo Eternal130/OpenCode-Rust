@@ -239,14 +239,14 @@ pub async fn run_mini(input: MiniInput, server: &ServerParams) -> i32 {
     // service to reconnect; ref leaves `reconnect` undefined there and
     // the retry loop exits after the first failure (G-157).
     let target = {
-        let mut reconnect = || async {
-            if !managed {
-                None
-            } else {
+        let reconnect = || async {
+            if managed {
                 server_connection::ensure_managed(false)
                     .await
                     .ok()
                     .map(|endpoint| endpoint.client())
+            } else {
+                None
             }
         };
         resolve_mini_target(&client, &target_input, &directory, reconnect).await

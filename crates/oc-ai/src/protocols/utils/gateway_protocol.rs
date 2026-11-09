@@ -26,7 +26,7 @@ pub enum GatewayApi {
     Messages,
     /// Open Responses (`/responses`).
     Responses,
-    /// OpenAI Chat Completions (`/chat/completions`).
+    /// `OpenAI` Chat Completions (`/chat/completions`).
     Chat,
 }
 
@@ -452,7 +452,7 @@ mod tests {
             .iter()
             .find(|event| matches!(event, LLMEvent::Finish { .. }))
             .expect("finish event");
-        let LLMEvent::Finish { provider_metadata, usage: _, .. } = finish else {
+        let LLMEvent::Finish { provider_metadata, .. } = finish else {
             unreachable!();
         };
         assert!(

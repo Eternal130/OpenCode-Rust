@@ -8,7 +8,7 @@
 //! D2.2 (ruling attempt 2, plan (e)): the chrome FAMILY's surfaces
 //! mount as absolutely-positioned wrapper subtrees under ONE shared
 //! `surface-chrome` container in the shared-tree hub (the live
-//! CliRenderer) — pixels reach the emitted [`Frame`] through ONE
+//! `CliRenderer`) — pixels reach the emitted [`Frame`] through ONE
 //! full-buffer compositor seam ([`composite_chrome_tree`]; bg
 //! alpha==0 cells are holes and skip, so the hand-painted frame
 //! survives underneath). The family-6 OVERLAY surfaces (console /
@@ -360,7 +360,7 @@ pub(crate) fn surface_element(
 
 /// ONE `SolidRenderer` per thread-process (ruling #1, plan (a)): in
 /// the live app its `.renderer` IS the D2.1 scheduling `CliRenderer`
-/// (the pump's request_render/settle/resize/destroy all go through
+/// (the pump's `request_render/settle/resize/destroy` all go through
 /// it — constructed here, attached to the session in `app::run`);
 /// headless frame builds (unit tests, goldens) lazily install their
 /// own. Zero surfaces mount in the mechanical commit — the
@@ -369,7 +369,7 @@ pub(crate) fn surface_element(
 /// container in the migration commit.
 ///
 /// Family skeleton under the root (ruling #2 — z order IS child
-/// order, fixed indices, aligned to `App::frame`/paste_frame's z
+/// order, fixed indices, aligned to `App::frame`/`paste_frame`'s z
 /// stack; later lanes mount their family wrapper at their index):
 ///
 /// ```text
@@ -642,7 +642,7 @@ pub(crate) struct ChromeTree {
     /// frame (the "golden zero-diff but PTY timing divergence"
     /// failure mode).
     dirty: bool,
-    /// The mounted chrome-family surfaces, always in SURFACE_ORDER
+    /// The mounted chrome-family surfaces, always in `SURFACE_ORDER`
     /// (child order = z order).
     surfaces: Vec<ChromeSurface>,
     /// The non-chrome family wrappers (composer first), child order
@@ -677,7 +677,7 @@ impl ChromeTree {
         }
     }
 
-    /// The pump's draw gate (D2.1b): the live CliRenderer's scheduler.
+    /// The pump's draw gate (D2.1b): the live `CliRenderer`'s scheduler.
     pub(crate) fn request_render(&mut self) {
         self.solid.renderer.request_render();
     }
@@ -899,9 +899,10 @@ impl ChromeTree {
         // index 0 counts when mounted) — the root's children stay
         // sorted by skeleton index regardless of which family synced
         // first, so z (child order) never depends on mount order.
-        let container = match self.family_containers.iter().position(|(f, _, _)| *f == family) {
-            Some(index) => self.family_containers[index].2.clone(),
-            None => {
+        let container =
+            if let Some(index) = self.family_containers.iter().position(|(f, _, _)| *f == family) {
+                self.family_containers[index].2.clone()
+            } else {
                 let element = box_()
                     .key(format!("surface-{family}"))
                     .position("absolute")
@@ -919,8 +920,7 @@ impl ChromeTree {
                 let key = self.solid.mount(SolidRenderer::ROOT, seat, element);
                 self.family_containers.push((family, skeleton_index, key.clone()));
                 key
-            }
-        };
+            };
         if let Some(index) = self.wrappers.iter().position(|w| w.family == family) {
             let existing = &mut self.wrappers[index];
             if existing.left != left {
@@ -963,10 +963,8 @@ impl ChromeTree {
                 .height(height as f32)
                 .into_element();
             let key = self.solid.mount(&container, 0, element);
-            let content_key = content.zip(content_key).map(|(element, _)| {
-                let mounted = self.solid.mount(&key, 0, element);
-                mounted
-            });
+            let content_key =
+                content.zip(content_key).map(|(element, _)| self.solid.mount(&key, 0, element));
             self.wrappers.push(FamilyWrapper {
                 family,
                 key,
@@ -1088,7 +1086,7 @@ impl ChromeTree {
 
     /// Flush the shared reconciler iff a chrome sync left patches
     /// pending — the once-per-batch boundary (ruling flag: the shared
-    /// flush rides after the D2.1 settle/request_render seam). Returns
+    /// flush rides after the D2.1 `settle/request_render` seam). Returns
     /// whether a render happened.
     pub(crate) fn flush_if_pending(&mut self) -> bool {
         if !self.dirty {
@@ -1108,7 +1106,7 @@ thread_local! {
 }
 
 /// Install the LIVE hub in `app::run`: the returned handle's renderer
-/// is the D2.1 scheduling CliRenderer (config + session attach happen
+/// is the D2.1 scheduling `CliRenderer` (config + session attach happen
 /// here, exactly where the bare renderer was built before).
 pub(crate) fn install_live_hub(
     config: CliRendererConfig,
@@ -1125,7 +1123,7 @@ pub(crate) fn install_live_hub(
 /// by resize when a later surface needs a larger canvas — never
 /// shrinks within a build).
 pub(crate) fn hub_for(width: u32, height: u32) -> Rc<RefCell<ChromeTree>> {
-    let existing = HUB.with_borrow(|slot| slot.clone());
+    let existing = HUB.with_borrow(std::clone::Clone::clone);
     existing.unwrap_or_else(|| {
         let handle = Rc::new(RefCell::new(ChromeTree::new(CliRendererConfig {
             width: width.max(1),
@@ -1254,7 +1252,7 @@ pub(crate) fn mount_family_wrapper(
 /// lane's own content state must rebuild when this is false (the hub
 /// was reset, or the wrapper was pruned at a seam).
 pub(crate) fn family_wrapper_live(family: &str) -> bool {
-    let hub = HUB.with_borrow(|slot| slot.clone());
+    let hub = HUB.with_borrow(std::clone::Clone::clone);
     hub.is_some_and(|hub| hub.borrow().wrappers.iter().any(|w| w.family == family))
 }
 
@@ -1269,7 +1267,7 @@ pub(crate) fn family_wrapper_live(family: &str) -> bool {
 /// above footer by child order). The opentui emitter stays the sole byte
 /// emitter; this seam only writes the in-house Frame cells.
 pub(crate) fn composite_chrome_tree(frame: &mut Frame) {
-    let hub = HUB.with_borrow(|slot| slot.clone());
+    let hub = HUB.with_borrow(std::clone::Clone::clone);
     let Some(hub) = hub else {
         return;
     };
@@ -1292,7 +1290,7 @@ pub(crate) fn reset_hub() {
 /// the real production renderable tree through this. `None` when no
 /// hub is installed.
 pub(crate) fn with_hub_tree<R>(f: impl FnOnce(&ChromeTree) -> R) -> Option<R> {
-    HUB.with_borrow(|slot| slot.clone()).map(|hub| f(&hub.borrow()))
+    HUB.with_borrow(std::clone::Clone::clone).map(|hub| f(&hub.borrow()))
 }
 
 impl ChromeTree {

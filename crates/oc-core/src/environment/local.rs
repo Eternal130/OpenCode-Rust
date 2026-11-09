@@ -72,18 +72,18 @@ impl Spawner for HostSpawner {
         let stdout_task = child.stdout.take().map(|pipe| {
             let cap = command.max_stdout;
             let notify = cap_tripped.clone();
-            tokio::spawn(async move { read_capped(pipe, cap, notify).await })
+            tokio::spawn(read_capped(pipe, cap, notify))
         });
         let stderr_task = child.stderr.take().map(|pipe| {
             let cap = command.max_stderr;
             let notify = cap_tripped.clone();
-            tokio::spawn(async move { read_capped(pipe, cap, notify).await })
+            tokio::spawn(read_capped(pipe, cap, notify))
         });
         // If either cap trips we must kill the child: it may be blocked
         // writing into a pipe nobody drains, which would hang `wait`.
         let output = tokio::select! {
             status = child.wait() => status.map_err(|error| error.to_string())?,
-            _ = cap_tripped.notified() => {
+            () = cap_tripped.notified() => {
                 let _ = child.start_kill();
                 child.wait().await.map_err(|error| error.to_string())?
             }
@@ -107,30 +107,32 @@ impl Spawner for HostSpawner {
 /// end at `cap + 1` so callers can detect the overrun). On cap trip the
 /// shared `notify` is fired so the parent kills the child instead of
 /// hanging on `wait` with an undrained pipe.
-async fn read_capped<R: tokio::io::AsyncRead + Unpin>(
+fn read_capped<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
     mut pipe: R,
     cap: Option<usize>,
     notify: std::sync::Arc<tokio::sync::Notify>,
-) -> Vec<u8> {
-    use tokio::io::AsyncReadExt;
-    let mut buf = Vec::new();
-    let mut chunk = [0u8; 64 * 1024];
-    loop {
-        let read = match pipe.read(&mut chunk).await {
-            Ok(0) | Err(_) => break,
-            Ok(n) => n,
-        };
-        buf.extend_from_slice(&chunk[..read]);
-        if let Some(cap) = cap {
-            if buf.len() > cap {
-                buf.truncate(cap + 1);
-                drop(pipe);
-                notify.notify_waiters();
-                return buf;
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<u8>> + Send>> {
+    Box::pin(async move {
+        use tokio::io::AsyncReadExt;
+        let mut buf = Vec::new();
+        let mut chunk = vec![0u8; 64 * 1024].into_boxed_slice();
+        loop {
+            let read = match pipe.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => n,
+            };
+            buf.extend_from_slice(&chunk[..read]);
+            if let Some(cap) = cap {
+                if buf.len() > cap {
+                    buf.truncate(cap + 1);
+                    drop(pipe);
+                    notify.notify_waiters();
+                    return buf;
+                }
             }
         }
-    }
-    buf
+        buf
+    })
 }
 
 /// `makeLocalDriver(spawner)` — overrides the full `Files` surface with raw
@@ -145,6 +147,7 @@ pub fn make_local_driver(spawner: std::sync::Arc<dyn Spawner>) -> Driver {
 }
 
 /// Convenience: local driver over [`HostSpawner`].
+#[must_use]
 pub fn make_local_driver_default() -> Driver {
     make_local_driver(std::sync::Arc::new(HostSpawner))
 }
@@ -164,7 +167,7 @@ impl Files for LocalFiles {
             Some(range) => {
                 let file =
                     std::fs::File::open(path).map_err(|error| attempt_follow(path, error))?;
-                let mut buffer = vec![0u8; range.length as usize];
+                let mut buffer = vec![0u8; usize::try_from(range.length).unwrap_or(usize::MAX)];
                 #[cfg(unix)]
                 let read = {
                     use std::os::unix::fs::FileExt;
@@ -244,9 +247,8 @@ impl Files for LocalFiles {
             }
             // Ref catches only NotFound and lets every other error
             // propagate; only a missing destination means "move to `to`".
-            Err(FilesError::NotFound { .. }) => to.to_string(),
+            Err(FilesError::NotFound { .. }) | Ok(_) => to.to_string(),
             Err(error) => return Err(error),
-            Ok(_) => to.to_string(),
         };
         std::fs::rename(from, destination).map_err(|error| attempt(from, error))
     }
@@ -293,8 +295,7 @@ fn mtime_ms(meta: &std::fs::Metadata) -> f64 {
     meta.modified()
         .ok()
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_secs_f64() * 1_000.0)
-        .unwrap_or(0.0)
+        .map_or(0.0, |duration| duration.as_secs_f64() * 1_000.0)
 }
 
 fn is_missing(error: &std::io::Error) -> bool {

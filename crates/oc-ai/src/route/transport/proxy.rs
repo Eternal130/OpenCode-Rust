@@ -15,7 +15,7 @@
 //! `socks4://` stays unsupported. Proxy selection + `NO_PROXY` are
 //! pure functions so tests can drive them without process env races.
 //! Parity with the TS stack (websocket-constructor.ts): loopback
-//! targets (127.0.0.1 / localhost / ::1) always connect directly,
+//! targets (127.0.0.1 / localhost / `::1`) always connect directly,
 //! `WSS_PROXY` / `WS_PROXY` are consulted before the standard
 //! spellings, and proxy URL userinfo is honored (Basic
 //! `Proxy-Authorization` on CONNECT, username/password on SOCKS5).
@@ -201,13 +201,10 @@ fn percent_decode(value: &str) -> String {
     while index < bytes.len() {
         if bytes[index] == b'%' && index + 2 < bytes.len() {
             let hex = |byte: u8| (byte as char).to_digit(16);
-            match (hex(bytes[index + 1]), hex(bytes[index + 2])) {
-                (Some(high), Some(low)) => {
-                    out.push((high * 16 + low) as u8);
-                    index += 3;
-                    continue;
-                }
-                _ => {}
+            if let (Some(high), Some(low)) = (hex(bytes[index + 1]), hex(bytes[index + 2])) {
+                out.push((high * 16 + low) as u8);
+                index += 3;
+                continue;
             }
         }
         out.push(bytes[index]);
@@ -475,7 +472,7 @@ async fn https_connect(
         Some(connector) => connector,
         None => proxy_tls_connector(None).map_err(fail)?,
     };
-    let name = server_name(&proxy.host).map_err(|message| fail(message))?;
+    let name = server_name(&proxy.host).map_err(fail)?;
     let future = async {
         let tcp = tokio::net::TcpStream::connect((proxy.host.as_str(), proxy.port))
             .await

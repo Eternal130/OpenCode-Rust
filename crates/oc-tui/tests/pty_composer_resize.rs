@@ -65,8 +65,7 @@ fn pty_composer_rect_follows_terminal_resize() {
                     }
                 }
                 return Err(format!(
-                    "the composer never re-laid at 60 cols after SIGWINCH: {:?}",
-                    rows
+                    "the composer never re-laid at 60 cols after SIGWINCH: {rows:?}"
                 ));
             }
             Ok(())

@@ -44,7 +44,7 @@ impl Endpoint {
     }
 
     /// The basic-auth username (`"opencode"`; v2 hardcodes it).
-    fn username(&self) -> &str {
+    fn username(&self) -> &'static str {
         "opencode"
     }
 
@@ -272,7 +272,7 @@ mod tests {
         // G-154: `Service.headers` (service-probe.ts:72-77) — the only
         // scheme ref's Endpoint.auth carries is basic; no bearer.
         let unauthed = Endpoint { url: "http://x".to_owned(), password: None };
-        assert!(unauthed.service_headers().is_empty());
+        assert_eq!(unauthed.service_headers(), [] as [(&str, std::string::String); 0]);
         let authed = Endpoint { url: "http://x".to_owned(), password: Some("pw".to_owned()) };
         assert_eq!(
             authed.service_headers(),

@@ -5,7 +5,7 @@
 //! rolled-up failures when an update fails, and reloads the updated
 //! plugin (`plugin.updated` notify leg).
 //!
-//! Hermetic: sandboxed HOME/config/cache (the plugins_production
+//! Hermetic: sandboxed HOME/config/cache (the `plugins_production`
 //! pattern), pre-staged install generations under the v2 cache layout,
 //! an `npm view` shim ahead of the real npm on PATH, no network.
 

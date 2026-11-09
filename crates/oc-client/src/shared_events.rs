@@ -720,9 +720,9 @@ mod tests {
         assert_eq!(harness.attempts.load(Ordering::SeqCst), 2);
     }
 
-    /// G-125: after a failed completion, the second AND third next()
+    /// G-125: after a failed completion, the second AND third `next()`
     /// also reject (TS shared-events.ts:76,123 — completion rejects all
-    /// pending and every later next()); the stream no longer ends after
+    /// pending and every later `next()`); the stream no longer ends after
     /// a single Err.
     #[tokio::test]
     async fn terminal_error_is_delivered_repeatedly() {

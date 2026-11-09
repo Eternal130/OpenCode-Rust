@@ -1172,7 +1172,7 @@ impl App {
                                 // 2226-2244: "Move to queue" / "Delete").
                                 if self
                                     .store
-                                    .pending_delivery(&hit.session_id, &message_id)
+                                    .pending_delivery(&hit.session_id, message_id)
                                     .as_deref()
                                     == Some("steer")
                                 {
@@ -1512,7 +1512,7 @@ impl App {
                 // time feeds the streak (the input stream carries no wheel
                 // timestamps — `Date.now()` at `tick` in the ref).
                 let now_ms = i64::try_from(self.clock.now_ms_value()).unwrap_or(0);
-                let step = self.store.wheel_step(now_ms) as i32;
+                let step = self.store.wheel_step(now_ms);
                 let delta = if down { step } else { -step };
                 // A modal select's option window scrolls WITHOUT
                 // moving the selection (v2's scrollbox; the rows
@@ -3273,7 +3273,7 @@ impl App {
     }
 
     /// Sync the footer family's live body into the shared tree (the
-    /// D2.2 footer lane's ONLY live mount call — the old App::frame
+    /// D2.2 footer lane's ONLY live mount call — the old `App::frame`
     /// paste branches, one per body kind, collapsed into ONE family
     /// wrapper under `surface-footer`). The mount rect is the old
     /// paste site (`(0, size.1 - mount_height)`, full width); the
@@ -3373,7 +3373,7 @@ impl App {
         // it (the old else arms).
         let footer_theme = FooterTheme::from_resolved(&theme.resolved.tokens);
         self.sync_footer_family(&footer_theme);
-        let mut frame = render_app(&self.store, &theme, self.size);
+        let frame = render_app(&self.store, &theme, self.size);
         // PLUG-TUI-SLOT / D2.2: the open plugin route page now rides
         // the shared chrome tree — it mounts inside render_app (the
         // route-replacement arm) and its pixels land at the composite
@@ -3450,7 +3450,7 @@ impl App {
 /// The live footer panel's CANVAS for one picker route — the mini
 /// footer family's docked pickers (`footer.command.tsx`) fed from
 /// the store's server lists (model/agent/variant) and settings
-/// state (D2.2: the old Frame-returning dispatch fed the App::frame
+/// state (D2.2: the old Frame-returning dispatch fed the `App::frame`
 /// paste; the canvas now feeds the `surface-footer` mount):
 ///
 /// * **model**: provider-grouped `model.list` rows, the active
@@ -4055,7 +4055,6 @@ fn spawn_plugin_server_worker(
                             &oc_client::types::PluginUpdateBody { targets: vec![target.clone()] },
                         )
                         .await
-                        .map(|_| ())
                         .map_err(|error| error.to_string());
                     let _ = tx.send(PluginServerEvent::Updated { target, result }).await;
                 }
@@ -4067,7 +4066,7 @@ fn spawn_plugin_server_worker(
                             &oc_client::types::PluginInstallBody { target: target.clone() },
                         )
                         .await
-                        .map(|_| target.clone())
+                        .map(|()| target.clone())
                         .map_err(|error| error.to_string());
                     let _ = tx.send(PluginServerEvent::Installed(result)).await;
                 }
@@ -5023,7 +5022,7 @@ pub fn wire_skill_attachments(
 /// `errorMessage` (util/error.ts): the client error's message text.
 /// G-142 — `cliErrorMessage` (util/error.ts:5-87) over the declared
 /// API envelope: the CliError/account family's message, the
-/// ProviderModelNotFoundError "Did you mean" block, and the config
+/// `ProviderModelNotFoundError` "Did you mean" block, and the config
 /// error family's friendly one-liners + issue details. `None`-worthy
 /// shapes fall back to the raw display (v2's `errorMessage`).
 fn client_error_message(error: &oc_client::ClientError) -> String {
@@ -7573,21 +7572,20 @@ async fn fetch_diff(
             base = Some((selected.to_owned(), selected.to_owned()));
         } else {
             let cached = diff_base_cache().lock().expect("diff base cache").get(directory).cloned();
-            let resolved = match cached {
-                Some(hit) => hit,
-                None => {
-                    let response = client
-                        .vcs()
-                        .base(&oc_client::types::VcsBaseQuery { location: location() })
-                        .await
-                        .map_err(|error| error.to_string())?;
-                    let hit = response.data.map(|info| (info.name, info.ref_));
-                    diff_base_cache()
-                        .lock()
-                        .expect("diff base cache")
-                        .insert(directory.to_owned(), hit.clone());
-                    hit
-                }
+            let resolved = if let Some(hit) = cached {
+                hit
+            } else {
+                let response = client
+                    .vcs()
+                    .base(&oc_client::types::VcsBaseQuery { location: location() })
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let hit = response.data.map(|info| (info.name, info.ref_));
+                diff_base_cache()
+                    .lock()
+                    .expect("diff base cache")
+                    .insert(directory.to_owned(), hit.clone());
+                hit
             };
             base = resolved;
         }
@@ -7852,7 +7850,7 @@ fn apply_boot_route(store: &crate::store::Store, boot: &BootArgs, continue_targe
 pub type SessionTerminal =
     opentui_core::terminal::Terminal<opentui_core::terminal::UnixTty, std::io::Stdout>;
 
-/// D2.1b — the live CliRenderer's terminal-session handle. The
+/// D2.1b — the live `CliRenderer`'s terminal-session handle. The
 /// renderer owns OUTPUT scheduling through this handle (title /
 /// mouse-toggle writes, teardown on `destroy`); it always locks the
 /// shared slot, so the editor/suspend terminal rebuilds swap in under
@@ -7897,7 +7895,7 @@ impl opentui_core::renderer::RendererTerminalSession for RendererSessionHandle {
     }
 
     fn is_torn_down(&self) -> bool {
-        self.session.lock().map(|session| session.is_torn_down()).unwrap_or(true)
+        self.session.lock().map_or(true, |session| session.is_torn_down())
     }
 }
 
@@ -9666,7 +9664,7 @@ pub async fn run_with_size(
                     let key = app.prompt_key();
                     let mut composer = app.store.composer(&key);
                     let current =
-                        composer.autocomplete.directory_query().map(|query| query.to_owned());
+                        composer.autocomplete.directory_query().map(std::borrow::ToOwned::to_owned);
                     if current.as_deref() == Some(query.as_str()) {
                         match result {
                             Ok(rows) => {
@@ -10284,7 +10282,7 @@ pub async fn run_with_size(
                 }
                 match caret {
                     Some((x, y)) => {
-                        emitter.cursor().set_position(u32::from(x) + 1, u32::from(y) + 1, true)
+                        emitter.cursor().set_position(u32::from(x) + 1, u32::from(y) + 1, true);
                     }
                     None => emitter.cursor().set_position(1, 1, false),
                 }
@@ -10469,7 +10467,7 @@ pub async fn run_with_size(
         // cooked mode. Called OUTSIDE the session lock above (the
         // renderer's session handle takes the same lock). Same bytes,
         // same order — only the call site moved.
-        let _ = render_renderer.borrow_mut().destroy();
+        let () = render_renderer.borrow_mut().destroy();
     }
     // #46 — the exit epilogue (v2 app.tsx:446-450: the renderer stops,
     // then `process.stdout.write(epilogue + "\n")`): the wordmark +

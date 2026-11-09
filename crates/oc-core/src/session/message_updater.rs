@@ -859,7 +859,7 @@ fn project_terminal_snapshot(
     }
     let mut next = draft.snapshot.clone().unwrap_or_default();
     next.end = snapshot;
-    next.files = files.map(|files| files.to_vec());
+    next.files = files.map(<[oc_schema::RelativePath]>::to_vec);
     draft.snapshot = Some(next);
 }
 
@@ -914,7 +914,7 @@ mod g112_tests {
     }
 
     fn files(value: Option<&[RelativePath]>) -> Option<Vec<RelativePath>> {
-        value.map(|files| files.to_vec())
+        value.map(<[oc_schema::RelativePath]>::to_vec)
     }
 
     /// G-112: key presence carries the semantics — `files: []` writes an

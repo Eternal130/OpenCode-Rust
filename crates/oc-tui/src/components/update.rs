@@ -11,7 +11,7 @@
 //! The one [`Frame`] producer is [`error_component_frame`] — the
 //! render-crash fallback, deliberately NOT a tree surface (a broken
 //! renderer must still paint its last screen). It is a reasoned
-//! retention for D4, not a GridEmitter blocker.
+//! retention for D4, not a `GridEmitter` blocker.
 //!
 //! **K-class licensed exception (lane D4.2, ADR-0019)**:
 //! [`error_component_frame`] is the ONE licensed `Frame` producer
@@ -185,7 +185,7 @@ pub fn dialog_initial_selection(state: &UpdateDialogState) -> usize {
 /// (a caught panic — the terminal stays up, the user reads the error
 /// and exits). No store access: a broken store is the crash cause.
 /// G-287⑤ — the ref's structure (error-component.tsx:27-283): the
-/// "OpenCode crashed" headline, the error panel, the horizontal
+/// "`OpenCode` crashed" headline, the error panel, the horizontal
 /// action row (c Copy report / r Restart / q Quit — the port's crash
 /// loop only wires q/escape to exit; the labels still document the
 /// ref's model), the stack section, and the version footer.
@@ -295,7 +295,7 @@ pub fn build_issue_report(message: &str, stack: &str, version: &str) -> String {
         let mut lo = 0usize;
         let mut hi = cut_points.len() - 1;
         while lo < hi {
-            let mid = (lo + hi + 1) / 2;
+            let mid = (lo + hi).div_ceil(2);
             let cut = format!("{}{MARKER}", &stack[..cut_points[mid]]);
             if url_len(&cut) <= MAX_URL_LENGTH {
                 lo = mid;

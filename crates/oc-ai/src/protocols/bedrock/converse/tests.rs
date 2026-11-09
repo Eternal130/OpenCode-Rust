@@ -43,7 +43,7 @@ fn route() -> Route {
 
 fn media_part(mime: &str, base64: &str) -> ContentPart {
     ContentPart::Media {
-        media: Asset {
+        media: Box::new(Asset {
             source: crate::schema::media::Source::Base64 {
                 data: base64.to_string(),
                 media_type: mime.to_string(),
@@ -53,7 +53,7 @@ fn media_part(mime: &str, base64: &str) -> ContentPart {
             expires_at: None,
             provider_metadata: None,
             headers: None,
-        },
+        }),
         filename: None,
         cache: None,
         metadata: None,
@@ -194,7 +194,7 @@ fn image_media_lowers_to_bytes_and_cache_points_emit_positionally() {
 fn url_or_ref_media_fails_cleanly() {
     let route = route();
     let part = ContentPart::Media {
-        media: Asset {
+        media: Box::new(Asset {
             source: crate::schema::media::Source::Url {
                 url: "https://example.test/x.png".into(),
                 media_type: Some("image/png".into()),
@@ -205,7 +205,7 @@ fn url_or_ref_media_fails_cleanly() {
             expires_at: None,
             provider_metadata: None,
             headers: None,
-        },
+        }),
         filename: None,
         cache: None,
         metadata: None,
@@ -222,7 +222,7 @@ fn url_or_ref_media_fails_cleanly() {
 
 fn doc_part(filename: Option<&str>, base64: &str) -> ContentPart {
     ContentPart::Media {
-        media: Asset {
+        media: Box::new(Asset {
             source: crate::schema::media::Source::Base64 {
                 data: base64.to_string(),
                 media_type: "application/pdf".to_string(),
@@ -232,7 +232,7 @@ fn doc_part(filename: Option<&str>, base64: &str) -> ContentPart {
             expires_at: None,
             provider_metadata: None,
             headers: None,
-        },
+        }),
         filename: filename.map(str::to_string),
         cache: None,
         metadata: None,

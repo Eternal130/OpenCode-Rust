@@ -560,7 +560,7 @@ struct FuzzPty {
     output: Arc<Mutex<Vec<u8>>>,
     vt: Vt,
     /// The exit code once OUR waitpid (the job-control poll) reaped
-    /// the child — std's try_wait then ECHILDs, so the poll caches it.
+    /// the child — std's `try_wait` then ECHILDs, so the poll caches it.
     reaped: Option<i32>,
 }
 
@@ -750,7 +750,7 @@ impl FuzzPty {
         unsafe {
             let mut status = 0;
             let pid = self.child.id() as libc::pid_t;
-            let waited = libc::waitpid(pid, &mut status, libc::WNOHANG | libc::WUNTRACED);
+            let waited = libc::waitpid(pid, &raw mut status, libc::WNOHANG | libc::WUNTRACED);
             if waited == pid {
                 if libc::WIFSTOPPED(status) {
                     let _ = libc::kill(pid, libc::SIGCONT);

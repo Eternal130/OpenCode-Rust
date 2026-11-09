@@ -962,7 +962,7 @@ fn azure_responses_websocket_capable(
     // host check — unanchored on the right, so any path after the host
     // stays Azure-native. The user connection's baseURL is the explicit
     // setting.
-    connection.base_url.as_deref().map_or(true, azure_openai_base_url)
+    connection.base_url.as_deref().is_none_or(azure_openai_base_url)
 }
 
 /// The Azure-native base-URL check (`azure.ts:546` regex, case-insensitive):
@@ -1982,7 +1982,7 @@ mod local_discovery_tests {
             Some(format!("http://127.0.0.1:{port}/v1").as_str()),
             "routes to the running server's openai-compatible endpoint"
         );
-        assert_eq!(resolved.capabilities.tools, true);
+        assert!(resolved.capabilities.tools);
         assert_eq!(resolved.limit.context, 8192, "discovered context limit carries");
         // The provider's inventory is authoritative: an unknown model id
         // fails instead of falling through to the catalog.

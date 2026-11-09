@@ -11,7 +11,7 @@ use crate::environment::{make_files, Driver, Environment};
 use crate::location::LocationRef;
 use crate::project::SqliteProjectStore;
 
-async fn temp_root(tag: &str) -> PathBuf {
+fn temp_root(tag: &str) -> PathBuf {
     let root = std::env::temp_dir()
         .join("oc-core-environment-tests")
         .join(format!("{tag}-{}", std::process::id()));
@@ -21,7 +21,7 @@ async fn temp_root(tag: &str) -> PathBuf {
 }
 
 async fn sqlite_store(tag: &str) -> (Arc<SqliteProjectStore>, PathBuf) {
-    let root = temp_root(tag).await;
+    let root = temp_root(tag);
     let db = crate::database::Database::open_file(root.join("opencode.db")).await.unwrap();
     (Arc::new(SqliteProjectStore::new(db)), root)
 }
@@ -35,7 +35,7 @@ async fn memory_stat_is_lstat_read_follows() {
     let driver = MemoryDriver::new();
     let files = make_files(&driver.driver());
     files.write("/a.txt", b"hello").await.unwrap();
-    driver.symlink("/a.txt", "/link").await.unwrap();
+    driver.symlink("/a.txt", "/link").unwrap();
 
     let stat = files.stat("/link").await.unwrap();
     assert_eq!(stat.kind, FileType::Symlink);
@@ -65,7 +65,7 @@ async fn memory_read_range_and_errors() {
         Err(FilesError::WrongKind { actual: FileType::Directory, .. })
     ));
     // Dangling symlink: lookup sees the symlink, resolution fails NotFound.
-    driver.symlink("/gone", "/dangling").await.unwrap();
+    driver.symlink("/gone", "/dangling").unwrap();
     assert!(matches!(files.read("/dangling", None).await, Err(FilesError::NotFound { .. })));
 }
 
@@ -77,7 +77,7 @@ async fn memory_list_sorts_and_preserves_entry_types() {
     files.write("/d/b.txt", b"").await.unwrap();
     files.write("/d/a.txt", b"").await.unwrap();
     files.mkdir("/d/sub").await.unwrap();
-    driver.symlink("/a.txt", "/d/link").await.unwrap();
+    driver.symlink("/a.txt", "/d/link").unwrap();
 
     let entries = files.list("/d").await.unwrap();
     let names: Vec<(&str, FileType)> =
@@ -106,9 +106,9 @@ async fn memory_list_wrong_kind() {
     ));
     // List follows a final symlink to a directory.
     files.mkdir("/d").await.unwrap();
-    driver.symlink("/d", "/dirlink").await.unwrap();
+    driver.symlink("/d", "/dirlink").unwrap();
     let entries = files.list("/dirlink").await.unwrap();
-    assert!(entries.is_empty());
+    assert_eq!(entries.len(), 0);
 }
 
 #[tokio::test]
@@ -155,15 +155,15 @@ async fn memory_write_through_symlink_and_type_following() {
     let driver = MemoryDriver::new();
     let files = make_files(&driver.driver());
     files.write("/real.txt", b"first").await.unwrap();
-    driver.symlink("/real.txt", "/link").await.unwrap();
+    driver.symlink("/real.txt", "/link").unwrap();
     files.write("/link", b"second").await.unwrap();
     assert_eq!(files.read("/real.txt", None).await.unwrap().bytes, b"second");
 
     assert_eq!(type_following(files.as_ref(), "/link").await.unwrap(), FileType::File);
     files.mkdir("/d").await.unwrap();
-    driver.symlink("/d", "/dirlink").await.unwrap();
+    driver.symlink("/d", "/dirlink").unwrap();
     assert_eq!(type_following(files.as_ref(), "/dirlink").await.unwrap(), FileType::Directory);
-    driver.symlink("/gone", "/dangling").await.unwrap();
+    driver.symlink("/gone", "/dangling").unwrap();
     assert!(matches!(
         type_following(files.as_ref(), "/dangling").await,
         Err(FilesError::NotFound { .. })
@@ -176,7 +176,7 @@ async fn memory_write_through_symlink_and_type_following() {
 
 #[tokio::test]
 async fn exec_defaults_round_trip() {
-    let root = temp_root("exec-roundtrip").await;
+    let root = temp_root("exec-roundtrip");
     let driver = Driver {
         spawner: Arc::new(HostSpawner),
         overrides: None,
@@ -205,7 +205,7 @@ async fn exec_defaults_round_trip() {
 
 #[tokio::test]
 async fn exec_defaults_error_protocol() {
-    let root = temp_root("exec-errors").await;
+    let root = temp_root("exec-errors");
     let driver = Driver {
         spawner: Arc::new(HostSpawner),
         overrides: None,
@@ -255,7 +255,7 @@ async fn exec_defaults_error_protocol() {
 
 #[tokio::test]
 async fn exec_defaults_symlink_semantics() {
-    let root = temp_root("exec-symlink").await;
+    let root = temp_root("exec-symlink");
     let driver = Driver {
         spawner: Arc::new(HostSpawner),
         overrides: None,
@@ -284,7 +284,7 @@ async fn exec_defaults_symlink_semantics() {
 
 #[tokio::test]
 async fn exec_defaults_move_into_dir() {
-    let root = temp_root("exec-move").await;
+    let root = temp_root("exec-move");
     let driver = Driver {
         spawner: Arc::new(HostSpawner),
         overrides: None,
@@ -296,7 +296,7 @@ async fn exec_defaults_move_into_dir() {
     let source = root.join("a.txt");
     files.write(source.to_str().unwrap(), b"x").await.unwrap();
     files.r#move(source.to_str().unwrap(), root.join("d").to_str().unwrap()).await.unwrap();
-    assert!(std::fs::read(root.join("d/a.txt")).unwrap() == b"x");
+    assert_eq!(std::fs::read(root.join("d/a.txt")).unwrap(), b"x");
     assert!(!source.exists());
 }
 
@@ -306,7 +306,7 @@ async fn exec_defaults_move_into_dir() {
 
 #[tokio::test]
 async fn local_driver_semantics() {
-    let root = temp_root("local-driver").await;
+    let root = temp_root("local-driver");
     let files = make_files(&make_local_driver_default());
     let dir = root.join("d");
     files.mkdir(dir.to_str().unwrap()).await.unwrap();
@@ -326,7 +326,7 @@ async fn local_driver_semantics() {
 
     // Move into a directory lands at basename join.
     files.r#move(file.to_str().unwrap(), dir.to_str().unwrap()).await.unwrap();
-    assert!(std::fs::read(dir.join("a.txt")).unwrap() == b"hello");
+    assert_eq!(std::fs::read(dir.join("a.txt")).unwrap(), b"hello");
     assert!(matches!(
         files.r#move(root.join("nope").to_str().unwrap(), dir.to_str().unwrap()).await,
         Err(FilesError::NotFound { .. })
@@ -445,7 +445,7 @@ async fn environment_pty_resolves_per_location() {
         crate::bus::BusOptions::deterministic(),
     ))
     .create_with(
-        local,
+        &local,
         &crate::pty::CreateInput {
             command: Some("/bin/sh".to_string()),
             args: Some(vec!["-c".to_string(), "exit 0".to_string()]),
@@ -470,7 +470,7 @@ async fn memory_driver_pty_fails_closed() {
         command: "/bin/sh".to_string(),
         args: Vec::new(),
         cwd: "/tmp".to_string(),
-        env: Default::default(),
+        env: std::collections::BTreeMap::default(),
         cols: 80,
         rows: 24,
     });

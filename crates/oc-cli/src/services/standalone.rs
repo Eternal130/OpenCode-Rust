@@ -70,7 +70,7 @@ impl StandaloneServer {
     /// it reaps the exited child; `None` when the status is not yet
     /// observed (no child / racing the reaper).
     pub fn exit_reason(&self) -> Option<String> {
-        self.exit_detail.lock().unwrap_or_else(|poison| poison.into_inner()).clone()
+        self.exit_detail.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 
     fn exited_flag(&self) -> bool {
@@ -90,7 +90,7 @@ impl StandaloneServer {
         // delivered even if this process dies.
         self.stdin = None;
         if let Some(child) = self.child.as_ref() {
-            let mut child = child.lock().unwrap_or_else(|poison| poison.into_inner());
+            let mut child = child.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             // Incident 2026-10 rule: signals only ever target the PID of a
             // Child handle we still own and have not reaped — the pid is
             // taken from the handle at call time, never from stored state.
@@ -202,7 +202,8 @@ pub async fn start_with(options: Options) -> Result<StandaloneServer, String> {
         // Reap and describe the exit (best effort; a hair of latency is
         // possible between EOF and the waitable state).
         for _ in 0..100 {
-            let mut guard = child_for_task.lock().unwrap_or_else(|poison| poison.into_inner());
+            let mut guard =
+                child_for_task.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             match guard.try_wait() {
                 Ok(Some(status)) => {
                     let detail = if let Some(code) = status.code() {
@@ -218,8 +219,9 @@ pub async fn start_with(options: Options) -> Result<StandaloneServer, String> {
                             None
                         }
                     };
-                    *exit_detail_for_task.lock().unwrap_or_else(|poison| poison.into_inner()) =
-                        detail;
+                    *exit_detail_for_task
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = detail;
                     return;
                 }
                 Ok(None) => drop(guard),
@@ -239,7 +241,7 @@ pub async fn start_with(options: Options) -> Result<StandaloneServer, String> {
     let ready_line =
         if exited.load(std::sync::atomic::Ordering::Relaxed) { None } else { ready_line };
     let Some(ready_line) = ready_line else {
-        let mut guard = child.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut guard = child.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let _ = guard.kill();
         let _ = guard.wait();
         return Err("Standalone server exited before reporting readiness".to_owned());

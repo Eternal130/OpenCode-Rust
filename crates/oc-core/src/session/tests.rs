@@ -3678,7 +3678,7 @@ async fn g226_same_turn_failed_twice_appends_one_synthetic_row() {
     assert_eq!(rows[0].1.as_deref(), Some("failure 1"));
     let first_id = rows[0].0.clone();
 
-    execution.resume("ses_g226_same").await;
+    let _ = execution.resume("ses_g226_same").await;
     let rows = assistant_error_rows(&store, "ses_g226_same").await;
     assert_eq!(rows.len(), 1, "second failure of the SAME turn adds no row: {rows:?}");
     assert_eq!(rows[0].0, first_id, "the existing row's message id is reused");
@@ -3700,7 +3700,7 @@ async fn g226_distinct_failing_turns_get_distinct_rows() {
     seed_user_message(&db, "ses_g226_two", "msg_g226_user1", 0).await;
 
     let store = SessionStore::new(db.clone());
-    execution.resume("ses_g226_two").await;
+    let _ = execution.resume("ses_g226_two").await;
     let first = assistant_error_rows(&store, "ses_g226_two").await;
     assert_eq!(first.len(), 1);
 
@@ -3708,7 +3708,7 @@ async fn g226_distinct_failing_turns_get_distinct_rows() {
     // after the first failure's rows, before the next failure's).
     let next = next_event_seq(&db).await;
     seed_user_message(&db, "ses_g226_two", "msg_g226_user2", next).await;
-    execution.resume("ses_g226_two").await;
+    let _ = execution.resume("ses_g226_two").await;
     let second = assistant_error_rows(&store, "ses_g226_two").await;
     assert_eq!(second.len(), 2, "distinct turns keep distinct rows");
     assert_ne!(first[0].0, second[1].0);

@@ -3,7 +3,7 @@
 //! plugin-source fs-watch leg, source.ts:60-68), drop-in add/delete
 //! drives the add/remove path, the `sdk.plugin.updated` bus event
 //! triggers a pass (supervisor.ts:213), config-only changes keep the
-//! ConfigReloadBridge's refresh working (no regression), and the 100ms
+//! `ConfigReloadBridge`'s refresh working (no regression), and the 100ms
 //! debounce coalesces a burst of quick edits into ONE pass
 //! (supervisor.ts:236).
 //!
@@ -78,8 +78,7 @@ fn bun_available() -> bool {
     std::process::Command::new("bun")
         .arg("--version")
         .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|output| output.status.success())
 }
 
 /// The committed helloworld fixture copied into the sandbox (tests
@@ -230,7 +229,7 @@ async fn sdk_plugin_updated_bus_event_triggers_a_pass() {
 }
 
 /// No regression: a config-ONLY change (no plugin source touched) still
-/// goes through ConfigReloadBridge's refresh — the plugin survives the
+/// goes through `ConfigReloadBridge`'s refresh — the plugin survives the
 /// reload (the bridge leg kept its immediate pass, boot.rs).
 #[tokio::test]
 async fn config_only_change_keeps_the_plugin_alive() {

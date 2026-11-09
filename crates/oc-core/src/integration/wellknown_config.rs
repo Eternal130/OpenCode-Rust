@@ -245,8 +245,14 @@ impl crate::integration::IntegrationHost {
             if let Some(definition) =
                 crate::bus::registry::by_type(crate::bus::registry::INTEGRATION_UPDATED)
             {
-                let _ =
-                    self.bus.publish(definition, serde_json::json!({}), Default::default()).await;
+                let _ = self
+                    .bus
+                    .publish(
+                        definition,
+                        serde_json::json!({}),
+                        crate::bus::PublishOptions::default(),
+                    )
+                    .await;
             }
         }
     }

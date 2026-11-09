@@ -115,7 +115,7 @@ pub struct AppState {
     /// strategies.ts:48-65). Seeded at boot from the plugin snapshot;
     /// the worktree handlers read it instead of building a
     /// request-local registry.
-    /// G-24 residual: behind a RwLock so the post-update hot reload can
+    /// G-24 residual: behind a `RwLock` so the post-update hot reload can
     /// re-run the strategy-registry seeding (mirror of boot.rs's
     /// `plugin_worktree_registry`) when a plugin update lands.
     pub worktree_strategies: std::sync::Arc<

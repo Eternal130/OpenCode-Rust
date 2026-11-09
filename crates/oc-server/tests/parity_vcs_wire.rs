@@ -62,7 +62,7 @@ async fn boot(workspace: std::path::PathBuf) -> TestServer {
     // launch directory at boot — serialize the critical section so
     // parallel tests cannot boot in another test's workspace.
     static BOOT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = BOOT_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let _guard = BOOT_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let data = tempfile::tempdir().expect("data tempdir");
     std::env::set_current_dir(&workspace).expect("chdir to workspace");
     let engine =

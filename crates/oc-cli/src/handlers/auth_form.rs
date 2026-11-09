@@ -53,7 +53,7 @@ pub fn answer_form(
             None if field_type(field) != "external"
                 && field.get("hidden").and_then(Value::as_bool).unwrap_or(false) =>
             {
-                field.get("default").map(|default| json_to_form_value(default))
+                field.get("default").map(json_to_form_value)
             }
             None => answer_field(field)?,
         };
@@ -182,7 +182,7 @@ fn answer_field(field: &Value) -> Result<Option<FormValue>, String> {
             println!("  {url}");
             crate::handlers::auth::open_url(url);
             let acknowledged = Confirm::new()
-                .with_prompt(format!("{} Continue after completing this step?", message))
+                .with_prompt(format!("{message} Continue after completing this step?"))
                 .default(true)
                 .interact()
                 .map_err(|error| error.to_string())?;
@@ -347,7 +347,7 @@ fn answer_field(field: &Value) -> Result<Option<FormValue>, String> {
 fn prompt_text(field: &Value) -> Result<String, String> {
     let message = field_title(field);
     let field_type = field_type(field);
-    let mut input = Input::<String>::new().with_prompt(message);
+    let input = Input::<String>::new().with_prompt(message);
     let _ = field_type;
     let required = field.get("required").and_then(Value::as_bool).unwrap_or(false);
     input
@@ -622,7 +622,7 @@ mod tests {
     }
 
     /// `when` conditions: an inactive field cannot be supplied, and a
-    /// satisfied condition makes it required-validated (ref active()).
+    /// satisfied condition makes it required-validated (ref `active()`).
     #[test]
     fn when_conditions_gate_fields() {
         let fields = vec![

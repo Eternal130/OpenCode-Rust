@@ -521,14 +521,14 @@ fn gemini_prepares_multimodal_user_input_and_tool_history() {
             vec![
                 ContentPart::text("What is in this image?"),
                 ContentPart::Media {
-                    media: media::base64("AAECAw==", "image/png"),
+                    media: Box::new(media::base64("AAECAw==", "image/png")),
                     filename: None,
                     cache: None,
                     metadata: None,
                     provider_metadata: None,
                 },
                 ContentPart::Media {
-                    media: media::base64("JVBERi0xLjQ=", "application/pdf"),
+                    media: Box::new(media::base64("JVBERi0xLjQ=", "application/pdf")),
                     filename: None,
                     cache: None,
                     metadata: None,
@@ -653,7 +653,7 @@ fn gemini_strips_matching_data_urls_to_raw_base64() {
         .with_message(Message::new(
             MessageRole::User,
             vec![ContentPart::Media {
-                media: media::parse_data_url("data:image/png;base64,AAEC").unwrap(),
+                media: Box::new(media::parse_data_url("data:image/png;base64,AAEC").unwrap()),
                 filename: None,
                 cache: None,
                 metadata: None,
@@ -822,8 +822,8 @@ fn gemini_collects_legacy_tool_media_into_one_turn_after_merged_responses() {
 fn gemini_passes_encoded_media_through_without_local_validation() {
     let fixture = empty_body_route();
     let model = model_2_5(&fixture.route);
-    let media_part = |asset| ContentPart::Media {
-        media: asset,
+    let media_part = |asset: crate::schema::Asset| ContentPart::Media {
+        media: Box::new(asset),
         filename: None,
         cache: None,
         metadata: None,
@@ -1028,7 +1028,7 @@ fn gemini_replays_generated_assistant_media_as_model_inline_data() {
     let fixture = empty_body_route();
     let model = model_2_5(&fixture.route);
     let media_part = |signature: &str| ContentPart::Media {
-        media: media::base64("AAECAw==", "image/png"),
+        media: Box::new(media::base64("AAECAw==", "image/png")),
         filename: None,
         cache: None,
         metadata: None,

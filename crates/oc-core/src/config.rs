@@ -703,7 +703,7 @@ impl WatchedConfig {
 /// interleave their read-modify-write and lose one side's patch. The
 /// port guards the whole read-patch-write with a process-wide mutex.
 pub fn update_shell(globals: &GlobalDirs, shell: Option<&str>) -> std::io::Result<()> {
-    let _guard = update_shell_lock().lock().unwrap_or_else(|poison| poison.into_inner());
+    let _guard = update_shell_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let candidates: Vec<PathBuf> = NAMES.iter().map(|name| globals.config.join(name)).collect();
     let filepath = candidates
         .iter()

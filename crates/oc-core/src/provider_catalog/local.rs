@@ -96,12 +96,9 @@ pub struct Endpoint {
 pub fn resolve_endpoint(spec: &LocalSpec, base_url_override: Option<&str>) -> Option<Endpoint> {
     let raw = base_url_override
         .filter(|url| !url.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| format!("{}/v1", spec.origin));
+        .map_or_else(|| format!("{}/v1", spec.origin), str::to_owned);
     let base_url = raw.trim_end_matches('/').to_owned();
-    let Some((scheme, rest)) = base_url.split_once("://") else {
-        return None;
-    };
+    let (scheme, rest) = base_url.split_once("://")?;
     if scheme != "http" && scheme != "https" {
         return None;
     }
@@ -191,35 +188,32 @@ impl LocalDiscovery {
                     }
                 }
             }
-            match discover(&self.client, spec, &endpoint, api_key.as_deref()).await {
-                Ok(models) => {
-                    let stamp = fingerprint(&endpoint.base_url, api_key.as_deref(), &models);
-                    let mut entries = self.entries.write();
-                    if models.is_empty() {
-                        changed |= entries.remove(spec.id).is_some();
-                    } else {
-                        let provider = CustomProvider {
-                            id: spec.id.to_owned(),
-                            name: spec.name.to_owned(),
-                            base_url: endpoint.base_url.clone(),
-                            api_key: api_key.clone(),
-                            models,
-                            ..CustomProvider::default()
-                        };
-                        let existing = entries.get(spec.id).and_then(|p| {
-                            (fingerprint(&p.base_url, p.api_key.as_deref(), &p.models) == stamp)
-                                .then(|| p.id.clone())
-                        });
-                        if existing.is_none() {
-                            entries.insert(spec.id.to_owned(), provider);
-                            changed = true;
-                        }
+            if let Ok(models) = discover(&self.client, spec, &endpoint, api_key.as_deref()).await {
+                let stamp = fingerprint(&endpoint.base_url, api_key.as_deref(), &models);
+                let mut entries = self.entries.write();
+                if models.is_empty() {
+                    changed |= entries.remove(spec.id).is_some();
+                } else {
+                    let provider = CustomProvider {
+                        id: spec.id.to_owned(),
+                        name: spec.name.to_owned(),
+                        base_url: endpoint.base_url.clone(),
+                        api_key: api_key.clone(),
+                        models,
+                        ..CustomProvider::default()
+                    };
+                    let existing = entries.get(spec.id).and_then(|p| {
+                        (fingerprint(&p.base_url, p.api_key.as_deref(), &p.models) == stamp)
+                            .then(|| p.id.clone())
+                    });
+                    if existing.is_none() {
+                        entries.insert(spec.id.to_owned(), provider);
+                        changed = true;
                     }
                 }
-                // Unreachable/unhealthy/malformed: keep the last
-                // successful inventory (ref local.ts:115).
-                Err(_) => {}
             }
+            // Unreachable/unhealthy/malformed: keep the last
+            // successful inventory (ref local.ts:115).
         }
         changed
     }
@@ -342,7 +336,7 @@ fn local_model(
 /// model (cached by digest in the ref; the port re-asks each refresh —
 /// bounded by the 1 s timeout and one refresh every 30 s). Only models
 /// whose show response advertises the `completion` capability list;
-/// the FIRST `*.context_length` model_info entry sets the context
+/// the FIRST `*.context_length` `model_info` entry sets the context
 /// limit; tools/vision come from the capability list.
 async fn discover_ollama(
     client: &reqwest::Client,
@@ -513,9 +507,11 @@ pub(crate) mod test_support {
     use std::collections::HashMap;
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
+    /// (method, path, body) triple recorded per hit.
+    pub type HttpHits = Vec<(String, String, Option<String>)>;
     pub struct HttpMock {
         pub port: u16,
-        pub hits: std::sync::Arc<std::sync::Mutex<Vec<(String, String, Option<String>)>>>,
+        pub hits: std::sync::Arc<std::sync::Mutex<HttpHits>>,
     }
 
     pub async fn http_mock(
@@ -734,14 +730,14 @@ mod tests {
                     { "type": "embedding", "key": "e", "display_name": "E",
                       "loaded_instances": [], "max_context_length": 10 },
                     { "type": "llm", "key": "qwen3", "display_name": "Qwen3 Coder",
-                      "architecture": "qwen", "max_context_length": 131072,
+                      "architecture": "qwen", "max_context_length": 131_072,
                       "loaded_instances": [
-                          { "config": { "context_length": 131072 } },
+                          { "config": { "context_length": 131_072 } },
                           { "config": { "context_length": 8192 } }
                       ],
                       "capabilities": { "vision": false, "trained_for_tool_use": true } },
                     { "type": "llm", "key": "gpt-oss", "display_name": "GPT OSS",
-                      "architecture": null, "max_context_length": 131072,
+                      "architecture": null, "max_context_length": 131_072,
                       "loaded_instances": [] }
                 ] })
                 .to_string(),
@@ -767,7 +763,7 @@ mod tests {
         let provider = discovery.provider("lmstudio").expect("lmstudio injected");
         assert_eq!(provider.models.len(), 2, "embedding type drops");
         assert_eq!(provider.models[0].id, "gpt-oss");
-        assert_eq!(provider.models[0].limit.expect("limit").context, Some(131072));
+        assert_eq!(provider.models[0].limit.expect("limit").context, Some(131_072));
         assert_eq!(provider.models[0].family, None, "null architecture stays unset");
         assert_eq!(provider.models[0].capabilities.as_ref().expect("caps").tools, Some(false));
         assert_eq!(provider.models[1].id, "qwen3");

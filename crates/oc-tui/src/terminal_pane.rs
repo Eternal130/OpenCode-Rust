@@ -81,9 +81,9 @@ fn hue_distance(first: f64, second: f64) -> f64 {
 }
 
 /// `terminalHue` (terminal-pane.tsx:370-379): the hue scale whose
-/// 200-step sits nearest the target OkLCh hue (chroma ≥ 0.03, alpha
+/// 200-step sits nearest the target `OkLCh` hue (chroma ≥ 0.03, alpha
 /// > 0), else the accent 200 fallback; matches beyond 30° also fall
-/// back.
+/// > back.
 fn terminal_hue(
     theme: &oc_theme::types::ResolvedThemeTokens,
     target: f64,

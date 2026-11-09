@@ -116,14 +116,14 @@ fn mistral_lowers_native_messages_media_tool_choice_options_and_replay_ids() {
             vec![
                 ContentPart::text("Inspect"),
                 ContentPart::Media {
-                    media: media::base64("aW1hZ2U=", "image/png"),
+                    media: Box::new(media::base64("aW1hZ2U=", "image/png")),
                     filename: None,
                     cache: None,
                     metadata: None,
                     provider_metadata: None,
                 },
                 ContentPart::Media {
-                    media: media::base64("cGRm", "application/pdf"),
+                    media: Box::new(media::base64("cGRm", "application/pdf")),
                     filename: None,
                     cache: None,
                     metadata: None,
@@ -344,11 +344,11 @@ fn mistral_preserves_remote_media_urls_and_structured_tool_result_media() {
         .with_message(Message::new(
             MessageRole::User,
             vec![ContentPart::Media {
-                media: media::url(
+                media: Box::new(media::url(
                     "https://assets.example.test/input.png",
                     Some("image/png".into()),
                     None,
-                ),
+                )),
                 filename: None,
                 cache: None,
                 metadata: None,

@@ -57,12 +57,21 @@ impl SpringTransition {
 }
 
 /// `tween({duration, ease})` (animation.ts:37-42).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy)]
 pub struct TweenTransition {
     /// Seconds (the ref's `duration` is seconds against `now/1_000`).
     pub duration: f64,
     /// The ease fn (`smoothstep` default).
     pub ease: fn(f64) -> f64,
+}
+
+// Hand-rolled equality: fn-pointer `==` is not guaranteed meaningful
+// across codegen units (clippy::fn_pointer_eq) — compare the pointed-to
+// code addresses explicitly instead of deriving PartialEq.
+impl PartialEq for TweenTransition {
+    fn eq(&self, other: &Self) -> bool {
+        self.duration == other.duration && self.ease as usize == other.ease as usize
+    }
 }
 
 /// `Transition` (animation.ts:15-19).
@@ -113,10 +122,9 @@ impl Animatable {
     /// resets `started`/`previous` at animate time — the port defers
     /// to the next pump sample, same wall-clock semantics).
     pub fn animate(&mut self, now_ms: f64, next: &[(&str, f64)]) {
-        let same_target = next
-            .iter()
-            .all(|&(key, target)| self.state.get(key).is_some_and(|state| state.target == target))
-            && next.len() == self.state.len();
+        let same_target = next.iter().all(|&(key, target)| {
+            self.state.get(key).is_some_and(|state| (state.target - target).abs() < f64::EPSILON)
+        }) && next.len() == self.state.len();
         if same_target {
             return;
         }
@@ -240,7 +248,7 @@ pub fn advance_tween(spec: TweenTransition, from: f64, target: f64, progress: f6
     from + (target - from) * eased
 }
 
-/// The RetryProvider's timing constants (retry-provider.tsx:19-21):
+/// The `RetryProvider`'s timing constants (retry-provider.tsx:19-21):
 /// the FADE half-duration and the RESIZE midpoint, both ms.
 pub const RETRY_FADE_MS: f64 = 80.0;
 pub const RETRY_RESIZE_MS: f64 = 60.0;

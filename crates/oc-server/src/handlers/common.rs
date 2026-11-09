@@ -576,7 +576,7 @@ pub fn session_row_to_info(row: &oc_core::database::schema::SessionRow) -> Resul
 
 /// Decodes a JSON-typed session column. G-253: a non-empty column whose
 /// JSON is corrupted must fail the read explicitly (logged cause + 500
-/// UnknownError with a log ref) instead of silently vanishing from the
+/// `UnknownError` with a log ref) instead of silently vanishing from the
 /// wire — the ref schema-decodes the whole row (session.ts decode) so a
 /// corrupt column surfaces as a decode failure, never a silent drop.
 fn decode_json_column(
@@ -590,7 +590,7 @@ fn decode_json_column(
         Err(error) => {
             crate::errors::debug_cause(
                 "session:row_decode",
-                &format!("session {session_id}: corrupt {column} column: {error}"),
+                format!("session {session_id}: corrupt {column} column: {error}"),
             );
             Err(ApiError::unknown_ref())
         }
@@ -601,10 +601,10 @@ fn decode_json_column(
 /// `{id, type}` back into the projected `data` JSON.
 ///
 /// G-253: corrupted `data` is an explicit error (logged cause + 500
-/// UnknownError with ref), mirroring ref history.ts:62-77
+/// `UnknownError` with ref), mirroring ref history.ts:62-77
 /// `decodeMessageRow` → `MessageDecodeError` → session-error.ts
 /// `failedMessageDecode` (logError "failed to decode session message" +
-/// UnknownError "Unexpected server error. Check server logs for
+/// `UnknownError` "Unexpected server error. Check server logs for
 /// details.") — never a 200 with an `{id,type}`-only empty shell.
 pub fn message_row_to_info(
     row: &oc_core::database::schema::SessionMessageRow,
@@ -612,7 +612,7 @@ pub fn message_row_to_info(
     let mut data: Value = serde_json::from_str(&row.data).map_err(|error| {
         crate::errors::debug_cause(
             "session:message_decode",
-            &format!(
+            format!(
                 "failed to decode session message: session {} message {}: {error}",
                 row.session_id, row.id
             ),
@@ -622,7 +622,7 @@ pub fn message_row_to_info(
     let Value::Object(map) = &mut data else {
         crate::errors::debug_cause(
             "session:message_decode",
-            &format!(
+            format!(
                 "failed to decode session message: session {} message {}: data is not a JSON object",
                 row.session_id, row.id
             ),

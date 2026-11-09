@@ -1,7 +1,7 @@
 //! G-237 — `ctx.ui.prompt` end-to-end against a REAL bun guest: the
 //! fixture's `tui.poke` handler awaits a prompt; the deferred request
 //! carries the guest's jsonrpc id (the promise's settle key) plus the
-//! ref's option fields (api.tsx:367-386 → DialogPromptOptions,
+//! ref's option fields (api.tsx:367-386 → `DialogPromptOptions`,
 //! context.ts:348-353). The embedder's `resolve_ui_request` settles
 //! the promise — the typed string on submit, null on dismiss.
 
@@ -15,7 +15,7 @@ use oc_plugin_host::UiRequest;
 /// consumes; the found request is captured, never dropped).
 fn wait_for_prompt(host: &oc_plugin_host::PluginHost, label: &str) -> UiRequest {
     let found = std::cell::RefCell::new(None);
-    let ok = common::wait_for(Duration::from_secs(10), || {
+    let _ok = common::wait_for(Duration::from_secs(10), || {
         if found.borrow().is_some() {
             return true;
         }

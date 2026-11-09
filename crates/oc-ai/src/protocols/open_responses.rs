@@ -584,7 +584,7 @@ fn tool_file_media(item: &Value) -> Option<ContentPart> {
     // The declared mime wins over any data-URL prefix.
     asset.media_type = mime.to_string();
     Some(ContentPart::Media {
-        media: asset,
+        media: Box::new(asset),
         filename: item.get("name").and_then(Value::as_str).map(str::to_string),
         cache: None,
         metadata: None,

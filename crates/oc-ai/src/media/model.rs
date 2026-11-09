@@ -618,7 +618,7 @@ pub struct ResponseContext<'a, T> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum MediaResponse {
     Image(ImageResponse),
-    Speech(SpeechResponse),
+    Speech(Box<SpeechResponse>),
     Video(VideoResponse),
     Transcription(TranscriptionResponse),
 }
@@ -630,7 +630,7 @@ pub enum CollectedResponse {
     /// (TS `Effect.die`; the driver surfaces the protocol's own failure).
     Incomplete,
     Image(ImageResponse),
-    Speech(SpeechResponse),
+    Speech(Box<SpeechResponse>),
     Video(VideoResponse),
     Transcription(TranscriptionResponse),
 }
@@ -673,13 +673,13 @@ pub fn collect_speech_response(events: &[SpeechEvent]) -> CollectedResponse {
             _ => Vec::new(),
         })
         .collect();
-    CollectedResponse::Speech(SpeechResponse {
+    CollectedResponse::Speech(Box::new(SpeechResponse {
         audio: audio.clone(),
         timestamps: if timestamps.is_empty() { None } else { Some(timestamps) },
         usage: usage.clone(),
         notices: notices.clone(),
         provider_metadata: provider_metadata.clone(),
-    })
+    }))
 }
 
 /// `collectResponse` for video streams (video.ts:149-161).

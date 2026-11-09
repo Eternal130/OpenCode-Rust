@@ -82,7 +82,7 @@ fn repository_keeps_file_references_distinct() {
 }
 
 /// G-278③ — `file://host/path` is REJECTED (ref `fileURLToPath` throws
-/// ERR_INVALID_FILE_URL_HOST → parse returns undefined); the host never
+/// `ERR_INVALID_FILE_URL_HOST` → parse returns undefined); the host never
 /// becomes a path segment.
 #[test]
 fn repository_rejects_file_urls_with_a_host() {
@@ -91,7 +91,7 @@ fn repository_rejects_file_urls_with_a_host() {
     // Percent-escapes decode; encoded separators reject.
     let reference = parse("file:///tmp/my%20repo").unwrap();
     assert!(
-        matches!(&reference, super::repository::Reference::File(file) if file.path == PathBuf::from("/tmp/my repo"))
+        matches!(&reference, super::repository::Reference::File(file) if file.path == *"/tmp/my repo")
     );
     assert!(parse("file:///a%2Fb").is_none());
 }
@@ -279,11 +279,11 @@ fn cache_persists_daily_throttle_and_serializes_refreshes() {
     commit(&fixture.source, "two\n", "advance main");
     // Fresh cache instance: the throttle record must persist (the ref test
     // recreates the layer between checks).
-    let cache = cache_layer(
-        &fixture,
-        Arc::clone(&store) as Arc<dyn RefreshStore>,
-        SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_100),
-    );
+    // clippy's from_mins suggestion is unstable (duration_constructors)
+    // on the pinned 1.99 toolchain — intentional from_secs fallback.
+    #[allow(clippy::duration_suboptimal_units)]
+    let epoch = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_100);
+    let cache = cache_layer(&fixture, Arc::clone(&store) as Arc<dyn RefreshStore>, epoch);
     assert_eq!(cache.ensure(&ensure(&fixture.reference)).unwrap().status, "cached");
     let key = format!("repository-cache:{}", initial.local_path.to_string_lossy());
     store.set_attempted_at(&key, 1_700_000_100_000 - 86_400_000);
@@ -298,8 +298,9 @@ fn cache_persists_daily_throttle_and_serializes_refreshes() {
     std::fs::remove_dir_all(&initial.local_path).unwrap();
     let store2 = Arc::new(MemoryRefreshStore::default());
     store2.set_attempted_at(&key, 1_700_000_100_000);
-    let cache =
-        cache_layer(&fixture, store2, SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_100));
+    #[allow(clippy::duration_suboptimal_units)]
+    let epoch = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_100);
+    let cache = cache_layer(&fixture, store2, epoch);
     assert_eq!(cache.ensure(&ensure(&fixture.reference)).unwrap().status, "cloned");
     assert_eq!(read(&initial.local_path.join("README.md")), "two\n");
 }
@@ -467,7 +468,7 @@ fn reference_reads_the_editor_source_by_name() {
     assert_eq!(references.get("docs"), Some(replacement.clone()));
     references.remove("docs");
     assert_eq!(references.get("docs"), None);
-    assert!(references.list().is_empty());
+    assert_eq!(references.list().len(), 0);
 }
 
 #[test]
@@ -568,8 +569,8 @@ fn reference_refresh_ensures_git_sources_daily() {
 
     // reference.test.ts "reads batched references before cache work": a
     // mocked cache records the ensure inputs.
-    let operations: Arc<PLMutex<Vec<(String, Option<String>, Refresh)>>> =
-        Arc::new(PLMutex::new(Vec::new()));
+    type RecordedOps = Vec<(String, Option<String>, Refresh)>;
+    let operations: Arc<PLMutex<RecordedOps>> = Arc::new(PLMutex::new(Vec::new()));
     let recorder = {
         let operations = Arc::clone(&operations);
         let repos = PathBuf::from("/repos");
@@ -661,8 +662,8 @@ fn instructions_list_available_references() {
 
 #[test]
 fn instructions_omit_empty_and_undescribed_references() {
-    assert!(super::instructions::summaries(&[]).is_empty());
-    assert!(super::instructions::summaries(&[instructions_info("docs", None)]).is_empty());
+    assert_eq!(super::instructions::summaries(&[]).len(), 0);
+    assert_eq!(super::instructions::summaries(&[instructions_info("docs", None)]).len(), 0);
 }
 
 #[test]
@@ -972,9 +973,9 @@ fn g231_forced_refspec_lands_non_fast_forward_update() {
 // G-270② — the config-plugin transform (config/plugin/reference.ts:23-66)
 // ---------------------------------------------------------------------------
 
-fn config_document(path: Option<&str>, references: serde_json::Value) -> oc_schema::config::Entry {
+fn config_document(path: Option<&str>, references: &serde_json::Value) -> oc_schema::config::Entry {
     oc_schema::config::Entry::Document(Box::new(oc_schema::config::Document {
-        info: serde_json::from_value(serde_json::json!({ "references": references }))
+        info: serde_json::from_value(serde_json::json!({ "references": references.clone() }))
             .expect("config document"),
         path: path.map(str::to_owned),
     }))
@@ -987,7 +988,7 @@ fn g270_sources_from_config_mirrors_the_config_plugin() {
     let entries = vec![
         config_document(
             Some("/work/opencode.json"),
-            serde_json::json!({
+            &serde_json::json!({
                 "local-abs": { "type": "local", "path": "/abs/docs" },
                 "local-rel": "./docs",
                 "local-home": "~/refs/x",
@@ -1001,7 +1002,7 @@ fn g270_sources_from_config_mirrors_the_config_plugin() {
         ),
         // A path-less document (the global config has no file path):
         // relative paths resolve against the LOCATION directory.
-        config_document(None, serde_json::json!({ "global-ref": "./global" })),
+        config_document(None, &serde_json::json!({ "global-ref": "./global" })),
     ];
     let sources = ReferenceService::sources_from_config(&entries, location, home);
     let by_name = |name: &str| {
@@ -1143,7 +1144,7 @@ fn g270_install_seeds_silently() {
     );
 }
 
-/// apply() = install + ONE notify: with refresh-on-mutation enabled, a
+/// `apply()` = install + ONE notify: with refresh-on-mutation enabled, a
 /// single apply of N git sources results in exactly one forked refresh
 /// pass (the single-transform shape of the ref's config plugin — not one
 /// per entry).

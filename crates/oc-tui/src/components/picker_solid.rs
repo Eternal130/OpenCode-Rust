@@ -448,7 +448,7 @@ pub(crate) const PICKER_SKELETON_INDEX: usize = 2;
 
 /// The mounted panel's reactive state, kept across frames so content
 /// churn patches dyn-props in place; a geometry-key change (the
-/// colors_key arm: width + every baked color) rebuilds the wrapper's
+/// `colors_key` arm: width + every baked color) rebuilds the wrapper's
 /// content subtree.
 struct PickerEntry2 {
     signal: Signal<PanelInputs>,
@@ -510,7 +510,7 @@ pub fn picker_panel_mount(
         let signal = Signal::new(PanelInputs { items: items.clone() });
         let element = panel_element(&signal, width, rgb_of(colors.raised));
         PICKER_TREE.with_borrow_mut(|slot| *slot = Some(PickerEntry2 { signal, key }));
-        (Some(element), Some(format!("picker-content@{width}x{:?}", key)))
+        (Some(element), Some(format!("picker-content@{width}x{key:?}")))
     } else {
         PICKER_TREE.with_borrow_mut(|slot| {
             slot.as_ref().expect("checked above").signal.set(PanelInputs { items });

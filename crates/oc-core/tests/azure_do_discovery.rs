@@ -1,4 +1,4 @@
-//! G-259 — the azure deployment discovery + DigitalOcean routers syncs
+//! G-259 — the azure deployment discovery + `DigitalOcean` routers syncs
 //! over stub HTTP: the exact request shapes (endpoint URLs, query
 //! params, auth headers, the Resource Graph POST body), the response
 //! folding into the provider snapshots, the management-lane fallback
@@ -44,12 +44,12 @@ impl Recorded {
     }
 }
 
+type Handler = Arc<dyn Fn(&str, &Recorded) -> (u16, String) + Send + Sync>;
+
 /// A loopback HTTP stub: records every request and answers through the
 /// per-path handler (path = pathname + query); the handler receives
 /// the stub's own origin (for same-origin `nextLink`s).
-async fn stub(
-    handler: Arc<dyn Fn(&str, &Recorded) -> (u16, String) + Send + Sync>,
-) -> (String, Arc<std::sync::Mutex<Vec<Recorded>>>) {
+async fn stub(handler: Handler) -> (String, Arc<std::sync::Mutex<Vec<Recorded>>>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let port = listener.local_addr().expect("port").port();
     let origin = format!("http://127.0.0.1:{port}");
@@ -114,7 +114,7 @@ async fn stub(
                         break;
                     }
                     // Consume the handled bytes; keep any pipelined rest.
-                    buffer = rest[content_length..].as_bytes().to_vec();
+                    buffer = rest.as_bytes()[content_length..].to_vec();
                 }
             });
         }
@@ -421,7 +421,7 @@ async fn azure_failures_keep_the_previous_state() {
     assert_eq!(sync.state().expect("still seeded").merged.models.len(), 1);
 }
 
-/// G-259 — the DigitalOcean routers refresh (digitalocean.ts:137-153
+/// G-259 — the `DigitalOcean` routers refresh (digitalocean.ts:137-153
 /// over provider-digitalocean.test.ts:96-153): GET the routers
 /// endpoint with the bearer token, fold the routers into the merged
 /// snapshot, keep the last success through a 503, and return to the

@@ -390,7 +390,7 @@ fn ui_dialog_prompt() {
 #[test]
 fn dialog_experiments() {
     let store = Store::new(Runtime::new());
-    let mut dispatcher = StoreDispatcher;
+    let _dispatcher = StoreDispatcher;
 
     // The dialog opens through the store API directly — the palette
     // row superset was removed (D3-7b); ref's entry is the

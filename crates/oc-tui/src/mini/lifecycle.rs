@@ -41,7 +41,7 @@
 //!   `calculate_render_geometry` + `set_footer_height`), and the
 //!   frame bytes leave through the terminal pump exit — the
 //!   `?2026`-wrapped SGR stream (`Terminal::pump_output`). The lane-B
-//!   "GridEmitter is the one frame writer" ruling retires here: mini
+//!   "`GridEmitter` is the one frame writer" ruling retires here: mini
 //!   emits NO grid-diffed bytes of its own, every frame byte flows
 //!   through the renderer pump (the D2.1b "never pump" seam is dead).
 //!
@@ -157,8 +157,8 @@ pub enum FooterEffect {
     /// G-272 — the variant panel's explicit pick (`onVariantSelect`).
     VariantSelect(Option<String>),
     /// G-272 — a queued-prompt action (`onQueuedPromptAction`,
-    /// QueuedPromptAction = steer|queue|cancel, types.ts:103): the
-    /// runtime PATCHes the inbox row's delivery (or DELETEs it on
+    /// `QueuedPromptAction` = steer|queue|cancel, types.ts:103): the
+    /// runtime `PATCHes` the inbox row's delivery (or DELETEs it on
     /// cancel).
     QueuedPromptAction {
         action: &'static str,
@@ -757,7 +757,7 @@ impl FooterPane {
             .collect()
     }
 
-    /// G-272 — a picker panel's keys (the PanelShell: esc closes,
+    /// G-272 — a picker panel's keys (the `PanelShell`: esc closes,
     /// up/down move through the FILTERED list, printables/backspace
     /// edit the query, ctrl+u clears it, enter runs the entry —
     /// footer.command.tsx:228-259).
@@ -899,7 +899,7 @@ impl FooterPane {
     }
 
     /// G-272 — one settings step (`change`, footer.command.tsx:
-    /// 790-812): verbosity cycles its presets, work_spinner walks
+    /// 790-812): verbosity cycles its presets, `work_spinner` walks
     /// the literals, mono toggles, the show/hide knobs flip — all
     /// through the same [`FooterEffect::SettingChange`] the runtime
     /// persists.
@@ -1638,7 +1638,7 @@ impl RendererTerminalSession for MiniSessionHandle {
     }
 
     fn is_torn_down(&self) -> bool {
-        self.session.lock().map(|session| session.is_torn_down()).unwrap_or(true)
+        self.session.lock().map_or(true, |session| session.is_torn_down())
     }
 }
 
@@ -2063,7 +2063,7 @@ impl Lifecycle {
         let band_height = pane_height.min(self.height).max(1);
         let height_changed = u32::try_from(band_height)
             .ok()
-            .map_or(true, |height| height != self.solid.renderer.footer_height());
+            .is_none_or(|height| height != self.solid.renderer.footer_height());
         if height_changed {
             self.solid
                 .renderer
@@ -2272,7 +2272,7 @@ fn resize_target(current: (usize, usize), observed: Option<(u16, u16)>) -> Optio
 }
 
 /// G-181③ — the TIOCGWINSZ observation (fd 0, the same device the
-/// KeyPipeline reads): `None` when the ioctl fails or reports a
+/// `KeyPipeline` reads): `None` when the ioctl fails or reports a
 /// degenerate 0×0 (the resize poll ignores it).
 #[allow(unsafe_code)] // TIOCGWINSZ on stdin is libc FFI
 fn observe_window_size() -> Option<(u16, u16)> {

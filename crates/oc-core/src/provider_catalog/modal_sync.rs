@@ -93,7 +93,7 @@ fn number(value: Option<&Value>) -> Option<f64> {
     value?.as_f64()
 }
 
-/// Decode one raw `/models` row; `None` when it is not a RemoteModel
+/// Decode one raw `/models` row; `None` when it is not a `RemoteModel`
 /// (models.ts:67-70 — one malformed entry never discards the batch).
 #[must_use]
 pub fn parse_modal_model(raw: &Value) -> Option<ModalRemoteModel> {
@@ -148,7 +148,6 @@ pub fn parse_modal_model(raw: &Value) -> Option<ModalRemoteModel> {
 }
 
 /// `load`'s decode half (models.ts:56-71) over a response body.
-#[must_use]
 pub fn parse_modal_models_body(body: &str) -> Result<Vec<ModalRemoteModel>, String> {
     let value: Value = serde_json::from_str(body)
         .map_err(|error| format!("Failed to fetch Modal models: {error}"))?;
@@ -183,7 +182,11 @@ fn limit(value: Option<f64>, fallback: i64) -> i64 {
     let Some(value) = value else { return fallback };
     let parsed = value.trunc();
     if parsed >= 0.0 && parsed.fract() == 0.0 {
-        parsed as i64
+        // guarded whole-number crossing (clippy::cast_possible_truncation)
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            parsed as i64
+        }
     } else {
         fallback
     }
@@ -261,7 +264,7 @@ pub fn modal_model_info(
         capabilities: oc_schema::model::Capabilities {
             tools: match &remote.supported_features {
                 Some(features) => features.iter().any(|feature| feature == "tools"),
-                None => previous.map(|info| info.capabilities.tools).unwrap_or(true),
+                None => previous.is_none_or(|info| info.capabilities.tools),
             },
             input: remote
                 .input_modalities
@@ -278,37 +281,31 @@ pub fn modal_model_info(
             None => previous.map(|info| info.variants.clone()).unwrap_or_default(),
             Some(_) => variants(remote),
         },
-        time: previous.map(|info| info.time).unwrap_or(ModelTime { released: Num(0.0) }),
+        time: previous.map_or(ModelTime { released: Num(0.0) }, |info| info.time),
         cost: vec![Cost {
             tier: None,
             input: UsdPerMillionTokens(price(
                 remote.pricing.as_ref().and_then(|pricing| pricing.prompt.as_ref()),
-                cost.map(|cost| cost.input.0).unwrap_or(Num(0.0)),
+                cost.map_or(Num(0.0), |cost| cost.input.0),
             )),
             output: UsdPerMillionTokens(price(
                 remote.pricing.as_ref().and_then(|pricing| pricing.completion.as_ref()),
-                cost.map(|cost| cost.output.0).unwrap_or(Num(0.0)),
+                cost.map_or(Num(0.0), |cost| cost.output.0),
             )),
             cache: CostCache {
                 read: UsdPerMillionTokens(price(
                     remote.pricing.as_ref().and_then(|pricing| pricing.input_cache_read.as_ref()),
-                    cost.map(|cost| cost.cache.read.0).unwrap_or(Num(0.0)),
+                    cost.map_or(Num(0.0), |cost| cost.cache.read.0),
                 )),
-                write: UsdPerMillionTokens(cost.map(|cost| cost.cache.write.0).unwrap_or(Num(0.0))),
+                write: UsdPerMillionTokens(cost.map_or(Num(0.0), |cost| cost.cache.write.0)),
             },
         }],
-        status: previous.map(|info| info.status).unwrap_or(Status::Active),
-        enabled: previous.map(|info| info.enabled).unwrap_or(true),
+        status: previous.map_or(Status::Active, |info| info.status),
+        enabled: previous.is_none_or(|info| info.enabled),
         limit: ModelLimit {
-            context: limit(
-                remote.context_length,
-                previous.map(|info| info.limit.context).unwrap_or(0),
-            ),
+            context: limit(remote.context_length, previous.map_or(0, |info| info.limit.context)),
             input: input_limit,
-            output: limit(
-                remote.max_output_length,
-                previous.map(|info| info.limit.output).unwrap_or(0),
-            ),
+            output: limit(remote.max_output_length, previous.map_or(0, |info| info.limit.output)),
         },
     }
 }
@@ -401,7 +398,7 @@ impl ModalSync {
             method: "GET".to_string(),
             url: url.clone(),
             headers: vec![("Authorization".to_string(), format!("Bearer {token}"))],
-            body: Default::default(),
+            body: bytes::Bytes::default(),
         };
         let Ok(response) = tokio::time::timeout(
             std::time::Duration::from_millis(MODAL_MODELS_TIMEOUT_MS),
@@ -465,8 +462,8 @@ mod tests {
         )
     }
 
-    fn remote_row(raw: Value) -> Option<ModalRemoteModel> {
-        parse_modal_model(&raw)
+    fn remote_row(raw: &Value) -> Option<ModalRemoteModel> {
+        parse_modal_model(raw)
     }
 
     /// G-209 — a seeded Modal API payload derives model entries with
@@ -497,9 +494,9 @@ mod tests {
                     "base_model_id": "thinkingmachines/Inkling-NVFP4",
                     "name": "My Finetune",
                     "input_modalities": ["text", "image"],
-                    "context_length": 123456.7,
+                    "context_length": 123_456.7,
                     "max_output_length": 8192.25,
-                    "pricing": { "prompt": "0.0000035", "completion": 0.000012 },
+                    "pricing": { "prompt": "0.0000035", "completion": 0.000_012 },
                     "supported_features": ["tools", "json"],
                     "reasoning_options": [
                         { "type": "effort", "values": ["low", null, "low"] }
@@ -607,7 +604,7 @@ mod tests {
             catalog,
             "https://modal.example/v1",
             "tk_modal",
-            vec![remote_row(json!({ "id": "solo" })).expect("row")],
+            vec![remote_row(&json!({ "id": "solo" })).expect("row")],
         );
         assert!(sync.state().is_some());
         let state = sync.state().expect("seeded");

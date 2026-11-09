@@ -104,7 +104,7 @@ fn runner_output_limit_uses_catalog_limit_fitted_to_room() {
 
 fn media_part(mime: &str, bytes: usize) -> ContentPart {
     ContentPart::Media {
-        media: oc_ai::schema::media::base64("A".repeat(bytes), mime),
+        media: Box::new(oc_ai::schema::media::base64("A".repeat(bytes), mime)),
         filename: None,
         cache: None,
         metadata: None,
@@ -176,14 +176,14 @@ fn runner_bound_images_drops_oldest_to_target() {
         oc_ai::schema::messages::MessageRole::User,
         vec![
             ContentPart::Media {
-                media: oc_ai::schema::media::base64(big, "image/png"),
+                media: Box::new(oc_ai::schema::media::base64(big, "image/png")),
                 filename: Some("old.png".into()),
                 cache: None,
                 metadata: None,
                 provider_metadata: None,
             },
             ContentPart::Media {
-                media: oc_ai::schema::media::base64(small, "image/png"),
+                media: Box::new(oc_ai::schema::media::base64(small, "image/png")),
                 filename: Some("new.png".into()),
                 cache: None,
                 metadata: None,
@@ -1173,7 +1173,11 @@ fn discovery_update(previous: &[(&str, &str)], current: &[(&str, &str)]) -> Opti
 fn runner_discovery_changed_file_renders_ref_shaped_diff_block() {
     // A 12-line file with a one-line edit near the end: the 3-context
     // diff is shorter than restating the file, so shorter-wins picks it.
-    let old = (1..=12).map(|n| format!("line {n}\n")).collect::<Vec<_>>().join("");
+    let old = (1..=12).fold(String::new(), |mut out, n| {
+        use std::fmt::Write as _;
+        let _ = writeln!(out, "line {n}");
+        out
+    });
     let new = old.replace("line 12\n", "line twelve edited\n");
     let update = discovery_update(&[("/repo/AGENTS.md", &old)], &[("/repo/AGENTS.md", &new)])
         .expect("update");
@@ -1222,7 +1226,11 @@ fn runner_discovery_diff_shorter_than_full_refetch() {
     // A long file with a one-line change: the diff block must be shorter
     // than restating the whole file (shorter-wins, ref :148) — i.e. the
     // update is the diff, not the full content.
-    let big = (0..40).map(|n| format!("line {n}\n")).collect::<String>();
+    let big = (0..40).fold(String::new(), |mut out, n| {
+        use std::fmt::Write as _;
+        let _ = writeln!(out, "line {n}");
+        out
+    });
     let edited = big.replace("line 20\n", "line 20 edited\n");
     let update = discovery_update(&[("/repo/AGENTS.md", &big)], &[("/repo/AGENTS.md", &edited)])
         .expect("update");

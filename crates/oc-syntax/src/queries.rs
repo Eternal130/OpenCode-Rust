@@ -44,9 +44,14 @@
 //! drops) under `lang-swift`/`lang-csharp`/`lang-kotlin`, everything
 //! under the `all-languages` meta-feature.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
+#[cfg(test)]
+use std::sync::Arc;
+
+#[cfg(test)]
 use tree_sitter::{Parser, Query};
+
 use tree_sitter_language::LanguageFn;
 
 /// Vendored highlight query sources (`include_str!`, no runtime fetching).
@@ -587,7 +592,7 @@ type QueryCacheSlot = (&'static str, &'static str, Arc<Query>);
 
 /// The process-wide compiled-query cache (queries are immutable; compile
 /// once per grammar) — test-harness support (the runtime query compile
-/// lives in opentui's TreeSitterClient).
+/// lives in opentui's `TreeSitterClient`).
 #[cfg(test)]
 fn query_cache() -> &'static std::sync::Mutex<Vec<QueryCacheSlot>> {
     static CACHE: OnceLock<std::sync::Mutex<Vec<QueryCacheSlot>>> = OnceLock::new();
@@ -613,7 +618,7 @@ fn cached_query(
 
 /// A grammar's compiled highlight query (cached on first use) —
 /// test-harness support (the runtime compile lives in opentui's
-/// TreeSitterClient).
+/// `TreeSitterClient`).
 #[cfg(test)]
 pub fn highlight_query(entry: &GrammarEntry) -> Arc<Query> {
     // A panic here means registry drift (grammar/query ABI mismatch) —

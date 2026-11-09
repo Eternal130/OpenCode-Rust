@@ -385,7 +385,7 @@ pub struct ListenGuard {
 
 /// G-276② — JSON-semantics deep equality for replay identity (ref
 /// bus.ts:349 compares with Node's `isDeepStrictEqual`, where JSON `1`
-/// and `1.0` are the SAME number): serde_json `Value` equality is
+/// and `1.0` are the SAME number): `serde_json` `Value` equality is
 /// representation-sensitive (`u64 1` ≠ `f64 1.0`) and produced false
 /// "Replay diverged" errors on numerically identical payloads. Numbers
 /// compare numerically (exact for integer/integer pairs, f64

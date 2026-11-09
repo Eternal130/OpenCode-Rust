@@ -629,15 +629,15 @@ async fn run_branch_subscription(state: Arc<AppState>, mut shutdown: watch::Rece
     }
 }
 
-/// Resolves a head_watch key back to a live location (best effort).
+/// Resolves a `head_watch` key back to a live location (best effort).
 fn location_by_key(state: &Arc<AppState>, key: &str) -> Option<LocationRef> {
     for location in state.engine.live_locations() {
         if key_of(&location) == key {
             return Some(location);
         }
     }
-    for entry in state.announce.tracked.iter() {
-        if key_of(&entry.value()) == key {
+    for entry in &state.announce.tracked {
+        if key_of(entry.value()) == key {
             return Some(entry.value().clone());
         }
     }

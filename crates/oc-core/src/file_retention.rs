@@ -15,7 +15,7 @@ use oc_schema::config::Experimental;
 /// Default sweep interval — hourly (the previous hardcoded cadence).
 pub const DEFAULT_CLEANUP_INTERVAL: Duration = Duration::from_secs(3_600);
 /// Default retention window — 7 days (tool-output/shell `RETENTION_MS`).
-pub const DEFAULT_RETENTION: Duration = Duration::from_millis(7 * 24 * 60 * 60 * 1_000);
+pub const DEFAULT_RETENTION: Duration = Duration::from_hours(168);
 
 /// Effective sweep settings (defaults preserve the pre-G-14 behavior).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,7 +62,11 @@ mod tests {
     #[test]
     fn file_retention_settings_default_to_hourly() {
         assert_eq!(FileRetentionSettings::default().cleanup_interval, Duration::from_secs(3_600));
-        assert_eq!(DEFAULT_RETENTION, Duration::from_millis(7 * 24 * 60 * 60 * 1_000));
+        // clippy's from_days suggestion is unstable (duration_constructors)
+        // on the pinned 1.99 toolchain — intentional from_secs fallback.
+        #[allow(clippy::duration_suboptimal_units)]
+        let expected = Duration::from_secs(7 * 24 * 60 * 60);
+        assert_eq!(DEFAULT_RETENTION, expected);
     }
 
     #[test]

@@ -143,7 +143,7 @@ pub struct StderrTail {
 impl StderrTail {
     /// Append a chunk, keeping only the last [`STDERR_TAIL_BYTES`] bytes.
     pub fn push(&self, chunk: &[u8]) {
-        let mut buffer = self.buffer.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut buffer = self.buffer.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         buffer.extend_from_slice(chunk);
         let excess = buffer.len().saturating_sub(STDERR_TAIL_BYTES);
         if excess > 0 {
@@ -156,7 +156,7 @@ impl StderrTail {
     /// code point from the byte-boundary truncation is skipped.
     #[must_use]
     pub fn snapshot(&self) -> String {
-        let buffer = self.buffer.lock().unwrap_or_else(|poison| poison.into_inner());
+        let buffer = self.buffer.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         // The window may open mid-code-point after truncation: skip
         // leading UTF-8 continuation bytes (0b10xxxxxx).
         let mut start = 0;
@@ -256,7 +256,7 @@ mod tests {
 
     #[tokio::test]
     async fn failing_stdio_spawner_reports_cannot_spawn() {
-        let error = match FailingStdioSpawner("The memory driver cannot spawn processes")
+        let Err(error) = FailingStdioSpawner("The memory driver cannot spawn processes")
             .spawn_piped(StdioSpec {
                 command: "true".into(),
                 args: vec![],
@@ -265,9 +265,8 @@ mod tests {
                 extend_env: false,
             })
             .await
-        {
-            Ok(_) => panic!("the failing spawner must not produce a process"),
-            Err(error) => error,
+        else {
+            panic!("the failing spawner must not produce a process")
         };
         assert_eq!(error, "The memory driver cannot spawn processes");
     }
@@ -292,7 +291,7 @@ mod tests {
         assert_eq!(error.to_string(), "MCP stdio frame exceeded 16 MiB");
     }
 
-    /// G-72 stderr tail: bounded to the last STDERR_TAIL_BYTES bytes.
+    /// G-72 stderr tail: bounded to the last `STDERR_TAIL_BYTES` bytes.
     #[test]
     fn stderr_tail_keeps_the_last_8k() {
         let tail = StderrTail::default();

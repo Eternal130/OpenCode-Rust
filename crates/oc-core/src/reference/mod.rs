@@ -12,7 +12,7 @@ pub mod repository_cache;
 #[cfg(test)]
 mod tests;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -140,13 +140,13 @@ impl ReferenceService {
     /// The production shape over the global repos root and a file-backed
     /// refresh store.
     #[must_use]
-    pub fn new(repos_root: PathBuf, clock: Arc<dyn oc_util::determinism::Clock>) -> Self {
+    pub fn new(repos_root: &Path, clock: Arc<dyn oc_util::determinism::Clock>) -> Self {
         Self::with_cache(
-            repos_root.clone(),
+            repos_root.to_owned(),
             RepositoryCache::new(
-                repos_root.clone(),
+                repos_root.to_owned(),
                 clock,
-                Arc::new(repository_cache::FileRefreshStore::new(&repos_root)),
+                Arc::new(repository_cache::FileRefreshStore::new(repos_root)),
             ),
         )
     }
@@ -258,6 +258,7 @@ impl ReferenceService {
     /// - `localPath`: `~/…` resolves against `home`, absolute paths stay,
     ///   relative paths resolve against the DOCUMENT's directory (its
     ///   `path` dirname) or the location directory for path-less docs.
+    #[must_use]
     pub fn sources_from_config(
         entries: &[oc_schema::config::Entry],
         location: &std::path::Path,
@@ -266,16 +267,14 @@ impl ReferenceService {
         let mut out = Vec::new();
         for entry in entries {
             let oc_schema::config::Entry::Document(document) = entry else { continue };
-            let directory = document
-                .path
-                .as_deref()
-                .map(|path| {
+            let directory = document.path.as_deref().map_or_else(
+                || location.to_path_buf(),
+                |path| {
                     std::path::Path::new(path)
                         .parent()
-                        .map(std::path::Path::to_path_buf)
-                        .unwrap_or_else(|| location.to_path_buf())
-                })
-                .unwrap_or_else(|| location.to_path_buf());
+                        .map_or_else(|| location.to_path_buf(), std::path::Path::to_path_buf)
+                },
+            );
             let Some(map) = document.info.references.as_ref() else { continue };
             for (name, entry) in map {
                 if !valid_alias(name) {

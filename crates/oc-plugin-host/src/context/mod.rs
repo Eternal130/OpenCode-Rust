@@ -340,7 +340,7 @@ pub trait VcsPort: Send + Sync {
 }
 
 /// `ctx.provider.list/get/reload` routing target (G-64 — the v2
-/// ProviderDomain read surface, ref host.ts:196-223: the provider
+/// `ProviderDomain` read surface, ref host.ts:196-223: the provider
 /// registry/catalog rows and the reload trigger).
 #[async_trait]
 pub trait ProviderPort: Send + Sync {
@@ -394,9 +394,9 @@ pub trait TerminalPort: Send + Sync {
 
 /// `ctx.integration.*` routing target (G-64 — ref host.ts:274-357's
 /// method channel: list/get/connect.key/oauth.*/command.*/connection.*
-/// over the engine's IntegrationHost). One `call` carrying the ref
+/// over the engine's `IntegrationHost`). One `call` carrying the ref
 /// method name keeps the supervisor arm flat; the engine port maps
-/// 1:1 onto the IntegrationHost surface.
+/// 1:1 onto the `IntegrationHost` surface.
 #[async_trait]
 pub trait IntegrationPort: Send + Sync {
     /// One integration-domain call (`method`: the ref method name,

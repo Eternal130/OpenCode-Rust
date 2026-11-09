@@ -715,10 +715,10 @@ impl Runtime {
                 if let Some(target) = &self.boot_target {
                     self.preferences.save_variant(target, variant.as_deref());
                 }
-                let status = variant
-                    .as_deref()
-                    .map(|variant| format!("variant {variant}"))
-                    .unwrap_or_else(|| "variant default".to_owned());
+                let status = variant.as_deref().map_or_else(
+                    || "variant default".to_owned(),
+                    |variant| format!("variant {variant}"),
+                );
                 self.lifecycle.append(Commit::system(&status));
             }
             // G-272 — a queued-prompt action (`onQueuedPromptAction`,
@@ -1414,9 +1414,7 @@ async fn hydrate_blockers(
             // The wire row IS the footer request shape (sessionID/
             // action/resources/save/source line up; `message` is
             // presentation-only and ignored).
-            if let Ok(request) =
-                serde_json::to_value(wire).and_then(|value| serde_json::from_value(value))
-            {
+            if let Ok(request) = serde_json::to_value(wire).and_then(serde_json::from_value) {
                 lifecycle.pane.permission_asked(request);
             }
         }
@@ -1464,8 +1462,7 @@ fn replay_message_commits(
         .get("id")
         .and_then(Value::as_str)
         .filter(|id| !id.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| format!("replay:{fallback_index}"));
+        .map_or_else(|| format!("replay:{fallback_index}"), str::to_owned);
 
     if kind == "user" || role == "user" {
         // `renderUser` (transport.ts:600-618): the skill rows, the

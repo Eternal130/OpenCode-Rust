@@ -55,12 +55,11 @@ pub(crate) fn realign_mentions(
         if mention.text.is_empty() {
             continue;
         }
-        match texts.iter().position(|text| text == &mention.text) {
-            Some(group) => groups[group].push(index),
-            None => {
-                texts.push(mention.text.clone());
-                groups.push(vec![index]);
-            }
+        if let Some(group) = texts.iter().position(|text| text == &mention.text) {
+            groups[group].push(index)
+        } else {
+            texts.push(mention.text.clone());
+            groups.push(vec![index]);
         }
     }
     // Longest text first, ties lexicographic (mention.ts:34-36 —

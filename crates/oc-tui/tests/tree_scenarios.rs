@@ -10,7 +10,7 @@
 //!    for every state is byte-identical to the checked-in scenario
 //!    under `tools/parity/tree-scenarios/` (regeneration is the
 //!    explicit `tools/parity/tree-scenario-capture.sh` script AND the
-//!    `OC_TUI_TREE_CAPTURE_UPDATE=1` env var — the PARITY_UPDATE
+//!    `OC_TUI_TREE_CAPTURE_UPDATE=1` env var — the `PARITY_UPDATE`
 //!    stop-and-escalate discipline).
 //! 2. `capture_is_deterministic` — re-driving the same state on a
 //!    fresh hub/store produces byte-identical JSON (no mount-order,
@@ -29,7 +29,6 @@
 
 use oc_tui::components::tree_capture::capture_app_state;
 use oc_tui::data::{Ingest, SessionSnapshot};
-use oc_tui::reactive::Runtime;
 use oc_tui::store::Store;
 
 /// The committed scenario directory (repo root / tools/parity).
@@ -114,7 +113,7 @@ enum Mount {
     /// stage, so the end-of-frame `prune_stale` (a family its lane did
     /// not sync in the final batch unmounts) drops it from the settled
     /// tree even though its ink is in the frame — the twin is the
-    /// documented capture seam for this family (diff_viewer_solid's
+    /// documented capture seam for this family (`diff_viewer_solid`'s
     /// own golden tests mount the same way).
     DiffTwin,
 }

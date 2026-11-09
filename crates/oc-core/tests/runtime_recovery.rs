@@ -971,6 +971,7 @@ fn k01_request_text(request: &oc_ai::schema::messages::LLMRequest) -> String {
 /// request identity (`request === prepared.request`, compaction.ts:421),
 /// so a flattened or shrunk clone never earns a second one.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // one-scenario test body; splitting would scatter the fixture
 async fn compaction_too_large_resend() {
     let dir = tempfile::Builder::new()
         .prefix(&format!("lane-k01-{}-", std::process::id()))

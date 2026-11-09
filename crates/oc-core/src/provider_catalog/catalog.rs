@@ -155,13 +155,13 @@ impl Catalog {
     ///   env integration connection rule (`provider.ts:404`; the
     ///   models.dev plugin registers one env method per catalog
     ///   provider, `packages/core/src/plugin/models-dev.ts:35-52`); or
-    /// * it is `amazon-bedrock` and the AmazonBedrockPlugin activation
+    /// * it is `amazon-bedrock` and the `AmazonBedrockPlugin` activation
     ///   chain applies (G-262②, `plugin/provider/amazon-bedrock.ts:
     ///   31-53`): the narrowed `AWS_BEARER_TOKEN_BEDROCK` env credential
     ///   or any ambient default-chain input (`AWS_PROFILE`,
     ///   `AWS_ACCESS_KEY_ID`, web-identity/container creds) flips
     ///   activation auto→enabled. The raw models.dev names
-    ///   (`AWS_SECRET_ACCESS_KEY`, `AWS_REGION`) are SigV4 chain config,
+    ///   (`AWS_SECRET_ACCESS_KEY`, `AWS_REGION`) are `SigV4` chain config,
     ///   not keys, and never gate visibility on their own.
     ///
     /// Deprecated and non-text models never register in v2
@@ -241,7 +241,7 @@ const BEDROCK_PROFILE_ONLY_IDS: &[&str] = &[
     "mistral.pixtral-large-2502-v1:0",
 ];
 
-/// G-261 — OpenRouter-specific OpenAI chat aliases that do not work on the
+/// G-261 — OpenRouter-specific `OpenAI` chat aliases that do not work on the
 /// generic path; the ref plugin disables them when present
 /// (`plugin/provider/openrouter.ts:16-28`). Custom providers with matching
 /// ids stay untouched (the plugin keys on the openrouter package).
@@ -708,7 +708,7 @@ mod tests {
         assert!(catalog.model("amazon-bedrock", "anthropic.claude-opus-4-6").is_some());
     }
 
-    /// G-261 — the OpenRouter chat aliases stay listed but disabled when
+    /// G-261 — the `OpenRouter` chat aliases stay listed but disabled when
     /// the snapshot carries them (openrouter.ts:16-28); providers that
     /// merely share the model id keep them enabled.
     #[test]
@@ -916,12 +916,12 @@ mod tests {
         assert_eq!(anthropic.len(), full.len(), "full (non-deprecated, text) model list");
     }
 
-    /// G-262② — the AmazonBedrockPlugin activation chain
+    /// G-262② — the `AmazonBedrockPlugin` activation chain
     /// (`plugin/provider/amazon-bedrock.ts:8-52`): ambient AWS
     /// default-chain inputs (or the narrowed bearer token) activate the
     /// provider WITHOUT any stored key, while the non-key models.dev
     /// names (`AWS_SECRET_ACCESS_KEY`, `AWS_REGION`) alone do not —
-    /// SigV4 chain config is not a credential.
+    /// `SigV4` chain config is not a credential.
     #[test]
     fn provider_catalog_bedrock_chain_env_activation() {
         let catalog = Catalog::embedded();

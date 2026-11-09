@@ -11,6 +11,7 @@ use oc_ai::protocols::openai_chat::{
 };
 use oc_ai::protocols::openai_responses::{openai_responses_route, OpenAIResponsesRouteSpec};
 use oc_ai::route::client::Route;
+use oc_ai::route::client::RouteDefaults;
 use oc_ai::route::transport::FailingTransport;
 use oc_ai::schema::{LLMRequest, Message, ToolDefinition, ToolEntry};
 use serde_json::{json, Value};
@@ -71,7 +72,7 @@ fn openai_responses_lane_projects_tool_schemas() {
         base_url: None,
         auth: None,
         transport: transport(),
-        defaults: Default::default(),
+        defaults: RouteDefaults::default(),
     });
     let body = body(&route);
     assert_object_root(&body["tools"][0]["parameters"], "openai-responses");

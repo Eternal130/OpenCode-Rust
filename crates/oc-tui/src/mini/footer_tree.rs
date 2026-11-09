@@ -189,7 +189,7 @@ fn row_element(rows: &Signal<Vec<FooterRowUnit>>, key: &str) -> Element {
 }
 
 /// The mini footer's root element: a relative box whose extents track
-/// the band geometry signal (resize/set_footer_height patch in place)
+/// the band geometry signal (`resize/set_footer_height` patch in place)
 /// carrying ONE keyed `For` of the row units.
 fn footer_root(rows: &Signal<Vec<FooterRowUnit>>, geometry: &Signal<(usize, usize)>) -> Element {
     let source = ForItemSource {

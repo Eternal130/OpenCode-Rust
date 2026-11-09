@@ -13,16 +13,21 @@
 
 use serde_json::Value;
 
+/// The unit error of [`parse_jsonc`]: any laxness beyond comments and
+/// trailing commas is rejected (mirrors ref's error branch).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JsoncError;
+
 /// Parse a JSONC document: comments and trailing commas allowed, any
-/// further laxness rejected (`Err(())` mirrors ref's error branch).
-pub fn parse_jsonc(text: &str) -> Result<Value, ()> {
+/// further laxness rejected ([`JsoncError`] mirrors ref's error branch).
+pub fn parse_jsonc(text: &str) -> Result<Value, JsoncError> {
     let cleaned = strip_jsonc(text);
-    serde_json::from_str(&cleaned).map_err(|_| ())
+    serde_json::from_str(&cleaned).map_err(|_| JsoncError)
 }
 
 /// Removes `//…` and `/*…*/` comments, trailing commas, a leading BOM,
 /// and escapes raw control characters inside strings (jsonc-parser
-/// tolerates those silently; serde_json would reject them — escaping
+/// tolerates those silently; `serde_json` would reject them — escaping
 /// keeps the accepted set identical). String-aware: `//` or `,` inside
 /// a string literal is left untouched, `\"` escapes honored.
 #[must_use]

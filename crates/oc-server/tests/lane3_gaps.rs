@@ -80,7 +80,7 @@ async fn session_row(server: &TestServer, session_id: &str) -> (String, Option<S
         .transaction(move |tx| {
             Ok(tx
                 .conn()
-                .query_row("SELECT directory, path FROM session_v2 WHERE id = ?1", &[&id], |row| {
+                .query_row("SELECT directory, path FROM session_v2 WHERE id = ?1", [&id], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
                 })
                 .expect("session row"))
@@ -100,7 +100,7 @@ async fn pending_inbox_items(server: &TestServer, session_id: &str) -> Vec<(Stri
                 .conn()
                 .prepare("SELECT payload, delivery FROM session_inbox WHERE session_id = ?1")?;
             let rows = statement
-                .query_map(&[&id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+                .query_map([&id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
         })
@@ -130,7 +130,7 @@ async fn g107_g108_move_subpath_and_delivery() {
         .transaction(move |tx| {
             tx.execute(
                 "UPDATE session_v2 SET directory = ?2, path = ?3 WHERE id = ?1",
-                &[&id, &sub_dir, "sub"],
+                [&id, &sub_dir, "sub"],
             )?;
             Ok(())
         })
@@ -179,7 +179,7 @@ async fn g108_orphan_session_moves_immediately() {
         .transaction(move |tx| {
             tx.execute(
                 "UPDATE session_v2 SET directory = ?2, path = ?3 WHERE id = ?1",
-                &[&id, &gone_dir, "gone"],
+                [&id, &gone_dir, "gone"],
             )?;
             Ok(())
         })
@@ -196,7 +196,7 @@ async fn g108_orphan_session_moves_immediately() {
     // The session row landed at the destination immediately.
     let (directory, path) = session_row(&server, &session_id).await;
     assert_eq!(directory, b_root, "session.moved relocated the orphan");
-    assert!(path.as_ref().is_none_or(|value| value.is_empty()), "root subpath: {path:?}");
+    assert!(path.as_ref().is_none_or(std::string::String::is_empty), "root subpath: {path:?}");
 
     // Nothing was queued.
     let items = pending_inbox_items(&server, &session_id).await;
@@ -227,7 +227,7 @@ async fn g111_pairing_browser_401_has_no_challenge() {
 }
 
 /// G-113: an unknown IANA zone is a 400 "Invalid time zone" (the ref
-/// constructs an Intl.DateTimeFormat and lets the RangeError surface —
+/// constructs an Intl.DateTimeFormat and lets the `RangeError` surface —
 /// handlers/session.ts:109-111), never a silent UTC fallback.
 #[tokio::test]
 async fn g113_stats_unknown_timezone_is_400() {

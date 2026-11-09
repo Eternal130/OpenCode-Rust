@@ -1253,7 +1253,7 @@ impl WorktreeSink for RecordingWorktreeSink {
 // G-29 — the plugin manager's server flows (check / update / install)
 // ---------------------------------------------------------------------------
 
-/// One server-runtime plugin row (the ref PluginsDialog's `server:`
+/// One server-runtime plugin row (the ref `PluginsDialog`'s `server:`
 /// entries — `plugin.list` / `plugin.check` rows with the fresh
 /// `outdated` flags, plugins.tsx:74-81).
 #[derive(Debug, Clone, PartialEq)]
@@ -1978,8 +1978,8 @@ pub struct Store {
     /// The accounts view's two-press delete (`deleting` signal,
     /// dialog-integration.tsx:161).
     integration_deleting: Signal<Option<String>>,
-    /// G-271③ — the pending auto-connect target (DialogMcp's
-    /// needs_auth jump): consumed when the `integration.list` refetch
+    /// G-271③ — the pending auto-connect target (`DialogMcp`'s
+    /// `needs_auth` jump): consumed when the `integration.list` refetch
     /// lands — the row routes into its connect flow (the
     /// `autoConnect` effect, dialog-integration.tsx:96-108).
     integration_auto_connect_id: std::cell::RefCell<Option<String>>,
@@ -2849,20 +2849,15 @@ impl BranchListSink for RecordingBranchListSink {
 
 /// RE-14 — the `/stats` page's resource phase (stats.tsx:141-176's
 /// `createResource`): loading, the error fallback, or the payload.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum StatsPhase {
     /// The resource is pending (`Gathering your stats…`).
+    #[default]
     Loading,
     /// The fetch errored — the fixed fallback copy.
     Failed(String),
     /// `session.stats` resolved.
     Loaded(std::sync::Arc<oc_client::types::SessionStatsInfo>),
-}
-
-impl Default for StatsPhase {
-    fn default() -> Self {
-        Self::Loading
-    }
 }
 
 /// RE-14 — the `/stats` page's live state (stats.tsx:140-186): the
@@ -7414,7 +7409,7 @@ impl Store {
             *self.wheel_accel.borrow_mut() =
                 crate::scroll_accel::ScrollAcceleration::from_config(acceleration, speed);
         }
-        self.wheel_accel.borrow_mut().tick(now_ms).clamp(0, i32::MAX as i64) as i32
+        self.wheel_accel.borrow_mut().tick(now_ms).clamp(0, i64::from(i32::MAX)) as i32
     }
 
     /// Wheel-scroll the sidebar's content slot by `delta` rows
@@ -7646,7 +7641,7 @@ impl Store {
     }
 
     /// G-185 — the prompt history boot load (`history.tsx:91-100`,
-    /// the PromptHistory provider's onMount): the parsed
+    /// the `PromptHistory` provider's onMount): the parsed
     /// `<state>/prompt-history.jsonl` entries populate the composer's
     /// history ring (with the file attached as the append sink).
     pub fn load_prompt_history(&self, state_root: &std::path::Path) {
@@ -8263,7 +8258,7 @@ impl Store {
         self.integration_sink.borrow().list();
     }
 
-    /// G-271③ — the DialogMcp needs_auth jump: mount the integration
+    /// G-271③ — the `DialogMcp` `needs_auth` jump: mount the integration
     /// dialog over a fresh `integration.list` and route the target
     /// row into its connect flow when the list lands
     /// (`DialogIntegration {integrationID, autoConnect}`,
@@ -8487,38 +8482,35 @@ impl Store {
     fn integration_form_complete(&self) {
         let Some(state) = self.integration_form.borrow_mut().take() else { return };
         let answer = state.answer.clone();
-        match state.method_kind {
-            "oauth" => {
-                self.integration_sink.borrow().oauth_connect(
-                    &state.integration_id,
-                    &state.method_id,
-                    Some(&answer),
-                );
-            }
-            _ => {
-                // beginKey's second half: the API-key prompt mounts
-                // over the walked answer (:319-325).
-                *self.integration_key_answer.borrow_mut() = Some(answer);
-                let name = self
-                    .integration_row(&state.integration_id)
-                    .map_or_else(String::new, |row| row.name);
-                let title = if state.method_id == "key" && name.is_empty() {
-                    "Connect".to_owned()
-                } else if state.method_id == "key" {
-                    format!("Connect {name}")
-                } else {
-                    name
-                };
-                self.replace_dialog(
-                    DialogKind::IntegrationKey {
-                        integration_id: state.integration_id.clone(),
-                        method_id: state.method_id.clone(),
-                        title,
-                    },
-                    DialogSize::Medium,
-                );
-                self.update_dialog(|top| top.value.clear());
-            }
+        if state.method_kind == "oauth" {
+            self.integration_sink.borrow().oauth_connect(
+                &state.integration_id,
+                &state.method_id,
+                Some(&answer),
+            );
+        } else {
+            // beginKey's second half: the API-key prompt mounts
+            // over the walked answer (:319-325).
+            *self.integration_key_answer.borrow_mut() = Some(answer);
+            let name = self
+                .integration_row(&state.integration_id)
+                .map_or_else(String::new, |row| row.name);
+            let title = if state.method_id == "key" && name.is_empty() {
+                "Connect".to_owned()
+            } else if state.method_id == "key" {
+                format!("Connect {name}")
+            } else {
+                name
+            };
+            self.replace_dialog(
+                DialogKind::IntegrationKey {
+                    integration_id: state.integration_id.clone(),
+                    method_id: state.method_id.clone(),
+                    title,
+                },
+                DialogSize::Medium,
+            );
+            self.update_dialog(|top| top.value.clear());
         }
     }
 
@@ -8908,7 +8900,7 @@ impl Store {
         // `enabled: !!session()?.revert?.messageID`): with no staged
         // revert there is nothing to redo — the command is a no-op
         // (the palette row renders disabled in the ref).
-        if self.revert(&session_id).map(|state| state.message_id.is_empty()).unwrap_or(true) {
+        if self.revert(&session_id).is_none_or(|state| state.message_id.is_empty()) {
             self.clear_dialogs();
             return;
         }
@@ -8977,14 +8969,14 @@ impl Store {
     /// sanitize (json) toggles. `defaultThinking` seeds `true`
     /// (index.tsx:1213 passes `true`).
     pub fn export_options_state(&self) -> ExportOptionsState {
-        self.export_options.borrow().clone()
+        *self.export_options.borrow()
     }
 
     /// G-132 — one form interaction (the dialog's `activate`,
     /// dialog-export-options.tsx:44-52): the format radio, the three
     /// toggles.
     pub fn export_options_activate(&self, control: &str) {
-        let mut state = self.export_options.borrow().clone();
+        let mut state = *self.export_options.borrow();
         match control {
             "format:markdown" => state.format = ExportFormat::Markdown,
             "format:json" => state.format = ExportFormat::Json,
@@ -10876,7 +10868,7 @@ impl Store {
     /// `session.generate`; the pending counter arms the footer
     /// spinner until the result lands.
     pub fn btw_ask(&self, session_id: &str, question: &str) {
-        let prompt = format!("{}\n\n{}", BTW_INSTRUCTIONS, question);
+        let prompt = format!("{BTW_INSTRUCTIONS}\n\n{question}");
         self.lane_dialogs.borrow_mut().btw_pending += 1;
         drop(self.lane_dialogs.borrow_mut());
         self.session_action_sink.borrow().aside(session_id, question, &prompt);
@@ -12530,14 +12522,7 @@ impl Store {
                     tap.publish(&event);
                 }
             }
-            Ingest::Resync {
-                sessions: mut sessions,
-                unread,
-                messages,
-                cursors,
-                permissions,
-                forms,
-            } => {
+            Ingest::Resync { mut sessions, unread, messages, cursors, permissions, forms } => {
                 // A resync only happens after a successful subscribe —
                 // the stream is attached, the client is connected
                 // (SURF-2: servers that never emit the `server.

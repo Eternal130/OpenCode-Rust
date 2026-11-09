@@ -782,7 +782,7 @@ impl SearchIndex {
         // Claim the single-flight rebuild; the guard releases the claim
         // on completion, cancellation, or panic (review C1).
         let guard = {
-            let mut slot = self.slots.entry(root.clone()).or_insert_with(IndexSlot::empty);
+            let slot = self.slots.entry(root.clone()).or_insert_with(IndexSlot::empty);
             if slot.refreshing.swap(true, std::sync::atomic::Ordering::AcqRel) {
                 None
             } else {
@@ -822,7 +822,7 @@ impl SearchIndex {
     }
 
     /// One walk + swap (ref `scan`): builds on `spawn_blocking` (the
-    /// std::fs recursion must not run on a tokio worker), replaces the
+    /// `std::fs` recursion must not run on a tokio worker), replaces the
     /// slot's entries only on success — a failed refresh keeps the
     /// last good index (ref keeps the previous map alive mid-scan).
     /// A vanished root self-evicts its slot afterwards (review I1).
@@ -1371,7 +1371,7 @@ mod index_tests {
         ));
         tokio::select! {
             _ = &mut first => {}
-            _ = tokio::time::sleep(std::time::Duration::from_millis(1)) => {}
+            () = tokio::time::sleep(std::time::Duration::from_millis(1)) => {}
         }
         drop(first); // cancellation vector: Drop runs the ClaimGuard
 

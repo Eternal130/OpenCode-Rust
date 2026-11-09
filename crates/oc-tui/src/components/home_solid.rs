@@ -476,11 +476,12 @@ fn footer_left_label(
 pub type PaintedHome = (Frame, Option<(usize, usize)>, Option<(usize, usize, usize)>);
 
 /// Mount the home route's chrome into the shared tree — the LIVE-path
-/// entry (D4.1a: no Frame comes back; pixels land at render_app's
+/// entry (D4.1a: no Frame comes back; pixels land at `render_app`'s
 /// composite seam). Returns the terminal-cursor cell and TUI-TD27's
 /// update-banner rect (frame-relative, the same walks the old painter
 /// ran). The degenerate 0×N shape mounts nothing.
 #[allow(clippy::too_many_lines)] // the banner row is the lane-TAIL addition
+#[must_use]
 pub fn mount_solid_home_view(
     view: &HomeView,
     theme: &ThemeState,
@@ -603,11 +604,11 @@ pub fn mount_solid_home_view(
         let background = crate::render::CellColor::Rgb(backdrop.0, backdrop.1, backdrop.2);
         let mut items = Vec::new();
         let mut x = x0;
-        let mut push = |items: &mut Vec<crate::components::chrome_solid::ChromeUnit>,
-                        column: usize,
-                        x: usize,
-                        ch: char,
-                        color: crate::render::CellColor| {
+        let push = |items: &mut Vec<crate::components::chrome_solid::ChromeUnit>,
+                    column: usize,
+                    x: usize,
+                    ch: char,
+                    color: crate::render::CellColor| {
             if ch == ' ' {
                 return; // the fill's own cell
             }

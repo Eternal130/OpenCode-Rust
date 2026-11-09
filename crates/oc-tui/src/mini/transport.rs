@@ -1265,7 +1265,7 @@ fn shell_terminal(id: &str, command: &str, shell: &Value, output: &Value) -> Vec
     } else if status == "exited" {
         Some(format!(
             "Shell exited with code {}",
-            exit.map(exit_label).unwrap_or_else(|| "unknown".to_owned())
+            exit.map_or_else(|| "unknown".to_owned(), exit_label)
         ))
     } else {
         Some(format!("Shell {status}"))
@@ -1371,7 +1371,8 @@ fn prompt_attachments(parts: &[super::queue::RunPromptPart]) -> PromptAttachment
                 ..PromptAgentAttachment::default()
             }),
             super::queue::RunPromptPart::Skill { id } => {
-                out.skills.push(PromptInputSkillAttachment { id: id.clone(), ..Default::default() })
+                out.skills
+                    .push(PromptInputSkillAttachment { id: id.clone(), ..Default::default() });
             }
         }
     }
@@ -1519,7 +1520,6 @@ pub async fn switch_agent(client: &Client, session_id: &str, agent: &str) -> Res
         .session()
         .switch_agent(session_id, &SessionSwitchAgentBody { agent: agent.to_owned() })
         .await
-        .map(|_| ())
         .map_err(|error| error.to_string())
 }
 
@@ -1545,14 +1545,13 @@ pub async fn switch_model(
             },
         )
         .await
-        .map(|_| ())
         .map_err(|error| error.to_string())
 }
 
 /// G-272 — `onBackground` (runtime.ts:386-392): detach blocking
 /// subagent tools into the background (`session.background`).
 pub async fn session_background(client: &Client, session_id: &str) -> Result<(), String> {
-    client.session().background(session_id).await.map(|_| ()).map_err(|error| error.to_string())
+    client.session().background(session_id).await.map_err(|error| error.to_string())
 }
 
 /// Reply to a permission ask (`onPermissionReply`,

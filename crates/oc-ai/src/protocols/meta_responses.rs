@@ -46,7 +46,7 @@ pub const DEFAULT_BASE_URL: &str = "https://api.meta.ai/v1";
 const NATIVE_TOOL_TYPES: [&str; 2] = ["web_search", "image_generation"];
 
 /// The `ImageItem` shape: `type === "image_generation_call"` with a string
-/// `id` (status/result/output_format/error optional — light validation of
+/// `id` (`status`/`result`/`output_format`/`error` optional — light validation of
 /// the TS `Schema.is(ImageItem)` guard).
 fn is_image_item(value: &Value) -> bool {
     value.get("type").and_then(Value::as_str) == Some("image_generation_call")
@@ -226,7 +226,7 @@ pub struct MetaParserState {
 }
 
 /// The `meta-responses` protocol: the Open Responses baseline plus the
-/// hosted tool item completion (web_search / image_generation), message
+/// hosted tool item completion (`web_search` / `image_generation`), message
 /// annotations on text-end events, and terminal-only item recovery.
 pub struct MetaResponsesProtocol;
 
@@ -235,7 +235,6 @@ impl MetaResponsesProtocol {
     /// `output_item.done` branch runs before the baseline step; message
     /// items get their annotations attached to `text-end` events.
     fn on_event(
-        &self,
         state: &ParserState,
         normalized: open_responses::NormalizedEvent,
     ) -> Result<(ParserState, Vec<LLMEvent>), AiError> {
@@ -326,13 +325,13 @@ impl MetaResponsesProtocol {
                 {
                     continue;
                 }
-                let (next, emitted) = self.on_event(&state.base, done)?;
+                let (next, emitted) = Self::on_event(&state.base, done)?;
                 state.base = next;
                 events.extend(emitted);
                 completed.insert(id);
             }
         }
-        let (next, emitted) = self.on_event(&state.base, normalized)?;
+        let (next, emitted) = Self::on_event(&state.base, normalized)?;
         state.base = next;
         events.extend(emitted);
         if event.kind == "response.output_item.done" {

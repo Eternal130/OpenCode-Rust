@@ -369,17 +369,16 @@ async fn auth_interactive_choice(server: &crate::cli::ServerParams) -> Result<Op
             _ => server.name.clone(),
         })
         .collect();
-    match dialoguer::Select::new()
+    if let Ok(Some(index)) = dialoguer::Select::new()
         .with_prompt("Select MCP server")
         .items(&labels)
         .default(0)
         .interact_opt()
     {
-        Ok(Some(index)) => Ok(Some(choices[index].name.clone())),
-        _ => {
-            println!("└  Cancelled");
-            Err(1)
-        }
+        Ok(Some(choices[index].name.clone()))
+    } else {
+        println!("└  Cancelled");
+        Err(1)
     }
 }
 
@@ -388,23 +387,22 @@ async fn auth(name: Option<&str>, server: &crate::cli::ServerParams) -> i32 {
     // G-151①: no name → interactive selector over the configured
     // OAuth-capable remote MCP servers (ref mcpAuthChoices; non-TTY
     // still demands a name).
-    let name = match name {
-        Some(name) => name.to_owned(),
-        None => {
-            if let Err(message) = crate::handlers::auth::require_interactive(
-                "Pass an MCP server name when running without an interactive terminal",
-            ) {
-                eprintln!("Error: {message}");
-                return 1;
+    let name = if let Some(name) = name {
+        name.to_owned()
+    } else {
+        if let Err(message) = crate::handlers::auth::require_interactive(
+            "Pass an MCP server name when running without an interactive terminal",
+        ) {
+            eprintln!("Error: {message}");
+            return 1;
+        }
+        match auth_interactive_choice(server).await {
+            Ok(Some(selected)) => selected,
+            Ok(None) => {
+                println!("└  Done");
+                return 0;
             }
-            match auth_interactive_choice(server).await {
-                Ok(Some(selected)) => selected,
-                Ok(None) => {
-                    println!("└  Done");
-                    return 0;
-                }
-                Err(code) => return code,
-            }
+            Err(code) => return code,
         }
     };
     println!("◆ Authenticate an MCP server");
@@ -454,15 +452,13 @@ async fn auth(name: Option<&str>, server: &crate::cli::ServerParams) -> i32 {
         // stores).
         if stdin_is_tty() && stdout_is_tty() {
             println!("◇ Select re-authentication");
-            match dialoguer::Confirm::new()
+            if let Ok(true) = dialoguer::Confirm::new()
                 .with_prompt(format!("{name} already has valid credentials. Re-authenticate?"))
                 .interact()
             {
-                Ok(true) => {}
-                _ => {
-                    println!("└  Cancelled");
-                    return 0;
-                }
+            } else {
+                println!("└  Cancelled");
+                return 0;
             }
         }
     }
@@ -489,19 +485,19 @@ async fn auth(name: Option<&str>, server: &crate::cli::ServerParams) -> i32 {
     // instead of re-running DCR (ref oauth.ts:346-351).
     let previous_client = match client.credential().list().await {
         Ok(rows) => {
-            rows.into_iter().filter(|row| &row.integration_id == integration_id).last().and_then(
-                |row| match row.value {
+            rows.into_iter().rfind(|row| &row.integration_id == integration_id).and_then(|row| {
+                match row.value {
                     oc_client::types::CredentialValue::OAuth(value) => {
                         oc_core::mcp::oauth::metadata_client(value.metadata.as_ref())
                     }
                     oc_client::types::CredentialValue::Key(_) => None,
-                },
-            )
+                }
+            })
         }
         Err(_) => None,
     };
     let authorization = match oc_core::mcp::oauth::authorize(oc_core::mcp::oauth::AuthorizeInput {
-        name: name.to_owned(),
+        name: name.clone(),
         config: (*config).clone(),
         method_id: integration_id.clone(),
         http: oc_http::client(),
@@ -549,7 +545,7 @@ async fn auth(name: Option<&str>, server: &crate::cli::ServerParams) -> i32 {
         .credential()
         .create(&oc_client::types::CredentialCreateInput {
             integration_id: integration_id.clone(),
-            label: Some(name.to_owned()),
+            label: Some(name.clone()),
             value,
             activate: Some(true),
             id: None,

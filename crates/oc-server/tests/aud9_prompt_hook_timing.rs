@@ -9,7 +9,7 @@
 //! (ref handlers/session.ts:334-337), and NO inbox row is admitted in
 //! either case (nothing to poison/cancel). The drain-side
 //! `prepare_pending` remains as the backstop for engine-internal
-//! admits (covered by oc-core's prompt_prepare_hooks battery).
+//! admits (covered by oc-core's `prompt_prepare_hooks` battery).
 //!
 //! Hermetic: sandbox tempdirs, no network beyond 127.0.0.1:0, the
 //! prompt submits use `resume: false` so no model turn is needed.

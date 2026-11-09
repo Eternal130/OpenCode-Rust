@@ -5,7 +5,7 @@
 //! provision attempt (workspace.ts:113-146 — concurrent `provision` calls
 //! here invoke `driver.create` twice, safe because create is idempotent by
 //! contract), connection pooling / wake-per-spawn spawner wrapper
-//! (workspace.ts:254-290), and destroy-vs-racing-provision NotFound
+//! (workspace.ts:254-290), and destroy-vs-racing-provision `NotFound`
 //! settling. These become load-bearing only once a remote provider
 //! registers — the local provider needs none of them.
 
@@ -83,6 +83,7 @@ pub struct Registry {
 }
 
 impl Registry {
+    #[must_use]
     pub fn new() -> Self {
         Registry::default()
     }
@@ -155,9 +156,8 @@ impl WorkspaceService {
     /// Instantly commits a logical workspace ID. No provider work happens
     /// here.
     pub async fn create(&self, id: Option<&str>, provider: &str) -> Result<String, WorkspaceError> {
-        let workspace_id = id
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("wrk_{:032x}", rand::random::<u128>()));
+        let workspace_id =
+            id.map_or_else(|| format!("wrk_{:032x}", rand::random::<u128>()), str::to_string);
         if let Some(row) = self.store.workspace_row(&workspace_id).await {
             if row.1 == provider {
                 return Ok(workspace_id);
@@ -235,9 +235,8 @@ impl WorkspaceService {
     /// Makes the workspace absent; reports whether this call destroyed an
     /// existing workspace.
     pub async fn destroy(&self, workspace_id: &str) -> Result<DestroyResult, WorkspaceError> {
-        let row = match self.store.workspace_row(workspace_id).await {
-            Some(row) => row,
-            None => return Ok(DestroyResult { destroyed: false }),
+        let Some(row) = self.store.workspace_row(workspace_id).await else {
+            return Ok(DestroyResult { destroyed: false });
         };
         // Null binding still reaches the driver: an interrupted or crashed
         // provision may have created a resource that was never persisted. A

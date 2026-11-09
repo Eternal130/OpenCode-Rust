@@ -94,7 +94,7 @@ impl UpdateCache {
                 // update.ts:41 — a failed probe logs a warning and keeps
                 // the last known answer (false when never checked).
                 eprintln!("opencode plugin: failed to check plugin update for {target}: {cause}");
-                current.map_or(false, |entry| entry.outdated)
+                current.is_some_and(|entry| entry.outdated)
             }
         };
         self.entries
@@ -128,7 +128,7 @@ fn now_ms() -> u128 {
 /// the installed tree's `package.json` — the `@latest` cache key does
 /// not carry the real version).
 pub fn installed_version(root: &Path, package: &str) -> Option<String> {
-    let installed = resolve_installed_package(root, &package)?;
+    let installed = resolve_installed_package(root, package)?;
     let manifest: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(installed.join("package.json")).ok()?)
             .ok()?;
@@ -220,7 +220,6 @@ pub fn collect_stale(root: &Path) {
                 generations.push((name.parse::<u128>().unwrap_or(0), name));
             } else {
                 // Unknown junk (e.g. a stray file) — leave it alone.
-                continue;
             }
         }
         generations.sort_unstable();
@@ -249,7 +248,7 @@ pub fn collect_stale(root: &Path) {
 fn remove_logged(dir: &Path, name: &str) {
     if let Err(cause) = std::fs::remove_dir_all(dir) {
         // npm.ts:337 — log and continue.
-        eprintln!("opencode plugin: failed to remove stale generation {}: {cause}", name);
+        eprintln!("opencode plugin: failed to remove stale generation {name}: {cause}");
     }
 }
 
@@ -417,7 +416,7 @@ mod tests {
         stage(&root, "demo-plugin", "1.0.0", &(now - 10 * day).to_string());
         collect_stale(&root);
         let key = root.join("demo-plugin@1.0.0");
-        let count = std::fs::read_dir(&key).unwrap().filter_map(|entry| entry.ok()).count();
+        let count = std::fs::read_dir(&key).unwrap().filter_map(std::result::Result::ok).count();
         assert_eq!(count, 2, "keep-2 floor");
     }
 

@@ -529,7 +529,7 @@ pub fn content_rows(groups: &[SelectGroup], options: &[SelectOption]) -> usize {
             rows += if i == 0 { 1 } else { 2 };
         }
         for &index in &group.indices {
-            rows += 1 + options.get(index).map(|option| option.details.len()).unwrap_or(0);
+            rows += 1 + options.get(index).map_or(0, |option| option.details.len());
         }
     }
     rows
@@ -586,12 +586,12 @@ pub fn row_of_index(groups: &[SelectGroup], options: &[SelectOption], flat_index
         }
         if remaining < group.indices.len() {
             for &index in &group.indices[..remaining] {
-                row += 1 + options.get(index).map(|option| option.details.len()).unwrap_or(0);
+                row += 1 + options.get(index).map_or(0, |option| option.details.len());
             }
             return row;
         }
         for &index in &group.indices {
-            row += 1 + options.get(index).map(|option| option.details.len()).unwrap_or(0);
+            row += 1 + options.get(index).map_or(0, |option| option.details.len());
         }
         remaining -= group.indices.len();
     }

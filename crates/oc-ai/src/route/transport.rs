@@ -737,7 +737,7 @@ impl Transport for AuthRetry401Transport {
         let mut retry = request;
         let value = format!("Bearer {token}");
         let mut replaced = false;
-        for (name, header) in retry.headers.iter_mut() {
+        for (name, header) in &mut retry.headers {
             if name.eq_ignore_ascii_case("authorization") {
                 *header = value.clone();
                 replaced = true;
@@ -759,7 +759,6 @@ pub fn auth_retry_401(inner: SharedTransport, refresh: AuthRefresh) -> SharedTra
 #[cfg(test)]
 mod auth_retry_tests {
     use super::*;
-    use futures::StreamExt as _;
 
     /// A scripted transport: answers with the queued statuses in order
     /// (repeating the last), recording every request's authorization

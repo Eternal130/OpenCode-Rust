@@ -641,7 +641,7 @@ fn compact_indicator_label(
             .next()
             .map_or_else(|| "U".to_owned(), String::from)
     } else {
-        label.to_owned()
+        label.clone()
     }
 }
 

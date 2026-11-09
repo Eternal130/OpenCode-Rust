@@ -1,7 +1,7 @@
 //! gb10-lane10 wire regressions:
 //!
 //! - G-253 — corrupted `session_message.data` (and corrupted session-row
-//!   JSON columns) fail the read with a 500 UnknownError (ref
+//!   JSON columns) fail the read with a 500 `UnknownError` (ref
 //!   history.ts:62-77 `MessageDecodeError` → session-error.ts
 //!   `failedMessageDecode`), never a 200 with an `{id,type}`-only empty
 //!   shell or a silently-dropped column.
@@ -9,7 +9,7 @@
 //!   trim, `~`/`~/x` expansion against the engine home, relative paths
 //!   resolved against the SESSION's current directory (not the server
 //!   process cwd), and `workspaceID` passthrough into the queued
-//!   MovePayload (move.ts:84).
+//!   `MovePayload` (move.ts:84).
 
 use std::sync::Arc;
 
@@ -187,7 +187,7 @@ async fn g253_corrupt_session_column_returns_500_not_silent_drop() {
         .transaction(move |tx| {
             tx.execute(
                 "UPDATE session_v2 SET model = ?2 WHERE id = ?1",
-                &[&id, r#"{"providerID":"broken"#],
+                [&id, r#"{"providerID":"broken"#],
             )?;
             Ok(())
         })
@@ -230,7 +230,7 @@ async fn first_move_payload(server: &TestServer, session_id: &str) -> Value {
                 .conn()
                 .query_row(
                     "SELECT payload FROM session_inbox WHERE session_id = ?1 AND type = 'move'",
-                    &[&id],
+                    [&id],
                     |row| row.get(0),
                 )
                 .expect("move item");
@@ -298,7 +298,7 @@ async fn g254_relative_directory_resolves_against_session_directory() {
         .engine
         .db
         .transaction(move |tx| {
-            tx.execute("UPDATE session_v2 SET directory = ?2 WHERE id = ?1", &[&id, &sub_dir])?;
+            tx.execute("UPDATE session_v2 SET directory = ?2 WHERE id = ?1", [&id, &sub_dir])?;
             Ok(())
         })
         .await
@@ -324,7 +324,7 @@ async fn g254_relative_directory_resolves_against_session_directory() {
     );
 }
 
-/// `workspaceID` passes through into the queued MovePayload (ref
+/// `workspaceID` passes through into the queued `MovePayload` (ref
 /// move.ts:84 `workspaceID: input.workspaceID`).
 #[tokio::test]
 async fn g254_workspace_id_passthrough() {

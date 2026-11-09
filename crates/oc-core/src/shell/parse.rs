@@ -226,12 +226,11 @@ fn separator_after(resource: &str, boundary: usize) -> String {
     let rest = &tail[consumed.len()..];
     let mut continuation = 0usize;
     if rest.starts_with('`') {
-        let newline_len = if rest[1..].starts_with("\r\n") {
+        let after_tick = rest.strip_prefix('`').unwrap_or(rest);
+        let newline_len = if after_tick.starts_with("\r\n") {
             2
-        } else if rest[1..].starts_with('\r') || rest[1..].starts_with('\n') {
-            1
         } else {
-            0
+            usize::from(after_tick.starts_with('\r') || after_tick.starts_with('\n'))
         };
         if newline_len > 0 {
             continuation += 1 + newline_len;

@@ -1387,7 +1387,7 @@ pub struct McpServerRaw {
 #[must_use]
 pub fn visible_mcp_summaries(raw: &[McpServerRaw], permissions: &Ruleset) -> Vec<McpServerSummary> {
     let rulesets = std::slice::from_ref(permissions);
-    let can_execute = crate::permission::evaluate("execute", "*", &rulesets).effect != Effect::Deny;
+    let can_execute = crate::permission::evaluate("execute", "*", rulesets).effect != Effect::Deny;
     let mut visible: Vec<McpServerSummary> = raw
         .iter()
         .filter_map(|item| {
@@ -1401,7 +1401,7 @@ pub fn visible_mcp_summaries(raw: &[McpServerRaw], permissions: &Ruleset) -> Vec
                 crate::permission::evaluate(
                     &crate::mcp::registry::tool_name(&item.server, &tool.name),
                     "*",
-                    &rulesets,
+                    rulesets,
                 )
                 .effect
                     != Effect::Deny

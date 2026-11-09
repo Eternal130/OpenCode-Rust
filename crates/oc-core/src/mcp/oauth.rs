@@ -998,6 +998,18 @@ pub async fn refresh(
     config: &RemoteConfig,
     credential: &StoredCredential,
 ) -> Result<StoredTokens, String> {
+    // Every awaiter removes the entry post-settle — `refreshes.delete(key)`
+    // in the ref's `.finally`. Removal runs on ALL unwind paths via Drop
+    // (an RAII guard): if `pending.await` unwinds — e.g. `refresh_once`
+    // panics inside the shared future — the map entry is still removed,
+    // so a later refresh starts fresh instead of awaiting a poisoned
+    // entry forever.
+    struct RemoveOnSettle(String);
+    impl Drop for RemoveOnSettle {
+        fn drop(&mut self) {
+            IN_FLIGHT_REFRESHES.lock().remove(&self.0);
+        }
+    }
     let key = refresh_key(config, credential);
     let pending = {
         let mut map = IN_FLIGHT_REFRESHES.lock();
@@ -1019,12 +1031,6 @@ pub async fn refresh(
     // panics inside the shared future — the map entry is still removed,
     // so a later refresh starts fresh instead of awaiting a poisoned
     // entry forever.
-    struct RemoveOnSettle(String);
-    impl Drop for RemoveOnSettle {
-        fn drop(&mut self) {
-            IN_FLIGHT_REFRESHES.lock().remove(&self.0);
-        }
-    }
     let _guard = RemoveOnSettle(key);
     pending.await
 }

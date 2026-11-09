@@ -1189,7 +1189,7 @@ fn settled_parser(writer: &std::fs::File, boot: &Boot, rows: &mut u16) -> vt100:
 }
 
 /// PTY: G-66 — shift+left selects the composer's tail and the
-/// rendered cells INVERT (EditBufferRenderable's default selection
+/// rendered cells INVERT (`EditBufferRenderable`'s default selection
 /// styling: the selected cells' bg becomes the text fg and their fg
 /// becomes the prompt bg, while the unselected prefix keeps the
 /// resting paint). Asserted purely relationally (bg/fg swap), so the

@@ -12,7 +12,7 @@ use oc_core::engine::{Engine, EngineOptions};
 use oc_server::handlers;
 use oc_server::state::{AppState, AuthConfig};
 use oc_util::determinism::{SystemClock, UuidV4IdGen};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 
 struct TestServer {
     client: Client,
@@ -205,7 +205,7 @@ async fn be1_sse_credential_remove_non_active_does_not_switch() {
     let _ = active;
 }
 
-/// (active, time_created, time_updated) for one credential row, read
+/// (active, `time_created`, `time_updated`) for one credential row, read
 /// straight off the engine db (the be1 SQL-probe pattern).
 async fn credential_times(server: &TestServer, id: &str) -> (i64, i64, i64) {
     let id = id.to_owned();

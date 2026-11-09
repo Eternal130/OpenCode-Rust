@@ -35,8 +35,8 @@ fn image_identity(file: &Value) -> Option<(String, String)> {
     let description = text("description");
     let metadata = serde_json::Value::Array(vec![
         serde_json::Value::String(mime.to_owned()),
-        opt(&name).unwrap_or(serde_json::Value::Null),
-        opt(&description).unwrap_or(serde_json::Value::Null),
+        opt(name).unwrap_or(serde_json::Value::Null),
+        opt(description).unwrap_or(serde_json::Value::Null),
         serde_json::Value::String(mention.to_owned()),
     ])
     .to_string();

@@ -1159,7 +1159,7 @@ fn runner_compaction_token_estimate_counts_utf16_units_not_bytes() {
 /// G-252② — an overflow-triggered compaction folds its reason to "auto"
 /// on the wire (ref compaction.ts:629 `trigger.reason === "manual" ?
 /// "manual" : "auto"`). Both sides' event schemas only allow
-/// ["auto","manual"] (ref session-event.ts:588; session_message.rs
+/// `["auto","manual"]` (ref session-event.ts:588; session_message.rs
 /// `CompactionReason`), so the internal "overflow" would break typed
 /// clients and the projected row's strict decode.
 #[tokio::test]
