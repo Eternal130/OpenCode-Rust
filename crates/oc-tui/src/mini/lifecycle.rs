@@ -115,6 +115,12 @@ pub enum FooterKey {
     /// config/keybind.ts:41): `<leader>q` opens the queued menu
     /// (`session.queued_prompts`, config/keybind.ts:131).
     CtrlX,
+    /// G-272 — `session.background`'s ctrl+b (config/keybind.ts:127).
+    CtrlB,
+    /// G-272 — the settings panel's change keys (`left`/
+    /// `right`, footer.command.tsx:818-824's `onKey`).
+    Left,
+    Right,
 }
 
 /// The side effects a keypress produced — the runtime seams
@@ -138,6 +144,35 @@ pub enum FooterEffect {
     /// composer keymap layer's ctrl+t entry, footer.view.tsx:569-575
     /// → `onCycleVariant`, runtime.ts:293-310).
     CycleVariant,
+    /// G-272 — the agent panel's selection (`onAgentSelect`,
+    /// runtime.lifecycle.ts:72): the NEXT turn runs as this agent
+    /// (`session.switchAgent` before the prompt POST).
+    AgentSelect(String),
+    /// G-272 — the model panel's selection (`onModelSelect` →
+    /// `resolveSelectedModel`): the next turn switches the session's
+    /// model first (`session.switchModel`).
+    ModelSelect { provider_id: String, model_id: String },
+    /// G-272 — the variant panel's explicit pick (`onVariantSelect`).
+    VariantSelect(Option<String>),
+    /// G-272 — a queued-prompt action (`onQueuedPromptAction`,
+    /// QueuedPromptAction = steer|queue|cancel, types.ts:103): the
+    /// runtime PATCHes the inbox row's delivery (or DELETEs it on
+    /// cancel).
+    QueuedPromptAction { action: &'static str, inbox_id: String },
+    /// G-272 — `session.background` (ctrl+b,
+    /// footer.view.tsx:580-589): detach blocking subagent tools.
+    Background,
+    /// G-272 — a settings-panel change (`onChange` →
+    /// `onMiniSettingChange`, footer.command.tsx:790-812): the key +
+    /// the raw wire value ("show"/"hide"/mono bool/spinner id —
+    /// "verbosity" carries the preset name).
+    SettingChange { key: &'static str, value: String },
+}
+
+/// G-272 — `flip_show_hide`: the show/hide knobs' toggle direction
+/// (`change`'s default arm, footer.command.tsx:806).
+fn flip_show_hide(current: &str) -> &str {
+    if current == "show" { "hide" } else { "show" }
 }
 
 /// The footer state machine + per-view key handling (the pure half of
@@ -192,9 +227,9 @@ pub struct FooterPane {
     /// `queued.prompts` view — the statusline's `N pending` group,
     /// `footer.view.tsx:246`).
     pub queued_pending: usize,
-    /// G-272 — the queued prompts' TEXTS (the queued-menu's rows —
-    /// the count only feeds the statusline).
-    pub queued_prompts: Vec<String>,
+    /// G-272 — the queued prompts' rows (the queued-menu's entries +
+    /// the action targets — `FooterQueuedPrompt`, types.ts:98-102).
+    pub queued_prompts: Vec<QueuedPromptView>,
     /// G-272 — `state.usage` (footer.view.tsx:213-218): the
     /// statusline's context/cost groups.
     pub usage: Option<UsageInfo>,
@@ -221,13 +256,25 @@ pub struct FooterPane {
     pub settings_summary: crate::components::footer::state::MiniSettings,
 }
 
-/// G-272 — `state.usage` (footer.view.tsx:213-218): the summed step
+/// G-221 — `state.usage` (footer.view.tsx:213-218): the summed step
 /// tokens with the context percent and the cost.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UsageInfo {
     pub tokens: u64,
     pub percent: Option<u32>,
     pub cost: Option<f64>,
+}
+
+/// G-272 — one queued-prompt row the footer tracks
+/// (`FooterQueuedPrompt`, types.ts:98-102): the inbox id (the action
+/// target), the prompt text, and the current delivery (the queued
+/// menu's "queued"/"steering" footer + the Enter toggle's source).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct QueuedPromptView {
+    pub message_id: String,
+    pub text: String,
+    /// `queue` | `steer`.
+    pub delivery: String,
 }
 
 /// G-272 — the panel routes' shared search state (the `PanelShell`'s
@@ -369,6 +416,9 @@ impl FooterPane {
             FooterKey::CtrlT => "ctrl+t".to_owned(),
             FooterKey::CtrlP => "ctrl+p".to_owned(),
             FooterKey::CtrlX => "ctrl+x".to_owned(),
+            FooterKey::CtrlB => "ctrl+b".to_owned(),
+            FooterKey::Left => "left".to_owned(),
+            FooterKey::Right => "right".to_owned(),
             FooterKey::Tab => "tab".to_owned(),
             FooterKey::PageUp => "pageup".to_owned(),
             FooterKey::PageDown => "pagedown".to_owned(),
@@ -416,7 +466,8 @@ impl FooterPane {
             FooterKey::Down => state = form_move(&state, request, 1),
             // G-272 — the panel-family keys never reach a form body
             // (the blocker owns every key); consumed without effect.
-            FooterKey::CtrlP | FooterKey::CtrlX => {}
+            FooterKey::CtrlP | FooterKey::CtrlX | FooterKey::CtrlB | FooterKey::Left
+            | FooterKey::Right => {}
             FooterKey::Enter => {
                 if textual || state.editing {
                     let (next, reply) = form_commit_input(&state, request, &draft);
@@ -560,6 +611,22 @@ impl FooterPane {
                 }
             }
             FooterKey::Tab | FooterKey::PageUp | FooterKey::PageDown => {}
+            // G-272 — `session.background` (ctrl+b,
+            // config/keybind.ts:127): enabled on the composer route
+            // while blocking subagent tools run foreground
+            // (`foregroundSubagents()`, footer.view.tsx:580).
+            FooterKey::CtrlB => {
+                let running = self
+                    .subagent_children
+                    .iter()
+                    .any(|child| child.status == super::transport::SubagentStatus::Running);
+                if running {
+                    effects.push(FooterEffect::Background);
+                }
+            }
+            // G-272 — left/right are settings-panel keys; the
+            // composer consumes them without effect.
+            FooterKey::Left | FooterKey::Right => {}
             // G-181① — `variant.cycle` on the composer route
             // (footer.view.tsx:569-575: enabled when
             // `route().type === "composer"`): fires `onCycleVariant`.
@@ -635,11 +702,21 @@ impl FooterPane {
             crate::components::footer::PromptRoute::Variant => {
                 variant_entries(&self.variants, self.active_variant.as_deref())
             }
+            // G-272 — the queued menu's rows (`RunQueuedPromptSelect
+            // Body.entries`, footer.command.tsx:956-964): one row per
+            // pending prompt — the newline-flattened text, the
+            // delivery footer ("queued"/"steering"), and the inbox id
+            // as the action payload.
             crate::components::footer::PromptRoute::QueuedMenu => self
                 .queued_prompts
                 .iter()
-                .map(|text| FooterMenuItem {
-                    display: text.clone(),
+                .map(|prompt| FooterMenuItem {
+                    display: prompt.text.replace('\n', " "),
+                    footer: Some(
+                        if prompt.delivery == "queue" { "queued" } else { "steering" }.to_owned(),
+                    ),
+                    footer_tone: Some(crate::components::footer::state::FooterTone::Selection),
+                    value: Some(prompt.message_id.clone()),
                     ..FooterMenuItem::default()
                 })
                 .collect(),
@@ -671,6 +748,18 @@ impl FooterPane {
         use crate::components::footer::state::{move_selection_clamp, reconcile_selection};
         let mut effects = Vec::new();
         let count = self.panel_entries().len();
+        // G-272 — the settings panel's change keys (`onKey`,
+        // footer.command.tsx:818-824): left/right step the selected
+        // row's value (enter = right's +1 via `onSelect: change`).
+        let settings_route = self.machine.route
+            == crate::components::footer::PromptRoute::Settings;
+        // G-272 — the queued menu's action keys
+        // (`queued_prompt.delete` ctrl+d / `queued_prompt.undo`
+        // ctrl+u, config/keybind.ts:132-133): the leader chord arms
+        // ctrl+d/ctrl+u like ctrl+u's query-clear in the command
+        // panel.
+        let queued_route =
+            self.machine.route == crate::components::footer::PromptRoute::QueuedMenu;
         match key {
             FooterKey::Escape | FooterKey::CtrlC => {
                 // closePanel → the composer (footer.view.tsx:320-322).
@@ -688,12 +777,40 @@ impl FooterPane {
                 self.panel.query.pop();
                 self.panel.selected = reconcile_selection(self.panel.selected, count);
             }
+            FooterKey::Left if settings_route => {
+                effects.extend(self.settings_change(-1));
+            }
+            FooterKey::Right if settings_route => {
+                effects.extend(self.settings_change(1));
+            }
             FooterKey::Printable(char) => {
-                if char == 'u' && self.leader_armed {
+                if char == 'u' && self.leader_armed && !queued_route {
                     // ctrl+u clears the query (footer.command.tsx:254).
                     self.leader_armed = false;
                     self.panel.query.clear();
                     self.panel.selected = 0;
+                } else if char == 'u' && self.leader_armed && queued_route {
+                    // G-272 — `queued_prompt.undo` (ctrl+u,
+                    // config/keybind.ts:132): cancel the row and
+                    // restore its text into the composer draft
+                    // (footer.view.tsx:801-811's `promptAppend`).
+                    self.leader_armed = false;
+                    if let Some(prompt) = self.selected_queued_prompt() {
+                        self.draft = if self.draft.is_empty() {
+                            prompt.text.clone()
+                        } else {
+                            format!("{}\n{}", self.draft, prompt.text)
+                        };
+                        effects.push(FooterEffect::QueuedPromptAction {
+                            action: "cancel",
+                            inbox_id: prompt.message_id.clone(),
+                        });
+                        self.machine.close_panel();
+                        self.panel = PanelState::default();
+                    }
+                } else if queued_route && self.leader_armed && char == 'd' {
+                    self.leader_armed = false;
+                    effects.extend(self.queued_entry_action("cancel"));
                 } else {
                     self.leader_armed = false;
                     self.panel.query.push(char);
@@ -704,7 +821,26 @@ impl FooterPane {
                 let entries = self.panel_entries();
                 if let Some(entry) = entries.get(self.panel.selected.min(entries.len().saturating_sub(1)))
                 {
-                    effects.extend(self.run_panel_entry(entry));
+                    if settings_route {
+                        // `onSelect: change` (footer.command.tsx:817) —
+                        // enter steps the row forward.
+                        effects.extend(self.settings_change(1));
+                    } else if queued_route {
+                        // The select toggle (footer.view.tsx:795-800):
+                        // queue → steer, steer → queue, then close.
+                        let action = if entry
+                            .footer
+                            .as_deref()
+                            .is_some_and(|footer| footer == "steering")
+                        {
+                            "queue"
+                        } else {
+                            "steer"
+                        };
+                        effects.extend(self.queued_entry_action(action));
+                    } else {
+                        effects.extend(self.run_panel_entry(entry));
+                    }
                 }
             }
             FooterKey::Tab
@@ -712,19 +848,127 @@ impl FooterPane {
             | FooterKey::PageDown
             | FooterKey::CtrlT
             | FooterKey::CtrlP
-            | FooterKey::CtrlX => {}
+            | FooterKey::CtrlX
+            | FooterKey::CtrlB => {}
+            // Left/right carry meaning only on the settings route
+            // (handled above); other panels consume them.
+            FooterKey::Left | FooterKey::Right => {}
         }
         effects
     }
 
+    /// G-272 — the FILTERED list's selected queued row (the action
+    /// target).
+    fn selected_queued_prompt(&self) -> Option<QueuedPromptView> {
+        let entries = self.panel_entries();
+        let entry = entries.get(self.panel.selected.min(entries.len().saturating_sub(1)))?;
+        let id = entry.value.as_deref()?;
+        self.queued_prompts.iter().find(|prompt| prompt.message_id == id).cloned()
+    }
+
+    /// G-272 — one queued-menu action over the selected row
+    /// (`queuedPromptAction`, footer.view.tsx:325-345): steer/queue
+    /// toggle or cancel; the panel closes on success (the runtime
+    /// reports failures back as system rows).
+    fn queued_entry_action(&mut self, action: &'static str) -> Vec<FooterEffect> {
+        let Some(prompt) = self.selected_queued_prompt() else { return Vec::new() };
+        let resolved = if action == "cancel" {
+            "cancel"
+        } else if prompt.delivery == "queue" {
+            "steer"
+        } else {
+            "queue"
+        };
+        self.machine.close_panel();
+        self.panel = PanelState::default();
+        vec![FooterEffect::QueuedPromptAction { action: resolved, inbox_id: prompt.message_id }]
+    }
+
+    /// G-272 — one settings step (`change`, footer.command.tsx:
+    /// 790-812): verbosity cycles its presets, work_spinner walks
+    /// the literals, mono toggles, the show/hide knobs flip — all
+    /// through the same [`FooterEffect::SettingChange`] the runtime
+    /// persists.
+    fn settings_change(&self, direction: i8) -> Vec<FooterEffect> {
+        use crate::components::footer::state::{verbosity_change, WORK_SPINNERS};
+        let entries = self.panel_entries();
+        let Some(entry) = entries.get(self.panel.selected.min(entries.len().saturating_sub(1)))
+        else {
+            return Vec::new();
+        };
+        let summary = &self.settings_summary;
+        let change: Option<(&'static str, String)> = match entry.display.as_str() {
+            "Verbosity" => verbosity_change(summary, direction)
+                .map(|(key, value)| (key, value.to_owned())),
+            "Work spinner" => {
+                let current = WORK_SPINNERS
+                    .iter()
+                    .position(|spinner| *spinner == summary.work_spinner)
+                    .unwrap_or(0);
+                let offset = direction.rem_euclid(WORK_SPINNERS.len() as i8) as usize;
+                let next = WORK_SPINNERS
+                    .get((current + offset) % WORK_SPINNERS.len())
+                    .copied()
+                    .unwrap_or(summary.work_spinner);
+                Some(("work_spinner", next.to_owned()))
+            }
+            "Monochrome UI" => Some(("mono", (!summary.mono).to_string())),
+            "Thinking" => Some(("thinking", flip_show_hide(summary.thinking).to_owned())),
+            "Tools" => Some(("tools", flip_show_hide(summary.tools).to_owned())),
+            "Shell" => Some(("shell_output", flip_show_hide(summary.shell_output).to_owned())),
+            "Turn summary" => Some(("turn_summary", flip_show_hide(summary.turn_summary).to_owned())),
+            "Footer details" => Some(("footer", flip_show_hide(summary.footer).to_owned())),
+            "Splash" => Some(("splash", flip_show_hide(summary.splash).to_owned())),
+            _ => None,
+        };
+        match change {
+            Some((key, value)) => vec![FooterEffect::SettingChange { key, value }],
+            None => Vec::new(),
+        }
+    }
+
     /// G-272 — run one command entry (`pick`, footer.command.tsx:
-    /// 526-590): the route/effect subset the mini runtime carries;
-    /// the model/agent/variant SELECTION rows need the per-turn
-    /// switch seams (out of this lane's scope) and stay inert.
+    /// 526-590): the command-menu rows route; the AGENT/MODEL/
+    /// VARIANT panels' selection rows emit their switch effects (the
+    /// runtime applies them before the next turn's POST).
     fn run_panel_entry(
         &mut self,
         entry: &crate::components::footer::state::FooterMenuItem,
     ) -> Vec<FooterEffect> {
+        match self.machine.route {
+            // G-272 — the agent panel's rows (`onAgentSelect`): the
+            // picked id becomes the next turn's agent.
+            crate::components::footer::PromptRoute::Agent => {
+                self.machine.close_panel();
+                self.panel = PanelState::default();
+                self.agent = Some(entry.display.clone());
+                return vec![FooterEffect::AgentSelect(entry.display.clone())];
+            }
+            // G-272 — the model panel's rows (`onModelSelect`): the
+            // `provider/model` value resolves the next turn's model.
+            crate::components::footer::PromptRoute::Model => {
+                let value = entry.value.clone().unwrap_or_else(|| entry.display.clone());
+                let Some((provider_id, model_id)) = value.split_once('/') else {
+                    return Vec::new();
+                };
+                self.machine.close_panel();
+                self.panel = PanelState::default();
+                self.model_label = Some(value.clone());
+                return vec![FooterEffect::ModelSelect {
+                    provider_id: provider_id.to_owned(),
+                    model_id: model_id.to_owned(),
+                }];
+            }
+            // G-272 — the variant panel's rows (`onVariantSelect`).
+            crate::components::footer::PromptRoute::Variant => {
+                let variant = (entry.display != "Default").then(|| entry.display.clone());
+                self.machine.close_panel();
+                self.panel = PanelState::default();
+                self.active_variant = variant.clone();
+                return vec![FooterEffect::VariantSelect(variant)];
+            }
+            _ => {}
+        }
         match entry.display.as_str() {
             "Switch agent" => {
                 self.open_panel(crate::components::footer::PromptRoute::Agent);
@@ -893,7 +1137,8 @@ impl FooterPane {
             // G-181① — `variant.cycle`'s layer is composer-route-only;
             // the inspector consumes the key without effect.
             FooterKey::CtrlT => {}
-            FooterKey::CtrlP | FooterKey::CtrlX => {}
+            FooterKey::CtrlP | FooterKey::CtrlX | FooterKey::CtrlB | FooterKey::Left
+            | FooterKey::Right => {}
             FooterKey::Printable(_) => {}
         }
         effects
@@ -1888,6 +2133,11 @@ impl Lifecycle {
             wrote_exit = true;
         }
         let _ = self.flush();
+        // G-272 — the teardown title clear (`renderer.setTerminal
+        // Title("")`, runtime.lifecycle.ts:333 — linux-only).
+        if cfg!(target_os = "linux") {
+            let _ = self.write_raw(b"\x1b]2;\x07");
+        }
         // `shutdown(renderer)` (`runtime.lifecycle.ts:97-111`): switch
         // external output back to passthrough BEFORE leaving
         // split-footer mode, so pending stdout doesn't get captured
@@ -1957,6 +2207,52 @@ impl Lifecycle {
     #[must_use]
     pub fn is_closed(&self) -> bool {
         self.closed
+    }
+
+    /// G-272 — `setTitle` (runtime.lifecycle.ts:175-179 + renderer
+    /// `setTerminalTitle`): linux-only OSC 2 — `OpenCode` for missing/
+    /// fallback titles, else `OC | {title}` with the 40-char
+    /// truncation (37 + `…`, the root TUI's TUI-18 twin). `None`
+    /// clears (the close path's `setTerminalTitle("")`).
+    pub fn set_title(&mut self, title: Option<&str>) {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let text = terminal_title(title);
+        // OSC 2 (the window title) + BEL terminator.
+        let _ = self.write_raw(format!("\x1b]2;{text}\x07").as_bytes());
+    }
+}
+
+/// G-272 — the title rule (`setTitle`, runtime.lifecycle.ts:175-179):
+/// a missing or timestamped-fallback title maps to `OpenCode`
+/// (`isFallbackTitle`, util/session-title-fallback.ts); anything else
+/// becomes `OC | {title}` truncated at 40 chars (37 + `…`).
+#[must_use]
+pub fn terminal_title(title: Option<&str>) -> String {
+    let pattern_fallback = |text: &str| {
+        // `^(New session|Child session) - \d{4}-…Z$` — the fallback
+        // title shapes.
+        let Some((head, tail)) = text.split_once(" - ") else { return false };
+        if !matches!(head, "New session" | "Child session") {
+            return false;
+        }
+        let mut chars = tail.chars();
+        let Some(first) = chars.next() else { return false };
+        first.is_ascii_digit()
+            && tail.len() >= 20
+            && tail.ends_with('Z')
+            && tail.as_bytes()[tail.len() - 2].is_ascii_digit()
+            && head.len() + tail.len() > 0
+    };
+    match title {
+        None | Some("") => "OpenCode".to_owned(),
+        Some(title) if pattern_fallback(title) => "OpenCode".to_owned(),
+        Some(title) if title.chars().count() > 40 => {
+            let head: String = title.chars().take(37).collect();
+            format!("OC | {head}…")
+        }
+        Some(title) => format!("OC | {title}"),
     }
 }
 
@@ -2264,7 +2560,18 @@ mod tests {
         assert_eq!(footer.machine.route, PromptRoute::Composer);
         assert_eq!(footer.draft, "", "q never typed through the chord");
         // With rows the menu opens and lists them.
-        footer.queued_prompts = vec!["first queued".into(), "second queued".into()];
+        footer.queued_prompts = vec![
+            QueuedPromptView {
+                message_id: "msg_a".into(),
+                text: "first queued".into(),
+                delivery: "queue".into(),
+            },
+            QueuedPromptView {
+                message_id: "msg_b".into(),
+                text: "second\nqueued".into(),
+                delivery: "steer".into(),
+            },
+        ];
         footer.queued_pending = 2;
         footer.press(FooterKey::CtrlX);
         footer.press(FooterKey::Printable('q'));
@@ -2272,6 +2579,20 @@ mod tests {
         let entries = footer.panel_entries();
         assert_eq!(entries.len(), 2, "the queued rows list: {entries:?}");
         assert_eq!(entries[0].display, "first queued");
+        assert_eq!(entries[0].footer.as_deref(), Some("queued"));
+        assert_eq!(entries[1].display, "second queued", "newlines flatten");
+        assert_eq!(entries[1].footer.as_deref(), Some("steering"));
+        // Enter over a "queue" row steers it (the toggle's action
+        // fires with the inbox id and the panel closes).
+        let effects = footer.press(FooterKey::Enter);
+        assert_eq!(
+            effects,
+            vec![FooterEffect::QueuedPromptAction {
+                action: "steer",
+                inbox_id: "msg_a".into()
+            }]
+        );
+        assert_eq!(footer.machine.route, PromptRoute::Composer);
         // Any OTHER key after the leader consumes the chord.
         footer.press(FooterKey::Escape);
         footer.press(FooterKey::CtrlX);

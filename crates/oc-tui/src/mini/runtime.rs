@@ -342,6 +342,10 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
         work_spinner: "block-soft-slide",
         mono: settings.mono,
     };
+    // G-272 — `setTitle(input.sessionTitle)` at boot
+    // (runtime.lifecycle.ts:180): the OSC 2 window title tracks the
+    // session (fallback titles map to "OpenCode").
+    lifecycle.set_title(input.target.session_title.as_deref());
     let client = input.client.clone();
     let session_id = input.target.session_id.clone();
 
@@ -388,6 +392,24 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
     // subscription is live (v2 prewarms the transport after
     // firstPaint, `runtime.ts:1055-1069`).
     let (event_tx, event_rx) = tokio::sync::mpsc::channel::<StreamMessage>(256);
+    // G-272 — the SIGINT subscription (`host.signals.sigint`
+    // → `footer.requestExit()`, runtime.lifecycle.ts:275-295): a
+    // real `kill -INT` (or the terminal's INT delivery when raw mode
+    // missed the chord) routes through the SAME ctrl+c semantics —
+    // first press clears a live draft, second press within 5 s exits.
+    // The handler task only forwards presses; the loop applies them.
+    let (sigint_tx, sigint_rx) = tokio::sync::mpsc::unbounded_channel();
+    let sigint_task = tokio::spawn(async move {
+        if let Ok(mut stream) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+        {
+            while stream.recv().await.is_some() {
+                if sigint_tx.send(()).is_err() {
+                    break;
+                }
+            }
+        }
+    });
     let (stream_ready_tx, stream_ready_rx) = tokio::sync::oneshot::channel::<()>();
     let stream_task = tokio::spawn(stream_pump(
         client.clone(),
@@ -434,6 +456,10 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
         providers,
         context_limits,
         needs_catalog: false,
+        next_agent: None,
+        next_model: None,
+        sigint_rx,
+        persist_settings: input.settings.is_none(),
     };
 
     // The initial input submits first (`runPromptQueue`'s
@@ -450,6 +476,7 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
 
     while !runtime.lifecycle.is_closed() {
         runtime.pump_keys().await;
+        runtime.pump_sigint();
         runtime.pump_events();
         // G-181④ — a reconnect marker replays the session transcript
         // through the SAME reconciler the live folds consume (the
@@ -504,6 +531,7 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
         tokio::time::sleep(TICK).await;
     }
     stream_task.abort();
+    sigint_task.abort();
     Ok(runtime.exit_code)
 }
 
@@ -577,6 +605,22 @@ struct Runtime {
     /// `refreshCatalog`, transport.ts:383-392, 1009-1014): the loop
     /// re-fetches the catalogs.
     needs_catalog: bool,
+    /// G-272 — the pending per-turn agent (`state.agent` +
+    /// `session.switchAgent`, stream-v2.transport.ts:1799/1834):
+    /// applied before the next prompt POST, then consumed.
+    next_agent: Option<String>,
+    /// G-272 — the pending per-turn model (`resolveSelectedModel` →
+    /// `session.switchModel`, stream-v2.transport.ts:1804/1839).
+    next_model: Option<(String, String)>,
+    /// G-272 — the SIGINT presses (the `host.signals.sigint`
+    /// subscription, runtime.lifecycle.ts:275-295): each press behaves
+    /// exactly like the ctrl+c chord key (first press clears a draft,
+    /// second within 5 s exits).
+    sigint_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
+    /// G-272 — whether settings changes persist to the global cli.json
+    /// (the production default path; injected test settings stay
+    /// in-memory).
+    persist_settings: bool,
 }
 
 impl Runtime {
@@ -593,11 +637,43 @@ impl Runtime {
         }
     }
 
+    /// G-272 — drain pending SIGINT presses (`attachSigint` →
+    /// `footer.requestExit()`, runtime.lifecycle.ts:275-295): each
+    /// press is the ctrl+c chord's semantics (clear the draft first,
+    /// then the two-press exit window).
+    fn pump_sigint(&mut self) {
+        while let Ok(()) = self.sigint_rx.try_recv() {
+            for effect in self.lifecycle.pane.press(FooterKey::CtrlC) {
+                // The press arms/clears inside the pane; only a FULL
+                // exit press-count emits the Close effect (the
+                // futures-only runtime can't await inside `press`).
+                if let FooterEffect::Close = effect {
+                    self.lifecycle.close(
+                        self.shown && !self.session_id.is_empty(),
+                        self.session_title.as_deref(),
+                        Some(&self.session_id),
+                    );
+                }
+            }
+        }
+    }
+
     async fn apply_effect(&mut self, effect: FooterEffect) {
         match effect {
             FooterEffect::Submit(text) => {
                 self.history.push(&text);
-                self.pending.push(RunPrompt { text, ..RunPrompt::default() });
+                // G-272 — the `!` shell passthrough (`setShellMode`'s
+                // observable gesture: `!` at cursor 0 toggles shell
+                // MODE, the submitted text minus the bang is the
+                // command — `runShellTurn`,
+                // stream-v2.transport.ts:1561-1592).
+                let prompt = match super::prompt_shared::parse_shell_command(&text) {
+                    Some(command) => {
+                        RunPrompt { text: command.to_owned(), shell: true, ..RunPrompt::default() }
+                    }
+                    None => RunPrompt { text, ..RunPrompt::default() },
+                };
+                self.pending.push(prompt);
             }
             FooterEffect::Close => {
                 self.lifecycle.close(
@@ -619,6 +695,67 @@ impl Runtime {
                     return;
                 }
                 let _ = transport::interrupt(&self.client, &child, false).await;
+            }
+            // G-272 — the agent panel's pick (`state.agent` +
+            // `switchAgent` before the next turn,
+            // stream-v2.transport.ts:1799/1834): the status mirrors
+            // the ref's `agent {id}` write (runtime.ts:337-352).
+            FooterEffect::AgentSelect(agent) => {
+                self.next_agent = Some(agent.clone());
+                self.turn_agent = Some(agent.clone());
+                self.lifecycle.append(Commit::system(&format!("agent {agent}")));
+            }
+            // G-272 — the model panel's pick (`switchModel` before
+            // the next turn); the label feeds the footer + turn
+            // summary (`formatModelLabel`).
+            FooterEffect::ModelSelect { provider_id, model_id } => {
+                let label = format!("{provider_id}/{model_id}");
+                self.next_model = Some((provider_id, model_id));
+                self.turn_model = Some(label.clone());
+                self.lifecycle.append(Commit::system(&label));
+            }
+            // G-272 — the variant panel's pick (`onVariantSelect` →
+            // `saveVariant`, runtime.ts:360-374): persist the choice.
+            FooterEffect::VariantSelect(variant) => {
+                self.active_variant = variant.clone();
+                self.lifecycle.pane.active_variant = variant.clone();
+                if let Some(target) = &self.boot_target {
+                    self.preferences.save_variant(target, variant.as_deref());
+                }
+                let status = variant
+                    .as_deref()
+                    .map(|variant| format!("variant {variant}"))
+                    .unwrap_or_else(|| "variant default".to_owned());
+                self.lifecycle.append(Commit::system(&status));
+            }
+            // G-272 — a queued-prompt action (`onQueuedPromptAction`,
+            // runtime.ts:394-402): steer/queue PATCH the delivery,
+            // cancel DELETEs the row; failures surface as system rows
+            // (`failed to … pending prompt: …`, footer.view.tsx:340).
+            FooterEffect::QueuedPromptAction { action, inbox_id } => {
+                if !self.demo {
+                    if let Err(error) =
+                        transport::inbox_prompt_action(&self.client, &self.session_id, &inbox_id, action)
+                            .await
+                    {
+                        self.lifecycle.append(Commit::system(&format!(
+                            "failed to {action} pending prompt: {error}"
+                        )));
+                    }
+                }
+            }
+            // G-272 — `session.background` (runtime.ts:386-392).
+            FooterEffect::Background => {
+                if !self.demo {
+                    let _ = transport::session_background(&self.client, &self.session_id).await;
+                }
+            }
+            // G-272 — a settings change (`onMiniSettingChange`,
+            // runtime.ts:253-266): apply the preset/knob to the live
+            // gates + the pane's summary and persist through the
+            // cli.json write-through (`config.update`).
+            FooterEffect::SettingChange { key, value } => {
+                self.apply_setting_change(key, &value);
             }
             FooterEffect::PermissionReply(reply) => {
                 if self.demo {
@@ -694,6 +831,145 @@ impl Runtime {
                         self.lifecycle.append(Commit::system(&status));
                     }
                 }
+            }
+        }
+    }
+
+    /// G-272 — apply one settings change (`applyMiniSettingChange`,
+    /// verbosity.ts:73-76 + `config.update`, runtime.ts:253-266): the
+    /// live gates update immediately; the cli.json `mini` section
+    /// persists write-through (production only — injected test
+    /// settings never touch the file).
+    fn apply_setting_change(&mut self, key: &str, value: &str) {
+        let settings = &mut self.settings;
+        let mut touched: Vec<(&'static str, String)> = Vec::new();
+        match key {
+            // The verbosity preset assigns ALL five knobs
+            // (`Object.assign(draft.mini, verbosityPreset(value))`).
+            "verbosity" => {
+                let mut preset = |thinking: bool, tools: bool, shell: bool, turn: bool, footer: bool| {
+                    let on = |flag: bool| if flag { "show" } else { "hide" };
+                    touched.extend([
+                        ("thinking", on(thinking).to_string()),
+                        ("tools", on(tools).to_string()),
+                        ("shell_output", on(shell).to_string()),
+                        ("turn_summary", on(turn).to_string()),
+                        ("footer", on(footer).to_string()),
+                    ]);
+                    settings.thinking = thinking;
+                    settings.tools = tools;
+                    settings.shell_output = shell;
+                    settings.turn_summary = turn;
+                    settings.footer = footer;
+                };
+                match value {
+                    "quiet" => preset(false, false, false, false, false),
+                    "everything" => preset(true, true, true, true, true),
+                    _ => preset(true, false, false, true, true),
+                }
+            }
+            "thinking" => {
+                settings.thinking = value == "show";
+                touched.push(("thinking", value.to_owned()));
+            }
+            "tools" => {
+                settings.tools = value == "show";
+                touched.push(("tools", value.to_owned()));
+            }
+            "shell_output" => {
+                settings.shell_output = value == "show";
+                touched.push(("shell_output", value.to_owned()));
+            }
+            "turn_summary" => {
+                settings.turn_summary = value == "show";
+                touched.push(("turn_summary", value.to_owned()));
+            }
+            "footer" => {
+                settings.footer = value == "show";
+                touched.push(("footer", value.to_owned()));
+            }
+            "splash" => {
+                settings.splash = value == "show";
+                touched.push(("splash", value.to_owned()));
+            }
+            "mono" => {
+                settings.mono = value == "true";
+                self.lifecycle.pane.mono = settings.mono;
+                touched.push(("mono", value.to_owned()));
+            }
+            "work_spinner" => {
+                settings.work_spinner = value.to_owned();
+                self.lifecycle.pane.work_spinner = value.to_owned();
+                touched.push(("work_spinner", value.to_owned()));
+            }
+            _ => {}
+        }
+        // The pane's summary mirror (`miniSettings()` reads).
+        let show = |on: bool| if on { "show" } else { "hide" };
+        let spinner = crate::components::footer::state::WORK_SPINNERS
+            .iter()
+            .find(|literal| **literal == self.settings.work_spinner)
+            .copied()
+            .unwrap_or("block-soft-slide");
+        let summary = &mut self.lifecycle.pane.settings_summary;
+        summary.thinking = show(self.settings.thinking);
+        summary.tools = show(self.settings.tools);
+        summary.shell_output = show(self.settings.shell_output);
+        summary.turn_summary = show(self.settings.turn_summary);
+        summary.footer = show(self.settings.footer);
+        summary.splash = show(self.settings.splash);
+        summary.mono = self.settings.mono;
+        summary.work_spinner = spinner;
+        self.lifecycle.pane.footer_details = self.settings.footer;
+        // `config.update((draft) => { draft.mini[key] = value })`
+        // (runtime.ts:255-262) — only on the production config path.
+        if self.persist_settings {
+            let service = oc_core::cli_config::CliConfig::open(&oc_util::global_roots::resolve());
+            let result = service.update(|draft| {
+                let mini = draft
+                    .as_object_mut()
+                    .map(|object| object.entry("mini").or_insert(serde_json::Value::Object(Default::default())))
+                    .map(serde_json::Value::as_object_mut)
+                    .unwrap_or_default();
+                if let Some(mini) = mini {
+                    for (key, value) in &touched {
+                        let json = if *key == "mono" {
+                            serde_json::Value::Bool(value == "true")
+                        } else {
+                            serde_json::Value::String(value.clone())
+                        };
+                        mini.insert((*key).to_owned(), json);
+                    }
+                }
+            });
+            if let Err(error) = result {
+                self.lifecycle
+                    .append(Commit::system(&format!("failed to save setting: {error}")));
+            }
+        }
+    }
+
+    /// G-272 — the per-turn switches (`runPromptTurn`'s head,
+    /// stream-v2.transport.ts:1832-1840): the pending agent/model
+    /// land BEFORE the prompt POST (`switchAgent` then
+    /// `switchModel`), then consume.
+    async fn apply_turn_switches(&mut self) {
+        if self.demo {
+            self.next_agent = None;
+            self.next_model = None;
+            return;
+        }
+        if let Some(agent) = self.next_agent.take() {
+            if let Err(error) = transport::switch_agent(&self.client, &self.session_id, &agent).await
+            {
+                self.lifecycle.append(Commit::error(&error));
+            }
+        }
+        if let Some((provider, model)) = self.next_model.take() {
+            if let Err(error) =
+                transport::switch_model(&self.client, &self.session_id, &provider, &model).await
+            {
+                self.lifecycle.append(Commit::error(&error));
             }
         }
     }
@@ -801,9 +1077,12 @@ impl Runtime {
                         Some(super::lifecycle::UsageInfo { tokens, percent, cost });
                 }
                 // G-272 — the ROOT session's rename
-                // (`input.onSessionTitle`, transport.ts:1036-1039).
+                // (`input.onSessionTitle`, transport.ts:1036-1039 →
+                // `shell.setTitle(state.sessionTitle)`,
+                // runtime.ts:809): the OSC 2 title follows.
                 Fold::SessionTitle(title) => {
-                    self.session_title = Some(title);
+                    self.session_title = Some(title.clone());
+                    self.lifecycle.set_title(Some(&title));
                 }
             }
             // G-221 — `syncPending` (transport.ts:582-590): the
@@ -811,7 +1090,7 @@ impl Runtime {
             // pending list after every event (the dirty-check push —
             // the statusline's `N pending` group, footer.view.tsx:
             // 246). G-272 — the queued MENU rides the same push (the
-            // row texts).
+            // action rows: inbox id + text + delivery).
             let queued = self.transport.pending_prompts().len();
             if queued != self.queued_synced {
                 self.queued_synced = queued;
@@ -820,7 +1099,11 @@ impl Runtime {
                     .transport
                     .pending_prompts()
                     .iter()
-                    .map(|prompt| prompt.text.clone())
+                    .map(|prompt| super::lifecycle::QueuedPromptView {
+                        message_id: prompt.message_id.clone(),
+                        text: prompt.text.clone(),
+                        delivery: prompt.delivery.clone(),
+                    })
                     .collect();
             }
             if self.transport.is_terminated() {
@@ -868,6 +1151,9 @@ impl Runtime {
                         Ok(new_id) => {
                             self.session_id = new_id.clone();
                             self.session_title = None;
+                            // G-272 — a fresh session's title resets
+                            // (`setTitle(undefined)` → "OpenCode").
+                            self.lifecycle.set_title(None);
                             self.transport = TransportState::new(&new_id);
                             self.subagents =
                                 super::transport::SubagentTracker::new(&new_id);
@@ -911,13 +1197,17 @@ impl Runtime {
             QueueAction::Admit { prompt, delivery } => {
                 self.pending.remove(0);
                 self.shown = true;
+                // G-272 — the admission runs the same per-turn
+                // switches FIRST (`admitPromptTurn`'s head,
+                // stream-v2.transport.ts:1795-1807), then the
+                // durable-queue POST with the parts-aware body.
+                self.apply_turn_switches().await;
                 let message_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
-                let _ = transport::send_prompt(
+                let _ = transport::send_prompt_parts(
                     &self.client,
                     &self.session_id,
                     &message_id,
-                    &prompt.text,
-                    Some(delivery),
+                    &RunPrompt { delivery: Some(delivery), ..prompt },
                 )
                 .await;
             }
@@ -953,22 +1243,47 @@ impl Runtime {
                 }
             }
         }
+        // G-272 — the `!` shell passthrough arm (`runShellTurn`,
+        // stream-v2.transport.ts:1561-1592): NO user echo (the SSE
+        // shell rows render `$ command` + output); the POST is
+        // `session.shell` and the settle loop waits for the shell to
+        // end through the same idle fence.
+        if prompt.shell {
+            let message_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
+            if let Err(error) =
+                transport::send_shell(&self.client, &self.session_id, &message_id, &prompt.text)
+                    .await
+            {
+                self.lifecycle.append(Commit::error(&error));
+                self.exit_code = 1;
+                return;
+            }
+            self.settle_turn().await;
+            return;
+        }
         // The user echo (`onSend` → `rememberLocal`,
         // `runtime.ts:895-907`): pending rows can still be cancelled,
         // so the echo prints before the POST resolves.
         self.lifecycle.append(Commit::user(&prompt.text));
+        // G-272 — the per-turn switches land BEFORE the POST
+        // (`switchAgent`/`switchModel`, stream-v2.transport.ts:
+        // 1832-1840).
+        self.apply_turn_switches().await;
         let message_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
         if let Err(error) =
-            transport::send_prompt(&self.client, &self.session_id, &message_id, &prompt.text, None)
-                .await
+            transport::send_prompt_parts(&self.client, &self.session_id, &message_id, prompt).await
         {
             self.lifecycle.append(Commit::error(&error));
             self.exit_code = 1;
             return;
         }
-        // Settle: pump keys + folds until the execution terminates (the
-        // running → idle transition, or a terminal fold that arrived in
-        // the same batch), then drain once more.
+        self.settle_turn().await;
+    }
+
+    /// The turn settle loop (`runTurnWait` → `settleSession`): pump
+    /// keys + folds until the execution terminates, then the turn
+    /// summary (CONFIG-T4 `turn.duration`).
+    async fn settle_turn(&mut self) {
         let deadline = Instant::now() + TURN_TIMEOUT;
         let turn_started = Instant::now();
         let mut observed_running = self.transport.is_running();
@@ -1054,8 +1369,15 @@ async fn replay_history(
             .collect::<Vec<_>>();
         transport.seed_pending(&values);
         lifecycle.pane.queued_pending = transport.pending_prompts().len();
-        lifecycle.pane.queued_prompts =
-            transport.pending_prompts().iter().map(|prompt| prompt.text.clone()).collect();
+        lifecycle.pane.queued_prompts = transport
+            .pending_prompts()
+            .iter()
+            .map(|prompt| super::lifecycle::QueuedPromptView {
+                message_id: prompt.message_id.clone(),
+                text: prompt.text.clone(),
+                delivery: prompt.delivery.clone(),
+            })
+            .collect();
     }
     // G-272 — the hydrate's blocker sweep (`hydrate`,
     // transport.ts:952-1004): the PARALLEL permission.list +
@@ -1302,6 +1624,12 @@ fn footer_key_from_spec(spec: &str) -> Option<FooterKey> {
     match spec {
         "ctrl+c" => Some(FooterKey::CtrlC),
         "ctrl+t" => Some(FooterKey::CtrlT),
+        // G-272 — `session.background`'s ctrl+b (config/keybind.
+        // ts:127) and the settings panel's left/right arrows
+        // (footer.command.tsx:818-824).
+        "ctrl+b" => Some(FooterKey::CtrlB),
+        "left" => Some(FooterKey::Left),
+        "right" => Some(FooterKey::Right),
         // G-272 — the panel-family keys (`command.palette.show`'s
         // ctrl+p and the `<leader>` = ctrl+x chord,
         // config/keybind.ts:41,57,131).

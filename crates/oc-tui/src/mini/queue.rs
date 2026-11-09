@@ -15,7 +15,25 @@
 
 use super::prompt_shared::{is_compact_command, is_exit_command, is_new_command};
 
-/// A submitted prompt (`RunPrompt`, text subset).
+/// G-272 — `RunPromptPart` (types.ts:37-52): the structured parts a
+/// prompt carries beside its text — `@`-mentioned files (the wire
+/// `files` attachment), agents, and skills.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunPromptPart {
+    /// `{ type: "file", url, filename?, mime? }`.
+    File {
+        url: String,
+        filename: Option<String>,
+        mime: Option<String>,
+        description: Option<String>,
+    },
+    /// `{ type: "agent", name }` (types.ts:48).
+    Agent { name: String },
+    /// `{ type: "skill", id }` (types.ts:49).
+    Skill { id: String },
+}
+
+/// A submitted prompt (`RunPrompt`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunPrompt {
     pub text: String,
@@ -23,6 +41,9 @@ pub struct RunPrompt {
     pub shell: bool,
     /// `delivery` for admitted queued prompts (`queue`/`steer`).
     pub delivery: Option<&'static str>,
+    /// G-272 — `parts: RunPromptPart[]` (types.ts:71): the structured
+    /// attachments that ride the prompt beside its text.
+    pub parts: Vec<RunPromptPart>,
 }
 
 /// What `submit` decided (`runtime.queue.ts:243-294`).

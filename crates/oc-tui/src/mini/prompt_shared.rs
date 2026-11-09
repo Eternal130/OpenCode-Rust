@@ -28,6 +28,18 @@ pub fn is_compact_command(input: &str) -> bool {
     input.trim().to_lowercase() == "/compact"
 }
 
+/// G-272 — the `!` shell passthrough parse: the ref toggles shell
+/// MODE when `!` is pressed at cursor 0 (footer.prompt.tsx:1260-1273,
+/// the `!` keybind — the character itself is consumed by the toggle,
+/// never typed), so a submitted `!{command}` is the same observable
+/// gesture: `{ text: command, mode: "shell" }` (types.ts:73). A bare
+/// `!` (no command) is not a shell prompt.
+#[must_use]
+pub fn parse_shell_command(input: &str) -> Option<&str> {
+    let command = input.strip_prefix('!')?;
+    (!command.trim().is_empty()).then_some(command)
+}
+
 /// The prompt history ring (`PromptHistoryState`,
 /// `prompt.shared.ts:17-22`): stores past prompts, `browse` tracks the
 /// up-navigation position (`None` = not browsing), `draft` holds the
@@ -113,6 +125,18 @@ mod tests {
         assert!(!is_new_command("/newest"));
         assert!(is_compact_command("/compact"));
         assert!(!is_compact_command("/compact/x"));
+    }
+
+    /// G-272 — the `!` shell-mode parse: `!{command}` → the bare
+    /// command; `!` alone / no prefix → not a shell prompt.
+    #[test]
+    fn shell_commands_parse_after_the_bang() {
+        assert_eq!(parse_shell_command("!ls -la").as_deref(), Some("ls -la"));
+        assert_eq!(parse_shell_command("!  echo hi").as_deref(), Some("  echo hi"));
+        assert_eq!(parse_shell_command("!"), None, "bare ! is not a command");
+        assert_eq!(parse_shell_command("   !"), None);
+        assert_eq!(parse_shell_command("ls"), None);
+        assert_eq!(parse_shell_command("hello !world"), None);
     }
 
     #[test]
