@@ -76,7 +76,7 @@ use crate::components::tab_pulse::{
     blend_tab_pulse_color, glow_text_color, intensity_at, resting_glow_bg, tint, Rgb,
     TabPulseTrack, GLOW_TAIL, RUN_SWEEP_OPACITY,
 };
-use crate::render::{CellColor, Frame};
+use crate::render::Frame;
 use crate::store::Unread;
 use crate::theme::ThemeStyles;
 use crate::wrap::take_width;
@@ -1116,44 +1116,7 @@ pub fn mount_solid_bar_clock(
     strip_mount(inputs, left, top);
 }
 
-/// opentui attribute bits → the frame's ECMA-48 bits (1=bold ..
-/// 9=crossed; opentui packs strikethrough at bit 8 = SGR 9).
-fn frame_attrs(attributes: u32) -> u16 {
-    let mut bits = 0u32;
-    if attributes & 0x1 != 0 {
-        bits |= 1 << 0; // bold
-    }
-    if attributes & (1 << 1) != 0 {
-        bits |= 1 << 1; // dim
-    }
-    if attributes & (1 << 2) != 0 {
-        bits |= 1 << 2; // italic
-    }
-    if attributes & (1 << 3) != 0 {
-        bits |= 1 << 3; // underline
-    }
-    if attributes & (1 << 4) != 0 {
-        bits |= 1 << 4; // blink
-    }
-    if attributes & (1 << 5) != 0 {
-        bits |= 1 << 5; // inverse
-    }
-    if attributes & (1 << 6) != 0 {
-        bits |= 1 << 6; // hidden
-    }
-    if attributes & (1 << 7) != 0 {
-        bits |= 1 << 8; // crossed out (SGR 9)
-    }
-    bits as u16
-}
 
-fn frame_color(color: Rgba) -> CellColor {
-    if color.alpha() == 0 {
-        CellColor::Default
-    } else {
-        CellColor::Rgb(color.red(), color.green(), color.blue())
-    }
-}
 
 /// The glow cell ranges of this frame's layout — the strip-local
 /// `[x, x + width)` spans of visible glowing tabs (leading overflow
@@ -1299,6 +1262,7 @@ fn paint_inputs(inputs: StripInputs) -> Frame {
 
 #[cfg(test)]
 mod tests {
+    use crate::render::CellColor;
     use super::*;
     use crate::components::session_tabs::TabStatus;
     use crate::store::SessionTab;

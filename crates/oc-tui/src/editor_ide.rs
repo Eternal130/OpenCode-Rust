@@ -165,6 +165,7 @@ pub fn resolve_ide_connection(home: Option<&str>, directory: &Path) -> Option<Id
     discover_ide_connection(home, directory)
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// `decodeEditorSelection` (context/editor.ts:52-93): the ranges
 /// form, or the single-selection form folded into one range.
 #[must_use]

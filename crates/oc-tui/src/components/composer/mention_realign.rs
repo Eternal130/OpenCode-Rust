@@ -122,17 +122,6 @@ fn assign_mentions(
     items: &[usize],
     candidates: &[Candidate],
 ) -> Vec<(usize, Candidate)> {
-    #[derive(Clone)]
-    struct Solved {
-        matches: usize,
-        cost: i64,
-        pairs: Vec<(usize, Candidate)>,
-    }
-    let mut memo: std::collections::HashMap<(usize, usize), Solved> =
-        std::collections::HashMap::new();
-    let mut ordered: Vec<usize> = items.to_vec();
-    ordered.sort_by_key(|index| (mentions[*index].start, *index));
-
     fn solve(
         mentions: &[MentionCandidate],
         ordered: &[usize],
@@ -176,6 +165,18 @@ fn assign_mentions(
         memo.insert((item, candidate), best.clone());
         best
     }
+
+
+    #[derive(Clone)]
+    struct Solved {
+        matches: usize,
+        cost: i64,
+        pairs: Vec<(usize, Candidate)>,
+    }
+    let mut memo: std::collections::HashMap<(usize, usize), Solved> =
+        std::collections::HashMap::new();
+    let mut ordered: Vec<usize> = items.to_vec();
+    ordered.sort_by_key(|index| (mentions[*index].start, *index));
 
     solve(mentions, &ordered, candidates, &mut memo, 0, 0).pairs
 }

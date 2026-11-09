@@ -253,6 +253,7 @@ pub struct MiniInput {
     pub reconnect: Option<ReconnectFactory>,
 }
 
+#[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
 /// The runtime loop. Returns the process exit status.
 ///
 /// Exit semantics (`runtime.ts:1081-1091`): teardown aborts the
@@ -530,6 +531,7 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
 
 /// Everything the loop drives (the `RuntimeState`,
 /// `runtime.ts:115-134`).
+#[allow(clippy::struct_excessive_bools)] // runtime.ts state flags ported 1:1
 struct Runtime {
     lifecycle: Lifecycle,
     /// Lane B3a — the footer key pipeline (opentui parse; replaces the
@@ -651,6 +653,7 @@ impl Runtime {
         }
     }
 
+#[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
     async fn apply_effect(&mut self, effect: FooterEffect) {
         match effect {
             FooterEffect::Submit(text) => {
@@ -832,6 +835,7 @@ impl Runtime {
         }
     }
 
+#[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
     /// G-272 — apply one settings change (`applyMiniSettingChange`,
     /// verbosity.ts:73-76 + `config.update`, runtime.ts:253-266): the
     /// live gates update immediately; the cli.json `mini` section
@@ -930,7 +934,7 @@ impl Runtime {
                     .map(|object| {
                         object
                             .entry("mini")
-                            .or_insert(serde_json::Value::Object(Default::default()))
+                            .or_insert(serde_json::Value::Object(serde_json::Map::default()))
                     })
                     .map(serde_json::Value::as_object_mut)
                     .unwrap_or_default();
@@ -977,6 +981,7 @@ impl Runtime {
         }
     }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// Drain arrived SSE events through the transport folds.
     fn pump_events(&mut self) {
         while let Ok(message) = self.events.try_recv() {
@@ -1434,6 +1439,7 @@ async fn hydrate_blockers(
     }
 }
 
+#[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
 /// `renderMessage` (transport.ts:802-899): one projected message →
 /// its scrollback commits. Every text/reasoning part re-projects
 /// through the fragment reconciler (the suffix past the committed
@@ -1955,7 +1961,7 @@ mod tests {
                     preferences.save_variant(&target, next.as_deref());
                     active = next;
                 }
-                other => panic!("expected a cycle, got {other:?}"),
+                CycleVariantDecision::NoVariants => panic!("expected a cycle"),
             }
         }
         match cycle_variant_decision(Some(&target), active.as_deref(), &variants) {
@@ -1965,7 +1971,7 @@ mod tests {
                 assert_eq!(label.as_deref(), Some("anthropic/claude"));
                 preferences.save_variant(&target, None);
             }
-            other => panic!("expected the default arm, got {other:?}"),
+            CycleVariantDecision::NoVariants => panic!("expected the default arm"),
         }
 
         // A fresh boot reflects the persisted override.

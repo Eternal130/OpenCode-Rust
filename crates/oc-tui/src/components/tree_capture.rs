@@ -151,24 +151,26 @@ fn kind_name(content: &Content) -> &'static str {
     }
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// One renderable → one tree node (or `None` when it paints nothing
 /// the contract can express: Groups, empty texts, zero-size mounts,
 /// out-of-viewport rects).
+#[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
 fn node_of(r: &Renderable, width: u16, height: u16) -> Option<serde_json::Value> {
-    let x = r.screen_x.max(0) as u32;
-    let y = r.screen_y.max(0) as u32;
-    let w = r.w.round() as i64;
-    let h = r.h.round() as i64;
-    if w <= 0 || h <= 0 {
+    let origin_x = r.screen_x.max(0) as u32;
+    let origin_y = r.screen_y.max(0) as u32;
+    let round_w = r.w.round() as i64;
+    let round_h = r.h.round() as i64;
+    if round_w <= 0 || round_h <= 0 {
         return None;
     }
     // keep the declared rect inside the canvas (README contract rule)
-    let w = (w as u32).min(u32::from(width).saturating_sub(x));
-    let h = (h as u32).min(u32::from(height).saturating_sub(y));
-    if w == 0 || h == 0 {
+    let fit_w = (round_w as u32).min(u32::from(width).saturating_sub(origin_x));
+    let fit_h = (round_h as u32).min(u32::from(height).saturating_sub(origin_y));
+    if fit_w == 0 || fit_h == 0 {
         return None;
     }
-    let rect = serde_json::json!({ "x": x, "y": y, "w": w, "h": h });
+    let rect = serde_json::json!({ "x": origin_x, "y": origin_y, "w": fit_w, "h": fit_h });
     let id = r.id.0.clone();
     match &r.content {
         Content::Box(state) => {
@@ -261,7 +263,7 @@ fn node_of(r: &Renderable, width: u16, height: u16) -> Option<serde_json::Value>
             // the element mounted `height: <rows>` — pass the settled
             // height through (the passthrough overrides the wrapper's
             // 100%×100% mount, preserving the internal layout).
-            options.insert("height".into(), f64::from(h).into());
+            options.insert("height".into(), f64::from(fit_h).into());
             Some(node_json(&id, "diff", rect, style, None, Some(options))).map(|mut node| {
                 node.as_object_mut()
                     .expect("node is an object")
@@ -342,6 +344,7 @@ fn sanitize_id(id: &str) -> String {
     }
 }
 
+#[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// The styled document → chunk-array content (contract: `content` is
 /// a string or a `{text, fg?, bg?, attributes?}` chunk array). Spans
 /// slice the line text by CLUSTER COLUMNS; unstyled gaps between

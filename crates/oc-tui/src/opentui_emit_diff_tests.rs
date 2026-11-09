@@ -157,6 +157,7 @@ fn blank_grid(width: usize, height: usize) -> Frame {
     grid(width, height, &[])
 }
 
+#[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// The pinned vocabulary sequence: first-frame force, no-op, revert,
 /// hidden idle, then the color/attribute/wide-char vocabulary with
 /// cursor show/move/hide/re-style churn, resize full-repaint, and

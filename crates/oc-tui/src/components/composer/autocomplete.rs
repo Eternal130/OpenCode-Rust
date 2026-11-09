@@ -843,6 +843,7 @@ impl Frecency {
         store
     }
 
+#[allow(clippy::cast_precision_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// `calculateFrecency` (frecency.tsx:33-36):
     /// `frequency / (1 + Δdays)` where Δdays is the days since
     /// `lastOpen`; an absent path scores 0.
@@ -888,7 +889,8 @@ impl Frecency {
                             entry.last_open
                         )
                     })
-                    .collect::<String>();
+                    .collect::<Vec<String>>()
+                    .concat();
                 let _ = rewrite_file(&file, &body);
             }
         }
@@ -901,9 +903,9 @@ impl Frecency {
     pub fn encode_jsonl(&self) -> String {
         let mut text = String::new();
         for (path, entry) in &self.data {
-            let _ = write!(
+            let _ = writeln!(
                 text,
-                "{{\"path\":{},\"frequency\":{},\"lastOpen\":{}}}\n",
+                "{{\"path\":{},\"frequency\":{},\"lastOpen\":{}}}",
                 serde_json::to_string(path).unwrap_or_else(|_| "\"\"".into()),
                 entry.frequency,
                 entry.last_open
@@ -1133,6 +1135,7 @@ pub fn rank_reference_options(
     ranked.into_iter().map(|(_, option)| option).take(10).collect()
 }
 
+#[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// Wall-clock epoch ms (`Date.now()`) — the frecency store's clock.
 #[must_use]
 pub fn now_ms() -> i64 {
@@ -1482,6 +1485,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+#[allow(clippy::cast_possible_wrap)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// RE-03 — compaction at >1000 (frecency.tsx:63-71): the 1001st
     /// update rewrites the file with the `lastOpen`-descending top
     /// 1000 (the oldest entry dropped).

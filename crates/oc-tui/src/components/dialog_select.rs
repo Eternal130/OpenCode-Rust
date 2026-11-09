@@ -264,6 +264,7 @@ impl SelectAction {
 
 /// Component props (`DialogSelectProps`, the wave-1 subset). Owned so
 /// the keypress pump can rebuild them per dialog kind.
+#[allow(clippy::struct_excessive_bools)] // render knob set mirrors the ref's props
 #[derive(Debug, Clone)]
 pub struct SelectProps {
     pub title: String,
@@ -662,6 +663,7 @@ impl SelectState {
         self.selected = if last { indices.len() - 1 } else { 0 };
     }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// G-131 — `moveSection` (dialog-select.tsx:367-374, wired on the
     /// `alt+up`/`alt+down` sectionNavigation binds, :547-562): jump to
     /// the FIRST entry of the previous/next non-empty section, with
@@ -904,7 +906,7 @@ fn cell_color(color: Color) -> CellColor {
     match color {
         Color::Rgb(r, g, b) => CellColor::Rgb(r, g, b),
         Color::Indexed(index) => CellColor::Indexed(index),
-        _ => CellColor::Default,
+        Color::Reset => CellColor::Default,
     }
 }
 
@@ -916,6 +918,7 @@ pub struct SelectView {
     pub width: usize,
 }
 
+#[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
 /// Render the select content.
 ///
 /// * `surface_bg` — the background under the select (the terminal base

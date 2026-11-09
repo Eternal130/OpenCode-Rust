@@ -669,6 +669,7 @@ pub struct FakeLlm {
 }
 
 impl FakeLlm {
+    #[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
     #[must_use]
     pub fn spawn(sessions: Vec<FakeSession>) -> Self {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");

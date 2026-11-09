@@ -481,6 +481,7 @@ fn colors_key(colors: &PickerColors, width: usize) -> (usize, Rgb, Rgb, Rgb, Rgb
     )
 }
 
+#[allow(clippy::too_many_arguments)] // the argument set mirrors the ref call shape
 /// Sync the picker family into the shared tree (the panel's ONLY live
 /// mount entry — no Frame comes back; pixels reach the emitted frame
 /// through `composite_chrome_tree`, the single compositor seam inside

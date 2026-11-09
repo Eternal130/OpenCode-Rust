@@ -475,6 +475,9 @@ fn footer_left_label(
 /// banner rect `(x, row, width)`.
 pub type PaintedHome = (Frame, Option<(usize, usize)>, Option<(usize, usize, usize)>);
 
+/// The mount hints: the caret rect + the version-gate button rect.
+type HomeMountHints = (Option<(usize, usize)>, Option<(usize, usize, usize)>);
+
 /// Mount the home route's chrome into the shared tree — the LIVE-path
 /// entry (D4.1a: no Frame comes back; pixels land at `render_app`'s
 /// composite seam). Returns the terminal-cursor cell and TUI-TD27's
@@ -487,7 +490,7 @@ pub fn mount_solid_home_view(
     theme: &ThemeState,
     size: (u16, u16),
     origin: (usize, usize),
-) -> (Option<(usize, usize)>, Option<(usize, usize, usize)>) {
+) -> HomeMountHints {
     let (width, height) = (usize::from(size.0), usize::from(size.1));
     if width == 0 || height == 0 {
         // The old painter's degenerate shape: nothing mounts.
@@ -759,12 +762,12 @@ mod tests {
         }
     }
 
-    /// The lane gate: the solid home frame must equal the old
-    /// painter's frame CELL FOR CELL (char + attrs + fg + bg) over
-    /// the home matrix — idle placeholder, typing, multiline, the
-    /// popup open, plugin actions, the <64-col version gate + the
-    /// content-row collapse, tiny frames (no logo/footer), the
-    /// caret — across widths 40/60/80/120/160 and heights 20/24/30.
+    // The lane gate: the solid home frame must equal the old
+    // painter's frame CELL FOR CELL (char + attrs + fg + bg) over
+    // the home matrix — idle placeholder, typing, multiline, the
+    // popup open, plugin actions, the <64-col version gate + the
+    // content-row collapse, tiny frames (no logo/footer), the
+    // caret — across widths 40/60/80/120/160 and heights 20/24/30.
     // -- RE-04: the banner's FadeInText (fade-in-text.tsx) ----------
 
     /// The banner view fixture: a LOCAL available notice mounted at
@@ -785,7 +788,7 @@ mod tests {
             .cells
             .iter()
             .find(|row| row.iter().any(|cell| cell.ch == '/'))
-            .map(|row| row.clone())
+            .cloned()
             .unwrap_or_default()
     }
 

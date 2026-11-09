@@ -701,6 +701,7 @@ impl ChromeTree {
         self.family_containers.iter().filter(|(_, index, _)| *index == 0).count()
     }
 
+#[allow(clippy::too_many_arguments)] // the argument set mirrors the ref call shape
     /// Sync (or first-mount) one chrome-family surface: the wrapper
     /// box keyed by the surface name, absolutely positioned at the
     /// imperative rect; rect/background changes patch via `set_prop`
@@ -1181,6 +1182,7 @@ fn surface_wrapper(
         .into_element()
 }
 
+#[allow(clippy::too_many_arguments)] // the argument set mirrors the ref call shape
 /// Sync one chrome-family surface into the shared tree (the family's
 /// ONLY mount entry — no Frame comes back; pixels reach the emitted
 /// frame through [`composite_chrome_tree`], the single compositor

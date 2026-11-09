@@ -104,7 +104,7 @@ pub fn render_form_authorization(
     height: usize,
     theme: &FooterTheme,
 ) -> Frame {
-    super::solid::finish(form_authorization_canvas(request, state, width, height, theme))
+    super::solid::finish(&form_authorization_canvas(request, state, width, height, theme))
 }
 
 /// [`render_form_authorization`]'s canvas (the parity tests' op source).

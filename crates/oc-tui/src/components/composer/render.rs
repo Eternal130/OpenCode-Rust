@@ -774,6 +774,7 @@ pub(crate) struct FooterPlan {
     pub editor_file: Option<(usize, String)>,
 }
 
+#[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
 /// Resolve the footer row's plan at `width` (see [`FooterPlan`]).
 pub(crate) fn footer_plan(view: &PromptView, width: usize) -> FooterPlan {
     let agent_hint = format!("{} agents", view.footer.agent_shortcut);

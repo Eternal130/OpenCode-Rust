@@ -93,6 +93,7 @@ impl Frgba {
     }
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// `deriveTrailColors` (spinner.ts:236-263): the lead at full
 /// brightness/opacity, position 1 a slight bloom (×1.15, α 0.9),
 /// then exponential α decay (`0.65^(i-1)`).
@@ -192,6 +193,7 @@ fn scanner_state(
     }
 }
 
+#[allow(clippy::cast_possible_wrap)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// `calculateColorIndex` (spinner.ts:91-127): the trail's color index
 /// behind the movement direction — `directional_distance` while
 /// moving, `distance + hold_progress` while holding (the trail fades
@@ -221,6 +223,7 @@ pub fn total_frames(options: &KnightOptions) -> usize {
     options.width + options.hold_end + (options.width - 1) + options.hold_start
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap, clippy::cast_sign_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// `createFrames` (spinner.ts:270-315): one string per frame, `width`
 /// cells each — active cells carry the style's glyph, inactive cells
 /// the dim marker.
@@ -258,6 +261,7 @@ pub fn create_frames(options: &KnightOptions) -> Vec<String> {
         .collect()
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// `createColors` (spinner.ts:335-368) as a per-cell query: the trail
 /// color at `index`, or the inactive default — with the global
 /// hold/movement fade folded into the default's alpha
@@ -430,6 +434,7 @@ mod tests {
         assert_eq!(wrapped, first, "the cycle wraps modulo 54 frames");
     }
 
+#[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// G-49a — the frame index is derived from ELAPSED TIME at
     /// render (`elapsed_ms/40 % frames.len()`), so the ref's 40 ms
     /// interval MATH holds at any repaint rate: consecutive 40 ms

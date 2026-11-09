@@ -370,15 +370,6 @@ pub fn render_home_view(
     (crate::components::chrome_solid::blank_frame(width, height), caret_screen, banner_hit)
 }
 
-/// Paste `region` into `target` at `(x, y)` (the shared paste the
-/// solid bridge reuses for the prompt mount).
-pub(crate) fn paste(target: &mut Frame, region: &Frame, x: usize, y: usize) {
-    for (row, cells) in region.cells.iter().enumerate() {
-        let Some(slot) = target.cells.get_mut(y + row) else { break };
-        let count = cells.len().min(slot.len().saturating_sub(x));
-        slot[x..x + count].clone_from_slice(&cells[..count]);
-    }
-}
 
 /// Render the home route over the store: the home prompt's draft
 /// (`HOME_PROMPT_KEY`'s composer, placeholder rotation pinned to entry

@@ -12,6 +12,7 @@ use crate::wrap::wrap_label;
 
 /// A transcript commit (`StreamCommit`, `mini/types.ts` — the text
 /// subset the mono writer renders).
+#[allow(clippy::struct_excessive_bools)] // the flag set mirrors the ref's Commit shape
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Commit {
     /// `kind`.
@@ -242,13 +243,13 @@ pub fn tool_view(name: &str) -> Option<ToolViewGate> {
 /// truncation marker.
 #[must_use]
 pub fn structured_fallback_rows(meta: &str) -> Vec<String> {
+    const LIMIT: usize = 4096;
+    const SUFFIX: &str = "\n… [truncated]";
     let Ok(value) = serde_json::from_str::<serde_json::Value>(meta) else {
         return Vec::new();
     };
     // `Object.keys(value).length === 0 → undefined` — an empty (or
     // non-object) meta renders nothing.
-    const LIMIT: usize = 4096;
-    const SUFFIX: &str = "\n… [truncated]";
     if value.as_object().is_none_or(serde_json::Map::is_empty) {
         return Vec::new();
     }

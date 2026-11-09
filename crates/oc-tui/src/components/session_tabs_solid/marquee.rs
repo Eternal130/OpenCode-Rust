@@ -144,11 +144,6 @@ impl Marquee {
         self.cycle_width = 0;
     }
 
-    #[must_use]
-    pub fn active(&self) -> Option<&str> {
-        self.active.as_deref()
-    }
-
     /// The scroll offset at `now_ms`: 0 through the delay, then +1 per
     /// interval until the cycle width is covered — v2 stops the
     /// interval and resets (`value + 1 < cycleWidth` else 0).

@@ -523,6 +523,7 @@ impl PaletteProvider for CachedPaletteProvider {
     }
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// `tint` (theme/color.ts): lerp `overlay` over `base` by `alpha` on
 /// the 0-1 float channels, rounding like the ref.
 fn tint(base: Rgba, overlay: Rgba, alpha: f64) -> Rgba {
@@ -532,27 +533,28 @@ fn tint(base: Rgba, overlay: Rgba, alpha: f64) -> Rgba {
     Rgba::from_ints(channel(br, or_), channel(bg_, og), channel(bb, ob), 255)
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// `generateGrayScale` (system.ts): 12 grays stepping 40% of the way
 /// from the background toward its extreme, with flat ramps for
 /// near-black/near-white backgrounds.
 fn generate_gray_scale(bg: Rgba, is_dark: bool) -> Vec<Rgba> {
     let [bgr, bgg, bgb, _] = bg.to_ints();
-    let bg_r = f64::from(bgr);
-    let bg_g = f64::from(bgg);
-    let bg_b = f64::from(bgb);
-    let luminance = 0.299 * bg_r + 0.587 * bg_g + 0.114 * bg_b;
+    let red = f64::from(bgr);
+    let green = f64::from(bgg);
+    let blue = f64::from(bgb);
+    let luminance = 0.299 * red + 0.587 * green + 0.114 * blue;
     let mut grays = vec![Rgba::TRANSPARENT; 13]; // index 0 unused, ref keys 1..=12
-    for i in 1..=12usize {
+    for (i, slot) in grays.iter_mut().enumerate().skip(1) {
         let factor = i as f64 / 12.0;
         let gray;
         if is_dark && luminance < 10.0 {
             gray = (factor * 0.4 * 255.0).floor();
-            grays[i] = Rgba::from_ints(gray as u8, gray as u8, gray as u8, 255);
+            *slot = Rgba::from_ints(gray as u8, gray as u8, gray as u8, 255);
             continue;
         }
         if !is_dark && luminance > 245.0 {
             gray = (255.0 - factor * 0.4 * 255.0).floor();
-            grays[i] = Rgba::from_ints(gray as u8, gray as u8, gray as u8, 255);
+            *slot = Rgba::from_ints(gray as u8, gray as u8, gray as u8, 255);
             continue;
         }
         let next = if is_dark {
@@ -561,12 +563,13 @@ fn generate_gray_scale(bg: Rgba, is_dark: bool) -> Vec<Rgba> {
             luminance * (1.0 - factor * 0.4)
         };
         let ratio = if luminance == 0.0 { 0.0 } else { next / luminance };
-        let channel = |value: f64| ((value * ratio).min(255.0).max(0.0)).floor() as u8;
-        grays[i] = Rgba::from_ints(channel(bg_r), channel(bg_g), channel(bg_b), 255);
+        let channel = |value: f64| ((value * ratio).clamp(0.0, 255.0)).floor() as u8;
+        *slot = Rgba::from_ints(channel(red), channel(green), channel(blue), 255);
     }
     grays
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// `generateMutedTextColor` (system.ts).
 fn generate_muted_text_color(bg: Rgba, is_dark: bool) -> Rgba {
     let [r, g, b, _] = bg.to_ints();
@@ -585,6 +588,7 @@ fn generate_muted_text_color(bg: Rgba, is_dark: bool) -> Rgba {
     Rgba::from_ints(gray, gray, gray, 255)
 }
 
+#[allow(clippy::cast_possible_wrap)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 /// `generateSystem` (theme/system.ts): derive a v1-shaped theme from
 /// the terminal palette — background/foreground fall back to palette
 /// slots 0/7, missing palette entries fall back to the ANSI table
