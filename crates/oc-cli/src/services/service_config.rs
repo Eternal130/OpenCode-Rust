@@ -314,8 +314,12 @@ pub async fn set(key: &str, value: &str, nested_value: Option<&str>) -> Result<(
                 let Ok(url) = reqwest::Url::parse(origin) else {
                     return Err(cors_message());
                 };
+                // G-288⑥ — ref `url.origin !== origin` (service-config.ts
+                // :226-227): the serialized origin is compared with the
+                // input, so ANY path component (and a trailing slash)
+                // rejects, not just the trailing slash.
                 if !matches!(url.scheme(), "http" | "https")
-                    || url.as_str().trim_end_matches('/') != origin
+                    || url.origin().ascii_serialization() != *origin
                 {
                     return Err(cors_message());
                 }
@@ -477,6 +481,23 @@ mod tests {
         assert!(set("disabled", "yes", None).await.is_err());
         assert!(set("port", "0", None).await.is_err());
         assert!(set("bogus", "x", None).await.is_err());
+    }
+
+    // --- G-288⑥: cors origins with a path are rejected ------------------
+
+    #[tokio::test]
+    async fn cors_rejects_paths_and_trailing_slashes() {
+        let _sandbox = sandboxed();
+        // ref `url.origin !== origin`: a path component rejects…
+        assert!(set("cors", "https://example.com/path", None).await.is_err());
+        // …a trailing slash rejects (origin has no slash)…
+        assert!(set("cors", "https://example.com/", None).await.is_err());
+        // …non-HTTP(S) rejects…
+        assert!(set("cors", "ftp://example.com", None).await.is_err());
+        // …while a bare origin (explicit port included) accepts.
+        set("cors", "https://example.com:8443,http://localhost", None)
+            .await
+            .expect("bare origins set");
     }
 
     #[test]

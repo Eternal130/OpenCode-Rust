@@ -10,6 +10,11 @@ use serde::Serialize;
 use crate::error::ClientError;
 use crate::Client;
 
+/// G-288⑦ — the diagnostic body cap for undeclared error statuses
+/// (64 KiB); ref never reads the body at all (only the status
+/// travels), so this only bounds the port's extra diagnostic.
+const MAX_UNEXPECTED_BODY_BYTES: usize = 64 * 1024;
+
 /// Per-request options (v2 `RequestOptions`): cancellation signal, extra
 /// headers applied after the client's defaults (so they override), and an
 /// `onActivity` hook invoked for every chunk a streaming response receives.
@@ -240,7 +245,21 @@ impl Client {
         } else if call.declared.contains(&status) {
             Ok(Err(response))
         } else {
-            let body = response.text().await.unwrap_or_default();
+            // G-288⑦ — ref cancels the body unread (client-error flow,
+            // generated client.ts:343-346: the error detail is the bare
+            // status). The port keeps a diagnostic body but CAPS it at
+            // 64 KiB so a huge error page cannot balloon memory.
+            let mut response = response;
+            let mut body: Vec<u8> = Vec::new();
+            while let Ok(Some(chunk)) = response.chunk().await {
+                if body.len() + chunk.len() >= MAX_UNEXPECTED_BODY_BYTES {
+                    let room = MAX_UNEXPECTED_BODY_BYTES.saturating_sub(body.len());
+                    body.extend_from_slice(&chunk[..room]);
+                    break;
+                }
+                body.extend_from_slice(&chunk);
+            }
+            let body = String::from_utf8_lossy(&body).into_owned();
             Err(ClientError::UnexpectedStatus { status, body })
         }
     }

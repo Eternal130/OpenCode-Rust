@@ -320,9 +320,13 @@ async fn import(server: &ServerParams, file: &str, directory: Option<&str>) -> i
         Err(code) => return code,
     };
     let client = resolved.endpoint.client();
+    // G-288② — ref import.ts:38 `path.resolve(input.directory ?? cwd)`:
+    // a relative --directory resolves against the cwd (absolute inputs
+    // pass through), with `..`/`.` components folded lexically like
+    // path.resolve — never the raw flag text.
     let directory = directory.map_or_else(
         || std::env::current_dir().map(|path| path.display().to_string()).unwrap_or_default(),
-        str::to_owned,
+        |directory| resolve_directory(directory),
     );
     let location = match client
         .location()
@@ -380,9 +384,33 @@ async fn import(server: &ServerParams, file: &str, directory: Option<&str>) -> i
 
 use base64::Engine as _;
 
+/// G-288② — `path.resolve(cwd, input)` (import.ts:38): absolute inputs
+/// pass through, relative ones join the cwd, and `.`/`..` fold lexically
+/// (no filesystem touch; `..` at a root stays at the root).
+fn resolve_directory(input: &str) -> String {
+    let joined = if std::path::Path::new(input).is_absolute() {
+        std::path::PathBuf::from(input)
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(input)
+    };
+    let mut normalized = std::path::PathBuf::new();
+    for component in joined.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized.display().to_string()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{format_local_time, validate_transfer};
+    use super::{format_local_time, resolve_directory, validate_transfer};
     use serde_json::json;
 
     /// A minimal valid SessionTransfer payload (the export endpoint's
@@ -468,5 +496,19 @@ mod tests {
         assert_eq!(format_local_time(0.0), "1970-01-01 00:00:00");
         assert_eq!(format_local_time(f64::NAN), "1970-01-01 00:00:00");
         assert_eq!(format_local_time(-1.0), "1969-12-31 23:59:59");
+    }
+
+    // --- G-288②: session import --directory absolutizes ---------------
+
+    #[test]
+    fn import_directory_resolves_relative_and_folds_dots() {
+        let cwd = std::env::current_dir().expect("cwd");
+        // Absolute passes through (with `.`/`..` folded, path.resolve-style).
+        assert_eq!(resolve_directory("/a/b/../c"), "/a/c");
+        assert_eq!(resolve_directory("/a/./b"), "/a/b");
+        // Relative joins the cwd.
+        assert_eq!(resolve_directory("sub"), cwd.join("sub").display().to_string());
+        // Relative with `..` folds after joining.
+        assert_eq!(resolve_directory("sub/../other"), cwd.join("other").display().to_string());
     }
 }

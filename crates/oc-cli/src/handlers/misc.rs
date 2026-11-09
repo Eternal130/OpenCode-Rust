@@ -137,7 +137,17 @@ pub async fn uninstall(dry_run: bool, keep_config: bool, keep_data: bool, force:
     for file in &services {
         println!("  Stop background service and persistent terminals: {}", file.display());
     }
-    println!("  Binary: {}", exe.display());
+    // G-288⑤ — ref never unlinks the running binary itself: a curl
+    // install previews `Binary (manual removal): <path>` (uninstall.ts:59)
+    // and only prints the rm hint at the end; package-manager installs
+    // are removed by their own removal command. The port's rust-extra
+    // methods (local-file/github) follow the same hands-off shape.
+    let curl_install = method == "curl";
+    if curl_install {
+        println!("  Binary (manual removal): {}", exe.display());
+    } else {
+        println!("  Binary: {}", exe.display());
+    }
     if method == "unknown" {
         println!(
             "Could not detect the installation method. Remove the installation manually after cleanup."
@@ -221,11 +231,16 @@ pub async fn uninstall(dry_run: bool, keep_config: bool, keep_data: bool, force:
             errors.push(format!("Shell config {}: {error}", config.display()));
         }
     }
-    // Self-unlink (unix keeps the running inode alive until exit).
-    if let Err(error) = std::fs::remove_file(&exe) {
-        if exe.exists() {
-            errors.push(format!("Binary: {error}"));
-        }
+    // G-288⑤ — the binary is NEVER self-deleted (ref uninstall.ts
+    // never unlinks it): a curl install only prints the manual
+    // removal command (ref :124-126
+    // `log.message("To finish removing the binary, run:")` +
+    // `log.info("  rm '<path>'")`); package-manager installs are
+    // removed by the package command above. The running inode stays
+    // valid until the process exits either way.
+    if curl_install {
+        println!("To finish removing the binary, run:");
+        println!("  rm '{}'", exe.display().to_string().replace('\'', "'\\''"));
     }
     if errors.is_empty() {
         println!("Done");
@@ -356,6 +371,13 @@ pub async fn pair(url: Option<&str>) -> i32 {
     };
     let links: Vec<String> =
         urls.iter().map(|url| format!("{url}/auth/connect/{}", pairing.code)).collect();
+    // G-288③ (bounded deviation, pinned for adjudication): ref builds
+    // links with `new URL("/auth/connect/<code>", url).href` (pair.ts:21)
+    // — an ABSOLUTE path REPLACES the base URL's path, so
+    // `--url http://proxy/base` yields `http://proxy/auth/connect/x`.
+    // The port concatenates instead, KEEPING the base path — for
+    // reverse-proxy deployments (pairing behind a path-prefixing proxy)
+    // the rust shape produces working links where ref's would not.
     // ref pair.ts:27 uses Math.round on the minute count; the float
     // round-trip is port parity, the cast is intended.
     #[allow(clippy::cast_precision_loss)]
@@ -397,11 +419,14 @@ pub async fn pair(url: Option<&str>) -> i32 {
     0
 }
 
-/// `opencode debug` subcommands.
-pub async fn debug(command: &DebugCommands) -> i32 {
+/// `opencode debug` subcommands. G-274 — the global `--server`/
+/// `--standalone` flags flow into the connect-consuming subcommands
+/// (`debug agents/config` hit the resolved endpoint); `debug paths` is
+/// local-only in ref too.
+pub async fn debug(command: &DebugCommands, server: &ServerParams) -> i32 {
     match command {
         DebugCommands::Agents => {
-            let resolved = match connect(&ServerParams::default(), None).await {
+            let resolved = match connect(server, None).await {
                 Ok(resolved) => resolved,
                 Err(code) => return code,
             };
@@ -428,7 +453,7 @@ pub async fn debug(command: &DebugCommands) -> i32 {
             0
         }
         DebugCommands::Config => {
-            let resolved = match connect(&ServerParams::default(), None).await {
+            let resolved = match connect(server, None).await {
                 Ok(resolved) => resolved,
                 Err(code) => return code,
             };
