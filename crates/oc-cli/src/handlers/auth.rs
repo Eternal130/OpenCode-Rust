@@ -153,7 +153,8 @@ fn method_selector_label(method: &Value) -> String {
 }
 
 /// G-283② (ref login.ts:139 `keyLogin`): the secret prompt prefers the
-/// key method's label — `method.label ?? \`Enter your ${name} API key\``
+/// key method's label — the ref's "method.label ?? Enter your ${name}
+/// API key" fallback
 /// (empty-string labels are kept, matching `??` nullish semantics).
 fn key_method_prompt(method_label: Option<&str>, integration_name: &str) -> String {
     method_label.map_or_else(|| format!("Enter your {integration_name} API key"), str::to_owned)
@@ -297,7 +298,6 @@ async fn list(server: &ServerParams, format: OutputFormat) -> i32 {
 /// G-150 note: answers now carry the wire `FormAnswer` built by
 /// [`crate::handlers::auth_form::answer_form`] (typed values, not
 /// stringified key=value pairs).
-
 #[allow(clippy::too_many_lines)]
 async fn login(
     server: &ServerParams,
@@ -1363,9 +1363,9 @@ mod tests {
         assert_eq!(super::method_selector_label(&oauth), "OAuth");
     }
 
-    /// G-283② (ref login.ts:139 `method.label ?? \`Enter your ${name}
-    /// API key\``): the key secret prompt prefers the key method's
-    /// label; without one it is the generic integration-name prompt.
+    /// G-283② (ref login.ts:139 method.label with the "Enter your
+    /// ${name} API key" fallback): the key secret prompt prefers the
+    /// method's label; without one it is the generic prompt.
     #[test]
     fn g283_key_prompt_prefers_method_label() {
         assert_eq!(key_method_prompt(Some("GitHub App token"), "GitHub"), "GitHub App token");

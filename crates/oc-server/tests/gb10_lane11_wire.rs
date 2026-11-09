@@ -561,13 +561,16 @@ async fn pty_connect_unresolvable_location_is_a_404_before_upgrade() {
 
 /// Tiny %-encoder for the query value (path + separator chars).
 fn urlencoding_encode(input: &str) -> String {
+    use std::fmt::Write as _; // format_push_string: write! into the existing String
     let mut out = String::new();
     for byte in input.bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                 out.push(byte as char);
             }
-            other => out.push_str(&format!("%{other:02X}")),
+            other => {
+                let _ = write!(out, "%{other:02X}");
+            }
         }
     }
     out

@@ -159,7 +159,6 @@ pub const PACKAGE_MANAGERS: [&str; 5] = ["npm", "pnpm", "bun", "yarn", "vp"];
 /// * vp uses `update` when the same package is already installed;
 ///   `install --force` for cross-package migrations (G-156, ref
 ///   :405-408).
-#[must_use]
 pub fn package_manager_command(
     method: &str,
     package: &str,
@@ -1437,11 +1436,14 @@ mod tests {
 
     /// Sets a file's mtime `age` in the past (unix `utimensat`).
     fn set_mtime_past(path: &std::path::Path, age: std::time::Duration) {
+        // SAFETY: utimensat on a path is libc FFI (repo convention).
+        #[allow(unsafe_code)]
         unsafe {
             let seconds = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("clock")
                 .saturating_sub(age);
+            #[allow(clippy::cast_possible_wrap)] // u64 epoch secs -> timespec tv_sec
             let atime = libc::timespec { tv_sec: seconds.as_secs() as i64, tv_nsec: 0 };
             let mtime = atime;
             let times = [atime, mtime];

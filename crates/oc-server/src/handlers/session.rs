@@ -2967,7 +2967,7 @@ mod g249_tests {
     use super::{drop_pre_checkpoint_system_rows, is_native_checkpoint};
     use oc_core::database::schema::SessionMessageRow;
 
-    fn row(id: &str, type_: &str, seq: i64, data: serde_json::Value) -> SessionMessageRow {
+    fn row(id: &str, type_: &str, seq: i64, data: &serde_json::Value) -> SessionMessageRow {
         SessionMessageRow {
             id: id.to_owned(),
             session_id: "ses_g249".to_owned(),
@@ -2984,7 +2984,7 @@ mod g249_tests {
             "msg_native",
             "compaction",
             seq,
-            serde_json::json!({
+            &serde_json::json!({
                 "status": "completed",
                 "reason": "auto",
                 "providerContext": { "version": 1, "messages": [] },
@@ -2997,11 +2997,11 @@ mod g249_tests {
     #[test]
     fn drops_system_rows_strictly_below_the_newest_native_checkpoint() {
         let rows = [
-            row("sys_old", "system", 1, serde_json::json!({ "text": "stale" })),
-            row("user_1", "user", 2, serde_json::json!({ "text": "hi" })),
+            row("sys_old", "system", 1, &serde_json::json!({ "text": "stale" })),
+            row("user_1", "user", 2, &serde_json::json!({ "text": "hi" })),
             native_compaction(3),
-            row("sys_new", "system", 4, serde_json::json!({ "text": "fresh" })),
-            row("user_2", "user", 5, serde_json::json!({ "text": "after" })),
+            row("sys_new", "system", 4, &serde_json::json!({ "text": "fresh" })),
+            row("user_2", "user", 5, &serde_json::json!({ "text": "after" })),
         ];
         let refs: Vec<&SessionMessageRow> = rows.iter().collect();
         let kept: Vec<&str> =
@@ -3018,12 +3018,12 @@ mod g249_tests {
     fn the_newest_native_checkpoint_bounds_the_filter() {
         let rows = [
             native_compaction(2),
-            row("sys_mid", "system", 3, serde_json::json!({ "text": "mid" })),
+            row("sys_mid", "system", 3, &serde_json::json!({ "text": "mid" })),
             row(
                 "msg_native2",
                 "compaction",
                 4,
-                serde_json::json!({
+                &serde_json::json!({
                     "status": "completed",
                     "reason": "manual",
                     "providerContext": { "version": 1, "messages": [] },
@@ -3041,14 +3041,14 @@ mod g249_tests {
     #[test]
     fn without_a_native_checkpoint_nothing_drops() {
         let rows = [
-            row("sys_1", "system", 1, serde_json::json!({ "text": "a" })),
+            row("sys_1", "system", 1, &serde_json::json!({ "text": "a" })),
             row(
                 "msg_local",
                 "compaction",
                 2,
-                serde_json::json!({ "status": "completed", "reason": "auto", "summary": "s" }),
+                &serde_json::json!({ "status": "completed", "reason": "auto", "summary": "s" }),
             ),
-            row("sys_2", "system", 3, serde_json::json!({ "text": "b" })),
+            row("sys_2", "system", 3, &serde_json::json!({ "text": "b" })),
         ];
         let refs: Vec<&SessionMessageRow> = rows.iter().collect();
         let kept: Vec<&str> =
@@ -3064,14 +3064,14 @@ mod g249_tests {
             "msg_running",
             "compaction",
             2,
-            serde_json::json!({ "status": "running", "providerContext": { "version": 1 } }),
+            &serde_json::json!({ "status": "running", "providerContext": { "version": 1 } }),
         );
         assert!(!is_native_checkpoint(&running));
         let null_context = row(
             "msg_null",
             "compaction",
             3,
-            serde_json::json!({ "status": "completed", "providerContext": null }),
+            &serde_json::json!({ "status": "completed", "providerContext": null }),
         );
         assert!(!is_native_checkpoint(&null_context));
         assert!(is_native_checkpoint(&native_compaction(4)));

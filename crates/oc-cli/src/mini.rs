@@ -160,6 +160,7 @@ fn resolve_interactive_stdin() -> Result<std::fs::File, String> {
 /// `runMini` (`mini.ts:33-135`): validate → interactive stdin → merge
 /// piped input with `--prompt` → resolve the target → run the
 /// frontend. Returns the process exit code.
+#[allow(clippy::too_many_lines)] // the ref's runMini boot walk, ported 1:1
 pub async fn run_mini(input: MiniInput, server: &ServerParams) -> i32 {
     if let Err(message) = validate(&input) {
         return fail(&message);
@@ -295,7 +296,8 @@ pub async fn run_mini(input: MiniInput, server: &ServerParams) -> i32 {
         // runtime.ts:197-199).
         settings: None,
     };
-    match mini::runtime::run(frontend).await {
+    // `runtime::run`'s future is large; box it (clippy::large_futures).
+    match Box::pin(mini::runtime::run(frontend)).await {
         Ok(code) => code,
         Err(message) => fail(&message),
     }

@@ -79,7 +79,7 @@ async fn find_substring_completion_ranks_first_and_fuzzy_falls_back() {
     // though scattered subsequences also match (e.g. rust/.../docs).
     let envelope = find_raw(&server, "read").await;
     let found = paths(&envelope);
-    assert!(!found.is_empty());
+    assert_ne!(found.len(), 0);
     assert!(found[0].ends_with("readme.md"), "substring completion first: {found:?}");
 
     // Fuzzy subsequence: "rdm" matches readme.md (tight: d-m adjacent)
@@ -145,7 +145,7 @@ async fn find_type_filter_and_entry_shape() {
         assert_eq!(response.status, 200);
         let envelope = response.json();
         let entries = envelope["data"].as_array().expect("array");
-        assert!(!entries.is_empty());
+        assert_ne!(entries.len(), 0);
         for entry in entries {
             assert_eq!(entry["type"], json!(kind));
         }
@@ -187,7 +187,7 @@ async fn find_excludes_protected_and_heavy_trees() {
 /// G-31 T2: repeated finds are served from the shared in-memory index —
 /// one build on first access, no walk per request (the 10s freshness
 /// window keeps the cached entries; unit-covered further in
-/// handlers::fs::index_tests).
+/// `handlers::fs::index_tests`).
 #[tokio::test]
 async fn find_serves_from_the_shared_index_no_walk_per_request() {
     let server = boot().await;

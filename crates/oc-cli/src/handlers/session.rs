@@ -419,7 +419,7 @@ mod tests {
             agent: None,
             model: None,
             cost: oc_schema::common::Usd::zero(),
-            tokens: Default::default(),
+            tokens: oc_schema::common::TokenUsage::default(),
             outcome: None,
             time: oc_schema::session::Time {
                 created: 1,
