@@ -1060,7 +1060,8 @@ fn pty_destroy_under_load_exits_cleanly() {
 }
 
 /// `ErrorComponent` (auditB #9): a render-path crash mid-run is CAUGHT
-/// — the fallback screen paints ("Something went wrong" + the detail),
+/// — the fallback screen paints (G-287⑤: "OpenCode crashed" + the
+/// detail, error-component.tsx:63),
 /// the crash-restore sequence fired on the pty (this thread owns the
 /// terminal), and any key exits cleanly (the teardown repeats are
 /// idempotent mode pops).
@@ -1073,7 +1074,7 @@ fn pty_render_panic_shows_the_error_component_and_exits() {
 
     run_tui(&url, oc_tui::app::BootArgs::default(), move |boot, writer| {
         assert!(
-            wait_for(&boot, b"Something went wrong", Duration::from_secs(8)),
+            wait_for(&boot, b"OpenCode crashed", Duration::from_secs(8)),
             "the ErrorComponent fallback rendered"
         );
         assert!(
