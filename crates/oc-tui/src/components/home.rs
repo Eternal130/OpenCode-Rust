@@ -370,7 +370,6 @@ pub fn render_home_view(
     (crate::components::chrome_solid::blank_frame(width, height), caret_screen, banner_hit)
 }
 
-
 /// Render the home route over the store: the home prompt's draft
 /// (`HOME_PROMPT_KEY`'s composer, placeholder rotation pinned to entry
 /// 0) and the crate version in the footer slot. The location label is
@@ -874,7 +873,7 @@ mod tests {
 #[cfg(test)]
 mod surf2_home_tests {
     use super::tests::home_frame;
-    
+
     use crate::reactive::Runtime;
     use crate::store::{McpServerRow, Store};
 

@@ -663,7 +663,7 @@ impl SelectState {
         self.selected = if last { indices.len() - 1 } else { 0 };
     }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// G-131 — `moveSection` (dialog-select.tsx:367-374, wired on the
     /// `alt+up`/`alt+down` sectionNavigation binds, :547-562): jump to
     /// the FIRST entry of the previous/next non-empty section, with

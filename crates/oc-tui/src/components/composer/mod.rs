@@ -276,7 +276,7 @@ impl HistoryEntry {
         })
     }
 
-#[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
+    #[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// Tolerant decode (`parsePromptInfo` + the `DeepMutable` pick):
     /// unknown shapes degrade to the text-only entry; a non-string
     /// `text` or non-array `pasted` rejects the line entirely.

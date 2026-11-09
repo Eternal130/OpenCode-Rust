@@ -157,7 +157,12 @@ pub struct ActivityCalendarView {
     pub clipped: bool,
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap, clippy::cast_precision_loss, clippy::cast_sign_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
 #[must_use]
 pub fn activity_calendar(
     activity: &[SessionStatsActivity],
@@ -573,7 +578,7 @@ mod tests {
         SessionStatsActivity { date: date.to_owned(), steps }
     }
 
-#[allow(clippy::cast_precision_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
+    #[allow(clippy::cast_precision_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// `2026-01-01T00:00:00Z` in epoch ms — a Thursday.
     fn ms(year: i64, month: u32, day: u32) -> f64 {
         (days_from_civil(year, month, day) * 86_400_000) as f64
@@ -674,7 +679,7 @@ mod tests {
         assert_eq!(calendar.weeks[1][6].level, -1);
     }
 
-#[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
+    #[allow(clippy::cast_possible_truncation)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// F1 (ref1): the calendar buckets by the LOCAL day (the ref
     /// extracts `getFullYear/getMonth/getDate` — activity-calendar.ts
     /// :8-11). An instant at 23:30 local is already the NEXT UTC day;

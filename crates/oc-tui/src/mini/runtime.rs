@@ -653,7 +653,7 @@ impl Runtime {
         }
     }
 
-#[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
+    #[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
     async fn apply_effect(&mut self, effect: FooterEffect) {
         match effect {
             FooterEffect::Submit(text) => {
@@ -835,7 +835,7 @@ impl Runtime {
         }
     }
 
-#[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
+    #[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
     /// G-272 — apply one settings change (`applyMiniSettingChange`,
     /// verbosity.ts:73-76 + `config.update`, runtime.ts:253-266): the
     /// live gates update immediately; the cli.json `mini` section
@@ -981,7 +981,7 @@ impl Runtime {
         }
     }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// Drain arrived SSE events through the transport folds.
     fn pump_events(&mut self) {
         while let Ok(message) = self.events.try_recv() {
@@ -2176,6 +2176,9 @@ mod tests {
         assert_eq!(commits.len(), 1, "only the tool image commit");
         assert_eq!(commits[0].kind, CommitKind::Tool);
         assert_eq!(commits[0].part_id.as_deref(), Some("prt_9:image:0"));
-        assert_eq!(replay_message_commits(&tool, 2, &mut transport, &settings), [] as [crate::mini::scrollback::Commit; 0]);
+        assert_eq!(
+            replay_message_commits(&tool, 2, &mut transport, &settings),
+            [] as [crate::mini::scrollback::Commit; 0]
+        );
     }
 }
