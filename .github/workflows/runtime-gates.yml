@@ -263,6 +263,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ubuntu-26.04 runners (20261101 image) ship ~21GB of preinstalled
+      # toolchains we never use; the multi-GB target artifact (~10GB
+      # unpacked) plus workspace growth exhausted the runner disk
+      # (System.IO.IOException: No space left on device - the nextest
+      # jobs died before writing logs). Reclaim the four big preinstalled
+      # trees BEFORE unpacking the artifact; runners are ephemeral
+      # single-use VMs, so privileged removal is the platform convention.
+      - name: Reclaim runner disk (before artifact download)
+        run: |
+          set -eu
+          df -h / | tee "$RUNNER_TEMP/df-before.txt"
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghcup /usr/local/.ghcup || true
+          df -h / | tee "$RUNNER_TEMP/df-after.txt"
+
       - uses: actions/download-artifact@v4
         with:
           name: runtime-gates-target
@@ -483,6 +497,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ubuntu-26.04 runners (20261101 image) ship ~21GB of preinstalled
+      # toolchains we never use; the multi-GB target artifact (~10GB
+      # unpacked) plus workspace growth exhausted the runner disk
+      # (System.IO.IOException: No space left on device - the nextest
+      # jobs died before writing logs). Reclaim the four big preinstalled
+      # trees BEFORE unpacking the artifact; runners are ephemeral
+      # single-use VMs, so privileged removal is the platform convention.
+      - name: Reclaim runner disk (before artifact download)
+        run: |
+          set -eu
+          df -h / | tee "$RUNNER_TEMP/df-before.txt"
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghcup /usr/local/.ghcup || true
+          df -h / | tee "$RUNNER_TEMP/df-after.txt"
+
       - uses: actions/download-artifact@v4
         with:
           name: runtime-gates-target
@@ -656,6 +684,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ubuntu-26.04 runners (20261101 image) ship ~21GB of preinstalled
+      # toolchains we never use; the multi-GB target artifact (~10GB
+      # unpacked) plus workspace growth exhausted the runner disk
+      # (System.IO.IOException: No space left on device - the nextest
+      # jobs died before writing logs). Reclaim the four big preinstalled
+      # trees BEFORE unpacking the artifact; runners are ephemeral
+      # single-use VMs, so privileged removal is the platform convention.
+      - name: Reclaim runner disk (before artifact download)
+        run: |
+          set -eu
+          df -h / | tee "$RUNNER_TEMP/df-before.txt"
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghcup /usr/local/.ghcup || true
+          df -h / | tee "$RUNNER_TEMP/df-after.txt"
+
       - uses: actions/download-artifact@v4
         with:
           name: runtime-gates-target
@@ -795,6 +837,20 @@ jobs:
       HAS_COPILOT_TOKEN: ${{ secrets.OC_CI_COPILOT_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
+
+      # ubuntu-26.04 runners (20261101 image) ship ~21GB of preinstalled
+      # toolchains we never use; the multi-GB target artifact (~10GB
+      # unpacked) plus workspace growth exhausted the runner disk
+      # (System.IO.IOException: No space left on device - the nextest
+      # jobs died before writing logs). Reclaim the four big preinstalled
+      # trees BEFORE unpacking the artifact; runners are ephemeral
+      # single-use VMs, so privileged removal is the platform convention.
+      - name: Reclaim runner disk (before artifact download)
+        run: |
+          set -eu
+          df -h / | tee "$RUNNER_TEMP/df-before.txt"
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghcup /usr/local/.ghcup || true
+          df -h / | tee "$RUNNER_TEMP/df-after.txt"
 
       - uses: actions/download-artifact@v4
         with:
@@ -937,6 +993,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ubuntu-26.04 runners (20261101 image) ship ~21GB of preinstalled
+      # toolchains we never use; the multi-GB target artifact (~10GB
+      # unpacked) plus workspace growth exhausted the runner disk
+      # (System.IO.IOException: No space left on device - the nextest
+      # jobs died before writing logs). Reclaim the four big preinstalled
+      # trees BEFORE unpacking the artifact; runners are ephemeral
+      # single-use VMs, so privileged removal is the platform convention.
+      - name: Reclaim runner disk (before artifact download)
+        run: |
+          set -eu
+          df -h / | tee "$RUNNER_TEMP/df-before.txt"
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghcup /usr/local/.ghcup || true
+          df -h / | tee "$RUNNER_TEMP/df-after.txt"
+
       - uses: actions/download-artifact@v4
         with:
           name: runtime-gates-target
@@ -1029,6 +1099,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ubuntu-26.04 runners (20261101 image) ship ~21GB of preinstalled
+      # toolchains we never use; the multi-GB target artifact (~10GB
+      # unpacked) plus workspace growth exhausted the runner disk
+      # (System.IO.IOException: No space left on device - the nextest
+      # jobs died before writing logs). Reclaim the four big preinstalled
+      # trees BEFORE unpacking the artifact; runners are ephemeral
+      # single-use VMs, so privileged removal is the platform convention.
+      - name: Reclaim runner disk (before artifact download)
+        run: |
+          set -eu
+          df -h / | tee "$RUNNER_TEMP/df-before.txt"
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghcup /usr/local/.ghcup || true
+          df -h / | tee "$RUNNER_TEMP/df-after.txt"
+
       - uses: actions/download-artifact@v4
         with:
           name: runtime-gates-target
@@ -1111,6 +1195,20 @@ jobs:
           shared-key: opencode-ci
 
       - uses: mozilla-actions/sccache-action@v0.0.9
+
+      # ubuntu-26.04 runners (20261101 image) ship ~21GB of preinstalled
+      # toolchains we never use; the multi-GB target artifact (~10GB
+      # unpacked) plus workspace growth exhausted the runner disk
+      # (System.IO.IOException: No space left on device - the nextest
+      # jobs died before writing logs). Reclaim the four big preinstalled
+      # trees BEFORE unpacking the artifact; runners are ephemeral
+      # single-use VMs, so privileged removal is the platform convention.
+      - name: Reclaim runner disk (before artifact download)
+        run: |
+          set -eu
+          df -h / | tee "$RUNNER_TEMP/df-before.txt"
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghcup /usr/local/.ghcup || true
+          df -h / | tee "$RUNNER_TEMP/df-after.txt"
 
       - uses: actions/download-artifact@v4
         with:
@@ -1226,6 +1324,20 @@ jobs:
       browser: ${{ steps.chrome.outputs.browser }}
     steps:
       - uses: actions/checkout@v4
+
+      # ubuntu-26.04 runners (20261101 image) ship ~21GB of preinstalled
+      # toolchains we never use; the multi-GB target artifact (~10GB
+      # unpacked) plus workspace growth exhausted the runner disk
+      # (System.IO.IOException: No space left on device - the nextest
+      # jobs died before writing logs). Reclaim the four big preinstalled
+      # trees BEFORE unpacking the artifact; runners are ephemeral
+      # single-use VMs, so privileged removal is the platform convention.
+      - name: Reclaim runner disk (before artifact download)
+        run: |
+          set -eu
+          df -h / | tee "$RUNNER_TEMP/df-before.txt"
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghcup /usr/local/.ghcup || true
+          df -h / | tee "$RUNNER_TEMP/df-after.txt"
 
       - uses: actions/download-artifact@v4
         with:
@@ -1381,6 +1493,20 @@ jobs:
       corpus: ${{ steps.corpus.outputs.corpus || steps.gap.outputs.corpus }}
     steps:
       - uses: actions/checkout@v4
+
+      # ubuntu-26.04 runners (20261101 image) ship ~21GB of preinstalled
+      # toolchains we never use; the multi-GB target artifact (~10GB
+      # unpacked) plus workspace growth exhausted the runner disk
+      # (System.IO.IOException: No space left on device - the nextest
+      # jobs died before writing logs). Reclaim the four big preinstalled
+      # trees BEFORE unpacking the artifact; runners are ephemeral
+      # single-use VMs, so privileged removal is the platform convention.
+      - name: Reclaim runner disk (before artifact download)
+        run: |
+          set -eu
+          df -h / | tee "$RUNNER_TEMP/df-before.txt"
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghcup /usr/local/.ghcup || true
+          df -h / | tee "$RUNNER_TEMP/df-after.txt"
 
       - uses: actions/download-artifact@v4
         with:
