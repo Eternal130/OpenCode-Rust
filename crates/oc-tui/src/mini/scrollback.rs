@@ -323,8 +323,13 @@ pub fn entry_body_with(commit: &Commit, shell_output: bool) -> Vec<String> {
         && commit.kind == CommitKind::Tool
         && commit.phase == Phase::Progress
         && commit.shell.is_none()
+        && !commit.started
         && commit.tool.as_deref().is_some_and(|tool| canonical_tool_name(tool) == "shell")
     {
+        // G-272 — the knob gates the STREAMED OUTPUT only
+        // (`options?.shellOutput === false`, tool.ts:1301); the
+        // part's first caption (the ref's "start" commit) always
+        // renders.
         return Vec::new();
     }
     if commit.summary {

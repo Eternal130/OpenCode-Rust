@@ -426,6 +426,13 @@ mod t4 {
             phase: Phase::Progress,
             text: "$ echo hi\nhi".to_owned(),
             tool: Some("bash".to_owned()),
+            ..Default::default()
+        };
+        let bash_start = Commit {
+            kind: CommitKind::Tool,
+            phase: Phase::Progress,
+            text: "Bash · echo hi".to_owned(),
+            tool: Some("bash".to_owned()),
             started: true,
             ..Default::default()
         };
@@ -452,6 +459,14 @@ mod t4 {
         assert!(
             shown.iter().any(|row| row.contains("echo hi")),
             "shell_output=show streams the live rows: {shown:?}"
+        );
+        // G-272 — the part's FIRST caption (the ref's "start" commit)
+        // renders regardless of the knob (tool.ts:1301 gates the
+        // streamed output only).
+        let start_hidden = format_commit_with(None, &bash_start, 80, false);
+        assert!(
+            start_hidden.iter().any(|row| row.contains("Bash")),
+            "the start caption survives: {start_hidden:?}"
         );
 
         // The shell family's completed final suppresses
