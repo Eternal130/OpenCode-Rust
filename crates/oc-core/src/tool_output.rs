@@ -184,13 +184,13 @@ fn byte_len(text: &str) -> usize {
 /// RW-T4: JS `String.prototype.length` semantics — UTF-16 code units
 /// (chars outside the BMP count 2). The ref truncation budget
 /// (`tool-output.ts:93`) is computed with this unit, not Unicode scalars.
-fn utf16_len(text: &str) -> usize {
+pub(crate) fn utf16_len(text: &str) -> usize {
     text.chars().map(char::len_utf16).sum()
 }
 
 /// JS `String.prototype.slice(0, units)` analogue, rounded down to whole
 /// Rust chars (a lone surrogate is not representable in a Rust `String`).
-fn utf16_prefix(text: &str, units: usize) -> String {
+pub(crate) fn utf16_prefix(text: &str, units: usize) -> String {
     let mut taken = 0usize;
     let mut out = String::new();
     for ch in text.chars() {

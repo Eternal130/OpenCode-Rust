@@ -157,16 +157,25 @@ async fn find_excludes_protected_and_heavy_trees() {
     let server = boot().await;
     let workspace = server.workspace.path().to_path_buf();
     // Heavy trees (pre-existing skip, ripgrep-default equivalents).
-    for heavy in [".git", "node_modules", "target"] {
+    for heavy in [".git", "node_modules"] {
         std::fs::create_dir_all(workspace.join(heavy)).expect("heavy dir");
         std::fs::write(workspace.join(heavy).join("needle.txt"), "x").expect("write");
     }
+    // G-278② — `target` is NOT skipped (ref's rg --files has no
+    // cargo-specific exclusion): its files stay find-visible.
+    std::fs::create_dir_all(workspace.join("target").join("debug")).expect("target dir");
+    std::fs::write(workspace.join("target").join("debug").join("needle.bin"), "x")
+        .expect("write");
     std::fs::write(workspace.join("needle.txt"), "x").expect("top-level hit");
 
     let envelope = find_raw(&server, "needle").await;
     let found = paths(&envelope);
-    assert_eq!(found.len(), 1, "heavy trees excluded: {found:?}");
-    assert!(found[0].ends_with("needle.txt"));
+    assert_eq!(found.len(), 2, "heavy trees excluded, target visible: {found:?}");
+    assert!(found.iter().any(|path| path.ends_with("needle.txt")));
+    assert!(
+        found.iter().any(|path| path.contains("target")),
+        "target/ artifacts are indexed: {found:?}"
+    );
 
     // Home-rooted scans apply REF Protected.names(): on linux the table is
     // empty (mirroring REF exactly), so a home-rooted scan still finds

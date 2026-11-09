@@ -154,7 +154,13 @@ enum HubEvent {
 pub struct WatchHub {
     backend: Arc<dyn WatchBackend>,
     subscriptions: Mutex<HashMap<String, Box<dyn WatchGuard>>>,
-    tx: std::sync::mpsc::SyncSender<HubEvent>,
+    /// G-281③ — ref wires per-file updates over `PubSub.unbounded`
+    /// (config.ts:243) and reload requests over `PubSub.sliding(1)`
+    /// (:244): a notify storm must never DROP an update (the
+    /// ChangePublishers' per-file notifications are lossy-sensitive),
+    /// and reload coalescing happens in the debounce loop. The old
+    /// `sync_channel(1024) + try_send` dropped both under storms.
+    tx: std::sync::mpsc::Sender<HubEvent>,
     rx: Mutex<Option<std::sync::mpsc::Receiver<HubEvent>>>,
     publishers: Mutex<Vec<Arc<dyn ChangePublisher>>>,
 }
@@ -162,7 +168,7 @@ pub struct WatchHub {
 impl WatchHub {
     #[must_use]
     pub fn new(backend: Arc<dyn WatchBackend>) -> Arc<Self> {
-        let (tx, rx) = std::sync::mpsc::sync_channel(1024);
+        let (tx, rx) = std::sync::mpsc::channel();
         Arc::new(Self {
             backend,
             subscriptions: Mutex::new(HashMap::new()),
@@ -190,7 +196,9 @@ impl WatchHub {
             let guard = self.backend.subscribe(
                 target,
                 Box::new(move |update| {
-                    let _ = tx.try_send(HubEvent::Update(update));
+                    // Unbounded send: fails only when the hub (receiver)
+                    // is gone — the correct drop in that case.
+                    let _ = tx.send(HubEvent::Update(update));
                 }),
             );
             if let Some(guard) = guard {
@@ -200,9 +208,11 @@ impl WatchHub {
     }
 
     /// Requests a debounced reload (watch events, credential switches,
-    /// wellknown refreshes, readiness rescans).
+    /// wellknown refreshes, readiness rescans). The sliding(1) coalescing
+    /// of ref's reload pub-sub is realized by the debounce loop (all
+    /// requests queued during a window collapse into one reload).
     pub fn request_reload(&self) {
-        let _ = self.tx.try_send(HubEvent::Reload);
+        let _ = self.tx.send(HubEvent::Reload);
     }
 
     /// Runs the debounce loop on a background thread. `reload` returns
@@ -580,6 +590,48 @@ mod tests {
         std::thread::sleep(Duration::from_millis(120));
         assert_eq!(handler.updates.load(Ordering::SeqCst), 1);
         assert_eq!(changed.load(Ordering::SeqCst), 2);
+    }
+
+    /// G-281③ — a notify storm must not DROP updates (ref
+    /// `PubSub.unbounded`, config.ts:243): 5000 events emitted while
+    /// the debounce loop is not yet consuming all reach the publishers
+    /// (the old `sync_channel(1024) + try_send` dropped everything
+    /// past the queue capacity).
+    #[test]
+    fn config_watch_hub_storm_does_not_drop_updates() {
+        let backend = FakeBackend::new();
+        let hub = WatchHub::new(backend.clone());
+        let publisher = Arc::new(RecordingPublisher { changes: Mutex::new(Vec::new()) });
+        hub.add_publisher(publisher.clone());
+        hub.reconcile(&[WatchTarget::Entries {
+            path: PathBuf::from("/cfg"),
+            names: vec!["opencode.json".to_string()],
+        }]);
+
+        // Storm BEFORE the loop starts — nothing is consuming yet.
+        for _ in 0..5000 {
+            backend.emit(&FsUpdate {
+                kind: FsChangeKind::Update,
+                path: PathBuf::from("/cfg/opencode.json"),
+            });
+        }
+
+        let handler = Arc::new(CountingHandler { updates: AtomicUsize::new(0) });
+        let changed = Arc::new(AtomicUsize::new(0));
+        let changed_for_reload = Arc::clone(&changed);
+        let reload: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
+            changed_for_reload.fetch_add(1, Ordering::SeqCst);
+            true
+        });
+        hub.run(Duration::from_millis(50), reload, handler.clone());
+
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(
+            publisher.changes.lock().unwrap().len(),
+            5000,
+            "no update dropped under the storm"
+        );
+        assert_eq!(handler.updates.load(Ordering::SeqCst), 1, "still one coalesced reload");
     }
 
     #[test]

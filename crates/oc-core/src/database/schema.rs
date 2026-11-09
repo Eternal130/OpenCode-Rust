@@ -854,6 +854,12 @@ impl Database {
         self.transaction(move |tx| tx.kv_get(&key)).await
     }
 
+    /// Deletes a kv entry (the KV `remove` face; G-282②).
+    pub async fn kv_delete(&self, key: &str) -> Result<()> {
+        let key = key.to_string();
+        self.transaction(move |tx| tx.kv_delete(&key)).await
+    }
+
     /// Scans kv entries (`KV.scan`): prefix filter + `after` cursor
     /// pagination; `limit` defaults to 100 upstream — callers pass it here.
     pub async fn kv_scan(

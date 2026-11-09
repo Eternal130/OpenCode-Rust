@@ -118,7 +118,11 @@ pub enum ReadOutput {
     ListPage { entries: Vec<ListEntry>, truncated: bool, next: Option<u64> },
 }
 
-/// `Mime.detect` — magic-byte sniffing for the supported media set.
+/// `Mime.detect` (core mime.ts:3-21) — magic-byte sniffing for the full
+/// media set. NOTE (G-278①): BMP and AVIF ARE detected here exactly like
+/// ref, but ref's read tool only INGESTS [`MEDIA_MIMES`] members
+/// (read-filesystem.ts:137 `MEDIA_MIMES.has(media)`) — a BMP/AVIF falls
+/// through to the text/binary path (a real one has NULs → BinaryFileError).
 fn detect_mime(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
         Some("image/png")
@@ -128,11 +132,28 @@ fn detect_mime(bytes: &[u8]) -> Option<&'static str> {
         Some("image/gif")
     } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
         Some("image/webp")
+    } else if bytes.starts_with(&[0x42, 0x4d]) {
+        // G-278① — `BM` (mime.ts:8): detected but NOT ingested (ref
+        // MEDIA_MIMES has no image/bmp).
+        Some("image/bmp")
     } else if bytes.starts_with(b"%PDF") {
         Some("application/pdf")
+    } else if bytes.len() >= 12
+        && &bytes[4..8] == b"ftyp"
+        && (&bytes[8..12] == b"avif" || &bytes[8..12] == b"avis")
+    {
+        // G-278① — ISO-BMFF `ftyp` box with an avif/avis brand
+        // (mime.ts:14-19): detected but NOT ingested.
+        Some("image/avif")
     } else {
         None
     }
+}
+
+/// The ingest gate (read-filesystem.ts:137 `MEDIA_MIMES.has(media)`):
+/// only the five members become base64 file parts.
+fn is_ingestible_media(media: &str) -> bool {
+    MEDIA_MIMES.contains(&media)
 }
 
 /// `mimeType(path)` — extension fallback (mime-types `lookup`).
@@ -478,7 +499,10 @@ where
     };
 
     let media = detect_mime(&first);
-    if let Some(media) = media {
+    // G-278① — ref gates the base64 media path on `MEDIA_MIMES.has(media)`
+    // (read-filesystem.ts:137): BMP/AVIF are DETECTED but not ingested —
+    // they fall through to the text/binary path exactly like ref.
+    if let Some(media) = media.filter(|media| is_ingestible_media(media)) {
         if size > MAX_MEDIA_INGEST_BYTES {
             return Err(ReadError::MediaLimit {
                 resource: resource.to_string(),

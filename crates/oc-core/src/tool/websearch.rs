@@ -117,7 +117,10 @@ impl WebSearch {
     pub fn providers(&self) -> Vec<(String, String)> {
         let mut providers: Vec<(String, String)> =
             self.all().iter().map(|p| (p.id().to_string(), p.name().to_string())).collect();
-        providers.sort_by(|a, b| a.1.cmp(&b.1));
+        // G-282① — ref `toSorted((a, b) => a.name.localeCompare(b.name))`
+        // (websearch.ts:168): the CLDR-root collation, not byte order
+        // (G-154 family; oc-util localecmp).
+        providers.sort_by(|a, b| oc_util::localecmp::locale_cmp(&a.1, &b.1));
         providers
     }
 
@@ -146,7 +149,14 @@ impl WebSearch {
             serde_json::Value::String(id) if id == "random" => Some(Selection::Random),
             serde_json::Value::Bool(false) => Some(Selection::Disabled),
             serde_json::Value::String(id) => Some(Selection::Provider(id)),
-            _ => None,
+            // G-282② — ref removes a stored KV entry that fails the
+            // Selection decode (websearch.ts:130-133 `kv.remove`):
+            // numbers/objects/`true`/null are undecodable garbage, not a
+            // selection; drop the entry instead of re-reading it forever.
+            _ => {
+                let _ = self.db.kv_delete(PROVIDER_KEY).await;
+                None
+            }
         }
     }
 
@@ -967,6 +977,57 @@ mod tests {
             WebSearchError::ProviderRequired
         ));
         assert!(search.providers().is_empty());
+    }
+
+    /// G-282① — `providers()` sorts display names with the CLDR-root
+    /// collation (`localeCompare`, websearch.ts:168), not byte order:
+    /// case-insensitive base letters first, so "Apple" < "banana" <
+    /// "cherry" (byte order would put the uppercase first).
+    #[tokio::test]
+    async fn tool_websearch_providers_sort_by_locale() {
+        struct Named(&'static str, &'static str);
+        #[async_trait::async_trait]
+        impl SearchProvider for Named {
+            fn id(&self) -> &str {
+                self.0
+            }
+            fn name(&self) -> &str {
+                self.1
+            }
+            async fn execute(&self, _query: &str) -> Result<Vec<WebSearchResult>, ProviderError> {
+                Ok(Vec::new())
+            }
+        }
+        let db = crate::database::Database::open_in_memory().await.unwrap();
+        let search = WebSearch::new(
+            db,
+            vec![
+                Arc::new(Named("c", "cherry")),
+                Arc::new(Named("a", "banana")),
+                Arc::new(Named("b", "Apple")),
+            ],
+        );
+        let names: Vec<String> = search.providers().into_iter().map(|(_, name)| name).collect();
+        assert_eq!(names, vec!["Apple".to_owned(), "banana".to_owned(), "cherry".to_owned()]);
+    }
+
+    /// G-282② — an undecodable stored KV selection is REMOVED
+    /// (websearch.ts:130-133 `kv.remove`), not silently re-read.
+    #[tokio::test]
+    async fn tool_websearch_invalid_stored_selection_is_cleaned() {
+        let db = crate::database::Database::open_in_memory().await.unwrap();
+        let search = WebSearch::new(db.clone(), Vec::new());
+        // A stored number decodes as neither string nor false.
+        search.db.kv_set(PROVIDER_KEY, &serde_json::json!(42)).await.unwrap();
+        assert!(search.stored_selection().await.is_none());
+        assert!(
+            search.db.kv_get(PROVIDER_KEY).await.unwrap().is_none(),
+            "the garbage entry was removed"
+        );
+        // Valid entries survive untouched.
+        search.select(&Selection::Random).await;
+        assert!(matches!(search.stored_selection().await, Some(Selection::Random)));
+        assert!(search.db.kv_get(PROVIDER_KEY).await.unwrap().is_some());
     }
 
     #[tokio::test]

@@ -901,6 +901,41 @@ async fn tool_read_media_as_base64_file_parts() {
     );
 }
 
+/// G-278① — BMP and AVIF magics are DETECTED (ref mime.ts:8/:14-19) but
+/// NOT ingested: ref's read tool gates the base64 path on
+/// `MEDIA_MIMES.has(media)` (read-filesystem.ts:137), which has no
+/// image/bmp or image/avif — they fall through to the text/binary path
+/// (a NUL-bearing one is a BinaryFileError exactly like ref).
+#[tokio::test]
+async fn tool_read_media_detects_but_does_not_ingest_bmp_and_avif() {
+    let harness = harness().await;
+    // `BM…` with a NUL byte — detected, not ingestible, binary fallthrough.
+    let mut bmp = vec![0x42, 0x4d, 1, 2, 3, 4, 0, 6, 7, 8, 9, 10];
+    bmp.extend_from_slice(&[0, 0, 0, 0]);
+    std::fs::write(harness.dir.join("pixel.bmp"), &bmp).expect("write");
+    let failure = call(&harness.tools, "read", serde_json::json!({ "path": "pixel.bmp" }))
+        .await
+        .expect_err("bmp is not ingested");
+    assert_eq!(error_message(&failure), "Cannot read binary file: pixel.bmp");
+
+    // ISO-BMFF `ftyp`/`avif` brand with NULs — same fallthrough.
+    let mut avif = vec![0, 0, 0, 24, b'f', b't', b'y', b'p', b'a', b'v', b'i', b'f'];
+    avif.extend_from_slice(&[0, 0, 0, 0]);
+    std::fs::write(harness.dir.join("pixel.avif"), &avif).expect("write");
+    let failure = call(&harness.tools, "read", serde_json::json!({ "path": "pixel.avif" }))
+        .await
+        .expect_err("avif is not ingested");
+    assert_eq!(error_message(&failure), "Cannot read binary file: pixel.avif");
+
+    // A NUL-free BMP-prefixed file takes the text path like ref (the
+    // media gate rejected it, not the binary gate).
+    std::fs::write(harness.dir.join("odd.bmp"), b"BM just text, no NULs").expect("write");
+    let settled = call(&harness.tools, "read", serde_json::json!({ "path": "odd.bmp" }))
+        .await
+        .expect("text path");
+    assert_eq!(settled.content.len(), 1, "no file part for non-ingestible media");
+}
+
 // ---------------------------------------------------------------------------
 // Formatter integration (post-write formatting through the tool path)
 // ---------------------------------------------------------------------------
@@ -2354,4 +2389,34 @@ async fn read_binary_detection_covers_only_the_consumed_page() {
         matches!(outcome, ReadOutput::TextPage { .. }),
         "NUL beyond the consumed page is not fatal"
     );
+}
+
+// --- G-282⑤: grep match-text clamp is UTF-16 code-unit based ---------
+
+#[test]
+fn grep_match_text_clamps_at_utf16_code_units() {
+    // 1999 scalars where every other one is astral (2 UTF-16 units) =
+    // 2998+ code units: over the 2000 budget even though scalar count
+    // is under. The clamp must fire on the UTF-16 length (JS
+    // `.length`/`.slice`, ripgrep.ts:255-257) and cut at a code-unit
+    // boundary rounded down to a whole char.
+    let emoji = "😀"; // U+1F600 — 2 UTF-16 code units, 1 scalar
+    let mut astral = String::new();
+    for index in 0..1999 {
+        astral.push(if index % 2 == 0 { 'a' } else { emoji.chars().next().unwrap() });
+    }
+    let clamped = crate::tool::grep::clamp_match_text(&astral);
+    assert!(clamped.ends_with("..."));
+    // 2000 code units = 666 ('a'+emoji) pairs (1998) + 'a' (1999); the
+    // next emoji needs 2 units and a Rust String cannot hold half a
+    // surrogate pair, so the prefix rounds DOWN to 1999 whole units
+    // (the documented G-116①/G-126 family rounding).
+    let prefix = &clamped[..clamped.len() - 3];
+    assert_eq!(
+        prefix.chars().map(char::len_utf16).sum::<usize>(),
+        1999,
+        "the kept prefix is the whole-char rounding of 2000 UTF-16 units"
+    );
+    // A short ASCII line passes through untouched.
+    assert_eq!(crate::tool::grep::clamp_match_text("let x = 1"), "let x = 1");
 }

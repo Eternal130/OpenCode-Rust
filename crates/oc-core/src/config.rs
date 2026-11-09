@@ -14,6 +14,7 @@ pub mod command_md;
 pub mod discovery;
 pub mod instruction;
 pub mod jsonc_edit;
+pub mod jsonc_parse;
 pub mod managed_policy;
 pub mod markdown;
 pub mod normalize;
@@ -532,7 +533,11 @@ impl Loader {
         source: &str,
         diagnostics: &mut Vec<SourceDiagnostic>,
     ) -> Option<Info> {
-        let Ok(value) = json5::from_str::<Json>(text) else {
+        // G-281① — ref's jsonc-parser tolerance class EXACTLY
+        // (config.ts:106: comments + trailing commas; every other
+        // laxness fills `errors` and rejects). json5 previously
+        // accepted single quotes/unquoted keys/hex silently.
+        let Ok(value) = jsonc_parse::parse_jsonc(text).map(Json::from) else {
             diagnostics.push(SourceDiagnostic {
                 source: source.to_string(),
                 path: "$".to_string(),
@@ -692,7 +697,13 @@ impl WatchedConfig {
 /// `opencode.json(c)` while preserving unrelated JSONC content (v2
 /// config.ts:329-349 — jsonc modify over the original text, plus the
 /// trailing-newline normalization of `writeWithDirs`).
+///
+/// G-281④ — ref serializes every update through `updateLock`
+/// (config.ts:102 `Semaphore.makeUnsafe(1)`): concurrent writers would
+/// interleave their read-modify-write and lose one side's patch. The
+/// port guards the whole read-patch-write with a process-wide mutex.
 pub fn update_shell(globals: &GlobalDirs, shell: Option<&str>) -> std::io::Result<()> {
+    let _guard = update_shell_lock().lock().unwrap_or_else(|poison| poison.into_inner());
     let candidates: Vec<PathBuf> = NAMES.iter().map(|name| globals.config.join(name)).collect();
     let filepath = candidates
         .iter()
@@ -709,6 +720,12 @@ pub fn update_shell(globals: &GlobalDirs, shell: Option<&str>) -> std::io::Resul
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&filepath, updated)
+}
+
+/// The process-wide `updateLock` (G-281④, ref config.ts:102).
+fn update_shell_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
 }
 
 /// Replaces, inserts, or removes the top-level `shell` property with v2's

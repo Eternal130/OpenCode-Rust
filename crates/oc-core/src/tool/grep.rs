@@ -24,6 +24,16 @@ const MAX_SUBMATCHES: usize = 100;
 /// Match-text clamp (Ripgrep.ts).
 const MATCH_TEXT_CLAMP: usize = 2_000;
 
+/// G-282⑤ — `text.length > 2_000 ? text.slice(0, 2_000) + "..."` with
+/// JS UTF-16 code-unit math (ripgrep.ts:255-257).
+pub(crate) fn clamp_match_text(text: &str) -> String {
+    if crate::tool_output::utf16_len(text) > MATCH_TEXT_CLAMP {
+        format!("{}...", crate::tool_output::utf16_prefix(text, MATCH_TEXT_CLAMP))
+    } else {
+        text.to_string()
+    }
+}
+
 #[must_use]
 pub fn timeout_message() -> String {
     format!(
@@ -270,12 +280,12 @@ pub async fn ripgrep_grep(
                     .collect()
             })
             .unwrap_or_default();
-        let text = if text.chars().count() > MATCH_TEXT_CLAMP {
-            let prefix: String = text.chars().take(MATCH_TEXT_CLAMP).collect();
-            format!("{prefix}...")
-        } else {
-            text.to_string()
-        };
+        // G-282⑤ — ref truncates by UTF-16 code units (ripgrep.ts:256
+        // `text.length > 2_000 ? text.slice(0, 2_000) + "..."`): JS
+        // `.length`/`.slice` count UTF-16 code units, so a line of 1999
+        // scalars with astral chars can exceed the budget (G-116①/G-126
+        // family; the shared `tool_output` helpers do the unit math).
+        let text = clamp_match_text(text);
         Some(SearchMatch {
             path: normalize_path(path),
             line: line_number,

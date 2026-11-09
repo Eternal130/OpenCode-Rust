@@ -40,8 +40,18 @@ fn detect_mime(bytes: &[u8]) -> Option<&'static str> {
         Some("image/gif")
     } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
         Some("image/webp")
+    } else if bytes.starts_with(&[0x42, 0x4d]) {
+        // G-278① — `BM` (core mime.ts:8).
+        Some("image/bmp")
     } else if bytes.starts_with(b"%PDF") {
         Some("application/pdf")
+    } else if bytes.len() >= 12
+        && &bytes[4..8] == b"ftyp"
+        && (&bytes[8..12] == b"avif" || &bytes[8..12] == b"avis")
+    {
+        // G-278① — ISO-BMFF `ftyp` box with an avif/avis brand
+        // (core mime.ts:14-19).
+        Some("image/avif")
     } else {
         None
     }
@@ -169,7 +179,7 @@ async fn read(
     })?;
     let mime = detect_mime(&bytes).map_or_else(
         || {
-            if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) || utf8_valid(&bytes) {
+            if is_text(&bytes) {
                 "text/plain".to_owned()
             } else {
                 mime_from_path(&real)
@@ -181,8 +191,26 @@ async fn read(
     Ok(super::common::bytes_response(bytes, &mime))
 }
 
-fn utf8_valid(bytes: &[u8]) -> bool {
-    std::str::from_utf8(bytes).is_ok()
+/// G-278① — ref `isText` (core mime.ts:24-33): empty is text; a NUL
+/// byte is not; must decode as strict UTF-8; and the control-character
+/// ratio (bytes < 9 or 13<byte<32) must stay ≤ 30%.
+fn is_text(bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return true;
+    }
+    if bytes.contains(&0) {
+        return false;
+    }
+    if std::str::from_utf8(bytes).is_err() {
+        return false;
+    }
+    let controls = bytes
+        .iter()
+        .filter(|byte| **byte < 9 || (**byte > 13 && **byte < 32))
+        .count();
+    #[allow(clippy::cast_precision_loss)]
+    let ratio = controls as f64 / bytes.len() as f64;
+    ratio <= 0.3
 }
 
 // ---------------------------------------------------------------------------
@@ -416,7 +444,13 @@ impl ScanExclusions {
     fn is_excluded_dir(&self, name: &str, directory: &std::path::Path) -> bool {
         // Heavy/irrelevant trees (pre-existing skip; ripgrep's defaults
         // exclude .git/node_modules in REF).
-        if name == ".git" || name == "node_modules" || name == "target" {
+        //
+        // G-278② — `target` is NO LONGER excluded: ref's find runs
+        // plain `rg --files` (search.ts:68-90 + ripgrep.ts:193-218)
+        // with no cargo-specific skip, so a rust project's own
+        // target/ artifacts stay find-visible; the extra skip made
+        // this repo's files invisible to find.
+        if name == ".git" || name == "node_modules" {
             return true;
         }
         if self.home_rooted && self.names.iter().any(|candidate| candidate == name) {
@@ -990,12 +1024,49 @@ mod find_tests {
         assert!(!scan.is_excluded_dir("Trashes", std::path::Path::new("/repo/Trashes")));
     }
 
+    /// G-278① — the ref `isText` heuristic (core mime.ts:24-33): empty
+    /// is text, NUL is not, invalid UTF-8 is not, and the control-char
+    /// ratio must stay ≤ 30%.
+    #[test]
+    fn is_text_follows_the_ref_heuristic() {
+        assert!(is_text(b""));
+        assert!(is_text(b"plain text\nwith lines"));
+        assert!(is_text("héllo — utf8".as_bytes()));
+        assert!(!is_text(b"abc\x00def"), "NUL rejects");
+        assert!(!is_text(&[0xff, 0xfe, 0x0d]), "invalid UTF-8 rejects");
+        // 31 control bytes out of 100 — just over the 30% line.
+        let mut over = vec![b'a'; 69];
+        over.extend(std::iter::repeat_n(0x01, 31));
+        assert!(!is_text(&over), "control ratio > 30% rejects");
+        // 30/100 — at the line, still text.
+        let mut at = vec![b'a'; 70];
+        at.extend(std::iter::repeat_n(0x01, 30));
+        assert!(is_text(&at), "control ratio == 30% accepts");
+        // Tab/LF/CR are the ALLOWED control range (9..=13).
+        let mut allowed = vec![b'a'; 66];
+        allowed.extend([b'\t', b'\n', b'\r', 0x0b, 0x0c]);
+        assert!(is_text(&allowed));
+    }
+
+    /// G-278① — the BMP and AVIF magics join the sniffed set.
+    #[test]
+    fn detect_mime_covers_bmp_and_avif() {
+        assert_eq!(detect_mime(&[0x42, 0x4d, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]), Some("image/bmp"));
+        let mut avif = vec![0, 0, 0, 24, b'f', b't', b'y', b'p', b'a', b'v', b'i', b'f'];
+        avif.extend_from_slice(&[0, 0, 0, 0]);
+        assert_eq!(detect_mime(&avif), Some("image/avif"));
+        assert_eq!(detect_mime(b"not a magic"), None);
+    }
+
     #[test]
     fn exclusions_keep_heavy_tree_skips() {
         let scan = ScanExclusions { home_rooted: false, names: vec![], paths: vec![] };
-        for name in [".git", "node_modules", "target"] {
+        for name in [".git", "node_modules"] {
             assert!(scan.is_excluded_dir(name, &std::path::Path::new("/repo").join(name)));
         }
+        // G-278② — `target` is NOT excluded (ref's rg has no such skip;
+        // a rust project's own artifacts stay find-visible).
+        assert!(!scan.is_excluded_dir("target", std::path::Path::new("/repo/target")));
     }
 
     #[test]

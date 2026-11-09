@@ -259,9 +259,38 @@ fn build_remote(
 }
 
 fn build_file(rest: &str, remote: &str) -> Option<Reference> {
-    // `file://` URLs: an empty authority precedes the absolute path.
-    let raw = if rest.starts_with('/') { rest.to_owned() } else { format!("/{rest}") };
-    let file_path = std::fs::canonicalize(&raw).unwrap_or_else(|_| PathBuf::from(&raw));
+    // G-278③ — ref `buildFile` (repository.ts:189-203):
+    // `path.normalize(fileURLToPath(url))`. `fileURLToPath` REJECTS a
+    // file URL with a non-empty authority other than `localhost`
+    // (ERR_INVALID_FILE_URL_HOST) — the try/catch around the URL builders
+    // turns that into an unparseable reference, never a `host` path
+    // segment. Percent-escapes decode (`file:///a%20b` → `/a b`) and
+    // encoded separators (`%2F`) reject (ERR_INVALID_FILE_URL_PATH).
+    let (authority, path) = match rest.split_once('/') {
+        Some((authority, path)) => (authority, format!("/{path}")),
+        None => (rest, String::new()),
+    };
+    if !authority.is_empty() && authority != "localhost" {
+        return None;
+    }
+    if path.to_ascii_lowercase().contains("%2f") {
+        return None;
+    }
+    let decoded = percent_decode(&path);
+    // `path.normalize`: purely LEXICAL `.`/`..` folding — the old
+    // `fs::canonicalize` touched the filesystem and made the cachePath
+    // key depend on symlink layout (and on the path existing at parse
+    // time); the key is now stable text like ref's.
+    let mut file_path = PathBuf::new();
+    for component in Path::new(&decoded).components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                file_path.pop();
+            }
+            other => file_path.push(other.as_os_str()),
+        }
+    }
     let segments: Vec<String> = file_path
         .to_string_lossy()
         .split(['/', '\\'])

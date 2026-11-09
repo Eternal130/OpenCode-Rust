@@ -235,38 +235,173 @@ pub fn parse_exa_results(text: &str) -> Vec<WebSearchResult> {
         .collect()
 }
 
+/// G-282④ — ref uses `Date.parse(publishedText)` (plugin/websearch/exa.ts:71),
+/// which accepts far more than an ISO date prefix: ISO datetimes with
+/// optional time/offset, RFC-822/1123 (`Mon, 09 Nov 2026 12:00:00 GMT`),
+/// and long-month forms (`November 9, 2026`). The old parser only read
+/// the leading `YYYY-MM-DD`. Returns milliseconds since the Unix epoch.
 fn parse_date_millis(value: &str) -> Option<u64> {
-    // Date.parse approximation for ISO-8601 dates (UTC midnight).
-    value.trim().parse::<chrono_like::Naive>().ok().map(|parsed| parsed.0)
+    let value = value.trim();
+    parse_iso_datetime(value).or_else(|| parse_loose_date(value))
 }
 
-mod chrono_like {
-    pub struct Naive(pub u64);
-}
-
-impl std::str::FromStr for chrono_like::Naive {
-    type Err = ();
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let value = value.trim();
-        // YYYY-MM-DD or with time — seconds since epoch (UTC).
-        let date = &value[..10.min(value.len())];
-        let mut parts = date.split('-');
-        let year: i64 = parts.next().ok_or(())?.parse().map_err(|_| ())?;
-        let month: i64 = parts.next().ok_or(())?.parse().map_err(|_| ())?;
-        let day: i64 = parts.next().ok_or(())?.parse().map_err(|_| ())?;
-        if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-            return Err(());
-        }
-        // days since epoch (civil algorithm)
-        let years = if month <= 2 { year - 1 } else { year };
-        let era = if years >= 0 { years } else { years - 399 } / 400;
-        let yoe = years - era * 400;
-        let mp = (month + 9) % 12;
-        let doy = (153 * mp + 2) / 5 + day - 1;
-        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-        let days = era * 146_097 + doe - 719_468;
-        Ok(chrono_like::Naive((days * 86_400).max(0) as u64 * 1000))
+/// `YYYY-MM-DD` or `YYYY-MM-DD[T ]HH:MM[:SS[.frac]][Z|±HH[:MM]]`.
+fn parse_iso_datetime(value: &str) -> Option<u64> {
+    let (date, rest) = value.split_once(['T', ' ']).unwrap_or((value, ""));
+    let days = parse_ymd(date)?;
+    if rest.trim().is_empty() {
+        return days_to_millis(days, 0, 0, 0, 0);
     }
+    // Strip a trailing timezone off the clock: `Z`, `+HH:MM`, `-HHMM`, or
+    // a zone word (GMT/UTC treated as +0000 like V8's fallback).
+    let (clock, offset_minutes) = split_offset(rest)?;
+    let (hour, minute, second) = parse_clock(clock)?;
+    Some(days_to_millis(days, hour, minute, second, offset_minutes)?)
+}
+
+/// `(clock, offset-minutes)` — an unrecognized trailing token (a named
+/// zone we do not model) rejects like V8's parser would for ambiguous
+/// input; GMT/UTC/Z and numeric offsets decode.
+fn split_offset(rest: &str) -> Option<(&str, i64)> {
+    let rest = rest.trim();
+    if rest.is_empty() {
+        // No offset: V8 treats a date-time without one as LOCAL time;
+        // the sandboxed process runs UTC, so ±0 is the honest decode.
+        return Some((rest, 0));
+    }
+    let upper = rest.to_ascii_uppercase();
+    if upper.ends_with("GMT") || upper.ends_with("UTC") {
+        return Some((&rest[..rest.len() - 3], 0));
+    }
+    if let Some(clock) = rest.strip_suffix('Z').or_else(|| rest.strip_suffix('z')) {
+        return Some((clock, 0));
+    }
+    // Numeric offset ±HH[:MM] / ±HHMM AFTER the clock (clocks contain
+    // no `+`/`-`; the found position is a char boundary since both are
+    // ASCII).
+    let position = rest.find(['+', '-'])?;
+    let (clock, offset_text) = rest.split_at(position);
+    let sign = if offset_text.starts_with('+') { 1_i64 } else { -1_i64 };
+    let digits = offset_text[1..].trim();
+    let (hours, minutes) = if let Some((h, m)) = digits.split_once(':') {
+        (h.parse::<i64>().ok()?, m.parse::<i64>().ok()?)
+    } else if digits.len() == 4 && digits.is_ascii() {
+        (digits[..2].parse::<i64>().ok()?, digits[2..].parse::<i64>().ok()?)
+    } else if digits.len() <= 2 {
+        (digits.parse::<i64>().ok()?, 0)
+    } else {
+        return None;
+    };
+    Some((clock, sign * (hours * 60 + minutes)))
+}
+
+fn parse_clock(clock: &str) -> Option<(i64, i64, i64)> {
+    let clock = clock.trim();
+    // Fractional seconds truncate to whole seconds (millisecond
+    // precision; the result is ms-epoch anyway).
+    let seconds = clock.split('.').next().unwrap_or(clock);
+    let mut parts = seconds.split(':');
+    let hour: i64 = parts.next()?.trim().parse().ok()?;
+    let minute: i64 = parts.next().map(str::trim).map(str::parse).transpose().ok()??;
+    let second: i64 = parts.next().map(str::trim).map(str::parse).transpose().ok()?.unwrap_or(0);
+    if !(0..=23).contains(&hour) || !(0..=59).contains(&minute) || !(0..=60).contains(&second) {
+        return None;
+    }
+    Some((hour, minute, second))
+}
+
+/// `[Www, ]D Mon YYYY[ HH:MM[:SS]][ zone]` and `Mon D, YYYY` (the V8
+/// legacy `Date.parse` classes Exa's human-readable dates land in).
+fn parse_loose_date(value: &str) -> Option<u64> {
+    let mut text = value.trim();
+    // Optional weekday prefix `Mon`/`Monday` (with or without a comma).
+    let first_word: String =
+        text.chars().take_while(|char| char.is_alphabetic()).collect();
+    if is_weekday_prefix(&first_word) {
+        text = text.strip_prefix(&first_word).unwrap_or(text);
+        text = text.trim_start();
+        text = text.strip_prefix(',').map(str::trim_start).unwrap_or(text);
+    }
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    // `D Mon YYYY [clock]` or `Mon D, YYYY [clock]`.
+    let (day, month, year, clock) = if tokens.len() >= 3 {
+        if let Some(month) = month_number(tokens[0]) {
+            let day: i64 = tokens[1].trim_matches(',').parse().ok()?;
+            let year: i64 = tokens[2].parse().ok()?;
+            (day, month, year, tokens.get(3..))
+        } else if let Some(month) = month_number(tokens[1].trim_matches(',')) {
+            let day: i64 = tokens[0].parse().ok()?;
+            let year: i64 = tokens[2].parse().ok()?;
+            (day, month, year, tokens.get(3..))
+        } else {
+            return None;
+        }
+    } else {
+        return None;
+    };
+    if !(1..=31).contains(&day) || !(1..=12).contains(&month) {
+        return None;
+    }
+    let days = civil_days(year, month, day)?;
+    let (hour, minute, second) = match clock {
+        Some([clock, ..]) => parse_clock(clock)?,
+        _ => (0, 0, 0),
+    };
+    days_to_millis(days, hour, minute, second, 0)
+}
+
+/// A weekday prefix for stripping: the 3-letter form or a full name
+/// (`Mon`, `Monday`, …).
+fn is_weekday_prefix(word: &str) -> bool {
+    let lowered = word.to_ascii_lowercase();
+    lowered.len() >= 3
+        && ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+            .iter()
+            .any(|day| lowered == &day[..3] || *day == lowered)
+}
+
+/// Month number for a full or 3-letter English month name.
+fn month_number(token: &str) -> Option<i64> {
+    let lowered = token.to_ascii_lowercase();
+    if lowered.is_empty() {
+        return None;
+    }
+    const MONTHS: [&str; 12] = [
+        "january", "february", "march", "april", "may", "june", "july", "august", "september",
+        "october", "november", "december",
+    ];
+    MONTHS
+        .iter()
+        .position(|month| *month == lowered || (lowered.len() == 3 && month.starts_with(&lowered)))
+        .map(|index| index as i64 + 1)
+}
+
+fn parse_ymd(date: &str) -> Option<i64> {
+    let mut parts = date.split('-');
+    let year: i64 = parts.next()?.parse().ok()?;
+    let month: i64 = parts.next()?.parse().ok()?;
+    let day: i64 = parts.next()?.parse().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    civil_days(year, month, day)
+}
+
+/// Days since the Unix epoch for a civil (year, month, day) — the
+/// Howard Hinnant civil algorithm (UTC midnight).
+fn civil_days(year: i64, month: i64, day: i64) -> Option<i64> {
+    let years = if month <= 2 { year - 1 } else { year };
+    let era = if years >= 0 { years } else { years - 399 } / 400;
+    let yoe = years - era * 400;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe - 719_468)
+}
+
+fn days_to_millis(days: i64, hour: i64, minute: i64, second: i64, offset_minutes: i64) -> Option<u64> {
+    let millis = ((days * 86_400) + hour * 3_600 + minute * 60 + second - offset_minutes * 60) * 1000;
+    u64::try_from(millis).ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -651,6 +786,29 @@ mod tests {
         assert_eq!(results[0].time.published, Some(1_705_276_800_000));
         assert_eq!(results[1].title, None);
         assert_eq!(results[1].content.as_deref(), Some("body"));
+    }
+
+    /// G-282④ — `Date.parse` format classes beyond the bare ISO date
+    /// prefix (exa.ts:71): datetimes with offsets, RFC-822 forms, and
+    /// long-month forms all decode.
+    #[test]
+    fn tool_websearch_exa_dates_parse_dateparse_classes() {
+        // ISO datetime, Z.
+        assert_eq!(parse_date_millis("2024-01-15T12:30:45Z"), Some(1_705_321_845_000));
+        // ISO datetime with a numeric offset (+02:00 shifts back).
+        assert_eq!(parse_date_millis("2024-01-15T12:30:45+02:00"), Some(1_705_314_645_000));
+        // Space separator + GMT zone word.
+        assert_eq!(parse_date_millis("2024-01-15 12:30:45 GMT"), Some(1_705_321_845_000));
+        // RFC-822/1123.
+        assert_eq!(parse_date_millis("Mon, 15 Jan 2024 12:30:45 GMT"), Some(1_705_321_845_000));
+        // Long month, day-first and month-first.
+        assert_eq!(parse_date_millis("15 January 2024"), Some(1_705_276_800_000));
+        assert_eq!(parse_date_millis("January 15, 2024"), Some(1_705_276_800_000));
+        // The legacy date-only shape keeps its epoch.
+        assert_eq!(parse_date_millis("2024-01-15"), Some(1_705_276_800_000));
+        // Garbage still rejects.
+        assert_eq!(parse_date_millis("not a date"), None);
+        assert_eq!(parse_date_millis("2024-13-99"), None);
     }
 
     #[test]

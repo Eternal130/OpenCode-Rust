@@ -1671,15 +1671,28 @@ fn escape_text(part: &str) -> String {
 }
 
 fn escape_destination(value: &str) -> String {
+    // G-282③ — ref html-markdown.ts:192
+    // `.replace(/[\t\n\r ]+/g, "%20")`: ONE %20 per whitespace RUN, not
+    // per character ("a  b" → "a%20b", never "a%20%20b").
     let mut escaped = String::with_capacity(value.len());
+    let mut in_whitespace_run = false;
     for char in value.chars() {
         match char {
             '\\' | '(' | ')' => {
                 escaped.push('\\');
                 escaped.push(char);
+                in_whitespace_run = false;
             }
-            '\t' | '\n' | '\r' | ' ' => escaped.push_str("%20"),
-            _ => escaped.push(char),
+            '\t' | '\n' | '\r' | ' ' => {
+                if !in_whitespace_run {
+                    escaped.push_str("%20");
+                }
+                in_whitespace_run = true;
+            }
+            _ => {
+                escaped.push(char);
+                in_whitespace_run = false;
+            }
         }
     }
     escaped
@@ -1818,6 +1831,17 @@ mod tests {
         let html = "<h1>Hello</h1><script>bad()</script><p>world <strong>wide</strong> <product-name>today</product-name></p><style>.bad {}</style>";
         assert_eq!(extract_text_from_html(html), "Helloworld wide today");
         assert_eq!(convert_html_to_markdown(html), "# Hello\n\nworld **wide** today");
+    }
+
+    /// G-282③ — one %20 per whitespace RUN (ref
+    /// `.replace(/[\t\n\r ]+/g, "%20")`, html-markdown.ts:192).
+    #[test]
+    fn tool_html_markdown_destination_whitespace_runs_collapse() {
+        assert_eq!(escape_destination("a  b"), "a%20b", "double space → one %20");
+        assert_eq!(escape_destination("a \t\n b"), "a%20b", "mixed run → one %20");
+        assert_eq!(escape_destination("a b"), "a%20b", "single space unchanged");
+        assert_eq!(escape_destination("a%20%20b"), "a%20%20b", "literal %20 text untouched");
+        assert_eq!(escape_destination("a\\ b"), "a\\\\%20b", "escape then run");
     }
 
     #[test]
