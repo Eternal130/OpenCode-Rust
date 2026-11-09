@@ -619,7 +619,7 @@ impl FooterPane {
                 let running = self
                     .subagent_children
                     .iter()
-                    .any(|child| child.status == super::transport::SubagentStatus::Running);
+                    .any(|child| child.status == crate::mini::transport::SubagentStatus::Running);
                 if running {
                     effects.push(FooterEffect::Background);
                 }
@@ -652,7 +652,7 @@ impl FooterPane {
                         .subagent_children
                         .iter()
                         .rev()
-                        .find(|child| child.status == super::transport::SubagentStatus::Running)
+                        .find(|child| child.status == crate::mini::transport::SubagentStatus::Running)
                         .or_else(|| self.subagent_children.last())
                         .map(|child| child.session_id.clone());
                     self.subagent_scroll = 0;
@@ -680,7 +680,7 @@ impl FooterPane {
         let running = self
             .subagent_children
             .iter()
-            .filter(|child| child.status == super::transport::SubagentStatus::Running)
+            .filter(|child| child.status == crate::mini::transport::SubagentStatus::Running)
             .count();
         let entries = match self.machine.route {
             crate::components::footer::PromptRoute::Command => command_menu_entries(
@@ -848,8 +848,10 @@ impl FooterPane {
             | FooterKey::PageDown
             | FooterKey::CtrlT
             | FooterKey::CtrlP
-            | FooterKey::CtrlX
             | FooterKey::CtrlB => {}
+            // G-272 — the leader chord arms from an open panel too
+            // (the queued menu's undo/delete chords complete here).
+            FooterKey::CtrlX => self.leader_armed = true,
             // Left/right carry meaning only on the settings route
             // (handled above); other panels consume them.
             FooterKey::Left | FooterKey::Right => {}
@@ -991,7 +993,7 @@ impl FooterPane {
                         .subagent_children
                         .iter()
                         .rev()
-                        .find(|child| child.status == super::transport::SubagentStatus::Running)
+                        .find(|child| child.status == crate::mini::transport::SubagentStatus::Running)
                         .or_else(|| self.subagent_children.last())
                         .map(|child| child.session_id.clone());
                     self.subagent_scroll = 0;
@@ -1297,7 +1299,7 @@ impl FooterPane {
                 let running = self
                     .subagent_children
                     .iter()
-                    .filter(|child| child.status == super::transport::SubagentStatus::Running)
+                    .filter(|child| child.status == crate::mini::transport::SubagentStatus::Running)
                     .count();
                 // G-221 — the statusline details (footer.view.tsx:
                 // 243-248): `N pending` (the `queued.prompts` view)
@@ -2354,6 +2356,132 @@ mod tests {
         FooterPane::new(FooterTheme::fallback_dark())
     }
 
+    /// G-272 — the settings panel's change keys (footer.command.tsx:
+    /// 818-824): left/right step the SELECTED row; verbosity cycles
+    /// its presets, the show/hide knobs flip, enter = right.
+    #[test]
+    fn settings_panel_left_right_step_the_selected_row() {
+        use crate::components::footer::PromptRoute;
+        let mut footer = pane();
+        footer.press(FooterKey::CtrlP);
+        for ch in "settings".chars() {
+            footer.press(FooterKey::Printable(ch));
+        }
+        footer.press(FooterKey::Enter);
+        assert_eq!(footer.machine.route, PromptRoute::Settings);
+        // Select the Verbosity row (row 0): right cycles the preset
+        // (the ambient cli.json may set any level — assert the step,
+        // not the absolute).
+        footer.panel.selected = 0;
+        let effects = footer.press(FooterKey::Right);
+        let current = crate::components::footer::state::match_mini_verbosity(
+            &footer.settings_summary,
+        );
+        match effects.as_slice() {
+            [FooterEffect::SettingChange { key: "verbosity", value }] => {
+                assert_ne!(value.as_str(), current, "a step changes the level");
+                assert!(["quiet", "default", "everything"].contains(&value.as_str()));
+            }
+            other => panic!("expected a verbosity change, got {other:?}"),
+        }
+        // A show/hide row (Thinking) flips its value.
+        footer.panel.selected = 1;
+        let current = footer.settings_summary.thinking;
+        let effects = footer.press(FooterKey::Left);
+        assert_eq!(
+            effects,
+            vec![FooterEffect::SettingChange {
+                key: "thinking",
+                value: flip_show_hide(current).to_owned(),
+            }]
+        );
+        // Enter on a settings row behaves like right (onSelect:
+        // change — the pane's summary stays untouched until the
+        // runtime applies the effect, so the flip re-derives from
+        // the same current value).
+        let effects = footer.press(FooterKey::Enter);
+        assert_eq!(
+            effects,
+            vec![FooterEffect::SettingChange {
+                key: "thinking",
+                value: flip_show_hide(current).to_owned(),
+            }]
+        );
+    }
+
+    /// G-272 — `session.background` (ctrl+b): fires only while a
+    /// tracked child is RUNNING (`foregroundSubagents()`).
+    #[test]
+    fn ctrl_b_backgrounds_only_over_running_children() {
+        let mut footer = pane();
+        assert_eq!(footer.press(FooterKey::CtrlB), Vec::new(), "no children, no effect");
+        footer.subagent_children = vec![crate::mini::transport::SubagentChild {
+            session_id: "ses_child".into(),
+            label: "Subagent".into(),
+            title: String::new(),
+            description: String::new(),
+            status: crate::mini::transport::SubagentStatus::Completed,
+            commits: Vec::new(),
+        }];
+        assert_eq!(footer.press(FooterKey::CtrlB), Vec::new(), "a settled child is not blocking");
+        footer.subagent_children[0].status = crate::mini::transport::SubagentStatus::Running;
+        assert_eq!(
+            footer.press(FooterKey::CtrlB),
+            vec![FooterEffect::Background],
+            "a running blocking child enables the key"
+        );
+    }
+
+    /// G-272 — the queued menu's undo (leader+u over ctrl+u,
+    /// config/keybind.ts:132): the row cancels and its text lands in
+    /// the composer draft (`promptAppend`).
+    #[test]
+    fn queued_menu_undo_restores_the_prompt_text() {
+        use crate::components::footer::PromptRoute;
+        let mut footer = pane();
+        footer.queued_prompts = vec![QueuedPromptView {
+            message_id: "msg_x".into(),
+            text: "queued thought".into(),
+            delivery: "queue".into(),
+        }];
+        footer.press(FooterKey::CtrlX);
+        footer.press(FooterKey::Printable('q'));
+        assert_eq!(footer.machine.route, PromptRoute::QueuedMenu);
+        footer.press(FooterKey::CtrlX);
+        let effects = footer.press(FooterKey::Printable('u'));
+        assert_eq!(
+            effects,
+            vec![FooterEffect::QueuedPromptAction {
+                action: "cancel",
+                inbox_id: "msg_x".into()
+            }]
+        );
+        assert_eq!(footer.machine.route, PromptRoute::Composer);
+        assert_eq!(footer.draft, "queued thought");
+    }
+
+    /// G-272 — the OSC title rule (`setTitle`,
+    /// runtime.lifecycle.ts:175-179): fallback titles map to
+    /// "OpenCode", long titles truncate at 40 (37 + `…`).
+    #[test]
+    fn terminal_title_maps_fallbacks_and_truncates() {
+        assert_eq!(super::terminal_title(None), "OpenCode");
+        assert_eq!(super::terminal_title(Some("")), "OpenCode");
+        assert_eq!(
+            super::terminal_title(Some("New session - 2026-11-09T10:00:00.000Z")),
+            "OpenCode",
+            "timestamped fallback titles collapse"
+        );
+        assert_eq!(super::terminal_title(Some("Fix the parser")), "OC | Fix the parser");
+        let long = "x".repeat(41);
+        let title = super::terminal_title(Some(&long));
+        assert!(title.starts_with("OC | "));
+        assert_eq!(title.chars().count(), "OC | ".len() + 37 + 1);
+        assert!(title.ends_with('…'));
+        let exactly = "y".repeat(40);
+        assert_eq!(super::terminal_title(Some(&exactly)), format!("OC | {exactly}"));
+    }
+
     // -- RD-19: the SEED_LAUNCH launch row -------------------------------
 
     /// The launch row grows the pane by one (`footer.ts:762`'s
@@ -2685,12 +2813,12 @@ mod tests {
         assert!(grid[1].contains("2 pending"), "the queued count: {:?}", grid[1]);
         assert!(!grid[1].contains("subagent"), "no children tracked: {:?}", grid[1]);
         // A running child appends its group AFTER the pending count.
-        footer.subagent_children = vec![super::super::transport::SubagentChild {
+        footer.subagent_children = vec![crate::mini::transport::SubagentChild {
             session_id: "ses_child".into(),
             label: "Subagent".into(),
             title: String::new(),
             description: String::new(),
-            status: super::super::transport::SubagentStatus::Running,
+            status: crate::mini::transport::SubagentStatus::Running,
             commits: Vec::new(),
         }];
         let frame = footer.render_frame(60, super::super::FOOTER_HEIGHT);

@@ -1362,13 +1362,9 @@ fn prompt_attachments(parts: &[super::queue::RunPromptPart]) -> PromptAttachment
     let mut out = PromptAttachments::default();
     for part in parts {
         match part {
-            super::queue::RunPromptPart::File { url, filename, mime: _, description } => {
-                out.files.push(PromptInputFileAttachment {
-                    uri: url.clone(),
-                    name: filename.clone(),
-                    description: description.clone(),
-                    ..PromptInputFileAttachment::default()
-                });
+            super::queue::RunPromptPart::File { .. } => {
+                // The File parts walk `prepare_initial_file` below
+                // (inline text vs wire attachment) — not pre-added.
             }
             super::queue::RunPromptPart::Agent { name } => out.agents.push(PromptAgentAttachment {
                 name: name.clone(),
@@ -1392,13 +1388,14 @@ pub fn prepare_prompt_body(prompt: &super::queue::RunPrompt) -> SessionPromptBod
     let mut attachments = prompt_attachments(&prompt.parts);
     let mut inline = Vec::new();
     for part in &prompt.parts {
-        if let super::queue::RunPromptPart::File { url, filename, mime, .. } = part {
+        if let super::queue::RunPromptPart::File { url, filename, mime, description } = part {
             let filename = filename.clone().unwrap_or_else(|| url.clone());
             let (text, file) = prepare_initial_file(url, &filename, mime.as_deref());
             if let Some(text) = text {
                 inline.push(text);
             }
-            if let Some(file) = file {
+            if let Some(mut file) = file {
+                file.description = description.clone();
                 attachments.files.push(file);
             }
         }

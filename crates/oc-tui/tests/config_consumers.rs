@@ -413,8 +413,11 @@ mod t4 {
 
     /// `mini.shell_output` (tool.ts:1301 + scrollback.surface.ts:457):
     /// a shell-family tool's PROGRESS rows vanish when the knob hides
-    /// them; the final row and non-shell tools always render
-    /// (`bash` canonicalizes to `shell`, tool-display.ts:1-5).
+    /// them. G-272 — `TOOL_RULES.view` gates per tool (tool.ts:890+):
+    /// the shell family's COMPLETED final row suppresses too
+    /// (`final: false`; error finals always render) and non-shell
+    /// progress follows each tool's own `output` flag (batch
+    /// streams, write/read do not).
     #[test]
     fn mini_shell_output_gates_shell_progress_rows() {
         use oc_tui::mini::scrollback::format_commit_with;
@@ -423,21 +426,24 @@ mod t4 {
             phase: Phase::Progress,
             text: "$ echo hi\nhi".to_owned(),
             tool: Some("bash".to_owned()),
-            ..Commit::default()
+            started: true,
+            ..Default::default()
         };
         let bash_final = Commit {
             kind: CommitKind::Tool,
             phase: Phase::Final,
             text: "Bash · echo hi".to_owned(),
             tool: Some("bash".to_owned()),
-            ..Commit::default()
+            tool_state: Some("completed"),
+            ..Default::default()
         };
-        let read_progress = Commit {
+        let bash_error = Commit { tool_state: Some("error"), ..bash_final.clone() };
+        let batch_progress = Commit {
             kind: CommitKind::Tool,
             phase: Phase::Progress,
-            text: "Read · main.rs".to_owned(),
-            tool: Some("read".to_owned()),
-            ..Commit::default()
+            text: "Batch · one two".to_owned(),
+            tool: Some("batch".to_owned()),
+            ..Default::default()
         };
 
         let hidden = format_commit_with(None, &bash_progress, 80, false);
@@ -448,17 +454,20 @@ mod t4 {
             "shell_output=show streams the live rows: {shown:?}"
         );
 
-        // The final row survives both settings.
+        // The shell family's completed final suppresses
+        // (`TOOL_RULES.shell.final === false`); errors always render.
         let final_hidden = format_commit_with(None, &bash_final, 80, false);
+        assert!(final_hidden.is_empty(), "completed final gated: {final_hidden:?}");
+        let error_rows = format_commit_with(None, &bash_error, 80, false);
         assert!(
-            final_hidden.iter().any(|row| row.contains("Bash")),
-            "final row survives: {final_hidden:?}"
+            error_rows.iter().any(|row| row.contains("Bash")),
+            "error finals always render: {error_rows:?}"
         );
-        // Non-shell tools ignore the knob.
-        let read_hidden = format_commit_with(None, &read_progress, 80, false);
+        // Non-shell tools ignore the knob (batch streams regardless).
+        let batch_hidden = format_commit_with(None, &batch_progress, 80, false);
         assert!(
-            read_hidden.iter().any(|row| row.contains("Read")),
-            "non-shell tools ignore the knob: {read_hidden:?}"
+            batch_hidden.iter().any(|row| row.contains("Batch")),
+            "non-shell tools ignore the knob: {batch_hidden:?}"
         );
     }
 

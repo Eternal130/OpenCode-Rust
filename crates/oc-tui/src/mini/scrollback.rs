@@ -551,6 +551,81 @@ pub fn compaction_note(text: &str) -> Commit {
 mod tests {
     use super::*;
 
+    /// G-272 — `TOOL_RULES[name].view` (tool.ts:890-1062): the
+    /// start caption always renders; write-family progress refreshes
+    /// and read-family final rows vanish; error finals always render.
+    #[test]
+    fn tool_view_gates_suppress_rows_per_rule() {
+        let start = |tool: &str| Commit {
+            kind: CommitKind::Tool,
+            phase: Phase::Progress,
+            tool: Some(tool.to_owned()),
+            text: "running".to_owned(),
+            started: true,
+            ..Commit::default()
+        };
+        let progress = |tool: &str| Commit {
+            kind: CommitKind::Tool,
+            phase: Phase::Progress,
+            tool: Some(tool.to_owned()),
+            text: "refresh".to_owned(),
+            ..Commit::default()
+        };
+        let final_row = |tool: &str, state: Option<&'static str>| Commit {
+            kind: CommitKind::Tool,
+            phase: Phase::Final,
+            tool: Some(tool.to_owned()),
+            text: "done".to_owned(),
+            tool_state: state,
+            ..Commit::default()
+        };
+        // The first caption (the ref's "start" commit) renders.
+        assert!(!entry_body(&start("read")).is_empty());
+        // Progress refreshes: shell streams (output: true), write
+        // does not (output: false).
+        assert!(!entry_body(&progress("bash")).is_empty());
+        assert!(entry_body(&progress("write")).is_empty());
+        // Finals: write renders (final: true), read does not
+        // (final: false), errors always render.
+        assert!(!entry_body(&final_row("write", Some("completed"))).is_empty());
+        assert!(entry_body(&final_row("read", Some("completed"))).is_empty());
+        assert!(!entry_body(&final_row("read", Some("error"))).is_empty());
+    }
+
+    /// G-272 — `structuredFallback` (tool.ts:1249-1262): a rule-less
+    /// tool's meta pretty-prints (empty objects render nothing, the
+    /// 4096 cap carries the truncation marker).
+    #[test]
+    fn structured_fallback_pretty_prints_meta() {
+        assert_eq!(structured_fallback_rows("{}"), Vec::<String>::new());
+        assert_eq!(structured_fallback_rows("not json"), Vec::<String>::new());
+        let rows = structured_fallback_rows(r#"{"path":"src/lib.rs"}"#);
+        assert_eq!(rows, vec!["{", "  \"path\": \"src/lib.rs\"", "}"]);
+        let big = format!("{{\"blob\":\"{}\"}}", "x".repeat(8192));
+        let rows = structured_fallback_rows(&big);
+        assert_eq!(rows.last().unwrap(), "\n… [truncated]");
+        let total: usize = rows.iter().map(String::len).sum::<usize>() + 1;
+        assert!(total <= 4097, "cap holds: {total}");
+    }
+
+    /// G-272 — the structured fallback rides the final tool commit:
+    /// a rule-less completed tool with meta renders the JSON rows.
+    #[test]
+    fn ruleless_final_tools_render_the_meta_json() {
+        let commit = Commit {
+            kind: CommitKind::Tool,
+            phase: Phase::Final,
+            tool: Some("customtool".to_owned()),
+            text: "customtool done".to_owned(),
+            tool_state: Some("completed"),
+            meta: Some(r#"{"kind":"deploy"}"#.to_owned()),
+            ..Commit::default()
+        };
+        let rows = entry_body(&commit);
+        assert_eq!(rows, vec!["{", "  \"kind\": \"deploy\"", "}"]);
+        assert_eq!(tool_view("customtool"), None, "no rule for the custom tool");
+    }
+
     #[test]
     fn user_entries_get_the_mono_prefix() {
         let rows = entry_body(&Commit::user("hello world"));
@@ -756,8 +831,21 @@ mod tests {
         assert_eq!(entry_body(&failed).len(), 1, "the caption row stays on failure");
         let caption_only = Commit { snapshot: ToolSnapshot::None, ..commit };
         assert_eq!(entry_body(&caption_only).len(), 1);
-        // Progress rows never render the card.
+        // Progress rows never render the card. G-272 — the view gate
+        // (`TOOL_RULES.write.output === false`) suppresses the write
+        // family's PROGRESS refresh entirely (tool.ts:1301-1303); a
+        // streaming family (shell) keeps its progress rows.
         let progress = Commit {
+            phase: Phase::Progress,
+            snapshot: ToolSnapshot::Task {
+                title: "# General Subagent".to_owned(),
+                rows: vec!["d".to_owned()],
+            },
+            ..caption_only.clone()
+        };
+        assert_eq!(entry_body(&progress).len(), 0, "write refreshes suppress (output: false)");
+        let streaming = Commit {
+            tool: Some("bash".to_owned()),
             phase: Phase::Progress,
             snapshot: ToolSnapshot::Task {
                 title: "# General Subagent".to_owned(),
@@ -765,5 +853,5 @@ mod tests {
             },
             ..caption_only
         };
-        assert_eq!(entry_body(&progress).len(), 1);
+        assert_eq!(entry_body(&streaming).len(), 1, "shell streams (output: true)");
     }
