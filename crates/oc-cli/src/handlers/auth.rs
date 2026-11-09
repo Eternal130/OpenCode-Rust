@@ -137,6 +137,46 @@ fn resolve_method<'a>(methods: &'a [Value], target: &str) -> Result<&'a Value, S
     }
 }
 
+/// G-283② (ref login.ts:110-118 `chooseMethod` options): the method
+/// selector row prefers the method's own label; a key method falls
+/// back to "API key" (`method.label ?? "API key"` — the label, when
+/// present, wins over the generic hint).
+fn method_selector_label(method: &Value) -> String {
+    if method.get("type").and_then(Value::as_str) == Some("key") {
+        method
+            .get("label")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| "API key".to_owned())
+    } else {
+        method.get("label").and_then(Value::as_str).unwrap_or_default().to_owned()
+    }
+}
+
+/// G-283② (ref login.ts:139 `keyLogin`): the secret prompt prefers the
+/// key method's label — `method.label ?? \`Enter your ${name} API key\``
+/// (empty-string labels are kept, matching `??` nullish semantics).
+fn key_method_prompt(method_label: Option<&str>, integration_name: &str) -> String {
+    method_label
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("Enter your {integration_name} API key"))
+}
+
+/// G-283⑤ — the well-known discovery probe (ref login.ts:63-65
+/// `URL.canParse(target)` then `protocol === "http:" | "https:"`):
+/// WHATWG URL schemes parse case-insensitively, so `HTTP://` and
+/// `HtTpS://` targets must trigger discovery like lowercase ones;
+/// non-http(s) schemes and bare words never do.
+fn is_wellknown_url(target: &str) -> bool {
+    match target.split_once("://") {
+        Some((scheme, rest)) => {
+            !rest.is_empty()
+                && (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
+        }
+        None => false,
+    }
+}
+
 /// `util/open.ts openUrl` + `ui/prompt.ts openUrl` (login.ts:177): open an
 /// http(s) URL with the platform browser opener. Plain subprocess spawn —
 /// non-fatal on failure (REF pipes through `Effect.ignore`); the URL itself
@@ -284,9 +324,15 @@ async fn login(
     };
     let client = resolved.endpoint.client();
 
-    // Well-known provider URL discovery.
+    // Well-known provider URL discovery (ref login.ts:63-72): the probe
+    // is `URL.canParse(target)` + an `http:`/`https:` protocol check.
+    // G-283⑤: WHATWG schemes are case-insensitive
+    // (`new URL("HTTP://x").protocol === "http:"`), so the scheme match
+    // must be too. Bounded to the authority form `scheme://…` — the
+    // special-scheme shorthand `http:example.com` is not a real CLI
+    // target shape.
     if let Some(target) = target {
-        if target.starts_with("http://") || target.starts_with("https://") {
+        if is_wellknown_url(target) {
             if let Err(error) = client
                 .integration()
                 .wellknown_add(
@@ -384,18 +430,13 @@ async fn login(
                     eprintln!("{message}");
                     return 1;
                 }
+                // G-283②: selector rows prefer the method label ("API
+                // key" only as the key-method fallback).
                 let labels: Vec<String> = methods
                     .iter()
-                    .map(|method| {
-                        let kind = method.get("type").and_then(Value::as_str).unwrap_or_default();
-                        let label = method.get("label").and_then(Value::as_str).unwrap_or_default();
-                        if kind == "key" {
-                            "API key".to_owned()
-                        } else {
-                            label.to_owned()
-                        }
-                    })
-                    .collect();
+                    .map(|method| method_selector_label(method))
+                    .collect::<Vec<_>>()
+                    .to_vec();
                 if let Ok(Some(index)) = Select::new()
                     .with_prompt("Select login method")
                     .items(&labels)
@@ -428,7 +469,17 @@ async fn login(
         }
     };
     let outcome = match kind.as_str() {
-        "key" => key_login(&client, &integration_id, &integration_name, answer.as_ref()).await,
+        "key" => {
+            key_login(
+                &client,
+                &integration_id,
+                &integration_name,
+                // G-283②: the key method's label drives the secret prompt.
+                method.get("label").and_then(Value::as_str),
+                answer.as_ref(),
+            )
+            .await
+        }
         "command" => command_login(&client, &integration_id, &integration_name, &method).await,
         _ => {
             oauth_login(&client, &integration_id, &integration_name, &method, answer.as_ref(), None)
@@ -457,11 +508,14 @@ async fn key_login(
     client: &oc_client::Client,
     integration_id: &str,
     integration_name: &str,
+    method_label: Option<&str>,
     answer: Option<&oc_client::types::FormAnswer>,
 ) -> Result<(), String> {
     require_interactive("This login requires an interactive terminal")?;
+    // G-283② (ref login.ts:139): `method.label ?? "Enter your ${name}
+    // API key"` — the key method's label takes priority.
     let key = Password::new()
-        .with_prompt(format!("Enter your {integration_name} API key"))
+        .with_prompt(key_method_prompt(method_label, integration_name))
         .interact()
         .map_err(|error| error.to_string())?;
     println!("◇ Saving credential...");
@@ -769,6 +823,7 @@ async fn resolve_account(
     server: &ServerParams,
     target: Option<&str>,
     credential: Option<&str>,
+    action: &str,
 ) -> Result<(oc_client::Client, Value, String), String> {
     // G-150 (ref chooseIntegration/chooseCredential): both halves get
     // TTY selectors when the target/credential is omitted — only a
@@ -777,6 +832,9 @@ async fn resolve_account(
     // exits) so the REAL connect error propagates — logout/switch print
     // it via their eprintln path instead of an empty line (ref
     // handlePromptErrors).
+    // G-283④: `action` is the ref chooseCredential verb — "log out"
+    // (ref logout.ts:35) or "switch to" (ref switch.ts:35) — driving
+    // the selector copy and the env-authenticated hint gate.
     let resolved = server_connection::resolve(server_connection::Args {
         server: server.server.clone(),
         standalone: server.standalone,
@@ -792,7 +850,7 @@ async fn resolve_account(
             require_interactive(
                 "Pass an integration ID or name when running without an interactive terminal",
             )?;
-            choose_integration(&integrations, "use")?
+            choose_integration(&integrations)?
         }
     };
     if credential.is_none() {
@@ -800,25 +858,36 @@ async fn resolve_account(
             "Pass a credential ID or label when running without an interactive terminal",
         )?;
     }
-    let credential_id = choose_credential(&integration, "use", credential)?;
+    let credential_id = choose_credential(&integration, action, credential)?;
     Ok((client, integration, credential_id))
 }
 
-/// G-150 — the TTY integration selector for logout/switch (ref
-/// `chooseIntegration` over the connected integrations; the G-61
-/// `loginChoices` pattern restricted to rows with credentials).
-fn choose_integration(integrations: &[Value], action: &str) -> Result<Value, String> {
-    let choices: Vec<&Value> = integrations
+/// G-283④ (ref account.ts:12-14 `chooseIntegration` filter): the
+/// logout/switch selector lists only integrations with at least one
+/// CREDENTIAL connection — env-only integrations have no stored
+/// account to act on.
+fn credential_integrations(integrations: &[Value]) -> Vec<&Value> {
+    integrations
         .iter()
         .filter(|integration| {
-            integration
-                .get("connections")
-                .and_then(Value::as_array)
-                .is_some_and(|connections| !connections.is_empty())
+            integration.get("connections").and_then(Value::as_array).is_some_and(|connections| {
+                connections.iter().any(|connection| {
+                    connection.get("type").and_then(Value::as_str) == Some("credential")
+                })
+            })
         })
-        .collect();
+        .collect()
+}
+
+/// G-150 — the TTY integration selector for logout/switch (ref
+/// `chooseIntegration` over integrations with stored credentials).
+/// G-283④: copy pinned to ref account.ts — the message is
+/// "Select integration" and the empty list fails with
+/// "No stored credentials found".
+fn choose_integration(integrations: &[Value]) -> Result<Value, String> {
+    let choices = credential_integrations(integrations);
     if choices.is_empty() {
-        return Err("No connected integrations found".to_owned());
+        return Err("No stored credentials found".to_owned());
     }
     let labels: Vec<String> = choices
         .iter()
@@ -826,12 +895,7 @@ fn choose_integration(integrations: &[Value], action: &str) -> Result<Value, Str
             integration.get("name").and_then(Value::as_str).unwrap_or_default().to_owned()
         })
         .collect();
-    match Select::new()
-        .with_prompt(format!("Select integration to {action}"))
-        .items(&labels)
-        .default(0)
-        .interact_opt()
-    {
+    match Select::new().with_prompt("Select integration").items(&labels).default(0).interact_opt() {
         Ok(Some(index)) => Ok(choices[index].clone()),
         _ => Err("Cancelled".to_owned()),
     }
@@ -840,7 +904,7 @@ fn choose_integration(integrations: &[Value], action: &str) -> Result<Value, Str
 async fn logout(server: &ServerParams, target: Option<&str>, credential: Option<&str>) -> i32 {
     println!("◆ Log out of an account");
     let (client, integration, credential_id) =
-        match resolve_account(server, target, credential).await {
+        match resolve_account(server, target, credential, "log out").await {
             Ok(account) => account,
             Err(message) => {
                 eprintln!("{message}");
@@ -861,7 +925,7 @@ async fn logout(server: &ServerParams, target: Option<&str>, credential: Option<
 async fn switch(server: &ServerParams, target: Option<&str>, credential: Option<&str>) -> i32 {
     println!("◆ Switch account");
     let (client, integration, credential_id) =
-        match resolve_account(server, target, credential).await {
+        match resolve_account(server, target, credential, "switch to").await {
             Ok(account) => account,
             Err(message) => {
                 eprintln!("{message}");
@@ -926,6 +990,34 @@ async fn export(server: &ServerParams, target: Option<&str>) -> i32 {
     0
 }
 
+/// G-283③ — ref import.ts:19 decodes the payload with
+/// `Schema.fromJsonString(Schema.Array(Credential.Entry))` BEFORE any
+/// server call: an entry that fails the credential schema (notably a
+/// `value` that is neither a valid oauth nor key credential) rejects
+/// the WHOLE package — no degrade-to-empty-Key import. The entry
+/// index + serde cause approximate the ref ParseError tree
+/// (identifier `Credential.Entry`).
+fn parse_import_payload(text: &str) -> Result<Vec<oc_client::types::CredentialEntry>, String> {
+    let values: Vec<Value> =
+        serde_json::from_str(text).map_err(|_| "Invalid credentials JSON".to_owned())?;
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            serde_json::from_value(value.clone()).map_err(|error| {
+                format!(
+                    "Invalid credential entry (Credential.Entry) at index {index}{}: {error}",
+                    value
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(|id| format!(" (id \"{id}\")"))
+                        .unwrap_or_default()
+                )
+            })
+        })
+        .collect()
+}
+
 async fn import(server: &ServerParams, file: Option<&str>) -> i32 {
     let text = if let Some(file) = file {
         match std::fs::read_to_string(file) {
@@ -948,11 +1040,12 @@ async fn import(server: &ServerParams, file: Option<&str>) -> i32 {
             }
         }
     };
-    let credentials: Vec<Value> = if let Ok(credentials) = serde_json::from_str(&text) {
-        credentials
-    } else {
-        eprintln!("Error: Invalid credentials JSON");
-        return 1;
+    let credentials = match parse_import_payload(&text) {
+        Ok(credentials) => credentials,
+        Err(message) => {
+            eprintln!("Error: {message}");
+            return 1;
+        }
     };
     let resolved = match connect(server, None).await {
         Ok(resolved) => resolved,
@@ -966,23 +1059,19 @@ async fn import(server: &ServerParams, file: Option<&str>) -> i32 {
         existing.iter().map(|credential| credential.integration_id.clone()).collect();
     let mut imported = 0usize;
     for credential in &credentials {
-        let id = credential.get("id").and_then(Value::as_str).unwrap_or_default();
-        if ids.contains(id) {
+        if ids.contains(&credential.id) {
             continue;
         }
-        let integration_id =
-            credential.get("integrationID").and_then(Value::as_str).unwrap_or_default().to_owned();
         let body = oc_client::types::CredentialCreateInput {
-            id: credential.get("id").and_then(Value::as_str).map(str::to_owned),
-            integration_id: integration_id.clone(),
-            label: credential.get("label").and_then(Value::as_str).map(str::to_owned),
-            value: serde_json::from_value(credential.get("value").cloned().unwrap_or(Value::Null))
-                .unwrap_or(oc_client::types::CredentialValue::Key(
-                    oc_client::types::CredentialKey::default(),
-                )),
+            id: Some(credential.id.clone()),
+            integration_id: credential.integration_id.clone(),
+            label: Some(credential.label.clone()),
+            value: credential.value.clone(),
+            // Keep the destination's current selections; only
+            // integrations new to it adopt the exported selection
+            // (ref import.ts:34-35).
             activate: Some(
-                credential.get("active").and_then(Value::as_bool).unwrap_or(false)
-                    && !known_integrations.contains(&integration_id),
+                credential.active && !known_integrations.contains(&credential.integration_id),
             ),
         };
         // G-149 (ref auth/import.ts:47-50 `isConflictError`): ONLY a
@@ -1090,7 +1179,11 @@ fn login_choices(integrations: &[Value]) -> Vec<LoginChoice> {
 
 #[cfg(test)]
 mod tests {
-    use super::{connect_methods, login_choices, open_url, require_interactive, resolve_account, util};
+    use super::{
+        choose_credential, choose_integration, connect_methods, credential_integrations,
+        is_wellknown_url, key_method_prompt, login_choices, open_url, parse_import_payload,
+        require_interactive, resolve_account, util,
+    };
     use crate::cli::ServerParams;
     use serde_json::json;
     use std::path::PathBuf;
@@ -1258,9 +1351,175 @@ mod tests {
             // Port 1 on loopback: refused immediately, no server.
             server: Some("http://127.0.0.1:1".to_owned()),
         };
-        let error = resolve_account(&server, Some("github"), Some("cred"))
+        let error = resolve_account(&server, Some("github"), Some("cred"), "log out")
             .await
             .expect_err("unreachable server must fail resolve");
         assert!(!error.trim().is_empty(), "error message must be non-empty, got {error:?}");
+    }
+
+    /// G-283② (ref login.ts:114 `method.label ?? "API key"`): the
+    /// method selector row prefers the key method's own label and only
+    /// falls back to the generic "API key" hint when it is absent.
+    #[test]
+    fn g283_key_selector_row_prefers_method_label() {
+        let labelled = json!({ "id": "key", "type": "key", "label": "Personal access token" });
+        assert_eq!(super::method_selector_label(&labelled), "Personal access token");
+        let unlabelled = json!({ "id": "key", "type": "key" });
+        assert_eq!(super::method_selector_label(&unlabelled), "API key");
+        let oauth = json!({ "id": "oauth", "type": "oauth", "label": "OAuth" });
+        assert_eq!(super::method_selector_label(&oauth), "OAuth");
+    }
+
+    /// G-283② (ref login.ts:139 `method.label ?? \`Enter your ${name}
+    /// API key\``): the key secret prompt prefers the key method's
+    /// label; without one it is the generic integration-name prompt.
+    #[test]
+    fn g283_key_prompt_prefers_method_label() {
+        assert_eq!(key_method_prompt(Some("GitHub App token"), "GitHub"), "GitHub App token");
+        assert_eq!(key_method_prompt(None, "GitHub"), "Enter your GitHub API key");
+        // `??` keeps an empty-string label (only null/undefined fall
+        // through) — an empty prompt, not the fallback.
+        assert_eq!(key_method_prompt(Some(""), "GitHub"), "");
+    }
+
+    /// G-283③ (ref import.ts:19 strict `Schema.Array(Credential.Entry)`
+    /// decode): a payload whose entry `value` fails the credential
+    /// schema rejects the WHOLE package — the old port degraded the
+    /// entry to an empty `Key` credential and imported it.
+    #[test]
+    fn g283_import_rejects_bad_credential_value() {
+        let bad_key = r#"[
+            {"id":"cred_1","integrationID":"github","label":"gh","active":true,
+             "value":{"type":"key"}}
+        ]"#;
+        let error = parse_import_payload(bad_key).expect_err("key without `key` field must reject");
+        assert!(error.contains("Credential.Entry"), "{error}");
+        assert!(error.contains("index 0"), "{error}");
+        assert!(error.contains("cred_1"), "{error}");
+
+        // Wrong union tag and null/missing value reject too.
+        for bad in [
+            r#"[{"id":"c","integrationID":"i","label":"l","active":true,"value":{"type":"wrong"}}]"#,
+            r#"[{"id":"c","integrationID":"i","label":"l","active":true,"value":null}]"#,
+            r#"[{"id":"c","integrationID":"i","label":"l","active":true}]"#,
+            r#"[{"id":"c","integrationID":"i","label":"l","active":true,
+                "value":{"type":"oauth","access":"a","refresh":"r","expires":"3600","methodID":"m"}}]"#,
+        ] {
+            assert!(parse_import_payload(bad).is_err(), "must reject: {bad}");
+        }
+
+        // Whole-package semantics: one bad entry rejects even when a
+        // valid entry precedes it (decode fails before any import).
+        let mixed = r#"[
+            {"id":"cred_ok","integrationID":"anthropic","label":"a","active":true,
+             "value":{"type":"key","key":"sk-ant"}},
+            {"id":"cred_bad","integrationID":"github","label":"g","active":true,
+             "value":{"type":"key"}}
+        ]"#;
+        let error = parse_import_payload(mixed).expect_err("mixed payload must reject");
+        assert!(error.contains("index 1"), "{error}");
+    }
+
+    /// G-283③ — payloads that satisfy `Credential.Entry` decode to the
+    /// typed entries the import loop forwards verbatim (no
+    /// reconstruction, no defaulting).
+    #[test]
+    fn g283_import_accepts_valid_payload() {
+        let payload = r#"[
+            {"id":"cred_1","integrationID":"github","label":"gh","active":true,
+             "value":{"type":"key","key":"ghp_x"}},
+            {"id":"cred_2","integrationID":"linear","label":"lin","active":false,
+             "value":{"type":"oauth","access":"a","refresh":"r","expires":3600,"methodID":"m"}}
+        ]"#;
+        let entries = parse_import_payload(payload).expect("valid payload decodes");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].id, "cred_1");
+        assert_eq!(entries[0].label, "gh");
+        assert!(entries[0].active);
+        assert!(matches!(
+            &entries[0].value,
+            oc_client::types::CredentialValue::Key(key) if key.key == "ghp_x"
+        ));
+        assert!(matches!(
+            &entries[1].value,
+            oc_client::types::CredentialValue::OAuth(oauth) if oauth.expires == 3600
+        ));
+        // Non-array / non-JSON payloads still fail the top-level check.
+        assert_eq!(
+            parse_import_payload("{}").expect_err("object payload"),
+            "Invalid credentials JSON"
+        );
+        assert_eq!(
+            parse_import_payload("not json").expect_err("syntax error"),
+            "Invalid credentials JSON"
+        );
+    }
+
+    /// G-283④ (ref account.ts:12-15): the logout/switch integration
+    /// list only carries integrations with at least one CREDENTIAL
+    /// connection (env-only rows are excluded) and the empty list
+    /// fails with "No stored credentials found".
+    #[test]
+    fn g283_choose_integration_filters_to_credential_connections() {
+        let integrations = vec![
+            json!({
+                "id": "stored", "name": "Stored",
+                "connections": [{"type": "credential", "id": "cred_1", "label": "L"}]
+            }),
+            json!({
+                "id": "env-only", "name": "Env Only",
+                "connections": [{"type": "env", "name": "GH_TOKEN"}]
+            }),
+            json!({ "id": "none", "name": "No Connections", "connections": [] }),
+        ];
+        let choices = credential_integrations(&integrations);
+        let ids: Vec<&str> =
+            choices.iter().map(|integration| integration["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, vec!["stored"]);
+
+        let empty = vec![
+            json!({ "id": "env-only", "name": "Env Only",
+                    "connections": [{"type": "env", "name": "GH_TOKEN"}] }),
+            json!({ "id": "none", "name": "None", "connections": [] }),
+        ];
+        // Without a TTY the selector cannot run; the filter-empty error
+        // fires before any prompt either way.
+        let error = choose_integration(&empty).expect_err("no credential rows");
+        assert_eq!(error, "No stored credentials found");
+    }
+
+    /// G-283④ (ref account.ts:43-50): the env-authenticated hint only
+    /// applies to the "log out" action — "switch to" goes straight to
+    /// "No stored credentials".
+    #[test]
+    fn g283_choose_credential_env_hint_only_for_logout() {
+        let integration = json!({
+            "id": "github", "name": "GitHub",
+            "connections": [{"type": "env", "name": "GH_TOKEN"}]
+        });
+        let logout = choose_credential(&integration, "log out", None)
+            .expect_err("env-only logout must fail");
+        assert_eq!(
+            logout,
+            "GitHub is authenticated through GH_TOKEN; unset the environment variable to disconnect"
+        );
+        let switch = choose_credential(&integration, "switch to", None)
+            .expect_err("env-only switch must fail");
+        assert_eq!(switch, "No stored credentials for GitHub");
+    }
+
+    /// G-283⑤ (ref login.ts:63-65): well-known discovery accepts any
+    /// case of the http/https scheme (`URL.canParse("HTTP://x")` →
+    /// protocol `http:`); other schemes and bare words never probe.
+    #[test]
+    fn g283_wellknown_url_scheme_is_case_insensitive() {
+        assert!(is_wellknown_url("https://mcp.example.com/.well-known/oauth-authorization-server"));
+        assert!(is_wellknown_url("HTTP://EXAMPLE.com"));
+        assert!(is_wellknown_url("HtTpS://example.com/path"));
+        assert!(!is_wellknown_url("ftp://example.com"));
+        assert!(!is_wellknown_url("opencode://example.com"));
+        assert!(!is_wellknown_url("github"));
+        assert!(!is_wellknown_url("http://"));
+        assert!(!is_wellknown_url("https+mcp://example.com"));
     }
 }
