@@ -3447,6 +3447,7 @@ impl App {
 /// * **variant**: "Default" + the active model's variants;
 /// * **command/settings**: the static entry lists (the golden
 ///   fixtures' data source).
+///
 /// The live footer panel's CANVAS for one picker route — the mini
 /// footer family's docked pickers (`footer.command.tsx`) fed from
 /// the store's server lists (model/agent/variant) and settings
@@ -3481,10 +3482,9 @@ fn footer_panel_canvas(
     let session_agent = store.selection_for(&active).agent;
 
     match route {
-        PromptRoute::Composer | PromptRoute::Subagent => None,
-        // G-272 — the mini-only queued-prompts menu (the session-route
-        // footer never routes here).
-        PromptRoute::QueuedMenu => None,
+        // G-272 — QueuedMenu is the mini-only queued-prompts menu
+        // (the session-route footer never routes here).
+        PromptRoute::Composer | PromptRoute::Subagent | PromptRoute::QueuedMenu => None,
         PromptRoute::Model => Some(model_panel_canvas(
             &store.server_lists(),
             session_selection
@@ -4411,6 +4411,10 @@ impl crate::store::SessionViewSink for HttpSessionViewSink {
                 // G-197: per-request options — the pre-cancelled token
                 // short-circuits before any IO.
                 let options = oc_client::RequestOptions::new().with_signal(signal.clone());
+                // `Ok` and the cancelled sink arm both stop the
+                // retry, but the patterns cannot merge (distinct
+                // types) — match_same_arms is intentional here.
+                #[allow(clippy::match_same_arms)]
                 match client
                     .session()
                     .view_with_options(
@@ -4783,7 +4787,7 @@ impl HttpPromptSink {
         self,
         cell: std::rc::Rc<std::cell::RefCell<Option<String>>>,
     ) -> Self {
-        *cell.borrow_mut() = self.home_directory.borrow().clone();
+        self.home_directory.borrow().clone_into(&mut *cell.borrow_mut());
         Self { home_directory: cell, ..self }
     }
 
@@ -5048,7 +5052,9 @@ pub fn cli_error_message(
         fields.get(key).and_then(serde_json::Value::as_str).unwrap_or_default().to_owned()
     };
     match name {
-        "CliError" | "AccountServiceError" | "AccountTransportError" => Some(field("message")),
+        "CliError" | "AccountServiceError" | "AccountTransportError" | "ConfigFrontmatterError" => {
+            Some(field("message"))
+        }
         "ProviderModelNotFoundError" => {
             let suggestions: Vec<String> = fields
                 .get("suggestions")
@@ -5084,7 +5090,7 @@ pub fn cli_error_message(
             field("path"),
             field("suggestion")
         )),
-        "ConfigFrontmatterError" => Some(field("message")),
+
         "ConfigInvalidError" => {
             let path = field("path");
             let message = field("message");
@@ -10620,7 +10626,7 @@ mod tests {
     #[test]
     fn session_redo_is_gated_on_a_staged_revert() {
         let sink = std::rc::Rc::new(crate::store::RecordingRevertSink::default());
-        let mut store = Store::new(crate::reactive::Runtime::new());
+        let store = Store::new(crate::reactive::Runtime::new());
         store.set_revert_sink(sink.clone());
         store.open_tab("s1", None);
         store.navigate(Route::session("s1"));
@@ -10685,7 +10691,7 @@ mod tests {
     /// (never even the cache); invalidation forces a re-fetch.
     /// G-200① — the `session.viewed` POST retries with the ref's
     /// exponential backoff (session-tabs.tsx:209-242 +
-    /// VIEW_RETRY_DELAY/MAX :53-54): the stub answers 500 twice then
+    /// `VIEW_RETRY_DELAY/MAX` :53-54): the stub answers 500 twice then
     /// 204; the three arrivals span at least 250 ms + 500 ms of
     /// scheduled wait and the body carries the idle watermark.
     #[tokio::test]
@@ -11734,7 +11740,7 @@ mod tests {
             crate::components::session::render_session(&app.store, "s1", &theme.styles(), (80, 24));
         crate::components::chrome_solid::composite_chrome_tree(&mut frame);
         let grid = frame.text_grid();
-        let painted: Vec<String> = grid.iter().filter(|row| row.contains("@")).cloned().collect();
+        let painted: Vec<String> = grid.iter().filter(|row| row.contains('@')).cloned().collect();
         assert!(
             painted.iter().any(|row| row.contains("@greet")),
             "the popup's skill row never painted: {painted:?}"
@@ -14943,7 +14949,7 @@ fn home_footer_chips_are_clickable() {
 }
 
 /// D2.1b — the render-loop ownership flip's scheduler-equivalence
-/// proofs: the LIVE CliRenderer's `request_render`/`settle` gate must
+/// proofs: the LIVE `CliRenderer`'s `request_render`/`settle` gate must
 /// reproduce the pre-flip draw predicate's burst boundary exactly
 /// (one draw per dirty pump iteration; nothing extra, nothing
 /// merged away).
@@ -15015,7 +15021,7 @@ mod render_scheduler_equiv_tests {
         use crate::components::chrome_solid::{hub_for, reset_hub};
 
         reset_hub();
-        let mut app = App::new((80, 24));
+        let app = App::new((80, 24));
         // A chrome-family surface route: the stats page mounts through
         // render_app's stats arm; its pixels composite in the same
         // frame build.
@@ -15042,7 +15048,7 @@ mod render_scheduler_equiv_tests {
     }
 
     /// A renderer-internally armed frame (the resize-driven
-    /// request_render inside `CliRenderer::resize`) drains through
+    /// `request_render` inside `CliRenderer::resize`) drains through
     /// settle but must never draw on its own — the oc-tui dirty
     /// predicate stays authoritative.
     #[test]

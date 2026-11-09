@@ -122,9 +122,6 @@ fn assign_mentions(
     items: &[usize],
     candidates: &[Candidate],
 ) -> Vec<(usize, Candidate)> {
-    let mut ordered: Vec<usize> = items.to_vec();
-    ordered.sort_by_key(|index| (mentions[*index].start, *index));
-
     #[derive(Clone)]
     struct Solved {
         matches: usize,
@@ -133,6 +130,8 @@ fn assign_mentions(
     }
     let mut memo: std::collections::HashMap<(usize, usize), Solved> =
         std::collections::HashMap::new();
+    let mut ordered: Vec<usize> = items.to_vec();
+    ordered.sort_by_key(|index| (mentions[*index].start, *index));
 
     fn solve(
         mentions: &[MentionCandidate],
@@ -329,6 +328,6 @@ mod tests {
         assert_eq!(draft.agents[0].name, "build");
         assert_eq!(draft.agents[0].start, 8);
         assert_eq!(draft.agents[0].end, 14);
-        assert!(draft.pasted.is_empty());
+        assert_eq!(draft.pasted, [] as [crate::components::composer::PastedPart; 0]);
     }
 }

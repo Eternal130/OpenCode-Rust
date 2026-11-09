@@ -196,6 +196,7 @@ pub fn mount_vertical_rail_solid(
 /// The rail + tooltip standalone Frames — the golden/budget twins
 /// (the retired per-surface copy's test form).
 #[cfg(test)]
+#[must_use]
 pub fn vertical_rail_solid_frames(
     inputs: &RailInputs,
     geometry: &RailGeometry,

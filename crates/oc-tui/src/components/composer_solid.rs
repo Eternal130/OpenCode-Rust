@@ -1009,7 +1009,7 @@ mod tests {
     }
 
     /// G-66 — the selection paints with the ref's DEFAULT styling,
-    /// the fg/bg swap (EditBufferRenderable's no-selectionBg branch):
+    /// the fg/bg swap (`EditBufferRenderable`'s no-selectionBg branch):
     /// selected glyph cells carry `text.base` bg + `prompt-bg` fg
     /// while the unselected neighbors keep the resting paint.
     #[test]
@@ -1137,7 +1137,7 @@ mod tests {
                 caret: None,
                 selection: None,
             };
-            composer_mount(&view, 80, 8, &theme, 2, 16)
+            composer_mount(&view, 80, 8, &theme, 2, 16);
         };
         build("a");
         build("ab");

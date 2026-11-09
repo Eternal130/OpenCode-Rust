@@ -8,7 +8,7 @@
 //! * `SessionImages` (session/index.tsx:2456) →
 //!   [`rows::image_strip_row`] / `user_message_row`
 //! * opentui `<image protocol="auto">` → [`crate::image_view::ImageFrame`]
-//!   (drawImage + ImageFrameEmitter: kitty APC / sixel DCS / delete)
+//!   (drawImage + `ImageFrameEmitter`: kitty APC / sixel DCS / delete)
 //! * the "No preview" error fallback (dialog-image-preview.tsx:62)
 //!   → the bordered placeholder with the centered label
 
@@ -166,7 +166,7 @@ fn plain_terminal_renders_blocks_cells_deterministically() {
     // Nothing emits on the wire.
     let mut wire = Vec::new();
     ImageFrame::new().render(&mut wire, &transcript.images, None, 80, 24).expect("emit");
-    assert!(wire.is_empty());
+    assert_eq!(wire, [] as [u8; 0]);
 }
 
 #[test]

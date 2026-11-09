@@ -989,7 +989,7 @@ pub fn render_session(
             u16::try_from(terminal_width).unwrap_or(u16::MAX),
             u16::try_from(pane_height).unwrap_or(u16::MAX),
         );
-        let _ = store.terminal_pane_sync(session_id, pane_size, column + shift, content_top);
+        let () = store.terminal_pane_sync(session_id, pane_size, column + shift, content_top);
     }
     frame
 }
@@ -1785,10 +1785,11 @@ mod tests {
     use super::*;
     use crate::reactive::Runtime;
 
-    /// The headless twin of render_app's seam: render_session mounts
-    /// the shared-tree families (D2.2: the composer wrapper); direct
-    /// test callers read the pixels back through the ONE compositor
-    /// seam, exactly what render_app does at the end of a frame.
+    /// The headless twin of `render_app`'s seam: `render_session`
+    /// mounts the shared-tree families (D2.2: the composer wrapper);
+    /// direct test callers read the pixels back through the ONE
+    /// compositor seam, exactly what `render_app` does at the end of
+    /// a frame.
     fn session_frame(
         store: &Store,
         session_id: &str,

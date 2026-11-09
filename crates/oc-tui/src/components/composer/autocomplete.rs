@@ -10,6 +10,7 @@
 //! makes it 12 wide).
 
 use crate::components::dialog_select::fuzzy;
+use std::fmt::Write as _; // format_push_string: write! into the existing String
 
 /// Which trigger opened the list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -900,12 +901,13 @@ impl Frecency {
     pub fn encode_jsonl(&self) -> String {
         let mut text = String::new();
         for (path, entry) in &self.data {
-            text.push_str(&format!(
+            let _ = write!(
+                text,
                 "{{\"path\":{},\"frequency\":{},\"lastOpen\":{}}}\n",
                 serde_json::to_string(path).unwrap_or_else(|_| "\"\"".into()),
                 entry.frequency,
                 entry.last_open
-            ));
+            );
         }
         text
     }
@@ -1589,12 +1591,12 @@ pub fn parse_file_line_range(input: &str) -> (String, Option<FileLineRange>) {
 fn start_end_line(start: &str, end: Option<&str>) -> Option<FileLineRange> {
     let start_line = parse_line_number(start)?;
     let end_line = match end {
-        Some("") => None, // `#N-` — the open-ended `\d*` empty match.
+        // `#N-` — the open-ended `\d*` empty match.
+        None | Some("") => None,
         Some(text) => {
             let end = parse_line_number(text)?;
             (start_line < end).then_some(end)
         }
-        None => None,
     };
     Some(FileLineRange { start_line, end_line })
 }
@@ -1853,7 +1855,7 @@ fn file_find_options_carry_the_file_part_identity() {
     let options = file_find_options(&rows);
     assert_eq!(options.len(), 2);
     assert_eq!(options[0].display, "src/main.rs");
-    assert!(options[0].is_directory == false);
+    assert!(!options[0].is_directory);
     assert_eq!(options[0].path.as_deref(), Some("src/main.rs"));
     // The structured file-part identity (createFilePart → the
     // wire `files` attachment + frecency on `part.path`).

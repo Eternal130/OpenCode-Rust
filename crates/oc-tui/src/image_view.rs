@@ -419,6 +419,6 @@ mod tests {
                 24,
             )
             .unwrap();
-        assert!(wire.is_empty());
+        assert_eq!(wire, [] as [u8; 0]);
     }
 }

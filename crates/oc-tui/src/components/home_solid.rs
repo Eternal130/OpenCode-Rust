@@ -764,7 +764,7 @@ mod tests {
     /// the home matrix — idle placeholder, typing, multiline, the
     /// popup open, plugin actions, the <64-col version gate + the
     /// content-row collapse, tiny frames (no logo/footer), the
-    /// caret — × widths 40/60/80/120/160 × heights 20/24/30 (the
+    /// caret — across widths 40/60/80/120/160 and heights 20/24/30.
     // -- RE-04: the banner's FadeInText (fade-in-text.tsx) ----------
 
     /// The banner view fixture: a LOCAL available notice mounted at

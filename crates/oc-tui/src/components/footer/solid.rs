@@ -249,7 +249,6 @@ fn shape_ops(ops: &[CanvasOp]) -> Option<(Vec<FooterUnit>, Vec<ChromeStamp>)> {
 
 /// The defensive fallback was retired with the seam's frame-overlay
 /// slot (D3.2): the op stream never carries a non-RGB color.
-
 // ---------------------------------------------------------------------------
 // the element tree
 // ---------------------------------------------------------------------------

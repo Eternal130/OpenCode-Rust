@@ -59,7 +59,8 @@
 //! 2. footer `close()` → `destroy()`;
 //! 3. `shutdown(renderer)`: leave split-footer mode, destroy;
 //! 4. when no exit splash was written: `stdout.write("\n")`
-//!    (`runtime.lifecycle.ts:339-341`).//!
+//!    (`runtime.lifecycle.ts:339-341`).
+//!
 //! The footer's key handling lives in [`FooterPane`] so the state
 //! machine is unit-testable without a terminal.
 
@@ -981,7 +982,7 @@ impl FooterPane {
                 let variant = (entry.display != "Default").then(|| entry.display.clone());
                 self.machine.close_panel();
                 self.panel = PanelState::default();
-                self.active_variant = variant.clone();
+                self.active_variant.clone_from(&variant);
                 return vec![FooterEffect::VariantSelect(variant)];
             }
             _ => {}
@@ -2363,11 +2364,11 @@ mod tests {
     fn settings_panel_left_right_step_the_selected_row() {
         use crate::components::footer::PromptRoute;
         let mut footer = pane();
-        footer.press(FooterKey::CtrlP);
+        let _ = footer.press(FooterKey::CtrlP);
         for ch in "settings".chars() {
-            footer.press(FooterKey::Printable(ch));
+            let _ = footer.press(FooterKey::Printable(ch));
         }
-        footer.press(FooterKey::Enter);
+        let _ = footer.press(FooterKey::Enter);
         assert_eq!(footer.machine.route, PromptRoute::Settings);
         // Select the Verbosity row (row 0): right cycles the preset
         // (the ambient cli.json may set any level — assert the step,
@@ -2443,10 +2444,10 @@ mod tests {
             text: "queued thought".into(),
             delivery: "queue".into(),
         }];
-        footer.press(FooterKey::CtrlX);
-        footer.press(FooterKey::Printable('q'));
+        let _ = footer.press(FooterKey::CtrlX);
+        let _ = footer.press(FooterKey::Printable('q'));
         assert_eq!(footer.machine.route, PromptRoute::QueuedMenu);
-        footer.press(FooterKey::CtrlX);
+        let _ = footer.press(FooterKey::CtrlX);
         let effects = footer.press(FooterKey::Printable('u'));
         assert_eq!(
             effects,
@@ -2458,7 +2459,7 @@ mod tests {
 
     /// G-272 — the OSC title rule (`setTitle`,
     /// runtime.lifecycle.ts:175-179): fallback titles map to
-    /// "OpenCode", long titles truncate at 40 (37 + `…`).
+    /// "`OpenCode`", long titles truncate at 40 (37 + `…`).
     #[test]
     fn terminal_title_maps_fallbacks_and_truncates() {
         assert_eq!(super::terminal_title(None), "OpenCode");
@@ -2604,7 +2605,7 @@ mod tests {
     }
 
     /// G-181① — `variant.cycle` (footer.view.tsx:569-575): ctrl+t on
-    /// the composer route fires the CycleVariant effect (the
+    /// the composer route fires the `CycleVariant` effect (the
     /// `onCycleVariant` seam, runtime.ts:293-310).
     #[test]
     fn ctrl_t_cycles_the_model_variant() {
@@ -2621,11 +2622,11 @@ mod tests {
     fn ctrl_p_opens_the_command_palette_and_entries_route() {
         use crate::components::footer::PromptRoute;
         let mut footer = pane();
-        assert!(footer.press(FooterKey::CtrlP).is_empty());
+        assert_eq!(footer.press(FooterKey::CtrlP), [] as [crate::mini::lifecycle::FooterEffect; 0]);
         assert_eq!(footer.machine.route, PromptRoute::Command, "the palette route opens");
         // The composer's history key never fires inside the panel
         // (up clamps at 0).
-        assert!(footer.press(FooterKey::Up).is_empty());
+        assert_eq!(footer.press(FooterKey::Up), [] as [crate::mini::lifecycle::FooterEffect; 0]);
         // The entries: with no subagents/queued/variants the base
         // commands list (footer.command.tsx:416-524).
         let displays: Vec<String> =
@@ -2637,25 +2638,25 @@ mod tests {
         // Down x4 lands on "Switch agent" (Open editor, Show status,
         // Compact session, New session precede it); enter re-routes.
         for _ in 0..4 {
-            footer.press(FooterKey::Down);
+            let _ = footer.press(FooterKey::Down);
         }
-        assert!(footer.press(FooterKey::Enter).is_empty());
+        assert_eq!(footer.press(FooterKey::Enter), [] as [crate::mini::lifecycle::FooterEffect; 0]);
         assert_eq!(footer.machine.route, PromptRoute::Agent, "the entry routed to agent");
         // Esc closes the panel (closePanel → composer).
-        footer.press(FooterKey::Escape);
+        let _ = footer.press(FooterKey::Escape);
         assert_eq!(footer.machine.route, PromptRoute::Composer);
         assert_eq!(footer.panel, PanelState::default(), "the panel state resets");
     }
 
-    /// G-272 — the panel's search (the PanelShell's query): the
+    /// G-272 — the panel's search (the `PanelShell`'s query): the
     /// filter narrows the list and the count label follows.
     #[test]
     fn panel_query_filters_the_entries() {
         use crate::components::footer::PromptRoute;
         let mut footer = pane();
-        footer.press(FooterKey::CtrlP);
+        let _ = footer.press(FooterKey::CtrlP);
         for ch in "settings".chars() {
-            footer.press(FooterKey::Printable(ch));
+            let _ = footer.press(FooterKey::Printable(ch));
         }
         let entries = footer.panel_entries();
         assert!(
@@ -2663,11 +2664,11 @@ mod tests {
             "only Settings survives: {entries:?}"
         );
         // Enter runs it: the Settings route opens.
-        footer.press(FooterKey::Enter);
+        let _ = footer.press(FooterKey::Enter);
         assert_eq!(footer.machine.route, PromptRoute::Settings);
         // Backspace edits the query; esc returns to the composer.
-        footer.press(FooterKey::Backspace);
-        footer.press(FooterKey::Escape);
+        let _ = footer.press(FooterKey::Backspace);
+        let _ = footer.press(FooterKey::Escape);
         assert_eq!(footer.machine.route, PromptRoute::Composer);
     }
 
@@ -2680,8 +2681,8 @@ mod tests {
         use crate::components::footer::PromptRoute;
         let mut footer = pane();
         // Without queued prompts the chord is a no-op.
-        footer.press(FooterKey::CtrlX);
-        footer.press(FooterKey::Printable('q'));
+        let _ = footer.press(FooterKey::CtrlX);
+        let _ = footer.press(FooterKey::Printable('q'));
         assert_eq!(footer.machine.route, PromptRoute::Composer);
         assert_eq!(footer.draft, "", "q never typed through the chord");
         // With rows the menu opens and lists them.
@@ -2698,8 +2699,8 @@ mod tests {
             },
         ];
         footer.queued_pending = 2;
-        footer.press(FooterKey::CtrlX);
-        footer.press(FooterKey::Printable('q'));
+        let _ = footer.press(FooterKey::CtrlX);
+        let _ = footer.press(FooterKey::Printable('q'));
         assert_eq!(footer.machine.route, PromptRoute::QueuedMenu);
         let entries = footer.panel_entries();
         assert_eq!(entries.len(), 2, "the queued rows list: {entries:?}");
@@ -2716,9 +2717,9 @@ mod tests {
         );
         assert_eq!(footer.machine.route, PromptRoute::Composer);
         // Any OTHER key after the leader consumes the chord.
-        footer.press(FooterKey::Escape);
-        footer.press(FooterKey::CtrlX);
-        footer.press(FooterKey::Printable('x'));
+        let _ = footer.press(FooterKey::Escape);
+        let _ = footer.press(FooterKey::CtrlX);
+        let _ = footer.press(FooterKey::Printable('x'));
         assert_eq!(footer.machine.route, PromptRoute::Composer);
         assert_eq!(footer.draft, "x", "the non-q key typed into the draft");
     }
@@ -2729,18 +2730,18 @@ mod tests {
     fn command_entries_submit_slash_rows_and_exit() {
         use crate::components::footer::PromptRoute;
         let mut footer = pane();
-        footer.press(FooterKey::CtrlP);
+        let _ = footer.press(FooterKey::CtrlP);
         for ch in "compact".chars() {
-            footer.press(FooterKey::Printable(ch));
+            let _ = footer.press(FooterKey::Printable(ch));
         }
         let effects = footer.press(FooterKey::Enter);
         assert_eq!(effects, vec![FooterEffect::Submit("/compact".to_owned())]);
         assert_eq!(footer.machine.route, PromptRoute::Command, "a slash row keeps the panel");
         // "Exit" closes the footer.
-        footer.press(FooterKey::Escape);
-        footer.press(FooterKey::CtrlP);
+        let _ = footer.press(FooterKey::Escape);
+        let _ = footer.press(FooterKey::CtrlP);
         for ch in "exit".chars() {
-            footer.press(FooterKey::Printable(ch));
+            let _ = footer.press(FooterKey::Printable(ch));
         }
         assert_eq!(footer.press(FooterKey::Enter), vec![FooterEffect::Close]);
     }

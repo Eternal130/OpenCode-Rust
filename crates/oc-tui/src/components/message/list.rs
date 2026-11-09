@@ -37,7 +37,7 @@ use crate::style::Style;
 use crate::components::message::markdown::{render_markdown, MarkdownStyles};
 use crate::components::message::model::{
     canonical_tool_name, exploration_label, reasoning_summary, reduce_rows_with_rules, Entry,
-    Message, Part, Row,
+    GroupKind, Message, Part, PartTime, Row, ToolState, ToolStatus,
 };
 use crate::components::message::rows::{
     completed_tool_row, reasoning_header_row, running_tool_row, user_message_row, RowRender,
@@ -635,7 +635,6 @@ fn tool_cell(
     theme: &ThemeStyles,
     width: usize,
 ) -> RowRender {
-    use crate::components::message::model::ToolStatus;
     let mut state = state.clone();
     let shell_id = state.metadata.get("shellID").cloned().unwrap_or_default();
     if !shell_id.is_empty() && !(state.status == ToolStatus::Completed && state.output.is_some()) {
@@ -1019,7 +1018,6 @@ fn group_row(
     theme: &ThemeStyles,
     width: usize,
 ) -> RowRender {
-    use crate::components::message::model::GroupKind;
     match kind {
         GroupKind::Exploration | GroupKind::Activity => {
             // G-145② — low verbosity's ACTIVITY summary
@@ -1364,7 +1362,6 @@ fn shift_fill(fill: &Fill, offset: usize) -> Option<Fill> {
 /// `GROUP_MESSAGES`) — byte-for-byte.
 #[must_use]
 pub fn message_groups_fixture() -> Vec<Message> {
-    use crate::components::message::model::{PartTime, ToolState};
     vec![
         Message::User {
             id: "grp-user-0".into(),
@@ -1432,7 +1429,6 @@ pub fn message_groups_fixture() -> Vec<Message> {
 /// transcript (80 rows) overflows a 16-row viewport 5×.
 #[must_use]
 pub fn vscroll_messages_fixture() -> Vec<Message> {
-    use crate::components::message::model::PartTime;
     let mut messages = Vec::new();
     for index in 0..10u64 {
         messages.push(Message::User {
@@ -1470,7 +1466,6 @@ pub fn vscroll_messages_fixture() -> Vec<Message> {
 /// 103 − 90 (the turn-9 user message) = 13ms.
 #[must_use]
 pub fn vscroll_appended_turn() -> Message {
-    use crate::components::message::model::PartTime;
     Message::Assistant {
         id: "vs-answer-appended".into(),
         agent: "build".into(),
@@ -1642,7 +1637,6 @@ mod tests {
 
     #[test]
     fn resolve_part_ords_and_tool_ids() {
-        use crate::components::message::model::{PartTime, ToolState};
         let parts = vec![
             Part::Text { text: "a".into(), time: PartTime::default() },
             Part::Reasoning { text: "r".into(), time: PartTime::default() },
@@ -1667,7 +1661,6 @@ mod tests {
 #[cfg(test)]
 mod surf1_tests {
     use super::*;
-    use crate::components::message::model::PartTime;
     use crate::theme::ThemeState;
 
     fn theme() -> ThemeStyles {
@@ -1779,6 +1772,7 @@ mod surf1_tests {
         assert!(text.contains("hi"), "the output preview: {text}");
     }
 
+    use crate::components::message::model::{GroupKind, PartTime, ToolState, ToolStatus, UserFile};
     fn assistant_with(parts: Vec<Part>) -> Message {
         Message::Assistant {
             id: "a1".into(),
@@ -1800,7 +1794,6 @@ mod surf1_tests {
     #[test]
     fn tool_part_with_images_renders_the_strip() {
         let theme = theme();
-        use crate::components::message::model::{ToolState, ToolStatus, UserFile};
         let state = ToolState {
             status: ToolStatus::Completed,
             input: [("path".to_owned(), "shot.png".to_owned())].into_iter().collect(),
@@ -1840,7 +1833,6 @@ mod surf1_tests {
     #[test]
     fn inline_shell_renders_the_live_stream_output() {
         let theme = theme();
-        use crate::components::message::model::{ToolState, ToolStatus};
         let state = ToolState {
             status: ToolStatus::Running,
             input: [("command".to_owned(), "npm test".to_owned())].into_iter().collect(),
@@ -1879,7 +1871,6 @@ mod surf1_tests {
     #[test]
     fn permission_blocked_tool_renders_outside_the_group() {
         let theme = theme();
-        use crate::components::message::model::{ToolState, ToolStatus};
         let tool = |id: &str, status: ToolStatus| Part::Tool {
             id: id.into(),
             name: "read".into(),

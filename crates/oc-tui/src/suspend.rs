@@ -100,9 +100,7 @@ mod tests {
     #[cfg(unix)]
     fn child_suspends_and_resumes() {
         let markers =
-            std::env::var("OC_SUSPEND_MARKERS").map(std::path::PathBuf::from).unwrap_or_else(
-                |_| std::env::temp_dir().join(format!("oc-suspend-{}", std::process::id())),
-            );
+            std::env::var("OC_SUSPEND_MARKERS").map_or_else(|_| std::env::temp_dir().join(format!("oc-suspend-{}", std::process::id())), std::path::PathBuf::from);
         let _ = std::fs::remove_dir_all(&markers);
         std::fs::create_dir_all(&markers).expect("markers dir");
         if std::env::var("OC_SUSPEND_CHILD").is_ok() {
@@ -119,7 +117,7 @@ mod tests {
         // PARENT: fork the test binary as the child persona (the env
         // var routes the SAME test into its child branch).
         let exe = std::env::current_exe().expect("exe");
-        let mut child = std::process::Command::new(exe)
+        let child = std::process::Command::new(exe)
             .args(["suspend::tests::child_suspends_and_resumes", "--exact", "--nocapture"])
             .env("OC_SUSPEND_CHILD", "1")
             .env("OC_SUSPEND_MARKERS", &markers)
@@ -143,13 +141,11 @@ mod tests {
             // on our OWN child — allowed), then continue it.
             let mut status = 0;
             loop {
-                let waited = libc::waitpid(pid, &mut status, libc::WUNTRACED);
+                let waited = libc::waitpid(pid, &raw mut status, libc::WUNTRACED);
                 if waited == pid && libc::WIFSTOPPED(status) {
                     break;
                 }
-                if waited == pid {
-                    panic!("child settled before continue: status {status}");
-                }
+                assert!(waited != pid, "child settled before continue: status {status}")
             }
             libc::kill(pid, libc::SIGCONT);
         }

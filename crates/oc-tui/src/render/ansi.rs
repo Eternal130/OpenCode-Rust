@@ -5,6 +5,7 @@
 //! non-default-styled line.
 
 use super::{Cell, CellColor, Frame, CONTINUATION};
+use std::fmt::Write as _; // format_push_string: write! into the existing String
 
 /// Serialize a frame to the canonical golden byte format.
 #[must_use]
@@ -104,8 +105,8 @@ pub mod text_attributes {
 pub fn emit_fg(buf: &mut String, color: CellColor) {
     match color {
         CellColor::Default => buf.push_str("\x1b[39m"),
-        CellColor::Indexed(index) => buf.push_str(&format!("\x1b[38;5;{index}m")),
-        CellColor::Rgb(r, g, b) => buf.push_str(&format!("\x1b[38;2;{r};{g};{b}m")),
+        CellColor::Indexed(index) => write!(buf, "\x1b[38;5;{index}m").unwrap_or(()),
+        CellColor::Rgb(r, g, b) => write!(buf, "\x1b[38;2;{r};{g};{b}m").unwrap_or(()),
     }
 }
 
@@ -113,8 +114,8 @@ pub fn emit_fg(buf: &mut String, color: CellColor) {
 pub fn emit_bg(buf: &mut String, color: CellColor) {
     match color {
         CellColor::Default => buf.push_str("\x1b[49m"),
-        CellColor::Indexed(index) => buf.push_str(&format!("\x1b[48;5;{index}m")),
-        CellColor::Rgb(r, g, b) => buf.push_str(&format!("\x1b[48;2;{r};{g};{b}m")),
+        CellColor::Indexed(index) => write!(buf, "\x1b[48;5;{index}m").unwrap_or(()),
+        CellColor::Rgb(r, g, b) => write!(buf, "\x1b[48;2;{r};{g};{b}m").unwrap_or(()),
     }
 }
 
