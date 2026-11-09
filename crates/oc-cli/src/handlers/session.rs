@@ -391,9 +391,7 @@ fn resolve_directory(input: &str) -> String {
     let joined = if std::path::Path::new(input).is_absolute() {
         std::path::PathBuf::from(input)
     } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from("."))
-            .join(input)
+        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")).join(input)
     };
     let mut normalized = std::path::PathBuf::new();
     for component in joined.components() {

@@ -282,15 +282,16 @@ pub fn build_issue_report(message: &str, stack: &str, version: &str) -> String {
             "The OpenCode TUI crashed with an unexpected error.\n\n**Error:** {message}\n\n**Stack trace:**\n```\n{stack_text}\n```"
         )
     };
-    let url_len = |stack_text: &str| prefix.len() + "&description=".len() + encode(&body_of(stack_text)).len();
+    let url_len = |stack_text: &str| {
+        prefix.len() + "&description=".len() + encode(&body_of(stack_text)).len()
+    };
     let mut stack_text = stack.to_owned();
     if url_len(&stack_text) > MAX_URL_LENGTH {
         // Largest char-safe stack prefix whose encoded URL (with the
         // marker) still fits (the ref's binary search,
         // error-component.tsx:312-320).
-        let cut_points: Vec<usize> = std::iter::once(0)
-            .chain(stack.char_indices().map(|(at, _)| at))
-            .collect();
+        let cut_points: Vec<usize> =
+            std::iter::once(0).chain(stack.char_indices().map(|(at, _)| at)).collect();
         let mut lo = 0usize;
         let mut hi = cut_points.len() - 1;
         while lo < hi {
@@ -424,13 +425,18 @@ mod tests {
     #[test]
     fn issue_report_trims_huge_stacks() {
         let url = build_issue_report("boom", "at frame (x.rs:1)", "2.0.24");
-        assert!(url.starts_with("https://github.com/anomalyco/opencode/issues/new?template=bug-report.yml"));
+        assert!(url.starts_with(
+            "https://github.com/anomalyco/opencode/issues/new?template=bug-report.yml"
+        ));
         assert!(url.contains("TUI%20crash%3A%20boom") || url.contains("TUI%20crash"));
         assert!(url.contains("at%20frame%20"), "the stack rides the body");
         assert!(url.len() <= 6000);
         let huge = "x".repeat(20_000);
         let url = build_issue_report("boom", &huge, "2.0.24");
         assert!(url.len() <= 6000, "the trim holds: {}", url.len());
-        assert!(url.contains("%E2%80%A6%20%28truncated%29"), "the truncation marker: … (truncated)");
+        assert!(
+            url.contains("%E2%80%A6%20%28truncated%29"),
+            "the truncation marker: … (truncated)"
+        );
     }
 }

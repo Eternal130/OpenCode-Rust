@@ -2141,14 +2141,10 @@ mod fan_bus_grouping_tests {
         if !handled.contains(&first) || !handled.contains(&second) {
             return false;
         }
-        let route = routes
-            .iter()
-            .find(|route| route.edge_index == first)
-            .expect("first route present");
-        let other = routes
-            .iter()
-            .find(|route| route.edge_index == second)
-            .expect("second route present");
+        let route =
+            routes.iter().find(|route| route.edge_index == first).expect("first route present");
+        let other =
+            routes.iter().find(|route| route.edge_index == second).expect("second route present");
         let lanes = |points: &[Point]| -> HashSet<i64> {
             points[1..points.len().saturating_sub(1)]
                 .iter()

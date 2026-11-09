@@ -1786,15 +1786,11 @@ async fn g63_write_op_accepts_non_utf8_bytes() {
     let (frontend, _transport) = daemon_frontend(&bus, Arc::clone(&launcher));
     frontend.set_runtime_dir(&root).expect("set root");
 
-    let info = frontend
-        .create(&session(), create_input("g63w", "cat", &root))
-        .await
-        .expect("create");
+    let info =
+        frontend.create(&session(), create_input("g63w", "cat", &root)).await.expect("create");
     let log = EventLog::new();
-    let attachment = frontend
-        .attach(&info.id, log.attach_input("g63w-obs", 0))
-        .await
-        .expect("attach");
+    let attachment =
+        frontend.attach(&info.id, log.attach_input("g63w-obs", 0)).await.expect("attach");
     attachment.activate();
 
     // "héllo" (multibyte UTF-8) + a raw 0xFF byte — not valid UTF-8.
@@ -1825,9 +1821,9 @@ async fn g63_write_op_accepts_non_utf8_bytes() {
     let text = "héllo".as_bytes();
     wait_until(10, "raw echo", || async {
         let output = log.output.lock().clone();
-        output.windows(text.len() + 1).any(|window| {
-            window[..text.len()] == *text && window[text.len()] == 0xFF
-        })
+        output
+            .windows(text.len() + 1)
+            .any(|window| window[..text.len()] == *text && window[text.len()] == 0xFF)
     })
     .await;
     assert!(
@@ -1875,10 +1871,8 @@ async fn g277_default_program_survives_a_dangling_shell() {
 
     wait_for_output(&frontend, &info.id, "G277-DEFAULT".len()).await;
     let log = EventLog::new();
-    let attachment = frontend
-        .attach(&info.id, log.attach_input("g277-obs", 0))
-        .await
-        .expect("attach");
+    let attachment =
+        frontend.attach(&info.id, log.attach_input("g277-obs", 0)).await.expect("attach");
     assert!(
         bytes_contain(&attachment.data, b"G277-DEFAULT"),
         "the fallback shell ran the command, replay: {:?}",

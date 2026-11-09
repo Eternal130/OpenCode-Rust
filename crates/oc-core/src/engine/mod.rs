@@ -101,15 +101,15 @@ pub mod warming;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use dashmap::DashMap;
 use oc_schema::id::SessionId;
 use oc_util::determinism::{Clock, IdGen, RngSource, SystemClock, SystemRng, UuidV4IdGen};
 
 use crate::bus::{Bus, BusOptions, Subscription};
-use crate::config::{self, GlobalDirs, Loader, managed_policy};
+use crate::config::{self, managed_policy, GlobalDirs, Loader};
 use crate::database::Database;
 use crate::forms::Forms;
 use crate::hooks::{InternalPlugin, PluginSupervisor};
@@ -122,7 +122,7 @@ use crate::location_services::{GlobalServices, LocationServiceMap};
 use crate::mcp::McpRegistry;
 use crate::permission::{Permission, ReplyInput};
 use crate::provider_catalog::facade::{FacadeContext, ModelConnection};
-use crate::provider_catalog::{Catalog, providers_from_config};
+use crate::provider_catalog::{providers_from_config, Catalog};
 use crate::session::execution::{InterruptOptions, SessionExecution};
 use crate::session::inbox::SessionInbox;
 use crate::session::projector::install_projectors;
@@ -143,7 +143,7 @@ use crate::subagent::ChildExecution;
 use crate::tool::shell::{ShellToolServices, SyntheticPublisher};
 use crate::tool::skill::SkillTable;
 use crate::tool::{
-    self, ToolServices, opencode_tools, question, skill as skill_tool, webfetch, websearch,
+    self, opencode_tools, question, skill as skill_tool, webfetch, websearch, ToolServices,
 };
 use crate::tool_output::ToolOutput;
 use oc_ai::route::SharedTransport;
@@ -625,19 +625,22 @@ impl Engine {
         // deployments than the resource does, so it keeps the catalog,
         // azure.ts:293-297); no credential → inert, the static catalog
         // serves unchanged.
-        let azure_sync = Arc::new(crate::provider_catalog::azure_sync::AzureSync::new(
-            Arc::clone(&facade_transport),
-        ));
+        let azure_sync = Arc::new(crate::provider_catalog::azure_sync::AzureSync::new(Arc::clone(
+            &facade_transport,
+        )));
         let azure_custom_base = options
             .connections
             .get(crate::provider_catalog::azure_sync::AZURE_PROVIDER_ID)
             .and_then(|connection| connection.base_url.clone())
             .or_else(|| {
-                options.custom_providers.iter().find(|custom| {
-                    custom.id == crate::provider_catalog::azure_sync::AZURE_PROVIDER_ID
-                        && !custom.base_url.is_empty()
-                })
-                .map(|custom| custom.base_url.clone())
+                options
+                    .custom_providers
+                    .iter()
+                    .find(|custom| {
+                        custom.id == crate::provider_catalog::azure_sync::AZURE_PROVIDER_ID
+                            && !custom.base_url.is_empty()
+                    })
+                    .map(|custom| custom.base_url.clone())
             });
         if azure_custom_base.is_none() {
             let azure_sync = Arc::clone(&azure_sync);
@@ -1606,9 +1609,9 @@ impl Engine {
             )
             .await;
             let _ = applied; // diagnostics only (boot-trace reads the registry)
-            // The latest activation updates the guest's ctx.location
-            // view (the one-guest approximation of v2's per-instance
-            // hosts) — only when plugins are active for this location.
+                             // The latest activation updates the guest's ctx.location
+                             // view (the one-guest approximation of v2's per-instance
+                             // hosts) — only when plugins are active for this location.
             let active = source.active_plugins(&ops);
             if active.as_ref().is_none_or(|ids| !ids.is_empty()) {
                 source.location_activated(&location.as_path().display().to_string(), &project.id);
@@ -2277,7 +2280,11 @@ impl Engine {
     /// of each requested type (empty slice = everything).
     #[must_use]
     pub fn subscribe(&self, types: &[&str]) -> Subscription {
-        if types.is_empty() { self.bus.subscribe() } else { self.bus.subscribe_types(types) }
+        if types.is_empty() {
+            self.bus.subscribe()
+        } else {
+            self.bus.subscribe_types(types)
+        }
     }
 
     /// Manual compaction: admit a `/compact` item and run it to

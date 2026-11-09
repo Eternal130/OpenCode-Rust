@@ -17,8 +17,8 @@ use oc_schema::provider::{Activation, Info as ProviderInfo, Settings as Provider
 use serde_json::Value;
 
 use crate::provider_catalog::native::native_package;
-use crate::provider_catalog::source::{SourceCost, SourceModel, SourceProvider, parse_catalog};
-use crate::provider_catalog::support::{VariantModel, supports_from_reasoning_options};
+use crate::provider_catalog::source::{parse_catalog, SourceCost, SourceModel, SourceProvider};
+use crate::provider_catalog::support::{supports_from_reasoning_options, VariantModel};
 use crate::provider_catalog::variant;
 
 /// The embedded snapshot of `https://models.opencode.ai/api.json`, committed
@@ -199,7 +199,7 @@ impl Catalog {
                 if !model.capabilities.output.iter().any(|item| item == "text") {
                     continue;
                 }
-                if keyless_zen && model.cost.iter().any(|cost| cost.input.0.0 > 0.0) {
+                if keyless_zen && model.cost.iter().any(|cost| cost.input.0 .0 > 0.0) {
                     continue;
                 }
                 pairs.push((snapshot, model));
@@ -680,9 +680,10 @@ mod tests {
         ] {
             assert!(catalog.model("amazon-bedrock", id).is_none(), "{id} must not register");
         }
-        assert!(
-            bedrock.models.iter().any(|model| model.id.as_str() == "anthropic.claude-opus-4-6-v1")
-        );
+        assert!(bedrock
+            .models
+            .iter()
+            .any(|model| model.id.as_str() == "anthropic.claude-opus-4-6-v1"));
         // The filter applies to every parsed snapshot, not just the
         // embedded one (the ref re-runs `snapshots()` over each refreshed
         // body, models-dev.ts:61-66).
@@ -839,7 +840,7 @@ mod tests {
         );
         for (_, model) in &pairs {
             assert!(
-                model.cost.iter().all(|cost| cost.input.0.0 == 0.0),
+                model.cost.iter().all(|cost| cost.input.0 .0 == 0.0),
                 "keyless zen serves zero-cost models only: {} ({:?})",
                 model.name,
                 model.cost
@@ -884,7 +885,7 @@ mod tests {
         );
         assert!(!providers.contains("anthropic"), "no ANTHROPIC_API_KEY → absent");
         let zen_paid = pairs.iter().any(|(snapshot, model)| {
-            snapshot.info.id.as_str() == "opencode" && model.cost.iter().any(|c| c.input.0.0 > 0.0)
+            snapshot.info.id.as_str() == "opencode" && model.cost.iter().any(|c| c.input.0 .0 > 0.0)
         });
         assert!(zen_paid, "with a key the paid zen models are enabled");
     }

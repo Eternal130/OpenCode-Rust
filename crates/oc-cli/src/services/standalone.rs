@@ -202,8 +202,7 @@ pub async fn start_with(options: Options) -> Result<StandaloneServer, String> {
         // Reap and describe the exit (best effort; a hair of latency is
         // possible between EOF and the waitable state).
         for _ in 0..100 {
-            let mut guard =
-                child_for_task.lock().unwrap_or_else(|poison| poison.into_inner());
+            let mut guard = child_for_task.lock().unwrap_or_else(|poison| poison.into_inner());
             match guard.try_wait() {
                 Ok(Some(status)) => {
                     let detail = if let Some(code) = status.code() {
@@ -219,9 +218,8 @@ pub async fn start_with(options: Options) -> Result<StandaloneServer, String> {
                             None
                         }
                     };
-                    *exit_detail_for_task
-                        .lock()
-                        .unwrap_or_else(|poison| poison.into_inner()) = detail;
+                    *exit_detail_for_task.lock().unwrap_or_else(|poison| poison.into_inner()) =
+                        detail;
                     return;
                 }
                 Ok(None) => drop(guard),

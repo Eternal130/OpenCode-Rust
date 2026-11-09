@@ -97,11 +97,10 @@ fn wait_transcript(driver: &mut vt_harness::HarnessHandle, cols: usize, rows: us
     let deadline = std::time::Instant::now() + Duration::from_secs(8);
     loop {
         let grid = driver.grid_now();
-        let probe = (0..grid.rows.min(rows)).any(|y| {
-            grid.content_rect(0, y, cols, 1).contains("count slowly for the resize")
-        });
-        let thinking = (0..grid.rows.min(rows))
-            .any(|y| grid.content_rect(0, y, cols, 1).contains("Thinking"));
+        let probe = (0..grid.rows.min(rows))
+            .any(|y| grid.content_rect(0, y, cols, 1).contains("count slowly for the resize"));
+        let thinking =
+            (0..grid.rows.min(rows)).any(|y| grid.content_rect(0, y, cols, 1).contains("Thinking"));
         if probe && thinking {
             return true;
         }

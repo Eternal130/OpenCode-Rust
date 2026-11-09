@@ -246,8 +246,8 @@ async fn pump(
         // window (the last kind wins — a remove after modifies is a
         // distinct observable outcome).
         let mut update = update;
-        let deadline = tokio::time::Instant::now()
-            + tokio::time::Duration::from_millis(COALESCE_WINDOW_MS);
+        let deadline =
+            tokio::time::Instant::now() + tokio::time::Duration::from_millis(COALESCE_WINDOW_MS);
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             match tokio::time::timeout(remaining, subscription.recv()).await {

@@ -52,11 +52,7 @@ pub struct SpringTransition {
 impl SpringTransition {
     #[must_use]
     pub fn new(visual_duration: f64) -> Self {
-        Self {
-            visual_duration,
-            rest_delta: 0.002,
-            rest_speed: 0.002,
-        }
+        Self { visual_duration, rest_delta: 0.002, rest_speed: 0.002 }
     }
 }
 
@@ -105,10 +101,7 @@ impl Animatable {
         let state = initial
             .iter()
             .map(|&(key, value)| {
-                (
-                    key.to_owned(),
-                    ValueState { value, target: value, velocity: 0.0, from: value },
-                )
+                (key.to_owned(), ValueState { value, target: value, velocity: 0.0, from: value })
             })
             .collect();
         Self { transition, state, previous_ms: None, started_ms }
@@ -120,9 +113,10 @@ impl Animatable {
     /// resets `started`/`previous` at animate time — the port defers
     /// to the next pump sample, same wall-clock semantics).
     pub fn animate(&mut self, now_ms: f64, next: &[(&str, f64)]) {
-        let same_target = next.iter().all(|&(key, target)| {
-            self.state.get(key).is_some_and(|state| state.target == target)
-        }) && next.len() == self.state.len();
+        let same_target = next
+            .iter()
+            .all(|&(key, target)| self.state.get(key).is_some_and(|state| state.target == target))
+            && next.len() == self.state.len();
         if same_target {
             return;
         }
@@ -163,7 +157,8 @@ impl Animatable {
             Transition::Spring(spec) => {
                 let mut moving = false;
                 for state in self.state.values_mut() {
-                    let (value, velocity) = advance_spring(spec, state.value, state.velocity, state.target, delta);
+                    let (value, velocity) =
+                        advance_spring(spec, state.value, state.velocity, state.target, delta);
                     state.value = value;
                     state.velocity = velocity;
                     moving |= (value - state.target).abs() > spec.rest_delta
@@ -212,13 +207,7 @@ impl Animatable {
     /// `value()[key]` — the animated read (target once settled).
     #[must_use]
     pub fn value(&self, key: &str) -> Option<f64> {
-        self.state.get(key).map(|state| {
-            if self.moving() {
-                state.value
-            } else {
-                state.target
-            }
-        })
+        self.state.get(key).map(|state| if self.moving() { state.value } else { state.target })
     }
 }
 
@@ -246,12 +235,7 @@ pub fn advance_spring(
 
 /// `advanceTween` for one value (animation.ts:165-176).
 #[must_use]
-pub fn advance_tween(
-    spec: TweenTransition,
-    from: f64,
-    target: f64,
-    progress: f64,
-) -> f64 {
+pub fn advance_tween(spec: TweenTransition, from: f64, target: f64, progress: f64) -> f64 {
     let eased = (spec.ease)(progress.clamp(0.0, 1.0));
     from + (target - from) * eased
 }
@@ -273,7 +257,8 @@ mod tests {
         let mut value = 0.0f64;
         let mut velocity = 0.0f64;
         for _ in 0..200 {
-            let (next_value, next_velocity) = advance_spring(spec, value, velocity, 1.0, 1.0 / 60.0);
+            let (next_value, next_velocity) =
+                advance_spring(spec, value, velocity, 1.0, 1.0 / 60.0);
             value = next_value;
             velocity = next_velocity;
         }
@@ -283,8 +268,11 @@ mod tests {
 
     #[test]
     fn animatable_advances_on_the_pump_clock_and_finishes_by_snapping() {
-        let mut animatable =
-            Animatable::new(&[("width", 22.0)], Transition::Spring(SpringTransition::new(0.2)), 0.0);
+        let mut animatable = Animatable::new(
+            &[("width", 22.0)],
+            Transition::Spring(SpringTransition::new(0.2)),
+            0.0,
+        );
         animatable.animate(100.0, &[("width", 32.0)]);
         let mut moving = false;
         let mut now = 100.0;
@@ -298,8 +286,11 @@ mod tests {
 
     #[test]
     fn same_target_animate_is_a_noop_and_jump_lands() {
-        let mut animatable =
-            Animatable::new(&[("opacity", 1.0)], Transition::Spring(SpringTransition::new(0.1)), 0.0);
+        let mut animatable = Animatable::new(
+            &[("opacity", 1.0)],
+            Transition::Spring(SpringTransition::new(0.1)),
+            0.0,
+        );
         animatable.animate(10.0, &[("opacity", 1.0)]);
         assert!(!animatable.moving());
         animatable.animate(10.0, &[("opacity", 0.0)]);
@@ -317,8 +308,7 @@ mod tests {
         let mid = advance_tween(spec, 0.0, 10.0, 0.5);
         assert!((mid - 5.0).abs() < 1e-9, "smoothstep is symmetric, got {mid}");
         // The tween finishes: progress reaches 1 and reports done.
-        let mut animatable =
-            Animatable::new(&[("x", 0.0)], Transition::Tween(spec), 0.0);
+        let mut animatable = Animatable::new(&[("x", 0.0)], Transition::Tween(spec), 0.0);
         animatable.animate(0.0, &[("x", 4.0)]);
         assert!(animatable.advance(50.0), "halfway: still moving");
         assert!((animatable.value("x").unwrap() - 2.0).abs() < 1e-9, "halfway of 0→4");

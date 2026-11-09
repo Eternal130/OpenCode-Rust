@@ -209,20 +209,16 @@ pub fn parse_apply_patch_files(metadata: Option<&serde_json::Value>) -> Vec<Appl
     files
         .iter()
         .filter_map(|file| {
-            let number =
-                |key: &str| file.get(key).and_then(serde_json::Value::as_i64).unwrap_or(0);
-            let type_ = file
-                .get("type")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-                .or_else(|| {
-                    match file.get("status").and_then(serde_json::Value::as_str)? {
+            let number = |key: &str| file.get(key).and_then(serde_json::Value::as_i64).unwrap_or(0);
+            let type_ =
+                file.get("type").and_then(serde_json::Value::as_str).map(str::to_owned).or_else(
+                    || match file.get("status").and_then(serde_json::Value::as_str)? {
                         "added" => Some("add".to_owned()),
                         "deleted" => Some("delete".to_owned()),
                         "modified" => Some("update".to_owned()),
                         _ => None,
-                    }
-                })?;
+                    },
+                )?;
             let relative_path = file
                 .get("file")
                 .or_else(|| file.get("relativePath"))
@@ -369,13 +365,17 @@ fn patch_hunk_rows(
                             0,
                             0,
                             format!("{old:>digits$}"),
-                            Style::new().fg(theme.diff.line_number).bg(theme.diff.background_context),
+                            Style::new()
+                                .fg(theme.diff.line_number)
+                                .bg(theme.diff.background_context),
                         ),
                         text_at(
                             digits,
                             0,
                             format!(" {new:>digits$}"),
-                            Style::new().fg(theme.diff.line_number).bg(theme.diff.background_context),
+                            Style::new()
+                                .fg(theme.diff.line_number)
+                                .bg(theme.diff.background_context),
                         ),
                         text_at(
                             digits * 2 + 1,
@@ -391,7 +391,9 @@ fn patch_hunk_rows(
                             0,
                             0,
                             format!("{old:>digits$}"),
-                            Style::new().fg(theme.diff.line_number).bg(theme.diff.background_removed),
+                            Style::new()
+                                .fg(theme.diff.line_number)
+                                .bg(theme.diff.background_removed),
                         ),
                         text_at(
                             digits * 2 + 1,
@@ -436,11 +438,7 @@ fn apply_patch_block(state: &ToolState, theme: &ThemeStyles, width: usize) -> Ro
             "delete" => vec![vec![text_at(
                 0,
                 0,
-                format!(
-                    "-{} line{}",
-                    file.deletions,
-                    if file.deletions != 1 { "s" } else { "" }
-                ),
+                format!("-{} line{}", file.deletions, if file.deletions != 1 { "s" } else { "" }),
                 Style::new().fg(theme.diff.text_removed).bg(theme.background),
             )]],
             _ => patch_hunk_rows(
@@ -458,12 +456,7 @@ fn apply_patch_block(state: &ToolState, theme: &ThemeStyles, width: usize) -> Ro
         let mut rows = rows;
         rows.insert(
             0,
-            vec![text_at(
-                0,
-                0,
-                format!("{label} {}", file.relative_path),
-                theme.text_muted,
-            )],
+            vec![text_at(0, 0, format!("{label} {}", file.relative_path), theme.text_muted)],
         );
         let card_render = block_from_rows(&rows, theme, width);
         card = Some(match card {
@@ -544,10 +537,7 @@ fn parse_diagnostics(state: &ToolState, file_path: &str) -> Vec<(usize, usize, S
     let rows = diagnostics
         .get(file_path)
         .or_else(|| {
-            diagnostics
-                .iter()
-                .find(|(key, _)| normalize(key) == target)
-                .map(|(_, value)| value)
+            diagnostics.iter().find(|(key, _)| normalize(key) == target).map(|(_, value)| value)
         })
         .and_then(serde_json::Value::as_array);
     let Some(rows) = rows else { return Vec::new() };
@@ -736,9 +726,8 @@ pub fn shell_message_row(
 /// G-183 — `parseQuestions` (index.tsx:3562-3568): the `question`
 /// strings of `input.questions`.
 fn parse_questions(input_json: Option<&serde_json::Value>) -> Vec<String> {
-    let Some(items) = input_json
-        .and_then(|value| value.get("questions"))
-        .and_then(serde_json::Value::as_array)
+    let Some(items) =
+        input_json.and_then(|value| value.get("questions")).and_then(serde_json::Value::as_array)
     else {
         return Vec::new();
     };
@@ -780,7 +769,12 @@ fn parse_question_answers(metadata: Option<&serde_json::Value>) -> Option<Vec<Ve
 /// answered → a `# Questions` BlockTool of Q/A pairs (question muted,
 /// answer base, `(no answer)` fallback); pending → the
 /// `Asking questions…` InlineTool / `Asked N question(s)`.
-fn question_block(state: &ToolState, clock_ms: u64, theme: &ThemeStyles, width: usize) -> RowRender {
+fn question_block(
+    state: &ToolState,
+    clock_ms: u64,
+    theme: &ThemeStyles,
+    width: usize,
+) -> RowRender {
     let muted = theme.text_muted;
     let base = theme.text.fg.unwrap_or(theme.background);
     let questions = parse_questions(state.input_json.as_ref());
@@ -788,8 +782,7 @@ fn question_block(state: &ToolState, clock_ms: u64, theme: &ThemeStyles, width: 
     let count = questions.len();
     match answers {
         Some(answers) => {
-            let mut rows: Vec<Vec<Placed>> =
-                vec![vec![text_at(0, 0, "# Questions", muted)]];
+            let mut rows: Vec<Vec<Placed>> = vec![vec![text_at(0, 0, "# Questions", muted)]];
             for (index, question) in questions.iter().enumerate() {
                 let answer = answers.get(index).map(|answer| {
                     if answer.is_empty() {
@@ -809,8 +802,7 @@ fn question_block(state: &ToolState, clock_ms: u64, theme: &ThemeStyles, width: 
             block_from_rows(&rows, theme, width)
         }
         None => {
-            let label =
-                format!("Asked {count} question{}", if count != 1 { "s" } else { "" });
+            let label = format!("Asked {count} question{}", if count != 1 { "s" } else { "" });
             if matches!(state.status, ToolStatus::Running | ToolStatus::Streaming) {
                 running_tool_row("Asking questions…", clock_ms, theme, width)
             } else {
@@ -1337,12 +1329,7 @@ mod tests {
         assert!(grid[5].contains("(no answer)"), "the empty-answer fallback: {}", grid[5]);
         assert!(grid[7].contains("a, b"), "answers join with ', ': {}", grid[7]);
 
-        let pending = state_with(
-            ToolStatus::Running,
-            &[],
-            None,
-            None,
-        );
+        let pending = state_with(ToolStatus::Running, &[], None, None);
         let pending = ToolState {
             input_json: Some(serde_json::json!({
                 "questions": [{"question": "Run tests?"}]

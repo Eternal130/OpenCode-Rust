@@ -126,8 +126,12 @@ pub(crate) fn read_config_json_pub(path: &std::path::Path) -> Result<Value, Stri
     // commas exactly (v2 reads configs with jsonc-parser's
     // `parse(..., { allowTrailingComma: true })`); json5's wider laxness
     // (single quotes, unquoted keys, …) rejects like the main loader.
-    oc_core::config::jsonc_parse::parse_jsonc(&text)
-        .map_err(|_| format!("Invalid configuration {}: rejected malformed JSON or JSONC document", path.display()))
+    oc_core::config::jsonc_parse::parse_jsonc(&text).map_err(|_| {
+        format!(
+            "Invalid configuration {}: rejected malformed JSON or JSONC document",
+            path.display()
+        )
+    })
 }
 
 /// Public re-export for the plugin config editor.

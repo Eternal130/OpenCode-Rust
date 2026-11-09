@@ -824,8 +824,10 @@ mod auth_retry_tests {
             statuses: std::sync::Mutex::new(vec![401, 200]),
             auths: std::sync::Mutex::new(vec![]),
         });
-        let transport =
-            auth_retry_401(Arc::clone(&scripted) as SharedTransport, refresh_returning(Some("fresh")));
+        let transport = auth_retry_401(
+            Arc::clone(&scripted) as SharedTransport,
+            refresh_returning(Some("fresh")),
+        );
         let response = transport.execute(request()).await.expect("execute");
         assert_eq!(response.status, 200, "the retry's answer surfaces");
         assert_eq!(
@@ -859,8 +861,10 @@ mod auth_retry_tests {
             statuses: std::sync::Mutex::new(vec![401, 401, 200]),
             auths: std::sync::Mutex::new(vec![]),
         });
-        let transport =
-            auth_retry_401(Arc::clone(&scripted) as SharedTransport, refresh_returning(Some("fresh")));
+        let transport = auth_retry_401(
+            Arc::clone(&scripted) as SharedTransport,
+            refresh_returning(Some("fresh")),
+        );
         let response = transport.execute(request()).await.expect("execute");
         assert_eq!(response.status, 401, "the second 401 surfaces");
         assert_eq!(scripted.auths.lock().unwrap().len(), 2, "no third request");
@@ -873,8 +877,10 @@ mod auth_retry_tests {
             statuses: std::sync::Mutex::new(vec![400]),
             auths: std::sync::Mutex::new(vec![]),
         });
-        let transport =
-            auth_retry_401(Arc::clone(&scripted) as SharedTransport, refresh_returning(Some("fresh")));
+        let transport = auth_retry_401(
+            Arc::clone(&scripted) as SharedTransport,
+            refresh_returning(Some("fresh")),
+        );
         let response = transport.execute(request()).await.expect("execute");
         assert_eq!(response.status, 400);
         assert_eq!(scripted.auths.lock().unwrap().len(), 1);
@@ -887,8 +893,10 @@ mod auth_retry_tests {
             statuses: std::sync::Mutex::new(vec![401, 200]),
             auths: std::sync::Mutex::new(vec![]),
         });
-        let transport =
-            auth_retry_401(Arc::clone(&scripted) as SharedTransport, refresh_returning(Some("fresh")));
+        let transport = auth_retry_401(
+            Arc::clone(&scripted) as SharedTransport,
+            refresh_returning(Some("fresh")),
+        );
         let bare = TransportRequest { headers: vec![], ..request() };
         let response = transport.execute(bare).await.expect("execute");
         assert_eq!(response.status, 200);

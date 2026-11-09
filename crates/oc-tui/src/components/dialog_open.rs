@@ -263,7 +263,6 @@ fn path_relative(from: &str, to: &str) -> String {
     }
 }
 
-
 /// G-287⑦ — the direct-lookup id pattern
 /// (`/^ses_[0-9A-Za-z]{26}$/`, dialog-open.tsx:144).
 fn is_session_id(value: &str) -> bool {
@@ -311,11 +310,9 @@ pub fn open_menu_props(store: &Store) -> SelectProps {
     sessions.sort_by(|a, b| {
         let attention_a = attention.contains(a.id.as_str());
         let attention_b = attention.contains(b.id.as_str());
-        attention_b
-            .cmp(&attention_a)
-            .then_with(|| {
-                b.time_updated.unwrap_or_default().total_cmp(&a.time_updated.unwrap_or_default())
-            })
+        attention_b.cmp(&attention_a).then_with(|| {
+            b.time_updated.unwrap_or_default().total_cmp(&a.time_updated.unwrap_or_default())
+        })
     });
 
     // The recents memo (:203-207): an empty filter hides what the tab

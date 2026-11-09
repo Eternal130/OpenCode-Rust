@@ -126,8 +126,7 @@ impl RpcDefinition {
         input: serde_json::Value,
         output: serde_json::Value,
     ) -> Self {
-        self.methods
-            .insert(name.into(), RpcMethodDef { input, output, errors: BTreeMap::new() });
+        self.methods.insert(name.into(), RpcMethodDef { input, output, errors: BTreeMap::new() });
         self
     }
 
@@ -194,9 +193,7 @@ impl RpcClient {
             .call_into(
                 &self.definition.id,
                 method,
-                &crate::types::RpcCallQuery {
-                    location: location.cloned(),
-                },
+                &crate::types::RpcCallQuery { location: location.cloned() },
                 input,
             )
             .await
@@ -220,10 +217,8 @@ impl RpcClient {
     pub async fn subscribe_events(
         &self,
         name: &str,
-    ) -> Result<
-        Pin<Box<dyn Stream<Item = Result<BusEventFrame, ClientError>> + Send>>,
-        ClientError,
-    > {
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<BusEventFrame, ClientError>> + Send>>, ClientError>
+    {
         let type_ = self.event_type(name)?;
         let sse = self.client.event().subscribe().await?;
         Ok(filter_rpc_events(crate::bus_event::sse_frames(sse), type_))
@@ -348,10 +343,7 @@ mod tests {
             .call::<serde_json::Value, serde_json::Value>("nope", None, &json!({}))
             .await
             .expect_err("unknown method must fail");
-        assert!(
-            error.to_string().contains("Unknown RPC method: demo.nope"),
-            "{error}"
-        );
+        assert!(error.to_string().contains("Unknown RPC method: demo.nope"), "{error}");
     }
 
     #[tokio::test]
@@ -371,10 +363,7 @@ mod tests {
         let rpc = demo_definition().client(client);
         assert_eq!(rpc.event_type("updated").unwrap(), "rpc.demo.updated");
         let error = rpc.event_type("nope").expect_err("unknown event must fail");
-        assert!(
-            error.to_string().contains("Unknown RPC event: demo.nope"),
-            "{error}"
-        );
+        assert!(error.to_string().contains("Unknown RPC event: demo.nope"), "{error}");
     }
 
     /// The event filter passes only the `rpc.<id>.<event>` frames.
@@ -383,16 +372,20 @@ mod tests {
         let source = futures::stream::iter([
             Ok(crate::bus_event::BusEventFrame::decode(&json!({
                 "type": "server.connected"
-            })).unwrap()),
+            }))
+            .unwrap()),
             Ok(crate::bus_event::BusEventFrame::decode(&json!({
                 "type": "rpc.other.happened", "data": {}
-            })).unwrap()),
+            }))
+            .unwrap()),
             Ok(crate::bus_event::BusEventFrame::decode(&json!({
                 "type": "rpc.demo.updated", "data": {"n": 1}
-            })).unwrap()),
+            }))
+            .unwrap()),
             Ok(crate::bus_event::BusEventFrame::decode(&json!({
                 "type": "rpc.demo.deleted", "data": {}
-            })).unwrap()),
+            }))
+            .unwrap()),
         ]);
         let mut filtered =
             crate::rpc_typed::filter_rpc_events(source, "rpc.demo.updated".to_owned());
@@ -439,8 +432,7 @@ mod tests {
             sse_payload("session.updated"),
             sse_payload("rpc.demo.updated"),
         );
-        let (client, server) =
-            serve_sse(Box::leak(body.into_boxed_str())).await;
+        let (client, server) = serve_sse(Box::leak(body.into_boxed_str())).await;
         let rpc = demo_definition().client(client);
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let guard = rpc
@@ -454,9 +446,7 @@ mod tests {
             .expect("subscribe");
         let mut seen = Vec::new();
         while seen.len() < 2 {
-            seen.push(
-                rx.recv().await.unwrap_or_else(|| panic!("got {:?} events", seen.len())),
-            );
+            seen.push(rx.recv().await.unwrap_or_else(|| panic!("got {:?} events", seen.len())));
         }
         assert_eq!(seen, ["rpc.demo.updated", "rpc.demo.updated"]);
         guard.unsubscribe();

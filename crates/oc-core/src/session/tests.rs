@@ -3631,11 +3631,9 @@ async fn assistant_error_rows(
 /// The event log's next sequence position (for mid-transcript seeds).
 async fn next_event_seq(db: &Database) -> i64 {
     db.transaction(move |tx| {
-        Ok(tx.conn().query_row(
-            "SELECT COALESCE(MAX(seq), 0) + 1 FROM event",
-            [],
-            |row| row.get::<_, i64>(0),
-        )?)
+        Ok(tx.conn().query_row("SELECT COALESCE(MAX(seq), 0) + 1 FROM event", [], |row| {
+            row.get::<_, i64>(0)
+        })?)
     })
     .await
     .unwrap()

@@ -19,8 +19,8 @@
 use super::chrome_solid::{chrome_mount, ChromeBody, ChromeChunk, ChromeStamp, ChromeUnit};
 use super::session_tabs_rail::{rail_paint_list, RailGeometry, RailInputs, TOOLTIP_MAX_WIDTH};
 use crate::layout::Placed;
-use crate::render::Fill;
 use crate::render::CellColor;
+use crate::render::Fill;
 #[cfg(test)]
 use crate::render::Frame;
 use crate::theme::ThemeStyles;

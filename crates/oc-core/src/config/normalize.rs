@@ -205,11 +205,7 @@ fn decode_encoded<T: serde::de::DeserializeOwned + serde::Serialize>(
 /// schema/mcp.ts:8-15): an integer decode that ALSO rejects 0 with the
 /// standard `invalid` diagnostic (mirroring decodeEncoded's failure
 /// shape, normalize.ts:252-258).
-fn decode_positive(
-    value: &Json,
-    path: &[&str],
-    diagnostics: &mut Vec<Diagnostic>,
-) -> Option<u64> {
+fn decode_positive(value: &Json, path: &[&str], diagnostics: &mut Vec<Diagnostic>) -> Option<u64> {
     let decoded = decode_value::<u64>(value, path, diagnostics)?;
     if decoded == 0 {
         invalid(path, diagnostics);
@@ -832,8 +828,7 @@ fn normalize_mcp(
         // G-281② — ref decodes with `PositiveInt` (normalize.ts:252-258;
         // `Schema.Int.check(Schema.isGreaterThan(0))`): 0 (or negatives)
         // is a decode failure → diagnostic + dropped, not a 0ms timeout.
-        if let Some(value) = decode_positive(value, &["experimental", "mcp_timeout"], diagnostics)
-        {
+        if let Some(value) = decode_positive(value, &["experimental", "mcp_timeout"], diagnostics) {
             let number = Json::Number(serde_json::Number::from(value));
             timeout.push(("catalog".to_string(), number.clone()));
             timeout.push(("execution".to_string(), number));
@@ -2911,9 +2906,8 @@ mod tests {
     /// 0 ms timeout.
     #[test]
     fn config_normalize_rejects_zero_mcp_timeouts() {
-        let (encoded, diagnostics) = normalized(
-            r#"{ "mcp": { "timeout": { "startup": 0, "catalog": 2000 } } }"#,
-        );
+        let (encoded, diagnostics) =
+            normalized(r#"{ "mcp": { "timeout": { "startup": 0, "catalog": 2000 } } }"#);
         assert_eq!(
             to_value(get(&encoded, "mcp")),
             serde_json::json!({ "timeout": { "catalog": 2000 } }),

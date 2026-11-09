@@ -491,11 +491,8 @@ fn lower_messages(
                     texts.push(text.as_str());
                     last_cache = cache.as_ref();
                 }
-                let content = text_with_cache(
-                    breakpoints,
-                    &shared::wrap_system_update(texts),
-                    last_cache,
-                );
+                let content =
+                    text_with_cache(breakpoints, &shared::wrap_system_update(texts), last_cache);
                 push_user(&mut messages, content);
             }
             MessageRole::User => {

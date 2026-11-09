@@ -10,9 +10,9 @@
 
 use std::sync::Arc;
 
-use oc_client::Client;
 use oc_client::error::ClientError;
 use oc_client::types::*;
+use oc_client::Client;
 use oc_core::engine::{Engine, EngineOptions};
 use oc_server::handlers;
 use oc_server::state::{AppState, AuthConfig};
@@ -357,11 +357,9 @@ async fn handlers_prompt_resume_false_and_inbox() {
     assert_eq!(inbox_user.session_id, session_id);
 
     let pending = client.session().inbox().list(&session_id).await.expect("inbox");
-    assert!(
-        pending
-            .iter()
-            .any(|item| matches!(item, SessionInboxInfo::User(user) if user.id == "msg_custom1"))
-    );
+    assert!(pending
+        .iter()
+        .any(|item| matches!(item, SessionInboxInfo::User(user) if user.id == "msg_custom1")));
 
     let error = client
         .session()

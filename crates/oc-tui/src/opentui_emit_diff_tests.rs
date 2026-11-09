@@ -12,7 +12,7 @@
 //! assertions and the cluster pixel contract.
 
 use crate::render::opentui_emit::OpentuiEmitter;
-use crate::render::{CONTINUATION, Cell, CellColor, Frame};
+use crate::render::{Cell, CellColor, Frame, CONTINUATION};
 use opentui_core::renderables::textarea::CursorStyle;
 
 type CursorInput = Option<((u32, u32), (CursorStyle, bool, (u8, u8, u8)))>;
@@ -114,12 +114,12 @@ fn replay_corpus_emission_is_pinned() {
                 && !pump.permission_live()
                 && !pump.form_live()
             {
-                pump.store
-                    .caret_cell()
-                    .filter(|(x, y)| *x < 100 && *y < 30)
-                    .map(|(x, y)| {
-                        ((u32::from(x) + 1, u32::from(y) + 1), (CursorStyle::Line, true, (224, 224, 224)))
-                    })
+                pump.store.caret_cell().filter(|(x, y)| *x < 100 && *y < 30).map(|(x, y)| {
+                    (
+                        (u32::from(x) + 1, u32::from(y) + 1),
+                        (CursorStyle::Line, true, (224, 224, 224)),
+                    )
+                })
             } else {
                 None
             };
@@ -285,7 +285,6 @@ fn cluster_frames_keep_pixels_through_vt100() {
     assert!(text.contains("flag"), "flag must survive: {text:?}");
 }
 
-
 // -- G-287⑧: OSC-8 hyperlink emission --------------------------------------
 
 use crate::render::FrameLinkRect;
@@ -294,11 +293,7 @@ fn link(x: usize, y: usize, width: usize, url: &str) -> FrameLinkRect {
     FrameLinkRect { x, y, width, url: url.to_owned() }
 }
 
-fn emit_linked(
-    emitter: &mut OpentuiEmitter,
-    frame: &Frame,
-    links: &[FrameLinkRect],
-) -> String {
+fn emit_linked(emitter: &mut OpentuiEmitter, frame: &Frame, links: &[FrameLinkRect]) -> String {
     emitter.cursor().set_position(1, 1, false);
     let mut sink = Vec::new();
     emitter.emit_with_links(&mut sink, frame, links).expect("emit");
@@ -419,12 +414,9 @@ fn transcript_openlink_rows_drive_osc8_under_the_probe_gate() {
     let links: Vec<FrameLinkRect> = rows
         .into_iter()
         .filter_map(|row| match row.action {
-            crate::store::TranscriptHitAction::OpenLink { url } => Some(FrameLinkRect {
-                x: row.x,
-                y: row.y,
-                width: row.width,
-                url,
-            }),
+            crate::store::TranscriptHitAction::OpenLink { url } => {
+                Some(FrameLinkRect { x: row.x, y: row.y, width: row.width, url })
+            }
             _ => None,
         })
         .collect();

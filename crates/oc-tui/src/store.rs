@@ -1105,8 +1105,15 @@ impl SessionListSink for RecordingSessionListSink {
 /// oc-client.
 
 /// G-287① — the production sink seams (one bit per `set_*_sink`).
-const PRODUCTION_SINK_MASK: u16 =
-    (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 8);
+const PRODUCTION_SINK_MASK: u16 = (1 << 0)
+    | (1 << 1)
+    | (1 << 2)
+    | (1 << 3)
+    | (1 << 4)
+    | (1 << 5)
+    | (1 << 6)
+    | (1 << 7)
+    | (1 << 8);
 
 pub trait SelectionSink {
     fn switch_model(&self, session_id: &str, model: &ModelSelection);
@@ -4550,8 +4557,7 @@ impl Store {
     /// session-frame.tsx:41) clamped by `clampSessionPaneWidth`.
     #[must_use]
     pub fn session_pane_width(&self, content_width: usize) -> usize {
-        let preferred =
-            self.session_pane_width.get().unwrap_or((content_width / 2).max(1));
+        let preferred = self.session_pane_width.get().unwrap_or((content_width / 2).max(1));
         crate::components::session::clamp_session_pane_width(preferred, content_width)
     }
 
@@ -10311,13 +10317,7 @@ impl Store {
         } else {
             SelectState::default()
         };
-        let entry = DialogEntry {
-            kind,
-            size,
-            select,
-            value: String::new(),
-            theme_initial,
-        };
+        let entry = DialogEntry { kind, size, select, value: String::new(), theme_initial };
         self.dialogs.update(|stack| stack.push(entry));
         self.dialog_opened_strip_hover_reset();
         self.focus_dialog_current();
@@ -10338,13 +10338,7 @@ impl Store {
         } else {
             SelectState::default()
         };
-        let entry = DialogEntry {
-            kind,
-            size,
-            select,
-            value: String::new(),
-            theme_initial,
-        };
+        let entry = DialogEntry { kind, size, select, value: String::new(), theme_initial };
         let removed = self.dialogs.update(|stack| std::mem::replace(stack, vec![entry]));
         for entry in &removed {
             self.revert_unconfirmed_theme_dialog(entry);
@@ -14766,8 +14760,10 @@ mod tests {
         store.replace_dialog(DialogKind::Open, DialogSize::Large);
         let props = crate::components::dialog_open::open_menu_props(&store);
         let order: Vec<&str> = props.options.iter().map(|option| option.value.as_str()).collect();
-        assert!(order.iter().position(|value| *value == "ses:ses_newer")
-            < order.iter().position(|value| *value == "ses:ses_older"));
+        assert!(
+            order.iter().position(|value| *value == "ses:ses_newer")
+                < order.iter().position(|value| *value == "ses:ses_older")
+        );
         // A pending permission flips the order (attention first).
         store.ingest_all([Ingest::Event(BusEvent::new(
             "permission.asked",
@@ -14786,11 +14782,13 @@ mod tests {
             "the attention row leads: {order:?}"
         );
         // A ses_ id query offers the direct-open row.
-        let id = "ses_".to_owned() + &"ABCDEFGHJKLMNOPQRSTUVXYZabcde".chars().take(26).collect::<String>();
+        let id = "ses_".to_owned()
+            + &"ABCDEFGHJKLMNOPQRSTUVXYZabcde".chars().take(26).collect::<String>();
         store.update_dialog(|entry| entry.select.filter = id.clone());
         let props = crate::components::dialog_open::open_menu_props(&store);
         assert_eq!(
-            props.options[0].value, format!("ses:{id}"),
+            props.options[0].value,
+            format!("ses:{id}"),
             "the direct row leads: {:?}",
             props.options.iter().map(|option| &option.value).collect::<Vec<_>>()
         );
@@ -14798,10 +14796,7 @@ mod tests {
         // A NON-id query does not spawn the row.
         store.update_dialog(|entry| entry.select.filter = "newer".to_owned());
         let props = crate::components::dialog_open::open_menu_props(&store);
-        assert!(!props
-            .options
-            .iter()
-            .any(|option| option.title.contains("Open session ")));
+        assert!(!props.options.iter().any(|option| option.title.contains("Open session ")));
     }
 
     #[test]
@@ -16661,18 +16656,12 @@ fn update_command_opens_the_dialog_with_actions() {
             "2.0.25".to_owned(),
         ));
         store.replace_dialog(DialogKind::Update, DialogSize::Medium);
-        let selected = store
-            .top_dialog()
-            .map(|entry| entry.select.selected)
-            .unwrap_or_default();
+        let selected = store.top_dialog().map(|entry| entry.select.selected).unwrap_or_default();
         assert_eq!(selected, 2, "the confirm row (Update) starts focused");
         // No confirm (up-to-date) → Skip.
         store.set_update_dialog(crate::components::update::UpdateDialogState::Current);
         store.open_dialog(DialogKind::Update, DialogSize::Medium);
-        let selected = store
-            .top_dialog()
-            .map(|entry| entry.select.selected)
-            .unwrap_or_default();
+        let selected = store.top_dialog().map(|entry| entry.select.selected).unwrap_or_default();
         assert_eq!(selected, 1, "Skip starts focused without a confirm");
     }
 

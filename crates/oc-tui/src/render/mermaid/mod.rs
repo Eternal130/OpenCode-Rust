@@ -172,9 +172,9 @@ pub fn render_mermaid_block_with_recovery(
 
             let lines: Vec<&str> = content.split('\n').collect();
             if error.line_number <= 2
-                || lines.get(error.line_number..).is_some_and(|tail| {
-                    tail.iter().any(|line| !line.trim().is_empty())
-                })
+                || lines
+                    .get(error.line_number..)
+                    .is_some_and(|tail| tail.iter().any(|line| !line.trim().is_empty()))
             {
                 return None;
             }

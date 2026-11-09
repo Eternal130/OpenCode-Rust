@@ -732,10 +732,7 @@ mod tests {
         ) -> std::pin::Pin<
             Box<
                 dyn std::future::Future<
-                        Output = Result<
-                            super::super::ToolOutcome,
-                            super::super::ToolFailure,
-                        >,
+                        Output = Result<super::super::ToolOutcome, super::super::ToolFailure>,
                     > + Send
                     + 'a,
             >,
@@ -793,10 +790,7 @@ mod tests {
             json!({}),
             Some(schema),
             Arc::new(FixedLeaf {
-                outcome: ToolOutcome {
-                    output: Some(json!({ "count": 3 })),
-                    ..Default::default()
-                },
+                outcome: ToolOutcome { output: Some(json!({ "count": 3 })), ..Default::default() },
             }),
             &harness.services,
             &hooks,

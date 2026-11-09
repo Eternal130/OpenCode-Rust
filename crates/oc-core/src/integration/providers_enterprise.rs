@@ -365,7 +365,10 @@ pub(super) async fn gitlab_refresh(value: OAuthValue) -> Result<CredentialValue,
         Ok(tokens) => {
             gitlab_refresh_results().insert(
                 key,
-                GitlabRefreshResult { until: now_ms() + GITLAB_REFRESH_RETENTION_MS, value: tokens.clone() },
+                GitlabRefreshResult {
+                    until: now_ms() + GITLAB_REFRESH_RETENTION_MS,
+                    value: tokens.clone(),
+                },
             );
             Ok(CredentialValue::OAuth(tokens))
         }
@@ -514,7 +517,6 @@ pub(super) fn azure_token_cache_clear_for_test() {
 /// (`provider_catalog::azure_sync`) mints its per-scope tokens through
 /// the same cache.
 pub(crate) async fn azure_cli_token(scope: &str) -> Result<(String, i64), String> {
-
     // G-260④ — a minted token is reused while >5 minutes remain
     // (azure.ts:92-95).
     if let Some(cached) = azure_token_cache().get(scope) {
@@ -527,14 +529,7 @@ pub(crate) async fn azure_cli_token(scope: &str) -> Result<(String, i64), String
     let output = tokio::time::timeout(
         Duration::from_secs(10),
         tokio::process::Command::new("az")
-            .args([
-                "account",
-                "get-access-token",
-                "--scope",
-                scope,
-                "--output",
-                "json",
-            ])
+            .args(["account", "get-access-token", "--scope", scope, "--output", "json"])
             .stdin(std::process::Stdio::null())
             .output(),
     )
@@ -1310,9 +1305,7 @@ async fn chatgpt_agent_host_id(db: &Arc<crate::database::Database>) -> String {
     }
     let host_id = format!("urn:uuid:{}", random_uuid_v4());
     let stored = host_id.clone();
-    let _ = db
-        .transaction(move |tx| tx.kv_set(CHATGPT_HOST_ID_KEY, &Value::String(stored)))
-        .await;
+    let _ = db.transaction(move |tx| tx.kv_set(CHATGPT_HOST_ID_KEY, &Value::String(stored))).await;
     host_id
 }
 
@@ -1324,14 +1317,7 @@ fn random_uuid_v4() -> String {
     bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
     bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10
     let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
-    format!(
-        "{}-{}-{}-{}-{}",
-        &hex[0..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..32]
-    )
+    format!("{}-{}-{}-{}-{}", &hex[0..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..32])
 }
 
 /// G-260② — reauthorization reuses the connection's registered client
@@ -1410,10 +1396,8 @@ pub(super) async fn chatgpt_authorize_at(
     // G-260② — authorizeURL (chatgpt.ts:509-531): a saved client id takes
     // precedence (no agent_name_hint); the stable agent host id rides
     // every request either way.
-    let mut params: Vec<(&str, &str)> = vec![(
-        "client_id",
-        saved_client_id.unwrap_or(CHATGPT_REGISTRATION_CLIENT_ID),
-    )];
+    let mut params: Vec<(&str, &str)> =
+        vec![("client_id", saved_client_id.unwrap_or(CHATGPT_REGISTRATION_CLIENT_ID))];
     if saved_client_id.is_none() {
         params.push(("agent_name_hint", "OpenCode"));
     }

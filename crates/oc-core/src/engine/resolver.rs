@@ -64,12 +64,12 @@ use oc_ai::route::client::RoutePatch;
 use oc_ai::schema::options::{merge_json_records, merge_string_records};
 
 use crate::database::schema::SessionRow;
-use crate::provider_catalog::Catalog;
 use crate::provider_catalog::facade::{
-    CustomModel, CustomProvider, FacadeContext, ModelConnection, custom_language_model,
-    language_model_for_model,
+    custom_language_model, language_model_for_model, CustomModel, CustomProvider, FacadeContext,
+    ModelConnection,
 };
 use crate::provider_catalog::native::package_name;
+use crate::provider_catalog::Catalog;
 use crate::session::runner::{ModelError, ModelResolver, ResolvedModel};
 
 /// The production resolver: catalog + user connections + custom
@@ -557,8 +557,7 @@ impl CatalogModelResolver {
         // G-259 — the azure deployment discovery sync: the narrowed
         // snapshot replaces the static azure record for resolution
         // (the ref model transform, azure.ts:400-411).
-        let azure_state = if provider_id == crate::provider_catalog::azure_sync::AZURE_PROVIDER_ID
-        {
+        let azure_state = if provider_id == crate::provider_catalog::azure_sync::AZURE_PROVIDER_ID {
             self.azure.as_ref().and_then(|sync| sync.state())
         } else {
             None
@@ -566,13 +565,13 @@ impl CatalogModelResolver {
         // G-259 — the DigitalOcean routers sync: the merged snapshot
         // replaces the static digitalocean record for resolution (the
         // ref provider transform, digitalocean.ts:158-170).
-        let digitalocean_state =
-            if provider_id == crate::provider_catalog::digitalocean_sync::DIGITALOCEAN_PROVIDER_ID
-            {
-                self.digitalocean.as_ref().and_then(|sync| sync.state())
-            } else {
-                None
-            };
+        let digitalocean_state = if provider_id
+            == crate::provider_catalog::digitalocean_sync::DIGITALOCEAN_PROVIDER_ID
+        {
+            self.digitalocean.as_ref().and_then(|sync| sync.state())
+        } else {
+            None
+        };
         let snapshot: &crate::provider_catalog::Snapshot = if let Some(state) = &copilot_state {
             &state.merged
         } else if let Some(state) = &modal_state {
@@ -1880,8 +1879,8 @@ mod console_merge_tests {
 #[cfg(test)]
 mod local_discovery_tests {
     use super::*;
-    use crate::provider_catalog::local::LocalDiscovery;
     use crate::provider_catalog::local::test_support::http_mock;
+    use crate::provider_catalog::local::LocalDiscovery;
     use oc_ai::route::transport::reqwest_transport::ReqwestTransport;
 
     fn catalog() -> Arc<Catalog> {

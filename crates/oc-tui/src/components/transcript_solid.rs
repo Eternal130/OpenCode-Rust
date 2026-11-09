@@ -92,12 +92,12 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use opentui_core::Rgba;
 use opentui_core::styled_text::{StyledText, TextChunk};
+use opentui_core::Rgba;
 use opentui_solid::builder::ForItemSource;
 use opentui_solid::element::{ForItem, PropValue};
 use opentui_solid::reactive::Reactive;
-use opentui_solid::{Element, Signal, box_, for_list, map, text};
+use opentui_solid::{box_, for_list, map, text, Element, Signal};
 
 use crate::components::chrome_solid::{family_wrapper_live, mount_family_wrapper};
 use crate::components::message::list::Transcript;
@@ -593,7 +593,7 @@ pub fn render_transcript_region(
 mod tests {
     use super::*;
     use crate::components::message::list::{
-        TranscriptOptions, message_groups_fixture, render_transcript, vscroll_messages_fixture,
+        message_groups_fixture, render_transcript, vscroll_messages_fixture, TranscriptOptions,
     };
     use crate::components::message::model::{Message, Part};
     use crate::theme::ThemeState;
@@ -640,8 +640,13 @@ mod tests {
                 1 => 0,
                 _ => maximum / 2,
             };
-            let frame =
-                render_transcript_region(&transcript, &theme, (width as u16, height as u16), offset, None);
+            let frame = render_transcript_region(
+                &transcript,
+                &theme,
+                (width as u16, height as u16),
+                offset,
+                None,
+            );
             assert_eq!(frame.height, height, "region height at step {step}");
             if step == 2 {
                 // Stream one more chunk into the tail assistant.
@@ -671,8 +676,13 @@ mod tests {
             let transcript =
                 render_transcript(&messages, &TranscriptOptions::default(), &theme, width);
             let offset = transcript.content_height.saturating_sub(height);
-            let frame =
-                render_transcript_region(&transcript, &theme, (width as u16, height as u16), offset, None);
+            let frame = render_transcript_region(
+                &transcript,
+                &theme,
+                (width as u16, height as u16),
+                offset,
+                None,
+            );
             assert_eq!(frame.width, width, "full-width region at {width}x{height}");
         }
     }
@@ -689,15 +699,7 @@ mod tests {
         let transcript = render_transcript(&messages, &TranscriptOptions::default(), &theme, 80);
         let offset = transcript.content_height.saturating_sub(16);
         crate::components::chrome_solid::reset_hub();
-        transcript_mount(
-            &transcript,
-            &theme,
-            (80, 16),
-            offset,
-            10,
-            4,
-            None,
-        );
+        transcript_mount(&transcript, &theme, (80, 16), offset, 10, 4, None);
         let mut frame = crate::components::chrome_solid::blank_frame(100, 24);
         // Hand-paint a glyph EVERYWHERE (the stand-in for every
         // unmigrated Frame painter; '#' appears in no fixture glyph).
@@ -751,7 +753,6 @@ mod tests {
         assert!(row.contains(label), "the label never painted: {row:?}");
     }
 
-
     /// The scheduler-fairness gate for the transcript family (the
     /// hub's generic guard): N syncs in one frame batch → exactly ONE
     /// flush at the seam.
@@ -769,10 +770,7 @@ mod tests {
             transcript_mount(&transcript, &theme, (80, 16), offset, 0, 0, None);
         }
         let hub = crate::components::chrome_solid::hub_for(80, 24);
-        assert!(
-            hub.borrow_mut().flush_if_pending(),
-            "a pending sync batch flushes exactly once"
-        );
+        assert!(hub.borrow_mut().flush_if_pending(), "a pending sync batch flushes exactly once");
         assert!(
             !hub.borrow_mut().flush_if_pending(),
             "a second flush with no intervening sync is a no-op (no double raster)"

@@ -1197,16 +1197,27 @@ pub const MODULE_LOADING_REJECTED: &str =
 /// Words after which a `/` opens a regex literal (operand position),
 /// not a division — the scanner's lexer heuristic.
 const REGEX_KEYWORDS: [&str; 14] = [
-    "return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "case", "do", "else",
-    "yield", "await", "throw",
+    "return",
+    "typeof",
+    "instanceof",
+    "in",
+    "of",
+    "new",
+    "delete",
+    "void",
+    "case",
+    "do",
+    "else",
+    "yield",
+    "await",
+    "throw",
 ];
 
 /// Characters after which a `/` opens a regex (operator/punctuation —
 /// an operand is expected). Everything else (identifier end, `)`,
 /// `]`, `}`, a string/template/regex end) reads as division.
-const REGEX_OPENERS: [char; 19] = [
-    '(', '[', '{', ',', ';', ':', '=', '!', '?', '&', '|', '+', '-', '*', '%', '^', '~', '<', '>',
-];
+const REGEX_OPENERS: [char; 19] =
+    ['(', '[', '{', ',', ';', ':', '=', '!', '?', '&', '|', '+', '-', '*', '%', '^', '~', '<', '>'];
 
 /// What the scan found in a program source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1663,8 +1674,7 @@ pub fn format_result(outcome: &RunOutcome) -> String {
     } else {
         None
     };
-    let logs = (!outcome.logs.is_empty())
-        .then(|| format!("Logs:\n{}", outcome.logs.join("\n")));
+    let logs = (!outcome.logs.is_empty()).then(|| format!("Logs:\n{}", outcome.logs.join("\n")));
     [Some(output), warnings, logs]
         .into_iter()
         .flatten()
@@ -2992,7 +3002,10 @@ mod g247_tests {
         let rejected: &[(&str, ModuleLoadToken)] = &[
             // Dynamic import — the direct escape the gap entry cites.
             (r#"await import("node:fs")"#, ModuleLoadToken::Import),
-            (r#"return import("node:child_process").then(m => m.spawn("id"))"#, ModuleLoadToken::Import),
+            (
+                r#"return import("node:child_process").then(m => m.spawn("id"))"#,
+                ModuleLoadToken::Import,
+            ),
             // Whitespace/newline variants between `import` and `(`.
             (r#"import ("node:fs")"#, ModuleLoadToken::Import),
             ("import\n(\n'node:fs'\n)", ModuleLoadToken::Import),
@@ -3015,11 +3028,7 @@ mod g247_tests {
             (r#"if (x) { await import("node:fs"); }"#, ModuleLoadToken::Import),
         ];
         for (code, expected) in rejected {
-            assert_eq!(
-                scan_program(code),
-                Some(*expected),
-                "must reject: {code}"
-            );
+            assert_eq!(scan_program(code), Some(*expected), "must reject: {code}");
         }
     }
 

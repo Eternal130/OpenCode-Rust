@@ -8,8 +8,7 @@ use oc_schema::tool::Content;
 use serde_json::json;
 
 use crate::location::{
-    ToolCallContext, ToolExecute, ToolRegistryState, ToolRunFailure,
-    ToolRunResult,
+    ToolCallContext, ToolExecute, ToolRegistryState, ToolRunFailure, ToolRunResult,
 };
 use crate::mcp::McpRegistry;
 use crate::permission::{AssertInput, Permission};
@@ -248,9 +247,8 @@ macro_rules! pipeline_leaf {
                 context: &'a ToolCallContext,
             ) -> std::pin::Pin<
                 Box<
-                    dyn std::future::Future<
-                            Output = Result<super::ToolOutcome, super::ToolFailure>,
-                        > + Send
+                    dyn std::future::Future<Output = Result<super::ToolOutcome, super::ToolFailure>>
+                        + Send
                         + 'a,
                 >,
             > {
@@ -519,7 +517,10 @@ mod tests {
                 .register_tool_execute_before(
                     crate::hooks::fn_hook(
                         move |event: &mut crate::hooks::ToolExecuteBeforeEvent| {
-                            before_seen.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(format!("before:{}", event.tool));
+                            before_seen
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .push(format!("before:{}", event.tool));
                             Ok(())
                         },
                     ),
@@ -537,7 +538,10 @@ mod tests {
                                 crate::hooks::ToolOutcome::Completed { .. } => "after",
                                 crate::hooks::ToolOutcome::Error { .. } => "after-error",
                             };
-                            after_seen.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(format!("{phase}:{}", event.tool));
+                            after_seen
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .push(format!("{phase}:{}", event.tool));
                             Ok(())
                         },
                     ),
@@ -547,13 +551,10 @@ mod tests {
         );
 
         // Success leg: the list tool completes offline (empty catalog).
-        let _ = crate::tool::tests::call(
-            &harness.tools,
-            "list_mcp_resources",
-            serde_json::json!({}),
-        )
-        .await
-        .expect("list");
+        let _ =
+            crate::tool::tests::call(&harness.tools, "list_mcp_resources", serde_json::json!({}))
+                .await
+                .expect("list");
 
         // Error leg: an invalid read input surfaces the ref decode
         // message (decodeInput runs in the pipeline, before the leaf).
@@ -588,8 +589,7 @@ mod tests {
     async fn g191_plain_text_resource_content_becomes_text_part() {
         let database = crate::database::Database::open_in_memory().await.expect("database");
         let bus = crate::bus::Bus::new(database, crate::bus::BusOptions::deterministic());
-        let connector =
-            crate::mcp::tests::scripted_connector(|| crate::mcp::tests::Script::new());
+        let connector = crate::mcp::tests::scripted_connector(|| crate::mcp::tests::Script::new());
         let mut servers = std::collections::BTreeMap::new();
         servers.insert("alpha".to_string(), crate::mcp::tests::local_config());
         let source = Arc::new(move || servers.clone());

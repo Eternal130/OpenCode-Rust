@@ -132,8 +132,7 @@ async fn derived_fields_mirror_ref_math() {
     let payload = json!({ "data": [claude, legacy_cache] }).to_string();
     let stub = models_stub(payload).await;
     let base_url = format!("http://127.0.0.1:{}", stub.port);
-    let transport: oc_ai::route::transport::SharedTransport =
-        Arc::new(ReqwestTransport::new());
+    let transport: oc_ai::route::transport::SharedTransport = Arc::new(ReqwestTransport::new());
     let remote = load_copilot_models(Arc::clone(&transport), &base_url, Vec::new())
         .await
         .expect("models load");
@@ -190,7 +189,12 @@ fn released_derivation() {
     remote["capabilities"]["family"] = json!("gpt");
     let remote: oc_ai::protocols::copilot::CopilotRemoteModel =
         serde_json::from_value(remote).expect("decode");
-    let entry = copilot_model_entry("gpt-9", &remote, "https://api.githubcopilot.com", CopilotPrevious::default());
+    let entry = copilot_model_entry(
+        "gpt-9",
+        &remote,
+        "https://api.githubcopilot.com",
+        CopilotPrevious::default(),
+    );
     // 2026-03-05 UTC in epoch ms.
     assert_eq!(entry.released, 1_772_668_800_000.0, "{}", entry.released);
 
@@ -215,7 +219,13 @@ fn variant_lanes() {
         let mut remote: serde_json::Value = remote_model("m", endpoints);
         remote["capabilities"]["family"] = json!("f");
         serde_json::Value::Object(
-            remote.as_object().unwrap().clone().into_iter().chain(extras.as_object().unwrap().clone()).collect(),
+            remote
+                .as_object()
+                .unwrap()
+                .clone()
+                .into_iter()
+                .chain(extras.as_object().unwrap().clone())
+                .collect(),
         )
     };
     let decode = |value: serde_json::Value| -> oc_ai::protocols::copilot::CopilotRemoteModel {
@@ -278,9 +288,8 @@ async fn utility_title_free_channel() {
         }
     });
 
-    let messages = vec![
-        UtilityTitleMessage { role: "user".into(), text: "help me port a compiler".into() },
-    ];
+    let messages =
+        vec![UtilityTitleMessage { role: "user".into(), text: "help me port a compiler".into() }];
     let input = UtilityTitleInput {
         base_url: &format!("http://127.0.0.1:{port}"),
         token: "ghu_utility_token",
@@ -299,10 +308,7 @@ async fn utility_title_free_channel() {
     assert!(request.starts_with("POST /chat/completions "), "{request}");
     let lowered = request.to_ascii_lowercase();
     assert!(lowered.contains("authorization: bearer ghu_utility_token"), "{request}");
-    assert!(
-        lowered.contains("x-interaction-type: agent-session-name-generation"),
-        "{request}"
-    );
+    assert!(lowered.contains("x-interaction-type: agent-session-name-generation"), "{request}");
     assert!(lowered.contains("x-interaction-id: ses_utility"), "{request}");
     assert!(lowered.contains("x-initiator: agent"), "{request}");
     assert!(lowered.contains("x-github-api-version: 2026-08-01"), "{request}");
@@ -315,8 +321,7 @@ async fn utility_title_free_channel() {
     assert_eq!(parsed["messages"][1]["role"], "user");
 
     // An empty content is a failure so the normal title path still runs.
-    assert!(utility_title_from_response(r#"{"choices":[{"message":{"content":"  "}}]}"#)
-        .is_err());
+    assert!(utility_title_from_response(r#"{"choices":[{"message":{"content":"  "}}]}"#).is_err());
     assert!(utility_title_from_response(r#"{"choices":[]}"#).is_err());
 }
 

@@ -10,9 +10,9 @@
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, Uri};
 use axum::response::Response;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
-use super::common::{ApiError, SharedState, parse_query_field};
+use super::common::{parse_query_field, ApiError, SharedState};
 use super::session::{query_field, services};
 
 pub fn routes() -> axum::Router<SharedState> {
@@ -204,10 +204,7 @@ fn is_text(bytes: &[u8]) -> bool {
     if std::str::from_utf8(bytes).is_err() {
         return false;
     }
-    let controls = bytes
-        .iter()
-        .filter(|byte| **byte < 9 || (**byte > 13 && **byte < 32))
-        .count();
+    let controls = bytes.iter().filter(|byte| **byte < 9 || (**byte > 13 && **byte < 32)).count();
     #[allow(clippy::cast_precision_loss)]
     let ratio = controls as f64 / bytes.len() as f64;
     ratio <= 0.3
@@ -413,7 +410,11 @@ fn is_vcs_root(project: &oc_core::project::Resolved, root: &std::path::Path) -> 
 /// scans (ref's `MAX_SAFE_INTEGER`), the 100k ceiling everywhere
 /// else.
 fn scan_budget(vcs_root: bool, exclusions: &ScanExclusions) -> usize {
-    if vcs_root && !exclusions.home_rooted { usize::MAX } else { SCAN_ENTRY_BUDGET }
+    if vcs_root && !exclusions.home_rooted {
+        usize::MAX
+    } else {
+        SCAN_ENTRY_BUDGET
+    }
 }
 
 /// Sensitive-directory exclusions for a scan (port of

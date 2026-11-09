@@ -34,8 +34,7 @@ use oc_tui::store::Store;
 
 /// The committed scenario directory (repo root / tools/parity).
 fn scenario_dir() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tools/parity/tree-scenarios")
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/parity/tree-scenarios")
 }
 
 /// Boot a session-backed store: one resynced session (s1) with a
@@ -70,8 +69,14 @@ fn boot_session(store: &Store) {
                     agent: "build".to_owned(),
                     model: "p/m".to_owned(),
                     parts: vec![
-                        Part::Reasoning { text: "check the wrap path".to_owned(), time: PartTime::default() },
-                        Part::Text { text: "done — the wrap now slices on cluster bounds".to_owned(), time: PartTime::default() },
+                        Part::Reasoning {
+                            text: "check the wrap path".to_owned(),
+                            time: PartTime::default(),
+                        },
+                        Part::Text {
+                            text: "done — the wrap now slices on cluster bounds".to_owned(),
+                            time: PartTime::default(),
+                        },
                     ],
                     finish: Some("stop".to_owned()),
                     error: None,
@@ -131,9 +136,7 @@ fn diff_files() -> Vec<oc_tui::components::diff_viewer::DiffFile> {
 
 fn capture_value(spec: &StateSpec) -> Option<serde_json::Value> {
     match spec.mount {
-        Mount::App(drive) => {
-            capture_app_state(spec.name, spec.source, SIZE.0, SIZE.1, drive)
-        }
+        Mount::App(drive) => capture_app_state(spec.name, spec.source, SIZE.0, SIZE.1, drive),
         Mount::DiffTwin => {
             let theme = oc_tui::theme::ThemeState::v2_dark();
             let files = diff_files();
@@ -150,7 +153,10 @@ fn capture_value(spec: &StateSpec) -> Option<serde_json::Value> {
                 SIZE.1.into(),
             );
             oc_tui::components::tree_capture::capture_tree_scenario(
-                spec.name, spec.source, SIZE.0, SIZE.1,
+                spec.name,
+                spec.source,
+                SIZE.0,
+                SIZE.1,
             )
         }
     }
@@ -249,8 +255,7 @@ fn states() -> Vec<StateSpec> {
 const SIZE: (u16, u16) = (100, 30);
 
 fn capture_pretty(spec: &StateSpec) -> String {
-    let value = capture_value(spec)
-        .unwrap_or_else(|| panic!("{}: no hub tree mounted", spec.name));
+    let value = capture_value(spec).unwrap_or_else(|| panic!("{}: no hub tree mounted", spec.name));
     serde_json::to_string_pretty(&value).expect("scenario serialization")
 }
 
@@ -267,8 +272,8 @@ fn scenarios_match_committed_captures() {
             eprintln!("updated {}", path.display());
             continue;
         }
-        let committed =
-            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: read {e}", path.display()));
+        let committed = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{}: read {e}", path.display()));
         assert_eq!(
             committed, json,
             "{}: capture drifted from the committed scenario (regenerate via \
@@ -342,7 +347,10 @@ const PINNED_PORT_MISMATCHES: &[(&str, usize, usize, usize, usize, &str)] = &[
 fn dual_engine_matches_frozen_oracle() {
     let oracle_dir = scenario_dir().join("oracle");
     if !oracle_dir.is_dir() {
-        eprintln!("SKIP: {} absent — freeze via tools/parity/tree-oracle-freeze.sh", oracle_dir.display());
+        eprintln!(
+            "SKIP: {} absent — freeze via tools/parity/tree-oracle-freeze.sh",
+            oracle_dir.display()
+        );
         return;
     }
     let mut ran = 0usize;
@@ -374,17 +382,14 @@ fn dual_engine_matches_frozen_oracle() {
             spec.name
         );
         let report = opentui_diff::compare::compare_filtered(&oracle, &rust, false);
-        if let Some(&(_, cells, fields, x, y, field)) = PINNED_PORT_MISMATCHES
-            .iter()
-            .find(|(n, ..)| *n == spec.name)
+        if let Some(&(_, cells, fields, x, y, field)) =
+            PINNED_PORT_MISMATCHES.iter().find(|(n, ..)| *n == spec.name)
         {
             assert!(
                 !report.identical,
                 "{}: pinned port mismatch has HEALED ({} vs {} cells) — re-freeze the oracle \
                  and drop the pin entry",
-                spec.name,
-                report.mismatched_cells,
-                report.total_cells
+                spec.name, report.mismatched_cells, report.total_cells
             );
             assert_eq!(
                 (report.mismatched_cells, report.diffs.len()),
@@ -415,7 +420,10 @@ fn dual_engine_matches_frozen_oracle() {
             report.oracle_frame,
             report.rust_frame
         );
-        println!("{}: IDENTICAL vs frozen @opentui 0.5.14 oracle ({} cells)", spec.name, report.total_cells);
+        println!(
+            "{}: IDENTICAL vs frozen @opentui 0.5.14 oracle ({} cells)",
+            spec.name, report.total_cells
+        );
     }
     assert!(ran > 0, "no frozen oracles found in {}", oracle_dir.display());
 }

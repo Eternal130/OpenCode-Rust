@@ -558,7 +558,10 @@ mod tests {
         .unwrap();
         let entry = resolve_entry(&pkg).expect("main entry");
         assert!(probe_feature_entry(&entry, "./tui").is_none(), "main must not fake a tui feature");
-        assert!(probe_feature_entry(&entry, "./rpc").is_none(), "main must not fake an rpc feature");
+        assert!(
+            probe_feature_entry(&entry, "./rpc").is_none(),
+            "main must not fake an rpc feature"
+        );
         // Classic files turn the features on.
         std::fs::write(pkg.join("rpc.js"), "export default {}").unwrap();
         std::fs::create_dir_all(pkg.join("tui")).unwrap();

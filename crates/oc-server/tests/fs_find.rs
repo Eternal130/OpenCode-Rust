@@ -164,8 +164,7 @@ async fn find_excludes_protected_and_heavy_trees() {
     // G-278② — `target` is NOT skipped (ref's rg --files has no
     // cargo-specific exclusion): its files stay find-visible.
     std::fs::create_dir_all(workspace.join("target").join("debug")).expect("target dir");
-    std::fs::write(workspace.join("target").join("debug").join("needle.bin"), "x")
-        .expect("write");
+    std::fs::write(workspace.join("target").join("debug").join("needle.bin"), "x").expect("write");
     std::fs::write(workspace.join("needle.txt"), "x").expect("top-level hit");
 
     let envelope = find_raw(&server, "needle").await;

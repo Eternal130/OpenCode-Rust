@@ -145,7 +145,8 @@ pub fn npm_check(target: &str, root: &Path, options: &InstallOptions) -> Result<
     check_outdated(target, root, options)
 }
 
-fn check_outdated(target: &str, root: &Path, options: &InstallOptions) -> Result<bool, String> {    let (package, requested) = split_spec(target);
+fn check_outdated(target: &str, root: &Path, options: &InstallOptions) -> Result<bool, String> {
+    let (package, requested) = split_spec(target);
     // A pinned spec is immutable (npm.ts:368 `!target.mutable → false`).
     if requested.is_some() {
         return Ok(false);

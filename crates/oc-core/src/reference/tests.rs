@@ -8,8 +8,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use super::repository::{
-    Reference, cache_identity, cache_path, is_file, is_remote, parse, parse_remote, same,
-    validate_branch,
+    cache_identity, cache_path, is_file, is_remote, parse, parse_remote, same, validate_branch,
+    Reference,
 };
 use super::repository_cache::{
     CacheError, EnsureInput, MemoryRefreshStore, Refresh, RefreshStore, RepositoryCache,
@@ -90,7 +90,9 @@ fn repository_rejects_file_urls_with_a_host() {
     assert!(parse("file://localhost/repo").is_some(), "localhost authority is allowed");
     // Percent-escapes decode; encoded separators reject.
     let reference = parse("file:///tmp/my%20repo").unwrap();
-    assert!(matches!(&reference, super::repository::Reference::File(file) if file.path == PathBuf::from("/tmp/my repo")));
+    assert!(
+        matches!(&reference, super::repository::Reference::File(file) if file.path == PathBuf::from("/tmp/my repo"))
+    );
     assert!(parse("file:///a%2Fb").is_none());
 }
 
@@ -712,8 +714,8 @@ fn instructions_restate_the_list_when_entries_change() {
 #[test]
 fn guidance_source_reads_renders_and_removes() {
     use crate::session::runner::context::{
-        InstructionList, ReadOutcome, instruction_read, reference_guidance_source, render_initial,
-        render_update,
+        instruction_read, reference_guidance_source, render_initial, render_update,
+        InstructionList, ReadOutcome,
     };
     use std::collections::BTreeMap;
 

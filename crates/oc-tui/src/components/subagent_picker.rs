@@ -31,8 +31,8 @@
 use crate::layout::{Placed, PlacedLine};
 use crate::render::Fill;
 use crate::store::{PickerEntry, PickerState, PickerTab};
-use crate::theme::ThemeState;
 use crate::style::{Color, Modifier, Style};
+use crate::theme::ThemeState;
 
 /// The body's fixed height (`maxHeight={5}` on the scrollbox — the
 /// corpus grids pin 5 body rows whether the list is empty or short).

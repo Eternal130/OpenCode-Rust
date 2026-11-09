@@ -390,50 +390,86 @@ async fn emit_g221_script(tx: &tokio::sync::broadcast::Sender<String>) {
     let pace = Duration::from_millis(700);
     // Phase 1 — two rows queue: the dock paints "2 pending".
     event("session.execution.started", session.clone());
-    event("session.inbox.enqueued", serde_json::json!({
-        "sessionID": SESSION_ID, "inboxID": "msg_g21",
-        "item": { "type": "user", "payload": { "text": "queued one" }, "delivery": "queue" },
-    }));
-    event("session.inbox.enqueued", serde_json::json!({
-        "sessionID": SESSION_ID, "inboxID": "msg_g22",
-        "item": { "type": "user", "payload": { "text": "queued two" }, "delivery": "queue" },
-    }));
+    event(
+        "session.inbox.enqueued",
+        serde_json::json!({
+            "sessionID": SESSION_ID, "inboxID": "msg_g21",
+            "item": { "type": "user", "payload": { "text": "queued one" }, "delivery": "queue" },
+        }),
+    );
+    event(
+        "session.inbox.enqueued",
+        serde_json::json!({
+            "sessionID": SESSION_ID, "inboxID": "msg_g22",
+            "item": { "type": "user", "payload": { "text": "queued two" }, "delivery": "queue" },
+        }),
+    );
     tokio::time::sleep(pace).await;
     // Phase 2 — one cancels, one delivers; a skill activates.
-    event("session.inbox.cancelled", serde_json::json!({ "sessionID": SESSION_ID, "inboxID": "msg_g21" }));
-    event("session.inbox.delivered", serde_json::json!({ "sessionID": SESSION_ID, "inboxID": "msg_g22" }));
-    event("session.skill.activated", serde_json::json!({
-        "sessionID": SESSION_ID, "id": "skl_deploy", "name": "deploy", "text": "…",
-    }));
+    event(
+        "session.inbox.cancelled",
+        serde_json::json!({ "sessionID": SESSION_ID, "inboxID": "msg_g21" }),
+    );
+    event(
+        "session.inbox.delivered",
+        serde_json::json!({ "sessionID": SESSION_ID, "inboxID": "msg_g22" }),
+    );
+    event(
+        "session.skill.activated",
+        serde_json::json!({
+            "sessionID": SESSION_ID, "id": "skl_deploy", "name": "deploy", "text": "…",
+        }),
+    );
     tokio::time::sleep(pace).await;
     // Phase 3 — a direct shell runs and exits 0.
-    event("session.shell.started", serde_json::json!({
-        "sessionID": SESSION_ID, "shell": { "id": "shl_g1", "command": "echo g221 hello", "status": "running" },
-    }));
+    event(
+        "session.shell.started",
+        serde_json::json!({
+            "sessionID": SESSION_ID, "shell": { "id": "shl_g1", "command": "echo g221 hello", "status": "running" },
+        }),
+    );
     tokio::time::sleep(pace).await;
-    event("session.shell.ended", serde_json::json!({
-        "sessionID": SESSION_ID,
-        "shell": { "id": "shl_g1", "command": "echo g221 hello", "status": "exited", "exit": 0 },
-        "output": { "output": "g221 shell output\n", "cursor": 18, "size": 18, "truncated": false },
-    }));
+    event(
+        "session.shell.ended",
+        serde_json::json!({
+            "sessionID": SESSION_ID,
+            "shell": { "id": "shl_g1", "command": "echo g221 hello", "status": "exited", "exit": 0 },
+            "output": { "output": "g221 shell output\n", "cursor": 18, "size": 18, "truncated": false },
+        }),
+    );
     // Phase 4 — a server-driven compaction runs to completion.
-    event("session.compaction.started", serde_json::json!({
-        "sessionID": SESSION_ID, "reason": "auto", "recent": "recent", "inputID": "msg_gcmp",
-    }));
-    event("session.compaction.delta", serde_json::json!({ "sessionID": SESSION_ID, "text": "Distilled " }));
-    event("session.compaction.ended", serde_json::json!({
-        "sessionID": SESSION_ID, "reason": "auto", "text": "Distilled context.", "recent": "recent",
-    }));
+    event(
+        "session.compaction.started",
+        serde_json::json!({
+            "sessionID": SESSION_ID, "reason": "auto", "recent": "recent", "inputID": "msg_gcmp",
+        }),
+    );
+    event(
+        "session.compaction.delta",
+        serde_json::json!({ "sessionID": SESSION_ID, "text": "Distilled " }),
+    );
+    event(
+        "session.compaction.ended",
+        serde_json::json!({
+            "sessionID": SESSION_ID, "reason": "auto", "text": "Distilled context.", "recent": "recent",
+        }),
+    );
     tokio::time::sleep(pace).await;
     // Phase 5 — a streaming tool input settles at its final text
     // (the REAL wire shape: id/name, no partID).
-    event("session.tool.input.started", serde_json::json!({
-        "sessionID": SESSION_ID, "assistantMessageID": "msg_stub_1", "id": "call_g1", "name": "bash",
-    }));
-    event("session.tool.input.ended", serde_json::json!({
-        "sessionID": SESSION_ID, "assistantMessageID": "msg_stub_1", "id": "call_g1",
-        "text": "{\"command\":\"oc fmt --check\"}",
-    }));
+    event(
+        "session.tool.input.started",
+        serde_json::json!({
+            "sessionID": SESSION_ID, "assistantMessageID": "msg_stub_1", "id": "call_g1", "name": "bash",
+        }),
+    );
+    event(
+        "session.tool.input.ended",
+        serde_json::json!({
+            "sessionID": SESSION_ID, "assistantMessageID": "msg_stub_1", "id": "call_g1",
+            "text": "{\"command\":\"oc fmt --check\"}",
+        }),
+    );
     tokio::time::sleep(pace).await;
     event("session.execution.succeeded", session);
 }
@@ -993,7 +1029,8 @@ async fn mini_pty_g221_inbox_skill_shell_compaction_tool_input() {
 #[tokio::test(flavor = "multi_thread")]
 async fn mini_pty_g221_replay_hydrates_blocks_and_pending() {
     let stub = start_stub(PromptMode::G221Replay).await;
-    let mut mini = MiniPty::spawn_replay(stub.port, &[], r#"{ "mini": { "tools": "show", "mono": true } }"#);
+    let mut mini =
+        MiniPty::spawn_replay(stub.port, &[], r#"{ "mini": { "tools": "show", "mono": true } }"#);
 
     assert!(
         mini.wait_for("→ Skill \"review\"", Duration::from_secs(30)),
@@ -1049,11 +1086,15 @@ async fn mini_pty_g221_replay_hydrates_blocks_and_pending() {
 #[tokio::test(flavor = "multi_thread")]
 async fn mini_pty_hydrate_restores_pending_permission_and_form() {
     let stub = start_stub(PromptMode::HydrateBlockers).await;
-    let mut mini = MiniPty::spawn_replay(stub.port, &[], r#"{ "mini": { "tools": "show", "mono": true } }"#);
+    let mut mini =
+        MiniPty::spawn_replay(stub.port, &[], r#"{ "mini": { "tools": "show", "mono": true } }"#);
 
     // The hydrate mounts the pending permission BEFORE any prompt.
     assert!(
-        mini.wait_for_any(&["Permission required", "ermission required", "Permissio"], Duration::from_secs(30)),
+        mini.wait_for_any(
+            &["Permission required", "ermission required", "Permissio"],
+            Duration::from_secs(30)
+        ),
         "the hydrated permission body mounted: {}",
         mini.output()
     );
@@ -1261,10 +1302,7 @@ async fn mini_pty_catalog_fetches_at_boot_and_refreshes_on_events() {
         std::thread::sleep(Duration::from_millis(100));
     }
     let after = stub.catalog_requests.lock().expect("lock").clone();
-    assert!(
-        after.len() > before,
-        "agent.updated re-fetched the catalogs: {after:?}"
-    );
+    assert!(after.len() > before, "agent.updated re-fetched the catalogs: {after:?}");
     // A FOREIGN location's event never refreshes.
     let before = after.len();
     let _ = stub.events.send(

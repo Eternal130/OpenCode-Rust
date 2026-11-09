@@ -385,9 +385,7 @@ fn resolve_hue_entry(
         // (ref resolve.ts:222-225 `throw "Unknown hue step"`).
         for step_key in map.keys() {
             if !schema::HUE_STEPS.contains(&step_key.as_str()) {
-                return Err(ThemeError(format!(
-                    "Unknown hue step at \"hue.{name}.{step_key}\""
-                )));
+                return Err(ThemeError(format!("Unknown hue step at \"hue.{name}.{step_key}\"")));
             }
         }
         let mut steps = [Rgba::TRANSPARENT; 9];

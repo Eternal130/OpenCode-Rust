@@ -13,7 +13,7 @@ use super::websearch_providers::SearchProvider;
 use crate::forms::Forms;
 use crate::permission::{AssertInput, PermissionError};
 use crate::tool::{
-    BuiltinTool, ToolExecuteWithContext, ToolFailure, ToolOutcome, ToolServices, permission_cause,
+    permission_cause, BuiltinTool, ToolExecuteWithContext, ToolFailure, ToolOutcome, ToolServices,
 };
 
 pub const NO_RESULTS: &str = "No search results found. Please try a different query.";

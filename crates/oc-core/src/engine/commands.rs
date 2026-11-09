@@ -15,8 +15,8 @@
 
 use parking_lot::RwLock;
 
-use crate::config::Loaded;
 use crate::config::command_md;
+use crate::config::Loaded;
 
 /// `plugin/command/initialize.txt`, verbatim (G-193.5, ref
 /// plugin/command.ts:8/31-41 — `${path}` substituted at registration).
@@ -280,9 +280,9 @@ mod tests {
             panic!("init is template-driven");
         };
         assert!(command.template.starts_with("Create or update `AGENTS.md` for this repository."));
-        assert!(
-            command.template.contains("If `AGENTS.md` already exists at `/work/repo`, improve it")
-        );
+        assert!(command
+            .template
+            .contains("If `AGENTS.md` already exists at `/work/repo`, improve it"));
         assert!(command.template.contains("$ARGUMENTS"));
 
         let review = table.get("review").expect("review registered");
@@ -296,11 +296,9 @@ mod tests {
         assert!(command
             .template
             .starts_with("You are a code reviewer. Your job is to review code changes and provide actionable feedback."));
-        assert!(
-            command
-                .template
-                .contains("1. **No arguments (default)**: Review all uncommitted changes")
-        );
+        assert!(command
+            .template
+            .contains("1. **No arguments (default)**: Review all uncommitted changes"));
         assert!(command.template.contains(
             "AVOID flattery, do not give any comments that are not helpful to the reader."
         ));

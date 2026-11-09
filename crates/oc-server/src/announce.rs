@@ -573,14 +573,10 @@ pub async fn refresh_location_branch(state: &Arc<AppState>, location: &LocationR
 /// branch, vcs.ts:118-152; the first event diffs against it).
 fn seed_location_head(state: &Arc<AppState>, location: &LocationRef) {
     let key = key_of(location);
-    state
-        .announce
-        .head_watch
-        .entry(key)
-        .or_insert_with(|| HeadWatch {
-            head: discover_head_file(&location.directory),
-            branch: discover_head_file(&location.directory).as_deref().and_then(head_branch),
-        });
+    state.announce.head_watch.entry(key).or_insert_with(|| HeadWatch {
+        head: discover_head_file(&location.directory),
+        branch: discover_head_file(&location.directory).as_deref().and_then(head_branch),
+    });
 }
 
 /// G-218 — the `vcs.branch.updated` subscription (ref vcs.ts:158-165):
@@ -589,7 +585,8 @@ fn seed_location_head(state: &Arc<AppState>, location: &LocationRef) {
 /// owning location's branch. Runs until the announcer's shutdown latch.
 async fn run_branch_subscription(state: Arc<AppState>, mut shutdown: watch::Receiver<bool>) {
     use futures::StreamExt as _;
-    let mut events = state.engine.bus.subscribe_types(&[oc_core::bus::registry::FILESYSTEM_CHANGED]);
+    let mut events =
+        state.engine.bus.subscribe_types(&[oc_core::bus::registry::FILESYSTEM_CHANGED]);
     loop {
         let event = tokio::select! {
             event = events.next() => match event {

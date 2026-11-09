@@ -336,11 +336,9 @@ fn answer_field(field: &Value) -> Result<Option<FormValue>, String> {
                 Ok(Some(FormValue::String(typed)))
             } else {
                 // number/integer: convert like ref `Number(value)`.
-                Ok(Some(FormValue::FormValueVariant2(
-                    oc_client::types::FormValueVariant2::Number(
-                        typed.parse::<f64>().map_err(|_| format!("{message}: Expected a number"))?,
-                    ),
-                )))
+                Ok(Some(FormValue::FormValueVariant2(oc_client::types::FormValueVariant2::Number(
+                    typed.parse::<f64>().map_err(|_| format!("{message}: Expected a number"))?,
+                ))))
             }
         }
     }
@@ -678,10 +676,7 @@ mod tests {
         // Required + hidden + no default is a validation failure (ref
         // formValidateValue on undefined).
         let fields = vec![string_field("secret", json!({ "hidden": true, "required": true }))];
-        assert_eq!(
-            answer_form(Some(&fields), &[]).unwrap_err(),
-            "secret: Required"
-        );
+        assert_eq!(answer_form(Some(&fields), &[]).unwrap_err(), "secret: Required");
     }
 
     /// Required empty string answers are rejected post-validate.

@@ -42,10 +42,9 @@ fn g237_prompt_resolves_typed_value_and_null_on_dismiss() {
     assert!(host.wait_ready(Duration::from_secs(15)), "host ready");
 
     // Round 1: the prompt queues with the full option shape.
-    assert!(host.tap().publish(oc_plugin_host::TapEvent::new(
-        "tui.poke",
-        serde_json::json!({ "round": 1 })
-    )));
+    assert!(host
+        .tap()
+        .publish(oc_plugin_host::TapEvent::new("tui.poke", serde_json::json!({ "round": 1 }))));
     let request = wait_for_prompt(&host, "the prompt request queued");
     let request_id = match &request {
         UiRequest::Prompt { request_id, plugin_id, title, description, placeholder, value } => {
@@ -69,10 +68,9 @@ fn g237_prompt_resolves_typed_value_and_null_on_dismiss() {
     );
 
     // Round 2: the dismissed prompt settles null (any unresolved close).
-    assert!(host.tap().publish(oc_plugin_host::TapEvent::new(
-        "tui.poke",
-        serde_json::json!({ "round": 2 })
-    )));
+    assert!(host
+        .tap()
+        .publish(oc_plugin_host::TapEvent::new("tui.poke", serde_json::json!({ "round": 2 }))));
     let request = wait_for_prompt(&host, "the second prompt request queued");
     let request_id = match &request {
         UiRequest::Prompt { request_id, .. } => *request_id,

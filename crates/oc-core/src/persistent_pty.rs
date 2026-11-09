@@ -950,12 +950,16 @@ impl PersistentPty {
                         if live.info.status != crate::pty::Status::Running {
                             break;
                         }
-                        (live.master.as_ref().and_then(|m| m.as_raw_fd()), live.info.foreground_process.clone())
+                        (
+                            live.master.as_ref().and_then(|m| m.as_raw_fd()),
+                            live.info.foreground_process.clone(),
+                        )
                     };
                     let Some(master_fd) = master_fd else { continue };
                     let process = foreground_process_of_pty(master_fd);
                     if process != current {
-                        let event = StreamEvent::ForegroundProcessChanged { process: process.clone() };
+                        let event =
+                            StreamEvent::ForegroundProcessChanged { process: process.clone() };
                         let mut terminals = inner.terminals.lock();
                         let Some(live) = terminals.get_mut(&id_for_probe) else { break };
                         if live.info.status != crate::pty::Status::Running {
@@ -1910,7 +1914,8 @@ fn foreground_scan_by_pgid(pgid: libc::pid_t) -> Option<String> {
         let Some(rest) = stat.rsplit_once(')').map(|(_, rest)| rest) else { continue };
         // rest starts with " <state> <ppid> <pgrp> ..." — fields 3,4,5
         // after the comm; pgrp is the third token of `rest`.
-        let pgrp = rest.split_whitespace().nth(2).and_then(|value| value.parse::<libc::pid_t>().ok());
+        let pgrp =
+            rest.split_whitespace().nth(2).and_then(|value| value.parse::<libc::pid_t>().ok());
         if pgrp == Some(pgid) {
             // comm sits between the first '(' and the last ')'.
             let comm = stat.split('(').nth(1).map(|tail| tail.rsplit(')').next().unwrap_or(tail));
@@ -2477,11 +2482,8 @@ mod tests {
         // settles EXITED but STAYS listed — no `removed` (G-229②).
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
-            let exited = service
-                .get(&info.id)
-                .expect("entry retained")
-                .status
-                == crate::pty::Status::Exited;
+            let exited =
+                service.get(&info.id).expect("entry retained").status == crate::pty::Status::Exited;
             if exited {
                 break;
             }
@@ -2489,9 +2491,10 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-        let premature_removal = events.lock().iter().any(|(type_, data)| {
-            type_ == "persistent-pty.removed" && data["ptyID"] == info.id.0
-        });
+        let premature_removal = events
+            .lock()
+            .iter()
+            .any(|(type_, data)| type_ == "persistent-pty.removed" && data["ptyID"] == info.id.0);
         assert!(!premature_removal, "unattached exit must NOT publish removed");
         assert!(
             service.list(Some(&session)).expect("list").iter().any(|row| row.id == info.id),
@@ -3038,10 +3041,7 @@ mod tests {
     #[test]
     fn g229_osc_title_scanner_multiple_titles_last_wins() {
         let mut scanner = OscTitleScanner::new();
-        assert_eq!(
-            scanner.feed(b"\x1b]0;One\x07junk\x1b]2;Two\x07"),
-            Some("Two".into())
-        );
+        assert_eq!(scanner.feed(b"\x1b]0;One\x07junk\x1b]2;Two\x07"), Some("Two".into()));
     }
 
     /// G-229① — a child emitting an OSC 0/2 title publishes
@@ -3157,10 +3157,15 @@ mod tests {
             assert!(
                 std::time::Instant::now() < deadline,
                 "foreground event never arrived; events so far: {:?}",
-                events.lock().iter().map(|event| match event {
-                    StreamEvent::ForegroundProcessChanged { process } => format!("fg:{process:?}"),
-                    other => format!("{other:?}"),
-                }).collect::<Vec<_>>()
+                events
+                    .lock()
+                    .iter()
+                    .map(|event| match event {
+                        StreamEvent::ForegroundProcessChanged { process } =>
+                            format!("fg:{process:?}"),
+                        other => format!("{other:?}"),
+                    })
+                    .collect::<Vec<_>>()
             );
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }

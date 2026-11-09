@@ -94,11 +94,7 @@ pub fn apply(base: &str, model: Option<&oc_schema::model::Info>, tools: &[String
             continue;
         }
         let rendered = super::system_prompt::render(&(family.template)(model), tools);
-        return if family.append {
-            format!("{base}\n\n{rendered}")
-        } else {
-            rendered
-        };
+        return if family.append { format!("{base}\n\n{rendered}") } else { rendered };
     }
     base.to_string()
 }
@@ -147,7 +143,8 @@ mod tests {
         let trinity = apply("b", Some(&model("trinity-1", "Trinity")), &[]);
         assert!(trinity.starts_with("You are opencode, an interactive CLI tool"));
         let meta = apply("b", Some(&model("muse-1", "Muse One")), &[]);
-        assert!(meta.contains("You are powered by Muse One, a large language model trained by Meta MSL."));
+        assert!(meta
+            .contains("You are powered by Muse One, a large language model trained by Meta MSL."));
         assert!(!meta.contains("{{MODEL_NAME}}"));
     }
 

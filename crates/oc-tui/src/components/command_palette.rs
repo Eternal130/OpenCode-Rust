@@ -2005,10 +2005,8 @@ pub fn model_list_props(store: &Store, title: &'static str) -> SelectProps {
     // (dialog-model.tsx:32-33): the sections render on an EMPTY query
     // while connected; a typed query prioritizes favorites instead
     // (`prioritizeFavorites`, dialog-model.tsx:106-112).
-    let filter = store
-        .top_dialog()
-        .map(|entry| entry.select.filter.trim().to_owned())
-        .unwrap_or_default();
+    let filter =
+        store.top_dialog().map(|entry| entry.select.filter.trim().to_owned()).unwrap_or_default();
     let ring = store.model_ring();
     let options = match &lists.models {
         ListState::Loading => vec![status_option("Loading models…")],
@@ -2020,24 +2018,28 @@ pub fn model_list_props(store: &Store, title: &'static str) -> SelectProps {
             // `sortModelOptions(…, connected())` — connected → grouped.
             sort_model_options(&mut rows, connected, &provider_name);
             let is_pinned = |provider: &str, model: &str| -> bool {
-                ring.document.favorite.iter().any(|favorite| {
-                    favorite.provider_id == provider && favorite.model_id == model
-                })
+                ring.document
+                    .favorite
+                    .iter()
+                    .any(|favorite| favorite.provider_id == provider && favorite.model_id == model)
             };
             let show_sections = connected && filter.is_empty();
             let favorite_of = |provider: &str, model: &str| -> bool {
-                ring.document.favorite.iter().any(|favorite| {
-                    favorite.provider_id == provider && favorite.model_id == model
-                })
+                ring.document
+                    .favorite
+                    .iter()
+                    .any(|favorite| favorite.provider_id == provider && favorite.model_id == model)
             };
             let mut options: Vec<SelectOption> = Vec::new();
             if show_sections {
                 // `toOptions(favorites, "Favorites")` + the recents
                 // minus favorites (dialog-model.tsx:58-63).
-                let mut pinned_row = |category: &str, provider: &str, model: &str| -> Option<SelectOption> {
-                    let row = rows.iter().find(|row| {
-                        row.provider_id == provider && row.id == model
-                    })?;
+                let mut pinned_row = |category: &str,
+                                      provider: &str,
+                                      model: &str|
+                 -> Option<SelectOption> {
+                    let row =
+                        rows.iter().find(|row| row.provider_id == provider && row.id == model)?;
                     let title = if row.name.is_empty() { row.id.clone() } else { row.name.clone() };
                     let mut option = SelectOption::titled(title, format!("{provider}/{model}"))
                         .categorized(category)
@@ -4603,7 +4605,10 @@ mod tests {
         let claude = props.options.iter().position(|option| option.value == "anthropic/claude");
         let grok = props.options.iter().position(|option| option.value == "opencode/grok-code");
         let (claude, grok) = (claude.expect("claude matches"), grok.expect("grok matches"));
-        assert!(claude < grok, "the favorite outranks the non-favorite in search: {claude} < {grok}");
+        assert!(
+            claude < grok,
+            "the favorite outranks the non-favorite in search: {claude} < {grok}"
+        );
     }
 
     /// D-05 — `sortModelOptions` ported verbatim from

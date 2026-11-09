@@ -26,7 +26,8 @@ use crate::provider_catalog::{Catalog, Snapshot};
 pub const DIGITALOCEAN_PROVIDER_ID: &str = "digitalocean";
 
 /// The routers inventory endpoint (digitalocean.ts:21).
-pub const DIGITALOCEAN_ROUTERS_ENDPOINT: &str = "https://api.digitalocean.com/v2/gen-ai/models/routers";
+pub const DIGITALOCEAN_ROUTERS_ENDPOINT: &str =
+    "https://api.digitalocean.com/v2/gen-ai/models/routers";
 
 /// The browser OAuth method id (digitalocean.ts:17).
 pub const DIGITALOCEAN_BROWSER_METHOD_ID: &str = "browser";
@@ -289,17 +290,22 @@ mod tests {
     #[test]
     fn routers_decode_is_strict() {
         assert_eq!(
-            parse_routers_response(&json!({ "model_routers": [{ "name": "alpha" }, { "name": "beta" }] }).to_string())
-                .expect("decodes"),
+            parse_routers_response(
+                &json!({ "model_routers": [{ "name": "alpha" }, { "name": "beta" }] }).to_string()
+            )
+            .expect("decodes"),
             vec!["alpha".to_owned(), "beta".to_owned()]
         );
         assert_eq!(
             parse_routers_response(&json!({ "model_routers": [] }).to_string()).expect("decodes"),
             Vec::<String>::new()
         );
-        assert!(parse_routers_response(&json!({ "model_routers": [{ "name": 123 }] }).to_string()).is_err());
-        assert!(parse_routers_response(&json!({ "model_routers": [{ "other": 1 }] }).to_string()).is_err());
-        assert!(parse_routers_response(&json!({ "model_routers": [{ "name": "" }] }).to_string()).is_err());
+        assert!(parse_routers_response(&json!({ "model_routers": [{ "name": 123 }] }).to_string())
+            .is_err());
+        assert!(parse_routers_response(&json!({ "model_routers": [{ "other": 1 }] }).to_string())
+            .is_err());
+        assert!(parse_routers_response(&json!({ "model_routers": [{ "name": "" }] }).to_string())
+            .is_err());
         assert!(parse_routers_response(&json!({}).to_string()).is_err());
         assert!(parse_routers_response("not json").is_err());
     }
@@ -312,10 +318,8 @@ mod tests {
     /// shape.
     #[test]
     fn routers_inject_over_the_static_catalog() {
-        let static_snapshot = catalog()
-            .provider(DIGITALOCEAN_PROVIDER_ID)
-            .expect("digitalocean in catalog")
-            .clone();
+        let static_snapshot =
+            catalog().provider(DIGITALOCEAN_PROVIDER_ID).expect("digitalocean in catalog").clone();
         let mut with_configured = static_snapshot.clone();
         with_configured.models.push(schema_model::Info {
             name: "Configured router".to_owned(),
@@ -325,7 +329,10 @@ mod tests {
                 ModelId::parse("router:configured"),
             )
         });
-        let merged = merge_digitalocean_snapshot(&with_configured, &["alpha".to_owned(), "configured".to_owned()]);
+        let merged = merge_digitalocean_snapshot(
+            &with_configured,
+            &["alpha".to_owned(), "configured".to_owned()],
+        );
 
         let alpha = merged
             .models

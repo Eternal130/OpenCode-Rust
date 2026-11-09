@@ -903,18 +903,9 @@ async fn persistent_framed_input_drops_malformed_frames() {
     // Malformed frames — each carries a distinctive 'q' payload that
     // must NEVER reach `cat` (all-ASCII so the Text variant is valid
     // UTF-8 as well; 'q' appears in no valid payload below).
-    socket
-        .send_binary(&input_frame(2, 80, 24, b"q-kind2\n"))
-        .await
-        .expect("send kind 2");
-    socket
-        .send_binary(&input_frame(1, 0, 24, b"q-cols0\n"))
-        .await
-        .expect("send cols 0");
-    socket
-        .send_binary(&input_frame(1, 80, 0, b"q-rows0\n"))
-        .await
-        .expect("send rows 0");
+    socket.send_binary(&input_frame(2, 80, 24, b"q-kind2\n")).await.expect("send kind 2");
+    socket.send_binary(&input_frame(1, 0, 24, b"q-cols0\n")).await.expect("send cols 0");
+    socket.send_binary(&input_frame(1, 80, 0, b"q-rows0\n")).await.expect("send rows 0");
     socket.send_binary(&[1, 0, 80]).await.expect("send short");
     // A malformed frame sent as TEXT goes through the same parse (and
     // is equally dropped).

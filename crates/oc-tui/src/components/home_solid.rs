@@ -42,14 +42,14 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use opentui_core::Rgba;
 use opentui_core::styled_text::{StyledText, TextChunk};
+use opentui_core::Rgba;
 use opentui_solid::element::PropValue;
 use opentui_solid::reactive::Reactive;
-use opentui_solid::{Element, Signal, box_, map, text};
+use opentui_solid::{box_, map, text, Element, Signal};
 
 use crate::components::composer::render::{FooterHints, PromptView};
-use crate::components::home::{HomeView, LOGO_LEFT, LOGO_RIGHT, plan_home};
+use crate::components::home::{plan_home, HomeView, LOGO_LEFT, LOGO_RIGHT};
 use crate::render::Frame;
 use crate::theme::ThemeState;
 use oc_theme::Rgba as ThemeRgba;
@@ -357,7 +357,6 @@ fn home_mount(
     );
 }
 
-
 fn styled_label(label: &str, fg: Rgb) -> StyledText {
     if label.is_empty() {
         StyledText::new(Vec::new())
@@ -601,8 +600,7 @@ pub fn mount_solid_home_view(
         // byte (the surface's background IS the backdrop color; the
         // unwritten gap column reads the fill, exactly the buffer's
         // cleared cells).
-        let background =
-            crate::render::CellColor::Rgb(backdrop.0, backdrop.1, backdrop.2);
+        let background = crate::render::CellColor::Rgb(backdrop.0, backdrop.1, backdrop.2);
         let mut items = Vec::new();
         let mut x = x0;
         let mut push = |items: &mut Vec<crate::components::chrome_solid::ChromeUnit>,
@@ -703,8 +701,8 @@ pub fn paint_solid_home_view(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::composer::PromptDraft;
     use crate::components::composer::render::AutocompleteView;
+    use crate::components::composer::PromptDraft;
     use crate::components::home::LOGO_WIDTH;
     use crate::wrap::display_width;
 
@@ -830,7 +828,8 @@ mod tests {
         assert_eq!(glyphs[glyphs.len() - 1].1.fg, backdrop, "the trailing glyph hides");
         // t≥200: byte-identical to the settled (plain) paint.
         let (settled, _, _) = paint_solid_home_view(&banner_view(200, 0), &theme, (80, 24), (0, 0));
-        let (later, _, _) = paint_solid_home_view(&banner_view(60_000, 0), &theme, (80, 24), (0, 0));
+        let (later, _, _) =
+            paint_solid_home_view(&banner_view(60_000, 0), &theme, (80, 24), (0, 0));
         assert_eq!(settled.cells, later.cells, "past the duration the fade is inert");
         let plain_view = banner_view(u64::MAX, 0);
         let (plain, _, _) = paint_solid_home_view(&plain_view, &theme, (80, 24), (0, 0));
@@ -851,7 +850,8 @@ mod tests {
         let mut view = banner_view(0, 0);
         view.update_since_ms = None;
         let (frame, _, _) = paint_solid_home_view(&view, &theme, (80, 24), (0, 0));
-        let (settled, _, _) = paint_solid_home_view(&banner_view(60_000, 0), &theme, (80, 24), (0, 0));
+        let (settled, _, _) =
+            paint_solid_home_view(&banner_view(60_000, 0), &theme, (80, 24), (0, 0));
         assert_eq!(frame.cells, settled.cells);
     }
 

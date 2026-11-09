@@ -341,7 +341,10 @@ impl rmcp::transport::streamable_http_client::StreamableHttpClient for SessionOb
         message: rmcp::model::ClientJsonRpcMessage,
         session_id: Option<std::sync::Arc<str>>,
         auth_header: Option<String>,
-        custom_headers: std::collections::HashMap<reqwest13::header::HeaderName, reqwest13::header::HeaderValue>,
+        custom_headers: std::collections::HashMap<
+            reqwest13::header::HeaderName,
+            reqwest13::header::HeaderValue,
+        >,
     ) -> Result<
         rmcp::transport::streamable_http_client::StreamableHttpPostResponse,
         rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>,
@@ -356,7 +359,10 @@ impl rmcp::transport::streamable_http_client::StreamableHttpClient for SessionOb
         message: rmcp::model::ClientJsonRpcMessage,
         session_id: Option<std::sync::Arc<str>>,
         auth_header: Option<String>,
-        custom_headers: std::collections::HashMap<reqwest13::header::HeaderName, reqwest13::header::HeaderValue>,
+        custom_headers: std::collections::HashMap<
+            reqwest13::header::HeaderName,
+            reqwest13::header::HeaderValue,
+        >,
         max_sse_event_size: usize,
     ) -> Result<
         rmcp::transport::streamable_http_client::StreamableHttpPostResponse,
@@ -380,7 +386,10 @@ impl rmcp::transport::streamable_http_client::StreamableHttpClient for SessionOb
         uri: std::sync::Arc<str>,
         session_id: std::sync::Arc<str>,
         auth_header: Option<String>,
-        custom_headers: std::collections::HashMap<reqwest13::header::HeaderName, reqwest13::header::HeaderValue>,
+        custom_headers: std::collections::HashMap<
+            reqwest13::header::HeaderName,
+            reqwest13::header::HeaderValue,
+        >,
     ) -> Result<(), rmcp::transport::streamable_http_client::StreamableHttpError<Self::Error>> {
         self.inner.delete_session(uri, session_id, auth_header, custom_headers).await
     }
@@ -391,7 +400,10 @@ impl rmcp::transport::streamable_http_client::StreamableHttpClient for SessionOb
         session_id: Option<std::sync::Arc<str>>,
         last_event_id: Option<String>,
         auth_header: Option<String>,
-        custom_headers: std::collections::HashMap<reqwest13::header::HeaderName, reqwest13::header::HeaderValue>,
+        custom_headers: std::collections::HashMap<
+            reqwest13::header::HeaderName,
+            reqwest13::header::HeaderValue,
+        >,
     ) -> Result<
         futures::stream::BoxStream<
             'static,
@@ -409,7 +421,10 @@ impl rmcp::transport::streamable_http_client::StreamableHttpClient for SessionOb
         session_id: Option<std::sync::Arc<str>>,
         last_event_id: Option<String>,
         auth_header: Option<String>,
-        custom_headers: std::collections::HashMap<reqwest13::header::HeaderName, reqwest13::header::HeaderValue>,
+        custom_headers: std::collections::HashMap<
+            reqwest13::header::HeaderName,
+            reqwest13::header::HeaderValue,
+        >,
         max_sse_event_size: usize,
     ) -> Result<
         futures::stream::BoxStream<
@@ -444,9 +459,11 @@ pub(super) fn transport_http_error<'a>(
     while let Some(current) = node {
         if let Some(typed) = current.downcast_ref::<rmcp::ServiceError>() {
             if let rmcp::ServiceError::TransportSend(dynamic) = typed {
-                if let Some(inner) =
-                    dynamic.error.downcast_ref::<rmcp::transport::streamable_http_client::StreamableHttpError<reqwest13::Error>>()
-                {
+                if let Some(inner) = dynamic
+                    .error
+                    .downcast_ref::<rmcp::transport::streamable_http_client::StreamableHttpError<
+                    reqwest13::Error,
+                >>() {
                     return Some(inner);
                 }
             }
@@ -473,9 +490,9 @@ pub(super) fn unauthorized(error: &(dyn std::error::Error + 'static)) -> bool {
         | rmcp::transport::streamable_http_client::StreamableHttpError::InsufficientScope(_) => {
             true
         }
-        rmcp::transport::streamable_http_client::StreamableHttpError::Client(inner) => inner
-            .status()
-            .is_some_and(|status| status.as_u16() == 401 || status.as_u16() == 403),
+        rmcp::transport::streamable_http_client::StreamableHttpError::Client(inner) => {
+            inner.status().is_some_and(|status| status.as_u16() == 401 || status.as_u16() == 403)
+        }
         rmcp::transport::streamable_http_client::StreamableHttpError::UnexpectedServerResponse(
             text,
         ) => text.starts_with("HTTP 401") || text.starts_with("HTTP 403"),
@@ -501,10 +518,7 @@ pub(super) fn session_expired(
     session_attached: bool,
 ) -> bool {
     if transport_http_error(error).is_some_and(|http| {
-        matches!(
-            http,
-            rmcp::transport::streamable_http_client::StreamableHttpError::SessionExpired
-        )
+        matches!(http, rmcp::transport::streamable_http_client::StreamableHttpError::SessionExpired)
     }) {
         return true;
     }
@@ -536,7 +550,9 @@ type BoxedRequest<T> = Pin<Box<dyn Future<Output = Result<T, RequestError>> + Se
 /// deadline has not passed" — `Schedule.max([exponential(250ms, 4),
 /// recurs(2)])` (G-280①): the exponential arm proposes 250/1000/4000…,
 /// `recurs(2)` bounds it to two hops, `max` picks the proposed delay.
-pub(super) async fn retrying<T>(mut attempt: impl FnMut() -> BoxedRequest<T>) -> Result<T, RequestError> {
+pub(super) async fn retrying<T>(
+    mut attempt: impl FnMut() -> BoxedRequest<T>,
+) -> Result<T, RequestError> {
     const DELAYS_MS: [u64; 2] = [250, 1000];
     let mut round = 0;
     loop {
@@ -760,9 +776,7 @@ impl Connection {
         let chain = error_chain(error);
         // G-223: typed classification — a 404 only counts as expiry when
         // the transport carried a session id (see `session_expired`).
-        if self.remote
-            && !self.expiry_reported()
-            && session_expired(error, self.session_attached())
+        if self.remote && !self.expiry_reported() && session_expired(error, self.session_attached())
         {
             self.expiry_flag.store(true, std::sync::atomic::Ordering::SeqCst);
             return RequestError {
@@ -1394,13 +1408,8 @@ async fn connect_local(
     let stdout = StopOnDropReader { inner: Box::new(stdout), stop: Some(stop) };
     // rmcp's async-rw transport over (read, write) — the same plumbing
     // TokioChildProcess wrapped internally.
-    match start(
-        input,
-        (stdout, stdin),
-        false,
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-    )
-    .await
+    match start(input, (stdout, stdin), false, Arc::new(std::sync::atomic::AtomicBool::new(false)))
+        .await
     {
         Ok(connection) => Ok(connection),
         Err(failure) => {
@@ -1525,15 +1534,14 @@ async fn connect_remote(
                 session_attached: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             };
             let session_attached = Arc::clone(&observing.session_attached);
-            let transport =
-                StreamableHttpClientTransport::<SessionObservingClient>::with_client(
-                    observing,
-                    // rmcp 0.5 had no transparent 404 session recovery — the
-                    // registry's expiry handling owns reconnect+replay, so the
-                    // 3.7 default (`true`) must stay off.
-                    StreamableHttpClientTransportConfig::with_uri(url.to_string())
-                        .reinit_on_expired_session(false),
-                );
+            let transport = StreamableHttpClientTransport::<SessionObservingClient>::with_client(
+                observing,
+                // rmcp 0.5 had no transparent 404 session recovery — the
+                // registry's expiry handling owns reconnect+replay, so the
+                // 3.7 default (`true`) must stay off.
+                StreamableHttpClientTransportConfig::with_uri(url.to_string())
+                    .reinit_on_expired_session(false),
+            );
             start(input, transport, true, session_attached).await
         }
     };

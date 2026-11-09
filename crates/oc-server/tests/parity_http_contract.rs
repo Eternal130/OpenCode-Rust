@@ -1616,10 +1616,7 @@ async fn g233_move_directory_error_messages() {
     .expect("raw");
     assert_eq!(response.status, 400, "nonexistent directory: {}", response.text());
     let envelope = response.json();
-    assert_eq!(
-        envelope["message"],
-        "Directory does not exist: /definitely/not/here-g233"
-    );
+    assert_eq!(envelope["message"], "Directory does not exist: /definitely/not/here-g233");
 
     // A FILE target: "Not a directory: <dir>".
     let file_target = server.workspace.join("g233_file.txt");
@@ -1629,16 +1626,17 @@ async fn g233_move_directory_error_messages() {
         "POST",
         &format!("/api/session/{session}/move"),
         &[("content-type", "application/json")],
-        format!(r#"{{"directory": {}}}"#, serde_json::to_string(&file_target.display().to_string()).unwrap()).as_bytes(),
+        format!(
+            r#"{{"directory": {}}}"#,
+            serde_json::to_string(&file_target.display().to_string()).unwrap()
+        )
+        .as_bytes(),
     )
     .await
     .expect("raw");
     assert_eq!(response.status, 400, "file target: {}", response.text());
     let envelope = response.json();
-    assert_eq!(
-        envelope["message"],
-        format!("Not a directory: {}", file_target.display())
-    );
+    assert_eq!(envelope["message"], format!("Not a directory: {}", file_target.display()));
 }
 
 // ---------------------------------------------------------------------------

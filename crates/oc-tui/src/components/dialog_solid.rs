@@ -561,8 +561,7 @@ fn title_chunks(inputs: &DialogInputs, paint: &RowPaint, index: usize) -> Styled
         let run_fg = if paint.bold { paint.title_fg } else { fg };
         for atom in crate::wrap::flatten(
             text,
-            crate::style::Style::new()
-                .fg(crate::style::Color::Rgb(run_fg.0, run_fg.1, run_fg.2)),
+            crate::style::Style::new().fg(crate::style::Color::Rgb(run_fg.0, run_fg.1, run_fg.2)),
         ) {
             let step = atom.width.max(1);
             if used + step > clip {
@@ -2363,9 +2362,7 @@ fn build_inputs(
         // prompt family (dynamic title + the field's placeholder +
         // description/error rows); the select-style fields carry
         // option rows and fall to the generic Select family below.
-        DialogKind::IntegrationForm { .. } if props.options.is_empty() => {
-            Family::ConnectPrompt
-        }
+        DialogKind::IntegrationForm { .. } if props.options.is_empty() => Family::ConnectPrompt,
         DialogKind::Help => Family::Help,
         DialogKind::TabMenu { .. } => Family::Menu,
         DialogKind::Plugin { .. } if plugin.is_some_and(|content| !content.is_select()) => {

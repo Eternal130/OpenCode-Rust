@@ -47,8 +47,7 @@ async fn gitlab_port_lock() -> std::fs::File {
         .expect("lock file");
     loop {
         #[allow(unsafe_code)] // contained flock(2) on the lock file above
-        let held =
-            unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
+        let held = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
         if held {
             return file;
         }
@@ -521,16 +520,10 @@ async fn force_refresh_gates_on_credential_shape_and_persists() {
 
     // The forced refresh: no expiry margin, the new token returns and
     // persists.
-    let access = host
-        .connection_force_refresh("snowflake-cortex", "browser")
-        .await
-        .expect("refreshed");
+    let access =
+        host.connection_force_refresh("snowflake-cortex", "browser").await.expect("refreshed");
     assert_eq!(access, "refreshed-from-rejected");
-    let active = host
-        .connection_active("snowflake-cortex")
-        .await
-        .expect("active")
-        .expect("some");
+    let active = host.connection_active("snowflake-cortex").await.expect("active").expect("some");
     let ConnectionInfo::Credential { id, .. } = active else { panic!() };
     let stored = host.store().get(&id).await.expect("get").expect("stored");
     let CredentialValue::OAuth(persisted) = stored.value else { panic!() };
@@ -805,7 +798,10 @@ async fn zen_device_flow_round_trip_against_mock() {
     let requests = mock.requests().join("\n");
     assert!(requests.contains("\"client_id\":\"opencode-cli\""), "{requests}");
     assert!(requests.contains("\"supports_org_scope\":true"), "{requests}");
-    assert!(requests.contains("\"grant_type\":\"urn:ietf:params:oauth:grant-type:device_code\""), "{requests}");
+    assert!(
+        requests.contains("\"grant_type\":\"urn:ietf:params:oauth:grant-type:device_code\""),
+        "{requests}"
+    );
     assert!(requests.contains("\"device_code\":\"dev-123\""), "{requests}");
     // The two discovery GETs ride the fresh bearer (opencode.ts:592-600).
     assert!(requests.contains("authorization: Bearer zen-access"), "{requests}");
@@ -1136,10 +1132,7 @@ async fn zen_org_resolution_matches_org_id_or_sorts_by_name() {
             "/auth/device/token",
             vec![json!({"access_token": "a2", "refresh_token": "r2", "expires_in": 3600})],
         ),
-        (
-            "/api/user",
-            vec![json!({"id": "u2", "email": "u2@t.test"})],
-        ),
+        ("/api/user", vec![json!({"id": "u2", "email": "u2@t.test"})]),
         (
             "/api/orgs",
             vec![json!([
@@ -1370,7 +1363,8 @@ async fn gitlab_pkce_flow_round_trip_against_mock() {
 }
 
 #[tokio::test]
-async fn gitlab_bundled_client_rejected_off_gitlab_com() {    let _env = env_guard().await;
+async fn gitlab_bundled_client_rejected_off_gitlab_com() {
+    let _env = env_guard().await;
     #[allow(unsafe_code)]
     unsafe {
         std::env::remove_var("GITLAB_OAUTH_CLIENT_ID");
@@ -1389,7 +1383,8 @@ async fn gitlab_bundled_client_rejected_off_gitlab_com() {    let _env = env_gua
 }
 
 #[tokio::test]
-async fn gitlab_refresh_rotates_via_mock() {    let mock = MockOAuth::start(vec![(
+async fn gitlab_refresh_rotates_via_mock() {
+    let mock = MockOAuth::start(vec![(
         "/oauth/token",
         vec![json!({"access_token": "gl-rotated", "refresh_token": "gl-rotated-refresh", "expires_in": 7200})],
     )])
@@ -1801,11 +1796,7 @@ async fn chatgpt_connector_round_trip_against_mock() {
     // request; agent_name_hint only when no saved client exists.
     assert!(authorization.url.contains("client_id=dynamic_agent_client"), "{}", authorization.url);
     assert!(authorization.url.contains("agent_name_hint=OpenCode"), "{}", authorization.url);
-    assert!(
-        authorization.url.contains("ext_agent_host_id=urn%3Auuid%3A"),
-        "{}",
-        authorization.url
-    );
+    assert!(authorization.url.contains("ext_agent_host_id=urn%3Auuid%3A"), "{}", authorization.url);
     assert!(authorization.url.contains("nonce="), "{}", authorization.url);
     assert!(authorization.url.contains("chatgpt.tokens.use.direct"), "{}", authorization.url);
     let state = parse_query_param(&authorization.url, "state").expect("state");
@@ -1878,11 +1869,7 @@ async fn chatgpt_reauthorization_reuses_saved_client() {
     )
     .await
     .expect("authorize");
-    assert!(
-        authorization.url.contains("client_id=client_reg_1"),
-        "{}",
-        authorization.url
-    );
+    assert!(authorization.url.contains("client_id=client_reg_1"), "{}", authorization.url);
     assert!(
         !authorization.url.contains("agent_name_hint"),
         "no registration hint when a saved client exists: {}",
@@ -1892,8 +1879,11 @@ async fn chatgpt_reauthorization_reuses_saved_client() {
     let nonce = parse_query_param(&authorization.url, "nonce").expect("nonce");
     let redirect = parse_query_param(&authorization.url, "redirect_uri").expect("redirect");
     mock.serve("/.well-known/jwks.json", jwks_document("sign-in", SIGNING_KEY_N));
-    let id_token =
-        signed_id_token(&valid_claims(&nonce, "client_reg_1", 9_999_999_999), "sign-in", SIGNING_KEY_PEM);
+    let id_token = signed_id_token(
+        &valid_claims(&nonce, "client_reg_1", 9_999_999_999),
+        "sign-in",
+        SIGNING_KEY_PEM,
+    );
     *mock.slot.lock() = Some((
         200,
         json!({
@@ -1907,8 +1897,9 @@ async fn chatgpt_reauthorization_reuses_saved_client() {
 
     // The callback omits client_id — the saved client completes the flow
     // (G-234②: the redirect responds only after the exchange).
-    let callback_get =
-        tokio::spawn(async move { reqwest::get(format!("{redirect}?code=cg-code&state={state}")).await });
+    let callback_get = tokio::spawn(async move {
+        reqwest::get(format!("{redirect}?code=cg-code&state={state}")).await
+    });
     let AuthMode::Auto(callback_future) = authorization.mode else { panic!("auto") };
     let value = callback_future.await.expect("callback value");
     let response = callback_get.await.expect("join").expect("callback");
@@ -3398,7 +3389,11 @@ async fn g225_corrupt_credential_value_fails_the_read_not_silently_empties() {
             id: None,
             integration_id: "github",
             label: None,
-            value: &CredentialValue::Key(KeyValue { key: "k-1".into(), metadata: None, configuration: None }),
+            value: &CredentialValue::Key(KeyValue {
+                key: "k-1".into(),
+                metadata: None,
+                configuration: None,
+            }),
             activate: None,
         })
         .await
@@ -3437,14 +3432,21 @@ async fn g225_corrupt_credential_value_fails_the_read_not_silently_empties() {
             id: None,
             integration_id: "linear",
             label: None,
-            value: &CredentialValue::Key(KeyValue { key: "k-2".into(), metadata: None, configuration: None }),
+            value: &CredentialValue::Key(KeyValue {
+                key: "k-2".into(),
+                metadata: None,
+                configuration: None,
+            }),
             activate: None,
         })
         .await
         .expect("healthy create 2");
     let listed = store.list("linear").await.expect("healthy integration reads");
     assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].value, CredentialValue::Key(KeyValue { key: "k-2".into(), metadata: None, configuration: None }));
+    assert_eq!(
+        listed[0].value,
+        CredentialValue::Key(KeyValue { key: "k-2".into(), metadata: None, configuration: None })
+    );
 }
 
 #[tokio::test]
@@ -3463,7 +3465,11 @@ async fn g225_row_without_integration_id_is_skipped() {
             id: Some("cred_kept"),
             integration_id: "github",
             label: None,
-            value: &CredentialValue::Key(KeyValue { key: "k".into(), metadata: None, configuration: None }),
+            value: &CredentialValue::Key(KeyValue {
+                key: "k".into(),
+                metadata: None,
+                configuration: None,
+            }),
             activate: None,
         })
         .await
@@ -3507,13 +3513,7 @@ async fn row_times(db: &Arc<crate::database::Database>, id: &str) -> (i64, i64, 
             .query_row(
                 "SELECT active, time_created, time_updated FROM credential WHERE id = ?1",
                 [&id],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, i64>(2)?,
-                    ))
-                },
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
             )
             .map_err(crate::database::DbError::Sqlite)
     })
@@ -3654,7 +3654,10 @@ async fn g234_loopback_serves_branded_success_and_error_pages() {
     async fn get(url: &str) -> (String, String) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let mut stream = tokio::net::TcpStream::connect(url).await.expect("connect");
-        stream.write_all(b"GET /callback HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").await.expect("write");
+        stream
+            .write_all(b"GET /callback HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+            .await
+            .expect("write");
         let mut body = Vec::new();
         stream.read_to_end(&mut body).await.expect("read");
         let text = String::from_utf8_lossy(&body).into_owned();
@@ -3727,7 +3730,9 @@ async fn g234_loopback_bootstrap_is_the_shared_page() {
     assert!(text.starts_with("HTTP/1.1 200"), "status: {text}");
     assert!(text.contains("Finishing sign-in"), "branded pending card: {text}");
     assert!(text.contains("Completing your xAI authorization."));
-    assert!(text.contains("var TOKEN_URL=new URL(\"/callback/token\",window.location.origin).href;"));
+    assert!(
+        text.contains("var TOKEN_URL=new URL(\"/callback/token\",window.location.origin).href;")
+    );
 }
 
 // -- G-260③: host-side form validation (ref form.ts:238-360) ------------------------
@@ -3887,11 +3892,8 @@ async fn g260_azure_form_omitted_and_token_cached_when_configured() {
     #[allow(unsafe_code)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(
-            dir.path().join("az"),
-            std::fs::Permissions::from_mode(0o755),
-        )
-        .expect("chmod");
+        std::fs::set_permissions(dir.path().join("az"), std::fs::Permissions::from_mode(0o755))
+            .expect("chmod");
     }
     let old_path = std::env::var("PATH").unwrap_or_default();
     // G-260④ — a configured resource omits the form (azure.ts:121-133).
@@ -3904,19 +3906,16 @@ async fn g260_azure_form_omitted_and_token_cached_when_configured() {
     let host = host().await;
     let info = host.get("azure").await.expect("get").expect("present");
     assert!(
-        info.methods.iter().any(|method| matches!(
-            method,
-            super::types::Method::Key { form: None, .. }
-        )),
+        info.methods
+            .iter()
+            .any(|method| matches!(method, super::types::Method::Key { form: None, .. })),
         "the key method carries no form once the resource is configured"
     );
 
     // No answer at all: the env-configured resource satisfies the flow
     // (azure.ts:155-158).
-    let attempt = host
-        .oauth_connect("azure", "azure-cli", &FormAnswer::new(), None)
-        .await
-        .expect("connect");
+    let attempt =
+        host.oauth_connect("azure", "azure-cli", &FormAnswer::new(), None).await.expect("connect");
     let status = wait_complete(&host, "azure", &attempt, 200).await;
     assert!(matches!(status, AttemptStatus::Complete { .. }), "{status:?}");
     let active = host.connection_active("azure").await.expect("active").expect("some");
@@ -4002,14 +4001,14 @@ async fn g284_connection_status_dedups_unchanged() {
     let (host, bus) = host_with_bus().await;
     let mut subscription = bus.subscribe_type("integration.updated");
     // Drain whatever arrived before the probe window.
-    async fn drain(
-        subscription: &mut crate::bus::Subscription,
-        settle: u64,
-    ) -> usize {
+    async fn drain(subscription: &mut crate::bus::Subscription, settle: u64) -> usize {
         let mut seen = 0;
         loop {
-            match tokio::time::timeout(std::time::Duration::from_millis(settle), subscription.next())
-                .await
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(settle),
+                subscription.next(),
+            )
+            .await
             {
                 Ok(Some(_)) => seen += 1,
                 _ => break,

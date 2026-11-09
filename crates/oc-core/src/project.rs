@@ -1480,7 +1480,8 @@ fn main_worktree(worktree: &Path, common_directory: &Path) -> Option<PathBuf> {
 }
 
 /// Cached project id stored at `<store>/opencode`.
-fn cached_id(store: &Path) -> Option<String> {    let value = std::fs::read_to_string(store.join("opencode")).ok()?;
+fn cached_id(store: &Path) -> Option<String> {
+    let value = std::fs::read_to_string(store.join("opencode")).ok()?;
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
@@ -2028,11 +2029,7 @@ mod tests {
             .args(["worktree", "add", linked.to_str().unwrap(), "main"])
             .output()
             .expect("worktree add");
-        assert!(
-            bare_flag.status.success(),
-            "{}",
-            String::from_utf8_lossy(&bare_flag.stderr)
-        );
+        assert!(bare_flag.status.success(), "{}", String::from_utf8_lossy(&bare_flag.stderr));
         let porcelain = Command::new("git")
             .arg("-C")
             .arg(&linked)

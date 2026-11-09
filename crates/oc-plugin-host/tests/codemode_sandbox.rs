@@ -96,9 +96,10 @@ fn codemode_sandbox_rejects_module_loading() {
         r#"return `a ${ `b ${ require("fs") } c` } d`;"#,
     ];
     for code in rejected {
-        let run =
-            block_on(host.codemode_evaluate_async(code, &catalog, Duration::from_secs(10)))
-                .unwrap_or_else(|_| panic!("rejection is a program result, not a transport error: {code}"));
+        let run = block_on(host.codemode_evaluate_async(code, &catalog, Duration::from_secs(10)))
+            .unwrap_or_else(|_| {
+                panic!("rejection is a program result, not a transport error: {code}")
+            });
         assert_eq!(
             run.error.as_deref(),
             Some("Code Mode programs cannot use import()/require — the sandbox forbids module loading."),
@@ -204,9 +205,11 @@ fn codemode_sandbox_disables_timers() {
     }
 
     // A bare un-caught call surfaces as the program's error verbatim.
-    let run = block_on(
-        host.codemode_evaluate_async("setTimeout(() => {}, 1); return 1;", &catalog, Duration::from_secs(10)),
-    )
+    let run = block_on(host.codemode_evaluate_async(
+        "setTimeout(() => {}, 1); return 1;",
+        &catalog,
+        Duration::from_secs(10),
+    ))
     .expect("the throw is the program's error");
     assert_eq!(
         run.error.as_deref(),

@@ -113,9 +113,7 @@ var TOKEN_URL=new URL({token_path_literal},window.location.origin).href;
 
 /// `scriptString` (page.ts:139-141).
 fn script_string(value: &str) -> String {
-    serde_json::to_string(value)
-        .unwrap_or_else(|_| format!("{value:?}"))
-        .replace('<', "\\u003c")
+    serde_json::to_string(value).unwrap_or_else(|_| format!("{value:?}")).replace('<', "\\u003c")
 }
 
 struct RenderCard<'a> {
