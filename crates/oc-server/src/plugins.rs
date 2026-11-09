@@ -352,6 +352,7 @@ fn plugins_disabled() -> bool {
 /// [`READY_TIMEOUT`] — `boot_and_serve` runs this inside
 /// `spawn_blocking`.
 #[must_use]
+#[allow(clippy::too_many_lines)] // plugin boot pipeline; 1:1 with the ref boot
 pub fn boot(
     ops: &[oc_plugin_host::PluginOp],
     loaded: &Loaded,
@@ -689,7 +690,7 @@ impl PluginSupervisor {
     pub fn spawn(
         boot: Arc<PluginBoot>,
         watched: Arc<oc_core::config::WatchedConfig>,
-        bus: oc_core::bus::Bus,
+        bus: &oc_core::bus::Bus,
     ) -> Arc<Self> {
         let (trigger_tx, trigger_rx) = tokio::sync::watch::channel(0u64);
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -724,6 +725,7 @@ impl PluginSupervisor {
         // which runs the same pass synchronously — see boot.rs).
         let bus_leg = Arc::clone(&supervisor);
         let mut bus_shutdown = shutdown_rx;
+        let bus = (*bus).clone();
         let mut events = bus.subscribe_types(&[oc_core::bus::registry::SDK_PLUGIN_UPDATED]);
         tokio::spawn(async move {
             use futures::StreamExt as _;
@@ -917,8 +919,9 @@ pub fn reload_after_update(boot: &PluginBoot) -> bool {
         }
         swapped_any = true;
         match boot.host.remove_entry(&old.entry) {
-            Ok(true) => {}  // unloaded; the new generation loads below
-            Ok(false) => {} // never loaded (a failed boot) — nothing to tear down
+            // unloaded (new generation loads below) or never loaded (a
+            // failed boot — nothing to tear down): both fall through.
+            Ok(_) => {}
             Err(error) => {
                 eprintln!("opencode plugin: updated {} unload failed ({error})", plugin.target);
             }
@@ -2892,6 +2895,7 @@ pub struct EngineIntegrationPort {
 
 #[async_trait]
 impl oc_plugin_host::IntegrationPort for EngineIntegrationPort {
+    #[allow(clippy::too_many_lines)] // engine passthrough dispatch; 1:1 with the ref host methods
     async fn call(&self, method: &str, args: &Value) -> Result<Value, String> {
         use oc_core::integration::types::{
             ConnectionInfo, ConnectionStatus, FormAnswer, IntegrationError,
@@ -3041,6 +3045,7 @@ impl EngineIntegrationSlot {
 
 #[async_trait]
 impl oc_plugin_host::IntegrationPort for EngineIntegrationSlot {
+    #[allow(clippy::too_many_lines)] // engine passthrough dispatch; 1:1 with the ref host methods
     async fn call(&self, method: &str, args: &Value) -> Result<Value, String> {
         self.port()?.call(method, args).await
     }

@@ -207,6 +207,8 @@ pub async fn boot_and_serve(options: &BootOptions) -> io::Result<ServeHandle> {
 /// passes the listener here so an old daemon exiting hands the port to
 /// the new one instead of failing the boot. `None` keeps the one-shot
 /// `lifecycle::serve` bind used by the binary and embedders.
+/// Monolithic boot pipeline (server boot.ts); helper split deferred.
+#[allow(clippy::too_many_lines)]
 pub async fn boot_and_serve_with_listener(
     options: &BootOptions,
     listener: Option<tokio::net::TcpListener>,
@@ -530,7 +532,7 @@ pub async fn boot_and_serve_with_listener(
             let supervisor = crate::plugins::PluginSupervisor::spawn(
                 Arc::clone(boot),
                 Arc::clone(watched),
-                (*app_state.engine.bus).clone(),
+                &app_state.engine.bus,
             );
             boot.set_supervisor(supervisor);
         }

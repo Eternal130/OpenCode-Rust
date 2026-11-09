@@ -989,7 +989,7 @@ pub fn render_session(
             u16::try_from(terminal_width).unwrap_or(u16::MAX),
             u16::try_from(pane_height).unwrap_or(u16::MAX),
         );
-        store.terminal_pane_sync(session_id, pane_size, column + shift, content_top);
+        let _ = store.terminal_pane_sync(session_id, pane_size, column + shift, content_top);
     }
     frame
 }

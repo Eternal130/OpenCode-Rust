@@ -914,7 +914,11 @@ fn synthesized_patch(file: &str, content: &str, marker: char) -> String {
     } else {
         (format!("1,{}", lines.len()), "0,0".to_string())
     };
-    out.push_str(&format!("@@ -{old} +{new} @@\n"));
+    out.push_str("@@ -");
+    out.push_str(&old);
+    out.push_str(" +");
+    out.push_str(&new);
+    out.push_str(" @@\n");
     for line in lines {
         out.push(marker);
         out.push_str(line);
