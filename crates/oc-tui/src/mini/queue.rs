@@ -207,4 +207,25 @@ mod tests {
         assert_eq!(queue.pop().map(|item| item.text), Some("b".into()));
         assert_eq!(queue.pop(), None);
     }
+
+    /// G-272 — shell prompts ride their own lane: `/exit`-shaped
+    /// COMMANDS still execute as shell text (the mode gate,
+    /// runtime.queue.ts:246-250) and parts survive the queue verbatim.
+    #[test]
+    fn shell_prompts_skip_command_dispatch() {
+        let mut queue = PromptQueue::new(true);
+        let shell = RunPrompt {
+            text: "/exit".into(),
+            shell: true,
+            parts: vec![super::RunPromptPart::Agent { name: "build".into() }],
+            ..RunPrompt::default()
+        };
+        assert!(matches!(queue.submit(shell.clone()), QueueAction::Run { .. }));
+        if let QueueAction::Run { prompt } = queue.submit(shell) {
+            assert!(prompt.shell);
+            assert_eq!(prompt.parts.len(), 1, "parts ride the queue verbatim");
+        }
+        // The ordinary prompt still dispatches commands.
+        assert_eq!(queue.submit(prompt("/exit")), QueueAction::Exit);
+    }
 }
