@@ -12,7 +12,7 @@
 //! assertions and the cluster pixel contract.
 
 use crate::render::opentui_emit::OpentuiEmitter;
-use crate::render::{CONTINUATION, Cell, CellColor, Frame};
+use crate::render::{Cell, CellColor, Frame, CONTINUATION};
 use opentui_core::renderables::textarea::CursorStyle;
 
 type CursorInput = Option<((u32, u32), (CursorStyle, bool, (u8, u8, u8)))>;
@@ -114,12 +114,12 @@ fn replay_corpus_emission_is_pinned() {
                 && !pump.permission_live()
                 && !pump.form_live()
             {
-                pump.store
-                    .caret_cell()
-                    .filter(|(x, y)| *x < 100 && *y < 30)
-                    .map(|(x, y)| {
-                        ((u32::from(x) + 1, u32::from(y) + 1), (CursorStyle::Line, true, (224, 224, 224)))
-                    })
+                pump.store.caret_cell().filter(|(x, y)| *x < 100 && *y < 30).map(|(x, y)| {
+                    (
+                        (u32::from(x) + 1, u32::from(y) + 1),
+                        (CursorStyle::Line, true, (224, 224, 224)),
+                    )
+                })
             } else {
                 None
             };
@@ -284,4 +284,3 @@ fn cluster_frames_keep_pixels_through_vt100() {
     assert!(norm.contains(&target), "family must round-trip: {text:?}");
     assert!(text.contains("flag"), "flag must survive: {text:?}");
 }
-

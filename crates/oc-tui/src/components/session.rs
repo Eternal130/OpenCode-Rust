@@ -13,13 +13,13 @@
 
 use crate::components::composer::autocomplete;
 use crate::components::composer::render::{AutocompleteView, FooterHints, PromptView};
-use crate::components::message::list::{TranscriptOptions, render_transcript};
+use crate::components::message::list::{render_transcript, TranscriptOptions};
 use crate::components::message::model::ToolStatus;
 use crate::components::session_tabs::{Attention, TabStatus, TabView};
 use crate::components::sidebar::{
-    SIDEBAR_AUTO_BREAKPOINT, SidebarContextWidget, SidebarMcpWidget, SidebarSections, SidebarView,
+    SidebarContextWidget, SidebarMcpWidget, SidebarSections, SidebarView, SIDEBAR_AUTO_BREAKPOINT,
 };
-use crate::render::{Frame, paint_placed_with_fills};
+use crate::render::{paint_placed_with_fills, Frame};
 use crate::store::{SessionTab, Store};
 use crate::style::Style;
 
@@ -1325,13 +1325,26 @@ fn mount_queued_dock(
     top: usize,
 ) {
     let (background, items) = queued_dock_units(queued, width, styles);
-    crate::components::chrome_solid::chrome_mount("queued_dock", left, top, width, 1, background, &items, &[]);
+    crate::components::chrome_solid::chrome_mount(
+        "queued_dock",
+        left,
+        top,
+        width,
+        1,
+        background,
+        &items,
+        &[],
+    );
 }
 
 /// v2's count pluralization (`${count} subagent${count === 1 ? "" : "s"}`,
 /// footer.tsx:24-32).
 fn plural_s(count: usize) -> &'static str {
-    if count == 1 { "" } else { "s" }
+    if count == 1 {
+        ""
+    } else {
+        "s"
+    }
 }
 
 /// An oc-tui style color back to its RGBA token (G-35's spinner input —
@@ -1732,7 +1745,11 @@ fn composer_usage(store: &Store, session_id: &str) -> String {
     let cost = store.session_cost(session_id);
     if cost > 0.0 {
         let money = crate::components::sidebar::format_usd(cost);
-        if context.is_empty() { money } else { format!("{context} · {money}") }
+        if context.is_empty() {
+            money
+        } else {
+            format!("{context} · {money}")
+        }
     } else {
         context
     }
@@ -2075,7 +2092,16 @@ mod tests {
         let submitted = store.submit_prompt("s1").expect("submitted");
         assert_eq!(submitted.text, "hello");
         assert!(store.prompt_draft("s1").is_empty(), "draft cleared");
-        assert_eq!(store.composer("s1").history.entries.iter().map(|entry| entry.text.clone()).collect::<Vec<_>>(), vec!["hello".to_owned()]);
+        assert_eq!(
+            store
+                .composer("s1")
+                .history
+                .entries
+                .iter()
+                .map(|entry| entry.text.clone())
+                .collect::<Vec<_>>(),
+            vec!["hello".to_owned()]
+        );
     }
 
     /// F7 — cross-session render purity: switching to another tab's

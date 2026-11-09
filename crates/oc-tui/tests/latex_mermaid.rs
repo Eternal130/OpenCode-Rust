@@ -153,5 +153,3 @@ fn broken_mermaid_syntax_falls_back_to_the_plain_code_block() {
         "fallback code block missing: {rows:?}"
     );
 }
-
-

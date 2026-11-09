@@ -24,15 +24,15 @@
 
 #![allow(clippy::cast_possible_truncation)]
 
-use crate::components::message::list::{FollowState, TranscriptOptions, render_transcript};
+use crate::components::message::list::{render_transcript, FollowState, TranscriptOptions};
 use crate::components::message::model::Message;
 use crate::components::session_tabs::{
-    ADD_TAB_WIDTH, SESSION_SIDEBAR_WIDTH, adaptive_session_tab_layout,
+    adaptive_session_tab_layout, ADD_TAB_WIDTH, SESSION_SIDEBAR_WIDTH,
 };
-use crate::components::sidebar::{SidebarMode, SidebarView, render_sidebar, sidebar_visible};
-use crate::components::tool_rows::{DEFAULT_FOREGROUND, fill_style};
+use crate::components::sidebar::{render_sidebar, sidebar_visible, SidebarMode, SidebarView};
+use crate::components::tool_rows::{fill_style, DEFAULT_FOREGROUND};
 use crate::layout::{Placed, PlacedLine};
-use crate::render::{Fill, Frame, paint_placed, paint_placed_with_fills};
+use crate::render::{paint_placed, paint_placed_with_fills, Fill, Frame};
 use crate::style::{Color, Modifier, Style};
 use crate::theme::ThemeState;
 

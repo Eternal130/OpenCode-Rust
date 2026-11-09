@@ -283,6 +283,10 @@ pub struct SelectProps {
     /// query trims to empty = the full list). The palette and the rest
     /// keep the fuzzysort contract.
     pub substring_filter: bool,
+    /// G-271⑤ — v2's `skipFilter` (dialog-session-list.tsx:212): the
+    /// dialog NEVER locally filters — the debounced server search owns
+    /// the rows (the local fallback arrives pre-filtered).
+    pub skip_filter: bool,
     /// v2's `emptyView` copy override ("No worktrees available").
     pub empty_text: Option<String>,
     /// v2's `noMatchView` copy override ("No worktrees found").
@@ -313,6 +317,7 @@ impl SelectProps {
             flat: false,
             filter_threshold: None,
             substring_filter: false,
+            skip_filter: false,
             empty_text: None,
             no_match_text: None,
             destructive: false,
@@ -363,6 +368,13 @@ impl SelectProps {
     #[must_use]
     pub fn substring_filter(mut self) -> Self {
         self.substring_filter = true;
+        self
+    }
+
+    /// G-271⑤ — v2's `skipFilter` (see the field docs).
+    #[must_use]
+    pub fn skip_filter(mut self) -> Self {
+        self.skip_filter = true;
         self
     }
 
@@ -434,6 +446,9 @@ type OptionKey = fn(&IndexedOption<'_>) -> Option<String>;
 /// (SE-F4): trim + case-fold + byte-exact substring, registry order.
 #[must_use]
 pub fn filter_indices(props: &SelectProps, filter: &str) -> Vec<usize> {
+    if props.skip_filter {
+        return props.options.iter().enumerate().map(|(index, _)| index).collect();
+    }
     if props.substring_filter {
         let needle = filter.trim().to_lowercase();
         if needle.is_empty() {
@@ -1527,7 +1542,11 @@ mod tests {
         let groups = grouped(&props, "");
         assert_eq!(groups.len(), 2, "grouped by category while unfiltered");
         assert_eq!(groups[0].category.as_deref(), Some("Session"));
-        assert_eq!(content_rows(&groups, &props.options), 5, "header + option, blank + header + option");
+        assert_eq!(
+            content_rows(&groups, &props.options),
+            5,
+            "header + option, blank + header + option"
+        );
 
         let groups = grouped(&props, "switch");
         assert_eq!(groups.len(), 1, "flat while filtering");
@@ -1796,9 +1815,9 @@ mod tests {
             let row = &view.rows[4];
             let footer_end = width - 4;
             let footer_start = footer_end - 8; // display width of "ctrl+x n"
-            // The footer renders COMPLETE (flexShrink 0 — the title
-            // yields, never the footer; the ref's own test
-            // dialog-select.test.tsx:291-308).
+                                               // The footer renders COMPLETE (flexShrink 0 — the title
+                                               // yields, never the footer; the ref's own test
+                                               // dialog-select.test.tsx:291-308).
             let footer: String = (footer_start..footer_end).map(|col| row[col].ch).collect();
             assert_eq!(footer, "ctrl+x n", "complete footer at width {width}");
             // The gap column before the footer never shows a title
@@ -1961,7 +1980,8 @@ fn alt_arrows_jump_section_boundaries() {
             SelectOption::titled("Worktree w", "w").categorized("Worktrees"),
         ],
     );
-    let mut state = SelectState { filter: String::new(), selected: 0, scroll: 0, focused_action: None };
+    let mut state =
+        SelectState { filter: String::new(), selected: 0, scroll: 0, focused_action: None };
     // alt+down from the first section's head → the next section's
     // FIRST entry.
     state.move_section(&props, 1);
@@ -1989,7 +2009,8 @@ fn section_jump_on_flat_list_lands_on_the_edges() {
         "Flat",
         vec![SelectOption::titled("a", "a"), SelectOption::titled("b", "b")],
     );
-    let mut state = SelectState { filter: String::new(), selected: 1, scroll: 0, focused_action: None };
+    let mut state =
+        SelectState { filter: String::new(), selected: 1, scroll: 0, focused_action: None };
     // A single (headerless) section: the wrap lands back on row 0.
     state.move_section(&props, 1);
     assert_eq!(state.selected, 0);

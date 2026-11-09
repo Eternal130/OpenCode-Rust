@@ -33,7 +33,7 @@
 #![allow(clippy::cast_sign_loss)]
 
 use crate::components::command_palette::{
-    CommandDispatcher, StoreDispatcher, select_props_for_entry,
+    select_props_for_entry, CommandDispatcher, StoreDispatcher,
 };
 use crate::keymap::{Clock, KeyStroke, Keymap, Outcome};
 use crate::render::Frame;
@@ -62,6 +62,21 @@ pub enum DialogKeyOutcome {
     Unhandled,
 }
 
+/// G-271⑤ — the sessions dialog's filter-change hook: every typed
+/// keystroke re-arms the 150 ms debounce (`createDebouncedSignal`,
+/// dialog-session-list.tsx:35,213-216); the run loop's drain fires
+/// the server `session.list {search}` once it settles.
+fn session_search_typed_hook(store: &Store) {
+    let sessions = store.top_dialog().is_some_and(|entry| {
+        matches!(entry.kind, DialogKind::ServerList { command: "session.list", .. })
+    });
+    if sessions {
+        if let Some(filter) = store.top_dialog().map(|entry| entry.select.filter.clone()) {
+            store.session_search_typed(&filter);
+        }
+    }
+}
+
 /// The modal key layer (`ui/dialog.tsx` + the select's dialog
 /// commands): route one stroke while a dialog holds focus.
 // The modal layer is inherently a key-by-key walk (escape → ctrl+c →
@@ -84,9 +99,9 @@ pub fn handle_dialog_key(
             // G-271④ — the form walk's dialog flips per field: the
             // textual kinds (and the custom arm) take the prompt
             // input, the rest the select pipeline.
-            DialogKind::IntegrationForm { .. } => store
-                .integration_form()
-                .is_some_and(|state| state.prompt_style()),
+            DialogKind::IntegrationForm { .. } => {
+                store.integration_form().is_some_and(|state| state.prompt_style())
+            }
             DialogKind::SessionRename { .. }
             | DialogKind::WorktreeName
             | DialogKind::IntegrationKey { .. }
@@ -263,6 +278,10 @@ pub fn handle_dialog_key(
                     top.select.set_filter(&filter, &props, usize::from(terminal.1));
                 }
             });
+            // G-271⑤ — the sessions dialog's filter feeds the
+            // debounced server search (`setFilter` + `setSearch`,
+            // dialog-session-list.tsx:213-216).
+            session_search_typed_hook(store);
             store.preview_theme_filter();
             return DialogKeyOutcome::Consumed;
         }
@@ -277,6 +296,7 @@ pub fn handle_dialog_key(
                 top.select.set_filter(&filter, &props, usize::from(terminal.1));
             }
         });
+        session_search_typed_hook(store);
         store.preview_theme_filter();
         return DialogKeyOutcome::Consumed;
     }
@@ -934,7 +954,12 @@ pub fn mount_dialog_layer(
         Vec::new()
     };
     let seat = crate::components::dialog_solid::mount_dialog_tree(
-        &entry, &props, plugin.as_ref(), theme, terminal, &sidecar,
+        &entry,
+        &props,
+        plugin.as_ref(),
+        theme,
+        terminal,
+        &sidecar,
     );
     let (_box_x, box_y, _, _) = seat.rect;
     let option_rows =
@@ -1364,7 +1389,8 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
                 // resource value). The calendar buckets by the LOCAL
                 // day (the fetch already sends local_timezone_name).
                 let timezone = crate::components::stats_page::local_timezone_name();
-                poster_storage = crate::components::stats_page::stats_poster(info, route_size, &timezone);
+                poster_storage =
+                    crate::components::stats_page::stats_poster(info, route_size, &timezone);
                 crate::components::stats_page_solid::StatsPhaseView::Loaded(&poster_storage)
             }
         };
@@ -1405,7 +1431,9 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
         )
     } else {
         match store.route() {
-            crate::store::Route::Home => crate::components::home::render_home(store, &styles, route_size),
+            crate::store::Route::Home => {
+                crate::components::home::render_home(store, &styles, route_size)
+            }
             crate::store::Route::Session { session_id, .. } => {
                 crate::components::session::render_session(store, &session_id, &styles, route_size)
             }

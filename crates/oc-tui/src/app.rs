@@ -4277,8 +4277,7 @@ impl crate::store::SessionViewSink for HttpSessionViewSink {
             loop {
                 // G-197: per-request options — the pre-cancelled token
                 // short-circuits before any IO.
-                let options =
-                    oc_client::RequestOptions::new().with_signal(signal.clone());
+                let options = oc_client::RequestOptions::new().with_signal(signal.clone());
                 match client
                     .session()
                     .view_with_options(
@@ -5179,6 +5178,11 @@ pub enum LoopRequest {
     },
     /// `session.list` (the dialog-open refetch).
     SessionList,
+    /// G-271⑤ — the sessions dialog's debounced server search
+    /// (`session.list {search}`, dialog-session-list.tsx:52-66).
+    SessionSearch {
+        query: String,
+    },
     /// G-127 — the composer `@`-reference fuzzy file search
     /// (`client.api.file.find({query, limit: 20, location})`,
     /// autocomplete.tsx:361).
@@ -5382,6 +5386,12 @@ pub enum LoopFetch {
         result: Result<(Vec<crate::components::message::model::Message>, Option<String>), String>,
     },
     SessionList(Result<Vec<crate::data::SessionSnapshot>, String>),
+    /// G-271⑤ — the sessions dialog's `session.list {search}` result
+    /// (keyed by the query it answered).
+    SessionSearch {
+        query: String,
+        result: Result<Vec<crate::data::SessionSnapshot>, String>,
+    },
     /// G-184 — the inline shell arm's incremental `shell.output` page
     /// (the fetch result of `LoopRequest::ShellInline`).
     ShellInline {
@@ -5650,6 +5660,36 @@ pub fn spawn_loop_fetcher(
                         let fetcher = HttpResync::new(client);
                         let result = crate::data::ResyncSource::fetch_sessions(&fetcher).await;
                         let _ = tx.send(LoopFetch::SessionList(result));
+                    });
+                }
+                // G-271⑤ — the sessions dialog's debounced search:
+                // `session.list {search, limit: 50, order: desc,
+                // parentID: null}` (dialog-session-list.tsx:52-66 —
+                // a transient failure degrades the search, never
+                // crashes the picker).
+                LoopRequest::SessionSearch { query } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = client
+                            .session()
+                            .list(&oc_client::types::SessionListQuery {
+                                search: (!query.is_empty()).then(|| query.clone()),
+                                limit: Some("50".to_owned()),
+                                order: Some(oc_client::types::SessionListQueryOrder::Desc),
+                                parent_id: Some("null".to_owned()),
+                                ..oc_client::types::SessionListQuery::default()
+                            })
+                            .await
+                            .map(|response| {
+                                response
+                                    .data
+                                    .into_iter()
+                                    .map(crate::data::session_snapshot_from)
+                                    .collect::<Vec<_>>()
+                            })
+                            .map_err(|error| error.to_string());
+                        let _ = tx.send(LoopFetch::SessionSearch { query, result });
                     });
                 }
                 // G-127 — `fs.find` (autocomplete.tsx:361): the
@@ -6368,9 +6408,7 @@ pub fn spawn_loop_fetcher(
                                 &shell_id,
                                 &oc_client::types::ShellOutputQuery {
                                     cursor: Some(cursor.to_string()),
-                                    limit: Some(
-                                        crate::store::SHELL_DISPLAY_LIMIT.to_string(),
-                                    ),
+                                    limit: Some(crate::store::SHELL_DISPLAY_LIMIT.to_string()),
                                     location: None,
                                 },
                             )
@@ -7705,7 +7743,10 @@ impl opentui_core::renderer::RendererTerminalSession for RendererSessionHandle {
         }
     }
 
-    fn pump_output(&mut self, renderer: &mut opentui_core::renderer::CliRenderer) -> std::io::Result<()> {
+    fn pump_output(
+        &mut self,
+        renderer: &mut opentui_core::renderer::CliRenderer,
+    ) -> std::io::Result<()> {
         if let Ok(mut session) = self.session.lock() {
             opentui_core::terminal::Terminal::pump_output(&mut session, renderer)
         } else {
@@ -7722,10 +7763,7 @@ impl opentui_core::renderer::RendererTerminalSession for RendererSessionHandle {
     }
 
     fn is_torn_down(&self) -> bool {
-        self.session
-            .lock()
-            .map(|session| session.is_torn_down())
-            .unwrap_or(true)
+        self.session.lock().map(|session| session.is_torn_down()).unwrap_or(true)
     }
 }
 
@@ -7917,10 +7955,8 @@ pub async fn run_with_size(
     // two byte-identical on the golden corpus — no second
     // frame-writer seam remains.
     let size = size.unwrap_or((100, 30));
-    let mut emitter = crate::render::opentui_emit::OpentuiEmitter::new(
-        usize::from(size.0),
-        usize::from(size.1),
-    );
+    let mut emitter =
+        crate::render::opentui_emit::OpentuiEmitter::new(usize::from(size.0), usize::from(size.1));
 
     // D2.1b — the LIVE CliRenderer owns frame scheduling. It carries
     // no renderables in this lane (the surface tree migrates in
@@ -8527,10 +8563,8 @@ pub async fn run_with_size(
                 if input_stop.load(std::sync::atomic::Ordering::Relaxed) {
                     break;
                 }
-                let bytes = read_session_input(
-                    tty_input_fd.load(std::sync::atomic::Ordering::Acquire),
-                    50,
-                );
+                let bytes =
+                    read_session_input(tty_input_fd.load(std::sync::atomic::Ordering::Acquire), 50);
                 if bytes.is_empty() {
                     // The no-input feed tick still advances the probe's
                     // wall-clock deadline.
@@ -8984,12 +9018,21 @@ pub async fn run_with_size(
         }
         // G-20(1) — fold the IDE socket's `selection_changed`
         // notifications into the SAME seam (context/editor.ts:221-226:
-        // `setSelection({...selection, source: "websocket"})`).
+        // `setSelection({...selection, source: "websocket"})`), plus
+        // G-273①'s `at_mentioned` mentions into the focused composer
+        // (:242-246 → autocomplete.tsx:763-765).
         if let Some(ide_rx) = ide_rx.as_mut() {
-            while let Ok(selection) = ide_rx.try_recv() {
-                app.store.apply_zed_selection(crate::editor_zed::ZedSelectionResult::Selection(
-                    selection,
-                ));
+            while let Ok(event) = ide_rx.try_recv() {
+                match event {
+                    crate::editor_ide::IdeSocketEvent::Selection(selection) => {
+                        app.store.apply_zed_selection(
+                            crate::editor_zed::ZedSelectionResult::Selection(selection),
+                        );
+                    }
+                    crate::editor_ide::IdeSocketEvent::Mention(mention) => {
+                        app.store.apply_editor_mention(&mention);
+                    }
+                }
             }
         }
         // Drain the server-list fetches into the picker state.
@@ -9178,6 +9221,14 @@ pub async fn run_with_size(
                     }
                 }
             }
+        }
+        // G-271⑤ — the sessions dialog's search debounce drain: once
+        // 150 ms pass without a keystroke, the server
+        // `session.list {search}` fires (createDebouncedSignal("",
+        // 150) → the resource, dialog-session-list.tsx:35,57-66).
+        if let Some(query) = app.store.take_due_session_search() {
+            app.store.session_search_started(&query);
+            let _ = loop_fetch_tx.send(LoopRequest::SessionSearch { query });
         }
         // The external editor (<leader>e / /editor): suspend → $EDITOR
         // over the focused draft → resume → replace on success (a
@@ -9411,6 +9462,12 @@ pub async fn run_with_size(
                 }
                 LoopFetch::SessionList(Err(error)) => {
                     crate::keymap::log_skip(&format!("session list refresh: {error}"));
+                }
+                // G-271⑤ — the search result folds into the dialog's
+                // row source (the settled query + rows or the error
+                // fallback).
+                LoopFetch::SessionSearch { query, result } => {
+                    app.store.session_search_loaded(query, result);
                 }
                 // G-127 — the `@`-file `fs.find` rows land on the
                 // FOCUSED composer when its popup still shows the
@@ -10027,9 +10084,9 @@ pub async fn run_with_size(
                     }
                 }
                 match caret {
-                    Some((x, y)) => emitter
-                        .cursor()
-                        .set_position(u32::from(x) + 1, u32::from(y) + 1, true),
+                    Some((x, y)) => {
+                        emitter.cursor().set_position(u32::from(x) + 1, u32::from(y) + 1, true)
+                    }
                     None => emitter.cursor().set_position(1, 1, false),
                 }
             }
@@ -10193,10 +10250,7 @@ pub async fn run_with_size(
             // delete-all (`a=d,d=a`).
             let _ = out.write_all(crate::terminal_proto::KITTY_POP);
             let graphics = app.store.graphics_capabilities();
-            if graphics
-                .as_ref()
-                .is_some_and(|caps| caps.kitty_graphics || caps.sixel)
-            {
+            if graphics.as_ref().is_some_and(|caps| caps.kitty_graphics || caps.sixel) {
                 let _ = out.write_all(crate::terminal_proto::KITTY_GRAPHICS_DELETE_ALL);
             }
             let _ = out.flush();
@@ -10262,10 +10316,7 @@ fn cache_tty_input_fd(
     use opentui_core::terminal::TtyDevice as _;
     use std::os::fd::AsRawFd as _;
     if let Ok(mut terminal) = session.lock() {
-        cache.store(
-            terminal.tty().input_fd().as_raw_fd(),
-            std::sync::atomic::Ordering::Release,
-        );
+        cache.store(terminal.tty().input_fd().as_raw_fd(), std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -10299,7 +10350,6 @@ fn read_session_input(fd: std::os::fd::RawFd, timeout_ms: i32) -> Vec<u8> {
     buffer.truncate(usize::try_from(read).unwrap_or(0));
     buffer
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -10441,7 +10491,8 @@ mod tests {
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr");
-        let arrivals: Arc<Mutex<Vec<(std::time::Instant, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let arrivals: Arc<Mutex<Vec<(std::time::Instant, String)>>> =
+            Arc::new(Mutex::new(Vec::new()));
         let log = Arc::clone(&arrivals);
         let server = tokio::spawn(async move {
             let mut served = 0u32;
@@ -10454,19 +10505,20 @@ mod tests {
                 let mut request = vec![0u8; 8192];
                 let _ = reader.read(&mut request).await;
                 let head = String::from_utf8_lossy(&request);
-                let body = head
-                    .split("\r\n\r\n")
-                    .nth(1)
-                    .unwrap_or_default()
-                    .to_owned();
+                let body = head.split("\r\n\r\n").nth(1).unwrap_or_default().to_owned();
                 if head.split_whitespace().nth(1).unwrap_or_default().contains("/view") {
                     log.lock().expect("log").push((std::time::Instant::now(), body));
                     // Failures first (500), success on the third try.
-                    let status = if served < 3 { "500 Internal Server Error" } else { "204 No Content" };
-                    let response = format!("HTTP/1.1 {status}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+                    let status =
+                        if served < 3 { "500 Internal Server Error" } else { "204 No Content" };
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                    );
                     let _ = writer.write_all(response.as_bytes()).await;
                 } else {
-                    let _ = writer.write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n").await;
+                    let _ = writer
+                        .write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n")
+                        .await;
                 }
             }
         });
@@ -10505,7 +10557,8 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::too_many_lines)] // the scripted HTTP listener
-    async fn diff_base_is_lazy_cached_and_the_selection_short_circuits() {        use std::sync::{Arc, Mutex};
+    async fn diff_base_is_lazy_cached_and_the_selection_short_circuits() {
+        use std::sync::{Arc, Mutex};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -10997,8 +11050,7 @@ mod tests {
         };
         let mut app = App::new((100, 30));
         app.set_palette_provider(std::rc::Rc::new(Stub(palette)));
-        let config =
-            crate::config::TuiConfig::parse(r#"{ "theme": { "name": "system" } }"#, None);
+        let config = crate::config::TuiConfig::parse(r#"{ "theme": { "name": "system" } }"#, None);
         app.apply_config(&config, Mode::Dark);
         assert_eq!(app.store.theme().name, "system");
         let registry = app.store.registry();
@@ -11014,8 +11066,7 @@ mod tests {
     #[test]
     fn system_slot_without_a_palette_keeps_the_builtin_fallback() {
         let mut app = App::new((100, 30));
-        let config =
-            crate::config::TuiConfig::parse(r#"{ "theme": { "name": "system" } }"#, None);
+        let config = crate::config::TuiConfig::parse(r#"{ "theme": { "name": "system" } }"#, None);
         app.apply_config(&config, Mode::Dark);
         let registry = app.store.registry();
         let entry = registry.get("system").expect("system slot");
@@ -14520,14 +14571,14 @@ fn mcp_failure_transitions_toast_once() {
         name: "github".to_owned(),
         status: "connected",
         error: None,
-    integration_id: None,
+        integration_id: None,
     }]);
     assert!(app.store.toasts().current().is_none(), "healthy servers never toast");
     app.store.set_mcp_servers(vec![crate::store::McpServerRow {
         name: "github".to_owned(),
         status: "failed",
         error: Some("connect ECONNREFUSED".to_owned()),
-    integration_id: None,
+        integration_id: None,
     }]);
     let toast = app.store.toasts().current().expect("the failure toasted").clone();
     assert_eq!(toast.title.as_deref(), Some("MCP server failed: github"));
@@ -14540,7 +14591,7 @@ fn mcp_failure_transitions_toast_once() {
         name: "github".to_owned(),
         status: "failed",
         error: Some("connect ECONNREFUSED".to_owned()),
-    integration_id: None,
+        integration_id: None,
     }]);
     assert!(app.store.toasts().current().is_none(), "the same status never re-toasts");
 }
@@ -14557,12 +14608,17 @@ fn home_footer_chips_are_clickable() {
         title: Some("Restored".to_owned()),
     }]);
     app.store.set_mcp_servers(vec![
-        crate::store::McpServerRow { name: "fs".to_owned(), status: "connected", error: None , integration_id: None },
+        crate::store::McpServerRow {
+            name: "fs".to_owned(),
+            status: "connected",
+            error: None,
+            integration_id: None,
+        },
         crate::store::McpServerRow {
             name: "broken".to_owned(),
             status: "failed",
             error: Some("boom".to_owned()),
-        integration_id: None,
+            integration_id: None,
         },
     ]);
     app.store.set_plugins_failed(2);
@@ -14632,13 +14688,13 @@ mod render_scheduler_equiv_tests {
         // (generation, clock) per pump iteration — the pre-flip
         // predicate: `generation != redraw_at || clock > 0`.
         let wakeups: &[(u64, u64)] = &[
-            (1, 0),  // boot frame (generation moved, clock not yet)
-            (1, 0),  // idle pre-tick pass — NO draw pre-flip
-            (1, 1),  // first clock tick — draws from here on
-            (1, 1),  // steady clock — draws every iteration
-            (2, 1),  // a redraw generation bump
-            (2, 1),  // steady
-            (0, 1),  // forced redraw (redraw_at reset — resize)
+            (1, 0), // boot frame (generation moved, clock not yet)
+            (1, 0), // idle pre-tick pass — NO draw pre-flip
+            (1, 1), // first clock tick — draws from here on
+            (1, 1), // steady clock — draws every iteration
+            (2, 1), // a redraw generation bump
+            (2, 1), // steady
+            (0, 1), // forced redraw (redraw_at reset — resize)
         ];
         let mut redraw_at = 0u64;
         for &(generation, clock) in wakeups {

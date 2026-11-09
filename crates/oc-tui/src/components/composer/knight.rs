@@ -452,17 +452,14 @@ mod tests {
         };
         let frames = create_frames(&options);
         let frame_at = |elapsed: u64| -> String {
-            composer_spinner_cell(&options, elapsed)
-                .iter()
-                .map(|(glyph, _)| *glyph)
-                .collect()
+            composer_spinner_cell(&options, elapsed).iter().map(|(glyph, _)| *glyph).collect()
         };
         // Consecutive 40 ms elapsed steps → consecutive frame indices
         // (the ref's timer advances one frame per step).
         for index in 0..12u64 {
             let elapsed = index * SPINNER_INTERVAL_MS;
-            let expected = frames[(elapsed / SPINNER_INTERVAL_MS % frames.len() as u64) as usize]
-                .clone();
+            let expected =
+                frames[(elapsed / SPINNER_INTERVAL_MS % frames.len() as u64) as usize].clone();
             assert_eq!(frame_at(elapsed), expected, "elapsed {elapsed} ms → frame {index}");
         }
         // Sub-interval elapsed stays on the SAME frame (39 ms is

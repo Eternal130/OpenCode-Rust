@@ -30,8 +30,8 @@
 //! * the whole footer hides below 44 cols or 12 rows, the logo below
 //!   12 rows (`homeFooterVisibility` / `Logo`).
 
-use crate::components::composer::PromptDraft;
 use crate::components::composer::render::AutocompleteView;
+use crate::components::composer::PromptDraft;
 use crate::render::{CellColor, Frame};
 use crate::theme::ThemeState;
 use crate::wrap::display_width;
@@ -882,8 +882,8 @@ mod tests {
 
 #[cfg(test)]
 mod surf2_home_tests {
-    use super::*;
     use super::tests::home_frame;
+    use super::*;
     use crate::reactive::Runtime;
     use crate::store::{McpServerRow, Store};
 
@@ -897,8 +897,18 @@ mod surf2_home_tests {
 
         let healthy = Store::new(Runtime::new());
         healthy.set_mcp_servers(vec![
-            McpServerRow { name: "a".into(), status: "connected", error: None , integration_id: None },
-            McpServerRow { name: "b".into(), status: "connected", error: None , integration_id: None },
+            McpServerRow {
+                name: "a".into(),
+                status: "connected",
+                error: None,
+                integration_id: None,
+            },
+            McpServerRow {
+                name: "b".into(),
+                status: "connected",
+                error: None,
+                integration_id: None,
+            },
         ]);
         let frame = home_frame(&healthy, &styles, (80, 30));
         let footer = frame.text_grid()[28].trim_start().to_owned();
@@ -908,8 +918,18 @@ mod surf2_home_tests {
 
         let failing = Store::new(Runtime::new());
         failing.set_mcp_servers(vec![
-            McpServerRow { name: "a".into(), status: "connected", error: None , integration_id: None },
-            McpServerRow { name: "b".into(), status: "failed", error: Some("boom".into()) , integration_id: None },
+            McpServerRow {
+                name: "a".into(),
+                status: "connected",
+                error: None,
+                integration_id: None,
+            },
+            McpServerRow {
+                name: "b".into(),
+                status: "failed",
+                error: Some("boom".into()),
+                integration_id: None,
+            },
         ]);
         let frame = home_frame(&failing, &styles, (80, 30));
         let footer = frame.text_grid()[28].trim_start().to_owned();

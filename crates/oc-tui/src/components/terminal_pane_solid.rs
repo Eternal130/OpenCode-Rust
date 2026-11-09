@@ -32,11 +32,11 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use opentui_core::Rgba;
 use opentui_core::styled_text::{StyledText, TextChunk};
+use opentui_core::Rgba;
 use opentui_solid::builder::ForItemSource;
 use opentui_solid::element::{ForItem, PropValue};
-use opentui_solid::{Element, Signal, box_, for_list, map, text};
+use opentui_solid::{box_, for_list, map, text, Element, Signal};
 
 use crate::components::chrome_solid::{family_wrapper_live, mount_family_wrapper};
 use crate::render::CellColor;
@@ -222,7 +222,9 @@ fn shape_row(cells: Vec<terminal_pane::PaneCell>) -> Vec<(String, CellColor, Cel
     let mut chunks: Vec<(String, CellColor, CellColor, u16)> = Vec::new();
     for cell in cells {
         match chunks.last_mut() {
-            Some((text, fg, bg, attrs)) if *fg == cell.fg && *bg == cell.bg && *attrs == cell.attrs => {
+            Some((text, fg, bg, attrs))
+                if *fg == cell.fg && *bg == cell.bg && *attrs == cell.attrs =>
+            {
                 text.push(cell.ch);
             }
             _ => chunks.push((cell.ch.to_string(), cell.fg, cell.bg, cell.attrs)),

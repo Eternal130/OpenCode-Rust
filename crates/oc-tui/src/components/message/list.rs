@@ -425,15 +425,13 @@ pub fn render_transcript(
         // the summary line carries the gate's surface.
         if options.turn_tokens {
             if let Row::Entry(Entry::AssistantFooter { message_id }) = row {
-                let turn_ends_here = rows_iter
-                    .next()
-                    .is_none_or(|next| match next {
-                        Row::Entry(Entry::Message { message_id: next_id }) => messages
-                            .iter()
-                            .find(|m| m.id() == next_id.as_str())
-                            .is_some_and(|message| matches!(message, Message::User { .. })),
-                        _ => false,
-                    });
+                let turn_ends_here = rows_iter.next().is_none_or(|next| match next {
+                    Row::Entry(Entry::Message { message_id: next_id }) => messages
+                        .iter()
+                        .find(|m| m.id() == next_id.as_str())
+                        .is_some_and(|message| matches!(message, Message::User { .. })),
+                    _ => false,
+                });
                 if turn_ends_here {
                     if let Some(render) =
                         turn_token_usage_row(message_id, messages, theme, content_width)
@@ -633,8 +631,7 @@ fn tool_cell(
     use crate::components::message::model::ToolStatus;
     let mut state = state.clone();
     let shell_id = state.metadata.get("shellID").cloned().unwrap_or_default();
-    if !shell_id.is_empty() && !(state.status == ToolStatus::Completed && state.output.is_some())
-    {
+    if !shell_id.is_empty() && !(state.status == ToolStatus::Completed && state.output.is_some()) {
         if let Some(live) = options.shell_live.get(&shell_id) {
             state.output = Some(live.clone());
         }
@@ -922,7 +919,17 @@ fn render_row(
             // G-188 — the census walks `groupRefs` (the group's
             // part refs EXCLUDING the permission-pending ones).
             let refs = row.part_refs();
-            group_row(kind.clone(), children, &refs, *completed, expanded, messages, options, theme, width)
+            group_row(
+                kind.clone(),
+                children,
+                &refs,
+                *completed,
+                expanded,
+                messages,
+                options,
+                theme,
+                width,
+            )
         }
     }
 }
@@ -1809,7 +1816,10 @@ mod surf1_tests {
         let transcript = render_transcript(&messages, &options, &theme, 80);
         let frame = transcript.paint(FollowState::Sticky, &theme, (80, 30), None);
         let text = frame.text_grid().join("\n");
-        assert!(text.contains("pm test"), "the command (the spinner glyph overwrites its lead): {text}");
+        assert!(
+            text.contains("pm test"),
+            "the command (the spinner glyph overwrites its lead): {text}"
+        );
         assert!(text.contains("[earlier output omitted]"), "the 1MiB cap marker: {text}");
         assert!(text.contains("live tail"), "the live text: {text}");
         assert!(!text.contains("stale snapshot"), "the static output replaced");

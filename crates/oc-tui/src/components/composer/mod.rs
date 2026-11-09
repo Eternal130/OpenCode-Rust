@@ -286,10 +286,7 @@ impl HistoryEntry {
             return None;
         }
         let range = |item: &serde_json::Value| {
-            Some((
-                item.get("start")?.as_u64()? as usize,
-                item.get("end")?.as_u64()? as usize,
-            ))
+            Some((item.get("start")?.as_u64()? as usize, item.get("end")?.as_u64()? as usize))
         };
         let files = value
             .get("files")
@@ -305,9 +302,10 @@ impl HistoryEntry {
                             start,
                             end,
                             payload: None,
-                            mention: item.get("mention").and_then(serde_json::Value::as_str).map(
-                                |label| label.to_owned(),
-                            ),
+                            mention: item
+                                .get("mention")
+                                .and_then(serde_json::Value::as_str)
+                                .map(|label| label.to_owned()),
                         })
                     })
                     .collect::<Vec<_>>()
@@ -437,14 +435,12 @@ impl PromptHistory {
                 }
             } else {
                 let Ok(line) = serde_json::to_string(&entry.to_json()) else { return self };
-                let _ = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&file)
-                    .and_then(|mut handle| {
+                let _ = std::fs::OpenOptions::new().create(true).append(true).open(&file).and_then(
+                    |mut handle| {
                         use std::io::Write as _;
                         handle.write_all(format!("{line}\n").as_bytes())
-                    });
+                    },
+                );
             }
         }
         self
@@ -1590,6 +1586,51 @@ impl Composer {
         }
     }
 
+    /// G-273① — the editor `at_mentioned` insertion
+    /// (`insertFileMention`, autocomplete.tsx:298-306): the chip
+    /// lands at the popup's trigger index when the reference popup is
+    /// open, else at the CARET (`props.input().cursorOffset`, :302);
+    /// the file part records with the SAME move-or-push bookkeeping
+    /// as the `@`-reference rows (the ref dedupes by uri — the name
+    /// is this port's identity).
+    pub fn insert_file_mention(&mut self, name: &str) {
+        let caret = self.edit.caret();
+        let index = if self.autocomplete.visible
+            == Some(crate::components::composer::autocomplete::Mode::Reference)
+        {
+            self.autocomplete.trigger_index
+        } else {
+            caret
+        };
+        let chars: Vec<char> = self.draft.text.chars().collect();
+        let needs_space = chars.get(caret).is_none_or(|ch| *ch != ' ');
+        if index < caret {
+            self.delete_range(index..caret);
+        }
+        let chip = format!("@{name}");
+        let end = index + chip.chars().count();
+        let insert = if needs_space { format!("{chip} ") } else { chip };
+        self.insert_text(&insert);
+        let existing = self.draft.files.iter().position(|file| file.name == name);
+        match existing {
+            Some(at) => {
+                let file = &mut self.draft.files[at];
+                file.start = index;
+                file.end = end;
+            }
+            None => self.draft.files.push(FileMention {
+                name: name.to_owned(),
+                start: index,
+                end,
+                payload: None,
+                mention: None,
+            }),
+        }
+        // insertPart's frecency bump (autocomplete.tsx:241-242 —
+        // `part.type === "file" && part.path`).
+        self.autocomplete.frecency.update(name, autocomplete::now_ms());
+    }
+
     /// RD-05 — replace the `@query` trigger token with the virtual
     /// chip `@<name>` (autocomplete.tsx:160-190): the token range
     /// (trigger index through the caret) deletes first, the chip (+ a
@@ -1847,8 +1888,14 @@ mod tests {
     #[test]
     fn up_down_at_boundaries_reach_history() {
         let mut state = Composer::default();
-        state.history = state.history.clone().push(&PromptDraft { text: "older".into(), ..PromptDraft::default() });
-        state.history = state.history.clone().push(&PromptDraft { text: "oldest".into(), ..PromptDraft::default() });
+        state.history = state
+            .history
+            .clone()
+            .push(&PromptDraft { text: "older".into(), ..PromptDraft::default() });
+        state.history = state
+            .history
+            .clone()
+            .push(&PromptDraft { text: "oldest".into(), ..PromptDraft::default() });
         state.set(PromptDraft { text: "draft".into(), ..PromptDraft::default() });
         // Up on the first line → history.previous.
         state.handle_key(&ComposerKey::Up);

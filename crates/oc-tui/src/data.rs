@@ -178,6 +178,27 @@ pub struct SessionSnapshot {
     pub project_id: Option<String>,
 }
 
+/// The wire `SessionInfo` → snapshot mapping (the resync fetch and
+/// G-271⑤'s `session.list {search}` rows share it).
+pub fn session_snapshot_from(session: oc_client::types::SessionInfo) -> SessionSnapshot {
+    SessionSnapshot {
+        id: session.id,
+        title: session.title,
+        parent_id: session.parent_id,
+        time_idle: session.time.idle,
+        viewed: session.time.viewed,
+        model: session.model.map(|model| SessionModelRef {
+            provider_id: model.provider_id,
+            id: model.id,
+            variant: model.variant,
+        }),
+        time_updated: Some(session.time.updated),
+        time_created: Some(session.time.created),
+        directory: Some(session.location.directory),
+        project_id: Some(session.project_id),
+    }
+}
+
 /// The durable model off a session record (`ModelRef` subset).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionModelRef {
@@ -389,26 +410,7 @@ impl ResyncSource for HttpResync {
             subpath: None,
         };
         let response = self.client.session().list(&query).await.map_err(|e| e.to_string())?;
-        Ok(response
-            .data
-            .into_iter()
-            .map(|session| SessionSnapshot {
-                id: session.id,
-                title: session.title,
-                parent_id: session.parent_id,
-                time_idle: session.time.idle,
-                viewed: session.time.viewed,
-                model: session.model.map(|model| SessionModelRef {
-                    provider_id: model.provider_id,
-                    id: model.id,
-                    variant: model.variant,
-                }),
-                time_updated: Some(session.time.updated),
-                time_created: Some(session.time.created),
-                directory: Some(session.location.directory),
-                project_id: Some(session.project_id),
-            })
-            .collect())
+        Ok(response.data.into_iter().map(session_snapshot_from).collect())
     }
 
     fn open_sessions(&self) -> Vec<String> {
@@ -733,11 +735,7 @@ pub fn tool_state_from_wire(
                     .map(|map| serde_json::to_value(map).unwrap_or_default()),
                 output: error.content.as_deref().and_then(tool_output_from_content),
                 error: Some(error.error.message.clone()),
-                images: error
-                    .content
-                    .as_deref()
-                    .map(tool_images_from_content)
-                    .unwrap_or_default(),
+                images: error.content.as_deref().map(tool_images_from_content).unwrap_or_default(),
                 input_json: Some(serde_json::to_value(&error.input).unwrap_or_default()),
             }
         }

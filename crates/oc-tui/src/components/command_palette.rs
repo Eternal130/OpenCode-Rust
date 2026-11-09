@@ -99,7 +99,9 @@ impl PaletteCommand {
             }
             "session.queued_prompts" => {
                 return match store.route() {
-                    Route::Session { session_id, .. } => !store.queued_prompts(&session_id).is_empty(),
+                    Route::Session { session_id, .. } => {
+                        !store.queued_prompts(&session_id).is_empty()
+                    }
                     Route::Home => false,
                 };
             }
@@ -879,13 +881,19 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             // title, the outside-project footer basename, and the
             // armed two-press delete's confirm title
             // (dialog-session-list.tsx:141-192).
-            let options = crate::components::dialog_open::session_list_options(store);
-            // SE-F4 + TUI-7: the ref's filter semantics — trimmed,
-            // case-folded, byte-exact substring (whitespace-only = the
-            // full list); the empty + no-match copy is the dialog's
-            // `searchState` (:110-121).
+            // G-271⑤ — the filter feeds the debounced server
+            // `session.list {search}` (dialog-session-list.tsx
+            // :35,40-78,213-216): the rows come from the search
+            // state and the dialog itself never re-filters
+            // (`skipFilter`, :212). The empty + no-match copy is the
+            // dialog's `searchState` (:110-121).
+            let filter = store
+                .top_dialog()
+                .map(|entry| entry.select.filter.clone())
+                .unwrap_or_default();
+            let options = crate::components::dialog_open::session_list_options(store, &filter);
             let mut props = SelectProps::new(*title, options)
-                .substring_filter()
+                .skip_filter()
                 .with_empty_texts("No sessions available", "No sessions found");
             // The current session row carries the `●` focus mark
             // (`current={currentSessionID()}`, :211).
@@ -2171,10 +2179,15 @@ fn active_selection(store: &Store) -> crate::store::SessionSelection {
 /// G-132 — the toggle row's checkbox (`[x]`/`[ ]`,
 /// dialog-export-options.tsx:135/159/183).
 fn checked(on: bool) -> &'static str {
-    if on { "[x]" } else { "[ ]" }
+    if on {
+        "[x]"
+    } else {
+        "[ ]"
+    }
 }
 
-fn status_option(text: &str) -> SelectOption {    SelectOption::titled(text, "status").muted_placeholder()
+fn status_option(text: &str) -> SelectOption {
+    SelectOption::titled(text, "status").muted_placeholder()
 }
 
 /// `Locale.time` (`util/locale.ts:7-10` — `toLocaleTimeString` at
@@ -3504,7 +3517,9 @@ impl CommandDispatcher for StoreDispatcher {
                 let direction = if command == "agent.cycle" { 1 } else { -1 };
                 if let Some(agent) = store.agent_cycle(direction) {
                     match store.route() {
-                        Route::Session { session_id, .. } => store.select_agent(&session_id, &agent),
+                        Route::Session { session_id, .. } => {
+                            store.select_agent(&session_id, &agent)
+                        }
                         Route::Home => store.stage_agent(crate::app::HOME_PROMPT_KEY, &agent),
                     }
                 }
@@ -3514,7 +3529,9 @@ impl CommandDispatcher for StoreDispatcher {
                 let direction = if command == "model.cycle_recent" { 1 } else { -1 };
                 if let Some(model) = store.model_cycle_recent(direction) {
                     match store.route() {
-                        Route::Session { session_id, .. } => store.select_model(&session_id, &model),
+                        Route::Session { session_id, .. } => {
+                            store.select_model(&session_id, &model)
+                        }
                         Route::Home => store.stage_model(crate::app::HOME_PROMPT_KEY, model),
                     }
                 }
@@ -3524,7 +3541,9 @@ impl CommandDispatcher for StoreDispatcher {
                 let direction = if command == "model.cycle_favorite" { 1 } else { -1 };
                 match store.model_cycle_favorite(direction) {
                     Some(model) => match store.route() {
-                        Route::Session { session_id, .. } => store.select_model(&session_id, &model),
+                        Route::Session { session_id, .. } => {
+                            store.select_model(&session_id, &model)
+                        }
                         Route::Home => store.stage_model(crate::app::HOME_PROMPT_KEY, model),
                     },
                     // local.tsx:427-431: no favorites configured.
@@ -3871,12 +3890,17 @@ mod tests {
 
         // /mcps — the live rows with status footers (dialog-mcp.tsx).
         store.set_mcp_servers(vec![
-            McpServerRow { name: "beta".into(), status: "connected", error: None , integration_id: None },
+            McpServerRow {
+                name: "beta".into(),
+                status: "connected",
+                error: None,
+                integration_id: None,
+            },
             McpServerRow {
                 name: "alpha".into(),
                 status: "failed",
                 error: Some("spawn failed".into()),
-            integration_id: None,
+                integration_id: None,
             },
         ]);
         assert_eq!(dispatcher.dispatch(&store, "mcp.list", None), Dispatch::Handled);
@@ -4001,9 +4025,24 @@ mod tests {
         let sink = std::rc::Rc::new(RecordingMcpToggleSink::default());
         store.set_mcp_toggle_sink(sink.clone());
         store.set_mcp_servers(vec![
-            McpServerRow { name: "on".into(), status: "connected", error: None , integration_id: None },
-            McpServerRow { name: "off".into(), status: "failed", error: Some("x".into()) , integration_id: None },
-            McpServerRow { name: "wait".into(), status: "pending", error: None , integration_id: None },
+            McpServerRow {
+                name: "on".into(),
+                status: "connected",
+                error: None,
+                integration_id: None,
+            },
+            McpServerRow {
+                name: "off".into(),
+                status: "failed",
+                error: Some("x".into()),
+                integration_id: None,
+            },
+            McpServerRow {
+                name: "wait".into(),
+                status: "pending",
+                error: None,
+                integration_id: None,
+            },
         ]);
         store.mcp_toggle("on");
         store.mcp_toggle("off");
@@ -4846,7 +4885,7 @@ mod tests {
                 id: "key".into(),
                 kind: "key",
                 label: "API key".into(),
-            form: Vec::new(),
+                form: Vec::new(),
             }],
             accounts: Vec::new(),
             summary: String::new(),
@@ -4896,7 +4935,7 @@ mod tests {
                 id: "oauth-browser".into(),
                 kind: "oauth",
                 label: "Browser".into(),
-            form: Vec::new(),
+                form: Vec::new(),
             }],
             accounts: Vec::new(),
             summary: String::new(),
@@ -5107,8 +5146,11 @@ mod tests {
             crate::components::dialog::execute_submission(&store, &mut dispatcher, "format:json");
         assert_eq!(submit, Dispatch::Handled);
         assert_eq!(store.export_options_state().format.as_str(), "json");
-        let submit =
-            crate::components::dialog::execute_submission(&store, &mut dispatcher, "toggle:sanitize");
+        let submit = crate::components::dialog::execute_submission(
+            &store,
+            &mut dispatcher,
+            "toggle:sanitize",
+        );
         assert_eq!(submit, Dispatch::Handled);
         assert!(store.export_options_state().sanitize);
         // The action row exports with the chosen values.
@@ -5253,18 +5295,12 @@ mod tests {
         store.replace_dialog(crate::store::DialogKind::Settings, crate::store::DialogSize::Large);
 
         // animations: false → true (the row's default is "false").
-        assert_eq!(
-            dispatcher.dispatch(&store, "app.toggle.animations", None),
-            Dispatch::Handled
-        );
+        assert_eq!(dispatcher.dispatch(&store, "app.toggle.animations", None), Dispatch::Handled);
         assert_eq!(store.settings_snapshot_value("animations"), "true");
         assert!(store.top_dialog().is_none(), "dialog.clear() ran");
 
         // file_context: prompt.editor true → false (default "true").
-        assert_eq!(
-            dispatcher.dispatch(&store, "app.toggle.file_context", None),
-            Dispatch::Handled
-        );
+        assert_eq!(dispatcher.dispatch(&store, "app.toggle.file_context", None), Dispatch::Handled);
         assert_eq!(store.settings_snapshot_value("prompt.editor"), "false");
 
         // diffwrap: diffs.wrap word → none → word (the two-value cycle).
@@ -5354,8 +5390,12 @@ mod tests {
             fg: crate::render::CellColor::Rgb(255, 255, 255),
             bg: crate::render::CellColor::Rgb(10, 10, 10),
         };
-        let mut frame =
-            crate::render::Frame { cells: vec![vec![cell; 80]; 24], width: 80, height: 24, clusters: None };
+        let mut frame = crate::render::Frame {
+            cells: vec![vec![cell; 80]; 24],
+            width: 80,
+            height: 24,
+            clusters: None,
+        };
         crate::components::dialog::render_overlay_with(
             &mut frame,
             &store.top_dialog().expect("open"),

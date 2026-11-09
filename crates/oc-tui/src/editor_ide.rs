@@ -5,6 +5,9 @@
 //! tracks `selection_changed` notifications — the SAME editor-context
 //! seam the Zed sqlite poll feeds (`store.apply_zed_selection`).
 //!
+//! G-273① — the socket also decodes `at_mentioned` notifications
+//! (context/editor.ts:242-246) into the composer's file mention.
+//!
 //! Discovery (editor.ts:44-85): `~/.claude/ide/*.lock` — the FILE
 //! NAME is the port, the JSON body carries `transport` ("ws" only),
 //! `workspaceFolders` (scored against the cwd — the longest
@@ -28,6 +31,41 @@ pub struct IdeConnection {
     pub auth_token: Option<String>,
     /// `env:<port>` / `lock:<port>` (editor.ts:61/69).
     pub source: String,
+}
+
+/// G-273① — one `at_mentioned` notification's payload
+/// (`EditorMentionSchema`, context/editor.ts:74-77): the file the IDE
+/// `@`-mentioned plus its line span (the composer's
+/// `insertFileMention`, autocomplete.tsx:763-765).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EditorMention {
+    pub file_path: String,
+    pub line_start: f64,
+    pub line_end: f64,
+}
+
+/// `decodeEditorMention` (context/editor.ts:92): `{filePath, lineStart,
+/// lineEnd}` — `Schema.Number` accepts any finite JSON number.
+#[must_use]
+pub fn decode_mention(params: &serde_json::Value) -> Option<EditorMention> {
+    let object = params.as_object()?;
+    let number = |key: &str| -> Option<f64> {
+        let value = object.get(key)?.as_f64()?;
+        value.is_finite().then_some(value)
+    };
+    Some(EditorMention {
+        file_path: object.get("filePath")?.as_str()?.to_owned(),
+        line_start: number("lineStart")?,
+        line_end: number("lineEnd")?,
+    })
+}
+
+/// The IDE socket's events: the selection feed (G-20) plus the
+/// `at_mentioned` mentions (G-273①).
+#[derive(Debug, Clone, PartialEq)]
+pub enum IdeSocketEvent {
+    Selection(ZedSelection),
+    Mention(EditorMention),
 }
 
 /// The env override (`CLAUDE_CODE_SSE_PORT || OPENCODE_EDITOR_SSE_PORT`,
@@ -211,22 +249,30 @@ fn resolve_path(value: &str) -> String {
 }
 
 /// The editor socket task (`connect`, context/editor.ts:177-288 —
-/// the WebSocket arm). Resolves the connection ONCE at boot (the env
-/// override or the best lock file); `None` when neither exists (the
-/// ref keeps polling for locks — the port re-resolves on reconnect
-/// attempts within a run, not across). Emits every decoded
-/// `selection_changed` selection; `None` = the socket closed
-/// (the selection stays until a reconnect re-establishes it).
-pub fn spawn_ide_socket() -> Option<tokio::sync::mpsc::Receiver<ZedSelection>> {
-    let connection = resolve_ide_connection(
-        std::env::var("HOME").ok().as_deref(),
-        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-    )?;
+/// the WebSocket arm). G-273② — EVERY attempt re-runs the resolution
+/// (`connect()`'s `resolveEditorConnection(directory, …)`,
+/// editor.ts:175-176): the env override first, else the lock
+/// discovery — a mid-run IDE restart/switch picks the fresh lock
+/// instead of silently keeping the boot-time connection. No
+/// connection at all still schedules the reconnect (the disabled
+/// status + `scheduleReconnect`, :177-186) — the task keeps polling
+/// for locks like the ref. Emits every decoded `selection_changed`
+/// selection and `at_mentioned` mention (G-273①).
+pub fn spawn_ide_socket() -> Option<tokio::sync::mpsc::Receiver<IdeSocketEvent>> {
+    let home = std::env::var("HOME").ok();
+    let directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let (tx, rx) = tokio::sync::mpsc::channel(8);
     tokio::spawn(async move {
         let mut attempt: u32 = 0;
         loop {
-            let outcome = connect_once(&connection, &tx).await;
+            // G-273② — resolve fresh per attempt (editor.ts:175).
+            let connection = resolve_ide_connection(home.as_deref(), &directory);
+            let outcome = match connection {
+                Some(connection) => connect_once(&connection, &tx).await,
+                // No lock + no env override: the disabled state still
+                // reconnects (the ref's lock polling, :180-186).
+                None => ConnectOutcome { stopped: tx.is_closed(), opened: false },
+            };
             if outcome.stopped {
                 // The channel closed — the run loop ended.
                 return;
@@ -264,7 +310,7 @@ struct ConnectOutcome {
 /// One connection attempt (`connect`'s socket arm).
 async fn connect_once(
     connection: &IdeConnection,
-    tx: &tokio::sync::mpsc::Sender<ZedSelection>,
+    tx: &tokio::sync::mpsc::Sender<IdeSocketEvent>,
 ) -> ConnectOutcome {
     use futures::{SinkExt as _, StreamExt as _};
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -318,7 +364,17 @@ async fn connect_once(
             // `selection_changed` (context/editor.ts:221-226).
             Some("selection_changed") => {
                 if let Some(selection) = decode_selection(body.get("params").unwrap_or(&value)) {
-                    if tx.send(selection).await.is_err() {
+                    if tx.send(IdeSocketEvent::Selection(selection)).await.is_err() {
+                        return outcome(true, true);
+                    }
+                }
+            }
+            // G-273① — `at_mentioned` (:242-246): the mention fans out
+            // to the composer's insertFileMention listener
+            // (autocomplete.tsx:763-765).
+            Some("at_mentioned") => {
+                if let Some(mention) = decode_mention(body.get("params").unwrap_or(&value)) {
+                    if tx.send(IdeSocketEvent::Mention(mention)).await.is_err() {
                         return outcome(true, true);
                     }
                 }
@@ -434,6 +490,33 @@ mod tests {
         }))
         .is_none());
         assert!(decode_selection(&serde_json::json!({"filePath": "/a"})).is_none());
+    }
+
+    /// G-273① — `decodeEditorMention` (context/editor.ts:74-92):
+    /// `{filePath, lineStart, lineEnd}`, finite numbers only.
+    #[test]
+    fn mention_decodes_the_editor_payload() {
+        let mention = decode_mention(&serde_json::json!({
+            "filePath": "/proj/src/main.rs",
+            "lineStart": 12,
+            "lineEnd": 34
+        }))
+        .expect("decodes");
+        assert_eq!(mention.file_path, "/proj/src/main.rs");
+        assert_eq!(mention.line_start, 12.0);
+        assert_eq!(mention.line_end, 34.0);
+        // Fractional numbers decode (Schema.Number accepts them).
+        assert!(decode_mention(&serde_json::json!({
+            "filePath": "/a", "lineStart": 1.5, "lineEnd": 2
+        }))
+        .is_some());
+        // Missing keys / non-numbers never decode.
+        assert!(decode_mention(&serde_json::json!({"filePath": "/a"})).is_none());
+        assert!(decode_mention(&serde_json::json!({"lineStart": 1, "lineEnd": 2})).is_none());
+        assert!(decode_mention(
+            &serde_json::json!({"filePath": "/a", "lineStart": "x", "lineEnd": 2})
+        )
+        .is_none());
     }
 
     /// `discoverEditorConnection` against a real temp `~/.claude/ide`:

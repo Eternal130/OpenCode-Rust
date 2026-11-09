@@ -18,7 +18,7 @@
 //!   deferred (see docs/surf2.log).
 
 use crate::components::diff_viewer::{
-    DiffFile, DiffView, DiffViewerOptions, PatchRow, diff_layout,
+    diff_layout, DiffFile, DiffView, DiffViewerOptions, PatchRow,
 };
 use crate::render::{Cell, CellColor, Frame};
 use crate::store::{DiffPhase, DiffSource, DiffViewerLive, Store};
