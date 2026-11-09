@@ -15,7 +15,11 @@ use crate::theme::ThemeStyles;
 /// The bar's row units — the shaping seam shared by the mount (the
 /// live path) and the golden twin.
 #[must_use]
-pub(crate) fn devtools_bar_units(store: &Store, styles: &ThemeStyles, size: (u16, u16)) -> Vec<ChromeUnit> {
+pub(crate) fn devtools_bar_units(
+    store: &Store,
+    styles: &ThemeStyles,
+    size: (u16, u16),
+) -> Vec<ChromeUnit> {
     let width = usize::from(size.0).max(1);
     let full = super::devtools::bar_text(store, styles, size);
     let text: String = full.chars().take(width.saturating_sub(1)).collect();
@@ -36,7 +40,11 @@ pub(crate) fn devtools_bar_units(store: &Store, styles: &ThemeStyles, size: (u16
 /// per-surface copy's test form).
 #[cfg(test)]
 #[must_use]
-pub(crate) fn devtools_bar_row_solid(store: &Store, styles: &ThemeStyles, size: (u16, u16)) -> Frame {
+pub(crate) fn devtools_bar_row_solid(
+    store: &Store,
+    styles: &ThemeStyles,
+    size: (u16, u16),
+) -> Frame {
     let units = devtools_bar_units(store, styles, size);
     super::chrome_solid::mounted_surface_frame(
         "devtools_bar",

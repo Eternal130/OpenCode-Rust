@@ -289,8 +289,7 @@ async fn undeclared_status_is_unexpected() {
 #[tokio::test]
 async fn unexpected_status_body_is_capped_at_64k() {
     let huge = "x".repeat(1024 * 1024);
-    let mock =
-        spawn_mock(move |_, _, stream| stream.write_all(&json_response(502, &huge)));
+    let mock = spawn_mock(move |_, _, stream| stream.write_all(&json_response(502, &huge)));
     let c = client(&mock.url());
     let err = c.server().info().await.expect_err("huge body");
     let ClientError::UnexpectedStatus { status, body } = &err else {

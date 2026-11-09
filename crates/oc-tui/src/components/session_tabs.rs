@@ -211,9 +211,7 @@ impl TabStatus {
         match self.attention {
             Some(Attention::Permission) => "!".to_owned(),
             Some(Attention::Question) => "?".to_owned(),
-            None if self.runs() => {
-                config.spinner.frames()[0].to_string()
-            }
+            None if self.runs() => config.spinner.frames()[0].to_string(),
             None if self.unread.is_some() => config.unread_marker.glyph().to_owned(),
             None => String::new(),
         }

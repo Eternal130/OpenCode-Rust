@@ -1361,9 +1361,9 @@ impl App {
                 // equal split instead.
                 if self.store.dialogs().is_empty()
                     && !self.permission_live()
-                    && self.pane_boundary_cols().is_some_and(|(left, len)| {
-                        col >= left && col < left + len
-                    })
+                    && self
+                        .pane_boundary_cols()
+                        .is_some_and(|(left, len)| col >= left && col < left + len)
                 {
                     if let Some(last) = self.pane_boundary_click {
                         if last.elapsed() < std::time::Duration::from_millis(300) {
@@ -10238,7 +10238,8 @@ pub async fn run_with_size(
                         // G-287⑤ — capture the panic stack for the
                         // crash screen's stack section + the issue
                         // report (`error.stack`).
-                        app.error_stack = Some(std::backtrace::Backtrace::force_capture().to_string());
+                        app.error_stack =
+                            Some(std::backtrace::Backtrace::force_capture().to_string());
                         crate::components::update::error_component_frame_with(
                             app.size,
                             &message,
@@ -10293,9 +10294,7 @@ pub async fn run_with_size(
             // the session terminal's output writer (a no-op frame
             // writes nothing).
             let emission = match session_terminal.lock() {
-                Ok(mut session) => {
-                    emitter.emit_with_links(session.output(), &frame, &frame_links)
-                }
+                Ok(mut session) => emitter.emit_with_links(session.output(), &frame, &frame_links),
                 Err(_) => Err(std::io::Error::other("session terminal lock poisoned")),
             };
             if emission.is_err() {

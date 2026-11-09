@@ -41,14 +41,15 @@ pub const HIDDEN_COPILOT_MODEL: &str = "gpt-5-chat-latest";
 /// `baseURL` + `endpoint` overlays, and the derived
 /// family/modalities/variants/released/cost/limit fields.
 #[must_use]
-pub fn copilot_model_info(entry: &CopilotModelEntry, previous: Option<&schema_model::Info>) -> schema_model::Info {
+pub fn copilot_model_info(
+    entry: &CopilotModelEntry,
+    previous: Option<&schema_model::Info>,
+) -> schema_model::Info {
     let provider_id = ProviderId::parse("github-copilot");
     let mut settings = previous.and_then(|info| info.settings.clone()).unwrap_or_default();
     settings.rest.insert("baseURL".to_string(), serde_json::json!(entry.base_url));
     if let Some(endpoint) = entry.endpoint {
-        settings
-            .rest
-            .insert("endpoint".to_string(), serde_json::json!(endpoint.as_str()));
+        settings.rest.insert("endpoint".to_string(), serde_json::json!(endpoint.as_str()));
     }
     schema_model::Info {
         id: ModelId::parse(entry.id.clone()),
@@ -214,7 +215,11 @@ impl crate::hooks::HookHandler<crate::hooks::SessionTitleEvent> for CopilotUtili
         let system = {
             let text: Vec<&str> =
                 event.request.system.iter().map(|part| part.text.as_str()).collect();
-            if text.is_empty() { None } else { Some(text.join("\n")) }
+            if text.is_empty() {
+                None
+            } else {
+                Some(text.join("\n"))
+            }
         };
         let messages: Vec<oc_ai::protocols::copilot::UtilityTitleMessage> = event
             .request
@@ -240,11 +245,7 @@ impl crate::hooks::HookHandler<crate::hooks::SessionTitleEvent> for CopilotUtili
                     .join("\n"),
             })
             .collect();
-        let max_tokens = event
-            .request
-            .options
-            .get("maxTokens")
-            .and_then(serde_json::Value::as_u64);
+        let max_tokens = event.request.options.get("maxTokens").and_then(serde_json::Value::as_u64);
         let input = oc_ai::protocols::copilot::UtilityTitleInput {
             base_url: &state.base_url,
             token: &state.token,
@@ -301,14 +302,27 @@ impl CopilotSync {
     /// headers and rebuild the merged snapshot. No binding, or a failed
     /// fetch, leaves the previous state in place (v2 clears on a
     /// missing credential and keeps stale models on a failed fetch).
-    pub async fn refresh(&self, catalog: &Catalog, base_url: String, token: String, user_agent: String) {
+    pub async fn refresh(
+        &self,
+        catalog: &Catalog,
+        base_url: String,
+        token: String,
+        user_agent: String,
+    ) {
         let headers = vec![
             ("Authorization".to_string(), format!("Bearer {token}")),
             ("User-Agent".to_string(), user_agent),
-            ("X-GitHub-Api-Version".to_string(), oc_ai::protocols::copilot::COPILOT_API_VERSION.to_string()),
+            (
+                "X-GitHub-Api-Version".to_string(),
+                oc_ai::protocols::copilot::COPILOT_API_VERSION.to_string(),
+            ),
         ];
-        let Ok(remote) =
-            oc_ai::protocols::copilot::load_copilot_models(Arc::clone(&self.transport), &base_url, headers).await
+        let Ok(remote) = oc_ai::protocols::copilot::load_copilot_models(
+            Arc::clone(&self.transport),
+            &base_url,
+            headers,
+        )
+        .await
         else {
             return; // "no refresh" — keep the previous state
         };

@@ -411,9 +411,9 @@ async fn attach_session(
             // (daemon.ts:116-117 field names; `process` keeps its
             // explicit null).
             StreamEvent::TitleChanged { title } => {
-                let _ = outbox.send(
-                    Message::Text(json!({ "type": "title_changed", "title": title }).to_string()),
-                );
+                let _ = outbox.send(Message::Text(
+                    json!({ "type": "title_changed", "title": title }).to_string(),
+                ));
             }
             StreamEvent::ForegroundProcessChanged { process } => {
                 let _ = outbox.send(Message::Text(
@@ -589,11 +589,7 @@ async fn handle_framed(
     if let Some(frame) = decode_framed(bytes) {
         match frame.kind {
             0 => {
-                shared
-                    .persistent
-                    .control(pty_id, attachment_id, frame.cols, frame.rows)
-                    .await
-                    .ok();
+                shared.persistent.control(pty_id, attachment_id, frame.cols, frame.rows).await.ok();
             }
             _ => {
                 shared

@@ -35,21 +35,20 @@ use std::sync::Arc;
 use serde::Deserialize;
 use serde_json::Value;
 
-use oc_ai::LanguageModel;
-use oc_ai::protocols::alibaba_responses::{AlibabaResponsesRouteSpec, alibaba_responses_route};
+use oc_ai::protocols::alibaba_responses::{alibaba_responses_route, AlibabaResponsesRouteSpec};
 use oc_ai::protocols::anthropic_messages::{
     alibaba_messages_compatibility, anthropic_messages_route, anthropic_route,
     meta_messages_compatibility, moonshot_messages_compatibility,
     zai_coding_plan_messages_compatibility,
 };
-use oc_ai::protocols::azure::{AzureConfig, azure_chat_route, azure_responses_route};
+use oc_ai::protocols::azure::{azure_chat_route, azure_responses_route, AzureConfig};
 use oc_ai::protocols::bedrock::{self as bedrock_lane, BedrockAuthOptions, MantleMessagesConfig};
-use oc_ai::protocols::cohere_chat::{CohereConfig, cohere_route_for_package};
-use oc_ai::protocols::copilot::{CopilotConfig, copilot_chat_route};
-use oc_ai::protocols::gemini::{GoogleConfig, google_route};
-use oc_ai::protocols::google_interactions::{GoogleInteractionsConfig, google_interactions_route};
-use oc_ai::protocols::meta_responses::{MetaResponsesRouteSpec, meta_auth, meta_responses_route};
-use oc_ai::protocols::mistral_chat::{MistralConfig, mistral_route_for_package};
+use oc_ai::protocols::cohere_chat::{cohere_route_for_package, CohereConfig};
+use oc_ai::protocols::copilot::{copilot_chat_route, CopilotConfig};
+use oc_ai::protocols::gemini::{google_route, GoogleConfig};
+use oc_ai::protocols::google_interactions::{google_interactions_route, GoogleInteractionsConfig};
+use oc_ai::protocols::meta_responses::{meta_auth, meta_responses_route, MetaResponsesRouteSpec};
+use oc_ai::protocols::mistral_chat::{mistral_route_for_package, MistralConfig};
 use oc_ai::protocols::openai_chat::{
     alibaba_chat_compatibility, alibaba_chat_route, cerebras_chat_compatibility,
     cohere_chat_compatibility, deepinfra_chat_compatibility, deepseek_chat_compatibility,
@@ -63,24 +62,25 @@ use oc_ai::protocols::openai_chat::{
 use oc_ai::protocols::openai_compatible::{
     openai_compatible_chat_configured, openai_compatible_responses_route,
 };
-use oc_ai::protocols::openai_responses::{OpenAIResponsesRouteSpec, openai_responses_route};
+use oc_ai::protocols::openai_responses::{openai_responses_route, OpenAIResponsesRouteSpec};
 use oc_ai::protocols::vercel_gateway::{
-    VercelGatewayRouteSpec, route_for_model as vercel_gateway_route_for_model,
+    route_for_model as vercel_gateway_route_for_model, VercelGatewayRouteSpec,
 };
 use oc_ai::protocols::vertex::{
-    VertexConfig, VertexEndpointConfig, vertex_chat_route, vertex_responses_route,
-    vertex_route_for_model,
+    vertex_chat_route, vertex_responses_route, vertex_route_for_model, VertexConfig,
+    VertexEndpointConfig,
 };
-use oc_ai::protocols::vertex_messages::{VertexMessagesConfig, vertex_messages_route};
-use oc_ai::protocols::xai_responses::{XaiResponsesRouteSpec, xai_auth, xai_responses_route};
+use oc_ai::protocols::vertex_messages::{vertex_messages_route, VertexMessagesConfig};
+use oc_ai::protocols::xai_responses::{xai_auth, xai_responses_route, XaiResponsesRouteSpec};
 use oc_ai::route::auth::{self, Secret};
 use oc_ai::route::client::{Route, RouteDefaults, RoutePatch};
 use oc_ai::route::endpoint::EndpointPatch;
 use oc_ai::route::{AuthDefinition, SharedTransport};
 use oc_ai::schema::options::{
-    HttpOptions, LanguageModelCompatibility, MaxTokensFieldCompatibility, merge_json_records,
-    merge_string_records,
+    merge_json_records, merge_string_records, HttpOptions, LanguageModelCompatibility,
+    MaxTokensFieldCompatibility,
 };
+use oc_ai::LanguageModel;
 use oc_schema::model::Info as ModelInfo;
 use oc_schema::provider::{Activation, Settings as ProviderSettings};
 
@@ -595,10 +595,7 @@ pub fn language_model_for_model(
             });
             transport = oc_ai::route::transport::auth_retry_401(transport, refresh);
         }
-        route.with(RoutePatch {
-            transport: Some(transport),
-            ..Default::default()
-        })
+        route.with(RoutePatch { transport: Some(transport), ..Default::default() })
     } else {
         route
     };
@@ -1505,7 +1502,11 @@ fn baked_chat_base(package: &str) -> Option<&'static str> {
 /// trailing slashes, append `/openai` unless the URL already ends with it.
 fn deepinfra_base_url(url: &str) -> String {
     let root = url.trim_end_matches('/');
-    if root.ends_with("/openai") { root.to_string() } else { format!("{root}/openai") }
+    if root.ends_with("/openai") {
+        root.to_string()
+    } else {
+        format!("{root}/openai")
+    }
 }
 
 /// Provider env fallback chains hardcoded in the TS provider files that the
@@ -2034,13 +2035,11 @@ mod tests {
             "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
         );
         // matched: the error key variant
-        assert!(
-            snowflake_rewrite_400_conversation_complete(&snapshot(
-                400,
-                r#"{"error":"...conversation complete..."}"#
-            ))
-            .is_some()
-        );
+        assert!(snowflake_rewrite_400_conversation_complete(&snapshot(
+            400,
+            r#"{"error":"...conversation complete..."}"#
+        ))
+        .is_some());
         // matched: a non-string message (V1's String() coercion)
         assert!(
             snowflake_rewrite_400_conversation_complete(&snapshot(400, r#"{"message":42}"#))
@@ -2161,8 +2160,8 @@ mod tests {
     /// the same 401 still fails as a provider error.
     #[tokio::test]
     async fn snowflake_401_refreshes_and_retries_once_through_the_route() {
-        use futures::StreamExt as _;
         use futures::future::BoxFuture;
+        use futures::StreamExt as _;
 
         // A transport that 401s every bearer except the refreshed one
         // (then answers the empty SSE terminator), recording the auths.
@@ -2199,12 +2198,15 @@ mod tests {
                         "content-type".to_string(),
                         "application/json".to_string(),
                     )]),
-                    body: futures::stream::iter(vec![Ok::<
-                        _,
-                        oc_ai::route::transport::TransportError,
-                    >(bytes::Bytes::from(
-                        r#"{"message":"Session no longer active. Reauthenticate."}"#.as_bytes().to_vec(),
-                    ))])
+                    body: futures::stream::iter(vec![
+                        Ok::<_, oc_ai::route::transport::TransportError>(
+                            bytes::Bytes::from(
+                                r#"{"message":"Session no longer active. Reauthenticate."}"#
+                                    .as_bytes()
+                                    .to_vec(),
+                            ),
+                        ),
+                    ])
                     .boxed(),
                 })
             }
@@ -2257,10 +2259,7 @@ mod tests {
             Some(crate::integration::OAuthImplementation {
                 authorize: Arc::new(|_answer| {
                     Box::pin(async { Err("unused".to_string()) })
-                        as BoxFuture<'static, Result<
-                            crate::integration::Authorization,
-                            String,
-                        >>
+                        as BoxFuture<'static, Result<crate::integration::Authorization, String>>
                 }),
                 refresh: Some(Arc::new(|value: crate::integration::types::OAuthValue| {
                     Box::pin(async move {
@@ -2559,10 +2558,8 @@ mod tests {
 
         // region flows into the converse host; nothing configured →
         // us-east-1 (the plugin's explicit default, amazon-bedrock.ts:42).
-        let model = bind(&ModelConnection {
-            region: Some("eu-central-1".into()),
-            ..Default::default()
-        });
+        let model =
+            bind(&ModelConnection { region: Some("eu-central-1".into()), ..Default::default() });
         assert_eq!(
             model.route.endpoint.base_url.as_deref(),
             Some("https://bedrock-runtime.eu-central-1.amazonaws.com"),

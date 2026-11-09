@@ -509,7 +509,11 @@ mod tests {
     impl WarmGenerate for RecordingGenerate {
         async fn generate(&self, session_id: &str, prompt: &str) -> Result<String, String> {
             self.calls.lock().expect("calls").push((session_id.to_string(), prompt.to_string()));
-            if self.fail { Err("boom".to_string()) } else { Ok("OK".to_string()) }
+            if self.fail {
+                Err("boom".to_string())
+            } else {
+                Ok("OK".to_string())
+            }
         }
     }
 

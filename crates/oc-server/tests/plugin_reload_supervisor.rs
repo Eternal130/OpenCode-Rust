@@ -31,8 +31,7 @@ struct Sandbox {
 }
 
 fn sandbox(tag: &str) -> Sandbox {
-    let root =
-        PathBuf::from(format!("/tmp/opencode/oc-server-g222-{tag}-{}", std::process::id()));
+    let root = PathBuf::from(format!("/tmp/opencode/oc-server-g222-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let home = root.join("home");
     let project = root.join("project");
@@ -87,8 +86,7 @@ fn bun_available() -> bool {
 /// mutate their copies — reload edits must never touch the repo).
 fn copy_helloworld(destination: &Path) -> PathBuf {
     let source = oc_plugin_host::fixture_dir().join("helloworld.ts");
-    std::fs::copy(&source, destination)
-        .unwrap_or_else(|error| panic!("copy helloworld: {error}"));
+    std::fs::copy(&source, destination).unwrap_or_else(|error| panic!("copy helloworld: {error}"));
     destination.to_path_buf()
 }
 
@@ -121,7 +119,11 @@ async fn boot_with_plugins(box_: &Sandbox) -> (oc_server::lifecycle::ServeHandle
     let handle = boot_and_serve(&box_.boot_options()).await.expect("boot and serve");
     let boot = wait_for(Duration::from_secs(30), || {
         handle.state.plugins.as_ref().and_then(|boot| {
-            if boot.ready { Some(Arc::clone(boot)) } else { None }
+            if boot.ready {
+                Some(Arc::clone(boot))
+            } else {
+                None
+            }
         })
     })
     .await
@@ -187,10 +189,9 @@ async fn dropin_add_and_delete_drive_the_add_remove_path() {
 
     // Delete: remove_entry tears the generation down.
     std::fs::remove_file(&added).expect("delete drop-in");
-    let removed = wait_for(Duration::from_secs(20), || {
-        hello_description(&boot).is_none().then_some(())
-    })
-    .await;
+    let removed =
+        wait_for(Duration::from_secs(20), || hello_description(&boot).is_none().then_some(()))
+            .await;
     assert!(removed.is_some(), "drop-in removed and unloaded (passes={})", supervisor.passes());
     handle.begin_shutdown();
 }
@@ -222,11 +223,9 @@ async fn sdk_plugin_updated_bus_event_triggers_a_pass() {
         .await
         .expect("publish sdk.plugin.updated");
 
-    wait_for(Duration::from_secs(10), || {
-        (supervisor.passes() > before).then_some(())
-    })
-    .await
-    .expect("bus event drove a supervisor pass");
+    wait_for(Duration::from_secs(10), || (supervisor.passes() > before).then_some(()))
+        .await
+        .expect("bus event drove a supervisor pass");
     handle.begin_shutdown();
 }
 

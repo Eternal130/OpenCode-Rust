@@ -28,7 +28,7 @@
 //! composer engine are gone (the lane that replaced them ran default-
 //! ON for one release, per the M-engine plan).
 
+pub mod animation;
 pub mod keymap;
 pub mod scroll;
 pub mod text_edit;
-pub mod animation;

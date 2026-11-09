@@ -838,7 +838,11 @@ async fn alternate_path(files: &dyn crate::environment::Files, absolute: &Path) 
             matches.push(dir.join(name));
         }
     }
-    if matches.len() == 1 { matches.pop() } else { None }
+    if matches.len() == 1 {
+        matches.pop()
+    } else {
+        None
+    }
 }
 
 async fn run(

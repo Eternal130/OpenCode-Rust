@@ -6,8 +6,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use oc_client::Client;
 use oc_client::types::*;
+use oc_client::Client;
 use oc_core::engine::{Engine, EngineOptions};
 use oc_server::handlers;
 use oc_server::state::{AppState, AuthConfig};
@@ -431,15 +431,13 @@ async fn be1_sse_tui_frames_pass_the_public_filter() {
 #[tokio::test]
 async fn be1_sse_filesystem_changed_and_branch_updated_on_head_move() {
     let workspace = tempfile::tempdir().expect("workspace");
-    assert!(
-        std::process::Command::new("git")
-            .args(["init", "-b", "main"])
-            .current_dir(workspace.path())
-            .output()
-            .expect("git init")
-            .status
-            .success()
-    );
+    assert!(std::process::Command::new("git")
+        .args(["init", "-b", "main"])
+        .current_dir(workspace.path())
+        .output()
+        .expect("git init")
+        .status
+        .success());
     let server = boot(workspace.path().to_path_buf()).await;
     // The announcer's branch subscription (the production shell starts
     // this; the bare test harness does not).
@@ -456,15 +454,13 @@ async fn be1_sse_filesystem_changed_and_branch_updated_on_head_move() {
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
     let mut stream = feed(&server.state).subscribe();
-    assert!(
-        std::process::Command::new("git")
-            .args(["checkout", "-b", "feature-lane-be1"])
-            .current_dir(workspace.path())
-            .output()
-            .expect("git checkout")
-            .status
-            .success()
-    );
+    assert!(std::process::Command::new("git")
+        .args(["checkout", "-b", "feature-lane-be1"])
+        .current_dir(workspace.path())
+        .output()
+        .expect("git checkout")
+        .status
+        .success());
 
     let changed =
         expect_frame(&mut stream, "\"type\":\"filesystem.changed\"", "filesystem.changed").await;

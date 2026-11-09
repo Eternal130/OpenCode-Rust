@@ -174,8 +174,7 @@ async fn azure_api_key_lane_narrows_to_deployments() {
     let request = &requests[0];
     assert_eq!(request.method, "GET");
     assert_eq!(
-        request.path,
-        "/openai/deployments?api-version=2022-12-01",
+        request.path, "/openai/deployments?api-version=2022-12-01",
         "the data-plane deployment list (azure.ts:296)"
     );
     assert_eq!(request.header("api-key"), Some("secret"), "the key credential header");
@@ -184,12 +183,8 @@ async fn azure_api_key_lane_narrows_to_deployments() {
 
     // The name disambiguation: a deployment named after another model
     // keeps the catalog model's facts under a `(deployment)` name.
-    let prod = state
-        .merged
-        .models
-        .iter()
-        .find(|m| m.id.as_str() == "prod-mini")
-        .expect("prod-mini");
+    let prod =
+        state.merged.models.iter().find(|m| m.id.as_str() == "prod-mini").expect("prod-mini");
     let embedded = catalog();
     let catalog_model = embedded
         .provider("azure")
@@ -241,10 +236,8 @@ async fn azure_entra_lane_paginates_the_management_inventory() {
         (404, r#"{"error":"not found"}"#.to_owned())
     }))
     .await;
-    let endpoints = AzureEndpoints {
-        resource_template: format!("{origin}/openai"),
-        management: origin,
-    };
+    let endpoints =
+        AzureEndpoints { resource_template: format!("{origin}/openai"), management: origin };
     let sync = AzureSync::new(transport());
     sync.refresh(
         &catalog(),
@@ -266,10 +259,7 @@ async fn azure_entra_lane_paginates_the_management_inventory() {
     assert_eq!(requests.len(), 3, "graph + page 1 + page 2, never the resource list");
     let graph = &requests[0];
     assert_eq!(graph.method, "POST");
-    assert_eq!(
-        graph.path,
-        "/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01"
-    );
+    assert_eq!(graph.path, "/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01");
     assert_eq!(graph.header("authorization"), Some("Bearer mgmt-token"));
     let body: Value = serde_json::from_str(&graph.body).expect("the query body is JSON");
     let query = body["query"].as_str().unwrap_or_default();
@@ -305,10 +295,8 @@ async fn azure_entra_lane_falls_back_to_the_resource_list() {
         }
     }))
     .await;
-    let endpoints = AzureEndpoints {
-        resource_template: format!("{origin}/openai"),
-        management: origin,
-    };
+    let endpoints =
+        AzureEndpoints { resource_template: format!("{origin}/openai"), management: origin };
     let sync = AzureSync::new(transport());
     sync.refresh(
         &catalog(),
@@ -323,12 +311,7 @@ async fn azure_entra_lane_falls_back_to_the_resource_list() {
     .await;
     let state = sync.state().expect("the fallback stored its state");
     assert_eq!(
-        state
-            .merged
-            .models
-            .iter()
-            .map(|m| m.id.as_str())
-            .collect::<Vec<_>>(),
+        state.merged.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
         vec!["gpt-5-mini"]
     );
     let requests = requests.lock().unwrap();
@@ -372,10 +355,8 @@ async fn azure_nextlink_outside_management_falls_back() {
         (404, r#"{"error":"not found"}"#.to_owned())
     }))
     .await;
-    let endpoints = AzureEndpoints {
-        resource_template: format!("{origin}/openai"),
-        management: origin,
-    };
+    let endpoints =
+        AzureEndpoints { resource_template: format!("{origin}/openai"), management: origin };
     let sync = AzureSync::new(transport());
     sync.refresh(
         &catalog(),
@@ -514,7 +495,8 @@ async fn digitalocean_routers_refresh_folds_and_retains() {
     *body.lock().unwrap() = json!({ "model_routers": [] }).to_string();
     sync.refresh(&catalog, &endpoint, "do-token".to_owned(), 0, "opencode-test").await;
     assert!(
-        !sync.state()
+        !sync
+            .state()
             .expect("state")
             .merged
             .models
@@ -549,14 +531,13 @@ async fn digitalocean_expired_token_keeps_its_inventory() {
     // fetch, the inventory stays.
     sync.refresh(&catalog, &endpoint, "do-token".to_owned(), 1, "opencode-test").await;
     assert_eq!(requests.lock().unwrap().len(), 1, "no second request");
-    assert!(
-        sync.state()
-            .expect("retained")
-            .merged
-            .models
-            .iter()
-            .any(|model| model.id.as_str() == "router:alpha")
-    );
+    assert!(sync
+        .state()
+        .expect("retained")
+        .merged
+        .models
+        .iter()
+        .any(|model| model.id.as_str() == "router:alpha"));
 }
 
 /// G-259 — offline zero-behavior: without a credential neither sync

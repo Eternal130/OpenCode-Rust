@@ -323,7 +323,14 @@ fn render_spec(
         }
         BlockSpec::Blockquote { content, border_color, margin_bottom } => {
             let mut body = Vec::new();
-            render_spec(content, content_width.saturating_sub(2), 0, styles, &mut body, fence_counter);
+            render_spec(
+                content,
+                content_width.saturating_sub(2),
+                0,
+                styles,
+                &mut body,
+                fence_counter,
+            );
             let border = border_color
                 .and_then(rgba_to_style_color)
                 .map_or(styles.quote_border, |color| styles.quote_border.fg(color));
@@ -450,7 +457,14 @@ fn render_list(
             if index > 0 && item.child_margins_top.get(index).is_some_and(|m| *m > 0) {
                 body.push(MarkdownLine(Vec::new()));
             }
-            render_spec(child, width.saturating_sub(marker_width), 0, styles, &mut body, fence_counter);
+            render_spec(
+                child,
+                width.saturating_sub(marker_width),
+                0,
+                styles,
+                &mut body,
+                fence_counter,
+            );
         }
         for (row, line) in body.into_iter().enumerate() {
             let mut runs = Vec::new();
@@ -874,7 +888,12 @@ mod tests {
     #[test]
     fn unsupported_hyperlinks_keep_the_url_tail_visible() {
         let lines = render_with("see [docs](https://example.com) here", 60, false);
-        assert_eq!(lines.len(), 1, "{:?}", lines.iter().map(MarkdownLine::text).collect::<Vec<_>>());
+        assert_eq!(
+            lines.len(),
+            1,
+            "{:?}",
+            lines.iter().map(MarkdownLine::text).collect::<Vec<_>>()
+        );
         assert_eq!(lines[0].text(), "see docs (https://example.com) here");
         let links = links_of(&lines[0]);
         // The label run and the visible URL run both link.

@@ -41,10 +41,7 @@ impl ProviderError {
 
 /// The raw `Retry-After` header off a response, when present.
 fn retry_after_header(headers: &reqwest::header::HeaderMap) -> Option<String> {
-    headers
-        .get("retry-after")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string)
+    headers.get("retry-after").and_then(|value| value.to_str().ok()).map(str::to_string)
 }
 
 /// `WebSearchMcp.MAX_RESPONSE_BYTES`.
@@ -315,8 +312,7 @@ fn parse_clock(clock: &str) -> Option<(i64, i64, i64)> {
 fn parse_loose_date(value: &str) -> Option<u64> {
     let mut text = value.trim();
     // Optional weekday prefix `Mon`/`Monday` (with or without a comma).
-    let first_word: String =
-        text.chars().take_while(|char| char.is_alphabetic()).collect();
+    let first_word: String = text.chars().take_while(|char| char.is_alphabetic()).collect();
     if is_weekday_prefix(&first_word) {
         text = text.strip_prefix(&first_word).unwrap_or(text);
         text = text.trim_start();
@@ -367,8 +363,18 @@ fn month_number(token: &str) -> Option<i64> {
         return None;
     }
     const MONTHS: [&str; 12] = [
-        "january", "february", "march", "april", "may", "june", "july", "august", "september",
-        "october", "november", "december",
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
     ];
     MONTHS
         .iter()
@@ -399,8 +405,15 @@ fn civil_days(year: i64, month: i64, day: i64) -> Option<i64> {
     Some(era * 146_097 + doe - 719_468)
 }
 
-fn days_to_millis(days: i64, hour: i64, minute: i64, second: i64, offset_minutes: i64) -> Option<u64> {
-    let millis = ((days * 86_400) + hour * 3_600 + minute * 60 + second - offset_minutes * 60) * 1000;
+fn days_to_millis(
+    days: i64,
+    hour: i64,
+    minute: i64,
+    second: i64,
+    offset_minutes: i64,
+) -> Option<u64> {
+    let millis =
+        ((days * 86_400) + hour * 3_600 + minute * 60 + second - offset_minutes * 60) * 1000;
     u64::try_from(millis).ok()
 }
 
@@ -904,7 +917,6 @@ mod tests {
         server.state.lock().unwrap().last().expect("recorded request").clone()
     }
 
-
     /// G-224③ — the tavily request carries the app user-agent
     /// (`App.useragent`, ref tavily.ts:53-54) alongside X-Client-Name.
     #[tokio::test]
@@ -919,7 +931,10 @@ mod tests {
             request.to_ascii_lowercase().contains("user-agent: opencode/"),
             "app UA on the wire: {request}"
         );
-        assert!(request.contains("x-client-name: opencode2") || request.contains("X-Client-Name: opencode2"));
+        assert!(
+            request.contains("x-client-name: opencode2")
+                || request.contains("X-Client-Name: opencode2")
+        );
     }
 
     /// G-224① — a 429's `Retry-After` header survives into the
@@ -927,7 +942,9 @@ mod tests {
     #[tokio::test]
     async fn g224_provider_error_carries_retry_after() {
         let body = "{}".to_string();
-        let server = fake_mcp_with_headers("429 Too Many Requests", body, false, "Retry-After: 12\r\n").await;
+        let server =
+            fake_mcp_with_headers("429 Too Many Requests", body, false, "Retry-After: 12\r\n")
+                .await;
         let mut provider = TavilyProvider::new(None);
         provider.endpoint = server.base.clone();
         let error = provider.execute("q").await.unwrap_err();

@@ -70,11 +70,7 @@ pub fn snap_write(input: &Value) -> ToolSnapshot {
     if file.is_empty() && content.is_empty() {
         return ToolSnapshot::None;
     }
-    ToolSnapshot::Code {
-        title: format!("# Wrote {}", display_path(&file)),
-        content,
-        file,
-    }
+    ToolSnapshot::Code { title: format!("# Wrote {}", display_path(&file)), content, file }
 }
 
 /// `snapEdit` (tool.ts:544-562): `# Edited {path}` + the first
@@ -229,12 +225,12 @@ mod tests {
                 file: "src/main.rs".to_owned(),
             }
         );
-        assert_eq!(
-            snapshot_rows(&snapshot),
-            ["# Wrote src/main.rs", "fn main() {}", ""]
-        );
+        assert_eq!(snapshot_rows(&snapshot), ["# Wrote src/main.rs", "fn main() {}", ""]);
         // No path AND no content: no snapshot (tool.ts:533-535).
-        assert_eq!(tool_snapshot("write", &json!({}), &Value::Null, &Value::Null), ToolSnapshot::None);
+        assert_eq!(
+            tool_snapshot("write", &json!({}), &Value::Null, &Value::Null),
+            ToolSnapshot::None
+        );
     }
 
     #[test]
@@ -277,7 +273,10 @@ mod tests {
         // An empty-patch file drops the whole snapshot (all-or-nothing).
         let meta = json!({"files": [{"file": "a.txt", "patch": "  "}]});
         assert_eq!(tool_snapshot("patch", &Value::Null, &Value::Null, &meta), ToolSnapshot::None);
-        assert_eq!(tool_snapshot("patch", &Value::Null, &Value::Null, &json!({})), ToolSnapshot::None);
+        assert_eq!(
+            tool_snapshot("patch", &Value::Null, &Value::Null, &json!({})),
+            ToolSnapshot::None
+        );
     }
 
     #[test]
@@ -293,8 +292,11 @@ mod tests {
         );
         assert_eq!(snapshot_rows(&snapshot), ["# Engineer Subagent", "fix the bug"]);
         // No agent: "General".
-        let snapshot = tool_snapshot("task", &json!({"description": "d"}), &Value::Null, &Value::Null);
-        assert!(matches!(&snapshot, ToolSnapshot::Task { title, .. } if title == "# General Subagent"));
+        let snapshot =
+            tool_snapshot("task", &json!({"description": "d"}), &Value::Null, &Value::Null);
+        assert!(
+            matches!(&snapshot, ToolSnapshot::Task { title, .. } if title == "# General Subagent")
+        );
     }
 
     #[test]

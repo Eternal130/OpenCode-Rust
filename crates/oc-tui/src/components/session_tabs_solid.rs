@@ -60,23 +60,21 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use opentui_core::Rgba;
 use opentui_core::styled_text::{StyledText, TextChunk};
+use opentui_core::Rgba;
 use opentui_solid::builder::ForItemSource;
 use opentui_solid::element::{Children, ForItem, PropValue};
 use opentui_solid::reactive::Reactive;
-use opentui_solid::{Element, Signal, box_, children_expr, for_list, map, show, text};
+use opentui_solid::{box_, children_expr, for_list, map, show, text, Element, Signal};
 
-use crate::components::chrome_solid::{
-    ChromeStamp, family_wrapper_live, mount_family_wrapper,
-};
+use crate::components::chrome_solid::{family_wrapper_live, mount_family_wrapper, ChromeStamp};
 use crate::components::session_tabs::{
-    ADD_TAB_WIDTH, AdaptiveLayout, TabStatus, TabView, adaptive_session_tab_layout,
-    session_tab_overflow_width,
+    adaptive_session_tab_layout, session_tab_overflow_width, AdaptiveLayout, TabStatus, TabView,
+    ADD_TAB_WIDTH,
 };
 use crate::components::tab_pulse::{
-    GLOW_TAIL, RUN_SWEEP_OPACITY, Rgb, TabPulseTrack, blend_tab_pulse_color, glow_text_color,
-    intensity_at, resting_glow_bg, tint,
+    blend_tab_pulse_color, glow_text_color, intensity_at, resting_glow_bg, tint, Rgb,
+    TabPulseTrack, GLOW_TAIL, RUN_SWEEP_OPACITY,
 };
 use crate::render::{CellColor, Frame};
 use crate::store::Unread;
@@ -409,8 +407,7 @@ fn title_chunks(inputs: &StripInputs, paint: &TabPaint, key: &str) -> StyledText
     // an overflowing title scrolls one cell per 80 ms after a 600 ms
     // still frame (`marqueeTextParts(title, width, offset)`); the
     // leading fade rides the first FADE_WIDTH cells.
-    let scrolling =
-        paint.hovered && self::marquee::marquee_overflows(&title, title_width);
+    let scrolling = paint.hovered && self::marquee::marquee_overflows(&title, title_width);
     let (offset, leading) = marquee_offset(key, &title, title_width, scrolling, inputs.clock_ms);
     let title_text = if scrolling && offset > 0 {
         self::marquee::marquee_text(&title, title_width, offset)
@@ -420,8 +417,8 @@ fn title_chunks(inputs: &StripInputs, paint: &TabPaint, key: &str) -> StyledText
     let foreground =
         if paint.selected || paint.hovered { inputs.colors.text } else { inputs.colors.muted };
     let bold = u32::from(paint.selected); // attributes bit 1 = BOLD
-    // `titleFades` — marqueeOverflows(title, availableTitleWidth) &&
-    // availableTitleWidth > FADE_WIDTH (session-tabs.tsx:1605-1607).
+                                          // `titleFades` — marqueeOverflows(title, availableTitleWidth) &&
+                                          // availableTitleWidth > FADE_WIDTH (session-tabs.tsx:1605-1607).
     let title_fades =
         title.chars().count() > title_width_chars(&title, title_width) && title_width > FADE_WIDTH;
     match paint.glow {
@@ -509,7 +506,11 @@ fn fade_title_color(color: Rgb, background: Rgb, index: usize, length: usize, le
         - i64::try_from(length.saturating_sub(FADE_WIDTH)).unwrap_or(0)
         + 1;
     let opacity = (fade(start) * leading).max(fade(end));
-    if opacity == 0.0 { color } else { tint(color, background, opacity) }
+    if opacity == 0.0 {
+        color
+    } else {
+        tint(color, background, opacity)
+    }
 }
 
 /// The indicator chunks (`TabIndicator.label`): `!`/`?`/spinner/`•`
@@ -889,22 +890,20 @@ fn strip_element(inputs: &Signal<StripInputs>) -> Element {
         {
             let inputs = inputs.clone();
             move || {
-                vec![
-                    text()
-                        .dyn_prop(
-                            "content",
-                            dyn_styled(map(inputs.clone(), |i: &StripInputs| {
-                                overflow_chunks(format!("‹{}", i.layout().before), &i.colors)
-                            })),
-                        )
-                        .dyn_prop(
-                            "width",
-                            dyn_num(map(inputs.clone(), |i: &StripInputs| {
-                                session_tab_overflow_width(i.layout().before)
-                            })),
-                        )
-                        .into_element(),
-                ]
+                vec![text()
+                    .dyn_prop(
+                        "content",
+                        dyn_styled(map(inputs.clone(), |i: &StripInputs| {
+                            overflow_chunks(format!("‹{}", i.layout().before), &i.colors)
+                        })),
+                    )
+                    .dyn_prop(
+                        "width",
+                        dyn_num(map(inputs.clone(), |i: &StripInputs| {
+                            session_tab_overflow_width(i.layout().before)
+                        })),
+                    )
+                    .into_element()]
             }
         },
     );
@@ -916,22 +915,20 @@ fn strip_element(inputs: &Signal<StripInputs>) -> Element {
         {
             let inputs = inputs.clone();
             move || {
-                vec![
-                    text()
-                        .dyn_prop(
-                            "content",
-                            dyn_styled(map(inputs.clone(), |i: &StripInputs| {
-                                overflow_chunks(format!(" {}›", i.layout().after), &i.colors)
-                            })),
-                        )
-                        .dyn_prop(
-                            "width",
-                            dyn_num(map(inputs.clone(), |i: &StripInputs| {
-                                session_tab_overflow_width(i.layout().after)
-                            })),
-                        )
-                        .into_element(),
-                ]
+                vec![text()
+                    .dyn_prop(
+                        "content",
+                        dyn_styled(map(inputs.clone(), |i: &StripInputs| {
+                            overflow_chunks(format!(" {}›", i.layout().after), &i.colors)
+                        })),
+                    )
+                    .dyn_prop(
+                        "width",
+                        dyn_num(map(inputs.clone(), |i: &StripInputs| {
+                            session_tab_overflow_width(i.layout().after)
+                        })),
+                    )
+                    .into_element()]
             }
         },
     );
@@ -964,17 +961,15 @@ fn strip_element(inputs: &Signal<StripInputs>) -> Element {
         {
             let inputs = inputs.clone();
             move || {
-                vec![
-                    text()
-                        .width(ADD_TAB_WIDTH)
-                        .dyn_prop(
-                            "content",
-                            dyn_styled(map(inputs.clone(), |i: &StripInputs| {
-                                plus_chunks(i.add_hovered, &i.colors)
-                            })),
-                        )
-                        .into_element(),
-                ]
+                vec![text()
+                    .width(ADD_TAB_WIDTH)
+                    .dyn_prop(
+                        "content",
+                        dyn_styled(map(inputs.clone(), |i: &StripInputs| {
+                            plus_chunks(i.add_hovered, &i.colors)
+                        })),
+                    )
+                    .into_element()]
             }
         },
     );

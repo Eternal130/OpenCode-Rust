@@ -126,17 +126,21 @@ pub(crate) fn stats_page_solid_frame(
 ) -> crate::render::Frame {
     super::chrome_solid::reset_hub();
     mount_stats_page_solid(phase, styles, size);
-    let mut frame = super::chrome_solid::blank_frame(
-        usize::from(size.0).max(1),
-        usize::from(size.1).max(1),
-    );
+    let mut frame =
+        super::chrome_solid::blank_frame(usize::from(size.0).max(1), usize::from(size.1).max(1));
     super::chrome_solid::composite_chrome_tree(&mut frame);
     frame
 }
 
 /// The shared mount tail: the page/poster wrapper covers the screen
 /// edge-to-edge with the page background (opaque — no holes).
-fn mount_stats(surface: &'static str, width: usize, height: usize, bg: CellColor, items: &[ChromeUnit]) {
+fn mount_stats(
+    surface: &'static str,
+    width: usize,
+    height: usize,
+    bg: CellColor,
+    items: &[ChromeUnit],
+) {
     chrome_mount(surface, 0, 0, width.max(1), height.max(1), bg, items, &[]);
 }
 

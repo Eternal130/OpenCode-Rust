@@ -46,8 +46,8 @@
 #![allow(clippy::too_many_lines)]
 
 use crate::render::Frame;
-use crate::theme::ThemeStyles;
 use crate::style::Color;
+use crate::theme::ThemeStyles;
 
 /// `MIN_SPLIT_WIDTH` — the patch pane needs this many columns before
 /// the split view is offered.
@@ -109,7 +109,8 @@ pub fn split_added_patch(patch: &str, size: usize) -> Option<Vec<AddedPatchChunk
     let count = found?;
     let prefix = &patch[..line_start];
     let body = &patch[offset..];
-    let mut lines: Vec<String> = body.strip_suffix('\n').unwrap_or(body).split('\n').map(str::to_owned).collect();
+    let mut lines: Vec<String> =
+        body.strip_suffix('\n').unwrap_or(body).split('\n').map(str::to_owned).collect();
     let marker = lines
         .last()
         .filter(|last| last.starts_with("\\ No newline at end of file"))
@@ -141,7 +142,6 @@ pub fn split_added_patch(patch: &str, size: usize) -> Option<Vec<AddedPatchChunk
     }
     Some(chunks)
 }
-
 
 /// A file's diff status (`vcs.diff` entries).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1021,7 +1021,9 @@ mod g130_tests {
         assert_eq!(chunks.len(), 3, "ceil(300/128)");
         assert_eq!(chunks[0].rows, 128);
         assert_eq!(chunks[2].rows, 44);
-        assert!(chunks[0].patch.starts_with("--- /dev/null\n+++ b/big.txt\n@@ -0,0 +1,128 @@\n+line 0\n"));
+        assert!(chunks[0]
+            .patch
+            .starts_with("--- /dev/null\n+++ b/big.txt\n@@ -0,0 +1,128 @@\n+line 0\n"));
         assert!(chunks[1].patch.contains("@@ -0,0 +129,128 @@"));
         assert!(chunks[2].patch.contains("@@ -0,0 +257,44 @@"));
         assert_eq!(chunks.iter().map(|chunk| chunk.rows).sum::<usize>(), 300);

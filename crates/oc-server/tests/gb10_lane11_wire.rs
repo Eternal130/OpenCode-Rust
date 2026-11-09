@@ -22,7 +22,7 @@ use oc_core::engine::{Engine, EngineOptions};
 use oc_server::handlers;
 use oc_server::state::{AppState, AuthConfig};
 use oc_util::determinism::{SystemClock, UuidV4IdGen};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use support::request;
 

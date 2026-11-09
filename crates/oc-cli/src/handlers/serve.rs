@@ -239,9 +239,12 @@ pub async fn run(options: Options) -> i32 {
         None
     };
 
-    for line in
-        startup_announcement(&options.mode, environment_password.as_deref(), &password, &handle.url())
-    {
+    for line in startup_announcement(
+        &options.mode,
+        environment_password.as_deref(),
+        &password,
+        &handle.url(),
+    ) {
         println!("{line}");
     }
 

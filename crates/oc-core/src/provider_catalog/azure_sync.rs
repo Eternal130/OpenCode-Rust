@@ -370,15 +370,16 @@ pub async fn resolve_azure_discovery_input(
                 .map(str::to_owned),
         )
     };
-    let metadata_resource = |metadata: Option<&std::collections::BTreeMap<String, serde_json::Value>>| {
-        non_empty(
-            metadata
-                .and_then(|metadata| metadata.get("resourceName"))
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .map(str::to_owned),
-        )
-    };
+    let metadata_resource =
+        |metadata: Option<&std::collections::BTreeMap<String, serde_json::Value>>| {
+            non_empty(
+                metadata
+                    .and_then(|metadata| metadata.get("resourceName"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .map(str::to_owned),
+            )
+        };
     match host.connection_active(AZURE_PROVIDER_ID).await.ok()? {
         Some(ConnectionInfo::Credential { id, .. }) => {
             let stored = host.store().get(&id).await.ok()??;
@@ -395,8 +396,8 @@ pub async fn resolve_azure_discovery_input(
                 // first; other oauth methods never drive discovery
                 // (azure.ts:311).
                 CredentialValue::OAuth(oauth) if oauth.method_id == AZURE_CLI_METHOD_ID => {
-                    let resource = metadata_resource(oauth.metadata.as_ref())
-                        .or_else(env_resource_name)?;
+                    let resource =
+                        metadata_resource(oauth.metadata.as_ref()).or_else(env_resource_name)?;
                     // azure.ts:92-105 — per-scope tokens through the
                     // CLI; a failed management mint still leaves the
                     // data-plane lane.
@@ -434,7 +435,6 @@ pub async fn resolve_azure_discovery_input(
         None => None,
     }
 }
-
 
 /// One successful sync: the resource it listed, its normalized
 /// deployment inventory, and the narrowed provider snapshot.
@@ -543,10 +543,7 @@ impl AzureSync {
         // compares with `localeCompare`; the port's ASCII fold matches
         // for the deployment names Azure allows.)
         found.sort_by(|a, b| {
-            a.name
-                .to_lowercase()
-                .cmp(&b.name.to_lowercase())
-                .then_with(|| a.name.cmp(&b.name))
+            a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.name.cmp(&b.name))
         });
         self.store(catalog, resource, found);
     }
@@ -561,9 +558,7 @@ impl AzureSync {
         auth_value: &str,
         user_agent: &str,
     ) -> Option<Vec<AzureDeployment>> {
-        let body = self
-            .get_json(url, &[(auth_header, auth_value)], user_agent)
-            .await?;
+        let body = self.get_json(url, &[(auth_header, auth_value)], user_agent).await?;
         parse_resource_deployments(&body).ok()
     }
 
@@ -586,9 +581,8 @@ impl AzureSync {
         let id = match cached {
             Some(id) => id,
             None => {
-                let found = self
-                    .find_resource(endpoints, resource, management_token, user_agent)
-                    .await?;
+                let found =
+                    self.find_resource(endpoints, resource, management_token, user_agent).await?;
                 self.resource_ids.lock().insert(key.clone(), found.clone());
                 found
             }
@@ -819,7 +813,11 @@ mod tests {
             vec![
                 ("gpt-5-mini".to_owned(), "gpt-5-mini".to_owned(), "GPT-5 Mini".to_owned()),
                 ("gpt-5-nano".to_owned(), "GPT-5-Nano".to_owned(), "GPT-5 Nano".to_owned()),
-                ("prod-mini".to_owned(), "prod-mini".to_owned(), "GPT-5 Mini (prod-mini)".to_owned()),
+                (
+                    "prod-mini".to_owned(),
+                    "prod-mini".to_owned(),
+                    "GPT-5 Mini (prod-mini)".to_owned()
+                ),
             ],
             "catalog order for survivors; unknown-model deployments drop"
         );
@@ -848,7 +846,10 @@ mod tests {
         };
         let merged = merge_azure_snapshot(
             &snapshot_with_deepseek,
-            &[AzureDeployment { name: "deepseek-v4-flash".into(), model: "DeepSeek-V4-Flash-2026".into() }],
+            &[AzureDeployment {
+                name: "deepseek-v4-flash".into(),
+                model: "DeepSeek-V4-Flash-2026".into(),
+            }],
         );
         assert!(
             merged.models.iter().any(|m| m.id.as_str() == "deepseek-v4-flash"),
@@ -870,7 +871,10 @@ mod tests {
             .to_string(),
         )
         .expect("decodes");
-        assert_eq!(resource, vec![AzureDeployment { name: "live".into(), model: "gpt-5-mini".into() }]);
+        assert_eq!(
+            resource,
+            vec![AzureDeployment { name: "live".into(), model: "gpt-5-mini".into() }]
+        );
 
         let (page, next) = parse_management_deployments_page(
             &json!({ "value": [
@@ -899,7 +903,10 @@ mod tests {
             graph.as_deref(),
             Some("/subscriptions/sub/resourceGroups/rg/providers/Microsoft.CognitiveServices/accounts/test")
         );
-        assert_eq!(parse_resource_graph_response(&json!({ "data": [] }).to_string()).unwrap(), None);
+        assert_eq!(
+            parse_resource_graph_response(&json!({ "data": [] }).to_string()).unwrap(),
+            None
+        );
         assert!(parse_resource_deployments("not json").is_err());
         assert!(parse_management_deployments_page("{}").is_err());
     }
@@ -925,7 +932,10 @@ mod tests {
     /// half is exercised with the same chain the helper reads.
     #[test]
     fn resource_name_priority() {
-        assert_eq!(resolve_resource_name(Some(" from-config "), Some("fallback")), Some("from-config".into()));
+        assert_eq!(
+            resolve_resource_name(Some(" from-config "), Some("fallback")),
+            Some("from-config".into())
+        );
         assert_eq!(resolve_resource_name(Some("   "), Some("fallback")), Some("fallback".into()));
         // No configured name: the environment chain (or None without
         // the vars — the ambient environment decides, exactly like the
@@ -957,8 +967,14 @@ mod tests {
     /// The URL origin subset (the nextLink guard, azure.ts:214-217).
     #[test]
     fn url_origin_extraction() {
-        assert_eq!(url_origin("https://management.azure.com/x?y=1").as_deref(), Some("https://management.azure.com"));
-        assert_eq!(url_origin("http://127.0.0.1:8080/page-2").as_deref(), Some("http://127.0.0.1:8080"));
+        assert_eq!(
+            url_origin("https://management.azure.com/x?y=1").as_deref(),
+            Some("https://management.azure.com")
+        );
+        assert_eq!(
+            url_origin("http://127.0.0.1:8080/page-2").as_deref(),
+            Some("http://127.0.0.1:8080")
+        );
         assert_eq!(url_origin("ftp://example/"), None);
         assert_eq!(url_origin("management.azure.com"), None);
     }

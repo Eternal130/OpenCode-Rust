@@ -267,11 +267,7 @@ pub fn structured_fallback_rows(meta: &str) -> Vec<String> {
         .take_while(|at| *at <= LIMIT - SUFFIX.len())
         .last()
         .unwrap_or(0);
-    content[..head_end]
-        .split('\n')
-        .map(str::to_owned)
-        .chain([SUFFIX.to_owned()])
-        .collect()
+    content[..head_end].split('\n').map(str::to_owned).chain([SUFFIX.to_owned()]).collect()
 }
 
 /// `canonicalToolName` (`util/tool-display.ts:1-5`): the display-name
@@ -747,116 +743,122 @@ mod tests {
     }
 }
 
-    /// G-221 — the direct-shell rows (`toolEntryBody`'s
-    /// `commit.shell` branch, tool.ts:1282-1294): start renders
-    /// `$ command`, progress renders the merged output (leading blank
-    /// row when the command is known, trimmed edges, empty →
-    /// nothing), the error final renders the error text — and the
-    /// `mini.shell_output` knob NEVER gates these (the ref's knob
-    /// branch sits below the `commit.shell` one), while a TOOL-CALL
-    /// shell progress row still hides.
-    #[test]
-    fn direct_shell_rows_render_the_command_and_output() {
-        let shell = |text: &str, phase: Phase, state: Option<&'static str>| Commit {
-            kind: CommitKind::Tool,
-            tool: Some("shell".to_owned()),
-            shell: Some("echo hi".to_owned()),
-            part_id: Some("shell:shl_1".to_owned()),
-            text: text.to_owned(),
-            phase,
-            tool_state: state,
-            ..Commit::default()
-        };
-        assert_eq!(entry_body(&shell("running shell", Phase::Start, Some("running"))), vec!["$ echo hi"]);
-        assert_eq!(
-            entry_body(&shell("hi\n", Phase::Progress, Some("completed"))),
-            vec![String::new(), "hi".to_owned()],
-            "the output starts below the command row"
-        );
-        assert_eq!(entry_body(&shell("\n\nhi\n\n", Phase::Progress, None)), vec![String::new(), "hi".to_owned()]);
-        assert_eq!(
-            entry_body(&shell("", Phase::Progress, None)),
-            Vec::<String>::new(),
-            "an empty body renders nothing"
-        );
-        assert_eq!(
-            entry_body(&shell("Shell exited with code 3", Phase::Final, Some("error"))),
-            vec!["Shell exited with code 3"]
-        );
-        // The knob: direct-shell output always renders; the
-        // TOOL-CALL (bash) progress row still hides.
-        assert_eq!(
-            entry_body_with(&shell("hi\n", Phase::Progress, None), false),
-            vec![String::new(), "hi".to_owned()]
-        );
-        let bash = Commit {
-            kind: CommitKind::Tool,
-            tool: Some("bash".to_owned()),
-            phase: Phase::Progress,
-            text: "raw output".to_owned(),
-            ..Commit::default()
-        };
-        assert!(entry_body_with(&bash, false).is_empty());
-        assert_eq!(entry_body_with(&bash, true), vec!["raw output"]);
-    }
+/// G-221 — the direct-shell rows (`toolEntryBody`'s
+/// `commit.shell` branch, tool.ts:1282-1294): start renders
+/// `$ command`, progress renders the merged output (leading blank
+/// row when the command is known, trimmed edges, empty →
+/// nothing), the error final renders the error text — and the
+/// `mini.shell_output` knob NEVER gates these (the ref's knob
+/// branch sits below the `commit.shell` one), while a TOOL-CALL
+/// shell progress row still hides.
+#[test]
+fn direct_shell_rows_render_the_command_and_output() {
+    let shell = |text: &str, phase: Phase, state: Option<&'static str>| Commit {
+        kind: CommitKind::Tool,
+        tool: Some("shell".to_owned()),
+        shell: Some("echo hi".to_owned()),
+        part_id: Some("shell:shl_1".to_owned()),
+        text: text.to_owned(),
+        phase,
+        tool_state: state,
+        ..Commit::default()
+    };
+    assert_eq!(
+        entry_body(&shell("running shell", Phase::Start, Some("running"))),
+        vec!["$ echo hi"]
+    );
+    assert_eq!(
+        entry_body(&shell("hi\n", Phase::Progress, Some("completed"))),
+        vec![String::new(), "hi".to_owned()],
+        "the output starts below the command row"
+    );
+    assert_eq!(
+        entry_body(&shell("\n\nhi\n\n", Phase::Progress, None)),
+        vec![String::new(), "hi".to_owned()]
+    );
+    assert_eq!(
+        entry_body(&shell("", Phase::Progress, None)),
+        Vec::<String>::new(),
+        "an empty body renders nothing"
+    );
+    assert_eq!(
+        entry_body(&shell("Shell exited with code 3", Phase::Final, Some("error"))),
+        vec!["Shell exited with code 3"]
+    );
+    // The knob: direct-shell output always renders; the
+    // TOOL-CALL (bash) progress row still hides.
+    assert_eq!(
+        entry_body_with(&shell("hi\n", Phase::Progress, None), false),
+        vec![String::new(), "hi".to_owned()]
+    );
+    let bash = Commit {
+        kind: CommitKind::Tool,
+        tool: Some("bash".to_owned()),
+        phase: Phase::Progress,
+        text: "raw output".to_owned(),
+        ..Commit::default()
+    };
+    assert!(entry_body_with(&bash, false).is_empty());
+    assert_eq!(entry_body_with(&bash, true), vec!["raw output"]);
+}
 
-    // -- G-134 ---------------------------------------------------------
+// -- G-134 ---------------------------------------------------------
 
-    #[test]
-    fn completed_structured_tools_render_the_card() {
-        use crate::mini::tool_snapshot::ToolSnapshot;
-        let commit = Commit {
-            kind: CommitKind::Tool,
-            phase: Phase::Final,
-            tool: Some("write".to_owned()),
-            tool_state: Some("completed"),
-            text: "Write · src/main.rs".to_owned(),
-            snapshot: ToolSnapshot::Code {
-                title: "# Wrote src/main.rs".to_owned(),
-                content: "fn main() {}".to_owned(),
-                file: "src/main.rs".to_owned(),
-            },
-            ..Commit::default()
-        };
-        assert_eq!(
-            entry_body(&commit),
-            ["# Wrote src/main.rs", "fn main() {}"],
-            "the card replaces the caption row"
-        );
-        // Failures + caption families keep the caption row.
-        let failed = Commit {
-            tool_state: Some("error"),
-            snapshot: ToolSnapshot::Code {
-                title: "# Wrote x".to_owned(),
-                content: "x".to_owned(),
-                file: "x".to_owned(),
-            },
-            ..commit.clone()
-        };
-        assert_eq!(entry_body(&failed).len(), 1, "the caption row stays on failure");
-        let caption_only = Commit { snapshot: ToolSnapshot::None, ..commit };
-        assert_eq!(entry_body(&caption_only).len(), 1);
-        // Progress rows never render the card. G-272 — the view gate
-        // (`TOOL_RULES.write.output === false`) suppresses the write
-        // family's PROGRESS refresh entirely (tool.ts:1301-1303); a
-        // streaming family (shell) keeps its progress rows.
-        let progress = Commit {
-            phase: Phase::Progress,
-            snapshot: ToolSnapshot::Task {
-                title: "# General Subagent".to_owned(),
-                rows: vec!["d".to_owned()],
-            },
-            ..caption_only.clone()
-        };
-        assert_eq!(entry_body(&progress).len(), 0, "write refreshes suppress (output: false)");
-        let streaming = Commit {
-            tool: Some("bash".to_owned()),
-            phase: Phase::Progress,
-            snapshot: ToolSnapshot::Task {
-                title: "# General Subagent".to_owned(),
-                rows: vec!["d".to_owned()],
-            },
-            ..caption_only
-        };
-        assert_eq!(entry_body(&streaming).len(), 1, "shell streams (output: true)");
-    }
+#[test]
+fn completed_structured_tools_render_the_card() {
+    use crate::mini::tool_snapshot::ToolSnapshot;
+    let commit = Commit {
+        kind: CommitKind::Tool,
+        phase: Phase::Final,
+        tool: Some("write".to_owned()),
+        tool_state: Some("completed"),
+        text: "Write · src/main.rs".to_owned(),
+        snapshot: ToolSnapshot::Code {
+            title: "# Wrote src/main.rs".to_owned(),
+            content: "fn main() {}".to_owned(),
+            file: "src/main.rs".to_owned(),
+        },
+        ..Commit::default()
+    };
+    assert_eq!(
+        entry_body(&commit),
+        ["# Wrote src/main.rs", "fn main() {}"],
+        "the card replaces the caption row"
+    );
+    // Failures + caption families keep the caption row.
+    let failed = Commit {
+        tool_state: Some("error"),
+        snapshot: ToolSnapshot::Code {
+            title: "# Wrote x".to_owned(),
+            content: "x".to_owned(),
+            file: "x".to_owned(),
+        },
+        ..commit.clone()
+    };
+    assert_eq!(entry_body(&failed).len(), 1, "the caption row stays on failure");
+    let caption_only = Commit { snapshot: ToolSnapshot::None, ..commit };
+    assert_eq!(entry_body(&caption_only).len(), 1);
+    // Progress rows never render the card. G-272 — the view gate
+    // (`TOOL_RULES.write.output === false`) suppresses the write
+    // family's PROGRESS refresh entirely (tool.ts:1301-1303); a
+    // streaming family (shell) keeps its progress rows.
+    let progress = Commit {
+        phase: Phase::Progress,
+        snapshot: ToolSnapshot::Task {
+            title: "# General Subagent".to_owned(),
+            rows: vec!["d".to_owned()],
+        },
+        ..caption_only.clone()
+    };
+    assert_eq!(entry_body(&progress).len(), 0, "write refreshes suppress (output: false)");
+    let streaming = Commit {
+        tool: Some("bash".to_owned()),
+        phase: Phase::Progress,
+        snapshot: ToolSnapshot::Task {
+            title: "# General Subagent".to_owned(),
+            rows: vec!["d".to_owned()],
+        },
+        ..caption_only
+    };
+    assert_eq!(entry_body(&streaming).len(), 1, "shell streams (output: true)");
+}

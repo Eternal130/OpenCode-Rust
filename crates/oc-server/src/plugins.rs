@@ -648,7 +648,10 @@ const SUPERVISOR_PERIOD: Duration = Duration::from_secs(24 * 60 * 60);
 /// entry change: editing a plugin file changes no config entry, but the
 /// rescan + digest scan still observe it (the G-222 gap — the ref's
 /// "plugins changed" is separate from "config changed").
-pub async fn run_reload_pass(boot: &Arc<PluginBoot>, watched: &Arc<oc_core::config::WatchedConfig>) {
+pub async fn run_reload_pass(
+    boot: &Arc<PluginBoot>,
+    watched: &Arc<oc_core::config::WatchedConfig>,
+) {
     let lock = Arc::clone(&boot.reload_lock);
     let boot_pass = Arc::clone(boot);
     let loaded = watched.loaded();
@@ -1992,8 +1995,7 @@ impl EngineSessionPort {
                     .await
                     .map_err(|error| error.to_string())?
                     .ok_or_else(|| format!("MCP prompt not found: {server}:{prompt}"))?;
-                let expanded =
-                    crate::handlers::session::mcp_prompt_message_text(&result);
+                let expanded = crate::handlers::session::mcp_prompt_message_text(&result);
                 let id = oc_schema::id::SessionId(session_id.to_owned());
                 let message_id = format!("msg_plugin_{}", uuid::Uuid::new_v4());
                 self.engine.prompt(&self.location, &id, &message_id, &expanded).await?;

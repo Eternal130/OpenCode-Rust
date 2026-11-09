@@ -1150,7 +1150,8 @@ async fn g229_title_and_foreground_frames_flow_through_the_client_pump() {
                 on_event: Box::new(move |event| {
                     if matches!(
                         event,
-                        StreamEvent::TitleChanged { .. } | StreamEvent::ForegroundProcessChanged { .. }
+                        StreamEvent::TitleChanged { .. }
+                            | StreamEvent::ForegroundProcessChanged { .. }
                     ) {
                         let _ = forward.send(event);
                     }

@@ -231,7 +231,11 @@ mod tests {
         let prefix = tempfile::tempdir().unwrap();
         std::fs::write(home.path().join(".npmrc"), "registry=https://user.example/\n").unwrap();
         std::fs::create_dir_all(prefix.path().join("etc")).unwrap();
-        std::fs::write(prefix.path().join("etc").join("npmrc"), "registry=https://global.example/\n").unwrap();
+        std::fs::write(
+            prefix.path().join("etc").join("npmrc"),
+            "registry=https://global.example/\n",
+        )
+        .unwrap();
         std::fs::create_dir_all(prefix.path().join("lib/node_modules/npm")).unwrap();
         std::fs::write(
             prefix.path().join("lib/node_modules/npm/npmrc"),

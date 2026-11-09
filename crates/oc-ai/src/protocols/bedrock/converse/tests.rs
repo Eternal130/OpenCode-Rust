@@ -265,13 +265,17 @@ fn document_labels_sanitize_dedupe_and_announce() {
     // extension stripped + `_` collapsed to a space + hint block first
     assert_eq!(
         content[0]["text"],
-        json!("Attached file \"My Report_v2 FINAL.pdf\" has document label \"My Report v2 FINAL\".")
+        json!(
+            "Attached file \"My Report_v2 FINAL.pdf\" has document label \"My Report v2 FINAL\"."
+        )
     );
     assert_eq!(content[1]["document"]["name"], json!("My Report v2 FINAL"));
     // second file with the same name: ` 2` suffix + its own hint
     assert_eq!(
         content[2]["text"],
-        json!("Attached file \"My Report_v2 FINAL.pdf\" has document label \"My Report v2 FINAL 2\".")
+        json!(
+            "Attached file \"My Report_v2 FINAL.pdf\" has document label \"My Report v2 FINAL 2\"."
+        )
     );
     assert_eq!(content[3]["document"]["name"], json!("My Report v2 FINAL 2"));
     // filename without extension == label → no announcement block

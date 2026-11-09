@@ -975,10 +975,7 @@ mod tests {
             session.cursor = 105;
         }
         let attach = |cursor: Option<i64>| {
-            service
-                .attach(&id, cursor, Box::new(|_| {}), Box::new(|_| {}))
-                .expect("attach")
-                .replay
+            service.attach(&id, cursor, Box::new(|_| {}), Box::new(|_| {})).expect("attach").replay
         };
         // Past cursor clamps to the retained window start (full replay).
         assert_eq!(attach(Some(99)), "αβγ😀");
@@ -1188,19 +1185,15 @@ mod tests {
         let info = service
             .create(&CreateInput {
                 command: Some("/bin/sh".to_string()),
-                args: Some(vec![
-                    "-c".to_string(),
-                    "printf '中🎉文 tail'; sleep 2".to_string(),
-                ]),
+                args: Some(vec!["-c".to_string(), "printf '中🎉文 tail'; sleep 2".to_string()]),
                 cwd: Some("/tmp".to_string()),
                 ..CreateInput::default()
             })
             .expect("create");
         // Wait for the output to land.
         let replay = loop {
-            let attach = service
-                .attach(&info.id, None, Box::new(|_| {}), Box::new(|_| {}))
-                .expect("attach");
+            let attach =
+                service.attach(&info.id, None, Box::new(|_| {}), Box::new(|_| {})).expect("attach");
             if attach.replay.contains("tail") {
                 break attach;
             }
@@ -1239,12 +1232,7 @@ mod tests {
             .expect("healthy attach");
         healthy.activate();
         let panicking = service
-            .attach(
-                &info.id,
-                None,
-                Box::new(|_chunk| panic!("subscriber boom")),
-                Box::new(|_| {}),
-            )
+            .attach(&info.id, None, Box::new(|_chunk| panic!("subscriber boom")), Box::new(|_| {}))
             .expect("panicking attach");
         panicking.activate();
 

@@ -11,6 +11,6 @@ pub mod opentui_emit;
 pub mod paint;
 
 pub use ansi::serialize_canonical;
-pub use frame::{CONTINUATION, Cell, CellColor, ClusterMap, Frame};
+pub use frame::{Cell, CellColor, ClusterMap, Frame, CONTINUATION};
 pub use opentui_emit::FrameLinkRect;
-pub use paint::{Fill, paint_placed, paint_placed_with_fills, to_frame};
+pub use paint::{paint_placed, paint_placed_with_fills, to_frame, Fill};

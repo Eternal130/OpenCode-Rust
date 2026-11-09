@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, Uri};
 use axum::response::{IntoResponse, Response};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
-use super::common::{ApiError, SharedState, no_content, resolve_location};
+use super::common::{no_content, resolve_location, ApiError, SharedState};
 use super::session::{query_field, services};
 use oc_core::project::ProjectEvents as _;
 use oc_core::project::ProjectStore as _;
@@ -1450,7 +1450,11 @@ async fn vcs_diff(
         let Some(reference) = git_merge_base(scope, &base) else {
             return Err(unavailable(&format!("No merge base available for {base}")));
         };
-        if mode == "committed" { (Some(reference), Some("HEAD")) } else { (Some(reference), None) }
+        if mode == "committed" {
+            (Some(reference), Some("HEAD"))
+        } else {
+            (Some(reference), None)
+        }
     };
 
     // File list + stats + untracked (git.ts:344-371 + statusNames).

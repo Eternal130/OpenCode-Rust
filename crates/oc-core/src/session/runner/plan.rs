@@ -114,7 +114,10 @@ mod tests {
         assert_eq!(reminder_for(true, None, &enter).as_deref(), Some(enter.as_str()));
         assert_eq!(reminder_for(true, Some(enter.as_str()), &enter), None);
         // non-plan agent carrying the enter reminder → leave
-        assert_eq!(reminder_for(false, Some(enter.as_str()), &enter).as_deref(), Some(LEAVE_REMINDER));
+        assert_eq!(
+            reminder_for(false, Some(enter.as_str()), &enter).as_deref(),
+            Some(LEAVE_REMINDER)
+        );
         assert_eq!(reminder_for(false, None, &enter), None);
         assert_eq!(reminder_for(false, Some(LEAVE_REMINDER), &enter), None);
     }

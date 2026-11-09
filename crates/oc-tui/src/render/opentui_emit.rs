@@ -39,7 +39,7 @@
 
 use opentui_core::buffer::{OptimizedBuffer, CHAR_FLAG_CONTINUATION};
 use opentui_core::color::Rgba;
-use opentui_core::renderer::{CliRenderer, CliRendererConfig, create_cli_renderer};
+use opentui_core::renderer::{create_cli_renderer, CliRenderer, CliRendererConfig};
 
 use super::{Cell, CellColor, ClusterMap, Frame, CONTINUATION};
 
@@ -204,8 +204,7 @@ impl OpentuiEmitter {
         // `\x1b]8;id=…;URL\x1b\\` opens (renderer/frame.rs:582-614).
         // No links (the headless/no-probe profile) → an empty map and
         // byte-identical emission.
-        let mut link_ids: std::collections::HashMap<String, u32> =
-            std::collections::HashMap::new();
+        let mut link_ids: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
         let mut link_cells: std::collections::HashMap<(usize, usize), u32> =
             std::collections::HashMap::new();
         for link in links {
@@ -230,7 +229,10 @@ impl OpentuiEmitter {
         self.prev_clusters = cluster_sized(frame, self.width, self.height);
         // The `render()` tail (renderer/frame.rs :122-127): the
         // just-emitted frame becomes the diff base.
-        core::mem::swap(&mut self.renderer.current_render_buffer, &mut self.renderer.next_render_buffer);
+        core::mem::swap(
+            &mut self.renderer.current_render_buffer,
+            &mut self.renderer.next_render_buffer,
+        );
         // The forced path (frame_id == 0) does not self-advance
         // through the bench seam — run one EMPTY-tree frame to bump
         // the counter past the forced path, restoring the diff base
@@ -304,7 +306,11 @@ impl OpentuiEmitter {
 /// cells (start + their continuation span) poke as continuation
 /// words — NO inline bytes (the deferred cluster pass prints them
 /// after the opentui stream; see [`OpentuiEmitter::render_sgr`]).
-fn poke(renderer: &mut CliRenderer, frame: &Frame, link_cells: &std::collections::HashMap<(usize, usize), u32>) {
+fn poke(
+    renderer: &mut CliRenderer,
+    frame: &Frame,
+    link_cells: &std::collections::HashMap<(usize, usize), u32>,
+) {
     let buffer = &mut renderer.next_render_buffer;
     buffer.clear(transparent_black());
     for (y, row) in frame.cells.iter().enumerate() {
@@ -341,7 +347,8 @@ fn touched_rows(
     let mut touched = vec![false; height];
     for y in 0..height {
         for x in 0..width {
-            let (cx, cy) = (u32::try_from(x).unwrap_or(u32::MAX), u32::try_from(y).unwrap_or(u32::MAX));
+            let (cx, cy) =
+                (u32::try_from(x).unwrap_or(u32::MAX), u32::try_from(y).unwrap_or(u32::MAX));
             if renderer.current_render_buffer.get(cx, cy) != renderer.next_render_buffer.get(cx, cy)
             {
                 touched[y] = true;
@@ -350,18 +357,15 @@ fn touched_rows(
         }
         if !touched[y] {
             // cluster-aware row equality: same-symbol sidecar entries
-            let changed = frame
-                .clusters
-                .as_ref()
-                .map_or(false, |m| {
-                    m.range((y, 0)..(y + 1, 0))
-                        .any(|(key, symbol)| prev_clusters.get(key).map(String::as_str) != Some(symbol.as_str()))
+            let changed = frame.clusters.as_ref().map_or(false, |m| {
+                m.range((y, 0)..(y + 1, 0)).any(|(key, symbol)| {
+                    prev_clusters.get(key).map(String::as_str) != Some(symbol.as_str())
                 })
-                || prev_clusters.range((y, 0)..(y + 1, 0)).next().is_some()
-                    && frame
-                        .clusters
-                        .as_ref()
-                        .map_or(true, |m| m.range((y, 0)..(y + 1, 0)).next().is_none());
+            }) || prev_clusters.range((y, 0)..(y + 1, 0)).next().is_some()
+                && frame
+                    .clusters
+                    .as_ref()
+                    .map_or(true, |m| m.range((y, 0)..(y + 1, 0)).next().is_none());
             touched[y] = changed;
         }
     }
@@ -386,13 +390,10 @@ fn emit_cluster_pass(
         if row >= touched.len() {
             continue;
         }
-        let changed = force
-            || prev_clusters.get(&(row, col)).map(String::as_str) != Some(symbol.as_str());
+        let changed =
+            force || prev_clusters.get(&(row, col)).map(String::as_str) != Some(symbol.as_str());
         if changed && touched[row] {
-            let cell = frame
-                .cells
-                .get(row)
-                .and_then(|r| r.get(col));
+            let cell = frame.cells.get(row).and_then(|r| r.get(col));
             if let Some(cell) = cell {
                 out.push_str(&format!("\x1b[{};{}H", row + 1, col + 1));
                 super::ansi::emit_fg(out, cell.fg);

@@ -846,9 +846,7 @@ async fn bus_events_flow_to_the_owner_including_zero_subscriber_exit() {
                         assert_eq!(data["terminal"]["id"], format!("pty_persistent_{id}"));
                     }
                     "persistent-pty.removed" => {
-                        panic!(
-                            "unattached exit must NOT publish removed (G-229②): {data}"
-                        );
+                        panic!("unattached exit must NOT publish removed (G-229②): {data}");
                     }
                     other => panic!("unexpected bus event: {other}"),
                 }

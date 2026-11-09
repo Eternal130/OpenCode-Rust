@@ -17,11 +17,11 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::bus::{PublishOptions, registry};
+use crate::bus::{registry, PublishOptions};
 
 pub use repository::{
-    FileReference, Reference, RemoteReference, cache_path, parse, parse_remote, same,
-    validate_branch,
+    cache_path, parse, parse_remote, same, validate_branch, FileReference, Reference,
+    RemoteReference,
 };
 use repository_cache::{EnsureInput, Refresh, RepositoryCache};
 

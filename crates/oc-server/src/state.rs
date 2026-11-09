@@ -140,7 +140,9 @@ impl AppState {
         let (shutdown, _shutdown_rx) = tokio::sync::watch::channel(false);
         let tmp_dir = oc_util::global_roots::resolve().tmp.clone();
         let engine = Arc::new(engine);
-        let fs_index = std::sync::Arc::new(crate::handlers::fs::SearchIndex::new(std::sync::Arc::clone(&clock)));
+        let fs_index = std::sync::Arc::new(crate::handlers::fs::SearchIndex::new(
+            std::sync::Arc::clone(&clock),
+        ));
         let bus = engine.bus.as_ref().clone();
         let workspace = std::sync::Arc::new(oc_core::environment::WorkspaceService::new(
             std::sync::Arc::new(oc_core::project::SqliteProjectStore::new((*engine.db).clone())),

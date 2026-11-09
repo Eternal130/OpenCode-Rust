@@ -195,7 +195,9 @@ pub(crate) fn validate_external_binary(path: &Path) -> Result<(), String> {
         u32::try_from(meta.uid()).unwrap_or(u32::MAX),
         uid,
     )
-    .map_err(|reason| format!("Unsafe OPENCODE_PTY_BIN executable ({reason}): {}", path.display()))?;
+    .map_err(|reason| {
+        format!("Unsafe OPENCODE_PTY_BIN executable ({reason}): {}", path.display())
+    })?;
     if meta.permissions().mode() & 0o111 == 0 {
         return Err(format!(
             "OPENCODE_PTY_BIN is not executable (missing +x bit): {}",
@@ -2099,10 +2101,7 @@ mod g240_tests {
         std::fs::write(&file, "#!/bin/sh\n").expect("write");
         make_executable(&file);
         validate_external_binary(&file).expect("valid override");
-        assert_eq!(
-            resolve_binary_path(Some(file.to_str().unwrap()), None, ""),
-            Some(file.clone())
-        );
+        assert_eq!(resolve_binary_path(Some(file.to_str().unwrap()), None, ""), Some(file.clone()));
     }
 
     fn make_executable(path: &Path) {

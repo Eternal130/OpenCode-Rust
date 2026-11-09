@@ -27,7 +27,8 @@ pub fn identity_for(
     info: Option<&oc_schema::model::Info>,
     reference: &oc_schema::model::Ref,
 ) -> String {
-    let name = info.map(|info| info.name.clone()).unwrap_or_else(|| reference.id.as_str().to_string());
+    let name =
+        info.map(|info| info.name.clone()).unwrap_or_else(|| reference.id.as_str().to_string());
     identity_section(&name, reference.provider_id.as_str(), reference.id.as_str())
 }
 

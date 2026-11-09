@@ -413,7 +413,11 @@ pub fn spawn_activity_sweeper(
 ///    expired position is invalidated (shutdown sequence) and removed.
 ///
 /// A `ttl` of zero disables expiry (nothing is ever older than `now`).
-pub async fn sweep_once(ttl: Duration, map: &Arc<LocationServiceMap>, activity: &Arc<LocationActivity>) {
+pub async fn sweep_once(
+    ttl: Duration,
+    map: &Arc<LocationServiceMap>,
+    activity: &Arc<LocationActivity>,
+) {
     // (a) Cached-but-untracked locations get re-armed, never swept.
     for location in map.locations() {
         if activity.last_touch(&location).is_none() {
@@ -561,10 +565,8 @@ mod tests {
     async fn harness(clock: &Arc<MutableClock>) -> Harness {
         let permissions = Arc::new(RecordingPermission(Mutex::new(Vec::new())));
         let forms = Arc::new(RecordingForms(Mutex::new(Vec::new())));
-        let interruptor = Arc::new(RecordingInterruptor(
-            Mutex::new(Vec::new()),
-            Arc::new(Mutex::new(false)),
-        ));
+        let interruptor =
+            Arc::new(RecordingInterruptor(Mutex::new(Vec::new()), Arc::new(Mutex::new(false))));
         let db = Arc::new(Database::open_in_memory().await.expect("database"));
         let bus = Arc::new(Bus::new(
             (*db).clone(),

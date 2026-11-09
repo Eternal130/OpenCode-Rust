@@ -70,8 +70,7 @@ use std::io::Write as _;
 use std::time::{Duration, Instant};
 
 use opentui_core::renderer::{
-    create_cli_renderer, CliRendererConfig, ExternalOutputMode,
-    RendererTerminalSession, ScreenMode,
+    create_cli_renderer, CliRendererConfig, ExternalOutputMode, RendererTerminalSession, ScreenMode,
 };
 use opentui_core::scrollback::ScrollbackSnapshot;
 
@@ -151,14 +150,20 @@ pub enum FooterEffect {
     /// G-272 — the model panel's selection (`onModelSelect` →
     /// `resolveSelectedModel`): the next turn switches the session's
     /// model first (`session.switchModel`).
-    ModelSelect { provider_id: String, model_id: String },
+    ModelSelect {
+        provider_id: String,
+        model_id: String,
+    },
     /// G-272 — the variant panel's explicit pick (`onVariantSelect`).
     VariantSelect(Option<String>),
     /// G-272 — a queued-prompt action (`onQueuedPromptAction`,
     /// QueuedPromptAction = steer|queue|cancel, types.ts:103): the
     /// runtime PATCHes the inbox row's delivery (or DELETEs it on
     /// cancel).
-    QueuedPromptAction { action: &'static str, inbox_id: String },
+    QueuedPromptAction {
+        action: &'static str,
+        inbox_id: String,
+    },
     /// G-272 — `session.background` (ctrl+b,
     /// footer.view.tsx:580-589): detach blocking subagent tools.
     Background,
@@ -166,13 +171,20 @@ pub enum FooterEffect {
     /// `onMiniSettingChange`, footer.command.tsx:790-812): the key +
     /// the raw wire value ("show"/"hide"/mono bool/spinner id —
     /// "verbosity" carries the preset name).
-    SettingChange { key: &'static str, value: String },
+    SettingChange {
+        key: &'static str,
+        value: String,
+    },
 }
 
 /// G-272 — `flip_show_hide`: the show/hide knobs' toggle direction
 /// (`change`'s default arm, footer.command.tsx:806).
 fn flip_show_hide(current: &str) -> &str {
-    if current == "show" { "hide" } else { "show" }
+    if current == "show" {
+        "hide"
+    } else {
+        "show"
+    }
 }
 
 /// The footer state machine + per-view key handling (the pure half of
@@ -466,7 +478,10 @@ impl FooterPane {
             FooterKey::Down => state = form_move(&state, request, 1),
             // G-272 — the panel-family keys never reach a form body
             // (the blocker owns every key); consumed without effect.
-            FooterKey::CtrlP | FooterKey::CtrlX | FooterKey::CtrlB | FooterKey::Left
+            FooterKey::CtrlP
+            | FooterKey::CtrlX
+            | FooterKey::CtrlB
+            | FooterKey::Left
             | FooterKey::Right => {}
             FooterKey::Enter => {
                 if textual || state.editing {
@@ -652,7 +667,9 @@ impl FooterPane {
                         .subagent_children
                         .iter()
                         .rev()
-                        .find(|child| child.status == crate::mini::transport::SubagentStatus::Running)
+                        .find(|child| {
+                            child.status == crate::mini::transport::SubagentStatus::Running
+                        })
                         .or_else(|| self.subagent_children.last())
                         .map(|child| child.session_id.clone());
                     self.subagent_scroll = 0;
@@ -751,15 +768,13 @@ impl FooterPane {
         // G-272 — the settings panel's change keys (`onKey`,
         // footer.command.tsx:818-824): left/right step the selected
         // row's value (enter = right's +1 via `onSelect: change`).
-        let settings_route = self.machine.route
-            == crate::components::footer::PromptRoute::Settings;
+        let settings_route = self.machine.route == crate::components::footer::PromptRoute::Settings;
         // G-272 — the queued menu's action keys
         // (`queued_prompt.delete` ctrl+d / `queued_prompt.undo`
         // ctrl+u, config/keybind.ts:132-133): the leader chord arms
         // ctrl+d/ctrl+u like ctrl+u's query-clear in the command
         // panel.
-        let queued_route =
-            self.machine.route == crate::components::footer::PromptRoute::QueuedMenu;
+        let queued_route = self.machine.route == crate::components::footer::PromptRoute::QueuedMenu;
         match key {
             FooterKey::Escape | FooterKey::CtrlC => {
                 // closePanel → the composer (footer.view.tsx:320-322).
@@ -767,8 +782,7 @@ impl FooterPane {
                 self.panel = PanelState::default();
             }
             FooterKey::Up => {
-                self.panel.selected =
-                    move_selection_clamp(self.panel.selected, count, -1);
+                self.panel.selected = move_selection_clamp(self.panel.selected, count, -1);
             }
             FooterKey::Down => {
                 self.panel.selected = move_selection_clamp(self.panel.selected, count, 1);
@@ -819,7 +833,8 @@ impl FooterPane {
             }
             FooterKey::Enter => {
                 let entries = self.panel_entries();
-                if let Some(entry) = entries.get(self.panel.selected.min(entries.len().saturating_sub(1)))
+                if let Some(entry) =
+                    entries.get(self.panel.selected.min(entries.len().saturating_sub(1)))
                 {
                     if settings_route {
                         // `onSelect: change` (footer.command.tsx:817) —
@@ -828,15 +843,12 @@ impl FooterPane {
                     } else if queued_route {
                         // The select toggle (footer.view.tsx:795-800):
                         // queue → steer, steer → queue, then close.
-                        let action = if entry
-                            .footer
-                            .as_deref()
-                            .is_some_and(|footer| footer == "steering")
-                        {
-                            "queue"
-                        } else {
-                            "steer"
-                        };
+                        let action =
+                            if entry.footer.as_deref().is_some_and(|footer| footer == "steering") {
+                                "queue"
+                            } else {
+                                "steer"
+                            };
                         effects.extend(self.queued_entry_action(action));
                     } else {
                         effects.extend(self.run_panel_entry(entry));
@@ -900,8 +912,9 @@ impl FooterPane {
         };
         let summary = &self.settings_summary;
         let change: Option<(&'static str, String)> = match entry.display.as_str() {
-            "Verbosity" => verbosity_change(summary, direction)
-                .map(|(key, value)| (key, value.to_owned())),
+            "Verbosity" => {
+                verbosity_change(summary, direction).map(|(key, value)| (key, value.to_owned()))
+            }
             "Work spinner" => {
                 let current = WORK_SPINNERS
                     .iter()
@@ -918,7 +931,9 @@ impl FooterPane {
             "Thinking" => Some(("thinking", flip_show_hide(summary.thinking).to_owned())),
             "Tools" => Some(("tools", flip_show_hide(summary.tools).to_owned())),
             "Shell" => Some(("shell_output", flip_show_hide(summary.shell_output).to_owned())),
-            "Turn summary" => Some(("turn_summary", flip_show_hide(summary.turn_summary).to_owned())),
+            "Turn summary" => {
+                Some(("turn_summary", flip_show_hide(summary.turn_summary).to_owned()))
+            }
             "Footer details" => Some(("footer", flip_show_hide(summary.footer).to_owned())),
             "Splash" => Some(("splash", flip_show_hide(summary.splash).to_owned())),
             _ => None,
@@ -993,7 +1008,9 @@ impl FooterPane {
                         .subagent_children
                         .iter()
                         .rev()
-                        .find(|child| child.status == crate::mini::transport::SubagentStatus::Running)
+                        .find(|child| {
+                            child.status == crate::mini::transport::SubagentStatus::Running
+                        })
                         .or_else(|| self.subagent_children.last())
                         .map(|child| child.session_id.clone());
                     self.subagent_scroll = 0;
@@ -1065,11 +1082,8 @@ impl FooterPane {
             _ => ("Pending prompts", true, None, false, true, false, "No pending prompts"),
         };
         let all = self.panel_all_entries();
-        let filtered: Vec<_> = all
-            .iter()
-            .filter(|item| fuzzy_matches(item, &self.panel.query))
-            .cloned()
-            .collect();
+        let filtered: Vec<_> =
+            all.iter().filter(|item| fuzzy_matches(item, &self.panel.query)).cloned().collect();
         let menu = FooterMenuState { selected: self.panel.selected, offset: 0 };
         let mut canvas = Canvas::new(width, height);
         let layout = footer_panel_layout(height.max(3), PANEL_LIST_ROWS);
@@ -1139,7 +1153,10 @@ impl FooterPane {
             // G-181① — `variant.cycle`'s layer is composer-route-only;
             // the inspector consumes the key without effect.
             FooterKey::CtrlT => {}
-            FooterKey::CtrlP | FooterKey::CtrlX | FooterKey::CtrlB | FooterKey::Left
+            FooterKey::CtrlP
+            | FooterKey::CtrlX
+            | FooterKey::CtrlB
+            | FooterKey::Left
             | FooterKey::Right => {}
             FooterKey::Printable(_) => {}
         }
@@ -1172,8 +1189,7 @@ impl FooterPane {
                 FooterView::Form { .. } => footer_base(FOOTER_HEIGHT) + FORM_ROWS,
                 FooterView::Prompt => match self.machine.route {
                     crate::components::footer::PromptRoute::Subagent => {
-                        footer_base(FOOTER_HEIGHT)
-                            + super::footer_subagent::SUBAGENT_INSPECTOR_ROWS
+                        footer_base(FOOTER_HEIGHT) + super::footer_subagent::SUBAGENT_INSPECTOR_ROWS
                     }
                     crate::components::footer::PromptRoute::QueuedMenu => {
                         1 + self.queued_prompts.len().max(1)
@@ -1310,7 +1326,8 @@ impl FooterPane {
                     status_detail = format!("{} pending", self.queued_pending);
                 }
                 if running > 0 {
-                    let subagents = format!("{running} subagent{}", if running == 1 { "" } else { "s" });
+                    let subagents =
+                        format!("{running} subagent{}", if running == 1 { "" } else { "s" });
                     status_detail = if status_detail.is_empty() {
                         subagents
                     } else {
@@ -1552,16 +1569,10 @@ fn serialize_atoms_row(atoms: &[crate::wrap::Atom], width: usize) -> String {
         if last_style != Some(atom.style) {
             sequence.push_str("\x1b[0m");
             if let Some(color) = atom.style.fg {
-                crate::render::ansi::emit_fg(
-                    &mut sequence,
-                    crate::render::CellColor::from(color),
-                );
+                crate::render::ansi::emit_fg(&mut sequence, crate::render::CellColor::from(color));
             }
             if let Some(color) = atom.style.bg {
-                crate::render::ansi::emit_bg(
-                    &mut sequence,
-                    crate::render::CellColor::from(color),
-                );
+                crate::render::ansi::emit_bg(&mut sequence, crate::render::CellColor::from(color));
             }
             crate::render::ansi::apply_attributes(&mut sequence, atom.style.add_modifier.bits());
             last_style = Some(atom.style);
@@ -1578,10 +1589,8 @@ fn serialize_atoms_row(atoms: &[crate::wrap::Atom], width: usize) -> String {
 /// The mini terminal session — opentui's `Terminal` over the real
 /// tty + stdout (the main app's [`crate::app::SessionTerminal`]
 /// shape).
-pub type MiniTerminal = opentui_core::terminal::Terminal<
-    opentui_core::terminal::UnixTty,
-    std::io::Stdout,
->;
+pub type MiniTerminal =
+    opentui_core::terminal::Terminal<opentui_core::terminal::UnixTty, std::io::Stdout>;
 
 /// D2.3 — the renderer's terminal-session handle (the same adapter
 /// the main app installs, `app.rs`'s `RendererSessionHandle`): the
@@ -1629,10 +1638,7 @@ impl RendererTerminalSession for MiniSessionHandle {
     }
 
     fn is_torn_down(&self) -> bool {
-        self.session
-            .lock()
-            .map(|session| session.is_torn_down())
-            .unwrap_or(true)
+        self.session.lock().map(|session| session.is_torn_down()).unwrap_or(true)
     }
 }
 
@@ -1729,8 +1735,7 @@ impl Lifecycle {
             let Ok(mut session) = session.lock() else {
                 return Err("mini session terminal lock poisoned".to_owned());
             };
-            let (columns, rows) =
-                session.tty().window_size().map_err(|e| e.to_string())?;
+            let (columns, rows) = session.tty().window_size().map_err(|e| e.to_string())?;
             (usize::from(columns).max(1), usize::from(rows).max(1))
         };
         // Split-footer mode never enters the alternate screen — the
@@ -2008,10 +2013,7 @@ impl Lifecycle {
     /// homes the cursor (the next park re-positions anyway).
     fn reconcile_scrollback_region(&mut self) -> Result<(), String> {
         let pane = self.pane.pane_height(self.height).clamp(1, self.height);
-        let bottom = self
-            .height
-            .saturating_sub(pane.max(FOOTER_HEIGHT))
-            .max(1);
+        let bottom = self.height.saturating_sub(pane.max(FOOTER_HEIGHT)).max(1);
         if bottom != self.region_bottom {
             self.region_bottom = bottom;
             self.transcript_row = self.transcript_row.min(bottom);
@@ -2023,10 +2025,7 @@ impl Lifecycle {
 
     /// One raw write through the lifecycle's single writer.
     fn write_raw(&mut self, bytes: &[u8]) -> Result<(), String> {
-        self.out
-            .write_all(bytes)
-            .and_then(|()| self.out.flush())
-            .map_err(|error| error.to_string())
+        self.out.write_all(bytes).and_then(|()| self.out.flush()).map_err(|error| error.to_string())
     }
 
     /// Paint the footer pane into the screen's bottom rows — D4.1c:
@@ -2077,8 +2076,7 @@ impl Lifecycle {
             // repaints every band row (the retired force flag's
             // full-paint semantics; set_footer_height already rebuilt
             // the buffers on a height change).
-            let (width, height) =
-                (self.solid.renderer.width(), self.solid.renderer.height());
+            let (width, height) = (self.solid.renderer.width(), self.solid.renderer.height());
             self.solid.renderer.current_render_buffer =
                 opentui_core::buffer::OptimizedBuffer::new(width, height);
         }
@@ -2181,8 +2179,10 @@ impl Lifecycle {
         // (renderOffset/renderHeight) from the new terminal size, so
         // the next draw fully repaints the dock at the new
         // width/height.
-        self.solid
-            .resize(u32::try_from(self.width).unwrap_or(u32::MAX), u32::try_from(self.height).unwrap_or(u32::MAX));
+        self.solid.resize(
+            u32::try_from(self.width).unwrap_or(u32::MAX),
+            u32::try_from(self.height).unwrap_or(u32::MAX),
+        );
         // The transcript band re-arms at the new height (the flush's
         // region reconcile; the dock repaint follows).
         self.region_bottom = 0;
@@ -2374,9 +2374,8 @@ mod tests {
         // not the absolute).
         footer.panel.selected = 0;
         let effects = footer.press(FooterKey::Right);
-        let current = crate::components::footer::state::match_mini_verbosity(
-            &footer.settings_summary,
-        );
+        let current =
+            crate::components::footer::state::match_mini_verbosity(&footer.settings_summary);
         match effects.as_slice() {
             [FooterEffect::SettingChange { key: "verbosity", value }] => {
                 assert_ne!(value.as_str(), current, "a step changes the level");
@@ -2451,10 +2450,7 @@ mod tests {
         let effects = footer.press(FooterKey::Printable('u'));
         assert_eq!(
             effects,
-            vec![FooterEffect::QueuedPromptAction {
-                action: "cancel",
-                inbox_id: "msg_x".into()
-            }]
+            vec![FooterEffect::QueuedPromptAction { action: "cancel", inbox_id: "msg_x".into() }]
         );
         assert_eq!(footer.machine.route, PromptRoute::Composer);
         assert_eq!(footer.draft, "queued thought");
@@ -2590,7 +2586,8 @@ mod tests {
     }
 
     #[test]
-    fn two_press_exit_and_draft_clear() {        let mut footer = pane();
+    fn two_press_exit_and_draft_clear() {
+        let mut footer = pane();
         let _ = footer.press(FooterKey::Printable('h'));
         let effects = footer.press(FooterKey::CtrlC);
         assert!(effects.is_empty(), "no effect on a draft clear");
@@ -2715,10 +2712,7 @@ mod tests {
         let effects = footer.press(FooterKey::Enter);
         assert_eq!(
             effects,
-            vec![FooterEffect::QueuedPromptAction {
-                action: "steer",
-                inbox_id: "msg_a".into()
-            }]
+            vec![FooterEffect::QueuedPromptAction { action: "steer", inbox_id: "msg_a".into() }]
         );
         assert_eq!(footer.machine.route, PromptRoute::Composer);
         // Any OTHER key after the leader consumes the chord.

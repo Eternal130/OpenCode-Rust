@@ -80,11 +80,9 @@ async fn session_row(server: &TestServer, session_id: &str) -> (String, Option<S
         .transaction(move |tx| {
             Ok(tx
                 .conn()
-                .query_row(
-                    "SELECT directory, path FROM session_v2 WHERE id = ?1",
-                    &[&id],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
-                )
+                .query_row("SELECT directory, path FROM session_v2 WHERE id = ?1", &[&id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+                })
                 .expect("session row"))
         })
         .await
@@ -102,9 +100,7 @@ async fn pending_inbox_items(server: &TestServer, session_id: &str) -> Vec<(Stri
                 .conn()
                 .prepare("SELECT payload, delivery FROM session_inbox WHERE session_id = ?1")?;
             let rows = statement
-                .query_map(&[&id], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })?
+                .query_map(&[&id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
         })
@@ -236,8 +232,7 @@ async fn g111_pairing_browser_401_has_no_challenge() {
 #[tokio::test]
 async fn g113_stats_unknown_timezone_is_400() {
     let server = boot().await;
-    let response =
-        server.raw_get("/api/experimental/session/stats?timezone=Invalid%2FZone").await;
+    let response = server.raw_get("/api/experimental/session/stats?timezone=Invalid%2FZone").await;
     assert_eq!(response.status, 400, "unknown timezone rejected: {}", response.text());
     let body: Value = serde_json::from_slice(&response.body).expect("json error body");
     assert_eq!(body["_tag"], "InvalidRequestError", "{body}");

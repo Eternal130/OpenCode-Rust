@@ -9,8 +9,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use oc_theme::{Rgba, SyntaxStyleDef};
 use crate::style::{Color, Modifier, Style};
+use oc_theme::{Rgba, SyntaxStyleDef};
 
 /// The flattened scope → style map (`convertThemeToStyles` output),
 /// shared cheaply across renders.

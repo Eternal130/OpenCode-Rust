@@ -74,9 +74,7 @@ pub fn strip_jsonc(text: &str) -> String {
             }
             '/' if bytes.get(index + 1) == Some(&'*') => {
                 index += 2;
-                while index + 1 < bytes.len()
-                    && !(bytes[index] == '*' && bytes[index + 1] == '/')
-                {
+                while index + 1 < bytes.len() && !(bytes[index] == '*' && bytes[index + 1] == '/') {
                     index += 1;
                 }
                 index = (index + 2).min(bytes.len());
@@ -111,7 +109,10 @@ mod tests {
 
     #[test]
     fn strict_json_parses() {
-        assert_eq!(parse_jsonc(r#"{"a": 1, "b": [true, null]}"#).unwrap(), json!({"a": 1, "b": [true, null]}));
+        assert_eq!(
+            parse_jsonc(r#"{"a": 1, "b": [true, null]}"#).unwrap(),
+            json!({"a": 1, "b": [true, null]})
+        );
     }
 
     #[test]
@@ -161,10 +162,7 @@ mod tests {
     fn raw_control_chars_in_strings_are_tolerated() {
         // jsonc-parser's tolerant scan accepts raw tabs/newlines inside
         // strings; keep that acceptance (escaped for the strict pass).
-        assert_eq!(
-            parse_jsonc("{\"a\": \"x\ty\"}").unwrap(),
-            json!({"a": "x\ty"})
-        );
+        assert_eq!(parse_jsonc("{\"a\": \"x\ty\"}").unwrap(), json!({"a": "x\ty"}));
     }
 
     #[test]

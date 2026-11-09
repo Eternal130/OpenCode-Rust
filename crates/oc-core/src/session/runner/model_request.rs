@@ -163,9 +163,9 @@ pub fn base_transcript(
     let system_text = match agent.system.clone() {
         Some(system) => system,
         None => optimize::apply(
-            &crate::session::runner::system_prompt::make(&crate::session::runner::context::tool_names(
-                tools,
-            )),
+            &crate::session::runner::system_prompt::make(
+                &crate::session::runner::context::tool_names(tools),
+            ),
             model.info.as_deref(),
             &crate::session::runner::context::tool_names(tools),
         ),
@@ -192,7 +192,8 @@ pub fn base_transcript(
         let directory = plan::plan_directory(&oc_util::global_roots::resolve().home);
         let enter = plan::enter_reminder(&directory);
         let is_plan = agent.id.as_str() == "plan";
-        if let Some(text) = plan::reminder_for(is_plan, plan::last_reminder(&lowered, &enter), &enter)
+        if let Some(text) =
+            plan::reminder_for(is_plan, plan::last_reminder(&lowered, &enter), &enter)
         {
             plan::inject(&mut lowered, &text);
         }
@@ -1925,7 +1926,8 @@ mod g193_prompt_surface_tests {
             )
         );
         // a custom agent system prompt bypasses the family template.
-        let mut custom = oc_schema::agent::Info::default_for(oc_schema::id::AgentId::parse("build"));
+        let mut custom =
+            oc_schema::agent::Info::default_for(oc_schema::id::AgentId::parse("build"));
         custom.system = Some("CUSTOM PROMPT".to_string());
         let transcript = base_transcript(&custom, &model, &[], "", &[]);
         assert_eq!(transcript.system[0].text, "CUSTOM PROMPT");
@@ -1957,11 +1959,12 @@ mod g193_prompt_surface_tests {
             "",
             &[user_message(&enter), user_message("more")],
         );
-        assert_eq!(transcript.messages.len(), 2, "no extra reminder: {:?}", transcript
-            .messages
-            .iter()
-            .map(|m| text_of(m))
-            .collect::<Vec<_>>());
+        assert_eq!(
+            transcript.messages.len(),
+            2,
+            "no extra reminder: {:?}",
+            transcript.messages.iter().map(|m| text_of(m)).collect::<Vec<_>>()
+        );
 
         // non-plan agent carrying the enter reminder → leave reminder
         let transcript =

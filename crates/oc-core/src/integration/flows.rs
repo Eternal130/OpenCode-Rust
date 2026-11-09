@@ -318,8 +318,7 @@ pub async fn listen_loopback(options: LoopbackOptions) -> std::io::Result<Loopba
             let tx = tx.take();
             let page = page.clone();
             tokio::spawn(async move {
-                let resolved =
-                    serve_callback_connection(stream, callback_path, &page).await;
+                let resolved = serve_callback_connection(stream, callback_path, &page).await;
                 if let (Some(tx), Some(hit)) = (tx, resolved) {
                     let _ = tx.send(hit);
                 }
@@ -380,9 +379,9 @@ async fn serve_callback_connection(
     let query_params = parse_query(query);
     let token_path = match page {
         CallbackPage::Bootstrap { token_path, .. } => Some(token_path.as_str()),
-        CallbackPage::Html(_) | CallbackPage::Branded { .. } | CallbackPage::BrandedDeferred { .. } => {
-            None
-        }
+        CallbackPage::Html(_)
+        | CallbackPage::Branded { .. }
+        | CallbackPage::BrandedDeferred { .. } => None,
     };
     if method == "GET" && path == callback_path {
         // G-234② — an OAuth failure redirect renders the branded ERROR

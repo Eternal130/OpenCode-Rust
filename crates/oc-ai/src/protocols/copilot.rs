@@ -645,12 +645,13 @@ pub fn copilot_model_entry(
         .and_then(|billing| billing.token_prices.as_ref())
         .is_some_and(|prices| prices.batch_size > 0.0)
     {
-        10_000.0 / remote
-            .billing
-            .as_ref()
-            .and_then(|billing| billing.token_prices.as_ref())
-            .map(|prices| prices.batch_size)
-            .unwrap_or_default()
+        10_000.0
+            / remote
+                .billing
+                .as_ref()
+                .and_then(|billing| billing.token_prices.as_ref())
+                .map(|prices| prices.batch_size)
+                .unwrap_or_default()
     } else {
         0.0
     };
@@ -658,19 +659,15 @@ pub fn copilot_model_entry(
         input: prices.and_then(|p| p.input_price).unwrap_or(0.0) * usd_per_million,
         output: prices.and_then(|p| p.output_price).unwrap_or(0.0) * usd_per_million,
         // `cache_read_price ?? cache_price ?? 0` (models.ts:188).
-        cache_read: prices
-            .and_then(|p| p.cache_read_price.or(p.cache_price))
-            .unwrap_or(0.0)
+        cache_read: prices.and_then(|p| p.cache_read_price.or(p.cache_price)).unwrap_or(0.0)
             * usd_per_million,
     };
 
     // Released (models.ts:154-155, 175-176): a kept local release time
     // wins, else `Date.parse` of the version with the `{id}-` prefix
     // stripped; an unparseable version stores 0.
-    let version = remote
-        .version
-        .strip_prefix(&format!("{}-", remote.id))
-        .unwrap_or(remote.version.as_str());
+    let version =
+        remote.version.strip_prefix(&format!("{}-", remote.id)).unwrap_or(remote.version.as_str());
     let released = previous
         .released
         .filter(|released| *released != 0.0)
@@ -683,9 +680,7 @@ pub fn copilot_model_entry(
     let limits = remote.capabilities.limits.as_ref();
     let prompt_tokens = limits.and_then(|l| l.max_prompt_tokens).unwrap_or_default();
     let limit = CopilotDerivedLimit {
-        context: limits
-            .and_then(|l| l.max_context_window_tokens)
-            .unwrap_or(prompt_tokens) as i64,
+        context: limits.and_then(|l| l.max_context_window_tokens).unwrap_or(prompt_tokens) as i64,
         input: prompt_tokens as i64,
         output: limits.and_then(|l| l.max_output_tokens).unwrap_or_default() as i64,
     };
@@ -833,10 +828,7 @@ pub fn utility_title_headers(input: &UtilityTitleInput<'_>) -> Vec<(String, Stri
         ("User-Agent".to_owned(), input.user_agent.to_string()),
         ("X-GitHub-Api-Version".to_owned(), COPILOT_API_VERSION.to_owned()),
         ("Openai-Intent".to_owned(), "conversation-edits".to_owned()),
-        (
-            "X-Interaction-Type".to_owned(),
-            "agent-session-name-generation".to_owned(),
-        ),
+        ("X-Interaction-Type".to_owned(), "agent-session-name-generation".to_owned()),
         ("X-Interaction-Id".to_owned(), input.session_id.to_string()),
         ("x-initiator".to_owned(), "agent".to_owned()),
     ]
@@ -847,8 +839,8 @@ pub fn utility_title_headers(input: &UtilityTitleInput<'_>) -> Vec<(String, Stri
 /// an empty (or missing) content is a failure so the caller's normal
 /// title path still runs.
 pub fn utility_title_from_response(body: &str) -> Result<String, String> {
-    let value: Value =
-        serde_json::from_str(body).map_err(|error| format!("Utility title response was malformed: {error}"))?;
+    let value: Value = serde_json::from_str(body)
+        .map_err(|error| format!("Utility title response was malformed: {error}"))?;
     let content = value
         .get("choices")
         .and_then(Value::as_array)

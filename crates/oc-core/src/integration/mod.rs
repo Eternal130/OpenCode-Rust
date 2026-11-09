@@ -1463,10 +1463,7 @@ fn is_date(text: &str) -> bool {
 /// `chrono_naive` (providers_enterprise.rs); a bare date round-trips a
 /// JS `Date` too.
 fn is_date_time(text: &str) -> bool {
-    is_date(text)
-        || text
-            .parse::<providers_enterprise::chrono_naive::NaiveDateTime>()
-            .is_ok()
+    is_date(text) || text.parse::<providers_enterprise::chrono_naive::NaiveDateTime>().is_ok()
 }
 
 /// form.ts:329 email shape: `^[^\s@]+@[^\s@]+\.[^\s@]+$`.
@@ -1488,18 +1485,24 @@ fn is_email(text: &str) -> bool {
 /// conditioned field was judged invisible and silently hidden.
 fn field_visible(field: &FormField, answer: &FormAnswer) -> bool {
     field.when.as_ref().is_none_or(|conditions| {
-        conditions.iter().all(|condition| {
-            match answer.get(&condition.key) {
-                None | Some(Value::Null) => false,
-                Some(Value::Array(items)) => {
-                    let neq = condition.op == "neq";
-                    let hit = items.iter().any(|item| *item == condition.value);
-                    if neq { !hit } else { hit }
+        conditions.iter().all(|condition| match answer.get(&condition.key) {
+            None | Some(Value::Null) => false,
+            Some(Value::Array(items)) => {
+                let neq = condition.op == "neq";
+                let hit = items.iter().any(|item| *item == condition.value);
+                if neq {
+                    !hit
+                } else {
+                    hit
                 }
-                Some(value) => {
-                    let neq = condition.op == "neq";
-                    let hit = *value == condition.value;
-                    if neq { !hit } else { hit }
+            }
+            Some(value) => {
+                let neq = condition.op == "neq";
+                let hit = *value == condition.value;
+                if neq {
+                    !hit
+                } else {
+                    hit
                 }
             }
         })

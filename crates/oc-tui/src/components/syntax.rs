@@ -234,12 +234,7 @@ impl HighlightedBlock {
     /// concatenated text always equals the source line — styling
     /// never changes glyphs.
     #[must_use]
-    pub fn line_spans(
-        &self,
-        line: usize,
-        base: Style,
-        syntax: &SyntaxStyles,
-    ) -> Vec<StyledSpan> {
+    pub fn line_spans(&self, line: usize, base: Style, syntax: &SyntaxStyles) -> Vec<StyledSpan> {
         let Some(text) = self.0.lines.get(line) else {
             return Vec::new();
         };
@@ -305,8 +300,7 @@ fn build(content: &str, highlights: &[SimpleHighlight]) -> HighlightedBlock {
         // UTF-16 → byte (the D1d boundary: SimpleHighlight offsets
         // are UTF-16 code units; the map rounds in-bounds).
         let start_byte = map.byte_of_utf16(highlight.start).min(content.len());
-        let end_byte =
-            map.byte_of_utf16(highlight.end).min(content.len()).max(start_byte);
+        let end_byte = map.byte_of_utf16(highlight.end).min(content.len()).max(start_byte);
         if start_byte == end_byte {
             continue; // zero-width (e.g. missing nodes in recovery)
         }

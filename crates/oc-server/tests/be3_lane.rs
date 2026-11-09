@@ -316,7 +316,10 @@ async fn zen_oauth_flow_round_trip_via_routes() {
     assert!(log.contains("/auth/device/code"), "{log}");
     assert!(log.contains("\"client_id\":\"opencode-cli\""), "{log}");
     assert!(log.contains("\"supports_org_scope\":true"), "{log}");
-    assert!(log.contains("\"grant_type\":\"urn:ietf:params:oauth:grant-type:device_code\""), "{log}");
+    assert!(
+        log.contains("\"grant_type\":\"urn:ietf:params:oauth:grant-type:device_code\""),
+        "{log}"
+    );
     assert!(log.contains("/api/user"), "{log}");
     assert!(log.contains("/api/orgs"), "{log}");
 

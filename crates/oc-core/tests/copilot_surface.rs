@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use oc_ai::protocols::copilot::CopilotRemoteModel;
 use oc_core::database::schema::SessionRow;
 use oc_core::engine::resolver::CatalogModelResolver;
 use oc_core::provider_catalog::catalog::Catalog;
@@ -18,7 +19,6 @@ use oc_core::provider_catalog::copilot_sync::{
 };
 use oc_core::provider_catalog::facade::{language_model_for_model, FacadeContext, ModelConnection};
 use oc_core::session::runner::ModelResolver as _;
-use oc_ai::protocols::copilot::CopilotRemoteModel;
 use serde_json::json;
 
 fn remote_model(id: &str, endpoints: &[&str]) -> CopilotRemoteModel {
@@ -89,15 +89,24 @@ fn merge_folds_remote_over_static() {
     aliased.models.push(hidden);
 
     let remote = BTreeMap::from([
-        (static_snapshot.models[0].model_id.0.clone(), remote_model(&kept_id, &["/chat/completions"])),
-        (HIDDEN_COPILOT_MODEL.to_string(), remote_model(HIDDEN_COPILOT_MODEL, &["/chat/completions"])),
+        (
+            static_snapshot.models[0].model_id.0.clone(),
+            remote_model(&kept_id, &["/chat/completions"]),
+        ),
+        (
+            HIDDEN_COPILOT_MODEL.to_string(),
+            remote_model(HIDDEN_COPILOT_MODEL, &["/chat/completions"]),
+        ),
         ("brand-new-model".to_string(), remote_model("brand-new-model", &["/responses"])),
     ]);
     let merged = merge_copilot_snapshot(&aliased, "https://api.githubcopilot.com", &remote);
 
     let by_id: BTreeMap<&str, _> =
         merged.models.iter().map(|model| (model.id.as_str(), model)).collect();
-    assert!(!by_id.contains_key(dropped_id.as_str()), "a model whose API id left the listing drops");
+    assert!(
+        !by_id.contains_key(dropped_id.as_str()),
+        "a model whose API id left the listing drops"
+    );
     assert!(by_id.contains_key("brand-new-model"), "an unseen remote model joins");
     assert!(by_id.contains_key("my-alias"), "an alias whose API model survives keeps");
 
@@ -308,18 +317,15 @@ async fn free_title_hook_uses_the_utility_channel() {
     let hooks = HookRegistry::new();
     let _keep = hooks
         .register_session_title(
-            Arc::new(CopilotUtilityTitleHook::new(
-                Arc::clone(&sync),
-                transport(),
-                "opencode-test",
-            )),
+            Arc::new(CopilotUtilityTitleHook::new(Arc::clone(&sync), transport(), "opencode-test")),
             HookOptions { provider_id: Some("github-copilot".to_string()) },
         )
         .await;
 
     let event = SessionTitleEvent {
         request: oc_core::hooks::SessionRequestEvent {
-            session_id: oc_schema::id::SessionId::parse("ses_utility".to_owned()).expect("session id"),
+            session_id: oc_schema::id::SessionId::parse("ses_utility".to_owned())
+                .expect("session id"),
             model: model_ref("github-copilot", "gpt-5.4"),
             system: vec![oc_ai::schema::messages::SystemPart::new("name the session")],
             messages: vec![oc_ai::schema::Message::user("port a compiler")],
@@ -342,7 +348,8 @@ async fn free_title_hook_uses_the_utility_channel() {
     // A non-copilot session never hits the channel (the provider filter).
     let other = SessionTitleEvent {
         request: oc_core::hooks::SessionRequestEvent {
-            session_id: oc_schema::id::SessionId::parse("ses_other".to_owned()).expect("session id"),
+            session_id: oc_schema::id::SessionId::parse("ses_other".to_owned())
+                .expect("session id"),
             model: model_ref("anthropic", "claude-opus-4-5"),
             system: vec![],
             messages: vec![oc_ai::schema::Message::user("x")],

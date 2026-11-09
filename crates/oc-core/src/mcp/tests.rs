@@ -463,7 +463,9 @@ async fn connect_mock_with(
 }
 
 /// A connector scripted per-call: each invocation connects a fresh mock.
-pub(crate) fn scripted_connector(next: impl FnMut() -> Script + Send + Sync + 'static) -> Connector {
+pub(crate) fn scripted_connector(
+    next: impl FnMut() -> Script + Send + Sync + 'static,
+) -> Connector {
     let next = Arc::new(parking_lot::Mutex::new(next));
     Arc::new(move |input: ConnectInput<'_>| {
         let script = (next.lock())();
@@ -1682,13 +1684,8 @@ async fn mcp_tool_bridge_registers_namespaced_tools_and_flushes() {
     let permission = test_permission(&bus);
     let hooks = Arc::new(crate::hooks::HookRegistry::new());
     let services = test_services(&permission);
-    let bridge = super::registry::McpToolBridge::install(
-        &registry,
-        &tools,
-        &permission,
-        &hooks,
-        &services,
-    );
+    let bridge =
+        super::registry::McpToolBridge::install(&registry, &tools, &permission, &hooks, &services);
     bridge.flush().await;
     assert_eq!(tools.list().len(), 1);
     let registration = tools.list().remove(0);
@@ -1800,13 +1797,8 @@ async fn g242_fixture(
     let (permission, rx) = test_permission_with_rules(bus, rules);
     let hooks = Arc::new(crate::hooks::HookRegistry::new());
     let services = test_services(&permission);
-    let bridge = super::registry::McpToolBridge::install(
-        &registry,
-        &tools,
-        &permission,
-        &hooks,
-        &services,
-    );
+    let bridge =
+        super::registry::McpToolBridge::install(&registry, &tools, &permission, &hooks, &services);
     bridge.flush().await;
     (registry, tools, hooks, permission, rx)
 }
@@ -1826,9 +1818,7 @@ async fn g242_ask_rule_parks_mcp_tool_execution_until_reply() {
 
     let executor = tools.executor("echo").expect("pipeline executor registered");
     let spawned = tokio::spawn(async move {
-        executor
-            .execute_with_context(&serde_json::json!({}), &g242_context())
-            .await
+        executor.execute_with_context(&serde_json::json!({}), &g242_context()).await
     });
     // The assert parks on an `alpha_echo` ask with ref's exact shape:
     // resources ["*"], save ["*"] (mcp.ts:53-54).
@@ -1840,10 +1830,7 @@ async fn g242_ask_rule_parks_mcp_tool_execution_until_reply() {
     assert_eq!(asked.resources, vec!["*".to_string()]);
     assert_eq!(asked.save, Some(vec!["*".to_string()]));
     // The call must not have completed while parked.
-    assert!(
-        !spawned.is_finished(),
-        "the MCP call stays parked while the ask is pending"
-    );
+    assert!(!spawned.is_finished(), "the MCP call stays parked while the ask is pending");
     // Approving "once" releases the parked call; the tool then runs.
     permission
         .reply(crate::permission::ReplyInput {
@@ -1901,7 +1888,8 @@ async fn g242_deny_rule_rejects_mcp_tool_execution() {
 #[tokio::test]
 async fn g242_pipeline_hooks_and_decode_wrap_mcp_tools() {
     let (_db, bus) = test_bus().await;
-    let (registry, tools, hooks, _permission, _rx) = g242_fixture(&bus, Some(allow_all_rules())).await;
+    let (registry, tools, hooks, _permission, _rx) =
+        g242_fixture(&bus, Some(allow_all_rules())).await;
 
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let before_seen = Arc::clone(&seen);
@@ -1909,15 +1897,13 @@ async fn g242_pipeline_hooks_and_decode_wrap_mcp_tools() {
     scope.track(
         hooks
             .register_tool_execute_before(
-                crate::hooks::fn_hook(
-                    move |event: &mut crate::hooks::ToolExecuteBeforeEvent| {
-                        before_seen
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .push(format!("before:{}", event.tool));
-                        Ok(())
-                    },
-                ),
+                crate::hooks::fn_hook(move |event: &mut crate::hooks::ToolExecuteBeforeEvent| {
+                    before_seen
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .push(format!("before:{}", event.tool));
+                    Ok(())
+                }),
                 crate::hooks::HookOptions::default(),
             )
             .await,
@@ -1926,19 +1912,17 @@ async fn g242_pipeline_hooks_and_decode_wrap_mcp_tools() {
     scope.track(
         hooks
             .register_tool_execute_after(
-                crate::hooks::fn_hook(
-                    move |event: &mut crate::hooks::ToolExecuteAfterEvent| {
-                        let phase = match event.outcome {
-                            crate::hooks::ToolOutcome::Completed { .. } => "after",
-                            crate::hooks::ToolOutcome::Error { .. } => "after-error",
-                        };
-                        after_seen
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .push(format!("{phase}:{}", event.tool));
-                        Ok(())
-                    },
-                ),
+                crate::hooks::fn_hook(move |event: &mut crate::hooks::ToolExecuteAfterEvent| {
+                    let phase = match event.outcome {
+                        crate::hooks::ToolOutcome::Completed { .. } => "after",
+                        crate::hooks::ToolOutcome::Error { .. } => "after-error",
+                    };
+                    after_seen
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .push(format!("{phase}:{}", event.tool));
+                    Ok(())
+                }),
                 crate::hooks::HookOptions::default(),
             )
             .await,
@@ -1994,7 +1978,8 @@ async fn g242_pipeline_hooks_and_decode_wrap_mcp_tools() {
 #[tokio::test]
 async fn g242_declared_output_schema_enters_encode_output() {
     let (_db, bus) = test_bus().await;
-    let (registry, tools, _hooks, _permission, _rx) = g242_fixture(&bus, Some(allow_all_rules())).await;
+    let (registry, tools, _hooks, _permission, _rx) =
+        g242_fixture(&bus, Some(allow_all_rules())).await;
 
     let result = tools
         .executor("shaped")
@@ -2175,10 +2160,8 @@ fn test_services(permission: &crate::permission::Permission) -> Arc<crate::tool:
         home: home.clone(),
         access,
         permission: permission.clone(),
-        mutation: Arc::new(crate::file_mutation::FileMutation::new(
-            dir.path().to_path_buf(),
-            home,
-        )),        files: Arc::new(crate::environment::LocalFiles),
+        mutation: Arc::new(crate::file_mutation::FileMutation::new(dir.path().to_path_buf(), home)),
+        files: Arc::new(crate::environment::LocalFiles),
         formatter: Arc::new(crate::formatter::NoopFormatter::new()),
         instructions: None,
         db: None,
@@ -2516,22 +2499,16 @@ fn g280_number_elicitation_maps_to_number_field() {
         }
     ));
     // The wire kind round-trips: `type: "number"` (not "integer").
+    let field =
+        elicitation::to_elicitation_field("ratio", &serde_json::json!({ "type": "number" }), false);
+    assert_eq!(serde_json::to_value(&field).expect("wire")["type"], serde_json::json!("number"));
+    // Integer stays Integer.
     let field = elicitation::to_elicitation_field(
-        "ratio",
-        &serde_json::json!({ "type": "number" }),
+        "count",
+        &serde_json::json!({ "type": "integer" }),
         false,
     );
-    assert_eq!(
-        serde_json::to_value(&field).expect("wire")["type"],
-        serde_json::json!("number")
-    );
-    // Integer stays Integer.
-    let field =
-        elicitation::to_elicitation_field("count", &serde_json::json!({ "type": "integer" }), false);
-    assert_eq!(
-        serde_json::to_value(&field).expect("wire")["type"],
-        serde_json::json!("integer")
-    );
+    assert_eq!(serde_json::to_value(&field).expect("wire")["type"], serde_json::json!("integer"));
 }
 
 // ---------------------------------------------------------------------------
@@ -2777,7 +2754,9 @@ mod g223_classification {
     /// `StreamableHttpError`).
     #[derive(Debug, thiserror::Error)]
     #[error("Transport send error")]
-    struct Wrap(#[source] rmcp::transport::streamable_http_client::StreamableHttpError<reqwest13::Error>);
+    struct Wrap(
+        #[source] rmcp::transport::streamable_http_client::StreamableHttpError<reqwest13::Error>,
+    );
 
     /// The restarted single-session server's JSON-RPC rejection (reaches
     /// the classifier as `ServiceError::McpError`, no typed HTTP status).
@@ -2789,8 +2768,8 @@ mod g223_classification {
     /// only when the POST carried the negotiated session id.
     #[test]
     fn g223_404_with_session_is_expired() {
-        let error = Wrap(rmcp::transport::streamable_http_client::StreamableHttpError::SessionExpired,
-        );
+        let error =
+            Wrap(rmcp::transport::streamable_http_client::StreamableHttpError::SessionExpired);
         assert!(client::session_expired(&error, true));
         // The typed variant carries the session gate by construction — it
         // classifies even without the observing flag.
@@ -2803,7 +2782,8 @@ mod g223_classification {
     /// expired).
     #[test]
     fn g223_404_without_session_is_not_expired() {
-        let error = Wrap(rmcp::transport::streamable_http_client::StreamableHttpError::UnexpectedServerResponse(
+        let error = Wrap(
+            rmcp::transport::streamable_http_client::StreamableHttpError::UnexpectedServerResponse(
                 std::borrow::Cow::Borrowed("HTTP 404 Not Found: no such resource"),
             ),
         );
@@ -2815,28 +2795,29 @@ mod g223_classification {
     /// reqwest status error all classify unauthorized.
     #[test]
     fn g223_unauthorized_typed_variants() {
-        let challenge = Wrap(rmcp::transport::streamable_http_client::StreamableHttpError::AuthRequired(
+        let challenge =
+            Wrap(rmcp::transport::streamable_http_client::StreamableHttpError::AuthRequired(
                 rmcp::transport::streamable_http_client::AuthRequiredError::new(
                     "Bearer realm=\"mcp\"".to_string(),
                 ),
-            ),
-        );
+            ));
         assert!(client::unauthorized(&challenge));
         assert!(!client::session_expired(&challenge, true));
 
-        let bare = Wrap(rmcp::transport::streamable_http_client::StreamableHttpError::UnexpectedServerResponse(
+        let bare = Wrap(
+            rmcp::transport::streamable_http_client::StreamableHttpError::UnexpectedServerResponse(
                 std::borrow::Cow::Borrowed("HTTP 401 Unauthorized: token revoked"),
             ),
         );
         assert!(client::unauthorized(&bare));
 
-        let forbidden = Wrap(rmcp::transport::streamable_http_client::StreamableHttpError::InsufficientScope(
+        let forbidden =
+            Wrap(rmcp::transport::streamable_http_client::StreamableHttpError::InsufficientScope(
                 rmcp::transport::streamable_http_client::InsufficientScopeError::new(
                     "Bearer scope=\"admin\"".to_string(),
                     Some("admin".to_string()),
                 ),
-            ),
-        );
+            ));
         assert!(client::unauthorized(&forbidden));
     }
 

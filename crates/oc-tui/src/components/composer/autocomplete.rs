@@ -296,10 +296,8 @@ impl SlashRegistry {
             if known.contains(&display) {
                 continue;
             }
-            self.entries.push(SlashEntry {
-                display,
-                description: description.clone().unwrap_or_default(),
-            });
+            self.entries
+                .push(SlashEntry { display, description: description.clone().unwrap_or_default() });
         }
         self.entries.sort_by(|a, b| a.display.cmp(&b.display));
     }
@@ -1666,7 +1664,11 @@ pub fn merge_file_rows(
 #[must_use]
 pub fn directory_autocomplete_search(query: &str, directory: &str, home: &str) -> DirectorySearch {
     if query == "~" {
-        return DirectorySearch { directory: home.to_owned(), prefix: "~/".to_owned(), query: String::new() };
+        return DirectorySearch {
+            directory: home.to_owned(),
+            prefix: "~/".to_owned(),
+            query: String::new(),
+        };
     }
     if let Some(rest) = query.strip_prefix("~/") {
         return directory_search(rest, home, "~/");
@@ -1689,7 +1691,11 @@ pub fn directory_autocomplete_search(query: &str, directory: &str, home: &str) -
 
 fn directory_search(query: &str, root: &str, prefix: &str) -> DirectorySearch {
     match query.rfind('/') {
-        None => DirectorySearch { directory: root.to_owned(), prefix: prefix.to_owned(), query: query.to_owned() },
+        None => DirectorySearch {
+            directory: root.to_owned(),
+            prefix: prefix.to_owned(),
+            query: query.to_owned(),
+        },
         Some(at) => {
             let parent = &query[..=at];
             DirectorySearch {
@@ -1803,134 +1809,145 @@ impl AutocompleteFetchSink for NoopAutocompleteFetchSink {
     fn directory_list(&self, _query: &str, _directory: String, _home: String) {}
 }
 
-    // -- G-127 ---------------------------------------------------------
+// -- G-127 ---------------------------------------------------------
 
-    #[test]
-    fn file_query_base_strips_the_line_range() {
-        assert_eq!(file_query_base("src/lib.rs#12-40"), "src/lib.rs");
-        assert_eq!(file_query_base("src/lib.rs"), "src/lib.rs");
-        assert_eq!(file_query_base(""), "");
-    }
+#[test]
+fn file_query_base_strips_the_line_range() {
+    assert_eq!(file_query_base("src/lib.rs#12-40"), "src/lib.rs");
+    assert_eq!(file_query_base("src/lib.rs"), "src/lib.rs");
+    assert_eq!(file_query_base(""), "");
+}
 
-    /// G-287⑨ — `parseFileLineRange` (prompt/parse.ts:1-13): the
-    /// suffix validates as `#N` / `#N-N` / `#N-`; `end` survives only
-    /// when `start < end` (the `#5-3` collapse); a non-matching
-    /// suffix keeps the hash-stripped base with NO range.
-    #[test]
-    fn line_ranges_parse_and_validate() {
-        let (base, range) = parse_file_line_range("src/lib.rs#12-40");
-        assert_eq!(base, "src/lib.rs");
-        assert_eq!(
-            range,
-            Some(FileLineRange { start_line: 12, end_line: Some(40) })
-        );
-        // Single line.
-        let (_, range) = parse_file_line_range("a.rs#7");
-        assert_eq!(range, Some(FileLineRange { start_line: 7, end_line: None }));
-        // Open-ended.
-        let (_, range) = parse_file_line_range("a.rs#7-");
-        assert_eq!(range, Some(FileLineRange { start_line: 7, end_line: None }));
-        // Inverted range collapses to start-only.
-        let (_, range) = parse_file_line_range("a.rs#5-3");
-        assert_eq!(range, Some(FileLineRange { start_line: 5, end_line: None }));
-        // Non-numeric / non-suffix hashes: no range, base still strips.
-        let (base, range) = parse_file_line_range("src#main");
-        assert_eq!(base, "src");
-        assert_eq!(range, None);
-        let (base, range) = parse_file_line_range("no-hash");
-        assert_eq!(base, "no-hash");
-        assert_eq!(range, None);
-    }
+/// G-287⑨ — `parseFileLineRange` (prompt/parse.ts:1-13): the
+/// suffix validates as `#N` / `#N-N` / `#N-`; `end` survives only
+/// when `start < end` (the `#5-3` collapse); a non-matching
+/// suffix keeps the hash-stripped base with NO range.
+#[test]
+fn line_ranges_parse_and_validate() {
+    let (base, range) = parse_file_line_range("src/lib.rs#12-40");
+    assert_eq!(base, "src/lib.rs");
+    assert_eq!(range, Some(FileLineRange { start_line: 12, end_line: Some(40) }));
+    // Single line.
+    let (_, range) = parse_file_line_range("a.rs#7");
+    assert_eq!(range, Some(FileLineRange { start_line: 7, end_line: None }));
+    // Open-ended.
+    let (_, range) = parse_file_line_range("a.rs#7-");
+    assert_eq!(range, Some(FileLineRange { start_line: 7, end_line: None }));
+    // Inverted range collapses to start-only.
+    let (_, range) = parse_file_line_range("a.rs#5-3");
+    assert_eq!(range, Some(FileLineRange { start_line: 5, end_line: None }));
+    // Non-numeric / non-suffix hashes: no range, base still strips.
+    let (base, range) = parse_file_line_range("src#main");
+    assert_eq!(base, "src");
+    assert_eq!(range, None);
+    let (base, range) = parse_file_line_range("no-hash");
+    assert_eq!(base, "no-hash");
+    assert_eq!(range, None);
+}
 
-    #[test]
-    fn file_find_options_carry_the_file_part_identity() {
-        let rows = [
-            FileFindRow { path: "src/main.rs".to_owned(), is_directory: false },
-            FileFindRow { path: "docs".to_owned(), is_directory: true },
-        ];
-        let options = file_find_options(&rows);
-        assert_eq!(options.len(), 2);
-        assert_eq!(options[0].display, "src/main.rs");
-        assert!(options[0].is_directory == false);
-        assert_eq!(options[0].path.as_deref(), Some("src/main.rs"));
-        // The structured file-part identity (createFilePart → the
-        // wire `files` attachment + frecency on `part.path`).
-        assert!(matches!(options[0].reference, Some(Reference::Source { ref name }) if name == "src/main.rs"));
-        assert!(options[1].is_directory);
-    }
+#[test]
+fn file_find_options_carry_the_file_part_identity() {
+    let rows = [
+        FileFindRow { path: "src/main.rs".to_owned(), is_directory: false },
+        FileFindRow { path: "docs".to_owned(), is_directory: true },
+    ];
+    let options = file_find_options(&rows);
+    assert_eq!(options.len(), 2);
+    assert_eq!(options[0].display, "src/main.rs");
+    assert!(options[0].is_directory == false);
+    assert_eq!(options[0].path.as_deref(), Some("src/main.rs"));
+    // The structured file-part identity (createFilePart → the
+    // wire `files` attachment + frecency on `part.path`).
+    assert!(
+        matches!(options[0].reference, Some(Reference::Source { ref name }) if name == "src/main.rs")
+    );
+    assert!(options[1].is_directory);
+}
 
-    #[test]
-    fn merge_file_rows_ride_behind_the_static_set() {
-        let non_file = vec![AutocompleteOption::command("@build", None)];
-        let file = (0..12)
-            .map(|index| AutocompleteOption {
-                display: format!("file{index}.rs"),
-                ..AutocompleteOption::default()
-            })
-            .collect::<Vec<_>>();
-        // Empty query: no slice (the ref returns early, :548-549).
-        let merged = merge_file_rows(non_file.clone(), &file, "");
-        assert_eq!(merged.len(), 13);
-        // A typed query caps the merged list at the popup's 10.
-        let merged = merge_file_rows(non_file, &file, "file");
-        assert_eq!(merged.len(), 10);
-        assert_eq!(merged[0].display, "@build");
-        assert_eq!(merged[1].display, "file0.rs");
-    }
+#[test]
+fn merge_file_rows_ride_behind_the_static_set() {
+    let non_file = vec![AutocompleteOption::command("@build", None)];
+    let file = (0..12)
+        .map(|index| AutocompleteOption {
+            display: format!("file{index}.rs"),
+            ..AutocompleteOption::default()
+        })
+        .collect::<Vec<_>>();
+    // Empty query: no slice (the ref returns early, :548-549).
+    let merged = merge_file_rows(non_file.clone(), &file, "");
+    assert_eq!(merged.len(), 13);
+    // A typed query caps the merged list at the popup's 10.
+    let merged = merge_file_rows(non_file, &file, "file");
+    assert_eq!(merged.len(), 10);
+    assert_eq!(merged[0].display, "@build");
+    assert_eq!(merged[1].display, "file0.rs");
+}
 
-    #[test]
-    fn directory_search_splits_prefix_and_filter() {
-        let search = directory_autocomplete_search("src/ma", "/w/repo", "/h");
-        assert_eq!(search.directory, "/w/repo/src");
-        assert_eq!(search.prefix, "src/");
-        assert_eq!(search.query, "ma");
-        // `~` and `~/…` resolve against home.
-        let search = directory_autocomplete_search("~", "/w/repo", "/h");
-        assert_eq!((search.directory.as_str(), search.prefix.as_str(), search.query.as_str()), ("/h", "~/", ""));
-        let search = directory_autocomplete_search("~/pro", "/w", "/h");
-        assert_eq!((search.directory.as_str(), search.prefix.as_str(), search.query.as_str()), ("/h", "~/", "pro"));
-        // A bare `..` chain resolves against the current directory.
-        let search = directory_autocomplete_search("../..", "/w/repo/sub", "/h");
-        assert_eq!((search.directory.as_str(), search.prefix.as_str(), search.query.as_str()), ("/w", "../../", ""));
-        // Absolute queries resolve from the root.
-        let search = directory_autocomplete_search("/us", "/w/repo", "/h");
-        assert_eq!((search.directory.as_str(), search.prefix.as_str(), search.query.as_str()), ("/", "/", "us"));
-    }
+#[test]
+fn directory_search_splits_prefix_and_filter() {
+    let search = directory_autocomplete_search("src/ma", "/w/repo", "/h");
+    assert_eq!(search.directory, "/w/repo/src");
+    assert_eq!(search.prefix, "src/");
+    assert_eq!(search.query, "ma");
+    // `~` and `~/…` resolve against home.
+    let search = directory_autocomplete_search("~", "/w/repo", "/h");
+    assert_eq!(
+        (search.directory.as_str(), search.prefix.as_str(), search.query.as_str()),
+        ("/h", "~/", "")
+    );
+    let search = directory_autocomplete_search("~/pro", "/w", "/h");
+    assert_eq!(
+        (search.directory.as_str(), search.prefix.as_str(), search.query.as_str()),
+        ("/h", "~/", "pro")
+    );
+    // A bare `..` chain resolves against the current directory.
+    let search = directory_autocomplete_search("../..", "/w/repo/sub", "/h");
+    assert_eq!(
+        (search.directory.as_str(), search.prefix.as_str(), search.query.as_str()),
+        ("/w", "../../", "")
+    );
+    // Absolute queries resolve from the root.
+    let search = directory_autocomplete_search("/us", "/w/repo", "/h");
+    assert_eq!(
+        (search.directory.as_str(), search.prefix.as_str(), search.query.as_str()),
+        ("/", "/", "us")
+    );
+}
 
-    #[test]
-    fn directory_matches_hide_dotfiles_on_empty_query() {
-        assert!(directory_autocomplete_matches("src", ""));
-        assert!(!directory_autocomplete_matches(".git", ""));
-        assert!(directory_autocomplete_matches(".git", ".g"));
-        assert!(directory_autocomplete_matches("Repo", "rep"));
-    }
+#[test]
+fn directory_matches_hide_dotfiles_on_empty_query() {
+    assert!(directory_autocomplete_matches("src", ""));
+    assert!(!directory_autocomplete_matches(".git", ""));
+    assert!(directory_autocomplete_matches(".git", ".g"));
+    assert!(directory_autocomplete_matches("Repo", "rep"));
+}
 
-    #[test]
-    fn directory_live_options_filter_and_prefix() {
-        let search = DirectorySearch {
-            directory: "/w/repo/src".to_owned(),
-            prefix: "src/".to_owned(),
-            query: "ma".to_owned(),
-        };
-        let entries = [
-            FileFindRow { path: "main.rs".to_owned(), is_directory: false },
-            FileFindRow { path: "markdown".to_owned(), is_directory: true },
-            FileFindRow { path: "math".to_owned(), is_directory: true },
-            FileFindRow { path: "zed".to_owned(), is_directory: true },
-        ];
-        let options = directory_live_options(&entries, "/w/repo/src", &search);
-        let displays: Vec<&str> = options.iter().map(|option| option.display.as_str()).collect();
-        assert_eq!(displays, ["src/markdown/", "src/math/"]);
-        assert_eq!(options[0].absolute.as_deref(), Some("/w/repo/src/markdown"));
-        assert!(options[0].is_directory);
-        // No basename filter + a prefix: the queried directory itself
-        // completes first (directoryAutocompleteExactValue).
-        let search = DirectorySearch {
-            directory: "/w/repo/src".to_owned(),
-            prefix: "src/".to_owned(),
-            query: String::new(),
-        };
-        let options = directory_live_options(&entries, "/w/repo/src", &search);
-        assert_eq!(options[0].display, "src/");
-        assert_eq!(options[0].absolute.as_deref(), Some("/w/repo/src"));
-    }
+#[test]
+fn directory_live_options_filter_and_prefix() {
+    let search = DirectorySearch {
+        directory: "/w/repo/src".to_owned(),
+        prefix: "src/".to_owned(),
+        query: "ma".to_owned(),
+    };
+    let entries = [
+        FileFindRow { path: "main.rs".to_owned(), is_directory: false },
+        FileFindRow { path: "markdown".to_owned(), is_directory: true },
+        FileFindRow { path: "math".to_owned(), is_directory: true },
+        FileFindRow { path: "zed".to_owned(), is_directory: true },
+    ];
+    let options = directory_live_options(&entries, "/w/repo/src", &search);
+    let displays: Vec<&str> = options.iter().map(|option| option.display.as_str()).collect();
+    assert_eq!(displays, ["src/markdown/", "src/math/"]);
+    assert_eq!(options[0].absolute.as_deref(), Some("/w/repo/src/markdown"));
+    assert!(options[0].is_directory);
+    // No basename filter + a prefix: the queried directory itself
+    // completes first (directoryAutocompleteExactValue).
+    let search = DirectorySearch {
+        directory: "/w/repo/src".to_owned(),
+        prefix: "src/".to_owned(),
+        query: String::new(),
+    };
+    let options = directory_live_options(&entries, "/w/repo/src", &search);
+    assert_eq!(options[0].display, "src/");
+    assert_eq!(options[0].absolute.as_deref(), Some("/w/repo/src"));
+}

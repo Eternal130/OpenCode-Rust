@@ -59,9 +59,8 @@ impl CredentialStore {
                 "SELECT id, integration_id, label, value, active FROM credential \
                  ORDER BY active ASC, time_created ASC, id ASC",
             )?;
-            let rows = statement
-                .query_map([], raw_credential_row)?
-                .collect::<Result<Vec<_>, _>>()?;
+            let rows =
+                statement.query_map([], raw_credential_row)?.collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
         })
         .await
@@ -238,7 +237,9 @@ impl CredentialStore {
             .transaction(move |tx| {
                 let previous: Option<String> = tx
                     .conn()
-                    .query_row("SELECT label FROM credential WHERE id = ?1", [&id], |row| row.get(0))
+                    .query_row("SELECT label FROM credential WHERE id = ?1", [&id], |row| {
+                        row.get(0)
+                    })
                     .ok();
                 let Some(previous) = previous else { return Ok(None) };
                 if label.is_none() && value.is_none() {
@@ -339,12 +340,12 @@ impl CredentialStore {
 /// the read errors with [`StoreError::Decode`] (plus a stderr line —
 /// oc-core's logging seam, cf. the MCP stdio fallback in mcp/client.rs).
 fn decode_value(value_text: Option<&str>, id: &str) -> Result<CredentialValue, StoreError> {
-    value_text
-        .and_then(|text| serde_json::from_str::<CredentialValue>(text).ok())
-        .ok_or_else(|| {
+    value_text.and_then(|text| serde_json::from_str::<CredentialValue>(text).ok()).ok_or_else(
+        || {
             eprintln!("[credential] row {id}: value does not decode; failing the read");
             StoreError::Decode(format!("credential {id}"))
-        })
+        },
+    )
 }
 
 /// One raw `credential` table row (id, integration_id, label, value,
@@ -353,21 +354,13 @@ fn decode_value(value_text: Option<&str>, id: &str) -> Result<CredentialValue, S
 type RawCredentialRow = (String, Option<String>, String, Option<String>, Option<bool>);
 
 fn raw_credential_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawCredentialRow> {
-    Ok((
-        row.get(0)?,
-        row.get(1)?,
-        row.get(2)?,
-        row.get(3)?,
-        row.get(4)?,
-    ))
+    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
 }
 
 /// `storedRows` (credential.ts:66-78): a row WITHOUT integration_id is
 /// skipped; a value that does not decode FAILS the read (never a fake
 /// empty-key credential — G-225).
-fn stored_credentials(
-    rows: Vec<RawCredentialRow>,
-) -> Result<Vec<StoredCredential>, StoreError> {
+fn stored_credentials(rows: Vec<RawCredentialRow>) -> Result<Vec<StoredCredential>, StoreError> {
     rows.into_iter()
         .filter(|(_, integration_id, _, _, _)| integration_id.is_some())
         .map(|(id, integration_id, label, value_text, active)| {

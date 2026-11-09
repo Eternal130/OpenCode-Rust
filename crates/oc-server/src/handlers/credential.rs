@@ -5,9 +5,9 @@
 #![allow(clippy::must_use_candidate, clippy::similar_names)]
 use axum::extract::{Path, State};
 use axum::response::Response;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
-use super::common::{ApiError, SharedState, json_data, no_content};
+use super::common::{json_data, no_content, ApiError, SharedState};
 
 /// Publishes one of v2's global credential frames
 /// (`credential.updated` / `credential.switched`, credential.ts:160-316 —

@@ -85,11 +85,7 @@ pub enum Fold {
     /// G-272 — `session.step.ended`'s usage patch (transport.ts:1371-
     /// 1380): the summed tokens with the step's model (the percent's
     /// context limit) and the turn's cost.
-    Usage {
-        model: Option<(String, String)>,
-        tokens: u64,
-        cost: Option<f64>,
-    },
+    Usage { model: Option<(String, String)>, tokens: u64, cost: Option<f64> },
     /// G-272 — the ROOT session's `session.renamed`
     /// (`input.onSessionTitle`, transport.ts:1036-1039).
     SessionTitle(String),
@@ -248,10 +244,10 @@ impl TransportState {
             "session.skill.activated" => self.skill_activated(event, data),
             // G-221 — server-driven compaction (transport.ts:1086-
             // 1124).
-            "session.compaction.started" | "session.compaction.delta"
-            | "session.compaction.ended" | "session.compaction.failed" => {
-                self.compaction_event(event, event_type, data)
-            }
+            "session.compaction.started"
+            | "session.compaction.delta"
+            | "session.compaction.ended"
+            | "session.compaction.failed" => self.compaction_event(event, event_type, data),
             // G-221 — the direct-shell rows (transport.ts:1125-1164).
             "session.shell.started" | "session.shell.ended" => self.shell_event(event_type, data),
             "session.execution.started" | "session.execution.resumed" => {
@@ -369,19 +365,21 @@ impl TransportState {
     fn text_ended(&mut self, data: &Value) -> Fold {
         let key = part_key(data);
         let event_text = text_field(data, "text");
-        let fragment = FragmentRef {
-            message_id: message_id(data).unwrap_or_default(),
-            part_id: key.clone(),
-        };
+        let fragment =
+            FragmentRef { message_id: message_id(data).unwrap_or_default(), part_id: key.clone() };
         // An event without the final text keeps the COMMITTED text —
         // the reconciler's value (a projection's full text included),
         // never the streamed-chunks tail alone (a covered chunk a
         // projection consumed would otherwise drop from the final
         // commit).
-        let committed =
-            self.fragments.value(&fragment).map(str::to_owned).unwrap_or_default();
+        let committed = self.fragments.value(&fragment).map(str::to_owned).unwrap_or_default();
         let text = if event_text.is_empty() {
-            committed.clone().is_empty().then(|| self.texts.remove(&key)).flatten().unwrap_or(committed)
+            committed
+                .clone()
+                .is_empty()
+                .then(|| self.texts.remove(&key))
+                .flatten()
+                .unwrap_or(committed)
         } else {
             event_text
         };
@@ -424,11 +422,7 @@ impl TransportState {
         // (`update.previous ? delta : `Thinking: ${delta}``,
         // transport.ts:1224) — the same append-only rule as
         // `text_delta`.
-        let text = if update.previous.is_empty() {
-            format!("Thinking: {delta}")
-        } else {
-            delta
-        };
+        let text = if update.previous.is_empty() { format!("Thinking: {delta}") } else { delta };
         Fold::Commit(Commit {
             kind: CommitKind::Reasoning,
             phase: Phase::Progress,
@@ -442,15 +436,17 @@ impl TransportState {
     fn reasoning_ended(&mut self, data: &Value) -> Fold {
         let key = part_key(data);
         let event_text = text_field(data, "text");
-        let fragment = FragmentRef {
-            message_id: message_id(data).unwrap_or_default(),
-            part_id: key.clone(),
-        };
+        let fragment =
+            FragmentRef { message_id: message_id(data).unwrap_or_default(), part_id: key.clone() };
         // Same covered-prefix preservation as `text_ended`.
-        let committed =
-            self.fragments.value(&fragment).map(str::to_owned).unwrap_or_default();
+        let committed = self.fragments.value(&fragment).map(str::to_owned).unwrap_or_default();
         let text = if event_text.is_empty() {
-            committed.clone().is_empty().then(|| self.reasons.remove(&key)).flatten().unwrap_or(committed)
+            committed
+                .clone()
+                .is_empty()
+                .then(|| self.reasons.remove(&key))
+                .flatten()
+                .unwrap_or(committed)
         } else {
             event_text
         };
@@ -558,9 +554,7 @@ impl TransportState {
                 tool.as_str(),
                 data.get("input").unwrap_or(&Value::Null),
                 data.get("metadata").unwrap_or(&Value::Null),
-                data.get("metadata")
-                    .or_else(|| data.get("output"))
-                    .unwrap_or(&Value::Null),
+                data.get("metadata").or_else(|| data.get("output")).unwrap_or(&Value::Null),
             )
         };
         // G-272 — the meta dict for `structuredFallback` (tool.ts:
@@ -698,7 +692,8 @@ impl TransportState {
     fn inbox_delivery_changed(&mut self, data: &Value) -> Fold {
         let inbox_id = text_field(data, "inboxID");
         let delivery = text_field(data, "delivery");
-        if let Some(pending) = self.pending.iter_mut().find(|pending| pending.message_id == inbox_id)
+        if let Some(pending) =
+            self.pending.iter_mut().find(|pending| pending.message_id == inbox_id)
         {
             pending.delivery = delivery;
         }
@@ -797,11 +792,7 @@ impl TransportState {
                     return Fold::Ignored;
                 };
                 let delta = text_field(data, "text");
-                if self
-                    .fragments
-                    .delta(&compaction_fragment(&message_id), &delta)
-                    .is_none()
-                {
+                if self.fragments.delta(&compaction_fragment(&message_id), &delta).is_none() {
                     return Fold::Ignored;
                 }
                 Fold::Commit(compaction_summary(&message_id, &delta, Phase::Progress))
@@ -816,7 +807,8 @@ impl TransportState {
                 let text = text_field(data, "text");
                 let update = self.fragments.end(&compaction_fragment(&message_id), &text);
                 let mut commits = Vec::new();
-                if let Some(suffix) = text.get(update.previous.len()..).filter(|suffix| !suffix.is_empty())
+                if let Some(suffix) =
+                    text.get(update.previous.len()..).filter(|suffix| !suffix.is_empty())
                 {
                     commits.push(compaction_summary(&message_id, suffix, Phase::Progress));
                 }
@@ -905,7 +897,13 @@ impl TransportState {
         let mut commits = Vec::new();
         if event_type == "session.shell.started" {
             if self.shell_started.insert(id.clone()) {
-                commits.push(shell_commit(&id, &command, "running shell", Phase::Start, Some("running")));
+                commits.push(shell_commit(
+                    &id,
+                    &command,
+                    "running shell",
+                    Phase::Start,
+                    Some("running"),
+                ));
             }
         } else {
             // A late `ended` (the start event was missed) still opens
@@ -914,7 +912,13 @@ impl TransportState {
             if !self.shell_started.contains(&id) {
                 self.shell_started.insert(id.clone());
                 if !command.is_empty() {
-                    commits.push(shell_commit(&id, &command, "running shell", Phase::Start, Some("running")));
+                    commits.push(shell_commit(
+                        &id,
+                        &command,
+                        "running shell",
+                        Phase::Start,
+                        Some("running"),
+                    ));
                 }
             }
             if self.shell_ended.insert(id.clone()) {
@@ -948,12 +952,16 @@ impl TransportState {
         if !command.is_empty() {
             self.shell_commands.insert(shell_id.clone(), command.clone());
         }
-        let completed = message
-            .pointer("/time/completed")
-            .is_some_and(|value| !value.is_null());
+        let completed = message.pointer("/time/completed").is_some_and(|value| !value.is_null());
         let mut commits = Vec::new();
         if self.shell_started.insert(shell_id.clone()) {
-            commits.push(shell_commit(&shell_id, &command, "running shell", Phase::Start, Some("running")));
+            commits.push(shell_commit(
+                &shell_id,
+                &command,
+                "running shell",
+                Phase::Start,
+                Some("running"),
+            ));
         }
         if completed {
             // A settled replayed shell marks both displays so live
@@ -991,10 +999,7 @@ impl TransportState {
     #[must_use]
     pub fn part_value(&self, message_id: &str, part_id: &str) -> Option<String> {
         self.fragments
-            .value(&FragmentRef {
-                message_id: message_id.to_owned(),
-                part_id: part_id.to_owned(),
-            })
+            .value(&FragmentRef { message_id: message_id.to_owned(), part_id: part_id.to_owned() })
             .map(str::to_owned)
     }
 
@@ -1078,9 +1083,7 @@ fn tool_name_field(data: &Value) -> String {
 /// `messageIDFromEvent` (transport.ts:375-381): the SSE event id and
 /// its message id share the `evt_` ⇄ `msg_` prefix swap.
 fn message_id_from_event(event_id: &str) -> String {
-    event_id
-        .strip_prefix("evt_")
-        .map_or_else(|| event_id.to_owned(), |rest| format!("msg_{rest}"))
+    event_id.strip_prefix("evt_").map_or_else(|| event_id.to_owned(), |rest| format!("msg_{rest}"))
 }
 
 /// The mono tool caption (`tool.ts` caption subset): the human tool
@@ -1339,10 +1342,7 @@ fn prepare_initial_file(
         std::fs::read_to_string(url).ok()
     };
     match content {
-        Some(content) => (
-            Some(format!("<file name=\"{filename}\">\n{content}\n</file>")),
-            None,
-        ),
+        Some(content) => (Some(format!("<file name=\"{filename}\">\n{content}\n</file>")), None),
         None => (
             None,
             Some(PromptInputFileAttachment {
@@ -1402,10 +1402,7 @@ pub fn prepare_prompt_body(prompt: &super::queue::RunPrompt) -> SessionPromptBod
     }
     let mut text = prompt.text.clone();
     if !inline.is_empty() {
-        text = std::iter::once(prompt.text.clone())
-            .chain(inline)
-            .collect::<Vec<_>>()
-            .join("\n\n");
+        text = std::iter::once(prompt.text.clone()).chain(inline).collect::<Vec<_>>().join("\n\n");
     }
     SessionPromptBody {
         id: None,
@@ -1480,10 +1477,7 @@ pub async fn send_shell(
     message_id: &str,
     command: &str,
 ) -> Result<(), String> {
-    let body = SessionShellBody {
-        command: command.to_owned(),
-        id: Some(message_id.to_owned()),
-    };
+    let body = SessionShellBody { command: command.to_owned(), id: Some(message_id.to_owned()) };
     client.session().shell(session_id, &body).await.map_err(|error| error.to_string())
 }
 
@@ -1558,12 +1552,7 @@ pub async fn switch_model(
 /// G-272 — `onBackground` (runtime.ts:386-392): detach blocking
 /// subagent tools into the background (`session.background`).
 pub async fn session_background(client: &Client, session_id: &str) -> Result<(), String> {
-    client
-        .session()
-        .background(session_id)
-        .await
-        .map(|_| ())
-        .map_err(|error| error.to_string())
+    client.session().background(session_id).await.map(|_| ()).map_err(|error| error.to_string())
 }
 
 /// Reply to a permission ask (`onPermissionReply`,
@@ -1899,8 +1888,7 @@ mod tests {
         };
         let body = prepare_prompt_body(&prompt);
         assert_eq!(
-            body.text,
-            "summarize these\n\n<file name=\"notes.txt\">\nhello\n</file>",
+            body.text, "summarize these\n\n<file name=\"notes.txt\">\nhello\n</file>",
             "inline text blocks join with blank-line separators"
         );
         assert_eq!(body.files.as_ref().map(Vec::len), Some(1), "only the non-text file attaches");
@@ -2076,10 +2064,8 @@ mod tests {
         ));
         assert_eq!(folded, Fold::SessionTitle("A fresh title".to_owned()));
         // A FOREIGN session's rename never folds.
-        let foreign = state.fold(&event(
-            "session.renamed",
-            &json!({ "sessionID": "other", "title": "Not mine" }),
-        ));
+        let foreign = state
+            .fold(&event("session.renamed", &json!({ "sessionID": "other", "title": "Not mine" })));
         assert_eq!(foreign, Fold::Ignored);
     }
 
@@ -2135,7 +2121,11 @@ mod tests {
             &json!({ "sessionID": "s1", "assistantMessageID": "msg_f",
                      "error": { "type": "Error", "message": "boom" } }),
         ));
-        assert_eq!(again, Fold::Ignored, "the second failure for the same message never re-renders");
+        assert_eq!(
+            again,
+            Fold::Ignored,
+            "the second failure for the same message never re-renders"
+        );
         // A STRING error payload keeps its text.
         let string_error = state.fold(&event(
             "session.step.failed",
@@ -2243,7 +2233,10 @@ mod tests {
         assert_eq!(tool_commits[0].kind, CommitKind::Tool, "the ref's kind: tool");
         assert_eq!(tool_commits[0].text, "out.png");
         assert_eq!(tool_commits[0].part_id.as_deref(), Some("prt_1:image:0"));
-        assert!(state.commit_tool_images("prt_1", &tool_state, "msg_a").is_empty(), "replays dedupe");
+        assert!(
+            state.commit_tool_images("prt_1", &tool_state, "msg_a").is_empty(),
+            "replays dedupe"
+        );
     }
 
     /// G-68 (fix #5) — an `ended` WITHOUT the final text preserves the
@@ -2384,7 +2377,10 @@ mod tests {
         assert_eq!(state.pending_prompts()[0].message_id, "msg_q1");
         assert_eq!(state.pending_prompts()[0].text, "first question");
         assert_eq!(state.pending_prompts()[0].delivery, "queue");
-        assert_eq!(state.pending_prompts()[0].skills, vec![QueuedSkill { id: "skl_a".into(), name: "deploy".into() }]);
+        assert_eq!(
+            state.pending_prompts()[0].skills,
+            vec![QueuedSkill { id: "skl_a".into(), name: "deploy".into() }]
+        );
         // A non-user item never queues.
         assert_eq!(
             state.fold(&event(
@@ -2444,7 +2440,8 @@ mod tests {
             json!({ "id": "msg_q3", "sessionID": "s1", "type": "user", "payload": { "text": "third" }, "delivery": "queue", "time": { "created": 2 } }),
             json!({ "id": "msg_s", "sessionID": "s1", "type": "synthetic", "payload": { "text": "note" }, "delivery": "queue", "time": { "created": 3 } }),
         ]);
-        let ids: Vec<&str> = state.pending_prompts().iter().map(|p| p.message_id.as_str()).collect();
+        let ids: Vec<&str> =
+            state.pending_prompts().iter().map(|p| p.message_id.as_str()).collect();
         assert_eq!(ids, vec!["msg_q3"], "the promoted row is skipped, non-user rows dropped");
     }
 
@@ -2591,7 +2588,10 @@ mod tests {
         let mut state = TransportState { session_id: "s1".into(), ..Default::default() };
         // Without an active compaction everything folds to nothing.
         assert_eq!(
-            state.fold(&event("session.compaction.delta", &json!({ "sessionID": "s1", "text": "x" }))),
+            state.fold(&event(
+                "session.compaction.delta",
+                &json!({ "sessionID": "s1", "text": "x" })
+            )),
             Fold::Ignored
         );
         let started = state.fold(&event(

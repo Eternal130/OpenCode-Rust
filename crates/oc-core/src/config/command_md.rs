@@ -351,13 +351,8 @@ async fn run_shell_block(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|error| fail(error.to_string()))?;
-    let output = child
-        .wait_with_output()
-        .await
-        .map_err(|error| fail(error.to_string()))?;
+    let mut child = command.spawn().map_err(|error| fail(error.to_string()))?;
+    let output = child.wait_with_output().await.map_err(|error| fail(error.to_string()))?;
     if !output.status.success() {
         return Err(fail(format!(
             "Process exited with non-zero status: {}",
@@ -511,7 +506,11 @@ mod tests {
         let middle = result.trim_start_matches("Branch: ").trim_end_matches(" end");
         // The ref does NOT trim block output — `basename` writes a
         // trailing newline that stays in the replacement.
-        assert_eq!(middle.trim(), dir.file_name().unwrap().to_string_lossy(), "cwd + output: {result:?}");
+        assert_eq!(
+            middle.trim(),
+            dir.file_name().unwrap().to_string_lossy(),
+            "cwd + output: {result:?}"
+        );
     }
 
     #[tokio::test]

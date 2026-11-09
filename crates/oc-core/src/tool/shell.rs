@@ -9,9 +9,9 @@ use std::sync::Arc;
 use crate::env::SessionEnv;
 use crate::jobs::{BlockResult, Jobs, Recovery, RunError, StartInput};
 use crate::permission::{AssertInput, PermissionError};
-use crate::shell::{Shell, result as shell_result, select};
+use crate::shell::{result as shell_result, select, Shell};
 use crate::tool::{
-    BuiltinTool, ToolExecuteWithContext, ToolFailure, ToolOutcome, ToolServices, permission_cause,
+    permission_cause, BuiltinTool, ToolExecuteWithContext, ToolFailure, ToolOutcome, ToolServices,
 };
 
 /// `ShellTool.name`.

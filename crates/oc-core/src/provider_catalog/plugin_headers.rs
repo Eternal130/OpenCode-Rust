@@ -279,18 +279,16 @@ mod tests {
         }
         // A user HTTP-Referer must not flip another openai-compatible
         // gateway onto the zenmux branch (package+baseURL both gate).
-        assert!(
-            plugin_provider_headers(
-                OPENAI_COMPATIBLE,
-                Some("https://api.kilo.ai/api/gateway"),
-                Activation::Auto,
-                false,
-                &user
-            )
-            .headers
-            .get("X-Title")
-            .is_some()
-        );
+        assert!(plugin_provider_headers(
+            OPENAI_COMPATIBLE,
+            Some("https://api.kilo.ai/api/gateway"),
+            Activation::Auto,
+            false,
+            &user
+        )
+        .headers
+        .get("X-Title")
+        .is_some());
     }
 
     /// G-285③ — vercel keys on the aisdk @ai-sdk/vercel package and injects
@@ -354,17 +352,15 @@ mod tests {
 
     #[test]
     fn kilo_requires_the_openai_compatible_package() {
-        assert!(
-            plugin_provider_headers(
-                "@opencode/ai/providers/openai/chat",
-                Some("https://api.kilo.ai/api/gateway"),
-                Activation::Enabled,
-                false,
-                &existing(),
-            )
-            .headers
-            .is_empty()
-        );
+        assert!(plugin_provider_headers(
+            "@opencode/ai/providers/openai/chat",
+            Some("https://api.kilo.ai/api/gateway"),
+            Activation::Enabled,
+            false,
+            &existing(),
+        )
+        .headers
+        .is_empty());
     }
 
     #[test]

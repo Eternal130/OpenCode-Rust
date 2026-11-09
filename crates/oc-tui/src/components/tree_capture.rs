@@ -54,9 +54,9 @@ pub fn capture_app_state(
     // viewport — without these the state renders a different frame
     // than the app would.
     store.set_terminal_size((width, height));
-    store.set_prompt_viewport_width(crate::components::composer::prompt_text_width(
-        usize::from(width),
-    ));
+    store.set_prompt_viewport_width(crate::components::composer::prompt_text_width(usize::from(
+        width,
+    )));
     chrome_solid::reset_hub();
     drive(&store);
     let theme = store.theme();
@@ -82,10 +82,8 @@ pub fn capture_tree_scenario(
         for child in &root.children {
             visit(child, width, height, &mut nodes, &mut skipped);
         }
-        let skipped_kinds: serde_json::Map<String, serde_json::Value> = skipped
-            .into_iter()
-            .map(|(kind, n)| (kind, serde_json::json!(n)))
-            .collect();
+        let skipped_kinds: serde_json::Map<String, serde_json::Value> =
+            skipped.into_iter().map(|(kind, n)| (kind, serde_json::json!(n))).collect();
         serde_json::json!({
             "$schema": "opentui-diff tree scenario v1",
             "name": name,
@@ -263,13 +261,12 @@ fn node_of(r: &Renderable, width: u16, height: u16) -> Option<serde_json::Value>
             // height through (the passthrough overrides the wrapper's
             // 100%×100% mount, preserving the internal layout).
             options.insert("height".into(), f64::from(h).into());
-            Some(node_json(&id, "diff", rect, style, None, Some(options)))
-                .map(|mut node| {
-                    node.as_object_mut()
-                        .expect("node is an object")
-                        .insert("diff".into(), o.diff.clone().into());
-                    node
-                })
+            Some(node_json(&id, "diff", rect, style, None, Some(options))).map(|mut node| {
+                node.as_object_mut()
+                    .expect("node is an object")
+                    .insert("diff".into(), o.diff.clone().into());
+                node
+            })
         }
         Content::Text(state) => {
             let content = text_content(state)?;
@@ -337,7 +334,11 @@ fn sanitize_id(id: &str) -> String {
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
         .collect();
-    if cleaned.is_empty() { "n".to_owned() } else { cleaned }
+    if cleaned.is_empty() {
+        "n".to_owned()
+    } else {
+        cleaned
+    }
 }
 
 /// The styled document → chunk-array content (contract: `content` is
@@ -346,7 +347,9 @@ fn sanitize_id(id: &str) -> String {
 /// spans carry the node defaults (chunk without fg/bg/attrs). `\n`
 /// between lines is a zero-width chunk (the doc builder drops its
 /// span — harmless, the line split is what matters).
-fn text_content(state: &opentui_core::renderables::text::TextRenderableState) -> Option<serde_json::Value> {
+fn text_content(
+    state: &opentui_core::renderables::text::TextRenderableState,
+) -> Option<serde_json::Value> {
     use opentui_core::renderables::text::TextRenderableState;
     let state: &TextRenderableState = state;
     if state.doc.lines.is_empty() {
@@ -432,4 +435,3 @@ fn slice_by_columns(
 fn hex(color: Rgba) -> String {
     format!("#{:02x}{:02x}{:02x}", color.red(), color.green(), color.blue())
 }
-
