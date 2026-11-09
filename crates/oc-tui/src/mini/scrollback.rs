@@ -50,6 +50,16 @@ pub struct Commit {
     /// output on progress — `toolEntryBody`'s first branch,
     /// tool.ts:1282-1294). `None` on every other commit.
     pub shell: Option<String>,
+    /// G-272 — the part's START commit (`toolCommit(…, "start", …)`):
+    /// the first caption row always renders (the view gate only
+    /// suppresses PROGRESS refreshes and non-final finals,
+    /// `TOOL_RULES[name].view`, tool.ts:890-1062).
+    pub started: bool,
+    /// G-272 — the completed tool's input dict (JSON), the
+    /// `structuredFallback(ctx.meta)` source (tool.ts:1249-1262):
+    /// rule-less tools with no structured final render the pretty
+    /// JSON instead.
+    pub meta: Option<String>,
 }
 
 /// `StreamCommit["kind"]` (the text subset).
@@ -191,6 +201,79 @@ pub fn entry_flags(commit: &Commit) -> (bool, bool) {
     }
 }
 
+/// G-272 — `TOOL_RULES[name].view` (tool.ts:890-1062): the per-tool
+/// render gates — `output` lets PROGRESS rows stream, `final` lets
+/// the completed (non-error) final row render. Tools NOT in the
+/// table fall to `structuredFallback`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolViewGate {
+    pub output: bool,
+    pub final_row: bool,
+}
+
+/// `toolView(name).view` — `None` for tools without a rule
+/// (`rule(name) === undefined`, tool.ts:1070-1080).
+#[must_use]
+pub fn tool_view(name: &str) -> Option<ToolViewGate> {
+    let gate = |output, final_row| Some(ToolViewGate { output, final_row });
+    match canonical_tool_name(name) {
+        "invalid" => gate(true, false),
+        "shell" => gate(true, false),
+        "write" => gate(false, true),
+        "edit" => gate(false, true),
+        "patch" => gate(false, true),
+        "batch" => gate(true, false),
+        "subagent" => gate(false, true),
+        "question" => gate(false, true),
+        "read" => gate(false, false),
+        "glob" => gate(false, false),
+        "grep" => gate(false, false),
+        "list" => gate(false, false),
+        "lsp" => gate(false, false),
+        "webfetch" => gate(false, false),
+        "websearch" => gate(false, false),
+        "skill" => gate(false, false),
+        _ => None,
+    }
+}
+
+/// G-272 — `structuredFallback` (tool.ts:1249-1262): a rule-less
+/// tool's meta dict pretty-printed, capped at 4096 chars with the
+/// truncation marker.
+#[must_use]
+pub fn structured_fallback_rows(meta: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(meta) else {
+        return Vec::new();
+    };
+    // `Object.keys(value).length === 0 → undefined` — an empty (or
+    // non-object) meta renders nothing.
+    if value.as_object().is_none_or(|object| object.is_empty()) {
+        return Vec::new();
+    }
+    let content = serde_json::to_string_pretty(&value).unwrap_or_default();
+    if content.is_empty() {
+        return Vec::new();
+    }
+    const LIMIT: usize = 4096;
+    const SUFFIX: &str = "\n… [truncated]";
+    if content.len() <= LIMIT {
+        return content.split('\n').map(str::to_owned).collect();
+    }
+    // Char-safe head: never split a UTF-8 boundary (the JSON body is
+    // ASCII-dominated; the guard keeps non-ASCII strings panic-free).
+    let head_end = content
+        .char_indices()
+        .map(|(at, _)| at)
+        .take_while(|at| *at <= LIMIT - SUFFIX.len())
+        .last()
+        .unwrap_or(0);
+    content[..head_end]
+        .split('\n')
+        .map(str::to_owned)
+        .chain([SUFFIX.to_owned()])
+        .collect()
+}
+
 /// `canonicalToolName` (`util/tool-display.ts:1-5`): the display-name
 /// aliases (the `shell_output` gate keys on the canonical name).
 #[must_use]
@@ -307,8 +390,55 @@ fn reasoning_rows(raw: &str) -> Vec<String> {
 /// through `monoToolText`. G-134 — a COMPLETED structured tool renders
 /// its card instead (the title + body rows, `structuredBody`,
 /// tool.ts:1290-1339; the caption row stays for the caption families
-/// and for failures).
+/// and for failures). G-272 — `TOOL_RULES[name].view` gates the rows
+/// (`toolEntryBody`, tool.ts:1301-1337): the START caption always
+/// renders; PROGRESS refreshes need `view.output`; the completed
+/// FINAL needs `view.final` (error finals always render); rule-less
+/// tools with no structured final fall to `structuredFallback`.
 fn tool_rows(commit: &Commit, raw: &str) -> Vec<String> {
+    // The part's FIRST caption (`started`) is the ref's "start"
+    // commit — it always renders; later rows carry the gates.
+    if !commit.started {
+        let gate = tool_view(commit.tool.as_deref().unwrap_or_default());
+        match commit.phase {
+            Phase::Start => {}
+            // PROGRESS refreshes need `view.output` (tool.ts:
+            // 1301-1303).
+            Phase::Progress => {
+                if let Some(gate) = gate {
+                    if !gate.output {
+                        return Vec::new();
+                    }
+                }
+            }
+            Phase::Final => {
+                // Errors always render (`ctx.status === "error"`
+                // arm, tool.ts:1310-1312).
+                if commit.tool_state != Some("error") {
+                    if let Some(gate) = gate {
+                        if !gate.final_row {
+                            return Vec::new();
+                        }
+                    }
+                    // G-272 — the structured fallback (tool.ts:
+                    // 1333-1335): a rule-less completed tool with NO
+                    // structured snapshot and a non-empty meta dict
+                    // renders the pretty JSON instead of the caption.
+                    if gate.is_none()
+                        && commit.tool_state == Some("completed")
+                        && commit.snapshot == ToolSnapshot::None
+                    {
+                        if let Some(meta) = commit.meta.as_deref() {
+                            let rows = structured_fallback_rows(meta);
+                            if !rows.is_empty() {
+                                return rows;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     if commit.phase == Phase::Final
         && commit.tool_state == Some("completed")
         && commit.snapshot != ToolSnapshot::None

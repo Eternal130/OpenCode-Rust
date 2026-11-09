@@ -1388,6 +1388,10 @@ pub struct FooterMenuItem {
     pub current: bool,
     /// A one-cell icon glyph rendered in a 2-wide column.
     pub icon: Option<char>,
+    /// G-272 — the row's selection payload (the agent id / the
+    /// `provider/model` pair / the inbox id): the runner effects key
+    /// on it instead of parsing the display text.
+    pub value: Option<String>,
 }
 
 // ===========================================================================
@@ -1750,6 +1754,8 @@ pub fn model_entries(
                     footer,
                     footer_tone: is_current.then_some(FooterTone::Selection),
                     current: is_current,
+                    // G-272 — the selection payload (`provider/model`).
+                    value: Some(format!("{}/{}", provider.id, model.id)),
                     ..FooterMenuItem::default()
                 }
             })

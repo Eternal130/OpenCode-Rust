@@ -49,6 +49,19 @@ pub fn base64url_decode_string(value: &str) -> Result<String, EncodeError> {
     String::from_utf8(bytes).map_err(|err| EncodeError::Utf8(err.utf8_error()))
 }
 
+/// G-272 — decodes STANDARD-alphabet base64 (the `data:` URL payload
+/// alphabet, `Buffer.from(…, "base64")` parity) into a string.
+///
+/// # Errors
+///
+/// Returns [`EncodeError::Base64`] for malformed input and
+/// [`EncodeError::Utf8`] when the bytes are not valid UTF-8.
+pub fn base64_decode_string(value: &str) -> Result<String, EncodeError> {
+    use base64::engine::general_purpose::STANDARD;
+    let bytes = STANDARD.decode(value)?;
+    String::from_utf8(bytes).map_err(|err| EncodeError::Utf8(err.utf8_error()))
+}
+
 const BASE36: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
 
 fn to_base36(mut value: u32) -> String {

@@ -8,7 +8,11 @@
 //! same generated client + the same wire shapes).
 
 #![allow(clippy::match_same_arms)] // the event arms mirror the transport switch
-use oc_client::types::{PermissionReply, SessionPermissionReplyBody, SessionPromptBody};
+use oc_client::types::{
+    PermissionReply, PromptAgentAttachment, PromptInputFileAttachment, PromptInputSkillAttachment,
+    SessionInboxUpdateBody, SessionPermissionReplyBody, SessionPromptBody, SessionShellBody,
+    SessionSwitchAgentBody, SessionSwitchModelBody,
+};
 use oc_client::Client;
 use serde_json::Value;
 
@@ -490,6 +494,9 @@ impl TransportState {
             tool: Some(tool_name_field(data)),
             message_id: message_id(data),
             part_id: Some(key),
+            // G-272 — the part's first caption is the ref's "start"
+            // commit (`toolCommit(…, "start", …)`, transport.ts:746).
+            started: true,
             ..Commit::default()
         })
     }
@@ -556,6 +563,16 @@ impl TransportState {
                     .unwrap_or(&Value::Null),
             )
         };
+        // G-272 — the meta dict for `structuredFallback` (tool.ts:
+        // 1333-1335): rule-less completed tools render the pretty
+        // JSON input when no structured snapshot exists.
+        let meta = (!failed)
+            .then(|| {
+                data.get("input")
+                    .filter(|input| input.as_object().is_some_and(|object| !object.is_empty()))
+                    .and_then(|input| serde_json::to_string(input).ok())
+            })
+            .flatten();
         Fold::Commit(Commit {
             kind: CommitKind::Tool,
             phase: Phase::Final,
@@ -565,6 +582,7 @@ impl TransportState {
             message_id: message_id(data),
             part_id: Some(key),
             snapshot,
+            meta,
             ..Commit::default()
         })
     }
@@ -1292,8 +1310,132 @@ fn exit_label(exit: &Value) -> String {
     }
 }
 
+/// G-272 — `prepareInitialFile` (stream-v2.transport.ts:243-252): a
+/// text/plain initial file becomes an INLINE text block wrapped as
+/// `<file name="…">…</file>` (data: URLs decode base64 first; local
+/// paths read from disk through the host seam); every other mime
+/// stays a wire file attachment. Returns `(inline_text, wire_file)`.
+fn prepare_initial_file(
+    url: &str,
+    filename: &str,
+    mime: Option<&str>,
+) -> (Option<String>, Option<PromptInputFileAttachment>) {
+    if mime != Some("text/plain") {
+        return (
+            None,
+            Some(PromptInputFileAttachment {
+                uri: url.to_owned(),
+                name: Some(filename.to_owned()),
+                ..PromptInputFileAttachment::default()
+            }),
+        );
+    }
+    let content = if let Some(encoded) = url.strip_prefix("data:") {
+        // `data:{mime};base64,{data}` — the payload after the first
+        // comma (transport.ts:249-250).
+        let payload = encoded.rsplit_once(',').map_or(encoded, |(_, tail)| tail);
+        oc_util::encode::base64_decode_string(payload).ok()
+    } else {
+        std::fs::read_to_string(url).ok()
+    };
+    match content {
+        Some(content) => (
+            Some(format!("<file name=\"{filename}\">\n{content}\n</file>")),
+            None,
+        ),
+        None => (
+            None,
+            Some(PromptInputFileAttachment {
+                uri: url.to_owned(),
+                name: Some(filename.to_owned()),
+                ..PromptInputFileAttachment::default()
+            }),
+        ),
+    }
+}
+
+/// G-272 — `promptFiles` (transport.ts:263-282): the prompt's FILE
+/// parts (the `@`-mentioned attachments) map to wire file
+/// attachments; agent/skill parts map to the `agents`/`skills`
+/// arrays (transport.ts:284-296).
+fn prompt_attachments(parts: &[super::queue::RunPromptPart]) -> PromptAttachments {
+    let mut out = PromptAttachments::default();
+    for part in parts {
+        match part {
+            super::queue::RunPromptPart::File { url, filename, mime: _, description } => {
+                out.files.push(PromptInputFileAttachment {
+                    uri: url.clone(),
+                    name: filename.clone(),
+                    description: description.clone(),
+                    ..PromptInputFileAttachment::default()
+                });
+            }
+            super::queue::RunPromptPart::Agent { name } => out.agents.push(PromptAgentAttachment {
+                name: name.clone(),
+                ..PromptAgentAttachment::default()
+            }),
+            super::queue::RunPromptPart::Skill { id } => {
+                out.skills.push(PromptInputSkillAttachment { id: id.clone(), ..Default::default() })
+            }
+        }
+    }
+    out
+}
+
+/// G-272 — `prepareAttachments` (transport.ts:284-318): the initial
+/// `input.files` (text/plain inlined + wrapped, others attached)
+/// MERGED with the prompt's file parts; the inline text blocks join
+/// the prompt text with `\n\n` separators (`[next.prompt.text,
+/// ...attachments.text].join("\n\n")`, transport.ts:1743).
+#[must_use]
+pub fn prepare_prompt_body(prompt: &super::queue::RunPrompt) -> SessionPromptBody {
+    let mut attachments = prompt_attachments(&prompt.parts);
+    let mut inline = Vec::new();
+    for part in &prompt.parts {
+        if let super::queue::RunPromptPart::File { url, filename, mime, .. } = part {
+            let filename = filename.clone().unwrap_or_else(|| url.clone());
+            let (text, file) = prepare_initial_file(url, &filename, mime.as_deref());
+            if let Some(text) = text {
+                inline.push(text);
+            }
+            if let Some(file) = file {
+                attachments.files.push(file);
+            }
+        }
+    }
+    let mut text = prompt.text.clone();
+    if !inline.is_empty() {
+        text = std::iter::once(prompt.text.clone())
+            .chain(inline)
+            .collect::<Vec<_>>()
+            .join("\n\n");
+    }
+    SessionPromptBody {
+        id: None,
+        text,
+        delivery: prompt.delivery.map(|delivery| match delivery {
+            "steer" => oc_client::types::SessionInboxDelivery::Steer,
+            _ => oc_client::types::SessionInboxDelivery::Queue,
+        }),
+        files: (!attachments.files.is_empty()).then_some(attachments.files),
+        agents: (!attachments.agents.is_empty()).then_some(attachments.agents),
+        skills: (!attachments.skills.is_empty()).then_some(attachments.skills),
+        ..SessionPromptBody::default()
+    }
+}
+
+/// The prepared attachment arrays (`prepareAttachments`'s two lists).
+#[derive(Default)]
+struct PromptAttachments {
+    files: Vec<PromptInputFileAttachment>,
+    agents: Vec<PromptAgentAttachment>,
+    skills: Vec<PromptInputSkillAttachment>,
+}
+
 /// Send one prompt turn (`runPromptTurn` → `session.prompt` with
 /// `delivery` per the queue's admission, `stream-v2.transport.ts`).
+/// G-272 — the prompt's structured parts ride the same POST
+/// (`prepareAttachments` → `files`/`agents`/`skills`).
 pub async fn send_prompt(
     client: &Client,
     session_id: &str,
@@ -1301,16 +1443,130 @@ pub async fn send_prompt(
     text: &str,
     delivery: Option<&str>,
 ) -> Result<(), String> {
-    let body = SessionPromptBody {
-        id: Some(message_id.to_owned()),
-        text: text.to_owned(),
-        delivery: delivery.map(|delivery| match delivery {
-            "steer" => oc_client::types::SessionInboxDelivery::Steer,
-            _ => oc_client::types::SessionInboxDelivery::Queue,
-        }),
-        ..SessionPromptBody::default()
-    };
+    send_prompt_parts(
+        client,
+        session_id,
+        message_id,
+        &super::queue::RunPrompt {
+            text: text.to_owned(),
+            delivery: delivery.map(|delivery| match delivery {
+                "steer" => "steer",
+                _ => "queue",
+            }),
+            ..super::queue::RunPrompt::default()
+        },
+    )
+    .await
+}
+
+/// G-272 — the full prompt POST over the structured prompt
+/// (`admitPrompt`, stream-v2.transport.ts:1735-1752): the message id
+/// rides the body, the attachments join per
+/// [`prepare_prompt_body`].
+pub async fn send_prompt_parts(
+    client: &Client,
+    session_id: &str,
+    message_id: &str,
+    prompt: &super::queue::RunPrompt,
+) -> Result<(), String> {
+    let body = SessionPromptBody { id: Some(message_id.to_owned()), ..prepare_prompt_body(prompt) };
     client.session().prompt(session_id, &body).await.map(|_| ()).map_err(|error| error.to_string())
+}
+
+/// G-272 — `runShellTurn`'s send half (stream-v2.transport.ts:
+/// 1561-1592): the `!` passthrough POSTs `session.shell` with a
+/// client-minted message id; the SSE shell events render the rows
+/// (`session.shell.started`/`ended` folds).
+pub async fn send_shell(
+    client: &Client,
+    session_id: &str,
+    message_id: &str,
+    command: &str,
+) -> Result<(), String> {
+    let body = SessionShellBody {
+        command: command.to_owned(),
+        id: Some(message_id.to_owned()),
+    };
+    client.session().shell(session_id, &body).await.map_err(|error| error.to_string())
+}
+
+/// G-272 — the queued-prompt action (`onQueuedPromptAction`,
+/// runtime.ts:394-402): `cancel` DELETEs the inbox row; `steer`/
+/// `queue` PATCH its delivery.
+pub async fn inbox_prompt_action(
+    client: &Client,
+    session_id: &str,
+    inbox_id: &str,
+    action: &str,
+) -> Result<(), String> {
+    if action == "cancel" {
+        client
+            .session()
+            .inbox()
+            .cancel(session_id, inbox_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+    let delivery = if action == "steer" {
+        oc_client::types::SessionInboxDelivery::Steer
+    } else {
+        oc_client::types::SessionInboxDelivery::Queue
+    };
+    client
+        .session()
+        .inbox()
+        .update(session_id, inbox_id, &SessionInboxUpdateBody { delivery })
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// G-272 — the per-turn agent switch (`client.session.switchAgent`,
+/// stream-v2.transport.ts:1799/1816:1834).
+pub async fn switch_agent(client: &Client, session_id: &str, agent: &str) -> Result<(), String> {
+    client
+        .session()
+        .switch_agent(session_id, &SessionSwitchAgentBody { agent: agent.to_owned() })
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// G-272 — the per-turn model switch (`client.session.switchModel`,
+/// stream-v2.transport.ts:1804/1839: `selected` resolves through the
+/// model preference seam).
+pub async fn switch_model(
+    client: &Client,
+    session_id: &str,
+    provider_id: &str,
+    model_id: &str,
+) -> Result<(), String> {
+    client
+        .session()
+        .switch_model(
+            session_id,
+            &SessionSwitchModelBody {
+                model: oc_client::types::ModelRef {
+                    id: model_id.to_owned(),
+                    provider_id: provider_id.to_owned(),
+                    variant: None,
+                },
+            },
+        )
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// G-272 — `onBackground` (runtime.ts:386-392): detach blocking
+/// subagent tools into the background (`session.background`).
+pub async fn session_background(client: &Client, session_id: &str) -> Result<(), String> {
+    client
+        .session()
+        .background(session_id)
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 /// Reply to a permission ask (`onPermissionReply`,
@@ -1616,6 +1872,77 @@ mod tests {
 
     fn event(kind: &str, data: &Value) -> Value {
         json!({ "type": kind, "data": data })
+    }
+
+    /// G-272 — `prepareAttachments` (stream-v2.transport.ts:284-318):
+    /// a text/plain initial file inlines as the `<file name>` block
+    /// (data: URLs decode base64), other mimes stay wire files, and
+    /// the prompt's own parts ride `files`/`agents`/`skills`.
+    #[test]
+    fn prompt_parts_prepare_the_wire_body() {
+        let prompt = super::super::queue::RunPrompt {
+            text: "summarize these".to_owned(),
+            parts: vec![
+                super::super::queue::RunPromptPart::File {
+                    url: "data:text/plain;base64,aGVsbG8=".to_owned(),
+                    filename: Some("notes.txt".to_owned()),
+                    mime: Some("text/plain".to_owned()),
+                    description: None,
+                },
+                super::super::queue::RunPromptPart::File {
+                    url: "chart.png".to_owned(),
+                    filename: Some("chart.png".to_owned()),
+                    mime: Some("image/png".to_owned()),
+                    description: None,
+                },
+                super::super::queue::RunPromptPart::Agent { name: "build".to_owned() },
+                super::super::queue::RunPromptPart::Skill { id: "refactor".to_owned() },
+            ],
+            ..Default::default()
+        };
+        let body = prepare_prompt_body(&prompt);
+        assert_eq!(
+            body.text,
+            "summarize these\n\n<file name=\"notes.txt\">\nhello\n</file>",
+            "inline text blocks join with blank-line separators"
+        );
+        assert_eq!(body.files.as_ref().map(Vec::len), Some(1), "only the non-text file attaches");
+        assert_eq!(body.files.as_ref().unwrap()[0].uri, "chart.png");
+        assert_eq!(body.agents.as_ref().map(Vec::len), Some(1));
+        assert_eq!(body.skills.as_ref().map(Vec::len), Some(1));
+        assert!(body.delivery.is_none(), "no admission delivery on a direct run");
+    }
+
+    /// G-272 — a text/plain file that CANNOT be read (missing local
+    /// path) falls back to the wire attachment instead of dropping.
+    #[test]
+    fn unreadable_text_files_fall_back_to_attachments() {
+        let prompt = super::super::queue::RunPrompt {
+            text: "hi".to_owned(),
+            parts: vec![super::super::queue::RunPromptPart::File {
+                url: "/nonexistent/definitely-missing.txt".to_owned(),
+                filename: Some("gone.txt".to_owned()),
+                mime: Some("text/plain".to_owned()),
+                description: None,
+            }],
+            ..Default::default()
+        };
+        let body = prepare_prompt_body(&prompt);
+        assert_eq!(body.text, "hi");
+        assert_eq!(body.files.as_ref().map(Vec::len), Some(1));
+    }
+
+    /// G-272 — the admission delivery survives the parts merge
+    /// (`send.command`'s delivery arm, transport.ts:1743-1752).
+    #[test]
+    fn admitted_delivery_maps_to_the_wire_enum() {
+        let prompt = super::super::queue::RunPrompt {
+            text: "queued work".to_owned(),
+            delivery: Some("steer"),
+            ..Default::default()
+        };
+        let body = prepare_prompt_body(&prompt);
+        assert_eq!(body.delivery, Some(oc_client::types::SessionInboxDelivery::Steer));
     }
 
     #[test]
