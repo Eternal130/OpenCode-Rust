@@ -428,7 +428,7 @@ fn patch_hunk_rows(
 /// G-182 — the `patch` tool's detail: ONE `BlockTool` CARD PER FILE
 /// (`ApplyPatch`, index.tsx:3333-3378 — `<For each={files()}>`): the
 /// per-file status header (`# Created` / `# Deleted` / `← Patched`)
-/// + path; deletions render the `-N lines` count instead of a diff;
+/// \+ path; deletions render the `-N lines` count instead of a diff;
 /// everything else renders the file's hunks.
 fn apply_patch_block(state: &ToolState, theme: &ThemeStyles, width: usize) -> RowRender {
     let files = parse_apply_patch_files(state.metadata_json.as_ref());

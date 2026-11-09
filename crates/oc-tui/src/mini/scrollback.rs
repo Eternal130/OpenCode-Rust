@@ -247,6 +247,8 @@ pub fn structured_fallback_rows(meta: &str) -> Vec<String> {
     };
     // `Object.keys(value).length === 0 → undefined` — an empty (or
     // non-object) meta renders nothing.
+    const LIMIT: usize = 4096;
+    const SUFFIX: &str = "\n… [truncated]";
     if value.as_object().is_none_or(serde_json::Map::is_empty) {
         return Vec::new();
     }
@@ -254,8 +256,6 @@ pub fn structured_fallback_rows(meta: &str) -> Vec<String> {
     if content.is_empty() {
         return Vec::new();
     }
-    const LIMIT: usize = 4096;
-    const SUFFIX: &str = "\n… [truncated]";
     if content.len() <= LIMIT {
         return content.split('\n').map(str::to_owned).collect();
     }
@@ -581,16 +581,16 @@ mod tests {
             ..Commit::default()
         };
         // The first caption (the ref's "start" commit) renders.
-        assert!(!entry_body(&start("read")).is_empty());
+        assert_ne!(entry_body(&start("read")).len(), 0);
         // Progress refreshes: shell streams (output: true), write
         // does not (output: false).
-        assert!(!entry_body(&progress("bash")).is_empty());
-        assert!(entry_body(&progress("write")).is_empty());
+        assert_ne!(entry_body(&progress("bash")).len(), 0);
+        assert_eq!(entry_body(&progress("write")).len(), 0);
         // Finals: write renders (final: true), read does not
         // (final: false), errors always render.
-        assert!(!entry_body(&final_row("write", Some("completed"))).is_empty());
-        assert!(entry_body(&final_row("read", Some("completed"))).is_empty());
-        assert!(!entry_body(&final_row("read", Some("error"))).is_empty());
+        assert_ne!(entry_body(&final_row("write", Some("completed"))).len(), 0);
+        assert_eq!(entry_body(&final_row("read", Some("completed"))).len(), 0);
+        assert_ne!(entry_body(&final_row("read", Some("error"))).len(), 0);
     }
 
     /// G-272 — `structuredFallback` (tool.ts:1249-1262): a rule-less
@@ -798,7 +798,7 @@ fn direct_shell_rows_render_the_command_and_output() {
         text: "raw output".to_owned(),
         ..Commit::default()
     };
-    assert!(entry_body_with(&bash, false).is_empty());
+    assert_eq!(entry_body_with(&bash, false).len(), 0);
     assert_eq!(entry_body_with(&bash, true), vec!["raw output"]);
 }
 

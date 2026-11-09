@@ -71,7 +71,7 @@ fn goldens() -> std::path::PathBuf {
 /// step's live frame (route + blockers + dialog overlay) through the
 /// emitter with the pump's own caret policy. The emission digest is
 /// PINNED at the value the differential gate proved byte-identical to
-/// the retired GridEmitter; the corpus frames carry no cluster
+/// the retired `GridEmitter`; the corpus frames carry no cluster
 /// sidecars (a precondition — cluster frames print through the
 /// deferred pass with different framing bytes, by design).
 #[test]
@@ -81,7 +81,7 @@ fn replay_corpus_emission_is_pinned() {
         .expect("replay corpus")
         .filter_map(|entry| {
             let path = entry.ok()?.path();
-            (path.extension().is_some_and(|e| e == "json")).then(|| path)
+            (path.extension().is_some_and(|e| e == "json")).then_some(path)
         })
         .collect::<Vec<_>>();
     assert!(!scripts.is_empty(), "the replay corpus must be present");
@@ -142,12 +142,12 @@ fn grid(width: usize, height: usize, rows: &[&str]) -> Frame {
         .map(|row| {
             row.chars()
                 .take(width)
-                .chain(std::iter::repeat(' ').take(width.saturating_sub(row.chars().count())))
+                .chain(std::iter::repeat_n(' ', width.saturating_sub(row.chars().count())))
                 .map(|ch| Cell { ch, attrs: 0, fg: CellColor::Default, bg: CellColor::Default })
                 .collect::<Vec<_>>()
         })
         .chain(
-            std::iter::repeat(vec![Cell::default(); width]).take(height.saturating_sub(rows.len())),
+            std::iter::repeat_n(vec![Cell::default(); width], height.saturating_sub(rows.len())),
         )
         .collect();
     Frame { cells, width, height, clusters: None }
@@ -160,7 +160,7 @@ fn blank_grid(width: usize, height: usize) -> Frame {
 /// The pinned vocabulary sequence: first-frame force, no-op, revert,
 /// hidden idle, then the color/attribute/wide-char vocabulary with
 /// cursor show/move/hide/re-style churn, resize full-repaint, and
-/// invalidate_full — every frame's bytes digested and pinned at the
+/// `invalidate_full` — every frame's bytes digested and pinned at the
 /// differential-proven value, the cursor policies asserted per frame.
 #[test]
 fn vocabulary_emission_is_pinned() {
@@ -336,7 +336,7 @@ fn osc8_link_rect_wraps_exactly_the_linked_cells() {
             } else {
                 // any other escape: skip to the letter
                 let letter = rest[1..].chars().position(char::is_alphabetic);
-                let skip = letter.map(|i| i + 2).unwrap_or(rest.len());
+                let skip = letter.map_or(rest.len(), |i| i + 2);
                 rest = &rest[skip..];
             }
         }
@@ -387,8 +387,8 @@ fn link_ids_intern_across_frames() {
 /// the golden corpus pins).
 #[test]
 fn transcript_openlink_rows_drive_osc8_under_the_probe_gate() {
-    let mut app = crate::app::App::new((80, 24));
     use crate::components::message::model::{Message, Part, PartTime};
+    let app = crate::app::App::new((80, 24));
     app.store.set_messages(
         "s1",
         vec![Message::Assistant {

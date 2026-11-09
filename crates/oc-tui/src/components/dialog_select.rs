@@ -1496,7 +1496,7 @@ mod tests {
         let colors: Vec<(u8, u8, u8)> = (4..30).map(|x| fg_color(&row[x])).collect();
         assert_ne!(muted, target, "the fixture styles differentiate");
         assert_eq!(colors[0], muted, "behind the band the title stays muted");
-        assert!(colors.iter().any(|c| *c == target), "the passing band restores text.base");
+        assert!(colors.contains(&target), "the passing band restores text.base");
 
         // Without the shimmer flag the row paints the plain static
         // title (the pre-RE-04 bytes: uniform, never the target).

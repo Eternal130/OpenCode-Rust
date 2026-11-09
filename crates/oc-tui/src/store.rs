@@ -39,6 +39,7 @@ use crate::reactive::{Effect, Runtime, Signal};
 use crate::theme::{ThemeRegistry, ThemeState};
 use oc_client::types::FormValue;
 use oc_tui_core::scroll::{FollowState, ScrollCommand, ScrollDriver};
+use std::fmt::Write as _; // format_push_string: write! into the existing String
 
 /// How many bus-event ids the replay-dedup window remembers (the F2
 /// contract — see [`Store::ingest_all`] and `data.rs`).
@@ -194,10 +195,10 @@ impl WorktreeFileChange {
     pub fn change_counts(&self) -> String {
         let mut out = String::new();
         if self.additions != 0 {
-            out.push_str(&format!(" +{}", self.additions));
+            let _ = write!(out, " +{}", self.additions);
         }
         if self.deletions != 0 {
-            out.push_str(&format!(" -{}", self.deletions));
+            let _ = write!(out, " -{}", self.deletions);
         }
         out
     }
@@ -294,7 +295,7 @@ pub enum DialogKind {
     /// G-6: the composer Shell tab's output viewer
     /// (`DialogShellOutput`, shell-tab.tsx:29-32 — `dialog.replace(`
     /// `<DialogShellOutput shell …>)`): the shell's status + command
-    /// + captured output tail, fetched through the shell control
+    /// \+ captured output tail, fetched through the shell control
     /// sink at open time. Like [`DialogKind::ToolOutput`]'s shell
     /// role, the rows render through the select pipeline.
     ShellOutput { shell_id: String },
@@ -1103,7 +1104,7 @@ impl SessionListSink for RecordingSessionListSink {
 /// commit path — `prompt/index.tsx` `prepareAgent`/`commitModel`, the
 /// mini footer's `admitPromptTurn`). Tests record; production calls
 /// oc-client.
-
+///
 /// G-287① — the production sink seams (one bit per `set_*_sink`).
 const PRODUCTION_SINK_MASK: u16 = (1 << 0)
     | (1 << 1)
@@ -2579,8 +2580,9 @@ pub struct McpServerRow {
     pub error: Option<String>,
     /// G-271③ — `server.integrationID` (mcp.list's wire row): an
     /// auth-gated server whose sign-in rides the integration flow —
-    /// the dialog's toggle jumps to `DialogIntegration
-    /// {autoConnect}`` instead of `mcp.connect` (dialog-mcp.tsx:
+    /// the dialog's toggle jumps to
+    /// `DialogIntegration {autoConnect}` instead of `mcp.connect`
+    /// (dialog-mcp.tsx:
     /// 103-105,117-119).
     pub integration_id: Option<String>,
 }
@@ -5747,7 +5749,8 @@ impl Store {
     /// memo's `searchResults.loading` arm).
     pub fn session_search_started(&self, query: &str) {
         let mut state = self.session_search.borrow_mut();
-        state.query = query.to_owned();
+        // `query` is `&str`; `clone_from` needs `&String`.
+        state.query = query.to_string();
         state.in_flight = true;
     }
 
@@ -5785,7 +5788,8 @@ impl Store {
             for entry in registry.iter_mut() {
                 if let Some(record) = entry.terminals.iter_mut().find(|row| row.id == pty_id) {
                     if record.title != title {
-                        record.title = title.to_owned();
+                        // `title` is `&str`; `clone_from` needs `&String`.
+                        record.title = title.to_string();
                         changed = true;
                     }
                 }
@@ -5805,7 +5809,7 @@ impl Store {
             for entry in registry.iter_mut() {
                 if let Some(record) = entry.terminals.iter_mut().find(|row| row.id == pty_id) {
                     if record.foreground_process != process {
-                        record.foreground_process = process.clone();
+                        record.foreground_process.clone_from(&process);
                         changed = true;
                     }
                 }
@@ -9406,7 +9410,7 @@ impl Store {
     /// The diff worker's directory (keys the bases memory + the
     /// branch list; the run loop sets it at boot).
     pub fn set_diff_directory(&self, directory: &str) {
-        *self.diff_directory.borrow_mut() = directory.to_owned();
+        directory.clone_into(&mut *self.diff_directory.borrow_mut());
     }
 
     /// `memory.bases[baseKey()]` → `diffInput().selected` — the
@@ -11017,7 +11021,8 @@ impl Store {
         // The textarea mounts with `initialValue` + `gotoLineEnd` —
         // the cursor sits after the seeded text.
         if !value.is_empty() {
-            self.update_dialog(|top| top.value = value.to_owned());
+            // `value` is `&str`; `clone_from` needs `&String`.
+            self.update_dialog(|top| top.value = value.to_string());
         }
         self.request_redraw();
     }
@@ -12191,7 +12196,7 @@ impl Store {
     /// prompt-sink cell (when wired) mirrors the resolution so the
     /// home submission creates its session in the inherited directory.
     pub fn set_home_location(&self, directory: Option<String>) {
-        *self.home_location.borrow_mut() = directory.clone();
+        directory.clone_into(&mut *self.home_location.borrow_mut());
         if let Some(cell) = self.home_location_cell.borrow().as_ref() {
             *cell.borrow_mut() = directory;
         }
@@ -12200,7 +12205,7 @@ impl Store {
     /// G-34 — shares the prompt sink's home-directory cell (the run
     /// loop wires it next to `HttpPromptSink`; tests seed it directly).
     pub fn set_home_location_cell(&self, cell: std::rc::Rc<std::cell::RefCell<Option<String>>>) {
-        *cell.borrow_mut() = self.home_location.borrow().clone();
+        self.home_location.borrow().clone_into(&mut *cell.borrow_mut());
         *self.home_location_cell.borrow_mut() = Some(cell);
     }
 
@@ -14920,7 +14925,7 @@ mod tests {
             "tui.command.execute",
             serde_json::json!({ "command": 42 }),
         ))]);
-        assert!(store.take_bus_commands().is_empty());
+        assert_eq!(store.take_bus_commands(), [] as [std::string::String; 0]);
     }
 
     #[test]
@@ -16299,7 +16304,7 @@ mod tests {
         ))]);
         // The empty list renders the shell empty state (the paint
         // test asserts the label; here the entries drain).
-        assert!(store.picker_entries("s1").is_empty());
+        assert_eq!(store.picker_entries("s1"), [] as [crate::store::PickerEntry; 0]);
     }
 
     /// G-6 — the Terminals tab's move WRAPS including the `+ New
@@ -16307,6 +16312,15 @@ mod tests {
     /// no close branch), and the select on the add slot creates.
     #[test]
     fn composer_terminals_tab_wraps_and_the_add_slot_creates() {
+        struct CreateSink(std::rc::Rc<std::cell::RefCell<Vec<String>>>);
+        impl TerminalSink for CreateSink {
+            fn refresh(&self, _session_id: &str) {}
+            fn create(&self, session_id: &str) {
+                self.0.borrow_mut().push(session_id.to_owned());
+            }
+            fn select(&self, _session_id: &str, _pty_id: Option<&str>) {}
+            fn send_frame(&self, _pty_id: &str, _frame: &[u8]) {}
+        }
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Root".to_owned()));
         store.navigate(Route::session("s1".to_owned()));
@@ -16326,15 +16340,6 @@ mod tests {
 
         // The select on the add slot: the composer closes + the
         // create request rides the sink.
-        struct CreateSink(std::rc::Rc<std::cell::RefCell<Vec<String>>>);
-        impl TerminalSink for CreateSink {
-            fn refresh(&self, _session_id: &str) {}
-            fn create(&self, session_id: &str) {
-                self.0.borrow_mut().push(session_id.to_owned());
-            }
-            fn select(&self, _session_id: &str, _pty_id: Option<&str>) {}
-            fn send_frame(&self, _pty_id: &str, _frame: &[u8]) {}
-        }
         let creates = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         store.set_terminal_sink(std::rc::Rc::new(CreateSink(std::rc::Rc::clone(&creates))));
         store.picker_terminal_select();
@@ -16631,24 +16636,6 @@ fn installation_events_notify_the_banner() {
 /// submission seam (skip dismisses; confirm marks Installing).
 #[test]
 fn update_command_opens_the_dialog_with_actions() {
-    /// G-287② — the update dialog's INITIAL focus rests on the
-    /// CONFIRM button (`setActive(max(0, buttons().length - 1))`,
-    /// dialog-update.tsx:65): [state row, Skip, Update] → row 2.
-    #[test]
-    fn update_dialog_focuses_the_confirm_button() {
-        let store = Store::new(Runtime::new());
-        store.set_update_dialog(crate::components::update::UpdateDialogState::Available(
-            "2.0.25".to_owned(),
-        ));
-        store.replace_dialog(DialogKind::Update, DialogSize::Medium);
-        let selected = store.top_dialog().map(|entry| entry.select.selected).unwrap_or_default();
-        assert_eq!(selected, 2, "the confirm row (Update) starts focused");
-        // No confirm (up-to-date) → Skip.
-        store.set_update_dialog(crate::components::update::UpdateDialogState::Current);
-        store.open_dialog(DialogKind::Update, DialogSize::Medium);
-        let selected = store.top_dialog().map(|entry| entry.select.selected).unwrap_or_default();
-        assert_eq!(selected, 1, "Skip starts focused without a confirm");
-    }
 
     use crate::components::command_palette::CommandDispatcher as _;
     let store = Store::new(Runtime::new());
@@ -16685,10 +16672,30 @@ fn update_command_opens_the_dialog_with_actions() {
     assert!(store.update_notice().is_none(), "skip dismissed the banner");
 }
 
+/// G-287② — the update dialog's INITIAL focus rests on the
+/// CONFIRM button (`setActive(max(0, buttons().length - 1))`,
+/// dialog-update.tsx:65): [state row, Skip, Update] → row 2.
+#[test]
+fn update_dialog_focuses_the_confirm_button() {
+    let store = Store::new(Runtime::new());
+    store.set_update_dialog(crate::components::update::UpdateDialogState::Available(
+        "2.0.25".to_owned(),
+    ));
+    store.replace_dialog(DialogKind::Update, DialogSize::Medium);
+    let selected = store.top_dialog().map(|entry| entry.select.selected).unwrap_or_default();
+    assert_eq!(selected, 2, "the confirm row (Update) starts focused");
+    // No confirm (up-to-date) → Skip.
+    store.set_update_dialog(crate::components::update::UpdateDialogState::Current);
+    store.open_dialog(DialogKind::Update, DialogSize::Medium);
+    let selected = store.top_dialog().map(|entry| entry.select.selected).unwrap_or_default();
+    assert_eq!(selected, 1, "Skip starts focused without a confirm");
+}
+
 // -- TUI-TD01: the six wire classes project from the SSE path ----
 
 #[test]
 fn six_wire_classes_project_from_events() {
+
     let store = Store::new(Runtime::new());
     store.open_tab("s1", None);
     let events = [

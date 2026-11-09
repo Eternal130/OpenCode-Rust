@@ -1185,7 +1185,7 @@ fn glow_ranges(inputs: &StripInputs) -> Vec<(usize, usize)> {
 /// pixels reach the emitted frame through the shared tree's ONE
 /// composite seam now — same raster, same cell semantics (the glow
 /// ranges' fg-Reset restoration rides as `ChromeStamp::FgDefault`).
-
+// --
 /// Paint the strip through the opentui-solid path — the new-path
 /// twin of the old `render_bar` + `paint_placed_with_fills` pair,
 /// fused: sync inputs → flush patches → render → copy the cells.

@@ -7,6 +7,7 @@
 //! the ref's, not a redesign.
 
 use oc_client::types::{SessionStatsActivity, SessionStatsInfo, TokenUsageInfo};
+use std::fmt::Write as _; // format_push_string: write! into the existing String
 
 /// The en-US short month names (`Intl.DateTimeFormat("en-US", {month:
 /// "short"})` — the calendar's month labels).
@@ -46,12 +47,12 @@ pub fn token_total(tokens: &TokenUsageInfo) -> f64 {
 /// `1000K`).
 #[must_use]
 pub fn stats_number(value: f64) -> String {
+    const UNITS: [&str; 4] = ["K", "M", "B", "T"];
     if !value.is_finite() || value < 0.0 {
         return "0".to_owned();
     }
     // The tier walk: divide while the mantissa still rounds up into
     // the next group (999.95 · 10³ⁿ is the 1-decimal bump edge).
-    const UNITS: [&str; 4] = ["K", "M", "B", "T"];
     let mut scaled = value;
     let mut unit = "";
     for candidate in UNITS {
@@ -390,7 +391,7 @@ fn month_label_row(calendar: &ActivityCalendarView) -> String {
     for month in &calendar.months {
         let span = month.span * 2;
         let label = if month.label.chars().count() <= span { month.label.as_str() } else { "" };
-        row.push_str(&format!("{label:<span$}"));
+        let _ = write!(row, "{label:<span$}");
     }
     row
 }

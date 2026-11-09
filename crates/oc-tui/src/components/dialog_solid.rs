@@ -414,12 +414,13 @@ fn content_height(inputs: &DialogInputs) -> usize {
         // gap + window + root gap + [footer] + paddingBottom 1.
         Family::Select => 4 + inputs.window.len() + 1 + usize::from(!inputs.actions.is_empty()) + 1,
         // title, gap, input, gap, footer, the footer's paddingBottom.
-        Family::RenamePrompt | Family::WorktreeNamePrompt => 6,
-        // RE-13: the /btw question prompt — the same prompt tree
-        // (title, gap, input, gap, footer, the footer's pad).
-        Family::BtwPrompt => 6,
-        // G-29: the plugin install prompt — the same prompt tree.
-        Family::PluginInstallPrompt => 6,
+        // RE-13: the /btw question prompt and the G-29 plugin install
+        // prompt share the same prompt tree (title, gap, input, gap,
+        // footer, the footer's pad).
+        Family::RenamePrompt
+        | Family::WorktreeNamePrompt
+        | Family::BtwPrompt
+        | Family::PluginInstallPrompt => 6,
         // G-237 (dialog-prompt.tsx:98-145): title, gap, description
         // rows, gap, input, gap, footer, the footer's pad.
         Family::GenericPrompt => inputs.hint_lines.len() + 7,
@@ -2420,7 +2421,12 @@ fn build_inputs(
                 plugin_rows: Vec::new(),
             }
         }
-        Family::RenamePrompt | Family::WorktreeNamePrompt => DialogInputs {
+        // RE-13/G-29: the btw + plugin-install prompts share the
+        // renamed-prompt tree (empty title/placeholder entry).
+        Family::RenamePrompt
+        | Family::WorktreeNamePrompt
+        | Family::BtwPrompt
+        | Family::PluginInstallPrompt => DialogInputs {
             family,
             box_width,
             colors,
@@ -2498,42 +2504,6 @@ fn build_inputs(
                 btw_styled: Vec::new(),
             }
         }
-        // RE-13: the /btw question prompt — the prompt tree's value
-        // arm (title "/btw" + placeholder "Ask anything" are the
-        // builder's, btw.tsx:65).
-        Family::BtwPrompt | Family::PluginInstallPrompt => DialogInputs {
-            family,
-            box_width,
-            colors,
-            title: String::new(),
-            placeholder: String::new(),
-            filter: String::new(),
-            options: Vec::new(),
-            flat: Vec::new(),
-            selected: 0,
-            current: None,
-            flatten: false,
-            destructive: false,
-            window: Vec::new(),
-            actions: Vec::new(),
-            prompt_value: entry.value.clone(),
-            hint_lines: Vec::new(),
-            plugin_title: String::new(),
-            plugin_rows: Vec::new(),
-            message: String::new(),
-            confirm_labels: (String::new(), String::new(), true),
-            error_source: String::new(),
-            error_window: Vec::new(),
-            diagnostic: String::new(),
-            preview_title: String::new(),
-            preview_footer: (String::new(), String::new(), String::new()),
-            preview_rows: 0,
-            pair_rows: Vec::new(),
-            pair_split: false,
-            pair_qr: Vec::new(),
-            btw_window: Vec::new(),
-            btw_styled: Vec::new(),
-        },
         // RE-13: the /btw Answer dialog — the sidecar's markdown
         // rows sliced to the window (the ref's scrollbox maxHeight,
         // btw.tsx:101).

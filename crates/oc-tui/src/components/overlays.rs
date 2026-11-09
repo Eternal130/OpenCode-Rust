@@ -15,8 +15,8 @@
 //!   (today's frame-tail z, above every dialog pixel; ref zIndex
 //!   5000).
 //! * **The `paste_frame` overlays** (renderer console / toast): the
-//! overlays family's first seats — mounted here
-//! from the live store, before `render_app`'s compositor seam.
+//!   overlays family's first seats — mounted here
+//!   from the live store, before `render_app`'s compositor seam.
 
 use crate::components::footer::theme::FooterTheme;
 use crate::render::Frame;

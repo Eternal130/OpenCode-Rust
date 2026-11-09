@@ -974,8 +974,8 @@ fn option_dialog_records_rows(
 ) -> bool {
     match kind {
         // G-271④ — the form walk's select-style fields own rows.
-        DialogKind::IntegrationForm { .. } => true,
-        DialogKind::Update
+        DialogKind::IntegrationForm { .. }
+        | DialogKind::Update
         | DialogKind::CommandPalette
         | DialogKind::QueuedPrompts
         | DialogKind::PendingSteer { .. }
@@ -2720,7 +2720,7 @@ mod btw_tests {
             (100, 30),
         );
         assert_eq!(outcome, DialogKeyOutcome::Closed);
-        assert!(store.dialogs().is_empty());
+        assert_eq!(store.dialogs(), []);
     }
 
     fn blank_base(width: u16, height: u16) -> Frame {

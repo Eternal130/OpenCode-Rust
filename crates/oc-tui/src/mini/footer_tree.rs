@@ -291,7 +291,7 @@ mod tests {
         assert_eq!(chunks[1].fg, None);
         assert_eq!(chunks[2].text, "c");
         // An all-bare row mounts an empty content row.
-        assert!(units[1].content.chunks.is_empty());
+        assert_eq!(units[1].content.chunks, [] as [opentui_core::TextChunk; 0]);
     }
 
     /// The root-tree round trip: the pane frame's ink lands in the

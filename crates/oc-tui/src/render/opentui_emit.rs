@@ -42,6 +42,7 @@ use opentui_core::color::Rgba;
 use opentui_core::renderer::{create_cli_renderer, CliRenderer, CliRendererConfig};
 
 use super::{Cell, CellColor, ClusterMap, Frame, CONTINUATION};
+use std::fmt::Write as _; // format_push_string: write! into the existing String
 
 /// G-287⑧ — one OSC-8 link rectangle of the frame being emitted:
 /// `width` cells at (`x`, `y`) wrap `url`. Source: the transcript
@@ -284,7 +285,7 @@ impl OpentuiEmitter {
         let cursor = &self.renderer.cursor_state;
         if cursor.visible {
             if !sgr.ends_with("\x1b[?25h") {
-                sgr.push_str(&format!("\x1b[{};{}H\x1b[?25h", cursor.y, cursor.x));
+                let _ = write!(sgr, "\x1b[{};{}H\x1b[?25h", cursor.y, cursor.x);
             }
         } else if !sgr.ends_with("\x1b[?25l") {
             sgr.push_str("\x1b[?25l");
@@ -395,7 +396,7 @@ fn emit_cluster_pass(
         if changed && touched[row] {
             let cell = frame.cells.get(row).and_then(|r| r.get(col));
             if let Some(cell) = cell {
-                out.push_str(&format!("\x1b[{};{}H", row + 1, col + 1));
+                let _ = write!(out, "\x1b[{};{}H", row + 1, col + 1);
                 super::ansi::emit_fg(out, cell.fg);
                 super::ansi::emit_bg(out, cell.bg);
                 super::ansi::apply_attributes(out, cell.attrs);

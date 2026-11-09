@@ -1396,7 +1396,7 @@ pub fn prepare_prompt_body(prompt: &super::queue::RunPrompt) -> SessionPromptBod
                 inline.push(text);
             }
             if let Some(mut file) = file {
-                file.description = description.clone();
+                file.description.clone_from(&description);
                 attachments.files.push(file);
             }
         }
@@ -2176,7 +2176,7 @@ mod tests {
     #[test]
     fn restore_classifies_local_rows() {
         let mut state = TransportState { session_id: "s1".into(), ..Default::default() };
-        state.project_part("m1", "text", 0, "abc", true);
+        let _ = state.project_part("m1", "text", 0, "abc", true);
         assert_eq!(
             state.restore_part("m1", "text:0", "abcdef"),
             FragmentRestore::Append { suffix: "def".to_owned() }
@@ -2246,7 +2246,7 @@ mod tests {
     #[test]
     fn ended_without_text_preserves_the_projected_prefix() {
         let mut state = TransportState { session_id: "s1".into(), ..Default::default() };
-        state.project_part("m1", "text", 0, "one two three", true);
+        let _ = state.project_part("m1", "text", 0, "one two three", true);
         // The stream re-delivers covered chunks (consumed)...
         assert_eq!(
             state.fold(&event(
@@ -2265,7 +2265,7 @@ mod tests {
         assert_eq!(ended, Fold::Ignored, "an ended equal to the committed text replays nothing");
         assert_eq!(state.part_value("m1", "text:0"), Some("one two three".to_owned()));
         // The reasoning arm keeps the same guarantee.
-        state.project_part("m1", "reasoning", 0, "think", true);
+        let _ = state.project_part("m1", "reasoning", 0, "think", true);
         let ended = state.fold(&event(
             "session.reasoning.ended",
             &json!({ "sessionID": "s1", "messageID": "m1", "partID": "reasoning:0" }),
@@ -2415,7 +2415,7 @@ mod tests {
             }
             other => panic!("delivered folded: {other:?}"),
         }
-        assert!(state.pending_prompts().is_empty());
+        assert_eq!(state.pending_prompts(), []);
         // A re-enqueue of the promoted row renders the echo again —
         // but the once-guard (messageIDs) keeps it to one row.
         match state.fold(&enqueue("msg_q1", "first question", "queue")) {
@@ -2431,7 +2431,7 @@ mod tests {
             )),
             Fold::Ignored
         );
-        assert!(state.pending_prompts().is_empty());
+        assert_eq!(state.pending_prompts(), []);
         // The hydrate seed replaces the list; a promoted row never
         // re-queues (transport.ts:971-977).
         state.seed_pending(&[
@@ -2568,7 +2568,7 @@ mod tests {
         }
         assert_eq!(state.fold(&activated), Fold::Ignored, "one row per message");
         // The replay arm shares the dedup.
-        assert!(state.replay_skill_message("msg_sk1", "deploy").is_empty());
+        assert_eq!(state.replay_skill_message("msg_sk1", "deploy"), []);
         assert_eq!(
             state.replay_skill_message("msg_sk2", "review").len(),
             1,
@@ -2698,7 +2698,7 @@ mod tests {
             "id": "msg_c3", "type": "compaction", "status": "failed", "reason": "auto",
             "error": { "type": "aborted", "message": "interrupted" },
         });
-        assert!(state.replay_compaction_message(&aborted).is_empty());
+        assert_eq!(state.replay_compaction_message(&aborted), []);
     }
 
     /// G-221 block 2 (replay) — the shell message walk

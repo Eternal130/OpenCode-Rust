@@ -678,7 +678,13 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         // G-237: the generic prompt renders its own tree (the kind
         // carries title/placeholder/description).
         | DialogKind::Prompt { .. }
-        | DialogKind::BtwAnswer { .. } => SelectProps::new("", Vec::new()),
+        | DialogKind::BtwAnswer { .. }
+        // -- TUI-10/24/25: the custom-key families render their own
+        // chrome (no select pipeline).
+        | DialogKind::ImagePreview
+        | DialogKind::ErrorDetails { .. }
+        | DialogKind::Alert { .. }
+        | DialogKind::Confirm { .. } => SelectProps::new("", Vec::new()),
         DialogKind::Plugin { id } => {
             // The delegation payload: plugin-supplied options at open
             // time. Rows-only content returns empty props (the dialog
@@ -1369,12 +1375,6 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                 SelectProps::new("Experiments", options)
             }
         }
-        // -- TUI-10/24/25: the custom-key families render their own
-        // chrome (no select pipeline).
-        DialogKind::ImagePreview
-        | DialogKind::ErrorDetails { .. }
-        | DialogKind::Alert { .. }
-        | DialogKind::Confirm { .. } => SelectProps::new("", Vec::new()),
         // SE-F9: the stub row is DELISTED — only model/agent/session
         // listings ever mount a ServerList now; an unknown picker
         // falls to the shared empty state ("No items available"),
@@ -3489,14 +3489,14 @@ impl CommandDispatcher for StoreDispatcher {
             | "app.scrap"
             | "service.restart"
             | "dialog.integration.rename"
-            | "dialog.integration.delete" => Dispatch::Handled,
+            | "dialog.integration.delete"
             // The which-key family (keybind.ts:290-300): ref ships
             // these eleven registrations as DEAD bindings (the panel
             // plugin was deleted at 06290907a9; nothing consumes
             // them) — the port keeps the same registered-but-
             // surfaceless state (D3-7b: the panel superset was
             // removed). The keymap consumes the stroke; no-op.
-            "which-key.toggle"
+            | "which-key.toggle"
             | "which-key.layout.toggle"
             | "which-key.pending.toggle"
             | "which-key.group.previous"
@@ -4363,7 +4363,6 @@ mod tests {
     }
 
     /// The session-list dialog lists the HISTORY (the resync's
-
     /// Shared body for the G-34 dispatch cases: seed one routed
     /// session at `/work/cur` (optionally marked unavailable via the
     /// location worker's error state), dispatch `session.new`, and
@@ -5471,7 +5470,7 @@ mod tests {
         let store = Store::new(Runtime::new());
         let title = |command: &str| {
             let entry = palette_command(command).expect("the registry entry");
-            palette_title(&entry, &store)
+            palette_title(entry, &store)
         };
         // Row defaults: animations false, prompt.editor true,
         // diffs.wrap word.
@@ -5639,7 +5638,7 @@ mod tests {
     /// G-29: `dialog.plugins.check` fires the sink's check and the
     /// fresh rows (with `outdated` flags) render as the dialog's
     /// SERVER entries — the `update available` footer (plugins.tsx:
-    /// 304-318's footer()); a failed check toasts and keeps the rows.
+    /// 304-318's `footer()`); a failed check toasts and keeps the rows.
     #[test]
     fn plugins_check_flow_updates_server_rows() {
         use crate::store::{PluginServerCall, RecordingPluginServerSink, ServerPluginRow};

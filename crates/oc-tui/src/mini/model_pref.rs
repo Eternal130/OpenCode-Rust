@@ -310,7 +310,7 @@ mod tests {
         repo.set_favorite(&target, true);
         assert_eq!(repo.read().favorite, vec![target.clone()]);
         repo.set_favorite(&target, false);
-        assert!(repo.read().favorite.is_empty());
+        assert_eq!(repo.read().favorite, [] as [crate::mini::model_pref::ModelPreferenceModel; 0]);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

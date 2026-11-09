@@ -292,14 +292,14 @@ fn fill_at(
 /// hunk (unified = one row per patch row; split = the del/add run
 /// zipped, `split_pairs`' old pairing).
 fn split_row_count(rows: &[PatchRow]) -> usize {
-    let mut pairs = 0usize;
-    let mut pending_dels = 0usize;
-    let mut pending_adds = 0usize;
     fn flush(pairs: &mut usize, dels: &mut usize, adds: &mut usize) {
         *pairs += (*dels).max(*adds);
         *dels = 0;
         *adds = 0;
     }
+    let mut pairs = 0usize;
+    let mut pending_dels = 0usize;
+    let mut pending_adds = 0usize;
     for row in rows {
         match row {
             PatchRow::Context { .. } => {
@@ -1101,6 +1101,6 @@ mod tests {
         assert!(grid[0].starts_with("  All · vs v2"));
         assert!(grid[4].starts_with("   1    const first = true"), "row 4: {:?}", grid[4]);
         assert!(grid[5].starts_with("   2 -  const oldFirst = true"), "row 5: {:?}", grid[5]);
-        assert!(hits.is_empty());
+        assert_eq!(hits, [] as [(usize, usize, usize, usize, std::string::String); 0]);
     }
 }

@@ -34,6 +34,7 @@ pub use oc_tui_core::text_edit::{EditCore, EditOutcome, SnapshotKind};
 pub use render::{prompt_text_width, AutocompleteView, FooterHints, PromptView};
 
 use oc_tui_core::text_edit::EditCommand;
+use std::fmt::Write as _; // format_push_string: write! into the existing String
 
 /// An inline attachment payload staged in the composer (the resolved
 /// half of a `PromptInput.FileAttachment`: the data URI decoded into
@@ -1763,7 +1764,7 @@ impl Composer {
                             .map(|range| {
                                 let mut text = format!("#{}", range.start_line);
                                 if let Some(end) = range.end_line {
-                                    text.push_str(&format!("-{end}"));
+                                    let _ = write!(text, "-{end}");
                                 }
                                 text
                             })
@@ -2182,7 +2183,7 @@ mod tests {
 
     /// G-185 — a history entry round-trips its attachments: a submit
     /// with a file chip + a folded paste records text AND parts, and
-    /// ↑ restores the chips beside the text (the ref's PromptInfo,
+    /// ↑ restores the chips beside the text (the ref's `PromptInfo`,
     /// history.tsx:22-28/114-118).
     #[test]
     fn history_round_trips_attachments_and_restores_chips() {
@@ -2245,7 +2246,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).expect("dir");
         let mut history = PromptHistory::open(&dir);
-        assert!(history.entries.is_empty());
+        assert_eq!(history.entries, [] as [crate::components::composer::HistoryEntry; 0]);
         for index in 0..60 {
             let mut draft = PromptDraft::default();
             draft.text = format!("prompt {index}");

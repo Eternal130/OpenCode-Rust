@@ -131,8 +131,8 @@ mod tests {
     /// command; `!` alone / no prefix → not a shell prompt.
     #[test]
     fn shell_commands_parse_after_the_bang() {
-        assert_eq!(parse_shell_command("!ls -la").as_deref(), Some("ls -la"));
-        assert_eq!(parse_shell_command("!  echo hi").as_deref(), Some("  echo hi"));
+        assert_eq!(parse_shell_command("!ls -la"), Some("ls -la"));
+        assert_eq!(parse_shell_command("!  echo hi"), Some("  echo hi"));
         assert_eq!(parse_shell_command("!"), None, "bare ! is not a command");
         assert_eq!(parse_shell_command("   !"), None);
         assert_eq!(parse_shell_command("ls"), None);

@@ -183,7 +183,7 @@ mod tests {
     #[test]
     fn macos_accel_stays_low_on_slow_streaks() {
         let mut model = MacOsScrollAccel::new();
-        model.tick(0);
+        let _ = model.tick(0);
         let mut now = 0i64;
         let mut peak = 1.0f64;
         for _ in 0..8 {

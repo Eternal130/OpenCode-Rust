@@ -621,8 +621,8 @@ mod tests {
     use super::*;
     use crate::reactive::Runtime;
 
-    /// The headless twin of render_app's seam (D2.2: the composer
-    /// wrapper mounts during render_home; direct test callers read
+    /// The headless twin of `render_app`'s seam (D2.2: the composer
+    /// wrapper mounts during `render_home`; direct test callers read
     /// the pixels back through the ONE compositor seam).
     pub(crate) fn home_frame(
         store: &Store,
@@ -883,7 +883,7 @@ mod tests {
 #[cfg(test)]
 mod surf2_home_tests {
     use super::tests::home_frame;
-    use super::*;
+    
     use crate::reactive::Runtime;
     use crate::store::{McpServerRow, Store};
 

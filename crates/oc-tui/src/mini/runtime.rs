@@ -710,8 +710,8 @@ impl Runtime {
             // G-272 — the variant panel's pick (`onVariantSelect` →
             // `saveVariant`, runtime.ts:360-374): persist the choice.
             FooterEffect::VariantSelect(variant) => {
-                self.active_variant = variant.clone();
-                self.lifecycle.pane.active_variant = variant.clone();
+                self.active_variant.clone_from(&variant);
+                self.lifecycle.pane.active_variant.clone_from(&variant);
                 if let Some(target) = &self.boot_target {
                     self.preferences.save_variant(target, variant.as_deref());
                 }
@@ -817,10 +817,10 @@ impl Runtime {
                         self.lifecycle.append(Commit::system("no variants available"));
                     }
                     CycleVariantDecision::Cycle { next, status, label } => {
-                        self.active_variant = next.clone();
+                        self.active_variant.clone_from(&next);
                         // G-272 — the variant panel's `current` marker
                         // follows the cycle.
-                        self.lifecycle.pane.active_variant = next.clone();
+                        self.lifecycle.pane.active_variant.clone_from(&next);
                         if let Some(target) = &self.boot_target {
                             self.preferences.save_variant(target, next.as_deref());
                         }
@@ -896,8 +896,9 @@ impl Runtime {
                 touched.push(("mono", value.to_owned()));
             }
             "work_spinner" => {
-                settings.work_spinner = value.to_owned();
-                self.lifecycle.pane.work_spinner = value.to_owned();
+                // `value` is `&str`; `clone_from` needs `&String`.
+                settings.work_spinner = value.to_string();
+                self.lifecycle.pane.work_spinner = value.to_string();
                 touched.push(("work_spinner", value.to_owned()));
             }
             _ => {}
@@ -1155,7 +1156,7 @@ impl Runtime {
                     .await
                     {
                         Ok(new_id) => {
-                            self.session_id = new_id.clone();
+                            self.session_id.clone_from(&new_id);
                             self.session_title = None;
                             // G-272 — a fresh session's title resets
                             // (`setTitle(undefined)` → "OpenCode").
@@ -2135,7 +2136,7 @@ mod tests {
         }));
         match tail {
             super::super::transport::Fold::Commit(commit) => {
-                assert_eq!(commit.text, " four", "the delta commits its chunk")
+                assert_eq!(commit.text, " four", "the delta commits its chunk");
             }
             other => panic!("tail folded: {other:?}"),
         }
@@ -2169,6 +2170,6 @@ mod tests {
         assert_eq!(commits.len(), 1, "only the tool image commit");
         assert_eq!(commits[0].kind, CommitKind::Tool);
         assert_eq!(commits[0].part_id.as_deref(), Some("prt_9:image:0"));
-        assert!(replay_message_commits(&tool, 2, &mut transport, &settings).is_empty());
+        assert_eq!(replay_message_commits(&tool, 2, &mut transport, &settings), [] as [crate::mini::scrollback::Commit; 0]);
     }
 }

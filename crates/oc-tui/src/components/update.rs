@@ -42,6 +42,7 @@
 //! same poll); no in-TUI network code exists on this side.
 
 use crate::render::{Cell, CellColor, Frame};
+use std::fmt::Write as _; // format_push_string: write! into the existing String
 
 /// One banner notice (v2's `Notice`: type + version + source).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -267,7 +268,7 @@ pub fn build_issue_report(message: &str, stack: &str, version: &str) -> String {
                     out.push(byte as char);
                 }
                 b' ' => out.push_str("%20"),
-                _ => out.push_str(&format!("%{byte:02X}")),
+                _ => write!(out, "%{byte:02X}").unwrap_or(()),
             }
         }
         out
