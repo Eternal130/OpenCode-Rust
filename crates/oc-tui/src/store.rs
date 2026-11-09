@@ -1734,6 +1734,14 @@ pub struct Store {
     /// owns detection (kitty graphics + DA1 sixel + cell-px resolution);
     /// `protocol="auto"` resolves against it in `image_view`.
     graphics_capabilities: std::cell::RefCell<Option<opentui_core::renderer::TerminalCapabilities>>,
+    /// G-287⑧ — the probe's OSC-8 hyperlink verdict
+    /// (`Capabilities.hyperlinks`, terminal/probe.rs: name-based
+    /// enablement for kitty/wezterm/ghostty/alacritty/foot/iterm).
+    /// `false` until the probe answers — upstream's
+    /// `ctx.capabilities?.hyperlinks === true` default
+    /// (Markdown.ts:385-390); drives the markdown seam and the
+    /// emitter's OSC-8 link wrapping.
+    hyperlinks_supported: std::cell::Cell<bool>,
     /// The last frame's image placements (R-07): `render_session`
     /// writes them; the run loop emits them after the cell grid draw
     /// and takes them for delta tracking.
@@ -4101,6 +4109,7 @@ impl Store {
             _redraw_effect: redraw_effect,
             image_preview: Cell::new(false),
             graphics_capabilities: std::cell::RefCell::new(None),
+            hyperlinks_supported: std::cell::Cell::new(false),
             frame_images: std::cell::RefCell::new(Vec::new()),
             expanded_groups: std::cell::RefCell::new(HashMap::new()),
             collapsed_thoughts: std::cell::RefCell::new(HashMap::new()),
@@ -4802,6 +4811,21 @@ impl Store {
         capabilities: Option<opentui_core::renderer::TerminalCapabilities>,
     ) {
         *self.graphics_capabilities.borrow_mut() = capabilities;
+    }
+
+    /// G-287⑧ — the OSC-8 hyperlink capability snapshot: the run
+    /// loop's capability event writes the probe's
+    /// `Capabilities.hyperlinks` verdict; `false` until the probe
+    /// answers (upstream's default). Consumers: the markdown seam
+    /// (`MarkdownStyles::with_hyperlinks`) and the emitter's OSC-8
+    /// link wrapping.
+    pub fn set_hyperlinks_supported(&self, supported: bool) {
+        self.hyperlinks_supported.set(supported);
+    }
+
+    #[must_use]
+    pub fn hyperlinks_supported(&self) -> bool {
+        self.hyperlinks_supported.get()
     }
 
     #[must_use]

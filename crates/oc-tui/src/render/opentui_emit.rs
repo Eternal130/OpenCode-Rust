@@ -43,6 +43,19 @@ use opentui_core::renderer::{CliRenderer, CliRendererConfig, create_cli_renderer
 
 use super::{Cell, CellColor, ClusterMap, Frame, CONTINUATION};
 
+/// G-287⑧ — one OSC-8 link rectangle of the frame being emitted:
+/// `width` cells at (`x`, `y`) wrap `url`. Source: the transcript
+/// walk's `OpenLink` hit rows (the link runs' own glyph extents in
+/// screen space — the same rects the mouse release dispatches on),
+/// filtered by the probe's hyperlink verdict.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameLinkRect {
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
+    pub url: String,
+}
+
 /// Synchronized-update envelope open — opentui-core
 /// `terminal/modes.rs:114` (`SYNC_BEGIN`).
 pub const SYNC_BEGIN: &[u8] = b"\x1b[?2026h";
@@ -177,13 +190,33 @@ impl OpentuiEmitter {
     /// divergence from the retired emitter (the cursor tail order);
     /// the golden corpus carries no clusters, so corpus parity stays
     /// byte-exact.
-    fn render_sgr(&mut self, frame: &Frame) -> String {
+    fn render_sgr(&mut self, frame: &Frame, links: &[FrameLinkRect]) -> String {
         if frame.width != self.width || frame.height != self.height {
             let (width, height) = (frame.width, frame.height);
             self.resize(width, height);
         }
         let force = self.renderer.frame_id() == 0;
-        poke(&mut self.renderer, frame);
+        // G-287⑧ — resolve the frame's link rects into per-cell link
+        // ids over the renderer's own link pool (`allocLink`/
+        // link.zig — interned, so the same URL keeps its id across
+        // frames): the poke packs the id into cell attributes 8-31
+        // and `emit_frame_sgr`'s OSC 8 branch resolves it back to
+        // `\x1b]8;id=…;URL\x1b\\` opens (renderer/frame.rs:582-614).
+        // No links (the headless/no-probe profile) → an empty map and
+        // byte-identical emission.
+        let mut link_ids: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
+        let mut link_cells: std::collections::HashMap<(usize, usize), u32> =
+            std::collections::HashMap::new();
+        for link in links {
+            let id = *link_ids
+                .entry(link.url.clone())
+                .or_insert_with(|| self.renderer.alloc_link(&link.url));
+            for x in link.x..link.x.saturating_add(link.width) {
+                link_cells.insert((x, link.y), id);
+            }
+        }
+        poke(&mut self.renderer, frame, &link_cells);
         // The rows this emission touches (upstream's row-equality
         // outcome, computed over the poked buffers + the cluster
         // sidecar diff): rows whose cells changed OR whose clusters
@@ -230,7 +263,22 @@ impl OpentuiEmitter {
     ///   E1 dialog-open-idle flush-cadence detector.
     /// * a fully invisible frame writes nothing (no envelope).
     pub fn emit<W: std::io::Write>(&mut self, out: &mut W, frame: &Frame) -> std::io::Result<()> {
-        let mut sgr = self.render_sgr(frame);
+        self.emit_with_links(out, frame, &[])
+    }
+
+    /// G-287⑧ — [`Self::emit`] with the frame's OSC-8 link rects: the
+    /// poked cells of each rect carry the interned link id and the
+    /// opentui SGR stream wraps them in `\x1b]8;id=…;URL\x1b\\` …
+    /// `\x1b]8;;\x1b\\` (the terminal's native click-open). An empty
+    /// `links` slice is byte-identical to [`Self::emit`] — the
+    /// headless/no-probe profile emits no OSC 8.
+    pub fn emit_with_links<W: std::io::Write>(
+        &mut self,
+        out: &mut W,
+        frame: &Frame,
+        links: &[FrameLinkRect],
+    ) -> std::io::Result<()> {
+        let mut sgr = self.render_sgr(frame, links);
         let cursor = &self.renderer.cursor_state;
         if cursor.visible {
             if !sgr.ends_with("\x1b[?25h") {
@@ -256,7 +304,7 @@ impl OpentuiEmitter {
 /// cells (start + their continuation span) poke as continuation
 /// words — NO inline bytes (the deferred cluster pass prints them
 /// after the opentui stream; see [`OpentuiEmitter::render_sgr`]).
-fn poke(renderer: &mut CliRenderer, frame: &Frame) {
+fn poke(renderer: &mut CliRenderer, frame: &Frame, link_cells: &std::collections::HashMap<(usize, usize), u32>) {
     let buffer = &mut renderer.next_render_buffer;
     buffer.clear(transparent_black());
     for (y, row) in frame.cells.iter().enumerate() {
@@ -266,7 +314,14 @@ fn poke(renderer: &mut CliRenderer, frame: &Frame) {
             } else {
                 u32::from(cell.ch)
             };
-            set_word(buffer, x, y, word, cell);
+            // G-287⑧ — a linked cell packs its link id into
+            // attributes 8-31 (ansi.ts's packed order); the OSC 8
+            // emission branch reads it back at emit time.
+            let attrs = match link_cells.get(&(x, y)) {
+                Some(id) => opentui_core::ansi::set_link_id(u32::from(cell.attrs & 0xFF), *id),
+                None => u32::from(cell.attrs & 0xFF),
+            };
+            set_word(buffer, x, y, word, cell, attrs);
         }
     }
 }
@@ -350,14 +405,14 @@ fn emit_cluster_pass(
     }
 }
 
-fn set_word(buffer: &mut OptimizedBuffer, x: usize, y: usize, word: u32, cell: &Cell) {
+fn set_word(buffer: &mut OptimizedBuffer, x: usize, y: usize, word: u32, cell: &Cell, attrs: u32) {
     buffer.set_cell_word(
         u32::try_from(x).unwrap_or(u32::MAX),
         u32::try_from(y).unwrap_or(u32::MAX),
         word,
         fg_rgba(cell.fg),
         bg_rgba(cell.bg),
-        u32::from(cell.attrs & 0xFF),
+        attrs,
     );
 }
 

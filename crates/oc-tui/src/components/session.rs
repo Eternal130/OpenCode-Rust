@@ -468,6 +468,9 @@ pub fn render_session(
                 .into_iter()
                 .collect::<Vec<String>>(),
             collapsed_thoughts: store.collapsed_thought_keys(session_id),
+            // G-287⑧ — the probe's OSC-8 verdict drives the markdown
+            // hyperlink seam for the live transcript.
+            hyperlinks_supported: store.hyperlinks_supported(),
             image_strip: crate::components::message::rows::ImageStripOptions {
                 enabled: store.image_preview(),
                 capabilities: store.graphics_capabilities(),

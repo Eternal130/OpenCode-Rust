@@ -285,3 +285,156 @@ fn cluster_frames_keep_pixels_through_vt100() {
     assert!(text.contains("flag"), "flag must survive: {text:?}");
 }
 
+
+// -- G-287⑧: OSC-8 hyperlink emission --------------------------------------
+
+use crate::render::FrameLinkRect;
+
+fn link(x: usize, y: usize, width: usize, url: &str) -> FrameLinkRect {
+    FrameLinkRect { x, y, width, url: url.to_owned() }
+}
+
+fn emit_linked(
+    emitter: &mut OpentuiEmitter,
+    frame: &Frame,
+    links: &[FrameLinkRect],
+) -> String {
+    emitter.cursor().set_position(1, 1, false);
+    let mut sink = Vec::new();
+    emitter.emit_with_links(&mut sink, frame, links).expect("emit");
+    String::from_utf8_lossy(&sink).into_owned()
+}
+
+/// The probe-true face: the link rect's cells wrap in an OSC 8 open
+/// (`ESC]8;id=1;URL ESC\`, the renderer's id-pool shape,
+/// renderer/frame.rs:599-607) closed by the empty-params terminator
+/// (`ESC]8;;ESC\`, renderer.zig:2754) — and the glyph content is
+/// untouched (visible text zero-change; the wrapping is the ONLY
+/// delta vs the same frame emitted without links).
+#[test]
+fn osc8_link_rect_wraps_exactly_the_linked_cells() {
+    let frame = grid(30, 1, &["see the docs here             "]);
+    // Two fresh emitters: each emission is a first-frame full
+    // repaint, so the two streams cover the same glyph set and the
+    // strip comparison is meaningful (a shared emitter would diff —
+    // only the link-attributed cells would re-emit).
+    let plain = emit_linked(&mut OpentuiEmitter::new(30, 1), &frame, &[]);
+    let wrapped = emit_linked(
+        &mut OpentuiEmitter::new(30, 1),
+        &frame,
+        &[link(8, 0, 4, "https://example.com")],
+    );
+    assert!(plain.contains("see the docs here"), "{plain:?}");
+    assert!(wrapped.contains("\x1b]8;id=1;https://example.com\x1b\\"), "{wrapped:?}");
+    assert!(wrapped.contains("\x1b]8;;\x1b\\"), "the close terminator: {wrapped:?}");
+    // The visible text is unchanged — strip the OSC 8 sequences and
+    // the SGR runs and the glyphs match the plain emission.
+    let strip = |s: &str| -> String {
+        let mut out = String::new();
+        let mut rest = s;
+        while let Some(pos) = rest.find('\x1b') {
+            out.push_str(&rest[..pos]);
+            rest = &rest[pos..];
+            if rest.starts_with("\x1b]8;") {
+                let end = rest.find("\x1b\\").expect("OSC terminator");
+                rest = &rest[end + 2..];
+            } else {
+                // any other escape: skip to the letter
+                let letter = rest[1..].chars().position(char::is_alphabetic);
+                let skip = letter.map(|i| i + 2).unwrap_or(rest.len());
+                rest = &rest[skip..];
+            }
+        }
+        out.push_str(rest);
+        out
+    };
+    assert_eq!(strip(&plain), strip(&wrapped), "glyph content zero-change");
+}
+
+/// The fallback face (the headless/no-probe profile): an empty link
+/// slice emits ZERO OSC 8 bytes — byte-identical to the plain emit
+/// (the entire golden corpus rides this path).
+#[test]
+fn no_links_emits_no_osc8() {
+    let frame = grid(30, 1, &["see the docs here             "]);
+    let mut emitter = OpentuiEmitter::new(30, 1);
+    let bytes = emit_linked(&mut emitter, &frame, &[]);
+    assert!(!bytes.contains("]8;"), "{bytes:?}");
+}
+
+/// The link pool interns (link.zig: same URL → same id across
+/// frames): re-emitting the same rect after a no-link frame reuses
+/// `id=1`, and a second URL takes `id=2`. A no-change frame after
+/// the link frame emits only the close (the diff base keeps the
+/// linked cells).
+#[test]
+fn link_ids_intern_across_frames() {
+    let frame = grid(30, 1, &["see the docs here             "]);
+    let other = grid(30, 1, &["other row                     "]);
+    let mut emitter = OpentuiEmitter::new(30, 1);
+    let first = emit_linked(&mut emitter, &frame, &[link(8, 0, 4, "https://a.example")]);
+    assert!(first.contains("id=1;https://a.example"), "{first:?}");
+    // no-link frame: different content, no OSC 8
+    let mid = emit_linked(&mut emitter, &other, &[]);
+    assert!(!mid.contains("]8;"), "{mid:?}");
+    // the same URL again: still id=1; a new URL takes id=2
+    let again = emit_linked(&mut emitter, &frame, &[link(8, 0, 4, "https://a.example")]);
+    assert!(again.contains("id=1;https://a.example"), "{again:?}");
+    // a fresh rect on new cells takes id=2 (the id=1 cells are
+    // unchanged vs the diff base, so they do not re-emit)
+    let both = emit_linked(&mut emitter, &frame, &[link(0, 0, 3, "https://b.example")]);
+    assert!(both.contains("id=2;https://b.example"), "{both:?}");
+}
+
+/// A live transcript frame end-to-end: the walk's `OpenLink` hit rows
+/// (probe on) convert to rects and the label's cells carry the OSC 8
+/// wrap; probe off, the same frame emits no OSC 8 (the fallback face
+/// the golden corpus pins).
+#[test]
+fn transcript_openlink_rows_drive_osc8_under_the_probe_gate() {
+    let mut app = crate::app::App::new((80, 24));
+    use crate::components::message::model::{Message, Part, PartTime};
+    app.store.set_messages(
+        "s1",
+        vec![Message::Assistant {
+            id: "a1".into(),
+            agent: "build".into(),
+            model: "fixture/fixture".into(),
+            parts: vec![Part::Text {
+                text: "see [the docs](https://example.com/router) for details".into(),
+                time: PartTime::default(),
+            }],
+            finish: Some("success".into()),
+            error: None,
+            time: PartTime { created: Some(1), completed: Some(2) },
+            tokens: None,
+            usage_total: None,
+            cache_read: None,
+            retry: None,
+        }],
+    );
+    app.store.open_tab("s1", Some("Links".to_owned()));
+    let frame = app.frame();
+    let rows = app.store.transcript_hit_rows();
+    let links: Vec<FrameLinkRect> = rows
+        .into_iter()
+        .filter_map(|row| match row.action {
+            crate::store::TranscriptHitAction::OpenLink { url } => Some(FrameLinkRect {
+                x: row.x,
+                y: row.y,
+                width: row.width,
+                url,
+            }),
+            _ => None,
+        })
+        .collect();
+    assert!(!links.is_empty(), "the label armed a hit rect");
+    let mut emitter = OpentuiEmitter::new(80, 24);
+    let fallback = emit_linked(&mut emitter, &frame, &[]);
+    assert!(!fallback.contains("]8;"), "probe off: plain text: {fallback:?}");
+    let wrapped = emit_linked(&mut emitter, &frame, &links);
+    assert!(
+        wrapped.contains("\x1b]8;id=1;https://example.com/router\x1b\\"),
+        "probe on: the label wraps: {wrapped:?}"
+    );
+}

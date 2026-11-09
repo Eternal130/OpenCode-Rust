@@ -143,6 +143,12 @@ pub struct TranscriptOptions {
     /// the collapsed groups and sink to the bottom
     /// (`partitionPending`, grouping/session.ts:163-176).
     pub pending_permissions: std::collections::HashSet<String>,
+    /// G-287⑧ — the terminal probe's OSC-8 hyperlink verdict: `true`
+    /// conceals the `](url)` tails of label≠url links and arms the
+    /// emitter's OSC-8 wrapping (upstream
+    /// `ctx.capabilities?.hyperlinks === true`). Default `false` —
+    /// the headless/no-probe profile (all goldens).
+    pub hyperlinks_supported: bool,
 }
 
 impl Default for TranscriptOptions {
@@ -168,6 +174,7 @@ impl Default for TranscriptOptions {
             redo_key: "R".to_owned(),
             shell_live: std::collections::HashMap::new(),
             pending_permissions: std::collections::HashSet::new(),
+            hyperlinks_supported: false,
         }
     }
 }
@@ -260,7 +267,8 @@ pub fn render_transcript(
     // G-188 — `partitionPending` (rows.ts:71 + grouping/session.ts:
     // 163-176): permission-blocked tools leave the collapsed groups.
     crate::components::message::model::partition_pending(&mut rows, &options.pending_permissions);
-    let markdown = MarkdownStyles::from_theme(theme);
+    let markdown =
+        MarkdownStyles::from_theme(theme).with_hyperlinks(options.hyperlinks_supported);
     let mut measured: Vec<MeasuredRow> = Vec::new();
     let mut images: Vec<crate::image_view::ImagePlacement> = Vec::new();
     let mut y = 0usize;
@@ -1165,7 +1173,7 @@ pub fn group_view_frame(
     height: u16,
     top: usize,
 ) -> crate::render::Frame {
-    let markdown = MarkdownStyles::from_theme(theme);
+    let markdown = MarkdownStyles::from_theme(theme).with_hyperlinks(options.hyperlinks_supported);
     let render = render_row(row, messages, options, theme, &markdown, usize::from(width));
     let mut placed = render.placed;
     for item in &mut placed {
@@ -1482,6 +1490,47 @@ mod tests {
 
     fn theme() -> ThemeStyles {
         ThemeState::v2_dark().styles()
+    }
+
+    /// G-287⑧ — `TranscriptOptions.hyperlinks_supported` threads the
+    /// probe's verdict into the walk's markdown seam: `true` conceals
+    /// a label≠url link's `](url)` tail (upstream's
+    /// capability-on rendering), `false` keeps the URL visible (the
+    /// headless/no-probe profile every golden pins).
+    #[test]
+    fn hyperlinks_option_threads_the_markdown_seam() {
+        let theme = theme();
+        let messages = vec![crate::components::message::model::Message::Assistant {
+            id: "a1".into(),
+            agent: "build".into(),
+            model: "fixture/fixture".into(),
+            parts: vec![crate::components::message::model::Part::Text {
+                text: "see [docs](https://example.com) here".into(),
+                time: crate::components::message::model::PartTime::default(),
+            }],
+            finish: Some("success".into()),
+            error: None,
+            time: crate::components::message::model::PartTime::default(),
+            tokens: None,
+            usage_total: None,
+            cache_read: None,
+            retry: None,
+        }];
+        for (flag, expected) in
+            [(false, "  see docs (https://example.com) here"), (true, "  see docs here")]
+        {
+            let options = TranscriptOptions { hyperlinks_supported: flag, ..Default::default() };
+            let transcript = render_transcript(&messages, &options, &theme, 80);
+            let frame = transcript.paint(FollowState::Sticky, &theme, (80, 30), None);
+            let line = frame
+                .text_grid()
+                .into_iter()
+                .map(|l| l.trim().to_owned())
+                .find(|l| l.contains("docs"))
+                .unwrap_or_else(|| panic!("flag={flag}: link row missing"));
+            let expected = expected.trim_start();
+            assert_eq!(line, expected, "flag={flag}");
+        }
     }
 
     /// The transcript's geometry over the golden fixture at 80 cols:
