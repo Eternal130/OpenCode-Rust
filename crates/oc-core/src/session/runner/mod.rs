@@ -274,25 +274,24 @@ impl LlmClient for RouteLlmClient {
         )
         .await?;
         // Commit the continuation checkpoint once the events stream ended
-        // cleanly (v2 `execution.complete` after a successful stream).
+        // (v2 `execution.complete` rides `Stream.onEnd`
+        // route/client.ts:497 — onEnd fires on EVERY terminal end, clean
+        // or errored; on a failed exchange the continuation cell holds no
+        // staged pending checkpoint, so the commit is a no-op).
         let oc_ai::protocols::open_responses_channel::ChannelStream { events, complete, .. } =
             channel;
-        let wrapped = futures::stream::unfold(
-            (events, complete, true),
-            |(mut events, complete, clean)| async move {
+        let wrapped =
+            futures::stream::unfold((events, complete), |(mut events, complete)| async move {
                 use futures::StreamExt as _;
                 match events.next().await {
-                    Some(Ok(event)) => Some((Ok(event), (events, complete, clean))),
-                    Some(Err(error)) => Some((Err(error), (events, complete, false))),
+                    Some(Ok(event)) => Some((Ok(event), (events, complete))),
+                    Some(Err(error)) => Some((Err(error), (events, complete))),
                     None => {
-                        if clean {
-                            let _ = complete();
-                        }
+                        let _ = complete();
                         None
                     }
                 }
-            },
-        );
+            });
         Ok(Box::pin(wrapped))
     }
 

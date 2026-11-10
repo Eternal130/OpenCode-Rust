@@ -26,9 +26,29 @@ pub struct PendingTool {
 /// Sparse parser state keyed by the provider's stream-local tool identifier
 /// (numeric content index for `OpenAI` Chat/Anthropic/Bedrock; string
 /// `item_id` for `OpenAI` Responses).
+///
+/// Iteration (`values`) mirrors the ref's `Object.values` semantics, which
+/// the streaming tool-call emission order (`finishAll`) inherits: JS
+/// integer-like keys iterate in ASCENDING NUMERIC order first, then string
+/// keys in insertion order. A plain `BTreeMap`'s lexicographic order
+/// diverges for both (e.g. `"10" < "2"`), so the state tracks first-insert
+/// order alongside the map.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct State {
     tools: BTreeMap<String, PendingTool>,
+    /// First-insert order of the keys (JS string-key ordering).
+    insertion: Vec<String>,
+}
+
+/// A JS integer-like key: `"0"` or `[1-9][0-9]*` without sign/decimal.
+fn integer_key(key: &str) -> Option<u64> {
+    if key.is_empty() || (key.len() > 1 && key.starts_with('0')) {
+        return None;
+    }
+    if !key.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    key.parse().ok()
 }
 
 impl State {
@@ -48,7 +68,27 @@ impl State {
     }
 
     pub fn values(&self) -> impl Iterator<Item = &PendingTool> {
-        self.tools.values()
+        // integer-like keys ascending (JS numeric ordering), then string
+        // keys in insertion order
+        let mut numeric: Vec<(u64, &String)> =
+            self.insertion.iter().filter_map(|key| integer_key(key).map(|n| (n, key))).collect();
+        numeric.sort_by_key(|(n, _)| *n);
+        let mut ordered: Vec<&String> = numeric.into_iter().map(|(_, key)| key).collect();
+        ordered.extend(self.insertion.iter().filter(|key| integer_key(key).is_none()));
+        ordered.into_iter().filter_map(|key| self.tools.get(key))
+    }
+
+    fn upsert(&mut self, key: &str, tool: PendingTool) {
+        if !self.tools.contains_key(key) {
+            self.insertion.push(key.to_string());
+        }
+        self.tools.insert(key.to_string(), tool);
+    }
+
+    fn remove(&mut self, key: &str) -> Option<PendingTool> {
+        let removed = self.tools.remove(key)?;
+        self.insertion.retain(|existing| existing != key);
+        Some(removed)
     }
 }
 
@@ -77,7 +117,10 @@ fn input_start(tool: &PendingTool) -> LLMEvent {
         id: tool.id.clone(),
         name: tool.name.clone(),
         namespace: tool.namespace.clone(),
-        provider_executed: tool.provider_executed.map(|_| true),
+        // ref: `providerExecuted: tool.providerExecuted ? true : undefined`
+        // — Some(false) stays unset (the tool is locally executed), never
+        // coerced to Some(true)
+        provider_executed: executed(tool.provider_executed),
         provider_metadata: tool.provider_metadata.clone(),
     }
 }
@@ -90,6 +133,13 @@ fn input_delta(tool: &PendingTool, text: &str) -> LLMEvent {
         text: text.to_string(),
         input: Some(partial_input(&tool.input)),
     }
+}
+
+/// The ref's `providerExecuted: tool.providerExecuted ? true : undefined`
+/// boolean coercion: only a true flag survives; `Some(false)` is dropped
+/// (the pending tool stays tracked for LOCAL execution).
+fn executed(provider_executed: Option<bool>) -> Option<bool> {
+    provider_executed.filter(|value| *value).map(|_| true)
 }
 
 fn tool_call_event(
@@ -112,7 +162,7 @@ fn tool_call_event(
         name: tool.name.clone(),
         namespace: tool.namespace.clone(),
         input: parsed,
-        provider_executed: tool.provider_executed.map(|_| true),
+        provider_executed: executed(tool.provider_executed),
         provider_metadata: tool.provider_metadata.clone(),
     })
 }
@@ -143,7 +193,7 @@ pub struct Delta<'a> {
 #[must_use]
 pub fn start(tools: &State, key: &str, tool: PendingTool) -> State {
     let mut next = tools.clone();
-    next.tools.insert(key.to_string(), tool);
+    next.upsert(key, tool);
     next
 }
 
@@ -191,7 +241,7 @@ pub fn append_or_start(
         events.push(input_delta(&tool, delta.text));
     }
     let mut next = tools.clone();
-    next.tools.insert(key.to_string(), tool.clone());
+    next.upsert(key, tool.clone());
     Ok(AppendOutcome { tools: next, tool, events })
 }
 
@@ -210,7 +260,7 @@ pub fn append(tools: &State, key: &str, text: &str) -> Option<AppendOutcome> {
     let tool = PendingTool { input: format!("{}{}", current.input, text), ..current.clone() };
     let events = vec![input_delta(&tool, text)];
     let mut next = tools.clone();
-    next.tools.insert(key.to_string(), tool.clone());
+    next.upsert(key, tool.clone());
     Some(AppendOutcome { tools: next, tool, events })
 }
 
@@ -234,7 +284,7 @@ pub fn finish(route: &str, tools: &State, key: &str) -> Result<FinishOutcome, Ai
         return Ok(FinishOutcome { tools: tools.clone(), events: Vec::new() });
     };
     let mut next = tools.clone();
-    next.tools.remove(key);
+    next.remove(key);
     let call = tool_call_event(route, tool, None)?;
     Ok(FinishOutcome { tools: next, events: finish_events(tool, call) })
 }
@@ -252,7 +302,7 @@ pub fn finish_with_input(
         return Ok(FinishOutcome { tools: tools.clone(), events: Vec::new() });
     };
     let mut next = tools.clone();
-    next.tools.remove(key);
+    next.remove(key);
     let call = tool_call_event(route, tool, Some(input))?;
     Ok(FinishOutcome { tools: next, events: finish_events(tool, call) })
 }
@@ -274,6 +324,82 @@ mod tests {
     use super::*;
 
     const ADAPTER: &str = "test-route";
+
+    /// G-372.1 — `values()` follows JS `Object.values` ordering: integer-like
+    /// keys ascend numerically ("10" after "2"), string keys keep insertion
+    /// order; `finish_all` inherits this emission order.
+    #[test]
+    fn values_iterate_in_js_object_order() {
+        let mut state = State::new();
+        // inserted deliberately out of numeric order
+        for (key, id) in [("2", "call_c"), ("10", "call_d"), ("1", "call_b")] {
+            state = start(
+                &state,
+                key,
+                PendingTool {
+                    id: id.to_string(),
+                    name: "t".to_string(),
+                    namespace: None,
+                    input: "{}".to_string(),
+                    provider_executed: None,
+                    provider_metadata: None,
+                },
+            );
+        }
+        let ids: Vec<&str> = state.values().map(|tool| tool.id.as_str()).collect();
+        assert_eq!(ids, vec!["call_b", "call_c", "call_d"], "numeric keys ascend");
+        // string keys keep insertion order regardless of lexicographic order
+        let mut state = State::new();
+        for (key, id) in [("zebra", "call_z"), ("alpha", "call_a")] {
+            state = start(
+                &state,
+                key,
+                PendingTool {
+                    id: id.to_string(),
+                    name: "t".to_string(),
+                    namespace: None,
+                    input: "{}".to_string(),
+                    provider_executed: None,
+                    provider_metadata: None,
+                },
+            );
+        }
+        let ids: Vec<&str> = state.values().map(|tool| tool.id.as_str()).collect();
+        assert_eq!(ids, vec!["call_z", "call_a"], "string keys keep insertion order");
+        // removal drops the key from insertion tracking too
+        state.remove("zebra");
+        let ids: Vec<&str> = state.values().map(|tool| tool.id.as_str()).collect();
+        assert_eq!(ids, vec!["call_a"]);
+    }
+
+    /// G-372.2 — `Some(false)` providerExecuted stays locally executed: the
+    /// emitted tool-input-start/tool-call carry NO providerExecuted flag
+    /// (ref: `tool.providerExecuted ? true : undefined`).
+    #[test]
+    fn provider_executed_false_stays_local() {
+        let state = start(
+            &State::new(),
+            "0",
+            PendingTool {
+                id: "call_1".to_string(),
+                name: "lookup".to_string(),
+                namespace: None,
+                input: r#"{"q":"x"}"#.to_string(),
+                provider_executed: Some(false),
+                provider_metadata: None,
+            },
+        );
+        let outcome = finish(ADAPTER, &state, "0").expect("finish");
+        let call = outcome
+            .events
+            .iter()
+            .find_map(|event| match event {
+                LLMEvent::ToolCall { provider_executed, .. } => Some(*provider_executed),
+                _ => None,
+            })
+            .expect("tool call event");
+        assert_eq!(call, None, "Some(false) never surfaces as Some(true)");
+    }
 
     fn delta<'a>(id: Option<&'a str>, name: Option<&'a str>, text: &'a str) -> Delta<'a> {
         Delta { id, name, text, provider_metadata: None }

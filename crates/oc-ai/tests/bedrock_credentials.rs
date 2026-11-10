@@ -521,7 +521,10 @@ async fn credential_process_chain() {
         sandbox.write("creds.json", "{\"AccessKeyId\":\"PROC_AKID\",\"SecretAccessKey\":\"PROC_SECRET\",\"SessionToken\":\"PROC_TOKEN\"}");
     let config_file = sandbox.write(
         "config",
-        &format!("[profile corp]\ncredential_process = cat {creds}\n", creds = credentials_json.display()),
+        &format!(
+            "[profile corp]\ncredential_process = cat {creds}\n",
+            creds = credentials_json.display()
+        ),
     );
     let options = DefaultChainOptions {
         region: "us-east-1".into(),
@@ -530,7 +533,8 @@ async fn credential_process_chain() {
         paths: ChainPaths { credentials_file: None, config_file: Some(config_file), aws_dir: None },
         endpoints: ChainEndpoints::default(),
     };
-    let credentials = resolve_default_chain(&options).await.expect("credential_process credentials");
+    let credentials =
+        resolve_default_chain(&options).await.expect("credential_process credentials");
     assert_eq!(credentials.access_key_id, "PROC_AKID");
     assert_eq!(credentials.secret_access_key, "PROC_SECRET");
     assert_eq!(credentials.session_token.as_deref(), Some("PROC_TOKEN"));
@@ -541,10 +545,8 @@ async fn credential_process_chain() {
 #[tokio::test]
 async fn credential_process_failure_surfaces() {
     let sandbox = Sandbox::new("credproc-fail");
-    let config_file = sandbox.write(
-        "config",
-        "[profile corp]\ncredential_process = /nonexistent/fetch-creds.sh\n",
-    );
+    let config_file = sandbox
+        .write("config", "[profile corp]\ncredential_process = /nonexistent/fetch-creds.sh\n");
     let options = DefaultChainOptions {
         region: "us-east-1".into(),
         profile: Some("corp".into()),
@@ -603,15 +605,15 @@ async fn assume_role_chain_signs_sts_call() {
     assert!(requests[0].body.contains("Action=AssumeRole"), "body: {}", requests[0].body);
     assert!(requests[0].body.contains("Version=2011-06-15"), "body: {}", requests[0].body);
     assert!(
-        requests[0]
-            .body
-            .contains("RoleArn=arn%3Aaws%3Aiam%3A%3A123456789012%3Arole%2Fapp"),
+        requests[0].body.contains("RoleArn=arn%3Aaws%3Aiam%3A%3A123456789012%3Arole%2Fapp"),
         "role arn form-encoded: {}",
         requests[0].body
     );
     assert!(
-        requests[0].headers.iter().any(|(name, value)| name == "authorization"
-            && value.contains("Credential=SRC_AKID/")),
+        requests[0]
+            .headers
+            .iter()
+            .any(|(name, value)| name == "authorization" && value.contains("Credential=SRC_AKID/")),
         "STS call is SigV4-signed with the source credentials"
     );
 }
@@ -766,7 +768,10 @@ async fn ecs_container_credentials_chain() {
 async fn ecs_full_uri_chain_sends_auth_token() {
     let ecs = http_mock(std::sync::Arc::new(|request: &RecordedRequest| {
         if request.path.starts_with("/credentials") {
-            Some((200, "{\"AccessKeyId\":\"FULL_AKID\",\"SecretAccessKey\":\"FULL_SECRET\"}".into()))
+            Some((
+                200,
+                "{\"AccessKeyId\":\"FULL_AKID\",\"SecretAccessKey\":\"FULL_SECRET\"}".into(),
+            ))
         } else {
             None
         }

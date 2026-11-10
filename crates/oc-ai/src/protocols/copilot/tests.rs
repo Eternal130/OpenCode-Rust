@@ -166,6 +166,39 @@ fn default_base_url_and_github_token_env_fallback() {
 // G-298 — the `model.request` interaction vocabulary on all three lanes
 // (github-copilot.ts:267-280)
 // ===========================================================================
+//
+// FINAL-G52 — the session runner's request-kind seam header
+// (`x-opencode-request-kind`) is authoritative: title requests classify as
+// `conversation-background` exactly like the ref's `evt.kind` read.
+
+#[test]
+fn interaction_kind_seam_header_overrides_the_body_derivation() {
+    // title kind via the seam → conversation-background + agent initiator
+    let request = session_request(
+        &[("x-session-affinity", "ses_affinity_1"), ("x-opencode-request-kind", "title")],
+        vec![Message::user("Summarize: hello world")],
+    );
+    assert_eq!(interaction_context(&request).kind, SessionRequestKind::Title);
+    let headers = copilot_interaction_headers(&request);
+    assert_eq!(headers.get("X-Interaction-Type"), Some(&"conversation-background".to_string()));
+    assert_eq!(headers.get("x-initiator"), Some(&"agent".to_string()));
+
+    // compaction kind via the seam (no compaction part in the body)
+    let request = session_request(
+        &[("x-session-affinity", "ses_affinity_1"), ("x-opencode-request-kind", "compaction")],
+        vec![Message::user("history")],
+    );
+    assert_eq!(interaction_context(&request).kind, SessionRequestKind::Compaction);
+    let headers = copilot_interaction_headers(&request);
+    assert_eq!(headers.get("X-Interaction-Type"), Some(&"conversation-compaction".to_string()));
+
+    // primary/generate map back to the agent-loop default
+    let request = session_request(
+        &[("x-session-affinity", "ses_affinity_1"), ("x-opencode-request-kind", "generate")],
+        vec![Message::user("hi")],
+    );
+    assert_eq!(interaction_context(&request).kind, SessionRequestKind::Chat);
+}
 
 fn session_request(route_headers: &[(&str, &str)], messages: Vec<Message>) -> LLMRequest {
     let route = copilot_chat_route(

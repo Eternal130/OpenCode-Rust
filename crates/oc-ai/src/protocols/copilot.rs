@@ -103,12 +103,13 @@ pub fn request_metadata(request: &LLMRequest) -> RequestMetadata {
 /// (`x-session-affinity` / `x-opencode-session-id` /
 /// `x-opencode-parent-session-id`):
 ///
-/// - kind: a request replaying a compaction window is a compaction
-///   request (`ContentPart::Compaction`); everything else maps to the
-///   agent-loop default. The title kind is not distinguishable at this
-///   layer — the free utility-title channel carries its own interaction
-///   vocabulary ([`utility_title_headers`]); the billable title path
-///   falls back to the agent-loop classification.
+/// - kind: FINAL-G52 — the runner seam's `x-opencode-request-kind` header
+///   is authoritative when present (title →
+///   `conversation-background` + `x-initiator: agent`, compaction →
+///   `conversation-compaction`); without the seam header (direct route
+///   use) a request replaying a compaction window is detected from
+///   `ContentPart::Compaction`, everything else maps to the agent-loop
+///   default.
 /// - child: a parent-session header is present.
 /// - interaction id: the affinity header, else the session id header;
 ///   absent entirely when the request did not flow through a session
@@ -124,6 +125,10 @@ pub struct InteractionContext {
 /// Header keys of the oc-core session seam this reads.
 const AFFINITY_HEADERS: [&str; 3] = ["x-session-affinity", "X-Session-Id", "x-opencode-session-id"];
 const PARENT_HEADERS: [&str; 2] = ["x-opencode-parent-session-id", "x-parent-session-id"];
+/// FINAL-G52 — the session request kind injected by the runner's seam
+/// (`x-opencode-request-kind`: primary/generate → chat, compaction,
+/// title).
+const KIND_HEADER: &str = "x-opencode-request-kind";
 
 /// Derive the interaction context from a lowered request
 /// (github-copilot.ts:267-276).
@@ -140,12 +145,22 @@ pub fn interaction_context(request: &LLMRequest) -> InteractionContext {
                 .collect::<BTreeMap<String, String>>()
         })
         .unwrap_or_default();
-    let kind = if request.messages.iter().any(|message| {
-        message.content.iter().any(|part| matches!(part, ContentPart::Compaction { .. }))
-    }) {
-        SessionRequestKind::Compaction
-    } else {
-        SessionRequestKind::Chat
+    let kind = match headers.get(KIND_HEADER).map(String::as_str) {
+        // the seam header is authoritative when present (the ref reads
+        // evt.kind directly); the body-derived compaction detection is the
+        // fallback for requests that did not flow through the session
+        // runner
+        Some("title") => SessionRequestKind::Title,
+        Some("compaction") => SessionRequestKind::Compaction,
+        Some("primary") | Some("generate") | _ => {
+            if request.messages.iter().any(|message| {
+                message.content.iter().any(|part| matches!(part, ContentPart::Compaction { .. }))
+            }) {
+                SessionRequestKind::Compaction
+            } else {
+                SessionRequestKind::Chat
+            }
+        }
     };
     let child = PARENT_HEADERS.iter().any(|name| headers.contains_key(*name));
     let interaction_id = AFFINITY_HEADERS

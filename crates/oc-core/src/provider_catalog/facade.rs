@@ -551,6 +551,12 @@ pub fn language_model_for_model(
         .and_then(Value::as_str)
         .map(str::to_string);
     let base_url = connection.base_url.clone().or(catalog_base);
+    // G-371 P3 (model-resolver.ts:291-297 `prepareProviderURL`): expand
+    // `${VAR}` env templates in the resolved baseURL; unset vars keep
+    // their placeholder (validated after the route builds — the vertex
+    // lanes still expand `${GOOGLE_VERTEX_*}` against the resolved
+    // project/location first)
+    let base_url = base_url.map(|url| expand_env_templates(&url));
     let env = &snapshot.environment;
 
     let route = build_route(
@@ -563,6 +569,21 @@ pub fn language_model_for_model(
         connection,
         model,
     )?;
+    // model-resolver.ts:271-279 `validateProviderVariables` — a baseURL
+    // that still carries `${VAR}` after every expansion pass is a
+    // configuration failure naming the unresolved variables
+    if let Some(base_url) = route.endpoint.base_url.as_deref() {
+        let unresolved = unresolved_template_vars(base_url);
+        if !unresolved.is_empty() {
+            return Err(ProviderError::Configuration {
+                provider: provider_id.to_string(),
+                message: format!(
+                    "baseURL has unresolved environment variables: {}",
+                    unresolved.join(", ")
+                ),
+            });
+        }
+    }
     // G-285② — snowflake-cortex's `http.response` rewrite
     // (snowflake-cortex.ts:221-235): a 400 whose error body says
     // "conversation complete" is the server's terminal success dressed as
@@ -1738,6 +1759,58 @@ fn custom_provider_options(model: &CustomModel) -> Option<serde_json::Map<String
     (!options.is_empty()).then_some(options)
 }
 
+/// G-371 P3 (model-resolver.ts:291-297 `prepareProviderURL`): expand
+/// `${VAR}` placeholders from the process environment; an unset variable
+/// keeps its literal placeholder (validated by the caller).
+fn expand_env_templates(url: &str) -> String {
+    if !url.contains("${") {
+        return url.to_string();
+    }
+    let mut out = String::with_capacity(url.len());
+    let mut rest = url;
+    while let Some(start) = rest.find("${") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        match after.find('}') {
+            Some(end) => {
+                let name = &after[..end];
+                match std::env::var(name) {
+                    Ok(value) => out.push_str(&value),
+                    Err(_) => out.push_str(&rest[start..start + 2 + name.len() + 1]),
+                }
+                rest = &after[end + 1..];
+            }
+            None => {
+                out.push_str(rest);
+                return out;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The `${VAR}` names still present after expansion
+/// (model-resolver.ts:299-305 `unresolvedProviderVariables`).
+fn unresolved_template_vars(url: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let mut rest = url;
+    while let Some(start) = rest.find("${") {
+        let after = &rest[start + 2..];
+        match after.find('}') {
+            Some(end) => {
+                let name = after[..end].to_string();
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+                rest = &after[end + 1..];
+            }
+            None => break,
+        }
+    }
+    names
+}
+
 /// Bind a user-defined custom provider (config `provider.<id>` /
 /// console-issued provider). When the binding package — the MODEL-level
 /// `package` first, else the PROVIDER-level one (provider.ts:351
@@ -1761,9 +1834,23 @@ pub fn custom_language_model(
         return Err(ProviderError::UnknownModel(custom.id.clone(), model_id.to_string()));
     };
     // The per-model baseURL overlay wins per key over the provider's
-    // (opencode.ts:276-279 mergeOverlay).
+    // (opencode.ts:276-279 mergeOverlay). G-371 P3: `${VAR}` env templates
+    // expand before the route binds (model-resolver.ts:291-297
+    // `prepareProviderURL`; unset vars keep their placeholder and surface
+    // as a configuration error naming them).
     let base_url =
         model.base_url.as_deref().filter(|url| !url.is_empty()).unwrap_or(custom.base_url.as_str());
+    let base_url = expand_env_templates(base_url);
+    let unresolved = unresolved_template_vars(&base_url);
+    if !unresolved.is_empty() {
+        return Err(ProviderError::Configuration {
+            provider: custom.id.clone(),
+            message: format!(
+                "baseURL has unresolved environment variables: {}",
+                unresolved.join(", ")
+            ),
+        });
+    }
     // Native-protocol binding (provider.ts:351): the model package
     // overrides the provider's; resolution is context-aware (HOSTS
     // redirects are host-conditional, the mantle split consults the
@@ -1772,7 +1859,7 @@ pub fn custom_language_model(
     // bridge is not ported).
     let specifier = model.package.as_deref().or(custom.package.as_deref());
     if let Some(specifier) = specifier {
-        return custom_native_language_model(context, custom, model, specifier, base_url);
+        return custom_native_language_model(context, custom, model, specifier, &base_url);
     }
     if base_url.is_empty() {
         return Err(ProviderError::Configuration {
@@ -1783,6 +1870,7 @@ pub fn custom_language_model(
             ),
         });
     }
+    let base_url = base_url.as_str();
     // Effective overlays: provider-level under model-level, the model
     // winning per key (v2 core/src/model.ts:204-209 + provider.ts
     // mergeOverlay/mergeHeaders:172-205).
@@ -2526,6 +2614,78 @@ mod tests {
             model.route.endpoint.base_url.as_deref(),
             Some("https://bedrock-mantle.us-east-1.api.aws/v1")
         );
+    }
+
+    /// G-371 P3 (model-resolver.ts:291-305): `${VAR}` templates in a
+    /// configured baseURL expand from the environment; an unset variable
+    /// keeps its placeholder and fails binding naming the variable.
+    #[test]
+    fn provider_facade_base_url_env_template_expansion() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        let openai = catalog.provider("openai").expect("openai in catalog");
+        let model = openai.models.first().expect("an openai model");
+        let var = "GB12_LANE7B_TEST_HOST";
+        std::env::set_var(var, "expanded.example.test");
+
+        let bound = language_model(
+            &context,
+            catalog,
+            "openai",
+            model.id.as_str(),
+            &ModelConnection {
+                api_key: Some("sk-test".into()),
+                base_url: Some(format!("https://${{{var}}}/v1")),
+                ..Default::default()
+            },
+        )
+        .expect("expanded template binds");
+        assert_eq!(
+            bound.route.endpoint.base_url.as_deref(),
+            Some("https://expanded.example.test/v1")
+        );
+        std::env::remove_var(var);
+
+        let error = language_model(
+            &context,
+            catalog,
+            "openai",
+            model.id.as_str(),
+            &ModelConnection {
+                api_key: Some("sk-test".into()),
+                base_url: Some(format!("https://${{{var}}}/v1")),
+                ..Default::default()
+            },
+        )
+        .expect_err("unresolved template fails");
+        assert!(error.to_string().contains(var), "names the unresolved variable: {error}");
+    }
+
+    /// G-371 P3 — the custom-provider lane expands the same templates.
+    #[test]
+    fn custom_provider_base_url_env_template_expansion() {
+        let context = context();
+        let var = "GB12_LANE7B_CUSTOM_HOST";
+        std::env::set_var(var, "custom.example.test");
+        let custom = crate::provider_catalog::CustomProvider {
+            id: "tmpl".into(),
+            base_url: format!("https://${{{var}}}/v1"),
+            models: vec![crate::provider_catalog::CustomModel {
+                id: "m1".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let model = custom_language_model(&context, &custom, custom.models[0].id.as_str())
+            .expect("expanded custom template binds");
+        assert_eq!(
+            model.route.endpoint.base_url.as_deref(),
+            Some("https://custom.example.test/v1")
+        );
+        std::env::remove_var(var);
+        let error = custom_language_model(&context, &custom, custom.models[0].id.as_str())
+            .expect_err("unresolved custom template fails");
+        assert!(error.to_string().contains(var), "names the variable: {error}");
     }
 
     /// G-262② — the bedrock settings chain (amazon-bedrock.ts:40-52): a

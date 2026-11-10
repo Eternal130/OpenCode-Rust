@@ -56,6 +56,20 @@ fn invalid(message: String) -> AiError {
     })
 }
 
+/// Bounded raw-payload snippet attached to decode/parse failures (the ref
+/// parse error carries the frame's raw `body`; the port caps it so a
+/// corrupt giant payload cannot flood diagnostics).
+const RAW_BODY_SNIPPET_BYTES: usize = 2048;
+
+fn invalid_with_body(message: &str, body: &[u8]) -> AiError {
+    let mut error = invalid(message.to_string());
+    if let AiErrorReason::InvalidProviderOutput { fields, .. } = &mut error.reason {
+        let snippet = String::from_utf8_lossy(&body[..body.len().min(RAW_BODY_SNIPPET_BYTES)]);
+        fields.body = Some(snippet.into_owned());
+    }
+    error
+}
+
 impl Frame {
     pub fn header(&self, name: &str) -> Option<&HeaderValue> {
         self.headers.iter().find(|(key, _)| key == name).map(|(_, value)| value)
@@ -194,11 +208,19 @@ pub fn frame_to_json(frame: &Frame) -> Result<Option<String>, AiError> {
     if frame.event_type.is_empty() || frame.payload.is_empty() {
         return Ok(None);
     }
-    let payload = std::str::from_utf8(&frame.payload).map_err(|error| {
-        invalid(format!("Failed to parse Bedrock Converse event-stream payload: {error}"))
-    })?;
-    let mut parsed: serde_json::Value = serde_json::from_str(payload).map_err(|error| {
-        invalid(format!("Failed to parse Bedrock Converse event-stream payload: {error}"))
+    let payload = std::str::from_utf8(&frame.payload)
+        .map_err(|error| {
+            invalid_with_body(
+                &format!("Failed to parse Bedrock Converse event-stream payload: {error}"),
+                &frame.payload,
+            )
+        })?
+        .to_string();
+    let mut parsed: serde_json::Value = serde_json::from_str(&payload).map_err(|error| {
+        invalid_with_body(
+            &format!("Failed to parse Bedrock Converse event-stream payload: {error}"),
+            frame.payload.as_slice(),
+        )
     })?;
     if let serde_json::Value::Object(object) = &mut parsed {
         object.remove("p");
@@ -368,5 +390,24 @@ mod tests {
         let bytes = encode::event("messageStart", "");
         let frame = decode_frame(&bytes).unwrap();
         assert!(frame_to_json(&frame).unwrap().is_none());
+    }
+
+    /// G-371 P7 — payload parse failures carry a bounded raw-body snippet
+    /// (the ref parse error attaches the frame's raw `body`,
+    /// bedrock-event-stream.ts:110-115).
+    #[test]
+    fn payload_parse_failures_carry_a_raw_body_snippet() {
+        let bytes = encode::event("contentBlockDelta", "{not json");
+        let frame = decode_frame(&bytes).unwrap();
+        let error = frame_to_json(&frame).unwrap_err();
+        assert!(error.message().contains("event-stream payload"), "{}", error.message());
+        match &error.reason {
+            AiErrorReason::InvalidProviderOutput { fields, .. } => {
+                let body = fields.body.as_deref().expect("raw body snippet");
+                assert!(body.contains("{not json"), "body: {body}");
+                assert!(body.len() <= 2048, "snippet is bounded");
+            }
+            reason => panic!("expected InvalidProviderOutput, got {reason:?}"),
+        }
     }
 }

@@ -773,6 +773,13 @@ impl SessionModelRequest {
             headers.insert("x-opencode-parent-session-id".into(), parent.clone());
             headers.insert("x-parent-session-id".into(), parent.clone());
         }
+        // FINAL-G52 — the session request kind rides the seam so the
+        // copilot interaction-header derivation (github-copilot.ts:267-280
+        // reads `evt.kind` from the model.request hook) can classify
+        // title requests (`conversation-background`) and compaction
+        // (`conversation-compaction`) exactly like the ref, instead of the
+        // bounded body-derived fallback.
+        headers.insert("x-opencode-request-kind".into(), kind.as_str().to_string());
         headers.insert("x-session-affinity".into(), affinity.clone());
         headers.insert("X-Session-Id".into(), affinity.clone());
         headers.insert("User-Agent".into(), useragent(&self.app));

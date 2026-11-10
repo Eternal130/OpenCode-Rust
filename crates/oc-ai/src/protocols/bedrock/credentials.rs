@@ -336,9 +336,9 @@ async fn assume_role_leg(
     profile: &BTreeMap<String, String>,
     profile_name: &str,
 ) -> Result<Credentials, String> {
-    let role_arn = profile.get("role_arn").ok_or_else(|| {
-        format!("profile `{profile_name}` assume-role leg has no role_arn")
-    })?;
+    let role_arn = profile
+        .get("role_arn")
+        .ok_or_else(|| format!("profile `{profile_name}` assume-role leg has no role_arn"))?;
     // source credentials: this profile's static keys, the source
     // profile's static keys, or the env — in that order
     let source_from_keys = |keys: &BTreeMap<String, String>| {
@@ -374,10 +374,8 @@ async fn assume_role_leg(
             "profile `{profile_name}` assume-role source could not be resolved (multi-hop source_profile chains are not supported)"
         ));
     };
-    let session_name = profile
-        .get("role_session_name")
-        .cloned()
-        .unwrap_or_else(|| "opencode".to_string());
+    let session_name =
+        profile.get("role_session_name").cloned().unwrap_or_else(|| "opencode".to_string());
     let mut form = vec![
         ("Action", "AssumeRole".to_string()),
         ("Version", "2011-06-15".to_string()),
@@ -440,19 +438,16 @@ async fn web_identity_leg(
 /// (direct, `AWS_CONTAINER_AUTHORIZATION_TOKEN` bearer). `Ok(None)` when
 /// neither env var is set.
 async fn ecs_leg(options: &DefaultChainOptions) -> Result<Option<Credentials>, String> {
-    let url = if let Some(relative) = options.env.non_empty("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
-    {
-        let base = options
-            .endpoints
-            .ecs
-            .clone()
-            .unwrap_or_else(|| "http://169.254.170.2".to_string());
-        format!("{base}{relative}")
-    } else if let Some(full) = options.env.non_empty("AWS_CONTAINER_CREDENTIALS_FULL_URI") {
-        full
-    } else {
-        return Ok(None);
-    };
+    let url =
+        if let Some(relative) = options.env.non_empty("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") {
+            let base =
+                options.endpoints.ecs.clone().unwrap_or_else(|| "http://169.254.170.2".to_string());
+            format!("{base}{relative}")
+        } else if let Some(full) = options.env.non_empty("AWS_CONTAINER_CREDENTIALS_FULL_URI") {
+            full
+        } else {
+            return Ok(None);
+        };
     let headers: Vec<(String, String)> = options
         .env
         .non_empty("AWS_CONTAINER_AUTHORIZATION_TOKEN")
@@ -512,11 +507,8 @@ async fn sts_call(
     };
     let signed = super::sigv4::sign(&input, source, "sts", instant)
         .map_err(|error| format!("STS signing failed: {error}"))?;
-    let headers: Vec<(String, String)> = signed
-        .headers
-        .iter()
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .collect();
+    let headers: Vec<(String, String)> =
+        signed.headers.iter().map(|(name, value)| (name.clone(), value.clone())).collect();
     let xml = http_post_form(&base, &body, &headers).await?;
     if let Some(error) = xml_error_message(&xml) {
         return Err(format!("STS call failed: {error}"));
