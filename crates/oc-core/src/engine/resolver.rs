@@ -2151,7 +2151,9 @@ mod local_discovery_tests {
             .nth(1)
         {
             let resolver = CatalogModelResolver::new(
-                FacadeContext::new(Arc::new(ReqwestTransport::new()) as oc_ai::route::SharedTransport),
+                FacadeContext::new(
+                    Arc::new(ReqwestTransport::new()) as oc_ai::route::SharedTransport
+                ),
                 catalog(),
                 BTreeMap::new(),
                 Vec::new(),
@@ -2166,8 +2168,13 @@ mod local_discovery_tests {
         }
 
         // Empty catalog: no available model qualifies → NotSelected.
-        let empty =
-            CatalogModelResolver::new(context, Arc::new(Catalog::empty()), BTreeMap::new(), Vec::new(), None);
+        let empty = CatalogModelResolver::new(
+            context,
+            Arc::new(Catalog::empty()),
+            BTreeMap::new(),
+            Vec::new(),
+            None,
+        );
         match empty.resolve(&session()) {
             Err(crate::session::runner::ModelError::NotSelected(_)) => {}
             other => panic!("expected NotSelected, got {other:?}"),

@@ -2192,10 +2192,7 @@ fn mcp_loaded(mcp: serde_json::Value) -> crate::config::Loaded {
         .expect("sandbox under /tmp/opencode");
     let mut loaded = crate::config::Loader::new(
         dir.path().to_path_buf(),
-        crate::config::GlobalDirs {
-            config: dir.path().join("cfg"),
-            home: dir.path().join("home"),
-        },
+        crate::config::GlobalDirs { config: dir.path().join("cfg"), home: dir.path().join("home") },
     )
     .load();
     loaded.entries.push(oc_schema::config::Entry::Document(Box::new(
@@ -2306,10 +2303,7 @@ fn mcp_document_timeout_latest_document_wins_per_field() {
         .expect("sandbox under /tmp/opencode");
     let mut loaded = crate::config::Loader::new(
         dir.path().to_path_buf(),
-        crate::config::GlobalDirs {
-            config: dir.path().join("cfg"),
-            home: dir.path().join("home"),
-        },
+        crate::config::GlobalDirs { config: dir.path().join("cfg"), home: dir.path().join("home") },
     )
     .load();
     for mcp in [
@@ -2318,8 +2312,7 @@ fn mcp_document_timeout_latest_document_wins_per_field() {
     ] {
         loaded.entries.push(oc_schema::config::Entry::Document(Box::new(
             oc_schema::config::Document {
-                info: serde_json::from_value(serde_json::json!({ "mcp": mcp }))
-                    .expect("info"),
+                info: serde_json::from_value(serde_json::json!({ "mcp": mcp })).expect("info"),
                 path: None,
             },
         )));
