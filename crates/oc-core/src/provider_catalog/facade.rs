@@ -1771,19 +1771,17 @@ fn expand_env_templates(url: &str) -> String {
     while let Some(start) = rest.find("${") {
         out.push_str(&rest[..start]);
         let after = &rest[start + 2..];
-        match after.find('}') {
-            Some(end) => {
-                let name = &after[..end];
-                match std::env::var(name) {
-                    Ok(value) => out.push_str(&value),
-                    Err(_) => out.push_str(&rest[start..start + 2 + name.len() + 1]),
-                }
-                rest = &after[end + 1..];
+        if let Some(end) = after.find('}') {
+            let name = &after[..end];
+            if let Ok(value) = std::env::var(name) {
+                out.push_str(&value);
+            } else {
+                out.push_str(&rest[start..=start + 2 + name.len()]);
             }
-            None => {
-                out.push_str(rest);
-                return out;
-            }
+            rest = &after[end + 1..];
+        } else {
+            out.push_str(rest);
+            return out;
         }
     }
     out.push_str(rest);
