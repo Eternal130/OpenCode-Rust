@@ -1,0 +1,95 @@
+name: size-guard
+
+# G-330 — binary size guardrail, mechanized.
+#
+# Provenance of the cap (this number was previously an "orphan" with no
+# written basis — recorded here once and for all):
+#   * R-01b ruling (ROADMAP.md:37): beta.5 shipped 72.7 MiB against a
+#     67.6 MiB cap → swift / c-sharp / kotlin grammars were cut from the
+#     default feature set (RA-07 made them non-default `lang-*` features).
+#   * Last recorded data point (post M-retire release): 68,144,160 B
+#     ≈ 64.98 MiB — ~2.6 MiB of headroom under the cap.
+# The cap is the ruling ceiling, so exceeding it is a HARD failure (the
+# precedent response to breaching it was cutting default features, not
+# shrugging). A warning fires at 95% so drift is visible before it lands.
+#
+# What is measured: the `opencode-rust` binary from a host
+# x86_64-unknown-linux-gnu release build. release.yml additionally stamps
+# OC_RELEASE_TAG (identity metadata — negligible size effect) and builds
+# per-target; the host linux-gnu build is the canonical proxy for the
+# shipped linux artifact and keeps this job off the cross matrix.
+# oc-pty ships beside it but is out of the ruling's scope (not gated,
+# not measured).
+#
+# Trigger discipline: main pushes that can change the binary only
+# (crates/, Cargo.toml/lock, .cargo/, this workflow) + manual dispatch.
+# PRs are deliberately not built here — a PR that breaches the cap is
+# caught when it lands on main, and the release workflow stays the
+# shipping authority.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/**"
+      - ".github/workflows/size-guard.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: size-guard-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  measure:
+    name: release binary size vs 67.6 MiB cap (R-01b)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # Distinct shared-key from the ci.yml dev-profile cache: this job
+      # builds the RELEASE profile; sharing entries would thrash both.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: opencode-size-guard
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Build release binary (oc-cli)
+        run: cargo build --release -p oc-cli --locked
+
+      - name: Measure and gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="target/release/opencode-rust"
+          test -s "$BIN"
+          BYTES=$(stat -c %s "$BIN")
+          # 67.6 MiB = floor(67.6 * 1048576) = 70,883,737 bytes
+          CAP_BYTES=70883737
+          WARN_BYTES=$(( CAP_BYTES * 95 / 100 ))
+          MIB=$(awk -v b="$BYTES" 'BEGIN { printf "%.2f", b / 1048576 }')
+          HEADROOM=$(awk -v b="$BYTES" -v c="$CAP_BYTES" 'BEGIN { printf "%.2f", (c - b) / 1048576 }')
+
+          {
+            echo "## Binary size guard (G-330 / R-01b)"
+            echo ""
+            echo "| artifact | size | cap | headroom |"
+            echo "|---|---|---|---|"
+            echo "| \`opencode-rust\` (x86_64-unknown-linux-gnu, release) | ${MIB} MiB (${BYTES} B) | 67.6 MiB | ${HEADROOM} MiB |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if (( BYTES > CAP_BYTES )); then
+            echo "::error::opencode-rust is ${MIB} MiB (${BYTES} B), over the R-01b cap of 67.6 MiB (${CAP_BYTES} B). Precedent response: cut default features (see RA-07 lang-* gating) — do not silently raise the cap."
+            exit 1
+          elif (( BYTES > WARN_BYTES )); then
+            echo "::warning::opencode-rust is ${MIB} MiB — within 5% of the 67.6 MiB cap (headroom ${HEADROOM} MiB)."
+          else
+            echo "opencode-rust ${MIB} MiB — within cap (headroom ${HEADROOM} MiB)."
+          fi
