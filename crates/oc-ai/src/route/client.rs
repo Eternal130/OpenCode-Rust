@@ -225,9 +225,14 @@ impl Route {
         match &self.headers {
             Some(headers) if !headers(&resolved).is_empty() => {
                 let header_map = headers(&resolved);
+                // G-298 — the per-request seam wins per key over the
+                // merged route/model/request headers (the ref
+                // `applyHeaders`/`model.request` per-request policy runs
+                // last and can only escalate, e.g. copilot's
+                // `x-initiator` escalation over the client default).
                 let merged = crate::schema::options::merge_http_options(&[
-                    Some(&HttpOptions { headers: Some(header_map), ..Default::default() }),
                     resolved.http.as_ref(),
+                    Some(&HttpOptions { headers: Some(header_map), ..Default::default() }),
                 ]);
                 resolved.update(LLMRequestPatch { http: merged, ..Default::default() })
             }

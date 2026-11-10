@@ -167,10 +167,7 @@ fn default_base_url_and_github_token_env_fallback() {
 // (github-copilot.ts:267-280)
 // ===========================================================================
 
-fn session_request(
-    route_headers: &[(&str, &str)],
-    messages: Vec<Message>,
-) -> LLMRequest {
+fn session_request(route_headers: &[(&str, &str)], messages: Vec<Message>) -> LLMRequest {
     let route = copilot_chat_route(
         transport(),
         CopilotConfig {
@@ -178,7 +175,7 @@ fn session_request(
             ..Default::default()
         },
     );
-    let model = route.model("gpt-5.4", None).unwrap();
+    let model = route.model("claude-sonnet-4.6", None).unwrap();
     let mut request = LLMRequest::new(model);
     request.messages = messages;
     if !route_headers.is_empty() {
@@ -219,10 +216,7 @@ fn interaction_headers_matrix_matches_the_ref_hook() {
     // Child session (parent header present): conversation-subagent and the
     // forced agent initiator.
     let request = session_request(
-        &[
-            ("x-session-affinity", "ses_affinity_1"),
-            ("x-opencode-parent-session-id", "ses_parent"),
-        ],
+        &[("x-session-affinity", "ses_affinity_1"), ("x-opencode-parent-session-id", "ses_parent")],
         vec![Message::user("hi")],
     );
     let headers = copilot_interaction_headers(&request);
@@ -273,10 +267,8 @@ fn interaction_headers_absent_without_session_context() {
 
 #[test]
 fn chat_lane_wire_carries_the_interaction_headers() {
-    let request = session_request(
-        &[("x-session-affinity", "ses_affinity_1")],
-        vec![Message::user("hello")],
-    );
+    let request =
+        session_request(&[("x-session-affinity", "ses_affinity_1")], vec![Message::user("hello")]);
     let route = request.model.route.clone();
     let prepared = route.prepare_request(&request);
     let body = route.build_body(&prepared).expect("chat body");
@@ -321,11 +313,12 @@ fn messages_lane_wire_carries_the_interaction_headers() {
     // The Anthropic escape lane (anthropic-messages route patched to the
     // copilot provider) also injects the vocabulary; plain anthropic
     // requests stay untouched.
-    let route = crate::protocols::anthropic_messages::anthropic_messages_route(transport())
-        .with(crate::route::RoutePatch {
+    let route = crate::protocols::anthropic_messages::anthropic_messages_route(transport()).with(
+        crate::route::RoutePatch {
             provider: Some("github-copilot".to_string()),
             ..Default::default()
-        });
+        },
+    );
     let model = route.model("claude-sonnet-4.6", None).unwrap();
     let mut request = LLMRequest::new(model);
     request.messages = vec![Message::user("hello")];

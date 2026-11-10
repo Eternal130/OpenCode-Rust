@@ -436,8 +436,8 @@ fn sigv4_signing_targets_the_bedrock_mantle_service() {
 #[test]
 fn effort_updates_require_claude_5_1_on_mantle() {
     let transport: SharedTransport = Arc::new(MockTransport::from_interactions(vec![]));
-    let route =
-        bedrock_mantle_messages_route(transport, MantleMessagesConfig::default()).expect("route builds");
+    let route = bedrock_mantle_messages_route(transport, MantleMessagesConfig::default())
+        .expect("route builds");
     let opus_5_0 = LLMRequest::new(route.model("anthropic.claude-opus-5", None).unwrap());
     assert!(!route.protocol.supports_effort_updates(&opus_5_0), "opus 5.0 unsupported");
     let opus_5_1 = LLMRequest::new(route.model("anthropic.claude-opus-5-1", None).unwrap());
