@@ -13,6 +13,9 @@ workspace = true
 # intentional 0.12/0.13 dual-stack; this crate owns the 0.12 client shape).
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "aws-lc-rs", "ring"] }
+# System-root source for the NODE_EXTRA_CA_CERTS additive trust (G-299);
+# already in the workspace tree via rustls-platform-verifier.
+rustls-native-certs = "0.8"
 rustls-platform-verifier = "0.7"
 # Fallback only: if the platform verifier cannot be initialised (e.g. a
 # minimal container without a system trust store) we degrade to the

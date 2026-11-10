@@ -612,7 +612,8 @@ fn ttl_bucket(ttl_seconds: Option<f64>) -> Option<&'static str> {
     ttl_seconds.is_some_and(|seconds| seconds >= 3600.0).then_some("1h")
 }
 
-fn cache_control(breakpoints: &mut Breakpoints, cache: Option<&CacheHint>) -> Option<Value> {    let hint = cache?;
+fn cache_control(breakpoints: &mut Breakpoints, cache: Option<&CacheHint>) -> Option<Value> {
+    let hint = cache?;
     if !matches!(hint.kind, CacheHintKind::Ephemeral | CacheHintKind::Persistent) {
         return None;
     }
