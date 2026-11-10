@@ -72,6 +72,53 @@ pub trait StoragePort: Send + Sync {
     async fn scan(&self, plugin_id: &str, query: StorageScanQuery) -> Result<Value, String>;
 }
 
+/// G-293 ② — the (id, revision) bookkeeping per entry, mirroring ref
+/// plugin.ts:100-180: `fingerprint` is the entry's content revision
+/// (a stable hash over its import-graph digests — the bounded
+/// deviation from the ref's module revisions: same diff semantics,
+/// derived from content); `failed` records the revision whose
+/// (re)load failed LAST. A failed revision is never retried until the
+/// source changes again (the ref's prefix-diff + failed-slot rule);
+/// the plugin keeps its last-good generation registered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RevisionState {
+    /// The plugin id of the last GOOD generation (restored on failure).
+    pub plugin_id: String,
+    /// Content fingerprint of the last observed source revision.
+    pub fingerprint: String,
+    /// `Some(fingerprint)` when that revision's load failed.
+    pub failed: Option<String>,
+}
+
+/// The G-293 content-revision fingerprint: order-independent stable
+/// hash over the entry's import-graph digests.
+fn revision_fingerprint(digests: &HashMap<String, String>) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut pairs: Vec<(&String, &String)> = digests.iter().collect();
+    pairs.sort();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for (path, digest) in pairs {
+        path.hash(&mut hasher);
+        digest.hash(&mut hasher);
+    }
+    format!("rev_{:016x}", hasher.finish())
+}
+
+/// G-295 — the ephemeral `rpc.{id}.{event}` publisher seam: the guest's
+/// `ctx.rpc.register(...).events.emit(name, data)` lands here after the
+/// host validated the rpc id + the declared event name. The embedder
+/// binds the process bus (ephemeral event named `rpc.{rpcId}.{event}`,
+/// location-scoped per its own routing — the same visibility class the
+/// SSE feed already treats `rpc.*` as public); the host crate stays
+/// dependency-light, so the port travels as data like every other
+/// engine seam. Answered INLINE on the IO reader (the publish is
+/// non-blocking by contract — deadlock rule 1).
+pub trait RpcEventPort: Send + Sync {
+    /// Publish one ephemeral `rpc.{rpc_id}.{event}` bus event carrying
+    /// `data`. Must not block.
+    fn publish(&self, rpc_id: &str, event: &str, data: Value) -> Result<(), String>;
+}
+
 /// Everything the supervisor needs at spawn time.
 #[derive(Clone)]
 pub struct SupervisorConfig {
@@ -138,6 +185,11 @@ pub struct SupervisorConfig {
     /// The integration backend (G-64): `None` declines every
     /// `ctx.integration.*` / `ctx.integration.connection.*` call.
     pub integration_port: Option<Arc<dyn crate::context::IntegrationPort>>,
+    /// G-295 — the ephemeral `rpc.{id}.{event}` bus publisher:
+    /// `None` declines every `ctx.rpc.events.emit` with a clear error;
+    /// the embedder binds the engine-bus-backed port (location scoping
+    /// is the binding's concern — the host is process-wide, G-28).
+    pub rpc_event_port: Option<Arc<dyn RpcEventPort>>,
 }
 
 impl Default for SupervisorConfig {
@@ -167,6 +219,7 @@ impl Default for SupervisorConfig {
             reference_port: None,
             terminal_port: None,
             integration_port: None,
+            rpc_event_port: None,
         }
     }
 }
@@ -261,6 +314,9 @@ pub struct Shared {
     busy_plugins: Mutex<HashSet<String>>,
     /// entry path → last known import-graph digests (hot reload).
     digests: Mutex<HashMap<String, HashMap<String, String>>>,
+    /// G-293 ② — entry path → (plugin id, revision fingerprint,
+    /// failed-revision) bookkeeping (the reload diff + no-retry rule).
+    revisions: Mutex<HashMap<String, RevisionState>>,
     /// Set once the first initialize+load pass finished (any plugin
     /// outcome) — [`crate::PluginHost::wait_ready`]'s condition.
     pub ready: Arc<(Mutex<bool>, Condvar)>,
@@ -305,6 +361,7 @@ impl Shared {
             crash_counts: Mutex::new(HashMap::new()),
             busy_plugins: Mutex::new(HashSet::new()),
             digests: Mutex::new(HashMap::new()),
+            revisions: Mutex::new(HashMap::new()),
             ready: Arc::new((Mutex::new(false), Condvar::new())),
             dispatched_events: AtomicU64::new(0),
             dropped_events: AtomicU64::new(0),
@@ -420,6 +477,12 @@ impl Shared {
             //    the definition lands in the native registry (method
             //    names gate dispatch); the handlers stay in the guest.
             "rpc.register" => Some(answer_rpc_register(self, id, params)),
+            // -- G-295: `rpc.register(...).events.emit(name, data)` —
+            //    validate the rpc id + the DECLARED event name, then
+            //    publish the ephemeral `rpc.{id}.{event}` bus event
+            //    through the embedder's port (answered inline — the
+            //    publish is non-blocking by contract, deadlock rule 1).
+            "rpc.event" => Some(answer_rpc_event(self, id, params)),
             // -- plugin-ID-scoped durable KV (PLUG-D18): the DB-backed
             //    port answers asynchronously off the reader (deadlock
             //    rule 1 — the backend's IO never blocks the pipe).
@@ -1394,6 +1457,53 @@ fn log_guest(params: &Value) {
     }
 }
 
+/// G-295 — the `rpc.event` guest-request arm: the guest's
+/// `events.emit(name, data)` after its own definition check. The host
+/// re-validates (registration exists, event name declared — both sides
+/// of the bridge validate, like every registration surface) and
+/// publishes `rpc.{id}.{name}` through the [`RpcEventPort`]. No port
+/// bound → a clear error back to the guest (the three-state discipline
+/// of every other optional engine seam).
+fn answer_rpc_event(shared: &Shared, id: u64, params: &Value) -> String {
+    let Some(rpc_id) = params.get("id").and_then(Value::as_str).filter(|id| !id.is_empty())
+    else {
+        return protocol::error_response(id, "rpc.event requires an id");
+    };
+    let Some(event) = params.get("name").and_then(Value::as_str).filter(|name| !name.is_empty())
+    else {
+        return protocol::error_response(id, "rpc.event requires a name");
+    };
+    let registration = shared
+        .registrations
+        .read()
+        .expect("registrations poisoned")
+        .rpcs
+        .get(rpc_id)
+        .cloned();
+    let Some(registration) = registration else {
+        return protocol::error_response(id, &format!("Unknown RPC id: {rpc_id}"));
+    };
+    let declared = registration
+        .definition
+        .get("events")
+        .and_then(Value::as_object)
+        .is_some_and(|events| events.contains_key(event));
+    if !declared {
+        return protocol::error_response(id, &format!("Unknown RPC event: {rpc_id}.{event}"));
+    }
+    let Some(port) = shared.config.rpc_event_port.clone() else {
+        return protocol::error_response(
+            id,
+            "rpc.event: no event bus attached to the plugin host",
+        );
+    };
+    let data = params.get("data").cloned().unwrap_or(Value::Null);
+    match port.publish(rpc_id, event, data) {
+        Ok(()) => protocol::response(id, Value::Null),
+        Err(message) => protocol::error_response(id, &message),
+    }
+}
+
 /// The `rpc.register` guest-request arm (PLUG-D14): validate + record
 /// the definition; the handlers stay guest-side (`rpc.call` routes back
 /// through the supervisor's request path).
@@ -1708,6 +1818,7 @@ impl Supervisor {
             crash_counts: Mutex::new(HashMap::new()),
             busy_plugins: Mutex::new(HashSet::new()),
             digests: Mutex::new(HashMap::new()),
+            revisions: Mutex::new(HashMap::new()),
             ready: Arc::new((Mutex::new(false), Condvar::new())),
             dispatched_events: AtomicU64::new(0),
             dropped_events: AtomicU64::new(0),
@@ -1918,10 +2029,30 @@ impl Shared {
                 self.request("scan", json!({ "entry": key }), self.config.dispatch_timeout).await
             {
                 if let Some(digests) = decode_digests(&result) {
+                    self.record_revision(&key, &digests, None);
                     self.digests.lock().expect("digests poisoned").insert(key, digests);
                 }
             }
         }
+    }
+
+    /// G-293 ② — record one entry's (id, revision) state. `failed`
+    /// overrides the stored state when `Some` (a failed load keeps the
+    /// last-good plugin id); `None` records a good generation.
+    fn record_revision(&self, key: &str, digests: &HashMap<String, String>, failed: Option<String>) {
+        let fingerprint = revision_fingerprint(digests);
+        let plugin_id = self
+            .registrations
+            .read()
+            .expect("registrations poisoned")
+            .plugins
+            .get(key)
+            .map(|status| status.plugin_id.clone())
+            .unwrap_or_default();
+        self.revisions.lock().expect("revisions poisoned").insert(
+            key.to_owned(),
+            RevisionState { plugin_id, fingerprint, failed },
+        );
     }
 
     fn loadable_entries(&self) -> Vec<PathBuf> {
@@ -1937,6 +2068,19 @@ impl Shared {
 
     /// Compare current digests against the stored ones; reload every
     /// plugin whose graph changed. Returns the reloaded count.
+    ///
+    /// G-293 ①: the reload is STAGED — the host snapshots the whole
+    /// registration store, drops the old plugin's entries, and loads
+    /// the NEW generation while the old one is still live in the guest
+    /// (`load` with `staged: true`: the guest snapshots its own
+    /// registries and restores them on failure). A failing load
+    /// RESTORES the snapshot wholesale — the old generation's
+    /// registrations survive and stay functional (ref
+    /// supervisor.ts:70-86: "the new revision never became a
+    /// generation, so the one already running keeps its place").
+    /// G-293 ②: the (id, revision) diff — an unchanged revision never
+    /// reloads, and a FAILED revision is not retried until the source
+    /// changes again.
     pub async fn reload_changed(&self) -> Result<usize, HostError> {
         let entries = self.loadable_entries();
         let mut reloaded = 0usize;
@@ -1948,6 +2092,7 @@ impl Shared {
                 continue; // entry vanished — next poll / restart handles it
             };
             let Some(fresh) = decode_digests(&result) else { continue };
+            let revision = revision_fingerprint(&fresh);
             let changed = {
                 let digests = self.digests.lock().expect("digests poisoned");
                 digests.get(&key).is_none_or(|stored| *stored != fresh)
@@ -1955,21 +2100,31 @@ impl Shared {
             if !changed {
                 continue;
             }
-            // Unload the OLD plugin id (registrations cleared), bump
-            // the generation, re-load, store the new digests.
+            // ② the revision model: a plugin whose last load of THIS
+            // revision failed keeps its last-good generation and is
+            // NOT retried until the source changes again.
             let old_id = {
                 let registrations = self.registrations.read().expect("registrations poisoned");
                 registrations.plugins.get(&key).map(|status| status.plugin_id.clone())
             };
-            if let Some(old_id) = old_id.filter(|id| !id.is_empty()) {
-                self.registrations.write().expect("registrations poisoned").clear_plugin(&old_id);
-                let _ = self
-                    .request(
-                        "unload",
-                        json!({ "pluginId": old_id }),
-                        self.config.registration_timeout,
-                    )
-                    .await;
+            {
+                let revisions = self.revisions.lock().expect("revisions poisoned");
+                if let Some(state) = revisions.get(&key) {
+                    if state.failed.as_deref() == Some(revision.as_str()) {
+                        // Keep the stored digests in sync with the
+                        // skipped (failed) revision so later passes
+                        // diff against it.
+                        self.digests.lock().expect("digests poisoned").insert(key, fresh);
+                        continue;
+                    }
+                }
+            }
+            // ① staged swap: snapshot the last good state, clear the
+            // old plugin's entries, load the new generation; on ANY
+            // failure restore the snapshot (the fallback).
+            let backup = self.registrations.read().expect("registrations poisoned").clone();
+            if let Some(old_id) = old_id.as_deref().filter(|id| !id.is_empty()) {
+                self.registrations.write().expect("registrations poisoned").clear_plugin(old_id);
             }
             let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
             let reload_options =
@@ -1982,6 +2137,7 @@ impl Shared {
                         "generation": generation,
                         "seed": self.config.host_state.to_seed_json(),
                         "options": reload_options,
+                        "staged": true,
                     }),
                     self.config.registration_timeout,
                 )
@@ -1991,17 +2147,44 @@ impl Shared {
                 Ok(result) => {
                     let plugin_id =
                         result.get("pluginId").and_then(Value::as_str).unwrap_or("?").to_owned();
-                    let mut registrations =
-                        self.registrations.write().expect("registrations poisoned");
+                    let mut registrations = self.registrations.write().expect("registrations poisoned");
                     if let Some(status) = registrations.plugins.get_mut(&key) {
-                        status.plugin_id = plugin_id;
+                        status.plugin_id.clone_from(&plugin_id);
                         status.state = PluginState::Active;
                     }
+                    drop(registrations);
+                    self.revisions.lock().expect("revisions poisoned").insert(
+                        key.clone(),
+                        RevisionState { plugin_id, fingerprint: revision, failed: None },
+                    );
                     reloaded += 1;
                     eprintln!("opencode plugin-host: hot reload {key}");
                 }
                 Err(error) => {
-                    eprintln!("opencode plugin-host: hot reload {key} failed: {error}");
+                    // ① rollback: restore the last good state — the
+                    // old generation's registrations are intact and
+                    // functional; the failure is surfaced on the
+                    // status (ref plugin.ts:154-169: the slot keeps
+                    // its last activation, the error is recorded).
+                    {
+                        let mut registrations =
+                            self.registrations.write().expect("registrations poisoned");
+                        *registrations = backup;
+                        if let Some(status) = registrations.plugins.get_mut(&key) {
+                            status.state = PluginState::Failed(error.to_string());
+                        }
+                    }
+                    self.revisions.lock().expect("revisions poisoned").insert(
+                        key.clone(),
+                        RevisionState {
+                            plugin_id: old_id.unwrap_or_default(),
+                            fingerprint: revision.clone(),
+                            failed: Some(revision),
+                        },
+                    );
+                    eprintln!(
+                        "opencode plugin-host: hot reload {key} failed ({error}); previous generation kept"
+                    );
                 }
             }
         }
@@ -2026,6 +2209,7 @@ impl Shared {
             self.request("scan", json!({ "entry": key }), self.config.dispatch_timeout).await
         {
             if let Some(digests) = decode_digests(&result) {
+                self.record_revision(&key, &digests, None);
                 self.digests.lock().expect("digests poisoned").insert(key, digests);
             }
         }

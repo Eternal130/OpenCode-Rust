@@ -396,7 +396,7 @@ pub struct RegistrationSnapshot {
 /// The mutable registration store behind the snapshot (interior to the
 /// supervisor; shared between the IO reader — guest `command.add`
 /// requests — and handle reads).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)] // G-293: cloneable for reload snapshots (restore-on-failure)
 pub struct Registrations {
     /// command name → definition (registration order preserved by the
     /// `BTreeMap`'s key sort; stable for snapshot diffing).

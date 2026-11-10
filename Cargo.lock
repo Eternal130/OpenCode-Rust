@@ -2359,6 +2359,7 @@ dependencies = [
  "oc-core",
  "oc-schema",
  "oc-util",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

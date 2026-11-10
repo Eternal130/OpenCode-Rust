@@ -720,21 +720,42 @@ async function rederiveDomain(kind, pluginId) {
 /** @type {Map<string, Map<string, Function>>} */
 const rpcHandlers = new Map();
 
+/** G-296 — the portable definitions by rpc id (the declared-errors
+ *  gate for `ctx.error` and the declared-events surface). */
+const rpcDefinitions = new Map();
+
 /** One host→guest `rpc.call` — run the registered handler with the v2
  *  call context (`ctx.error(type, message, data)` declares a typed
- *  failure; anything else thrown is a defect → rpc.internal). */
+ *  failure; anything else thrown is a defect → rpc.internal).
+ *  G-296: `ctx.error` with a type NOT declared in the definition's
+ *  `methods[method].errors` follows the ref's encodeError die path —
+ *  logged + normalized to `rpc.internal` (rpc.ts:232-241 +
+ *  catchDefect :127-131), never an undeclared typed failure. */
 async function handleRpcCall({ pluginId, rpcId, method, input }) {
-  const table = rpcHandlers.get(String(rpcId ?? ""));
+  const key = String(rpcId ?? "");
+  const table = rpcHandlers.get(key);
   const handler = table?.get(String(method ?? ""));
   if (typeof handler !== "function") {
     return { ok: false, failure: { type: "rpc.method_not_found", message: `Unknown RPC method: ${rpcId}.${method}` } };
   }
+  const declaredErrors = rpcDefinitions.get(key)?.methods?.[method]?.errors;
+  const isErrorTypeDeclared = (type) =>
+    !!declaredErrors && typeof declaredErrors === "object" && Object.prototype.hasOwnProperty.call(declaredErrors, String(type));
   notify("plugin.busy", { pluginId });
   try {
     const callContext = {
       error(type, message, data) {
+        const name = String(type ?? "");
+        if (!isErrorTypeDeclared(name)) {
+          // ref encodeError: undeclared type ⇒ Effect.die ⇒ the host's
+          // catchDefect normalizes to rpc.internal after logging.
+          notify("log", { pluginId, level: "error", message: `rpc ${rpcId}.${method}: undeclared RPC error type: ${name}` });
+          const internal = new Error("RPC call failed");
+          internal.__rpcFailure = { type: "rpc.internal", message: "RPC call failed" };
+          return internal;
+        }
         const failure = new Error(message ?? "RPC call failed");
-        failure.__rpcFailure = { type: String(type ?? "rpc.internal"), message: String(message ?? ""), data };
+        failure.__rpcFailure = { type: name, message: String(message ?? ""), data };
         return failure;
       },
     };
@@ -1484,10 +1505,28 @@ function makeCtx(pluginId, options) {
         for (const [name, handler] of Object.entries(handlers ?? {})) {
           table.set(name, typeof handler === "function" ? handler : null);
         }
+        rpcDefinitions.set(id, portable);
         await hostRequest("rpc.register", { pluginId, definition: portable });
         return {
           async dispose() {
             table.clear();
+            rpcDefinitions.delete(id);
+          },
+          // G-295 — the v2 register return shape (rpc.ts:87-105):
+          // `events.emit(name, data)` publishes the ephemeral
+          // `rpc.{id}.{name}` bus event through the host. The name is
+          // validated against the DEFINITION's declared events here
+          // (the host re-validates — both sides gate, like every
+          // registration surface); an undeclared name rejects the
+          // guest promise with the ref's error.
+          events: {
+            async emit(name, data) {
+              const event = String(name ?? "");
+              if (!portable.events || !Object.prototype.hasOwnProperty.call(portable.events, event)) {
+                throw new Error(`Unknown RPC event: ${id}.${event}`);
+              }
+              await hostRequest("rpc.event", { pluginId, id, name: event, data: data ?? null });
+            },
           },
         };
       },
@@ -1865,7 +1904,143 @@ function makeCtx(pluginId, options) {
 // Supervisor-facing methods
 // ---------------------------------------------------------------------------
 
-async function handleLoad({ entry, generation, seed, options }) {
+// ---------------------------------------------------------------------------
+// G-293 ①: staged-load snapshot/rollback. The reload path loads the NEW
+// generation BEFORE retiring the old one: the guest snapshots its
+// registration tables, runs the load, and on failure restores them
+// wholesale (the host restores its own registration store the same
+// way) — the previous generation keeps its place and stays functional
+// (ref supervisor.ts:70-86, plugin.ts:139-169).
+// ---------------------------------------------------------------------------
+
+function snapshotPluginState() {
+  const pluginCopies = new Map();
+  for (const [id, record] of plugins) {
+    pluginCopies.set(id, {
+      ...record,
+      subscriptions: record.subscriptions.slice(),
+      commands: new Map(record.commands),
+    });
+  }
+  const handlerCopies = {};
+  for (const [domain, map] of Object.entries(hookHandlers)) {
+    handlerCopies[domain] = new Map();
+    for (const [name, list] of map) handlerCopies[domain].set(name, list.slice());
+  }
+  return {
+    plugins: pluginCopies,
+    domainEditors: Object.fromEntries(
+      Object.entries(domainEditors).map(([kind, list]) => [kind, list.slice()]),
+    ),
+    domainStores: {
+      agents: new Map(domainStores.agents),
+      agentDefault: domainStores.agentDefault,
+      mcps: new Map(domainStores.mcps),
+      skills: new Map(domainStores.skills),
+      tools: new Map(domainStores.tools),
+      providers: new Map(domainStores.providers),
+      modelBase: domainStores.modelBase,
+      modelOverrides: new Map(domainStores.modelOverrides),
+      modelRemoved: new Set(domainStores.modelRemoved),
+      modelDefault: domainStores.modelDefault,
+      references: new Map(domainStores.references),
+      vcs: new Map(domainStores.vcs),
+    },
+    hookHandlers: handlerCopies,
+    rpcHandlers: new Map([...rpcHandlers].map(([id, table]) => [id, new Map(table)])),
+    rpcDefinitions: new Map(rpcDefinitions),
+    dialogProviders: new Map([...dialogProviders].map(([id, table]) => [id, new Map(table)])),
+    sidebarSlots: new Map(sidebarSlots),
+    tuiDisposers: new Map(tuiDisposers),
+    slotClaims: new Map(slotClaims),
+    slotClaimCounters: new Map(slotClaimCounters),
+    pluginRoutes: new Map(pluginRoutes),
+    keymapRuns: new Map(keymapRuns),
+    websearchExecutors: new Map(websearchExecutors),
+    worktreeImpls: new Map(worktreeImpls),
+    pendingIntegrationCallback,
+  };
+}
+
+function restorePluginState(snap) {
+  const reinstate = (map, entries) => {
+    map.clear();
+    for (const [key, value] of entries) map.set(key, value);
+  };
+  reinstate(plugins, snap.plugins);
+  for (const [kind, list] of Object.entries(snap.domainEditors)) domainEditors[kind] = list;
+  Object.assign(domainStores, snap.domainStores);
+  for (const [domain, map] of Object.entries(snap.hookHandlers)) {
+    reinstate(hookHandlers[domain], map);
+  }
+  reinstate(rpcHandlers, snap.rpcHandlers);
+  reinstate(rpcDefinitions, snap.rpcDefinitions);
+  reinstate(dialogProviders, snap.dialogProviders);
+  reinstate(sidebarSlots, snap.sidebarSlots);
+  reinstate(tuiDisposers, snap.tuiDisposers);
+  reinstate(slotClaims, snap.slotClaims);
+  reinstate(slotClaimCounters, snap.slotClaimCounters);
+  reinstate(pluginRoutes, snap.pluginRoutes);
+  reinstate(keymapRuns, snap.keymapRuns);
+  reinstate(websearchExecutors, snap.websearchExecutors);
+  reinstate(worktreeImpls, snap.worktreeImpls);
+  pendingIntegrationCallback = snap.pendingIntegrationCallback;
+}
+
+/** Drop one plugin id's entries from an id-keyed registry, preserving
+ *  a value the NEW generation just registered under the same id (the
+ *  staged-success retirement — mirrors `handleUnload`'s cleanup without
+ *  clobbering the replacement). */
+function retireKeyed(map, id) {
+  const current = map.get(id);
+  map.delete(id);
+  if (current !== undefined) map.set(id, current);
+}
+
+async function handleLoad({ entry, generation, seed, options, staged }) {
+  if (!staged) return loadGeneration({ entry, generation, seed, options });
+  // The staged reload: snapshot → load → (failure: restore + rethrow;
+  // success: retire the previous generation for this entry quietly).
+  // The host commits its side only after this load replies ok.
+  const abs = require("node:path").resolve(entry);
+  const snap = snapshotPluginState();
+  let result;
+  let loadedId = null;
+  try {
+    result = await loadGeneration({ entry, generation, seed, options });
+    loadedId = result?.pluginId ?? null;
+  } catch (error) {
+    restorePluginState(snap);
+    throw error;
+  }
+  for (const [id, record] of snap.plugins) {
+    if (record.entry !== abs || id === loadedId) continue;
+    try {
+      if (record.dispose) await record.dispose();
+    } catch (error) {
+      notify("log", { level: "warn", message: `${id}: staged retire dispose threw ${errText(error)}` });
+    }
+    const tuiDispose = snap.tuiDisposers.get(id);
+    if (tuiDispose) {
+      try {
+        await tuiDispose();
+      } catch (error) {
+        notify("log", { level: "warn", message: `${id}: staged retire tui dispose threw ${errText(error)}` });
+      }
+      tuiDisposers.delete(id);
+    }
+    retireKeyed(dialogProviders, id);
+    retireKeyed(sidebarSlots, id);
+    retireKeyed(slotClaims, id);
+    retireKeyed(slotClaimCounters, id);
+    retireKeyed(pluginRoutes, id);
+    retireKeyed(keymapRuns, id);
+    plugins.delete(id);
+  }
+  return result;
+}
+
+async function loadGeneration({ entry, generation, seed, options }) {
   const abs = require("node:path").resolve(entry);
   // G-148②: detect `@opencode/plugin/effect` imports up front and fail
   // with a clear error instead of an obscure module-not-found from the
