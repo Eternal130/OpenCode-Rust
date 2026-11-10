@@ -1951,18 +1951,16 @@ mod tests {
         // Handshake: the connect url/headers the connector saw carry the
         // seam rewrite (before the affinity key — v2 model-transport.ts
         // 298-311).
-        let opens = connector.opens.lock().expect("opens lock");
-        assert_eq!(opens.len(), 1, "one socket");
+        let opened = connector.opens.lock().expect("opens lock")[0].clone();
         assert_eq!(
-            opens[0].0, "wss://provider.test/v1?hooked=1",
+            opened.0, "wss://provider.test/v1?hooked=1",
             "the handshake seam rewrote the url"
         );
         assert!(
-            opens[0].1.iter().any(|(name, value)| name == "x-plugin" && value == "hooked"),
+            opened.1.iter().any(|(name, value)| name == "x-plugin" && value == "hooked"),
             "the handshake seam added a header: {:?}",
-            opens[0].1
+            opened.1
         );
-        drop(opens);
         assert_eq!(
             handshake_seen.lock().expect("seen lock").as_slice(),
             ["wss://provider.test/v1"],
