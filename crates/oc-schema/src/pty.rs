@@ -47,8 +47,11 @@ pub struct Updated {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Exited {
     pub id: String,
-    #[serde(rename = "exitCode")]
-    pub exit_code: NonNegativeInt,
+    /// G-383d — omitted when the exit code is unknown (node-pty leaves
+    /// `exitCode` undefined on signals; the ref JSON-omits it). A
+    /// missing code must not serialize as `0` (success).
+    #[serde(default, rename = "exitCode", skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<NonNegativeInt>,
 }
 
 /// `pty.deleted` data.
@@ -121,11 +124,29 @@ mod tests {
             created: 1,
             metadata: None,
             location: None,
-            data: Exited { id: "pty_1".into(), exit_code: 0 },
+            data: Exited { id: "pty_1".into(), exit_code: Some(0) },
         });
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "pty.exited");
         assert_eq!(json["data"]["exitCode"], 0);
+        let back: PtyEvent = serde_json::from_value(json).unwrap();
+        assert_eq!(back, event);
+    }
+
+    /// G-383d — an unknown exit code stays absent on the wire (never
+    /// `0`): node-pty leaves `exitCode` undefined on signals and the
+    /// ref JSON-omits undefined fields.
+    #[test]
+    fn pty_exited_omits_unknown_exit_code() {
+        let event = PtyEvent::Exited(EphemeralEnvelope {
+            id: crate::id::EventId::parse("evt_2").unwrap(),
+            created: 1,
+            metadata: None,
+            location: None,
+            data: Exited { id: "pty_9".into(), exit_code: None },
+        });
+        let json = serde_json::to_value(&event).unwrap();
+        assert!(json["data"].get("exitCode").is_none());
         let back: PtyEvent = serde_json::from_value(json).unwrap();
         assert_eq!(back, event);
     }

@@ -83,7 +83,7 @@ fn golden_pty_updated() {
 #[test]
 fn golden_pty_exited_and_deleted() {
     let exited =
-        PtyEvent::Exited(envelope("evt_3", 3, Exited { id: "pty_1".into(), exit_code: 3 }));
+        PtyEvent::Exited(envelope("evt_3", 3, Exited { id: "pty_1".into(), exit_code: Some(3) }));
     assert_eq!(
         serde_json::to_value(&exited).unwrap(),
         json!({

@@ -112,6 +112,48 @@ async fn shell_reports_exit_codes_and_output() {
     assert_eq!(result::notice(&output).as_deref(), Some("Exited with code 7"));
 }
 
+/// G-383a — dropping the last `Shell` handle runs the finalizer
+/// (ref `addFinalizer`, shell.ts:141-147): pending timeout fibers are
+/// interrupted and waiters unblock. The detached child is deliberately
+/// left running (ref behavior — only an explicit kill/timeout
+/// terminates it); we reap our own child at the end.
+#[tokio::test]
+async fn g383_dropping_shell_interrupts_timeouts_and_unblocks_waiters() {
+    let tmp = tempfile::tempdir().unwrap();
+    let shell = service(&tmp);
+    let info = shell
+        .create(
+            CreateInput {
+                command: "sleep 30".into(),
+                cwd: Some(tmp.path().to_string_lossy().to_string()),
+                timeout: Some(150),
+                metadata: None,
+            },
+            Some("/bin/sh"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let active = shell.inner.commands.lock().get(&info.id).cloned().unwrap();
+    let mut done = active.done.subscribe();
+    assert!(shell.list().len() == 1);
+    drop(shell);
+    // Waiter unblocked: `done` settles to `None` (the interruption
+    // analog of the ref's `Deferred.interrupt`).
+    tokio::time::timeout(std::time::Duration::from_secs(2), done.changed())
+        .await
+        .expect("waiter unblocked by teardown")
+        .unwrap();
+    assert!(done.borrow().is_none());
+    // The timeout fiber (150ms) was interrupted: after it would have
+    // fired, the status is still `running` — never `timeout`.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(active.info.lock().status, Status::Running, "timeout fiber interrupted");
+    // Reap our own child.
+    let _ = active.child.lock().as_mut().map(|child| child.start_kill());
+}
+
 #[tokio::test]
 async fn shell_timeout_kills_and_marks_status() {
     let tmp = tempfile::tempdir().unwrap();
