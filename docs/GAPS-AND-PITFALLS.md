@@ -22,6 +22,8 @@
 
 > **2026-11-10 第二十一轮 burndown 收口（gap-burndown-11）**：第二十轮重验确认未闭合的 G-291..G-312 全部 22 项 + 第三类补立可行动项（G-319..G-325/G-327，其中 G-324 为决策落地）+ G-330 体积护栏 + G-128 🧹，经 lanes A-H 串行落地合并 main（e82f4037/e8de0341/9d85f709/66f8337b/bf5b2e4e/7bc929c1/488bbb8f/3e3233ff），逐条 ✅；每 lane workspace 合并门全绿（白名单项按证据链放行）。**无上游阻挡项、无搁置项**。明细见文末「第二十一轮 burndown 收口」节。
 >
+> **2026-11-10 第二十二轮（全功能逐行对比审查 parity-line-review-v2024：27 lane + P1/FINAL 双门）**：对 ref v2.0.24 与当前树做第四轮独立全量逐行对读（27 条域 lane：oc-core×12 / oc-ai×5 / oc-tui×4 / server·client·cli·acp·plugin-host·schema-util×6，双侧 file:line 证据、不采信已有审查文档），两道 oracle 一致性门裁定 5 处跨 lane 矛盾、抽查 11/11 成立、0 未裁定矛盾。**新立项 G-334..G-383（50 项：🔴×12 / 🟡×22 / 🟢 簇×16）**；归类既有 12 处、撤销初报 1 条、勘正旧勘误 1 处（R17#13 locale_duration 括注）。核心新事实：CodeMode 沙箱逃逸残余具体化（`__rawFetch`/eval/Function/限位仅桥上，G-334）、WebSocketSeams 与 permission.evaluate 两条插件钩子生产断线（G-337/G-338）、非持久 PTY reader 逐 chunk lossy UTF-8（G-335）、中断后 hosted 工具多发持久 tool.failed（G-336）、媒体 provider 协议全移植但部署接线为零（G-347，产品级）、cloudflare-ai-gateway 网关语义全降级（G-348）、TUI 时长格式化 `%10_000` 取模 bug（G-341）与 stdin 双读竞争（G-342）。总报告 `docs/audit/port-parity-line-review/{REPORT,TABLE}.md`，32 份 lane/门原始报告归档 `docs/audit/port-parity-line-review/lanes/`。正面互证：keybind 230/230、主题资产 33+1 md5 全等、openapi 141 operation 字节级 0 diff、48 迁移 ID 全同、52 会话事件分类一致、models-dev 快照 md5 相同、session-message parts 全集无缺漏。
+
 > **2026-11-03 第十二轮（全量对比审查）**：22 通道逐文件全文对读（TS ~21 万行 / Rust ~40 万行生产代码）+ 3 通道缺口核验，对 50 项缺口声称逐项双侧源码取证：**新立项 46 项（G-165..G-210，含 🔴×6：Azure 未接线/Mcp.Protocol wire bug/Copilot anthropic 车道/第三方 anthropic 根 URL/shell 注释换行权限逃逸/transfer 脱敏弱）**、撤销 4 项初报 + 6 项子句修正（见文末第十二轮勘误）、5 项归类既有条目。总报告 `CODE_REVIEW_PARITY_2026-11-03.md`，域报告与核验记录 `/tmp/opencode/review/`。
 
 > **2026-11-02 第十一轮 burndown 收口（gap-burndown-7）**：第十轮立项的 G-105..G-164 全部 60 项经 lanes 1-9 落地并合并 main（lane1 043408d / lane2 3269839 / lane3 822d72d / lane4 88b25b5 / lane5 a28e380 / lane6 e516182 / lane7 e3395dc / lane8 3480df9 / lane9 本轮合并），逐条状态改标 ✅（G-163/G-164 维持 ℹ️ 登记项，G-161② 已修）。各 lane 有界偏离清单见文末第十一轮。
@@ -2260,3 +2262,288 @@ G-291..G-312 全部维持未闭合（22/22）；本轮更新波次（fmt/clippy/
 ## 第二十一轮判定
 
 G-291..G-312 全部 ✅；G-319/G-320/G-321/G-322/G-323/G-325/G-327 ✅（代码修复）；G-324 ✅（文档化决策落地：保留防御性跳过）；G-330 同日修订——护栏落地后经**用户裁决整体移除**（不设体积上限，R-01b 上限作废，见 G-330 勘注；laneH 提交 `3e3233ff` 为历史沿革）；G-128 🧹 清理完毕。G-313..G-318/G-326/G-328/G-329/G-331..G-333 维持 ℹ️ 登记（决策/规格/盯守项，触发条件未变）。现存未关闭项=既有文档化决策族（G-12/G-16/G-17/G-28/G-32/G-38/G-39/G-40/G-49/G-161①/G-163/G-164/G-200②/G-211(已 OBSOLETE)/G-212/G-238/G-239/G-240/G-289/G-290 + 上列 ℹ️）。R20 搁置项条件核查中的 G-272⑩（样式化滚动回写 surface，3-5 天中等 lane）与 G-230 die 分支（先补 14 内建 Output 声明 1-2 天）维持登记不自动立项——两者在登记册中均为已裁决的 bounded/范围外项，非未闭合缺口；条件已具备，按需再立项。**无上游阻挡项。**
+
+---
+
+# 第二十二轮（2026-11-10，27 通道逐行全量对比 + P1/FINAL 双门复核）
+
+> 对 ref v2.0.24（/opt/opencode-ref）与当前树做第四轮独立全量逐行对读：27 条域 lane（oc-core×12 / oc-ai×5 / oc-tui×4 / server·client·cli·acp·plugin-host·schema-util×6），逐行读码、双侧 file:line 证据、不采信既有审查/parity 文档；P1 门（12 份 C/T 报告）+ FINAL 门（15 份 A/S 报告）两道 oracle 一致性门裁定 11 处交叉点、抽查 11/11 成立、**0 处未裁定矛盾**。两门内部编号 G-01..G-63 经去重/归并/撤销后映射为正式编号 **G-334..G-383（50 项）**。原始报告：`docs/audit/port-parity-line-review/`（REPORT.md / TABLE.md + lanes/ 32 份）。
+
+## 🔴 高
+
+### G-334 ❌ CodeMode 沙箱逃逸残余面具体化（G-247 残余 + 新证据 `__rawFetch`）
+- rust：`oc-plugin-host/src/host/host.js:2833-2856` guest 求值前仅换装 console/fetch/timers 三面；**:2841 把原生 fetch 挂到 `globalThis.__rawFetch`**（换装后仍可直连）；:2863 AsyncFunction 在 guest 全局执行；:104-139/:2666-2668 结构上限（MAX_STRING/ARRAY）**仅桥接层生效**，guest 内部可自造超大对象；静态扫描只拦 import()/require token——`eval("require(…)")`/`(0,eval)`/`new Function` 全部可绕。
+- ref：interpreter.ts 结构性无进程面。
+- 后果：Bun.file/Bun.spawn/process/env/`__rawFetch` guest 全可达——G-247 登记的"静态扫描固有边界"残余被本轮证据具体化且加重（raw fetch 残留为全局键）。
+- 修法：求值期全局白名单 Proxy + 删 :2841 `__rawFetch` + eval/Function 置换；最小步=先删 `__rawFetch` 一行（P1 门建议）。
+- 出处：cmp-C8 / P1-G01+G05（门抽查 ✅）。
+
+### G-335 ❌ 非持久 PTY reader 逐 chunk lossy UTF-8
+- rust：`oc-core/src/pty.rs:623-638`（:631）reader 线程对每次 ≤8192B read 结果直接 `String::from_utf8_lossy`——多字节序列跨 read 边界即损坏（CJK/emoji 乱码）；persistent_pty 全程字节缓冲无此问题。
+- ref：node-pty 解码层按流缓冲。
+- 修法：字节缓冲/增量解码器（P1 门建议"pty 字节缓冲化"）。
+- 出处：cmp-C7a / P1-G02（门抽查 ✅）。
+
+### G-336 ❌ 中断后 hosted 工具多发持久 `tool.failed(result-missing)`
+- rust：`oc-core/src/session/runner/step.rs:557` RESULT_MISSING 清扫门只查 `stream_error.is_none() && !provider_failed`，未排除 :482 已独立存在的 `stream_interrupted` 标志——中断路径把正常收尾的 hosted 工具误落失败并持久化。
+- ref：step.ts:220 以 `Exit.isSuccess` 判定，中断不算失败。
+- 修法：门补 `&& !stream_interrupted`。
+- 出处：cmp-C2a / P1-G03（门抽查 ✅）。
+
+### G-337 ❌ WebSocketSeams（experimental.ws.*）构建后零消费
+- rust：`oc-core/src/session/runner/model_request.rs:974-1318` 构建 handshake/send/receive 三 seam 并存入 Prepared（:473/:1065）；全仓消费点仅 `tests/plugin_guest_wiring.rs:276-307`，SessionChannel::execute / open_responses_channel 均不接收——插件 WS 改写静默失效。
+- ref：WS channel 消费 seams（第九轮勘误 #2 修的是握手派发面，与此"hook seam 死线"不同层）。
+- 出处：cmp-A2+cmp-S4a / FINAL-G21（门抽查 ✅，互证裁定#1）。
+
+### G-338 ❌ permission.evaluate 生产派发断线（G-2 修复未达面）
+- rust：`oc-core/src/hooks.rs:1959`、`oc-core/src/plugin_apply.rs:2727` —— `dispatch_permission_evaluate` 全仓仅 2 个调用点且均在 `#[tokio::test]` 内；Permission 引擎只消费 managed-policy 的 HookOverride，guest hook 注册成功（G-2 ✅ 的桥接面）但永不生效。
+- ref：permission engine 对插件 hook 派发。
+- 后果：G-2 的 ✅ 只覆盖注册/白名单面；行为面断线。
+- 修法：Permission 决策点接入 dispatch_permission_evaluate（叠加 managed-policy 语义按 ref 优先序）。
+- 出处：cmp-S4a / FINAL-G22（门抽查 ✅）。
+
+### G-339 ❌ ACP `edit` 工具 added 文件权限 diff 预览全丢
+- rust：`oc-cli/src/acp/permission.rs:194-197` `status=="added"` → `old_text=None` → `let Some(old_text) = … else { continue }` 直接跳过，不产预览（对照同文件 patch 工具 :210-219 对 add hunk 正确推 `Preview{old_text:None}`）。
+- ref：permission.ts added 文件产出 new-content-only 预览。
+- 出处：cmp-S3b / FINAL-G23。
+
+### G-340 ❌ ACP `session.retry.scheduled` 的 nextRetryAt 恒空串
+- rust：`oc-schema` session_event.rs:594 `at: NonNegativeInt`（数字）；`oc-cli/src/acp/translate.rs:529` 经 `string(&event.data,"at")`（as_str→unwrap_or("")）取值——恒回 `""`。
+- ref：nextRetryAt 为 ISO 时间串。
+- 修法：数字 → ISO 时间串格式化。
+- 出处：cmp-S3b / FINAL-G24（门抽查 ✅）。
+
+### G-341 ❌ TUI locale_duration 秒档 `%10_000` 取模 bug（10–60s 时长全错）
+- rust：`oc-tui/src/message/model.rs:916-917` `f64::from(input as u32 % 10_000)/1000.0`——15000ms→"5.0s"（应为 15.0s）；10s–60s 区间全部显示 `x−10.0s`。
+- ref：locale.ts 秒档直接 `/1000`。
+- 修法：删 `% 10_000` 一行。
+- ⚠️ 勘正：第十七轮勘误 #13 括注"locale_duration（model.rs:915-931，ref locale.ts 逐字数学）"与代码不符——T3 lane 与 FINAL 门两次独立读码均证实取模存在（见本轮勘误节#2）。
+- 出处：cmp-T3 / FINAL-G25（门抽查 ✅）。
+
+### G-342 ❌ TUI stdin 双读竞争（OSC52 查询 vs 输入线程）
+- rust：`oc-tui/src/terminal_proto.rs:474-519` `clipboard_read_osc52` 自行 poll/read fd 0；`oc-tui/src/app.rs:8717-8830` 输入线程并发 `read_session_input(tty_input_fd,…)`——两路并发消费同一 stdin，OSC52 查询窗口可吞用户按键。
+- ref：单一输入读取路径。
+- 修法：stdin 读取串行化（查询经输入线程代理或互斥）。
+- 出处：cmp-T1 / FINAL-G26。
+
+### G-343 ❌ Sessions 对话框 pin/unpin 死键（且 pinned 仅内存不持久）
+- rust：`oc-tui/src/store.rs:6929` `toggle_pin` 全仓 3 处——定义 + 测试 :14443/:14445，无 UI 分发；pinned 集合也不落盘（ref 持久化）。
+- 出处：cmp-T2 / FINAL-G27（门抽查 ✅；不持久子项自 FINAL-G50 并入）。
+
+### G-344 ⚠️ runway cancel 路径重复 `/v1` → 404（当前无消费方缓冲）
+- rust：`oc-ai/src/media/video/runway.rs:20` `DEFAULT_BASE_URL` 已含 `/v1`；:310-312 `cancel_path` 返回 `"/v1/tasks/{id}"` 再拼一次 → `…/v1/v1/tasks/…`。与 G-347（媒体未接线）叠加故暂无用户可见面。
+- 修法：cancel_path 改 `/tasks/{id}`。
+- 出处：cmp-A4 / FINAL-G28。
+
+### G-345 ❌ replicate/stability `unsupported` 字段声明未强制（行为反转）
+- rust：`oc-ai/src/media/image/replicate.rs:270` 声明 `fn unsupported()` 但 body_from 无 check_unsupported、route 不读（对照 openai.rs:151,373 / google.rs:106,399 / xai.rs:57,126 均有强制）；stability 同。
+- ref："never silently dropped"——unsupported 请求参数必须显式报错。
+- 出处：cmp-A4 / FINAL-G29。
+
+## 🟡 中
+
+### G-346 ⚠️ 错误体先 2KB 截断后分类：嵌套 error.code 漏检误判 retryable
+- rust：`oc-ai/src/route/client.rs:457`（frame path）`read_body_limited(response.body, MAX_BODY_CHARS)` + `route/executor.rs:13` `MAX_BODY_CHARS=2000` + `route/transport.rs:171-186`——截断先于 classifyProviderFailure，>2KB 的嵌套 `error.code` 丢失 → 429/限流类被误判不可重试。（与 G-288⑦ 的客户端 64KiB 诊断上限不同位点。）
+- 修法：分类先行、截断仅用于展示。
+- 出处：cmp-A2 / FINAL-G31。
+
+### G-347 ❌ 媒体 provider 部署接线整体缺失（产品级，13+ 家协议不可达）
+- rust：oc-core/oc-server 对 `oc_ai::media` **零引用**；`media/model.rs:6-8`、`media/route.rs:1004-1006` 注释自认 seam（"deployment lives with a future media-route lane"）；13+ 家 image/video 协议+route 已移植但无任何 HTTP 路由挂载；decode 族 `unwrap_or_default` 系统性宽松。
+- ref：/api/media 路由族完整消费。
+- 出处：cmp-A3+cmp-A4 / FINAL-G32（互证裁定#1，产品级单列）。
+
+### G-348 ⚠️ cloudflare-ai-gateway 网关语义全降级（产品级）
+- rust：URL 合成 / `cf-aig-*` 计费头 / 前缀分派 / passthrough 鉴权全缺；仅 plain openai-chat 需用户显式 baseURL——经网关的 anthropic/google 等流量语义降级为直连。
+- ref：gateway provider 完整实现。
+- 出处：cmp-A3 / FINAL-G34（产品级单列）。
+
+### G-349 ❌ shell DELETE 非幂等（404 vs 204）
+- rust：`oc-server/src/handlers/shell.rs:119-122` remove 分支映射 404；ref 吞 NotFoundError 恒 204。
+- 出处：cmp-S1 / FINAL-G35（门抽查 ✅）。
+
+### G-350 ❌ vcs.init 插件 provider 不可达（硬编码 git|hg 旁路）
+- rust：`oc-server/src/handlers/project.rs:1876-1898` `provider != "git" && provider != "hg"` → 400，随后 `std::process::Command::new(&provider)` 直执行——G-270④ 修的错误族未触及执行通道；插件注册的 VCS provider 永不可达。
+- ref：经 Plugin.awaitActivation → vcs.initialize 走插件 provider。
+- 出处：cmp-S1+cmp-C5b / FINAL-G36。
+
+### G-351 ❌ 空白 delta 丢弃（流式空行/缩进丢失）
+- rust：`oc-tui/src/store.rs:13193`（"session.text.delta" reducer）`delta.trim().is_empty() → return`；ref data.ts:909-913 原样追加——纯空白 delta 丢弃后终值可与 transcript 不一致（同根终值非空门）。
+- 出处：cmp-S2 / FINAL-G37。
+
+### G-352 ⚠️ live 投影缺口：6 类 transcript 事件延迟到 resync；usage 只取 cost
+- rust：agent/model/location-switched/system/synthetic/shell 六类事件无 live reducer（仅 resync 填充）；渲染变体全集在（model.rs:262-361，T3 互证）——"能渲染、但延迟到下一次 resync"；`session.usage.updated` 只取 cost 漏 tokens。
+- 出处：cmp-S2+cmp-T3 / FINAL-G38（拼合口径见 FINAL 门裁定#3）。
+
+### G-353 ⚠️ mini 重连条件过宽：任何非 "Session not found" 错误无限重试
+- rust：`oc-cli/src/mini.rs:122-147`（:137 仅排除 "Session not found"）任意 `Err(String)` 进 250ms 无上限 reconnect；ref 仅对 Transport 错误重连。G-181④/G-157 修的是重连存在性，条件宽度为残面。
+- 出处：cmp-S3a / FINAL-G39。
+
+### G-354 ❌ ACP `Sessions::release` 身份判定恒真
+- rust：`oc-cli/src/acp/sessions.rs:325-330` `entries.get(&attached.id).is_some_and(|current| current.id == attached.id)`——以 attached.id 查表再比 id 必然相等，条件 ≡ 条目存在 → 无条件删除；注释自称"only when this exact attachment still owns the slot"与实现不符。
+- ref：按 attachment 身份判定（sessions.ts:169-172），并发重 attach 后不误拆。
+- 出处：cmp-S3b / FINAL-G40。
+
+### G-355 ⚠️ ACP cancel/drain 语义族（打包）
+- turn 取消后首事件短路 drain 丢弃收尾更新 + 事件流静默则 prompt 永不返回（FINAL-G41）；`$/cancel_request` 预取消不 interrupt server + ask 阻塞折叠循环（FINAL-G42）。
+- 出处：cmp-S3b / FINAL-G41+G42。
+
+### G-356 ⚠️ vertex Express+tuned 守卫缺失 + apiKey/accessToken 互斥缺
+- rust：`oc-core/src/integration/vertex.rs:212-274` ADC binding 把 token 塞 `api_key`（:274），:273 注释自认 "apiKey cannot combine with accessToken upstream" 但代码不拒绝组合只静默取先者；Express 模式/tuned 模型守卫（ref 明确拒绝的组合）全缺。
+- 出处：cmp-A1a / FINAL-G43。
+
+### G-357 ⚠️ /compact 响应宽容解析 → "成功但空/残"历史
+- rust：`oc-ai/src/protocols/utils/responses_compaction.rs:253-264`（compaction 缺 `encrypted_content` 填 `""`）、:311-319（未知 item → 空 user 消息；未知 role 一律归 User）；ref 严格 union 校验整体失败。
+- 出处：cmp-A1a / FINAL-G44。
+
+### G-358 ⚠️ MCP 目录分页截断（单发不跟 nextCursor）
+- rust：`oc-core/src/mcp/client.rs:863-869` ListTools/ListResources 等 `Request::default()` 单发直取 `result.tools`，全文件无 nextCursor 跟随（rmcp all-variants 未用）；>页大小目录静默截断。
+- 修法：跟随 cursor 循环或启用分页变体；**放行后以真实分页服务器对测闭环**（P1 门条件#4）。
+- 出处：cmp-C6a / P1-G07。
+
+### G-359 ❌ MCP 运行期 OAuth token 过期无 refresh/恢复
+- rust：`oc-core/src/mcp/client.rs:1496-1502` 连接期静态 bearer 快照（`input.bearer` 直插 header）；运行期 401 仅 unauthorized 文本，不续期、不转 needs_auth。
+- ref：OAuthClientProvider 由 SDK 自动 refresh（client.ts:149-151）；与 G-110（已修的失效凭证清理）不同面。
+- 出处：cmp-C6a / P1-G08。
+
+### G-360 ⚠️ MCP 工具桥缺 sessionID 元数据 + 桥同步竞窗 + 注册面无名称校验
+- rust：`oc-core/src/mcp/registry.rs:1672` `call_tool(..., None)` sessionID 丢弃（ref tool/mcp.ts:33,69,124 透传）；:1831-1882 初始注册与去抖 reload 的桥表同步存在竞窗；P1 裁定#2：MCP 工具注册直插 BTreeMap，**完全没有** ref tool.ts:177-218 的 RegistrationError 名称校验（超长/非法名静默注册）。
+- 出处：cmp-C6a / P1-G14+裁定#2。
+
+### G-361 ⚠️ vcs git 命令族偏差（打包）
+- rust `oc-server/src/handlers/project.rs`：:1255/:1522/:1684/:1724/:1736 `Command::new("git")` 直行、无 `--no-optional-locks`/`-c` cfg 标志组（ref git.ts:63-99）；:1833-1837 列表命令 cwd=`services.project.canonical` 而非 location.directory → **scope 放大至全仓**；:1849-1850 git status `additions/deletions` 恒 0（hg 侧 :885-894/:992 有 count_patch，git 侧无）；:1857-1863 `"AM "` 映射 added（ref 映射 modified）。
+- 出处：cmp-C5b / P1-G11。
+
+### G-362 ❌ `snapshots:false` 配置键无消费者 + 文档级 `mcp.timeout` 未合并（双键打包）
+- rust：`GitSnapshotStore::configure` 全仓仅 `snapshot/tests.rs:168-170` 调用，engine 只 configure compaction/tool_output——`snapshots:false` 被接受但快照恒写（ref config/plugin/snapshot.ts:15-19→snapshot.ts:83-87,115 为开关）；`engine/mod.rs:3330-3337` `mcp_servers_from_config` 只读 `mcp.servers`，ref config/plugin/mcp.ts:44-59 的 `{...timeout,...server.timeout}` 文档级合并缺失（per-server timeout 生效 ✅——P1 门裁定#1 两口径）。
+- 出处：cmp-C4+cmp-C5b+cmp-C6a / P1-G04+裁定#1。
+
+### G-363 ❌ 默认模型无"首个可用 text 模型"回退
+- rust：`oc-core/src/engine/resolver.rs:660-675` 仅 pin/config default，否则直接 NotSelected；ref model-resolver.ts:402-417 明确回退链。
+- 出处：cmp-C6b / P1-G06（门抽查 ✅）。
+
+### G-364 ❌ location 关闭缺 rpc.close
+- rust：`oc-core/src/location.rs:978-992` shutdown 仅 permissions.close→forms.close→publish 三步；ref location-lifecycle.ts:44-54 四步含 rpc.close+race——失效 location 的 RPC 域仍可经 /api/rpc 命中。
+- 出处：cmp-C7b / P1-G09。
+
+### G-365 ❌ plugin install 无原子性（staging 从未创建）
+- rust：`oc-plugin-host/src/context/install.rs` 直接写最终目录；staging 目录仅存在于 GC 代码、从未创建——残缺安装可被 `latest_install` 复用。⚠️ 置信度受限：S3a updater/plugin 安装路径未逐行（盲区#1）。
+- 出处：cmp-S4a / FINAL-G46。
+
+### G-366 ⚠️ google-interactions 事件形状零校验 + options 硬失败违背 lenient
+- rust：`oc-ai/src/protocols/google_interactions.rs` index 缺失折叠 0 → 步骤串扰；step 缺失错误语义错位；options 校验硬失败（ref lenient 容忍未知字段）。
+- 出处：cmp-A1a / FINAL-G47+G63（options 子项）。
+
+### G-367 ⚠️ session.tps 默认值反转
+- rust：`oc-tui/src/config.rs:234/378/501` `session_tps: false`（:181 注释自证对应 ref index.tsx:1892）；ref 默认 true。
+- 出处：cmp-T4 / FINAL-G48。
+
+## 🟢 低（打包簇）
+
+### G-368 ⚠️ T1 运行时边角簇
+标题 fallback regex 缺 + 插件路由标题臂缺 / SIGHUP 无 epilogue `_exit(1)` / 选区 ctrl+c 吞键 / kitty 探测时序 / 颜色量化经验推导（上游漂移风险）/ 帧率 100ms 上限 / storage 无跨进程 flock+watch。（剪贴板宿主写臂→G-39、boot 300ms 窗→G-17③，归类不重复。）
+- 出处：cmp-T1 / FINAL-G49。
+
+### G-369 ⚠️ T2 composer 对话框簇
+附件标签复用判据 mime+data vs ref uri+meta+text / 非 image data: URI 误标 `[PDF N]` 而非报错 / 命令面板静态表不含插件命令 / 历史导航守卫缺 / ctrl+f 双绑定注记。（pinned 不持久已并入 G-343。）
+- 出处：cmp-T2 / FINAL-G50。
+
+### G-370 ⚠️ T3 渲染簇
+低 verbosity messagePath 缺 activity,instructions 包裹 / question 包进 Activity / pending 不重排行尾 / synthetic 空 description 裸 ◈ 行 / mount flat 权重 / turn 摘要"下一行 User"启发式 / 纯-thought 组无 Thinking busyLabel / tok/s 口径 / Diagnostics 行 / RetryProvider 动画 / subagent 模型后缀原始串 + Background 徽章 + 点击跳转 / 输入回溯不认 synthetic。（语法高亮默认构建窄面→G-13。）
+- 出处：cmp-T3 / FINAL-G51。
+
+### G-371 ⚠️ A1a/A1b 协议簇
+gemini 命名空间扁平重写丢 provider_executed/cache/metadata（FINAL-G30）/ partial-json NaN 宽容 / thinking delta 丢失路径 / error.code 截断族 / 轻校验 / route 字段 / baseURL `${VAR}` 模板（FINAL-G63）+ bedrock converse metadataKey 硬编码 "bedrock" / 事件流错误无 rawBody 诊断 / AWS 默认凭证链无 credential_process·assume-role·web-identity·ECS / bedrock_invoke_route rust 独有 / mistral converse 哈希 `&0xFF` 截断 / copilot kind（FINAL-G52）。
+- 出处：cmp-A1a+cmp-A1b / FINAL-G30+G52+G63。
+
+### G-372 ⚠️ A2 管线簇
+pending BTreeMap id 序 vs 插入序 / `Some(false)` 不入 pending（providerExecuted 布尔回案同根）/ complete() 仅 clean 结束调用 / D-Metric 计数器缺 / send_text 30s 超集。（typed generateObject 子集=G-100 已修，归类不重复。）
+- 出处：cmp-A2 / FINAL-G53。
+
+### G-373 ⚠️ A3 provider 簇
+alibaba region/workspaceID host 派生缺 → cn 流量打 intl / zai bigmodel.cn messages 根未入重写表 / xai chat `x-grok-conv-id` 缺 / 自定义 provider `package` 字段解而不用 / anthropic-compatible 自定义 host 降级 openai-chat + authToken bearer 缺。
+- 出处：cmp-A3 / FINAL-G54。
+
+### G-374 ⚠️ A4 媒体簇
+Generation.cancel no-op vs ref UnsupportedOperation（语义反转）/ READ_RETRY 去抖动 / multipart 边界可预测。（unsupported 拒绝时机后移已并入 G-345 主面。）
+- 出处：cmp-A4 / FINAL-G55。
+
+### G-375 ⚠️ S1 server 簇
+events.persist 无服务器级开关 / persistent-pty cursor `Number()` 宽集合 vs `usize::parse` / pairing 容量逐出策略 / pty.rs:415-424 注释与实现矛盾。（workerd/simulation 剖面→G-163/G-8；replay 分块按字符边界→G-10 关联、G-105 已修。）
+- 出处：cmp-S1 / FINAL-G56。
+
+### G-376 ⚠️ S2 client 簇
+RPC 订阅每 `on()` 独占 SSE 连接（连接放大）/ probe URL 保留 basePath 与 ref 相反 / serde 宽松解码无 deny_unknown_fields 门 / DiscoverOptions 版本谓词仅 string / shared-events 错误完成弃缓冲 + 4096 off-by-one。（effect 面→G-28/G-148。）
+- 出处：cmp-S2 / FINAL-G57。
+
+### G-377 ⚠️ S3a cli 簇
+api `--param` 重复键后写覆盖 / title 更新失败静默 / service stop pty 策略 Clear vs ref 未显式（待核）。（升级换源/端口错开/TTY 权限交互/诊断信号缺席→G-17 rust-extra 族、G-238、G-38；ssh-askpass→G-316。）
+- 出处：cmp-S3a / FINAL-G58。
+
+### G-378 ⚠️ S3b ACP 簇
+child 投影缺 `_meta opencode` / child-session / MCP 跨 attach 去重缺 + 失败回滚缺 / handoff 仅 Interrupted 跟随 / command prompt 后台不等结果 / available_commands 先于响应 / PromptResponse usage 缺（unstable feature 未启用）/ readDisplayText 跳过 / zed:// 仅 ?path= 首参 / replay file URL 无目录 / directories 缺 realpath。
+- 出处：cmp-S3b / FINAL-G59。
+
+### G-379 ⚠️ S4a 插件宿主簇
+tui 子路径探测自相矛盾（probe 无回退 vs resolve_subpath 有）/ vcs dispose 过滤恒 false 清空整表 / vcs default editor no-op stub / merge_skills `id??name` 键回退 / 事件 best-effort 丢弃计数 / ui.sidebar.section 行不可点击 / rpc client 调用面缺 / vcs branch.list·status·diff 与 worktree list·create·refresh·remove guest 调用面缺（G-24 修的是 transform/reload，读面三件未覆盖）/ plugin.list 投影 4 字段 / 命令调用形状近似。（markdown 渲染器→G-332；effect 拒载→G-28/G-148。）
+- 出处：cmp-S4a / FINAL-G60。
+
+### G-380 ⚠️ S4b schema 簇
+BTreeMap 键序重排影响逐字节快照 / NonEmptyArray→Vec 宽松 / identifier check-then-act 竞窗 / websearch published Finite→NonNegativeInt。（simulation→G-8；flock 简化=第七轮勘误 #6 已裁定；glob 子集→G-92；theme null→G-160③ 已修。）
+- 出处：cmp-S4b / FINAL-G61。
+
+### G-381 ⚠️ T4 键位簇
+BindingValue 顶层对象不可解析被丢弃 / meta→alt·hyper→super 折叠 / win32 ctrl+z suspend/undo 反转 / 解析未消费键（scroll.speed/prompt.editor 等）。（插件目录发现初报经十九轮勘误 #13 证据复核**撤销**，见勘误节#1。）
+- 出处：cmp-T4 / FINAL-G62（去掉已撤销子项）。
+
+### G-382 ⚠️ core 杂项簇（C 系 residual）
+question 布尔回案映射（question.rs:160-167）/ 事件面族：无 finish 判失败超集、弃用提示文案缺、experimental generate service 恒 "opencode"、空 provider state `{provider:{}}` 省略（misc.rs:39、mod.rs:445、to_llm_message.rs:36-44）/ location 越界静默全仓快照（engine/mod.rs:1807，与 G-362 叠加放大）/ AGENTS.md 全局文件读失败过度降级 + lsp 键惰性（instruction.rs:104-107）/ mime 三副本不一致（read.rs:126-151 PNG 4 字节签名/GIF 双值）+ reload_all 吞失败 / subagent completion_text 空文本回扫旧消息 / replay 不做 schema 解码（宽容 vs ref die）/ canonical_json 浮点序列化差异 / instruction scrub 不中止在途交换。（output schema 豁免→G-230 bounded；60s/10s 有界窗→G-317；boot 悬置点已由 P1 门条件#2a 关闭——boot.rs:670-686 有守卫。）
+- 出处：cmp-C1+C2a+C3+C4+C5a+C6b+C7b / P1-G12+G13+G16+G17+G18+G19+G20。
+
+### G-383 ⚠️ pty/shell 服务簇（C7a residual）
+服务无 teardown（pty/shell 子进程与 waiter 无终态化，无 Drop；ref pty.ts:128-134）/ persistent-pty wire 协议超集共用版本号 7 的互操作风险（建议版本协商或升 v8）/ pty buffer 字节 vs ref UTF-16 单位口径差（更保守）/ pty.exited exitCode `unwrap_or(0)` / 事件异步发布时序 / watcher 25ms 合并窗 / fs find 无 fff+贪心评分（G-324 关联面）/ daemon prepare_handoff 持锁 IO。
+- 出处：cmp-C7a / P1-G10+G15+FINAL-G60（超时/进程模型子项）。
+
+## 归类与补注（不另立项）
+
+- **G-7/G-17 补注（evaluation/SystemOne 域）**：本轮 A3 复认缺失面并细化——typesafe-ai 在 ref 是 **provider**（rust provider 矩阵缺行）、zen evaluation 与 openrouter/vercel `/evaluate` 缺；维持 G-7 ℹ️"有意不移植"的既有裁决，FINAL-G33 归此不另立。
+- **G-39 补注**：剪贴板宿主写臂（T1 复认）维持 ℹ️。
+- **G-163/G-8 补注**：workerd 剖面与 OPENCODE_SIMULATE 拒绝（S1/S4b 复认）维持 ℹ️。
+- **G-332 补注**：guest markdown 渲染器注册缺失经 S4a/T4 双侧互证（FINAL-G45 归此）。
+- **G-317 复认**：TOOL_JOIN 5s / UNWIND 60s / remove 10s 有界族（C2a/C2b 同族偏差合并跟踪）。
+- **G-316 复认**：ssh-askpass argv[1] 参数位（S3a）。
+- **G-230 bounded 复认**：question/output schema 豁免（C1）。
+- **G-92 复认**：glob 子集（S4b）。
+- **G-324 复认**：node_modules 显式跳过=超收收紧（C7a fs find）。
+- **G-13 复认**：语法高亮默认构建窄面（T3）。
+- **G-28/G-148 补注**：S4a 发现 effect 导入面整体拒载（detectEffectImports），与 G-148②"仅 clear-error 钩子"的 bounded 表述关系待核（不改变既有裁决）。
+- **G-105/G-10 复认**：replay 分块按字符边界切 64KiB 帧（S1 D-5 与 C1 D-7 重复发现，P1 裁定#4 归并）。
+
+## 勘误与勘正（第二十二轮）
+
+1. **撤销本轮 T4 初报"插件目录自动发现走 config 声明"**——与十九轮勘误 #13 证据冲突：`resolve.rs:124-172` 自动扫描 plugin/plugins 目录、`plugin_boot.rs:199` 已接线（T4 审的 oc-tui plugin_boot 与 oc-plugin-host resolve 为不同层，目录放置发现**在**）。勿再立项。
+2. **勘正第十七轮勘误 #13 括注**——"locale_duration（model.rs:915-931，ref locale.ts 逐字数学）"与代码不符：`model.rs:916-917` 存在 `% 10_000` 取模（T3 lane 与 FINAL 门抽查两次独立读码），立项 G-341。该勘误的主结论（mini duration_label 死代码撤销）不受影响。
+3. **早前审查清单两处证伪记录（防复发）**：36 主题实为 33+1（md5 全等）；OKLCH 两侧同源。已录 REPORT.md。
+4. **C6a 对 C4 mcp.timeout 的"证伪"不成立**（P1 门裁定#1）：`client.rs:1262-1278` 消费的是 per-server timeout；文档级 `mcp.timeout.*` 合并确实缺失——两口径并入 G-362。
+
+## 正面互证（本轮全量对齐面）
+
+keybind 230/230 全对齐；主题资产 33+1 md5 全等；openapi 141 operation 字节级 0 diff；48 迁移 ID 全同；52 会话事件分类一致；models-dev 快照 md5 相同；session-message parts 全集无缺漏。
+
+## 审查盲区（10 项，如实披露）
+
+1. S3a 窄读：rust plugin.rs:151-863、updater.rs:121-2329、update_feed.rs 全文、auth.rs:701-1518、mini.rs:161-398——**G-365 installer 细节未逐行复核（最高优先披露）**。
+2. A3：~180 个 catalog-only provider 未逐一验证 api/env 字段（推定）。
+3. T1：store.rs 其余 ~13k 行、components 逐行（靠 T2/T3+注释引用密度覆盖）。
+4. T3：store.rs SSE 增量 append 逐事件对拍未做；solid 画笔依赖 golden；history prepend 位置未定位。
+5. S1：rust model.rs/fs.rs/plugins.rs/lifecycle.rs/errors.rs 未逐行（路由表+抽查）。
+6. C8：host.js codemode 解释器内部按任务书跳过（逃逸面结论已独立核验）。
+7. C 系遗留：variant.ts 其余 ~40 家族常量 diff、optimize/*.txt 字节 diff、persistent_pty/frontend.rs(583L)、repository_cache.rs 结构级。
+8. A1a/A1b：open-responses 主文件仅签名级、responses-hosted-tools 三端交叉验证、bedrock SSO/IMDS 细节、copilot 转换器全量。
+9. T4：mini footer.prompt/command 子特性、theme expand/resolve/syntax 字段级（结构面+md5 替代）。
+10. S4b：theme resolve.rs 后段、v1_migrate 函数级、低风险 util 仅确认落位。
+
+明细见 `docs/audit/port-parity-line-review/lanes/gate-FINAL.md`。
+
+## 第二十二轮判定汇总
+
+27 lane 初报候选经两门合并登记册（G-01..G-63）→ 去重/归并/撤销后**正式立项 50 项**：🔴×12（G-334..G-345）/ 🟡×22（G-346..G-367）/ 🟢 打包簇×16（G-368..G-383）；**归类既有 12 处**、**撤销初报 1 条**（T4 插件目录发现）、**勘正旧勘误 1 处**（R17#13 locale_duration 括注）。产品级缺口单列不混入行为偏差：G-347（媒体部署接线）、G-348（cf-ai-gateway）、evaluation 域（归 G-7/G-17）。修复优先序（两门建议合并）：小成本高收益先行——G-341（删 `% 10_000` 一行）→ G-334 最小步（删 `__rawFetch`）→ G-336（补 `!stream_interrupted`）→ G-343（toggle_pin 分发）→ G-344（cancel_path 去 /v1）→ G-339/G-340（ACP 预览/时间串）→ G-337/G-338（插件钩子断线对）→ G-335（pty 字节缓冲化）→ G-342（stdin 串行化）→ G-362（snapshots/mcp.timeout 双键）→ G-363（默认模型回退）→ 其余 🟡 → 🟢 簇按域随手收；G-358 放行后以真实分页服务器对测闭环。质量口径：0 处未裁定矛盾、抽查 11/11 成立、盲区 10 项如实披露。记录：`docs/audit/port-parity-line-review/{REPORT,TABLE}.md` + `lanes/`（32 份）。
