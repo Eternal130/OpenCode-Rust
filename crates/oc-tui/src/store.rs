@@ -12289,8 +12289,20 @@ impl Store {
     pub fn set_connection(&self, state: ConnectionState) {
         // SURF-2: the Reconnecting overlay's timer anchor — the clock
         // reading when the state LAST CHANGED (app.tsx:1298-1315's
-        // effect re-arms the timeout on every transition).
-        if self.connection.get() != state {
+        // effect re-arms the timeout on every transition). G-300: the
+        // change that matters is the state FAMILY (connected /
+        // connecting / reconnecting / failed) — the ref's status stays
+        // `"reconnecting"` across retries (the attempt counter rides a
+        // separate field), so Reconnecting{n}→Reconnecting{n+1} must
+        // NOT re-arm the anchor or the overlay would blink off for the
+        // 1 s threshold between every watchdog retry.
+        let family = |state: &ConnectionState| match state {
+            ConnectionState::Connected => 0u8,
+            ConnectionState::Connecting => 1,
+            ConnectionState::Reconnecting { .. } => 2,
+            ConnectionState::Failed => 3,
+        };
+        if family(&self.connection.get()) != family(&state) {
             self.connection_since.set(self.clock.get());
         }
         self.connection.set(state);

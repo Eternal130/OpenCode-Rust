@@ -1091,21 +1091,26 @@ fn vt_temporal_startup_loading_pill_never_connect_resolves_locally() {
          server"
     );
     // (c) the Reconnecting overlay: it APPEARS over the never-
-    // connecting boot at the END of the initial state's 5 s design
-    // grace (store.rs:9299 — the 0-init `connection_since` anchor
-    // latches at the first observation, so the scrim stays off for
-    // the first 5 s of a never-transitioned boot; app.tsx:1300-1314)
-    // and PERSISTS — the handshake never lands, so the overlay stays
-    // layered above the pill-free screen.
+    // connecting boot once the G-300 connect window (2 s, ref
+    // `connectTimeout`) aborts the hung subscribe — the state flips to
+    // Reconnecting{2} at ~2.5 s (window + backoff) and the overlay's
+    // 1 s reconnecting threshold (store.rs:9299 — the 0-init
+    // `connection_since` anchor latches at the first transition)
+    // surfaces it. Before G-300 the subscribe hung forever, so the
+    // overlay could only ride the initial state's 5 s grace; the
+    // watchdog now transitions first (ref parity: the ref aborts the
+    // connect at 2 s and reports reconnecting) — and it PERSISTS (the
+    // handshake never lands).
     let overlay_at = overlay.iter().find(|(_, seen)| *seen).map_or(u64::MAX, |(t, _)| *t);
     assert!(
         overlay_at != u64::MAX,
         "the Reconnecting overlay never appeared — the never-connecting server must surface it"
     );
     assert!(
-        overlay_at >= 5_000,
-        "the Reconnecting overlay appeared at {overlay_at} ms, before the 5 s initial grace ran \
-         out — the 0-init anchor must latch at the first observation, not read as already-expired"
+        overlay_at >= 2_000,
+        "the Reconnecting overlay appeared at {overlay_at} ms, before the 2 s G-300 connect \
+         window elapsed — the anchor must latch at the first transition, not read as \
+         already-expired"
     );
     let late_gaps: Vec<u64> = overlay
         .iter()
