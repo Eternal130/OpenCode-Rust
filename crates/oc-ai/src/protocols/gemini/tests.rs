@@ -2,6 +2,7 @@
 //! machine) plus cassette-parity replay against the TS dumps in
 //! `test-fixtures/expected/gemini/`.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde_json::{json, Value};
@@ -116,6 +117,61 @@ fn empty_body_route() -> Fixture {
 fn compile_body(route: &Route, request: &LLMRequest) -> Value {
     let prepared = route.prepare_request(request);
     route.build_body(&prepared).unwrap()
+}
+
+/// G-371 P2 — namespace flattening preserves the ref spread's
+/// `providerExecuted`/`cache`/`metadata` fields on tool calls/results
+/// (`{ ...part, name: ns_name, namespace: undefined }`,
+/// shared.ts:304-320).
+#[test]
+fn gemini_flatten_preserves_executed_cache_metadata() {
+    let messages = vec![Message {
+        id: None,
+        role: MessageRole::User,
+        content: vec![
+            ContentPart::ToolCall {
+                id: "call_1".into(),
+                name: "search".into(),
+                namespace: Some("ns".into()),
+                input: json!({"q": "x"}),
+                provider_executed: Some(true),
+                cache: None,
+                metadata: Some(BTreeMap::from([("k".to_string(), json!("v"))])),
+                provider_metadata: None,
+            },
+            ContentPart::ToolResult {
+                id: "call_1".into(),
+                name: "search".into(),
+                namespace: Some("ns".into()),
+                result: ToolResultValue::Text { value: json!("done") },
+                provider_executed: Some(true),
+                cache: None,
+                metadata: Some(BTreeMap::from([("r".to_string(), json!(1))])),
+                provider_metadata: None,
+            },
+        ],
+        metadata: None,
+        provider_metadata: None,
+        native: None,
+    }];
+    let flattened = super::flatten_namespaced_messages(&messages);
+    match (&flattened[0].content[0], &flattened[0].content[1]) {
+        (
+            ContentPart::ToolCall { name, namespace, provider_executed, metadata, .. },
+            ContentPart::ToolResult { metadata: result_metadata, .. },
+        ) => {
+            assert_eq!(name, "ns_search");
+            assert_eq!(namespace, &None);
+            assert_eq!(*provider_executed, Some(true), "providerExecuted survives");
+            assert_eq!(metadata.as_ref().map(|m| m.len()), Some(1), "call metadata survives");
+            assert_eq!(
+                result_metadata.as_ref().map(|m| m.len()),
+                Some(1),
+                "result metadata survives"
+            );
+        }
+        other => panic!("unexpected parts: {other:?}"),
+    }
 }
 
 /// Normalize a serialized event for comparison against the TS wire form.

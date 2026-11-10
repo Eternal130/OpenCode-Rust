@@ -20,7 +20,9 @@ use crate::cache_policy::apply_cache_policy;
 use crate::effort_updates::apply_effort_updates;
 use crate::route::auth::{self, Definition as AuthDefinition, Headers};
 use crate::route::endpoint::{self, Endpoint, EndpointInput, EndpointPatch};
-use crate::route::executor::{http_failure, provider_message, HttpFailureInput, MAX_ERROR_BODY_CHARS};
+use crate::route::executor::{
+    http_failure, provider_message, HttpFailureInput, MAX_ERROR_BODY_CHARS,
+};
 use crate::route::framing::{frame_stream, Framing};
 use crate::route::protocol::{Protocol, ProtocolState};
 use crate::route::transport::{

@@ -1125,12 +1125,14 @@ impl Protocol for BedrockConverseProtocol {
 
     fn initial(&self, request: &LLMRequest) -> ProtocolState {
         Box::new(ParserState {
+            // bedrock-converse.ts:333 — the route's providerMetadataKey,
+            // else the model's provider id string
             provider_metadata_key: request
                 .model
                 .route
                 .provider_metadata_key
                 .clone()
-                .unwrap_or_else(|| "bedrock".to_string()),
+                .unwrap_or_else(|| request.model.provider.0.clone()),
             ..Default::default()
         })
     }
@@ -1185,6 +1187,12 @@ pub fn bedrock_converse_route(transport: SharedTransport, options: BedrockAuthOp
 /// `invoke-stream` endpoint (the pre-Converse invoke shape — the
 /// `/model/{id}/invoke-stream` endpoint AWS exposes for the native
 /// anthropic messages body).
+///
+/// PINNED SUPERSET (G-371 P12): the v2 reference has no equivalent route —
+/// `bedrock-converse.ts` only builds the Converse-stream lane, and
+/// anthropic-on-bedrock rides the mantle provider instead. This port keeps
+/// the native invoke lane as a pinned superset; remove only if the ref
+/// ever lands a gate for it.
 pub fn bedrock_invoke_route(transport: SharedTransport, options: BedrockAuthOptions) -> Route {
     let auth = sigv4::resolve_auth(&options, "bedrock", "Bedrock Invoke");
     let region = sigv4::resolve_region(options.region.as_deref(), options.credentials.as_ref());

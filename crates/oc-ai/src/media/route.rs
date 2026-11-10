@@ -36,7 +36,9 @@ use crate::media::protocol::{
 };
 use crate::route::auth::{self, AuthInput, Definition as AuthDefinition, Headers};
 use crate::route::endpoint::trim_base_url;
-use crate::route::executor::{http_failure, provider_message, HttpFailureInput, MAX_BODY_CHARS};
+use crate::route::executor::{
+    http_failure, provider_message, HttpFailureInput, MAX_ERROR_BODY_CHARS,
+};
 use crate::route::framing::{Framing as RouteFraming, FramingDecoder};
 use crate::route::transport::timeouts::TimeoutBudget;
 use crate::route::transport::{
@@ -612,9 +614,12 @@ impl CoreTransport {
     }
 }
 
-/// Non-2xx classification with the provider-error taxonomy.
+/// Non-2xx classification with the provider-error taxonomy. The body is
+/// read up to the 256KB classification cap (G-346: error.code past the 2KB
+/// display budget still classifies); human-facing copy still truncates
+/// inside `provider_message`.
 async fn status_failure(http: HttpContext, body: transport::ByteStream) -> AiError {
-    let text = read_body_limited(body, MAX_BODY_CHARS).await.unwrap_or_default();
+    let text = read_body_limited(body, MAX_ERROR_BODY_CHARS).await.unwrap_or_default();
     let message = provider_message(http.status, Some(&text));
     let response_headers: Vec<(String, String)> =
         http.headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect();

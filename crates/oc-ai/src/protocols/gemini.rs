@@ -1343,29 +1343,47 @@ fn flatten_namespaced_messages(messages: &[Message]) -> Vec<Message> {
 }
 
 fn rename_namespaced(part: &ContentPart, namespace: &str) -> ContentPart {
+    // `{ ...part, name: ns_name, namespace: undefined }` — the ref spread
+    // preserves every other field (providerExecuted/cache/metadata included)
     match part {
-        ContentPart::ToolCall { id, name, input, provider_metadata, .. } => ContentPart::ToolCall {
+        ContentPart::ToolCall {
+            id,
+            name,
+            input,
+            provider_executed,
+            cache,
+            metadata,
+            provider_metadata,
+            ..
+        } => ContentPart::ToolCall {
             id: id.clone(),
             name: format!("{namespace}_{name}"),
             namespace: None,
             input: input.clone(),
-            provider_executed: None,
-            cache: None,
-            metadata: None,
+            provider_executed: provider_executed.clone(),
+            cache: cache.clone(),
+            metadata: metadata.clone(),
             provider_metadata: provider_metadata.clone(),
         },
-        ContentPart::ToolResult { id, name, result, provider_metadata, .. } => {
-            ContentPart::ToolResult {
-                id: id.clone(),
-                name: format!("{namespace}_{name}"),
-                namespace: None,
-                result: result.clone(),
-                provider_executed: None,
-                cache: None,
-                metadata: None,
-                provider_metadata: provider_metadata.clone(),
-            }
-        }
+        ContentPart::ToolResult {
+            id,
+            name,
+            result,
+            provider_executed,
+            cache,
+            metadata,
+            provider_metadata,
+            ..
+        } => ContentPart::ToolResult {
+            id: id.clone(),
+            name: format!("{namespace}_{name}"),
+            namespace: None,
+            result: result.clone(),
+            provider_executed: provider_executed.clone(),
+            cache: cache.clone(),
+            metadata: metadata.clone(),
+            provider_metadata: provider_metadata.clone(),
+        },
         other => other.clone(),
     }
 }

@@ -856,6 +856,11 @@ impl WebSocketChannelExecutor for SessionChannel {
             Arc::clone(&slot.send_text)
         };
 
+        // PINNED SUPERSET (G-372.5): the ref's sendText
+        // (websocket.ts:303-323) has no timeout — ws.send either enqueues
+        // or throws synchronously. The Rust transport's injected SendFn is
+        // async, so a wedged send could otherwise stall the exchange
+        // forever; the 30s bound is a rust-only pin, not ref parity.
         let sent = tokio::time::timeout(Duration::from_secs(30), (send_text)(message)).await;
         let sent = match sent {
             Ok(result) => result,
