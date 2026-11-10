@@ -269,11 +269,28 @@ impl PipelineExecutor {
         let input = before.input;
 
         // decodeInput — schema issues become the exact Tool.Error message.
+        // The after hook fires for ALL Tool.Error outcomes, including
+        // decode failure (tool.ts:130-137: decodeInput is caught inside
+        // `execute`, so `yield* afterEvent.error` runs before the
+        // return).
         let issues = validate_input(&self.schema, &input);
         if !issues.is_empty() {
+            let shaped = self
+                .emit_after(
+                    &input,
+                    context,
+                    HookToolOutcome::Error {
+                        error: oc_schema::tool::ToolError {
+                            message: format_input_issues(&self.name, &issues, &input),
+                            error: None,
+                            metadata: None,
+                        },
+                    },
+                )
+                .await;
             return Err(ToolRunFailure::Error {
-                message: format_input_issues(&self.name, &issues, &input),
-                metadata: None,
+                message: shaped.message,
+                metadata: shaped.metadata,
             });
         }
 

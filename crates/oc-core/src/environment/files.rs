@@ -96,8 +96,11 @@ pub trait Files: Send + Sync {
 
     /// `write` without implicit parent creation: a missing parent fails
     /// [`FilesError::NotFound`] on the parent instead of being created.
-    /// Added for the patch tool's move leg, which writes the destination
-    /// without `mkdir -p` (a missing parent must stay an error).
+    /// Kept for callers that must pin the no-parent-creation shape;
+    /// ordinary writes (including the patch move leg, G-307) use
+    /// [`Files::write`], which creates parents like the ref's
+    /// files.write (local.ts:50-55).
+    #[allow(dead_code)]
     async fn write_file(&self, path: &str, bytes: &[u8]) -> Result<(), FilesError> {
         if let Some(parent) = std::path::Path::new(path).parent() {
             self.stat(&parent.to_string_lossy()).await?;

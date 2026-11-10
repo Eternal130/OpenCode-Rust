@@ -495,6 +495,27 @@ async fn select_provider(
     lock: &Arc<tokio::sync::Mutex<()>>,
     session_id: &str,
 ) -> Result<Option<String>, WebSearchError> {
+    select_provider_with_budget(
+        search,
+        forms,
+        lock,
+        session_id,
+        Duration::from_millis(SELECTION_TIMEOUT_MS),
+    )
+    .await
+}
+
+/// G-310 — ONE "1 minute" budget wraps the ENTIRE permit flow
+/// (websearch.ts:141-144): the allow/choose/disable form AND the
+/// follow-up provider form share it (per-form timeouts could reach
+/// 2× the budget on the choose path).
+async fn select_provider_with_budget(
+    search: &Arc<WebSearch>,
+    forms: &Forms,
+    lock: &Arc<tokio::sync::Mutex<()>>,
+    session_id: &str,
+    budget: std::time::Duration,
+) -> Result<Option<String>, WebSearchError> {
     let _guard = lock.lock().await;
     if search.default_provider().await.is_ok_and(|provider| provider.is_some()) {
         return Ok(None);
@@ -505,8 +526,14 @@ async fn select_provider(
         return Err(WebSearchError::ProviderRequired);
     };
     let names = providers.iter().map(|(_, name)| name.as_str()).collect::<Vec<_>>().join(", ");
-    let response = tokio::time::timeout(Duration::from_millis(SELECTION_TIMEOUT_MS), async {
-        forms
+    let cancelled = || WebSearchError::Request {
+        provider_id: default_id.clone(),
+        status: None,
+        message: "Web search cancelled".to_string(),
+    };
+    // The single outer budget: covers both forms.
+    let response = tokio::time::timeout(budget, async {
+        let response = forms
             .ask(crate::forms::NewForm {
                 session_id: session_id.to_string(),
                 title: "Web Search".into(),
@@ -553,114 +580,105 @@ async fn select_provider(
                     custom: Some(false),
                 }],
             })
-            .await
+            .await;
+        let Ok(response) = response else {
+            return Err(cancelled());
+        };
+        match response {
+            oc_schema::form::State::Cancelled { .. } => Err(cancelled()),
+            oc_schema::form::State::Answered { answer } => {
+                let choice = answer.get("choice").and_then(|value| match value {
+                    oc_schema::form::FormValue::String(text) => Some(text.clone()),
+                    _ => None,
+                });
+                match choice.as_deref() {
+                    Some("disable") => {
+                        search.select(&Selection::Disabled).await;
+                        Err(WebSearchError::Disabled)
+                    }
+                    Some("choose") => {
+                        let selection = forms
+                            .ask(crate::forms::NewForm {
+                                session_id: session_id.to_string(),
+                                title: "Choose a web search provider".into(),
+                                // G-192 — ref websearch.ts:111: the
+                                // choose-provider form carries the
+                                // same kind metadata.
+                                metadata: Some(
+                                    serde_json::from_value(serde_json::json!({
+                                        "kind": "websearch.provider",
+                                    }))
+                                    .unwrap_or_default(),
+                                ),
+                                fields: vec![oc_schema::form::Field::String {
+                                    key: "provider".into(),
+                                    title: None,
+                                    description: Some(
+                                        "Choose a provider for web search.".into(),
+                                    ),
+                                    required: Some(true),
+                                    hidden: None,
+                                    when: None,
+                                    format: None,
+                                    min_length: None,
+                                    max_length: None,
+                                    pattern: None,
+                                    placeholder: None,
+                                    default: None,
+                                    options: Some(
+                                        providers
+                                            .iter()
+                                            .map(|(id, name)| oc_schema::form::Option_ {
+                                                value: id.clone(),
+                                                label: name.clone(),
+                                                description: None,
+                                            })
+                                            .collect(),
+                                    ),
+                                    custom: Some(false),
+                                }],
+                            })
+                            .await;
+                        let Ok(selection) = selection else {
+                            return Err(cancelled());
+                        };
+                        match selection {
+                            oc_schema::form::State::Cancelled { .. } => Err(cancelled()),
+                            oc_schema::form::State::Answered { answer } => {
+                                let provider =
+                                    answer.get("provider").and_then(|value| match value {
+                                        oc_schema::form::FormValue::String(text) => {
+                                            Some(text.clone())
+                                        }
+                                        _ => None,
+                                    });
+                                let Some(provider) = provider else {
+                                    return Err(WebSearchError::ProviderRequired);
+                                };
+                                search.select(&Selection::Provider(provider.clone())).await;
+                                Ok(Some(provider))
+                            }
+                            oc_schema::form::State::Pending => {
+                                Err(WebSearchError::ProviderRequired)
+                            }
+                        }
+                    }
+                    Some(_) => {
+                        search.select(&Selection::Random).await;
+                        Ok(None)
+                    }
+                    None => Err(WebSearchError::ProviderRequired),
+                }
+            }
+            oc_schema::form::State::Pending => Err(WebSearchError::ProviderRequired),
+        }
     })
     .await;
-    let Ok(Ok(response)) = response else {
-        return Err(WebSearchError::Request {
-            provider_id: default_id,
-            status: None,
-            message: "Web search cancelled".into(),
-        });
-    };
+    // The single budget elapsed across the whole flow (either form) —
+    // ref websearch.ts:143-144 fails with the same cancelled error.
     match response {
-        oc_schema::form::State::Cancelled { .. } => Err(WebSearchError::Request {
-            provider_id: default_id,
-            status: None,
-            message: "Web search cancelled".into(),
-        }),
-        oc_schema::form::State::Answered { answer } => {
-            let choice = answer.get("choice").and_then(|value| match value {
-                oc_schema::form::FormValue::String(text) => Some(text.clone()),
-                _ => None,
-            });
-            match choice.as_deref() {
-                Some("disable") => {
-                    search.select(&Selection::Disabled).await;
-                    Err(WebSearchError::Disabled)
-                }
-                Some("choose") => {
-                    let selection =
-                        tokio::time::timeout(Duration::from_millis(SELECTION_TIMEOUT_MS), async {
-                            forms
-                                .ask(crate::forms::NewForm {
-                                    session_id: session_id.to_string(),
-                                    title: "Choose a web search provider".into(),
-                                    // G-192 — ref websearch.ts:111: the
-                                    // choose-provider form carries the
-                                    // same kind metadata.
-                                    metadata: Some(
-                                        serde_json::from_value(serde_json::json!({
-                                            "kind": "websearch.provider",
-                                        }))
-                                        .unwrap_or_default(),
-                                    ),
-                                    fields: vec![oc_schema::form::Field::String {
-                                        key: "provider".into(),
-                                        title: None,
-                                        description: Some(
-                                            "Choose a provider for web search.".into(),
-                                        ),
-                                        required: Some(true),
-                                        hidden: None,
-                                        when: None,
-                                        format: None,
-                                        min_length: None,
-                                        max_length: None,
-                                        pattern: None,
-                                        placeholder: None,
-                                        default: None,
-                                        options: Some(
-                                            providers
-                                                .iter()
-                                                .map(|(id, name)| oc_schema::form::Option_ {
-                                                    value: id.clone(),
-                                                    label: name.clone(),
-                                                    description: None,
-                                                })
-                                                .collect(),
-                                        ),
-                                        custom: Some(false),
-                                    }],
-                                })
-                                .await
-                        })
-                        .await;
-                    let Ok(Ok(selection)) = selection else {
-                        return Err(WebSearchError::Request {
-                            provider_id: default_id,
-                            status: None,
-                            message: "Web search cancelled".into(),
-                        });
-                    };
-                    match selection {
-                        oc_schema::form::State::Cancelled { .. } => Err(WebSearchError::Request {
-                            provider_id: default_id,
-                            status: None,
-                            message: "Web search cancelled".into(),
-                        }),
-                        oc_schema::form::State::Answered { answer } => {
-                            let provider = answer.get("provider").and_then(|value| match value {
-                                oc_schema::form::FormValue::String(text) => Some(text.clone()),
-                                _ => None,
-                            });
-                            let Some(provider) = provider else {
-                                return Err(WebSearchError::ProviderRequired);
-                            };
-                            search.select(&Selection::Provider(provider.clone())).await;
-                            Ok(Some(provider))
-                        }
-                        oc_schema::form::State::Pending => Err(WebSearchError::ProviderRequired),
-                    }
-                }
-                Some(_) => {
-                    search.select(&Selection::Random).await;
-                    Ok(None)
-                }
-                None => Err(WebSearchError::ProviderRequired),
-            }
-        }
-        oc_schema::form::State::Pending => Err(WebSearchError::ProviderRequired),
+        Err(_elapsed) => Err(cancelled()),
+        Ok(result) => result,
     }
 }
 
@@ -1244,6 +1262,68 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
         panic!("form never became pending");
+    }
+
+    /// G-310 — ONE budget wraps the ENTIRE permit flow (ref
+    /// websearch.ts:141-144 `Effect.timeoutOrElse({ duration: "1
+    /// minute" })` around BOTH forms): the choose path that spends most
+    /// of the budget on the first form must time out at the single
+    /// budget, not budget-per-form (2×). Virtual time makes the split
+    /// deterministic.
+    #[tokio::test]
+    async fn g310_consent_flow_shares_one_timeout_budget_across_both_forms() {
+        let search = Arc::new(service().await);
+        let forms = Forms::new(
+            Arc::new(oc_util::determinism::SequentialIdGen::new()),
+            Arc::new(oc_util::determinism::FixedClock::epoch()),
+        );
+        let asker_forms = forms.clone();
+        let asker_search = Arc::clone(&search);
+        let asker_lock = Arc::new(tokio::sync::Mutex::new(()));
+        let started = std::time::Instant::now();
+        let joined = tokio::spawn(async move {
+            select_provider_with_budget(
+                &asker_search,
+                &asker_forms,
+                &asker_lock,
+                "ses_1",
+                std::time::Duration::from_millis(400),
+            )
+            .await
+        });
+
+        // First form: consume most of the budget before answering.
+        let first = await_form(&forms).await;
+        assert_eq!(first.title, "Web Search");
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        forms
+            .reply(
+                &first.id,
+                std::iter::once((
+                    "choice".to_string(),
+                    oc_schema::form::FormValue::String("choose".into()),
+                ))
+                .collect(),
+            )
+            .await
+            .expect("reply choose");
+
+        // Second form: never answered — the flow must end at the SINGLE
+        // 400ms budget (per-form budgets would run 300ms + 400ms ≥ 700ms).
+        let second = await_form(&forms).await;
+        assert_eq!(second.title, "Choose a web search provider");
+        let error = joined.await.expect("join").unwrap_err();
+        match error {
+            WebSearchError::Request { message, .. } => {
+                assert_eq!(message, "Web search cancelled");
+            }
+            other => panic!("expected cancelled, got {other:?}"),
+        }
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(650),
+            "one shared budget (400ms), not per-form (300ms + 400ms): {elapsed:?}"
+        );
     }
 
     /// G-192 — the disable filter hook (websearch.ts:181-192): a disabled

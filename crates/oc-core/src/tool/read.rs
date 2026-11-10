@@ -936,16 +936,28 @@ async fn run(
             };
             let mut candidates: Vec<PathBuf> = Vec::new();
             let root = services.directory.clone();
-            let mut current: Option<&Path> = Some(&start);
+            let mut current: Option<PathBuf> = Some(start);
             while let Some(dir) = current {
                 if dir == root {
                     break;
                 }
                 let candidate = dir.join(AGENTS_FILENAME);
-                if candidate.is_file() && candidate != target.absolute {
-                    candidates.push(candidate);
+                if candidate != target.absolute {
+                    // G-303: discovery goes through the Files seam
+                    // (ref read.ts:89-100 `fs.resolve`/`fs.up` — works in
+                    // remote/workspace environments). `type_following`
+                    // is the follow-symlink "is this a regular file"
+                    // probe: a symlink to a file counts.
+                    let kind = crate::environment::type_following(
+                        services.files.as_ref(),
+                        &candidate.to_string_lossy(),
+                    )
+                    .await;
+                    if kind == Ok(crate::environment::FileType::File) {
+                        candidates.push(candidate);
+                    }
                 }
-                current = dir.parent();
+                current = dir.parent().map(Path::to_path_buf);
             }
             // fs.up walks start→root; candidates order is nearest-first.
             if !candidates.is_empty() {

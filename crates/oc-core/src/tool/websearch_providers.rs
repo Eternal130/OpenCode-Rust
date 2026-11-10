@@ -427,6 +427,9 @@ pub struct TavilyProvider {
     /// G-224③ — the app user-agent (ref tavily.ts:53-54 sends
     /// `App.useragent(ctx.app)` alongside `X-Client-Name`).
     pub user_agent: String,
+    /// The request budget (ref tavily.ts:72 `Duration.seconds(25)`);
+    /// overridable for tests.
+    pub timeout: Duration,
 }
 
 pub const TAVILY_ENDPOINT: &str = "https://api.tavily.com/search";
@@ -439,6 +442,7 @@ impl TavilyProvider {
             user_agent: crate::session::runner::model_request::useragent(
                 &crate::session::runner::model_request::AppMetadata::detected(),
             ),
+            timeout: Duration::from_secs(MCP_TIMEOUT_SECONDS),
         }
     }
 
@@ -460,7 +464,7 @@ impl SearchProvider for TavilyProvider {
     }
     async fn execute(&self, query: &str) -> Result<Vec<WebSearchResult>, ProviderError> {
         let client = oc_http::builder()
-            .timeout(Duration::from_secs(MCP_TIMEOUT_SECONDS))
+            .timeout(self.timeout)
             .build()
             .map_err(|error| ProviderError::request(None, error.to_string()))?;
         let mut request = client
@@ -481,7 +485,16 @@ impl SearchProvider for TavilyProvider {
         let response = request
             .send()
             .await
-            .map_err(|error| ProviderError::request(None, error.to_string()))?;
+            .map_err(|error| {
+                // G-310 — the tavily branch uses the dedicated timeout
+                // message (ref tavily.ts:71-74), not the generic transport
+                // display.
+                if error.is_timeout() {
+                    ProviderError::request(None, "Tavily web search request timed out".to_string())
+                } else {
+                    ProviderError::request(None, error.to_string())
+                }
+            })?;
         let status = response.status();
         if !status.is_success() {
             let retry_after = retry_after_header(response.headers());
@@ -950,6 +963,31 @@ mod tests {
         let error = provider.execute("q").await.unwrap_err();
         assert_eq!(error.status, Some(429));
         assert_eq!(error.retry_after.as_deref(), Some("12"));
+    }
+
+    /// G-310 — the tavily timeout surfaces the DEDICATED message
+    /// (ref tavily.ts:71-74 "Tavily web search request timed out"),
+    /// not the generic transport error display.
+    #[tokio::test]
+    async fn g310_tavily_timeout_uses_dedicated_message() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        // A server that accepts, swallows the request, and never answers.
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buffer = vec![0u8; 65_536];
+                let _ = stream.read(&mut buffer).await;
+                let _ = stream.write(b"").await;
+                std::future::pending::<()>().await;
+            }
+        });
+        let mut provider = TavilyProvider::new(None);
+        provider.endpoint = format!("http://127.0.0.1:{port}");
+        provider.timeout = Duration::from_millis(150);
+        let error = provider.execute("q").await.unwrap_err();
+        assert_eq!(error.status, None);
+        assert_eq!(error.message, "Tavily web search request timed out");
     }
 
     #[tokio::test]

@@ -16,6 +16,55 @@ fn service(tmp: &tempfile::TempDir) -> Shell {
     Shell::new(tmp.path(), "proj", ids(), std::sync::Arc::new(oc_util::determinism::SystemClock))
 }
 
+/// G-304① — a non-UTF-8 process env entry must be SKIPPED (with a debug
+/// log), not panic: `std::env::vars()` panics on such entries
+/// (documented std behavior). nextest runs each test in its own process,
+/// so the process-global env mutation is safe here.
+#[cfg(unix)]
+#[test]
+fn g304_env_utf8_skips_non_utf8_entries_without_panic() {
+    use std::os::unix::ffi::OsStringExt;
+    unsafe {
+        std::env::set_var("G304_ASCII", "ok");
+        std::env::set_var("G304_WEIRD", std::ffi::OsString::from_vec(vec![0xFF, 0xFE, 0xC3]));
+    }
+    let env = env_utf8();
+    assert_eq!(env.get("G304_ASCII").map(String::as_str), Some("ok"));
+    assert!(
+        !env.contains_key("G304_WEIRD"),
+        "the non-UTF-8 entry is skipped, not lossily kept or panicking"
+    );
+}
+
+/// G-304② — the service layer has no location directory (ref
+/// shell.ts:265 defaults `cwd ?? location.directory` there), so an empty
+/// cwd reaching spawn is a caller bug; refuse instead of silently
+/// spawning in the server's process directory.
+#[tokio::test]
+async fn g304_empty_cwd_refuses_to_spawn() {
+    let tmp = tempfile::tempdir().unwrap();
+    let shell = service(&tmp);
+    let error = shell
+        .create(
+            CreateInput {
+                command: "pwd".into(),
+                cwd: Some(String::new()),
+                timeout: Some(5_000),
+                metadata: None,
+            },
+            Some("/bin/sh"),
+            None,
+            None,
+        )
+        .await
+        .expect_err("empty cwd must not spawn");
+    assert!(
+        error.to_string().contains("working directory"),
+        "clear error text: {error}"
+    );
+    assert!(shell.list().is_empty(), "no command was spawned");
+}
+
 #[tokio::test]
 async fn shell_runs_a_command_and_captures_combined_output() {
     let tmp = tempfile::tempdir().unwrap();

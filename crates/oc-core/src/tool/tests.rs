@@ -1036,6 +1036,114 @@ async fn tool_read_discovers_agents_md_walking_up_to_the_location_root() {
     assert!(recorder.loads.lock().is_empty(), "the read file is excluded");
 }
 
+/// A Files wrapper that records every `stat` probe of an AGENTS.md
+/// candidate, delegating to the local driver.
+struct RecordingFiles {
+    stats: Arc<parking_lot::Mutex<Vec<String>>>,
+}
+
+#[async_trait::async_trait]
+impl crate::environment::Files for RecordingFiles {
+    async fn read(
+        &self,
+        path: &str,
+        range: Option<crate::environment::Range>,
+    ) -> Result<crate::environment::ReadResult, crate::environment::FilesError> {
+        crate::environment::LocalFiles.read(path, range).await
+    }
+
+    async fn write(
+        &self,
+        path: &str,
+        bytes: &[u8],
+    ) -> Result<(), crate::environment::FilesError> {
+        crate::environment::LocalFiles.write(path, bytes).await
+    }
+
+    async fn stat(
+        &self,
+        path: &str,
+    ) -> Result<crate::environment::FileInfo, crate::environment::FilesError> {
+        if path.ends_with("AGENTS.md") {
+            self.stats.lock().push(path.to_string());
+        }
+        crate::environment::LocalFiles.stat(path).await
+    }
+
+    async fn list(
+        &self,
+        path: &str,
+    ) -> Result<Vec<crate::environment::DirEntry>, crate::environment::FilesError> {
+        crate::environment::LocalFiles.list(path).await
+    }
+
+    async fn remove(&self, path: &str) -> Result<(), crate::environment::FilesError> {
+        crate::environment::LocalFiles.remove(path).await
+    }
+
+    async fn r#move(&self, from: &str, to: &str) -> Result<(), crate::environment::FilesError> {
+        crate::environment::LocalFiles.r#move(from, to).await
+    }
+
+    async fn mkdir(&self, path: &str) -> Result<(), crate::environment::FilesError> {
+        crate::environment::LocalFiles.mkdir(path).await
+    }
+}
+
+/// G-303 — AGENTS.md discovery walks the ancestors through the Files
+/// seam (ref read.ts:89-100 `fs.resolve`/`fs.up` on the Environment
+/// seam), nearest-first, and works in remote/workspace environments.
+#[tokio::test]
+async fn tool_read_agents_discovery_goes_through_the_files_seam_nearest_first() {
+    let recorder = RecordingInstructions::default();
+    let stats = Arc::new(parking_lot::Mutex::new(Vec::<String>::new()));
+    let base = harness().await;
+    let mut shape = (*base.services).clone_shape();
+    shape.files = Arc::new(RecordingFiles { stats: Arc::clone(&stats) });
+    let services = Arc::new(crate::tool::ToolServices {
+        instructions: Some(Arc::new(recorder.clone())),
+        ..shape
+    });
+    let tools = Arc::new(ToolRegistryState::new());
+    let hooks = Arc::new(crate::hooks::HookRegistry::new());
+    crate::tool::register_all(&tools, &hooks, &services).expect("register");
+
+    std::fs::create_dir_all(base.dir.join("sub/deep")).expect("dirs");
+    std::fs::write(base.dir.join("AGENTS.md"), "root rules").expect("write");
+    std::fs::write(base.dir.join("sub/AGENTS.md"), "sub rules").expect("write");
+    std::fs::write(base.dir.join("sub/deep/AGENTS.md"), "deep rules").expect("write");
+    std::fs::write(base.dir.join("sub/deep/file.txt"), "hello").expect("write");
+
+    call(&tools, "read", serde_json::json!({ "path": "sub/deep/file.txt" })).await.expect("read");
+
+    // The candidates were probed via Files::stat, nearest-first, walking
+    // up to (but excluding) the location root.
+    let probes = stats.lock().clone();
+    // LocalFiles resolves seam paths against the location root ("/…").
+    let probed: Vec<String> = probes
+        .iter()
+        .map(|path| {
+            path.strip_prefix(base.dir.to_string_lossy().as_ref()).unwrap_or(path).to_string()
+        })
+        .collect();
+    assert_eq!(
+        probed,
+        vec!["/sub/deep/AGENTS.md".to_string(), "/sub/AGENTS.md".to_string()],
+        "discovery ancestors went through the Files seam, nearest first"
+    );
+    let loads = recorder.loads.lock().clone();
+    assert_eq!(loads.len(), 1, "one injection batch");
+    let paths = &loads[0].1;
+    assert_eq!(
+        paths,
+        &vec![
+            base.dir.join("sub/deep/AGENTS.md"),
+            base.dir.join("sub/AGENTS.md"),
+        ],
+        "injection order is nearest-first"
+    );
+}
+
 impl ToolServices {
     /// Clone the service shape with all shared handles (tests patch one
     /// field at a time).
@@ -1434,6 +1542,47 @@ async fn tool_read_structured_output_matches_ref_union_shapes() {
 // ---------------------------------------------------------------------------
 // Patch (tool-patch.test.ts)
 // ---------------------------------------------------------------------------
+
+/// G-307 — `*** Move to:` a target in a directory that does not exist
+/// yet succeeds: the move-write rides the Files seam's `write`, which
+/// creates missing parents (ref local.ts:50-55 — files.write mkdir -p
+/// applies to the patch move-write too).
+#[tokio::test]
+async fn tool_patch_move_to_new_directory_creates_parents() {
+    let harness = harness().await;
+    std::fs::write(harness.dir.join("old.txt"), "same\n").expect("write");
+    call(
+        &harness.tools,
+        "patch",
+        serde_json::json!({
+            "patchText": "*** Begin Patch\n*** Update File: old.txt\n*** Move to: nested/deeper/moved.txt\n@@\n-same\n+after\n*** End Patch"
+        }),
+    )
+    .await
+    .expect("move into a new directory");
+    assert!(!harness.dir.join("old.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(harness.dir.join("nested/deeper/moved.txt")).unwrap(),
+        "after\n",
+        "the new nested parent directories were created"
+    );
+
+    // Existing-parent moves keep working (the pre-G-307 shape).
+    std::fs::write(harness.dir.join("again.txt"), "x\n").expect("write");
+    call(
+        &harness.tools,
+        "patch",
+        serde_json::json!({
+            "patchText": "*** Begin Patch\n*** Update File: again.txt\n*** Move to: nested/deeper/again.txt\n@@\n-x\n+y\n*** End Patch"
+        }),
+    )
+    .await
+    .expect("move into an existing directory");
+    assert_eq!(
+        std::fs::read_to_string(harness.dir.join("nested/deeper/again.txt")).unwrap(),
+        "y\n"
+    );
+}
 
 #[tokio::test]
 async fn tool_patch_applies_add_update_delete_sequentially() {
@@ -1926,6 +2075,55 @@ async fn tool_pipeline_after_hook_error_rewrite_shapes_failure() {
         "rewritten by plugin",
         "the after hook's error rewrite must become the tool failure"
     );
+}
+
+/// G-321 — the after hook fires for ALL Tool.Error outcomes, including
+/// decodeInput failures (ref tool.ts:130-137: decodeInput is caught
+/// inside `execute`, so the after-event error leg runs before the
+/// return). A plugin rewriting the message shapes the model-visible
+/// failure.
+#[tokio::test]
+async fn tool_pipeline_decode_failure_fires_after_hook() {
+    let tools = ToolRegistryState::new();
+    let harness = harness().await;
+    let hooks = Arc::new(crate::hooks::HookRegistry::new());
+    let seen = Arc::new(parking_lot::Mutex::new(Vec::<String>::new()));
+    let seen_hook = Arc::clone(&seen);
+    let _keep_after = hooks
+        .register_tool_execute_after(
+            crate::hooks::fn_hook(move |event: &mut crate::hooks::ToolExecuteAfterEvent| {
+                if let crate::hooks::ToolOutcome::Error { error } = &mut event.outcome {
+                    seen_hook.lock().push(error.message.clone());
+                    // Rewrite so the decode failure observably rides the
+                    // after-hook channel back to the model.
+                    error.message = "rewritten decode failure".into();
+                }
+                Ok(())
+            }),
+            crate::hooks::HookOptions::default(),
+        )
+        .await;
+    crate::tool::registry::register(
+        &tools,
+        &hooks,
+        &harness.services,
+        crate::tool::write::tool(&harness.services),
+    )
+    .expect("register");
+
+    // Invalid input: `content` must be a string.
+    let failure = call(&tools, "write", serde_json::json!({ "path": "x.txt", "content": 7 }))
+        .await
+        .expect_err("decode failure");
+    assert_eq!(error_message(&failure), "rewritten decode failure");
+    let seen = seen.lock();
+    assert_eq!(seen.len(), 1, "the after hook observed the decode failure");
+    assert!(
+        seen[0].contains("content"),
+        "the observed outcome carries the decode issue message: {:?}",
+        seen[0]
+    );
+    assert!(!harness.dir.join("x.txt").exists(), "no file was written");
 }
 
 /// v2's normalizeContent applies an EMPTIED content array too (empty →

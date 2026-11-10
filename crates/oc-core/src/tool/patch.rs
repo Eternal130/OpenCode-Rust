@@ -426,11 +426,13 @@ async fn execute_patch(
             "update" if change.move_target.is_some() => {
                 let move_target =
                     change.move_target.clone().unwrap_or_else(|| change.target.clone());
-                // The move leg writes WITHOUT creating parents (a missing
-                // parent stays an error) — `write_file` vs `write`.
+                // G-307 — the move-write leg goes through the Files
+                // seam's `write`, which creates missing parent
+                // directories (`mkdir -p`, ref local.ts:50-55 — the
+                // ref move-write rides the same files.write).
                 services
                     .files
-                    .write_file(&move_target.absolute.to_string_lossy(), change.content.as_bytes())
+                    .write(&move_target.absolute.to_string_lossy(), change.content.as_bytes())
                     .await
                     .map_err(|error| {
                         let error = std::io::Error::from(error);

@@ -961,6 +961,7 @@ async fn g191_subagent_tool_runs_through_the_pipeline() {
         observed,
         vec![
             "before:subagent".to_string(),
+            "after-error:subagent".to_string(),
             "before:subagent".to_string(),
             "after-error:subagent".to_string()
         ]
