@@ -181,8 +181,11 @@ pub async fn execute_compaction(
         .await
         .map_err(crate::route::transport::TransportError::into_ai_error)?;
     if response.status >= 400 {
-        let body_text =
-            read_body_limited(response.body, executor::MAX_BODY_CHARS).await.unwrap_or_default();
+        // Full (safety-capped) body for classification; display copy is
+        // truncated by `provider_message` (G-346).
+        let body_text = read_body_limited(response.body, executor::MAX_ERROR_BODY_CHARS)
+            .await
+            .unwrap_or_default();
         let message = executor::provider_message(response.status, Some(&body_text));
         let response_headers: Vec<(String, String)> =
             response.headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -195,7 +198,10 @@ pub async fn execute_compaction(
             response_body: Some(&body_text),
         }));
     }
-    let text = read_body_limited(response.body, executor::MAX_BODY_CHARS).await.unwrap_or_default();
+    // The ref folds the whole decoded text stream with no cap; keep a
+    // generous safety limit (compaction bodies carry large encrypted blobs).
+    let text =
+        read_body_limited(response.body, executor::MAX_ERROR_BODY_CHARS).await.unwrap_or_default();
     parse_compaction_response(&text, route, request)
 }
 
@@ -229,9 +235,10 @@ pub fn parse_compaction_response(
         return Err(invalid("Compaction response did not contain a checkpoint"));
     }
     let key = metadata_key(request);
+    let route_id = route.id.clone();
     let replacement = output
         .iter()
-        .map(|item| to_message(item, request, &key))
+        .map(|item| to_message(item, request, &key, &route_id, text))
         .collect::<Result<Vec<_>, AiError>>()?;
     Ok(CompactionResponse {
         replacement,
@@ -248,19 +255,42 @@ fn provider_meta(key: &str, value: Value) -> ProviderMetadata {
 
 /// Map one compaction output item to a replacement message (port of
 /// `toMessage`).
-#[allow(clippy::unnecessary_wraps)] // keeps the output mapping uniform with the erroring branches
-fn to_message(item: &Value, request: &LLMRequest, key: &str) -> Result<Message, AiError> {
+///
+/// Strict per the ref's `Response` schema decode (G-357): a malformed output
+/// item fails the whole compaction with an `InvalidProviderOutput` error
+/// instead of silently defaulting. Required surface (mirroring the ref
+/// schemas — `CompactionItem`, `OpenResponsesReasoningItem`, and the
+/// `message` variants of the output union):
+/// - `compaction`: `encrypted_content` is a required string;
+/// - `reasoning`: `summary` is a required array of `{type:"summary_text",
+///   text:string}` parts (an empty array replays one empty summary);
+/// - `message`: `role` must be `user` or `assistant`; `content` is a
+///   required non-empty array; assistant content is text-only, user content
+///   may add `input_image` (required `image_url`) and `input_file`
+///   (required `filename` plus exactly one of `file_url`/`file_data`);
+/// - unknown item types are rejected.
+fn to_message(
+    item: &Value,
+    request: &LLMRequest,
+    key: &str,
+    route_id: &str,
+    text: &str,
+) -> Result<Message, AiError> {
+    let invalid = |message: &str| invalid_output(route_id, message, text);
+    let item = item
+        .as_object()
+        .ok_or_else(|| invalid("Invalid compaction response: output item is not an object"))?;
     let kind = item.get("type").and_then(Value::as_str).unwrap_or_default();
     if kind == "compaction" {
+        let Some(encrypted) = item.get("encrypted_content").and_then(Value::as_str) else {
+            return Err(invalid(
+                "Invalid compaction response: compaction item requires encrypted_content",
+            ));
+        };
         return Ok(Message::assistant(vec![ContentPart::Compaction {
             provider: request.model.provider.clone(),
             id: item.get("id").and_then(Value::as_str).map(str::to_string),
-            encrypted: Some(
-                item.get("encrypted_content")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-            ),
+            encrypted: Some(encrypted.to_string()),
             text: None,
         }]));
     }
@@ -269,23 +299,26 @@ fn to_message(item: &Value, request: &LLMRequest, key: &str) -> Result<Message, 
         let id = item.get("id").and_then(Value::as_str).map(str::to_string);
         let encrypted = item.get("encrypted_content").and_then(Value::as_str).map(str::to_string);
         let empty = SummaryPart { text: String::new() };
-        let summary: Vec<SummaryPart> = item
-            .get("summary")
-            .and_then(Value::as_array)
-            .map(|parts| {
-                parts
-                    .iter()
-                    .map(|part| SummaryPart {
-                        text: part
-                            .get("text")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
-                    })
-                    .collect()
-            })
-            .filter(|parts: &Vec<SummaryPart>| !parts.is_empty())
-            .unwrap_or_else(|| vec![empty]);
+        let parts = item.get("summary").and_then(Value::as_array).ok_or_else(|| {
+            invalid("Invalid compaction response: reasoning item requires a summary array")
+        })?;
+        let mut summary: Vec<SummaryPart> = Vec::with_capacity(parts.len());
+        for part in parts {
+            if part.get("type").and_then(Value::as_str) != Some("summary_text") {
+                return Err(invalid(
+                    "Invalid compaction response: reasoning summary requires summary_text parts",
+                ));
+            }
+            let Some(part_text) = part.get("text").and_then(Value::as_str) else {
+                return Err(invalid(
+                    "Invalid compaction response: reasoning summary requires text",
+                ));
+            };
+            summary.push(SummaryPart { text: part_text.to_string() });
+        }
+        if summary.is_empty() {
+            summary.push(empty);
+        }
         return Ok(Message::assistant(
             summary
                 .into_iter()
@@ -310,13 +343,25 @@ fn to_message(item: &Value, request: &LLMRequest, key: &str) -> Result<Message, 
 
     if kind != "message" {
         // Unknown item types are not part of the /compact contract.
-        return Ok(Message::new(MessageRole::User, Vec::new()));
+        return Err(invalid("Invalid compaction response: unknown output item type"));
     }
 
     let role = match item.get("role").and_then(Value::as_str) {
         Some("assistant") => MessageRole::Assistant,
-        _ => MessageRole::User,
+        Some("user") => MessageRole::User,
+        _ => {
+            return Err(invalid(
+                "Invalid compaction response: message role must be user or assistant",
+            ))
+        }
     };
+    if let Some(phase) = item.get("phase") {
+        let legal =
+            phase.is_null() || matches!(phase.as_str(), Some("commentary" | "final_answer"));
+        if !legal {
+            return Err(invalid("Invalid compaction response: invalid message phase"));
+        }
+    }
     let item_metadata = provider_meta(
         key,
         json!({
@@ -327,24 +372,36 @@ fn to_message(item: &Value, request: &LLMRequest, key: &str) -> Result<Message, 
         }),
     );
     let mut content = Vec::new();
-    let empty_content = Vec::new();
-    let item_content = item.get("content").and_then(Value::as_array).unwrap_or(&empty_content);
+    let item_content = item
+        .get("content")
+        .and_then(Value::as_array)
+        .filter(|parts| !parts.is_empty())
+        .ok_or_else(|| {
+            invalid("Invalid compaction response: message requires a non-empty content array")
+        })?;
     for part in item_content {
         let part_kind = part.get("type").and_then(Value::as_str).unwrap_or_default();
         if part_kind == "input_text" || part_kind == "output_text" {
-            content.push(ContentPart::text(
-                part.get("text").and_then(Value::as_str).unwrap_or_default(),
-            ));
+            let Some(part_text) = part.get("text").and_then(Value::as_str) else {
+                return Err(invalid("Invalid compaction response: text part requires text"));
+            };
+            content.push(ContentPart::text(part_text));
             continue;
+        }
+        // Assistant message content is text-only in the ref union.
+        if role == MessageRole::Assistant {
+            return Err(invalid(
+                "Invalid compaction response: assistant message content must be text",
+            ));
         }
         let detail = part.get("detail").and_then(Value::as_str).map(str::to_string);
         let part_metadata = detail.map(|detail| provider_meta(key, json!({ "detail": detail })));
         if part_kind == "input_image" {
+            let Some(image_url) = part.get("image_url").and_then(Value::as_str) else {
+                return Err(invalid("Invalid compaction response: input_image requires image_url"));
+            };
             content.push(ContentPart::Media {
-                media: Box::new(replay_media(
-                    part.get("image_url").and_then(Value::as_str).unwrap_or_default(),
-                    "image/*",
-                )),
+                media: Box::new(replay_media(image_url, "image/*")),
                 filename: None,
                 cache: None,
                 metadata: None,
@@ -354,12 +411,21 @@ fn to_message(item: &Value, request: &LLMRequest, key: &str) -> Result<Message, 
         }
         let file_url = part.get("file_url").and_then(Value::as_str);
         let file_data = part.get("file_data").and_then(Value::as_str);
+        let source = match (file_url, file_data) {
+            (Some(url), None) => url,
+            (None, Some(data)) => data,
+            _ => {
+                return Err(invalid(
+                    "Invalid compaction response: input_file requires exactly one of file_url or file_data",
+                ))
+            }
+        };
+        let Some(filename) = part.get("filename").and_then(Value::as_str) else {
+            return Err(invalid("Invalid compaction response: input_file requires filename"));
+        };
         content.push(ContentPart::Media {
-            media: Box::new(replay_media(
-                file_url.or(file_data).unwrap_or_default(),
-                "application/octet-stream",
-            )),
-            filename: part.get("filename").and_then(Value::as_str).map(str::to_string),
+            media: Box::new(replay_media(source, "application/octet-stream")),
+            filename: Some(filename.to_string()),
             cache: None,
             metadata: None,
             provider_metadata: part_metadata,
@@ -400,4 +466,103 @@ pub async fn compact(
 ) -> Result<CompactionResponse, AiError> {
     let (body, native) = compact_body(request, adapter, tools)?;
     execute_compaction(route, request, &body, &native).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn parse(document: &Value) -> Result<CompactionResponse, AiError> {
+        let route = crate::test_support::static_route_for_tests();
+        let request = crate::test_support::request_for_tests(vec![]);
+        parse_compaction_response(&serde_json::to_string(document).unwrap(), &route, &request)
+    }
+
+    fn checkpoint() -> Value {
+        json!({ "type": "compaction", "id": "cmp_1", "encrypted_content": "enc" })
+    }
+
+    #[test]
+    fn well_formed_compaction_still_succeeds() {
+        let parsed = parse(&json!({
+            "object": "response.compaction",
+            "output": [
+                checkpoint(),
+                { "type": "reasoning", "id": "rs_1", "summary": [{ "type": "summary_text", "text": "Thought" }], "encrypted_content": "re" },
+                { "type": "message", "id": "msg_1", "role": "assistant", "status": "completed",
+                  "content": [{ "type": "output_text", "text": "Summarized." }] },
+            ],
+            "usage": { "input_tokens": 10, "output_tokens": 2, "total_tokens": 12 },
+        }))
+        .unwrap();
+        assert_eq!(parsed.replacement.len(), 3);
+        assert_eq!(parsed.usage.unwrap().total_tokens, Some(12.0));
+    }
+
+    #[test]
+    fn missing_encrypted_content_fails_the_compaction() {
+        // G-357: no silent "" checkpoint — the ref schema requires the string.
+        let error = parse(&json!({
+            "object": "response.compaction",
+            "output": [{ "type": "compaction", "id": "cmp_1" }],
+        }))
+        .unwrap_err();
+        assert!(error.message().contains("requires encrypted_content"), "got {}", error.message());
+    }
+
+    #[test]
+    fn unknown_item_type_fails_the_compaction() {
+        let error = parse(&json!({
+            "object": "response.compaction",
+            "output": [checkpoint(), { "type": "mystery" }],
+        }))
+        .unwrap_err();
+        assert!(error.message().contains("unknown output item type"), "got {}", error.message());
+    }
+
+    #[test]
+    fn unknown_or_missing_role_fails_the_compaction() {
+        for role in [json!("system"), Value::Null] {
+            let error = parse(&json!({
+                "object": "response.compaction",
+                "output": [checkpoint(), { "type": "message", "role": role, "content": [] }],
+            }))
+            .unwrap_err();
+            assert!(
+                error.message().contains("role must be user or assistant"),
+                "got {}",
+                error.message()
+            );
+        }
+    }
+
+    #[test]
+    fn missing_or_empty_message_content_fails_the_compaction() {
+        for content in [json!([]), Value::Null] {
+            let error = parse(&json!({
+                "object": "response.compaction",
+                "output": [checkpoint(), { "type": "message", "role": "user", "content": content }],
+            }))
+            .unwrap_err();
+            assert!(error.message().contains("non-empty content array"), "got {}", error.message());
+        }
+    }
+
+    #[test]
+    fn missing_reasoning_summary_fails_and_empty_summary_replays_one_part() {
+        let error = parse(&json!({
+            "object": "response.compaction",
+            "output": [checkpoint(), { "type": "reasoning" }],
+        }))
+        .unwrap_err();
+        assert!(error.message().contains("summary array"), "got {}", error.message());
+
+        let parsed = parse(&json!({
+            "object": "response.compaction",
+            "output": [checkpoint(), { "type": "reasoning", "summary": [] }],
+        }))
+        .unwrap();
+        assert_eq!(parsed.replacement[1].content.len(), 1);
+    }
 }
