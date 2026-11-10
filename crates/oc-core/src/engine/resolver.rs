@@ -120,6 +120,10 @@ pub struct CatalogModelResolver {
     /// catalog record for resolution (`router:*` entries injected over
     /// the catalog, plugin/provider/digitalocean.ts:158-170).
     digitalocean: Option<Arc<crate::provider_catalog::digitalocean_sync::DigitalOceanSync>>,
+    /// G-363 — whether `resolve` falls back to the first available
+    /// text model when neither a session pin nor a configured default
+    /// exists (leaf resolvers only; see `first_available_text_model`).
+    first_available_fallback: bool,
 }
 
 impl CatalogModelResolver {
@@ -145,6 +149,7 @@ impl CatalogModelResolver {
             modal: None,
             azure: None,
             digitalocean: None,
+            first_available_fallback: false,
         }
     }
 
@@ -235,6 +240,15 @@ impl CatalogModelResolver {
         digitalocean: Arc<crate::provider_catalog::digitalocean_sync::DigitalOceanSync>,
     ) -> Self {
         self.digitalocean = Some(digitalocean);
+        self
+    }
+
+    /// G-363 — enables the first-available-text-model fallback in
+    /// `resolve` (the leaf/engine resolver only: a location overlay
+    /// must stay `NotSelected` so the engine default resolves first).
+    #[must_use]
+    pub fn with_first_available_fallback(mut self) -> Self {
+        self.first_available_fallback = true;
         self
     }
 
@@ -349,6 +363,12 @@ impl CatalogModelResolver {
     /// every catalog entry carries its package. Mirrors
     /// `Model.supportsText` (model.ts:285-289) — an empty input list
     /// counts as supporting text.
+    ///
+    /// Opt-in (`with_first_available_fallback`): the fallback is the
+    /// chain's LAST resort, so only the leaf resolver (the engine
+    /// binding serving locations without their own overlay) enables it
+    /// — a location overlay must stay `NotSelected` so the engine
+    /// default gets its turn first (`LocationModelResolver`).
     fn first_available_text_model(&self) -> Option<oc_schema::model::Ref> {
         self.catalog()
             .available_models(|name| std::env::var_os(name).is_some())
@@ -703,7 +723,9 @@ impl ModelResolver for CatalogModelResolver {
                     variant: selection.variant.clone(),
                 })
             })
-            .or_else(|| self.first_available_text_model())
+            .or_else(|| {
+                self.first_available_fallback.then(|| self.first_available_text_model()).flatten()
+            })
             .ok_or_else(|| ModelError::NotSelected(session.id.clone()))?;
         self.resolve_selected(session, &reference)
     }
@@ -2114,7 +2136,8 @@ mod local_discovery_tests {
         let context =
             FacadeContext::new(Arc::new(ReqwestTransport::new()) as oc_ai::route::SharedTransport);
         let resolver =
-            CatalogModelResolver::new(context, catalog(), BTreeMap::new(), Vec::new(), None);
+            CatalogModelResolver::new(context, catalog(), BTreeMap::new(), Vec::new(), None)
+                .with_first_available_fallback();
         // The expected pick under THIS test process's environment.
         let catalog = catalog();
         let expected = catalog
@@ -2162,7 +2185,8 @@ mod local_discovery_tests {
                     model: second.1.id.clone(),
                     variant: None,
                 }),
-            );
+            )
+            .with_first_available_fallback();
             let resolved = resolver.resolve(&session()).expect("default resolves");
             assert_eq!(resolved.model.id.as_str(), second.1.id.as_str(), "configured default wins");
         }
@@ -2174,7 +2198,8 @@ mod local_discovery_tests {
             BTreeMap::new(),
             Vec::new(),
             None,
-        );
+        )
+        .with_first_available_fallback();
         match empty.resolve(&session()) {
             Err(crate::session::runner::ModelError::NotSelected(_)) => {}
             other => panic!("expected NotSelected, got {other:?}"),

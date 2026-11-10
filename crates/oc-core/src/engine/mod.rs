@@ -756,7 +756,11 @@ impl Engine {
                     .with_copilot_sync(Arc::clone(&copilot_sync))
                     .with_modal_sync(Arc::clone(&modal_sync))
                     .with_azure_sync(Arc::clone(&azure_sync))
-                    .with_digitalocean_sync(Arc::clone(&digitalocean_sync)),
+                    .with_digitalocean_sync(Arc::clone(&digitalocean_sync))
+                    // G-363 — the leaf resolver falls back to the first
+                    // available text model when no pin and no default
+                    // exist (model-resolver.ts:402-417).
+                    .with_first_available_fallback(),
                 );
                 catalog_resolver = Some(Arc::clone(&typed));
                 typed
