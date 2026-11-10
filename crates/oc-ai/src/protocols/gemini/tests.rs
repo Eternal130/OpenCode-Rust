@@ -163,9 +163,9 @@ fn gemini_flatten_preserves_executed_cache_metadata() {
             assert_eq!(name, "ns_search");
             assert_eq!(namespace, &None);
             assert_eq!(*provider_executed, Some(true), "providerExecuted survives");
-            assert_eq!(metadata.as_ref().map(|m| m.len()), Some(1), "call metadata survives");
+            assert_eq!(metadata.as_ref().map(BTreeMap::len), Some(1), "call metadata survives");
             assert_eq!(
-                result_metadata.as_ref().map(|m| m.len()),
+                result_metadata.as_ref().map(BTreeMap::len),
                 Some(1),
                 "result metadata survives"
             );

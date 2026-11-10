@@ -264,7 +264,7 @@ async fn profile_leg(options: &DefaultChainOptions) -> Result<Option<Credentials
     }
     // credential_process: a shell command whose stdout is JSON credentials
     if let Some(command) = merged.get("credential_process").cloned() {
-        return credential_process_leg(options, &command).await.map(Some);
+        return credential_process_leg(options, &command).map(Some);
     }
     // web identity (profile form; the env-var form is the same leg)
     if merged.contains_key("web_identity_token_file") {
@@ -288,7 +288,7 @@ async fn profile_leg(options: &DefaultChainOptions) -> Result<Option<Credentials
 /// The `credential_process` leg: a shell command whose stdout is a JSON
 /// credential document (`AccessKeyId` / `SecretAccessKey` / optional
 /// `SessionToken`), the AWS CLI external-process contract.
-async fn credential_process_leg(
+fn credential_process_leg(
     options: &DefaultChainOptions,
     command: &str,
 ) -> Result<Credentials, String> {
@@ -427,7 +427,7 @@ async fn web_identity_leg(
         ("WebIdentityToken", token),
     ];
     let body: Vec<(String, String)> =
-        form.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        form.iter().map(|(k, v)| ((*k).to_string(), v.clone())).collect();
     let xml = http_post_form(&base, &body, &[]).await?;
     credentials_from_sts_xml(options, &xml)
         .ok_or_else(|| "STS AssumeRoleWithWebIdentity response has no credentials".to_string())

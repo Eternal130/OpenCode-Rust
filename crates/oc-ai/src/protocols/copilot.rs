@@ -152,7 +152,9 @@ pub fn interaction_context(request: &LLMRequest) -> InteractionContext {
         // runner
         Some("title") => SessionRequestKind::Title,
         Some("compaction") => SessionRequestKind::Compaction,
-        Some("primary") | Some("generate") | _ => {
+        // everything else (primary/generate/unknown): the body-derived
+        // fallback
+        _ => {
             if request.messages.iter().any(|message| {
                 message.content.iter().any(|part| matches!(part, ContentPart::Compaction { .. }))
             }) {
