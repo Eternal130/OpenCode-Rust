@@ -563,6 +563,7 @@ pub type WsFrameHook = Arc<
 /// message. Built only when the session owns a stateful WebSocket AND
 /// hooks are registered — the channel executors ride them when the
 /// durable-session transport carries the request.
+#[derive(Clone)]
 pub struct WebSocketSeams {
     pub handshake: WsHandshakeHook,
     pub send: WsFrameHook,

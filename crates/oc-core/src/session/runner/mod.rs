@@ -169,6 +169,24 @@ pub trait LlmClient: Send + Sync {
         self.stream(request).await
     }
 
+    /// G-337 — [`LlmClient::stream_for_session`] carrying the
+    /// `experimental.ws.*` seam triple built by the prepared request
+    /// (model-request.ts:351-375 `options.webSocket`): the production
+    /// route client rewrites the seams onto the session channel so the
+    /// handshake/send/receive hooks intercept the durable-session socket.
+    /// The default drops the seams (scripted test clients stream over
+    /// HTTP).
+    async fn stream_for_session_seamed(
+        &self,
+        session_id: &str,
+        transport: Option<oc_schema::provider::Transport>,
+        seams: Option<oc_ai::schema::options::WebSocketSeams>,
+        request: LLMRequest,
+    ) -> Result<LlmEventStream, AiError> {
+        let _ = seams;
+        self.stream_for_session(session_id, transport, request).await
+    }
+
     /// Closes the session's model transport (REF runner llm.ts
     /// `modelTransport.close(sessionID)` on location-closed and move).
     async fn close_transport(&self, _session_id: &str) {}
@@ -219,6 +237,19 @@ impl LlmClient for RouteLlmClient {
         transport: Option<oc_schema::provider::Transport>,
         request: LLMRequest,
     ) -> Result<LlmEventStream, AiError> {
+        self.stream_for_session_seamed(session_id, transport, None, request).await
+    }
+
+    /// G-337 — the production session WS path: seams from the prepared
+    /// request ride the bound channel (model-transport.ts `bind`'s
+    /// `interceptor`); `None` passes frames through unchanged.
+    async fn stream_for_session_seamed(
+        &self,
+        session_id: &str,
+        transport: Option<oc_schema::provider::Transport>,
+        seams: Option<oc_ai::schema::options::WebSocketSeams>,
+        request: LLMRequest,
+    ) -> Result<LlmEventStream, AiError> {
         let route = Arc::clone(&request.model.route);
         // REF model-request.ts:352: the WS channel is offered only when the
         // caller asked for the session transport (`webSocket: "session"`,
@@ -237,7 +268,7 @@ impl LlmClient for RouteLlmClient {
         // REF model-transport.ts `bind`: one long-lived socket per session,
         // sticky HTTP fallback inside the executor (refused connects,
         // repeated stream losses, oversized frames).
-        let executor = session_channels().bind(session_id);
+        let executor = session_channels().bind_with_seams(session_id, seams);
         let channel = oc_ai::protocols::open_responses_channel::stream_channel(
             &route, request, executor, &options,
         )
