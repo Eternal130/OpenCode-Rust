@@ -263,6 +263,14 @@ fn handle(mut socket: std::net::TcpStream, state: &Arc<ServerState>) {
         if socket.write_all(response).is_err() {
             return;
         }
+        // G-300: the client asserts the FIRST frame is the
+        // `server.connected` handshake marker — send it before the
+        // stream parks (the real server prepends it per response).
+        const HANDSHAKE: &str =
+            "data: \"{\\\"id\\\":\\\"evt_handshake\\\",\\\"type\\\":\\\"server.connected\\\",\\\"data\\\":{}}\"\n\n";
+        if socket.write_all(HANDSHAKE.as_bytes()).is_err() {
+            return;
+        }
         // Register for live pushes; park until the peer goes away. The
         // read parks on a SHORT timeout and RELEASES the lock between
         // ticks so `push_event` writers always get a window (a

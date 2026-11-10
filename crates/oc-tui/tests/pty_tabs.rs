@@ -115,10 +115,17 @@ fn handle(mut socket: std::net::TcpStream) {
     socket.set_read_timeout(Some(Duration::from_millis(200))).ok();
     let path = head.split_whitespace().nth(1).unwrap_or_default().to_owned();
     if path.starts_with("/api/event") {
-        // Held-open SSE stream: headers, then park until the peer
-        // closes (read returns 0/Err).
+        // Held-open SSE stream: headers, the `server.connected`
+        // handshake frame (G-300 — the client asserts it leads every
+        // connection), then park until the peer closes (read returns
+        // 0/Err).
         let response = b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\n\r\n";
         if socket.write_all(response).is_err() {
+            return;
+        }
+        const HANDSHAKE: &str =
+            "data: \"{\\\"id\\\":\\\"evt_handshake\\\",\\\"type\\\":\\\"server.connected\\\",\\\"data\\\":{}}\"\n\n";
+        if socket.write_all(HANDSHAKE.as_bytes()).is_err() {
             return;
         }
         let mut sink = [0u8; 256];

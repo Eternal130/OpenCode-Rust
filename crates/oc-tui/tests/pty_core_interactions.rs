@@ -442,6 +442,14 @@ fn handle(mut socket: std::net::TcpStream, shared: &Shared) {
             shared.sse_drops.fetch_sub(1, Ordering::SeqCst);
             return;
         }
+        // G-300: the client asserts the FIRST frame is the
+        // `server.connected` handshake marker (the real server
+        // prepends it per response) — ahead of any broadcast frames.
+        const HANDSHAKE: &str =
+            "data: \"{\\\"id\\\":\\\"evt_handshake\\\",\\\"type\\\":\\\"server.connected\\\",\\\"data\\\":{}}\"\n\n";
+        if socket.write_all(HANDSHAKE.as_bytes()).is_err() {
+            return;
+        }
         // Broadcast loop: write whatever the scripted turn queued, then
         // idle-poll for more (read timeouts are the poll tick — the
         // client's pings drain here; a closed socket ends the loop).

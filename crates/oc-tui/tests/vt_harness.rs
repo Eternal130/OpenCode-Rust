@@ -1108,6 +1108,14 @@ fn handle(
         if socket.write_all(response).is_err() {
             return;
         }
+        // G-300: the client asserts the FIRST frame is the
+        // `server.connected` handshake marker (the real server
+        // prepends it per response) — send it before anything else.
+        const HANDSHAKE: &str =
+            "data: \"{\\\"id\\\":\\\"evt_handshake\\\",\\\"type\\\":\\\"server.connected\\\",\\\"data\\\":{}}\"\n\n";
+        if socket.write_all(HANDSHAKE.as_bytes()).is_err() {
+            return;
+        }
         // The no-prompt quiet-hold window: generous — a loaded box
         // can stretch the boot → dialog → type → submit walk well
         // past a tight deadline, and parking early would silently
