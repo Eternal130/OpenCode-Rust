@@ -308,7 +308,7 @@ impl ToolExecuteWithContext for ShellExecute {
             // shell.ts:274-275).
             let session_env = deps.env.get(context.session_id.as_str());
             let mut env: HashMap<String, String> =
-                session_env.unwrap_or_else(|| std::env::vars().collect());
+                session_env.unwrap_or_else(crate::shell::env_utf8);
             for (key, value) in crate::shell::TERMINAL_ENV {
                 env.insert((*key).to_string(), (*value).to_string());
             }
@@ -661,7 +661,7 @@ pub async fn user_command(
 ) -> Result<shell_result::Notification, ToolFailure> {
     let shell_path = select::resolve(deps.config_shell.as_deref(), true);
     let mut env: HashMap<String, String> =
-        deps.env.get(session_id).unwrap_or_else(|| std::env::vars().collect());
+        deps.env.get(session_id).unwrap_or_else(crate::shell::env_utf8);
     for (key, value) in crate::shell::TERMINAL_ENV {
         env.insert((*key).to_string(), (*value).to_string());
     }

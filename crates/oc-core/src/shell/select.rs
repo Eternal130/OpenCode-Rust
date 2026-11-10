@@ -196,20 +196,26 @@ fn win_first() -> Option<String> {
 /// `/etc/shells` entries (or the classic three).
 fn unix_shells() -> Vec<String> {
     match std::fs::read_to_string("/etc/shells") {
-        Ok(text) => {
-            let mut shells: Vec<String> = text
-                .lines()
-                .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
-                .map(String::from)
-                .collect();
-            shells.dedup();
-            if shells.is_empty() {
-                vec!["/bin/bash".into(), "/bin/zsh".into(), "/bin/sh".into()]
-            } else {
-                shells
-            }
-        }
+        Ok(text) => shells_from(&text),
         Err(_) => vec!["/bin/bash".into(), "/bin/zsh".into(), "/bin/sh".into()],
+    }
+}
+
+/// Parses `/etc/shells` lines into an ordered, GLOBALLY deduplicated
+/// list (G-304③ — the ref builds a Set; `dedup()` only drops ADJACENT
+/// duplicates, so out-of-order repeats survived).
+fn shells_from(text: &str) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let shells: Vec<String> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
+        .map(String::from)
+        .filter(|shell| seen.insert(shell.clone()))
+        .collect();
+    if shells.is_empty() {
+        vec!["/bin/bash".into(), "/bin/zsh".into(), "/bin/sh".into()]
+    } else {
+        shells
     }
 }
 
@@ -258,6 +264,32 @@ fn win_list() -> Vec<String> {
         }
     }
     shells
+}
+
+/// G-304③ — `/etc/shells` dedup is GLOBAL (the ref builds a Set), not
+/// `dedup()`'s adjacent-only collapse.
+#[cfg(test)]
+mod g304_tests {
+    use super::shells_from;
+
+    #[test]
+    fn g304_shells_from_dedups_globally_preserving_order() {
+        let text = "/bin/bash\n/bin/zsh\n/bin/bash\n/usr/bin/fish\n/bin/zsh\n/bin/bash\n";
+        assert_eq!(
+            shells_from(text),
+            vec!["/bin/bash".to_string(), "/bin/zsh".to_string(), "/usr/bin/fish".to_string()]
+        );
+    }
+
+    #[test]
+    fn g304_shells_from_keeps_adjacent_dedup_and_default() {
+        assert_eq!(shells_from("/bin/bash\n/bin/bash\n"), vec!["/bin/bash".to_string()]);
+        // Comments/blank lines only → the classic three.
+        assert_eq!(
+            shells_from("# comment\n\n"),
+            vec!["/bin/bash".to_string(), "/bin/zsh".to_string(), "/bin/sh".to_string()]
+        );
+    }
 }
 
 /// `ShellSelect.environment` — `$SHELL` resolved afresh each call.

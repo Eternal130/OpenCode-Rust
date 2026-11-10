@@ -67,6 +67,10 @@ pub(crate) struct Script {
     input_required: BTreeMap<String, serde_json::Value>,
     /// Emit a 404 on the next call-tool (session-expiry probe), then behave.
     expire_once: Arc<std::sync::atomic::AtomicBool>,
+    /// Emit the expiry rejection on the next tools/LIST (background
+    /// session-expiry probe — list-changed refreshes observe it), then
+    /// behave.
+    expire_list_once: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Script {
@@ -324,6 +328,18 @@ fn respond(
             Some(JsonRpcMessage::response(ServerResult::DiscoverResult(result), id))
         }
         ClientRequest::ListToolsRequest(_) => {
+            if script.expire_list_once.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                // Same single-session expiry rejection as `expire_once`,
+                // observed by a BACKGROUND catalog refresh.
+                return Some(JsonRpcMessage::error(
+                    rmcp::ErrorData::new(
+                        rmcp::model::ErrorCode::INTERNAL_ERROR,
+                        "Bad Request: Server not initialized",
+                        None,
+                    ),
+                    Some(id),
+                ));
+            }
             response(serde_json::json!({ "tools": *script.tools.lock() }), id)
         }
         ClientRequest::ListResourcesRequest(_) => {
@@ -1644,6 +1660,103 @@ async fn mcp_registry_watch_tools_changed_refreshes_catalog() {
     registry.shutdown().await;
 }
 
+/// G-294 — the background list-changed watch reconnects on session
+/// expiry (index.ts:415 `onSessionExpired(() => fork(recover(...)))`):
+/// a refresh that observes the expiry signal triggers the same
+/// stop+start recovery the foreground paths use, and the replacement
+/// connection's startup load repopulates the tool table.
+#[tokio::test]
+async fn mcp_registry_watch_reconnects_after_background_session_expiry() {
+    let (_db, bus) = test_bus().await;
+    let mut servers = BTreeMap::new();
+    servers.insert("remote".to_string(), local_config());
+        let expire = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let connects = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let push_slot: Arc<parking_lot::Mutex<Vec<mpsc::UnboundedSender<ServerJsonRpcMessage>>>> =
+        Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let catalog: Arc<parking_lot::Mutex<Vec<serde_json::Value>>> =
+        Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let base = Script { tools: Arc::clone(&catalog), ..Script::new() };
+    base.add_tool("before", "B");
+    let push_capture = Arc::clone(&push_slot);
+    let expire_capture = Arc::clone(&expire);
+    let connects_capture = Arc::clone(&connects);
+    let catalog_capture = Arc::clone(&catalog);
+    let connector: Connector = Arc::new(move |input: ConnectInput<'_>| {
+        connects_capture.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let script = Script {
+            tools: Arc::clone(&catalog_capture),
+            expire_list_once: Arc::clone(&expire_capture),
+            ..Script::new()
+        };
+        let (transport, mock) = mock_pair(script);
+        push_capture.lock().push(mock.push.clone());
+        let server = input.server.to_string();
+        let config = input.config.clone();
+        let directory = input.directory.to_string();
+        let bearer = input.bearer.clone();
+        let elicitation = input.elicitation.clone();
+        Box::pin(async move {
+            // G-223: expiry classification requires the session-attached
+            // gate — the mock simulates a sessionful remote server.
+            client::connect_with_transport(
+                &ConnectInput {
+                    server: &server,
+                    config: &config,
+                    directory: &directory,
+                    bearer,
+                    elicitation,
+                    stdio: None,
+                },
+                transport,
+                true,
+            )
+            .await
+            .inspect(super::client::Connection::mark_session_attached)
+        })
+    });
+    let registry = registry_with(&bus, connector, servers);
+    registry.reconcile().await;
+    wait_for_status(&registry, "remote", Status::Connected).await;
+    assert_eq!(registry.tools().len(), 1);
+
+    // The next tools/list observes the expiry; arm it, replace the live
+    // catalog, and announce tools/list_changed. The background refresh
+    // errors with the expiry signal — the session-expired watch leg
+    // reconnects (stop + start) and the replacement's startup load
+    // sees the new catalog.
+    expire.store(true, std::sync::atomic::Ordering::SeqCst);
+    catalog.lock().clear();
+    base.add_tool("after", "A");
+    let push = push_slot.lock().last().cloned().expect("connector ran");
+    let _ = push.send(JsonRpcMessage::notification(
+        rmcp::model::ServerNotification::ToolListChangedNotification(
+            rmcp::model::ToolListChangedNotification {
+                method: Default::default(),
+                extensions: Default::default(),
+            },
+        ),
+    ));
+    for _ in 0..400 {
+        if connects.load(std::sync::atomic::Ordering::SeqCst) >= 2 && registry.tools().len() == 1 {
+            let names: Vec<String> =
+                registry.tools().into_iter().map(|tool| tool.name).collect();
+            if names == vec!["after".to_string()] {
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let names: Vec<String> = registry.tools().into_iter().map(|tool| tool.name).collect();
+    assert_eq!(names, vec!["after"], "tool table repopulated from the replacement");
+    assert_eq!(
+        connects.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "the expiry triggered exactly one reconnect"
+    );
+    registry.shutdown().await;
+}
+
 // ---------------------------------------------------------------------------
 // namespacing / bridge
 // ---------------------------------------------------------------------------
@@ -2108,17 +2221,16 @@ async fn g242_pipeline_hooks_and_decode_wrap_mcp_tools() {
     );
 
     let observed = seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-    // The decode-failure leg fires `before` but not `after` — the
-    // pipeline's decode early-return (pinned by the g191 test; ref
-    // tool.ts:130-137 DOES fire after-error on decode failures — a
-    // pre-existing generic-pipeline divergence, reported as a
-    // follow-up, out of G-242's MCP scope).
+    // G-321 — the decode-failure leg now fires `after` with an Error
+    // outcome too (ref tool.ts:130-137: decodeInput is caught inside
+    // `execute`, so the after-event error leg runs before the return).
     assert_eq!(
         observed,
         vec![
             "before:alpha_echo".to_string(),
             "after:alpha_echo".to_string(),
             "before:alpha_gated".to_string(),
+            "after-error:alpha_gated".to_string(),
         ]
     );
     registry.shutdown().await;

@@ -125,6 +125,22 @@ pub struct Invocation {
 /// Environment markers set on every shell invocation.
 pub const TERMINAL_ENV: &[(&str, &str)] = &[("TERM", "xterm-256color"), ("OPENCODE_TERMINAL", "1")];
 
+/// The process environment as a UTF-8 map (G-304①): `std::env::vars()`
+/// PANICS on non-UTF-8 entries (documented std behavior) — `vars_os()`
+/// with a skip (not lossy) keeps the un-representable input out of the
+/// sandboxed invocation instead of corrupting it. (oc-core has no
+/// logging facade wired, so the skip is silent.)
+pub fn env_utf8() -> HashMap<String, String> {
+    let mut env = HashMap::new();
+    for (key, value) in std::env::vars_os() {
+        let (Ok(key), Ok(value)) = (key.into_string(), value.into_string()) else {
+            continue;
+        };
+        env.insert(key, value);
+    }
+    env
+}
+
 type BeforeHook = Box<dyn FnOnce(&mut Invocation) + Send>;
 
 struct Active {
@@ -563,7 +579,7 @@ impl Shell {
         before: Option<BeforeHook>,
     ) -> Result<Info, std::io::Error> {
         let mut env: HashMap<String, String> =
-            session_env.cloned().unwrap_or_else(|| std::env::vars().collect());
+            session_env.cloned().unwrap_or_else(crate::shell::env_utf8);
         for (key, value) in TERMINAL_ENV {
             env.insert((*key).to_string(), (*value).to_string());
         }
@@ -653,11 +669,20 @@ impl Shell {
         };
         let _ = &mut info;
 
+        // G-304② — ref shell.ts:265 defaults `cwd: input.cwd ??
+        // location.directory`; this service layer has no location, so
+        // every caller must resolve the default (the HTTP handler does,
+        // G-55). Guard the boundary: an empty cwd would silently spawn
+        // in the SERVER's process directory — refuse instead.
+        if invocation.cwd.is_empty() {
+            return Err(std::io::Error::other(
+                "Shell command requires a working directory (cwd is empty)",
+            ));
+        }
+
         let mut command = Command::new(&invocation.shell);
         command.args(&args);
-        if !invocation.cwd.is_empty() {
-            command.current_dir(&invocation.cwd);
-        }
+        command.current_dir(&invocation.cwd);
         command.env_clear();
         command.envs(&invocation.env);
         command.stdin(std::process::Stdio::null());

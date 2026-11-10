@@ -576,8 +576,9 @@ mod tests {
                 "before:opencode_list_mcp_resources".to_string(),
                 "after:opencode_list_mcp_resources".to_string(),
                 "before:opencode_read_mcp_resource".to_string(),
+                "after-error:opencode_read_mcp_resource".to_string(),
             ],
-            "hooks observe the namespaced pipeline executor"
+            "hooks observe the namespaced pipeline executor (G-321: the decode-failure leg fires after-error too)"
         );
     }
 

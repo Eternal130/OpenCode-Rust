@@ -699,6 +699,51 @@ pub(crate) async fn run_tool_task(
     let _ = tx.send(outcome);
 }
 
+/// The settled tool-result pipeline, in REF order (G-308):
+///
+/// 1. tool.ts `normalizeImages` (tool.ts:150) runs INSIDE `executeTool`
+///    on the after-hook content — inline images are limit-checked /
+///    downscaled (or omitted with the REF note text);
+/// 2. step.ts:120-122 `flatMap(toolOutput.truncate)` — the 2000-line /
+///    50KiB budget runs inside the tool fiber, BEFORE the terminal
+///    settle: the spilled original lands in `<data>/tool-output/` and
+///    the in-band content becomes the fitting prefix plus the exact
+///    marker. The normalized image set (including any omission notes)
+///    participates in the budget.
+fn budget_tool_result(
+    result: ToolRunResult,
+    tool_output: Option<&Arc<crate::tool_output::ToolOutput>>,
+    image_limits: Option<&crate::image::Limits>,
+) -> ToolRunResult {
+    let content = match image_limits {
+        Some(limits) => crate::image::normalize_tool_content(result.content, limits),
+        None => result.content,
+    };
+    let result = ToolRunResult { content, ..result };
+    match tool_output {
+        Some(service) => {
+            let truncated = service.truncate(crate::tool_output::ToolOutputResult {
+                content: result.content.clone(),
+                metadata: result.metadata.clone(),
+            });
+            match truncated {
+                Ok(truncated) => ToolRunResult {
+                    content: truncated.content,
+                    metadata: truncated.metadata,
+                    // toolOutput.truncate spreads `...result`
+                    // (tool-output.ts:81) — the declared output
+                    // rides along untouched (TOOL-D1).
+                    output: result.output,
+                },
+                // A spill failure degrades to the raw result — the
+                // model still gets its output.
+                Err(_io) => result,
+            }
+        }
+        None => result,
+    }
+}
+
 /// `failTool`/`toolExecution` for one settled exit (declines and interrupts
 /// settle during finalization).
 async fn settle_tool_exit(
@@ -708,43 +753,11 @@ async fn settle_tool_exit(
 ) -> Result<(), PublisherError> {
     match exit {
         ToolExit::Success { id, name, result } => {
-            // toolOutput.truncate (step.ts:122) — the 2000-line / 50KiB
-            // budget runs inside the tool fiber, BEFORE the terminal
-            // settle: the spilled original lands in
-            // `<data>/tool-output/` and the in-band content becomes the
-            // fitting prefix plus the exact marker.
-            let result = match deps.tool_output.as_ref() {
-                Some(service) => {
-                    let truncated = service.truncate(crate::tool_output::ToolOutputResult {
-                        content: result.content.clone(),
-                        metadata: result.metadata.clone(),
-                    });
-                    match truncated {
-                        Ok(truncated) => ToolRunResult {
-                            content: truncated.content,
-                            metadata: truncated.metadata,
-                            // toolOutput.truncate spreads `...result`
-                            // (tool-output.ts:81) — the declared output
-                            // rides along untouched (TOOL-D1).
-                            output: result.output,
-                        },
-                        // A spill failure degrades to the raw result — the
-                        // model still gets its output.
-                        Err(_io) => result,
-                    }
-                }
-                None => result,
-            };
-            // tool.ts `normalizeImages` — inline images in the settled
-            // content are limit-checked / downscaled (or omitted with the
-            // REF note text) AFTER the output budget, matching REF order
-            // (truncate runs inside the tool fiber, normalize on the
-            // execute.after content).
-            let content = match deps.image_limits {
-                Some(limits) => crate::image::normalize_tool_content(result.content, &limits),
-                None => result.content,
-            };
-            let result = ToolRunResult { content, ..result };
+            let result = budget_tool_result(
+                result,
+                deps.tool_output.as_ref(),
+                deps.image_limits.as_ref(),
+            );
             publisher.tool_execution(&id, &name, &result).await
         }
         ToolExit::Error { id, error, metadata } => {
@@ -756,4 +769,76 @@ async fn settle_tool_exit(
 
 fn stream_failed(stream_error: Option<&AiError>, tool_die: Option<&AiError>) -> Option<AiError> {
     stream_error.cloned().or_else(|| tool_die.cloned())
+}
+
+#[cfg(test)]
+mod g308_tests {
+    use super::*;
+
+    /// G-308 — REF order is normalize → truncate (tool.ts:150
+    /// `normalizeImages` runs inside `executeTool` on the after-hook
+    /// content, THEN step.ts:120-122 `flatMap(toolOutput.truncate)`).
+    /// Observable case: an inline image near the truncation boundary —
+    /// the normalization's `[1 image omitted: …]` note JOINS the budget,
+    /// so the settled output is truncated (under the inverted order the
+    /// 3-line text fit the budget untouched and the note rode along
+    /// afterwards with `truncated: false`).
+    #[tokio::test]
+    async fn g308_normalized_image_notes_participate_in_the_truncation_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let service = Arc::new(crate::tool_output::ToolOutput::new(
+            dir.path(),
+            Arc::new(oc_util::determinism::FixedClock::epoch()),
+        ));
+        service.configure(crate::tool_output::Limits { max_lines: 3, max_bytes: 65_536 });
+
+        // 3 lines of text (exactly the line budget) + an undecodable
+        // inline image: normalize drops the image and appends the
+        // omission note as a 4th line → 4 > 3 → truncation.
+        let result = ToolRunResult {
+            content: vec![
+                oc_schema::tool::Content::Text { text: "one\ntwo\nthree".into() },
+                oc_schema::tool::Content::File {
+                    uri: "data:image/png;base64,%%%not-base64%%%".into(),
+                    mime: "image/png".into(),
+                    name: Some("shot.png".into()),
+                },
+            ],
+            metadata: None,
+            output: None,
+        };
+        let budgeted = budget_tool_result(
+            result,
+            Some(&service),
+            Some(&crate::image::Limits::default()),
+        );
+
+        let marker = budgeted.content.iter().any(|item| match item {
+            oc_schema::tool::Content::Text { text } => text.contains("[showing "),
+            _ => false,
+        });
+        assert!(
+            marker,
+            "normalize ran first: the omission note pushed the output past the budget — {:?}",
+            budgeted.content
+        );
+        assert_eq!(
+            budgeted.metadata.as_ref().and_then(|meta| meta.get("truncated")),
+            Some(&serde_json::json!(true))
+        );
+
+        // Without the image the same text fits the budget untouched —
+        // the truncation above is caused by the normalized note joining
+        // the budget, not by the fixture itself.
+        let plain = ToolRunResult {
+            content: vec![oc_schema::tool::Content::Text { text: "one\ntwo\nthree".into() }],
+            metadata: None,
+            output: None,
+        };
+        let budgeted = budget_tool_result(plain, Some(&service), Some(&crate::image::Limits::default()));
+        assert_eq!(
+            budgeted.metadata.as_ref().and_then(|meta| meta.get("truncated")),
+            Some(&serde_json::json!(false))
+        );
+    }
 }

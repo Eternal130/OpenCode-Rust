@@ -933,6 +933,38 @@ impl McpRegistry {
                     });
                 }
             })),
+            // `onSessionExpired(() => fork(recover(name, entry, connection)))`
+            // (index.ts:415): background refreshes (list-changed) can
+            // observe the expiry too; they do not retry, so reconnect
+            // here for them. Foreground calls reconnect through
+            // `recovering` (`replay_after_recovery`).
+            session_expired: Some(Box::new({
+                let registry = self.clone();
+                let name = name.to_string();
+                let entry = Arc::clone(entry);
+                let expired = connection.clone();
+                move || {
+                    let registry = registry.clone();
+                    let name = name.clone();
+                    let entry = Arc::clone(&entry);
+                    let expired = expired.clone();
+                    tokio::spawn(async move {
+                        let lock = Self::server_lock(&registry.inner, &name);
+                        let _guard = lock.lock().await;
+                        let live = entry.client.lock().await;
+                        if !live.as_ref().is_some_and(|current| current.is_same(&expired)) {
+                            return;
+                        }
+                        drop(live);
+                        // `recover` (index.ts:343-350): stop + start under
+                        // the server lock; the replacement's own watch
+                        // re-registers and `start_server`'s load
+                        // repopulates the tool table.
+                        registry.stop_server(&name, &entry).await;
+                        registry.start_server(&name, &entry).await;
+                    });
+                }
+            })),
         };
         connection.watch(changed);
         // Close watcher: mark failed, stop, publish — only while this
@@ -1234,7 +1266,7 @@ impl McpRegistry {
         let result = connection.call_tool(name, args.as_ref(), session_id).await;
         let result = match result {
             Err(error) if error.is_session_expired() => self
-                .replay_after_recovery(server, &entry, |connection| async move {
+                .replay_after_recovery(server, &entry, &connection, |connection| async move {
                     connection.call_tool(name, args.as_ref(), session_id).await
                 })
                 .await
@@ -1262,11 +1294,16 @@ impl McpRegistry {
     }
 
     /// `recovering` (index.ts:350-365): stop + start under the server lock,
-    /// then replay the request once against the replacement.
+    /// then replay the request once against the replacement. The recovery
+    /// only runs when the FAILED connection is still the entry's live
+    /// client (`recover`'s `entry.client !== connection` early return,
+    /// index.ts:344) — the background session-expired watcher may have
+    /// already reconnected.
     async fn replay_after_recovery<F, Fut, T>(
         &self,
         server: &str,
         entry: &Arc<ServerEntry>,
+        failed: &client::Connection,
         replay: F,
     ) -> Option<Result<T, client::RequestError>>
     where
@@ -1276,7 +1313,7 @@ impl McpRegistry {
         {
             let lock = Self::server_lock(&self.inner, server);
             let _guard = lock.lock().await;
-            if entry.client.lock().await.is_some() {
+            if entry.client.lock().await.as_ref().is_some_and(|current| current.is_same(failed)) {
                 self.stop_server(server, entry).await;
                 self.start_server(server, entry).await;
             }
@@ -1339,7 +1376,7 @@ impl McpRegistry {
         let result = connection.prompt(name, args.clone()).await;
         let result = match result {
             Err(error) if error.is_session_expired() => self
-                .replay_after_recovery(server, &entry, |connection| async move {
+                .replay_after_recovery(server, &entry, &connection, |connection| async move {
                     connection.prompt(name, args.clone()).await
                 })
                 .await
@@ -1390,7 +1427,7 @@ impl McpRegistry {
         match catalog {
             Ok(catalog) => Some(catalog),
             Err(error) if error.is_session_expired() => self
-                .replay_after_recovery(name, entry, |connection| async move {
+                .replay_after_recovery(name, entry, &connection, |connection| async move {
                     catalog_once(&connection, name).await
                 })
                 .await
@@ -1413,7 +1450,7 @@ impl McpRegistry {
         let read = connection.read_resource(uri).await;
         let read = match read {
             Err(error) if error.is_session_expired() => self
-                .replay_after_recovery(server, &entry, |connection| async move {
+                .replay_after_recovery(server, &entry, &connection, |connection| async move {
                     connection.read_resource(uri).await
                 })
                 .await

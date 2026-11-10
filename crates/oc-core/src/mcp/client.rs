@@ -581,6 +581,11 @@ pub struct Changed {
     pub tools: Option<Box<dyn Fn() + Send + Sync>>,
     pub prompts: Option<Box<dyn Fn() + Send + Sync>>,
     pub resources: Option<Box<dyn Fn() + Send + Sync>>,
+    /// `onSessionExpired` (client.ts:161 / index.ts:415): fired once when
+    /// request classification observes a session expiry. Background
+    /// consumers (list-changed watches) do not retry, so the registry
+    /// reconnects through this signal.
+    pub session_expired: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 /// The rmcp client handler: answers `roots/list` with the location
@@ -780,6 +785,12 @@ impl Connection {
         if self.remote && !self.expiry_reported() && session_expired(error, self.session_attached())
         {
             self.expiry_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            // `onSessionExpired` (index.ts:415): background refreshes can
+            // observe the expiry too — they do not retry, so the registry
+            // reconnects for them here.
+            if let Some(callback) = self.changed.lock().session_expired.as_ref() {
+                callback();
+            }
             return RequestError {
                 server: self.server_name().to_string(),
                 message: format!("{SESSION_EXPIRED_MESSAGE}{}", self.server_name()),
