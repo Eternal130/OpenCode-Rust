@@ -526,7 +526,14 @@ fn session_event(
         "session.retry.scheduled" => {
             let retry = RetryStatus {
                 attempt: event.data.get("attempt").and_then(Value::as_i64).unwrap_or_default(),
-                next_retry_at: string(&event.data, "at"),
+                // G-340 — `at` is numeric epoch-ms (schema RetryScheduled);
+                // ref renders `new Date(at).toISOString()`.
+                next_retry_at: event
+                    .data
+                    .get("at")
+                    .and_then(Value::as_i64)
+                    .map(crate::acp::service::iso_from_epoch_ms)
+                    .unwrap_or_default(),
                 error: event
                     .data
                     .get("error")
@@ -1159,7 +1166,9 @@ mod tests {
             &state,
             &Event::new(
                 "session.retry.scheduled",
-                json!({ "sessionID": "ses_root", "attempt": 1, "at": "2026-01-01T00:00:00.000Z",
+                // G-340 — `at` is numeric epoch-ms (schema RetryScheduled);
+                // ref renders new Date(at).toISOString().
+                json!({ "sessionID": "ses_root", "attempt": 1, "at": 1_755_000_000_000_i64,
                         "error": { "type": "provider.rate", "message": "slow down" } }),
             ),
             &ctx(),
@@ -1169,6 +1178,10 @@ mod tests {
             panic!("info update");
         };
         assert_eq!(info.meta.as_ref().expect("meta")[RETRY_META]["attempt"], serde_json::json!(1));
+        assert_eq!(
+            info.meta.as_ref().expect("meta")[RETRY_META]["nextRetryAt"],
+            serde_json::json!("2025-08-12T12:00:00.000Z")
+        );
     }
 
     #[test]

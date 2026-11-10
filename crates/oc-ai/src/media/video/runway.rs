@@ -308,7 +308,8 @@ impl QueuedProtocol for RunwayVideo {
     }
 
     fn cancel_path(&self, token: &Token) -> String {
-        format!("/v1/tasks/{}", token.task_id)
+        // The default base URL already ends in /v1 — do not duplicate it.
+        format!("/tasks/{}", token.task_id)
     }
 }
 
@@ -437,5 +438,18 @@ mod tests {
             RunwayVideo.headers(),
             vec![("X-Runway-Version".to_string(), API_VERSION.to_string())]
         );
+    }
+
+    /// G-344 — the default base URL already ends in /v1, so the cancel
+    /// path must not repeat the version segment (route.rs `resolve`
+    /// joins `trim_base_url(base) + path` verbatim).
+    #[test]
+    fn cancel_url_contains_a_single_v1_segment() {
+        let token = Token { task_id: "tsk_123".into() };
+        let path = RunwayVideo.cancel_path(&token);
+        assert_eq!(path, "/tasks/tsk_123");
+        let joined = format!("{}{}", crate::route::endpoint::trim_base_url(DEFAULT_BASE_URL), path);
+        assert_eq!(joined.matches("/v1/").count(), 1, "joined cancel URL: {joined}");
+        assert_eq!(joined, "https://api.dev.runwayml.com/v1/tasks/tsk_123");
     }
 }

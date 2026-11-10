@@ -914,7 +914,7 @@ pub fn reasoning_summary(text: &str) -> (Option<String>, String) {
 /// `Locale.duration`'s seconds arm: one decimal place.
 #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 fn milliseconds_to_seconds(input: u64) -> f64 {
-    f64::from(input as u32 % 10_000) / 1000.0
+    f64::from(input as u32) / 1000.0
 }
 
 /// `Locale.duration` (`util/locale.ts`) — turn and group durations.
@@ -1381,6 +1381,10 @@ mod tests {
         assert_eq!(locale_duration(2), "2ms");
         assert_eq!(locale_duration(999), "999ms");
         assert_eq!(locale_duration(1500), "1.5s");
+        // G-341: no `% 10_000` corruption — 10s..60s render directly
+        // (ref: (input / 1000).toFixed(1)).
+        assert_eq!(locale_duration(15_000), "15.0s");
+        assert_eq!(locale_duration(59_999), "60.0s");
         assert_eq!(locale_duration(61_500), "1m 1s");
         assert_eq!(locale_duration(3_780_000), "1h 3m");
         assert_eq!(locale_duration(90_000_000), "1d 1h");

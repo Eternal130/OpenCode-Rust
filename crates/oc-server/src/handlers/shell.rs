@@ -116,9 +116,10 @@ async fn remove(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
-    services.shell.remove(&oc_schema::id::ShellId(id.clone())).await.map_err(|error| {
+    // Ref (shell.ts "shell.remove"): Shell.NotFoundError is swallowed —
+    // DELETE is idempotent and always resolves 204.
+    if let Err(error) = services.shell.remove(&oc_schema::id::ShellId(id.clone())).await {
         crate::errors::debug_cause("shell:shell_not_found", &error);
-        ApiError::shell_not_found(&id)
-    })?;
+    }
     Ok(no_content())
 }

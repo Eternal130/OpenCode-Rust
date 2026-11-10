@@ -13190,11 +13190,11 @@ impl Store {
             // -- lane C: SSE message-part reducers (`rows.ts` subscriptions) --
             "session.text.delta" => {
                 let Some((session, assistant)) = session_and_assistant(event) else { return };
-                if event.string("delta").is_none_or(|delta| delta.trim().is_empty()) {
-                    return;
-                }
+                // G-351 — ref (client/src/solid/data.ts:909-913) appends
+                // deltas verbatim: whitespace-only deltas (blank lines,
+                // indentation) must accumulate, not be dropped.
+                let Some(delta) = event.string("delta") else { return };
                 let ordinal = event.ordinal();
-                let delta = event.string("delta").unwrap_or_default();
                 self.update_messages(&session, |messages| {
                     // G11-F1: a delta for a message a snapshot already
                     // completed (the first-connect snapshot/stream
@@ -13215,7 +13215,10 @@ impl Store {
             }
             "session.text.ended" => {
                 let Some((session, assistant)) = session_and_assistant(event) else { return };
-                let Some(text) = event.string("text").filter(|text| !text.trim().is_empty()) else {
+                // G-351 — ref (solid/data.ts:914-917) assigns the final
+                // text verbatim: whitespace-only finals are present values
+                // and must settle (only a genuinely empty string skips).
+                let Some(text) = event.string("text").filter(|text| !text.is_empty()) else {
                     return;
                 };
                 let ordinal = event.ordinal();
@@ -15083,14 +15086,37 @@ mod tests {
         assert_eq!(store.messages("s")[0].parts().len(), 2);
     }
 
+    /// G-351 — whitespace-only deltas are present values (ref solid
+    /// data.ts:909-913 appends verbatim) and must accumulate, not be
+    /// dropped: "Hello", " ", "world" streams to "Hello world".
     #[test]
-    fn blank_deltas_do_not_create_parts() {
+    fn whitespace_deltas_accumulate_verbatim() {
+        let store = Store::new(Runtime::new());
+        for delta in ["Hello", " ", "world"] {
+            store.ingest_all([Ingest::Event(BusEvent::new(
+                "session.text.delta",
+                serde_json::json!({ "sessionID": "s", "assistantMessageID": "a", "delta": delta }),
+            ))]);
+        }
+        assert_eq!(store.messages("s")[0].parts()[0].text(), "Hello world");
+
+        // A leading whitespace delta opens the part (blank line before
+        // any visible text) ...
         let store = Store::new(Runtime::new());
         store.ingest_all([Ingest::Event(BusEvent::new(
             "session.text.delta",
-            serde_json::json!({ "sessionID": "s", "assistantMessageID": "a", "delta": "  " }),
+            serde_json::json!({ "sessionID": "s2", "assistantMessageID": "a", "delta": "  " }),
         ))]);
-        assert!(store.messages("s").is_empty(), "no message from whitespace deltas");
+        assert_eq!(store.messages("s2")[0].parts().len(), 1);
+        assert_eq!(store.messages("s2")[0].parts()[0].text(), "  ");
+        // ... and a whitespace-only final value settles the part verbatim.
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "session.text.ended",
+            serde_json::json!({
+                "sessionID": "s2", "assistantMessageID": "a", "ordinal": 0, "text": " \n"
+            }),
+        ))]);
+        assert_eq!(store.messages("s2")[0].parts()[0].text(), " \n");
     }
 
     /// G-288⑧ — an out-of-order ordinal (a skip, e.g. across a
