@@ -118,7 +118,9 @@ pub use resolve::{
     discover_directory_ops, parse_ops, resolve, PluginOp, PluginSourceKind, Resolution,
     ResolvedPlugin, PLUGIN_SOURCE_DIRECTORIES,
 };
-pub use supervisor::{HostError, RevisionState, RpcEventPort, StoragePort, StorageScanQuery, SupervisorConfig};
+pub use supervisor::{
+    HostError, RevisionState, RpcEventPort, StoragePort, StorageScanQuery, SupervisorConfig,
+};
 pub use tap::{BroadcastTap, TapEvent};
 pub use ui::{PluginDialogOption, PluginDialogSpec, PluginSectionSpec, UiRequest};
 
@@ -890,11 +892,8 @@ impl PluginHost {
         if !registration.methods.iter().any(|name| name == method) {
             return Err(format!("Unknown RPC method: {rpc_id}.{method}"));
         }
-        let method_definition = registration
-            .definition
-            .get("methods")
-            .and_then(|methods| methods.get(method))
-            .cloned();
+        let method_definition =
+            registration.definition.get("methods").and_then(|methods| methods.get(method)).cloned();
         // Input validation (rpc.ts:117-119): a failing input never
         // reaches the handler.
         if let Some(schema) = method_definition.as_ref().and_then(|d| d.get("input")) {
@@ -945,9 +944,9 @@ impl PluginHost {
             // encode fails ⇒ die ⇒ rpc.internal). The wire failure's
             // type is already guest-gated against the declared errors.
             if let (Some(declared), Some(data)) = (
-                method_definition.as_ref().and_then(|d| {
-                    d.get("errors").and_then(|errors| errors.get(&type_))
-                }),
+                method_definition
+                    .as_ref()
+                    .and_then(|d| d.get("errors").and_then(|errors| errors.get(&type_))),
                 data.as_ref(),
             ) {
                 if let Some(issue) = json_schema::first_issue(declared, data) {

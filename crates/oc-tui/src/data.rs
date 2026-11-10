@@ -1084,6 +1084,55 @@ impl Connection {
         self.cursor.as_deref()
     }
 
+    /// Resync after EVERY successful subscribe — reconnects (the
+    /// consistency net for events missed while offline) AND the FIRST
+    /// connect (boot hydration: a TUI that restores tabs from
+    /// tabs.json never reconnects, so without this arm the restored
+    /// transcripts would stay empty forever — the M2 D4 defect). The
+    /// fetch results queue behind everything already sent and ahead of
+    /// the new stream's events. Unread marks derive from
+    /// `idle > viewed`, known-only; the message trees of every OPEN
+    /// session re-fetch through `message.list` and rebuild through the
+    /// store reducers. The open family's pending permission asks and
+    /// forms re-list too (RUNTIME-TD04: asks that happened while
+    /// offline are re-delivered after the resubscribe; per-id fetch
+    /// errors — e.g. a session deleted while offline — drop that id
+    /// only). Returns `false` when the ingest channel closed.
+    async fn resync_after_subscribe(
+        tx: &tokio::sync::mpsc::Sender<Ingest>,
+        fetcher: &impl ResyncSource,
+    ) -> bool {
+        let Ok(sessions) = fetcher.fetch_sessions().await else {
+            return true;
+        };
+        let unread = resync_unread(&sessions);
+        let mut messages = Vec::new();
+        let mut cursors = Vec::new();
+        for session_id in fetcher.open_sessions() {
+            if let Ok((list, cursor)) = fetcher.fetch_messages(&session_id).await {
+                cursors.push((session_id.clone(), cursor));
+                messages.push((session_id, list));
+            }
+        }
+        let family = resync_family(&sessions, &fetcher.open_sessions());
+        let mut permissions = Vec::new();
+        let mut forms = Vec::new();
+        for session_id in family {
+            match fetcher.fetch_permissions(&session_id).await {
+                Ok(list) => permissions.push((session_id.clone(), list)),
+                // A session deleted while offline 404s: no data, no
+                // decision for that id.
+                Err(_) => continue,
+            }
+            if let Ok(list) = fetcher.fetch_forms(&session_id).await {
+                forms.push((session_id, list));
+            }
+        }
+        tx.send(Ingest::Resync { sessions, unread, messages, cursors, permissions, forms })
+            .await
+            .is_ok()
+    }
+
     /// The reconnect loop. Pushes every observation into `tx` in order;
     /// the receiving side owns the store. Cancelling the task (or
     /// dropping `tx`) ends the loop.
@@ -1133,9 +1182,8 @@ impl Connection {
             };
             // A subscribe error or an elapsed connect window — both
             // reconnect through the same path the idle watchdog takes.
-            let stream = match stream {
-                Ok(result) => result,
-                Err(_) => continue, // connect window elapsed
+            let Ok(stream) = stream else {
+                continue; // connect window elapsed
             };
             let Ok(mut stream) = stream else {
                 continue; // subscribe error
@@ -1150,70 +1198,22 @@ impl Connection {
             // ingest is published for a failed handshake (the resync
             // below also stays skipped — the ref only records the
             // connection after the marker).
-            let first =
-                match tokio::time::timeout(self.config.connect_timeout, stream.next_json()).await {
-                    Ok(Ok(Some(value))) => value,
-                    Ok(Ok(None)) => continue, // stream ended before any frame
-                    Ok(Err(_)) => continue,   // decode error
-                    Err(_) => continue,       // connect window elapsed → reconnect
-                };
-            let connected = match BusEvent::from_json(&first) {
+            let Ok(Ok(Some(value))) =
+                tokio::time::timeout(self.config.connect_timeout, stream.next_json()).await
+            else {
+                // stream ended or decode error before a frame, or the
+                // connect window elapsed → reconnect
+                continue;
+            };
+            let connected = match BusEvent::from_json(&value) {
                 Some(event) if event.is_server_connected() => event,
                 _ => continue, // protocol failure → drop the stream, reconnect
             };
-            // Resync after EVERY successful subscribe — reconnects (the
-            // consistency net for events missed while offline) AND the
-            // FIRST connect (boot hydration: a TUI that restores tabs
-            // from tabs.json never reconnects, so without this arm the
-            // restored transcripts would stay empty forever — the M2 D4
-            // defect). The fetch results queue behind everything already
-            // sent and ahead of the new stream's events. Unread marks
-            // derive from `idle > viewed`, known-only; the message trees
-            // of every OPEN session re-fetch through `message.list` and
-            // rebuild through the store reducers. The open family's
-            // pending permission asks and forms re-list too
-            // (RUNTIME-TD04: asks that happened while offline are
-            // re-delivered after the resubscribe; per-id fetch errors
-            // — e.g. a session deleted while offline — drop that id
-            // only).
-            if let Ok(sessions) = fetcher.fetch_sessions().await {
-                let unread = resync_unread(&sessions);
-                let mut messages = Vec::new();
-                let mut cursors = Vec::new();
-                for session_id in fetcher.open_sessions() {
-                    if let Ok((list, cursor)) = fetcher.fetch_messages(&session_id).await {
-                        cursors.push((session_id.clone(), cursor));
-                        messages.push((session_id, list));
-                    }
-                }
-                let family = resync_family(&sessions, &fetcher.open_sessions());
-                let mut permissions = Vec::new();
-                let mut forms = Vec::new();
-                for session_id in family {
-                    match fetcher.fetch_permissions(&session_id).await {
-                        Ok(list) => permissions.push((session_id.clone(), list)),
-                        // A session deleted while offline 404s: no data,
-                        // no decision for that id.
-                        Err(_) => continue,
-                    }
-                    if let Ok(list) = fetcher.fetch_forms(&session_id).await {
-                        forms.push((session_id, list));
-                    }
-                }
-                if tx
-                    .send(Ingest::Resync {
-                        sessions,
-                        unread,
-                        messages,
-                        cursors,
-                        permissions,
-                        forms,
-                    })
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
+            // Resync after every successful subscribe (see
+            // `resync_after_subscribe` for the semantics); a closed
+            // ingest channel ends the loop.
+            if !Self::resync_after_subscribe(&tx, &fetcher).await {
+                return;
             }
             // The handshake marker publishes first (the connected
             // transition + the raw event, same order as before G-300).

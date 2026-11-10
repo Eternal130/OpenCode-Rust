@@ -1910,7 +1910,9 @@ async fn g291_same_named_tools_on_two_servers_coexist() {
             .unwrap_or_else(|failure| panic!("{key} executes: {failure:?}"));
         match &result.content[0] {
             oc_schema::tool::Content::Text { text } => assert_eq!(text, expect),
-            other => panic!("expected text part from {key}, got {other:?}"),
+            other @ oc_schema::tool::Content::File { .. } => {
+                panic!("expected text part from {key}, got {other:?}")
+            }
         }
     }
     registry.shutdown().await;
@@ -1961,7 +1963,9 @@ async fn g291_mcp_tool_does_not_shadow_same_named_builtin() {
     let result = builtin.execute(&serde_json::json!({})).await.expect("builtin executes");
     match &result.content[0] {
         oc_schema::tool::Content::Text { text } => assert_eq!(text, "builtin"),
-        other => panic!("expected builtin text, got {other:?}"),
+        other @ oc_schema::tool::Content::File { .. } => {
+            panic!("expected builtin text, got {other:?}")
+        }
     }
     registry.shutdown().await;
 }

@@ -32,7 +32,7 @@ use rustls::pki_types::CertificateDer;
 ///
 /// Node's `NODE_EXTRA_CA_CERTS` semantics (per the Node docs and the ref
 /// comment at `packages/core/src/effect/websocket-constructor.ts:66` —
-/// "Keep trust on the runtime store so NODE_EXTRA_CA_CERTS remains
+/// "Keep trust on the runtime store so `NODE_EXTRA_CA_CERTS` remains
 /// additive"): the value is the path to **a single PEM file**; the
 /// well-known/platform CAs remain trusted and the file's CA certificates
 /// are appended to them. (Node does not treat the value as a
@@ -232,20 +232,24 @@ mod tests {
         let (ca, _server, _key) = ca_signed_pair();
         let path = temp_pem_path("parse");
         std::fs::write(&path, ca.pem()).expect("write pem");
-        unsafe { std::env::set_var(EXTRA_CA_CERTS_ENV, &path) };
+        std::env::set_var(EXTRA_CA_CERTS_ENV, &path);
         let certs = extra_ca_certs_from_env();
-        unsafe { std::env::remove_var(EXTRA_CA_CERTS_ENV) };
+        std::env::remove_var(EXTRA_CA_CERTS_ENV);
         assert_eq!(certs.len(), 1, "one CA certificate from the bundle");
         let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn extra_ca_certs_env_unset_or_unreadable_is_ignored() {
-        unsafe { std::env::remove_var(EXTRA_CA_CERTS_ENV) };
-        assert!(extra_ca_certs_from_env().is_empty());
-        unsafe { std::env::set_var(EXTRA_CA_CERTS_ENV, "/nonexistent/oc-http-g299.pem") };
-        assert!(extra_ca_certs_from_env().is_empty());
-        unsafe { std::env::remove_var(EXTRA_CA_CERTS_ENV) };
+        std::env::remove_var(EXTRA_CA_CERTS_ENV);
+        assert_eq!(extra_ca_certs_from_env().len(), 0, "unset env yields no certificates");
+        std::env::set_var(EXTRA_CA_CERTS_ENV, "/nonexistent/oc-http-g299.pem");
+        assert_eq!(
+            extra_ca_certs_from_env().len(),
+            0,
+            "unreadable env path yields no certificates"
+        );
+        std::env::remove_var(EXTRA_CA_CERTS_ENV);
     }
 
     #[tokio::test]
@@ -284,9 +288,8 @@ mod tests {
                 };
                 let acceptor = acceptor.clone();
                 tokio::spawn(async move {
-                    let mut tls = match acceptor.accept(stream).await {
-                        Ok(tls) => tls,
-                        Err(_) => return, // client-side rejection aborts here
+                    let Ok(mut tls) = acceptor.accept(stream).await else {
+                        return; // client-side rejection aborts here
                     };
                     let mut buf = [0u8; 256];
                     let _n = tls.read(&mut buf).await;
@@ -303,7 +306,7 @@ mod tests {
 
         // (a) Without the env: the custom CA is not trusted — the
         // handshake fails (fresh env read, env unset).
-        unsafe { std::env::remove_var(EXTRA_CA_CERTS_ENV) };
+        std::env::remove_var(EXTRA_CA_CERTS_ENV);
         let err = reqwest::Client::builder()
             .use_preconfigured_tls(extra_tls_config())
             .build()
@@ -316,7 +319,7 @@ mod tests {
 
         // (b) With NODE_EXTRA_CA_CERTS=<pem file>: the extra CA is
         // appended to the trust roots and the request succeeds.
-        unsafe { std::env::set_var(EXTRA_CA_CERTS_ENV, &pem_path) };
+        std::env::set_var(EXTRA_CA_CERTS_ENV, &pem_path);
         let config = tls_config_with_extra_certs(&[ca_der]);
         let body = reqwest::Client::builder()
             .use_preconfigured_tls(config)
@@ -330,7 +333,7 @@ mod tests {
             .await
             .expect("body");
         assert_eq!(body, "ok");
-        unsafe { std::env::remove_var(EXTRA_CA_CERTS_ENV) };
+        std::env::remove_var(EXTRA_CA_CERTS_ENV);
 
         server.abort();
         let _ = std::fs::remove_file(&pem_path);

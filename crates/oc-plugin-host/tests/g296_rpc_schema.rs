@@ -56,7 +56,9 @@ fn rpc_schema_validation_legs() {
 
     // Output violating the schema ⇒ rpc.invalid_output (the internal
     // 500 leg, like a transport failure — internals never echo).
-    assert!(matches!(call(&host, json!({ "n": 2 })), RpcOutcome::Internal(message) if message.contains("Invalid RPC output")));
+    assert!(
+        matches!(call(&host, json!({ "n": 2 })), RpcOutcome::Internal(message) if message.contains("Invalid RPC output"))
+    );
 
     // ctx.error with a DECLARED type + valid data ⇒ the typed failure
     // carries the data.
@@ -72,10 +74,7 @@ fn rpc_schema_validation_legs() {
     // ctx.error with an UNDECLARED type ⇒ the ref-equivalent outcome:
     // encodeError dies ⇒ catchDefect ⇒ rpc.internal (500 leg), logged
     // guest-side — never an undeclared typed failure.
-    assert_eq!(
-        call(&host, json!({ "n": 1 })),
-        RpcOutcome::Internal("RPC call failed".into())
-    );
+    assert_eq!(call(&host, json!({ "n": 1 })), RpcOutcome::Internal("RPC call failed".into()));
     host.shutdown();
 }
 

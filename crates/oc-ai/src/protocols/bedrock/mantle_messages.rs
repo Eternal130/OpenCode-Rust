@@ -160,7 +160,7 @@ impl MantleMessagesConfig {
 /// https://bedrock-mantle.{region}.api.aws/anthropic/v1` with the
 /// `/messages` path, bearer/`SigV4` auth for the `bedrock-mantle`
 /// service, and the static `anthropic-version` header. G-319 — the TS
-/// `configure` guards run here (fail-fast instead of a silent SigV4
+/// `configure` guards run here (fail-fast instead of a silent `SigV4`
 /// fallback with confusing AWS-credential errors).
 pub fn bedrock_mantle_messages_route(
     transport: SharedTransport,

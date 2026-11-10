@@ -252,10 +252,7 @@ async fn credential_legacy_pin_covers_null_and_false_active() {
         assert!(!activated, "{case}: the new row stays inactive");
         let rows = store.list("anthropic").await.expect("list");
         let legacy = rows.iter().find(|row| row.id == "cred_legacy").expect("legacy row");
-        assert_eq!(
-            legacy.active, true,
-            "{case}: the top row ends active after the newer inactive create"
-        );
+        assert!(legacy.active, "{case}: the top row ends active after the newer inactive create");
         let _ = created;
     }
 }

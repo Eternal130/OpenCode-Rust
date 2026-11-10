@@ -458,7 +458,7 @@ pub fn scan_signature(roots: &[PathBuf]) -> Vec<SkillFileStamp> {
             let mtime = metadata
                 .and_then(|metadata| metadata.modified().ok())
                 .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                .map_or(0, |duration| duration.as_nanos() as u64);
+                .map_or(0, |duration| u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX));
             stamps.push((file, len, mtime));
         }
     }
@@ -630,21 +630,29 @@ mod tests {
         std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
         std::fs::write(&skill, "---\nname: A\n---\nbody\n").unwrap();
 
-        let before = scan_signature(&[root.clone()]);
+        let before = scan_signature(std::slice::from_ref(&root));
         assert_eq!(before.len(), 1);
-        assert_eq!(before, scan_signature(&[root.clone()]), "rescan without changes is equal");
+        assert_eq!(
+            before,
+            scan_signature(std::slice::from_ref(&root)),
+            "rescan without changes is equal"
+        );
 
         std::fs::write(&skill, "---\nname: A\n---\nbody edited\n").unwrap();
-        assert_ne!(before, scan_signature(&[root.clone()]), "in-place edit changes the signature");
+        assert_ne!(
+            before,
+            scan_signature(std::slice::from_ref(&root)),
+            "in-place edit changes the signature"
+        );
 
         let nested = root.join("alpha").join("deep").join("SKILL.md");
         std::fs::create_dir_all(nested.parent().unwrap()).unwrap();
         std::fs::write(&nested, "---\nname: D\n---\nbody\n").unwrap();
-        let after_create = scan_signature(&[root.clone()]);
+        let after_create = scan_signature(std::slice::from_ref(&root));
         assert_eq!(after_create.len(), 2, "nested SKILL.md at any depth is observed");
 
         std::fs::remove_file(&nested).unwrap();
-        assert_eq!(scan_signature(&[root.clone()]).len(), 1, "delete is observed");
+        assert_eq!(scan_signature(std::slice::from_ref(&root)).len(), 1, "delete is observed");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

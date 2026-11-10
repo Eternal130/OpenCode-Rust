@@ -1469,21 +1469,15 @@ fn log_guest(params: &Value) {
 /// undeclared event, no port) answers inline. Returns `None` when the
 /// reply is deferred.
 fn answer_rpc_event(shared: &Arc<Shared>, id: u64, params: &Value) -> Option<String> {
-    let Some(rpc_id) = params.get("id").and_then(Value::as_str).filter(|id| !id.is_empty())
-    else {
+    let Some(rpc_id) = params.get("id").and_then(Value::as_str).filter(|id| !id.is_empty()) else {
         return Some(protocol::error_response(id, "rpc.event requires an id"));
     };
     let Some(event) = params.get("name").and_then(Value::as_str).filter(|name| !name.is_empty())
     else {
         return Some(protocol::error_response(id, "rpc.event requires a name"));
     };
-    let registration = shared
-        .registrations
-        .read()
-        .expect("registrations poisoned")
-        .rpcs
-        .get(rpc_id)
-        .cloned();
+    let registration =
+        shared.registrations.read().expect("registrations poisoned").rpcs.get(rpc_id).cloned();
     let Some(registration) = registration else {
         return Some(protocol::error_response(id, &format!("Unknown RPC id: {rpc_id}")));
     };
@@ -2053,7 +2047,12 @@ impl Shared {
     /// G-293 ② — record one entry's (id, revision) state. `failed`
     /// overrides the stored state when `Some` (a failed load keeps the
     /// last-good plugin id); `None` records a good generation.
-    fn record_revision(&self, key: &str, digests: &HashMap<String, String>, failed: Option<String>) {
+    fn record_revision(
+        &self,
+        key: &str,
+        digests: &HashMap<String, String>,
+        failed: Option<String>,
+    ) {
         let fingerprint = revision_fingerprint(digests);
         let plugin_id = self
             .registrations
@@ -2063,10 +2062,10 @@ impl Shared {
             .get(key)
             .map(|status| status.plugin_id.clone())
             .unwrap_or_default();
-        self.revisions.lock().expect("revisions poisoned").insert(
-            key.to_owned(),
-            RevisionState { plugin_id, fingerprint, failed },
-        );
+        self.revisions
+            .lock()
+            .expect("revisions poisoned")
+            .insert(key.to_owned(), RevisionState { plugin_id, fingerprint, failed });
     }
 
     fn loadable_entries(&self) -> Vec<PathBuf> {
@@ -2101,36 +2100,9 @@ impl Shared {
         for entry in entries {
             let key = entry.to_string_lossy().into_owned();
             // A VANISHED source is an explicit removal, not a failed
-            // revision to keep: unload its generation outright (the
-            // remove path — mirrors `remove_entry`; the oc-server pass
-            // routes deleted drop-ins here when config discovery has
-            // not re-run yet).
+            // revision to keep (see `reload_drop_vanished`).
             if !entry.exists() {
-                let old_id = {
-                    let registrations = self.registrations.read().expect("registrations poisoned");
-                    registrations.plugins.get(&key).map(|status| status.plugin_id.clone())
-                };
-                if let Some(old_id) = old_id.filter(|id| !id.is_empty()) {
-                    self.registrations.write().expect("registrations poisoned").clear_plugin(&old_id);
-                    let _ = self
-                        .request(
-                            "unload",
-                            json!({ "pluginId": old_id }),
-                            self.config.registration_timeout,
-                        )
-                        .await;
-                }
-                let removed = self
-                    .registrations
-                    .write()
-                    .expect("registrations poisoned")
-                    .plugins
-                    .remove(&key)
-                    .is_some();
-                if removed {
-                    self.digests.lock().expect("digests poisoned").remove(&key);
-                    self.revisions.lock().expect("revisions poisoned").remove(&key);
-                }
+                self.reload_drop_vanished(&key).await;
                 continue;
             }
             let Ok(result) =
@@ -2166,76 +2138,121 @@ impl Shared {
                     }
                 }
             }
-            // ① staged swap: snapshot the last good state, clear the
-            // old plugin's entries, load the new generation; on ANY
-            // failure restore the snapshot (the fallback).
-            let backup = self.registrations.read().expect("registrations poisoned").clone();
-            if let Some(old_id) = old_id.as_deref().filter(|id| !id.is_empty()) {
-                self.registrations.write().expect("registrations poisoned").clear_plugin(old_id);
-            }
-            let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
-            let reload_options =
-                self.config.entry_options.get(&key).cloned().unwrap_or(Value::Null);
-            let outcome = self
-                .request(
-                    "load",
-                    json!({
-                        "entry": key,
-                        "generation": generation,
-                        "seed": self.config.host_state.to_seed_json(),
-                        "options": reload_options,
-                        "staged": true,
-                    }),
-                    self.config.registration_timeout,
-                )
-                .await;
-            self.digests.lock().expect("digests poisoned").insert(key.clone(), fresh);
-            match outcome {
-                Ok(result) => {
-                    let plugin_id =
-                        result.get("pluginId").and_then(Value::as_str).unwrap_or("?").to_owned();
-                    let mut registrations = self.registrations.write().expect("registrations poisoned");
-                    if let Some(status) = registrations.plugins.get_mut(&key) {
-                        status.plugin_id.clone_from(&plugin_id);
-                        status.state = PluginState::Active;
-                    }
-                    drop(registrations);
-                    self.revisions.lock().expect("revisions poisoned").insert(
-                        key.clone(),
-                        RevisionState { plugin_id, fingerprint: revision, failed: None },
-                    );
-                    reloaded += 1;
-                    eprintln!("opencode plugin-host: hot reload {key}");
-                }
-                Err(error) => {
-                    // ① rollback: restore the last good state — the
-                    // old generation's registrations are intact and
-                    // functional; the failure is surfaced on the
-                    // status (ref plugin.ts:154-169: the slot keeps
-                    // its last activation, the error is recorded).
-                    {
-                        let mut registrations =
-                            self.registrations.write().expect("registrations poisoned");
-                        *registrations = backup;
-                        if let Some(status) = registrations.plugins.get_mut(&key) {
-                            status.state = PluginState::Failed(error.to_string());
-                        }
-                    }
-                    self.revisions.lock().expect("revisions poisoned").insert(
-                        key.clone(),
-                        RevisionState {
-                            plugin_id: old_id.unwrap_or_default(),
-                            fingerprint: revision.clone(),
-                            failed: Some(revision),
-                        },
-                    );
-                    eprintln!(
-                        "opencode plugin-host: hot reload {key} failed ({error}); previous generation kept"
-                    );
-                }
+            // ① staged swap (see `reload_swap_generation`): snapshot
+            // the last good state, load the new generation, roll back
+            // on failure.
+            if self.reload_swap_generation(&key, revision, fresh, old_id).await {
+                reloaded += 1;
             }
         }
         Ok(reloaded)
+    }
+
+    /// G-293 follow-up: a vanished source is an explicit removal, not
+    /// a failed revision to keep — unload its generation outright (the
+    /// remove path mirrors `remove_entry`; the oc-server pass routes
+    /// deleted drop-ins here when config discovery has not re-run
+    /// yet).
+    async fn reload_drop_vanished(&self, key: &str) {
+        let old_id = {
+            let registrations = self.registrations.read().expect("registrations poisoned");
+            registrations.plugins.get(key).map(|status| status.plugin_id.clone())
+        };
+        if let Some(old_id) = old_id.filter(|id| !id.is_empty()) {
+            self.registrations.write().expect("registrations poisoned").clear_plugin(&old_id);
+            let _ = self
+                .request("unload", json!({ "pluginId": old_id }), self.config.registration_timeout)
+                .await;
+        }
+        let removed = self
+            .registrations
+            .write()
+            .expect("registrations poisoned")
+            .plugins
+            .remove(key)
+            .is_some();
+        if removed {
+            self.digests.lock().expect("digests poisoned").remove(key);
+            self.revisions.lock().expect("revisions poisoned").remove(key);
+        }
+    }
+
+    /// ① staged swap (G-293): snapshot the last good state, clear the
+    /// old plugin's entries, load the new generation; on ANY failure
+    /// restore the snapshot (the fallback). Returns `true` when the
+    /// new generation loaded.
+    async fn reload_swap_generation(
+        &self,
+        key: &str,
+        revision: String,
+        fresh: HashMap<String, String>,
+        old_id: Option<String>,
+    ) -> bool {
+        let backup = self.registrations.read().expect("registrations poisoned").clone();
+        if let Some(old_id) = old_id.as_deref().filter(|id| !id.is_empty()) {
+            self.registrations.write().expect("registrations poisoned").clear_plugin(old_id);
+        }
+        let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
+        let reload_options = self.config.entry_options.get(key).cloned().unwrap_or(Value::Null);
+        let outcome = self
+            .request(
+                "load",
+                json!({
+                    "entry": key,
+                    "generation": generation,
+                    "seed": self.config.host_state.to_seed_json(),
+                    "options": reload_options,
+                    "staged": true,
+                }),
+                self.config.registration_timeout,
+            )
+            .await;
+        self.digests.lock().expect("digests poisoned").insert(key.to_owned(), fresh);
+        match outcome {
+            Ok(result) => {
+                let plugin_id =
+                    result.get("pluginId").and_then(Value::as_str).unwrap_or("?").to_owned();
+                let mut registrations = self.registrations.write().expect("registrations poisoned");
+                if let Some(status) = registrations.plugins.get_mut(key) {
+                    status.plugin_id.clone_from(&plugin_id);
+                    status.state = PluginState::Active;
+                }
+                drop(registrations);
+                self.revisions.lock().expect("revisions poisoned").insert(
+                    key.to_owned(),
+                    RevisionState { plugin_id, fingerprint: revision, failed: None },
+                );
+                eprintln!("opencode plugin-host: hot reload {key}");
+                true
+            }
+            Err(error) => {
+                // ① rollback: restore the last good state — the
+                // old generation's registrations are intact and
+                // functional; the failure is surfaced on the
+                // status (ref plugin.ts:154-169: the slot keeps
+                // its last activation, the error is recorded).
+                {
+                    let mut registrations =
+                        self.registrations.write().expect("registrations poisoned");
+                    *registrations = backup;
+                    if let Some(status) = registrations.plugins.get_mut(key) {
+                        status.state = PluginState::Failed(error.to_string());
+                    }
+                }
+                self.revisions.lock().expect("revisions poisoned").insert(
+                    key.to_owned(),
+                    RevisionState {
+                        plugin_id: old_id.unwrap_or_default(),
+                        fingerprint: revision.clone(),
+                        failed: Some(revision),
+                    },
+                );
+                eprintln!(
+                    "opencode plugin-host: hot reload {key} failed ({error}); previous generation kept"
+                );
+                false
+            }
+        }
     }
 
     /// G-05 dynamic generation lifecycle: load ONE new entry into the

@@ -36,8 +36,7 @@ struct Sandbox {
 }
 
 fn sandbox(tag: &str) -> Sandbox {
-    let root =
-        PathBuf::from(format!("/tmp/opencode/oc-server-g295-{tag}-{}", std::process::id()));
+    let root = PathBuf::from(format!("/tmp/opencode/oc-server-g295-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let home = root.join("home");
     let project = root.join("project");
@@ -79,7 +78,7 @@ impl Sandbox {
     }
 }
 
-/// The SSE visibility precondition (event_manifest::RPC_PREFIX): every
+/// The SSE visibility precondition (`event_manifest::RPC_PREFIX`): every
 /// `rpc.*` type is public — the emitted event must reach subscribers
 /// exactly like the ref's.
 #[test]
@@ -134,7 +133,8 @@ async fn rpc_event_emit_reaches_the_engine_bus() {
     assert!(
         Path::new(location.directory.0.as_str()).canonicalize().ok()
             == box_.project.canonicalize().ok(),
-        "scoped to the boot location ({:?})", location.directory
+        "scoped to the boot location ({:?})",
+        location.directory
     );
     handle.shutdown_and_join().await.expect("shutdown");
 }

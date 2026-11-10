@@ -686,9 +686,14 @@ pub struct WatchedConfig {
 /// G-320 — the skill source directories the watcher must cover,
 /// enumerated from the skill loader's own source rules (compat roots +
 /// URL staging + config skill dirs — never hardcoded).
-fn skill_watch_roots(loader: &Loader, loaded: &Loaded) -> Vec<PathBuf> {
+fn skill_watch_roots(loader: &Loader, snapshot: &Loaded) -> Vec<PathBuf> {
     let cache_root = oc_util::global_roots::resolve().cache;
-    crate::engine::skills::watch_roots(loaded, &loader.location, &loader.globals.home, &cache_root)
+    crate::engine::skills::watch_roots(
+        snapshot,
+        &loader.location,
+        &loader.globals.home,
+        &cache_root,
+    )
 }
 
 impl WatchedConfig {
@@ -860,7 +865,7 @@ mod tests {
     }
     fn guard_project_disable_env() -> EnvRestore {
         let names = ["OPENCODE_CONFIG_PROJECT_DISABLE", "OPENCODE_DISABLE_PROJECT_CONFIG"];
-        let saved = names.iter().map(|name| std::env::var_os(name)).collect::<Vec<_>>();
+        let saved = names.iter().map(std::env::var_os).collect::<Vec<_>>();
         for name in names {
             std::env::remove_var(name);
         }
