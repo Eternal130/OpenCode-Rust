@@ -720,25 +720,18 @@ impl Registrations {
     }
 
     /// Merge one `ctx.skill.transform` materialization (whole-table, by
-    /// skill id).
+    /// skill id). G-379④ — the ref keys skills STRICTLY by `id`
+    /// (Skill.Info's `id` is a required branded string —
+    /// `Schema.decodeUnknownSync(Skill.Info)` throws without one; no
+    /// name fallback exists), so rows without an `id` are skipped.
     pub fn merge_skills(&mut self, plugin_id: &str, skills: &[Value]) {
         let ids: Vec<String> = skills
             .iter()
-            .filter_map(|info| {
-                info.get("id")
-                    .or_else(|| info.get("name"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            })
+            .filter_map(|info| info.get("id").and_then(Value::as_str).map(str::to_owned))
             .collect();
         self.skills.retain(|id, _| ids.contains(id));
         for info in skills {
-            let Some(id) = info
-                .get("id")
-                .or_else(|| info.get("name"))
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-            else {
+            let Some(id) = info.get("id").and_then(Value::as_str).map(str::to_owned) else {
                 continue;
             };
             let provenance =

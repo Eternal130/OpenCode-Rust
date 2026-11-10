@@ -1395,9 +1395,11 @@ fn answer_hook_register(shared: &Shared, id: u64, params: &Value) -> String {
     protocol::response(id, Value::Null)
 }
 
-/// G-148: `ctx.plugin.list` — the loaded plugin table
-/// (id/name/version/active), answered inline from the registration
-/// snapshot.
+/// G-148/G-379⑧ — `ctx.plugin.list`: the loaded plugin table in the
+/// ref `Plugin.Info` projection (schema/plugin.ts:37-43 +
+/// plugin.ts:285-293 `slotInfo`): `{id, source, state, features}`.
+/// The port additionally keeps the historical `name`/`version`/
+/// `active` keys as a superset (pinned by the G-147 fixture).
 fn answer_plugin_list(shared: &Shared, id: u64) -> String {
     let registrations = shared.registrations.read().expect("registrations poisoned");
     let plugins: Vec<Value> = registrations
@@ -1405,11 +1407,37 @@ fn answer_plugin_list(shared: &Shared, id: u64) -> String {
         .values()
         .map(|status| {
             let entry = status.entry.to_string_lossy().into_owned();
+            let active = matches!(status.state, crate::registrations::PluginState::Active);
+            let failure = match &status.state {
+                crate::registrations::PluginState::Failed(error) => Some(error.clone()),
+                _ => None,
+            };
+            // slotInfo: `state: failure === undefined ? {status:"active"}
+            // : {status:"failed", error}`.
+            let state = match failure {
+                Some(error) => json!({ "status": "failed", "error": error }),
+                None => json!({ "status": "active" }),
+            };
+            // The loaded entry is a local file: `{type: "local", path}`
+            // (the ref's Source union; package/builtin sources are the
+            // embedder's resolution face — see oc-server `list_info`).
+            let source = json!({ "type": "local", "path": entry });
+            // features: `server: true` merged with the module's
+            // detected entrypoints (the same probe `oc-server`
+            // advertises with).
+            let features = json!({
+                "server": true,
+                "tui": crate::context::install::probe_feature_entry(&status.entry, "./tui").map(|_| true),
+                "rpc": crate::context::install::probe_feature_entry(&status.entry, "./rpc").map(|_| true),
+            });
             serde_json::json!({
                 "id": status.plugin_id,
+                "source": source,
+                "state": state,
+                "features": features,
                 "name": plugin_display_name(&entry),
                 "version": plugin_package_field(&entry, "version").map_or(Value::Null, Value::String),
-                "active": matches!(status.state, crate::registrations::PluginState::Active),
+                "active": active,
             })
         })
         .collect();
@@ -2012,11 +2040,17 @@ async fn load_entry(shared: &Arc<Shared>, entry: &std::path::Path) {
 
 /// The package's `exports["./tui"]` entry, when the loaded entry
 /// sits inside a package that ships one (the flagship's companion
-/// TUI plugin). Walks up from the entry to the package root
-/// (the nearest `package.json`) and probes the subpath.
+/// TUI plugin). G-379① — unified with the loader probe semantics:
+/// `probe_feature_entry` (the same face `oc-server` advertises the
+/// tui/rpc features with) resolves ONLY the subpath's own files —
+/// `exports["./tui"]` or the classic `<root>/tui.*`/`<root>/tui/
+/// index.*` — with NO `main`/`index.js` fallback, matching the ref
+/// (`host.ts:24` `entry(["tui"])` swallows
+/// `ERR_PACKAGE_PATH_NOT_EXPORTED`; a main-only package advertises
+/// no TUI). The old `resolve_subpath_entry` fallback could return
+/// the SERVER entry as a "tui entry".
 fn probe_tui_entry(entry: &Path) -> Option<PathBuf> {
-    let package_root = crate::context::install::package_root(entry)?;
-    crate::context::install::resolve_subpath_entry(&package_root, "./tui").ok()
+    crate::context::install::probe_feature_entry(entry, "./tui")
 }
 
 fn mark_ready(shared: &Arc<Shared>) {
