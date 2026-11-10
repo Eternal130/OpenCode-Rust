@@ -606,6 +606,186 @@ async fn engine_e2e_permission_blocked_tool_fails_with_permission_rejected() {
 }
 
 // ===========================================================================
+// G-338 — the `permission.evaluate` hook dispatched from the production
+// engine (ref permission.ts:176-195): pre-hook effect carries into the
+// event, the plugin's effect/message win, and a base-rules deny
+// short-circuits BEFORE the hook.
+// ===========================================================================
+
+/// Creates a session with an explicit ruleset (the e2e harness pins
+/// allow-all; the G-338 cases need deny/empty bases).
+async fn create_session_with_rules(
+    engine: &Engine,
+    location: &LocationRef,
+    id: &str,
+    permissions: Vec<oc_schema::permission::Rule>,
+) -> SessionId {
+    let session_id = SessionId::parse(id).unwrap_or_else(|error| SessionId(error.value));
+    engine
+        .create_session(
+            location,
+            crate::session::store::CreateInput {
+                id: Some(session_id.clone()),
+                location: Some(oc_schema::location::Ref {
+                    directory: oc_schema::common::AbsolutePath::parse(
+                        location.directory.to_string_lossy().into_owned(),
+                    ),
+                    workspace_id: None,
+                }),
+                title: Some("Permission hook test".to_string()),
+                agent: None,
+                model: Some(oc_schema::model::Ref {
+                    provider_id: oc_schema::id::ProviderId::parse("parityfake"),
+                    id: oc_schema::id::ModelId::parse("fake-model"),
+                    variant: Some(oc_schema::id::ModelVariantId::parse("default")),
+                }),
+                permissions: Some(permissions),
+                metadata: None,
+                parent_id: None,
+                project: None,
+                version: "test".to_string(),
+                explicit_defaults: false,
+            },
+        )
+        .await
+        .expect("create session");
+    session_id
+}
+
+#[tokio::test]
+async fn engine_permission_evaluate_hook_receives_pre_hook_effect_and_overrides() {
+    let llm = TestLlm::new();
+    let (engine, _dir, location) = engine_with(llm).await;
+    let services = engine.location(location.clone()).await.expect("assemble");
+
+    // The hook observes the computed effect (the default build agent's
+    // allow-all ⇒ Allow) and overrides to deny with its own message —
+    // the returned effect/message WIN (ref permission.ts:195).
+    let seen: Arc<std::sync::Mutex<Vec<(oc_schema::permission::Effect, Option<String>)>>> =
+        Arc::default();
+    let recorder = Arc::clone(&seen);
+    let registration = services
+        .graph
+        .hooks
+        .register_permission_evaluate(
+            crate::hooks::fn_hook(move |event: &mut crate::hooks::PermissionEvaluateEvent| {
+                recorder.lock().expect("seen lock").push((event.effect, event.message.clone()));
+                event.effect = oc_schema::permission::Effect::Deny;
+                event.message = Some("plugin says no".into());
+                Ok(())
+            }),
+            crate::hooks::HookOptions::default(),
+        )
+        .await;
+    std::mem::forget(registration);
+
+    let session_id = create_session_with_rules(&engine, &location, "ses_g338_allow", {
+        use oc_schema::permission::{Effect, Rule};
+        vec![Rule { action: "*".into(), resource: "*".into(), effect: Effect::Allow }]
+    })
+    .await;
+    let permission =
+        services.graph.permissions.permission().expect("the location port owns the engine");
+    let error = permission
+        .assert(crate::permission::AssertInput::new(session_id, "bash", vec!["rm -rf /".into()]))
+        .await
+        .expect_err("the plugin override denies");
+    match error {
+        crate::permission::PermissionError::Blocked(blocked) => {
+            assert_eq!(blocked.reason.as_deref(), Some("plugin says no"));
+        }
+        other => panic!("expected Blocked, got {other:?}"),
+    }
+    assert_eq!(
+        seen.lock().expect("seen lock").as_slice(),
+        &[(oc_schema::permission::Effect::Allow, None)],
+        "the hook saw the PRE-hook computed effect and message"
+    );
+}
+
+#[tokio::test]
+async fn engine_permission_evaluate_hook_skipped_on_base_rules_deny() {
+    let llm = TestLlm::new();
+    let (engine, _dir, location) = engine_with(llm).await;
+    let services = engine.location(location.clone()).await.expect("assemble");
+
+    let dispatched = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = Arc::clone(&dispatched);
+    let registration = services
+        .graph
+        .hooks
+        .register_permission_evaluate(
+            crate::hooks::fn_hook(move |_event: &mut crate::hooks::PermissionEvaluateEvent| {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                // A plugin cannot un-deny — but it must not even run.
+                _event.effect = oc_schema::permission::Effect::Allow;
+                Ok(())
+            }),
+            crate::hooks::HookOptions::default(),
+        )
+        .await;
+    std::mem::forget(registration);
+
+    // Session rules deny `bash` outright — the short-circuit fires before
+    // the hook (ref permission.ts:181-183).
+    let session_id = create_session_with_rules(&engine, &location, "ses_g338_deny", {
+        use oc_schema::permission::{Effect, Rule};
+        vec![Rule { action: "bash".into(), resource: "*".into(), effect: Effect::Deny }]
+    })
+    .await;
+    let permission =
+        services.graph.permissions.permission().expect("the location port owns the engine");
+    let error = permission
+        .assert(crate::permission::AssertInput::new(session_id, "bash", vec!["rm -rf /".into()]))
+        .await
+        .expect_err("the base deny blocks");
+    assert!(matches!(error, crate::permission::PermissionError::Blocked(_)));
+    assert!(
+        !dispatched.load(std::sync::atomic::Ordering::SeqCst),
+        "the hook is NOT dispatched on the deny short-circuit"
+    );
+}
+
+#[tokio::test]
+async fn engine_permission_evaluate_pre_hook_effect_is_ask_when_a_rule_asks() {
+    let llm = TestLlm::new();
+    let (engine, _dir, location) = engine_with(llm).await;
+    let services = engine.location(location.clone()).await.expect("assemble");
+
+    // No session rules: the default build agent asks for `read *.env` —
+    // the pre-hook effect is `ask` (any ask ⇒ ask, ref permission.ts:188).
+    let seen: Arc<std::sync::Mutex<Vec<oc_schema::permission::Effect>>> = Arc::default();
+    let recorder = Arc::clone(&seen);
+    let registration = services
+        .graph
+        .hooks
+        .register_permission_evaluate(
+            crate::hooks::fn_hook(move |event: &mut crate::hooks::PermissionEvaluateEvent| {
+                recorder.lock().expect("seen lock").push(event.effect);
+                // Approve so the assert does not park on `ask`.
+                event.effect = oc_schema::permission::Effect::Allow;
+                Ok(())
+            }),
+            crate::hooks::HookOptions::default(),
+        )
+        .await;
+    std::mem::forget(registration);
+
+    let session_id = create_session_with_rules(&engine, &location, "ses_g338_ask", vec![]).await;
+    let permission =
+        services.graph.permissions.permission().expect("the location port owns the engine");
+    permission
+        .assert(crate::permission::AssertInput::new(session_id, "read", vec!["prod.env".into()]))
+        .await
+        .expect("the hook approved the ask");
+    assert_eq!(
+        seen.lock().expect("seen lock").as_slice(),
+        &[oc_schema::permission::Effect::Ask],
+        "the initial effect is computed per ref BEFORE the hook runs"
+    );
+}
+
+// ===========================================================================
 // Config-lane skill discovery (finding 7)
 // ===========================================================================
 
