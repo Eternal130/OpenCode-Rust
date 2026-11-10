@@ -174,7 +174,10 @@ async fn worktrees_for(
     db.transaction(move |tx| {
         let conn = tx.conn();
         let mut statement = conn.prepare(
-            "SELECT project_id, directory, coalesce(strategy, '') FROM worktree WHERE project_id = ?1 ORDER BY directory",
+            // G-322 — ref `Worktree.list` (worktree.ts:138-141) orders
+            // `desc(time_created), asc(directory)`: newest worktree
+            // first, directory as the tiebreaker (NOT directory-only).
+            "SELECT project_id, directory, coalesce(strategy, '') FROM worktree WHERE project_id = ?1 ORDER BY time_created DESC, directory ASC",
         )?;
         let rows = statement
             .query_map((project,), |row| {

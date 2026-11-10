@@ -371,6 +371,44 @@ pub struct Loaded {
     pub diagnostics: Vec<SourceDiagnostic>,
 }
 
+/// G-323 — v2 `truthy` (server-process.ts:191): exactly `"1"` or the
+/// case-insensitive `"true"`.
+fn env_truthy(value: &str) -> bool {
+    value == "1" || value.eq_ignore_ascii_case("true")
+}
+
+/// G-323 — whether project config discovery is disabled by the two env
+/// names (v2 `server-process.ts:112-116`:
+/// `project: !truthy(OPENCODE_CONFIG_PROJECT_DISABLE ?? OPENCODE_DISABLE_PROJECT_CONFIG)`).
+/// A truthy value under EITHER name disables (the port's oc-server
+/// switch has always OR-ed the names; the ref's `??` differs only when
+/// the primary is set to a non-truthy value while the fallback is
+/// truthy).
+#[must_use]
+pub fn project_config_disabled_from(primary: Option<&str>, fallback: Option<&str>) -> bool {
+    primary.is_some_and(env_truthy) || fallback.is_some_and(env_truthy)
+}
+
+/// G-323 — applies the project-disable env switch to loader options
+/// (the `Config.configured({project})` seam). Shared so oc-core's
+/// engine-internal loaders and oc-server's `configure_loader` run the
+/// SAME logic — no drift-prone duplicates.
+fn apply_project_config_env(options: &mut Options) {
+    if project_config_disabled_from(
+        std::env::var("OPENCODE_CONFIG_PROJECT_DISABLE").ok().as_deref(),
+        std::env::var("OPENCODE_DISABLE_PROJECT_CONFIG").ok().as_deref(),
+    ) {
+        options.project = Some(false);
+    }
+}
+
+/// G-323 — the oc-server `configure_loader` delegate: applies
+/// [`apply_project_config_env`] to a built loader (boot seeding, the
+/// per-location provider listing, the config/agent/project surfaces).
+pub fn configure_loader(loader: &mut Loader) {
+    apply_project_config_env(&mut loader.options);
+}
+
 /// The config loader (`Config.load`): discover sources, parse each document in
 /// isolation, and emit the priority-ordered entry list.
 #[derive(Clone)]
@@ -403,6 +441,15 @@ impl Loader {
         if options.content.is_none() {
             options.content = std::env::var("OPENCODE_CONFIG_CONTENT").ok();
         }
+        // G-323 — `OPENCODE_CONFIG_PROJECT_DISABLE` /
+        // `OPENCODE_DISABLE_PROJECT_CONFIG` (v2
+        // `server-process.ts:112-116` → `config.project: false`) apply
+        // at CONSTRUCTION so every engine-internal `Loader::new` site
+        // (location assembly, provider overlay, URL-skill loads) honors
+        // the switch, not just the oc-server surfaces that call
+        // [`configure_loader`]. Idempotent with a later
+        // [`configure_loader`] pass.
+        apply_project_config_env(&mut options);
         Self {
             location,
             globals,
@@ -627,8 +674,21 @@ impl Loader {
 pub struct WatchedConfig {
     loader: Loader,
     state: Mutex<Loaded>,
+    /// G-320 — the skill-source reload signature (path, size, mtime per
+    /// skill file): entries can be deep-equal while a compat-root or
+    /// URL-staged skill body changed, and that change must still fire
+    /// the reload so the engine invalidation rebuilds the skill table.
+    skill_signature: Mutex<Vec<crate::engine::skills::SkillFileStamp>>,
     hub: Arc<watch::WatchHub>,
     reload_lock: Mutex<()>,
+}
+
+/// G-320 — the skill source directories the watcher must cover,
+/// enumerated from the skill loader's own source rules (compat roots +
+/// URL staging + config skill dirs — never hardcoded).
+fn skill_watch_roots(loader: &Loader, loaded: &Loaded) -> Vec<PathBuf> {
+    let cache_root = oc_util::global_roots::resolve().cache;
+    crate::engine::skills::watch_roots(loaded, &loader.location, &loader.globals.home, &cache_root)
 }
 
 impl WatchedConfig {
@@ -647,10 +707,12 @@ impl WatchedConfig {
             hub.add_publisher(publisher);
         }
         let initial = loader.load();
-        hub.reconcile(&watch::plan(&initial.sources));
+        let skill_roots = skill_watch_roots(&loader, &initial);
+        hub.reconcile(&watch::plan(&initial.sources, &skill_roots));
         let service = Arc::new(Self {
             loader,
             state: Mutex::new(initial),
+            skill_signature: Mutex::new(crate::engine::skills::scan_signature(&skill_roots)),
             hub: hub.clone(),
             reload_lock: Mutex::new(()),
         });
@@ -681,11 +743,26 @@ impl WatchedConfig {
     fn do_reload(&self) -> bool {
         let _guard = self.reload_lock.lock().unwrap_or_else(unpoison);
         let discovered = self.loader.load();
-        self.hub.reconcile(&watch::plan(&discovered.sources));
+        let skill_roots = skill_watch_roots(&self.loader, &discovered);
+        self.hub.reconcile(&watch::plan(&discovered.sources, &skill_roots));
+        // G-320 — skill-source changes (compat roots, URL staging) are a
+        // reload even with deep-equal config entries: the signature swap
+        // below makes the verdict "changed" and the server's reload
+        // bridge then invalidates the live locations, whose
+        // re-assembly re-runs skill discovery over the edited files.
+        let skills_changed = {
+            let mut signature = self.skill_signature.lock().unwrap_or_else(unpoison);
+            let next = crate::engine::skills::scan_signature(&skill_roots);
+            let changed = *signature != next;
+            if changed {
+                *signature = next;
+            }
+            changed
+        };
         let mut state = self.state.lock().unwrap_or_else(unpoison);
         let compatibility_changed = state.sources.claude != discovered.sources.claude
             || state.sources.agents != discovered.sources.agents;
-        if state.entries == discovered.entries && !compatibility_changed {
+        if state.entries == discovered.entries && !compatibility_changed && !skills_changed {
             return false;
         }
         *state = discovered;
@@ -766,6 +843,82 @@ mod tests {
 
     fn loader_for(dir: &Path, globals: &GlobalDirs) -> Loader {
         Loader::new(dir.to_path_buf(), globals.clone())
+    }
+
+    /// Restores the G-323 env names on drop (nextest runs each test in
+    /// its own process; the guard keeps plain `--exact` repros safe too).
+    struct EnvRestore(Vec<&'static str>, Vec<Option<std::ffi::OsString>>);
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            for (name, saved) in self.0.iter().zip(self.1.iter()) {
+                match saved {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+    fn guard_project_disable_env() -> EnvRestore {
+        let names = ["OPENCODE_CONFIG_PROJECT_DISABLE", "OPENCODE_DISABLE_PROJECT_CONFIG"];
+        let saved = names.iter().map(|name| std::env::var_os(name)).collect::<Vec<_>>();
+        for name in names {
+            std::env::remove_var(name);
+        }
+        EnvRestore(names.to_vec(), saved)
+    }
+
+    /// G-323 — the engine-internal `Loader::new` path (engine location
+    /// assembly, provider overlay, URL-skill loads) honors
+    /// `OPENCODE_DISABLE_PROJECT_CONFIG`: set → a project config file
+    /// in the location tree is NOT picked up; unset → it is.
+    #[test]
+    fn config_loader_new_honors_project_disable_env() {
+        let _guard = guard_project_disable_env();
+        let dir = tempdir("project-disable");
+        let project = dir.join("project");
+        fs::create_dir_all(&project).unwrap();
+        write(&project.join("opencode.json"), r#"{"username": "from-project"}"#);
+        let globals = GlobalDirs { config: dir.join("global"), home: dir.join("home") };
+
+        // Unset → the project document loads.
+        let enabled = Loader::new(project.clone(), globals.clone()).load();
+        assert_eq!(
+            latest(&enabled.entries, |info| info.username.clone()).as_deref(),
+            Some("from-project")
+        );
+
+        // Set (either name, truthy value) → the same loader site skips
+        // project discovery entirely.
+        for name in ["OPENCODE_CONFIG_PROJECT_DISABLE", "OPENCODE_DISABLE_PROJECT_CONFIG"] {
+            std::env::set_var(name, "1");
+            let disabled = Loader::new(project.clone(), globals.clone()).load();
+            assert!(
+                latest(&disabled.entries, |info| info.username.clone()).is_none(),
+                "{name}=1 must disable project config pickup"
+            );
+            std::env::set_var(name, "true");
+            let disabled = Loader::new(project.clone(), globals.clone()).load();
+            assert!(
+                latest(&disabled.entries, |info| info.username.clone()).is_none(),
+                "{name}=true must disable project config pickup"
+            );
+            std::env::remove_var(name);
+        }
+
+        // Non-truthy values keep project config enabled (v2 `truthy`).
+        std::env::set_var("OPENCODE_DISABLE_PROJECT_CONFIG", "0");
+        let still_enabled = Loader::new(project.clone(), globals.clone()).load();
+        assert_eq!(
+            latest(&still_enabled.entries, |info| info.username.clone()).as_deref(),
+            Some("from-project")
+        );
+
+        // The shared configure_loader pass is idempotent with the
+        // construction-time application.
+        std::env::set_var("OPENCODE_DISABLE_PROJECT_CONFIG", "1");
+        let mut loader = Loader::new(project, globals);
+        configure_loader(&mut loader);
+        assert_eq!(loader.options.project, Some(false));
     }
 
     #[test]
@@ -1309,6 +1462,86 @@ mod tests {
             latest(&service.entries(), |info| info.username.clone()).as_deref()
                 == Some("wellknown-two")
         });
+        assert_eq!(handler.count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// G-320 — compat-root skill sources (`~/.claude/skills`) live
+    /// outside the config root; the watch plan must cover them
+    /// recursively and a SKILL.md edit must fire the reload (the
+    /// signature change flips the verdict even though config entries
+    /// are deep-equal). Never touches the real `~` — tempdir home.
+    #[test]
+    fn config_watched_config_reloads_on_compat_root_skill_edit() {
+        let dir = tempdir("watched-skills");
+        let global = dir.join("global");
+        let project = dir.join("project");
+        let home = dir.join("home");
+        let claude_skills = home.join(".claude").join("skills");
+        write(
+            &claude_skills.join("alpha").join("SKILL.md"),
+            "---\nname: Alpha\ndescription: one\n---\nbody one\n",
+        );
+        fs::create_dir_all(&global).unwrap();
+        fs::create_dir_all(&project).unwrap();
+        write(&project.join("opencode.json"), r#"{"shell": "one"}"#);
+
+        let loader =
+            Loader::new(project.clone(), GlobalDirs { config: global, home: home.clone() });
+        let backend = watch::FakeBackend::new();
+        let handler = Arc::new(CountingUpdates { count: std::sync::atomic::AtomicUsize::new(0) });
+        let service = WatchedConfig::start(loader, backend.clone(), handler.clone(), None);
+        wait_until(2_000, || !backend.subscriptions().is_empty());
+        // The compat root's skills dir is watched recursively…
+        assert!(backend.subscriptions().iter().any(|target| matches!(
+            target,
+            watch::WatchTarget::Directory { path, .. } if *path == claude_skills
+        )));
+
+        // …and editing the SKILL.md fires the debounced reload even
+        // though the config entries are unchanged.
+        let skill = claude_skills.join("alpha").join("SKILL.md");
+        write(&skill, "---\nname: Alpha\ndescription: two\n---\nbody two\n");
+        backend.emit(&watch::FsUpdate { kind: watch::FsChangeKind::Update, path: skill });
+        wait_until(2_000, || handler.count.load(std::sync::atomic::Ordering::SeqCst) == 1);
+        assert_eq!(handler.count.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // A no-op touch (same size AND mtime — rewritten identical bytes
+        // within the same nanosecond window is not observable) stays
+        // silent; a NEW nested skill file (G-216 any depth) reloads.
+        let nested = claude_skills.join("alpha").join("nested").join("deep");
+        write(&nested.join("SKILL.md"), "---\nname: Deep\n---\nbody\n");
+        backend.emit(&watch::FsUpdate { kind: watch::FsChangeKind::Create, path: nested });
+        wait_until(2_000, || handler.count.load(std::sync::atomic::Ordering::SeqCst) == 2);
+        assert_eq!(handler.count.load(std::sync::atomic::Ordering::SeqCst), 2);
+        drop(service);
+    }
+
+    /// G-320 — the same compat-root reload through the REAL notify
+    /// backend: an actual on-disk SKILL.md write (no synthetic emit)
+    /// reaches the hub through the recursive watch.
+    #[test]
+    fn config_watched_config_compat_root_skill_edit_via_notify_backend() {
+        let dir = tempdir("watched-skills-notify");
+        let global = dir.join("global");
+        let project = dir.join("project");
+        let home = dir.join("home");
+        let claude_skills = home.join(".claude").join("skills");
+        write(
+            &claude_skills.join("alpha").join("SKILL.md"),
+            "---\nname: Alpha\ndescription: one\n---\nbody one\n",
+        );
+        fs::create_dir_all(&global).unwrap();
+        fs::create_dir_all(&project).unwrap();
+        write(&project.join("opencode.json"), r#"{"shell": "one"}"#);
+
+        let loader = Loader::new(project, GlobalDirs { config: global, home: home.clone() });
+        let handler = Arc::new(CountingUpdates { count: std::sync::atomic::AtomicUsize::new(0) });
+        let _service =
+            WatchedConfig::start(loader, watch::NotifyBackend::new(), handler.clone(), None);
+
+        let skill = claude_skills.join("alpha").join("SKILL.md");
+        write(&skill, "---\nname: Alpha\ndescription: two\n---\nbody two — changed\n");
+        wait_until(10_000, || handler.count.load(std::sync::atomic::Ordering::SeqCst) >= 1);
         assert_eq!(handler.count.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 

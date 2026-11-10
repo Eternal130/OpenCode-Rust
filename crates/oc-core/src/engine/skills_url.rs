@@ -58,6 +58,15 @@ const RETRIES: u32 = 2;
 /// between retries, jittered to ±20 %.
 const RETRY_BASE_MS: u64 = 200;
 
+/// The URL-skill staging directory under a cache root — every hashed
+/// source slot lives under `<staging>/<sha1(base)>/<skill>/` (G-320:
+/// the hot-reload watcher watches this directory so edits inside
+/// pulled URL skill roots are observed).
+#[must_use]
+pub fn staging_root(cache_root: &Path) -> PathBuf {
+    cache_root.join("skills")
+}
+
 /// URL-source classification (v2 `config/plugin/skill.ts:90`):
 /// `URL.canParse(item) && /^(https?:)$/.test(protocol)` — only parseable
 /// http/https URLs are URL sources; anything else (`git@host:x`,
@@ -155,7 +164,7 @@ async fn pull(client: &reqwest::Client, url: &str, cache_root: &Path) -> Vec<Pat
             return Vec::new();
         }
     };
-    let source_root = cache_root.join("skills").join(sha1_hex(&base));
+    let source_root = staging_root(cache_root).join(sha1_hex(&base));
     let planned = data
         .skills
         .iter()

@@ -618,6 +618,58 @@ async fn worktree_list_serves_any_known_project() {
     assert_eq!(response.json()["_tag"], json!("ProjectNotFoundError"));
 }
 
+/// G-322 — `Worktree.list` (worktree.ts:138-141) orders
+/// `desc(time_created), asc(directory)`: newest worktree first, the
+/// directory as the tiebreaker — NOT directory-only.
+#[tokio::test]
+async fn worktree_list_orders_newest_first_with_directory_tiebreak() {
+    let server = boot().await;
+    server
+        .state
+        .engine
+        .db
+        .transaction(|tx| {
+            tx.execute(
+                "INSERT INTO project (id, worktree, vcs, time_created, time_updated, sandboxes, time_active) \
+                 VALUES ('proj_order', '/tmp/opencode/order-wt', 'git', 1, 1, '', 1)",
+                [],
+            )?;
+            // time_created deliberately inverse to alphabetical order,
+            // plus a same-timestamp pair for the tiebreak.
+            for (directory, created) in [
+                ("/tmp/opencode/b-old", 10),
+                ("/tmp/opencode/z-mid", 20),
+                ("/tmp/opencode/c-new", 30),
+                ("/tmp/opencode/a-new", 30),
+            ] {
+                tx.execute(
+                    "INSERT INTO worktree (project_id, directory, strategy, time_created) \
+                     VALUES ('proj_order', ?1, NULL, ?2)",
+                    (directory, created),
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .expect("seed");
+
+    let response = get(&server, "/api/worktree?projectID=proj_order").await;
+    assert_eq!(response.status, 200, "{}", response.text());
+    let data = response.json().as_array().expect("bare array").clone();
+    let directories: Vec<&str> =
+        data.iter().map(|row| row["directory"].as_str().expect("directory")).collect();
+    assert_eq!(
+        directories,
+        vec![
+            "/tmp/opencode/a-new", // newest (30), directory tiebreak
+            "/tmp/opencode/c-new", // newest (30), later directory
+            "/tmp/opencode/z-mid", // 20
+            "/tmp/opencode/b-old", // 10 — alphabetically first but OLDEST
+        ],
+        "newest first, directory as tiebreaker"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // G-270⑧
 // ---------------------------------------------------------------------------

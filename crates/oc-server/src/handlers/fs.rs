@@ -451,6 +451,13 @@ impl ScanExclusions {
         // with no cargo-specific skip, so a rust project's own
         // target/ artifacts stay find-visible; the extra skip made
         // this repo's files invisible to find.
+        //
+        // G-324 (adjudicated divergence) — ref has NO explicit
+        // `node_modules` skip (ripgrep.ts:193-218 relies on gitignore
+        // + hidden filtering only, and G-203 made rust honor gitignore
+        // too, so the skip is redundant wherever a gitignore exists);
+        // this port keeps it as a bounded defensive divergence for
+        // gitignore-less trees — direction = fewer results, safe.
         if name == ".git" || name == "node_modules" {
             return true;
         }

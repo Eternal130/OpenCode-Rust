@@ -74,8 +74,15 @@ impl WatchTarget {
 
 /// `ConfigWatch.plan`: directory watches for global + present project roots;
 /// parent entries watches for loose files not covered by a directory watch.
+/// G-320 — `skill_directories` (the skill loader's out-of-root source list,
+/// see [`crate::engine::skills::watch_roots`]) get RECURSIVE directory
+/// watches too, so edits to compat-root (`~/.claude/skills`,
+/// `~/.agents/skills`) or URL-staged skills drive the same debounced
+/// reload + engine-invalidation path as config-root edits; roots already
+/// covered by a config directory watch (e.g. `<project>/.opencode/skills`)
+/// add nothing.
 #[must_use]
-pub fn plan(sources: &Sources) -> Vec<WatchTarget> {
+pub fn plan(sources: &Sources, skill_directories: &[PathBuf]) -> Vec<WatchTarget> {
     let directories: Vec<PathBuf> = sources
         .global
         .iter()
@@ -97,6 +104,19 @@ pub fn plan(sources: &Sources) -> Vec<WatchTarget> {
             ignore: DIRECTORY_IGNORE.iter().map(ToString::to_string).collect(),
         })
         .collect();
+
+    // G-320 — out-of-root skill sources watch recursively (skills nest
+    // to any depth, G-216 `**/SKILL.md`); roots nested under an already
+    // watched config directory stay covered by that watch.
+    for root in skill_directories {
+        if directories.iter().any(|directory| root.starts_with(directory)) {
+            continue;
+        }
+        targets.push(WatchTarget::Directory {
+            path: root.clone(),
+            ignore: DIRECTORY_IGNORE.iter().map(ToString::to_string).collect(),
+        });
+    }
 
     // Group loose files by parent so deletion/recreation is observable.
     let mut parents: Vec<(PathBuf, Vec<String>)> = Vec::new();
@@ -479,7 +499,7 @@ mod tests {
     fn config_watch_plan_groups_missing_candidates_under_parent_entries() {
         let project = PathBuf::from("/watch-plan-project");
         let sources = sources_fixture(project.clone(), false);
-        let missing = plan(&sources);
+        let missing = plan(&sources, &[]);
         assert_eq!(
             missing,
             vec![WatchTarget::Entries {
@@ -493,7 +513,7 @@ mod tests {
                 ]
             }]
         );
-        let present = plan(&sources_fixture(project.clone(), true));
+        let present = plan(&sources_fixture(project.clone(), true), &[]);
         assert_eq!(
             present,
             vec![
@@ -512,15 +532,45 @@ mod tests {
         let mut sources = sources_fixture(project.clone(), true);
         // Explicit file inside the watched .opencode root: no extra watch.
         sources.explicit = Some(project.join(".opencode").join("custom.json"));
-        let covered = plan(&sources);
-        assert_eq!(covered, plan(&sources_fixture(project.clone(), true)));
+        let covered = plan(&sources, &[]);
+        assert_eq!(covered, plan(&sources_fixture(project.clone(), true), &[]));
         // Explicit outside: parent entries watch with its basename.
         sources.explicit = Some(PathBuf::from("/watch-plan-external/custom.json"));
-        let external = plan(&sources);
+        let external = plan(&sources, &[]);
         assert!(external.contains(&WatchTarget::Entries {
             path: PathBuf::from("/watch-plan-external"),
             names: vec!["custom.json".to_string()]
         }));
+    }
+
+    /// G-320 — out-of-root skill source directories (compat roots, URL
+    /// staging) become recursive directory watches; roots already under
+    /// a watched config directory add nothing.
+    #[test]
+    fn config_watch_plan_covers_out_of_root_skill_directories() {
+        let project = PathBuf::from("/watch-plan-project");
+        let mut sources = sources_fixture(project.clone(), true);
+        sources.claude = vec![PathBuf::from("/watch-home/.claude")];
+        sources.agents = vec![PathBuf::from("/watch-home/.agents")];
+        let compat_claude = PathBuf::from("/watch-home/.claude/skills");
+        let compat_agents = PathBuf::from("/watch-home/.agents/skills");
+        let staging = PathBuf::from("/watch-cache/opencode/skills");
+        let covered = project.join(".opencode").join("skills");
+        let targets = plan(
+            &sources,
+            &[compat_claude.clone(), compat_agents.clone(), staging.clone(), covered.clone()],
+        );
+        let ignore: Vec<String> = DIRECTORY_IGNORE.iter().map(ToString::to_string).collect();
+        for expected in [compat_claude, compat_agents, staging] {
+            assert!(targets
+                .contains(&WatchTarget::Directory { path: expected, ignore: ignore.clone() }));
+        }
+        assert!(
+            !targets.iter().any(
+                |target| matches!(target, WatchTarget::Directory { path, .. } if *path == covered)
+            ),
+            "root under the watched .opencode dir adds no watch"
+        );
     }
 
     struct CountingHandler {
