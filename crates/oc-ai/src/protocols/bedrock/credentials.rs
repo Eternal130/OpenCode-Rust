@@ -8,7 +8,8 @@
 //! `@aws-sdk/credential-providers` `fromNodeProviderChain`).
 //!
 //! Resolution order (v2 re-runs the chain on **every request** so
-//! credentials rotated on disk are always re-read):
+//! credentials rotated on disk are always re-read), mirroring
+//! `fromNodeProviderChain`:
 //!
 //! 1. **static** — credentials configured on the route (handled by the
 //!    caller, [`super::sigv4::resolve_auth`], before the chain);
@@ -17,17 +18,21 @@
 //! 3. **profile** — shared credentials/config INI files
 //!    (`AWS_SHARED_CREDENTIALS_FILE` / `AWS_CONFIG_FILE`, default
 //!    `~/.aws/...`), profile = explicit > `AWS_PROFILE` > `default`;
-//!    static keys, or the SSO leg (`sso-session`/legacy start URL + cached
-//!    access token + `federation/credentials` portal call);
-//! 4. **IMDS** — EC2 instance metadata (IMDSv2 token first, v1 fallback),
+//!    static keys, else `credential_process`, else assume-role
+//!    (`role_arn` + optional `source_profile`, single hop), else web
+//!    identity (`web_identity_token_file` / `role_arn`), else the SSO leg
+//!    (`sso-session`/legacy start URL + cached access token +
+//!    `federation/credentials` portal call);
+//! 4. **ECS container** — `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` /
+//!    `AWS_CONTAINER_CREDENTIALS_FULL_URI` credential endpoint;
+//! 5. **IMDS** — EC2 instance metadata (IMDSv2 token first, v1 fallback),
 //!    endpoint overridable via `AWS_EC2_METADATA_SERVICE_ENDPOINT`.
 //!
-//! Legs the file declares but this port does not implement
-//! (`credential_process`, assume-role/`source_profile`, web identity, ECS
-//! container credentials) fail loudly instead of silently falling through
-//! to IMDS. Network legs (SSO portal, IMDS) run over the
-//! `reqwest-transport` feature against injectable endpoints — tests point
-//! them at local mock servers (ADR-0006: no real endpoints).
+//! Bounded: assume-role `source_profile` chains deeper than one hop fail
+//! loudly (the SDK supports recursive chaining; the port resolves a source
+//! profile's static keys only). Network legs (STS, SSO portal, ECS, IMDS)
+//! run over the `reqwest-transport` feature against injectable endpoints —
+//! tests point them at local mock servers (ADR-0006: no real endpoints).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -87,6 +92,11 @@ pub struct ChainPaths {
 pub struct ChainEndpoints {
     /// SSO portal base; default `https://portal.sso.{region}.amazonaws.com`.
     pub sso_portal: Option<String>,
+    /// STS base; default `https://sts.{region}.amazonaws.com`.
+    pub sts: Option<String>,
+    /// ECS container credential base; default `http://169.254.170.2`
+    /// (relative-URI form).
+    pub ecs: Option<String>,
     /// IMDS base; default `AWS_EC2_METADATA_SERVICE_ENDPOINT` or
     /// `http://169.254.169.254`.
     pub imds: Option<String>,
@@ -140,6 +150,26 @@ pub async fn resolve_default_chain(options: &DefaultChainOptions) -> Result<Cred
         message: "AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY are not set".to_string(),
     });
 
+    // env-var web identity runs before the profile file in the standard
+    // chain (`AWS_WEB_IDENTITY_TOKEN_FILE` + `AWS_ROLE_ARN`); a failure
+    // falls through to the remaining legs like every other provider
+    if let (Some(token_file), Some(role_arn)) = (
+        options.env.non_empty("AWS_WEB_IDENTITY_TOKEN_FILE"),
+        options.env.non_empty("AWS_ROLE_ARN"),
+    ) {
+        match web_identity_leg(
+            options,
+            Some(&token_file),
+            Some(&role_arn),
+            options.env.non_empty("AWS_ROLE_SESSION_NAME").as_deref(),
+        )
+        .await
+        {
+            Ok(credentials) => return Ok(credentials),
+            Err(message) => failures.push(LegError { leg: "web-identity", message }),
+        }
+    }
+
     match profile_leg(options).await {
         Ok(Some(credentials)) => return Ok(credentials),
         Ok(None) => failures.push(LegError {
@@ -150,6 +180,16 @@ pub async fn resolve_default_chain(options: &DefaultChainOptions) -> Result<Cred
             ),
         }),
         Err(error) => failures.push(LegError { leg: "profile", message: error }),
+    }
+
+    match ecs_leg(options).await {
+        Ok(Some(credentials)) => return Ok(credentials),
+        Ok(None) => failures.push(LegError {
+            leg: "ecs",
+            message: "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI/AWS_CONTAINER_CREDENTIALS_FULL_URI are not set"
+                .to_string(),
+        }),
+        Err(error) => failures.push(LegError { leg: "ecs", message: error }),
     }
 
     match imds_leg(options).await {
@@ -222,22 +262,288 @@ async fn profile_leg(options: &DefaultChainOptions) -> Result<Option<Credentials
             session_token: merged.get("aws_session_token").cloned(),
         }));
     }
-    // legs we do not implement must not silently fall through to IMDS
-    if merged.contains_key("credential_process") {
-        return Err(format!("profile `{profile}` uses credential_process, which is not supported"));
+    // credential_process: a shell command whose stdout is JSON credentials
+    if let Some(command) = merged.get("credential_process").cloned() {
+        return credential_process_leg(options, &command).await.map(Some);
     }
-    if merged.contains_key("source_profile") || merged.contains_key("role_arn") {
-        return Err(format!(
-            "profile `{profile}` uses assume-role credentials, which are not supported"
-        ));
-    }
+    // web identity (profile form; the env-var form is the same leg)
     if merged.contains_key("web_identity_token_file") {
-        return Err(format!(
-            "profile `{profile}` uses web identity credentials, which are not supported"
-        ));
+        return web_identity_leg(
+            options,
+            merged.get("web_identity_token_file").map(String::as_str),
+            merged.get("role_arn").map(String::as_str),
+            merged.get("role_session_name").map(String::as_str),
+        )
+        .await
+        .map(Some);
+    }
+    // assume-role (single hop; deeper source-profile chains are bounded)
+    if merged.contains_key("role_arn") {
+        return assume_role_leg(options, &merged, &profile).await.map(Some);
     }
     // SSO leg
     sso_leg(options, &merged, &profile).await.map(Some)
+}
+
+/// The `credential_process` leg: a shell command whose stdout is a JSON
+/// credential document (`AccessKeyId` / `SecretAccessKey` / optional
+/// `SessionToken`), the AWS CLI external-process contract.
+async fn credential_process_leg(
+    options: &DefaultChainOptions,
+    command: &str,
+) -> Result<Credentials, String> {
+    let output = if cfg!(windows) {
+        std::process::Command::new("cmd").args(["/C", command]).output()
+    } else {
+        std::process::Command::new("sh").args(["-c", command]).output()
+    }
+    .map_err(|error| format!("credential_process failed to run `{command}`: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "credential_process `{command}` exited with status {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let json: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("credential_process `{command}` printed invalid JSON: {error}"))?;
+    let access_key_id = json
+        .get("AccessKeyId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "credential_process output has no AccessKeyId".to_string())?
+        .to_string();
+    let secret_access_key = json
+        .get("SecretAccessKey")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "credential_process output has no SecretAccessKey".to_string())?
+        .to_string();
+    let session_token = json.get("SessionToken").and_then(Value::as_str).map(str::to_string);
+    Ok(Credentials {
+        region: options.region.clone(),
+        access_key_id,
+        secret_access_key,
+        session_token,
+    })
+}
+
+/// The assume-role leg (single hop): `role_arn` exchanged at STS
+/// `AssumeRole` with credentials from static keys in the same profile,
+/// `source_profile` static keys, or the env. Deeper `source_profile`
+/// chains (a source profile that itself assumes a role) are a bounded
+/// failure, not a silent fall-through.
+async fn assume_role_leg(
+    options: &DefaultChainOptions,
+    profile: &BTreeMap<String, String>,
+    profile_name: &str,
+) -> Result<Credentials, String> {
+    let role_arn = profile.get("role_arn").ok_or_else(|| {
+        format!("profile `{profile_name}` assume-role leg has no role_arn")
+    })?;
+    // source credentials: this profile's static keys, the source
+    // profile's static keys, or the env — in that order
+    let source_from_keys = |keys: &BTreeMap<String, String>| {
+        Some(Credentials {
+            region: options.region.clone(),
+            access_key_id: keys.get("aws_access_key_id")?.clone(),
+            secret_access_key: keys.get("aws_secret_access_key")?.clone(),
+            session_token: keys.get("aws_session_token").cloned(),
+        })
+    };
+    let source = source_from_keys(profile).or_else(|| {
+        let source_name = profile.get("source_profile")?;
+        if source_name == profile_name {
+            return None;
+        }
+        let credentials_ini = read_ini(&credentials_path(options, "AWS_SHARED_CREDENTIALS_FILE"));
+        let config_ini = read_ini(&config_path(options));
+        let mut merged: BTreeMap<String, String> = BTreeMap::new();
+        if let Some(sections) = config_ini.sections.get(&format!("profile {source_name}")) {
+            merged.extend(sections.clone());
+        }
+        if let Some(sections) = credentials_ini.sections.get(source_name) {
+            merged.extend(sections.clone());
+        }
+        if merged.contains_key("role_arn") {
+            // multi-hop: the source profile itself assumes a role
+            return None;
+        }
+        source_from_keys(&merged)
+    });
+    let Some(source) = source else {
+        return Err(format!(
+            "profile `{profile_name}` assume-role source could not be resolved (multi-hop source_profile chains are not supported)"
+        ));
+    };
+    let session_name = profile
+        .get("role_session_name")
+        .cloned()
+        .unwrap_or_else(|| "opencode".to_string());
+    let mut form = vec![
+        ("Action", "AssumeRole".to_string()),
+        ("Version", "2011-06-15".to_string()),
+        ("RoleArn", role_arn.clone()),
+        ("RoleSessionName", session_name),
+    ];
+    if let Some(external_id) = profile.get("external_id") {
+        form.push(("ExternalId", external_id.clone()));
+    }
+    let xml = sts_call(options, &source, &form).await?;
+    credentials_from_sts_xml(options, &xml)
+        .ok_or_else(|| "STS AssumeRole response has no credentials".to_string())
+}
+
+/// The web-identity leg: a token file plus `role_arn` exchanged at STS
+/// `AssumeRoleWithWebIdentity` (unsigned — the token authenticates).
+async fn web_identity_leg(
+    options: &DefaultChainOptions,
+    token_file: Option<&str>,
+    role_arn: Option<&str>,
+    session_name: Option<&str>,
+) -> Result<Credentials, String> {
+    let token_file = token_file
+        .map(str::to_string)
+        .or_else(|| options.env.non_empty("AWS_WEB_IDENTITY_TOKEN_FILE"))
+        .ok_or_else(|| "web identity leg has no token file".to_string())?;
+    let role_arn = role_arn
+        .map(str::to_string)
+        .or_else(|| options.env.non_empty("AWS_ROLE_ARN"))
+        .ok_or_else(|| "web identity leg has no role_arn".to_string())?;
+    let token = std::fs::read_to_string(&token_file)
+        .map_err(|error| format!("web identity token file {token_file} unreadable: {error}"))?
+        .trim()
+        .to_string();
+    let session_name = session_name
+        .map(str::to_string)
+        .or_else(|| options.env.non_empty("AWS_ROLE_SESSION_NAME"))
+        .unwrap_or_else(|| "opencode".to_string());
+    let base = options
+        .endpoints
+        .sts
+        .clone()
+        .unwrap_or_else(|| format!("https://sts.{}.amazonaws.com", options.region));
+    let form = [
+        ("Action", "AssumeRoleWithWebIdentity".to_string()),
+        ("Version", "2011-06-15".to_string()),
+        ("RoleArn", role_arn),
+        ("RoleSessionName", session_name),
+        ("WebIdentityToken", token),
+    ];
+    let body: Vec<(String, String)> =
+        form.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let xml = http_post_form(&base, &body, &[]).await?;
+    credentials_from_sts_xml(options, &xml)
+        .ok_or_else(|| "STS AssumeRoleWithWebIdentity response has no credentials".to_string())
+}
+
+/// The ECS container leg: `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`
+/// (against `http://169.254.170.2`) or `AWS_CONTAINER_CREDENTIALS_FULL_URI`
+/// (direct, `AWS_CONTAINER_AUTHORIZATION_TOKEN` bearer). `Ok(None)` when
+/// neither env var is set.
+async fn ecs_leg(options: &DefaultChainOptions) -> Result<Option<Credentials>, String> {
+    let url = if let Some(relative) = options.env.non_empty("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
+    {
+        let base = options
+            .endpoints
+            .ecs
+            .clone()
+            .unwrap_or_else(|| "http://169.254.170.2".to_string());
+        format!("{base}{relative}")
+    } else if let Some(full) = options.env.non_empty("AWS_CONTAINER_CREDENTIALS_FULL_URI") {
+        full
+    } else {
+        return Ok(None);
+    };
+    let headers: Vec<(String, String)> = options
+        .env
+        .non_empty("AWS_CONTAINER_AUTHORIZATION_TOKEN")
+        .map(|token| ("Authorization".to_string(), token))
+        .into_iter()
+        .collect();
+    let text = http_post_form(&url, &[], &headers)
+        .await
+        .map_err(|error| format!("ECS container credentials failed: {error}"))?;
+    let json: Value = serde_json::from_str(&text)
+        .map_err(|error| format!("ECS container credentials response is not JSON: {error}"))?;
+    let access_key_id = json
+        .get("AccessKeyId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "ECS credentials have no AccessKeyId".to_string())?
+        .to_string();
+    let secret_access_key = json
+        .get("SecretAccessKey")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "ECS credentials have no SecretAccessKey".to_string())?
+        .to_string();
+    let session_token = json.get("Token").and_then(Value::as_str).map(str::to_string);
+    Ok(Some(Credentials {
+        region: options.region.clone(),
+        access_key_id,
+        secret_access_key,
+        session_token,
+    }))
+}
+
+/// POST one SigV4-signed STS form call and return the raw XML body.
+async fn sts_call(
+    options: &DefaultChainOptions,
+    source: &Credentials,
+    form: &[(&str, String)],
+) -> Result<String, String> {
+    let base = options
+        .endpoints
+        .sts
+        .clone()
+        .unwrap_or_else(|| format!("https://sts.{}.amazonaws.com", options.region));
+    let body: Vec<(String, String)> =
+        form.iter().map(|(k, v)| ((*k).to_string(), v.clone())).collect();
+    let instant = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default();
+    let input = crate::route::auth::AuthInput {
+        request_http: None,
+        method: "POST",
+        url: base.as_str(),
+        body: &encode_form(&body),
+        headers: crate::route::auth::Headers::from_pairs([(
+            "content-type".to_string(),
+            "application/x-www-form-urlencoded".to_string(),
+        )]),
+    };
+    let signed = super::sigv4::sign(&input, source, "sts", instant)
+        .map_err(|error| format!("STS signing failed: {error}"))?;
+    let headers: Vec<(String, String)> = signed
+        .headers
+        .iter()
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    let xml = http_post_form(&base, &body, &headers).await?;
+    if let Some(error) = xml_error_message(&xml) {
+        return Err(format!("STS call failed: {error}"));
+    }
+    Ok(xml)
+}
+
+/// Minimal extraction of `<Tag>value</Tag>` (STS responses are flat XML).
+fn xml_text(xml: &str, tag: &str) -> Option<String> {
+    let start = xml.find(&format!("<{tag}>"))? + tag.len() + 2;
+    let end = xml[start..].find(&format!("</{tag}>"))? + start;
+    Some(xml[start..end].to_string())
+}
+
+/// An STS error document (`<Error><Message>…</Message></Error>`).
+fn xml_error_message(xml: &str) -> Option<String> {
+    xml_text(xml, "Message").filter(|_| xml.contains("<Error>"))
+}
+
+/// Credentials from an STS `AssumeRole*` response document.
+fn credentials_from_sts_xml(options: &DefaultChainOptions, xml: &str) -> Option<Credentials> {
+    Some(Credentials {
+        region: options.region.clone(),
+        access_key_id: xml_text(xml, "AccessKeyId")?,
+        secret_access_key: xml_text(xml, "SecretAccessKey")?,
+        session_token: xml_text(xml, "SessionToken"),
+    })
 }
 
 /// The SSO leg: `sso-session NAME` (config `[sso-session NAME]`) or legacy
@@ -438,6 +744,62 @@ async fn http_get_json(url: &str, headers: &[(&str, &str)]) -> Result<Value, Str
 #[cfg(not(feature = "reqwest-transport"))]
 async fn http_get_json(_url: &str, _headers: &[(&str, &str)]) -> Result<Value, String> {
     Err("SSO/IMDS legs require the reqwest-transport feature".to_string())
+}
+
+/// URL-encode one form value (application/x-www-form-urlencoded:
+/// everything but unreserved characters escapes, space as `%20`).
+fn form_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(char::from(*byte));
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
+fn encode_form(pairs: &[(String, String)]) -> String {
+    pairs
+        .iter()
+        .map(|(key, value)| format!("{}={}", form_encode(key), form_encode(value)))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+/// POST a form-encoded body and return the response text (STS, ECS).
+#[cfg(feature = "reqwest-transport")]
+async fn http_post_form(
+    url: &str,
+    form: &[(String, String)],
+    headers: &[(String, String)],
+) -> Result<String, String> {
+    let mut request = oc_http::client()
+        .post(url)
+        .timeout(LEG_TIMEOUT)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(encode_form(form));
+    for (name, value) in headers {
+        request = request.header(name.as_str(), value.as_str());
+    }
+    let response = request.send().await.map_err(|error| error.to_string())?;
+    let status = response.status().as_u16();
+    let text = response.text().await.map_err(|error| error.to_string())?;
+    if !(200..300).contains(&status) {
+        return Err(format!("HTTP {status}: {}", text.chars().take(200).collect::<String>()));
+    }
+    Ok(text)
+}
+
+#[cfg(not(feature = "reqwest-transport"))]
+async fn http_post_form(
+    _url: &str,
+    _form: &[(String, String)],
+    _headers: &[(String, String)],
+) -> Result<String, String> {
+    Err("STS/ECS legs require the reqwest-transport feature".to_string())
 }
 
 // ---------------------------------------------------------------------------

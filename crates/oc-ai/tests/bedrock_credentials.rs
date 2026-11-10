@@ -176,7 +176,7 @@ async fn profile_chain() {
             config_file: Some(config_file.clone()),
             aws_dir: None,
         },
-        endpoints: ChainEndpoints { sso_portal: None, imds: Some(dead_imds()) },
+        endpoints: ChainEndpoints { imds: Some(dead_imds()), ..Default::default() },
     };
 
     // explicit profile → its static keys
@@ -225,7 +225,7 @@ async fn profile_beats_imds() {
             config_file: None,
             aws_dir: None,
         },
-        endpoints: ChainEndpoints { sso_portal: None, imds: Some(imds_base(&imds)) },
+        endpoints: ChainEndpoints { imds: Some(imds_base(&imds)), ..Default::default() },
     };
     let credentials = resolve_default_chain(&options).await.expect("profile wins");
     assert_eq!(credentials.access_key_id, "PROFILE_AKID");
@@ -284,6 +284,7 @@ async fn sso_chain_uses_cached_token_and_portal() {
         endpoints: ChainEndpoints {
             sso_portal: Some(format!("http://127.0.0.1:{}", portal.port)),
             imds: Some(dead_imds()),
+            ..Default::default()
         },
     };
     let credentials = resolve_default_chain(&options).await.expect("SSO credentials");
@@ -326,7 +327,7 @@ async fn imds_chain_imdsv2_token_then_role() {
         profile: None,
         env: empty_env(),
         paths: ChainPaths::default(),
-        endpoints: ChainEndpoints { sso_portal: None, imds: Some(imds_base(&imds)) },
+        endpoints: ChainEndpoints { imds: Some(imds_base(&imds)), ..Default::default() },
     };
     let credentials = resolve_default_chain(&options).await.expect("IMDS credentials");
     assert_eq!(credentials.access_key_id, "IMDS_AKID");
@@ -392,7 +393,7 @@ async fn imds_falls_back_to_v1_on_404() {
         profile: None,
         env: empty_env(),
         paths: ChainPaths::default(),
-        endpoints: ChainEndpoints { sso_portal: None, imds: Some(imds_base(&imds)) },
+        endpoints: ChainEndpoints { imds: Some(imds_base(&imds)), ..Default::default() },
     };
     let credentials = resolve_default_chain(&options).await.expect("v1 credentials");
     assert_eq!(credentials.access_key_id, "V1_AKID");
@@ -419,7 +420,7 @@ async fn unsupported_profile_legs_surface_in_chain_failure() {
         profile: Some("corp".into()),
         env: empty_env(),
         paths: ChainPaths { credentials_file: None, config_file: Some(config_file), aws_dir: None },
-        endpoints: ChainEndpoints { sso_portal: None, imds: Some(dead_imds()) },
+        endpoints: ChainEndpoints { imds: Some(dead_imds()), ..Default::default() },
     };
     let error = resolve_default_chain(&options).await.unwrap_err();
     match &error.reason {
@@ -460,8 +461,8 @@ async fn chain_exhaustion_message() {
             aws_dir: Some(sandbox.dir.join("missing-aws")),
         },
         endpoints: ChainEndpoints {
-            sso_portal: None,
             imds: Some(format!("http://127.0.0.1:{dead_port}")),
+            ..Default::default()
         },
     };
     let error = resolve_default_chain(&options).await.unwrap_err();
@@ -508,6 +509,286 @@ fn static_credentials_sign_without_chain() {
         .expect("static signing");
     let authorization = headers.get("authorization").expect("authorization");
     assert!(authorization.contains("Credential=STATIC_AKID/"), "{authorization}");
+}
+
+/// `credential_process` leg: the profile's shell command prints JSON
+/// credentials (hermetic: the fixture command is `cat` over a file in the
+/// sandbox).
+#[tokio::test]
+async fn credential_process_chain() {
+    let sandbox = Sandbox::new("credproc");
+    let credentials_json =
+        sandbox.write("creds.json", "{\"AccessKeyId\":\"PROC_AKID\",\"SecretAccessKey\":\"PROC_SECRET\",\"SessionToken\":\"PROC_TOKEN\"}");
+    let config_file = sandbox.write(
+        "config",
+        &format!("[profile corp]\ncredential_process = cat {creds}\n", creds = credentials_json.display()),
+    );
+    let options = DefaultChainOptions {
+        region: "us-east-1".into(),
+        profile: Some("corp".into()),
+        env: empty_env(),
+        paths: ChainPaths { credentials_file: None, config_file: Some(config_file), aws_dir: None },
+        endpoints: ChainEndpoints::default(),
+    };
+    let credentials = resolve_default_chain(&options).await.expect("credential_process credentials");
+    assert_eq!(credentials.access_key_id, "PROC_AKID");
+    assert_eq!(credentials.secret_access_key, "PROC_SECRET");
+    assert_eq!(credentials.session_token.as_deref(), Some("PROC_TOKEN"));
+}
+
+/// A failing `credential_process` surfaces by name in the aggregate chain
+/// failure instead of silently falling through.
+#[tokio::test]
+async fn credential_process_failure_surfaces() {
+    let sandbox = Sandbox::new("credproc-fail");
+    let config_file = sandbox.write(
+        "config",
+        "[profile corp]\ncredential_process = /nonexistent/fetch-creds.sh\n",
+    );
+    let options = DefaultChainOptions {
+        region: "us-east-1".into(),
+        profile: Some("corp".into()),
+        env: empty_env(),
+        paths: ChainPaths { credentials_file: None, config_file: Some(config_file), aws_dir: None },
+        endpoints: ChainEndpoints::default(),
+    };
+    let error = resolve_default_chain(&options).await.unwrap_err();
+    match &error.reason {
+        AiErrorReason::Authentication { fields } => {
+            assert!(fields.message.contains("credential_process"), "{}", fields.message);
+        }
+        reason => panic!("expected Authentication, got {reason:?}"),
+    }
+}
+
+/// Assume-role leg (single hop): `role_arn` + a `source_profile`'s static
+/// keys → SigV4-signed STS `AssumeRole` (form body asserted against the
+/// local mock). Static keys in the SAME profile win before assume-role
+/// (the SDK's `isStaticCredsProfile`), so the source must be a separate
+/// profile.
+#[tokio::test]
+async fn assume_role_chain_signs_sts_call() {
+    let sandbox = Sandbox::new("assume");
+    let config_file = sandbox.write(
+        "config",
+        "[profile corp]\nrole_arn = arn:aws:iam::123456789012:role/app\nsource_profile = base\nrole_session_name = sess\n[profile base]\naws_access_key_id = SRC_AKID\naws_secret_access_key = SRC_SECRET\n",
+    );
+    let sts = http_mock(std::sync::Arc::new(|request: &RecordedRequest| {
+        if request.method == "POST" && request.path == "/" {
+            Some((
+                200,
+                "<AssumeRoleResponse><AssumeRoleResult><Credentials><AccessKeyId>ROLE_AKID</AccessKeyId><SecretAccessKey>ROLE_SECRET</SecretAccessKey><SessionToken>ROLE_TOKEN</SessionToken></Credentials></AssumeRoleResult></AssumeRoleResponse>".into(),
+            ))
+        } else {
+            None
+        }
+    }))
+    .await;
+    let options = DefaultChainOptions {
+        region: "us-east-1".into(),
+        profile: Some("corp".into()),
+        env: empty_env(),
+        paths: ChainPaths { credentials_file: None, config_file: Some(config_file), aws_dir: None },
+        endpoints: ChainEndpoints {
+            sts: Some(format!("http://127.0.0.1:{}", sts.port)),
+            ..Default::default()
+        },
+    };
+    let credentials = resolve_default_chain(&options).await.expect("assume-role credentials");
+    assert_eq!(credentials.access_key_id, "ROLE_AKID");
+    assert_eq!(credentials.session_token.as_deref(), Some("ROLE_TOKEN"));
+
+    let requests = sts.requests();
+    assert_eq!(requests.len(), 1, "one STS call");
+    assert!(requests[0].body.contains("Action=AssumeRole"), "body: {}", requests[0].body);
+    assert!(requests[0].body.contains("Version=2011-06-15"), "body: {}", requests[0].body);
+    assert!(
+        requests[0]
+            .body
+            .contains("RoleArn=arn%3Aaws%3Aiam%3A%3A123456789012%3Arole%2Fapp"),
+        "role arn form-encoded: {}",
+        requests[0].body
+    );
+    assert!(
+        requests[0].headers.iter().any(|(name, value)| name == "authorization"
+            && value.contains("Credential=SRC_AKID/")),
+        "STS call is SigV4-signed with the source credentials"
+    );
+}
+
+/// Assume-role via `source_profile`: the source profile's static keys sign
+/// the exchange.
+#[tokio::test]
+async fn assume_role_source_profile_single_hop() {
+    let sandbox = Sandbox::new("assume-src");
+    let config_file = sandbox.write(
+        "config",
+        "[profile corp]\nrole_arn = arn:aws:iam::123456789012:role/app\nsource_profile = base\n[profile base]\naws_access_key_id = BASE_AKID\naws_secret_access_key = BASE_SECRET\n",
+    );
+    let sts = http_mock(std::sync::Arc::new(|_request: &RecordedRequest| {
+        Some((
+            200,
+            "<AssumeRoleResponse><AssumeRoleResult><Credentials><AccessKeyId>HOP_AKID</AccessKeyId><SecretAccessKey>HOP_SECRET</SecretAccessKey></Credentials></AssumeRoleResult></AssumeRoleResponse>".into(),
+        ))
+    }))
+    .await;
+    let options = DefaultChainOptions {
+        region: "us-east-1".into(),
+        profile: Some("corp".into()),
+        env: empty_env(),
+        paths: ChainPaths { credentials_file: None, config_file: Some(config_file), aws_dir: None },
+        endpoints: ChainEndpoints {
+            sts: Some(format!("http://127.0.0.1:{}", sts.port)),
+            ..Default::default()
+        },
+    };
+    let credentials =
+        resolve_default_chain(&options).await.expect("source-profile assume-role credentials");
+    assert_eq!(credentials.access_key_id, "HOP_AKID");
+    assert!(sts.requests()[0]
+        .headers
+        .iter()
+        .any(|(name, value)| name == "authorization" && value.contains("Credential=BASE_AKID/")));
+}
+
+/// Multi-hop assume-role (`source_profile` chain) is the bounded failure.
+#[tokio::test]
+async fn assume_role_multi_hop_is_bounded() {
+    let sandbox = Sandbox::new("assume-multi");
+    let config_file = sandbox.write(
+        "config",
+        "[profile corp]\nrole_arn = arn:aws:iam::1:role/a\nsource_profile = mid\n[profile mid]\nrole_arn = arn:aws:iam::1:role/b\nsource_profile = base\n[profile base]\naws_access_key_id = BASE_AKID\naws_secret_access_key = BASE_SECRET\n",
+    );
+    let options = DefaultChainOptions {
+        region: "us-east-1".into(),
+        profile: Some("corp".into()),
+        env: empty_env(),
+        paths: ChainPaths { credentials_file: None, config_file: Some(config_file), aws_dir: None },
+        endpoints: ChainEndpoints::default(),
+    };
+    let error = resolve_default_chain(&options).await.unwrap_err();
+    match &error.reason {
+        AiErrorReason::Authentication { fields } => {
+            assert!(
+                fields.message.contains("multi-hop") || fields.message.contains("source_profile"),
+                "bounded multi-hop failure named: {}",
+                fields.message
+            );
+        }
+        reason => panic!("expected Authentication, got {reason:?}"),
+    }
+}
+
+/// Web-identity leg: token file + role → unsigned STS
+/// `AssumeRoleWithWebIdentity`.
+#[tokio::test]
+async fn web_identity_chain_posts_token() {
+    let sandbox = Sandbox::new("webid");
+    let token_file = sandbox.write("token.jwt", "header.payload.signature");
+    let sts = http_mock(std::sync::Arc::new(|request: &RecordedRequest| {
+        if request.body.contains("Action=AssumeRoleWithWebIdentity") {
+            Some((
+                200,
+                "<AssumeRoleWithWebIdentityResponse><AssumeRoleWithWebIdentityResult><Credentials><AccessKeyId>WEB_AKID</AccessKeyId><SecretAccessKey>WEB_SECRET</SecretAccessKey><SessionToken>WEB_TOKEN</SessionToken></Credentials></AssumeRoleWithWebIdentityResult></AssumeRoleWithWebIdentityResponse>".into(),
+            ))
+        } else {
+            None
+        }
+    }))
+    .await;
+    let config_file = sandbox.write(
+        "config",
+        &format!(
+            "[profile corp]\nweb_identity_token_file = {}\nrole_arn = arn:aws:iam::1:role/w\n",
+            token_file.display()
+        ),
+    );
+    let options = DefaultChainOptions {
+        region: "us-east-1".into(),
+        profile: Some("corp".into()),
+        env: empty_env(),
+        paths: ChainPaths { credentials_file: None, config_file: Some(config_file), aws_dir: None },
+        endpoints: ChainEndpoints {
+            sts: Some(format!("http://127.0.0.1:{}", sts.port)),
+            ..Default::default()
+        },
+    };
+    let credentials = resolve_default_chain(&options).await.expect("web identity credentials");
+    assert_eq!(credentials.access_key_id, "WEB_AKID");
+    let requests = sts.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests[0].body.contains("WebIdentityToken=header.payload.signature"),
+        "body: {}",
+        requests[0].body
+    );
+    assert!(
+        !requests[0].headers.iter().any(|(name, _)| name == "authorization"),
+        "the web-identity exchange is unsigned"
+    );
+}
+
+/// ECS container leg: `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` against the
+/// injectable credential endpoint.
+#[tokio::test]
+async fn ecs_container_credentials_chain() {
+    let ecs = http_mock(std::sync::Arc::new(|request: &RecordedRequest| {
+        if request.path.starts_with("/v2/creds") {
+            Some((
+                200,
+                "{\"AccessKeyId\":\"ECS_AKID\",\"SecretAccessKey\":\"ECS_SECRET\",\"Token\":\"ECS_TOKEN\"}".into(),
+            ))
+        } else {
+            None
+        }
+    }))
+    .await;
+    let options = DefaultChainOptions {
+        region: "us-east-1".into(),
+        profile: None,
+        env: env_map(&[("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/creds/uuid-1")]),
+        paths: ChainPaths::default(),
+        endpoints: ChainEndpoints {
+            ecs: Some(format!("http://127.0.0.1:{}", ecs.port)),
+            ..Default::default()
+        },
+    };
+    let credentials = resolve_default_chain(&options).await.expect("ECS credentials");
+    assert_eq!(credentials.access_key_id, "ECS_AKID");
+    assert_eq!(credentials.session_token.as_deref(), Some("ECS_TOKEN"));
+    let requests = ecs.requests();
+    assert_eq!(requests[0].path, "/v2/creds/uuid-1");
+}
+
+/// ECS container credentials via `AWS_CONTAINER_CREDENTIALS_FULL_URI` with
+/// the authorization token header.
+#[tokio::test]
+async fn ecs_full_uri_chain_sends_auth_token() {
+    let ecs = http_mock(std::sync::Arc::new(|request: &RecordedRequest| {
+        if request.path.starts_with("/credentials") {
+            Some((200, "{\"AccessKeyId\":\"FULL_AKID\",\"SecretAccessKey\":\"FULL_SECRET\"}".into()))
+        } else {
+            None
+        }
+    }))
+    .await;
+    let full_uri = format!("http://127.0.0.1:{}/credentials/x", ecs.port);
+    let options = DefaultChainOptions {
+        region: "us-east-1".into(),
+        profile: None,
+        env: env_map(&[
+            ("AWS_CONTAINER_CREDENTIALS_FULL_URI", full_uri.as_str()),
+            ("AWS_CONTAINER_AUTHORIZATION_TOKEN", "secret-token"),
+        ]),
+        paths: ChainPaths::default(),
+        endpoints: ChainEndpoints::default(),
+    };
+    let credentials = resolve_default_chain(&options).await.expect("ECS full-URI credentials");
+    assert_eq!(credentials.access_key_id, "FULL_AKID");
+    assert!(ecs.requests()[0]
+        .headers
+        .iter()
+        .any(|(name, value)| name == "authorization" && value == "secret-token"));
 }
 
 // ---------------------------------------------------------------------------
