@@ -159,12 +159,14 @@ impl MantleMessagesConfig {
 /// `configuredRoute`): `baseURL ??
 /// https://bedrock-mantle.{region}.api.aws/anthropic/v1` with the
 /// `/messages` path, bearer/`SigV4` auth for the `bedrock-mantle`
-/// service, and the static `anthropic-version` header.
-#[must_use]
+/// service, and the static `anthropic-version` header. G-319 — the TS
+/// `configure` guards run here (fail-fast instead of a silent SigV4
+/// fallback with confusing AWS-credential errors).
 pub fn bedrock_mantle_messages_route(
     transport: SharedTransport,
     config: MantleMessagesConfig,
-) -> Route {
+) -> Result<Route, AiError> {
+    validate_config(config.api_key.as_deref(), config.mode)?;
     let region = resolve_region(
         config
             .region
@@ -176,7 +178,7 @@ pub fn bedrock_mantle_messages_route(
         .base_url
         .clone()
         .unwrap_or_else(|| format!("https://bedrock-mantle.{region}.api.aws/{ANTHROPIC_ROOT}"));
-    Route::new(RouteInput {
+    Ok(Route::new(RouteInput {
         id: ADAPTER.to_string(),
         provider: Some(PROVIDER.to_string()),
         provider_metadata_key: Some("mantle".to_string()),
@@ -190,7 +192,7 @@ pub fn bedrock_mantle_messages_route(
         })),
         transport: Arc::new(MantleMessagesTransport { inner: transport }),
         defaults: RouteDefaults::default(),
-    })
+    }))
 }
 
 /// Provider-configuration validation for the mantle package (TS

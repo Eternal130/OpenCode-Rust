@@ -778,7 +778,11 @@ fn build_route(
             );
             let base = base_url
                 .unwrap_or_else(|| format!("https://bedrock-mantle.{region}.api.aws/anthropic/v1"));
-            Ok(bedrock_lane::bedrock_mantle_messages_route(
+            // G-319 — the TS `configure` guards run at route construction:
+            // a misconfigured mantle setup fails fast with the typed
+            // ProviderConfigurationError instead of silently falling back
+            // to SigV4 (amazon-bedrock-mantle.ts:110-118).
+            let route = bedrock_lane::bedrock_mantle_messages_route(
                 transport,
                 MantleMessagesConfig {
                     api_key: connection.api_key.clone(),
@@ -786,7 +790,11 @@ fn build_route(
                     ..Default::default()
                 },
             )
-            .with(RoutePatch {
+            .map_err(|error| ProviderError::Configuration {
+                provider: provider_id.to_string(),
+                message: error.message().to_string(),
+            })?;
+            Ok(route.with(RoutePatch {
                 provider: Some(provider_id.to_string()),
                 auth: Some(auth),
                 ..Default::default()

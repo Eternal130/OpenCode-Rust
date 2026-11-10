@@ -12,6 +12,7 @@ use std::sync::Arc;
 use oc_ai::protocols::bedrock::mantle_messages::{
     bedrock_mantle_messages_route, MantleMessagesConfig,
 };
+use oc_ai::protocols::bedrock::BedrockAuthMode;
 use oc_ai::route::client::Route;
 use oc_ai::route::SharedTransport;
 use oc_ai::schema::{
@@ -69,7 +70,8 @@ fn fixture_route(name: &str) -> (Route, Arc<MockTransport>) {
             region: Some("us-east-1".into()),
             ..Default::default()
         },
-    );
+    )
+    .expect("route builds");
     (route, mock)
 }
 
@@ -376,7 +378,8 @@ fn route_points_at_the_mantle_anthropic_root_with_bearer_auth() {
             region: Some("us-west-1".into()),
             ..Default::default()
         },
-    );
+    )
+    .expect("route builds");
     assert_eq!(route.id, "bedrock-mantle-messages");
     assert_eq!(route.protocol.id(), "anthropic-messages");
     assert_eq!(route.provider_metadata_key.as_deref(), Some("mantle"));
@@ -417,7 +420,8 @@ fn sigv4_signing_targets_the_bedrock_mantle_service() {
             }),
             ..Default::default()
         },
-    );
+    )
+    .expect("route builds");
     let mut request =
         LLMRequest::new(route.model("anthropic.claude-opus-4-8", None).expect("model binds"));
     request.messages = vec![Message::user("Hi")];
@@ -432,11 +436,60 @@ fn sigv4_signing_targets_the_bedrock_mantle_service() {
 #[test]
 fn effort_updates_require_claude_5_1_on_mantle() {
     let transport: SharedTransport = Arc::new(MockTransport::from_interactions(vec![]));
-    let route = bedrock_mantle_messages_route(transport, MantleMessagesConfig::default());
+    let route =
+        bedrock_mantle_messages_route(transport, MantleMessagesConfig::default()).expect("route builds");
     let opus_5_0 = LLMRequest::new(route.model("anthropic.claude-opus-5", None).unwrap());
     assert!(!route.protocol.supports_effort_updates(&opus_5_0), "opus 5.0 unsupported");
     let opus_5_1 = LLMRequest::new(route.model("anthropic.claude-opus-5-1", None).unwrap());
     assert!(route.protocol.supports_effort_updates(&opus_5_1), "opus 5.1 supported");
     let opus_4_8 = LLMRequest::new(route.model("anthropic.claude-opus-4-8", None).unwrap());
     assert!(!route.protocol.supports_effort_updates(&opus_4_8), "opus 4.8 unsupported");
+}
+
+// ===========================================================================
+// G-319 — the `configure` guards run at route construction (fail-fast
+// ProviderConfigurationError instead of a silent SigV4 fallback).
+// ===========================================================================
+
+fn bare_transport() -> SharedTransport {
+    Arc::new(MockTransport::from_interactions(vec![])) as SharedTransport
+}
+
+#[test]
+fn bearer_mode_without_an_api_key_fails_route_construction() {
+    std::env::remove_var("AWS_BEARER_TOKEN_BEDROCK");
+    let error = bedrock_mantle_messages_route(
+        bare_transport(),
+        MantleMessagesConfig { mode: Some(BedrockAuthMode::Bearer), ..Default::default() },
+    )
+    .expect_err("bearer without apiKey must fail fast");
+    let message = format!("{error:?}");
+    assert!(message.contains("bearer auth requires apiKey"), "got: {message}");
+    // The typed reason is ProviderConfiguration (not a SigV4 fallback).
+    assert_eq!(error.tag(), "ProviderConfiguration");
+}
+
+#[test]
+fn bearer_mode_with_an_api_key_builds() {
+    let route = bedrock_mantle_messages_route(
+        bare_transport(),
+        MantleMessagesConfig {
+            mode: Some(BedrockAuthMode::Bearer),
+            api_key: Some("mantle-key".into()),
+            ..Default::default()
+        },
+    )
+    .expect("bearer with apiKey builds");
+    assert_eq!(route.id, "bedrock-mantle-messages");
+}
+
+#[test]
+fn sigv4_mode_builds_without_an_api_key() {
+    std::env::remove_var("AWS_BEARER_TOKEN_BEDROCK");
+    let route = bedrock_mantle_messages_route(
+        bare_transport(),
+        MantleMessagesConfig { mode: Some(BedrockAuthMode::SigV4), ..Default::default() },
+    )
+    .expect("sigv4 without apiKey builds");
+    assert_eq!(route.id, "bedrock-mantle-messages");
 }
