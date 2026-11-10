@@ -17,8 +17,11 @@
 //!    durable wake, listener/stream notification — sits on the `Ok` path
 //!    *after* the transaction future resolves. A rolled-back publish
 //!    notifies nothing and leaves no row.
-//! 3. Notification happens while the aggregate lock is still held, so
-//!    observers see one aggregate's events in exactly commit (`seq`) order.
+//! 3. Notification happens while the aggregate lock is still held (G-292 —
+//!    ref `bus.ts:469-477` runs `notify` inside `durableLocks.withLock`),
+//!    so observers see one aggregate's events in exactly commit (`seq`)
+//!    order; the notify path is fully synchronous, so no `.await` is held
+//!    under the lock.
 //! 4. The `(aggregate_id, seq)` unique index backstops cross-process races.
 //!
 //! # Shape (v2 parity)
@@ -528,24 +531,18 @@ fn invalid(type_: &str, message: impl Into<String>) -> BusError {
 }
 
 /// Invariant violations raised *inside* transaction closures must travel as
-/// [`DbError`] (the tx API carries nothing else); they are wrapped with this
-/// marker and lifted back into [`BusError::Invalid`] by [`lift_db_error`].
-const INVALID_MARKER: &str = "\u{0}bus-invalid\u{1}";
-
+/// [`DbError`] (the tx API carries nothing else); they use the typed
+/// [`DbError::BusInvalid`] variant and are lifted back into
+/// [`BusError::Invalid`] by [`lift_db_error`].
 fn tx_invalid(type_: &str, message: impl Into<String>) -> DbError {
-    DbError::Pragma(format!("{INVALID_MARKER}{type_}\u{1}{}", message.into()))
+    DbError::BusInvalid { type_: type_.to_string(), message: message.into() }
 }
 
 /// Converts a database error from a bus transaction, restoring tunnelled
 /// [`BusError::Invalid`] invariants.
 fn lift_db_error(err: DbError) -> BusError {
     match err {
-        DbError::Pragma(message) if message.starts_with(INVALID_MARKER) => {
-            let mut parts = message[INVALID_MARKER.len()..].splitn(2, '\u{1}');
-            let type_ = parts.next().unwrap_or_default().to_string();
-            let message = parts.next().unwrap_or_default().to_string();
-            BusError::Invalid { type_, message }
-        }
+        DbError::BusInvalid { type_, message } => BusError::Invalid { type_, message },
         other => other.into(),
     }
 }
@@ -699,13 +696,20 @@ impl Bus {
         let committed = self
             .commit_durable_event(definition, event, None, options.commit, options.persist)
             .await;
+        // G-292 — notify INSIDE the aggregate lock (ref bus.ts:469-477
+        // runs `notify` within `durableLocks.withLock`): a concurrent
+        // publisher on the same aggregate can never deliver seq N+1's
+        // notification before N's. `notify` is fully synchronous (sync
+        // listeners + sync channel sends), so no `.await` under the lock.
+        if let Ok(Some(committed)) = &committed {
+            let _ = self.inner.notify(&committed.routed, true);
+        }
         drop(guard);
         drop(lock);
         self.inner.evict_lock_if_idle(&aggregate_id);
         // Persist-then-publish: notify only after the commit succeeded.
         // (Unreachable `None`: publishes carry no replay input.)
         let committed = committed?.expect("publish never replays");
-        let _ = self.inner.notify(&committed.routed, true);
         Ok(committed.event)
     }
 
@@ -855,11 +859,11 @@ impl Bus {
                 Ok(CommitRecord { durable_events: queued, routing })
             })
             .await;
-        drop(guard);
-        drop(lock);
-        self.inner.evict_lock_if_idle(&aggregate_id);
+        // G-292 — the post-commit block (routing apply, wake, per-event
+        // notify) runs INSIDE the aggregate lock, matching ref
+        // bus.ts:531-669's notify under `durableLocks.withLock` — every
+        // step is synchronous, so no `.await` is held under the lock.
         let record: CommitRecord = transaction.map_err(lift_db_error)?;
-        // Post-commit: apply routing, wake, notify each in order.
         let resolved = record.routing.apply(&self.inner.sessions);
         self.inner.wake_publish(&aggregate_id);
         let mut out = Vec::with_capacity(record.durable_events.len());
@@ -868,6 +872,9 @@ impl Bus {
             let _ = self.inner.notify(&routed, true);
             out.push(routed.event);
         }
+        drop(guard);
+        drop(lock);
+        self.inner.evict_lock_if_idle(&aggregate_id);
         Ok(out)
     }
 
@@ -1342,15 +1349,17 @@ impl Bus {
         let guard = lock.lock().await;
         let committed =
             self.commit_durable_event(definition, payload, Some(input), None, None).await;
-        drop(guard);
-        drop(lock);
-        self.inner.evict_lock_if_idle(&aggregate_id);
-        let committed = committed?;
-        if let Some(committed) = committed {
+        // G-292 — notify INSIDE the aggregate lock (ref notify runs under
+        // `durableLocks.withLock`); `notify` is fully synchronous.
+        if let Ok(Some(committed)) = &committed {
             if options.publish {
                 let _ = self.inner.notify(&committed.routed, true);
             }
         }
+        drop(guard);
+        drop(lock);
+        self.inner.evict_lock_if_idle(&aggregate_id);
+        committed?;
         Ok(())
     }
 

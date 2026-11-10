@@ -122,15 +122,15 @@ async fn opencode_namespace() {
         ("session_move", "opencode_session_move"),
         ("models", "opencode_models"),
     ] {
-        let registration = tools.get(bare).unwrap_or_else(|| panic!("{bare} registered"));
+        let registration = tools.get(effective).unwrap_or_else(|| panic!("{effective} registered"));
         assert_eq!(
             registration.namespace.as_deref(),
             Some("opencode"),
             "{bare} keeps its namespace (registry.rs must not clear it)"
         );
         assert!(
-            tools.executor(bare).is_some(),
-            "{bare} has a pipeline executor under its bare name"
+            tools.executor(effective).is_some(),
+            "{effective} has a pipeline executor under its effective name"
         );
         assert_eq!(
             oc_core::tool::registry::effective_name(registration.namespace.as_deref(), bare),
@@ -163,7 +163,8 @@ async fn session_move_tool() {
     let destination = dir.path().join("moved-here");
     std::fs::create_dir_all(&destination).expect("destination");
 
-    let executor = services.graph.tools.executor("session_move").expect("session_move executor");
+    let executor =
+        services.graph.tools.executor("opencode_session_move").expect("session_move executor");
     let outcome = executor
         .execute_with_context(
             &json!({ "directory": destination.to_string_lossy() }),

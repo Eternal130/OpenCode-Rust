@@ -1756,8 +1756,8 @@ async fn g291_fixture(
     servers: Vec<&'static str>,
 ) -> (McpRegistry, Arc<crate::location::ToolRegistryState>) {
     let mut config = BTreeMap::new();
-    for server in servers {
-        config.insert(server.to_string(), local_config());
+    for server in &servers {
+        config.insert((*server).to_string(), local_config());
     }
     let registry = registry_with(bus, g291_connector(), config);
     registry.reconcile().await;
@@ -1765,7 +1765,7 @@ async fn g291_fixture(
         wait_for_status(&registry, server, Status::Connected).await;
     }
     let tools = Arc::new(crate::location::ToolRegistryState::new());
-    let (permission, _rx) = test_permission_with_rules(bus, allow_all_rules());
+    let (permission, _rx) = test_permission_with_rules(bus, Some(allow_all_rules()));
     let hooks = Arc::new(crate::hooks::HookRegistry::new());
     let services = test_services(&permission);
     let bridge =
@@ -1786,12 +1786,7 @@ async fn g291_same_named_tools_on_two_servers_coexist() {
     assert!(tools.get("one_search").is_some(), "one_search registered");
     assert!(tools.get("two_search").is_some(), "two_search registered");
     assert!(tools.get("search").is_none(), "no bare-name key");
-    assert_eq!(
-        tools.list().len(),
-        2,
-        "both same-named tools live: {:?}",
-        tools.list()
-    );
+    assert_eq!(tools.list().len(), 2, "both same-named tools live: {:?}", tools.list());
 
     // Each effective name routes to its own server's executor.
     for (key, expect) in [("one_search", "hit from one"), ("two_search", "hit from two")] {
@@ -1822,7 +1817,8 @@ impl crate::location::ToolExecute for G291Builtin {
     ) -> Result<crate::location::ToolRunResult, crate::location::ToolRunFailure> {
         Ok(crate::location::ToolRunResult {
             content: vec![oc_schema::tool::Content::Text { text: self.text.to_owned() }],
-            ..Default::default()
+            metadata: None,
+            output: None,
         })
     }
 }
@@ -1850,17 +1846,13 @@ async fn g291_mcp_tool_does_not_shadow_same_named_builtin() {
     assert!(tools.get("shadower_search").is_some(), "the MCP tool registers under its own key");
 
     let builtin = tools.executor("search").expect("builtin executor survives");
-    let result = builtin
-        .execute(&serde_json::json!({}))
-        .await
-        .expect("builtin executes");
+    let result = builtin.execute(&serde_json::json!({})).await.expect("builtin executes");
     match &result.content[0] {
         oc_schema::tool::Content::Text { text } => assert_eq!(text, "builtin"),
         other => panic!("expected builtin text, got {other:?}"),
     }
     registry.shutdown().await;
 }
-
 
 fn g242_context() -> crate::location::ToolCallContext {
     crate::location::ToolCallContext {
