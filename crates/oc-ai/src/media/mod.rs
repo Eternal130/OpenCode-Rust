@@ -22,6 +22,7 @@
 //! closes; these modules are the protocol layer exactly as v2 defines it.
 
 pub mod body;
+pub mod client;
 pub mod fal_queue;
 pub mod image;
 pub mod model;
@@ -33,6 +34,7 @@ pub mod utils;
 pub mod video;
 
 pub use body::{Body, Form, FormValue, Query, QueryValue};
+pub use client::{ClientEvent, GenerationHandle, MediaClient, RouteKind};
 pub use model::{
     collect_image_response, collect_speech_response, collect_video_response, is_terminal,
     Addressed, CollectedResponse, DecodeContext, ImageEvent, ImageRequest, ImageResponse,

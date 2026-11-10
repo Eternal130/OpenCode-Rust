@@ -5,7 +5,9 @@
 use std::collections::BTreeMap;
 
 use crate::media::body::{merge_records, Body};
-use crate::media::model::{ImageRequest, ImageResponse, PollContext, Snapshot, Started, Status};
+use crate::media::model::{
+    image_field_present, ImageRequest, ImageResponse, PollContext, Snapshot, Started, Status,
+};
 use crate::media::protocol::{
     status as table_status, Identity, MediaProtocolBase, QueuedProtocol, TextOutput,
 };
@@ -80,10 +82,23 @@ fn file_input(asset: &Asset) -> Result<String, AiError> {
     media_reference(asset, None, "Replicate").map(|(_, value)| value)
 }
 
+/// The route's unsupported-field rejection. The TS route layer runs
+/// `rejectUnsupported` before `body.from` for every lane kind
+/// (route/media.ts:356, 216) — the port keeps the check inside
+/// `body_from`, the seam every Rust route lane calls (G-345).
+pub fn check_unsupported(request: &ImageRequest) -> Result<(), AiError> {
+    let present: Vec<&str> = ["images", "mask", "n", "size", "aspectRatio", "seed", "format"]
+        .into_iter()
+        .filter(|field| image_field_present(request, field))
+        .collect();
+    identity().reject_unsupported(&present).map_or(Ok(()), Err)
+}
+
 /// `fromRequest` (replicate-images.ts:86-95): model-defined `input` fields
 /// under the model's own names; `Media.Asset` values lower to URLs or data
 /// URLs.
 pub fn body_from(request: &ImageRequest) -> Result<Body, AiError> {
+    check_unsupported(request)?;
     let mut input = serde_json::Map::new();
     input.insert("prompt".to_string(), serde_json::json!(request.prompt));
     if let Some(options) = &request.provider_options {
@@ -143,24 +158,17 @@ fn decode_prediction(output: &TextOutput) -> Result<serde_json::Value, AiError> 
 /// an already-finished prediction.
 pub fn decode_start(output: &TextOutput) -> Result<Started<Token>, AiError> {
     let prediction = decode_prediction(output)?;
-    let id =
-        prediction.get("id").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
+    // `Prediction` declares `id: Schema.String` and `urls: Schema.Struct(
+    // { get, cancel })` — required, not optionalNull (G-347A).
+    let id = output.required_str(&prediction, "id")?.to_string();
     let raw = prediction.get("status").and_then(serde_json::Value::as_str).unwrap_or_default();
     let status = table_status(&status_table(), raw, output)?;
     Ok(Started {
         snapshot: Snapshot { id: id.clone(), status, progress: None, position: None },
         token: Token {
             id,
-            get_url: prediction
-                .pointer("/urls/get")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            cancel_url: prediction
-                .pointer("/urls/cancel")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
+            get_url: output.required_pointer_str(&prediction, "/urls/get")?.to_string(),
+            cancel_url: output.required_pointer_str(&prediction, "/urls/cancel")?.to_string(),
         },
     })
 }
@@ -355,6 +363,59 @@ mod tests {
         assert!(is_official("black-forest-labs/flux-schnell"));
         assert!(!is_official("black-forest-labs/flux-schnell:abc123"));
         assert!(!is_official("abc123"));
+    }
+
+    // G-345: declared `unsupported` fields are enforced before lowering —
+    // "never silently dropped" (route/media.ts:423-448).
+    #[test]
+    fn unsupported_fields_fail_typed_before_lowering() {
+        let mut image_request = request("owner/name");
+        image_request.mask = Some(media::url("https://x/mask.png", None, None));
+        let error = body_from(&image_request).unwrap_err();
+        let crate::schema::AiErrorReason::UnsupportedOperation { operation, fields, .. } =
+            error.reason
+        else {
+            panic!("wrong reason: {error:?}")
+        };
+        assert_eq!(operation, "media.mask");
+        assert_eq!(fields.message, "replicate/replicate-images does not support mask");
+
+        // supported fields (provider options) still lower
+        let mut ok = request("owner/name");
+        let mut options = crate::schema::ProviderOptions::new();
+        options.insert("image".to_string(), json!("https://x/a.png"));
+        ok.provider_options = Some(options);
+        assert!(body_from(&ok).is_ok());
+    }
+
+    // G-347A: `Prediction` requires `id` and `urls.{get,cancel}` — a
+    // submission without them is an invalid provider document.
+    #[test]
+    fn decode_start_requires_id_and_urls() {
+        let identity = identity();
+        let missing = TextOutput {
+            identity: &identity,
+            body: r#"{"id":"p1","status":"starting"}"#,
+            http: None,
+        };
+        let error = decode_start(&missing).unwrap_err();
+        assert!(error.message().contains("invalid response"), "{}", error.message());
+
+        let token_missing = TextOutput {
+            identity: &identity,
+            body: r#"{"status":"starting","urls":{"get":"https://g"}}"#,
+            http: None,
+        };
+        assert!(decode_start(&token_missing).is_err());
+
+        let valid = TextOutput {
+            identity: &identity,
+            body: r#"{"id":"p1","status":"starting","urls":{"get":"https://g","cancel":"https://c"}}"#,
+            http: None,
+        };
+        let started = decode_start(&valid).unwrap();
+        assert_eq!(started.token.get_url, "https://g");
+        assert_eq!(started.token.cancel_url, "https://c");
     }
 
     #[test]

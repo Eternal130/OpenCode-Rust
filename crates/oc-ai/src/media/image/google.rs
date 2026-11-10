@@ -138,6 +138,11 @@ pub fn decode(
                 continue;
             }
             let mut google = std::collections::BTreeMap::new();
+            // `inlineData` is optional, but once present its `mimeType`
+            // and `data` are required `Schema.String`s (google-images.ts:
+            // 52-58, G-347A).
+            let data = output.required_str(inline, "data")?;
+            let media_type = Some(output.required_str(inline, "mimeType")?.to_string());
             google.insert(
                 "candidateIndex".to_string(),
                 candidate
@@ -171,8 +176,8 @@ pub fn decode(
             images.push(utils::decoded_asset(
                 |message| output.invalid(message),
                 &format!("Google Images candidate {candidate_index} part {part_index}"),
-                inline.get("data").and_then(serde_json::Value::as_str).unwrap_or_default(),
-                inline.get("mimeType").and_then(serde_json::Value::as_str),
+                data,
+                media_type.as_deref(),
                 None,
                 Some(metadata),
             )?);
@@ -548,6 +553,25 @@ mod tests {
         let context = DecodeContext { request: &request(), body: &body };
         let error = decode(&output, &context).unwrap_err();
         assert!(error.message().contains("finish reasons: SAFETY"));
+    }
+
+    // G-347A: a present `inlineData` requires `data` and `mimeType`
+    // (google-images.ts:52-58) — a part carrying one without the other is
+    // an invalid provider document, not a silently-empty image.
+    #[test]
+    fn inline_data_requires_data_and_mime_type() {
+        let document = r#"{"candidates": [{"index": 0, "content": {"parts": [{"inlineData": {"mimeType": "image/png"}}]}}]}"#;
+        let identity = identity();
+        let output = TextOutput { identity: &identity, body: document, http: None };
+        let body = Body::json(Default::default());
+        let context = DecodeContext { request: &request(), body: &body };
+        let error = decode(&output, &context).unwrap_err();
+        assert!(error.message().contains("invalid response"), "{}", error.message());
+
+        let document = r#"{"candidates": [{"index": 0, "content": {"parts": [{"inlineData": {"data": "AQID"}}]}}]}"#;
+        let output = TextOutput { identity: &identity, body: document, http: None };
+        let error = decode(&output, &context).unwrap_err();
+        assert!(error.message().contains("invalid response"), "{}", error.message());
     }
 
     #[test]

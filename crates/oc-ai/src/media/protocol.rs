@@ -210,6 +210,65 @@ impl TextOutput<'_> {
         })
     }
 
+    /// Required-field strictness (G-347A): the ref decodes every provider
+    /// document through an Effect `Schema.Struct`, where fields declared
+    /// `Schema.String` (no `optional`) fail the whole decode when missing
+    /// or wrong-typed — `MediaProtocol.decodeJson` maps that to the same
+    /// "`{name}` returned an invalid response" error as a malformed body
+    /// (media-protocol.ts:263-272). Optional fields (`optional`/
+    /// `optionalNull`) stay optional at the call sites.
+    pub fn required_str<'v>(
+        &self,
+        value: &'v serde_json::Value,
+        field: &str,
+    ) -> Result<&'v str, AiError> {
+        self.required(value.get(field), field)
+    }
+
+    /// [`Self::required_str`] for a JSON pointer path (e.g.
+    /// `/urls/get`), mirroring the nested `Schema.Struct`s the ref
+    /// declares for tokens.
+    pub fn required_pointer_str<'v>(
+        &self,
+        value: &'v serde_json::Value,
+        pointer: &str,
+    ) -> Result<&'v str, AiError> {
+        self.required(value.pointer(pointer), pointer)
+    }
+
+    fn required<'v>(
+        &self,
+        field: Option<&'v serde_json::Value>,
+        name: &str,
+    ) -> Result<&'v str, AiError> {
+        field.and_then(serde_json::Value::as_str).ok_or_else(|| {
+            let mut error =
+                self.invalid(format!("{} returned an invalid response", self.identity.name));
+            if let AiErrorReason::InvalidProviderOutput { fields, .. } = &mut error.reason {
+                fields.cause = Some(format!("expected a string at \"{name}\""));
+            }
+            error
+        })
+    }
+
+    /// [`Self::required_str`] for fields the ref schema declares as
+    /// `Schema.Array(...)` — required arrays fail when missing or not an
+    /// array.
+    pub fn required_array<'v>(
+        &self,
+        value: &'v serde_json::Value,
+        field: &str,
+    ) -> Result<&'v Vec<serde_json::Value>, AiError> {
+        value.get(field).and_then(serde_json::Value::as_array).ok_or_else(|| {
+            let mut error =
+                self.invalid(format!("{} returned an invalid response", self.identity.name));
+            if let AiErrorReason::InvalidProviderOutput { fields, .. } = &mut error.reason {
+                fields.cause = Some(format!("expected an array at \"{field}\""));
+            }
+            error
+        })
+    }
+
     /// Schema-decode one JSON stream frame; decode failures keep the frame
     /// as `reason.body` (media-protocol.ts:287-293).
     pub fn decode_frame(&self, frame: &str) -> Result<serde_json::Value, AiError> {

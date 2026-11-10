@@ -79,8 +79,9 @@ pub fn decode(
         .or(requested)
         .unwrap_or_else(|| "webp".to_string());
     let media_type = format!("image/{format}");
-    let data =
-        decoded.get("data").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
+    // `Response` declares `data` a required array of `{b64_json?, url?}`
+    // items (meta-images.ts:52-53, G-347A).
+    let data = output.required_array(&decoded, "data")?.clone();
     let mut images = Vec::new();
     for (index, item) in data.iter().enumerate() {
         images.push(utils::image_output(
@@ -95,12 +96,23 @@ pub fn decode(
     if images.is_empty() {
         return Err(output.invalid("Meta Images returned no images"));
     }
-    let usage =
-        decoded.get("usage").filter(|value| !value.is_null()).map(|value| MediaUsage::Tokens {
-            input: value.get("input_tokens").and_then(serde_json::Value::as_f64),
-            output: value.get("output_tokens").and_then(serde_json::Value::as_f64),
-            total: value.get("total_tokens").and_then(serde_json::Value::as_f64),
-            details: Some(serde_json::from_value(value.clone()).unwrap_or_default()),
+    // `usage` is optional, but the ref schema requires it to be an object
+    // when present (meta-images.ts:56-60, G-347A) — a scalar cannot land
+    // in `details`.
+    let usage = decoded
+        .get("usage")
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            value.as_object().cloned().ok_or_else(|| {
+                output.invalid(format!("{} returned an invalid response", identity().name))
+            })
+        })
+        .transpose()?
+        .map(|object| MediaUsage::Tokens {
+            input: object.get("input_tokens").and_then(serde_json::Value::as_f64),
+            output: object.get("output_tokens").and_then(serde_json::Value::as_f64),
+            total: object.get("total_tokens").and_then(serde_json::Value::as_f64),
+            details: Some(object),
         });
     let mut meta = std::collections::BTreeMap::new();
     meta.insert("outputFormat".to_string(), serde_json::json!(format));
@@ -223,5 +235,27 @@ mod tests {
         let context = DecodeContext { request: &request(), body: &body };
         let response = decode(&output, &context).unwrap();
         assert_eq!(response.images[0].media_type, "image/jpeg");
+    }
+
+    // G-347A: `data` is a required array; `usage`, when present, must be
+    // an object (meta-images.ts:52-60).
+    #[test]
+    fn decode_requires_data_array_and_object_usage() {
+        let identity = identity();
+        let body = Body::json(Default::default());
+        let context = DecodeContext { request: &request(), body: &body };
+
+        let output =
+            TextOutput { identity: &identity, body: r#"{"output_format":"webp"}"#, http: None };
+        let error = decode(&output, &context).unwrap_err();
+        assert!(error.message().contains("invalid response"), "{}", error.message());
+
+        let output = TextOutput {
+            identity: &identity,
+            body: r#"{"data":[{"url":"https://x/1"}],"usage":3}"#,
+            http: None,
+        };
+        let error = decode(&output, &context).unwrap_err();
+        assert!(error.message().contains("invalid response"), "{}", error.message());
     }
 }

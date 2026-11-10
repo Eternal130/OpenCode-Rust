@@ -207,23 +207,36 @@ fn event_image(
     )
 }
 
-/// `onEvent` (openai-images.ts:211-230) — one SSE frame.
+/// `onEvent` (openai-images.ts:211-230) — one SSE frame. The `StreamEvent`
+/// union requires the exact `type` literals plus `b64_json` and
+/// `output_format` (`partial_image_index` additionally on partials);
+/// anything else is an invalid stream event, never a silently-empty image
+/// (G-347A).
 pub fn on_event(state: &mut State, frame: &str) -> Result<Vec<ImageEvent>, AiError> {
     let invalid = |message: String| identity().frame_error(message, frame.to_string());
-    let event =
-        TextOutput { identity: &identity(), body: frame, http: None }.decode_frame(frame)?;
-    let event_type = event.get("type").and_then(serde_json::Value::as_str).unwrap_or_default();
-    let format = event
-        .get("output_format")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    if event_type.ends_with("partial_image") {
-        let data = event.get("b64_json").and_then(serde_json::Value::as_str).unwrap_or_default();
+    let output = TextOutput { identity: &identity(), body: frame, http: None };
+    let event = output.decode_frame(frame)?;
+    let event_type = output.required_str(&event, "type")?;
+    let is_partial =
+        matches!(event_type, "image_generation.partial_image" | "image_edit.partial_image");
+    let is_completed = matches!(event_type, "image_generation.completed" | "image_edit.completed");
+    if !is_partial && !is_completed {
+        return Err(invalid(format!(
+            "OpenAI Images sent an invalid stream event: unknown type \"{event_type}\""
+        )));
+    }
+    let format = output.required_str(&event, "output_format")?.to_string();
+    let data = output.required_str(&event, "b64_json")?;
+    if is_partial {
         let index = event
             .get("partial_image_index")
             .and_then(serde_json::Value::as_f64)
-            .unwrap_or_default();
+            .ok_or_else(|| {
+                invalid(
+                    "OpenAI Images sent an invalid stream event: expected a number at \"partial_image_index\""
+                        .to_string(),
+                )
+            })?;
         let image = event_image(
             invalid,
             "OpenAI Images partial image",
@@ -233,7 +246,6 @@ pub fn on_event(state: &mut State, frame: &str) -> Result<Vec<ImageEvent>, AiErr
         )?;
         return Ok(vec![ImageEvent::ImagePartial { index, image }]);
     }
-    let data = event.get("b64_json").and_then(serde_json::Value::as_str).unwrap_or_default();
     let image = event_image(
         invalid,
         &format!("OpenAI Images result {}", state.completed),
@@ -563,5 +575,27 @@ mod tests {
         let error = check_unsupported(&image_request).unwrap_err();
         assert!(error.message().contains("does not support aspectRatio, seed"));
         assert!(matches!(error.reason, crate::schema::AiErrorReason::UnsupportedOperation { .. }));
+    }
+
+    // G-347A: the StreamEvent union rejects unknown `type`s and requires
+    // `b64_json` / `output_format` / `partial_image_index`.
+    #[test]
+    fn stream_events_reject_unknown_types_and_missing_fields() {
+        let mut state = State::default();
+        let error =
+            on_event(&mut state, r#"{"type":"something.else","b64_json":"AQID"}"#).unwrap_err();
+        assert!(error.message().contains("invalid stream event"), "{}", error.message());
+
+        let error =
+            on_event(&mut state, r#"{"type":"image_generation.completed","output_format":"png"}"#)
+                .unwrap_err();
+        assert!(error.message().contains("invalid response"), "{}", error.message());
+
+        let error = on_event(
+            &mut state,
+            r#"{"type":"image_generation.partial_image","b64_json":"AQID","output_format":"png"}"#,
+        )
+        .unwrap_err();
+        assert!(error.message().contains("partial_image_index"), "{}", error.message());
     }
 }
