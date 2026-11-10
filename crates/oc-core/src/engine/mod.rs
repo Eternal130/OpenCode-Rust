@@ -1303,27 +1303,72 @@ impl Engine {
         );
 
         // Permission engine (session/agent ruleset resolver over the row +
-        // the agent table). The managed-policy `permission` deny hook
-        // (CONFIG-C7, policy.ts:54-67) rides the evaluate step: a
-        // matching `{action}:{resource}` policy denies the whole request
-        // with the policy's message — the hook only runs on the
-        // non-short-circuited path, matching v2's plugin registration.
+        // the agent table). The single `permission.evaluate` hook point
+        // (ref permission.ts:195 `hooks.trigger` — every registered hook
+        // mutates the SAME event; last writer wins) composes two writers
+        // in ref registration order:
+        //
+        // 1. the managed-policy deny (CONFIG-C7, ref config/plugin/
+        //    policy.ts:54-67 — the config policy plugin registers an
+        //    `evaluate` hook that rewrites a matching policy deny onto
+        //    the event),
+        // 2. the guest plugins' `permission.evaluate` registrations
+        //    dispatched through the location's HookRegistry (G-338) —
+        //    the returned effect/message WIN (ref evaluates
+        //    `event.effect` after the trigger).
+        //
+        // The rules-deny short-circuit stays AHEAD of both (evaluateInput
+        // returns before the hook — a plugin can never un-deny a base
+        // deny).
         let permission_policies = Arc::clone(&policy_list);
+        let permission_hooks = Arc::clone(&hooks);
         let policy_hook: Option<crate::permission::HookOverride> =
             Some(Arc::new(move |input: crate::permission::HookInput| {
                 let policies = permission_policies();
+                let hooks = Arc::clone(&permission_hooks);
                 Box::pin(async move {
-                    let Some(denied) = managed_policy::permission_denied(
+                    // 1. managed policy: a matching deny rewrites the
+                    //    computed verdict like the config policy plugin.
+                    let mut effect = input.effect;
+                    let mut message: Option<String> = None;
+                    if let Some(denied) = managed_policy::permission_denied(
                         &policies,
                         &input.action,
                         &input.resources,
-                    ) else {
-                        return None;
+                    ) {
+                        effect = oc_schema::permission::Effect::Deny;
+                        message = Some(denied.message.clone());
+                    }
+                    // 2. guest plugins: the dispatched event carries the
+                    //    (possibly policy-denied) effect; its returned
+                    //    effect/message win.
+                    let event = crate::hooks::PermissionEvaluateEvent {
+                        session_id: input.session_id,
+                        agent: input.agent,
+                        action: input.action,
+                        resources: input.resources,
+                        metadata: input.metadata.map(|record| {
+                            record
+                                .into_iter()
+                                .collect::<serde_json::Map<String, serde_json::Value>>()
+                        }),
+                        source: input.source.and_then(|source| serde_json::to_value(&source).ok()),
+                        effect,
+                        message: message.clone(),
                     };
-                    Some(crate::permission::HookVerdict {
-                        effect: oc_schema::permission::Effect::Deny,
-                        message: Some(denied.message.clone()),
-                    })
+                    match hooks.dispatch_permission_evaluate(event).await {
+                        Ok(event) => Some(crate::permission::HookVerdict {
+                            effect: event.effect,
+                            message: event.message,
+                        }),
+                        // HookOverride has no error channel; a failing
+                        // plugin handler keeps the pre-trigger verdict
+                        // (fail-open like v2's per-plugin containment).
+                        Err(_) => Some(crate::permission::HookVerdict {
+                            effect,
+                            message: message.clone(),
+                        }),
+                    }
                 })
             }));
         let permission = Permission::new(
@@ -2458,6 +2503,10 @@ impl PermissionPending for LocationPermissionPort {
 
     async fn pending_count(&self) -> usize {
         self.permission.list().len()
+    }
+
+    fn permission(&self) -> Option<Permission> {
+        Some(self.permission.clone())
     }
 }
 

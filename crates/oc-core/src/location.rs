@@ -154,6 +154,12 @@ pub trait PermissionPending: Send + Sync {
     async fn close(&self) -> Vec<String>;
     /// Number of currently parked permission requests.
     async fn pending_count(&self) -> usize;
+    /// The wrapped permission engine (G-338: production-path assertions
+    /// over the wired `permission.evaluate` hook). `None` for placeholder
+    /// ports that own no engine.
+    fn permission(&self) -> Option<crate::permission::Permission> {
+        None
+    }
 }
 
 /// Forms port (per-location `Form` node close). Placeholder seam.
