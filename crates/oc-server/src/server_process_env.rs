@@ -91,10 +91,12 @@ pub fn project_config_enabled() -> bool {
 /// `Config.configured({project})` seam for every loader the server
 /// builds (boot seeding, the per-location provider listing, the
 /// config/agent/project surfaces).
+///
+/// G-323 — delegates to oc-core's shared implementation (applied at
+/// `Loader::new` construction as well) so the engine-internal loaders
+/// and the server surfaces run the SAME logic.
 pub fn configure_loader(loader: &mut Loader) {
-    if !project_config_enabled() {
-        loader.options.project = Some(false);
-    }
+    oc_core::config::configure_loader(loader);
 }
 
 /// Applies [`ModelsEnv`] to engine options (`ModelsDev.configured`):

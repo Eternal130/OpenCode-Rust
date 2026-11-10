@@ -287,62 +287,7 @@ impl ConfigSkillTable {
         home: &Path,
         url_sources: &skills_url::PulledUrlSources,
     ) -> Self {
-        let mut sources: Vec<PathBuf> = Vec::new();
-        let mut seen = std::collections::BTreeSet::new();
-        let add = |path: PathBuf,
-                   sources: &mut Vec<PathBuf>,
-                   seen: &mut std::collections::BTreeSet<PathBuf>| {
-            if seen.insert(path.clone()) {
-                sources.push(path);
-            }
-        };
-        for entry in &loaded.entries {
-            match entry {
-                ConfigEntry::Directory(directory) => {
-                    for name in ["skill", "skills"] {
-                        add(PathBuf::from(&directory.path).join(name), &mut sources, &mut seen);
-                    }
-                }
-                ConfigEntry::Document(document) => {
-                    let Some(items) = document.info.skills.clone() else { continue };
-                    for item in items {
-                        if skills_url::is_url_source(&item) {
-                            // URL source (v2 skill.ts:89-93): the engine
-                            // seam already pulled it into the hashed
-                            // cache; the pulled roots join AT THIS
-                            // POSITION — v2 processes document items in
-                            // document order with URL and directory
-                            // items interleaved as written, and later
-                            // sources win id collisions. An absent entry
-                            // (failed/empty pull) skips.
-                            for root in url_sources.get(&item).into_iter().flatten() {
-                                add(root.clone(), &mut sources, &mut seen);
-                            }
-                            continue;
-                        }
-                        let expanded = if let Some(rest) = item.strip_prefix("~/") {
-                            home.join(rest)
-                        } else {
-                            PathBuf::from(item)
-                        };
-                        let resolved =
-                            if expanded.is_absolute() { expanded } else { location.join(expanded) };
-                        add(resolved, &mut sources, &mut seen);
-                    }
-                }
-            }
-        }
-        // G-199 (ref config/plugin/compatibility.ts:39-56): the
-        // compatibility roots — `~/.claude` / `~/.agents` plus discovered
-        // `.claude` / `.agents` directories — also contribute their
-        // `/skills` subdirectories. REF joins them AFTER the config
-        // sources (the compatibility plugin's `ctx.skill.transform`
-        // `editor.add` overwrites config skills on an id collision, and
-        // later compat roots overwrite earlier ones — claude first, then
-        // agents, matching `[...roots.claude, ...roots.agents]`).
-        for root in loaded.sources.claude.iter().chain(loaded.sources.agents.iter()) {
-            add(root.join("skills"), &mut sources, &mut seen);
-        }
+        let sources = source_roots(loaded, location, home, url_sources);
         let mut by_id: BTreeMap<String, Skill> = BTreeMap::new();
         // Built-ins first (the v2 SkillPlugin pre-plugin position), then
         // config skills inserted unconditionally: collisions overwrite —
@@ -394,8 +339,146 @@ impl SkillTable for ConfigSkillTable {
     }
 }
 
+/// The exact source-directory list [`ConfigSkillTable::discover`]
+/// scans, in discovery order (v2 `sources()`, config/plugin/skill.ts):
+/// directory entries contribute `<dir>/skill` + `<dir>/skills`; document
+/// `skills` items contribute paths relative to the location (`~`
+/// expands against `home`); URL items contribute their PULLED cache
+/// roots at the item's document position; the compatibility roots
+/// (G-199) contribute `<root>/skills` last.
+#[must_use]
+pub fn source_roots(
+    loaded: &Loaded,
+    location: &Path,
+    home: &Path,
+    url_sources: &skills_url::PulledUrlSources,
+) -> Vec<PathBuf> {
+    roots_with(loaded, location, home, &|item: &str| {
+        url_sources.get(item).into_iter().flatten().cloned().collect()
+    })
+}
+
+/// G-320 — the skill source directories the hot-reload watcher must
+/// cover OUTSIDE the config roots: the same enumeration as
+/// [`source_roots`] except URL items contribute the STAGING directory
+/// (`<cache_root>/skills`, [`skills_url::staging_root`]) every hashed
+/// source slot lives under — the watch side cannot await a network
+/// pull, and one recursive staging watch observes every slot.
+#[must_use]
+pub fn watch_roots(
+    loaded: &Loaded,
+    location: &Path,
+    home: &Path,
+    cache_root: &Path,
+) -> Vec<PathBuf> {
+    roots_with(loaded, location, home, &|_item: &str| vec![skills_url::staging_root(cache_root)])
+}
+
+/// Shared enumeration behind [`source_roots`] / [`watch_roots`]:
+/// `url_roots` resolves a URL-classified `skills` item to the roots it
+/// contributes (pulled cache dirs for discovery, the staging dir for
+/// watching); everything else is fixed by the v2 source rules.
+fn roots_with(
+    loaded: &Loaded,
+    location: &Path,
+    home: &Path,
+    url_roots: &dyn Fn(&str) -> Vec<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut sources: Vec<PathBuf> = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    fn add(
+        path: PathBuf,
+        sources: &mut Vec<PathBuf>,
+        seen: &mut std::collections::BTreeSet<PathBuf>,
+    ) {
+        if seen.insert(path.clone()) {
+            sources.push(path);
+        }
+    }
+    for entry in &loaded.entries {
+        match entry {
+            ConfigEntry::Directory(directory) => {
+                for name in ["skill", "skills"] {
+                    add(PathBuf::from(&directory.path).join(name), &mut sources, &mut seen);
+                }
+            }
+            ConfigEntry::Document(document) => {
+                let Some(items) = document.info.skills.clone() else { continue };
+                for item in items {
+                    if skills_url::is_url_source(&item) {
+                        // URL source (v2 skill.ts:89-93): roots join AT
+                        // THIS POSITION — document order, interleaved
+                        // with directory items as written.
+                        for root in url_roots(&item) {
+                            add(root, &mut sources, &mut seen);
+                        }
+                        continue;
+                    }
+                    let expanded = if let Some(rest) = item.strip_prefix("~/") {
+                        home.join(rest)
+                    } else {
+                        PathBuf::from(item)
+                    };
+                    let resolved =
+                        if expanded.is_absolute() { expanded } else { location.join(expanded) };
+                    add(resolved, &mut sources, &mut seen);
+                }
+            }
+        }
+    }
+    // G-199 (ref config/plugin/compatibility.ts:39-56): the
+    // compatibility roots — `~/.claude` / `~/.agents` plus discovered
+    // `.claude` / `.agents` directories — also contribute their
+    // `/skills` subdirectories, joined AFTER the config sources.
+    for root in loaded.sources.claude.iter().chain(loaded.sources.agents.iter()) {
+        add(root.join("skills"), &mut sources, &mut seen);
+    }
+    sources
+}
+
+/// One observed skill file for the G-320 reload signature:
+/// (path, size bytes, mtime nanos). A created/edited/deleted SKILL.md
+/// (or top-level `*.md`) under any skill source root changes the list.
+pub type SkillFileStamp = (PathBuf, u64, u64);
+
+/// The change-detection signature over every skill source root — the
+/// same `{*.md,**/SKILL.md}` file set [`ConfigSkillTable::discover`]
+/// scans (G-216: nested SKILL.md at any depth), stamped with size and
+/// mtime so an in-place edit is a change. The watch-driven config
+/// reload compares signatures: entries can be deep-equal while a skill
+/// body changed, and the engine invalidation that follows a "changed"
+/// verdict is what rebuilds the per-location skill table.
+#[must_use]
+pub fn scan_signature(roots: &[PathBuf]) -> Vec<SkillFileStamp> {
+    let mut stamps: Vec<SkillFileStamp> = Vec::new();
+    for root in roots {
+        for file in collect_skill_files(root) {
+            let metadata = std::fs::metadata(&file).ok();
+            let len = metadata.as_ref().map_or(0, std::fs::Metadata::len);
+            let mtime = metadata
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |duration| duration.as_nanos() as u64);
+            stamps.push((file, len, mtime));
+        }
+    }
+    stamps.sort();
+    stamps
+}
+
 /// `fs.scan("{*.md,**/SKILL.md}")` + `SkillFile.parse` per file, sorted.
 fn scan_directory(directory: &Path) -> Vec<Skill> {
+    collect_skill_files(directory)
+        .into_iter()
+        .filter_map(|file| parse_skill_file(directory, &file))
+        .collect()
+}
+
+/// The skill file set of one source root: top-level `*.md` plus
+/// `**/SKILL.md` at any depth (G-216), sorted and deduped — shared by
+/// discovery ([`scan_directory`]) and the reload signature
+/// ([`scan_signature`]) so both observe the same files.
+fn collect_skill_files(directory: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = Vec::new();
     let Ok(entries) = std::fs::read_dir(directory) else { return Vec::new() };
     for entry in entries.flatten() {
@@ -422,7 +505,7 @@ fn scan_directory(directory: &Path) -> Vec<Skill> {
     }
     files.sort();
     files.dedup();
-    files.into_iter().filter_map(|file| parse_skill_file(directory, &file)).collect()
+    files
 }
 
 /// `SkillFile.parse` (skill-file.ts): markdown frontmatter + the id
@@ -483,5 +566,85 @@ fn boolean_value(value: &Json) -> Option<bool> {
             _ => None,
         },
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::discovery::Sources;
+    use oc_schema::config::{Directory, Document};
+
+    fn loaded_with(skills_items: &[&str], claude: Vec<PathBuf>) -> Loaded {
+        let info = if skills_items.is_empty() {
+            serde_json::from_value(serde_json::json!({})).unwrap()
+        } else {
+            serde_json::from_value(serde_json::json!({ "skills": skills_items })).unwrap()
+        };
+        Loaded {
+            sources: Sources { claude, ..Sources::default() },
+            entries: vec![
+                ConfigEntry::Directory(Directory { path: "/proj/.opencode".to_string() }),
+                ConfigEntry::Document(Box::new(Document { info, path: None })),
+            ],
+            diagnostics: Vec::new(),
+        }
+    }
+
+    /// G-320 — `watch_roots` enumerates the loader's source list: dir
+    /// items resolve against the location/`~`, URL items map to the
+    /// staging directory (the watcher cannot await a pull), and the
+    /// compat roots' `/skills` subdirectories join last.
+    #[test]
+    fn skills_watch_roots_enumerate_loader_sources() {
+        let loaded = loaded_with(
+            &["./team", "~/personal", "https://example.test/s/"],
+            vec![PathBuf::from("/home/u/.claude")],
+        );
+        let roots =
+            watch_roots(&loaded, Path::new("/proj"), Path::new("/home/u"), Path::new("/cache/oc"));
+        assert_eq!(
+            roots,
+            vec![
+                PathBuf::from("/proj/.opencode/skill"),
+                PathBuf::from("/proj/.opencode/skills"),
+                PathBuf::from("/proj/team"),
+                PathBuf::from("/home/u/personal"),
+                PathBuf::from("/cache/oc/skills"), // staging_root
+                PathBuf::from("/home/u/.claude/skills"),
+            ]
+        );
+    }
+
+    /// G-320 — the reload signature tracks the same file set discovery
+    /// scans: an edit or a nested create/delete (any depth, G-216)
+    /// changes it; a rescan without changes does not.
+    #[test]
+    fn skills_scan_signature_detects_edits_and_nested_creates() {
+        let dir = std::env::temp_dir()
+            .join("oc-core-skills-sig-tests")
+            .join(format!("sig-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.join("skills");
+        let skill = root.join("alpha").join("SKILL.md");
+        std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
+        std::fs::write(&skill, "---\nname: A\n---\nbody\n").unwrap();
+
+        let before = scan_signature(&[root.clone()]);
+        assert_eq!(before.len(), 1);
+        assert_eq!(before, scan_signature(&[root.clone()]), "rescan without changes is equal");
+
+        std::fs::write(&skill, "---\nname: A\n---\nbody edited\n").unwrap();
+        assert_ne!(before, scan_signature(&[root.clone()]), "in-place edit changes the signature");
+
+        let nested = root.join("alpha").join("deep").join("SKILL.md");
+        std::fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        std::fs::write(&nested, "---\nname: D\n---\nbody\n").unwrap();
+        let after_create = scan_signature(&[root.clone()]);
+        assert_eq!(after_create.len(), 2, "nested SKILL.md at any depth is observed");
+
+        std::fs::remove_file(&nested).unwrap();
+        assert_eq!(scan_signature(&[root.clone()]).len(), 1, "delete is observed");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
