@@ -427,6 +427,47 @@ mod tests {
         schema
     }
 
+    /// G-291 — the lookup key is the tool's EFFECTIVE name (the ref
+    /// matches `tool.id === event.tool`, tool-input-repair.ts:31): an
+    /// MCP-namespaced tool's repair rule must hit when `event.tool`
+    /// carries the `<server>_<tool>` form.
+    #[tokio::test]
+    async fn g291_namespaced_tool_repair_hits_via_effective_name() {
+        let tools = Arc::new(ToolRegistryState::new());
+        tools.register(ToolRegistration {
+            name: "search".into(),
+            description: "Namespaced".into(),
+            input: object(json!({ "limit": { "type": "integer" } }), Some(vec!["limit"])),
+            namespace: Some("alpha".into()),
+            permission: None,
+            codemode: true,
+        });
+        let registry = Arc::new(HookRegistry::new());
+        let scope = HookScope::new();
+        scope.track(install_hook(&registry, &tools));
+        let event = ToolExecuteBeforeEvent {
+            tool: "alpha_search".into(),
+            session_id: oc_schema::id::SessionId::new(),
+            agent: oc_schema::id::AgentId::parse("build"),
+            message_id: oc_schema::id::MessageId::new(),
+            call_id: "call_ns".into(),
+            input: json!({ "limit": "20" }),
+        };
+        let shaped = registry.dispatch_tool_execute_before(event).await.unwrap().input;
+        assert_eq!(shaped, json!({ "limit": 20 }));
+        // The bare name is NOT a registry key — it must not repair either.
+        let event = ToolExecuteBeforeEvent {
+            tool: "search".into(),
+            session_id: oc_schema::id::SessionId::new(),
+            agent: oc_schema::id::AgentId::parse("build"),
+            message_id: oc_schema::id::MessageId::new(),
+            call_id: "call_bare".into(),
+            input: json!({ "limit": "20" }),
+        };
+        let untouched = registry.dispatch_tool_execute_before(event).await.unwrap().input;
+        assert_eq!(untouched, json!({ "limit": "20" }));
+    }
+
     // ref test 1: valid input is preserved (including extras and nested
     // containers).
     #[tokio::test]

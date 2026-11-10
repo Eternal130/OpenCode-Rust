@@ -1802,15 +1802,18 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
                     check_value_depth(&input)?;
                     // The guest calls by QUALIFIED path (`namespace.name` —
                     // buildToolsTree marks every callable with entry.path);
-                    // executors register under the bare name. Direct hit
-                    // first (unnamed tools), then the path resolves through
-                    // the registration table.
+                    // executors register under the EFFECTIVE name
+                    // (G-291, tool.ts:188). Direct hit first (unnamed
+                    // tools, where path == bare == effective), then the
+                    // path resolves through the registration table.
                     let executor = registry.executor(&name).or_else(|| {
                         registry
                             .list()
                             .into_iter()
                             .find(|registration| qualified_path(registration) == name)
-                            .and_then(|registration| registry.executor(&registration.name))
+                            .and_then(|registration| {
+                                registry.executor(&registration.effective_name())
+                            })
                     });
                     let Some(executor) = executor else {
                         return Err(format!("Unknown Code Mode tool: {name}"));

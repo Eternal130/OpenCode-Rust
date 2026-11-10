@@ -1017,12 +1017,13 @@ impl SessionModelRequest {
             });
 
         // The tool executor for this request: resolve from the registry by
-        // the ORIGINAL registration name (the hooked name maps back through
-        // the snapshot), recovering declines to typed failures.
+        // the registration's EFFECTIVE name (the registry keys both tables
+        // by `effectiveName`, tool.ts:188; the hooked name maps back
+        // through the snapshot), recovering declines to typed failures.
         let registry = Arc::clone(&self.tools);
         let hooked_names: BTreeMap<String, String> = hooked
             .iter()
-            .map(|(name, registration)| (name.clone(), registration.name.clone()))
+            .map(|(name, registration)| (name.clone(), registration.effective_name()))
             .collect();
         // Context captured per request (v2 Tool.Context: session + agent;
         // the assistant message id joins per call in the step loop).

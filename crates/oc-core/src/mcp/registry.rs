@@ -1860,13 +1860,17 @@ impl McpToolBridge {
         // `options.namespace = server` — the registry derives the
         // effective `server_tool` name and the `server.tool` Code Mode
         // path. The `{server}_{tool}` form is the PERMISSION ACTION
-        // (mcp.ts:17), asserted by the executor's leaf (G-242).
+        // (mcp.ts:17), asserted by the executor's leaf (G-242), and —
+        // G-291 — the EFFECTIVE registry key: both the registration
+        // table and the executor table key by it, so two servers
+        // exposing the same bare tool name coexist (tool.ts:188).
         let current: std::collections::BTreeSet<String> =
-            discovered.iter().map(|tool| tool.name.clone()).collect();
+            discovered.iter().map(|tool| tool_name(&tool.server, &tool.name)).collect();
         // Remove bridge-owned registrations that left the catalog; other
         // registrations are never touched.
         for stale in owned.lock().difference(&current) {
             tools.remove(stale);
+            tools.remove_executor(stale);
         }
         for tool in discovered {
             let name = tool.name.clone();
@@ -1890,9 +1894,10 @@ impl McpToolBridge {
             // permission assert + callTool. G-230's MCP face: a server
             // DECLARED `outputSchema` enters the `encodeOutput` path
             // (`tool.outputSchema` ≠ undefined, mcp.ts:48); undeclared
-            // stays the accept-all pass-through fallback.
+            // stays the accept-all pass-through fallback. G-291: the
+            // executor is keyed by the EFFECTIVE `server_tool` name.
             tools.register_executor(
-                name.clone(),
+                action.clone(),
                 crate::tool::registry::pipeline_executor_with_output(
                     &action,
                     tool.input_schema.clone(),
@@ -1902,7 +1907,7 @@ impl McpToolBridge {
                     hooks,
                 ),
             );
-            owned.lock().insert(name);
+            owned.lock().insert(action);
         }
     }
 

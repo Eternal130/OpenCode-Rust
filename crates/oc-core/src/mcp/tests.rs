@@ -1699,8 +1699,168 @@ async fn mcp_tool_bridge_registers_namespaced_tools_and_flushes() {
 }
 
 // ---------------------------------------------------------------------------
-// G-242 — the permission gate + pipeline wrap on MCP tool executors
+// G-291 — the registry keys by effectiveName (tool.ts:188): same-named
+// tools on different servers coexist; a same-named MCP tool never
+// shadows a builtin.
 // ---------------------------------------------------------------------------
+
+/// A scripted server exposing `search` whose answer names its server.
+fn g291_script(server: &str) -> Script {
+    let calls = BTreeMap::from([(
+        "search".to_string(),
+        serde_json::json!({
+            "content": [{ "type": "text", "text": format!("hit from {server}") }],
+            "isError": false,
+        }),
+    )]);
+    let script = Script { calls, ..Script::new() };
+    script.tools.lock().push(serde_json::json!({
+        "name": "search",
+        "description": "Search",
+        "inputSchema": { "type": "object", "properties": {} },
+    }));
+    script
+}
+
+/// A connector scripting `search` per server name (the connect input
+/// picks the script, unlike [`scripted_connector`]'s fixed one).
+fn g291_connector() -> Connector {
+    Arc::new(move |input: ConnectInput<'_>| {
+        let script = g291_script(input.server);
+        let (transport, _mock) = mock_pair(script);
+        let server = input.server.to_string();
+        let config = input.config.clone();
+        let directory = input.directory.to_string();
+        let bearer = input.bearer.clone();
+        let elicitation = input.elicitation.clone();
+        Box::pin(async move {
+            client::connect_with_transport(
+                &ConnectInput {
+                    server: &server,
+                    config: &config,
+                    directory: &directory,
+                    bearer,
+                    elicitation,
+                    stdio: None,
+                },
+                transport,
+                false,
+            )
+            .await
+        })
+    })
+}
+
+async fn g291_fixture(
+    bus: &crate::bus::Bus,
+    servers: Vec<&'static str>,
+) -> (McpRegistry, Arc<crate::location::ToolRegistryState>) {
+    let mut config = BTreeMap::new();
+    for server in servers {
+        config.insert(server.to_string(), local_config());
+    }
+    let registry = registry_with(bus, g291_connector(), config);
+    registry.reconcile().await;
+    for server in servers {
+        wait_for_status(&registry, server, Status::Connected).await;
+    }
+    let tools = Arc::new(crate::location::ToolRegistryState::new());
+    let (permission, _rx) = test_permission_with_rules(bus, allow_all_rules());
+    let hooks = Arc::new(crate::hooks::HookRegistry::new());
+    let services = test_services(&permission);
+    let bridge =
+        super::registry::McpToolBridge::install(&registry, &tools, &permission, &hooks, &services);
+    bridge.flush().await;
+    (registry, tools)
+}
+
+/// Two servers exposing the SAME bare tool name both live in the
+/// registry under distinct effective keys, and each effective name
+/// routes to its own executor.
+#[tokio::test]
+async fn g291_same_named_tools_on_two_servers_coexist() {
+    let (_db, bus) = test_bus().await;
+    let (registry, tools) = g291_fixture(&bus, vec!["one", "two"]).await;
+
+    // Distinct effective rows — no overwrite, and no bare `search` key.
+    assert!(tools.get("one_search").is_some(), "one_search registered");
+    assert!(tools.get("two_search").is_some(), "two_search registered");
+    assert!(tools.get("search").is_none(), "no bare-name key");
+    assert_eq!(
+        tools.list().len(),
+        2,
+        "both same-named tools live: {:?}",
+        tools.list()
+    );
+
+    // Each effective name routes to its own server's executor.
+    for (key, expect) in [("one_search", "hit from one"), ("two_search", "hit from two")] {
+        let result = tools
+            .executor(key)
+            .unwrap_or_else(|| panic!("executor for {key}"))
+            .execute_with_context(&serde_json::json!({}), &g242_context())
+            .await
+            .unwrap_or_else(|failure| panic!("{key} executes: {failure:?}"));
+        match &result.content[0] {
+            oc_schema::tool::Content::Text { text } => assert_eq!(text, expect),
+            other => panic!("expected text part from {key}, got {other:?}"),
+        }
+    }
+    registry.shutdown().await;
+}
+
+/// A fixed-text builtin executor (the shadow probe).
+struct G291Builtin {
+    text: &'static str,
+}
+
+#[async_trait::async_trait]
+impl crate::location::ToolExecute for G291Builtin {
+    async fn execute(
+        &self,
+        _input: &serde_json::Value,
+    ) -> Result<crate::location::ToolRunResult, crate::location::ToolRunFailure> {
+        Ok(crate::location::ToolRunResult {
+            content: vec![oc_schema::tool::Content::Text { text: self.text.to_owned() }],
+            ..Default::default()
+        })
+    }
+}
+
+/// An MCP tool whose bare name equals a builtin's does NOT overwrite
+/// the builtin: both the registration row and the executor survive.
+#[tokio::test]
+async fn g291_mcp_tool_does_not_shadow_same_named_builtin() {
+    let (_db, bus) = test_bus().await;
+    // The builtin lands first (the real registries seed builtins before
+    // MCP reconciliation).
+    let (registry, tools) = g291_fixture(&bus, vec!["shadower"]).await;
+    tools.register(crate::location::ToolRegistration::new(
+        "search",
+        "builtin search",
+        serde_json::json!({ "type": "object" }),
+    ));
+    tools.register_executor("search", std::sync::Arc::new(G291Builtin { text: "builtin" }));
+
+    assert_eq!(
+        tools.get("search").map(|tool| tool.description.clone()),
+        Some("builtin search".to_owned()),
+        "the builtin row survives the same-named MCP registration"
+    );
+    assert!(tools.get("shadower_search").is_some(), "the MCP tool registers under its own key");
+
+    let builtin = tools.executor("search").expect("builtin executor survives");
+    let result = builtin
+        .execute(&serde_json::json!({}))
+        .await
+        .expect("builtin executes");
+    match &result.content[0] {
+        oc_schema::tool::Content::Text { text } => assert_eq!(text, "builtin"),
+        other => panic!("expected builtin text, got {other:?}"),
+    }
+    registry.shutdown().await;
+}
+
 
 fn g242_context() -> crate::location::ToolCallContext {
     crate::location::ToolCallContext {
@@ -1814,7 +1974,7 @@ async fn g242_ask_rule_parks_mcp_tool_execution_until_reply() {
     }];
     let (registry, tools, _hooks, permission, mut rx) = g242_fixture(&bus, Some(rules)).await;
 
-    let executor = tools.executor("echo").expect("pipeline executor registered");
+    let executor = tools.executor("alpha_echo").expect("pipeline executor registered");
     let spawned = tokio::spawn(async move {
         executor.execute_with_context(&serde_json::json!({}), &g242_context()).await
     });
@@ -1866,7 +2026,7 @@ async fn g242_deny_rule_rejects_mcp_tool_execution() {
         },
     ];
     let (registry, tools, _hooks, _permission, _rx) = g242_fixture(&bus, Some(rules)).await;
-    let executor = tools.executor("echo").expect("pipeline executor registered");
+    let executor = tools.executor("alpha_echo").expect("pipeline executor registered");
     let failure = executor
         .execute_with_context(&serde_json::json!({}), &g242_context())
         .await
@@ -1930,7 +2090,7 @@ async fn g242_pipeline_hooks_and_decode_wrap_mcp_tools() {
 
     // Success leg: allow rules (none configured) → the tool answers.
     let result = tools
-        .executor("echo")
+        .executor("alpha_echo")
         .expect("executor")
         .execute_with_context(&serde_json::json!({}), &g242_context())
         .await
@@ -1944,7 +2104,7 @@ async fn g242_pipeline_hooks_and_decode_wrap_mcp_tools() {
     // Decode leg: the required `q` is missing — the pipeline's
     // decodeInput fires before the leaf (ref's exact issue message).
     let failure = tools
-        .executor("gated")
+        .executor("alpha_gated")
         .expect("executor")
         .execute_with_context(&serde_json::json!({}), &g242_context())
         .await
@@ -1984,7 +2144,7 @@ async fn g242_declared_output_schema_enters_encode_output() {
         g242_fixture(&bus, Some(allow_all_rules())).await;
 
     let result = tools
-        .executor("shaped")
+        .executor("alpha_shaped")
         .expect("executor")
         .execute_with_context(&serde_json::json!({}), &g242_context())
         .await
@@ -1992,7 +2152,7 @@ async fn g242_declared_output_schema_enters_encode_output() {
     assert_eq!(result.output, Some(serde_json::json!({ "answer": 42 })));
 
     let failure = tools
-        .executor("badshape")
+        .executor("alpha_badshape")
         .expect("executor")
         .execute_with_context(&serde_json::json!({}), &g242_context())
         .await

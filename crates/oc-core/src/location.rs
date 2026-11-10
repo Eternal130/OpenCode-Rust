@@ -529,8 +529,9 @@ pub fn wholly_denied(action: &str, rules: &oc_schema::permission::Ruleset) -> bo
 #[derive(Default)]
 pub struct ToolRegistryState {
     tools: Mutex<std::collections::BTreeMap<String, ToolRegistration>>,
-    /// Local executors keyed by bare name (Wave C folds these into the full
-    /// pipeline; the runner resolves them at tool-call time).
+    /// Local executors keyed by effective name (`<namespace>_<name>`,
+    /// tool.ts:188 keys the table by `effectiveName` — two MCP servers
+    /// exposing the same bare tool name coexist under distinct keys).
     executors: Mutex<std::collections::BTreeMap<String, ToolExecutorHandle>>,
     /// G-106② — `editor.namespace(...)` (ref tool.ts:169-176): namespace
     /// descriptions registered once per namespace; the Code Mode catalog
@@ -554,12 +555,15 @@ impl ToolRegistryState {
         Self::default()
     }
 
-    /// Insert or replace one registration (keyed by name).
+    /// Insert or replace one registration (keyed by `effectiveName`,
+    /// tool.ts:188 — a namespaced registration replaces only its own
+    /// effective key, never a same-named builtin).
     pub fn register(&self, tool: ToolRegistration) {
-        self.tools.lock().insert(tool.name.clone(), tool);
+        let key = tool.effective_name();
+        self.tools.lock().insert(key, tool);
     }
 
-    /// Remove one registration.
+    /// Remove one registration (by its effective key).
     pub fn remove(&self, name: &str) {
         self.tools.lock().remove(name);
     }
@@ -577,7 +581,7 @@ impl ToolRegistryState {
         self.namespace_descriptions.lock().get(name).cloned()
     }
 
-    /// One registration.
+    /// One registration (looked up by its effective key).
     #[must_use]
     pub fn get(&self, name: &str) -> Option<ToolRegistration> {
         self.tools.lock().get(name).cloned()
@@ -620,17 +624,18 @@ impl ToolRegistryState {
             .collect()
     }
 
-    /// Registers a local executor under a bare name (Wave B runner seam).
+    /// Registers a local executor under the registration's effective
+    /// name (`effectiveName`, matching the registration table key).
     pub fn register_executor(&self, name: impl Into<String>, executor: ToolExecutorHandle) {
         self.executors.lock().insert(name.into(), executor);
     }
 
-    /// Removes a local executor.
+    /// Removes a local executor (by its effective key).
     pub fn remove_executor(&self, name: &str) {
         self.executors.lock().remove(name);
     }
 
-    /// The registered local executor for a bare name.
+    /// The registered local executor for an effective name.
     #[must_use]
     pub fn executor(&self, name: &str) -> Option<ToolExecutorHandle> {
         self.executors.lock().get(name).cloned()

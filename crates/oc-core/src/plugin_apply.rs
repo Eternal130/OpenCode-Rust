@@ -1268,7 +1268,13 @@ pub async fn apply_location_plugins(
         registration.namespace.clone_from(&definition.namespace);
         tools.register(registration);
         if let Some(executor) = source.tool_executor(&definition.name) {
-            tools.register_executor(definition.name.clone(), executor);
+            // G-291 — the executor key mirrors the registration table's
+            // effective key (tool.ts:188), not the bare definition name.
+            let effective = crate::tool::registry::effective_name(
+                definition.namespace.as_deref(),
+                &definition.name,
+            );
+            tools.register_executor(effective, executor);
         }
     }
     if let Some(commands) = commands {

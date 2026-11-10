@@ -491,7 +491,7 @@ mod tests {
             .filter(|name| name.contains("mcp_resource"))
             .collect();
         assert_eq!(names, vec!["list_mcp_resources", "read_mcp_resource"]);
-        let read = harness.tools.get("read_mcp_resource").expect("read tool");
+        let read = harness.tools.get("opencode_read_mcp_resource").expect("read tool");
         assert_eq!(read.namespace.as_deref(), Some("opencode"));
         assert_eq!(read.permission.as_deref(), Some(READ_ACTION));
         assert!(read.codemode);
