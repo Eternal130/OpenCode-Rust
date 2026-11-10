@@ -482,19 +482,16 @@ impl SearchProvider for TavilyProvider {
             Some(key) => request.header("Authorization", format!("Bearer {key}")),
             None => request.header("X-Tavily-Access-Mode", "keyless"),
         };
-        let response = request
-            .send()
-            .await
-            .map_err(|error| {
-                // G-310 — the tavily branch uses the dedicated timeout
-                // message (ref tavily.ts:71-74), not the generic transport
-                // display.
-                if error.is_timeout() {
-                    ProviderError::request(None, "Tavily web search request timed out".to_string())
-                } else {
-                    ProviderError::request(None, error.to_string())
-                }
-            })?;
+        let response = request.send().await.map_err(|error| {
+            // G-310 — the tavily branch uses the dedicated timeout
+            // message (ref tavily.ts:71-74), not the generic transport
+            // display.
+            if error.is_timeout() {
+                ProviderError::request(None, "Tavily web search request timed out".to_string())
+            } else {
+                ProviderError::request(None, error.to_string())
+            }
+        })?;
         let status = response.status();
         if !status.is_success() {
             let retry_after = retry_after_header(response.headers());

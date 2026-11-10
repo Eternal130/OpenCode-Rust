@@ -753,11 +753,8 @@ async fn settle_tool_exit(
 ) -> Result<(), PublisherError> {
     match exit {
         ToolExit::Success { id, name, result } => {
-            let result = budget_tool_result(
-                result,
-                deps.tool_output.as_ref(),
-                deps.image_limits.as_ref(),
-            );
+            let result =
+                budget_tool_result(result, deps.tool_output.as_ref(), deps.image_limits.as_ref());
             publisher.tool_execution(&id, &name, &result).await
         }
         ToolExit::Error { id, error, metadata } => {
@@ -807,11 +804,8 @@ mod g308_tests {
             metadata: None,
             output: None,
         };
-        let budgeted = budget_tool_result(
-            result,
-            Some(&service),
-            Some(&crate::image::Limits::default()),
-        );
+        let budgeted =
+            budget_tool_result(result, Some(&service), Some(&crate::image::Limits::default()));
 
         let marker = budgeted.content.iter().any(|item| match item {
             oc_schema::tool::Content::Text { text } => text.contains("[showing "),
@@ -835,7 +829,8 @@ mod g308_tests {
             metadata: None,
             output: None,
         };
-        let budgeted = budget_tool_result(plain, Some(&service), Some(&crate::image::Limits::default()));
+        let budgeted =
+            budget_tool_result(plain, Some(&service), Some(&crate::image::Limits::default()));
         assert_eq!(
             budgeted.metadata.as_ref().and_then(|meta| meta.get("truncated")),
             Some(&serde_json::json!(false))

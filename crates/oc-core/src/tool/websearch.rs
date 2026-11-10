@@ -613,9 +613,7 @@ async fn select_provider_with_budget(
                                 fields: vec![oc_schema::form::Field::String {
                                     key: "provider".into(),
                                     title: None,
-                                    description: Some(
-                                        "Choose a provider for web search.".into(),
-                                    ),
+                                    description: Some("Choose a provider for web search.".into()),
                                     required: Some(true),
                                     hidden: None,
                                     when: None,

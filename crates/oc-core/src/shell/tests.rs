@@ -58,10 +58,7 @@ async fn g304_empty_cwd_refuses_to_spawn() {
         )
         .await
         .expect_err("empty cwd must not spawn");
-    assert!(
-        error.to_string().contains("working directory"),
-        "clear error text: {error}"
-    );
+    assert!(error.to_string().contains("working directory"), "clear error text: {error}");
     assert!(shell.list().is_empty(), "no command was spawned");
 }
 

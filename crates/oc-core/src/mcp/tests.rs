@@ -1670,7 +1670,7 @@ async fn mcp_registry_watch_reconnects_after_background_session_expiry() {
     let (_db, bus) = test_bus().await;
     let mut servers = BTreeMap::new();
     servers.insert("remote".to_string(), local_config());
-        let expire = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let expire = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let connects = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let push_slot: Arc<parking_lot::Mutex<Vec<mpsc::UnboundedSender<ServerJsonRpcMessage>>>> =
         Arc::new(parking_lot::Mutex::new(Vec::new()));
@@ -1739,8 +1739,7 @@ async fn mcp_registry_watch_reconnects_after_background_session_expiry() {
     ));
     for _ in 0..400 {
         if connects.load(std::sync::atomic::Ordering::SeqCst) >= 2 && registry.tools().len() == 1 {
-            let names: Vec<String> =
-                registry.tools().into_iter().map(|tool| tool.name).collect();
+            let names: Vec<String> = registry.tools().into_iter().map(|tool| tool.name).collect();
             if names == vec!["after".to_string()] {
                 break;
             }

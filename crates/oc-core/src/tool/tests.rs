@@ -1052,11 +1052,7 @@ impl crate::environment::Files for RecordingFiles {
         crate::environment::LocalFiles.read(path, range).await
     }
 
-    async fn write(
-        &self,
-        path: &str,
-        bytes: &[u8],
-    ) -> Result<(), crate::environment::FilesError> {
+    async fn write(&self, path: &str, bytes: &[u8]) -> Result<(), crate::environment::FilesError> {
         crate::environment::LocalFiles.write(path, bytes).await
     }
 
@@ -1136,10 +1132,7 @@ async fn tool_read_agents_discovery_goes_through_the_files_seam_nearest_first() 
     let paths = &loads[0].1;
     assert_eq!(
         paths,
-        &vec![
-            base.dir.join("sub/deep/AGENTS.md"),
-            base.dir.join("sub/AGENTS.md"),
-        ],
+        &vec![base.dir.join("sub/deep/AGENTS.md"), base.dir.join("sub/AGENTS.md"),],
         "injection order is nearest-first"
     );
 }
