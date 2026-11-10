@@ -110,6 +110,9 @@ pub struct PluginBoot {
     pub terminal_slot: Arc<EngineTerminalSlot>,
     /// The integration-port slot (G-64; filled after `Engine::boot`).
     pub integration_slot: Arc<EngineIntegrationSlot>,
+    /// The rpc-event-port slot (G-295; filled after `Engine::boot` —
+    /// `rpc.{id}.{event}` ephemeral publishes onto the engine bus).
+    pub rpc_event_slot: Arc<EngineRpcEventSlot>,
     /// G-222 — serializes the reload passes: the `ConfigReloadBridge`'s
     /// config leg and the [`PluginSupervisor`]'s fs/timer/sdk legs share
     /// it (the ref merges all four trigger sources into ONE supervisor
@@ -166,6 +169,7 @@ impl PluginBoot {
             reference_slot: Arc::new(EngineReferenceSlot::default()),
             terminal_slot: Arc::new(EngineTerminalSlot::default()),
             integration_slot: Arc::new(EngineIntegrationSlot::default()),
+            rpc_event_slot: Arc::new(EngineRpcEventSlot::default()),
             reload_lock: Arc::new(tokio::sync::Mutex::new(())),
             supervisor: parking_lot::RwLock::new(None),
         }
@@ -379,6 +383,7 @@ pub fn boot(
     let reference_slot = Arc::new(EngineReferenceSlot::default());
     let terminal_slot = Arc::new(EngineTerminalSlot::default());
     let integration_slot = Arc::new(EngineIntegrationSlot::default());
+    let rpc_event_slot = Arc::new(EngineRpcEventSlot::default());
     if !detected.enabled() && resolution.entries().is_empty() {
         eprintln!(
             "opencode plugin: no plugins configured and bun is unavailable; staying flat (no Code Mode runtime)"
@@ -397,6 +402,7 @@ pub fn boot(
             reference_slot,
             terminal_slot,
             integration_slot,
+            rpc_event_slot: Arc::new(EngineRpcEventSlot::default()),
             reload_lock: Arc::new(tokio::sync::Mutex::new(())),
             supervisor: parking_lot::RwLock::new(None),
         });
@@ -483,6 +489,11 @@ pub fn boot(
         integration_port: Some(
             Arc::clone(&integration_slot) as Arc<dyn oc_plugin_host::IntegrationPort>
         ),
+        // G-295: `rpc.{id}.{event}` ephemeral publishes onto the engine
+        // bus (slot filled after `Engine::boot`, the same pattern).
+        rpc_event_port: Some(
+            Arc::clone(&rpc_event_slot) as Arc<dyn oc_plugin_host::RpcEventPort>
+        ),
         storage_port,
         entry_options: resolution.entry_options(),
         // The registration pass spans bun cold start + every entry's
@@ -512,6 +523,7 @@ pub fn boot(
         reference_slot,
         terminal_slot,
         integration_slot,
+        rpc_event_slot,
         reload_lock: Arc::new(tokio::sync::Mutex::new(())),
         supervisor: parking_lot::RwLock::new(None),
     })
@@ -2117,6 +2129,86 @@ async fn publish_event(
         .await
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+/// G-295 — the engine-backed [`oc_plugin_host::RpcEventPort`]: one
+/// plugin's `ctx.rpc.register(...).events.emit(name, data)` becomes an
+/// EPHEMERAL `rpc.{rpcID}.{event}` bus event scoped to the boot
+/// location (ref rpc.ts:91-103 scopes by the location the RPC was
+/// registered in; the port's single-guest architecture tracks one
+/// location at a time — the same PLUG-D07 approximation the location
+/// push uses). The type is ephemeral and dynamic (not in the static
+/// registry); the SSE feed's `rpc.*` wildcard keeps it public
+/// (event_manifest::RPC_PREFIX, verified by the manifest tests).
+pub struct EngineRpcEventPort {
+    pub engine: Arc<Engine>,
+    pub location: LocationRef,
+}
+
+#[async_trait]
+impl oc_plugin_host::RpcEventPort for EngineRpcEventPort {
+    async fn publish(&self, rpc_id: &str, event: &str, data: Value) -> Result<(), String> {
+        let type_ = format!("rpc.{rpc_id}.{event}");
+        let services = self
+            .engine
+            .location(self.location.clone())
+            .await
+            .map_err(|error| error.to_string())?;
+        let location = oc_schema::location::Ref {
+            directory: oc_schema::common::AbsolutePath::parse(
+                services.graph.location.directory.to_string_lossy().into_owned(),
+            ),
+            workspace_id: services
+                .graph
+                .location
+                .workspace_id
+                .as_ref()
+                .and_then(|id| oc_schema::id::WorkspaceId::parse(id.clone()).ok()),
+        };
+        services
+            .graph
+            .bus
+            .publish(
+                &oc_core::bus::EventDefinition::ephemeral(&type_),
+                data,
+                oc_core::bus::PublishOptions {
+                    location: Some(location),
+                    ..oc_core::bus::PublishOptions::default()
+                },
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+}
+
+/// The pre-engine rpc-event-port placeholder (the slot pattern): empty
+/// until `boot_and_serve` fills it; emits before the fill reject with a
+/// clear message instead of vanishing.
+#[derive(Default)]
+pub struct EngineRpcEventSlot(std::sync::RwLock<Option<Arc<EngineRpcEventPort>>>);
+
+impl EngineRpcEventSlot {
+    /// Fill the slot (idempotent; the first engine wins).
+    pub fn fill(&self, port: Arc<EngineRpcEventPort>) {
+        let mut slot = self.0.write().expect("rpc event slot poisoned");
+        if slot.is_none() {
+            *slot = Some(port);
+        }
+    }
+
+    fn port(&self) -> Result<Arc<EngineRpcEventPort>, String> {
+        self.0.read().expect("rpc event slot poisoned").clone().ok_or_else(|| {
+            "rpc.event: the engine is not attached to the plugin host yet".to_owned()
+        })
+    }
+}
+
+#[async_trait]
+impl oc_plugin_host::RpcEventPort for EngineRpcEventSlot {
+    async fn publish(&self, rpc_id: &str, event: &str, data: Value) -> Result<(), String> {
+        self.port()?.publish(rpc_id, event, data).await
+    }
 }
 
 /// The v2 `Session.Info`-shaped JSON for one row (the plugin surface's

@@ -111,12 +111,14 @@ fn revision_fingerprint(digests: &HashMap<String, String>) -> String {
 /// location-scoped per its own routing — the same visibility class the
 /// SSE feed already treats `rpc.*` as public); the host crate stays
 /// dependency-light, so the port travels as data like every other
-/// engine seam. Answered INLINE on the IO reader (the publish is
-/// non-blocking by contract — deadlock rule 1).
+/// engine seam. The publish is answered ASYNC off the IO reader
+/// (deadlock rule 1 — a bus publish may await; the reply is enqueued
+/// when it settles, like every other engine port).
+#[async_trait]
 pub trait RpcEventPort: Send + Sync {
     /// Publish one ephemeral `rpc.{rpc_id}.{event}` bus event carrying
-    /// `data`. Must not block.
-    fn publish(&self, rpc_id: &str, event: &str, data: Value) -> Result<(), String>;
+    /// `data`.
+    async fn publish(&self, rpc_id: &str, event: &str, data: Value) -> Result<(), String>;
 }
 
 /// Everything the supervisor needs at spawn time.
@@ -480,9 +482,9 @@ impl Shared {
             // -- G-295: `rpc.register(...).events.emit(name, data)` —
             //    validate the rpc id + the DECLARED event name, then
             //    publish the ephemeral `rpc.{id}.{event}` bus event
-            //    through the embedder's port (answered inline — the
-            //    publish is non-blocking by contract, deadlock rule 1).
-            "rpc.event" => Some(answer_rpc_event(self, id, params)),
+            //    through the embedder's port (async off the reader —
+            //    the bus publish may await, deadlock rule 1).
+            "rpc.event" => answer_rpc_event(self, id, params),
             // -- plugin-ID-scoped durable KV (PLUG-D18): the DB-backed
             //    port answers asynchronously off the reader (deadlock
             //    rule 1 — the backend's IO never blocks the pipe).
@@ -1461,17 +1463,19 @@ fn log_guest(params: &Value) {
 /// `events.emit(name, data)` after its own definition check. The host
 /// re-validates (registration exists, event name declared — both sides
 /// of the bridge validate, like every registration surface) and
-/// publishes `rpc.{id}.{name}` through the [`RpcEventPort`]. No port
-/// bound → a clear error back to the guest (the three-state discipline
-/// of every other optional engine seam).
-fn answer_rpc_event(shared: &Shared, id: u64, params: &Value) -> String {
+/// publishes `rpc.{id}.{name}` through the [`RpcEventPort`]. The
+/// publish runs async off the reader (deadlock rule 1 — the bus
+/// publish may await); every fast-fail leg (bad params, unknown id,
+/// undeclared event, no port) answers inline. Returns `None` when the
+/// reply is deferred.
+fn answer_rpc_event(shared: &Arc<Shared>, id: u64, params: &Value) -> Option<String> {
     let Some(rpc_id) = params.get("id").and_then(Value::as_str).filter(|id| !id.is_empty())
     else {
-        return protocol::error_response(id, "rpc.event requires an id");
+        return Some(protocol::error_response(id, "rpc.event requires an id"));
     };
     let Some(event) = params.get("name").and_then(Value::as_str).filter(|name| !name.is_empty())
     else {
-        return protocol::error_response(id, "rpc.event requires a name");
+        return Some(protocol::error_response(id, "rpc.event requires a name"));
     };
     let registration = shared
         .registrations
@@ -1481,7 +1485,7 @@ fn answer_rpc_event(shared: &Shared, id: u64, params: &Value) -> String {
         .get(rpc_id)
         .cloned();
     let Some(registration) = registration else {
-        return protocol::error_response(id, &format!("Unknown RPC id: {rpc_id}"));
+        return Some(protocol::error_response(id, &format!("Unknown RPC id: {rpc_id}")));
     };
     let declared = registration
         .definition
@@ -1489,19 +1493,29 @@ fn answer_rpc_event(shared: &Shared, id: u64, params: &Value) -> String {
         .and_then(Value::as_object)
         .is_some_and(|events| events.contains_key(event));
     if !declared {
-        return protocol::error_response(id, &format!("Unknown RPC event: {rpc_id}.{event}"));
+        return Some(protocol::error_response(id, &format!("Unknown RPC event: {rpc_id}.{event}")));
     }
+    let Some(handle) = shared.runtime_handle.clone() else {
+        return Some(protocol::error_response(id, "plugin host runtime unavailable"));
+    };
     let Some(port) = shared.config.rpc_event_port.clone() else {
-        return protocol::error_response(
+        return Some(protocol::error_response(
             id,
             "rpc.event: no event bus attached to the plugin host",
-        );
+        ));
     };
     let data = params.get("data").cloned().unwrap_or(Value::Null);
-    match port.publish(rpc_id, event, data) {
-        Ok(()) => protocol::response(id, Value::Null),
-        Err(message) => protocol::error_response(id, &message),
-    }
+    let outbound = shared.outbound.read().expect("outbound lock poisoned").clone();
+    let rpc_id = rpc_id.to_owned();
+    let event = event.to_owned();
+    handle.spawn(async move {
+        let reply = match port.publish(&rpc_id, &event, data).await {
+            Ok(()) => protocol::response(id, Value::Null),
+            Err(message) => protocol::error_response(id, &message),
+        };
+        let _ = outbound.send(reply);
+    });
+    None
 }
 
 /// The `rpc.register` guest-request arm (PLUG-D14): validate + record

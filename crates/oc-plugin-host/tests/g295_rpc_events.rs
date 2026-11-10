@@ -9,6 +9,7 @@ mod common;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use oc_plugin_host::{PluginHost, RpcEventPort};
 use serde_json::{json, Value};
 
@@ -18,8 +19,9 @@ struct RecordingRpcEventPort {
     published: Mutex<Vec<(String, String, Value)>>,
 }
 
+#[async_trait]
 impl RpcEventPort for RecordingRpcEventPort {
-    fn publish(&self, rpc_id: &str, event: &str, data: Value) -> Result<(), String> {
+    async fn publish(&self, rpc_id: &str, event: &str, data: Value) -> Result<(), String> {
         self.published
             .lock()
             .unwrap()

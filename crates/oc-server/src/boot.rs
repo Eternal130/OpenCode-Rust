@@ -473,6 +473,13 @@ pub async fn boot_and_serve_with_listener(
     plugin_boot.integration_slot.fill(Arc::new(crate::plugins::EngineIntegrationPort {
         engine: Arc::clone(&app_state.engine),
     }));
+    // G-295: `rpc.register(...).events.emit` publishes the ephemeral
+    // `rpc.{id}.{event}` bus event scoped to the boot location (the
+    // PLUG-D07 single-location approximation).
+    plugin_boot.rpc_event_slot.fill(Arc::new(crate::plugins::EngineRpcEventPort {
+        engine: Arc::clone(&app_state.engine),
+        location: LocationRef::new(config_location.clone(), None),
+    }));
     *app_state.worktree_strategies.write() =
         crate::plugins::plugin_worktree_registry(&plugin_boot.host, &plugin_boot.resolution);
     app_state.plugins = Some(plugin_boot);
