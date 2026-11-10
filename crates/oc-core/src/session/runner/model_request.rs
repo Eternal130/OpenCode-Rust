@@ -1023,7 +1023,10 @@ impl SessionModelRequest {
         let registry = Arc::clone(&self.tools);
         let hooked_names: BTreeMap<String, String> = hooked
             .iter()
-            .map(|(name, registration)| (name.clone(), registration.effective_name()))
+            .map(|(name, registration)| {
+                let effective = registration.effective_name();
+                (name.clone(), effective)
+            })
             .collect();
         // Context captured per request (v2 Tool.Context: session + agent;
         // the assistant message id joins per call in the step loop).
