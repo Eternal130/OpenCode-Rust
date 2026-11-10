@@ -1,5 +1,8 @@
 //! SSE data layer on `oc-client`: a [`Connection`] with reconnect
-//! (exponential backoff), **resync on reconnect** (session re-fetch +
+//! (exponential backoff), the G-300 **connect/idle watchdog** (a 2s
+//! connect+first-frame window, a `server.connected` first-frame
+//! assertion, and a 45s per-read idle deadline — ref
+//! `connection.ts`), **resync on reconnect** (session re-fetch +
 //! event cursor), a connection-state stream for the status line, and a
 //! **single ordered ingest channel** into the store.
 //!
@@ -286,6 +289,18 @@ pub struct ConnectionConfig {
     /// Give up (report [`ConnectionState::Failed`]) after this many
     /// attempts; `None` retries forever.
     pub max_attempts: Option<u32>,
+    /// G-300 — the connect window (ref `connectTimeout` 2s,
+    /// connection.ts:32): the deadline for the subscribe request AND
+    /// its first frame. A server that accepts TCP but never speaks is
+    /// dropped and reconnected instead of hanging on the OS backstop.
+    pub connect_timeout: Duration,
+    /// G-300 — the per-read idle deadline (ref `defaultIdleTimeout`
+    /// 45s, connection.ts:35): every `next_json` read is wrapped in
+    /// it; a timeout is the "Event stream stalled" path — the stream
+    /// closes and the loop reconnects (half-open detection). The
+    /// server writes a keepalive comment every 15s, so a quiet but
+    /// healthy stream never trips it.
+    pub idle_timeout: Duration,
 }
 
 impl Default for ConnectionConfig {
@@ -294,6 +309,8 @@ impl Default for ConnectionConfig {
             backoff_base: Duration::from_millis(500),
             backoff_max: Duration::from_secs(8),
             max_attempts: None,
+            connect_timeout: Duration::from_secs(2),
+            idle_timeout: Duration::from_secs(45),
         }
     }
 }
@@ -1094,12 +1111,38 @@ impl Connection {
             // Resubscription carries the tracked cursor as the SSE
             // `Last-Event-ID` header: a cursor-aware server resumes the
             // event stream from it; any other server ignores the header.
-            let stream = match self.cursor.as_deref() {
+            // G-300: the subscribe runs INSIDE the connect window (ref
+            // `connectTimeout`, connection.ts:32/81) — a request that
+            // never completes within it is aborted and the loop
+            // reconnects instead of hanging on the TCP/OS backstop.
+            let subscribed = match self.cursor.as_deref() {
                 Some(cursor) => self.client.event().subscribe_from(cursor).await,
                 None => self.client.event().subscribe().await,
             };
-            let Ok(mut stream) = stream else {
-                continue;
+            let mut stream = match tokio::time::timeout(self.config.connect_timeout, subscribed).await
+            {
+                Ok(Ok(stream)) => stream,
+                Ok(Err(_)) => continue, // subscribe error → reconnect
+                Err(_) => continue,     // connect window elapsed → reconnect
+            };
+            // G-300: the FIRST frame must arrive inside the connect
+            // window too, and its type must be `server.connected` —
+            // anything else is a protocol failure (connection.ts:106-107
+            // "Event stream did not start with server.connected"): drop
+            // the stream and reconnect. No ingest is published for a
+            // failed handshake (the resync below also stays skipped —
+            // the ref only records the connection after the marker).
+            let first = match tokio::time::timeout(self.config.connect_timeout, stream.next_json())
+                .await
+            {
+                Ok(Ok(Some(value))) => value,
+                Ok(Ok(None)) => continue, // stream ended before any frame
+                Ok(Err(_)) => continue,   // decode error
+                Err(_) => continue,       // first frame never landed in time
+            };
+            let connected = match BusEvent::from_json(&first) {
+                Some(event) if event.is_server_connected() => event,
+                _ => continue, // protocol failure → drop the stream, reconnect
             };
             // Resync after EVERY successful subscribe — reconnects (the
             // consistency net for events missed while offline) AND the
@@ -1155,7 +1198,29 @@ impl Connection {
                     return;
                 }
             }
-            while let Ok(Some(value)) = stream.next_json().await {
+            // The handshake marker publishes first (the connected
+            // transition + the raw event, same order as before G-300).
+            if tx.send(Ingest::Connected).await.is_err() {
+                return;
+            }
+            if !connected.id.is_empty() {
+                self.cursor = Some(connected.id.clone());
+            }
+            if tx.send(Ingest::Event(connected)).await.is_err() {
+                return;
+            }
+            // G-300 — the idle watchdog: every read is wrapped in the
+            // per-read idle deadline (ref `idleTimeout`, connection.ts:
+            // 35/91 — "Event stream stalled"). A half-open connection
+            // (remote gone silent without FIN/RST) trips it and the
+            // loop reconnects through the SAME path as an error or EOF;
+            // the resubscription carries the tracked cursor as before.
+            loop {
+                let next =
+                    tokio::time::timeout(self.config.idle_timeout, stream.next_json()).await;
+                let Ok(Ok(Some(value))) = next else {
+                    break; // stall, decode error, or stream end → reconnect
+                };
                 if let Some(event) = BusEvent::from_json(&value) {
                     if event.is_server_connected() && tx.send(Ingest::Connected).await.is_err() {
                         return;
@@ -1168,7 +1233,8 @@ impl Connection {
                     }
                 }
             }
-            // Stream end or decode error falls through — reconnect.
+            // Stream end, decode error, or watchdog stall — all fall
+            // through and reconnect.
         }
     }
 }
@@ -1301,12 +1367,15 @@ mod tests {
                     });
                     cursors.lock().expect("cursor log").push(cursor);
                     // First connection: connected + one live event, then
-                    // EOF. Second connection: one live event, then EOF.
+                    // EOF. Second connection: the handshake marker again
+                    // (G-300: every connection's first frame MUST be
+                    // server.connected) + one live event, then EOF.
                     let body = if first {
                         sse_frame("e1", "server.connected", "{}")
                             + &sse_frame("e2", "message.updated", "{\"sessionID\":\"s1\"}")
                     } else {
-                        sse_frame("e3", "message.updated", "{\"sessionID\":\"s1\"}")
+                        sse_frame("c2", "server.connected", "{}")
+                            + &sse_frame("e3", "message.updated", "{\"sessionID\":\"s1\"}")
                     };
                     let response = format!(
                         "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{body}"
@@ -1334,6 +1403,8 @@ mod tests {
                 backoff_base: Duration::from_millis(10),
                 backoff_max: Duration::from_millis(10),
                 max_attempts: Some(2),
+                connect_timeout: Duration::from_secs(2),
+                idle_timeout: Duration::from_secs(45),
             },
         );
         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
@@ -1342,7 +1413,7 @@ mod tests {
 
         let mut observed = Vec::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        while observed.len() < 7 {
+        while observed.len() < 9 {
             let Some(message) =
                 tokio::time::timeout_at(deadline, rx.recv()).await.expect("deadline")
             else {
@@ -1355,9 +1426,10 @@ mod tests {
         // ONE ordered stream: the FIRST-connect boot resync (session
         // hydration — the M2 D4 fix), the connected marker + the raw
         // server.connected event + live events from connection 1, the
-        // reconnect transition, the second resync snapshot, then live
-        // events from connection 2.
-        assert_eq!(observed.len(), 7, "observed: {observed:?}");
+        // reconnect transition, the second resync snapshot, the second
+        // connection's handshake (connected marker + raw event, G-300),
+        // then live events from connection 2.
+        assert_eq!(observed.len(), 9, "observed: {observed:?}");
         let Ingest::Resync { .. } = &observed[0] else {
             panic!("boot resync leads the first connect: {observed:?}");
         };
@@ -1380,7 +1452,12 @@ mod tests {
         assert_eq!(sessions[0].viewed, Some(50.0));
         assert_eq!(sessions[2].time_idle, None, "s3 omits idle");
         assert_eq!(unread, &vec!["s1".to_owned()], "no false unread for s2/s3");
-        assert!(matches!(&observed[6], Ingest::Event(event) if event.id == "e3"));
+        assert_eq!(observed[6], Ingest::Connected, "handshake 2: {observed:?}");
+        assert!(
+            matches!(&observed[7], Ingest::Event(event) if event.id == "c2" && event.type_ == "server.connected"),
+            "{observed:?}"
+        );
+        assert!(matches!(&observed[8], Ingest::Event(event) if event.id == "e3"));
         // The reconnect carried the tracked cursor (e2) as Last-Event-ID.
         let cursors = seen_cursors.lock().expect("cursor log").clone();
         assert_eq!(cursors.len(), 2, "two /api/event connections");
@@ -1465,16 +1542,19 @@ mod tests {
                     )
                 };
                 if path.starts_with("/api/event") {
-                    // Both connections: one live event then EOF (the
-                    // second connection's event arrives AFTER the
-                    // resync — proving live continues on top).
+                    // Both connections: the handshake marker first (G-300:
+                    // first frame MUST be server.connected) then one live
+                    // event then EOF (the second connection's event
+                    // arrives AFTER the resync — proving live continues
+                    // on top).
                     let resumed = head.to_lowercase().contains("last-event-id");
                     let body = if resumed {
-                        sse_frame(
-                            "e3",
-                            "session.text.delta",
-                            r#"{"sessionID":"s1","assistantMessageID":"msg_a2","delta":"Live after resync."}"#,
-                        )
+                        sse_frame("c2", "server.connected", "{}")
+                            + &sse_frame(
+                                "e3",
+                                "session.text.delta",
+                                r#"{"sessionID":"s1","assistantMessageID":"msg_a2","delta":"Live after resync."}"#,
+                            )
                     } else {
                         sse_frame("e1", "server.connected", "{}")
                             + &sse_frame("e2", "message.updated", r#"{"sessionID":"s1"}"#)
@@ -1521,6 +1601,8 @@ mod tests {
                 backoff_base: Duration::from_millis(10),
                 backoff_max: Duration::from_millis(10),
                 max_attempts: Some(2),
+                connect_timeout: Duration::from_secs(2),
+                idle_timeout: Duration::from_secs(45),
             },
         );
         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
@@ -1534,7 +1616,7 @@ mod tests {
 
         let mut observed = Vec::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        while observed.len() < 7 {
+        while observed.len() < 9 {
             let Some(message) =
                 tokio::time::timeout_at(deadline, rx.recv()).await.expect("deadline")
             else {
@@ -1554,8 +1636,8 @@ mod tests {
         // on the FIRST connect — session hydration) → live (connected
         // marker + the raw server.connected + the live event) →
         // reconnect transition → resync (sessions + unread + messages)
-        // → live.
-        assert_eq!(observed.len(), 7, "observed: {observed:?}");
+        // → the second handshake (connected + raw marker) → live.
+        assert_eq!(observed.len(), 9, "observed: {observed:?}");
         assert!(
             matches!(&observed[0], Ingest::Resync { messages, .. } if matches!(
                 messages.as_slice(),
@@ -1590,8 +1672,13 @@ mod tests {
         );
         // The store reconciled and live continued ON TOP: the tree is
         // the resync's rebuilt pair, then the post-resync delta
-        // appended in order (the ingest loop applied all seven).
-        assert!(matches!(&observed[6], Ingest::Event(event) if event.id == "e3"), "{observed:?}");
+        // appended in order (the ingest loop applied all nine).
+        assert!(matches!(observed[6], Ingest::Connected), "{observed:?}");
+        assert!(
+            matches!(&observed[7], Ingest::Event(event) if event.id == "c2" && event.type_ == "server.connected"),
+            "{observed:?}"
+        );
+        assert!(matches!(&observed[8], Ingest::Event(event) if event.id == "e3"), "{observed:?}");
         let after = store.messages("s1");
         assert_eq!(after.len(), 3, "rebuilt pair + live delta, in order");
         assert!(matches!(&after[0], crate::components::message::model::Message::User { text, .. }
@@ -1660,19 +1747,22 @@ mod tests {
                     )
                 };
                 if path.starts_with("/api/event") {
-                    // The replay-honoring arm: on resubscription re-send
-                    // the post-cursor events (SAME ids) plus one fresh.
+                    // The replay-honoring arm: on resubscription the
+                    // handshake marker first (G-300), then re-send the
+                    // post-cursor events (SAME ids) plus one fresh.
                     let resumed = head.to_lowercase().contains("last-event-id: e2");
                     let body = if resumed {
-                        sse_frame(
-                            "e2",
-                            "session.text.delta",
-                            r#"{"sessionID":"s1","assistantMessageID":"msg_a1","delta":"Hello"}"#,
-                        ) + &sse_frame(
-                            "e3",
-                            "session.text.delta",
-                            r#"{"sessionID":"s1","assistantMessageID":"msg_a1","delta":" World"}"#,
-                        )
+                        sse_frame("c2", "server.connected", "{}")
+                            + &sse_frame(
+                                "e2",
+                                "session.text.delta",
+                                r#"{"sessionID":"s1","assistantMessageID":"msg_a1","delta":"Hello"}"#,
+                            )
+                            + &sse_frame(
+                                "e3",
+                                "session.text.delta",
+                                r#"{"sessionID":"s1","assistantMessageID":"msg_a1","delta":" World"}"#,
+                            )
                     } else {
                         sse_frame("e1", "server.connected", "{}")
                             + &sse_frame(
@@ -1719,6 +1809,8 @@ mod tests {
                 backoff_base: Duration::from_millis(10),
                 backoff_max: Duration::from_millis(10),
                 max_attempts: Some(2),
+                connect_timeout: Duration::from_secs(2),
+                idle_timeout: Duration::from_secs(45),
             },
         );
         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
@@ -1730,7 +1822,7 @@ mod tests {
 
         let mut observed = Vec::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        while observed.len() < 8 {
+        while observed.len() < 10 {
             let Some(message) =
                 tokio::time::timeout_at(deadline, rx.recv()).await.expect("deadline")
             else {
@@ -1746,8 +1838,9 @@ mod tests {
         server.abort();
 
         // boot resync ("Hello") + connected + live delta → reconnect →
-        // resync → replayed e2 (delivered, but dropped by the dedup window) + e3.
-        assert_eq!(observed.len(), 8, "observed: {observed:?}");
+        // resync → handshake (connected + marker) → the replayed e2
+        // (delivered, but dropped by the dedup window) + e3.
+        assert_eq!(observed.len(), 10, "observed: {observed:?}");
         assert!(
             matches!(&observed[0], Ingest::Resync { messages, .. } if matches!(
                 messages.as_slice(),
@@ -1772,11 +1865,16 @@ mod tests {
                 [(_, list)] if list.len() == 1
             )
         ));
+        assert!(matches!(observed[6], Ingest::Connected), "{observed:?}");
         assert!(
-            matches!(&observed[6], Ingest::Event(event) if event.id == "e2"),
+            matches!(&observed[7], Ingest::Event(event) if event.id == "c2" && event.type_ == "server.connected"),
+            "{observed:?}"
+        );
+        assert!(
+            matches!(&observed[8], Ingest::Event(event) if event.id == "e2"),
             "the replayed frame DID arrive (same id)"
         );
-        assert!(matches!(&observed[7], Ingest::Event(event) if event.id == "e3"));
+        assert!(matches!(&observed[9], Ingest::Event(event) if event.id == "e3"));
         // THE CONTRACT: the replayed e2 did not double-append onto the
         // resync-rebuilt tree ("HelloHello World" without dedup).
         let messages = store.messages("s1");
@@ -1786,6 +1884,325 @@ mod tests {
             "Hello World",
             "replay deduped; fresh delta applied"
         );
+    }
+
+    /// G-300 (a) — the connect window: a server that ACCEPTS the
+    /// subscribe but never sends the first frame is dropped within the
+    /// connect deadline and the loop reconnects (ref `connectTimeout`,
+    /// connection.ts:32/81) instead of hanging on the TCP/OS backstop.
+    /// Both attempts starve → the loop reports `Failed`.
+    #[tokio::test]
+    async fn watchdog_first_frame_deadline_reconnects() {
+        use std::sync::{Arc, Mutex};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let connections = Arc::new(Mutex::new(0u32));
+        let counter = Arc::clone(&connections);
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else { continue };
+                let counter = Arc::clone(&counter);
+                let (mut reader, _) = socket.split();
+                let mut request = vec![0u8; 8192];
+                let _ = reader.read(&mut request).await;
+                let path = request.split(|byte| *byte == b' ')
+                    .nth(1)
+                    .map(|raw| String::from_utf8_lossy(raw).into_owned())
+                    .unwrap_or_default();
+                if path.starts_with("/api/event") {
+                    if let Ok(mut count) = counter.lock() {
+                        *count += 1;
+                    }
+                    // SSE headers, then NOTHING — the stream stays open
+                    // but never delivers a first frame.
+                    let _ = socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n",
+                        )
+                        .await;
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                } else {
+                    let _ = socket
+                        .write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n")
+                        .await;
+                }
+            }
+        });
+
+        let client = Client::new(&format!("http://{addr}")).expect("client");
+        let connection = Connection::with_config(
+            client.clone(),
+            ConnectionConfig {
+                backoff_base: Duration::from_millis(10),
+                backoff_max: Duration::from_millis(10),
+                max_attempts: Some(2),
+                connect_timeout: Duration::from_millis(150),
+                idle_timeout: Duration::from_secs(45),
+            },
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        // The fetcher is never invoked (no handshake → no resync).
+        let runner = tokio::spawn(connection.run(tx, HttpResync::new(client)));
+
+        let mut observed = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while observed.len() < 2 {
+            let Some(message) =
+                tokio::time::timeout_at(deadline, rx.recv()).await.expect("deadline")
+            else {
+                break;
+            };
+            observed.push(message);
+        }
+        let _ = runner.await;
+        server.abort();
+
+        assert_eq!(
+            observed,
+            vec![
+                Ingest::Connection(ConnectionState::Reconnecting { attempt: 2 }),
+                Ingest::Connection(ConnectionState::Failed),
+            ],
+            "both attempts starved on the first frame: {observed:?}"
+        );
+        assert_eq!(*connections.lock().expect("count"), 2, "two /api/event connections");
+    }
+
+    /// G-300 (b) — the handshake assertion: a stream whose FIRST frame
+    /// is not `server.connected` is a protocol failure
+    /// (connection.ts:106-107) — the stream is dropped WITHOUT
+    /// publishing the frame (or tracking its id as the cursor) and the
+    /// loop reconnects; the next connection completes the handshake.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // scripted end-to-end listener
+    async fn watchdog_wrong_first_frame_reconnects() {
+        use std::sync::{Arc, Mutex};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let seen_cursors: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
+        let cursors = Arc::clone(&seen_cursors);
+        let server = tokio::spawn(async move {
+            let mut connections = 0u32;
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else { continue };
+                connections += 1;
+                let first = connections <= 1;
+                let cursors = Arc::clone(&cursors);
+                let (mut reader, _) = socket.split();
+                let mut request = vec![0u8; 8192];
+                let _ = reader.read(&mut request).await;
+                let head = String::from_utf8_lossy(&request);
+                let path = head.split_whitespace().nth(1).unwrap_or_default().split('?').next().unwrap_or_default().to_owned();
+                if path.starts_with("/api/event") {
+                    let cursor = head.lines().find_map(|line| {
+                        let lower = line.to_lowercase();
+                        lower.strip_prefix("last-event-id:").map(|value| value.trim().to_owned())
+                    });
+                    cursors.lock().expect("cursor log").push(cursor);
+                    // Connection 1: a NON-marker first frame (protocol
+                    // failure). Connection 2: the proper handshake + a
+                    // live event.
+                    let body = if first {
+                        sse_frame("e1", "message.updated", "{\"sessionID\":\"s1\"}")
+                    } else {
+                        sse_frame("c1", "server.connected", "{}")
+                            + &sse_frame("e3", "message.updated", "{\"sessionID\":\"s1\"}")
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{body}"
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                } else if path.starts_with("/api/session") {
+                    let body = session_list_body();
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                } else {
+                    let _ = socket
+                        .write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n")
+                        .await;
+                }
+            }
+        });
+
+        let client = Client::new(&format!("http://{addr}")).expect("client");
+        let connection = Connection::with_config(
+            client,
+            ConnectionConfig {
+                backoff_base: Duration::from_millis(10),
+                backoff_max: Duration::from_millis(10),
+                max_attempts: Some(3),
+                connect_timeout: Duration::from_secs(2),
+                idle_timeout: Duration::from_secs(45),
+            },
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let runner = tokio::spawn(connection.run(tx, HttpResync::new(Client::new(&format!("http://{addr}")).expect("client"))));
+
+        let mut observed = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while observed.len() < 5 {
+            let Some(message) =
+                tokio::time::timeout_at(deadline, rx.recv()).await.expect("deadline")
+            else {
+                break;
+            };
+            observed.push(message);
+        }
+        let _ = runner.await;
+        server.abort();
+
+        // The offending frame never published: no Connected, no Event,
+        // no resync from connection 1 — the reconnect leads.
+        assert!(
+            matches!(
+                &observed[0],
+                Ingest::Connection(ConnectionState::Reconnecting { attempt: 2 })
+            ),
+            "{observed:?}"
+        );
+        assert!(
+            observed.iter().all(|message| !matches!(
+                message,
+                Ingest::Event(event) if event.id == "e1"
+            )),
+            "the non-marker first frame was dropped: {observed:?}"
+        );
+        assert!(matches!(&observed[1], Ingest::Resync { .. }), "{observed:?}");
+        assert!(matches!(observed[2], Ingest::Connected), "{observed:?}");
+        assert!(
+            matches!(&observed[3], Ingest::Event(event) if event.id == "c1" && event.type_ == "server.connected"),
+            "{observed:?}"
+        );
+        assert!(matches!(&observed[4], Ingest::Event(event) if event.id == "e3"), "{observed:?}");
+        // The dropped frame's id was never tracked — the resubscribe
+        // carried NO cursor.
+        let cursors = seen_cursors.lock().expect("cursor log").clone();
+        assert_eq!(cursors, vec![None, None], "no Last-Event-ID after the protocol failure");
+    }
+
+    /// G-300 (c) — the idle watchdog: a stream that completes the
+    /// handshake and then goes silent (half-open — no FIN, no RST) is
+    /// abandoned at the per-read idle deadline ("Event stream stalled",
+    /// connection.ts:35/91) and the loop reconnects — through the SAME
+    /// path as an error, cursor (`Last-Event-ID`) in tow.
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // scripted end-to-end listener
+    async fn watchdog_idle_stall_reconnects_with_cursor() {
+        use std::sync::{Arc, Mutex};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let seen_cursors: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
+        let cursors = Arc::clone(&seen_cursors);
+        let server = tokio::spawn(async move {
+            let mut connections = 0u32;
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else { continue };
+                connections += 1;
+                let first = connections <= 1;
+                let cursors = Arc::clone(&cursors);
+                let (mut reader, _) = socket.split();
+                let mut request = vec![0u8; 8192];
+                let _ = reader.read(&mut request).await;
+                let head = String::from_utf8_lossy(&request);
+                let path = head.split_whitespace().nth(1).unwrap_or_default().split('?').next().unwrap_or_default().to_owned();
+                if path.starts_with("/api/event") {
+                    let cursor = head.lines().find_map(|line| {
+                        let lower = line.to_lowercase();
+                        lower.strip_prefix("last-event-id:").map(|value| value.trim().to_owned())
+                    });
+                    cursors.lock().expect("cursor log").push(cursor);
+                    if first {
+                        // Handshake, then SILENCE — the socket stays
+                        // open with no further frames (the stall).
+                        let body = sse_frame("e1", "server.connected", "{}");
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n{body}"
+                        );
+                        let _ = socket.write_all(response.as_bytes()).await;
+                        tokio::time::sleep(Duration::from_secs(3600)).await;
+                    } else {
+                        let body = sse_frame("c2", "server.connected", "{}")
+                            + &sse_frame("e3", "message.updated", "{\"sessionID\":\"s1\"}");
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{body}"
+                        );
+                        let _ = socket.write_all(response.as_bytes()).await;
+                    }
+                } else if path.starts_with("/api/session") {
+                    let body = session_list_body();
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                } else {
+                    let _ = socket
+                        .write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n")
+                        .await;
+                }
+            }
+        });
+
+        let client = Client::new(&format!("http://{addr}")).expect("client");
+        let connection = Connection::with_config(
+            client,
+            ConnectionConfig {
+                backoff_base: Duration::from_millis(10),
+                backoff_max: Duration::from_millis(10),
+                max_attempts: Some(2),
+                connect_timeout: Duration::from_secs(2),
+                idle_timeout: Duration::from_millis(150),
+            },
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let runner = tokio::spawn(connection.run(tx, HttpResync::new(Client::new(&format!("http://{addr}")).expect("client"))));
+
+        let mut observed = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while observed.len() < 8 {
+            let Some(message) =
+                tokio::time::timeout_at(deadline, rx.recv()).await.expect("deadline")
+            else {
+                break;
+            };
+            observed.push(message);
+        }
+        let _ = runner.await;
+        server.abort();
+
+        // Connection 1: resync + handshake, then the stall → the
+        // reconnect transition; connection 2: resync + handshake + the
+        // live event.
+        assert_eq!(observed.len(), 8, "observed: {observed:?}");
+        assert!(matches!(&observed[0], Ingest::Resync { .. }), "{observed:?}");
+        assert!(matches!(observed[1], Ingest::Connected), "{observed:?}");
+        assert!(
+            matches!(&observed[2], Ingest::Event(event) if event.id == "e1" && event.type_ == "server.connected"),
+            "{observed:?}"
+        );
+        assert!(
+            matches!(
+                &observed[3],
+                Ingest::Connection(ConnectionState::Reconnecting { attempt: 2 })
+            ),
+            "the watchdog stall followed the reconnect path: {observed:?}"
+        );
+        assert!(matches!(&observed[4], Ingest::Resync { .. }), "{observed:?}");
+        assert!(matches!(observed[5], Ingest::Connected), "{observed:?}");
+        assert!(matches!(&observed[6], Ingest::Event(event) if event.id == "c2"), "{observed:?}");
+        assert!(matches!(&observed[7], Ingest::Event(event) if event.id == "e3"), "{observed:?}");
+        // The watchdog-triggered resubscribe carried the tracked cursor.
+        let cursors = seen_cursors.lock().expect("cursor log").clone();
+        assert_eq!(cursors, vec![None, Some("e1".to_owned())], "Last-Event-ID resume survived the stall");
     }
 
     /// F19 — `fetch_session_messages` asks `order: "desc"` and REVERSES
