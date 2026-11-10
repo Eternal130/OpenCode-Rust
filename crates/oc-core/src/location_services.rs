@@ -623,6 +623,7 @@ mod tests {
         let mut live = harness.bus.subscribe();
         let location = loc_under(harness.dir.path(), "repo");
         let graph = harness.map.get_or_build(location.clone()).await.expect("boot");
+        assert!(graph.rpc_available(), "a fresh graph's rpc domain is open");
         assert!(Arc::ptr_eq(&graph, &harness.map.get_or_build(location.clone()).await.unwrap()));
         assert_eq!(harness.map.len(), 1);
         assert!(graph.plugin_failures.is_empty());
@@ -636,11 +637,24 @@ mod tests {
             "permission closes first"
         );
         assert_eq!(*harness.forms.0.lock(), vec!["forms.close"], "forms close second");
+        assert!(
+            !old.rpc_available(),
+            "G-364: the rpc domain sealed (rpc.close) before the shutdown event"
+        );
+        assert!(old.is_closed(), "G-364: isClosed flipped when shutdown started");
+        assert!(
+            !graph.rpc_available(),
+            "the sealed gate is visible through every Arc to the graph"
+        );
         assert_eq!(
             drain(&mut live).await,
             vec![LOCATION_SHUTDOWN_EVENT.to_string()],
             "shutdown publishes location.shutdown (data {{}}, via the bus)"
         );
+        // A rebuilt location gets a fresh Rpc node: the new graph's rpc
+        // domain is open again (v2 `makeLocationNode`).
+        let fresh = harness.map.get_or_build(location.clone()).await.expect("rebuild");
+        assert!(fresh.rpc_available(), "a fresh graph reopens the rpc domain");
     }
 
     #[tokio::test]
