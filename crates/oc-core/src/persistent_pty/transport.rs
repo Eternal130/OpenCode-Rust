@@ -1063,6 +1063,8 @@ impl Transport {
             attachment_id: attachment_id.to_owned(),
             role,
             takeover,
+            // G-383b — this client understands the chunked-replay arm.
+            chunked_replay: Some(true),
         };
         match self.subscribe_attempt(&request).await {
             Err(error) if error.kind == ErrorKind::Registration => {

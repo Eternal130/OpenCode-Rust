@@ -137,7 +137,7 @@ async fn g383_dropping_shell_interrupts_timeouts_and_unblocks_waiters() {
         .unwrap();
     let active = shell.inner.commands.lock().get(&info.id).cloned().unwrap();
     let mut done = active.done.subscribe();
-    assert!(shell.list().len() == 1);
+    assert_eq!(shell.list().len(), 1);
     drop(shell);
     // Waiter unblocked: `done` settles to `None` (the interruption
     // analog of the ref's `Deferred.interrupt`).
@@ -151,7 +151,7 @@ async fn g383_dropping_shell_interrupts_timeouts_and_unblocks_waiters() {
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert_eq!(active.info.lock().status, Status::Running, "timeout fiber interrupted");
     // Reap our own child.
-    let _ = active.child.lock().as_mut().map(|child| child.start_kill());
+    let _ = active.child.lock().as_mut().map(tokio::process::Child::start_kill);
 }
 
 #[tokio::test]

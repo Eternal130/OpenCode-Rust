@@ -378,10 +378,7 @@ impl Shell {
             config_shell: None,
             output_limits: crate::tool_output::Limits::default(),
         });
-        Self {
-            shutdown: Arc::new(ShutdownGuard { commands, exit_order }),
-            inner,
-        }
+        Self { shutdown: Arc::new(ShutdownGuard { commands, exit_order }), inner }
     }
 
     /// Attaches a bus for the ephemeral `shell.*` events.

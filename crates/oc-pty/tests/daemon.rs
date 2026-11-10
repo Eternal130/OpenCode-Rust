@@ -764,6 +764,7 @@ async fn terminal_ops_round_trip_with_v1_checkpoint() {
             attachment_id: "ops-controller".to_owned(),
             role: wire::WireRole::Controller,
             takeover: false,
+            chunked_replay: None,
         })
         .await;
     match subscriber.next_stream_frame().await {
@@ -1020,6 +1021,7 @@ async fn replay_chunking_both_arms_and_stream_events() {
             attachment_id: "replay-observer".to_owned(),
             role: wire::WireRole::Observer,
             takeover: false,
+            chunked_replay: None,
         })
         .await;
     let end_offset = match observer.next_stream_frame().await {
@@ -1055,6 +1057,8 @@ async fn replay_chunking_both_arms_and_stream_events() {
             attachment_id: "replay-chunked".to_owned(),
             role: wire::WireRole::Observer,
             takeover: false,
+            // G-383b — the chunked arm is opt-in.
+            chunked_replay: Some(true),
         })
         .await;
     let replay_length = match replayer.next_stream_frame().await {
@@ -1101,6 +1105,7 @@ async fn replay_chunking_both_arms_and_stream_events() {
             attachment_id: "replay-controller".to_owned(),
             role: wire::WireRole::Controller,
             takeover: true,
+            chunked_replay: None,
         })
         .await;
     match controller.next_stream_frame().await {
@@ -1159,6 +1164,7 @@ async fn subscribe_connections_end_at_stream_end() {
             attachment_id: "end-observer-a".to_owned(),
             role: wire::WireRole::Observer,
             takeover: false,
+            chunked_replay: None,
         })
         .await;
     match subscriber.next_stream_frame().await {
@@ -1183,6 +1189,7 @@ async fn subscribe_connections_end_at_stream_end() {
             attachment_id: "end-observer-b".to_owned(),
             role: wire::WireRole::Observer,
             takeover: false,
+            chunked_replay: None,
         })
         .await;
     match watcher.next_stream_frame().await {
@@ -1218,6 +1225,7 @@ async fn second_subscribe_on_a_connection_is_rejected() {
             attachment_id: "sub-first".to_owned(),
             role: wire::WireRole::Observer,
             takeover: false,
+            chunked_replay: None,
         })
         .await;
     match subscriber.next_stream_frame().await {
@@ -1234,6 +1242,7 @@ async fn second_subscribe_on_a_connection_is_rejected() {
             attachment_id: "sub-second".to_owned(),
             role: wire::WireRole::Observer,
             takeover: false,
+            chunked_replay: None,
         })
         .await
     {

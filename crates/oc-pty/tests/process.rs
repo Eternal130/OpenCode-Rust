@@ -1420,6 +1420,7 @@ async fn pty_d3_i15_full_buffer_chunked_replay_with_absolute_offsets() {
         attachment_id: "i15-raw".to_owned(),
         role: WireRole::Observer,
         takeover: false,
+        chunked_replay: Some(true),
     })
     .await;
     let attached = raw.frame().await;
@@ -1447,6 +1448,30 @@ async fn pty_d3_i15_full_buffer_chunked_replay_with_absolute_offsets() {
         tail - OUTPUT_LIMIT,
         "the window starts at the wrapped ring's head"
     );
+
+    // G-383b — a client that did NOT opt in (`chunked_replay` absent,
+    // the ref TS v7 client shape) never sees the chunked `attached`:
+    // the same >1 MiB window cannot ride an inline base64 frame, so
+    // the attach degrades to the ref-equivalent frame error instead of
+    // an unknown response shape.
+    let mut plain = RawClient::connect(&registration).await.expect("plain conn");
+    plain
+        .send(&WireRequest::Subscribe {
+            id: number,
+            offset: 0,
+            attachment_id: "i15-plain".to_owned(),
+            role: WireRole::Observer,
+            takeover: false,
+            chunked_replay: None,
+        })
+        .await;
+    let plain_attached = plain.frame().await;
+    match parse_json::<WireResponse>(&plain_attached) {
+        Some(WireResponse::Error { message }) => {
+            assert!(message.contains("too large"), "framing failure, got {message}");
+        }
+        other => panic!("non-opted-in client must not receive a chunked attached: {other:?}"),
+    }
 
     // A LIVE competing stream event (D3 review C1/M-3): consume the
     // FIRST chunk — the 8 MiB transfer is provably in flight — then
@@ -1566,6 +1591,7 @@ async fn pty_d3_slow_subscriber_replay_complete_defers_stream_events() {
         attachment_id: "slow-reader".to_owned(),
         role: WireRole::Observer,
         takeover: false,
+        chunked_replay: Some(true),
     })
     .await;
     let attached = slow.frame().await;
