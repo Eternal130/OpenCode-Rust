@@ -204,7 +204,11 @@ async fn create(
                         |row| row.get(0),
                     )
                     .ok();
-                if pinned.is_none() {
+                // G-305 — ref pins when `!current.active`
+                // (credential.ts:129), true for NULL AND false: a top
+                // row with active=false is pinned back to true before
+                // inserting a newer inactive row.
+                if pinned != Some(true) {
                     tx.execute("UPDATE credential SET active = 1 WHERE id = ?1", (current,))?;
                 }
             }

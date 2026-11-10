@@ -245,6 +245,53 @@ async fn credential_first_create_with_activate_false_is_forced_active() {
     assert_eq!(legacy["active"], json!(true), "legacy NULL-active row pinned: {rows:?}");
 }
 
+/// G-305 — ref's legacy pin is `!current.active` (credential.ts:129):
+/// true for NULL AND false. A top row with active=false is pinned back
+/// to true when a newer inactive credential is created on top; a top row
+/// already active=true is left untouched (no pin, existing semantics).
+#[tokio::test]
+async fn credential_legacy_pin_covers_false_and_true_active() {
+    let server = boot().await;
+    // After create(activate=false) over a seeded top row, the row ALWAYS
+    // ends active (false pinned by G-305; true already active).
+    for (case, seed_active) in [("false", 0), ("true", 1)] {
+        let id = format!("cred_legacy_{case}");
+        let insert_id = id.clone();
+        server
+            .state
+            .engine
+            .db
+            .transaction(move |tx| {
+                tx.execute(
+                    "INSERT INTO credential (id, integration_id, label, value, active, time_created, time_updated) \
+                     VALUES (?1, 'legacy305', 'default', ?2, ?3, 5, 5)",
+                    (&insert_id, key_credential("old").to_string(), seed_active),
+                )?;
+                Ok(())
+            })
+            .await
+            .expect("seed legacy row");
+
+        let response = post_json(
+            &server,
+            "/api/credential",
+            &json!({ "integrationID": "legacy305", "value": key_credential("new"), "activate": false }),
+        )
+        .await;
+        assert_eq!(response.status, 200, "{}", response.text());
+        assert_eq!(response.json()["data"]["active"], json!(false), "{case}: stays inactive");
+
+        let response = get(&server, "/api/credential").await;
+        let rows = response.json()["data"].as_array().expect("data").clone();
+        let legacy = rows.iter().find(|row| row["id"] == json!(id)).expect("legacy row");
+        assert_eq!(
+            legacy["active"],
+            json!(true),
+            "{case}: the top row ends active after the newer inactive create: {rows:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn credential_duplicate_id_conflicts_with_resource() {
     let server = boot().await;

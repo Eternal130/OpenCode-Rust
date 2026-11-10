@@ -115,30 +115,60 @@ fn prepare_file(input: &str, directory: &std::path::Path) -> Result<FilePart, St
     }
 }
 
-fn detect_mime(file: &std::path::Path, bytes: &[u8]) -> String {
+/// G-301 — the run attachment surface classifies like ref's
+/// `FSUtil.mimeType` (run.ts:202 → the full `mime-types` table): the
+/// shared oc-util union table first, with the attachment-surface image
+/// extensions the union does not carry yet (bmp/tif/tiff/heic/heif,
+/// values from the `mime-types` db) as a local supplement. Magic bytes
+/// keep the established G-278 sniff set (a headerless PNG still
+/// classifies as an image instead of falling to the octet-stream).
+fn sniff_magic(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
-        return "image/png".to_owned();
+        Some("image/png")
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else if bytes.starts_with(&[0x42, 0x4D]) {
+        Some("image/bmp")
+    } else if bytes.starts_with(b"%PDF") {
+        Some("application/pdf")
+    } else if bytes.len() >= 12
+        && &bytes[4..8] == b"ftyp"
+        && (&bytes[8..12] == b"avif" || &bytes[8..12] == b"avis")
+    {
+        Some("image/avif")
+    } else {
+        None
     }
-    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        return "image/jpeg".to_owned();
+}
+
+/// Attachment-surface image extensions missing from the oc-util union
+/// table (`mime-types` db values: image/bmp, image/tiff, image/heic,
+/// image/heif).
+fn image_extension_fallback(extension: &str) -> Option<&'static str> {
+    match extension.to_ascii_lowercase().as_str() {
+        "bmp" | "dib" => Some("image/bmp"),
+        "tif" | "tiff" => Some("image/tiff"),
+        "heic" => Some("image/heic"),
+        "heif" => Some("image/heif"),
+        _ => None,
     }
-    if bytes.starts_with(b"GIF8") {
-        return "image/gif".to_owned();
+}
+
+fn detect_mime(file: &std::path::Path, bytes: &[u8]) -> String {
+    if let Some(sniffed) = sniff_magic(bytes) {
+        return sniffed.to_owned();
     }
-    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
-        return "image/webp".to_owned();
-    }
-    if bytes.starts_with(b"%PDF") {
-        return "application/pdf".to_owned();
-    }
-    match file.extension().and_then(|ext| ext.to_str()) {
-        Some("png") => "image/png".to_owned(),
-        Some("jpg" | "jpeg") => "image/jpeg".to_owned(),
-        Some("gif") => "image/gif".to_owned(),
-        Some("webp") => "image/webp".to_owned(),
-        Some("pdf") => "application/pdf".to_owned(),
-        _ => "application/octet-stream".to_owned(),
-    }
+    file.extension()
+        .and_then(|ext| ext.to_str())
+        .and_then(|ext| {
+            oc_util::mime::from_extension(ext).or_else(|| image_extension_fallback(ext))
+        })
+        .unwrap_or(oc_util::mime::OCTET_STREAM)
+        .to_owned()
 }
 
 /// The resolved prompt target (`resolveSessionTarget` output).
@@ -484,6 +514,59 @@ mod tests {
             Some(("openai".into(), "gpt".into(), Some("turbo".into())))
         );
         assert_eq!(parse_run_model(Some("nonsense")), None);
+    }
+
+    /// G-301 — the attachment surface classifies like ref's
+    /// `FSUtil.mimeType` (run.ts:202): svg/bmp/tiff/ico/avif/heic are
+    /// image/* (svg as image/svg+xml) and package as DATA-URL
+    /// attachments; text stays the inline `<file>` text block; a
+    /// headerless PNG still sniffs to image/png.
+    #[test]
+    fn run_attachment_mime_and_packaging_match_ref() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let write = |name: &str, bytes: &[u8]| {
+            std::fs::write(dir.path().join(name), bytes).expect("write fixture");
+        };
+
+        // svg: XML text that previously fell to the text heuristic —
+        // now image/svg+xml, a data-URL attachment like ref.
+        write("drawing.svg", br#"<svg xmlns="http://www.w3.org/2000/svg"></svg>"#);
+        // bmp/tiff/ico/avif/heic by extension (no magic on most).
+        write("img.bmp", [0x42u8, 0x4D, 1, 2, 3, 4].as_slice());
+        write("img.tiff", b"II*\0 tag-ish body");
+        write("img.ico", [0u8, 0, 1, 0, 1, 0, 16, 16].as_slice());
+        write("img.avif", b"\0\0\0\x20ftypavif\x00\x00\x00\x00");
+        write("img.heic", b"\0\0\0\x20ftypheic\x00\x00\x00\x00");
+        // Text stays the inline <file> text block.
+        write("note.txt", b"plain text body");
+        // Magic bytes without a matching extension.
+        write("blob", [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A].as_slice());
+
+        let expect_attachment = |name: &str, mime: &str| {
+            let part = prepare_file(name, dir.path()).expect("prepared");
+            match part {
+                FilePart::Attachment { uri, .. } => {
+                    assert!(uri.starts_with(&format!("data:{mime};base64,")), "{name}: {uri}");
+                }
+                FilePart::Text { .. } => panic!("{name}: expected a data-url attachment"),
+            }
+        };
+        expect_attachment("drawing.svg", "image/svg+xml");
+        expect_attachment("img.bmp", "image/bmp");
+        expect_attachment("img.tiff", "image/tiff");
+        expect_attachment("img.ico", "image/vnd.microsoft.icon");
+        expect_attachment("img.avif", "image/avif");
+        expect_attachment("img.heic", "image/heic");
+        expect_attachment("blob", "image/png");
+
+        let part = prepare_file("note.txt", dir.path()).expect("prepared");
+        match part {
+            FilePart::Text { filename, content } => {
+                assert_eq!(filename, "note.txt");
+                assert_eq!(content, "plain text body");
+            }
+            FilePart::Attachment { .. } => panic!("text file must stay the inline block"),
+        }
     }
 
     /// RD-10: a raw one-shot HTTP stub answering

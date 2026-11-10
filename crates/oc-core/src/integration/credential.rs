@@ -137,7 +137,11 @@ impl CredentialStore {
                     // before inserting a newer inactive one (credential.ts:128-130).
                     let pinned: Option<bool> =
                         tx.conn().query_row("SELECT active FROM credential WHERE id = ?1", [&current], |row| row.get(0)).ok();
-                    if pinned.is_none() {
+                    // G-305 — ref pins when `!current.active`
+                    // (credential.ts:129), true for NULL AND false: a
+                    // top row with active=false is pinned back to true
+                    // before inserting a newer inactive one.
+                    if pinned != Some(true) {
                         tx.execute("UPDATE credential SET active = 1 WHERE id = ?1", [&current])?;
                     }
                 }

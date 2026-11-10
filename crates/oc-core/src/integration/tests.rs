@@ -201,6 +201,65 @@ async fn credential_create_activates_and_emits_events() {
     let _ = first;
 }
 
+/// G-305 — the legacy pin widens from "active IS NULL" to ref's
+/// `!current.active` (credential.ts:129): a top row with active=false is
+/// pinned back to true when a newer inactive credential is inserted,
+/// exactly like a NULL-active legacy row; a top row already active=true
+/// is left untouched.
+#[tokio::test]
+async fn credential_legacy_pin_covers_null_and_false_active() {
+    async fn boot_store() -> (credential::CredentialStore, Arc<crate::database::Database>) {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let db = Arc::new(
+            crate::database::Database::open_file(dir.path().join("t.db")).await.expect("db"),
+        );
+        std::mem::forget(dir);
+        let bus = Arc::new(crate::bus::Bus::new(
+            (*db).clone(),
+            crate::bus::BusOptions { persist: false, ..BusOptions::deterministic() },
+        ));
+        (credential::CredentialStore::new(Arc::clone(&db), bus), db)
+    }
+
+    let key =
+        CredentialValue::Key(KeyValue { key: "new".into(), metadata: None, configuration: None });
+    let value = r#"{"type":"key","key":"old"}"#;
+
+    // After create(activate=false) over a seeded top row, the row ALWAYS
+    // ends active (NULL/false pinned by G-305; true already active).
+    for (case, seed_active) in [("null", None), ("false", Some(false)), ("true", Some(true))] {
+        let (store, db) = boot_store().await;
+        db.transaction(move |tx| {
+            tx.execute(
+                "INSERT INTO credential (id, integration_id, label, value, active, time_created, time_updated) \
+                 VALUES ('cred_legacy', 'anthropic', 'default', ?1, ?2, 5, 5)",
+                (value, seed_active),
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("seed legacy row");
+        let (created, activated) = store
+            .create(credential::CreateInput {
+                id: None,
+                integration_id: "anthropic",
+                label: Some("newer"),
+                value: &key,
+                activate: Some(false),
+            })
+            .await
+            .expect("create inactive");
+        assert!(!activated, "{case}: the new row stays inactive");
+        let rows = store.list("anthropic").await.expect("list");
+        let legacy = rows.iter().find(|row| row.id == "cred_legacy").expect("legacy row");
+        assert_eq!(
+            legacy.active, true,
+            "{case}: the top row ends active after the newer inactive create"
+        );
+        let _ = created;
+    }
+}
+
 #[tokio::test]
 async fn connect_key_derives_integration_label() {
     let host = host().await;
