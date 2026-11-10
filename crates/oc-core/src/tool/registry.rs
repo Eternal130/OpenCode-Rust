@@ -153,8 +153,9 @@ pub fn register(
     registration.codemode = tool.codemode;
     state.register(registration);
 
+    let effective = effective_name(tool.namespace, tool.name);
     let pipeline = PipelineExecutor {
-        name: effective_name(tool.namespace, tool.name),
+        name: effective.clone(),
         schema: tool.input,
         // G-230 — no builtin declares an output schema yet (see the
         // `output_schema` field doc): the mcp.ts:48 accept-all fallback
@@ -165,7 +166,9 @@ pub fn register(
         services: Arc::clone(services),
         hooks: Arc::clone(hooks),
     };
-    state.register_executor(tool.name, Arc::new(pipeline));
+    // G-291 — the executor table is keyed by the SAME effective name
+    // as the registration table (tool.ts:188 `editor.tools.set(id, …)`).
+    state.register_executor(effective, Arc::new(pipeline));
     Ok(())
 }
 
