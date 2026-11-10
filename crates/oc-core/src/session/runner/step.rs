@@ -809,7 +809,7 @@ mod g308_tests {
 
         let marker = budgeted.content.iter().any(|item| match item {
             oc_schema::tool::Content::Text { text } => text.contains("[showing "),
-            _ => false,
+            oc_schema::tool::Content::File { .. } => false,
         });
         assert!(
             marker,

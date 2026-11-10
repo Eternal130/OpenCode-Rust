@@ -130,6 +130,7 @@ pub const TERMINAL_ENV: &[(&str, &str)] = &[("TERM", "xterm-256color"), ("OPENCO
 /// with a skip (not lossy) keeps the un-representable input out of the
 /// sandboxed invocation instead of corrupting it. (oc-core has no
 /// logging facade wired, so the skip is silent.)
+#[must_use]
 pub fn env_utf8() -> HashMap<String, String> {
     let mut env = HashMap::new();
     for (key, value) in std::env::vars_os() {

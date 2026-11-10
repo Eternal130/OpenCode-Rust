@@ -1,6 +1,6 @@
 //! G-295 — the plugin RPC events.emit host path (ref core/rpc.ts:87-105
-//! + eventDefinition :188-201): `rpc.register` returns
-//! `{dispose, events: {emit}}`; a declared-event emit publishes the
+//! and eventDefinition :188-201). `rpc.register` returns the
+//! dispose+events(`emit`) handle: a declared-event emit publishes the
 //! ephemeral `rpc.{id}.{event}` bus event through the embedder's port;
 //! an undeclared name rejects the guest promise and publishes nothing.
 
@@ -22,10 +22,7 @@ struct RecordingRpcEventPort {
 #[async_trait]
 impl RpcEventPort for RecordingRpcEventPort {
     async fn publish(&self, rpc_id: &str, event: &str, data: Value) -> Result<(), String> {
-        self.published
-            .lock()
-            .unwrap()
-            .push((rpc_id.to_owned(), event.to_owned(), data));
+        self.published.lock().unwrap().push((rpc_id.to_owned(), event.to_owned(), data));
         Ok(())
     }
 }
@@ -76,9 +73,8 @@ fn undeclared_emit_rejects_and_publishes_nothing() {
     }
     assert!(host.wait_ready(Duration::from_secs(15)));
 
-    let outcome = host
-        .execute_command("rpcev.bad", None, Duration::from_secs(5))
-        .expect("bad poke executes");
+    let outcome =
+        host.execute_command("rpcev.bad", None, Duration::from_secs(5)).expect("bad poke executes");
     assert_eq!(
         outcome,
         json!("rejected:Unknown RPC event: evt-rpc.nope"),
@@ -106,9 +102,6 @@ fn unbound_port_declines_the_emit() {
     assert!(host.wait_ready(Duration::from_secs(15)));
     let outcome = host.execute_command("rpcev.poke", None, Duration::from_secs(5));
     let error = outcome.expect_err("the emit rejects when no bus is attached");
-    assert!(
-        error.contains("no event bus attached"),
-        "a clear seam error surfaces, got: {error}"
-    );
+    assert!(error.contains("no event bus attached"), "a clear seam error surfaces, got: {error}");
     host.shutdown();
 }

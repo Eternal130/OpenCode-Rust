@@ -491,9 +491,7 @@ pub fn boot(
         ),
         // G-295: `rpc.{id}.{event}` ephemeral publishes onto the engine
         // bus (slot filled after `Engine::boot`, the same pattern).
-        rpc_event_port: Some(
-            Arc::clone(&rpc_event_slot) as Arc<dyn oc_plugin_host::RpcEventPort>
-        ),
+        rpc_event_port: Some(Arc::clone(&rpc_event_slot) as Arc<dyn oc_plugin_host::RpcEventPort>),
         storage_port,
         entry_options: resolution.entry_options(),
         // The registration pass spans bun cold start + every entry's
@@ -2139,7 +2137,7 @@ async fn publish_event(
 /// location at a time — the same PLUG-D07 approximation the location
 /// push uses). The type is ephemeral and dynamic (not in the static
 /// registry); the SSE feed's `rpc.*` wildcard keeps it public
-/// (event_manifest::RPC_PREFIX, verified by the manifest tests).
+/// (`event_manifest::RPC_PREFIX`, verified by the manifest tests).
 pub struct EngineRpcEventPort {
     pub engine: Arc<Engine>,
     pub location: LocationRef,
@@ -2149,11 +2147,8 @@ pub struct EngineRpcEventPort {
 impl oc_plugin_host::RpcEventPort for EngineRpcEventPort {
     async fn publish(&self, rpc_id: &str, event: &str, data: Value) -> Result<(), String> {
         let type_ = format!("rpc.{rpc_id}.{event}");
-        let services = self
-            .engine
-            .location(self.location.clone())
-            .await
-            .map_err(|error| error.to_string())?;
+        let services =
+            self.engine.location(self.location.clone()).await.map_err(|error| error.to_string())?;
         let location = oc_schema::location::Ref {
             directory: oc_schema::common::AbsolutePath::parse(
                 services.graph.location.directory.to_string_lossy().into_owned(),

@@ -405,6 +405,17 @@ fn spawn_scripted_server(long_transcript: bool) -> (String, Arc<Shared>) {
 }
 
 #[allow(clippy::too_many_lines)] // one arm per scripted endpoint
+/// G-300: the `server.connected` handshake frame the client requires
+/// as the FIRST frame of every SSE stream (the real server prepends it).
+const HANDSHAKE: &str =
+    "data: \"{\\\"id\\\":\\\"evt_handshake\\\",\\\"type\\\":\\\"server.connected\\\",\\\"data\\\":{}}\"\n\n";
+
+// The `handle` fn below carries `#[allow(clippy::too_many_lines)]`: a
+// scripted SSE handler for one test connection (handshake → drop
+// simulation → broadcast loop), cohesive by construction — splitting
+// it for the line budget would obscure the wire sequence it pins.
+
+#[allow(clippy::too_many_lines)] // rationale at the HANDSHAKE const above
 fn handle(mut socket: std::net::TcpStream, shared: &Shared) {
     socket.set_read_timeout(Some(Duration::from_secs(10))).ok();
     let mut buffer = [0u8; 16384];
@@ -445,8 +456,6 @@ fn handle(mut socket: std::net::TcpStream, shared: &Shared) {
         // G-300: the client asserts the FIRST frame is the
         // `server.connected` handshake marker (the real server
         // prepends it per response) — ahead of any broadcast frames.
-        const HANDSHAKE: &str =
-            "data: \"{\\\"id\\\":\\\"evt_handshake\\\",\\\"type\\\":\\\"server.connected\\\",\\\"data\\\":{}}\"\n\n";
         if socket.write_all(HANDSHAKE.as_bytes()).is_err() {
             return;
         }

@@ -29,14 +29,14 @@ pub struct Issue {
 /// Does a single JSON-Schema `type` name match `value`?
 fn matches_type(expected: &str, value: &Value) -> bool {
     match (expected, value) {
-        ("string", Value::String(_)) => true,
+        ("string", Value::String(_))
+        | ("boolean", Value::Bool(_))
+        | ("object", Value::Object(_))
+        | ("array", Value::Array(_))
+        | ("null", Value::Null) => true,
         ("number" | "integer", Value::Number(n)) => {
             expected == "number" || n.is_i64() || n.is_u64()
         }
-        ("boolean", Value::Bool(_)) => true,
-        ("object", Value::Object(_)) => true,
-        ("array", Value::Array(_)) => true,
-        ("null", Value::Null) => true,
         _ => false,
     }
 }
@@ -53,20 +53,45 @@ fn type_name(value: &Value) -> &'static str {
 }
 
 fn at_root(path: &str) -> String {
-    if path.is_empty() { "root".to_string() } else { path.to_string() }
+    if path.is_empty() {
+        "root".to_string()
+    } else {
+        path.to_string()
+    }
 }
 
 fn join_path(path: &str, key: &str) -> String {
-    if path.is_empty() { key.to_string() } else { format!("{path}.{key}") }
+    if path.is_empty() {
+        key.to_string()
+    } else {
+        format!("{path}.{key}")
+    }
 }
 
 /// The recognized keyword set — a schema object with NONE of these is
 /// not a JSON schema (an Effect-Schema skeleton) and validates
 /// everything (the lax fallback).
 const KEYWORDS: &[&str] = &[
-    "type", "enum", "const", "required", "properties", "additionalProperties", "items",
-    "minItems", "maxItems", "uniqueItems", "minLength", "maxLength", "minimum", "maximum",
-    "pattern", "oneOf", "anyOf", "allOf", "$ref", "$defs",
+    "type",
+    "enum",
+    "const",
+    "required",
+    "properties",
+    "additionalProperties",
+    "items",
+    "minItems",
+    "maxItems",
+    "uniqueItems",
+    "minLength",
+    "maxLength",
+    "minimum",
+    "maximum",
+    "pattern",
+    "oneOf",
+    "anyOf",
+    "allOf",
+    "$ref",
+    "$defs",
 ];
 
 /// Is `schema` a JSON-Schema-looking object the validator should
@@ -157,7 +182,10 @@ fn validate(
     }
     if let Some(list) = object.get("anyOf").and_then(Value::as_array) {
         if !list.iter().any(|sub| schema_matches(sub, root, value, depth)) {
-            issues.push(Issue { path: at_root(path), message: "must match a schema in anyOf".into() });
+            issues.push(Issue {
+                path: at_root(path),
+                message: "must match a schema in anyOf".into(),
+            });
         }
     }
     if let Some(list) = object.get("oneOf").and_then(Value::as_array) {
@@ -185,7 +213,11 @@ fn validate(
         if !matches {
             issues.push(Issue {
                 path: at_root(path),
-                message: format!("Expected {}, received {}", expected.join(" | "), type_name(value)),
+                message: format!(
+                    "Expected {}, received {}",
+                    expected.join(" | "),
+                    type_name(value)
+                ),
             });
             return;
         }
@@ -247,7 +279,7 @@ fn validate(
         if value != expected {
             issues.push(Issue {
                 path: at_root(path),
-                message: format!("must be equal to constant {}", expected),
+                message: format!("must be equal to constant {expected}"),
             });
         }
     }
@@ -281,7 +313,14 @@ fn validate(
             for (key, field) in fields {
                 match properties.and_then(|props| props.get(key)) {
                     Some(field_schema) => {
-                        validate(field_schema, root, field, &join_path(path, key), issues, depth + 1);
+                        validate(
+                            field_schema,
+                            root,
+                            field,
+                            &join_path(path, key),
+                            issues,
+                            depth + 1,
+                        );
                     }
                     None => match additional {
                         Some(Value::Bool(false)) => issues.push(Issue {
@@ -328,7 +367,14 @@ fn validate(
             }
             if let Some(item_schema) = object.get("items") {
                 for (index, item) in items.iter().enumerate() {
-                    validate(item_schema, root, item, &format!("{path}[{index}]"), issues, depth + 1);
+                    validate(
+                        item_schema,
+                        root,
+                        item,
+                        &format!("{path}[{index}]"),
+                        issues,
+                        depth + 1,
+                    );
                 }
             }
         }
@@ -338,6 +384,10 @@ fn validate(
 
 #[cfg(test)]
 mod tests {
+    // The emptiness asserts read as specifications here ("no issues"
+    // / "some issues"); the lint's assert_eq-vs-empty-slice rewrite
+    // adds noise without better failure output for these fixtures.
+    #![allow(clippy::assert_is_empty)]
     use super::*;
     use serde_json::json;
 
@@ -378,10 +428,11 @@ mod tests {
     #[test]
     fn arrays_items_and_uniqueness() {
         assert!(!validate_input(&json!({ "minItems": 2 }), &json!([1])).is_empty());
-        assert!(
-            !validate_input(&json!({ "items": { "type": "integer" }, "maxItems": 2 }), &json!([1, "x", 3]))
-                .is_empty()
-        );
+        assert!(!validate_input(
+            &json!({ "items": { "type": "integer" }, "maxItems": 2 }),
+            &json!([1, "x", 3])
+        )
+        .is_empty());
         assert!(!validate_input(&json!({ "uniqueItems": true }), &json!([1, 1])).is_empty());
     }
 

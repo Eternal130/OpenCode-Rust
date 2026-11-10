@@ -506,6 +506,14 @@ pub fn sandbox_env(tag: &str) -> std::path::PathBuf {
     root
 }
 
+/// G-300: the SSE response head the fake event server writes, followed
+/// by the `server.connected` handshake frame the client requires as
+/// the FIRST frame of every stream (the real server prepends it).
+const SSE_RESPONSE_HEAD: &[u8] =
+    b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\n\r\n";
+const SSE_HANDSHAKE_FRAME: &str =
+    "data: \"{\\\"id\\\":\\\"evt_handshake\\\",\\\"type\\\":\\\"server.connected\\\",\\\"data\\\":{}}\"\n\n";
+
 /// Serialize the tests of one binary under plain `cargo test`
 /// (nextest runs one process per test anyway): PTY attach and the
 /// sandbox env vars are process-global state.
@@ -1104,16 +1112,14 @@ fn handle(
         // reads (no timeout) once the head is read; the thread dies
         // with the test process when the peer closes.
         socket.set_read_timeout(None).ok();
-        let response = b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\n\r\n";
-        if socket.write_all(response).is_err() {
+        if socket.write_all(SSE_RESPONSE_HEAD).is_err() {
             return;
         }
         // G-300: the client asserts the FIRST frame is the
         // `server.connected` handshake marker (the real server
-        // prepends it per response) — send it before anything else.
-        const HANDSHAKE: &str =
-            "data: \"{\\\"id\\\":\\\"evt_handshake\\\",\\\"type\\\":\\\"server.connected\\\",\\\"data\\\":{}}\"\n\n";
-        if socket.write_all(HANDSHAKE.as_bytes()).is_err() {
+        // prepends it per response) — send it before anything else
+        // AFTER the HTTP response head.
+        if socket.write_all(SSE_HANDSHAKE_FRAME.as_bytes()).is_err() {
             return;
         }
         // The no-prompt quiet-hold window: generous — a loaded box

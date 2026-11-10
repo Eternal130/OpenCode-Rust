@@ -221,18 +221,22 @@ fn json_response(body: &str) -> String {
 }
 
 #[allow(unused_assignments)] // the head-bound reassignment is the read loop's accumulator
+/// G-300: the `server.connected` handshake frame the client requires
+/// as the FIRST frame of every SSE stream (the real server prepends it).
+const HANDSHAKE: &str =
+    "data: \"{\\\"id\\\":\\\"evt_handshake\\\",\\\"type\\\":\\\"server.connected\\\",\\\"data\\\":{}}\"\n\n";
+
 fn handle(mut socket: std::net::TcpStream, state: &Arc<ServerState>) {
     socket.set_read_timeout(Some(Duration::from_secs(10))).ok();
     let mut buffer = [0u8; 16384];
     let mut head = String::new();
-    let mut content_length = 0usize;
     loop {
         match socket.read(&mut buffer) {
             Ok(0) | Err(_) => return,
             Ok(count) => {
                 head.push_str(&String::from_utf8_lossy(&buffer[..count]));
                 if let Some(rest) = head.split_once("\r\n\r\n") {
-                    content_length = rest
+                    let content_length = rest
                         .0
                         .lines()
                         .find_map(|line| {
@@ -266,8 +270,6 @@ fn handle(mut socket: std::net::TcpStream, state: &Arc<ServerState>) {
         // G-300: the client asserts the FIRST frame is the
         // `server.connected` handshake marker — send it before the
         // stream parks (the real server prepends it per response).
-        const HANDSHAKE: &str =
-            "data: \"{\\\"id\\\":\\\"evt_handshake\\\",\\\"type\\\":\\\"server.connected\\\",\\\"data\\\":{}}\"\n\n";
         if socket.write_all(HANDSHAKE.as_bytes()).is_err() {
             return;
         }

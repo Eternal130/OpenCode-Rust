@@ -24,10 +24,8 @@ fn service(tmp: &tempfile::TempDir) -> Shell {
 #[test]
 fn g304_env_utf8_skips_non_utf8_entries_without_panic() {
     use std::os::unix::ffi::OsStringExt;
-    unsafe {
-        std::env::set_var("G304_ASCII", "ok");
-        std::env::set_var("G304_WEIRD", std::ffi::OsString::from_vec(vec![0xFF, 0xFE, 0xC3]));
-    }
+    std::env::set_var("G304_ASCII", "ok");
+    std::env::set_var("G304_WEIRD", std::ffi::OsString::from_vec(vec![0xFF, 0xFE, 0xC3]));
     let env = env_utf8();
     assert_eq!(env.get("G304_ASCII").map(String::as_str), Some("ok"));
     assert!(
