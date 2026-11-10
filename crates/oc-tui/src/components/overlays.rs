@@ -191,6 +191,35 @@ mod tests {
         assert!(store.reconnecting_overlay_visible(25_000), "5 s after the first observation");
     }
 
+    /// G-300: retry-attempt churn (Reconnecting{n}→Reconnecting{n+1})
+    /// must NOT re-arm the overlay anchor — the ref's status stays
+    /// `"reconnecting"` across retries (the attempt rides a separate
+    /// field), so the overlay PERSISTS between watchdog retries
+    /// instead of blinking off for the 1 s threshold.
+    #[test]
+    fn reconnecting_anchor_holds_across_retry_attempts() {
+        let store = Store::new(Runtime::new());
+        store.advance_clock(10_000);
+        store.set_connection(crate::data::ConnectionState::Reconnecting { attempt: 2 });
+        let anchor = store.connection_since();
+        store.advance_clock(1_500);
+        store.set_connection(crate::data::ConnectionState::Reconnecting { attempt: 3 });
+        assert_eq!(
+            store.connection_since(),
+            anchor,
+            "the same reconnecting family keeps the original anchor"
+        );
+        assert!(
+            store.reconnecting_overlay_visible(11_600),
+            "the overlay stayed up through the retry churn"
+        );
+        // A real family change re-arms.
+        store.advance_clock(12_000);
+        store.set_connection(crate::data::ConnectionState::Connected);
+        store.set_connection(crate::data::ConnectionState::Reconnecting { attempt: 4 });
+        assert!(store.connection_since() > anchor, "a connect→reconnect flip re-arms");
+    }
+
     /// `StartupLoading` (startup-loading.tsx:42-46): 500 ms wait, 3 s
     /// hold after ready with the copy flip.
     #[test]
