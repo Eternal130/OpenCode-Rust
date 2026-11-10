@@ -126,7 +126,16 @@ pub async fn cors_middleware(
             origin.as_deref().is_some_and(|origin| is_allowed_cors_origin(Some(origin), &cors));
         let mut response = Response::builder().status(axum::http::StatusCode::NO_CONTENT);
         let headers = response.headers_mut().expect("builder with status is valid");
-        headers.insert(header::VARY, HeaderValue::from_static("Origin"));
+        // G-311 — the preflight echoes `access-control-request-method` /
+        // `access-control-request-headers` back into the allow-* values,
+        // so shared caches must key on them too (spec-correct superset of
+        // the ref's `Vary: Access-Control-Request-Headers`).
+        headers.insert(
+            header::VARY,
+            HeaderValue::from_static(
+                "Origin, Access-Control-Request-Method, Access-Control-Request-Headers",
+            ),
+        );
         if allowed {
             if let Some(origin) = &origin {
                 if let Ok(value) = HeaderValue::from_str(origin) {

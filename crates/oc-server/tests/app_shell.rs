@@ -360,6 +360,12 @@ async fn server_process_cors_allowlist() {
     assert_eq!(preflight.header("access-control-allow-origin"), Some("http://localhost:3000"));
     assert_eq!(preflight.header("access-control-allow-headers"), Some("authorization"));
     assert_eq!(preflight.header("access-control-max-age"), Some("86400"));
+    // G-311 — the allow-* values echo request-derived headers, so the
+    // preflight must key shared caches on them as well as the origin.
+    assert_eq!(
+        preflight.header("vary"),
+        Some("Origin, Access-Control-Request-Method, Access-Control-Request-Headers")
+    );
 
     for origin in
         ["http://192.168.1.10:3001", "https://example.com", "https://untrusted.example.com"]
