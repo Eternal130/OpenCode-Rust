@@ -401,6 +401,11 @@ pub struct Engine {
     /// reconcile); `invalidate` rings them so a superseded bundle's
     /// loops stop instead of leaking for the process lifetime.
     location_shutdown: Arc<DashMap<LocationRef, tokio::sync::watch::Sender<bool>>>,
+    /// G-364 — locations whose graph ran the shutdown sequence
+    /// (`LocationLifecycle.shutdown` closed their rpc domain). A later
+    /// re-assembly clears the mark (a fresh location gets a fresh Rpc
+    /// node, `makeLocationNode`).
+    shutdown_marks: Arc<DashMap<LocationRef, ()>>,
     /// Per-location assembly locks: concurrent cold `location()` misses
     /// for the same location produce ONE bundle — both callers receive
     /// it. Entries stay for the engine's lifetime: removing one under
@@ -889,6 +894,7 @@ impl Engine {
             services,
             inputs: Arc::new(DashMap::new()),
             location_shutdown: Arc::new(DashMap::new()),
+            shutdown_marks: Arc::new(DashMap::new()),
             assembly_locks: Arc::new(DashMap::new()),
             generation: Arc::new(AtomicU64::new(1)),
             sweeper: options.activity_sweeper.then(|| {
@@ -1006,15 +1012,23 @@ impl Engine {
             return Ok(existing);
         }
         let services = self.assemble(&location).await?;
+        // G-364 — a fresh assembly is a fresh location lifecycle (and a
+        // fresh Rpc node); the previous shutdown mark no longer applies.
+        self.shutdown_marks.remove(&location);
         Ok(services)
     }
 
     /// Invalidates a location: graph shutdown sequence (per-location
-    /// permission close → forms close → `location.shutdown`)
+    /// permission close → forms close → rpc close → `location.shutdown`)
     /// + service teardown.
     pub async fn invalidate(&self, location: &LocationRef) {
         self.services.remove(location);
         self.inputs.remove(location);
+        // G-364 — the graph's shutdown sealed the location's rpc domain;
+        // remember the mark so `/api/rpc` keeps answering
+        // `rpc.unavailable` (rpc.ts:105-107) even though the registry
+        // entry is gone. A later `location()` re-assembly clears it.
+        self.shutdown_marks.insert(location.clone(), ());
         // Stop the bundle's background tasks (the MCP summary-cache
         // refresh loop and the in-flight reconcile) — without this every
         // invalidate leaks one poll loop holding the superseded registry.
@@ -1033,6 +1047,16 @@ impl Engine {
     #[must_use]
     pub fn live_locations(&self) -> Vec<LocationRef> {
         self.services.locations()
+    }
+
+    /// G-364 — whether the location's rpc domain accepts calls: false
+    /// once the location's graph ran the shutdown sequence
+    /// (`rpc.close` resolved the `closed` Deferred — `call` answers
+    /// `rpc.unavailable`, rpc.ts:105-107) and before a re-assembly.
+    /// Locations never assembled (no mark) are open.
+    #[must_use]
+    pub fn location_rpc_available(&self, location: &LocationRef) -> bool {
+        !self.shutdown_marks.contains_key(location)
     }
 
     /// G-48 — hot re-apply of the config `tool_output` budget on a
@@ -1816,6 +1840,18 @@ impl Engine {
                 BootError::Database(crate::database::error::DbError::Pragma(error.to_string()))
             })?,
         );
+        // G-362a — the config `snapshots` key (v2 `ConfigSnapshotPlugin`,
+        // config/plugin/snapshot.ts:15-19): `Config.latest(entries,
+        // "snapshots")` — whole-key latest across the location's
+        // documents — flips the store's enabled gate
+        // (snapshot.ts:83-87,115: with `snapshots:false`, `capture`
+        // becomes a no-op returning `undefined` and restore stays gated
+        // by the same flag; absent key keeps the default `true`).
+        if let Some(enabled) =
+            config_documents.iter().rev().find_map(|document| document.info.snapshots)
+        {
+            snapshot.configure(enabled);
+        }
         let location_dir = location.as_path().to_path_buf();
         // G-257 — the warming keep-alive runtime (ref plugin/warming.ts):
         // opt-in via the config `warming` key; the one-shot generate
@@ -3331,13 +3367,60 @@ fn mcp_servers_from_config(
     loaded: &config::Loaded,
 ) -> BTreeMap<String, oc_schema::mcp::ServerConfig> {
     let mut servers = BTreeMap::new();
+    // G-362b — document-level `mcp.timeout` defaults (v2
+    // config/plugin/mcp.ts:44-59): `Object.assign({}, ...documents)'
+    // folds every document's timeout in config order (later documents
+    // win per field), then each server's entry is rebuilt with
+    // `timeout: { ...timeout, ...server.timeout }` — a per-server field
+    // beats the document default, unset fields inherit it.
+    let mut timeout = oc_schema::mcp::TimeoutConfig::default();
+    let mut timeout_configured = false;
     for entry in &loaded.entries {
         if let oc_schema::config::Entry::Document(document) = entry {
             if let Some(mcp) = &document.info.mcp {
+                if let Some(document_timeout) = &mcp.timeout {
+                    timeout_configured = true;
+                    merge_timeout_fields(&mut timeout, document_timeout);
+                }
                 if let Some(configured) = &mcp.servers {
                     servers.extend(
                         configured.iter().map(|(name, config)| (name.clone(), config.clone())),
                     );
+                }
+            }
+        }
+    }
+    if timeout_configured {
+        for config in servers.values_mut() {
+            // The ref spread `{...timeout, ...server.timeout}` is
+            // per-variant (`ServerConfig` is the Local/Remote union).
+            let (existing, merged) = match config {
+                oc_schema::mcp::ServerConfig::Local(local) => {
+                    let mut merged = timeout.clone();
+                    if let Some(server_timeout) = &local.timeout {
+                        merge_timeout_fields(&mut merged, server_timeout);
+                    }
+                    (&local.timeout, merged)
+                }
+                oc_schema::mcp::ServerConfig::Remote(remote) => {
+                    let mut merged = timeout.clone();
+                    if let Some(server_timeout) = &remote.timeout {
+                        merge_timeout_fields(&mut merged, server_timeout);
+                    }
+                    (&remote.timeout, merged)
+                }
+            };
+            // Only materialize the section when the merge produced a
+            // value or the server already carried one — the ref's
+            // spread over an empty document table leaves `{}`.
+            if merged.startup.is_some()
+                || merged.catalog.is_some()
+                || merged.execution.is_some()
+                || existing.is_some()
+            {
+                match config {
+                    oc_schema::mcp::ServerConfig::Local(local) => local.timeout = Some(merged),
+                    oc_schema::mcp::ServerConfig::Remote(remote) => remote.timeout = Some(merged),
                 }
             }
         }
@@ -3347,6 +3430,23 @@ fn mcp_servers_from_config(
     // Mode off; PostHog ⇒ the `tools` header).
     crate::mcp::registry::apply_codemode_defaults(&mut servers);
     servers
+}
+
+/// G-362b — per-field timeout overlay (`{...onto, ...from}`): each
+/// `Some` field of `from` overwrites `onto` (`Object.assign` semantics).
+fn merge_timeout_fields(
+    onto: &mut oc_schema::mcp::TimeoutConfig,
+    from: &oc_schema::mcp::TimeoutConfig,
+) {
+    if from.startup.is_some() {
+        onto.startup = from.startup;
+    }
+    if from.catalog.is_some() {
+        onto.catalog = from.catalog;
+    }
+    if from.execution.is_some() {
+        onto.execution = from.execution;
+    }
 }
 
 /// The schema location ref for event stamping.

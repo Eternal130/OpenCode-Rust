@@ -339,6 +339,28 @@ impl CatalogModelResolver {
         }
     }
 
+    /// G-363 — the ref `ModelResolver.resolve` fallback tail
+    /// (model-resolver.ts:402-417 over model.ts:259-264): with no
+    /// requested model and no configured default, `models.default()`
+    /// lands on `available.find(supportsText)` — the first AVAILABLE
+    /// catalog model (the availability fold: env-gated providers plus
+    /// the keyless zen provider, release-descending order) whose
+    /// capabilities support text. `hasPackage` filters nothing here:
+    /// every catalog entry carries its package. Mirrors
+    /// `Model.supportsText` (model.ts:285-289) — an empty input list
+    /// counts as supporting text.
+    fn first_available_text_model(&self) -> Option<oc_schema::model::Ref> {
+        self.catalog()
+            .available_models(|name| std::env::var_os(name).is_some())
+            .into_iter()
+            .find(|(_, model)| supports_text(model))
+            .map(|(snapshot, model)| oc_schema::model::Ref {
+                provider_id: snapshot.info.id.clone(),
+                id: model.id.clone(),
+                variant: None,
+            })
+    }
+
     /// Binds one reference, returning the bound model, its catalog info,
     /// and the CANONICAL reference (the configured provider/model keys —
     /// v2 records the selected catalog identity on assistant messages,
@@ -657,6 +679,17 @@ impl CatalogModelResolver {
     }
 }
 
+/// G-363 — `Model.supportsText` (model.ts:285-289): an empty capability
+/// list counts as supporting text, otherwise some entry must start with
+/// `text`.
+fn supports_text(model: &oc_schema::model::Info) -> bool {
+    let input_ok = model.capabilities.input.is_empty()
+        || model.capabilities.input.iter().any(|item| item.starts_with("text"));
+    let output_ok = model.capabilities.output.is_empty()
+        || model.capabilities.output.iter().any(|item| item.starts_with("text"));
+    input_ok && output_ok
+}
+
 impl ModelResolver for CatalogModelResolver {
     fn resolve(&self, session: &SessionRow) -> Result<ResolvedModel, ModelError> {
         let reference = session
@@ -670,6 +703,7 @@ impl ModelResolver for CatalogModelResolver {
                     variant: selection.variant.clone(),
                 })
             })
+            .or_else(|| self.first_available_text_model())
             .ok_or_else(|| ModelError::NotSelected(session.id.clone()))?;
         self.resolve_selected(session, &reference)
     }

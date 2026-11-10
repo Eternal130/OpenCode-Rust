@@ -832,6 +832,13 @@ pub struct LocationGraph {
     pub built_at_generation: u64,
     /// Plugin boot failures (contained — the graph booted regardless).
     pub plugin_failures: Vec<PluginFailure>,
+    /// G-364 — `LocationLifecycle.isClosed` (location-lifecycle.ts:37,43):
+    /// true once the shutdown sequence has STARTED.
+    closed: std::sync::atomic::AtomicBool,
+    /// G-364 — the location's Rpc gate (`Rpc.Service`'s `closed`
+    /// Deferred, rpc.ts:41,105-107): once `close_rpc` runs, the
+    /// location's rpc domain answers `rpc.unavailable`.
+    rpc_closed: std::sync::atomic::AtomicBool,
 }
 
 impl fmt::Debug for LocationGraph {
@@ -951,6 +958,8 @@ impl LocationGraph {
             forms: Arc::clone(&globals.forms),
             built_at_generation: generation,
             plugin_failures: outcome.failures,
+            closed: std::sync::atomic::AtomicBool::new(false),
+            rpc_closed: std::sync::atomic::AtomicBool::new(false),
         }))
     }
 
@@ -971,13 +980,16 @@ impl LocationGraph {
     }
 
     /// v2 `LocationLifecycle.shutdown` sequence:
-    /// permission close → forms close → publish
+    /// permission close → forms close → rpc close → publish
     /// [`LOCATION_SHUTDOWN_EVENT`] (data `{}`, location-stamped —
-    /// `location-lifecycle.ts`). Idempotent per graph instance (each step
-    /// is delegated to the owning service).
+    /// `location-lifecycle.ts:44-54`; `closed` flips first and the
+    /// whole sequence is uninterruptible). Idempotent per graph
+    /// instance (each step is delegated to the owning service).
     pub async fn shutdown(&self) {
+        self.closed.store(true, std::sync::atomic::Ordering::Release);
         self.permissions.close().await;
         self.forms.close().await;
+        self.close_rpc();
         let _ = self
             .bus
             .publish(
@@ -989,6 +1001,27 @@ impl LocationGraph {
                 },
             )
             .await;
+    }
+
+    /// G-364 — `isClosed` (location-lifecycle.ts:43): true once this
+    /// graph's shutdown sequence has started.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// G-364 — `rpc.close` (rpc.ts:173: the `closed` Deferred resolves,
+    /// so `call` fails `rpc.unavailable` and in-flight calls race it):
+    /// seals this location's rpc domain.
+    pub fn close_rpc(&self) {
+        self.rpc_closed.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    /// G-364 — whether this location's rpc domain still accepts calls
+    /// (false ⇒ `rpc.unavailable`, rpc.ts:105-107).
+    #[must_use]
+    pub fn rpc_available(&self) -> bool {
+        !self.rpc_closed.load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// The schema-crate location ref for event payloads.

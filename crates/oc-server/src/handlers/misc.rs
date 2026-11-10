@@ -455,6 +455,8 @@ async fn plugin_install(
 async fn rpc_call(
     State(state): State<SharedState>,
     Path((rpc_id, method)): Path<(String, String)>,
+    uri: Uri,
+    headers: HeaderMap,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
     let input = body.get("input").cloned().unwrap_or(Value::Null);
@@ -463,6 +465,14 @@ async fn rpc_call(
         // `rpc.unavailable` (RpcError 400), never a 500 stub.
         return Err(ApiError::rpc(format!("RPC is unavailable: {rpc_id}"), "rpc.unavailable"));
     };
+    // G-364 — the request location's rpc gate (`rpc.close` on location
+    // shutdown, rpc.ts:105-107): a location whose graph ran the shutdown
+    // sequence answers `rpc.unavailable` for every id, exactly like a
+    // closed v2 `Rpc.Service` (location-lifecycle.ts:44-54).
+    let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
+    if !state.engine.location_rpc_available(&location) {
+        return Err(ApiError::rpc(format!("RPC is unavailable: {rpc_id}"), "rpc.unavailable"));
+    }
     match boot.rpc_call(&rpc_id, &method, input).await {
         // `output === undefined ? {} : { output }` (rpc.ts:10-11).
         Ok(output) => Ok(axum::Json(match output {
