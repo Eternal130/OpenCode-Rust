@@ -94,13 +94,98 @@ pub fn request_metadata(request: &LLMRequest) -> RequestMetadata {
     RequestMetadata { agent, vision }
 }
 
+/// The per-request interaction context the `model.request` hook reads in
+/// the ref (github-copilot.ts:267-280): the request kind, child-session
+/// ness, and the interaction id (`SessionAffinity.get(session) ?? id`).
+/// The Rust route layer only sees the lowered [`LLMRequest`], so the
+/// context is derived from the session seam headers oc-core's
+/// `model_request` injects into `http.headers`
+/// (`x-session-affinity` / `x-opencode-session-id` /
+/// `x-opencode-parent-session-id`):
+///
+/// - kind: a request replaying a compaction window is a compaction
+///   request (`ContentPart::Compaction`); everything else maps to the
+///   agent-loop default. The title kind is not distinguishable at this
+///   layer — the free utility-title channel carries its own interaction
+///   vocabulary ([`utility_title_headers`]); the billable title path
+///   falls back to the agent-loop classification.
+/// - child: a parent-session header is present.
+/// - interaction id: the affinity header, else the session id header;
+///   absent entirely when the request did not flow through a session
+///   (direct route use — the interaction headers are then omitted, like
+///   the ref hook not running outside a session).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InteractionContext {
+    pub kind: SessionRequestKind,
+    pub child: bool,
+    pub interaction_id: Option<String>,
+}
+
+/// Header keys of the oc-core session seam this reads.
+const AFFINITY_HEADERS: [&str; 3] = ["x-session-affinity", "X-Session-Id", "x-opencode-session-id"];
+const PARENT_HEADERS: [&str; 2] = ["x-opencode-parent-session-id", "x-parent-session-id"];
+
+/// Derive the interaction context from a lowered request
+/// (github-copilot.ts:267-276).
+#[must_use]
+pub fn interaction_context(request: &LLMRequest) -> InteractionContext {
+    let headers = request
+        .http
+        .as_ref()
+        .and_then(|http| http.headers.as_ref())
+        .map(|headers| {
+            headers
+                .iter()
+                .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
+                .collect::<BTreeMap<String, String>>()
+        })
+        .unwrap_or_default();
+    let kind = if request.messages.iter().any(|message| {
+        message.content.iter().any(|part| matches!(part, ContentPart::Compaction { .. }))
+    }) {
+        SessionRequestKind::Compaction
+    } else {
+        SessionRequestKind::Chat
+    };
+    let child = PARENT_HEADERS.iter().any(|name| headers.contains_key(*name));
+    let interaction_id = AFFINITY_HEADERS
+        .iter()
+        .filter_map(|name| headers.get(*name))
+        .find(|value| !value.is_empty())
+        .cloned();
+    InteractionContext { kind, child, interaction_id }
+}
+
+/// The `model.request` interaction headers (github-copilot.ts:272-280):
+/// `X-Interaction-Type` from the kind/child matrix, `X-Interaction-Id`
+/// from the session affinity (falling back to the session id), and the
+/// forced `x-initiator: agent` for every non-agent-loop interaction.
+/// Empty when the request carries no session context (no seam headers —
+/// the ref hook only runs inside a session).
+#[must_use]
+pub fn copilot_interaction_headers(request: &LLMRequest) -> BTreeMap<String, String> {
+    let context = interaction_context(request);
+    let mut headers = BTreeMap::new();
+    if let Some(id) = context.interaction_id.as_deref() {
+        let interaction = interaction_type(context.kind, context.child);
+        headers.insert("X-Interaction-Type".to_owned(), interaction.to_owned());
+        headers.insert("X-Interaction-Id".to_owned(), id.to_owned());
+        if interaction != "conversation-agent" {
+            headers.insert("x-initiator".to_owned(), "agent".to_owned());
+        }
+    }
+    headers
+}
+
 /// The per-request Copilot headers (github-copilot.ts `applyHeaders` over
-/// `requestMetadata`): the `x-initiator` escalation and the vision flag.
-/// Client headers (api version, intent) ride the route defaults.
+/// `requestMetadata`): the `x-initiator` escalation, the vision flag,
+/// and the `model.request` interaction vocabulary
+/// ([`copilot_interaction_headers`]). Client headers (api version,
+/// intent) ride the route defaults.
 #[must_use]
 pub fn copilot_request_headers(request: &LLMRequest) -> BTreeMap<String, String> {
     let metadata = request_metadata(request);
-    let mut headers = BTreeMap::new();
+    let mut headers = copilot_interaction_headers(request);
     if metadata.agent {
         headers.insert("x-initiator".to_owned(), "agent".to_owned());
     }

@@ -224,13 +224,63 @@ pub struct Options {
     pub service_tier: Option<String>,
     pub metadata: Option<Value>,
     pub container: Option<Value>,
-    pub inference_geo: Option<String>,
+    /// `optionalNull` (anthropic-messages.ts:352-353): explicit null is
+    /// legal and re-emitted on the wire.
+    pub inference_geo: NullableString,
     pub cache_control: Option<Value>,
     pub output_config: Option<OutputConfig>,
 }
 
 fn option_error(message: impl Into<String>) -> AiError {
     invalid_request(message)
+}
+
+/// Tri-state optional-null field (ref `optionalNull(Schema.String)` —
+/// anthropic-messages.ts:303,309-310,352-353): absent, explicit JSON
+/// null (legal and re-emitted on the wire), or a string value.
+/// Non-string non-null values still fail validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NullableString {
+    Absent,
+    Null,
+    Value(String),
+}
+
+impl NullableString {
+    /// `Schema.optionalNull(Schema.String)` decode.
+    fn decode(value: Option<&Value>) -> Result<Self, AiError> {
+        match value {
+            None => Ok(Self::Absent),
+            Some(Value::Null) => Ok(Self::Null),
+            Some(Value::String(text)) => Ok(Self::Value(text.clone())),
+            Some(other) => Err(option_error(format!("Expected a string, received {other}"))),
+        }
+    }
+
+    /// The `a ?? b` merge the ref body build uses for the dual key
+    /// spellings (`service_tier ?? serviceTier`,
+    /// `inference_geo ?? inferenceGeo`): a value wins; an absent or null
+    /// primary falls through to the fallback.
+    fn or(self, fallback: Self) -> Self {
+        match self {
+            Self::Value(value) => Self::Value(value),
+            _ => fallback,
+        }
+    }
+
+    /// Wire emission: absent stays absent, explicit null is re-emitted as
+    /// JSON null (ref ~:1086 re-emits the decoded fields as-is).
+    fn insert_into(self, object: &mut Map<String, Value>, key: &str) {
+        match self {
+            Self::Absent => {}
+            Self::Null => {
+                object.insert(key.to_string(), Value::Null);
+            }
+            Self::Value(value) => {
+                object.insert(key.to_string(), json!(value));
+            }
+        }
+    }
 }
 
 /// `Schema.optional(Schema.String)`: absent ok, any present value must be a
@@ -453,10 +503,18 @@ pub fn decode_options(input: Option<&crate::schema::ProviderOptions>) -> Result<
             let Some(metadata_object) = value.as_object() else {
                 return Err(option_error(format!("Expected an object, received {value}")));
             };
-            let user_id = want_string(metadata_object.get("user_id"))?;
+            // `user_id: optionalNull(Schema.String)` (~:303): explicit
+            // null is legal and re-emitted as-is on the wire (~:1086).
+            let user_id = NullableString::decode(metadata_object.get("user_id"))?;
             let mut out = Map::new();
-            if let Some(user_id) = user_id {
-                out.insert("user_id".into(), json!(user_id));
+            match user_id {
+                NullableString::Absent => {}
+                NullableString::Null => {
+                    out.insert("user_id".into(), Value::Null);
+                }
+                NullableString::Value(user_id) => {
+                    out.insert("user_id".into(), json!(user_id));
+                }
             }
             Some(Value::Object(out))
         }
@@ -468,22 +526,29 @@ pub fn decode_options(input: Option<&crate::schema::ProviderOptions>) -> Result<
             let Some(container_object) = value.as_object() else {
                 return Err(option_error(format!("Expected an object, received {value}")));
             };
+            // `skills`/`id` are `optionalNull` (~:309-310): explicit null
+            // is legal (the container passes through verbatim); a present
+            // non-null value must still match the shape.
             if let Some(skills) = container_object.get("skills") {
-                let Value::Array(items) = skills else {
+                if !matches!(skills, Value::Null | Value::Array(_)) {
                     return Err(option_error(format!("Expected an array, received {skills}")));
-                };
-                if !items.iter().all(Value::is_object) {
-                    return Err(option_error("container.skills items must be objects"));
+                }
+                if let Value::Array(items) = skills {
+                    if !items.iter().all(Value::is_object) {
+                        return Err(option_error("container.skills items must be objects"));
+                    }
                 }
             }
             if let Some(id) = container_object.get("id") {
-                want_string(Some(id))?;
+                if !matches!(id, Value::Null | Value::String(_)) {
+                    return Err(option_error(format!("Expected a string, received {id}")));
+                }
             }
             Some(value.clone())
         }
     };
-    let inference_geo =
-        want_string(object.get("inference_geo"))?.or(want_string(object.get("inferenceGeo"))?);
+    let inference_geo = NullableString::decode(object.get("inference_geo"))?
+        .or(NullableString::decode(object.get("inferenceGeo"))?);
     let cache_control = match object.get("cache_control") {
         Some(value) => Some(decode_cache_control(value)?),
         None => match object.get("cacheControl") {
@@ -529,14 +594,25 @@ impl Breakpoints {
     }
 }
 
+/// The breakpoint-drop warning (G-309; ref anthropic-messages.ts:1060-1064
+/// `Effect.logWarning`): emitted after lowering when callers over-marked
+/// and the 4-breakpoint budget shed hints. Pure message builder so the
+/// shape is testable; the warn site prints it to stderr (oc-ai has no
+/// logging facade — eprintln matches the oc-http convention).
+#[must_use]
+pub fn breakpoint_drop_warning(dropped: u32) -> String {
+    format!(
+        "Anthropic Messages: dropped {dropped} cache breakpoint(s); the API allows at most {ANTHROPIC_BREAKPOINT_CAP} per request."
+    )
+}
+
 /// Requests of at least one hour use the explicit `"1h"` bucket (port of
 /// `ttlBucket`).
 fn ttl_bucket(ttl_seconds: Option<f64>) -> Option<&'static str> {
     ttl_seconds.is_some_and(|seconds| seconds >= 3600.0).then_some("1h")
 }
 
-fn cache_control(breakpoints: &mut Breakpoints, cache: Option<&CacheHint>) -> Option<Value> {
-    let hint = cache?;
+fn cache_control(breakpoints: &mut Breakpoints, cache: Option<&CacheHint>) -> Option<Value> {    let hint = cache?;
     if !matches!(hint.kind, CacheHintKind::Ephemeral | CacheHintKind::Persistent) {
         return None;
     }
@@ -1754,6 +1830,11 @@ pub fn body_from_request(request: &LLMRequest) -> Result<Value, AiError> {
         ))
     };
     let messages = lower_messages(&flattened_request, &mut breakpoints)?;
+    // G-309 — the ref logs a warning when the 4-breakpoint budget shed
+    // caller hints (anthropic-messages.ts:1060-1064).
+    if breakpoints.dropped > 0 {
+        eprintln!("Warning: {}", breakpoint_drop_warning(breakpoints.dropped));
+    }
     let output_config_value = match (&effort, &format) {
         (None, None) => None,
         (effort, format) => {
@@ -1815,9 +1896,7 @@ pub fn body_from_request(request: &LLMRequest) -> Result<Value, AiError> {
     if let Some(container) = options.container {
         body.insert("container".into(), container);
     }
-    if let Some(inference_geo) = options.inference_geo {
-        body.insert("inference_geo".into(), json!(inference_geo));
-    }
+    options.inference_geo.insert_into(&mut body, "inference_geo");
     if let Some(metadata) = options.metadata {
         body.insert("metadata".into(), metadata);
     }
@@ -2855,8 +2934,17 @@ pub fn anthropic_messages_route(transport: SharedTransport) -> Route {
         .with_base_url(DEFAULT_BASE_URL),
         auth: None,
         framing: framing(),
-        headers: Some(Arc::new(|_request: &LLMRequest| {
-            BTreeMap::from([("anthropic-version".to_string(), "2023-06-01".to_string())])
+        headers: Some(Arc::new(|request: &LLMRequest| {
+            // G-298 — the Copilot escape lane (provider `github-copilot`,
+            // `{copilot}/v1/messages`) also carries the `model.request`
+            // interaction vocabulary (github-copilot.ts:267-280); every
+            // other anthropic-family provider only sends the version.
+            let mut headers =
+                BTreeMap::from([("anthropic-version".to_string(), "2023-06-01".to_string())]);
+            if request.model.provider.0 == "github-copilot" {
+                headers.extend(super::copilot::copilot_interaction_headers(request));
+            }
+            headers
         })),
         transport: BetaHeadersTransport::wrap(transport),
         defaults: Default::default(),

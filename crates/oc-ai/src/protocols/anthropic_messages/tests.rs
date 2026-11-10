@@ -2742,3 +2742,78 @@ fn meta_messages_without_tools_or_natives_is_a_no_op() {
     let body = compile(&request).unwrap();
     assert!(body.get("tools").is_none());
 }
+
+// ===========================================================================
+// G-306 — the optionalNull family: explicit null is legal and re-emitted;
+// absent stays absent; invalid types still error.
+// ===========================================================================
+
+#[test]
+fn optional_null_fields_round_trip_explicit_nulls() {
+    let base = base_request(model_of("claude-sonnet-4-5"));
+    let with = |options: Value| {
+        base.update(LLMRequestPatch {
+            provider_options: Some(serde_json::from_value(options).unwrap()),
+            ..Default::default()
+        })
+    };
+    let body = compile(&with(json!({
+        "metadata": {"user_id": null},
+        "container": {"id": null, "skills": null},
+        "inference_geo": null,
+    })))
+    .unwrap();
+    // Explicit nulls are re-emitted as JSON null exactly like the ref
+    // (anthropic-messages.ts:1086).
+    assert_eq!(body["metadata"], json!({"user_id": null}));
+    assert_eq!(body["container"], json!({"id": null, "skills": null}));
+    assert_eq!(body["inference_geo"], json!(null));
+    // The null primary spelling falls through to the camelCase one
+    // (`inference_geo ?? inferenceGeo`).
+    let body = compile(&with(json!({"inference_geo": null, "inferenceGeo": "eu"}))).unwrap();
+    assert_eq!(body["inference_geo"], json!("eu"));
+}
+
+#[test]
+fn optional_null_fields_stay_absent_when_absent() {
+    let body = compile(&base_request(model_of("claude-sonnet-4-5"))).unwrap();
+    assert!(body.get("metadata").is_none());
+    assert!(body.get("container").is_none());
+    assert!(body.get("inference_geo").is_none());
+}
+
+#[test]
+fn optional_null_fields_still_reject_invalid_types() {
+    let base = base_request(model_of("claude-sonnet-4-5"));
+    let with = |options: Value| {
+        base.update(LLMRequestPatch {
+            provider_options: Some(serde_json::from_value(options).unwrap()),
+            ..Default::default()
+        })
+    };
+    let error = compile(&with(json!({"metadata": {"user_id": 42}}))).unwrap_err();
+    assert!(error.message().contains("Expected a string"), "got: {}", error.message());
+    let error = compile(&with(json!({"inference_geo": 7}))).unwrap_err();
+    assert!(error.message().contains("Expected a string"), "got: {}", error.message());
+    let error = compile(&with(json!({"container": {"id": 7}}))).unwrap_err();
+    assert!(error.message().contains("Expected a string"), "got: {}", error.message());
+    let error = compile(&with(json!({"container": {"skills": "nope"}}))).unwrap_err();
+    assert!(error.message().contains("Expected an array"), "got: {}", error.message());
+}
+
+// ===========================================================================
+// G-309 — the breakpoint-drop warning message
+// ===========================================================================
+
+#[test]
+fn breakpoint_drop_warning_matches_the_ref_shape() {
+    use crate::protocols::anthropic_messages::breakpoint_drop_warning;
+    assert_eq!(
+        breakpoint_drop_warning(2),
+        "Anthropic Messages: dropped 2 cache breakpoint(s); the API allows at most 4 per request."
+    );
+    assert_eq!(
+        breakpoint_drop_warning(1),
+        "Anthropic Messages: dropped 1 cache breakpoint(s); the API allows at most 4 per request."
+    );
+}

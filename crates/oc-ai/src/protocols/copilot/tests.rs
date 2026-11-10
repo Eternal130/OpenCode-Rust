@@ -5,12 +5,15 @@
 use serde_json::json;
 
 use super::{
-    copilot_chat_route, copilot_client_headers, copilot_request_headers, interaction_type,
-    request_metadata, CopilotConfig, SessionRequestKind, COPILOT_BASE_URL,
+    copilot_chat_route, copilot_client_headers, copilot_interaction_headers,
+    copilot_request_headers, interaction_context, interaction_type, request_metadata,
+    CopilotConfig, SessionRequestKind, COPILOT_BASE_URL,
 };
 use crate::route::SharedTransport;
+use crate::schema::options::HttpOptions;
 use crate::schema::{ContentPart, LLMRequest, Message, MessageRole, ToolResultValue};
 use crate::test_support::MockTransport;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 fn transport() -> SharedTransport {
@@ -157,4 +160,204 @@ fn default_base_url_and_github_token_env_fallback() {
     std::env::remove_var("GITHUB_TOKEN");
     let client = copilot_client_headers();
     assert_eq!(client["X-GitHub-Api-Version"], "2026-08-01");
+}
+
+// ===========================================================================
+// G-298 — the `model.request` interaction vocabulary on all three lanes
+// (github-copilot.ts:267-280)
+// ===========================================================================
+
+fn session_request(
+    route_headers: &[(&str, &str)],
+    messages: Vec<Message>,
+) -> LLMRequest {
+    let route = copilot_chat_route(
+        transport(),
+        CopilotConfig {
+            token: Some(crate::route::auth::Secret::Value("t".into())),
+            ..Default::default()
+        },
+    );
+    let model = route.model("gpt-5.4", None).unwrap();
+    let mut request = LLMRequest::new(model);
+    request.messages = messages;
+    if !route_headers.is_empty() {
+        request.http = Some(HttpOptions {
+            headers: Some(
+                route_headers
+                    .iter()
+                    .map(|(name, value)| (name.to_string(), value.to_string()))
+                    .collect::<BTreeMap<String, String>>(),
+            ),
+            ..Default::default()
+        });
+    }
+    request
+}
+
+#[test]
+fn interaction_headers_matrix_matches_the_ref_hook() {
+    // Primary agent loop (not a child): conversation-agent, no forced
+    // initiator (the client default `user` stays).
+    let request = session_request(
+        &[("x-session-affinity", "ses_affinity_1"), ("x-opencode-session-id", "ses_abc")],
+        vec![Message::user("hi")],
+    );
+    assert_eq!(
+        interaction_context(&request),
+        super::InteractionContext {
+            kind: SessionRequestKind::Chat,
+            child: false,
+            interaction_id: Some("ses_affinity_1".to_string()),
+        }
+    );
+    let headers = copilot_interaction_headers(&request);
+    assert_eq!(headers.get("X-Interaction-Type"), Some(&"conversation-agent".to_string()));
+    assert_eq!(headers.get("X-Interaction-Id"), Some(&"ses_affinity_1".to_string()));
+    assert!(!headers.contains_key("x-initiator"));
+
+    // Child session (parent header present): conversation-subagent and the
+    // forced agent initiator.
+    let request = session_request(
+        &[
+            ("x-session-affinity", "ses_affinity_1"),
+            ("x-opencode-parent-session-id", "ses_parent"),
+        ],
+        vec![Message::user("hi")],
+    );
+    let headers = copilot_interaction_headers(&request);
+    assert_eq!(headers.get("X-Interaction-Type"), Some(&"conversation-subagent".to_string()));
+    assert_eq!(headers.get("X-Interaction-Id"), Some(&"ses_affinity_1".to_string()));
+    assert_eq!(headers.get("x-initiator"), Some(&"agent".to_string()));
+
+    // Compaction window replay: conversation-compaction + agent.
+    let request = session_request(
+        &[("x-opencode-session-id", "ses_abc")],
+        vec![Message::new(
+            MessageRole::User,
+            vec![ContentPart::Compaction {
+                provider: crate::schema::ProviderId::new("anthropic"),
+                id: None,
+                encrypted: Some("window".into()),
+                text: None,
+            }],
+        )],
+    );
+    assert_eq!(interaction_context(&request).kind, SessionRequestKind::Compaction);
+    let headers = copilot_interaction_headers(&request);
+    assert_eq!(headers.get("X-Interaction-Type"), Some(&"conversation-compaction".to_string()));
+    assert_eq!(headers.get("X-Interaction-Id"), Some(&"ses_abc".to_string()));
+    assert_eq!(headers.get("x-initiator"), Some(&"agent".to_string()));
+}
+
+#[test]
+fn interaction_id_falls_back_to_the_session_id_without_affinity() {
+    // `SessionAffinity.get(session) ?? sessionID` — with only the session
+    // id header the id header still rides the request.
+    let request =
+        session_request(&[("x-opencode-session-id", "ses_abc")], vec![Message::user("hi")]);
+    let headers = copilot_interaction_headers(&request);
+    assert_eq!(headers.get("X-Interaction-Id"), Some(&"ses_abc".to_string()));
+    assert_eq!(headers.get("X-Interaction-Type"), Some(&"conversation-agent".to_string()));
+}
+
+#[test]
+fn interaction_headers_absent_without_session_context() {
+    // No seam headers (direct route use): like the ref hook not running,
+    // no interaction headers; the pre-existing per-request policy is
+    // unchanged.
+    let request = session_request(&[], vec![Message::user("hi")]);
+    assert!(copilot_interaction_headers(&request).is_empty());
+    assert!(copilot_request_headers(&request).is_empty());
+}
+
+#[test]
+fn chat_lane_wire_carries_the_interaction_headers() {
+    let request = session_request(
+        &[("x-session-affinity", "ses_affinity_1")],
+        vec![Message::user("hello")],
+    );
+    let route = request.model.route.clone();
+    let prepared = route.prepare_request(&request);
+    let body = route.build_body(&prepared).expect("chat body");
+    let (transport_request, _) = route.prepare_transport(&prepared, &body).expect("wire");
+    assert_eq!(transport_request.url, "https://api.githubcopilot.com/chat/completions");
+    assert_eq!(transport_request.header("X-Interaction-Type"), Some("conversation-agent"));
+    assert_eq!(transport_request.header("X-Interaction-Id"), Some("ses_affinity_1"));
+    assert_eq!(transport_request.header("x-initiator"), Some("user"));
+}
+
+#[test]
+fn responses_lane_wire_carries_the_interaction_headers() {
+    // gpt-5.x models serve on /responses (the dispatch lane).
+    let route = copilot_chat_route(
+        transport(),
+        CopilotConfig {
+            token: Some(crate::route::auth::Secret::Value("t".into())),
+            ..Default::default()
+        },
+    );
+    let model = route.model("gpt-5.4", None).unwrap();
+    let mut request = LLMRequest::new(model);
+    request.messages = vec![Message::user("hello")];
+    request.http = Some(HttpOptions {
+        headers: Some(BTreeMap::from([
+            ("x-session-affinity".to_string(), "ses_affinity_2".to_string()),
+            ("x-opencode-parent-session-id".to_string(), "ses_parent".to_string()),
+        ])),
+        ..Default::default()
+    });
+    let prepared = route.prepare_request(&request);
+    let body = route.build_body(&prepared).expect("responses body");
+    let (transport_request, _) = route.prepare_transport(&prepared, &body).expect("wire");
+    assert_eq!(transport_request.url, "https://api.githubcopilot.com/responses");
+    assert_eq!(transport_request.header("X-Interaction-Type"), Some("conversation-subagent"));
+    assert_eq!(transport_request.header("X-Interaction-Id"), Some("ses_affinity_2"));
+    assert_eq!(transport_request.header("x-initiator"), Some("agent"));
+}
+
+#[test]
+fn messages_lane_wire_carries_the_interaction_headers() {
+    // The Anthropic escape lane (anthropic-messages route patched to the
+    // copilot provider) also injects the vocabulary; plain anthropic
+    // requests stay untouched.
+    let route = crate::protocols::anthropic_messages::anthropic_messages_route(transport())
+        .with(crate::route::RoutePatch {
+            provider: Some("github-copilot".to_string()),
+            ..Default::default()
+        });
+    let model = route.model("claude-sonnet-4.6", None).unwrap();
+    let mut request = LLMRequest::new(model);
+    request.messages = vec![Message::user("hello")];
+    request.http = Some(HttpOptions {
+        headers: Some(BTreeMap::from([(
+            "x-session-affinity".to_string(),
+            "ses_affinity_3".to_string(),
+        )])),
+        ..Default::default()
+    });
+    let prepared = route.prepare_request(&request);
+    let body = route.build_body(&prepared).expect("messages body");
+    let (transport_request, _) = route.prepare_transport(&prepared, &body).expect("wire");
+    assert_eq!(transport_request.header("anthropic-version"), Some("2023-06-01"));
+    assert_eq!(transport_request.header("X-Interaction-Type"), Some("conversation-agent"));
+    assert_eq!(transport_request.header("X-Interaction-Id"), Some("ses_affinity_3"));
+
+    // Same route shape without the copilot provider: no interaction headers.
+    let plain = crate::protocols::anthropic_messages::anthropic_messages_route(transport());
+    let model = plain.model("claude-sonnet-4.6", None).unwrap();
+    let mut request = LLMRequest::new(model);
+    request.messages = vec![Message::user("hello")];
+    request.http = Some(HttpOptions {
+        headers: Some(BTreeMap::from([(
+            "x-session-affinity".to_string(),
+            "ses_affinity_3".to_string(),
+        )])),
+        ..Default::default()
+    });
+    let prepared = plain.prepare_request(&request);
+    let body = plain.build_body(&prepared).expect("messages body");
+    let (transport_request, _) = plain.prepare_transport(&prepared, &body).expect("wire");
+    assert_eq!(transport_request.header("anthropic-version"), Some("2023-06-01"));
+    assert_eq!(transport_request.header("X-Interaction-Type"), None);
 }
