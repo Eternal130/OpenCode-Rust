@@ -1140,6 +1140,63 @@ async fn bus_chaos_concurrent_publishers_same_aggregate() {
     assert_eq!(bus.latest_sequence("ses_chaos").await.unwrap(), total - 1);
 }
 
+/// G-292 — the durable notify runs INSIDE the aggregate lock (ref
+/// bus.ts:469-477 `durableLocks.withLock`): a live subscriber's bounded
+/// channel receives one aggregate's notifications in non-decreasing seq
+/// order even under concurrent publishers. Before the fix, the notify
+/// happened after the lock was dropped, so a second publisher could
+/// commit + notify seq N+1 between the first publisher's unlock and its
+/// notify, reordering the channel.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn g292_durable_notify_order_under_concurrent_publishers() {
+    const PUBLISHERS: usize = 8;
+    const PER_PUBLISHER: usize = 8;
+
+    let (bus, _dir) = test_bus(true).await;
+    let mut live = bus.subscribe();
+
+    let mut handles = Vec::new();
+    for worker in 0..PUBLISHERS {
+        let bus = bus.clone();
+        handles.push(tokio::spawn(async move {
+            for index in 0..PER_PUBLISHER {
+                bus.publish(
+                    renamed_def(),
+                    renamed_data("ses_g292", &format!("w{worker}-e{index}")),
+                    PublishOptions::default(),
+                )
+                .await
+                .expect("g292 publish");
+            }
+        }));
+    }
+    for handle in handles {
+        handle.await.expect("publisher finished");
+    }
+
+    // Deterministic bounded-channel collection: the live channel buffers
+    // in SEND order — which is notify order — so draining it after the
+    // publishers finish still exposes any unlock/notify race.
+    let mut observed: Vec<i64> = Vec::new();
+    while let Ok(Some(event)) = tokio::time::timeout(Duration::from_millis(50), live.next()).await {
+        observed.push(event.seq().expect("durable event carries seq"));
+    }
+    let total = (PUBLISHERS * PER_PUBLISHER) as i64;
+    assert_eq!(
+        observed.len(),
+        usize::try_from(total).expect("usize"),
+        "exactly one live item per commit"
+    );
+    assert!(
+        observed.windows(2).all(|pair| pair[0] <= pair[1]),
+        "live channel observed seq out of order: {observed:?}"
+    );
+    let mut sorted = observed.clone();
+    sorted.sort_unstable();
+    let expected: Vec<i64> = (0..total).collect();
+    assert_eq!(sorted, expected, "contiguous exactly-once sequences");
+}
+
 /// Cross-aggregate interleaving preserves per-aggregate ordering.
 #[tokio::test]
 async fn bus_chaos_cross_aggregate_interleaving() {

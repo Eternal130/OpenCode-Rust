@@ -26,7 +26,7 @@ use std::sync::Arc;
 use futures::StreamExt as _;
 use oc_core::project::{
     hash_fast, MemoryProjectStore, NoEvents, ProjectEvents, ProjectInfo, ProjectRow, ProjectStore,
-    Resolver, WorktreeResolved,
+    Resolver, WorktreeResolved, WorktreeRow,
 };
 
 /// Test-side twin of the crate-private `config::resolve_path`
@@ -249,8 +249,11 @@ struct Recorder {
 
 #[async_trait::async_trait]
 impl ProjectEvents for Recorder {
-    async fn worktree_resolved(&self, event: &WorktreeResolved) {
+    async fn worktree_resolved(&self, event: &WorktreeResolved, _row: &WorktreeRow) -> bool {
         self.resolved.lock().unwrap().push(event.clone());
+        // Keep the standalone store insert (SQL assertions below read rows
+        // through the store, not the bus commit hook).
+        false
     }
     async fn project_updated(&self, row: &ProjectInfo) {
         self.updated.lock().unwrap().push(row.clone());
@@ -332,6 +335,63 @@ async fn worktree_resolved_adoption_requires_nearest_marker() {
         guard[0].adopted.is_none(),
         "a candidate with its own nearer repository is not adopted"
     );
+}
+
+/// G-297 — the worktree row INSERT rides the `worktree.resolved`
+/// durable event's commit hook (ref project.ts:184-199 publishes with
+/// `{ commit: () => db.insert(...) }`): row + event land in ONE
+/// transaction, and the existing-row short-circuit still skips
+/// re-publishing (a crash between a standalone insert and the publish
+/// would otherwise leave a row that suppresses the event forever).
+#[tokio::test]
+async fn worktree_resolved_row_insert_rides_publish_commit_hook() {
+    let db = project_db("d3-g297").await;
+    let dir = tempdir("d3-g297-repo");
+    init_repo(dir.path(), Some("git@github.com:owner/repo.git"));
+
+    let options =
+        oc_core::bus::BusOptions { persist: true, ..oc_core::bus::BusOptions::deterministic() };
+    let bus = oc_core::bus::Bus::new(db.clone(), options);
+    let events = Arc::new(oc_core::project::BusProjectEvents::new(bus.clone()));
+    let store = Arc::new(oc_core::project::SqliteProjectStore::new(db.clone()));
+    let resolver = oc_core::project::Resolver::new(store, events);
+    let project = resolver.resolve(dir.path()).await;
+    let expected_id = hash_fast("git-remote:github.com/owner/repo");
+    assert_eq!(project.id, expected_id);
+
+    let counts = |db: &oc_core::database::Database, id: &str| {
+        let id = id.to_string();
+        let db = db.clone();
+        async move {
+            db.transaction(move |tx| {
+                let rows: i64 = tx.conn().query_row(
+                    "SELECT COUNT(*) FROM worktree WHERE project_id = ?1",
+                    rusqlite::params![id],
+                    |row| row.get(0),
+                )?;
+                let events: i64 = tx.conn().query_row(
+                    "SELECT COUNT(*) FROM event WHERE aggregate_id = ?1 \
+                     AND type LIKE 'worktree.resolved%'",
+                    rusqlite::params![id],
+                    |row| row.get(0),
+                )?;
+                Ok((rows, events))
+            })
+            .await
+            .expect("count rows + events")
+        }
+    };
+    // Both the row and the durable event exist after the publish — the
+    // insert executed inside the commit hook.
+    let (rows, events) = counts(&db, &expected_id).await;
+    assert_eq!(rows, 1, "worktree row inserted via the publish commit hook");
+    assert_eq!(events, 1, "durable worktree.resolved event persisted");
+
+    // Existing-row short-circuit: re-resolution adds neither row nor event.
+    let _ = resolver.resolve(dir.path()).await;
+    let (rows, events) = counts(&db, &expected_id).await;
+    assert_eq!(rows, 1, "short-circuit skips a duplicate row");
+    assert_eq!(events, 1, "short-circuit skips a duplicate event");
 }
 
 /// End-to-end through a booted engine: assembling a location in a git

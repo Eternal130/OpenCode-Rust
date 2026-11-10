@@ -1151,7 +1151,14 @@ pub mod worktree_strategy {
 #[async_trait]
 pub trait ProjectEvents: Send + Sync {
     async fn project_updated(&self, _row: &ProjectInfo) {}
-    async fn worktree_resolved(&self, _event: &WorktreeResolved) {}
+    /// Announces `worktree.resolved`. Returns `true` when the impl also
+    /// persisted `row` (G-297 — the bus producer commits the worktree row
+    /// inside the durable event's transaction, ref project.ts:184-199
+    /// publishes with `{ commit: () => db.insert(...) }`); `false` tells
+    /// the resolver to fall back to the standalone store insert.
+    async fn worktree_resolved(&self, _event: &WorktreeResolved, _row: &WorktreeRow) -> bool {
+        false
+    }
 }
 
 /// No-op events.
@@ -1200,9 +1207,9 @@ impl ProjectEvents for BusProjectEvents {
             .await;
     }
 
-    async fn worktree_resolved(&self, event: &WorktreeResolved) {
+    async fn worktree_resolved(&self, event: &WorktreeResolved, row: &WorktreeRow) -> bool {
         let Some(definition) = crate::bus::registry::by_type("worktree.resolved") else {
-            return;
+            return false;
         };
         let mut data = serde_json::json!({
             "projectID": event.project_id,
@@ -1212,8 +1219,43 @@ impl ProjectEvents for BusProjectEvents {
         if let Some(adopted) = &event.adopted {
             data["adopted"] = serde_json::json!(adopted);
         }
-        let _ = self.bus.publish(definition, data, crate::bus::PublishOptions::default()).await;
+        // G-297 (ref project.ts:184-199): the worktree row INSERT rides
+        // the durable event's commit hook — the row and the event land
+        // in ONE transaction, so a crash between them can never leave a
+        // row that short-circuits all future publishes (losing the
+        // event forever). Same statement as the store's
+        // `insert_worktree`, `INSERT OR IGNORE` over the
+        // `(project_id, directory)` pk (ref `onConflictDoNothing`).
+        let hook = row.clone();
+        let options = crate::bus::PublishOptions {
+            commit: Some(Box::new(move |tx: &mut crate::database::Tx<'_>, _: i64| {
+                worktree_commit_insert(tx, &hook)
+            })),
+            ..Default::default()
+        };
+        let _ = self.bus.publish(definition, data, options).await;
+        true
     }
+}
+
+/// The `worktree` row INSERT executed inside a durable-event commit
+/// hook (G-297 — mirrors [`SqliteProjectStore::insert_worktree`]).
+fn worktree_commit_insert(
+    tx: &mut crate::database::Tx<'_>,
+    row: &WorktreeRow,
+) -> Result<(), crate::database::error::DbError> {
+    let Ok(directory) =
+        crate::database::schema::directory_storage(&row.directory.to_string_lossy())
+    else {
+        return Ok(());
+    };
+    let now = crate::database::migrations::now_ms();
+    tx.execute(
+        "INSERT OR IGNORE INTO worktree (project_id, directory, strategy, time_created) \
+         VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![row.project_id, directory, row.strategy, now],
+    )?;
+    Ok(())
 }
 
 /// `Project.root` — nearest `.git`/`.hg` ancestor directory (filesystem only;
@@ -1356,13 +1398,11 @@ impl Resolver {
                 continue;
             }
             let resolved_directory = crate::config::resolve_path(&directory);
-            self.store
-                .insert_worktree(&WorktreeRow {
-                    project_id: project.id.clone(),
-                    directory: resolved_directory.clone(),
-                    strategy,
-                })
-                .await;
+            let row = WorktreeRow {
+                project_id: project.id.clone(),
+                directory: resolved_directory.clone(),
+                strategy,
+            };
             // Adoption scan (project.ts:175-192): markerless
             // directory-keyed projects nested under the newly resolved
             // directory whose nearest VCS marker IS this directory's
@@ -1379,14 +1419,29 @@ impl Resolver {
                 })
                 .map(|(id, _)| id)
                 .collect();
-            self.events
-                .worktree_resolved(&WorktreeResolved {
-                    project_id: project.id.clone(),
-                    directory,
-                    previous: project.previous.clone().unwrap_or_else(|| "global".to_string()),
-                    adopted: (!adopted.is_empty()).then_some(adopted),
-                })
+            // G-297 — the row INSERT and the durable event must be
+            // atomic (ref project.ts:184-199 puts the insert in the
+            // publish's commit callback). A crash between a standalone
+            // insert and the publish leaves a row that short-circuits
+            // every future resolve, so the event is never emitted
+            // again. When the events producer rides the bus, the insert
+            // runs inside the event's commit hook; producers that
+            // cannot hook the publish keep the standalone store insert.
+            let handled = self
+                .events
+                .worktree_resolved(
+                    &WorktreeResolved {
+                        project_id: project.id.clone(),
+                        directory,
+                        previous: project.previous.clone().unwrap_or_else(|| "global".to_string()),
+                        adopted: (!adopted.is_empty()).then_some(adopted),
+                    },
+                    &row,
+                )
                 .await;
+            if !handled {
+                self.store.insert_worktree(&row).await;
+            }
         }
         project
     }
@@ -1771,8 +1826,14 @@ mod tests {
         }
         #[async_trait]
         impl ProjectEvents for Recorder {
-            async fn worktree_resolved(&self, event: &WorktreeResolved) {
+            async fn worktree_resolved(
+                &self,
+                event: &WorktreeResolved,
+                _row: &WorktreeRow,
+            ) -> bool {
                 self.resolved.lock().unwrap().push(event.clone());
+                // Keep the standalone store insert (memory-store parity).
+                false
             }
         }
         let dir = tempdir("project-persist");

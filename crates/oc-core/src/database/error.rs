@@ -71,6 +71,12 @@ pub enum DbError {
     #[error("pragma failed: {0}")]
     Pragma(String),
 
+    /// A bus invariant raised inside a transaction closure (G-325 —
+    /// typed tunnel replacing the former string-marker `Pragma`
+    /// encoding; lifted back into `BusError::Invalid` by the bus).
+    #[error("invalid event: {type_}: {message}")]
+    BusInvalid { type_: String, message: String },
+
     /// A recoverable session conflict tunneled out of a projector
     /// transaction (typed; see [`SessionConflict`]).
     #[error(transparent)]

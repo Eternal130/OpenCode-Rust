@@ -550,16 +550,19 @@ mod tests {
         );
 
         // Success leg: the list tool completes offline (empty catalog).
-        let _ =
-            crate::tool::tests::call(&harness.tools, "list_mcp_resources", serde_json::json!({}))
-                .await
-                .expect("list");
+        let _ = crate::tool::tests::call(
+            &harness.tools,
+            "opencode_list_mcp_resources",
+            serde_json::json!({}),
+        )
+        .await
+        .expect("list");
 
         // Error leg: an invalid read input surfaces the ref decode
         // message (decodeInput runs in the pipeline, before the leaf).
         let failure = crate::tool::tests::call(
             &harness.tools,
-            "read_mcp_resource",
+            "opencode_read_mcp_resource",
             serde_json::json!({ "server": "alpha" }),
         )
         .await
@@ -615,7 +618,7 @@ mod tests {
 
         let result = crate::tool::tests::call(
             &harness.tools,
-            "read_mcp_resource",
+            "opencode_read_mcp_resource",
             serde_json::json!({ "server": "alpha", "uri": "mock://text/1" }),
         )
         .await
