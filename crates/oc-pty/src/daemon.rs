@@ -286,7 +286,7 @@ async fn handle_conn(stream: UnixStream, state: Shared, conn_id: u64, exit_tx: m
                         )
                         .await;
                         if let Some(response) = dispatch.response {
-                            send_response(&writer_tx, &response);
+                            let _ = send_response(&writer_tx, &response);
                         }
                         if dispatch.shutdown {
                             // DRAIN path: the Ok frame must flush BEFORE the
@@ -347,9 +347,16 @@ async fn handle_conn(stream: UnixStream, state: Shared, conn_id: u64, exit_tx: m
 }
 
 /// Serializes + queues one response frame.
-fn send_response(writer: &ConnWriter, response: &wire::WireResponse) {
-    if let Ok(bytes) = response.to_frame() {
-        let _ = writer.send(WriterCommand::Bytes(bytes));
+/// Queues one framed response on the connection writer. `Err` carries
+/// the framing failure (e.g. an oversized inline replay, G-383b) so
+/// callers can fall back to an `error` response.
+fn send_response(writer: &ConnWriter, response: &wire::WireResponse) -> Result<(), String> {
+    match response.to_frame() {
+        Ok(bytes) => {
+            let _ = writer.send(WriterCommand::Bytes(bytes));
+            Ok(())
+        }
+        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -575,29 +582,36 @@ async fn handle_request(
         // §4.3 owner-only: mint a single-use ticket; `Machine::handoff`
         // also writes the `state.json` crash insurance (§6).
         wire::WireRequest::PrepareHandoff => {
-            // TODO(D1 review): `machine.handoff()` does synchronous
-            // file I/O (the atomic `state.json` write) while the
-            // DaemonState mutex is held, stalling every other op on
-            // this lock for the duration of the write. Acceptable for
-            // one small temp-file-and-rename today; if handoff grows
-            // (fsync, many terminals), snapshot the inputs under the
-            // lock and run the I/O outside it.
-            let mut shared = state.lock();
-            if shared.owner.as_ref().is_none_or(|owner| owner.conn_id != conn_id) {
-                return Dispatch {
-                    response: Some(wire::WireResponse::Error {
-                        message: "owner connection required".to_owned(),
-                    }),
-                    shutdown: false,
-                };
+            // G-383f — the ownership check is the only part that needs
+            // the DaemonState lock; `machine.handoff()` does real file
+            // I/O (the atomic `state.json` write) under its OWN
+            // fine-grained locks, so it runs OUTSIDE the critical
+            // section instead of stalling every other op on this mutex
+            // for the duration of the write.
+            {
+                let shared = state.lock();
+                if shared.owner.as_ref().is_none_or(|owner| owner.conn_id != conn_id) {
+                    return Dispatch {
+                        response: Some(wire::WireResponse::Error {
+                            message: "owner connection required".to_owned(),
+                        }),
+                        shutdown: false,
+                    };
+                }
             }
-            match shared.machine.handoff() {
+            match machine.handoff() {
                 Ok(Some(handoff)) => {
-                    shared.handoff_ticket = Some(HandoffTicket {
-                        ticket: handoff.ticket.clone(),
-                        expires_at: handoff.expires_at,
-                        consumed: false,
-                    });
+                    let mut shared = state.lock();
+                    // The ownership may have changed hands while the
+                    // write ran; the ticket is only recorded for the
+                    // connection that is (still) the owner.
+                    if shared.owner.as_ref().is_none_or(|owner| owner.conn_id == conn_id) {
+                        shared.handoff_ticket = Some(HandoffTicket {
+                            ticket: handoff.ticket.clone(),
+                            expires_at: handoff.expires_at,
+                            consumed: false,
+                        });
+                    }
                     Dispatch {
                         response: Some(wire::WireResponse::Handoff {
                             ticket: handoff.ticket,
@@ -801,17 +815,30 @@ async fn handle_request(
             Dispatch { response: Some(wire::WireResponse::Ok), shutdown: false }
         }
 
-        wire::WireRequest::Subscribe { id, offset, attachment_id, role, takeover } => subscribe(
-            &machine,
+        wire::WireRequest::Subscribe {
             id,
             offset,
             attachment_id,
             role,
             takeover,
-            writer,
-            close,
-            attachment_slot,
-        ),
+            chunked_replay,
+        } => {
+            subscribe(
+                &machine,
+                id,
+                offset,
+                attachment_id,
+                role,
+                takeover,
+                // G-383b — the chunked-replay extension is opt-in: a
+                // client that did not declare it gets the ref v7 inline
+                // `attached` shape only.
+                chunked_replay == Some(true),
+                writer,
+                close,
+                attachment_slot,
+            )
+        }
 
         // §11.4 compat guard: mixed versions degrade to clear errors.
         wire::WireRequest::Unknown => Dispatch {
@@ -864,6 +891,7 @@ async fn rows_response(
 /// binary frames + `replay_complete`), then output/resized/exited/
 /// `controller_changed` until the stream ends or the client closes.
 #[allow(clippy::needless_pass_by_value)] // owned id rides the §3 wire parameter set verbatim
+#[allow(clippy::too_many_arguments)] // the §3 wire parameter set + the G-383b capability flag
 fn subscribe(
     machine: &PersistentPty,
     id: u64,
@@ -871,6 +899,7 @@ fn subscribe(
     attachment_id: String,
     role: wire::WireRole,
     takeover: bool,
+    chunked_replay_capable: bool,
     writer: &ConnWriter,
     close: &Arc<ConnClose>,
     attachment_slot: &mut Option<Attachment>,
@@ -963,20 +992,14 @@ fn subscribe(
     let replay = attachment.data.clone();
     let end_offset = attachment.replay.end_offset as u64;
     *next_offset.lock() = end_offset;
-    let attached = if replay.len() <= wire::INLINE_REPLAY_LIMIT {
-        wire::WireResponse::Attached {
-            terminal: wire_terminal(&attachment.info),
-            role,
-            generation: attachment.generation,
-            requested_offset: attachment.replay.requested_offset as u64,
-            available_offset: attachment.replay.available_offset as u64,
-            end_offset,
-            truncated: attachment.replay.truncated,
-            replay_base64: Some(base64_encode(&replay)),
-            replay_chunked: None,
-            replay_length: None,
-        }
-    } else {
+    // G-383b — the chunked arm fires ONLY for clients that opted in
+    // via `subscribe({chunked_replay: true})`. Non-opted-in clients
+    // (a ref TS v7 client, older Rust clients) always get the inline
+    // `replay_base64` shape; if that replay cannot fit the 8 MiB frame
+    // cap the attach fails with an error — exactly the ref failure
+    // mode (its schema has no chunked fields at all).
+    let use_chunked = chunked_replay_capable && replay.len() > wire::INLINE_REPLAY_LIMIT;
+    let attached = if use_chunked {
         // §3.2 chunked arm: inline base64 of a full buffer (≈11.2 MiB)
         // cannot fit the 8 MiB frame cap.
         wire::WireResponse::Attached {
@@ -991,9 +1014,30 @@ fn subscribe(
             replay_chunked: Some(true),
             replay_length: Some(replay.len() as u64),
         }
+    } else {
+        wire::WireResponse::Attached {
+            terminal: wire_terminal(&attachment.info),
+            role,
+            generation: attachment.generation,
+            requested_offset: attachment.replay.requested_offset as u64,
+            available_offset: attachment.replay.available_offset as u64,
+            end_offset,
+            truncated: attachment.replay.truncated,
+            replay_base64: Some(base64_encode(&replay)),
+            replay_chunked: None,
+            replay_length: None,
+        }
     };
-    send_response(writer, &attached);
-    if replay.len() > wire::INLINE_REPLAY_LIMIT {
+    match send_response(writer, &attached) {
+        Ok(()) => {}
+        Err(message) => {
+            return Dispatch {
+                response: Some(wire::WireResponse::Error { message }),
+                shutdown: false,
+            }
+        }
+    }
+    if use_chunked {
         // Replay bytes as ordinary binary output frames in offset
         // order; live output follows with higher offsets.
         let base = end_offset - replay.len() as u64;
@@ -1009,7 +1053,8 @@ fn subscribe(
                 let _ = writer.send(WriterCommand::Bytes(bytes));
             }
         }
-        send_response(writer, &wire::WireResponse::ReplayComplete { end_offset: base + sent });
+        let _ =
+            send_response(writer, &wire::WireResponse::ReplayComplete { end_offset: base + sent });
     }
     // Delivery starts only after the replay contract is on the wire.
     attachment.activate();

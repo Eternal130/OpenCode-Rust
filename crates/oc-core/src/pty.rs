@@ -214,7 +214,7 @@ fn utf16_byte_offset(text: &str, units: usize) -> Option<usize> {
 }
 
 /// G-335 — incremental UTF-8 stream decoder with carry. node-pty
-/// decodes the PTY byte stream with a stream-buffered TextDecoder; a
+/// decodes the PTY byte stream with a stream-buffered `TextDecoder`; a
 /// naive `from_utf8_lossy` per ≤8192B read chunk corrupts any multi-
 /// byte sequence split across a read boundary (CJK/emoji mojibake).
 /// `feed` emits the longest valid UTF-8 prefix and keeps the invalid
@@ -236,7 +236,7 @@ impl Utf8StreamDecoder {
     /// Feeds one raw chunk; returns everything decodable right now.
     /// A DEFINITIVELY invalid sequence (`error_len` known — e.g. a
     /// stray continuation byte) is replaced with U+FFFD immediately,
-    /// like the ref's streaming TextDecoder; a possibly-merely-
+    /// like the ref's streaming `TextDecoder`; a possibly-merely-
     /// truncated tail (no error length) stays in carry until more
     /// bytes or EOF prove it.
     pub(crate) fn feed(&mut self, chunk: &[u8]) -> String {
@@ -252,18 +252,15 @@ impl Utf8StreamDecoder {
             // The prefix is valid UTF-8 by construction; the
             // `unwrap_or_default` never engages.
             out.push_str(&String::from_utf8(pending).unwrap_or_default());
-            match error_len {
-                // Definitively invalid: replace + continue with the rest.
-                Some(len) => {
-                    out.push('\u{fffd}');
-                    let mut rest = rest;
-                    self.carry = rest.split_off(len.min(rest.len()));
-                }
+            // Definitively invalid: replace + continue with the rest.
+            if let Some(len) = error_len {
+                out.push('\u{fffd}');
+                let mut rest = rest;
+                self.carry = rest.split_off(len.min(rest.len()));
+            } else {
                 // Clean, or truncated-at-the-end: park the tail as carry.
-                None => {
-                    self.carry = rest;
-                    return out;
-                }
+                self.carry = rest;
+                return out;
             }
         }
     }
@@ -381,8 +378,8 @@ impl Inner {
             // boundary (`utf16_byte_offset` clamps inside a surrogate
             // pair to the pair's start, so the trim never splits a
             // codepoint and at most one char over the cap survives).
-            let excess_bytes = utf16_byte_offset(&session.buffer, excess_units)
-                .unwrap_or(session.buffer.len());
+            let excess_bytes =
+                utf16_byte_offset(&session.buffer, excess_units).unwrap_or(session.buffer.len());
             let drained_units: usize =
                 session.buffer.as_str()[..excess_bytes].chars().map(char::len_utf16).sum();
             session.buffer.drain(..excess_bytes);
@@ -768,9 +765,7 @@ impl PtyService {
                         Ok(0) | Err(_) => break,
                         Ok(read) => {
                             let text = decoder.feed(&chunk[..read]);
-                            if !text.is_empty()
-                                && data_tx.send(ChildEvent::Data(text)).is_err()
-                            {
+                            if !text.is_empty() && data_tx.send(ChildEvent::Data(text)).is_err() {
                                 break;
                             }
                         }
@@ -814,8 +809,7 @@ impl PtyService {
                                 "pty.exited",
                                 serde_json::to_value(oc_schema::pty::Exited {
                                     id: id_for_exit.0.clone(),
-                                    exit_code: code
-                                        .and_then(|c| u64::try_from(c).ok()),
+                                    exit_code: code.and_then(|c| u64::try_from(c).ok()),
                                 })
                                 .unwrap_or_default(),
                             )
@@ -1506,16 +1500,12 @@ mod tests {
         let info = service
             .create_with(
                 &spawner,
-                &CreateInput {
-                    command: Some("fake".to_string()),
-                    ..CreateInput::default()
-                },
+                &CreateInput { command: Some("fake".to_string()), ..CreateInput::default() },
             )
             .expect("create");
         let replay = loop {
-            let attach = service
-                .attach(&info.id, None, Box::new(|_| {}), Box::new(|_| {}))
-                .expect("attach");
+            let attach =
+                service.attach(&info.id, None, Box::new(|_| {}), Box::new(|_| {})).expect("attach");
             if attach.replay.contains("ok") {
                 break attach.replay;
             }
@@ -1551,6 +1541,7 @@ mod tests {
         // it, after which kill(pid, 0) fails (no such process).
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
+            #[allow(unsafe_code)] // liveness probe on our own spawned child
             #[allow(clippy::cast_possible_wrap)]
             let rc = unsafe { libc::kill(info.pid as i32, 0) };
             if rc != 0 {

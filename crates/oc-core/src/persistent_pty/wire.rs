@@ -346,6 +346,16 @@ pub enum WireRequest {
         role: WireRole,
         #[serde(default)]
         takeover: bool,
+        /// G-383b — capability opt-in for the Rust-only chunked-replay
+        /// extension (§3.2): `Some(true)` = the client understands
+        /// `replay_chunked`/`replay_length`/binary replay frames/
+        /// `replay_complete`. Absent (the default) keeps the response
+        /// exactly ref v7-shaped (inline `replay_base64`) so a TS
+        /// client never sees an unknown `attached` shape. Additive:
+        /// old servers ignore the unknown field, old clients never set
+        /// it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chunked_replay: Option<bool>,
     },
     /// Extension (§6 arm B): snapshot restore — owner-only (§4.3).
     Restore {
