@@ -2086,6 +2086,39 @@ impl Shared {
         let mut reloaded = 0usize;
         for entry in entries {
             let key = entry.to_string_lossy().into_owned();
+            // A VANISHED source is an explicit removal, not a failed
+            // revision to keep: unload its generation outright (the
+            // remove path — mirrors `remove_entry`; the oc-server pass
+            // routes deleted drop-ins here when config discovery has
+            // not re-run yet).
+            if !entry.exists() {
+                let old_id = {
+                    let registrations = self.registrations.read().expect("registrations poisoned");
+                    registrations.plugins.get(&key).map(|status| status.plugin_id.clone())
+                };
+                if let Some(old_id) = old_id.filter(|id| !id.is_empty()) {
+                    self.registrations.write().expect("registrations poisoned").clear_plugin(&old_id);
+                    let _ = self
+                        .request(
+                            "unload",
+                            json!({ "pluginId": old_id }),
+                            self.config.registration_timeout,
+                        )
+                        .await;
+                }
+                let removed = self
+                    .registrations
+                    .write()
+                    .expect("registrations poisoned")
+                    .plugins
+                    .remove(&key)
+                    .is_some();
+                if removed {
+                    self.digests.lock().expect("digests poisoned").remove(&key);
+                    self.revisions.lock().expect("revisions poisoned").remove(&key);
+                }
+                continue;
+            }
             let Ok(result) =
                 self.request("scan", json!({ "entry": key }), self.config.dispatch_timeout).await
             else {
@@ -2233,6 +2266,7 @@ impl Shared {
             plugin_id
         };
         self.digests.lock().expect("digests poisoned").remove(&key);
+        self.revisions.lock().expect("revisions poisoned").remove(&key);
         if !plugin_id.is_empty() {
             let _ = self
                 .request(
