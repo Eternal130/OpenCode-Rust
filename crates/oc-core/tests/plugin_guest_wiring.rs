@@ -307,55 +307,23 @@ async fn ws_seams_offered_for_hooked_durable_sessions() {
     assert!(offered.web_socket_seams.is_none(), "no hooks → no seams");
 }
 
-/// G-337 — the PREPARED request's seams carry the production hooks into
-/// the session-channel send path (model-request.ts:351-375 +
+/// G-337 — the [`Prepared`] request's seams carry the production hooks
+/// into the session-channel send path (model-request.ts:351-375 +
 /// model-transport.ts `bind`): the `experimental.ws.*` hooks intercept the
 /// handshake url/headers, each outgoing frame, and each incoming frame of
 /// an exchange riding a bound session channel. Asserted at the
-/// model_request → channel boundary (no live guest needed — the hooks are
+/// `model_request` → channel boundary (no live guest needed — the hooks are
 /// registered in-process over the production registry the seams capture).
 #[tokio::test]
 async fn prepared_ws_seams_ride_the_bound_session_channel() {
     use futures::StreamExt as _;
     use oc_ai::route::transport::websocket::{
-        SessionChannelConfig, SessionChannels, WebSocketChannelDriver, WebSocketChannelExchange,
-        WebSocketChannelExecutor, WebSocketConnector, WebSocketMessage, WebSocketRequest,
+        ChannelConnect, SessionChannelConfig, SessionChannels, WebSocketChannelExchange,
+        WebSocketChannelExecutor, WebSocketConnector,
     };
-    use oc_ai::schema::errors::AiError;
 
     let hooks = Arc::new(HookRegistry::new());
-    for registration in [
-        hooks
-            .register_session_ws_handshake(
-                oc_core::hooks::fn_hook(|event: &mut oc_core::hooks::SessionWsHandshakeEvent| {
-                    event.url = format!("{}/hooked", event.url);
-                    event.headers.insert("x-plugin".into(), "ws".into());
-                    Ok(())
-                }),
-                oc_core::hooks::HookOptions::default(),
-            )
-            .await,
-        hooks
-            .register_session_ws_send(
-                oc_core::hooks::fn_hook(|event: &mut oc_core::hooks::SessionWsSendEvent| {
-                    event.frame = format!("{}|out", event.frame);
-                    Ok(())
-                }),
-                oc_core::hooks::HookOptions::default(),
-            )
-            .await,
-        hooks
-            .register_session_ws_receive(
-                oc_core::hooks::fn_hook(|event: &mut oc_core::hooks::SessionWsReceiveEvent| {
-                    event.frame = format!("{}|in", event.frame);
-                    Ok(())
-                }),
-                oc_core::hooks::HookOptions::default(),
-            )
-            .await,
-    ] {
-        std::mem::forget(registration);
-    }
+    register_g337_ws_rewrites(&hooks).await;
     let service = SessionModelRequest::new(
         Arc::clone(&hooks),
         Arc::new(oc_core::location::ToolRegistryState::new()),
@@ -388,127 +356,26 @@ async fn prepared_ws_seams_ride_the_bound_session_channel() {
         .expect("prepare");
     let seams = prepared.web_socket_seams.expect("hooks registered → seams offered");
 
-    // The production channel infra (SessionChannels::bind_with_seams — the
-    // runner's stream_for_session_seamed path) carrying the prepared seams.
-    struct RecordingConnector {
-        opened: std::sync::Mutex<Vec<(String, Vec<(String, String)>)>>,
-        sent: Arc<std::sync::Mutex<Vec<String>>>,
-    }
-    #[async_trait::async_trait]
-    impl WebSocketConnector for RecordingConnector {
-        async fn open(
-            &self,
-            request: WebSocketRequest,
-        ) -> Result<oc_ai::route::transport::websocket::WebSocketConnection, AiError> {
-            self.opened
-                .lock()
-                .expect("opened lock")
-                .push((request.url.clone(), request.headers.clone()));
-            let send = {
-                let sent = Arc::clone(&self.sent);
-                Arc::new(move |message: String| {
-                    let sent = Arc::clone(&sent);
-                    Box::pin(async move {
-                        sent.lock().expect("sent lock").push(message);
-                        Ok(())
-                    })
-                        as std::pin::Pin<
-                            Box<dyn std::future::Future<Output = Result<(), AiError>> + Send>,
-                        >
-                })
-            };
-            let close = Arc::new(|_code: u16, _reason: &str| {
-                Box::pin(std::future::ready(()))
-                    as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
-            });
-            let messages: std::pin::Pin<
-                Box<dyn futures::Stream<Item = Result<WebSocketMessage, AiError>> + Send>,
-            > = Box::pin(futures::stream::iter([
-                Ok(WebSocketMessage::Text("raw-frame".into())),
-                Ok(WebSocketMessage::Text("done".into())),
-            ]));
-            Ok(oc_ai::route::transport::websocket::WebSocketConnection {
-                http: None,
-                send_text: send,
-                messages,
-                close,
-            })
-        }
-    }
-
-    struct ChannelDriver;
-    impl WebSocketChannelDriver for ChannelDriver {
-        fn create(
-            &self,
-            _checkpoint: Option<&oc_ai::route::transport::websocket::ChannelCheckpoint>,
-        ) -> Result<oc_ai::route::transport::websocket::ChannelCreate, AiError> {
-            Ok(oc_ai::route::transport::websocket::ChannelCreate {
-                message: "create".into(),
-                mode: oc_ai::route::transport::websocket::ChannelMode::Full,
-            })
-        }
-
-        fn observe(
-            &self,
-            _create: &oc_ai::route::transport::websocket::ChannelCreate,
-            frame: &str,
-        ) -> Result<oc_ai::route::transport::websocket::ChannelObservation, AiError> {
-            use oc_ai::route::transport::websocket::ChannelObservation;
-            if frame == "raw-frame|in" {
-                Ok(ChannelObservation::Frame { frame: frame.into() })
-            } else {
-                Ok(ChannelObservation::Completed { frame: frame.into(), checkpoint: None })
-            }
-        }
-    }
-
-    let connector: Arc<RecordingConnector> = Arc::new(RecordingConnector {
-        opened: std::sync::Mutex::new(Vec::new()),
-        sent: Arc::new(std::sync::Mutex::new(Vec::new())),
-    });
+    // The production channel infra (`SessionChannels::bind_with_seams` —
+    // the runner's stream_for_session_seamed path) carrying the prepared
+    // seams over a recording connector.
+    let connector: Arc<G337Connector> = Arc::new(G337Connector::default());
     let channels = SessionChannels::new(
         Arc::clone(&connector) as Arc<dyn WebSocketConnector>,
         SessionChannelConfig::default(),
     );
-    let fallback = Arc::new(|| {
-        Box::pin(async {
-            Err::<
-                std::pin::Pin<Box<dyn futures::Stream<Item = Result<String, AiError>> + Send>>,
-                AiError,
-            >(oc_ai::route::transport::websocket::transport_error(
-                "no fallback",
-                oc_ai::schema::errors::TransportOperation::Request,
-                None,
-                None,
-                None,
-                None,
-            ))
-        })
-            as std::pin::Pin<
-                Box<
-                    dyn std::future::Future<
-                            Output = Result<
-                                std::pin::Pin<
-                                    Box<dyn futures::Stream<Item = Result<String, AiError>> + Send>,
-                                >,
-                                AiError,
-                            >,
-                        > + Send,
-                >,
-            >
-    });
     let executor: Arc<dyn WebSocketChannelExecutor> =
         channels.bind_with_seams("ses_ws_channel", Some(seams));
     let execution = executor
         .execute(WebSocketChannelExchange {
             id: "ex-1".into(),
-            connect: oc_ai::route::transport::websocket::ChannelConnect {
+            connect: ChannelConnect {
                 url: "wss://provider.test/v1".into(),
                 headers: vec![],
                 rotate_after_ms: None,
             },
-            fallback,
-            driver: Arc::new(ChannelDriver),
+            fallback: g337_no_fallback(),
+            driver: Arc::new(G337Driver),
         })
         .await
         .expect("exchange starts");
@@ -519,19 +386,165 @@ async fn prepared_ws_seams_ride_the_bound_session_channel() {
         frames.push(item.expect("frame"));
     }
 
-    let opened = connector.opened.lock().expect("opened lock");
-    assert_eq!(opened[0].0, "wss://provider.test/v1/hooked", "handshake hook rewrote the url");
+    let opened = connector.opened.lock().expect("opened lock")[0].clone();
+    assert_eq!(opened.0, "wss://provider.test/v1/hooked", "handshake hook rewrote the url");
     assert!(
-        opened[0].1.iter().any(|(name, value)| name == "x-plugin" && value == "ws"),
+        opened.1.iter().any(|(name, value)| name == "x-plugin" && value == "ws"),
         "handshake hook added a header"
     );
-    drop(opened);
-    assert_eq!(
-        connector.sent.lock().expect("sent lock").as_slice(),
-        ["create|out"],
-        "ws.send hook rewrote the outgoing frame"
-    );
+    let sent = connector.sent.lock().expect("sent lock").clone();
+    assert_eq!(sent.as_slice(), ["create|out"], "ws.send hook rewrote the outgoing frame");
     assert_eq!(frames, ["raw-frame|in", "done|in"], "ws.receive hook rewrote both inbound frames");
+}
+
+/// Registers the three `experimental.ws.*` rewrites for
+/// [`prepared_ws_seams_ride_the_bound_session_channel`].
+async fn register_g337_ws_rewrites(hooks: &Arc<HookRegistry>) {
+    for registration in [
+        hooks
+            .register_session_ws_handshake(
+                oc_core::hooks::fn_hook(|event: &mut oc_core::hooks::SessionWsHandshakeEvent| {
+                    event.url = format!("{}/hooked", event.url);
+                    event.headers.insert("x-plugin".into(), "ws".into());
+                    Ok(())
+                }),
+                oc_core::hooks::HookOptions::default(),
+            )
+            .await,
+        hooks
+            .register_session_ws_send(
+                oc_core::hooks::fn_hook(|event: &mut oc_core::hooks::SessionWsSendEvent| {
+                    event.frame = format!("{}|out", event.frame);
+                    Ok(())
+                }),
+                oc_core::hooks::HookOptions::default(),
+            )
+            .await,
+        hooks
+            .register_session_ws_receive(
+                oc_core::hooks::fn_hook(|event: &mut oc_core::hooks::SessionWsReceiveEvent| {
+                    event.frame = format!("{}|in", event.frame);
+                    Ok(())
+                }),
+                oc_core::hooks::HookOptions::default(),
+            )
+            .await,
+    ] {
+        std::mem::forget(registration);
+    }
+}
+
+/// Recording connector for [`prepared_ws_seams_ride_the_bound_session_channel`].
+#[derive(Default)]
+struct G337Connector {
+    #[allow(clippy::type_complexity, reason = "mirror of the lib's socket seams")]
+    opened: std::sync::Mutex<Vec<(String, Vec<(String, String)>)>>,
+    sent: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+#[async_trait::async_trait]
+impl oc_ai::route::transport::websocket::WebSocketConnector for G337Connector {
+    #[allow(clippy::type_complexity, reason = "mirror of the lib's socket seams")]
+    async fn open(
+        &self,
+        request: oc_ai::route::transport::websocket::WebSocketRequest,
+    ) -> Result<
+        oc_ai::route::transport::websocket::WebSocketConnection,
+        oc_ai::schema::errors::AiError,
+    > {
+        use oc_ai::route::transport::websocket::{WebSocketConnection, WebSocketMessage};
+        self.opened
+            .lock()
+            .expect("opened lock")
+            .push((request.url.clone(), request.headers.clone()));
+        let send = {
+            let sent = Arc::clone(&self.sent);
+            Arc::new(move |message: String| {
+                let sent = Arc::clone(&sent);
+                Box::pin(async move {
+                    sent.lock().expect("sent lock").push(message);
+                    Ok(())
+                })
+                    as std::pin::Pin<
+                        Box<
+                            dyn std::future::Future<
+                                    Output = Result<(), oc_ai::schema::errors::AiError>,
+                                > + Send,
+                        >,
+                    >
+            })
+        };
+        let close = Arc::new(|_code: u16, _reason: &str| {
+            Box::pin(std::future::ready(()))
+                as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+        });
+        let messages: std::pin::Pin<
+            Box<
+                dyn futures::Stream<Item = Result<WebSocketMessage, oc_ai::schema::errors::AiError>>
+                    + Send,
+            >,
+        > = Box::pin(futures::stream::iter([
+            Ok(WebSocketMessage::Text("raw-frame".into())),
+            Ok(WebSocketMessage::Text("done".into())),
+        ]));
+        Ok(WebSocketConnection { http: None, send_text: send, messages, close })
+    }
+}
+
+/// The exchange driver: one pass-through frame, then the terminal.
+struct G337Driver;
+
+impl oc_ai::route::transport::websocket::WebSocketChannelDriver for G337Driver {
+    fn create(
+        &self,
+        _checkpoint: Option<&oc_ai::route::transport::websocket::ChannelCheckpoint>,
+    ) -> Result<oc_ai::route::transport::websocket::ChannelCreate, oc_ai::schema::errors::AiError>
+    {
+        Ok(oc_ai::route::transport::websocket::ChannelCreate {
+            message: "create".into(),
+            mode: oc_ai::route::transport::websocket::ChannelMode::Full,
+        })
+    }
+
+    fn observe(
+        &self,
+        _create: &oc_ai::route::transport::websocket::ChannelCreate,
+        frame: &str,
+    ) -> Result<
+        oc_ai::route::transport::websocket::ChannelObservation,
+        oc_ai::schema::errors::AiError,
+    > {
+        use oc_ai::route::transport::websocket::ChannelObservation;
+        if frame == "raw-frame|in" {
+            Ok(ChannelObservation::Frame { frame: frame.into() })
+        } else {
+            Ok(ChannelObservation::Completed { frame: frame.into(), checkpoint: None })
+        }
+    }
+}
+
+/// The exchange's (unused) HTTP fallback.
+fn g337_no_fallback() -> oc_ai::route::transport::websocket::FallbackFn {
+    Arc::new(|| {
+        Box::pin(async {
+            Err::<
+                std::pin::Pin<
+                    Box<
+                        dyn futures::Stream<Item = Result<String, oc_ai::schema::errors::AiError>>
+                            + Send,
+                    >,
+                >,
+                oc_ai::schema::errors::AiError,
+            >(oc_ai::route::transport::websocket::transport_error(
+                "no fallback",
+                oc_ai::schema::errors::TransportOperation::Request,
+                None,
+                None,
+                None,
+                None,
+            ))
+        })
+    })
 }
 
 /// A model handle over a failing route (the ws leg never streams).
