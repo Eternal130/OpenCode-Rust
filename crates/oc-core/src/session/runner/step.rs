@@ -236,9 +236,12 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
     let mut stream_error: Option<AiError> = None;
     let mut stream: Option<crate::session::runner::LlmEventStream> = match deps
         .llm
-        .stream_for_session(
+        .stream_for_session_seamed(
             input.session_id.as_str(),
             input.model.transport,
+            // G-337 — the prepared request's `experimental.ws.*` seams ride
+            // the durable-session socket (model-request.ts:351-375).
+            input.prepared.web_socket_seams.clone(),
             input.prepared.request.clone(),
         )
         .await

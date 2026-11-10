@@ -629,6 +629,10 @@ pub struct SessionChannel {
     state: tokio::sync::Mutex<OwnerState>,
     continuation: Arc<std::sync::Mutex<ContinuationCell>>,
     weak: std::sync::Weak<SessionChannel>,
+    /// G-337 — the `experimental.ws.*` seams from the LATEST bound request
+    /// (v2 model-transport.ts `interceptor`): rewritten into the socket on
+    /// every `bind`. `None` = pass-through (no hooks registered).
+    seams: std::sync::Mutex<Option<crate::schema::options::WebSocketSeams>>,
 }
 
 impl SessionChannel {
@@ -648,7 +652,19 @@ impl SessionChannel {
             }),
             continuation: Arc::new(std::sync::Mutex::new(ContinuationCell::default())),
             weak: std::sync::Weak::clone(weak),
+            seams: std::sync::Mutex::new(None),
         })
+    }
+
+    /// Replace the `experimental.ws.*` seam triple (v2 `bind`'s interceptor
+    /// — fresh hooks captured per model request; `None` passes frames
+    /// through unchanged).
+    pub fn set_seams(&self, seams: Option<crate::schema::options::WebSocketSeams>) {
+        *self.seams.lock().expect("seams lock") = seams;
+    }
+
+    fn seams(&self) -> Option<crate::schema::options::WebSocketSeams> {
+        self.seams.lock().expect("seams lock").clone()
     }
 
     /// Close the socket and refuse further exchanges (v2 `close`).
@@ -713,7 +729,7 @@ fn affinity_key(url: &str, headers: &[(String, String)]) -> String {
 impl WebSocketChannelExecutor for SessionChannel {
     async fn execute(
         &self,
-        exchange: WebSocketChannelExchange,
+        mut exchange: WebSocketChannelExchange,
     ) -> Result<WebSocketChannelExecution, AiError> {
         let this = self.weak.upgrade().expect("session channel outlives its exchanges");
         let mut state = this.state.lock().await;
@@ -729,6 +745,26 @@ impl WebSocketChannelExecutor for SessionChannel {
         }
         if state.http_fallback {
             return fallback_execution(&exchange).await;
+        }
+        // G-337 — the `experimental.ws.*` seam triple rides every exchange
+        // (v2 model-transport.ts `start`): the handshake rewrite runs
+        // BEFORE the affinity key so a rewritten url/headers re-opens the
+        // socket exactly like v2's `interceptor.handshake` (298-311).
+        let seams = this.seams();
+        if let Some(seams) = seams.as_ref() {
+            let handshake = crate::schema::options::WsHandshake {
+                url: exchange.connect.url.clone(),
+                headers: exchange.connect.headers.iter().cloned().collect(),
+            };
+            match (seams.handshake)(handshake).await {
+                Ok(shaped) => {
+                    exchange.connect.url = shaped.url;
+                    exchange.connect.headers = shaped.headers.into_iter().collect();
+                }
+                Err(cause) => {
+                    return Err(seam_error("handshake", &cause, TransportPhase::Connect, None));
+                }
+            }
         }
         {
             // Rotation by affinity or age, then reuse or open.
@@ -795,6 +831,21 @@ impl WebSocketChannelExecutor for SessionChannel {
             lock_continuation(&this).checkpoint = None;
         }
 
+        // G-337 — the send seam rewrites the outgoing frame AFTER the
+        // driver built it and BEFORE the socket write (v2
+        // model-transport.ts:375-376); the driver still observes inbound
+        // frames against the ORIGINAL create (v2 passes `create`, not the
+        // rewritten message).
+        let message = match seams.as_ref() {
+            Some(seams) => match (seams.send)(create.message.clone()).await {
+                Ok(frame) => frame,
+                Err(cause) => {
+                    return Err(seam_error("send", &cause, TransportPhase::Send, None));
+                }
+            },
+            None => create.message.clone(),
+        };
+
         let token = state.next_token;
         state.next_token += 1;
         let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
@@ -805,9 +856,7 @@ impl WebSocketChannelExecutor for SessionChannel {
             Arc::clone(&slot.send_text)
         };
 
-        let sent =
-            tokio::time::timeout(Duration::from_secs(30), (send_text)(create.message.clone()))
-                .await;
+        let sent = tokio::time::timeout(Duration::from_secs(30), (send_text)(message)).await;
         let sent = match sent {
             Ok(result) => result,
             Err(_elapsed) => Err(transport_error(
@@ -846,6 +895,7 @@ impl WebSocketChannelExecutor for SessionChannel {
         let driver = Arc::clone(&exchange.driver);
         let idle_timeout = this.config.idle_timeout.get();
         let fallback = Arc::clone(&exchange.fallback);
+        let seams = seams;
         let mut receiver = receiver;
         let frames: RawFrameStream = Box::pin(async_stream::stream! {
             loop {
@@ -877,8 +927,7 @@ impl WebSocketChannelExecutor for SessionChannel {
                 };
                 let frame = match item {
                     Ok(frame) => frame,
-                    Err(error) => {
-                        // Server refused an oversized request (close 1009):
+                    Err(error) => {                        // Server refused an oversized request (close 1009):
                         // stay on HTTP from now on and retry this exchange.
                         if is_code(&error, "1009")
                             && matches!(
@@ -910,6 +959,21 @@ impl WebSocketChannelExecutor for SessionChannel {
                         not_reached_terminal(&this, channel_id).await;
                         return;
                     }
+                };
+                // G-337 — the receive seam rewrites each inbound frame
+                // BEFORE the driver observes it (v2 model-transport.ts:430
+                // — `mapEffect(interceptor.receive)` then
+                // `mapEffect(driver.observe)`).
+                let frame = match seams.as_ref() {
+                    Some(seams) => match (seams.receive)(frame).await {
+                        Ok(frame) => frame,
+                        Err(cause) => {
+                            yield Err(seam_error("receive", &cause, TransportPhase::Receive, Some(url.clone())));
+                            not_reached_terminal(&this, channel_id).await;
+                            return;
+                        }
+                    },
+                    None => frame,
                 };
                 let observation = match driver.observe(&create, &frame) {
                     Ok(observation) => observation,
@@ -1234,6 +1298,24 @@ async fn terminal_cleanup(
     }
 }
 
+/// G-337 — an `experimental.ws.*` seam failure (v2: the interceptor's
+/// `Effect` fails the exchange). Transport taxonomy attached so retries
+/// classify it like the surrounding phase.
+fn seam_error(which: &str, cause: &str, phase: TransportPhase, url: Option<String>) -> AiError {
+    let operation = match phase {
+        TransportPhase::Receive => TransportOperation::Read,
+        _ => TransportOperation::Write,
+    };
+    transport_error(
+        format!("experimental.ws.{which} seam failed: {cause}"),
+        operation,
+        Some(phase),
+        None,
+        Some("ws-seam".into()),
+        url,
+    )
+}
+
 /// Session-bound channel set (v2 `SessionModelTransport.Service`):
 /// one [`SessionChannel`] per session id, closed individually or all at
 /// once (the production consumer is the session runner's transport lane).
@@ -1262,6 +1344,23 @@ impl SessionChannels {
                 SessionChannel::new(Arc::clone(&self.connector), self.config.clone())
             })
             .clone()
+    }
+
+    /// [`SessionChannels::bind`] carrying the `experimental.ws.*` seam
+    /// triple from the bound request (G-337; v2 model-transport.ts
+    /// `bind(id, interceptor, chunkTimeout)`): the seams are rewritten
+    /// onto the (cached) session channel on every bind, so the hooks
+    /// captured by the LATEST prepared request intercept its exchanges —
+    /// exactly v2's per-request `interceptor` closure capture.
+    #[must_use]
+    pub fn bind_with_seams(
+        self: &Arc<Self>,
+        session_id: &str,
+        seams: Option<crate::schema::options::WebSocketSeams>,
+    ) -> Arc<SessionChannel> {
+        let channel = self.bind(session_id);
+        channel.set_seams(seams);
+        channel
     }
 
     /// Close one session's channel (v2 `close`).
@@ -1682,6 +1781,235 @@ mod tests {
             other => panic!("expected the failed exchange, got {other:?}"),
         }
     }
+
+    // ------------------------------------------------------------------
+    // G-337 — the `experimental.ws.*` seams at the consumption point
+    // (v2 model-transport.ts `start`: handshake before the affinity key,
+    // send after driver.create, receive before driver.observe).
+    // ------------------------------------------------------------------
+
+    /// A connector recording the handshake request + every sent frame and
+    /// replaying a fixed inbound frame script.
+    struct RecordingConnector {
+        opens: std::sync::Mutex<Vec<(String, Vec<(String, String)>)>>,
+        sent: Arc<std::sync::Mutex<Vec<String>>>,
+        inbound: Vec<String>,
+    }
+
+    #[async_trait]
+    impl WebSocketConnector for RecordingConnector {
+        async fn open(&self, request: WebSocketRequest) -> Result<WebSocketConnection, AiError> {
+            self.opens
+                .lock()
+                .expect("opens lock")
+                .push((request.url.clone(), request.headers.clone()));
+            let send: SendFn = {
+                let sent = Arc::clone(&self.sent);
+                Arc::new(move |message: String| {
+                    let sent = Arc::clone(&sent);
+                    Box::pin(async move {
+                        sent.lock().expect("sent lock").push(message);
+                        Ok(())
+                    })
+                })
+            };
+            let close: CloseFn = Arc::new(|_code, _reason| Box::pin(std::future::ready(())));
+            let inbound = self.inbound.clone();
+            let messages: Pin<Box<dyn Stream<Item = Result<WebSocketMessage, AiError>> + Send>> =
+                Box::pin(futures::stream::iter(
+                    inbound.into_iter().map(|frame| Ok(WebSocketMessage::Text(frame))),
+                ));
+            Ok(WebSocketConnection { http: None, send_text: send, messages, close })
+        }
+    }
+
+    /// Two-frame driver: the first observed frame passes through, the
+    /// second is the terminal `Completed`.
+    struct ScriptDriver;
+
+    impl WebSocketChannelDriver for ScriptDriver {
+        fn create(
+            &self,
+            _checkpoint: Option<&ChannelCheckpoint>,
+        ) -> Result<ChannelCreate, AiError> {
+            Ok(ChannelCreate { message: "create-msg".into(), mode: ChannelMode::Full })
+        }
+
+        fn observe(
+            &self,
+            _create: &ChannelCreate,
+            frame: &str,
+        ) -> Result<ChannelObservation, AiError> {
+            if frame == "raw-in|recv-hook" {
+                Ok(ChannelObservation::Frame { frame: frame.into() })
+            } else {
+                Ok(ChannelObservation::Completed { frame: frame.into(), checkpoint: None })
+            }
+        }
+    }
+
+    /// Same script, but matched against un-rewritten frames (the seamless
+    /// re-bind leg).
+    struct PassthroughDriver;
+
+    impl WebSocketChannelDriver for PassthroughDriver {
+        fn create(
+            &self,
+            _checkpoint: Option<&ChannelCheckpoint>,
+        ) -> Result<ChannelCreate, AiError> {
+            Ok(ChannelCreate { message: "create-msg".into(), mode: ChannelMode::Full })
+        }
+
+        fn observe(
+            &self,
+            _create: &ChannelCreate,
+            frame: &str,
+        ) -> Result<ChannelObservation, AiError> {
+            if frame == "raw-in" {
+                Ok(ChannelObservation::Frame { frame: frame.into() })
+            } else {
+                Ok(ChannelObservation::Completed { frame: frame.into(), checkpoint: None })
+            }
+        }
+    }
+
+    fn no_fallback() -> FallbackFn {
+        Arc::new(|| {
+            Box::pin(async {
+                Err(transport_error(
+                    "no fallback",
+                    TransportOperation::Request,
+                    None,
+                    None,
+                    None,
+                    None,
+                ))
+            })
+        })
+    }
+
+    #[tokio::test]
+    async fn session_channel_seams_intercept_handshake_send_and_receive() {
+        use crate::schema::options::{WebSocketSeams, WsHandshake};
+        use futures::StreamExt as _;
+        use std::collections::BTreeMap;
+
+        let connector: Arc<RecordingConnector> = Arc::new(RecordingConnector {
+            opens: std::sync::Mutex::new(Vec::new()),
+            sent: Arc::new(std::sync::Mutex::new(Vec::new())),
+            inbound: vec!["raw-in".into(), "done".into()],
+        });
+        let channels = SessionChannels::new(
+            Arc::clone(&connector) as Arc<dyn WebSocketConnector>,
+            SessionChannelConfig::default(),
+        );
+
+        // The seam triple: url/headers rewrite at connect, per-frame
+        // rewrites both directions.
+        let handshake_seen: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+        let seen = Arc::clone(&handshake_seen);
+        let handshake = Arc::new(move |connect: WsHandshake| {
+            let seen = Arc::clone(&seen);
+            Box::pin(async move {
+                seen.lock().expect("seen lock").push(connect.url.clone());
+                let mut headers: BTreeMap<String, String> = connect.headers;
+                headers.insert("x-plugin".into(), "hooked".into());
+                Ok(WsHandshake { url: format!("{}?hooked=1", connect.url), headers })
+            }) as futures::future::BoxFuture<'static, Result<WsHandshake, String>>
+        });
+        let send = Arc::new(|frame: String| {
+            Box::pin(async move { Ok(format!("{frame}|sent-hook")) })
+                as futures::future::BoxFuture<'static, Result<String, String>>
+        });
+        let receive = Arc::new(|frame: String| {
+            Box::pin(async move { Ok(format!("{frame}|recv-hook")) })
+                as futures::future::BoxFuture<'static, Result<String, String>>
+        });
+
+        let executor: Arc<dyn WebSocketChannelExecutor> =
+            channels.bind_with_seams("ses_g337", Some(WebSocketSeams { handshake, send, receive }));
+        let execution = executor
+            .execute(WebSocketChannelExchange {
+                id: "ex-1".into(),
+                connect: ChannelConnect {
+                    url: "wss://provider.test/v1".into(),
+                    headers: vec![("authorization".into(), "Bearer t".into())],
+                    rotate_after_ms: None,
+                },
+                fallback: no_fallback(),
+                driver: Arc::new(ScriptDriver),
+            })
+            .await
+            .expect("exchange starts");
+
+        let mut frames = Vec::new();
+        let mut stream = execution.frames;
+        while let Some(item) = stream.next().await {
+            frames.push(item.expect("frame"));
+        }
+
+        // Handshake: the connect url/headers the connector saw carry the
+        // seam rewrite (before the affinity key — v2 model-transport.ts
+        // 298-311).
+        let opens = connector.opens.lock().expect("opens lock");
+        assert_eq!(opens.len(), 1, "one socket");
+        assert_eq!(
+            opens[0].0, "wss://provider.test/v1?hooked=1",
+            "the handshake seam rewrote the url"
+        );
+        assert!(
+            opens[0].1.iter().any(|(name, value)| name == "x-plugin" && value == "hooked"),
+            "the handshake seam added a header: {:?}",
+            opens[0].1
+        );
+        drop(opens);
+        assert_eq!(
+            handshake_seen.lock().expect("seen lock").as_slice(),
+            ["wss://provider.test/v1"],
+            "the handshake seam observed the original url"
+        );
+
+        // Send: the outgoing create message carries the rewrite; the
+        // driver still built the original (v2 375-376).
+        assert_eq!(
+            connector.sent.lock().expect("sent lock").as_slice(),
+            ["create-msg|sent-hook"],
+            "the send seam rewrote the outgoing frame"
+        );
+
+        // Receive: both inbound frames pass the seam BEFORE the driver
+        // observed them (the driver matched the rewritten frame — v2 430).
+        assert_eq!(frames, ["raw-in|recv-hook", "done|recv-hook"]);
+
+        // The seams ride the latest bind: a `None` re-bind clears them —
+        // the next exchange passes frames through untouched.
+        let _ = channels.bind_with_seams("ses_g337", None);
+        let execution = executor
+            .execute(WebSocketChannelExchange {
+                id: "ex-2".into(),
+                connect: ChannelConnect {
+                    url: "wss://provider.test/v1".into(),
+                    headers: vec![],
+                    rotate_after_ms: None,
+                },
+                fallback: no_fallback(),
+                driver: Arc::new(PassthroughDriver),
+            })
+            .await
+            .expect("exchange starts");
+        let mut stream = execution.frames;
+        let mut bare = Vec::new();
+        while let Some(item) = stream.next().await {
+            bare.push(item.expect("frame"));
+        }
+        assert_eq!(bare, ["raw-in", "done"], "no seams — frames pass through");
+        assert_eq!(
+            connector.sent.lock().expect("sent lock").as_slice(),
+            ["create-msg|sent-hook", "create-msg"],
+            "the second exchange sent the raw create message"
+        );
+    }
+    // ------------------------------------------------------------------
 
     /// A connector that never opens (the poison test builds slots directly).
     struct UnsupportedConnector;
