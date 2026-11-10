@@ -271,6 +271,26 @@ pub const GETTING_STARTED_PARAGRAPH_2: &str =
 pub const GETTING_STARTED_ACTION: &str = "Connect provider";
 pub const GETTING_STARTED_ACTION_HINT: &str = "/connect";
 
+/// G-327 — the title-shimmer's one-shot ARRIVAL WIPE input (ref
+/// `title-shimmer.tsx:71-74, 190-215`): when the title text changes
+/// while rename-pending was armed (the rename echo lands), the last
+/// painted title is replaced by a wipe — the new glyphs reveal left
+/// of a coast-eased front while the old glyphs persist to its right,
+/// feathered over 4 columns, for 450 ms.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TitleArrival {
+    /// The title as last painted before the change (the wipe's right
+    /// half — the ref's `previous` snapshot).
+    pub previous: String,
+    /// The wipe's start (store clock ms).
+    pub since: u64,
+}
+
+/// The arrival wipe's duration (ref `ARRIVAL_DURATION`).
+const ARRIVAL_DURATION_MS: u64 = 450;
+/// The wipe edge's feather width in columns (ref `WIPE_FEATHER`).
+const ARRIVAL_FEATHER: f64 = 4.0;
+
 /// One sidebar view: what the pane renders. The strings are OWNED —
 /// the live route builds the title from store state per frame (the
 /// golden fixtures keep their `&str` constructors).
@@ -283,6 +303,9 @@ pub struct SidebarView {
     /// (title-shimmer.tsx: the title dims to 40% with a moving
     /// highlight sweeping every 1200 ms).
     pub title_pending_since: Option<u64>,
+    /// G-327 — the arrival wipe (a title change landing while
+    /// rename-pending was armed); `None` outside the 450 ms window.
+    pub title_arrival: Option<TitleArrival>,
     /// The store clock (ms) — the shimmer's only time source (a
     /// frozen clock pins the un-faded bold row).
     pub clock_ms: u64,
@@ -303,6 +326,7 @@ impl SidebarView {
         Self {
             title: title.to_owned(),
             title_pending_since: None,
+            title_arrival: None,
             clock_ms: 0,
             sections: SidebarSections::empty(),
             onboarding: true,
@@ -331,8 +355,25 @@ fn shimmer_fg(
         crate::components::tab_pulse::RUN_TAIL,
     );
     let strength = 0.6 * level * (1.0 - band);
-    // The tint factors bounded 0..=255 channels by a 0..1 strength.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    mix_rgb(fr, fg_, fb, br, bg_, bb, strength)
+}
+
+/// Mix an RGB triple toward a backdrop by `strength` (0..=1) — the
+/// shared tint of the sustained shimmer and the G-327 arrival wipe
+/// (the ref colorMatrix's masked translation; bounded channels).
+fn mix_toward(
+    base: crate::style::Color,
+    backdrop: crate::style::Color,
+    strength: f64,
+) -> crate::style::Color {
+    let crate::style::Color::Rgb(fr, fg_, fb) = base else { return base };
+    let crate::style::Color::Rgb(br, bg_, bb) = backdrop else { return base };
+    mix_rgb(fr, fg_, fb, br, bg_, bb, strength.clamp(0.0, 1.0))
+}
+
+/// The channel-level blend (factors bounded 0..=255 by a 0..1 strength).
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn mix_rgb(fr: u8, fg_: u8, fb: u8, br: u8, bg_: u8, bb: u8, strength: f64) -> crate::style::Color {
     let mix =
         |c: u8, b: u8| (f64::from(c) + (f64::from(b) - f64::from(c)) * strength).round() as u8;
     crate::style::Color::Rgb(mix(fr, br), mix(fg_, bg_), mix(fb, bb))
@@ -437,7 +478,89 @@ pub fn render_sidebar_scrolled(
     // while a highlight band (`intensityAt(col, front, 4, 18)`)
     // sweeps left-to-right every 1200 ms — per-char runs, all
     // deterministic from (clock − since).
-    if let Some(since) = view.title_pending_since {
+    //
+    // G-327 — the ARRIVAL WIPE takes precedence inside its one-shot
+    // 450 ms window (title-shimmer.tsx:190-215): a title change that
+    // landed while rename-pending was armed replaces the last painted
+    // title with a wipe — new glyphs left of a coast-eased front, the
+    // OLD glyphs persisting right of it, feathered over 4 columns,
+    // while the sustained dim decays over 240 ms (the ref's `blend`
+    // fade — pending released at the echo).
+    let arrival_active = view
+        .title_arrival
+        .as_ref()
+        .is_some_and(|arrival| view.clock_ms.saturating_sub(arrival.since) < ARRIVAL_DURATION_MS);
+    if arrival_active {
+        let arrival =
+            view.title_arrival.as_ref().expect("checked above: the arrival window is open");
+        let elapsed = view.clock_ms.saturating_sub(arrival.since);
+        let end = crate::wrap::display_width(&view.title).max(1);
+        let previous_end = crate::wrap::display_width(&arrival.previous).max(1);
+        let span = end.max(previous_end);
+        // The wipe front (ref: `-WIPE_FEATHER + coast(t) · (max(end,
+        // previous) + 2·WIPE_FEATHER)`), clipped to whole columns.
+        let wipe_front = -ARRIVAL_FEATHER
+            + crate::components::tab_pulse::coast(
+                f64::from(u32::try_from(elapsed).unwrap_or(0))
+                    / f64::from(u32::try_from(ARRIVAL_DURATION_MS).unwrap_or(1)),
+            ) * f64::from(u32::try_from(span + 8).unwrap_or(8));
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let cut =
+            (wipe_front.round().clamp(0.0, f64::from(u32::try_from(span).unwrap_or(0)))) as usize;
+        // The sustained dim's decay: the ref's `blend` ticks DOWN by
+        // delta/240 once `shimmering` ends (the echo released it).
+        let decay = f64::from(u32::try_from(elapsed.min(240)).unwrap_or(0)) / 240.0;
+        let level = crate::components::tab_pulse::smootherstep(1.0 - decay);
+        // The sustained sweep keeps running under the wipe (the shared
+        // `elapsed` clock, ref render:228).
+        let shimmer_front = -4.0
+            + crate::components::tab_pulse::coast(
+                f64::from(u32::try_from(elapsed % 1_200).unwrap_or(0)) / 1200.0,
+            ) * f64::from(u32::try_from(end + 22).unwrap_or(22));
+        let feather = |distance: f64| {
+            crate::components::tab_pulse::smootherstep((distance / ARRIVAL_FEATHER).clamp(0.0, 1.0))
+        };
+        let mut runs: Vec<StyledSpan> = Vec::new();
+        let new_chars: Vec<char> = view.title.chars().collect();
+        let old_chars: Vec<char> = arrival.previous.chars().collect();
+        for column in 0..span {
+            // Left of the front: the NEW title (`visibility` feathers
+            // up to the front, ref: `distance = wipeFront − (column +
+            // width)`); right of it: the OLD snapshot (`column −
+            // wipeFront`), still carrying the decaying sustained dim.
+            let (text, visibility) = if column < cut && column < new_chars.len() {
+                let distance = wipe_front - f64::from(u32::try_from(column + 1).unwrap_or(1));
+                (&new_chars[column], feather(distance))
+            } else if column >= cut && column < old_chars.len() {
+                let distance = f64::from(u32::try_from(column).unwrap_or(0)) - wipe_front;
+                let band = crate::components::tab_pulse::intensity_at(
+                    column,
+                    shimmer_front,
+                    crate::components::tab_pulse::RUN_HEAD,
+                    crate::components::tab_pulse::RUN_TAIL,
+                );
+                (&old_chars[column], feather(distance) * (1.0 - 0.6 * level * (1.0 - band)))
+            } else {
+                continue;
+            };
+            let strength = 1.0 - visibility;
+            runs.push(StyledSpan {
+                text: text.to_string(),
+                style: Style::new()
+                    .fg(mix_toward(fg_base, raised, strength))
+                    .bg(raised)
+                    .add_modifier(Modifier::BOLD),
+                link: None,
+            });
+        }
+        paint.placed.push(Placed {
+            x: 2,
+            y: 1,
+            width: span,
+            lines: vec![PlacedLine { runs }],
+            tag: Some("sidebar.title".into()),
+        });
+    } else if let Some(since) = view.title_pending_since {
         let elapsed_total = view.clock_ms.saturating_sub(since);
         let level = crate::components::tab_pulse::smootherstep(
             f64::from(u32::try_from(elapsed_total.min(240)).unwrap_or(0)) / 240.0,
@@ -878,6 +1001,66 @@ mod tests {
         ThemeState::v2_dark().styles()
     }
 
+    /// G-327 — the arrival wipe: a title change that landed while
+    /// rename-pending was armed opens on the OLD glyphs (the wipe
+    /// front starts left of column 0), reveals the new title left of
+    /// the coast-eased front mid-window, and settles to the plain
+    /// bold row after the one-shot 450 ms. No arrival and no pending
+    /// → the unchanged plain row.
+    #[test]
+    fn title_arrival_wipe_renders_then_settles() {
+        let theme = theme();
+        let fg_base = theme.text.fg.unwrap_or_default();
+        let arrival_view = |clock_ms: u64| SidebarView {
+            title: "New title".to_owned(),
+            title_pending_since: None,
+            title_arrival: Some(TitleArrival {
+                previous: "Old long title".to_owned(),
+                since: 1_000,
+            }),
+            clock_ms,
+            ..SidebarView::fixture("x", "/tmp/opencode:main")
+        };
+        let title_line = |view: &SidebarView| {
+            let paint = render_sidebar(view, &theme, 30);
+            let placed = paint
+                .placed
+                .iter()
+                .find(|p| p.tag.as_deref() == Some("sidebar.title"))
+                .expect("title");
+            placed.lines[0].clone()
+        };
+
+        // Frame 0 of the wipe: the front sits left of column 0 — the
+        // row is still the OLD title, dimmed (not the steady bold fg).
+        let opening = title_line(&arrival_view(1_000));
+        assert_eq!(opening.text(), "Old long title", "the wipe opens on the old snapshot");
+        assert_ne!(opening.runs[0].style.fg, Some(fg_base), "the old glyphs carry the dim");
+
+        // Mid-window: new glyphs left of the front, old glyphs right —
+        // the row is neither title wholesale.
+        let mid = title_line(&arrival_view(1_200));
+        let mid_text = mid.text();
+        assert!(
+            mid_text.starts_with("New") && mid_text.ends_with("title"),
+            "the wipe composes both halves: {mid_text:?}"
+        );
+        assert_ne!(mid_text, "New title", "old glyphs persist right of the front");
+        assert_ne!(mid_text, "Old long title", "new glyphs revealed left of the front");
+
+        // Past the 450 ms window: the one-shot is over — plain bold.
+        let settled = title_line(&arrival_view(1_500));
+        assert_eq!(settled.text(), "New title");
+        assert_eq!(settled.runs.len(), 1, "a single un-dimmed run");
+        assert_eq!(settled.runs[0].style.fg, Some(fg_base));
+
+        // No pending, no arrival → unchanged (the golden shape).
+        let plain = title_line(&SidebarView::fixture("Sidebar fixture", "/tmp/opencode:main"));
+        assert_eq!(plain.text(), "Sidebar fixture");
+        assert_eq!(plain.runs.len(), 1);
+        assert_eq!(plain.runs[0].style.fg, Some(fg_base));
+    }
+
     /// The golden's visibility rule: auto shows only above 120.
     #[test]
     fn auto_show_rule_matches_the_reference() {
@@ -1145,6 +1328,7 @@ mod surf1_tests {
         let view = SidebarView {
             title: "S".to_owned(),
             title_pending_since: None,
+            title_arrival: None,
             clock_ms: 0,
             sections: SidebarSections {
                 context: SidebarContextWidget { tokens: Some(60_400), percent: None, cost: None },
@@ -1212,6 +1396,7 @@ fn sidebar_scrollbar_paints_only_on_overflow() {
     let view = SidebarView {
         title: "T".into(),
         title_pending_since: None,
+        title_arrival: None,
         clock_ms: 0,
         sections: sections(30),
         onboarding: false,
@@ -1232,6 +1417,7 @@ fn sidebar_scrollbar_paints_only_on_overflow() {
     let view = SidebarView {
         title: "T".into(),
         title_pending_since: None,
+        title_arrival: None,
         clock_ms: 0,
         sections: sections(1),
         onboarding: false,
