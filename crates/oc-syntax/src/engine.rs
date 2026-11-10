@@ -335,7 +335,8 @@ mod tests {
     #[test]
     fn cache_evicts_oldest_at_capacity() {
         let first_lines = vec!["let a = 0;".to_owned()];
-        let first = highlight_cached(&first_lines.join("\n"), &first_lines, "rust").expect("parses");
+        let first =
+            highlight_cached(&first_lines.join("\n"), &first_lines, "rust").expect("parses");
         // Fill past capacity (twice over — robust even if an earlier
         // test in the same process left entries behind).
         let mut last = None;

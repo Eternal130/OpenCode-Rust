@@ -515,10 +515,7 @@ pub const EXTENSION_TABLE: &[(&str, &str)] = &[
 #[must_use]
 pub fn filetype_for_path(path: &str) -> Option<&'static str> {
     let extension = path.rsplit_once('.')?.1.to_ascii_lowercase();
-    EXTENSION_TABLE
-        .iter()
-        .find(|(ext, _)| *ext == extension)
-        .map(|(_, filetype)| *filetype)
+    EXTENSION_TABLE.iter().find(|(ext, _)| *ext == extension).map(|(_, filetype)| *filetype)
 }
 
 /// Highlight one code payload by its file path's extension: the
@@ -622,9 +619,9 @@ mod tests {
             if matches!(entry.filetype, "javascript" | "markdown-inline") {
                 continue;
             }
-            let reachable = EXTENSION_TABLE
-                .iter()
-                .any(|(_, filetype)| *filetype == entry.filetype || entry.aliases.contains(filetype));
+            let reachable = EXTENSION_TABLE.iter().any(|(_, filetype)| {
+                *filetype == entry.filetype || entry.aliases.contains(filetype)
+            });
             assert!(reachable, "{} has no extension routing", entry.filetype);
         }
     }
@@ -796,9 +793,11 @@ mod tests {
         let last = last.expect("parses");
         let reparsed = highlight("let a = 0;", "rust").expect("re-parses");
         assert!(!Arc::ptr_eq(&first.0, &reparsed.0), "the earliest entry was evicted");
-        let again =
-            highlight(&format!("let v{} = {};", CACHE_CAPACITY * 2 - 1, CACHE_CAPACITY * 2 - 1), "rust")
-                .expect("cached");
+        let again = highlight(
+            &format!("let v{} = {};", CACHE_CAPACITY * 2 - 1, CACHE_CAPACITY * 2 - 1),
+            "rust",
+        )
+        .expect("cached");
         assert!(Arc::ptr_eq(&last.0, &again.0), "the latest entry stayed cached");
     }
 

@@ -1243,6 +1243,7 @@ fn live_sidebar_view(store: &Store, session_id: &str, height: usize) -> SidebarV
     SidebarView {
         title,
         title_pending_since: store.title_pending_since(session_id),
+        title_arrival: store.title_arrival(session_id),
         clock_ms: store.clock(),
         sections: SidebarSections {
             context,

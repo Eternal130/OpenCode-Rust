@@ -2066,6 +2066,10 @@ pub struct Store {
     /// Rename-pending per session (session → armed-at clock ms) — the
     /// `title_shimmer` envelope's input (`StoreSignals::title_pending`).
     title_pending: Signal<HashMap<String, u64>>,
+    /// G-327 — the title-shimmer ARRIVAL WIPE state (session → the
+    /// last-painted title + the wipe's start), armed when a title
+    /// lands while rename-pending was held (title-shimmer.tsx:71-74).
+    title_arrival: Signal<HashMap<String, crate::components::sidebar::TitleArrival>>,
     /// The update-notification state (auditB #10 — v2's
     /// `update-notification.tsx`): the banner's notice + the dialog's
     /// live state.
@@ -3862,6 +3866,8 @@ struct StoreSignals {
     /// projects locally through the `session.renamed` echo). The
     /// sidebar `title_shimmer`'s envelope input (lane TAIL item 1d).
     title_pending: Signal<HashMap<String, u64>>,
+    /// G-327 — the arrival-wipe state (see the Store field).
+    title_arrival: Signal<HashMap<String, crate::components::sidebar::TitleArrival>>,
     update_notice: Signal<Option<crate::components::update::UpdateNotice>>,
     update_dialog: Signal<crate::components::update::UpdateDialogState>,
     /// TUI-5 (lane-tui2): the Open menu's project registry.
@@ -4010,6 +4016,7 @@ impl Store {
             stats_page,
             pair,
             title_pending,
+            title_arrival,
             update_notice,
             update_dialog,
         } = signals;
@@ -4198,6 +4205,7 @@ impl Store {
             open_url_sink: std::cell::RefCell::new(None),
             pair,
             title_pending,
+            title_arrival,
             update_notice,
             update_since: Cell::new(None),
             update_dialog,
@@ -4321,6 +4329,10 @@ impl Store {
         let stats_page = Signal::new(&runtime, StatsPageState::default());
         let pair = Signal::new(&runtime, PairState::default());
         let title_pending = Signal::new(&runtime, HashMap::<String, u64>::new());
+        let title_arrival = Signal::new(
+            &runtime,
+            HashMap::<String, crate::components::sidebar::TitleArrival>::new(),
+        );
         let update_notice = Signal::new(&runtime, None::<crate::components::update::UpdateNotice>);
         let update_dialog =
             Signal::new(&runtime, crate::components::update::UpdateDialogState::Current);
@@ -4406,6 +4418,7 @@ impl Store {
                 stats_page,
                 pair,
                 title_pending,
+                title_arrival,
                 update_notice,
                 update_dialog,
                 project_list,
@@ -4423,8 +4436,20 @@ impl Store {
         self.title_pending.get().get(session_id).copied()
     }
 
+    /// G-327 — the arrival-wipe snapshot for one session (`None`
+    /// outside a title-change-while-pending transition).
+    #[must_use]
+    pub fn title_arrival(
+        &self,
+        session_id: &str,
+    ) -> Option<crate::components::sidebar::TitleArrival> {
+        self.title_arrival.get().get(session_id).cloned()
+    }
+
     /// Arm/clear rename-pending for one session (the `title_shimmer`'s
-    /// envelope input).
+    /// envelope input). Arming resets any arrival wipe (ref
+    /// title-shimmer.tsx:62-69: a fresh pending arm clears the
+    /// snapshot and the wipe).
     pub fn set_title_pending(&self, session_id: &str, since: Option<u64>) {
         self.title_pending.update(|pending| match since {
             Some(ms) => {
@@ -4434,6 +4459,9 @@ impl Store {
                 pending.remove(session_id);
             }
         });
+        if since.is_some() {
+            self.title_arrival.update(|arrivals| arrivals.remove(session_id));
+        }
     }
 
     /// Sync one tab's pulse transition stamps against its live status
@@ -12825,6 +12853,28 @@ impl Store {
                 // rename-pending releases (`generatingTitles`'s
                 // finally + the projection note, context/data.tsx:42).
                 if self.title_pending.get().contains_key(&id) {
+                    // G-327: a title landing while rename-pending was
+                    // armed triggers the one-shot arrival wipe
+                    // (title-shimmer.tsx:71-74 — only a title CHANGE
+                    // replaces the last painted title): snapshot the
+                    // title as last painted, stamp the clock, then
+                    // release pending.
+                    if let Some(title) = &title {
+                        let previous = self
+                            .session_title(&id)
+                            .unwrap_or_else(|| "Untitled session".to_owned());
+                        if previous != *title {
+                            self.title_arrival.update(|arrivals| {
+                                arrivals.insert(
+                                    id.clone(),
+                                    crate::components::sidebar::TitleArrival {
+                                        previous,
+                                        since: self.clock.get(),
+                                    },
+                                );
+                            });
+                        }
+                    }
                     self.set_title_pending(&id, None);
                 }
                 // The session-list history refreshes in place (v2's

@@ -1124,8 +1124,11 @@ impl Connection {
                     .await
                 }
                 None => {
-                    tokio::time::timeout(self.config.connect_timeout, self.client.event().subscribe())
-                        .await
+                    tokio::time::timeout(
+                        self.config.connect_timeout,
+                        self.client.event().subscribe(),
+                    )
+                    .await
                 }
             };
             // A subscribe error or an elapsed connect window — both
@@ -1147,14 +1150,13 @@ impl Connection {
             // ingest is published for a failed handshake (the resync
             // below also stays skipped — the ref only records the
             // connection after the marker).
-            let first = match tokio::time::timeout(self.config.connect_timeout, stream.next_json())
-                .await
-            {
-                Ok(Ok(Some(value))) => value,
-                Ok(Ok(None)) => continue, // stream ended before any frame
-                Ok(Err(_)) => continue,   // decode error
-                Err(_) => continue,       // connect window elapsed → reconnect
-            };
+            let first =
+                match tokio::time::timeout(self.config.connect_timeout, stream.next_json()).await {
+                    Ok(Ok(Some(value))) => value,
+                    Ok(Ok(None)) => continue, // stream ended before any frame
+                    Ok(Err(_)) => continue,   // decode error
+                    Err(_) => continue,       // connect window elapsed → reconnect
+                };
             let connected = match BusEvent::from_json(&first) {
                 Some(event) if event.is_server_connected() => event,
                 _ => continue, // protocol failure → drop the stream, reconnect
@@ -1231,8 +1233,7 @@ impl Connection {
             // loop reconnects through the SAME path as an error or EOF;
             // the resubscription carries the tracked cursor as before.
             loop {
-                let next =
-                    tokio::time::timeout(self.config.idle_timeout, stream.next_json()).await;
+                let next = tokio::time::timeout(self.config.idle_timeout, stream.next_json()).await;
                 let Ok(Ok(Some(value))) = next else {
                     break; // stall, decode error, or stream end → reconnect
                 };
@@ -2017,7 +2018,14 @@ mod tests {
                 let mut request = vec![0u8; 8192];
                 let _ = reader.read(&mut request).await;
                 let head = String::from_utf8_lossy(&request);
-                let path = head.split_whitespace().nth(1).unwrap_or_default().split('?').next().unwrap_or_default().to_owned();
+                let path = head
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default()
+                    .split('?')
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned();
                 if path.starts_with("/api/event") {
                     let cursor = head.lines().find_map(|line| {
                         let lower = line.to_lowercase();
@@ -2064,8 +2072,10 @@ mod tests {
             },
         );
         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
-        let runner =
-            tokio::spawn(connection.run(tx, HttpResync::new(Client::new(&format!("http://{addr}")).expect("client"))));
+        let runner = tokio::spawn(
+            connection
+                .run(tx, HttpResync::new(Client::new(&format!("http://{addr}")).expect("client"))),
+        );
 
         let mut observed = Vec::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -2149,7 +2159,9 @@ mod tests {
                     if path.starts_with("/api/event") {
                         let cursor = head.lines().find_map(|line| {
                             let lower = line.to_lowercase();
-                            lower.strip_prefix("last-event-id:").map(|value| value.trim().to_owned())
+                            lower
+                                .strip_prefix("last-event-id:")
+                                .map(|value| value.trim().to_owned())
                         });
                         cursors.lock().expect("cursor log").push(cursor);
                         if first {
@@ -2197,7 +2209,10 @@ mod tests {
             },
         );
         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
-        let runner = tokio::spawn(connection.run(tx, HttpResync::new(Client::new(&format!("http://{addr}")).expect("client"))));
+        let runner = tokio::spawn(
+            connection
+                .run(tx, HttpResync::new(Client::new(&format!("http://{addr}")).expect("client"))),
+        );
 
         let mut observed = Vec::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -2235,7 +2250,11 @@ mod tests {
         assert!(matches!(&observed[7], Ingest::Event(event) if event.id == "e3"), "{observed:?}");
         // The watchdog-triggered resubscribe carried the tracked cursor.
         let cursors = seen_cursors.lock().expect("cursor log").clone();
-        assert_eq!(cursors, vec![None, Some("e1".to_owned())], "Last-Event-ID resume survived the stall");
+        assert_eq!(
+            cursors,
+            vec![None, Some("e1".to_owned())],
+            "Last-Event-ID resume survived the stall"
+        );
     }
 
     /// F19 — `fetch_session_messages` asks `order: "desc"` and REVERSES

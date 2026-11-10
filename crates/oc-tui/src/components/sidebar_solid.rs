@@ -12,20 +12,23 @@
 //! (no row carriers, no nesting). The old walk stays the solver:
 //! both painters consume the ONE [`SidebarPaint`] output.
 //!
-//! **The title shimmer (resting).** The tsx's `<title_shimmer>` is a
-//! raster `TextRenderable` subclass whose animated phases (the
-//! rename-pending pulse, the arrival wipe) draw through a scratch
-//! buffer + colorMatrix (`component/title-shimmer.tsx`). AT REST —
-//! `animating` false, which is every state the store models (no
-//! rename-pending input exists on our side) — it renders as its base
-//! `TextRenderable` with BOLD attributes (sidebar.tsx:41-45), i.e.
-//! plain bold `text.base` over `raised.base`. That resting shape is
-//! what this tree paints (a text unit carrying the BOLD bit), and
-//! what the old renderer paints — cell-for-cell identical. The
-//! animated phases are the registered seam: opentui-core's
-//! glow/pulse machinery (O2, `tab_pulse`) covers the sustain math,
-//! and the wipe/pulse envelopes would land in a core renderable when
-//! a later lane carries rename-pending state into the store.
+//! **The title shimmer.** The tsx's `<title_shimmer>` is a raster
+//! `TextRenderable` subclass whose animated phases (the rename-pending
+//! pulse, the arrival wipe) draw through a scratch buffer +
+//! colorMatrix (`component/title-shimmer.tsx`). The rename-pending
+//! state NOW flows end to end on our side: the store tracks the arm
+//! (`StoreSignals::title_pending` / `set_title_pending`, wired to the
+//! rename POST in app.rs) and the G-327 arrival wipe (`title_arrival`
+//! — a title change landing while pending was held), and the walk
+//! ([`crate::components::sidebar::render_sidebar`]) materializes both
+//! phases as per-cell styled runs (the sustain's 40% dim + sweep band
+//! and the one-shot 450 ms wipe) inside the SAME [`SidebarPaint`] this
+//! tree consumes — so both painters stay cell-for-cell identical.
+//! AT REST — `animating` false, every state where neither phase is
+//! live — it renders as its base `TextRenderable` with BOLD
+//! attributes (sidebar.tsx:41-45), i.e. plain bold `text.base` over
+//! `raised.base`: the resting shape this tree paints (a text unit
+//! carrying the BOLD bit), and what the old renderer paints.
 //!
 //! **The scrim overlay rides the tree (D3.2).** The ≤120-col manual
 //! open floats the pane over an rgba(0,0,0,70) backdrop
