@@ -74,6 +74,8 @@ unicode-normalization = "0.1.26"
 bytes = "1"
 [dev-dependencies]
 tempfile = "3"
+# G-362a: the snapshots-config test initializes a real source repo.
+git2 = { version = "0.19", default-features = false }
 # G-285②: the snowflake fake-stream route test builds a transport body.
 async-stream = "0.3"
 tokio-tungstenite = { version = "0.24", default-features = false, features = [

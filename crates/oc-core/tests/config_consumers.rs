@@ -297,3 +297,68 @@ fn model_ref(provider: &str, model: &str) -> oc_schema::model::Ref {
         variant: None,
     }
 }
+
+// ---------------------------------------------------------------------------
+// G-362a — the config `snapshots` key reaches the location's snapshot store
+// ---------------------------------------------------------------------------
+
+/// `snapshots: false` (v2 `ConfigSnapshotPlugin` over snapshot.ts:83-87,
+/// 115): the store's enabled gate flips, so `capture` becomes a no-op
+/// returning `None` — even though the project IS a git repository. With
+/// the key absent (default `true`) the same repo captures fine.
+#[tokio::test]
+async fn snapshots_false_disables_capture() {
+    let (engine, dir, location) = engine_with_config(Some(json!({ "snapshots": false }))).await;
+    git2::Repository::init(dir.path()).expect("source repo");
+    let services = engine.location(location.clone()).await.expect("location assembles");
+    assert!(
+        services.snapshot.capture().await.is_none(),
+        "snapshots:false makes capture a no-op (ref returns undefined)"
+    );
+
+    let (engine, dir, location) = engine_with_config(None).await;
+    git2::Repository::init(dir.path()).expect("source repo");
+    let services = engine.location(location).await.expect("location assembles");
+    assert!(
+        services.snapshot.capture().await.is_some(),
+        "absent key keeps the default enabled store capturing"
+    );
+}
+
+/// Whole-key latest-wins across documents (`Config.latest(entries,
+/// "snapshots")`): the LAST document owning the key decides — a global
+/// `true` under a project `false` stays disabled.
+#[tokio::test]
+async fn snapshots_latest_document_wins() {
+    let dir = tempfile::Builder::new()
+        .prefix("oc-core-snapshots-merge-")
+        .tempdir_in("/tmp/opencode")
+        .expect("sandbox");
+    std::fs::create_dir_all(dir.path().join(".git")).expect("git marker");
+    git2::Repository::init(dir.path()).expect("source repo");
+    let global = dir.path().join("home").join(".config").join("opencode");
+    std::fs::create_dir_all(&global).expect("global config dir");
+    std::fs::write(
+        global.join("opencode.json"),
+        serde_json::to_string(&json!({ "snapshots": true })).expect("json"),
+    )
+    .expect("global config");
+    std::fs::create_dir_all(dir.path().join(".opencode")).expect("project config dir");
+    std::fs::write(
+        dir.path().join(".opencode").join("opencode.json"),
+        serde_json::to_string(&json!({ "snapshots": false })).expect("json"),
+    )
+    .expect("project config");
+
+    let engine = Engine::boot(EngineOptions {
+        activity_sweeper: false,
+        ..EngineOptions::new(dir.path().join("data"), dir.path().join("home"))
+    })
+    .await;
+    let location = LocationRef::new(dir.path().to_path_buf(), None);
+    let services = engine.location(location).await.expect("location assembles");
+    assert!(
+        services.snapshot.capture().await.is_none(),
+        "the project document's snapshots:false wins over the global true"
+    );
+}

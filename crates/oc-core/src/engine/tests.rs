@@ -2178,3 +2178,212 @@ async fn engine_child_session_interrupt_settles_with_user_reason_on_the_wire() {
     assert_eq!(claim, None, "the child's claim was released");
     assert!(dropped.load(Ordering::SeqCst) > 0, "the blocking tool was cancelled");
 }
+
+// ---------------------------------------------------------------------------
+// G-362b — document-level `mcp.timeout` merges into the server configs
+// ---------------------------------------------------------------------------
+
+/// Loads an empty config then appends one document whose `mcp` node is
+/// `mcp` (the merge only reads documents, so the empty base is inert).
+fn mcp_loaded(mcp: serde_json::Value) -> crate::config::Loaded {
+    let dir = tempfile::Builder::new()
+        .prefix("oc-core-mcp-timeout-")
+        .tempdir_in("/tmp/opencode")
+        .expect("sandbox under /tmp/opencode");
+    let mut loaded = crate::config::Loader::new(
+        dir.path().to_path_buf(),
+        crate::config::GlobalDirs {
+            config: dir.path().join("cfg"),
+            home: dir.path().join("home"),
+        },
+    )
+    .load();
+    loaded.entries.push(oc_schema::config::Entry::Document(Box::new(
+        oc_schema::config::Document {
+            info: serde_json::from_value(serde_json::json!({ "mcp": mcp })).expect("info"),
+            path: None,
+        },
+    )));
+    loaded
+}
+
+/// The ref merge (config/plugin/mcp.ts:44-59): document-level
+/// `mcp.timeout` applies to servers lacking one; a per-server field
+/// beats the document default per field (spread `{...timeout,
+/// ...server.timeout}`).
+#[test]
+fn mcp_document_timeout_merges_with_server_timeouts() {
+    let loaded = mcp_loaded(serde_json::json!({
+        "timeout": { "startup": 10_000, "catalog": 20_000, "execution": 30_000 },
+        "servers": {
+            "plain": { "type": "local", "command": ["echo", "hi"] },
+            "own": {
+                "type": "local",
+                "command": ["echo", "hi"],
+                "timeout": { "startup": 111, "execution": 333 }
+            },
+            "remote": { "type": "remote", "url": "https://mcp.test" }
+        }
+    }));
+    let servers = crate::engine::mcp_servers_from_config(&loaded);
+
+    // No per-server timeout: every field inherits the document default.
+    let plain = match servers.get("plain").expect("plain present") {
+        oc_schema::mcp::ServerConfig::Local(local) => local.timeout.clone(),
+        other => panic!("plain is local: {other:?}"),
+    };
+    assert_eq!(
+        plain,
+        Some(oc_schema::mcp::TimeoutConfig {
+            startup: Some(10_000u64),
+            catalog: Some(20_000u64),
+            execution: Some(30_000u64),
+        }),
+        "document defaults apply to a server without its own timeout"
+    );
+
+    // Per-server fields win; the unset field (catalog) inherits.
+    let own = match servers.get("own").expect("own present") {
+        oc_schema::mcp::ServerConfig::Local(local) => local.timeout.clone(),
+        other => panic!("own is local: {other:?}"),
+    };
+    assert_eq!(
+        own,
+        Some(oc_schema::mcp::TimeoutConfig {
+            startup: Some(111u64),
+            catalog: Some(20_000u64),
+            execution: Some(333u64),
+        }),
+        "per-server startup/execution win, catalog inherits the document default"
+    );
+
+    // The remote variant merges the same way.
+    let remote = match servers.get("remote").expect("remote present") {
+        oc_schema::mcp::ServerConfig::Remote(remote) => remote.timeout.clone(),
+        other => panic!("remote is remote: {other:?}"),
+    };
+    assert_eq!(
+        remote.map(|timeout| (timeout.startup, timeout.execution)),
+        Some((Some(10_000u64), Some(30_000u64))),
+        "remote servers inherit the document defaults too"
+    );
+}
+
+/// No document-level timeout: server configs are untouched (a server
+/// with its own timeout keeps it verbatim; one without stays `None`).
+#[test]
+fn mcp_timeout_absent_leaves_servers_untouched() {
+    let loaded = mcp_loaded(serde_json::json!({
+        "servers": {
+            "own": {
+                "type": "local",
+                "command": ["echo", "hi"],
+                "timeout": { "startup": 5_000 }
+            },
+            "plain": { "type": "local", "command": ["echo", "hi"] }
+        }
+    }));
+    let servers = crate::engine::mcp_servers_from_config(&loaded);
+    let own = match servers.get("own").expect("own present") {
+        oc_schema::mcp::ServerConfig::Local(local) => local.timeout.clone(),
+        other => panic!("own is local: {other:?}"),
+    };
+    assert_eq!(own.map(|timeout| timeout.startup), Some(Some(5_000u64)));
+    let plain = match servers.get("plain").expect("plain present") {
+        oc_schema::mcp::ServerConfig::Local(local) => local.timeout.clone(),
+        other => panic!("plain is local: {other:?}"),
+    };
+    assert_eq!(plain, None, "no document default and no server timeout stays absent");
+}
+
+/// `Object.assign` across documents in config order: a later document's
+/// field overwrites an earlier one's, per field.
+#[test]
+fn mcp_document_timeout_latest_document_wins_per_field() {
+    let dir = tempfile::Builder::new()
+        .prefix("oc-core-mcp-timeout-merge-")
+        .tempdir_in("/tmp/opencode")
+        .expect("sandbox under /tmp/opencode");
+    let mut loaded = crate::config::Loader::new(
+        dir.path().to_path_buf(),
+        crate::config::GlobalDirs {
+            config: dir.path().join("cfg"),
+            home: dir.path().join("home"),
+        },
+    )
+    .load();
+    for mcp in [
+        serde_json::json!({ "timeout": { "startup": 1, "catalog": 2 } }),
+        serde_json::json!({ "timeout": { "catalog": 22, "execution": 33 } }),
+    ] {
+        loaded.entries.push(oc_schema::config::Entry::Document(Box::new(
+            oc_schema::config::Document {
+                info: serde_json::from_value(serde_json::json!({ "mcp": mcp }))
+                    .expect("info"),
+                path: None,
+            },
+        )));
+    }
+    // The document fold is asserted through a server contributed by a
+    // later document (the merge table collects servers from every
+    // document, then applies the folded timeout).
+    let mut with_server = loaded.clone();
+    with_server.entries.push(oc_schema::config::Entry::Document(Box::new(
+        oc_schema::config::Document {
+            info: serde_json::from_value(serde_json::json!({
+                "mcp": { "servers": { "srv": { "type": "local", "command": ["echo"] } } }
+            }))
+            .expect("info"),
+            path: None,
+        },
+    )));
+    let servers = crate::engine::mcp_servers_from_config(&with_server);
+    let timeout = match servers.get("srv").expect("srv present") {
+        oc_schema::mcp::ServerConfig::Local(local) => local.timeout.clone().expect("merged"),
+        other => panic!("srv is local: {other:?}"),
+    };
+    assert_eq!(
+        (timeout.startup, timeout.catalog, timeout.execution),
+        (Some(1u64), Some(22u64), Some(33u64)),
+        "startup from doc 1, catalog/execution overwritten by doc 2"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// G-364 — the engine-level rpc gate for shut-down locations
+// ---------------------------------------------------------------------------
+
+/// `location_rpc_available`: open for never-assembled and live
+/// locations, sealed by `invalidate` (the graph's shutdown closed its
+/// rpc domain), and reopened by a fresh `location()` assembly.
+#[tokio::test]
+async fn engine_rpc_gate_seals_with_invalidate_and_reopens_on_reassembly() {
+    let root = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+    let project_dir = root.path().join("proj");
+    std::fs::create_dir_all(&project_dir).expect("project dir");
+    std::fs::create_dir_all(project_dir.join(".git")).expect("git marker");
+    let engine = Engine::boot(EngineOptions {
+        activity_sweeper: false,
+        ..EngineOptions::new(root.path().join("data"), root.path().join("home"))
+    })
+    .await;
+    let location = LocationRef::new(project_dir, None);
+    assert!(
+        engine.location_rpc_available(&location),
+        "a never-assembled location carries no shutdown mark"
+    );
+    engine.location(location.clone()).await.expect("assembles");
+    assert!(engine.location_rpc_available(&location), "live location is open");
+
+    engine.invalidate(&location).await;
+    assert!(
+        !engine.location_rpc_available(&location),
+        "invalidate sealed the rpc domain (rpc.close ran in the shutdown sequence)"
+    );
+
+    engine.location(location.clone()).await.expect("re-assembles");
+    assert!(
+        engine.location_rpc_available(&location),
+        "a fresh assembly is a fresh Rpc node — the mark cleared"
+    );
+}

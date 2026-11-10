@@ -2103,4 +2103,74 @@ mod local_discovery_tests {
         // ollama is not a catalog provider and nothing was discovered.
         assert!(resolver.resolve_selected(&session(), &reference).is_err());
     }
+
+    /// G-363 — the `ModelResolver.resolve` fallback tail
+    /// (model-resolver.ts:402-417): no pinned session model and no
+    /// configured default ⇒ the FIRST available text model (the same
+    /// `Catalog::available_models` fold `GET /api/model` serves, release
+    /// descending, `Model.supportsText`).
+    #[tokio::test]
+    async fn resolve_falls_back_to_first_available_text_model() {
+        let context =
+            FacadeContext::new(Arc::new(ReqwestTransport::new()) as oc_ai::route::SharedTransport);
+        let resolver =
+            CatalogModelResolver::new(context, catalog(), BTreeMap::new(), Vec::new(), None);
+        // The expected pick under THIS test process's environment.
+        let catalog = catalog();
+        let expected = catalog
+            .available_models(|name| std::env::var_os(name).is_some())
+            .into_iter()
+            .find(|(_, model)| {
+                model.capabilities.input.is_empty()
+                    || model.capabilities.input.iter().any(|item| item.starts_with("text"))
+            })
+            .expect("at least one available text model (keyless zen)");
+        let resolved = resolver.resolve(&session()).expect("fallback selects a model");
+        assert_eq!(resolved.model.provider.as_str(), expected.0.info.id.as_str());
+        assert_eq!(resolved.model.id.as_str(), expected.1.id.as_str());
+    }
+
+    /// G-363 — pin/default still win, and nothing qualifying keeps the
+    /// `NotSelected` error (ref returns `undefined`; the runner maps it
+    /// to the not-selected failure).
+    #[tokio::test]
+    async fn resolve_pin_and_default_win_and_empty_catalog_stays_not_selected() {
+        let context =
+            FacadeContext::new(Arc::new(ReqwestTransport::new()) as oc_ai::route::SharedTransport);
+        // Configured default: the fallback never runs (the default is the
+        // catalog's SECOND available text model, so a fallback pick would
+        // differ and the assertion would catch it; skipped when this
+        // environment exposes only one).
+        if let Some(second) = catalog()
+            .available_models(|name| std::env::var_os(name).is_some())
+            .into_iter()
+            .filter(|(_, model)| {
+                model.capabilities.input.is_empty()
+                    || model.capabilities.input.iter().any(|item| item.starts_with("text"))
+            })
+            .nth(1)
+        {
+            let resolver = CatalogModelResolver::new(
+                FacadeContext::new(Arc::new(ReqwestTransport::new()) as oc_ai::route::SharedTransport),
+                catalog(),
+                BTreeMap::new(),
+                Vec::new(),
+                Some(oc_schema::config::ModelSelection {
+                    provider_id: second.0.info.id.clone(),
+                    model: second.1.id.clone(),
+                    variant: None,
+                }),
+            );
+            let resolved = resolver.resolve(&session()).expect("default resolves");
+            assert_eq!(resolved.model.id.as_str(), second.1.id.as_str(), "configured default wins");
+        }
+
+        // Empty catalog: no available model qualifies → NotSelected.
+        let empty =
+            CatalogModelResolver::new(context, Arc::new(Catalog::empty()), BTreeMap::new(), Vec::new(), None);
+        match empty.resolve(&session()) {
+            Err(crate::session::runner::ModelError::NotSelected(_)) => {}
+            other => panic!("expected NotSelected, got {other:?}"),
+        }
+    }
 }
