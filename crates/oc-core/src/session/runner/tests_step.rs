@@ -458,6 +458,146 @@ async fn runner_step_abrupt_close_flushes_and_settles() {
     assert_eq!(llm.requests.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
+// -- G-336: an interrupted stream must not fail hosted tools with
+// RESULT_MISSING (ref step.ts ~220 gates on Exit.isSuccess — an
+// interrupted stream is not a provider failure) -----------------------
+
+/// Poll the durable log until an event of `type_` appears (bounded).
+async fn until_event(
+    harness: &crate::session::runner::tests_harness::Harness,
+    type_: &str,
+) -> Option<serde_json::Value> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if let Some(found) = harness
+            .durable_events()
+            .await
+            .into_iter()
+            .find(|(kind, _, _)| kind == type_)
+            .map(|(_, _, data)| data)
+        {
+            return Some(found);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    None
+}
+
+/// An LLM client whose stream starts a provider-hosted tool call and
+/// then parks forever — the tool result never arrives from the provider.
+struct HostedToolParkClient {
+    release: std::sync::Arc<tokio::sync::Notify>,
+}
+
+#[async_trait::async_trait]
+impl crate::session::runner::LlmClient for HostedToolParkClient {
+    async fn stream(
+        &self,
+        _request: oc_ai::schema::messages::LLMRequest,
+    ) -> Result<crate::session::runner::LlmEventStream, oc_ai::schema::AiError> {
+        let release = self.release.clone();
+        Ok(Box::pin(async_stream::stream! {
+            yield Ok(LLMEvent::StepStart { index: 0.0 });
+            yield Ok(LLMEvent::ToolCall {
+                id: "call_g336".into(),
+                name: "web_search".into(),
+                namespace: None,
+                input: serde_json::json!({ "query": "hosted" }),
+                provider_executed: Some(true),
+                provider_metadata: None,
+            });
+            // Quiet forever: the hosted result never arrives.
+            release.notified().await;
+        }))
+    }
+
+    fn can_compact(
+        &self,
+        _request: &oc_ai::schema::messages::LLMRequest,
+        _mechanism: crate::session::runner::CompactMechanism,
+    ) -> bool {
+        false
+    }
+
+    async fn compact(
+        &self,
+        _request: oc_ai::schema::messages::LLMRequest,
+        _mechanism: crate::session::runner::CompactMechanism,
+    ) -> Result<crate::session::runner::CompactOutcome, oc_ai::schema::AiError> {
+        Err(oc_ai::schema::AiError::unsupported_operation("compact", "HostedToolParkClient"))
+    }
+}
+
+#[tokio::test]
+async fn runner_step_interrupted_hosted_tool_not_result_missing() {
+    let release = std::sync::Arc::new(tokio::sync::Notify::new());
+    let client = std::sync::Arc::new(HostedToolParkClient { release: release.clone() });
+    let harness = crate::session::runner::tests_harness::harness_with_client(
+        client as std::sync::Arc<dyn crate::session::runner::LlmClient>,
+        crate::session::runner::tests_harness::test_resolved_model(),
+    )
+    .await;
+    let harness = std::sync::Arc::new(harness);
+    harness.create_session().await;
+    harness.admit_prompt("msg_g336", "search something").await;
+
+    let drain = tokio::spawn({
+        let harness = std::sync::Arc::clone(&harness);
+        async move {
+            let _ = harness.execution.resume(harness.session_id().as_str()).await;
+        }
+    });
+    until_event(&harness, "session.tool.called").await.expect("hosted tool call published");
+
+    // Interrupt mid-stream: the drain observes shutdown while the hosted
+    // tool result is still missing.
+    let interrupted = harness
+        .execution
+        .interrupt(
+            harness.session_id().as_str(),
+            crate::session::execution::InterruptOptions {
+                await_settlement: true,
+                ..Default::default()
+            },
+        )
+        .await;
+    assert!(interrupted, "active execution was interrupted");
+    release.notify_waiters();
+    let _ = drain.await;
+
+    let events = harness.durable_events().await;
+    let result_missing_failures: Vec<&serde_json::Value> = events
+        .iter()
+        .filter(|(type_, _, data)| {
+            *type_ == "session.tool.failed"
+                && data["id"] == serde_json::json!("call_g336")
+                && data["error"]["type"] == serde_json::json!("tool.result-missing")
+        })
+        .map(|(_, _, data)| data)
+        .collect();
+    assert!(
+        result_missing_failures.is_empty(),
+        "an interrupted stream must not fail hosted tools with result-missing: {result_missing_failures:?}"
+    );
+    // Section 9 settles the unsettled hosted tool with tools_interrupted.
+    let tool_failures: Vec<&serde_json::Value> = events
+        .iter()
+        .filter(|(type_, _, data)| {
+            *type_ == "session.tool.failed" && data["id"] == serde_json::json!("call_g336")
+        })
+        .map(|(_, _, data)| data)
+        .collect();
+    assert_eq!(tool_failures.len(), 1, "exactly one settlement for the hosted tool");
+    assert_eq!(tool_failures[0]["error"]["type"], serde_json::json!("aborted"));
+    assert!(
+        tool_failures[0]["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.starts_with("Tool execution interrupted")),
+        "the settlement is the interrupted failure: {}",
+        tool_failures[0]["error"]["message"]
+    );
+}
+
 /// (b) Normal paths are unchanged: a complete text turn still ends with
 /// `step.ended` (and no failure), one text part, one delta batch.
 #[tokio::test]

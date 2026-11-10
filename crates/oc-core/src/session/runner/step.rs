@@ -554,7 +554,9 @@ pub async fn attempt(deps: &StepDeps, input: AttemptInput) -> Result<Outcome, At
     }
 
     // 10. Missing hosted results.
-    if llm_error.is_some() || (stream_error.is_none() && !record.provider_failed) {
+    if llm_error.is_some()
+        || (stream_error.is_none() && !stream_interrupted && !record.provider_failed)
+    {
         let missing =
             publisher.fail_unsettled_tools(result_missing(), ToolFailureScope::Hosted).await?;
         if missing && llm_error.is_none() && record.finish.is_none() {
