@@ -239,3 +239,93 @@ fn codemode_sandbox_disables_timers() {
 
     host.shutdown();
 }
+
+/// G-334 — the Code Mode sandbox's residual escape faces are closed:
+/// no global property holds the raw fetch (the wrapper closure is the
+/// only home), dynamic-code faces (eval/Function/AsyncFunction — and
+/// the `.constructor` escape hatches) throw for the program's
+/// duration, and `Bun`/`process` host globals are throwing facades
+/// (the host plumbing rides module-scope natives, so the guest stays
+/// alive and responsive throughout).
+#[test]
+fn codemode_sandbox_closes_escape_faces() {
+    let sandbox = common::sandbox("codemode-sandbox-escapes");
+    let host = sandbox_host(&sandbox);
+    if !host.enabled() {
+        eprintln!("bun unavailable; skipping");
+        return;
+    }
+    assert!(host.wait_ready(Duration::from_secs(15)));
+    let catalog = [spec("greet")];
+    let dynamic_suffix: &str = " — dynamic code evaluation is unavailable in the sandbox.";
+
+    // (a) NO global property holds the raw fetch — during a run and
+    // between runs alike.
+    for code in ["return typeof globalThis.__rawFetch;", "return typeof globalThis.fetch;"] {
+        let run = block_on(host.codemode_evaluate_async(code, &catalog, Duration::from_secs(10)))
+            .unwrap_or_else(|_| panic!("probe is a program result: {code}"));
+        assert!(run.error.is_none(), "code: {code} errored: {:?}", run.error);
+    }
+    let run = block_on(host.codemode_evaluate_async(
+        "return typeof globalThis.__rawFetch;",
+        &catalog,
+        Duration::from_secs(10),
+    ))
+    .expect("probe runs");
+    assert_eq!(run.value, Some(json!("undefined")), "__rawFetch must not exist");
+
+    // (b) eval / Function / AsyncFunction (globals AND the
+    // constructor escape hatches) throw the sandbox rejection message
+    // when CALLED or CONSTRUCTED.
+    let dynamic_faces: &[(&str, &str)] = &[
+        ("eval", r#"eval("return 1");"#),
+        ("globalThis.eval", r#"globalThis.eval("return 1");"#),
+        ("Function", r#"new Function("return 1");"#),
+        ("globalThis.Function", r#"new globalThis.Function("return 1");"#),
+        (
+            "AsyncFunction via .constructor",
+            r#"new (Object.getPrototypeOf(async function () {}).constructor)("return 1");"#,
+        ),
+        ("Function via .constructor", r#"new (function () {}).constructor("return 1");"#),
+    ];
+    for (name, call) in dynamic_faces {
+        let code =
+            format!(r#"try {{ {call}; return "ran"; }} catch (error) {{ return error.message; }}"#);
+        let run = block_on(host.codemode_evaluate_async(&code, &catalog, Duration::from_secs(10)))
+            .unwrap_or_else(|_| panic!("dynamic-code rejection is a program result: {name}"));
+        let message =
+            run.value.as_ref().and_then(|value| value.as_str()).unwrap_or_default().to_owned();
+        assert!(
+            message.ends_with(dynamic_suffix),
+            "{name} must throw the sandbox rejection message, got: {message:?}"
+        );
+    }
+
+    // (c) `Bun` and `process` are throwing facades for the program's
+    // duration (any access throws).
+    for name in ["Bun", "process"] {
+        let code = format!(
+            r#"try {{ const probe = {name}.version ?? {name}["version"]; return "read"; }} catch (error) {{ return "threw: " + error.message; }}"#
+        );
+        let run = block_on(host.codemode_evaluate_async(&code, &catalog, Duration::from_secs(10)))
+            .unwrap_or_else(|_| panic!("host-global probe is a program result: {name}"));
+        assert_eq!(
+            run.value,
+            Some(json!(format!(
+                "threw: Code Mode programs cannot use {name} — host runtime access is unavailable in the sandbox."
+            ))),
+            "{name} must be a throwing facade"
+        );
+    }
+
+    // The guest is healthy afterwards: the restore rode the capture
+    // frame, the soft timeout still arms on the native timer, and a
+    // later program can still use Function-shaped constructs via the
+    // HOST (its own AsyncFunction binding) — i.e. evaluation itself
+    // still works.
+    let after =
+        block_on(host.codemode_evaluate_async("return 6 * 7;", &catalog, Duration::from_secs(5)));
+    assert_eq!(after.expect("guest restored after the swaps").value, Some(json!(42)));
+
+    host.shutdown();
+}

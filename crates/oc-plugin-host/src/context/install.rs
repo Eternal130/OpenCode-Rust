@@ -110,10 +110,60 @@ pub fn install(spec: &str, options: &InstallOptions) -> Result<Installed, String
         }
     }
 
-    let dir = install_dir(&root, &package, &version);
-    write_install_manifest(&dir, &package, &version)?;
-    run_installer(&dir, options)?;
-    verify_and_resolve(&dir, &package, version)
+    let mut dir = install_dir(&root, &package, &version);
+    // G-365 — atomicity: the install runs in a STAGING directory
+    // (`.staging-<startedAt>-<pid>-<seq>` — the layout the update
+    // path's GC already assumes: `.staging-<startedAt>-…` leftovers
+    // sweep after 1 h and never count as generations) and only a
+    // fully verified install is RENAMED into the final timestamped
+    // location. A partial failure leaves at most a `.staging-*`
+    // residue `latest_install` ignores (non-digit names) and GC can
+    // sweep — never a reusable half-installed generation. The
+    // `<pid>-<seq>` suffix keeps two concurrent installs from
+    // trampling each other's staging tree; the rename retries on a
+    // stamp collision (same-millisecond installs).
+    let mut last_error = None;
+    for _ in 0..3 {
+        let staging = staging_dir(&root, &package, &version);
+        let outcome = write_install_manifest(&staging, &package, &version)
+            .and_then(|()| run_installer(&staging, options))
+            .and_then(|()| verify_and_resolve(&staging, &package, version.clone()));
+        match outcome {
+            Ok(mut installed) => {
+                match std::fs::rename(&staging, &dir) {
+                    Ok(()) => {
+                        // The verified entry pointed into staging; the
+                        // rename moved the tree — rebase it onto the
+                        // final location.
+                        if let Ok(relative) = installed.entry.strip_prefix(&staging) {
+                            installed.entry = dir.join(relative);
+                        }
+                        installed.root = dir;
+                        return Ok(installed);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        // Same-millisecond stamp collision: pick a
+                        // fresh stamp and rename again.
+                        let _ = std::fs::remove_dir_all(&staging);
+                        dir = install_dir(&root, &package, &version);
+                        last_error = Some(format!("install stamp collision: {error}"));
+                    }
+                    Err(error) => {
+                        let _ = std::fs::remove_dir_all(&staging);
+                        return Err(format!("finalize install {}: {error}", dir.display()));
+                    }
+                }
+            }
+            Err(error) => {
+                // A failed install leaves NO reusable partial state:
+                // best-effort sweep of the staging tree (GC catches
+                // what survives).
+                let _ = std::fs::remove_dir_all(&staging);
+                return Err(error);
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "install could not finalize a generation".to_owned()))
 }
 
 /// `pkg` | `pkg@version` → (package, Some(version)?).
@@ -132,6 +182,21 @@ fn install_dir(root: &Path, package: &str, version: &str) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |duration| duration.as_millis());
     root.join(format!("{package}@{version}")).join(stamp.to_string())
+}
+
+/// G-365 — the staging directory an install runs in before its
+/// atomic rename: `.staging-<startedAt>-<pid>-<seq>` under the same
+/// `<pkg>@<version>` key. The prefix is the layout the GC already
+/// sweeps (`.staging-<startedAt>-…`, 1 h retention, never a
+/// generation); the pid+seq suffix de-conflicts concurrent installs.
+fn staging_dir(root: &Path, package: &str, version: &str) -> PathBuf {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis());
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    root.join(format!("{package}@{version}"))
+        .join(format!(".staging-{started}-{}-{seq}", std::process::id()))
 }
 
 fn write_install_manifest(dir: &Path, package: &str, version: &str) -> Result<(), String> {
@@ -239,6 +304,11 @@ pub fn latest_install(root: &Path, package: &str, version: &str) -> Option<Insta
         .ok()?
         .filter_map(std::result::Result::ok)
         .filter(|entry| entry.path().is_dir())
+        // G-365 — staging residue (`.staging-*`) and any other
+        // non-generation name never counts as an install.
+        .filter(|entry| {
+            entry.file_name().to_str().is_some_and(|name| name.chars().all(|c| c.is_ascii_digit()))
+        })
         .map(|entry| entry.path())
         .collect();
     stamps.sort();
@@ -627,5 +697,123 @@ mod tests {
         let options = InstallOptions::default();
         assert!(install("", &options).is_err());
         assert!(install("-nope", &options).is_err());
+    }
+
+    /// G-365 — the install path's atomicity: everything (manifest,
+    /// installer, verification) runs in a `.staging-*` directory and
+    /// only a verified install is renamed into the final timestamped
+    /// location. A failing installer leaves NO reusable state.
+    #[test]
+    fn g365_failing_install_leaves_no_reusable_state() {
+        let root = std::env::temp_dir().join(format!("ocph-g365-fail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let options = InstallOptions {
+            root: Some(root.clone()),
+            allow_existing: false,
+            bun: Some(failing_installer_shim("g365fail")),
+            ..InstallOptions::default()
+        };
+        let error = install("demo-plugin@1.0.0", &options).expect_err("the shim fails");
+        assert!(error.contains("failed"), "the installer failure surfaces: {error}");
+        let key = root.join("demo-plugin@1.0.0");
+        // No final (digit-named) generation exists…
+        let names = dir_names(&key);
+        assert!(
+            names.iter().all(|name| !name.chars().all(|c| c.is_ascii_digit())),
+            "no partial final generation: {names:?}"
+        );
+        // …and latest_install finds nothing (staging residue, if any,
+        // is invisible).
+        assert!(latest_install(&root, "demo-plugin", "1.0.0").is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// G-365 — a successful install lands in the final directory
+    /// (populated), and the staging tree is gone.
+    #[test]
+    fn g365_successful_install_renames_out_of_staging() {
+        let root = std::env::temp_dir().join(format!("ocph-g365-ok-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let options = InstallOptions {
+            root: Some(root.clone()),
+            allow_existing: false,
+            bun: Some(successful_installer_shim("g365ok")),
+            ..InstallOptions::default()
+        };
+        let installed = install("demo-plugin@1.0.0", &options).expect("the shim installs");
+        assert!(!installed.reused);
+        // The final generation exists and is populated…
+        assert!(
+            installed.root.join("node_modules").join("demo-plugin").join("package.json").is_file(),
+            "final dir populated: {}",
+            installed.root.display()
+        );
+        assert!(installed.entry.is_file(), "entry resolves in the FINAL location");
+        let names = dir_names(&root.join("demo-plugin@1.0.0"));
+        assert!(
+            names.iter().any(|name| name.chars().all(|c| c.is_ascii_digit())),
+            "a digit-named generation exists: {names:?}"
+        );
+        assert!(
+            names.iter().all(|name| !name.starts_with(".staging-")),
+            "staging is cleaned on success: {names:?}"
+        );
+        // And it is reusable from here on.
+        assert!(latest_install(&root, "demo-plugin", "1.0.0").is_some());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn dir_names(dir: &Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .filter_map(std::result::Result::ok)
+                    .map(|entry| entry.file_name().into_string().unwrap_or_default())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// A fake `bun` that always fails (the install seam the tests use).
+    fn failing_installer_shim(tag: &str) -> PathBuf {
+        let shim =
+            std::env::temp_dir().join(format!("ocph-shim-fail-{tag}-{}", std::process::id()));
+        std::fs::write(&shim, "#!/bin/sh\nexit 1\n").unwrap();
+        make_executable(&shim);
+        shim
+    }
+
+    /// A fake `bun install` that materializes the package tree (runs
+    /// with cwd = the staging directory).
+    fn successful_installer_shim(tag: &str) -> PathBuf {
+        let shim = std::env::temp_dir().join(format!("ocph-shim-ok-{tag}-{}", std::process::id()));
+        std::fs::write(
+            &shim,
+            concat!(
+                "#!/bin/sh\n",
+                "mkdir -p node_modules/demo-plugin\n",
+                "printf '{\"name\":\"demo-plugin\",\"version\":\"1.0.0\",\"main\":\"plugin.js\"}' ",
+                "> node_modules/demo-plugin/package.json\n",
+                "echo 'export default {}' > node_modules/demo-plugin/plugin.js\n",
+                "exit 0\n",
+            ),
+        )
+        .unwrap();
+        make_executable(&shim);
+        shim
+    }
+
+    fn make_executable(shim: &Path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = shim;
+        }
     }
 }

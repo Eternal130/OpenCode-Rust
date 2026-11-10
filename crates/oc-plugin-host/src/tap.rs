@@ -59,6 +59,10 @@ pub struct BroadcastTap {
     seen: Arc<Mutex<SeenRing>>,
     /// Diagnostics: events dropped as duplicates.
     deduped: Arc<AtomicU64>,
+    /// Diagnostics: events dropped by a full/closed queue or a
+    /// disabled tap (G-379⑤ — the drop was only a one-shot log line
+    /// before; now it is countable too).
+    dropped: Arc<AtomicU64>,
 }
 
 /// Bounded FIFO of delivered envelope ids.
@@ -106,6 +110,7 @@ impl BroadcastTap {
             warned: Arc::new(AtomicBool::new(false)),
             seen: Arc::new(Mutex::new(SeenRing::new())),
             deduped: Arc::new(AtomicU64::new(0)),
+            dropped: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -117,6 +122,7 @@ impl BroadcastTap {
             warned: Arc::new(AtomicBool::new(false)),
             seen: Arc::new(Mutex::new(SeenRing::new())),
             deduped: Arc::new(AtomicU64::new(0)),
+            dropped: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -133,20 +139,34 @@ impl BroadcastTap {
         self.deduped.load(Ordering::Relaxed)
     }
 
+    /// Events dropped by a full/closed queue or a disabled tap so far
+    /// (G-379⑤ — the dropped-event observability next to the one-shot
+    /// warning log; the dispatch pump's own drop counter lives in the
+    /// supervisor's `Shared::dropped_events`).
+    #[must_use]
+    pub fn dropped_count(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+
     /// Publish one event. Returns `true` when queued. NEVER blocks:
-    /// full queue or closed channel → drop + (once) log. An envelope id
-    /// already delivered is dropped as a duplicate (first-wins — the
-    /// replay/live overlap must not reach plugins twice). The return
-    /// is advisory — callers on the ingest path ignore it (the drop
-    /// is logged), so `must_use` is deliberately suppressed.
+    /// full queue or closed channel → drop + count + (once) log. An
+    /// envelope id already delivered is dropped as a duplicate
+    /// (first-wins — the replay/live overlap must not reach plugins
+    /// twice). The return is advisory — callers on the ingest path
+    /// ignore it (the drop is logged), so `must_use` is deliberately
+    /// suppressed.
     #[allow(clippy::must_use_candidate)]
     pub fn publish(&self, event: TapEvent) -> bool {
-        let Some(tx) = &self.tx else { return false };
+        let Some(tx) = &self.tx else {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            return false;
+        };
         if event.id.is_empty() {
             return if let Ok(()) = tx.try_send(event) {
                 true
             } else {
                 self.warn_full();
+                self.dropped.fetch_add(1, Ordering::Relaxed);
                 false
             };
         }
@@ -164,6 +184,7 @@ impl BroadcastTap {
             true
         } else {
             self.warn_full();
+            self.dropped.fetch_add(1, Ordering::Relaxed);
             false
         }
     }
@@ -235,5 +256,22 @@ mod tests {
         assert!(!tap.is_live());
         assert!(!tap.publish(TapEvent::new("x", Value::Null)));
         assert_eq!(tap.deduped_count(), 0);
+    }
+
+    /// G-379⑤ — queue-full and disabled drops are COUNTED (next to
+    /// the one-shot warning), not just logged.
+    #[test]
+    fn queue_full_and_disabled_drops_are_counted() {
+        // A capacity-0 channel: every try_send is a full-queue drop.
+        let (tx, _rx) = tokio::sync::mpsc::channel::<TapEvent>(1);
+        let tap = BroadcastTap::live(tx);
+        assert!(tap.publish(TapEvent::new("a", Value::Null)), "capacity 1: first fits");
+        assert!(!tap.publish(TapEvent::new("b", Value::Null)), "the queue is full");
+        assert_eq!(tap.dropped_count(), 1, "the full-queue drop is counted");
+        // The disabled tap counts its (silent) no-op drops too.
+        let off = BroadcastTap::disabled();
+        assert!(!off.publish(TapEvent::new("c", Value::Null)));
+        assert_eq!(off.dropped_count(), 1);
+        assert_eq!(off.deduped_count(), 0, "a disabled drop is not a dedup");
     }
 }

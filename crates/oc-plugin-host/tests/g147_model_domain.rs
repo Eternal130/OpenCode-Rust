@@ -100,6 +100,17 @@ fn g147_model_domain_register_and_round_trip() {
     let plugins = read("plugin-list.json");
     assert!(plugins.contains("g147domains"), "plugin.list carries the plugin id: {plugins}");
     assert!(plugins.contains("\"active\""), "plugin.list carries the active flag: {plugins}");
+    // G-379⑧ — the ref Plugin.Info projection faces: source/state/
+    // features (slotInfo, schema/plugin.ts:37-43).
+    assert!(plugins.contains("\"source\""), "plugin.list carries the ref source face: {plugins}");
+    assert!(
+        plugins.contains("\"state\"") && plugins.contains("\"status\""),
+        "plugin.list carries the ref state face: {plugins}"
+    );
+    assert!(
+        plugins.contains("\"features\"") && plugins.contains("\"server\""),
+        "plugin.list carries the ref features face: {plugins}"
+    );
 }
 
 /// G-148② — an effect-style import (`@opencode/plugin/effect`) fails

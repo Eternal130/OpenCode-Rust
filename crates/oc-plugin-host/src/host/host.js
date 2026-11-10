@@ -69,19 +69,19 @@ function hostGone(reason) {
   // Best-effort last line — the pipe may already be dead; never throw
   // on the way out.
   try {
-    process.stdout.write(
+    nativeProcess.stdout.write(
       JSON.stringify({ jsonrpc: "2.0", method: "host.exit", params: { reason } }) + "\n",
     );
   } catch {
     // EPIPE — the reason we are exiting.
   }
-  process.exit(0);
+  nativeProcess.exit(0);
 }
 
 function send(message) {
   if (supervisorGone) return; // pipe is dead; a write would throw
   try {
-    process.stdout.write(JSON.stringify(message) + "\n");
+    nativeProcess.stdout.write(JSON.stringify(message) + "\n");
   } catch (error) {
     // EPIPE: the supervisor's read end is gone. Clean shutdown — the
     // throw must NEVER escape into error handlers (the spin).
@@ -234,6 +234,14 @@ function shieldCallback(fn) {
 // Mode soft-timeout race) must keep scheduling on the real ones.
 const nativeSetInterval = globalThis.setInterval.bind(globalThis);
 const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
+// G-334c — module-scope natives for `process`/`Bun`: the Code Mode
+// window swaps those globals for throwing facades (the sandbox must
+// not expose Bun.file/spawn or process to guest programs), so every
+// HOST-plumbing use (the NDJSON stdout channel, cwd fallbacks, the
+// hot-reload digest scan, the bun-version probe) goes through these
+// captured bindings instead of the global lookups.
+const nativeProcess = globalThis.process;
+const nativeBun = globalThis.Bun;
 {
   globalThis.setInterval = (fn, ms, ...args) =>
     typeof fn === "function" ? nativeSetInterval(shieldCallback(fn), ms, ...args) : nativeSetInterval(fn, ms, ...args);
@@ -278,7 +286,7 @@ function classify(defaultExport) {
 // ---------------------------------------------------------------------------
 
 /** The seeded base (host state; agents/mcps from the embedder). */
-let domainBase = { agents: [], mcps: {}, appVersion: "2.0.24", directory: process.cwd(), project: { id: "global" } };
+let domainBase = { agents: [], mcps: {}, appVersion: "2.0.24", directory: nativeProcess.cwd(), project: { id: "global" } };
 
 /** Current derived state: base ⊕ editors (editors replayed on reload). */
 const domainStores = {
@@ -580,6 +588,7 @@ function resetDomainsToBase() {
   domainStores.providers = new Map();
   domainStores.references = new Map();
   domainStores.vcs = new Map();
+  vcsOwners.clear();
   // G-147: the model editor's derived state resets with the base
   // (the next transform re-fetches the catalog).
   domainStores.modelBase = undefined;
@@ -597,7 +606,7 @@ function seedDomains(seed) {
     agents: Array.isArray(seed?.agents) ? seed.agents : [],
     mcps: seed?.mcps && typeof seed.mcps === "object" ? seed.mcps : {},
     appVersion: typeof seed?.appVersion === "string" && seed.appVersion ? seed.appVersion : "2.0.24",
-    directory: typeof seed?.directory === "string" && seed.directory ? seed.directory : process.cwd(),
+    directory: typeof seed?.directory === "string" && seed.directory ? seed.directory : nativeProcess.cwd(),
     project: { id: seed?.project?.id ?? "global" },
   };
   // Seed ONCE (the host's base state): later loads (a second plugin,
@@ -806,6 +815,17 @@ const WEBSEARCH_HOOKS = new Set(["execute"]);
 // through the domain hook dispatches).
 const websearchExecutors = new Map();
 const worktreeImpls = new Map();
+// G-379② — vcs provider ownership: `domainStores.vcs` keys are the
+// RAW provider ids (no plugin prefix), so dispose filters by this
+// `${pluginId}:${id}` index instead of a (never-matching, and
+// formerly inverted — it kept `pluginId:`-prefixed ids and dropped
+// everyone else's) prefix test on the store keys.
+const vcsOwners = new Map();
+// G-379③ — the vcs default editor's selection (ref vcs.ts:85-88:
+// `get: () => editor.selection, set: (selection) => editor.selection
+// = selection` — the State editor's in-memory selection; initially
+// undefined, shared across plugins like the ref's single vcs State).
+let vcsSelection;
 let pendingIntegrationCallback = null;
 const WORKTREE_HOOKS = new Set(["create", "remove", "list"]);
 const INTEGRATION_HOOKS = new Set(["authorize", "callback", "refresh"]);
@@ -1120,22 +1140,33 @@ function makeCtx(pluginId, options) {
           add: (definition) => {
             const id = String(definition?.id ?? "");
             if (!id) return;
+            vcsOwners.set(`${pluginId}:${id}`, id);
             domainStores.vcs.set(id, {
               id,
               name: String(definition?.name ?? definition?.id ?? id),
             });
           },
           default: {
-            get: () => undefined,
-            set: () => {},
+            // G-379③ — ref vcs.ts:85-88: the State editor's
+            // selection get/set (in-memory, initially undefined).
+            get: () => vcsSelection,
+            set: (selection) => {
+              vcsSelection = selection;
+            },
           },
         });
         await materializeDomain("vcs", pluginId);
         return {
           async dispose() {
-            domainStores.vcs = new Map(
-              Array.from(domainStores.vcs.entries()).filter(([id]) => id.startsWith(`${pluginId}:`)),
-            );
+            // G-379② — remove ONLY this plugin's registrations (the
+            // ownership index), then re-materialize; other plugins'
+            // rows survive.
+            for (const [key, id] of Array.from(vcsOwners.entries())) {
+              if (key.startsWith(`${pluginId}:`)) {
+                vcsOwners.delete(key);
+                domainStores.vcs.delete(id);
+              }
+            }
             await materializeDomain("vcs", pluginId);
           },
         };
@@ -2116,13 +2147,13 @@ async function detectEffectImports(entryFile) {
     seen.add(file);
     let source;
     try {
-      source = await Bun.file(file).text();
+      source = await nativeBun.file(file).text();
     } catch {
       return null;
     }
     let imports = [];
     try {
-      imports = new Bun.Transpiler({ loader: "tsx" }).scanImports(source);
+      imports = new nativeBun.Transpiler({ loader: "tsx" }).scanImports(source);
     } catch {
       return null;
     }
@@ -2240,11 +2271,17 @@ async function handleCommandExecute({ pluginId, name, args, sessionID }) {
   if (typeof execute !== "function") {
     throw new Error(`${pluginId}:${name}: no such command`);
   }
+  // G-379⑨ — ref CommandInvocation (promise/command.ts:7-11 +
+  // command.ts:14-18): `{ sessionID, prompt, delivery }` where prompt
+  // is a PromptInput.Prompt (`text` a REQUIRED string) and delivery
+  // is a SessionInbox.Delivery literal. The port approximation keeps
+  // `args` (the raw wire args) and the ctx second parameter as a
+  // harmless superset for port-local consumers; ref-shaped handlers
+  // see the ref shape.
   const invocation = {
     sessionID: typeof sessionID === "string" ? sessionID : "",
-    agent: undefined,
+    prompt: { text: typeof args === "string" ? args : String(args?.text ?? "") },
     delivery: "steer",
-    prompt: { text: typeof args === "string" ? args : args?.text ?? null },
     args,
   };
   const result = await execute(invocation, makeCtx(pluginId, {}));
@@ -2600,39 +2637,52 @@ function formatConsoleTableCell(value) {
   return formatConsoleValue(value, new Set(), 0);
 }
 
-// G-180② — ref web extension fetch (packages/core/src/codemode/web.ts):
-// the sandbox's ONLY fetch surface is this wrapper — a 30s
-// AbortSignal.timeout and a sanitized response (url/status/ok/
+// G-180② / G-334a — ref web extension fetch (packages/core/src/
+// codemode/web.ts): the sandbox's ONLY fetch surface is this wrapper —
+// a 30s AbortSignal.timeout and a sanitized response (url/status/ok/
 // headers get|has|entries, text/json/bytes). The raw Bun fetch (no
-// timeout, raw Response) must not leak into Code Mode programs.
+// timeout, raw Response) must not leak into Code Mode programs: the
+// native fetch lives ONLY in the closure the wrapper is created with
+// (plus a WeakMap for the nesting chain) — NO global property holds
+// it (the old `globalThis.__rawFetch` escape face is gone).
 const CODEMODE_FETCH_TIMEOUT_MS = 30_000;
 
-function codemodeFetch(input, init = {}) {
-  return globalThis.__rawFetch(input, {
-    method: init.method,
-    headers: init.headers,
-    body: init.body,
-    signal: AbortSignal.timeout(CODEMODE_FETCH_TIMEOUT_MS),
-  }).then(async (response) => {
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    const headers = Object.fromEntries(response.headers);
-    const text = () => new TextDecoder().decode(bytes);
-    return {
-      url: response.url,
-      status: response.status,
-      statusText: response.statusText,
-      ok: response.ok,
-      redirected: response.redirected,
-      headers: {
-        get: (name) => headers[name.toLowerCase()] ?? null,
-        has: (name) => name.toLowerCase() in headers,
-        entries: () => Object.entries(headers),
-      },
-      text: async () => text(),
-      json: async () => JSON.parse(text()),
-      bytes: async () => bytes,
-    };
-  });
+// Wrapper → the native fetch it captured (overlapping evaluations
+// nest: the next wrapper unwraps the previous one's raw reference
+// through here). A WeakMap keyed by the live wrapper function only —
+// unreachable from guest code.
+const codemodeRawFetches = new WeakMap();
+
+function makeCodemodeFetch(rawFetch) {
+  const wrapper = async (input, init = {}) => {
+    return rawFetch(input, {
+      method: init.method,
+      headers: init.headers,
+      body: init.body,
+      signal: AbortSignal.timeout(CODEMODE_FETCH_TIMEOUT_MS),
+    }).then(async (response) => {
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      const headers = Object.fromEntries(response.headers);
+      const text = () => new TextDecoder().decode(bytes);
+      return {
+        url: response.url,
+        status: response.status,
+        statusText: response.statusText,
+        ok: response.ok,
+        redirected: response.redirected,
+        headers: {
+          get: (name) => headers[name.toLowerCase()] ?? null,
+          has: (name) => name.toLowerCase() in headers,
+          entries: () => Object.entries(headers),
+        },
+        text: async () => text(),
+        json: async () => JSON.parse(text()),
+        bytes: async () => bytes,
+      };
+    });
+  };
+  codemodeRawFetches.set(wrapper, rawFetch);
+  return wrapper;
 }
 
 // G-180①/G-180② — overlapping evaluations nest: live captures stack;
@@ -2663,9 +2713,11 @@ const codemodeCaptureStack = [];
 //
 // Static `import … from` needs no rule: a Function body cannot carry
 // one (SyntaxError at compile — same observable as the ref's missing
-// node). Known limit of a static scan (the adjudicated option ①):
-// runtime-built code (`new Function(...)`, eval) could still smuggle
-// the tokens; those faces are reported as follow-up.
+// node). The static scan's known limit — runtime-built code
+// (`new Function(...)`, eval) smuggling the tokens — is CLOSED at the
+// runtime face (G-334b): the guest evaluation window swaps eval/
+// Function/AsyncFunction for throwing stubs, so dynamically built
+// code cannot run at all (see codemodeDynamicCodeDisabled).
 const CODEMODE_MODULE_LOADING_REJECTED =
   "Code Mode programs cannot use import()/require — the sandbox forbids module loading.";
 
@@ -2812,6 +2864,53 @@ function codemodeTimerDisabled(name) {
   };
 }
 
+// G-334b — dynamic-code faces (eval/Function/AsyncFunction): the ref
+// interpreter has no eval/Function node at all (its programs are
+// direct expressions), so `eval("require(…)")` / `new Function(…)`
+// must be unavailable, not merely scanned. For the program's duration
+// the globals (and the constructor escape hatches on the function
+// prototypes) are throwing stubs; the host's own `new AsyncFunction`
+// compiles against the module-scope native binding captured above.
+function codemodeDynamicCodeDisabled(name) {
+  const message =
+    `Code Mode programs cannot use ${name} — dynamic code evaluation is unavailable in the sandbox.`;
+  // A regular function (NOT an arrow): the construct trap only fires
+  // for constructable targets.
+  function fail() {
+    throw new Error(message);
+  }
+  return new Proxy(fail, {
+    construct() {
+      throw new Error(message);
+    },
+  });
+}
+
+// G-334c — `Bun`/`process` host-global facades for the program's
+// duration (G-247 ledgered the structural follow-up; this is the
+// cheap mitigation): ANY access throws. The host's own plumbing runs
+// on the module-scope `nativeProcess`/`nativeBun` bindings.
+function codemodeHostGlobalDisabled(name) {
+  const message = `Code Mode programs cannot use ${name} — host runtime access is unavailable in the sandbox.`;
+  const fail = () => {
+    throw new Error(message);
+  };
+  return new Proxy(fail, {
+    get() {
+      throw new Error(message);
+    },
+    set() {
+      throw new Error(message);
+    },
+    apply() {
+      throw new Error(message);
+    },
+    construct() {
+      throw new Error(message);
+    },
+  });
+}
+
 async function handleCodemodeEvaluate({ code, tools, token, limits }) {
   // resolveExecutionLimits (codemode.ts:133-137, called at make()):
   // throws the ref's RangeError text for invalid budgets — before any
@@ -2838,12 +2937,15 @@ async function handleCodemodeEvaluate({ code, tools, token, limits }) {
     };
   }
   const savedFetch = globalThis.fetch;
-  globalThis.__rawFetch = savedFetch.__codemodeWrapper === true ? savedFetch.__raw : savedFetch;
-  globalThis.fetch = codemodeFetch;
-  // Overlapping evaluations nest: the wrapper keeps the raw fetch and
-  // restores chain correctly through the stack below.
-  codemodeFetch.__codemodeWrapper = true;
-  codemodeFetch.__raw = globalThis.__rawFetch;
+  // G-334a — the native fetch goes ONLY into the wrapper closure: if
+  // the current global fetch is itself a codemode wrapper (nested
+  // evaluation), unwrap its raw reference through the WeakMap; no
+  // global property ever holds the raw fetch.
+  const rawFetch = codemodeRawFetches.has(savedFetch)
+    ? codemodeRawFetches.get(savedFetch)
+    : savedFetch;
+  const fetchWrapper = makeCodemodeFetch(rawFetch);
+  globalThis.fetch = fetchWrapper;
   // G-247 — timers join the swapped surface: the scheduling globals
   // become throwing placeholders for the program's duration (the ref
   // interpreter has no timer globals at all). Restore rides the
@@ -2853,15 +2955,66 @@ async function handleCodemodeEvaluate({ code, tools, token, limits }) {
     savedTimers[name] = globalThis[name];
     globalThis[name] = codemodeTimerDisabled(name);
   }
-  const frame = { savedConsole, savedFetch, savedTimers };
+  // G-334b — dynamic-code faces: eval/Function globals become
+  // throwing stubs and the AsyncFunction/Function constructor escape
+  // hatches (fn.constructor) are poisoned for the run; the host's own
+  // compilation uses the module-scope native bindings.
+  const savedDynamicCode = {
+    eval: globalThis.eval,
+    Function: globalThis.Function,
+    asyncFunctionConstructor: Object.getOwnPropertyDescriptor(AsyncFunction.prototype, "constructor"),
+    functionConstructor: Object.getOwnPropertyDescriptor(Function.prototype, "constructor"),
+  };
+  // (the intrinsic prototypes are captured BEFORE the global
+  // `Function` swap — `Function.prototype` after the swap would
+  // resolve through the stub)
+  const fnProto = Function.prototype;
+  const asyncFnProto = AsyncFunction.prototype;
+  globalThis.eval = codemodeDynamicCodeDisabled("eval");
+  globalThis.Function = codemodeDynamicCodeDisabled("Function");
+  // (the two intrinsic `.constructor` properties get the SAME stub;
+  // the descriptors above restore the natives afterwards)
+  Object.defineProperty(
+    asyncFnProto,
+    "constructor",
+    { value: codemodeDynamicCodeDisabled("AsyncFunction"), writable: true, configurable: true },
+  );
+  Object.defineProperty(
+    fnProto,
+    "constructor",
+    { value: codemodeDynamicCodeDisabled("Function"), writable: true, configurable: true },
+  );
+  // G-334c — `Bun`/`process` facades: Bun pins `globalThis.Bun` as a
+  // non-writable, non-configurable property, and swapping the WRITABLE
+  // `globalThis.process` breaks Bun's own stdio plumbing (the stream
+  // internals touch the global — observed: `stdin error: … cannot use
+  // process` → a clean host exit mid-program). The shadow therefore
+  // rides the EVALUATION SCOPE only: the runner takes `Bun`/`process`
+  // parameters (strict-mode parameters shadow the globals for the
+  // program's body). Residual faces: `globalThis.Bun` /
+  // `globalThis.process` stay reachable (Bun-the-runtime pins them;
+  // ledgered with G-247's structural follow-ups).
+  const bunFacade = codemodeHostGlobalDisabled("Bun");
+  const processFacade = codemodeHostGlobalDisabled("process");
+  const frame = { savedConsole, savedFetch, savedTimers, savedDynamicCode };
   codemodeCaptureStack.push(frame);
   const catalog = Array.isArray(tools) ? tools : [];
   const evaluationToken = typeof token === "number" && Number.isFinite(token) ? token : 0;
   const toolsTree = buildToolsTree(catalog, calls, evaluationToken, resolved.maxToolCalls);
   const search = makeSearch(catalog);
   let program = (async () => {
-    const runner = new AsyncFunction("tools", "search", `"use strict";\n${code}`);
-    return runner(toolsTree, search);
+    // G-334c — the `Bun`/`process` facades ride the evaluation scope
+    // (strict-mode parameters shadow the globals; `globalThis.Bun`
+    // itself is pinned non-configurable by Bun and stays a documented
+    // residual face).
+    const runner = new AsyncFunction(
+      "tools",
+      "search",
+      "Bun",
+      "process",
+      `"use strict";\n${code}`,
+    );
+    return runner(toolsTree, search, bunFacade, processFacade);
   })();
   // timeoutMs fires between event-loop turns (v2's interpreter fires
   // between steps): async hangs resolve with the ref's TimeoutExceeded
@@ -2938,11 +3091,11 @@ function withCodemodeLogs(result, logs) {
   return result;
 }
 
-// Restore the NDJSON-rerouted console, the raw Bun fetch, and the
-// native timers after a Code Mode program settles (the sandbox swaps
-// live only for the run). Overlapping evaluations: a finishing frame
-// drops itself and restores the globals only when no other capture is
-// still live.
+// Restore the NDJSON-rerouted console, the ref web fetch wrapper,
+// and the native timers/dynamic-code faces/host globals after a Code
+// Mode program settles (the sandbox swaps live only for the run).
+// Overlapping evaluations: a finishing frame drops itself and
+// restores the globals only when no other capture is still live.
 function restoreCodemodeConsole(frame) {
   const index = codemodeCaptureStack.indexOf(frame);
   if (index !== -1) codemodeCaptureStack.splice(index, 1);
@@ -2951,6 +3104,8 @@ function restoreCodemodeConsole(frame) {
     console[name] = method;
   }
   globalThis.fetch = frame.savedFetch;
+  // G-334a — `__rawFetch` is never created anymore; the defensive
+  // delete keeps a stale key (a pre-upgrade guest's leftover) gone.
   delete globalThis.__rawFetch;
   // G-247 — the timer placeholders go back to the shielded natives.
   if (frame.savedTimers) {
@@ -2958,6 +3113,30 @@ function restoreCodemodeConsole(frame) {
       globalThis[name] = saved;
     }
   }
+  // G-334b — the dynamic-code stubs go back to the natives (and the
+  // intrinsic constructor escape hatches are restored).
+  if (frame.savedDynamicCode) {
+    globalThis.eval = frame.savedDynamicCode.eval;
+    globalThis.Function = frame.savedDynamicCode.Function;
+    if (frame.savedDynamicCode.asyncFunctionConstructor) {
+      Object.defineProperty(
+        AsyncFunction.prototype,
+        "constructor",
+        frame.savedDynamicCode.asyncFunctionConstructor,
+      );
+    }
+    if (frame.savedDynamicCode.functionConstructor) {
+      Object.defineProperty(
+        Object.getPrototypeOf(function () {}),
+        "constructor",
+        frame.savedDynamicCode.functionConstructor,
+      );
+    }
+  }
+  // G-334c — nothing to restore: the `Bun`/`process` facades rode the
+  // evaluation scope as runner parameters (the host globals were
+  // never swapped; Bun pins `Bun` and its stdio plumbing reads the
+  // global `process`).
 }
 
 async function handleHookDispatch({ pluginId, domain, name, event }) {
@@ -3007,14 +3186,14 @@ async function scanDigests(entry) {
     seen.add(file);
     let source;
     try {
-      source = await Bun.file(file).text();
+      source = await nativeBun.file(file).text();
     } catch {
       return;
     }
     digests[file] = createHash("sha256").update(source).digest("hex");
     let imports = [];
     try {
-      imports = new Bun.Transpiler({ loader: "tsx" }).scanImports(source);
+      imports = new nativeBun.Transpiler({ loader: "tsx" }).scanImports(source);
     } catch {
       // Unparseable file: the digest still covers it.
     }
@@ -3597,7 +3776,7 @@ async function handleSlotClick({ pluginId, row }) {
 // ---------------------------------------------------------------------------
 
 const METHODS = {
-  initialize: async () => ({ ok: true, bun: Bun.version }),
+  initialize: async () => ({ ok: true, bun: nativeBun.version }),
   ping: async () => ({ ok: true }),
   load: handleLoad,
   "load.tui": handleLoadTui,
