@@ -230,8 +230,11 @@ pub async fn trigger_compaction(
         .map_err(crate::route::transport::TransportError::into_ai_error)?;
 
     if response.status >= 400 {
-        let body_text =
-            read_body_limited(response.body, executor::MAX_BODY_CHARS).await.unwrap_or_default();
+        // Full (safety-capped) body for classification; display copy is
+        // truncated by `provider_message` (G-346).
+        let body_text = read_body_limited(response.body, executor::MAX_ERROR_BODY_CHARS)
+            .await
+            .unwrap_or_default();
         let message = executor::provider_message(response.status, Some(&body_text));
         let response_headers: Vec<(String, String)> =
             response.headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect();

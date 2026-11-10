@@ -48,62 +48,27 @@ pub struct Options {
     pub service_tier: Option<String>,
 }
 
-const THINKING_LEVELS: [&str; 4] = ["minimal", "low", "medium", "high"];
-const THINKING_SUMMARIES: [&str; 2] = ["auto", "none"];
-const SERVICE_TIERS: [&str; 3] = ["standard", "flex", "priority"];
-
-/// `decodeOptions` (lenient validation of the five known keys).
+/// `decodeOptions` — lenient, mirroring the ref's `lenient(...)` wrappers
+/// (`Schema.optionalKey(Schema.UndefinedOr(schema).pipe(catchDecoding))`):
+/// unknown keys are ignored, and a known key whose value fails its schema
+/// decodes to `undefined` instead of failing the request (G-366). Enum-ish
+/// fields use `knownString`, which accepts any string at runtime.
 pub fn decode_options(request: &LLMRequest) -> Result<Options, AiError> {
     let Some(options) = request.provider_options.as_ref() else { return Ok(Options::default()) };
     let mut decoded = Options::default();
-    if let Some(value) = options.get("previousInteractionId") {
-        let Some(text) = value.as_str() else {
-            return Err(invalid_request(
-                "Google Interactions previousInteractionId must be a string",
-            ));
-        };
+    if let Some(text) = options.get("previousInteractionId").and_then(Value::as_str) {
         decoded.previous_interaction_id = Some(text.to_string());
     }
-    if let Some(value) = options.get("store") {
-        let Some(flag) = value.as_bool() else {
-            return Err(invalid_request("Google Interactions store must be a boolean"));
-        };
+    if let Some(flag) = options.get("store").and_then(Value::as_bool) {
         decoded.store = Some(flag);
     }
-    if let Some(value) = options.get("thinkingLevel") {
-        let Some(text) = value.as_str() else {
-            return Err(invalid_request("Google Interactions thinkingLevel must be a string"));
-        };
-        if !THINKING_LEVELS.contains(&text) {
-            return Err(invalid_request(format!(
-                "Google Interactions thinkingLevel must be one of {}",
-                THINKING_LEVELS.join(", ")
-            )));
-        }
+    if let Some(text) = options.get("thinkingLevel").and_then(Value::as_str) {
         decoded.thinking_level = Some(text.to_string());
     }
-    if let Some(value) = options.get("thinkingSummaries") {
-        let Some(text) = value.as_str() else {
-            return Err(invalid_request("Google Interactions thinkingSummaries must be a string"));
-        };
-        if !THINKING_SUMMARIES.contains(&text) {
-            return Err(invalid_request(format!(
-                "Google Interactions thinkingSummaries must be one of {}",
-                THINKING_SUMMARIES.join(", ")
-            )));
-        }
+    if let Some(text) = options.get("thinkingSummaries").and_then(Value::as_str) {
         decoded.thinking_summaries = Some(text.to_string());
     }
-    if let Some(value) = options.get("serviceTier") {
-        let Some(text) = value.as_str() else {
-            return Err(invalid_request("Google Interactions serviceTier must be a string"));
-        };
-        if !SERVICE_TIERS.contains(&text) {
-            return Err(invalid_request(format!(
-                "Google Interactions serviceTier must be one of {}",
-                SERVICE_TIERS.join(", ")
-            )));
-        }
+    if let Some(text) = options.get("serviceTier").and_then(Value::as_str) {
         decoded.service_tier = Some(text.to_string());
     }
     Ok(decoded)
@@ -703,21 +668,39 @@ fn on_stop(state: &ParserState, index: f64) -> Result<(ParserState, Vec<LLMEvent
 }
 
 /// `step` over one decoded event (google-interactions.ts:468-521).
+///
+/// `index` is a required number on `step.start`/`step.delta`/`step.stop`
+/// and `step`/`delta` are required objects in the ref `Event` schema —
+/// a missing field fails the event decode instead of folding to index 0
+/// (G-366, which would otherwise attribute events to the wrong step).
 pub fn step(state: ParserState, event: &Value) -> Result<(ParserState, Vec<LLMEvent>), AiError> {
+    let missing = |field: &str| {
+        event_error(ADAPTER, format!("{NAME} sent an invalid stream event: {field} is required"))
+    };
     let event_type = event.get("event_type").and_then(Value::as_str).unwrap_or_default();
     match event_type {
         "step.start" => {
-            let index = event.get("index").and_then(Value::as_f64).unwrap_or_default();
-            let step = event.get("step").cloned().unwrap_or(Value::Null);
-            on_start(&state, index, &step)
+            let Some(index) = event.get("index").and_then(Value::as_f64) else {
+                return Err(missing("step.start index"));
+            };
+            let Some(step) = event.get("step").filter(|step| step.is_object()) else {
+                return Err(missing("step.start step"));
+            };
+            on_start(&state, index, step)
         }
         "step.delta" => {
-            let index = event.get("index").and_then(Value::as_f64).unwrap_or_default();
-            let delta = event.get("delta").cloned().unwrap_or(Value::Null);
-            on_delta(&state, index, &delta)
+            let Some(index) = event.get("index").and_then(Value::as_f64) else {
+                return Err(missing("step.delta index"));
+            };
+            let Some(delta) = event.get("delta").filter(|delta| delta.is_object()) else {
+                return Err(missing("step.delta delta"));
+            };
+            on_delta(&state, index, delta)
         }
         "step.stop" => {
-            let index = event.get("index").and_then(Value::as_f64).unwrap_or_default();
+            let Some(index) = event.get("index").and_then(Value::as_f64) else {
+                return Err(missing("step.stop index"));
+            };
             on_stop(&state, index)
         }
         "interaction.created" | "interaction.status_update" => Ok((state, Vec::new())),
@@ -1059,5 +1042,101 @@ mod tests {
         assert_eq!(input.len(), 2);
         assert_eq!(input[0]["type"], json!("user_input"));
         assert_eq!(input[1]["type"], json!("user_input"));
+    }
+
+    // =========================================================================
+    // G-366: required event fields + lenient provider options
+    // =========================================================================
+
+    fn parser_state() -> ParserState {
+        ParserState::new(&base_request())
+    }
+
+    #[test]
+    fn step_events_require_a_numeric_index() {
+        // A missing index used to fold to 0 and attribute events to the
+        // wrong step; the ref `Event` schema requires `index: Number`.
+        let state = parser_state();
+        let error = step(
+            state.clone(),
+            &json!({ "event_type": "step.start", "step": { "type": "model_output", "content": [] } }),
+        )
+        .unwrap_err();
+        assert!(error.message().contains("index is required"), "got {}", error.message());
+
+        let error = step(state, &json!({ "event_type": "step.stop" })).unwrap_err();
+        assert!(error.message().contains("index is required"), "got {}", error.message());
+    }
+
+    #[test]
+    fn step_start_requires_a_step_object() {
+        let state = parser_state();
+        let error = step(state, &json!({ "event_type": "step.start", "index": 0 })).unwrap_err();
+        assert!(error.message().contains("step is required"), "got {}", error.message());
+    }
+
+    #[test]
+    fn distinct_indexes_do_not_cross_talk() {
+        let mut state = parser_state();
+        let (next, _) = step(
+            state.clone(),
+            &json!({ "event_type": "step.start", "index": 1, "step": { "type": "model_output", "content": [] } }),
+        )
+        .unwrap();
+        state = next;
+        // index 0 never started: its delta is an error, not step 1's text.
+        let error = step(
+            state,
+            &json!({ "event_type": "step.delta", "index": 0, "delta": { "type": "text", "text": "x" } }),
+        )
+        .unwrap_err();
+        assert!(error.message().contains("delta without step.start"), "got {}", error.message());
+    }
+
+    #[test]
+    fn options_decode_is_lenient_per_ref() {
+        // Wrong-typed and unknown-valued options decode to undefined instead
+        // of failing; unknown keys are ignored (`lenient(...)` in the ref).
+        let mut request = base_request();
+        request.provider_options = Some(
+            [
+                ("store".to_string(), json!("yes")),
+                ("thinkingLevel".to_string(), json!("ultra")),
+                ("serviceTier".to_string(), json!(7)),
+                ("previousInteractionId".to_string(), json!(42)),
+                ("unknownKey".to_string(), json!({ "a": 1 })),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let options = decode_options(&request).unwrap();
+        // knownString accepts any string: "ultra" passes through; the
+        // wrong-typed values decode to undefined.
+        assert_eq!(
+            options,
+            Options { thinking_level: Some("ultra".to_string()), ..Default::default() }
+        );
+
+        let mut request = base_request();
+        request.provider_options = Some(
+            [
+                ("store".to_string(), json!(true)),
+                ("thinkingLevel".to_string(), json!("ultra")),
+                ("serviceTier".to_string(), json!("flex")),
+                ("previousInteractionId".to_string(), json!("int_1")),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let options = decode_options(&request).unwrap();
+        assert_eq!(options.store, Some(true));
+        assert_eq!(options.thinking_level.as_deref(), Some("ultra"));
+        assert_eq!(options.service_tier.as_deref(), Some("flex"));
+        assert_eq!(options.previous_interaction_id.as_deref(), Some("int_1"));
+        let body = body_from(&request).unwrap();
+        assert_eq!(body["store"], json!(true));
+        assert_eq!(body["previous_interaction_id"], json!("int_1"));
+        assert_eq!(body["service_tier"], json!("flex"));
+        assert_eq!(body["generation_config"]["thinking_level"], json!("ultra"));
     }
 }

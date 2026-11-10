@@ -20,7 +20,7 @@ use crate::cache_policy::apply_cache_policy;
 use crate::effort_updates::apply_effort_updates;
 use crate::route::auth::{self, Definition as AuthDefinition, Headers};
 use crate::route::endpoint::{self, Endpoint, EndpointInput, EndpointPatch};
-use crate::route::executor::{http_failure, provider_message, HttpFailureInput, MAX_BODY_CHARS};
+use crate::route::executor::{http_failure, provider_message, HttpFailureInput, MAX_ERROR_BODY_CHARS};
 use crate::route::framing::{frame_stream, Framing};
 use crate::route::protocol::{Protocol, ProtocolState};
 use crate::route::transport::{
@@ -454,7 +454,10 @@ async fn status_failure_transport(
     transport_request: &TransportRequest,
     response: TransportResponse,
 ) -> AiError {
-    let body = read_body_limited(response.body, MAX_BODY_CHARS).await.unwrap_or_default();
+    // Read the full (safety-capped) body so classification sees nested
+    // `error.code` fields past the display budget; `provider_message`
+    // truncates only the human-facing copy (G-346).
+    let body = read_body_limited(response.body, MAX_ERROR_BODY_CHARS).await.unwrap_or_default();
     let message = provider_message(response.status, Some(&body));
     let response_headers: Vec<(String, String)> =
         response.headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -636,6 +639,32 @@ mod tests {
 
     fn request(route: &Route) -> LLMRequest {
         LLMRequest::new(route.model("test-model", None).unwrap()).with_prompt("hi")
+    }
+
+    #[tokio::test]
+    async fn error_classification_reads_past_the_display_budget() {
+        // G-346: the nested `error.code` sits past byte 2000. Classification
+        // must still see it (retryable quota signal) while the rendered
+        // message stays bounded by the display budget.
+        let padding = "x".repeat(2400);
+        let body_text = format!(
+            r#"{{"padding":"{padding}","error":{{"code":"rate_limit_exceeded","message":"Request failed"}}}}"#
+        );
+        assert!(body_text.len() > crate::route::executor::MAX_BODY_CHARS);
+        let chunks = crate::test_support::chunked(&body_text);
+        let body: crate::route::transport::ByteStream =
+            Box::pin(futures::stream::iter(chunks.into_iter().map(Ok)));
+        let response = TransportResponse { status: 429, headers: BTreeMap::new(), body };
+        let error =
+            status_failure_transport(&TransportRequest::post("https://echo.test/echo"), response)
+                .await;
+        assert!(
+            crate::provider_error::is_retryable(&error),
+            "rate-limit code past the display budget must stay retryable: {error:?}"
+        );
+        // The human-facing copy is the parsed message, never the raw body.
+        assert!(error.message().len() < crate::route::executor::MAX_BODY_CHARS);
+        assert_eq!(error.message(), "Request failed");
     }
 
     #[tokio::test]

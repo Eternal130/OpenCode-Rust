@@ -12,6 +12,14 @@ use crate::schema::{AiError, HttpContext, HttpRateLimitDetails};
 /// Cap on retained error bodies before they are truncated into the message.
 pub const MAX_BODY_CHARS: usize = 2000;
 
+/// Safety cap on error bodies retained for *classification* (`statusError`
+/// in the ref reads the full `response.text` with no limit; this bound only
+/// guards against unbounded memory on a hostile provider). Classification
+/// must see the whole body — a nested `error.code` past the display budget
+/// is still retryable signal — while [`provider_message`] truncates only the
+/// human-facing copy to [`MAX_BODY_CHARS`].
+pub const MAX_ERROR_BODY_CHARS: usize = 256 * 1024;
+
 /// Parse `retry-after-ms` or `retry-after` (seconds or HTTP-date) into
 /// milliseconds, clamped to `>= 0` (port of `retryAfterMs`).
 #[must_use]
