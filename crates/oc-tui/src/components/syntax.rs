@@ -343,9 +343,42 @@ const CACHE_CAPACITY: usize = 128;
 /// The content-keyed block cache (same policy as the pre-convergence
 /// engine: message content is immutable, so a dropped entry only
 /// costs one re-parse the next time it scrolls into view).
-fn cache() -> &'static Mutex<HashMap<(String, String), HighlightedBlock>> {
-    static CACHE: OnceLock<Mutex<HashMap<(String, String), HighlightedBlock>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+///
+/// G-312: at capacity the cache evicts the OLDEST entry (insertion
+/// order), not `clear()` — a full wipe dumped 128 parsed blocks for
+/// one insert and re-parsed everything scrolling back into view.
+fn cache() -> &'static Mutex<Cache> {
+    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(Cache::new()))
+}
+
+/// A bounded `(filetype, content) → block` map with oldest-first
+/// (FIFO) eviction — G-312's replacement for the full `clear()`.
+struct Cache {
+    entries: HashMap<(String, String), HighlightedBlock>,
+    order: std::collections::VecDeque<(String, String)>,
+}
+
+impl Cache {
+    fn new() -> Self {
+        Self { entries: HashMap::new(), order: std::collections::VecDeque::new() }
+    }
+
+    fn get(&self, key: &(String, String)) -> Option<&HighlightedBlock> {
+        self.entries.get(key)
+    }
+
+    fn insert(&mut self, key: (String, String), block: HighlightedBlock) {
+        if !self.entries.contains_key(&key) && self.entries.len() >= CACHE_CAPACITY {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+            }
+        }
+        if !self.order.contains(&key) {
+            self.order.push_back(key.clone());
+        }
+        self.entries.insert(key, block);
+    }
 }
 
 /// Highlight one code payload for a filetype (fence info string or
@@ -373,9 +406,6 @@ pub fn highlight(content: &str, filetype: &str) -> Option<HighlightedBlock> {
         .highlight_once(content, entry.filetype);
     let highlights = result.highlights?;
     let block = build(content, &highlights);
-    if cache.len() >= CACHE_CAPACITY {
-        cache.clear();
-    }
     cache.insert(key, block.clone());
     Some(block)
 }
@@ -384,35 +414,111 @@ pub fn highlight(content: &str, filetype: &str) -> Option<HighlightedBlock> {
 // The path-shaped helper surface (unchanged signatures)
 // ------------------------------------------------------------------
 
-/// Path extension → registry filetype (v2 `LANGUAGE_EXTENSIONS` subset
-/// that hits the registered 19-grammar catalog, plus `.toml`/`.h` the
-/// registry covers). v2's collapse rule (`filetype()`:
+/// Path extension → registry filetype. G-302: the FULL extension
+/// table — every mapping from v2's `LANGUAGE_EXTENSIONS`
+/// (util/filetype.ts) whose language has a grammar in the oc-syntax
+/// registry, whatever the feature set (unregistered targets simply
+/// fall through the offline rule in [`highlight`] — plain render, the
+/// same as before), plus the port extras the registry itself aliases
+/// (`.pyi`, `.hpp`/`.hh`/`.hxx`, `.toml`, `.vim`, `.agda`, `.ru`).
+/// v2's collapse rule (`filetype()`:
 /// typescriptreact/javascriptreact/javascript → `typescript`) is kept
 /// — `.js` highlights through the typescript grammar, as in v2.
+///
+/// Sorted-ish by extension (linear scan — the table is tiny);
+/// [`EXTENSION_TABLE`] is the single source of truth the coverage
+/// test walks (every grammar-registered filetype reachable by at
+/// least one extension).
+#[rustfmt::skip] // one flat table: extension, filetype — scannable
+pub const EXTENSION_TABLE: &[(&str, &str)] = &[
+    ("agda", "agda"),
+    ("bash", "bash"),
+    ("c", "c"),
+    ("c++", "cpp"),
+    ("cc", "cpp"),
+    ("cjs", "typescript"),
+    ("clj", "clojure"),
+    ("cljc", "clojure"),
+    ("cljs", "clojure"),
+    ("cpp", "cpp"),
+    ("cs", "csharp"),
+    ("csx", "csharp"),
+    ("css", "css"),
+    ("cts", "typescript"),
+    ("cxx", "cpp"),
+    ("diff", "diff"),
+    ("edn", "clojure"),
+    ("ets", "typescript"),
+    ("ex", "elixir"),
+    ("exs", "elixir"),
+    ("fsscript", "fsharp"),
+    ("fs", "fsharp"),
+    ("fsi", "fsharp"),
+    ("fsx", "fsharp"),
+    ("gemspec", "ruby"),
+    ("go", "go"),
+    ("h", "c"),
+    ("hcl", "hcl"),
+    ("hh", "cpp"),
+    ("hpp", "cpp"),
+    ("hs", "haskell"),
+    ("htm", "html"),
+    ("html", "html"),
+    ("hxx", "cpp"),
+    ("java", "java"),
+    ("jl", "julia"),
+    ("js", "typescript"), // v2 collapses javascript → typescript
+    ("json", "json"),
+    ("jsx", "typescript"), // v2 collapses javascriptreact → typescript
+    ("ksh", "bash"),
+    ("kt", "kotlin"),
+    ("kts", "kotlin"),
+    ("lhs", "haskell"),
+    ("lua", "lua"),
+    ("makefile", "make"),
+    ("markdown", "markdown"),
+    ("md", "markdown"),
+    ("mjs", "typescript"),
+    ("ml", "ocaml"),
+    ("mli", "ocaml"),
+    ("mts", "typescript"),
+    ("nix", "nix"),
+    ("patch", "diff"),
+    ("php", "php"),
+    ("py", "python"),
+    ("pyi", "python"),
+    ("r", "r"),
+    ("rake", "ruby"),
+    ("rb", "ruby"),
+    ("rs", "rust"),
+    ("ru", "ruby"),
+    ("scala", "scala"),
+    ("sh", "bash"),
+    ("swift", "swift"),
+    ("tf", "terraform"), // registry alias of hcl
+    ("toml", "toml"),
+    ("ts", "typescript"),
+    ("tsx", "typescript"), // v2 collapses typescriptreact → typescript
+    ("vim", "vim"),
+    ("vue", "vue"),
+    ("xml", "xml"),
+    ("yaml", "yaml"),
+    ("yml", "yaml"),
+    ("zsh", "bash"),
+];
+
+/// Resolve a file path's extension to a registry filetype (v2's
+/// `filetype()`): ASCII-case-insensitive extension match against
+/// [`EXTENSION_TABLE`]; unknown extensions return `None` (plain
+/// rendering). The returned token may be a registry alias (`tf` →
+/// `terraform` → hcl) — [`highlight`]'s registry lookup normalizes.
 #[must_use]
 pub fn filetype_for_path(path: &str) -> Option<&'static str> {
     let extension = path.rsplit_once('.')?.1.to_ascii_lowercase();
-    match extension.as_str() {
-        "rs" => Some("rust"),
-        "py" | "pyi" => Some("python"),
-        "ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs" | "cjs" => Some("typescript"),
-        "go" => Some("go"),
-        "c" | "h" => Some("c"),
-        "cpp" | "cxx" | "cc" | "c++" | "hpp" | "hh" | "hxx" => Some("cpp"),
-        "cs" | "csx" => Some("csharp"),
-        "java" => Some("java"),
-        "json" => Some("json"),
-        "yaml" | "yml" => Some("yaml"),
-        "toml" => Some("toml"),
-        "html" | "htm" => Some("html"),
-        "css" => Some("css"),
-        "diff" | "patch" => Some("diff"),
-        "kt" | "kts" => Some("kotlin"),
-        "rb" | "rake" | "gemspec" => Some("ruby"),
-        "php" => Some("php"),
-        "swift" => Some("swift"),
-        _ => None,
-    }
+    EXTENSION_TABLE
+        .iter()
+        .find(|(ext, _)| *ext == extension)
+        .map(|(_, filetype)| *filetype)
 }
 
 /// Highlight one code payload by its file path's extension: the
@@ -491,11 +597,87 @@ mod tests {
         assert_eq!(filetype_for_path("gem.rb"), Some("ruby"));
         assert_eq!(filetype_for_path("index.php"), Some("php"));
         assert_eq!(filetype_for_path("UI.swift"), Some("swift"));
+        // G-302 — the G-08 tail languages route (always registered).
+        assert_eq!(filetype_for_path("init.vim"), Some("vim"));
+        assert_eq!(filetype_for_path("App.scala"), Some("scala"));
+        assert_eq!(filetype_for_path("script.lua"), Some("lua"));
+        assert_eq!(filetype_for_path("GNUmakefile.makefile"), Some("make"));
         // Case-insensitive extensions; unknown → None (plain render).
-        assert_eq!(filetype_for_path("README.MD"), None);
+        assert_eq!(filetype_for_path("README.MD"), Some("markdown"), "md routes (G-302)");
         assert_eq!(filetype_for_path("notes.txt"), None);
         assert_eq!(filetype_for_path("no-extension"), None);
         assert_eq!(filetype_for_path(""), None);
+    }
+
+    /// G-302: every grammar-registered filetype is reachable through
+    /// at least one extension in [`EXTENSION_TABLE`] (directly or via
+    /// a registry alias — `tf` → `terraform` → hcl). Documented
+    /// exceptions: `javascript` (the v2 collapse ruling — js-family
+    /// PATHS highlight through the typescript grammar; the javascript
+    /// entry stays reachable through its `js` FENCE alias) and
+    /// `markdown-inline` (a fence-only label with no path surface).
+    #[test]
+    fn every_registered_filetype_is_reachable_by_extension() {
+        for entry in oc_syntax::registry() {
+            if matches!(entry.filetype, "javascript" | "markdown-inline") {
+                continue;
+            }
+            let reachable = EXTENSION_TABLE
+                .iter()
+                .any(|(_, filetype)| *filetype == entry.filetype || entry.aliases.contains(filetype));
+            assert!(reachable, "{} has no extension routing", entry.filetype);
+        }
+    }
+
+    /// G-302 spot-checks — the extension classes the audit called out.
+    /// The `langs-extra`/`lang-*` grammars register behind cargo
+    /// features, so their asserts run only when the grammar is
+    /// actually registered (the default gate covers the always-on
+    /// tail in `extensions_route_to_registry_filetypes`).
+    #[test]
+    fn spot_checks_for_the_audit_extension_classes() {
+        let registered = |filetype: &str| oc_syntax::lookup(filetype).is_some();
+        if registered("markdown") {
+            assert_eq!(filetype_for_path("README.md"), Some("markdown"));
+            assert_eq!(filetype_for_path("notes.markdown"), Some("markdown"));
+        }
+        if registered("bash") {
+            assert_eq!(filetype_for_path("run.sh"), Some("bash"));
+            assert_eq!(filetype_for_path("run.zsh"), Some("bash"));
+        }
+        if registered("xml") {
+            assert_eq!(filetype_for_path("pom.xml"), Some("xml"));
+        }
+        if registered("elixir") {
+            assert_eq!(filetype_for_path("app.ex"), Some("elixir"));
+            assert_eq!(filetype_for_path("app.exs"), Some("elixir"));
+        }
+        if registered("haskell") {
+            assert_eq!(filetype_for_path("Main.hs"), Some("haskell"));
+        }
+        if registered("ocaml") {
+            assert_eq!(filetype_for_path("main.ml"), Some("ocaml"));
+        }
+        if registered("fsharp") {
+            assert_eq!(filetype_for_path("App.fs"), Some("fsharp"));
+            assert_eq!(filetype_for_path("Script.fsx"), Some("fsharp"));
+        }
+        if registered("clojure") {
+            assert_eq!(filetype_for_path("core.clj"), Some("clojure"));
+        }
+        if registered("nix") {
+            assert_eq!(filetype_for_path("flake.nix"), Some("nix"));
+        }
+        if registered("r") {
+            assert_eq!(filetype_for_path("plot.r"), Some("r"));
+        }
+        if registered("hcl") {
+            assert_eq!(filetype_for_path("main.tf"), Some("terraform"));
+            assert_eq!(filetype_for_path("main.hcl"), Some("hcl"));
+        }
+        if registered("julia") {
+            assert_eq!(filetype_for_path("main.jl"), Some("julia"));
+        }
     }
 
     /// The full helper: a rust payload parses and materializes themed
@@ -597,6 +779,27 @@ mod tests {
         let first = highlight("let x = 1;", "rs").expect("rs parses");
         let second = highlight("let x = 1;", "rs").expect("cached");
         assert!(Arc::ptr_eq(&first.0, &second.0), "same content hits the cache");
+    }
+
+    /// G-312: at capacity the cache evicts the OLDEST entry (insertion
+    /// order) instead of `clear()` — the earliest block re-parses
+    /// (fresh `Arc`) while the latest entries stay cached.
+    #[test]
+    fn cache_evicts_oldest_at_capacity() {
+        let first = highlight("let a = 0;", "rust").expect("parses");
+        // Fill past capacity (twice over — robust even if an earlier
+        // test in the same process left entries behind).
+        let mut last = None;
+        for index in 0..(CACHE_CAPACITY * 2) {
+            last = highlight(&format!("let v{index} = {index};"), "rust");
+        }
+        let last = last.expect("parses");
+        let reparsed = highlight("let a = 0;", "rust").expect("re-parses");
+        assert!(!Arc::ptr_eq(&first.0, &reparsed.0), "the earliest entry was evicted");
+        let again =
+            highlight(&format!("let v{} = {};", CACHE_CAPACITY * 2 - 1, CACHE_CAPACITY * 2 - 1), "rust")
+                .expect("cached");
+        assert!(Arc::ptr_eq(&last.0, &again.0), "the latest entry stayed cached");
     }
 
     /// Scope resolution through the REAL generated theme rules: exact

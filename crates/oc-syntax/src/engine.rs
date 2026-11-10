@@ -12,9 +12,10 @@
 //! the parse+query work (message-build time — the block's text is final
 //! by then), and every later render of the same block hits the cache.
 //! Streaming messages produce new content keys, so partial parses are
-//! never reused. The cache is bounded; when full it drops the oldest
-//! generation wholesale (message content is immutable, so a dropped
-//! entry only costs one re-parse the next time it scrolls into view).
+//! never reused. The cache is bounded; when full it evicts the OLDEST
+//! entry (G-312, insertion order — message content is immutable, so a
+//! dropped entry only costs one re-parse the next time it scrolls
+//! into view).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -231,9 +232,41 @@ fn build(
 }
 
 /// The content-keyed block cache (see the module docs for the policy).
-fn cache() -> &'static Mutex<HashMap<(String, String), HighlightedBlock>> {
-    static CACHE: OnceLock<Mutex<HashMap<(String, String), HighlightedBlock>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+/// G-312: at capacity the cache evicts the OLDEST entry (insertion
+/// order), not `clear()` — a full wipe dumped every parsed block for
+/// one insert.
+fn cache() -> &'static Mutex<Cache> {
+    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(Cache::new()))
+}
+
+/// A bounded `(filetype, content) → block` map with oldest-first
+/// (FIFO) eviction — G-312's replacement for the full `clear()`.
+struct Cache {
+    entries: HashMap<(String, String), HighlightedBlock>,
+    order: std::collections::VecDeque<(String, String)>,
+}
+
+impl Cache {
+    fn new() -> Self {
+        Self { entries: HashMap::new(), order: std::collections::VecDeque::new() }
+    }
+
+    fn get(&self, key: &(String, String)) -> Option<&HighlightedBlock> {
+        self.entries.get(key)
+    }
+
+    fn insert(&mut self, key: (String, String), block: HighlightedBlock) {
+        if !self.entries.contains_key(&key) && self.entries.len() >= CACHE_CAPACITY {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+            }
+        }
+        if !self.order.contains(&key) {
+            self.order.push_back(key.clone());
+        }
+        self.entries.insert(key, block);
+    }
 }
 
 /// Parse (or fetch from cache) one fenced code block for a filetype.
@@ -253,9 +286,6 @@ pub(crate) fn highlight_cached(
         return Some(block.clone());
     }
     let block = build(source, lines, entry)?;
-    if cache.len() >= CACHE_CAPACITY {
-        cache.clear();
-    }
     cache.insert(key, block.clone());
     Some(block)
 }
@@ -297,6 +327,29 @@ mod tests {
         let first = highlight_cached(&source, &lines, "rs").expect("rs parses");
         let second = highlight_cached(&source, &lines, "rs").expect("cached");
         assert!(Arc::ptr_eq(&first.0, &second.0), "same content hits the cache");
+    }
+
+    /// G-312: at capacity the cache evicts the OLDEST entry (insertion
+    /// order) instead of `clear()` — the earliest block re-parses
+    /// (fresh `Arc`) while the latest entries stay cached.
+    #[test]
+    fn cache_evicts_oldest_at_capacity() {
+        let first_lines = vec!["let a = 0;".to_owned()];
+        let first = highlight_cached(&first_lines.join("\n"), &first_lines, "rust").expect("parses");
+        // Fill past capacity (twice over — robust even if an earlier
+        // test in the same process left entries behind).
+        let mut last = None;
+        for index in 0..(CACHE_CAPACITY * 2) {
+            let lines = vec![format!("let v{index} = {index};")];
+            last = highlight_cached(&lines.join("\n"), &lines, "rust");
+        }
+        let last = last.expect("parses");
+        let reparsed =
+            highlight_cached(&first_lines.join("\n"), &first_lines, "rust").expect("re-parses");
+        assert!(!Arc::ptr_eq(&first.0, &reparsed.0), "the earliest entry was evicted");
+        let tail = vec![format!("let v{} = {};", CACHE_CAPACITY * 2 - 1, CACHE_CAPACITY * 2 - 1)];
+        let again = highlight_cached(&tail.join("\n"), &tail, "rust").expect("cached");
+        assert!(Arc::ptr_eq(&last.0, &again.0), "the latest entry stayed cached");
     }
 
     #[test]

@@ -1111,34 +1111,49 @@ impl Connection {
             // Resubscription carries the tracked cursor as the SSE
             // `Last-Event-ID` header: a cursor-aware server resumes the
             // event stream from it; any other server ignores the header.
-            // G-300: the subscribe runs INSIDE the connect window (ref
-            // `connectTimeout`, connection.ts:32/81) — a request that
-            // never completes within it is aborted and the loop
+            // G-300: the connect window (ref `connectTimeout` 2s,
+            // connection.ts:32/81) bounds the subscribe request AND —
+            // below — its first frame; either half blowing the window
             // reconnects instead of hanging on the TCP/OS backstop.
-            let subscribed = match self.cursor.as_deref() {
-                Some(cursor) => self.client.event().subscribe_from(cursor).await,
-                None => self.client.event().subscribe().await,
+            let stream = match self.cursor.as_deref() {
+                Some(cursor) => {
+                    tokio::time::timeout(
+                        self.config.connect_timeout,
+                        self.client.event().subscribe_from(cursor),
+                    )
+                    .await
+                }
+                None => {
+                    tokio::time::timeout(self.config.connect_timeout, self.client.event().subscribe())
+                        .await
+                }
             };
-            let mut stream = match tokio::time::timeout(self.config.connect_timeout, subscribed).await
-            {
-                Ok(Ok(stream)) => stream,
-                Ok(Err(_)) => continue, // subscribe error → reconnect
-                Err(_) => continue,     // connect window elapsed → reconnect
+            // A subscribe error or an elapsed connect window — both
+            // reconnect through the same path the idle watchdog takes.
+            let stream = match stream {
+                Ok(result) => result,
+                Err(_) => continue, // connect window elapsed
             };
-            // G-300: the FIRST frame must arrive inside the connect
-            // window too, and its type must be `server.connected` —
-            // anything else is a protocol failure (connection.ts:106-107
-            // "Event stream did not start with server.connected"): drop
-            // the stream and reconnect. No ingest is published for a
-            // failed handshake (the resync below also stays skipped —
-            // the ref only records the connection after the marker).
+            let Ok(mut stream) = stream else {
+                continue; // subscribe error
+            };
+            // G-300: the FIRST frame must land inside the connect
+            // window (ref `connectTimeout` 2s, connection.ts:32/81 —
+            // the request AND its first byte; the lazy stream makes
+            // this read the whole window), and its type must be
+            // `server.connected` — anything else is a protocol failure
+            // (connection.ts:106-107 "Event stream did not start with
+            // server.connected"): drop the stream and reconnect. No
+            // ingest is published for a failed handshake (the resync
+            // below also stays skipped — the ref only records the
+            // connection after the marker).
             let first = match tokio::time::timeout(self.config.connect_timeout, stream.next_json())
                 .await
             {
                 Ok(Ok(Some(value))) => value,
                 Ok(Ok(None)) => continue, // stream ended before any frame
                 Ok(Err(_)) => continue,   // decode error
-                Err(_) => continue,       // first frame never landed in time
+                Err(_) => continue,       // connect window elapsed → reconnect
             };
             let connected = match BusEvent::from_json(&first) {
                 Some(event) if event.is_server_connected() => event,
@@ -1269,6 +1284,7 @@ mod tests {
             backoff_base: Duration::from_millis(500),
             backoff_max: Duration::from_secs(8),
             max_attempts: None,
+            ..Default::default()
         };
         assert_eq!(config.backoff(1), Duration::from_millis(500));
         assert_eq!(config.backoff(2), Duration::from_millis(1000));
@@ -1904,30 +1920,35 @@ mod tests {
             loop {
                 let Ok((mut socket, _)) = listener.accept().await else { continue };
                 let counter = Arc::clone(&counter);
-                let (mut reader, _) = socket.split();
-                let mut request = vec![0u8; 8192];
-                let _ = reader.read(&mut request).await;
-                let path = request.split(|byte| *byte == b' ')
-                    .nth(1)
-                    .map(|raw| String::from_utf8_lossy(raw).into_owned())
-                    .unwrap_or_default();
-                if path.starts_with("/api/event") {
-                    if let Ok(mut count) = counter.lock() {
-                        *count += 1;
+                // Per-connection task: the starved connection must
+                // HOLD its socket open without blocking the acceptor.
+                tokio::spawn(async move {
+                    let (mut reader, _) = socket.split();
+                    let mut request = vec![0u8; 8192];
+                    let _ = reader.read(&mut request).await;
+                    let path = request
+                        .split(|byte| *byte == b' ')
+                        .nth(1)
+                        .map(|raw| String::from_utf8_lossy(raw).into_owned())
+                        .unwrap_or_default();
+                    if path.starts_with("/api/event") {
+                        if let Ok(mut count) = counter.lock() {
+                            *count += 1;
+                        }
+                        // SSE headers, then NOTHING — the stream stays open
+                        // but never delivers a first frame.
+                        let _ = socket
+                            .write_all(
+                                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n",
+                            )
+                            .await;
+                        tokio::time::sleep(Duration::from_secs(3600)).await;
+                    } else {
+                        let _ = socket
+                            .write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n")
+                            .await;
                     }
-                    // SSE headers, then NOTHING — the stream stays open
-                    // but never delivers a first frame.
-                    let _ = socket
-                        .write_all(
-                            b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n",
-                        )
-                        .await;
-                    tokio::time::sleep(Duration::from_secs(3600)).await;
-                } else {
-                    let _ = socket
-                        .write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n")
-                        .await;
-                }
+                });
             }
         });
 
@@ -2037,13 +2058,14 @@ mod tests {
             ConnectionConfig {
                 backoff_base: Duration::from_millis(10),
                 backoff_max: Duration::from_millis(10),
-                max_attempts: Some(3),
+                max_attempts: Some(2),
                 connect_timeout: Duration::from_secs(2),
                 idle_timeout: Duration::from_secs(45),
             },
         );
         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
-        let runner = tokio::spawn(connection.run(tx, HttpResync::new(Client::new(&format!("http://{addr}")).expect("client"))));
+        let runner =
+            tokio::spawn(connection.run(tx, HttpResync::new(Client::new(&format!("http://{addr}")).expect("client"))));
 
         let mut observed = Vec::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -2109,46 +2131,57 @@ mod tests {
                 connections += 1;
                 let first = connections <= 1;
                 let cursors = Arc::clone(&cursors);
-                let (mut reader, _) = socket.split();
-                let mut request = vec![0u8; 8192];
-                let _ = reader.read(&mut request).await;
-                let head = String::from_utf8_lossy(&request);
-                let path = head.split_whitespace().nth(1).unwrap_or_default().split('?').next().unwrap_or_default().to_owned();
-                if path.starts_with("/api/event") {
-                    let cursor = head.lines().find_map(|line| {
-                        let lower = line.to_lowercase();
-                        lower.strip_prefix("last-event-id:").map(|value| value.trim().to_owned())
-                    });
-                    cursors.lock().expect("cursor log").push(cursor);
-                    if first {
-                        // Handshake, then SILENCE — the socket stays
-                        // open with no further frames (the stall).
-                        let body = sse_frame("e1", "server.connected", "{}");
+                // Per-connection task: connection 1 must HOLD its
+                // starved socket open without blocking the acceptor.
+                tokio::spawn(async move {
+                    let (mut reader, _) = socket.split();
+                    let mut request = vec![0u8; 8192];
+                    let _ = reader.read(&mut request).await;
+                    let head = String::from_utf8_lossy(&request);
+                    let path = head
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap_or_default()
+                        .split('?')
+                        .next()
+                        .unwrap_or_default()
+                        .to_owned();
+                    if path.starts_with("/api/event") {
+                        let cursor = head.lines().find_map(|line| {
+                            let lower = line.to_lowercase();
+                            lower.strip_prefix("last-event-id:").map(|value| value.trim().to_owned())
+                        });
+                        cursors.lock().expect("cursor log").push(cursor);
+                        if first {
+                            // Handshake, then SILENCE — the socket stays
+                            // open with no further frames (the stall).
+                            let body = sse_frame("e1", "server.connected", "{}");
+                            let response = format!(
+                                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n{body}"
+                            );
+                            let _ = socket.write_all(response.as_bytes()).await;
+                            tokio::time::sleep(Duration::from_secs(3600)).await;
+                        } else {
+                            let body = sse_frame("c2", "server.connected", "{}")
+                                + &sse_frame("e3", "message.updated", "{\"sessionID\":\"s1\"}");
+                            let response = format!(
+                                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{body}"
+                            );
+                            let _ = socket.write_all(response.as_bytes()).await;
+                        }
+                    } else if path.starts_with("/api/session") {
+                        let body = session_list_body();
                         let response = format!(
-                            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n{body}"
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                            body.len()
                         );
                         let _ = socket.write_all(response.as_bytes()).await;
-                        tokio::time::sleep(Duration::from_secs(3600)).await;
                     } else {
-                        let body = sse_frame("c2", "server.connected", "{}")
-                            + &sse_frame("e3", "message.updated", "{\"sessionID\":\"s1\"}");
-                        let response = format!(
-                            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{body}"
-                        );
-                        let _ = socket.write_all(response.as_bytes()).await;
+                        let _ = socket
+                            .write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n")
+                            .await;
                     }
-                } else if path.starts_with("/api/session") {
-                    let body = session_list_body();
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                        body.len()
-                    );
-                    let _ = socket.write_all(response.as_bytes()).await;
-                } else {
-                    let _ = socket
-                        .write_all(b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n")
-                        .await;
-                }
+                });
             }
         });
 

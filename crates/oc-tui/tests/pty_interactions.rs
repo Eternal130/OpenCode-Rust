@@ -128,6 +128,14 @@ fn handle(mut socket: std::net::TcpStream, shared: &Shared) {
         if socket.write_all(response).is_err() {
             return;
         }
+        // G-300: the client asserts the FIRST frame is the
+        // `server.connected` handshake marker (the real server
+        // prepends it per response).
+        const HANDSHAKE: &str =
+            "data: \"{\\\"id\\\":\\\"evt_handshake\\\",\\\"type\\\":\\\"server.connected\\\",\\\"data\\\":{}}\"\n\n";
+        if socket.write_all(HANDSHAKE.as_bytes()).is_err() {
+            return;
+        }
         let mut sink = [0u8; 256];
         loop {
             match socket.read(&mut sink) {
