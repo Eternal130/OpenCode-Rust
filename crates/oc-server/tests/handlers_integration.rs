@@ -1289,6 +1289,19 @@ async fn handlers_shell_round_trip() {
     assert_api(&error, 404, "ShellNotFoundError");
 
     client.shell().remove(&shell.id, &ShellRemoveQuery::default()).await.expect("remove");
+
+    // G-349 — ref (shell.ts "shell.remove") swallows Shell.NotFoundError:
+    // DELETE is idempotent, an unknown shellID still resolves 204.
+    client
+        .shell()
+        .remove("sh_missing", &ShellRemoveQuery::default())
+        .await
+        .expect("idempotent 204");
+    client
+        .shell()
+        .remove("sh_missing", &ShellRemoveQuery::default())
+        .await
+        .expect("repeat DELETE still 204");
 }
 
 // G-55 — ref shell.ts:265 `input.cwd ?? location.directory`: omitting cwd

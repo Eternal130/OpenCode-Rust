@@ -468,7 +468,7 @@ fn seconds_to_ms(epoch_seconds: f64) -> i64 {
 }
 
 /// Civil-from-days (Howard Hinnant's algorithm) — no chrono dependency.
-fn iso_from_epoch_ms(epoch_ms: i64) -> String {
+pub(crate) fn iso_from_epoch_ms(epoch_ms: i64) -> String {
     let seconds_total = epoch_ms.div_euclid(1000);
     let millis = epoch_ms.rem_euclid(1000);
     let days = seconds_total.div_euclid(86_400);

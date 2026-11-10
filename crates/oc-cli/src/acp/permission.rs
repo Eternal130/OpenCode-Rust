@@ -191,14 +191,20 @@ fn permission_previews(
         let path = tool::absolute_path(&string(file, "file"), cwd);
         let status = string(file, "status");
         let patch_text = string(file, "patch");
+        // Ref (permission.ts:98-99): added files carry oldText = null and
+        // the patch applies to the empty base — the preview is the new
+        // content only, never a skip.
         let old_text = if status == "added" { None } else { std::fs::read_to_string(&path).ok() };
-        let Some(old_text) = old_text else {
+        let (base, keep_old) = match &old_text {
+            Some(existing) => (existing.clone(), true),
+            None if status == "added" => (String::new(), false),
+            None => continue,
+        };
+        let Some(new_text) = apply_unified(&base, &patch_text) else {
             continue;
         };
-        let Some(new_text) = apply_unified(&old_text, &patch_text) else {
-            continue;
-        };
-        previews.push(Preview { path, old_text: Some(old_text), new_text });
+        let old_text = keep_old.then_some(base);
+        previews.push(Preview { path, old_text, new_text });
     }
     previews
 }
@@ -415,5 +421,20 @@ mod tests {
         assert_eq!(permission_title("edit", &input, &previews).as_deref(), Some("f.txt"));
         let multi = vec![previews[0].clone(), previews[0].clone()];
         assert_eq!(permission_title("edit", &input, &multi).as_deref(), Some("2 files"));
+    }
+
+    /// G-339 — added files yield a new-content-only preview (ref
+    /// permission.ts:98-99: oldText = null, patch applied to "") instead
+    /// of being skipped entirely.
+    #[test]
+    fn added_files_get_a_new_content_preview() {
+        let metadata = serde_json::json!({ "files": [{ "file": "new.txt", "status": "added", "patch": "@@ -0,0 +1,2 @@\n+hello\n+world" }] });
+        let input = serde_json::json!({ "file": "new.txt" });
+        let input = input.as_object().cloned().unwrap();
+        let previews = permission_previews("edit", &input, Some(&metadata), "/w");
+        assert_eq!(previews.len(), 1, "the added file is not skipped: {previews:?}");
+        assert_eq!(previews[0].path, "/w/new.txt");
+        assert_eq!(previews[0].old_text, None);
+        assert_eq!(previews[0].new_text, "hello\nworld\n");
     }
 }
