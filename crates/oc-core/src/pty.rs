@@ -213,6 +213,67 @@ fn utf16_byte_offset(text: &str, units: usize) -> Option<usize> {
     (seen >= units).then_some(text.len())
 }
 
+/// G-335 — incremental UTF-8 stream decoder with carry. node-pty
+/// decodes the PTY byte stream with a stream-buffered TextDecoder; a
+/// naive `from_utf8_lossy` per ≤8192B read chunk corrupts any multi-
+/// byte sequence split across a read boundary (CJK/emoji mojibake).
+/// `feed` emits the longest valid UTF-8 prefix and keeps the invalid
+/// (possibly merely incomplete) tail as carry for the next read;
+/// `finish` flushes a still-pending tail lossily at EOF — a truncated
+/// stream end is genuinely broken input (mirrors the ref's final
+/// `fatal: false` decode emitting U+FFFD).
+#[derive(Debug, Default)]
+pub(crate) struct Utf8StreamDecoder {
+    carry: Vec<u8>,
+}
+
+impl Utf8StreamDecoder {
+    #[must_use]
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Feeds one raw chunk; returns everything decodable right now.
+    /// A DEFINITIVELY invalid sequence (`error_len` known — e.g. a
+    /// stray continuation byte) is replaced with U+FFFD immediately,
+    /// like the ref's streaming TextDecoder; a possibly-merely-
+    /// truncated tail (no error length) stays in carry until more
+    /// bytes or EOF prove it.
+    pub(crate) fn feed(&mut self, chunk: &[u8]) -> String {
+        self.carry.extend_from_slice(chunk);
+        let mut out = String::new();
+        loop {
+            let mut pending = std::mem::take(&mut self.carry);
+            let (valid_up_to, error_len) = match std::str::from_utf8(&pending) {
+                Ok(_) => (pending.len(), None),
+                Err(error) => (error.valid_up_to(), error.error_len()),
+            };
+            let rest = pending.split_off(valid_up_to);
+            // The prefix is valid UTF-8 by construction; the
+            // `unwrap_or_default` never engages.
+            out.push_str(&String::from_utf8(pending).unwrap_or_default());
+            match error_len {
+                // Definitively invalid: replace + continue with the rest.
+                Some(len) => {
+                    out.push('\u{fffd}');
+                    let mut rest = rest;
+                    self.carry = rest.split_off(len.min(rest.len()));
+                }
+                // Clean, or truncated-at-the-end: park the tail as carry.
+                None => {
+                    self.carry = rest;
+                    return out;
+                }
+            }
+        }
+    }
+
+    /// EOF: any pending tail (truncated sequence) flushes lossily.
+    pub(crate) fn finish(&mut self) -> String {
+        String::from_utf8_lossy(&self.carry).into_owned()
+    }
+}
+
 /// G-116③ — the win32 UTF-8 locale overrides (pty.ts:178-180). Pure so
 /// the table is testable on every target; the injection itself is
 /// `#[cfg(windows)]` at the spawn site.
@@ -233,14 +294,48 @@ fn panic_description(panic: &(dyn std::any::Any + Send)) -> &str {
 }
 
 struct Inner {
-    sessions: Mutex<HashMap<PtyId, Session>>,
-    exit_order: Mutex<Vec<PtyId>>,
+    sessions: Arc<Mutex<HashMap<PtyId, Session>>>,
+    exit_order: Arc<Mutex<Vec<PtyId>>>,
     next_token: Mutex<u64>,
     ids: Arc<dyn IdGen>,
     bus: Bus,
 }
 
 impl Inner {
+    /// Bus publish (ephemeral definition fallback) — on `Inner` so the
+    /// per-session pump tasks never hold a `PtyService` clone
+    /// (G-383a: a service clone parked in a live session's pump task
+    /// would keep the shutdown guard alive forever).
+    async fn publish(&self, type_: &str, data: serde_json::Value) {
+        let definition = crate::bus::registry::by_type(type_)
+            .cloned()
+            .unwrap_or_else(|| crate::bus::registry::EventDefinition::ephemeral(type_));
+        let _ = self.bus.publish(&definition, data, PublishOptions::default()).await;
+    }
+
+    /// Exited-session retention cap (drains beyond [`EXITED_LIMIT`]).
+    async fn enforce_exited_limit(&self) {
+        let evict: Vec<PtyId> = {
+            let mut order = self.exit_order.lock();
+            let mut evict = Vec::new();
+            while order.len() > EXITED_LIMIT {
+                let Some(oldest) = order.first().cloned() else { break };
+                order.remove(0);
+                evict.push(oldest);
+            }
+            evict
+        };
+        for id in evict {
+            self.teardown(&id);
+            self.publish(
+                "pty.deleted",
+                serde_json::to_value(oc_schema::pty::Deleted { id: id.0.clone() })
+                    .unwrap_or_default(),
+            )
+            .await;
+        }
+    }
+
     fn on_data(&self, id: &PtyId, chunk: &str) {
         let mut sessions = self.sessions.lock();
         let Some(session) = sessions.get_mut(id) else { return };
@@ -273,23 +368,25 @@ impl Inner {
             session.subscribers.remove(&token);
         }
         session.buffer.push_str(chunk);
-        if session.buffer.len() > BUFFER_LIMIT {
-            let mut excess_bytes = session.buffer.len() - BUFFER_LIMIT;
-            // G-243① — a byte-count trim can split a multi-byte UTF-8
-            // codepoint; back off to a char boundary so the drain (and
-            // the prefix scan below) never panics (persistent_pty's
-            // byte buffer does the same backoff, persistent_pty.rs: the
-            // ref slices its JS string which cannot split, pty.ts:219-
-            // 221). The buffer stays at most one char over the limit.
-            while excess_bytes > 0 && !session.buffer.is_char_boundary(excess_bytes) {
-                excess_bytes -= 1;
-            }
-            // The buffer cursor moves by the UTF-16 length of the bytes
-            // drained (same unit as `cursor`).
-            let excess_units: usize =
+        // G-383c — the retention cap counts UTF-16 code units (JS
+        // `buffer.length` on a 2-unit-per-char string, pty.ts:218-221),
+        // not bytes: byte accounting evicted CJK/emoji windows ~3×
+        // early. The buffer always holds exactly `cursor -
+        // buffer_cursor` units (both advance in units), so the check
+        // and the excess are O(1) — no rescan of the window.
+        let units = session.cursor - session.buffer_cursor;
+        if units > BUFFER_LIMIT {
+            let excess_units = units - BUFFER_LIMIT;
+            // G-243① — map the excess back to a byte offset on a char
+            // boundary (`utf16_byte_offset` clamps inside a surrogate
+            // pair to the pair's start, so the trim never splits a
+            // codepoint and at most one char over the cap survives).
+            let excess_bytes = utf16_byte_offset(&session.buffer, excess_units)
+                .unwrap_or(session.buffer.len());
+            let drained_units: usize =
                 session.buffer.as_str()[..excess_bytes].chars().map(char::len_utf16).sum();
             session.buffer.drain(..excess_bytes);
-            session.buffer_cursor += excess_units;
+            session.buffer_cursor += drained_units;
         }
     }
 
@@ -320,10 +417,9 @@ impl Inner {
         self.exit_order.lock().push(id.clone());
     }
 
-    fn teardown(&self, id: &PtyId) {
-        let mut sessions = self.sessions.lock();
-        let Some(mut session) = sessions.remove(id) else { return };
-        self.exit_order.lock().retain(|other| other != id);
+    /// Ends one session's resources + subscribers (shared by
+    /// [`Inner::teardown`] and the [`ShutdownGuard`] finalizer).
+    fn teardown_session(session: &mut Session) {
         if let Some(mut killer) = session.killer.take() {
             let _ = killer.kill();
         }
@@ -343,6 +439,13 @@ impl Inner {
                 subscriber.deliver_pending();
             }
         }
+    }
+
+    fn teardown(&self, id: &PtyId) {
+        let mut sessions = self.sessions.lock();
+        let Some(mut session) = sessions.remove(id) else { return };
+        self.exit_order.lock().retain(|other| other != id);
+        Self::teardown_session(&mut session);
     }
 
     fn write(&self, id: &PtyId, data: &str) {
@@ -419,10 +522,40 @@ impl Attachment {
     }
 }
 
+/// G-383a — the service-close finalizer handle. `PtyService` is
+/// `Clone`; the guard's `Drop` runs when the LAST handle goes away
+/// (mirroring the ref's `Effect.addFinalizer` teardown, pty.ts:128-144)
+/// and kills every live child so a dropped service cannot leak
+/// processes. It holds the session store directly (not `Arc<Inner>`)
+/// so builder-time `Arc::get_mut` calls keep working; the pump tasks
+/// hold `Arc<Inner>` (not the service), so they never pin this guard —
+/// killing the children ends them (master EOF → reader exit → pump
+/// drain).
+struct ShutdownGuard {
+    sessions: Arc<Mutex<HashMap<PtyId, Session>>>,
+    exit_order: Arc<Mutex<Vec<PtyId>>>,
+}
+
+impl Drop for ShutdownGuard {
+    fn drop(&mut self) {
+        let mut sessions = self.sessions.lock();
+        let ids: Vec<PtyId> = sessions.keys().cloned().collect();
+        for id in ids {
+            if let Some(mut session) = sessions.remove(&id) {
+                Inner::teardown_session(&mut session);
+            }
+        }
+        self.exit_order.lock().clear();
+    }
+}
+
 /// The non-persistent PTY service (`Pty.Service`).
 #[derive(Clone)]
 pub struct PtyService {
     inner: Arc<Inner>,
+    /// G-383a — kills children + ends subscribers on last-handle drop.
+    #[allow(dead_code)] // Drop-only: the guard acts in `ShutdownGuard::drop`
+    shutdown: Arc<ShutdownGuard>,
     /// Default command resolver (`shell.resolve({priority: "config"})`).
     default_command: Arc<dyn Fn() -> Option<(String, Vec<String>)> + Send + Sync>,
     /// Default working directory (location directory).
@@ -439,14 +572,20 @@ impl PtyService {
     pub fn new(bus: Bus) -> Self {
         let ids: Arc<dyn IdGen> =
             Arc::new(AscendingIdGen::new(Arc::new(SystemClock), Arc::new(SystemRng)));
+        let inner = Arc::new(Inner {
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            exit_order: Arc::new(Mutex::new(Vec::new())),
+            next_token: Mutex::new(0),
+            ids,
+            bus,
+        });
+        let shutdown = Arc::new(ShutdownGuard {
+            sessions: Arc::clone(&inner.sessions),
+            exit_order: Arc::clone(&inner.exit_order),
+        });
         Self {
-            inner: Arc::new(Inner {
-                sessions: Mutex::new(HashMap::new()),
-                exit_order: Mutex::new(Vec::new()),
-                next_token: Mutex::new(0),
-                ids,
-                bus,
-            }),
+            shutdown,
+            inner,
             default_command: Arc::new(|| None),
             default_cwd: Arc::new(|| std::env::temp_dir().to_string_lossy().into_owned()),
             spawner: Arc::new(crate::environment::pty::LocalPtySpawner),
@@ -485,10 +624,7 @@ impl PtyService {
     }
 
     async fn publish(&self, type_: &str, data: serde_json::Value) {
-        let definition = crate::bus::registry::by_type(type_)
-            .cloned()
-            .unwrap_or_else(|| crate::bus::registry::EventDefinition::ephemeral(type_));
-        let _ = self.inner.bus.publish(&definition, data, PublishOptions::default()).await;
+        self.inner.publish(type_, data).await;
     }
 
     /// Wire conversion into the typed `Pty.Info` schema (camelCase
@@ -623,17 +759,28 @@ impl PtyService {
             std::thread::spawn(move || {
                 use std::io::Read;
                 let mut reader = reader;
+                // G-335 — stream-buffered decode: never lossy-decode a
+                // partial multi-byte sequence split across reads.
+                let mut decoder = Utf8StreamDecoder::new();
                 let mut chunk = [0u8; 8192];
                 loop {
                     match reader.read(&mut chunk) {
                         Ok(0) | Err(_) => break,
                         Ok(read) => {
-                            let text = String::from_utf8_lossy(&chunk[..read]).into_owned();
-                            if data_tx.send(ChildEvent::Data(text)).is_err() {
+                            let text = decoder.feed(&chunk[..read]);
+                            if !text.is_empty()
+                                && data_tx.send(ChildEvent::Data(text)).is_err()
+                            {
                                 break;
                             }
                         }
                     }
+                }
+                // EOF: a truncated tail is genuinely broken input — flush
+                // it lossily (U+FFFD) instead of dropping it silently.
+                let tail = decoder.finish();
+                if !tail.is_empty() {
+                    let _ = data_tx.send(ChildEvent::Data(tail));
                 }
             });
         }
@@ -645,25 +792,35 @@ impl PtyService {
         });
 
         let inner = Arc::clone(&self.inner);
-        let service = self.clone();
         let id_for_exit = id.clone();
+        // G-383a — the pump holds only `Arc<Inner>` (no service clone):
+        // a service clone here would pin the shutdown guard for the
+        // life of the session and a dropped service could never kill
+        // its children.
         tokio::spawn(async move {
             while let Some(event) = events_rx.recv().await {
                 match event {
                     ChildEvent::Data(chunk) => inner.on_data(&id_for_exit, &chunk),
                     ChildEvent::Exit(code) => {
                         inner.mark_exited(&id_for_exit, code);
-                        service
+                        // G-383d — the ref publishes the exit code it
+                        // has (`onExit({exitCode})`, JSON-omits an
+                        // undefined one — node-pty leaves it undefined
+                        // on signals); `unwrap_or(0)` would report
+                        // success for a missing code. Absent stays
+                        // absent.
+                        inner
                             .publish(
                                 "pty.exited",
                                 serde_json::to_value(oc_schema::pty::Exited {
                                     id: id_for_exit.0.clone(),
-                                    exit_code: u64::try_from(code.unwrap_or(0)).unwrap_or(0),
+                                    exit_code: code
+                                        .and_then(|c| u64::try_from(c).ok()),
                                 })
                                 .unwrap_or_default(),
                             )
                             .await;
-                        service.enforce_exited_limit().await;
+                        inner.enforce_exited_limit().await;
                         break;
                     }
                 }
@@ -671,9 +828,16 @@ impl PtyService {
         });
 
         let created = info.clone();
-        let bus_service = self.clone();
+        let created_inner = Arc::clone(&self.inner);
+        // G-383e (bounded) — the ref publishes `pty.created` awaited
+        // inside create and `pty.exited` via `runFork` (async) from
+        // onExit (pty.ts:225-233); both rides here are spawned. The
+        // only deviation is created-vs-exited ordering for a child
+        // that exits within the first scheduler tick — both events are
+        // ephemeral bus publishes and every consumer observes the
+        // session state through get/list anyway; pinned as bounded.
         tokio::spawn(async move {
-            bus_service
+            created_inner
                 .publish(
                     "pty.created",
                     serde_json::to_value(oc_schema::pty::Created {
@@ -684,28 +848,6 @@ impl PtyService {
                 .await;
         });
         Ok(info)
-    }
-
-    async fn enforce_exited_limit(&self) {
-        let evict: Vec<PtyId> = {
-            let mut order = self.inner.exit_order.lock();
-            let mut evict = Vec::new();
-            while order.len() > EXITED_LIMIT {
-                let Some(oldest) = order.first().cloned() else { break };
-                order.remove(0);
-                evict.push(oldest);
-            }
-            evict
-        };
-        for id in evict {
-            self.inner.teardown(&id);
-            self.publish(
-                "pty.deleted",
-                serde_json::to_value(oc_schema::pty::Deleted { id: id.0.clone() })
-                    .unwrap_or_default(),
-            )
-            .await;
-        }
     }
 
     fn default_command(&self) -> Option<(String, Vec<String>)> {
@@ -921,22 +1063,19 @@ mod tests {
         id
     }
 
-    /// G-243① — a multi-byte sequence straddling the trim boundary
-    /// trims without splitting a codepoint. The trim drains `excess`
-    /// bytes from the FRONT of the buffer; with é's leading the chunk
-    /// the trim index lands INSIDE the second 'é' (bytes 2..4). The
-    /// old byte-index slice/drain panicked (inside the tokio reader
-    /// task — the stream silently died and the session hung in
-    /// `running`); the ref's JS `slice` can never split
-    /// (pty.ts:219-221).
+    /// G-243① + G-383c — the retention cap counts UTF-16 code units
+    /// (ref `buffer.length`, pty.ts:218-221), and the trim maps the
+    /// excess units back to a byte offset on a char boundary so a
+    /// codepoint is never split. The ref's JS `slice` can never split;
+    /// the old byte-count cap also evicted CJK windows ~3× early.
     #[tokio::test]
-    async fn g243_buffer_trim_backs_off_to_char_boundary() {
+    async fn g243_buffer_trim_counts_utf16_units_on_char_boundaries() {
         let service = PtyService::new(bus().await);
         let id = synthetic_session(&service, "pty_g243_trim");
-        // "ééé" (2 bytes each) + 'a' run: len = LIMIT+3, excess = 3 —
-        // byte index 3 is the second 'é's continuation byte.
+        // "ééé" (1 unit, 2 bytes each) + 'a' run: units = LIMIT+2 —
+        // two units over the cap; bytes would be LIMIT+3.
         let mut chunk = "ééé".to_string();
-        chunk.push_str(&"a".repeat(BUFFER_LIMIT - 3));
+        chunk.push_str(&"a".repeat(BUFFER_LIMIT - 1));
         service.inner.on_data(&id, &chunk);
 
         let (buffer, buffer_cursor, cursor) = {
@@ -944,15 +1083,15 @@ mod tests {
             let session = sessions.get(&id).expect("session");
             (session.buffer.clone(), session.buffer_cursor, session.cursor)
         };
-        // No split: exactly the first 'é' was drained (a whole char);
-        // the window stays one char over the limit.
-        let mut expected = "éé".to_string();
-        expected.push_str(&"a".repeat(BUFFER_LIMIT - 3));
+        // Excess = 2 units = the first two é (byte offset 4, a char
+        // boundary) — the third é and the whole 'a' run survive whole.
+        let mut expected = "é".to_string();
+        expected.push_str(&"a".repeat(BUFFER_LIMIT - 1));
         assert_eq!(buffer, expected, "window keeps whole chars only");
         // Cursor invariant in UTF-16 units: what the window holds is
         // exactly what the absolute cursors say was not drained.
-        assert_eq!(cursor, BUFFER_LIMIT, "cursor advanced by the chunk's units");
-        assert_eq!(buffer_cursor, 1, "drained exactly one é's worth of units");
+        assert_eq!(cursor, BUFFER_LIMIT + 2, "cursor advanced by the chunk's units");
+        assert_eq!(buffer_cursor, 2, "drained exactly two é's worth of units");
         assert_eq!(cursor - buffer_cursor, utf16_units(&buffer));
     }
 
@@ -1254,5 +1393,171 @@ mod tests {
         std::panic::set_hook(previous_hook);
         healthy.detach();
         service.remove(&info.id).await.expect("cleanup");
+    }
+
+    // ------------------------------------------------------------------
+    // G-335 — stream-buffered UTF-8 decode (no per-chunk lossiness)
+    // ------------------------------------------------------------------
+
+    /// A `Read` that returns ONE byte per call — every possible split
+    /// boundary of a multi-byte sequence is exercised.
+    struct ByteAtATime(Vec<u8>, usize);
+
+    impl std::io::Read for ByteAtATime {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.1 >= self.0.len() || buf.is_empty() {
+                return Ok(0);
+            }
+            buf[0] = self.0[self.1];
+            self.1 += 1;
+            Ok(1)
+        }
+    }
+
+    #[test]
+    fn g335_decoder_reassembles_splits_at_every_boundary() {
+        // 中 (3 bytes) 🎉 (4 bytes) 文 (3 bytes): feed byte-at-a-time.
+        let bytes = "中🎉文".as_bytes().to_vec();
+        let mut decoder = Utf8StreamDecoder::new();
+        let mut out = String::new();
+        for byte in &bytes {
+            out.push_str(&decoder.feed(std::slice::from_ref(byte)));
+        }
+        assert_eq!(out, "中🎉文", "each char emits whole, exactly once");
+        assert_eq!(decoder.finish(), "", "nothing pending at EOF");
+    }
+
+    #[test]
+    fn g335_decoder_flushes_truncated_tail_with_replacement() {
+        let mut decoder = Utf8StreamDecoder::new();
+        assert_eq!(decoder.feed(b"ok"), "ok");
+        // A dangling 3-byte CJK lead + first continuation at EOF: a
+        // truncated stream end is genuinely broken input — U+FFFD, no
+        // panic, nothing silently dropped.
+        assert_eq!(decoder.feed(&[0xe4, 0xb8]), "");
+        assert_eq!(decoder.finish(), "\u{fffd}");
+    }
+
+    #[test]
+    fn g335_decoder_recovers_after_invalid_bytes() {
+        let mut decoder = Utf8StreamDecoder::new();
+        // Standalone continuation byte is DEFINITIVELY invalid (never a
+        // truncated prefix): replaced with U+FFFD immediately, the rest
+        // flows on — the streaming TextDecoder semantics.
+        assert_eq!(decoder.feed(b"be\x80fore"), "be\u{fffd}fore");
+        assert_eq!(decoder.feed(b"!"), "!");
+    }
+
+    /// G-335 end-to-end: a reader delivering one byte per read (the
+    /// worst-case split of every multi-byte sequence) still yields the
+    /// intact string through the session buffer — the old
+    /// per-chunk `from_utf8_lossy` produced mojibake here.
+    #[tokio::test]
+    async fn g335_byte_at_a_time_reader_emits_intact_multibyte() {
+        use crate::environment::pty::{PtyChild, PtyChildKiller, PtyMaster, PtySpawned};
+
+        struct FakeKiller(std::sync::Arc<std::sync::atomic::AtomicBool>);
+        impl PtyChildKiller for FakeKiller {
+            fn kill(&mut self) -> std::io::Result<()> {
+                self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }
+        }
+        struct FakeMaster;
+        impl PtyMaster for FakeMaster {
+            fn resize(&mut self, _cols: u16, _rows: u16) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        struct FakeChild(std::sync::Arc<std::sync::atomic::AtomicBool>);
+        impl PtyChild for FakeChild {
+            fn process_id(&self) -> Option<u32> {
+                Some(0)
+            }
+            fn clone_killer(&self) -> Box<dyn PtyChildKiller> {
+                Box::new(FakeKiller(Arc::clone(&self.0)))
+            }
+            fn wait(&mut self) -> std::io::Result<Option<i32>> {
+                while !self.0.load(std::sync::atomic::Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Ok(Some(0))
+            }
+        }
+        struct OneByteSpawner;
+        impl crate::environment::pty::PtySpawner for OneByteSpawner {
+            fn spawn(
+                &self,
+                request: crate::environment::pty::PtySpawnRequest,
+            ) -> Result<PtySpawned, crate::environment::pty::PtySpawnError> {
+                let _ = request;
+                let killed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                Ok(PtySpawned {
+                    reader: Box::new(ByteAtATime("中🎉文 ok\n".as_bytes().to_vec(), 0)),
+                    writer: Box::new(Vec::new()),
+                    master: Box::new(FakeMaster),
+                    child: Box::new(FakeChild(Arc::clone(&killed))),
+                })
+            }
+        }
+
+        let service = PtyService::new(bus().await);
+        let spawner: Arc<dyn crate::environment::pty::PtySpawner> = Arc::new(OneByteSpawner);
+        let info = service
+            .create_with(
+                &spawner,
+                &CreateInput {
+                    command: Some("fake".to_string()),
+                    ..CreateInput::default()
+                },
+            )
+            .expect("create");
+        let replay = loop {
+            let attach = service
+                .attach(&info.id, None, Box::new(|_| {}), Box::new(|_| {}))
+                .expect("attach");
+            if attach.replay.contains("ok") {
+                break attach.replay;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        };
+        assert!(replay.contains("中🎉文 ok"), "replay={replay:?}");
+        drop(service);
+    }
+
+    // ------------------------------------------------------------------
+    // G-383a — service teardown on last-handle drop
+    // ------------------------------------------------------------------
+
+    /// G-383a — dropping the last `PtyService` handle kills every live
+    /// child (ref `addFinalizer` teardown, pty.ts:128-144): the child
+    /// here is our own (`sleep`), reaped by the exit thread once the
+    /// master closes.
+    #[tokio::test]
+    async fn g383_dropping_service_kills_live_children() {
+        let service = PtyService::new(bus().await);
+        let info = service
+            .create(&CreateInput {
+                command: Some("/bin/sh".to_string()),
+                args: Some(vec!["-c".to_string(), "sleep 60".to_string()]),
+                cwd: Some("/tmp".to_string()),
+                ..CreateInput::default()
+            })
+            .expect("create");
+        assert!(info.pid != 0, "child must have a pid");
+        assert_eq!(service.get(&info.id).expect("get").status, Status::Running);
+        drop(service);
+        // The teardown guard TERM'd the child; the exit thread reaps
+        // it, after which kill(pid, 0) fails (no such process).
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            #[allow(clippy::cast_possible_wrap)]
+            let rc = unsafe { libc::kill(info.pid as i32, 0) };
+            if rc != 0 {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "child outlived the dropped service");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 }

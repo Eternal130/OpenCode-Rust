@@ -169,17 +169,50 @@ impl Active {
     }
 }
 
+/// G-383a — the service-close finalizer handle: runs when the LAST
+/// `Shell` clone goes away (the ref's `Effect.addFinalizer`,
+/// shell.ts:141-147), interrupting timeout fibers + waiters. It holds
+/// the command store directly (not `Arc<Inner>`) so builder-time
+/// `Arc::get_mut` calls keep working; background tasks hold
+/// `Arc<Inner>` (never a `Shell`), so they cannot pin this guard.
+struct ShutdownGuard {
+    commands: Arc<Mutex<HashMap<ShellId, Arc<Active>>>>,
+    exit_order: Arc<Mutex<Vec<ShellId>>>,
+}
+
+impl Drop for ShutdownGuard {
+    fn drop(&mut self) {
+        let commands = {
+            let mut commands = self.commands.lock();
+            self.exit_order.lock().clear();
+            std::mem::take(&mut *commands)
+        };
+        for command in commands.values() {
+            if let Some(timeout) = command.timeout.lock().take() {
+                timeout.abort();
+            }
+            // Unblock any pending wait (the ref interrupts the Deferred;
+            // a `None` settle resolves `Shell::wait` with NotFound once
+            // the map is empty — the interruption analog).
+            let _ = command.done.send(None);
+        }
+    }
+}
+
 /// The shell process service (clone shares state).
 #[derive(Clone)]
 pub struct Shell {
     inner: Arc<Inner>,
+    /// G-383a — interrupts timeouts + waiters on last-handle drop.
+    #[allow(dead_code)] // Drop-only: the guard acts in `ShutdownGuard::drop`
+    shutdown: Arc<ShutdownGuard>,
 }
 
 struct Inner {
     ids: Arc<dyn IdGen>,
     clock: Arc<dyn Clock>,
-    commands: Mutex<HashMap<ShellId, Arc<Active>>>,
-    exit_order: Mutex<Vec<ShellId>>,
+    commands: Arc<Mutex<HashMap<ShellId, Arc<Active>>>>,
+    exit_order: Arc<Mutex<Vec<ShellId>>>,
     output_dir: PathBuf,
     /// Optional bus for `shell.created`/`shell.exited`/`shell.deleted`.
     bus: Option<crate::bus::Bus>,
@@ -190,6 +223,135 @@ struct Inner {
     /// G-33 — the capture truncation budget (config `tool_output`;
     /// default = the compile-time constants, the previous behavior).
     output_limits: crate::tool_output::Limits,
+}
+
+impl Inner {
+    fn now_ms(&self) -> u64 {
+        u64::try_from(self.clock.unix_ms()).unwrap_or(0)
+    }
+
+    /// Bus publish — on `Inner` so background tasks (the exit watcher,
+    /// timeout fibers) hold `Arc<Inner>` and never a `Shell` clone
+    /// (G-383a: a parked clone would pin the shutdown guard).
+    async fn publish(&self, type_: &str, data: serde_json::Value) {
+        if let Some(bus) = &self.bus {
+            let definition = crate::bus::registry::EventDefinition::ephemeral(type_);
+            let _ = bus.publish(&definition, data, crate::bus::PublishOptions::default()).await;
+        }
+    }
+
+    async fn remove_command(&self, id: &ShellId) {
+        let command = {
+            let mut commands = self.commands.lock();
+            let mut exit_order = self.exit_order.lock();
+            if let Some(position) = exit_order.iter().position(|item| item == id) {
+                exit_order.remove(position);
+            }
+            commands.remove(id)
+        };
+        let Some(command) = command else { return };
+        if let Some(timeout) = command.timeout.lock().take() {
+            timeout.abort();
+        }
+        // Unblock any wait still pending when the command is removed before
+        // it terminated.
+        let _ = command.done.send(None);
+        let _ = tokio::fs::remove_file(&command.file).await;
+        self.publish("shell.deleted", serde_json::json!({ "id": id.as_str() })).await;
+    }
+
+    async fn finish(
+        &self,
+        command: &Arc<Active>,
+        status: Status,
+        exit: Option<f64>,
+        signal: Option<String>,
+        kill: bool,
+    ) {
+        // Mark the terminal status FIRST (v2 `produce` before `beforeWait`),
+        // so the exit watcher cannot race a timeout with "exited". The
+        // marking finisher always resolves the waiters.
+        let winner = {
+            let mut info = command.info.lock();
+            if info.status == Status::Running {
+                info.status = status;
+                info.exit = exit.map(oc_schema::common::Num);
+                info.signal = signal;
+                info.time.completed = Some(self.now_ms());
+                true
+            } else {
+                false
+            }
+        };
+        if !winner {
+            return;
+        }
+        if kill {
+            // v2 `handle.kill({ forceKillAfter: 3s })`: TERM the detached
+            // group first; escalate to SIGKILL only if it survives 3s.
+            // The command spawned its own process group (`process_group(0)`);
+            // signalling the group releases orphaned grandchildren holding
+            // the output pipes. Signals go through a dedicated blocking
+            // thread — tokio's own child driver is unreliable for one-shot
+            // helpers here.
+            #[cfg(unix)]
+            if let Some(pid) = command.pid {
+                let _ = tokio::task::spawn_blocking(move || {
+                    signal_process_group(pid, libc::SIGTERM);
+                })
+                .await;
+                // Escalation (3s → KILL). Detached: the TERM path usually
+                // settles the group, and the escalation must fire even if
+                // this finish future is cancelled.
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    let _ = tokio::task::spawn_blocking(move || {
+                        signal_process_group(pid, libc::SIGKILL);
+                    })
+                    .await;
+                });
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = command.child.lock().as_mut().is_some_and(|live| live.start_kill().is_ok());
+            }
+        }
+        // The capture file must be fully written before waiters resolve
+        // (`outputDone.await`).
+        {
+            let mut receiver = command.output_done.subscribe();
+            if !*receiver.borrow() {
+                let _ = receiver.changed().await;
+            }
+        }
+        let info = command.info.lock().clone();
+        let _ = command.done.send(Some(info.clone()));
+        self.exit_order.lock().push(info.id.clone());
+        let mut data =
+            serde_json::json!({ "id": info.id.as_str(), "status": status_str(info.status) });
+        if let Some(exit) = info.exit {
+            data["exit"] = serde_json::json!(exit.0);
+        }
+        self.publish("shell.exited", data).await;
+        // Retention: keep at most EXITED_LIMIT exited commands.
+        loop {
+            let evict = {
+                let exit_order = self.exit_order.lock();
+                if exit_order.len() <= EXITED_LIMIT {
+                    None
+                } else {
+                    exit_order.first().cloned()
+                }
+            };
+            match evict {
+                Some(oldest) => self.remove_command(&oldest).await,
+                None => break,
+            }
+        }
+        if let Some(timeout) = command.timeout.lock().take() {
+            timeout.abort();
+        }
+    }
 }
 
 impl Shell {
@@ -203,18 +365,22 @@ impl Shell {
     ) -> Self {
         let output_dir = data_root.join(DIRECTORY).join(project_id);
         let _ = std::fs::create_dir_all(&output_dir);
+        let commands = Arc::new(Mutex::new(HashMap::new()));
+        let exit_order = Arc::new(Mutex::new(Vec::new()));
+        let inner = Arc::new(Inner {
+            ids,
+            clock,
+            commands: Arc::clone(&commands),
+            exit_order: Arc::clone(&exit_order),
+            output_dir,
+            bus: None,
+            hooks: None,
+            config_shell: None,
+            output_limits: crate::tool_output::Limits::default(),
+        });
         Self {
-            inner: Arc::new(Inner {
-                ids,
-                clock,
-                commands: Mutex::new(HashMap::new()),
-                exit_order: Mutex::new(Vec::new()),
-                output_dir,
-                bus: None,
-                hooks: None,
-                config_shell: None,
-                output_limits: crate::tool_output::Limits::default(),
-            }),
+            shutdown: Arc::new(ShutdownGuard { commands, exit_order }),
+            inner,
         }
     }
 
@@ -256,14 +422,11 @@ impl Shell {
     }
 
     fn now_ms(&self) -> u64 {
-        u64::try_from(self.inner.clock.unix_ms()).unwrap_or(0)
+        self.inner.now_ms()
     }
 
     async fn publish(&self, type_: &str, data: serde_json::Value) {
-        if let Some(bus) = &self.inner.bus {
-            let definition = crate::bus::registry::EventDefinition::ephemeral(type_);
-            let _ = bus.publish(&definition, data, crate::bus::PublishOptions::default()).await;
-        }
+        self.inner.publish(type_, data).await;
     }
 
     fn require(&self, id: &ShellId) -> Result<Arc<Active>, NotFoundError> {
@@ -273,28 +436,8 @@ impl Shell {
     /// `Shell.remove`.
     pub async fn remove(&self, id: &ShellId) -> Result<(), NotFoundError> {
         self.require(id)?;
-        self.remove_command(id).await;
+        self.inner.remove_command(id).await;
         Ok(())
-    }
-
-    async fn remove_command(&self, id: &ShellId) {
-        let command = {
-            let mut commands = self.inner.commands.lock();
-            let mut exit_order = self.inner.exit_order.lock();
-            if let Some(position) = exit_order.iter().position(|item| item == id) {
-                exit_order.remove(position);
-            }
-            commands.remove(id)
-        };
-        let Some(command) = command else { return };
-        if let Some(timeout) = command.timeout.lock().take() {
-            timeout.abort();
-        }
-        // Unblock any wait still pending when the command is removed before
-        // it terminated.
-        let _ = command.done.send(None);
-        let _ = tokio::fs::remove_file(&command.file).await;
-        self.publish("shell.deleted", serde_json::json!({ "id": id.as_str() })).await;
     }
 
     /// `Shell.list` — currently running commands only.
@@ -357,14 +500,16 @@ impl Shell {
             return;
         }
         let timeout_command = Arc::clone(command);
-        let shell = self.clone();
+        let inner = Arc::clone(&self.inner);
         let handle = tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(duration)).await;
             // finish("timeout", …, beforeWait = kill): v2 marks the status,
             // then kills (TERM escalating to force after 3s — SIGKILL is the
             // closest primitive without signal APIs), then waits for the
-            // capture to flush before resolving waiters.
-            shell.finish(&timeout_command, Status::Timeout, None, None, true).await;
+            // capture to flush before resolving waiters. G-383a — the
+            // fiber holds `Arc<Inner>`, not a `Shell` clone (a parked
+            // clone would pin the shutdown guard for the whole timeout).
+            inner.finish(&timeout_command, Status::Timeout, None, None, true).await;
         });
         *command.timeout.lock() = Some(handle);
     }
@@ -476,99 +621,6 @@ impl Shell {
             .lock()
             .get(id)
             .map_or(0, |command| command.newlines.load(Ordering::SeqCst))
-    }
-
-    async fn finish(
-        &self,
-        command: &Arc<Active>,
-        status: Status,
-        exit: Option<f64>,
-        signal: Option<String>,
-        kill: bool,
-    ) {
-        // Mark the terminal status FIRST (v2 `produce` before `beforeWait`),
-        // so the exit watcher cannot race a timeout with "exited". The
-        // marking finisher always resolves the waiters.
-        let winner = {
-            let mut info = command.info.lock();
-            if info.status == Status::Running {
-                info.status = status;
-                info.exit = exit.map(oc_schema::common::Num);
-                info.signal = signal;
-                info.time.completed = Some(self.now_ms());
-                true
-            } else {
-                false
-            }
-        };
-        if !winner {
-            return;
-        }
-        if kill {
-            // v2 `handle.kill({ forceKillAfter: 3s })`: TERM the detached
-            // group first; escalate to SIGKILL only if it survives 3s.
-            // The command spawned its own process group (`process_group(0)`);
-            // signalling the group releases orphaned grandchildren holding
-            // the output pipes. Signals go through a dedicated blocking
-            // thread — tokio's own child driver is unreliable for one-shot
-            // helpers here.
-            #[cfg(unix)]
-            if let Some(pid) = command.pid {
-                let _ = tokio::task::spawn_blocking(move || {
-                    signal_process_group(pid, libc::SIGTERM);
-                })
-                .await;
-                // Escalation (3s → KILL). Detached: the TERM path usually
-                // settles the group, and the escalation must fire even if
-                // this finish future is cancelled.
-                tokio::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                    let _ = tokio::task::spawn_blocking(move || {
-                        signal_process_group(pid, libc::SIGKILL);
-                    })
-                    .await;
-                });
-            }
-            #[cfg(not(unix))]
-            {
-                let _ = command.child.lock().as_mut().is_some_and(|live| live.start_kill().is_ok());
-            }
-        }
-        // The capture file must be fully written before waiters resolve
-        // (`outputDone.await`).
-        {
-            let mut receiver = command.output_done.subscribe();
-            if !*receiver.borrow() {
-                let _ = receiver.changed().await;
-            }
-        }
-        let info = command.info.lock().clone();
-        let _ = command.done.send(Some(info.clone()));
-        self.inner.exit_order.lock().push(info.id.clone());
-        let mut data =
-            serde_json::json!({ "id": info.id.as_str(), "status": status_str(info.status) });
-        if let Some(exit) = info.exit {
-            data["exit"] = serde_json::json!(exit.0);
-        }
-        self.publish("shell.exited", data).await;
-        // Retention: keep at most EXITED_LIMIT exited commands.
-        loop {
-            let evict = {
-                let exit_order = self.inner.exit_order.lock();
-                if exit_order.len() <= EXITED_LIMIT {
-                    None
-                } else {
-                    exit_order.first().cloned()
-                }
-            };
-            match evict {
-                Some(oldest) => self.remove_command(&oldest).await,
-                None => break,
-            }
-        }
-        if let Some(timeout) = command.timeout.lock().take() {
-            timeout.abort();
-        }
     }
 
     /// `Shell.create` — spawn one detached shell command.
@@ -784,10 +836,18 @@ impl Shell {
 
         self.arm_timeout(&active, input_timeout);
 
-        // Observe exit and settle.
+        // Observe exit and settle. G-383a — the watcher holds
+        // `Arc<Inner>`, not a `Shell` clone (a parked clone would pin
+        // the shutdown guard for the child's whole lifetime).
+        // G-383e (bounded) — the ref settles on the child's async
+        // `exit` event; we poll `try_wait` on a 20ms merge window
+        // because tokio's SIGCHLD wakeups are flaky under load and the
+        // settle path must be deterministic. Worst-case added latency
+        // ~20ms, no ordering change (finish still marks the status
+        // before resolving waiters) — pinned as benign.
         {
             let active = Arc::clone(&active);
-            let shell = self.clone();
+            let inner = Arc::clone(&self.inner);
             tokio::spawn(async move {
                 let mut child = active.child.lock().take();
                 let Some(live) = child.as_mut() else { return };
@@ -811,10 +871,10 @@ impl Shell {
                     };
                     #[cfg(not(unix))]
                     let signal = None;
-                    shell.finish(&active, Status::Exited, exit, signal, false).await;
+                    inner.finish(&active, Status::Exited, exit, signal, false).await;
                 } else {
                     let id = active.info.lock().id.clone();
-                    shell.remove_command(&id).await;
+                    inner.remove_command(&id).await;
                 }
             });
         }
