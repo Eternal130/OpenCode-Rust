@@ -8,10 +8,13 @@
 //! stream routes. The protocol modules under [`crate::media`] were dead
 //! code without this layer; the drivers below close that seam.
 //!
-//! Divergence (determinism): the TS `READ_RETRY` schedule is jittered
-//! (`Schedule.jittered`); the port keeps the un-jittered exponential gaps
-//! so retry timing is deterministic under test. A provider `retryAfterMs`
-//! still raises the gap, capped at 30s, exactly like v2.
+//! Divergence: the TS `READ_RETRY` schedule is jittered with Effect's
+//! `Schedule.jittered` (each gap scaled by a uniform factor in
+//! `[0.8, 1.2]`); the port applies the same jitter when the retry sleeps
+//! ([`ReadRetryPolicy::jittered_delay`], G-374) while keeping
+//! [`ReadRetryPolicy::delay`] — the un-jittered base gap — deterministic
+//! for tests. A provider `retryAfterMs` still raises the gap, capped at
+//! 30s, exactly like v2.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -78,8 +81,9 @@ impl ReadRetryPolicy {
 
     /// The gap before retry `attempt` (1-based) after `error`, or `None`
     /// when the policy is exhausted or the error is not retryable
-    /// (`Schedule.max([exponential-spaced, recurs(8)]).jittered` with the
-    /// `modifyDelay` rate-limit raise, un-jittered).
+    /// (`Schedule.max([exponential-spaced, recurs(8)])` with the
+    /// `modifyDelay` rate-limit raise, un-jittered — the sleeping gap is
+    /// [`Self::jittered_delay`]).
     #[must_use]
     pub fn delay(&self, attempt: u32, error: &AiError) -> Option<Duration> {
         if attempt > self.max_attempts || !crate::provider_error::is_retryable(error) {
@@ -102,6 +106,27 @@ impl ReadRetryPolicy {
         }
         Some(delay.min(self.max_delay))
     }
+
+    /// The gap the route actually sleeps: [`Self::delay`] scaled by a
+    /// uniform random factor in `[0.8, 1.2]` (Effect `Schedule.jittered`,
+    /// which maps each delay `d` to `d*0.8*(1-r) + d*1.2*r` for
+    /// `r` uniform in `[0, 1)`), still capped at `max_delay` (G-374).
+    #[must_use]
+    pub fn jittered_delay(&self, attempt: u32, error: &AiError) -> Option<Duration> {
+        let base = self.delay(attempt, error)?;
+        if base.is_zero() {
+            return Some(base);
+        }
+        let random = random_unit();
+        let factor = 0.8 * (1.0 - random) + 1.2 * random;
+        let jittered = (base.as_secs_f64() * factor).min(self.max_delay.as_secs_f64());
+        Some(Duration::from_secs_f64(jittered.max(0.0)))
+    }
+}
+
+/// One uniform `f64` in `[0, 1)` (G-374).
+fn random_unit() -> f64 {
+    (random_u64() >> 11) as f64 / (1u64 << 53) as f64
 }
 
 // ---------------------------------------------------------------------------
@@ -195,7 +220,7 @@ impl Encoded {
     }
 
     fn multipart(form: &Form) -> Self {
-        let boundary = format!("opencode-media-{}", next_boundary());
+        let boundary = format!("opencode-media-{:016x}{:016x}", random_u64(), random_u64());
         Self {
             text: "[multipart/form-data]".to_string(),
             bytes: Bytes::from(encode_multipart(form, &boundary)),
@@ -214,10 +239,22 @@ fn encode(body: Option<&Body>) -> Encoded {
     }
 }
 
-fn next_boundary() -> u64 {
+/// One random `u64` — per-process random keys from `RandomState` over a
+/// changing counter/time mix. Not cryptographic; used only for retry
+/// jitter and multipart boundaries (G-374).
+fn random_u64() -> u64 {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
     use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(1);
-    COUNTER.fetch_add(1, Ordering::Relaxed)
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let mut hasher = RandomState::new().build_hasher();
+    hasher.write_u64(COUNTER.fetch_add(1, Ordering::Relaxed));
+    hasher.write_u64(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64),
+    );
+    hasher.finish()
 }
 
 /// Encode a multipart form (the transport seam is bytes + headers, so the
@@ -711,6 +748,12 @@ impl<P: InlineProtocol> Clone for InlineMediaRoute<P> {
 }
 
 impl<P: InlineProtocol> InlineMediaRoute<P> {
+    /// The protocol identity (route id/provider for facade errors).
+    #[must_use]
+    pub fn identity(&self) -> crate::media::protocol::Identity {
+        self.protocol.identity()
+    }
+
     #[must_use]
     pub fn new(protocol: Arc<P>, spec: MediaRouteSpec) -> Self {
         let headers = protocol.headers();
@@ -782,6 +825,12 @@ impl<P: QueuedProtocol> Clone for QueuedMediaRoute<P> {
 }
 
 impl<P: QueuedProtocol> QueuedMediaRoute<P> {
+    /// The protocol identity (route id/provider for facade errors).
+    #[must_use]
+    pub fn identity(&self) -> crate::media::protocol::Identity {
+        self.protocol.identity()
+    }
+
     #[must_use]
     pub fn new(protocol: Arc<P>, spec: MediaRouteSpec) -> Self {
         let read_retry = spec.read_retry;
@@ -1128,7 +1177,7 @@ impl<P: QueuedProtocol> Generation<P> {
                 Ok(decoded) => return Ok(decoded),
                 Err(error) => {
                     attempt += 1;
-                    match self.route.read_retry.delay(attempt, &error) {
+                    match self.route.read_retry.jittered_delay(attempt, &error) {
                         Some(delay) => tokio::time::sleep(delay).await,
                         None => return Err(error),
                     }
@@ -1164,6 +1213,12 @@ impl<P: StreamProtocol + 'static> Clone for StreamMediaRoute<P> {
 }
 
 impl<P: StreamProtocol + 'static> StreamMediaRoute<P> {
+    /// The protocol identity (route id/provider for facade errors).
+    #[must_use]
+    pub fn identity(&self) -> crate::media::protocol::Identity {
+        self.protocol.identity()
+    }
+
     #[must_use]
     pub fn new(
         protocol: Arc<P>,

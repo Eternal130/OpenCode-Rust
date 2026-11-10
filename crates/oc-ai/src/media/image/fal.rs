@@ -122,8 +122,9 @@ pub fn decode_result(
     context: &PollContext<FalToken>,
 ) -> Result<ImageResponse, AiError> {
     let value = output.decode_json(output.body)?;
-    let images =
-        value.get("images").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
+    // `QueueResult` declares `images` a required array; each image's
+    // `url` is a required string (fal-images.ts:31-42, G-347A).
+    let images = output.required_array(&value, "images")?.clone();
     if images.is_empty() {
         return Err(output.invalid("fal Images returned no images"));
     }
@@ -140,7 +141,7 @@ pub fn decode_result(
         .collect();
     let mut assets = Vec::new();
     for image in &images {
-        let url = image.get("url").and_then(serde_json::Value::as_str).unwrap_or_default();
+        let url = output.required_str(image, "url")?;
         let width = image.get("width").and_then(serde_json::Value::as_f64);
         let height = image.get("height").and_then(serde_json::Value::as_f64);
         let media_type =
@@ -370,5 +371,29 @@ mod tests {
         let response = decode_result(&output, &context).unwrap();
         let fal = response.provider_metadata.as_ref().unwrap()["fal"].clone();
         assert!(!fal.contains_key("seed"), "seed key omitted: {fal:?}");
+    }
+
+    // G-347A: `QueueResult` requires the `images` array and each image's
+    // `url` string (fal-images.ts:31-42).
+    #[test]
+    fn decode_result_requires_images_and_urls() {
+        let identity = identity();
+        let auth = BTreeMap::new();
+        let token = FalToken {
+            request_id: "req1".into(),
+            status_url: String::new(),
+            response_url: String::new(),
+            cancel_url: String::new(),
+        };
+        let context = PollContext { token: &token, auth: &auth };
+
+        let no_images = TextOutput { identity: &identity, body: r#"{"seed":7}"#, http: None };
+        let error = decode_result(&no_images, &context).unwrap_err();
+        assert!(error.message().contains("invalid response"), "{}", error.message());
+
+        let no_url =
+            TextOutput { identity: &identity, body: r#"{"images":[{"width":512}]}"#, http: None };
+        let error = decode_result(&no_url, &context).unwrap_err();
+        assert!(error.message().contains("invalid response"), "{}", error.message());
     }
 }

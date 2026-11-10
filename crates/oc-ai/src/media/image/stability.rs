@@ -4,7 +4,9 @@
 //! with the image.
 
 use crate::media::body::{merge_records, Body, Form};
-use crate::media::model::{ImageRequest, ImageResponse, PollContext, Snapshot, Started, Status};
+use crate::media::model::{
+    image_field_present, ImageRequest, ImageResponse, PollContext, Snapshot, Started, Status,
+};
 use crate::media::protocol::{
     Identity, InlineProtocol, MediaProtocolBase, QueuedProtocol, TextOutput,
 };
@@ -40,8 +42,29 @@ pub fn endpoint(model: &str) -> &str {
     }
 }
 
+/// The generate route's unsupported-field rejection (`size`, `mask`;
+/// stability-images.ts:186). The TS route layer runs `rejectUnsupported`
+/// before `body.from` (route/media.ts:356) — the port keeps the check at
+/// the top of `body_from`, the seam every Rust route lane calls (G-345).
+pub fn check_unsupported(request: &ImageRequest) -> Result<(), AiError> {
+    let present: Vec<&str> =
+        ["size", "mask"].into_iter().filter(|field| image_field_present(request, field)).collect();
+    identity().reject_unsupported(&present).map_or(Ok(()), Err)
+}
+
+/// The upscale route's unsupported-field rejection (`n`, `size`,
+/// `aspectRatio`, `mask`; stability-images.ts:195).
+pub fn upscale_check_unsupported(request: &ImageRequest) -> Result<(), AiError> {
+    let present: Vec<&str> = ["n", "size", "aspectRatio", "mask"]
+        .into_iter()
+        .filter(|field| image_field_present(request, field))
+        .collect();
+    upscale_identity().reject_unsupported(&present).map_or(Ok(()), Err)
+}
+
 /// `validate` + `form` (stability-images.ts:85-121).
 pub fn body_from(request: &ImageRequest) -> Result<Body, AiError> {
+    check_unsupported(request)?;
     if request.n.is_some_and(|n| n > 1) {
         return Err(identity().unsupported(
             "media.n",
@@ -201,6 +224,7 @@ pub struct StabilityUpscale;
 
 /// `fromUpscaleRequest` (stability-images.ts:123-132).
 pub fn upscale_body_from(request: &ImageRequest) -> Result<Body, AiError> {
+    upscale_check_unsupported(request)?;
     if request.images.is_empty() {
         return Err(crate::protocols::shared::invalid_request(
             "Stability AI upscale requires the source image in images",
@@ -223,10 +247,11 @@ pub fn upscale_body_from(request: &ImageRequest) -> Result<Body, AiError> {
     )
 }
 
-/// `decodeStart` (stability-images.ts:160-163).
+/// `decodeStart` (stability-images.ts:160-163). `Started` declares
+/// `id: Schema.String` — required (G-347A).
 pub fn upscale_decode_start(output: &TextOutput) -> Result<Started<UpscaleToken>, AiError> {
     let value = output.decode_json(output.body)?;
-    let id = value.get("id").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
+    let id = output.required_str(&value, "id")?.to_string();
     Ok(Started {
         snapshot: Snapshot {
             id: id.clone(),
@@ -410,5 +435,43 @@ mod tests {
             upscale_decode_status(Some(&http200), &context).unwrap().status,
             Status::Completed
         );
+    }
+
+    // G-345: the declared `unsupported` lists are enforced before lowering.
+    #[test]
+    fn unsupported_fields_fail_typed() {
+        let mut generate = request("ultra");
+        generate.size = Some("1024x1024".into());
+        let error = body_from(&generate).unwrap_err();
+        let crate::schema::AiErrorReason::UnsupportedOperation { operation, fields, .. } =
+            error.reason
+        else {
+            panic!("wrong reason: {error:?}")
+        };
+        assert_eq!(operation, "media.size");
+        assert_eq!(fields.message, "stability/stability-images does not support size");
+
+        let mut upscale = request("creative");
+        upscale.images = vec![media::base64("AQID", "image/png")];
+        upscale.n = Some(2);
+        let error = upscale_body_from(&upscale).unwrap_err();
+        assert_eq!(error.message(), "stability/stability-upscale does not support n", "{error}");
+
+        // supported generate fields still lower
+        let mut ok = request("ultra");
+        ok.seed = Some(11.0);
+        ok.aspect_ratio = Some("3:2".into());
+        assert!(body_from(&ok).is_ok());
+    }
+
+    // G-347A: the upscale submission requires `id` (Started schema).
+    #[test]
+    fn upscale_decode_start_requires_id() {
+        let identity = upscale_identity();
+        let missing = TextOutput { identity: &identity, body: "{}", http: None };
+        let error = upscale_decode_start(&missing).unwrap_err();
+        assert!(error.message().contains("invalid response"), "{}", error.message());
+        let ok = TextOutput { identity: &identity, body: r#"{"id":"u1"}"#, http: None };
+        assert_eq!(upscale_decode_start(&ok).unwrap().token.id, "u1");
     }
 }

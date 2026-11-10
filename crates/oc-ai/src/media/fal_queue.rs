@@ -37,12 +37,13 @@ fn status_table() -> BTreeMap<&'static str, Status> {
 }
 
 /// Decode a fal queue submission into the token + first snapshot
-/// (fal-queue.ts:56-70).
+/// (fal-queue.ts:56-70). `StartResponse` declares the four fields
+/// required (`Schema.String`) — missing ones fail the whole decode
+/// (G-347A); only `queue_position` is `optionalNull`.
 pub fn decode_start(output: &TextOutput) -> Result<Started<FalToken>, AiError> {
     let value = output.decode_json(output.body)?;
     let position = value.get("queue_position").and_then(serde_json::Value::as_f64);
-    let request_id =
-        value.get("request_id").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
+    let request_id = output.required_str(&value, "request_id")?.to_string();
     Ok(Started {
         snapshot: Snapshot {
             id: request_id.clone(),
@@ -52,21 +53,9 @@ pub fn decode_start(output: &TextOutput) -> Result<Started<FalToken>, AiError> {
         },
         token: FalToken {
             request_id,
-            status_url: value
-                .get("status_url")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            response_url: value
-                .get("response_url")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            cancel_url: value
-                .get("cancel_url")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
+            status_url: output.required_str(&value, "status_url")?.to_string(),
+            response_url: output.required_str(&value, "response_url")?.to_string(),
+            cancel_url: output.required_str(&value, "cancel_url")?.to_string(),
         },
     })
 }
@@ -145,5 +134,15 @@ mod tests {
         let context = PollContext { token: &token, auth: &auth };
         let error = decode_status(&output, &context).unwrap_err();
         assert!(error.message().contains("Unknown generation status"));
+    }
+
+    // G-347A: StartResponse declares the four submission fields required.
+    #[test]
+    fn decode_start_requires_the_submission_fields() {
+        let identity = Identity::new("fal-images", "fal Images", "fal");
+        let output = TextOutput { identity: &identity, body: r#"{"request_id":"r1"}"#, http: None };
+        let error = decode_start(&output).unwrap_err();
+        assert!(error.message().contains("invalid response"), "{}", error.message());
+        assert!(matches!(error.reason, crate::schema::AiErrorReason::InvalidProviderOutput { .. }));
     }
 }

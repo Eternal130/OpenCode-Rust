@@ -214,10 +214,11 @@ fn is_moderated(status: &str) -> bool {
     status == "Content Moderated" || status == "Request Moderated"
 }
 
-/// `decodeStart` (bfl-images.ts:155-162).
+/// `decodeStart` (bfl-images.ts:155-162). `StartResponse` declares `id`
+/// and `polling_url` required; `cost` is `optionalNull` (G-347A).
 pub fn decode_start(output: &TextOutput) -> Result<Started<Token>, AiError> {
     let value = output.decode_json(output.body)?;
-    let id = value.get("id").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
+    let id = output.required_str(&value, "id")?.to_string();
     Ok(Started {
         snapshot: Snapshot {
             id: id.clone(),
@@ -227,11 +228,7 @@ pub fn decode_start(output: &TextOutput) -> Result<Started<Token>, AiError> {
         },
         token: Token {
             id,
-            polling_url: value
-                .get("polling_url")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
+            polling_url: output.required_str(&value, "polling_url")?.to_string(),
             cost: value.get("cost").and_then(serde_json::Value::as_f64),
         },
     })
@@ -281,7 +278,9 @@ pub fn decode_result(
         return Err(output
             .invalid(format!("Black Forest Labs generation {} has no result", context.token.id)));
     };
-    let sample = result.get("sample").and_then(serde_json::Value::as_str).unwrap_or_default();
+    // `Result.result` is `optionalNull`, but once present its `sample`
+    // is `Schema.String` — required (bfl-images.ts:51-62, G-347A).
+    let sample = output.required_str(result, "sample")?;
     // A settled `cost` on the result supersedes the submit-time cost.
     let cost = value.get("cost").and_then(serde_json::Value::as_f64).or(context.token.cost);
     let mut bfl = std::collections::BTreeMap::new();
@@ -542,6 +541,28 @@ mod tests {
         };
         let error = decode_result(&pending, &context).unwrap_err();
         assert!(error.message().contains("has not finished"));
+    }
+
+    // G-347A: StartResponse requires `id`/`polling_url`; a present
+    // `result` requires `sample`.
+    #[test]
+    fn decode_strictness_on_required_fields() {
+        let identity = identity();
+        let missing_polling =
+            TextOutput { identity: &identity, body: r#"{"id":"t1"}"#, http: None };
+        let error = decode_start(&missing_polling).unwrap_err();
+        assert!(error.message().contains("invalid response"), "{}", error.message());
+
+        let auth = BTreeMap::new();
+        let token = Token { id: "t1".into(), polling_url: "https://poll".into(), cost: None };
+        let context = PollContext { token: &token, auth: &auth };
+        let missing_sample = TextOutput {
+            identity: &identity,
+            body: r#"{"id":"t1","status":"Ready","result":{"seed":1}}"#,
+            http: None,
+        };
+        let error = decode_result(&missing_sample, &context).unwrap_err();
+        assert!(error.message().contains("invalid response"), "{}", error.message());
     }
 
     // G-246: the ten-minute `sample` URL is pulled into owned bytes at the
