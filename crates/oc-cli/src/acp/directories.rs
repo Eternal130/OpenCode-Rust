@@ -129,9 +129,18 @@ pub fn rules(directories: &[String]) -> Value {
     )
 }
 
+/// `FSUtil.resolve` (fs-util.ts:257-265): lexical resolution followed by
+/// `realpathSync` — a symlinked cwd/additional directory is normalized
+/// to its real spelling so dedup and grant rules match the server's own
+/// comparisons (D-R6/G-378). ENOENT/ENOTDIR fall back to the lexical
+/// path, like the ref.
 fn resolve_path(path: &str) -> String {
-    let path =
-        if path.starts_with('/') { PathBuf::from(path) } else { PathBuf::from(".").join(path) };
+    let mut path = if path.starts_with('/') {
+        PathBuf::from(path)
+    } else {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(path)
+    };
+    // Lexical fold first (path.resolve collapses `..`/`.` without I/O).
     let mut resolved = PathBuf::new();
     for component in path.components() {
         match component {
@@ -142,7 +151,18 @@ fn resolve_path(path: &str) -> String {
             other => resolved.push(other.as_os_str()),
         }
     }
-    resolved.to_string_lossy().into_owned()
+    path = resolved;
+    match std::fs::canonicalize(&path) {
+        Ok(real) => real.to_string_lossy().into_owned(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            path.to_string_lossy().into_owned()
+        }
+        // ENOTDIR and friends: the lexical spelling, like the ref's
+        // catch of only ENOENT/ENOTDIR (other errors throw there; the
+        // port has no throwing channel, so every failure keeps the
+        // lexical path).
+        Err(_) => path.to_string_lossy().into_owned(),
+    }
 }
 
 #[cfg(test)]
@@ -218,5 +238,27 @@ mod tests {
         assert_eq!(list(Some(&json!({ KEY: ["/a", "/b"] }))), vec!["/a", "/b"]);
         assert_eq!(list(None).len(), 0, "no metadata ⇒ no directories");
         assert_eq!(list(Some(&json!({}))).len(), 0, "missing key ⇒ no directories");
+    }
+
+    /// G-378 R-6 — `FSUtil.resolve` follows symlinks: a symlinked
+    /// additional directory resolves to its real spelling, and a
+    /// symlinked cwd dedups against the same real path.
+    #[test]
+    fn resolve_path_follows_symlinks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let real = dir.path().join("real");
+        std::fs::create_dir_all(&real).expect("mkdir");
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        let resolved = resolve_path(link.to_str().expect("utf8"));
+        assert_eq!(resolved, real.to_str().expect("utf8"));
+        // A missing directory keeps the lexical spelling (ENOENT
+        // fallback, fs-util.ts:262).
+        let missing = dir.path().join("missing").to_string_lossy().into_owned();
+        assert_eq!(resolve_path(&missing), missing);
+        // parse() drops an additional dir that is the (real) root.
+        let cwd = real.to_string_lossy().into_owned();
+        let parsed = parse(&cwd, &[link.to_string_lossy().into_owned()]).expect("parse");
+        assert!(parsed.is_empty(), "symlink resolves to the root and is dropped: {parsed:?}");
     }
 }

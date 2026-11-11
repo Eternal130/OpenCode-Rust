@@ -49,10 +49,9 @@ pub async fn serve(app: Arc<App>, transport: CappedNdJson) -> Result<(), AcpErro
             {
                 let app = Arc::clone(&app);
                 async move |request: AuthenticateRequest, responder, cx| {
-                    respond_with(&app, cx, responder, |_app, _conn| async move {
+                    respond_with(&app, &cx, responder, |_app, _conn| async move {
                         crate::acp::service::authenticate(&request)
                     })
-                    .await
                 }
             },
             agent_client_protocol::on_receive_request!(),
@@ -61,10 +60,14 @@ pub async fn serve(app: Arc<App>, transport: CappedNdJson) -> Result<(), AcpErro
             {
                 let app = Arc::clone(&app);
                 async move |request: NewSessionRequest, responder, cx| {
-                    respond_with_responded(&app, cx, responder, |app, conn, responded| async move {
-                        crate::acp::service::new_session(&app, &conn, request, responded).await
-                    })
-                    .await
+                    respond_with_responded(
+                        &app,
+                        &cx,
+                        responder,
+                        |app, conn, responded| async move {
+                            crate::acp::service::new_session(&app, &conn, request, responded).await
+                        },
+                    )
                 }
             },
             agent_client_protocol::on_receive_request!(),
@@ -73,10 +76,14 @@ pub async fn serve(app: Arc<App>, transport: CappedNdJson) -> Result<(), AcpErro
             {
                 let app = Arc::clone(&app);
                 async move |request: LoadSessionRequest, responder, cx| {
-                    respond_with_responded(&app, cx, responder, |app, conn, responded| async move {
-                        crate::acp::service::load_session(&app, &conn, request, responded).await
-                    })
-                    .await
+                    respond_with_responded(
+                        &app,
+                        &cx,
+                        responder,
+                        |app, conn, responded| async move {
+                            crate::acp::service::load_session(&app, &conn, request, responded).await
+                        },
+                    )
                 }
             },
             agent_client_protocol::on_receive_request!(),
@@ -85,10 +92,9 @@ pub async fn serve(app: Arc<App>, transport: CappedNdJson) -> Result<(), AcpErro
             {
                 let app = Arc::clone(&app);
                 async move |request: ListSessionsRequest, responder, cx| {
-                    respond_with(&app, cx, responder, |app, _conn| async move {
+                    respond_with(&app, &cx, responder, |app, _conn| async move {
                         crate::acp::service::list_sessions(&app, request).await
                     })
-                    .await
                 }
             },
             agent_client_protocol::on_receive_request!(),
@@ -97,10 +103,9 @@ pub async fn serve(app: Arc<App>, transport: CappedNdJson) -> Result<(), AcpErro
             {
                 let app = Arc::clone(&app);
                 async move |request: DeleteSessionRequest, responder, cx| {
-                    respond_with(&app, cx, responder, |app, _conn| async move {
+                    respond_with(&app, &cx, responder, |app, _conn| async move {
                         crate::acp::service::delete_session(&app, request).await
                     })
-                    .await
                 }
             },
             agent_client_protocol::on_receive_request!(),
@@ -109,10 +114,15 @@ pub async fn serve(app: Arc<App>, transport: CappedNdJson) -> Result<(), AcpErro
             {
                 let app = Arc::clone(&app);
                 async move |request: ResumeSessionRequest, responder, cx| {
-                    respond_with_responded(&app, cx, responder, |app, conn, responded| async move {
-                        crate::acp::service::resume_session(&app, &conn, request, responded).await
-                    })
-                    .await
+                    respond_with_responded(
+                        &app,
+                        &cx,
+                        responder,
+                        |app, conn, responded| async move {
+                            crate::acp::service::resume_session(&app, &conn, request, responded)
+                                .await
+                        },
+                    )
                 }
             },
             agent_client_protocol::on_receive_request!(),
@@ -121,10 +131,9 @@ pub async fn serve(app: Arc<App>, transport: CappedNdJson) -> Result<(), AcpErro
             {
                 let app = Arc::clone(&app);
                 async move |request: CloseSessionRequest, responder, cx| {
-                    respond_with(&app, cx, responder, |app, _conn| async move {
+                    respond_with(&app, &cx, responder, |app, _conn| async move {
                         crate::acp::service::close_session(&app, request).await
                     })
-                    .await
                 }
             },
             agent_client_protocol::on_receive_request!(),
@@ -133,10 +142,14 @@ pub async fn serve(app: Arc<App>, transport: CappedNdJson) -> Result<(), AcpErro
             {
                 let app = Arc::clone(&app);
                 async move |request: ForkSessionRequest, responder, cx| {
-                    respond_with_responded(&app, cx, responder, |app, conn, responded| async move {
-                        crate::acp::service::fork_session(&app, &conn, request, responded).await
-                    })
-                    .await
+                    respond_with_responded(
+                        &app,
+                        &cx,
+                        responder,
+                        |app, conn, responded| async move {
+                            crate::acp::service::fork_session(&app, &conn, request, responded).await
+                        },
+                    )
                 }
             },
             agent_client_protocol::on_receive_request!(),
@@ -145,10 +158,9 @@ pub async fn serve(app: Arc<App>, transport: CappedNdJson) -> Result<(), AcpErro
             {
                 let app = Arc::clone(&app);
                 async move |request: SetSessionConfigOptionRequest, responder, cx| {
-                    respond_with(&app, cx, responder, |app, _conn| async move {
+                    respond_with(&app, &cx, responder, |app, _conn| async move {
                         crate::acp::service::set_session_config_option(&app, request).await
                     })
-                    .await
                 }
             },
             agent_client_protocol::on_receive_request!(),
@@ -157,10 +169,9 @@ pub async fn serve(app: Arc<App>, transport: CappedNdJson) -> Result<(), AcpErro
             {
                 let app = Arc::clone(&app);
                 async move |request: SetSessionModeRequest, responder, cx| {
-                    respond_with(&app, cx, responder, |app, _conn| async move {
+                    respond_with(&app, &cx, responder, |app, _conn| async move {
                         crate::acp::service::set_session_mode(&app, request).await
                     })
-                    .await
                 }
             },
             agent_client_protocol::on_receive_request!(),
@@ -313,9 +324,9 @@ async fn boot(app: &Arc<App>, conn: ConnectionTo<ClientRole>) -> Result<(), AcpE
 /// notified once the request's response has been queued, so watchers
 /// spawned by the service call (`sessions.ts:144` `yield* responded`)
 /// never push notifications ahead of the response (G-378 D-8).
-async fn respond_with_responded<T, F, Fut>(
+fn respond_with_responded<T, F, Fut>(
     app: &Arc<App>,
-    cx: ConnectionTo<ClientRole>,
+    cx: &ConnectionTo<ClientRole>,
     responder: Responder<T>,
     call: F,
 ) -> Result<(), AcpError>
@@ -325,11 +336,11 @@ where
     Fut: std::future::Future<Output = Result<T, ServiceError>> + Send,
 {
     let app = Arc::clone(app);
-    let responded = Arc::new(tokio::sync::Notify::new());
-    let gate = Arc::clone(&responded);
+    let responded_notify = Arc::new(tokio::sync::Notify::new());
+    let gate = Arc::clone(&responded_notify);
     cx.spawn(async move {
         let conn = app.conn().await;
-        match call(app, conn, responded).await {
+        match call(app, conn, responded_notify).await {
             Ok(response) => {
                 let _ = responder.respond(response);
             }
@@ -343,9 +354,9 @@ where
     .map_err(|error| AcpError::internal_error().data(format!("{error}")))
 }
 
-async fn respond_with<T, F, Fut>(
+fn respond_with<T, F, Fut>(
     app: &Arc<App>,
-    cx: ConnectionTo<ClientRole>,
+    cx: &ConnectionTo<ClientRole>,
     responder: Responder<T>,
     call: F,
 ) -> Result<(), AcpError>
