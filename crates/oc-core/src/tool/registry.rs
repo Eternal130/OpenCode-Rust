@@ -59,11 +59,32 @@ pub fn valid_namespace(name: &str) -> bool {
 /// `registrationError` — `None` when the tool registers.
 #[must_use]
 pub fn registration_error(tool: &BuiltinTool) -> Option<String> {
-    let id = effective_name(tool.namespace, tool.name);
-    if !valid_name(&normalized_name(tool.name)) {
-        return Some(format!("Invalid tool name: {}", normalized_name(tool.name)));
+    namespaced_registration_error(tool.namespace, tool.name, tool.codemode)
+}
+
+/// G-360③ — the namespaced face of [`registration_error`] (the MCP
+/// bridge's registration gate): the ref's editor.add rules (tool.ts
+/// 304-320) applied to a `(namespace, name, codemode)` triple —
+/// namespace segments `^[A-Za-z0-9_-]{1,64}$` when present, the
+/// normalized tool name `^[A-Za-z0-9_-]{1,128}$`, and the Code Mode
+/// `execute` reservation on the effective id.
+#[must_use]
+pub fn namespaced_registration_error(
+    namespace: Option<&str>,
+    name: &str,
+    codemode: bool,
+) -> Option<String> {
+    if let Some(namespace) = namespace {
+        if !valid_namespace(namespace) {
+            return Some(format!("Invalid tool namespace: {namespace:?}"));
+        }
     }
-    if !tool.codemode && id == "execute" {
+    let normalized = normalized_name(name);
+    if !valid_name(&normalized) {
+        return Some(format!("Invalid tool name: {normalized}"));
+    }
+    let id = effective_name(namespace, name);
+    if !codemode && id == "execute" {
         return Some("Tool name \"execute\" is reserved for CodeMode".to_string());
     }
     None
