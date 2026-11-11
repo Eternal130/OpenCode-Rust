@@ -3398,12 +3398,11 @@ pub fn xai_chat_route(transport: SharedTransport, auth: Option<AuthDefinition>) 
         auth,
         transport,
     );
-    route.headers = Some(Arc::new(|request: &crate::schema::LLMRequest| {
-        match &request.prompt_cache_key {
+    route.headers =
+        Some(Arc::new(|request: &crate::schema::LLMRequest| match &request.prompt_cache_key {
             Some(key) => BTreeMap::from([("x-grok-conv-id".to_string(), key.clone())]),
             None => BTreeMap::new(),
-        }
-    }));
+        }));
     route
 }
 
