@@ -989,8 +989,12 @@ fn build_route(
             // env stand-in; API keys are rejected upstream in the
             // factory), the `global` location fallback, and the
             // project-composed publishers/anthropic base URL.
-            let access_token =
-                api_key.or_else(|| env_first(env, "GOOGLE_OAUTH_ACCESS_TOKEN").map(Secret::Env));
+            let access_token = connection
+                .access_token
+                .clone()
+                .map(Secret::Value)
+                .or(api_key)
+                .or_else(|| env_first(env, "GOOGLE_OAUTH_ACCESS_TOKEN").map(Secret::Env));
             vertex_messages_route(
                 transport,
                 VertexMessagesConfig {
@@ -1011,8 +1015,12 @@ fn build_route(
             // `endpoints/openapi` root — the composed project/location URL
             // (or the expanded catalog template), ADC bearer, API keys
             // rejected.
-            let access_token =
-                api_key.or_else(|| env_first(env, "GOOGLE_OAUTH_ACCESS_TOKEN").map(Secret::Env));
+            let access_token = connection
+                .access_token
+                .clone()
+                .map(Secret::Value)
+                .or(api_key)
+                .or_else(|| env_first(env, "GOOGLE_OAUTH_ACCESS_TOKEN").map(Secret::Env));
             vertex_chat_route(
                 transport,
                 VertexEndpointConfig {
@@ -1031,8 +1039,12 @@ fn build_route(
         ProtocolFamily::VertexResponses => {
             // AI-V1: the open-responses lane on the same root with the
             // store/include defaults, ADC bearer, API keys rejected.
-            let access_token =
-                api_key.or_else(|| env_first(env, "GOOGLE_OAUTH_ACCESS_TOKEN").map(Secret::Env));
+            let access_token = connection
+                .access_token
+                .clone()
+                .map(Secret::Value)
+                .or(api_key)
+                .or_else(|| env_first(env, "GOOGLE_OAUTH_ACCESS_TOKEN").map(Secret::Env));
             vertex_responses_route(
                 transport,
                 VertexEndpointConfig {
@@ -3059,7 +3071,7 @@ mod tests {
             catalog,
             "google-vertex",
             gemini_model.id.as_str(),
-            &ModelConnection { api_key: Some("ya29.adc".into()), ..Default::default() },
+            &ModelConnection { access_token: Some("ya29.adc".into()), ..Default::default() },
         )
         .expect("vertex native binds");
         assert_eq!(model.route.id, "google-vertex-gemini");
@@ -3101,7 +3113,7 @@ mod tests {
             catalog,
             "google-vertex",
             claude.id.as_str(),
-            &ModelConnection { api_key: Some("ya29.adc".into()), ..Default::default() },
+            &ModelConnection { access_token: Some("ya29.adc".into()), ..Default::default() },
         )
         .expect("vertex messages binds");
         std::env::remove_var("GOOGLE_VERTEX_PROJECT");
@@ -3155,7 +3167,7 @@ mod tests {
             catalog,
             "google-vertex",
             maas.id.as_str(),
-            &ModelConnection { api_key: Some("ya29.adc".into()), ..Default::default() },
+            &ModelConnection { access_token: Some("ya29.adc".into()), ..Default::default() },
         )
         .expect("vertex chat binds");
         std::env::remove_var("GOOGLE_VERTEX_PROJECT");
@@ -4004,6 +4016,365 @@ mod tests {
     /// Builtin-table reconciliation snapshot (provider.ts:48-110): every
     /// ref builtin entrypoint must classify into a ported family — no
     /// silent gap between the ref load table and `family_of`.
+    /// G-348 — the Cloudflare AI Gateway lane: account-synthesized
+    /// passthrough routes, the cf-aig-* header set, passthrough auth,
+    /// and the per-prefix wire-id rewrite.
+    #[test]
+    fn provider_facade_cloudflare_ai_gateway_binding() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        let gateway = catalog.provider("cloudflare-ai-gateway").expect("gateway in catalog");
+        let connection = ModelConnection {
+            cloudflare_gateway: Some(CloudflareGatewayConnection {
+                account_id: Some("acc-1".into()),
+                gateway_id: Some("team-gw".into()),
+                gateway_api_key: Some("upstream-key".into()),
+                cache_ttl: Some(120),
+                ..CloudflareGatewayConnection::default()
+            }),
+            ..ModelConnection::default()
+        };
+        // anthropic/ → the messages passthrough route with the
+        // cf-aig-authorization passthrough credential and the dashed
+        // wire id.
+        let claude = gateway
+            .models
+            .iter()
+            .find(|model| model.id.as_str().starts_with("anthropic/"))
+            .expect("an anthropic/ gateway model");
+        let model = language_model(&context, catalog, "cloudflare-ai-gateway", claude.id.as_str(), &connection)
+            .expect("gateway messages binds");
+        assert_eq!(model.route.id, "cloudflare-ai-gateway-messages");
+        assert_eq!(
+            model.route.endpoint.base_url.as_deref(),
+            Some("https://gateway.ai.cloudflare.com/v1/acc-1/team-gw/anthropic/v1")
+        );
+        // The wire id strips `anthropic/` and dashes the dots.
+        let expected_id = claude
+            .id
+            .as_str()
+            .strip_prefix("anthropic/")
+            .expect("anthropic/-prefixed")
+            .replace('.', "-");
+        assert_eq!(model.id.as_str(), expected_id);
+        let route = Arc::clone(&model.route);
+        let mut request = oc_ai::schema::LLMRequest::new(model);
+        request.messages = vec![oc_ai::schema::Message::user("hi")];
+        let prepared = route.prepare_request(&request);
+        let body = route.build_body(&prepared).expect("body");
+        let (wire, _) = route.prepare_transport(&prepared, &body).expect("wire");
+        assert_eq!(wire.header("cf-aig-authorization"), Some("Bearer upstream-key"));
+        assert_eq!(wire.header("cf-aig-cache-ttl"), Some("120"));
+        let wire_body: serde_json::Value = serde_json::from_slice(&wire.body).expect("json body");
+        assert_eq!(wire_body["model"], serde_json::json!(expected_id));
+
+        // openai/ → the responses passthrough route.
+        let catalog2 = Catalog::embedded();
+        let gateway2 = catalog2.provider("cloudflare-ai-gateway").expect("gateway in catalog");
+        if let Some(gpt) = gateway2
+            .models
+            .iter()
+            .find(|model| model.id.as_str().starts_with("openai/"))
+        {
+            let model =
+                language_model(&context, catalog2, "cloudflare-ai-gateway", gpt.id.as_str(), &connection)
+                    .expect("gateway responses binds");
+            assert_eq!(model.route.id, "cloudflare-ai-gateway-responses");
+            assert_eq!(
+                model.route.endpoint.base_url.as_deref(),
+                Some("https://gateway.ai.cloudflare.com/v1/acc-1/team-gw/openai")
+            );
+        }
+
+        // No accountId and no baseURL: the ref's typed error.
+        let catalog3 = Catalog::embedded();
+        let gateway3 = catalog3.provider("cloudflare-ai-gateway").expect("gateway in catalog");
+        let claude3 = gateway3
+            .models
+            .iter()
+            .find(|model| model.id.as_str().starts_with("anthropic/"))
+            .expect("an anthropic/ gateway model");
+        let error = language_model(
+            &context,
+            catalog3,
+            "cloudflare-ai-gateway",
+            claude3.id.as_str(),
+            &ModelConnection::default(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("requires accountId unless baseURL is supplied"));
+    }
+
+    /// G-356 — the vertex guards: apiKey/accessToken mutual exclusion,
+    /// the tuned-model Express rejection, and the chat/messages API-key
+    /// bans.
+    #[test]
+    fn provider_facade_vertex_guards() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        let vertex = catalog.provider("google-vertex").expect("vertex in catalog");
+        let gemini = vertex
+            .models
+            .iter()
+            .find(|model| model.package.is_none())
+            .expect("a gemini model");
+
+        // apiKey + accessToken never combine.
+        let error = language_model(
+            &context,
+            catalog,
+            "google-vertex",
+            gemini.id.as_str(),
+            &ModelConnection {
+                api_key: Some("express".into()),
+                access_token: Some("ya29".into()),
+                ..ModelConnection::default()
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("apiKey cannot be combined with accessToken"));
+
+        // Tuned models reject Express API keys (settings key or env).
+        let mut tuned = gemini.clone();
+        tuned.id = oc_schema::id::ModelId::parse("endpoints/1234567890".to_string());
+        let error = language_model_for_model(
+            &context,
+            vertex,
+            &tuned,
+            &ModelConnection { api_key: Some("express".into()), ..ModelConnection::default() },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("tuned models do not support Express Mode API keys"));
+
+        // The OpenAPI chat + messages lanes ban apiKey outright.
+        let claude = vertex
+            .models
+            .iter()
+            .find(|model| {
+                model.package.as_deref() == Some("@opencode/ai/providers/google-vertex/messages")
+            })
+            .expect("a claude-on-vertex model");
+        let error = language_model(
+            &context,
+            catalog,
+            "google-vertex",
+            claude.id.as_str(),
+            &ModelConnection { api_key: Some("express".into()), ..Default::default() },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("Messages does not support API keys"));
+        let maas = vertex
+            .models
+            .iter()
+            .find(|model| {
+                model.package.as_deref() == Some("@opencode/ai/providers/google-vertex/chat")
+            })
+            .expect("a maas model");
+        let error = language_model(
+            &context,
+            catalog,
+            "google-vertex",
+            maas.id.as_str(),
+            &ModelConnection { api_key: Some("express".into()), ..Default::default() },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("Chat does not support API keys"));
+    }
+
+    /// G-373① — the Alibaba region/workspaceID host derivation on every
+    /// lane: cn-beijing traffic never falls through to the intl host.
+    #[test]
+    fn provider_facade_alibaba_region_host_derivation() {
+        let context = context();
+        let catalog = Catalog::embedded();
+        let alibaba = catalog.provider("alibaba").expect("alibaba in catalog");
+        let qwen = alibaba.models.first().expect("a qwen model");
+        let cn = ModelConnection {
+            region: Some("cn-beijing".into()),
+            api_key: Some("sk".into()),
+            ..ModelConnection::default()
+        };
+        let model =
+            language_model(&context, catalog, "alibaba", qwen.id.as_str(), &cn).expect("binds");
+        assert_eq!(
+            model.route.endpoint.base_url.as_deref(),
+            Some("https://dashscope.aliyuncs.com/compatible-mode/v1"),
+            "cn-beijing derives the cn host, not dashscope-intl"
+        );
+
+        // Workspace accounts ride the maas host.
+        let catalog = Catalog::embedded();
+        let alibaba = catalog.provider("alibaba").expect("alibaba in catalog");
+        let ws = ModelConnection {
+            region: Some("cn-beijing".into()),
+            workspace_id: Some("ws-123".into()),
+            api_key: Some("sk".into()),
+            ..ModelConnection::default()
+        };
+        let model = language_model(
+            &context,
+            catalog,
+            "alibaba",
+            alibaba.models.first().expect("a qwen model").id.as_str(),
+            &ws,
+        )
+        .expect("binds");
+        assert_eq!(
+            model.route.endpoint.base_url.as_deref(),
+            Some("https://ws-123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1")
+        );
+
+        // An unknown region without a workspace is the ref's typed error.
+        let catalog = Catalog::embedded();
+        let alibaba = catalog.provider("alibaba").expect("alibaba in catalog");
+        let error = language_model(
+            &context,
+            catalog,
+            "alibaba",
+            alibaba.models.first().expect("a qwen model").id.as_str(),
+            &ModelConnection {
+                region: Some("mars-1".into()),
+                ..ModelConnection::default()
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("Alibaba region mars-1 requires workspaceID or baseURL"));
+
+        // The messages lane derives the apps/anthropic root.
+        assert_eq!(
+            alibaba_derived_base(
+                &ModelConnection {
+                    region: Some("cn-hongkong".into()),
+                    ..ModelConnection::default()
+                },
+                "alibaba"
+            )
+            .unwrap(),
+            Some((
+                "https://cn-hongkong.dashscope.aliyuncs.com/compatible-mode/v1".to_string(),
+                "https://cn-hongkong.dashscope.aliyuncs.com/apps/anthropic/v1".to_string()
+            ))
+        );
+    }
+
+    /// G-373② — the zai/bigmodel.cn messages root: the coding-plan chat
+    /// root rewrites onto the anthropic root on every zai host.
+    #[test]
+    fn provider_facade_zai_bigmodel_messages_root() {
+        let none = ModelConnection::default();
+        assert_eq!(
+            anthropic_messages_base_url(
+                "@opencode/ai/providers/zai-coding-plan/messages",
+                Some("https://open.bigmodel.cn/api/coding/paas/v4".into()),
+                "zhipuai-coding-plan",
+                &none,
+            )
+            .unwrap(),
+            Some("https://open.bigmodel.cn/api/anthropic/v1".to_string())
+        );
+        assert_eq!(
+            anthropic_messages_base_url(
+                "@opencode/ai/providers/zai-coding-plan/messages",
+                Some("https://api.z.ai/api/coding/paas/v4".into()),
+                "zai-coding-plan",
+                &none,
+            )
+            .unwrap(),
+            Some("https://api.z.ai/api/anthropic/v1".to_string())
+        );
+        // An unrelated host passes through untouched.
+        assert_eq!(
+            anthropic_messages_base_url(
+                "@opencode/ai/providers/zai-coding-plan/messages",
+                Some("https://proxy.test/v1".into()),
+                "zai-coding-plan",
+                &none,
+            )
+            .unwrap(),
+            Some("https://proxy.test/v1".to_string())
+        );
+    }
+
+    /// G-373④/G-373⑤ — the custom provider `package` field binds the
+    /// declared protocol: an anthropic-compatible host rides the
+    /// Anthropic Messages protocol at its base URL with authToken as
+    /// the bearer (apiKey as x-api-key; the two never combine).
+    #[test]
+    fn provider_facade_custom_anthropic_compatible_package() {
+        let context = context();
+        let custom = crate::provider_catalog::CustomProvider {
+            id: "acme-anthropic".into(),
+            name: "Acme".into(),
+            base_url: "https://acme.test".into(),
+            auth_token: Some("tok-1".into()),
+            package: Some("@opencode/ai/providers/anthropic-compatible".into()),
+            models: vec![crate::provider_catalog::CustomModel {
+                id: "acme-large".into(),
+                ..crate::provider_catalog::CustomModel::default()
+            }],
+            ..crate::provider_catalog::CustomProvider::default()
+        };
+        let model =
+            custom_language_model(&context, &custom, "acme-large").expect("binds messages lane");
+        assert_eq!(model.route.id, "anthropic-messages");
+        assert_eq!(model.route.endpoint.base_url.as_deref(), Some("https://acme.test"));
+        let route = Arc::clone(&model.route);
+        let mut request = oc_ai::schema::LLMRequest::new(model);
+        request.messages = vec![oc_ai::schema::Message::user("hi")];
+        let prepared = route.prepare_request(&request);
+        let body = route.build_body(&prepared).expect("body");
+        let (wire, _) = route.prepare_transport(&prepared, &body).expect("wire");
+        assert_eq!(wire.url, "https://acme.test/messages");
+        assert_eq!(wire.header("authorization"), Some("Bearer tok-1"));
+
+        // apiKey rides x-api-key instead.
+        let custom = crate::provider_catalog::CustomProvider {
+            api_key: Some("sk-1".into()),
+            auth_token: None,
+            ..custom
+        };
+        let model = custom_language_model(&context, &custom, "acme-large").expect("binds");
+        let route = Arc::clone(&model.route);
+        let mut request = oc_ai::schema::LLMRequest::new(model);
+        request.messages = vec![oc_ai::schema::Message::user("hi")];
+        let prepared = route.prepare_request(&request);
+        let body = route.build_body(&prepared).expect("body");
+        let (wire, _) = route.prepare_transport(&prepared, &body).expect("wire");
+        assert_eq!(wire.header("x-api-key"), Some("sk-1"));
+
+        // Both configured: the ref's mutual-exclusion error.
+        let custom = crate::provider_catalog::CustomProvider {
+            api_key: Some("sk-1".into()),
+            auth_token: Some("tok-1".into()),
+            ..custom
+        };
+        let error = custom_language_model(&context, &custom, "acme-large").unwrap_err();
+        assert!(error.to_string().contains("apiKey cannot be combined with authToken"));
+    }
+
+    /// G-373③ — the xai chat lane carries the `x-grok-conv-id`
+    /// conversation-affinity header from the prompt cache key.
+    #[test]
+    fn provider_facade_xai_chat_conv_id_header() {
+        assert_eq!(
+            family_of("@opencode/ai/providers/xai/chat"),
+            Some(ProtocolFamily::OpenAIChat)
+        );
+        let route = oc_ai::protocols::openai_chat::xai_chat_route(
+            Arc::new(oc_ai::route::transport::FailingTransport { message: "unit" }),
+            None,
+        );
+        let mut request = oc_ai::test_support::request_for_tests(vec![oc_ai::schema::Message::user(
+            "hi",
+        )]);
+        request.prompt_cache_key = Some("conv-42".into());
+        let prepared = route.prepare_request(&request);
+        let body = route.build_body(&prepared).expect("body");
+        let (wire, _) = route.prepare_transport(&prepared, &body).expect("wire");
+        assert_eq!(wire.url, "https://api.x.ai/v1/chat/completions");
+        assert_eq!(wire.header("x-grok-conv-id"), Some("conv-42"));
+    }
+
     #[test]
     fn provider_facade_builtin_table_snapshot() {
         use crate::provider_catalog::native::BUILTIN_ENTRYPOINTS;
