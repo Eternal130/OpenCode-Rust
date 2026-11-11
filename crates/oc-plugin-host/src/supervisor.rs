@@ -172,6 +172,9 @@ pub struct SupervisorConfig {
     pub websearch_port: Option<Arc<dyn crate::context::WebsearchPort>>,
     /// The vcs backend (G-24): `None` declines every `ctx.vcs.*` call.
     pub vcs_port: Option<Arc<dyn crate::context::VcsPort>>,
+    /// The worktree backend (G-379.8): `None` declines every
+    /// `ctx.worktree.list/create/remove/refresh` call.
+    pub worktree_port: Option<Arc<dyn crate::context::WorktreePort>>,
     /// The provider registry backend (G-64): `None` declines every
     /// `ctx.provider.list/get/reload` call.
     pub provider_port: Option<Arc<dyn crate::context::ProviderPort>>,
@@ -216,6 +219,7 @@ impl Default for SupervisorConfig {
             permission_port: None,
             websearch_port: None,
             vcs_port: None,
+            worktree_port: None,
             provider_port: None,
             model_port: None,
             reference_port: None,
@@ -427,6 +431,109 @@ impl Shared {
         }
     }
 
+    /// G-379.7 — the shared rpc dispatch core behind BOTH host-side
+    /// entry points: `/api/rpc/{rpcID}/{method}`
+    /// ([`crate::PluginHost::rpc_call_async`]) and the guest-side
+    /// client face (`ctx.rpc.call` → `rpc.invoke`, ref core rpc.ts:108
+    /// `Rpc.Service.call` — the in-process registry dispatch that the
+    /// ref plugin host's `ctx.rpc(definition)` client rides). Resolves
+    /// the registration, gates unknown ids (`Err("RPC is unavailable:
+    /// …")`) / methods (`Err("Unknown RPC method: …")` — the callers
+    /// classify those to `rpc.unavailable` / `rpc.method_not_found`),
+    /// validates input/output/error-data against the definition's
+    /// JSON-Schema (G-296 discipline), and routes the call into the
+    /// OWNING plugin's guest through its `rpc.call` handler.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) async fn rpc_dispatch(
+        &self,
+        rpc_id: &str,
+        method: &str,
+        input: Value,
+        timeout: Duration,
+    ) -> Result<crate::RpcOutcome, String> {
+        use crate::json_schema;
+        let Some(registration) = self.rpc_registration(rpc_id) else {
+            return Err(format!("RPC is unavailable: {rpc_id}"));
+        };
+        if !registration.methods.iter().any(|name| name == method) {
+            return Err(format!("Unknown RPC method: {rpc_id}.{method}"));
+        }
+        let method_definition =
+            registration.definition.get("methods").and_then(|methods| methods.get(method)).cloned();
+        // Input validation (rpc.ts:117-119): a failing input never
+        // reaches the handler.
+        if let Some(schema) = method_definition.as_ref().and_then(|d| d.get("input")) {
+            if let Some(message) = json_schema::first_issue(schema, &input) {
+                return Ok(crate::RpcOutcome::Failure {
+                    type_: "rpc.invalid_input".into(),
+                    message: format!("Invalid RPC input: {message}"),
+                    data: None,
+                });
+            }
+        }
+        let result = match self
+            .request(
+                "rpc.call",
+                json!({
+                    "pluginId": registration.plugin_id,
+                    "rpcId": rpc_id,
+                    "method": method,
+                    "input": input,
+                }),
+                timeout,
+            )
+            .await
+        {
+            Ok(result) => result,
+            // Transport/host failures are the v2 `rpc.internal` leg
+            // (handler defects normalize guest-side; timeouts and a
+            // dead guest never echo internals).
+            Err(HostError::Guest(why)) => return Ok(crate::RpcOutcome::Internal(why)),
+            Err(HostError::Timeout(_) | HostError::Exited(_)) => {
+                return Ok(crate::RpcOutcome::Internal("RPC call failed".to_owned()));
+            }
+        };
+        // The guest answers `{ok: true, output?}` or `{ok: false,
+        // failure: {type, message, data?}}`.
+        if result.get("ok").and_then(Value::as_bool) == Some(false) {
+            let failure = result.get("failure").cloned().unwrap_or(Value::Null);
+            let type_ =
+                failure.get("type").and_then(Value::as_str).unwrap_or("rpc.internal").to_owned();
+            let message = failure
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("RPC call failed")
+                .to_owned();
+            let data = failure.get("data").cloned().filter(|data| !data.is_null());
+            // Declared-error data validation (rpc.ts:237-239 encodeError:
+            // encode fails ⇒ die ⇒ rpc.internal). The wire failure's
+            // type is already guest-gated against the declared errors.
+            if let (Some(declared), Some(data)) = (
+                method_definition
+                    .as_ref()
+                    .and_then(|d| d.get("errors").and_then(|errors| errors.get(&type_))),
+                data.as_ref(),
+            ) {
+                if let Some(issue) = json_schema::first_issue(declared, data) {
+                    return Ok(crate::RpcOutcome::Internal(format!("Invalid RPC error data: {issue}")));
+                }
+            }
+            if type_ == "rpc.internal" || type_ == "rpc.invalid_output" {
+                return Ok(crate::RpcOutcome::Internal(message));
+            }
+            return Ok(crate::RpcOutcome::Failure { type_, message, data });
+        }
+        // Output validation (rpc.ts:139-141).
+        if let Some(output) = result.get("output") {
+            if let Some(schema) = method_definition.as_ref().and_then(|d| d.get("output")) {
+                if let Some(message) = json_schema::first_issue(schema, output) {
+                    return Ok(crate::RpcOutcome::Internal(format!("Invalid RPC output: {message}")));
+                }
+            }
+        }
+        Ok(crate::RpcOutcome::Output(result.get("output").cloned()))
+    }
+
     /// Swap in a fresh writer channel for a new process generation;
     /// the stale sender is dropped so the old writer task exits, and
     /// everything still outstanding (sent on the dead generation's
@@ -485,6 +592,16 @@ impl Shared {
             //    through the embedder's port (async off the reader —
             //    the bus publish may await, deadlock rule 1).
             "rpc.event" => answer_rpc_event(self, id, params),
+            // -- G-379.7: `ctx.rpc.call(rpcID, method, input)` — the
+            //    guest-side CLIENT face (ref core rpc.ts:108 Rpc.call:
+            //    the in-process registry dispatch behind the ref
+            //    `ctx.rpc(definition)` client). Resolves the target in
+            //    the shared registry and routes the call into the
+            //    OWNING plugin's guest (a cross-plugin call inside the
+            //    same host). Async off the reader — the nested
+            //    `rpc.call` rides the same bridge the caller's blocked
+            //    reply waits on (deadlock rule 1).
+            "rpc.invoke" => answer_rpc_invoke(self, id, params),
             // -- plugin-ID-scoped durable KV (PLUG-D18): the DB-backed
             //    port answers asynchronously off the reader (deadlock
             //    rule 1 — the backend's IO never blocks the pipe).
@@ -508,8 +625,15 @@ impl Shared {
             }
             // -- G-24: `ctx.vcs.get/base/reload` over the engine's vcs
             //    adapters (async off the reader).
-            "vcs.get" | "vcs.base" | "vcs.reload" => {
+            "vcs.get" | "vcs.base" | "vcs.reload" | "vcs.branch.list" | "vcs.status"
+            | "vcs.diff" => {
                 self.answer_vcs_async(id, method, params);
+                None
+            }
+            // -- G-379.8: `ctx.worktree.list/create/remove/refresh` over
+            // the engine's worktree inventory (async off the reader).
+            "worktree.list" | "worktree.create" | "worktree.remove" | "worktree.refresh" => {
+                self.answer_worktree_async(id, method, params);
                 None
             }
             // -- G-64: `ctx.provider.list/get/reload` over the engine's
@@ -829,9 +953,10 @@ impl Shared {
     }
 
     /// The async `ctx.vcs.*` path (G-24): the engine's vcs adapters
-    /// answer off the reader.
+    /// answer off the reader. G-379.8 adds the branch.list/status/diff
+    /// read faces (ref promise adapter.ts:510-514).
     fn answer_vcs_async(self: &Arc<Self>, id: u64, method: &str, params: &Value) {
-        let _ = params;
+        let args = params.get("args").cloned().unwrap_or(Value::Null);
         let Some(handle) = self.runtime_handle.clone() else {
             let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
             let _ = outbound.send(protocol::error_response(id, "plugin host runtime unavailable"));
@@ -861,7 +986,77 @@ impl Shared {
                     Ok(()) => protocol::response(id, Value::Null),
                     Err(message) => protocol::error_response(id, &message),
                 },
+                // G-379.8 — `vcs.branch.list({search?, limit?})`.
+                "vcs.branch.list" => {
+                    let search = args.get("search").and_then(Value::as_str).map(str::to_owned);
+                    let limit = args.get("limit").and_then(Value::as_u64);
+                    match port.branch_list(search.as_deref(), limit).await {
+                        Ok(value) => protocol::response(id, json!({ "value": value })),
+                        Err(message) => protocol::error_response(id, &message),
+                    }
+                }
+                // G-379.8 — `vcs.status()`.
+                "vcs.status" => match port.status().await {
+                    Ok(value) => protocol::response(id, json!({ "value": value })),
+                    Err(message) => protocol::error_response(id, &message),
+                },
+                // G-379.8 — `vcs.diff({mode, base?, context?})`.
+                "vcs.diff" => {
+                    let mode =
+                        args.get("mode").and_then(Value::as_str).unwrap_or("working").to_owned();
+                    let base = args.get("base").and_then(Value::as_str).map(str::to_owned);
+                    let context = args.get("context").and_then(Value::as_i64);
+                    match port.diff(&mode, base.as_deref(), context).await {
+                        Ok(value) => protocol::response(id, json!({ "value": value })),
+                        Err(message) => protocol::error_response(id, &message),
+                    }
+                }
                 other => protocol::error_response(id, &format!("unknown vcs method {other:?}")),
+            };
+            let _ = outbound.send(reply);
+        });
+    }
+
+    /// G-379.8 — the async `ctx.worktree.*` op path: the engine's
+    /// worktree inventory answers off the reader (ref promise
+    /// adapter.ts:558-566).
+    fn answer_worktree_async(self: &Arc<Self>, id: u64, method: &str, params: &Value) {
+        let args = params.get("args").cloned().unwrap_or(Value::Null);
+        let Some(handle) = self.runtime_handle.clone() else {
+            let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+            let _ = outbound.send(protocol::error_response(id, "plugin host runtime unavailable"));
+            return;
+        };
+        let Some(port) = self.config.worktree_port.clone() else {
+            let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+            let _ = outbound.send(protocol::error_response(
+                id,
+                &format!("worktree.{method}: no worktree engine attached to the plugin host"),
+            ));
+            return;
+        };
+        let method = method.to_owned();
+        let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+        handle.spawn(async move {
+            let project_id = args.get("projectID").and_then(Value::as_str).unwrap_or_default();
+            let reply = match method.as_str() {
+                "worktree.list" => match port.list(project_id).await {
+                    Ok(value) => protocol::response(id, json!({ "value": value })),
+                    Err(message) => protocol::error_response(id, &message),
+                },
+                "worktree.create" => match port.create(args).await {
+                    Ok(value) => protocol::response(id, json!({ "value": value })),
+                    Err(message) => protocol::error_response(id, &message),
+                },
+                "worktree.remove" => match port.remove(args).await {
+                    Ok(()) => protocol::response(id, Value::Null),
+                    Err(message) => protocol::error_response(id, &message),
+                },
+                "worktree.refresh" => match port.refresh(project_id).await {
+                    Ok(()) => protocol::response(id, Value::Null),
+                    Err(message) => protocol::error_response(id, &message),
+                },
+                other => protocol::error_response(id, &format!("unknown worktree method {other:?}")),
             };
             let _ = outbound.send(reply);
         });
@@ -1536,6 +1731,71 @@ fn answer_rpc_event(shared: &Arc<Shared>, id: u64, params: &Value) -> Option<Str
             Err(message) => protocol::error_response(id, &message),
         };
         let _ = outbound.send(reply);
+    });
+    None
+}
+
+/// G-379.7 — the `rpc.invoke` guest-request arm: the guest-side rpc
+/// CLIENT face. Mirrors ref core rpc.ts:108-142 (`Rpc.Service.call` —
+/// what the promise adapter's `ctx.rpc(definition)` client runs):
+/// unknown ids/methods are TYPED failures (`rpc.unavailable` /
+/// `rpc.method_not_found`, classified like the HTTP layer's
+/// `RpcCallError::unregistered`) rather than transport errors, so the
+/// guest can catch them; everything else routes through
+/// [`Shared::rpc_dispatch`] (schema discipline + the owning plugin's
+/// `rpc.call` handler). Runs off the reader task — the dispatch
+/// awaits the nested guest call on the same bridge.
+fn answer_rpc_invoke(shared: &Arc<Shared>, id: u64, params: &Value) -> Option<String> {
+    let Some(rpc_id) = params.get("rpcId").and_then(Value::as_str).filter(|id| !id.is_empty())
+    else {
+        return Some(protocol::error_response(id, "rpc.invoke requires an rpcId"));
+    };
+    let Some(method) = params.get("method").and_then(Value::as_str).filter(|name| !name.is_empty())
+    else {
+        return Some(protocol::error_response(id, "rpc.invoke requires a method"));
+    };
+    let Some(handle) = shared.runtime_handle.clone() else {
+        return Some(protocol::error_response(id, "plugin host runtime unavailable"));
+    };
+    let input = params.get("input").cloned().unwrap_or(Value::Null);
+    let timeout = shared.config.dispatch_timeout.max(Duration::from_secs(10));
+    let shared = Arc::clone(shared);
+    let rpc_id = rpc_id.to_owned();
+    let method = method.to_owned();
+    let outbound = shared.outbound.read().expect("outbound lock poisoned").clone();
+    handle.spawn(async move {
+        // The v2 outcome shape the guest's handleRpcCall answers host
+        // calls with — the client face speaks the same envelope.
+        let body = match shared.rpc_dispatch(&rpc_id, &method, input, timeout).await {
+            Ok(crate::RpcOutcome::Output(output)) => match output {
+                Some(output) => json!({ "ok": true, "output": output }),
+                None => json!({ "ok": true }),
+            },
+            Ok(crate::RpcOutcome::Failure { type_, message, data }) => {
+                let mut failure = json!({ "type": type_, "message": message });
+                if let Some(data) = data {
+                    failure["data"] = data;
+                }
+                json!({ "ok": false, "failure": failure })
+            }
+            Ok(crate::RpcOutcome::Internal(message)) => {
+                json!({ "ok": false, "failure": { "type": "rpc.internal", "message": message } })
+            }
+            // Unregistered id / unknown method (v2's classification,
+            // RpcCallError::unregistered): typed failures, never a
+            // transport error — the guest client throws catchable.
+            Err(message) => {
+                let type_ = if message.starts_with("RPC is unavailable:") {
+                    "rpc.unavailable"
+                } else if message.starts_with("Unknown RPC method:") {
+                    "rpc.method_not_found"
+                } else {
+                    "rpc.internal"
+                };
+                json!({ "ok": false, "failure": { "type": type_, "message": message } })
+            }
+        };
+        let _ = outbound.send(protocol::response(id, body));
     });
     None
 }

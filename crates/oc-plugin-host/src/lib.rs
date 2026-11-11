@@ -106,6 +106,7 @@ pub use context::{
     update::{collect_stale, global_cache as update_cache, npm_check, update, UpdateCache},
     Bridge, HostState, IntegrationPort, ModelPort, NoSessionEngine, NoToolEngine, PermissionPort,
     ProviderPort, ReferencePort, SessionPort, TerminalPort, ToolPort, VcsPort, WebsearchPort,
+    WorktreePort,
     MUTATING_DISPATCH_TIMEOUT, SESSION_METHODS,
 };
 pub use registrations::{
@@ -160,9 +161,13 @@ pub struct PluginHostConfig {
     /// `ctx.websearch.providers/query` routing target (G-24): the
     /// engine's `WebSearch` service. `None` declines every call.
     pub websearch_port: Option<Arc<dyn WebsearchPort>>,
-    /// `ctx.vcs.get/base` routing target (G-24): the engine's vcs
+    /// `ctx.vcs.*` routing target (G-24 + G-379.8): the engine's vcs
     /// adapters. `None` declines every call.
     pub vcs_port: Option<Arc<dyn VcsPort>>,
+    /// `ctx.worktree.list/create/remove/refresh` routing target
+    /// (G-379.8): the engine's worktree inventory. `None` declines
+    /// every call.
+    pub worktree_port: Option<Arc<dyn WorktreePort>>,
     /// `ctx.provider.list/get/reload` routing target (G-64): the
     /// engine's provider registry. `None` declines every call.
     pub provider_port: Option<Arc<dyn ProviderPort>>,
@@ -204,6 +209,7 @@ impl Default for PluginHostConfig {
             permission_port: None,
             websearch_port: None,
             vcs_port: None,
+            worktree_port: None,
             provider_port: None,
             model_port: None,
             reference_port: None,
@@ -865,16 +871,14 @@ impl PluginHost {
     /// `rpc.method_not_found`), and routes the call through the guest's
     /// `rpc.call` handler.
     ///
-    /// G-296 — the ref's schema discipline (rpc.ts:115-141) executes
-    /// here, host-side: the input is validated against the method's
-    /// JSON-Schema `input` BEFORE dispatch (failure ⇒ the handler never
-    /// runs, `rpc.invalid_input`), the output against `output` after
-    /// (failure ⇒ `rpc.invalid_output`), and a declared failure's
-    /// `data` against the declared error's schema (failure ⇒ the ref's
-    /// die-on-encode path, surfaced as `rpc.internal`). Definitions
-    /// whose schemas degraded to skeletons over JSON (Effect Schema
-    /// instances) validate everything — the lax fallback.
-    #[allow(clippy::too_many_lines)]
+    /// G-296 — the ref's schema discipline (rpc.ts:115-141) executes in
+    /// the shared dispatch core ([`Shared::rpc_dispatch`], also the
+    /// G-379.7 guest client face): the input is validated against the
+    /// method's JSON-Schema `input` BEFORE dispatch (failure ⇒ the
+    /// handler never runs, `rpc.invalid_input`), the output against
+    /// `output` after (failure ⇒ `rpc.invalid_output`), and a declared
+    /// failure's `data` against the declared error's schema (failure ⇒
+    /// the ref's die-on-encode path, surfaced as `rpc.internal`).
     pub async fn rpc_call_async(
         &self,
         rpc_id: &str,
@@ -882,91 +886,10 @@ impl PluginHost {
         input: Value,
         timeout: Duration,
     ) -> Result<RpcOutcome, String> {
-        use crate::json_schema;
         let Some(facade) = &self.facade else {
             return Err(format!("RPC is unavailable: {rpc_id}"));
         };
-        let Some(registration) = facade.shared.rpc_registration(rpc_id) else {
-            return Err(format!("RPC is unavailable: {rpc_id}"));
-        };
-        if !registration.methods.iter().any(|name| name == method) {
-            return Err(format!("Unknown RPC method: {rpc_id}.{method}"));
-        }
-        let method_definition =
-            registration.definition.get("methods").and_then(|methods| methods.get(method)).cloned();
-        // Input validation (rpc.ts:117-119): a failing input never
-        // reaches the handler.
-        if let Some(schema) = method_definition.as_ref().and_then(|d| d.get("input")) {
-            if let Some(message) = json_schema::first_issue(schema, &input) {
-                return Ok(RpcOutcome::Failure {
-                    type_: "rpc.invalid_input".into(),
-                    message: format!("Invalid RPC input: {message}"),
-                    data: None,
-                });
-            }
-        }
-        let result = match facade
-            .shared
-            .request(
-                "rpc.call",
-                json!({
-                    "pluginId": registration.plugin_id,
-                    "rpcId": rpc_id,
-                    "method": method,
-                    "input": input,
-                }),
-                timeout,
-            )
-            .await
-        {
-            Ok(result) => result,
-            // Transport/host failures are the v2 `rpc.internal` leg
-            // (handler defects normalize guest-side; timeouts and a
-            // dead guest never echo internals).
-            Err(HostError::Guest(why)) => return Ok(RpcOutcome::Internal(why)),
-            Err(HostError::Timeout(_) | HostError::Exited(_)) => {
-                return Ok(RpcOutcome::Internal("RPC call failed".to_owned()));
-            }
-        };
-        // The guest answers `{ok: true, output?}` or `{ok: false,
-        // failure: {type, message, data?}}`.
-        if result.get("ok").and_then(Value::as_bool) == Some(false) {
-            let failure = result.get("failure").cloned().unwrap_or(Value::Null);
-            let type_ =
-                failure.get("type").and_then(Value::as_str).unwrap_or("rpc.internal").to_owned();
-            let message = failure
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("RPC call failed")
-                .to_owned();
-            let data = failure.get("data").cloned().filter(|data| !data.is_null());
-            // Declared-error data validation (rpc.ts:237-239 encodeError:
-            // encode fails ⇒ die ⇒ rpc.internal). The wire failure's
-            // type is already guest-gated against the declared errors.
-            if let (Some(declared), Some(data)) = (
-                method_definition
-                    .as_ref()
-                    .and_then(|d| d.get("errors").and_then(|errors| errors.get(&type_))),
-                data.as_ref(),
-            ) {
-                if let Some(issue) = json_schema::first_issue(declared, data) {
-                    return Ok(RpcOutcome::Internal(format!("Invalid RPC error data: {issue}")));
-                }
-            }
-            if type_ == "rpc.internal" || type_ == "rpc.invalid_output" {
-                return Ok(RpcOutcome::Internal(message));
-            }
-            return Ok(RpcOutcome::Failure { type_, message, data });
-        }
-        // Output validation (rpc.ts:139-141).
-        if let Some(output) = result.get("output") {
-            if let Some(schema) = method_definition.as_ref().and_then(|d| d.get("output")) {
-                if let Some(message) = json_schema::first_issue(schema, output) {
-                    return Ok(RpcOutcome::Internal(format!("Invalid RPC output: {message}")));
-                }
-            }
-        }
-        Ok(RpcOutcome::Output(result.get("output").cloned()))
+        facade.shared.rpc_dispatch(rpc_id, method, input, timeout).await
     }
 
     /// Drain the pending plugin → TUI UI requests (the wave-3 slot
@@ -1252,6 +1175,7 @@ fn supervisor_config(
         permission_port: config.permission_port.take(),
         websearch_port: config.websearch_port.take(),
         vcs_port: config.vcs_port.take(),
+        worktree_port: config.worktree_port.take(),
         provider_port: config.provider_port.take(),
         model_port: config.model_port.take(),
         reference_port: config.reference_port.take(),

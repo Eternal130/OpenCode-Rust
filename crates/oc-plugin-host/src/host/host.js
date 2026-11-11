@@ -1146,6 +1146,35 @@ function makeCtx(pluginId, options) {
       async reload() {
         await hostRequest("vcs.reload", { pluginId, args: {} });
       },
+      // G-379.8 — ref promise adapter.ts:510-514's read faces over the
+      // engine's vcs adapters (branch list, status, diff).
+      async branch(input) {
+        const args = typeof input === "string" ? { search: input } : input ?? {};
+        const result = await hostRequest("vcs.branch.list", {
+          pluginId,
+          args: {
+            search: typeof args.search === "string" ? args.search : null,
+            limit: typeof args.limit === "number" ? args.limit : null,
+          },
+        });
+        return result && typeof result === "object" && "value" in result ? result.value : result;
+      },
+      async status() {
+        const result = await hostRequest("vcs.status", { pluginId, args: {} });
+        return result && typeof result === "object" && "value" in result ? result.value : result;
+      },
+      async diff(input) {
+        const args = input ?? {};
+        const result = await hostRequest("vcs.diff", {
+          pluginId,
+          args: {
+            mode: typeof args.mode === "string" ? args.mode : "working",
+            base: typeof args.base === "string" ? args.base : null,
+            context: typeof args.context === "number" ? args.context : null,
+          },
+        });
+        return result && typeof result === "object" && "value" in result ? result.value : result;
+      },
       async transform(cb) {
         await cb({
           add: (definition) => {
@@ -1382,6 +1411,28 @@ function makeCtx(pluginId, options) {
       async reload() {
         await materializeDomain("worktree", pluginId);
       },
+      // G-379.8 — ref promise adapter.ts:558-566's op faces over the
+      // engine's worktree inventory (the same service the HTTP
+      // /api/worktree handlers ride).
+      async list(input) {
+        const projectID = typeof input === "string" ? input : input?.projectID;
+        const result = await hostRequest("worktree.list", {
+          pluginId,
+          args: { projectID: String(projectID ?? "") },
+        });
+        return result && typeof result === "object" && "value" in result ? result.value : result;
+      },
+      async create(input) {
+        const result = await hostRequest("worktree.create", { pluginId, args: input ?? {} });
+        return result && typeof result === "object" && "value" in result ? result.value : result;
+      },
+      async remove(input) {
+        await hostRequest("worktree.remove", { pluginId, args: input ?? {} });
+      },
+      async refresh(input) {
+        const projectID = typeof input === "string" ? input : input?.projectID;
+        await hostRequest("worktree.refresh", { pluginId, args: { projectID: String(projectID ?? "") } });
+      },
       async transform(cb) {
         await cb({
           add: (definition) => {
@@ -1588,6 +1639,42 @@ function makeCtx(pluginId, options) {
             },
           },
         };
+      },
+      // G-379.7 — the guest-side CLIENT face (ref promise adapter.ts:77-113
+      // rpcFromEffect's `client(definition)` over core rpc.ts:108's
+      // in-process `Rpc.call`): a call resolves the registration in the
+      // host registry (any plugin's, including this one) and routes into
+      // the owning handler. Unknown ids/methods throw typed errors
+      // (`error.type` = "rpc.unavailable" / "rpc.method_not_found" /
+      // declared error types), mirroring the ref client's failures.
+      async call(rpcId, method, input) {
+        const result = await hostRequest("rpc.invoke", {
+          pluginId,
+          rpcId: String(rpcId ?? ""),
+          method: String(method ?? ""),
+          input: input === undefined ? null : input,
+        });
+        if (result && typeof result === "object" && result.ok === false) {
+          const failure = result.failure ?? {};
+          const error = new Error(String(failure.message ?? "RPC call failed"));
+          error.type = String(failure.type ?? "rpc.internal");
+          if (failure.data !== undefined) error.data = failure.data;
+          throw error;
+        }
+        return result && typeof result === "object" && "output" in result ? result.output : undefined;
+      },
+      // The ref's `ctx.rpc(definition)` client constructor: one method
+      // function per declared method, all routing through `call` (the
+      // bounded deviation: the ref makes ctx.rpc itself callable —
+      // here the same face lives at `ctx.rpc.client(definition)`).
+      client(definition) {
+        const id = String(definition?.id ?? "");
+        const methods = definition?.methods && typeof definition.methods === "object" ? definition.methods : {};
+        const client = {};
+        for (const name of Object.keys(methods)) {
+          client[name] = (input) => this.call(id, name, input);
+        }
+        return client;
       },
     },
 
