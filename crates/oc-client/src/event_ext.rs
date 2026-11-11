@@ -52,12 +52,19 @@ impl crate::Client {
     /// `server.connected` marker; on stream end/error a fresh
     /// `subscribe()` opens a replacement connection (no auto-retry —
     /// the server is live-only, resync is snapshot-based per G-14).
+    ///
+    /// G-376①: cached per client (all clones share ONE multiplexer, the
+    /// ref's `make()` builds exactly one `SharedEvents` per client), so
+    /// repeated `subscribe()`/`on()` calls fan out over a single
+    /// connection instead of amplifying connections.
     #[must_use]
-    pub fn shared_events(&self) -> SharedEvents<serde_json::Value> {
-        let client = self.clone();
-        SharedEvents::new(Arc::new(move |activity| {
-            let client = client.clone();
-            Ok(connect_event_stream(client, activity))
+    pub fn shared_events(&self) -> Arc<SharedEvents<serde_json::Value>> {
+        Arc::clone(self.shared_value.get_or_init(|| {
+            let client = self.clone();
+            Arc::new(SharedEvents::new(Arc::new(move |activity| {
+                let client = client.clone();
+                Ok(connect_event_stream(client, activity))
+            })))
         }))
     }
 
@@ -66,12 +73,17 @@ impl crate::Client {
     /// through [`crate::bus_event::BusEventFrame`] so consumers
     /// dispatch on [`crate::bus_event::EventKind`] instead of probing
     /// `get("type")` strings; envelope-shape drift is a loud error.
+    /// Cached per client like [`Client::shared_events`] (G-376①) —
+    /// the `rpc.events` (`on()`/`subscribe_events`) surface joins this
+    /// one multiplexer.
     #[must_use]
-    pub fn shared_bus_events(&self) -> SharedEvents<crate::bus_event::BusEventFrame> {
-        let client = self.clone();
-        SharedEvents::new(Arc::new(move |activity| {
-            let client = client.clone();
-            Ok(connect_bus_event_stream(client, activity))
+    pub fn shared_bus_events(&self) -> Arc<SharedEvents<crate::bus_event::BusEventFrame>> {
+        Arc::clone(self.shared_bus.get_or_init(|| {
+            let client = self.clone();
+            Arc::new(SharedEvents::new(Arc::new(move |activity| {
+                let client = client.clone();
+                Ok(connect_bus_event_stream(client, activity))
+            })))
         }))
     }
 }

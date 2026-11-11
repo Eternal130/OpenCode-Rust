@@ -37,6 +37,10 @@ pub use sse::{SseFrame, SseStream, MAX_SSE_EVENT_BYTES};
 pub use transport::RequestOptions;
 
 use base64::Engine as _;
+use std::sync::{Arc, OnceLock};
+
+use bus_event::BusEventFrame;
+use shared_events::SharedEvents;
 
 /// HTTP client handle. Auth is injected per request: Basic credentials via
 /// the `Authorization` header (v2 merges caller headers; use
@@ -49,6 +53,13 @@ pub struct Client {
     basic: Option<(String, Option<String>)>,
     auth_token: Option<String>,
     default_headers: reqwest::header::HeaderMap,
+    /// The client-wide shared `/api/event` multiplexers (G-376①),
+    /// mirroring the ref's `make()` constructing ONE `SharedEvents`
+    /// instance per client that every `event`/`rpc.events` subscriber
+    /// joins: one SSE connection per (client) instead of one per
+    /// `on()`/`subscribe()`. Cached in `OnceLock` so clones share it.
+    shared_value: Arc<OnceLock<Arc<SharedEvents<serde_json::Value>>>>,
+    shared_bus: Arc<OnceLock<Arc<SharedEvents<BusEventFrame>>>>,
 }
 
 impl Client {
@@ -66,6 +77,8 @@ impl Client {
             basic: None,
             auth_token: None,
             default_headers: reqwest::header::HeaderMap::new(),
+            shared_value: Arc::new(OnceLock::new()),
+            shared_bus: Arc::new(OnceLock::new()),
         })
     }
 

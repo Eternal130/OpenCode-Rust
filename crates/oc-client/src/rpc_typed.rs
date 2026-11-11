@@ -210,18 +210,22 @@ impl RpcClient {
         })
     }
 
-    /// `events.subscribe(name)` (promise/rpc.ts:57-90): opens the shared
-    /// `/api/event` SSE and filters to the definition's
-    /// `rpc.<id>.<name>` wire type. Unknown event names error loudly
-    /// (`Unknown RPC event: <id>.<name>`), exactly like the ref.
+    /// `events.subscribe(name)` (promise/rpc.ts:57-90): joins the
+    /// client-wide SHARED `/api/event` stream (G-376① — the ref's
+    /// `makeRpc(raw, events)` receives the client's single
+    /// `SharedEvents` instance from `make()`, so every `on()`/
+    /// `subscribe()` fans out over one connection) and filters to the
+    /// definition's `rpc.<id>.<name>` wire type. Unknown event names
+    /// error loudly (`Unknown RPC event: <id>.<name>`), exactly like
+    /// the ref.
     pub async fn subscribe_events(
         &self,
         name: &str,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<BusEventFrame, ClientError>> + Send>>, ClientError>
     {
         let type_ = self.event_type(name)?;
-        let sse = self.client.event().subscribe().await?;
-        Ok(filter_rpc_events(crate::bus_event::sse_frames(sse), type_))
+        let shared = self.client.shared_bus_events();
+        Ok(filter_rpc_events(shared.subscribe(), type_))
     }
 
     /// `events.on(name, handler)` (promise/rpc.ts:95-110): spawns a task
@@ -295,6 +299,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use serde::Deserialize;
     use serde_json::json;
 
@@ -451,6 +457,81 @@ mod tests {
         assert_eq!(seen, ["rpc.demo.updated", "rpc.demo.updated"]);
         guard.unsubscribe();
         server.abort();
+    }
+
+    /// G-376①: two `on()` subscriptions join the client-wide shared
+    /// `/api/event` multiplexer — one SSE connection total (the ref's
+    /// `makeRpc` receives the client's single `SharedEvents` instance).
+    #[tokio::test]
+    async fn on_subscriptions_share_one_sse_connection() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let connections = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&connections);
+        let task = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else { return };
+                counter.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    use tokio::io::AsyncWriteExt;
+                    let body = format!(
+                        "{}{}",
+                        sse_payload("server.connected"),
+                        sse_payload("rpc.demo.updated")
+                    );
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n{body}"
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    // Hold the connection open so both subscribers join it.
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                });
+            }
+        });
+        let client = Client::new(&format!("http://{addr}")).expect("client");
+        let rpc = demo_definition().client(client.clone());
+
+        let (tx1, mut rx1) = tokio::sync::mpsc::unbounded_channel();
+        let (tx2, mut rx2) = tokio::sync::mpsc::unbounded_channel();
+        let first = rpc
+            .on("updated", move |frame| {
+                let tx = tx1.clone();
+                async move {
+                    let _ = tx.send(frame.type_);
+                }
+            })
+            .await
+            .expect("first subscribe");
+        let second = rpc
+            .on("updated", move |frame| {
+                let tx = tx2.clone();
+                async move {
+                    let _ = tx.send(frame.type_);
+                }
+            })
+            .await
+            .expect("second subscribe");
+
+        for received in [&mut rx1, &mut rx2] {
+            let mut seen = Vec::new();
+            while seen.len() < 1 {
+                seen.push(
+                    received.recv().await.unwrap_or_else(|| panic!("got {:?}", seen.len())),
+                );
+            }
+            assert_eq!(seen, ["rpc.demo.updated"]);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert_eq!(
+            connections.load(Ordering::SeqCst),
+            1,
+            "both on() subscriptions must share one SSE connection"
+        );
+        first.unsubscribe();
+        second.unsubscribe();
+        task.abort();
     }
 
     #[tokio::test]

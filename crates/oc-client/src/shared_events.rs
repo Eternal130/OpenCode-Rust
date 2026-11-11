@@ -40,6 +40,13 @@ use tokio::task::JoinHandle;
 use crate::error::ClientError;
 
 /// Per-subscriber queued-event cap (v2 `capacity = 4_096`).
+///
+/// Capacity accounting is exactly the TS gate: `push` errors when
+/// `queued.length === capacity` (shared-events.ts), i.e. the
+/// (capacity+1)-th undelivered event terminates the subscriber; a
+/// tokio channel of this size fails `try_send` on precisely that same
+/// event, so the counts match one-for-one (G-376⑤ re-verified — no
+/// off-by-one).
 pub const SUBSCRIBER_CAPACITY: usize = 4096;
 
 /// Events multiplexed by [`SharedEvents`]; knows the connection marker.
@@ -81,6 +88,15 @@ pub struct SharedEvents<A: SharedEvent> {
     inner: Arc<Inner<A>>,
 }
 
+// The connect factory is a closure (not `Debug`); `Client` embeds the
+// cached multiplexer and derives `Debug`, so this manual impl keeps that
+// derive working.
+impl<A: SharedEvent> std::fmt::Debug for SharedEvents<A> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SharedEvents").finish_non_exhaustive()
+    }
+}
+
 struct Inner<A: SharedEvent> {
     connect: Connect<A>,
     state: Mutex<State<A>>,
@@ -106,11 +122,19 @@ struct Sub<A: SharedEvent> {
     shared: Arc<SubShared>,
 }
 
-/// Completion state of a subscription: live, cleanly ended, or failed.
+/// Completion state of a subscription: live, cleanly ended, failed, or
+/// terminated for overflowing its queue.
 enum Terminal {
     Live,
     Ended,
+    /// The source failed. Buffered events stay readable first — the TS
+    /// subscriber's `finish` overrides the discard default to `false`
+    /// (shared-events.ts `finish(result, false)`).
     Failed(Arc<ClientError>),
+    /// The subscriber overflowed its queue. Buffered events are
+    /// DISCARDED — the TS `push` path calls the local `finish` closure
+    /// whose discard default is `true`.
+    Overflow(Arc<ClientError>),
 }
 
 /// Per-subscription terminal slot.
@@ -124,6 +148,12 @@ impl SubShared {
             Some(error) => Terminal::Failed(error),
             None => Terminal::Ended,
         };
+    }
+
+    /// Overflow termination: the queue is discarded (the TS `push`
+    /// path's local `finish` closure defaults `discard` to `true`).
+    fn finish_overflow(&self, error: Arc<ClientError>) {
+        *self.terminal.lock().expect("terminal lock") = Terminal::Overflow(error);
     }
 }
 
@@ -249,11 +279,10 @@ impl<A: SharedEvent> SharedEvents<A> {
         if let Some(conn) = state.current.as_mut() {
             if conn.id == conn_id {
                 if let Some(sub) = conn.subscribers.remove(&sub_id) {
-                    sub.shared.finish(Some(Arc::new(ClientError::SubscriberCapacity(
+                    sub.shared.finish_overflow(Arc::new(ClientError::SubscriberCapacity(
                         SUBSCRIBER_CAPACITY,
-                    ))));
-                }
-            }
+                    )));
+                }            }
         }
     }
 }
@@ -329,7 +358,7 @@ impl<A: SharedEvent> SharedSubscription<A> {
     #[must_use]
     pub fn terminal_error(&self) -> Option<Arc<ClientError>> {
         match &*self.shared.terminal.lock().expect("terminal lock") {
-            Terminal::Failed(error) => Some(Arc::clone(error)),
+            Terminal::Failed(error) | Terminal::Overflow(error) => Some(Arc::clone(error)),
             _ => None,
         }
     }
@@ -343,7 +372,9 @@ impl<A: SharedEvent> SharedSubscription<A> {
             // terminal error repeatedly instead of ending the stream.
             // The clone is a field-wise proxy (`ClientError: !Clone`);
             // the identity-preserving original stays in terminal_error().
-            Terminal::Failed(error) => Poll::Ready(Some(Err(clone_error(error)))),
+            Terminal::Failed(error) | Terminal::Overflow(error) => {
+                Poll::Ready(Some(Err(clone_error(error))))
+            }
         }
     }
 }
@@ -390,9 +421,16 @@ impl<A: SharedEvent> Stream for SharedSubscription<A> {
                 &this.shared,
             ));
         }
-        // An error completion discards queued events (v2 `finish` default);
-        // a clean completion lets them drain first.
-        if matches!(&*this.shared.terminal.lock().expect("terminal lock"), Terminal::Failed(_)) {
+        // G-376⑤: a FAILED source completion still yields buffered
+        // events first — the v2 subscriber's `finish` overrides the
+        // discard default to `false` (shared-events.ts
+        // `finish(result, false)`), so events already queued when the
+        // source errored stay readable and the terminal error applies
+        // only after the queue drains (and then, per G-125, rejects on
+        // every later `next()`). Only OVERFLOW discards its buffer (the
+        // TS `push` path's local `finish` closure defaults discard to
+        // `true`).
+        if matches!(&*this.shared.terminal.lock().expect("terminal lock"), Terminal::Overflow(_)) {
             this.rx = None;
             return this.terminal_poll();
         }
@@ -408,7 +446,10 @@ impl<A: SharedEvent> Stream for SharedSubscription<A> {
                 this.terminal_poll()
             }
             // Overflow terminates immediately (buffered discarded),
-            // matching the TS `push` behavior after completion.
+            // matching the TS `push` behavior after completion. This
+            // branch only trips once the queue is EMPTY (a non-empty
+            // queue returns Ready above) — an empty queue plus a
+            // terminal state means the completion result applies now.
             Poll::Pending => {
                 if matches!(
                     &*this.shared.terminal.lock().expect("terminal lock"),
@@ -649,9 +690,18 @@ mod tests {
         poke!(second);
         harness.at(0).await;
         harness.push(0, event("server.connected", 1));
+        assert!(first.next().await.is_some());
+        assert!(second.next().await.is_some());
+        // G-376⑤: events queued when the source errors stay readable —
+        // the error applies only after the buffer drains.
+        harness.push(0, event("session.updated", 42));
         harness.fail(0, ClientError::MalformedResponse("boom".into()));
 
         for subscription in [&mut first, &mut second] {
+            assert_eq!(
+                subscription.next().await.unwrap().expect("buffered event"),
+                event("session.updated", 42)
+            );
             match subscription.next().await {
                 Some(Err(ClientError::MalformedResponse(message))) => assert_eq!(message, "boom"),
                 other => panic!("expected the source error, got {other:?}"),
