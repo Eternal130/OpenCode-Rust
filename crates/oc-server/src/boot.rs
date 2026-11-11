@@ -561,6 +561,15 @@ pub async fn boot_and_serve_with_listener(
     }
     app_state.watched_config = Some(watched_config);
     let state = Arc::new(app_state);
+    // G-379.8 — ctx.worktree.list/create/remove/refresh over the shared
+    // worktree handler cores: the port takes the AppState handle (the
+    // strategy registry seed + every later mutation stay visible; a
+    // pre-Arc clone would freeze a stale registry).
+    if let Some(boot) = &state.plugins {
+        boot.worktree_slot.fill(Arc::new(crate::plugins::EngineWorktreePort {
+            state: Arc::clone(&state),
+        }));
+    }
     // RUNTIME-L01 — restart continuity (`installRestartContinuity`,
     // server process.ts:237-240 → `SessionRestart.resumeSuspendedSessions`
     // forked at boot before ready): execution claims are written at turn

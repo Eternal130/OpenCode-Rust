@@ -100,6 +100,9 @@ pub struct PluginBoot {
     pub websearch_slot: Arc<EngineWebsearchSlot>,
     /// The vcs-port slot (G-24; filled after `Engine::boot`).
     pub vcs_slot: Arc<EngineVcsSlot>,
+    /// The worktree-port slot (G-379.8; filled after `Engine::boot` —
+    /// `ctx.worktree.list/create/remove/refresh`).
+    pub worktree_slot: Arc<EngineWorktreeSlot>,
     /// The provider-port slot (G-64; filled after `Engine::boot`).
     pub provider_slot: Arc<EngineProviderSlot>,
     /// The model-port slot (G-147; filled after `Engine::boot`).
@@ -164,6 +167,7 @@ impl PluginBoot {
             permission_slot: Arc::new(EnginePermissionSlot::default()),
             websearch_slot: Arc::new(EngineWebsearchSlot::default()),
             vcs_slot: Arc::new(EngineVcsSlot::default()),
+            worktree_slot: Arc::new(EngineWorktreeSlot::default()),
             provider_slot: Arc::new(EngineProviderSlot::default()),
             model_slot: Arc::new(EngineModelSlot::default()),
             reference_slot: Arc::new(EngineReferenceSlot::default()),
@@ -378,6 +382,7 @@ pub fn boot(
     let permission_slot = Arc::new(EnginePermissionSlot::default());
     let websearch_slot = Arc::new(EngineWebsearchSlot::default());
     let vcs_slot = Arc::new(EngineVcsSlot::default());
+    let worktree_slot = Arc::new(EngineWorktreeSlot::default());
     let provider_slot = Arc::new(EngineProviderSlot::default());
     let model_slot = Arc::new(EngineModelSlot::default());
     let reference_slot = Arc::new(EngineReferenceSlot::default());
@@ -397,6 +402,7 @@ pub fn boot(
             permission_slot,
             websearch_slot,
             vcs_slot,
+            worktree_slot,
             provider_slot,
             model_slot,
             reference_slot,
@@ -477,6 +483,12 @@ pub fn boot(
         // Engine::boot, the permission-port pattern).
         websearch_port: Some(Arc::clone(&websearch_slot) as Arc<dyn oc_plugin_host::WebsearchPort>),
         vcs_port: Some(Arc::clone(&vcs_slot) as Arc<dyn oc_plugin_host::VcsPort>),
+        // G-379.8: ctx.worktree.list/create/remove/refresh over the
+        // shared worktree handler cores (slot filled after Engine::boot
+        // with the AppState handle, the same pattern).
+        worktree_port: Some(
+            Arc::clone(&worktree_slot) as Arc<dyn oc_plugin_host::WorktreePort>
+        ),
         // G-64: ctx.provider.*/reference.*/experimental.terminal.read/
         // integration.* over the boot location's engine services (slots
         // filled after Engine::boot, the same pattern).
@@ -516,6 +528,7 @@ pub fn boot(
         permission_slot,
         websearch_slot,
         vcs_slot,
+        worktree_slot,
         provider_slot,
         model_slot,
         reference_slot,
@@ -2653,6 +2666,57 @@ impl oc_plugin_host::VcsPort for EngineVcsPort {
         }
         Ok(Value::Null)
     }
+
+    /// G-379.8 — `vcs.branch.list({search?, limit?})`: the shared
+    /// handler core (handlers/project.rs `vcs_branch_list_data` — the
+    /// same service the HTTP `/api/vcs/branch` route rides).
+    async fn branch_list(
+        &self,
+        search: Option<&str>,
+        limit: Option<u64>,
+    ) -> Result<Value, String> {
+        let services =
+            self.engine.location(self.location.clone()).await.map_err(|e| e.to_string())?;
+        let limit = limit.map(|value| value.min(100) as usize);
+        crate::handlers::project::vcs_branch_list_data(
+            &services,
+            search.map(str::to_owned),
+            limit,
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    /// G-379.8 — `vcs.status()`: the shared handler core scoped to the
+    /// boot location directory.
+    async fn status(&self) -> Result<Value, String> {
+        let services =
+            self.engine.location(self.location.clone()).await.map_err(|e| e.to_string())?;
+        let directory = self.location.as_path().to_path_buf();
+        crate::handlers::project::vcs_status_data(&services, &directory)
+            .map_err(|error| error.to_string())
+    }
+
+    /// G-379.8 — `vcs.diff({mode, base?, context?})`: the shared
+    /// handler core (an unknown mode is a 400 → the mapped message).
+    async fn diff(
+        &self,
+        mode: &str,
+        base: Option<&str>,
+        context: Option<i64>,
+    ) -> Result<Value, String> {
+        if !matches!(mode, "working" | "branch" | "committed") {
+            return Err(format!("Expected \"working\" | \"branch\" | \"committed\": {mode}"));
+        }
+        let services =
+            self.engine.location(self.location.clone()).await.map_err(|e| e.to_string())?;
+        crate::handlers::project::vcs_diff_data(
+            &services,
+            mode,
+            base.map(str::to_owned),
+            context,
+        )
+        .map_err(|error| error.to_string())
+    }
 }
 
 /// The pre-engine vcs-port placeholder (the same slot pattern).
@@ -2668,6 +2732,16 @@ impl EngineVcsSlot {
     }
 }
 
+impl EngineVcsSlot {
+    fn port(&self) -> Result<Arc<EngineVcsPort>, String> {
+        self.0
+            .read()
+            .expect("vcs slot poisoned")
+            .clone()
+            .ok_or_else(|| "vcs: the engine is not attached to the plugin host yet".to_owned())
+    }
+}
+
 #[async_trait]
 impl oc_plugin_host::VcsPort for EngineVcsSlot {
     async fn get(&self) -> Result<Value, String> {
@@ -2677,15 +2751,111 @@ impl oc_plugin_host::VcsPort for EngineVcsSlot {
     async fn base(&self) -> Result<Value, String> {
         self.port()?.base().await
     }
+
+    async fn reload(&self) -> Result<(), String> {
+        self.port()?.reload().await
+    }
+
+    /// G-379.8 — the branch.list forwarder.
+    async fn branch_list(
+        &self,
+        search: Option<&str>,
+        limit: Option<u64>,
+    ) -> Result<Value, String> {
+        self.port()?.branch_list(search, limit).await
+    }
+
+    /// G-379.8 — the status forwarder.
+    async fn status(&self) -> Result<Value, String> {
+        self.port()?.status().await
+    }
+
+    /// G-379.8 — the diff forwarder.
+    async fn diff(
+        &self,
+        mode: &str,
+        base: Option<&str>,
+        context: Option<i64>,
+    ) -> Result<Value, String> {
+        self.port()?.diff(mode, base, context).await
+    }
 }
 
-impl EngineVcsSlot {
-    fn port(&self) -> Result<Arc<EngineVcsPort>, String> {
+/// The engine-backed [`oc_plugin_host::WorktreePort`] (G-379.8 —
+/// `ctx.worktree.list/create/remove/refresh` over the SHARED handler
+/// cores the `/api/worktree` routes ride: the project's saved
+/// inventory + the strategy registry on [`crate::state::AppState`]).
+pub struct EngineWorktreePort {
+    pub state: std::sync::Arc<crate::state::AppState>,
+}
+
+#[async_trait]
+impl oc_plugin_host::WorktreePort for EngineWorktreePort {
+    async fn list(&self, project_id: &str) -> Result<Value, String> {
+        crate::handlers::project::worktree_list_data(&self.state, project_id)
+            .await
+            .map(|directories| Value::Array(directories))
+            .map_err(|error| error.to_string())
+    }
+
+    async fn create(&self, input: Value) -> Result<Value, String> {
+        crate::handlers::project::worktree_create_data(&self.state, &input)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn remove(&self, input: Value) -> Result<(), String> {
+        crate::handlers::project::worktree_remove_data(&self.state, &input)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn refresh(&self, project_id: &str) -> Result<(), String> {
+        crate::handlers::project::worktree_refresh_data(&self.state, project_id)
+            .await
+            .map_err(|error| error.to_string())
+    }
+}
+
+/// The pre-engine worktree-port placeholder (the same slot pattern).
+#[derive(Default)]
+pub struct EngineWorktreeSlot(std::sync::RwLock<Option<Arc<EngineWorktreePort>>>);
+
+impl EngineWorktreeSlot {
+    /// G-379.8 — fills the slot once (first fill wins, like the vcs
+    /// slot).
+    pub fn fill(&self, port: Arc<EngineWorktreePort>) {
+        let mut slot = self.0.write().expect("worktree slot poisoned");
+        if slot.is_none() {
+            *slot = Some(port);
+        }
+    }
+
+    fn port(&self) -> Result<Arc<EngineWorktreePort>, String> {
         self.0
             .read()
-            .expect("vcs slot poisoned")
+            .expect("worktree slot poisoned")
             .clone()
-            .ok_or_else(|| "vcs: the engine is not attached to the plugin host yet".to_owned())
+            .ok_or_else(|| "worktree: the engine is not attached to the plugin host yet".to_owned())
+    }
+}
+
+#[async_trait]
+impl oc_plugin_host::WorktreePort for EngineWorktreeSlot {
+    async fn list(&self, project_id: &str) -> Result<Value, String> {
+        self.port()?.list(project_id).await
+    }
+
+    async fn create(&self, input: Value) -> Result<Value, String> {
+        self.port()?.create(input).await
+    }
+
+    async fn remove(&self, input: Value) -> Result<(), String> {
+        self.port()?.remove(input).await
+    }
+
+    async fn refresh(&self, project_id: &str) -> Result<(), String> {
+        self.port()?.refresh(project_id).await
     }
 }
 

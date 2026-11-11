@@ -200,26 +200,35 @@ async fn worktree_list(
     let Some(project_id) = query_field(&uri, "projectID") else {
         return Err(ApiError::invalid_request("projectID is required"));
     };
+    let directories = worktree_list_data(&state, &project_id).await?;
+    Ok(axum::Json(Value::Array(directories)).into_response())
+}
+
+/// G-379.8 — the `worktree.list` data core (shared by the HTTP handler
+/// and the plugin WorktreePort): the saved `[{directory, strategy?}]`
+/// inventory rows.
+pub(crate) async fn worktree_list_data(
+    state: &SharedState,
+    project_id: &str,
+) -> Result<Vec<Value>, ApiError> {
     // G-270⑦ — ref `Worktree.list` (worktree.ts:330-333) checks the
     // project ROW (`project(projectID)` → Project.NotFoundError 404) and
     // then lists the DB rows for that id — it never compares the id
     // against the CURRENT location's project (another project's tree is
     // listable from anywhere). The location above still resolves like the
     // ref's location middleware.
+    let project_row = project_id.to_owned();
     let known = state
         .engine
         .db
-        .transaction({
-            let project_id = project_id.clone();
-            move |tx| {
-                Ok(tx
-                    .conn()
-                    .query_row("SELECT id FROM project WHERE id = ?1", (project_id,), |row| {
-                        row.get::<_, String>(0)
-                    })
-                    .ok()
-                    .is_some())
-            }
+        .transaction(move |tx| {
+            Ok(tx
+                .conn()
+                .query_row("SELECT id FROM project WHERE id = ?1", (project_row,), |row| {
+                    row.get::<_, String>(0)
+                })
+                .ok()
+                .is_some())
         })
         .await
         .map_err(|error| {
@@ -227,13 +236,13 @@ async fn worktree_list(
             ApiError::unknown_ref()
         })?;
     if !known {
-        return Err(ApiError::project_not_found(&project_id));
+        return Err(ApiError::project_not_found(project_id));
     }
     // v2 `Worktree.List` is a BARE ARRAY of `{directory, strategy?}`
     // (schema/worktree.ts `List = Schema.Array(Directory)` — the core
     // ops.list rows); the strategy rides along for the TUI's
     // managed-root ordering (dialog-workspaces.tsx).
-    let directories: Vec<Value> = worktrees_for(&state, &project_id)
+    let directories: Vec<Value> = worktrees_for(state, project_id)
         .await?
         .into_iter()
         .map(|(_, directory, strategy)| {
@@ -244,7 +253,7 @@ async fn worktree_list(
             entry
         })
         .collect();
-    Ok(axum::Json(Value::Array(directories)).into_response())
+    Ok(directories)
 }
 
 /// v2 `Slug.create()` (util/slug.ts) — a random adjective-noun pair.
@@ -331,10 +340,22 @@ async fn worktree_create(
     State(state): State<SharedState>,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    // v2 `Worktree.create` (worktree.ts:192-238) with the git strategy
-    // (worktree/git.ts): source validation → parent resolution → slug
-    // name + collision suffixes → `git worktree add --detach` → row
-    // (replace) + `worktree.updated` → optional start command.
+    let created = worktree_create_data(&state, &body).await?;
+    Ok(axum::Json(created).into_response())
+}
+
+/// G-379.8 — the `worktree.create` data core (shared by the HTTP
+/// handler and the plugin WorktreePort).
+///
+/// v2 `Worktree.create` (worktree.ts:192-238) with the git strategy
+/// (worktree/git.ts): source validation → parent resolution → slug
+/// name + collision suffixes → `git worktree add --detach` → row
+/// (replace) + `worktree.updated` → optional start command.
+#[allow(clippy::too_many_lines)]
+pub(crate) async fn worktree_create_data(
+    state: &SharedState,
+    body: &Value,
+) -> Result<Value, ApiError> {
     let project_id = body["projectID"].as_str().unwrap_or_default().to_owned();
     if project_id.is_empty() {
         return Err(ApiError::invalid_request("projectID is required"));
@@ -508,7 +529,7 @@ async fn worktree_create(
         }
     }
 
-    Ok(axum::Json(json!({ "directory": directory_str })).into_response())
+    Ok(json!({ "directory": directory_str }))
 }
 
 /// `worktree.updated` `{projectID}` — v2 publishes it after every
@@ -553,12 +574,29 @@ async fn worktree_refresh(
     State(state): State<SharedState>,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    // v2 worktree.ts:273-327 — project row → strategy `load` (the
-    // canonical checkout must be a directory) → stored rows with on-disk
-    // checks → discovery over the unowned/canonical roots → ONE
-    // transaction (upsert discovered, prune vanished) →
-    // `worktree.updated` when anything changed.
     let project_id = body["projectID"].as_str().unwrap_or_default().to_owned();
+    if project_id.is_empty() {
+        return Err(ApiError::invalid_request("projectID is required"));
+    }
+    worktree_refresh_data(&state, &project_id).await?;
+    Ok(no_content())
+}
+
+/// G-379.8 — the `worktree.refresh` data core (shared by the HTTP
+/// handler and the plugin WorktreePort).
+///
+/// v2 worktree.ts:273-327 — project row → strategy `load` (the
+/// canonical checkout must be a directory) → stored rows with on-disk
+/// checks → discovery over the unowned/canonical roots → ONE
+/// transaction (upsert discovered, prune vanished) →
+/// `worktree.updated` when anything changed.
+#[allow(clippy::too_many_lines)]
+pub(crate) async fn worktree_refresh_data(
+    state: &SharedState,
+    project_id: &str,
+) -> Result<(), ApiError> {
+    // v2 worktree.ts:273-327 (see the handler doc above).
+    let project_id = project_id.to_owned();
     if project_id.is_empty() {
         return Err(ApiError::invalid_request("projectID is required"));
     }
@@ -695,9 +733,9 @@ async fn worktree_refresh(
 
     // `changed(projectID, update)` — announce only when a write landed.
     if updated > 0 || removed > 0 {
-        publish_worktree_updated(&state, &project_id).await;
+        publish_worktree_updated(state, &project_id).await;
     }
-    Ok(no_content())
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)] // one v2 Effect chain (worktree.ts:257-271)
@@ -705,9 +743,21 @@ async fn worktree_remove(
     State(state): State<SharedState>,
     axum::Json(body): axum::Json<Value>,
 ) -> Result<Response, ApiError> {
-    // v2 worktree.ts:257-271 — project row → canonicalize → stored
-    // strategy check → strategy remove (`git worktree remove [--force]`,
-    // git.ts:669-681) → row delete + `worktree.updated`.
+    worktree_remove_data(&state, &body).await?;
+    Ok(no_content())
+}
+
+/// G-379.8 — the `worktree.remove` data core (shared by the HTTP
+/// handler and the plugin WorktreePort).
+///
+/// v2 worktree.ts:257-271 — project row → canonicalize → stored
+/// strategy check → strategy remove (`git worktree remove [--force]`,
+/// git.ts:669-681) → row delete + `worktree.updated`.
+#[allow(clippy::too_many_lines)]
+pub(crate) async fn worktree_remove_data(
+    state: &SharedState,
+    body: &Value,
+) -> Result<(), ApiError> {
     let (project_id, directory, force) = (
         body["projectID"].as_str().unwrap_or_default().to_owned(),
         body["directory"].as_str().unwrap_or_default().to_owned(),
@@ -797,9 +847,9 @@ async fn worktree_remove(
     // canonical directory the row stores.
     let removed = state.engine.projects.remove_worktree(&project_id, &worktree_directory).await;
     if removed {
-        publish_worktree_updated(&state, &project_id).await;
+        publish_worktree_updated(state, &project_id).await;
     }
-    Ok(no_content())
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1266,23 +1316,32 @@ async fn vcs_branch_list(
     uri: Uri,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    // v2 vcs.branch.list → `Vcs.BranchList` = bare string[]
-    // (git.ts:228-241): case-insensitive for-each-ref over local+remote
-    // namespaces, committerdate-then-refname ordering, /HEAD filtered.
     let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
-    // The hg adapter's branch list is always empty (hg.ts:121-123) —
-    // named branches are not the git branch analog.
-    if is_hg(&services) {
-        return Ok(super::common::json_location_data(
-            &location.as_path().to_string_lossy(),
-            Value::Array(Vec::new()),
-        ));
-    }
     let search = query_field(&uri, "search");
     let limit = query_field(&uri, "limit")
         .and_then(|value| value.parse::<usize>().ok())
-        .map_or(50usize, |value| value.min(100));
+        .map(|value| value.min(100));
+    let data = vcs_branch_list_data(&services, search, limit)?;
+    Ok(super::common::json_location_data(&location.as_path().to_string_lossy(), data))
+}
+
+/// G-379.8 — the location-independent `vcs.branch.list` data core
+/// (shared by the HTTP handler and the plugin VcsPort).
+pub(crate) fn vcs_branch_list_data(
+    services: &oc_core::engine::LocationServices,
+    search: Option<String>,
+    limit: Option<usize>,
+) -> Result<Value, ApiError> {
+    // v2 vcs.branch.list → `Vcs.BranchList` = bare string[]
+    // (git.ts:228-241): case-insensitive for-each-ref over local+remote
+    // namespaces, committerdate-then-refname ordering, /HEAD filtered.
+    // The hg adapter's branch list is always empty (hg.ts:121-123) —
+    // named branches are not the git branch analog.
+    if is_hg(services) {
+        return Ok(Value::Array(Vec::new()));
+    }
+    let limit = limit.unwrap_or(50).min(100);
     let scope = services.project.canonical.as_path();
 
     let escaped = search.as_ref().map(|value| {
@@ -1322,10 +1381,7 @@ async fn vcs_branch_list(
         .filter(|line| !line.is_empty() && !line.ends_with("/HEAD"))
         .map(|line| json!(line))
         .collect();
-    Ok(super::common::json_location_data(
-        &location.as_path().to_string_lossy(),
-        Value::Array(branches),
-    ))
+    Ok(Value::Array(branches))
 }
 
 // ---------------------------------------------------------------------------
@@ -1409,16 +1465,30 @@ async fn vcs_diff(
             "Expected \"working\" | \"branch\" | \"committed\"\n  at [\"mode\"]".to_owned(),
         ));
     }
+    let data = vcs_diff_data(&services, &mode, base_param, context)?;
+    Ok(super::common::json_location_data(&location.as_path().to_string_lossy(), data))
+}
+
+/// G-379.8 — the location-independent `vcs.diff` data core (shared by
+/// the HTTP handler and the plugin VcsPort). `mode` must already be
+/// one of working/branch/committed.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn vcs_diff_data(
+    services: &oc_core::engine::LocationServices,
+    mode: &str,
+    base_param: Option<String>,
+    context_param: Option<i64>,
+) -> Result<Value, ApiError> {
     let scope = services.project.canonical.as_path();
     let unavailable =
         |message: &str| ApiError::service_unavailable(message.to_owned(), Some("vcs"));
 
-    let context = context.unwrap_or(PATCH_CONTEXT_LINES);
+    let context = context_param.unwrap_or(PATCH_CONTEXT_LINES);
 
     // The hg adapter (hg.ts:135-148): working diff against the parent;
     // committed mode and explicit bases are DiffError; branch mode diffs
     // against `ancestor(., default)` (empty on/unusable from `default`).
-    if is_hg(&services) {
+    if is_hg(services) {
         if mode == "committed" || base_param.is_some() {
             return Err(ApiError::service_unavailable(
                 "The Mercurial provider does not support committed reviews or explicit bases",
@@ -1450,10 +1520,7 @@ async fn vcs_diff(
                 })
             })
             .collect();
-        return Ok(super::common::json_location_data(
-            &location.as_path().to_string_lossy(),
-            Value::Array(files),
-        ));
+        return Ok(Value::Array(files));
     }
 
     // Mode routing (git.ts:101-117).
@@ -1461,10 +1528,7 @@ async fn vcs_diff(
         (git_has_head(scope).then(|| "HEAD".to_owned()), None)
     } else if !git_has_head(scope) {
         if mode == "committed" {
-            return Ok(super::common::json_location_data(
-                &location.as_path().to_string_lossy(),
-                json!([]),
-            ));
+            return Ok(json!([]));
         }
         // branch-mode without HEAD diffs the untracked status scan.
         (None, None)
@@ -1596,10 +1660,7 @@ async fn vcs_diff(
             "status": item.status,
         }));
     }
-    Ok(super::common::json_location_data(
-        &location.as_path().to_string_lossy(),
-        Value::Array(files),
-    ))
+    Ok(Value::Array(files))
 }
 
 /// `diff --name-status -z` (git.ts:344-359).
@@ -1832,9 +1893,19 @@ async fn vcs_status(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
+    let data = vcs_status_data(&services, location.as_path())?;
+    Ok(super::common::json_location_data(&location.as_path().to_string_lossy(), data))
+}
+
+/// G-379.8 — the location-independent `vcs.status` data core (shared
+/// by the HTTP handler and the plugin VcsPort).
+pub(crate) fn vcs_status_data(
+    services: &oc_core::engine::LocationServices,
+    directory: &std::path::Path,
+) -> Result<Value, ApiError> {
     // The hg adapter (hg.ts:124-134): status = diffAgainst(parent) mapped
     // to the FileStatus wire shape.
-    if is_hg(&services) {
+    if is_hg(services) {
         let data: Vec<Value> = hg_diff_against(services.project.canonical.as_path(), None, 0)
             .into_iter()
             .map(|entry| {
@@ -1846,10 +1917,7 @@ async fn vcs_status(
                 })
             })
             .collect();
-        return Ok(super::common::json_location_data(
-            &location.as_path().to_string_lossy(),
-            Value::Array(data),
-        ));
+        return Ok(Value::Array(data));
     }
     // Git status (plugin/vcs/git.ts:81-99): the porcelain scan AND the
     // numstat stats run scoped to the LOCATION directory (`--", "."` in
@@ -1858,7 +1926,6 @@ async fn vcs_status(
     // `diff --numstat <ref>` with the untracked fallback
     // (`statUntracked` from the worktree root — G-361③); the status
     // letter mapping is the shared `kind` matrix (G-361④).
-    let directory = location.as_path();
     let worktree = services.project.canonical.as_path();
     let items = git_status_items(directory);
     let stats: std::collections::HashMap<String, (i64, i64, bool)> = if git_has_head(directory) {
@@ -1885,7 +1952,7 @@ async fn vcs_status(
             "deletions": deletions,
         }));
     }
-    Ok(super::common::json_location_data(&location.as_path().to_string_lossy(), Value::Array(data)))
+    Ok(Value::Array(data))
 }
 
 async fn vcs_init(

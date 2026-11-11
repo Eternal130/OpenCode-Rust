@@ -340,6 +340,57 @@ pub trait VcsPort: Send + Sync {
     async fn reload(&self) -> Result<(), String> {
         Ok(())
     }
+
+    /// G-379.8 — `vcs.branch.list({search?, limit?})`: the v2
+    /// `Vcs.BranchList` (a bare string[] of local+remote branch names,
+    /// committerdate-then-refname order; empty on the hg adapter).
+    async fn branch_list(
+        &self,
+        _search: Option<&str>,
+        _limit: Option<u64>,
+    ) -> Result<Value, String> {
+        Err("vcs.branch.list: no vcs engine attached to the plugin host".to_owned())
+    }
+
+    /// G-379.8 — `vcs.status()`: the v2 `Vcs.FileStatus[]` JSON
+    /// (uncommitted working-copy changes scoped to the location).
+    async fn status(&self) -> Result<Value, String> {
+        Err("vcs.status: no vcs engine attached to the plugin host".to_owned())
+    }
+
+    /// G-379.8 — `vcs.diff({mode, base?, context?})`: the v2
+    /// `FileDiff.Info[]` JSON (working/branch/committed modes).
+    async fn diff(
+        &self,
+        _mode: &str,
+        _base: Option<&str>,
+        _context: Option<i64>,
+    ) -> Result<Value, String> {
+        Err("vcs.diff: no vcs engine attached to the plugin host".to_owned())
+    }
+}
+
+/// `ctx.worktree.list/create/remove/refresh` routing target (G-379.8 —
+/// the v2 `WorktreeDomain` read/op surface, ref host.ts/promise
+/// adapter.ts:558-566): the guest calls the project-scoped worktree
+/// inventory + operations the HTTP handlers serve; the embedder binds
+/// the engine-backed port over the same service calls.
+#[async_trait]
+pub trait WorktreePort: Send + Sync {
+    /// `worktree.list({projectID})` — the v2 `Worktree.List` (a bare
+    /// `[{directory, strategy?}]` array).
+    async fn list(&self, project_id: &str) -> Result<Value, String>;
+
+    /// `worktree.create({projectID, name?, branch?, from?, directory?})`
+    /// — the created `Worktree.Info` (`{directory}`) JSON.
+    async fn create(&self, input: Value) -> Result<Value, String>;
+
+    /// `worktree.remove({projectID, directory, force?})`.
+    async fn remove(&self, input: Value) -> Result<(), String>;
+
+    /// `worktree.refresh({projectID})` — re-discover + reconcile the
+    /// saved inventory.
+    async fn refresh(&self, project_id: &str) -> Result<(), String>;
 }
 
 /// `ctx.provider.list/get/reload` routing target (G-64 — the v2
