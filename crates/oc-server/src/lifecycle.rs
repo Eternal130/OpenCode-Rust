@@ -313,13 +313,38 @@ pub fn endpoint_auth_header(endpoint: &Endpoint) -> Option<String> {
     ))
 }
 
+/// `new URL("/api/info", info.url)` — the ABSOLUTE path `/api/info`
+/// replaces the registration URL's path, query, and fragment (G-376②):
+/// a base like `http://host/folder` probes `http://host/api/info`, NOT
+/// `http://host/folder/api/info`. `None` when `info.url` has no
+/// `scheme://authority` prefix (the ref's `new URL` would throw and the
+/// fetch is swallowed into an unclassifiable probe).
+fn probe_url(registration_url: &str) -> Option<String> {
+    let (scheme, rest) = registration_url.split_once("://")?;
+    if scheme.is_empty() || rest.is_empty() {
+        return None;
+    }
+    // Authority runs to the first path/query/fragment delimiter.
+    let authority_end =
+        rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    if authority.is_empty() {
+        return None;
+    }
+    Some(format!("{scheme}://{authority}/api/info"))
+}
+
 /// GET `<url>/api/info` with Basic auth, classified per `probeResult`.
 pub async fn probe(info: &Registration, timeout: Duration) -> ProbeResult {
     let endpoint = Endpoint {
         url: info.url.clone(),
         auth: info.password.clone().map(|password| ("opencode".to_owned(), password)),
     };
-    let url = format!("{}/api/info", info.url.trim_end_matches('/'));
+    // G-376②: ref resolves `new URL("/api/info", info.url)` — the
+    // absolute path REPLACES any basePath on the registration URL.
+    let Some(url) = probe_url(&info.url) else {
+        return ProbeResult { service: None, timed_out: false };
+    };
     let mut headers = Vec::new();
     if let Some(auth) = endpoint_auth_header(&endpoint) {
         headers.push(("authorization".to_owned(), auth));
@@ -591,6 +616,28 @@ pub fn matches_version(version: Option<&str>, required: Option<&str>) -> bool {
     match required {
         None => true,
         Some(_) => version == required,
+    }
+}
+
+/// Structured version requirement (G-376④): the ref's
+/// `DiscoverOptions.version` is `string | ((version: string) => boolean)`
+/// (service.ts:21, service-version.ts) — either an exact string or a
+/// compatibility predicate. The predicate arm runs when no exact string
+/// is given; `matchesVersion` semantics otherwise (no requirement →
+/// true; requirement with an unreported version → false).
+pub type VersionPredicate = std::sync::Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// `matchesVersion` with the predicate arm (service-version.ts:3-8).
+#[must_use]
+pub fn matches_version_with(
+    version: Option<&str>,
+    required: Option<&str>,
+    predicate: Option<&VersionPredicate>,
+) -> bool {
+    match (required, predicate) {
+        (None, None) => true,
+        (Some(exact), _) => version == Some(exact),
+        (None, Some(predicate)) => version.is_some_and(|v| predicate(v)),
     }
 }
 
@@ -895,6 +942,11 @@ pub struct EnsureOptions {
     pub file: Option<PathBuf>,
     /// Required exact version.
     pub version: Option<String>,
+    /// Required version as a compatibility predicate (G-376④, the ref
+    /// `DiscoverOptions.version` union arm `string | (v) => boolean`);
+    /// used when [`EnsureOptions::version`] is `None`. An exact
+    /// `version`, when set, still takes precedence.
+    pub version_predicate: Option<VersionPredicate>,
     /// Required build identity (B4-H3): the daemon's `x-opencode-build`
     /// must match exactly; `None` skips the check. A daemon reporting
     /// no marker counts as a mismatch (pre-marker builds get replaced).
@@ -962,8 +1014,11 @@ pub async fn ensure(options: &EnsureOptions) -> Result<Endpoint, EnsureError> {
 
         if let Some(service) = registration.1.service {
             pool.service_answered(timing);
-            let version_matches =
-                matches_version(service.version.as_deref(), options.version.as_deref());
+            let version_matches = matches_version_with(
+                service.version.as_deref(),
+                options.version.as_deref(),
+                options.version_predicate.as_ref(),
+            );
             let build_matches = matches_build(service.build.as_deref(), options.build.as_deref());
             let compatible = service.compatible && version_matches && build_matches;
             if !service.compatible && version_matches {
@@ -1740,6 +1795,21 @@ mod tests {
         assert!(!matches_version(Some("2"), Some("1")));
     }
 
+    /// G-376④: the structured predicate arm of `DiscoverOptions.version`
+    /// (`string | (v) => boolean`, service-version.ts:3-8).
+    #[test]
+    fn server_lifecycle_matches_version_predicate() {
+        let at_least: VersionPredicate = std::sync::Arc::new(|v| v >= "2");
+        assert!(matches_version_with(Some("3"), None, Some(&at_least)));
+        assert!(matches_version_with(Some("2"), None, Some(&at_least)));
+        assert!(!matches_version_with(Some("1"), None, Some(&at_least)));
+        // An unreported version fails any requirement (predicate or exact).
+        assert!(!matches_version_with(None, None, Some(&at_least)));
+        assert!(matches_version_with(None, None, None));
+        // The exact string takes precedence over the predicate.
+        assert!(!matches_version_with(Some("3"), Some("1"), Some(&at_least)));
+    }
+
     /// B4-H3: the build marker comparison — a required stamp demands an
     /// exact match; a MISSING marker (v2 daemons, pre-marker builds of
     /// the port) counts as stale so the upgrade flow replaces the very
@@ -1870,6 +1940,7 @@ mod tests {
             file: Some(file.clone()),
             version: Some(env!("CARGO_PKG_VERSION").to_owned()),
             build: Some(BUILD_STAMP.to_owned()),
+            version_predicate: None,
             command: Some(vec!["bash".to_owned(), "-c".to_owned(), script]),
             env: Vec::new(),
             on_start: Some(Box::new(move |reason, previous| {
@@ -1926,6 +1997,7 @@ mod tests {
             file: Some(file.clone()),
             version: Some(env!("CARGO_PKG_VERSION").to_owned()),
             build: Some(BUILD_STAMP.to_owned()),
+            version_predicate: None,
             command: Some(vec!["bash".to_owned(), "-c".to_owned(), script]),
             env: Vec::new(),
             on_start: Some(Box::new(move |_, _| {
@@ -2478,6 +2550,48 @@ mod tests {
         state.handle.begin_shutdown();
         let _ = state.handle.shutdown_and_join().await;
         let _ = incompatible;
+    }
+
+    /// G-376②: `new URL("/api/info", info.url)` — the absolute path
+    /// replaces any basePath on the registration URL.
+    #[test]
+    fn probe_url_replaces_base_path() {
+        assert_eq!(
+            probe_url("http://127.0.0.1:4096").as_deref(),
+            Some("http://127.0.0.1:4096/api/info")
+        );
+        assert_eq!(
+            probe_url("http://127.0.0.1:4096/base/path").as_deref(),
+            Some("http://127.0.0.1:4096/api/info")
+        );
+        assert_eq!(
+            probe_url("http://127.0.0.1:4096/base/path?query=1#frag").as_deref(),
+            Some("http://127.0.0.1:4096/api/info")
+        );
+        assert_eq!(probe_url("127.0.0.1:4096"), None);
+    }
+
+    /// G-376② end-to-end: a registration whose URL carries a basePath
+    /// still probes the server's `/api/info` (the basePath is replaced,
+    /// not prefixed) and classifies normally.
+    #[tokio::test]
+    async fn server_lifecycle_probe_replaces_base_path() {
+        let state = crate::test_support::booted_state("secret").await;
+        let addr = state.state.local_addr.read().expect("bound");
+        let info = Registration {
+            id: None,
+            version: Some("test-version".to_owned()),
+            url: format!("http://{addr}/sub/path"),
+            pid: std::process::id(),
+            password: Some("secret".to_owned()),
+        };
+        let probed = probe(&info, Duration::from_secs(2)).await;
+        let service = probed.service.unwrap_or_else(|| {
+            panic!("basePath registration must still classify (url {})", info.url)
+        });
+        assert!(service.compatible);
+        state.handle.begin_shutdown();
+        let _ = state.handle.shutdown_and_join().await;
     }
 
     #[tokio::test]
