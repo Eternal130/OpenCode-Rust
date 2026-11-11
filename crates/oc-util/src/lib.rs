@@ -9,6 +9,7 @@ pub mod glob;
 pub mod global_roots;
 pub mod hash;
 pub mod localecmp;
+pub mod logging;
 pub mod mime;
 pub mod npm_config;
 pub mod pathx;

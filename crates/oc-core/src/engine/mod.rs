@@ -521,7 +521,12 @@ impl Engine {
                 loop {
                     if let Err(error) = refresh_loop.refresh(false).await {
                         // v2 logs and ignores (`tapCause(logError) + ignore`).
-                        eprintln!("[models-dev] Failed to fetch models.dev: {error}");
+                        // G-387: the shared logging gate (file always,
+                        // stderr under OPENCODE_PRINT_LOGS=1).
+                        oc_util::logging::log(
+                            oc_util::logging::Level::Warn,
+                            &format!("[models-dev] Failed to fetch models.dev: {error}"),
+                        );
                     }
                     tokio::time::sleep(crate::provider_catalog::refresh::REFRESH_TTL).await;
                 }

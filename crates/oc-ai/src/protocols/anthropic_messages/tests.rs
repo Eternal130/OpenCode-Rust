@@ -2817,3 +2817,45 @@ fn breakpoint_drop_warning_matches_the_ref_shape() {
         "Anthropic Messages: dropped 1 cache breakpoint(s); the API allows at most 4 per request."
     );
 }
+
+/// G-387 — the gated warn: the `OPENCODE_LOG_LEVEL` parse matrix
+/// (invalid/absent → Info; Warn passes at every floor ≤ Warn) and the
+/// per-message `OPENCODE_PRINT_LOGS === "1"` stderr gate (off by
+/// default, so the breakpoint warning is silent on stderr unless
+/// explicitly requested — v2's `stderrLogger`).
+#[test]
+fn breakpoint_warning_is_gated_by_log_level_and_print_logs() {
+    use crate::protocols::anthropic_messages::{parse_log_level, log_prints_stderr, LogLevel};
+
+    // minimumLogLevel parse matrix (logging.ts:164-173).
+    assert_eq!(parse_log_level(Some("debug")), LogLevel::Debug);
+    assert_eq!(parse_log_level(Some("DEBUG")), LogLevel::Debug);
+    assert_eq!(parse_log_level(Some("Debug")), LogLevel::Debug);
+    assert_eq!(parse_log_level(Some("info")), LogLevel::Info);
+    assert_eq!(parse_log_level(Some("warn")), LogLevel::Warn);
+    assert_eq!(parse_log_level(Some("ERROR")), LogLevel::Error);
+    assert_eq!(parse_log_level(Some("garbage")), LogLevel::Info);
+    assert_eq!(parse_log_level(None), LogLevel::Info);
+
+    // Warn warnings survive every floor except ERROR.
+    assert!(LogLevel::Warn >= parse_log_level(None));
+    assert!(LogLevel::Warn >= parse_log_level(Some("debug")));
+    assert!(LogLevel::Warn >= parse_log_level(Some("warn")));
+    assert!(LogLevel::Warn < parse_log_level(Some("error")));
+
+    // The stderr gate is off by default in this process (no env in
+    // test runners) and exactly `"1"` turns it on.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let saved = std::env::var_os("OPENCODE_PRINT_LOGS");
+    std::env::remove_var("OPENCODE_PRINT_LOGS");
+    assert!(!log_prints_stderr(), "no stderr copy by default");
+    std::env::set_var("OPENCODE_PRINT_LOGS", "1");
+    assert!(log_prints_stderr(), "OPENCODE_PRINT_LOGS=1 enables stderr");
+    std::env::set_var("OPENCODE_PRINT_LOGS", "true");
+    assert!(!log_prints_stderr(), "only the literal \"1\" counts");
+    match saved {
+        Some(value) => std::env::set_var("OPENCODE_PRINT_LOGS", value),
+        None => std::env::remove_var("OPENCODE_PRINT_LOGS"),
+    }
+}
