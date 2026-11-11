@@ -28,22 +28,24 @@
 ## 总覆盖率
 
 **14 通道全集逐项归属 100%**（双侧并集每项都有 BOTH/REF_ONLY/RUST_ONLY/已登记裁定之一）。
-新缺口候选（经 orchestrator 复核）共 **6 项**；rust-extra 待登记注记 **10 项**；已登记项被机械化确认 **8 族**。
+**第二十四轮已入册：新立项 G-384..G-390（7 条：🟢×4 + ℹ️×3）+ G-230 勘注**；已登记项被机械化复认 9 族。
 
-## 新缺口候选裁定（2026-11-12 复核）
+## 入册裁定（2026-11-12 复核，详见登记册第二十四轮节）
 
 | # | 项 | 证据 | 裁定 |
 |---|---|---|---|
-| 1 | ctx.integration.transform 的 editor CRUD 面（list/get/update/remove/method.list） | ref adapter.ts:386-400；rust 仅 method.update（=G-24 已修半边） | 🟢 缺口候选（G-24 残余半边） |
-| 2 | ctx.integration.reload guest 直调面 | ref adapter.ts:426；rust 后端 reload_catalog 在（integration/mod.rs:213，models-dev.refreshed 自动路径已接），guest 键缺 | 🟢 缺口候选（接线半边） |
-| 3 | RPC 桥层 14 项 list/reload 读面（agent/command/mcp/skill/tool/websearch/worktree 的 list/reload/get） | ref adapter.ts 各处；rust 于 guest 本地实现（行为面等价性归行为通道复核） | ℹ️ 桥层形状差（登记候选） |
-| 4 | OPENCODE_LOG_LEVEL 运行时日志级别旋钮 | ref util/observability/logging.ts:165；rust 生产零读取 | 🟢 缺口候选 |
-| 5 | TERM_PROGRAM_VERSION 终端版本探测 | ref tui/util/system.ts:17；rust 未读（自有 kitty/ghostty 探测在，口径差待核） | 🟢 缺口候选（小） |
-| 6 | TOOLS output_schema 0/18（G-230 未修，范围 0/14→0/18） | registry.rs:185 output_schema:None；ref 14 文件 18/18 声明 | 已登记 G-230（census 机械化盯守） |
+| 1 | ctx.integration.transform 的 editor CRUD 面（list/get/update/remove/method.list） | ref adapter.ts:386-400；rust 仅 method.update（=G-24 已修半边） | 🟢 **G-384** |
+| 2 | ctx.integration.reload guest 直调面 | ref adapter.ts:426；rust 后端 reload_catalog 在（integration/mod.rs:213，models-dev.refreshed 自动路径已接），guest 键缺 | 🟢 **G-385** |
+| 3 | RPC 桥层 14 项 list/reload 读面 + rust command.add 扁平化 | ref adapter.ts 各处；rust 于 guest 本地实现（行为面等价性归行为通道） | ℹ️ **G-386**（打包登记） |
+| 4 | OPENCODE_LOG_LEVEL 运行时日志级别旋钮 | ref util/observability/logging.ts:165；rust 生产零读取 | 🟢 **G-387** |
+| 5 | TERM_PROGRAM_VERSION 终端版本探测 | ref tui/util/system.ts:17；rust 未读（自有 kitty/ghostty 探测在，口径差待核） | 🟢 **G-388** |
+| 6 | TOOLS output_schema die 分支前置面 | registry.rs:185 output_schema:None；ref 14 文件 18/18 声明 | **G-230 勘注**（0/14→0/18，NOT_YET 延续，census 盯守） |
+| 7 | keybind rust-extra 8 动作 | table.rs:902-917/641-642/828-829；ref Definitions 无 | ℹ️ **G-389**（超集登记） |
+| 8 | experimental.file_retention.cleanup_interval 旋钮 | experimental.rs:11；ref 无此键 | ℹ️ **G-390**（超集登记） |
 
 **非缺口裁定**：rpc.events=**G-295**（登记册 STILL_OPEN 在案）；TMUX/STY/NODE_ASSETS_DIR=登记册 :1300 D3-7 有据 bounded；requireSignature=G-174 产物键；pty read/restore/replay_complete=G-10/G-383b；plugin tui 入口面 13 键=G-239/G-331/G-332/G-148②；provider 3 个 rust-native 入口=round-23 决策族（G-373 系）；completion=RC-11。
 
-**rust-extra 待登记注记（10）**：keybind 8 项（上表）+ experimental.file_retention.cleanup_interval + ctx.command.add 扁平化。
+**rust-extra 已入册**：keybind 8 项=G-389 · file_retention 旋钮=G-390 · ctx.command.add=G-386 内注记。
 
 ## 已知锚核对汇总
 

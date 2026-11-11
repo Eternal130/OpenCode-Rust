@@ -24,6 +24,8 @@
 >
 > **2026-11-11 第二十三轮 burndown 收口（gap-burndown-12）**：第二十二轮立项的 G-334..G-383 全部 50 项经 17 个串行 lane 落地合并 main（L1 快赢/L2 engine/L3 hooks/L4 PTY/L5+L5b plugin-host/L6 媒体/L7a+b 协议/L8 providers/L9 server-vcs/L10 MCP/L11-12 TUI/L13 CLI-ACP/L14 schema-client/L15 core 杂项），逐条 ✅；**无上游阻挡项**。G-347 布线前提经双侧源码证伪（ref 无 /api/media 面）按勘误处理，残余（decode 严格化+薄 client 门面）落地；另 4 项审计文本失实/前提不成立以证据订正。工具面硬化：dev-gate 结构化禁裸 cargo test（`c4aa35ae`）、负载门 6→8（`47cd5ab1`）。明细见文末「第二十三轮 burndown 收口」节。
 
+> **2026-11-12 第二十四轮（census 机械化普查立项）**：基于 14 通道机械普查（`tools/census/*.py` 14 个幂等脚本 + `docs/audit/census/` 14 报告 + INDEX，双侧权威自报对拍/生产面提取/已知锚交叉验证，全部连跑逐字节可复现）：**新立项 G-384..G-390（7 条：🟢×4 / ℹ️×3）**；G-230 加勘注（die 分支前置面机械化确认：内建 output 声明 0/18，范围自 0/14 扩大，NOT_YET 延续）；9 族既有条目机械化复认（G-295 rpc.events、G-239/G-331/G-332/G-148② 插件 tui 入口面 13 键、D3-7 TMUX/STY/NODE_ASSETS_DIR、G-174 requireSignature 键、G-10 pty read/restore、G-383b replay_complete、G-373 系 provider 3 native 入口、RC-11 completion）；三处旧锚修正（事件 52→实 51 系旧口径分桶、keybind 230→243 系 ref 演进、catalog-only "~180 推定"→确凿 226=49 native+168 compat+9 npm 桥豁免——第二十二轮盲区#2 销项）。**14 通道总覆盖率 100%（双侧并集逐项归属）**；此后每轮缺口扫描边际成本=14 条命令，上游 bump 时轴 1 类 diff 自动产出变更面清单。
+
 > **2026-11-10 第二十二轮（全功能逐行对比审查 parity-line-review-v2024：27 lane + P1/FINAL 双门）**：对 ref v2.0.24 与当前树做第四轮独立全量逐行对读（27 条域 lane：oc-core×12 / oc-ai×5 / oc-tui×4 / server·client·cli·acp·plugin-host·schema-util×6，双侧 file:line 证据、不采信已有审查文档），两道 oracle 一致性门裁定 5 处跨 lane 矛盾、抽查 11/11 成立、0 未裁定矛盾。**新立项 G-334..G-383（50 项：🔴×12 / 🟡×22 / 🟢 簇×16）**；归类既有 12 处、撤销初报 1 条、勘正旧勘误 1 处（R17#13 locale_duration 括注）。核心新事实：CodeMode 沙箱逃逸残余具体化（`__rawFetch`/eval/Function/限位仅桥上，G-334）、WebSocketSeams 与 permission.evaluate 两条插件钩子生产断线（G-337/G-338）、非持久 PTY reader 逐 chunk lossy UTF-8（G-335）、中断后 hosted 工具多发持久 tool.failed（G-336）、媒体 provider 协议全移植但部署接线为零（G-347，产品级）、cloudflare-ai-gateway 网关语义全降级（G-348）、TUI 时长格式化 `%10_000` 取模 bug（G-341）与 stdin 双读竞争（G-342）。总报告 `docs/audit/port-parity-line-review/{REPORT,TABLE}.md`，32 份 lane/门原始报告归档 `docs/audit/port-parity-line-review/lanes/`。正面互证：keybind 230/230、主题资产 33+1 md5 全等、openapi 141 operation 字节级 0 diff、48 迁移 ID 全同、52 会话事件分类一致、models-dev 快照 md5 相同、session-message parts 全集无缺漏。
 
 > **2026-11-03 第十二轮（全量对比审查）**：22 通道逐文件全文对读（TS ~21 万行 / Rust ~40 万行生产代码）+ 3 通道缺口核验，对 50 项缺口声称逐项双侧源码取证：**新立项 46 项（G-165..G-210，含 🔴×6：Azure 未接线/Mcp.Protocol wire bug/Copilot anthropic 车道/第三方 anthropic 根 URL/shell 注释换行权限逃逸/transfer 脱敏弱）**、撤销 4 项初报 + 6 项子句修正（见文末第十二轮勘误）、5 项归类既有条目。总报告 `CODE_REVIEW_PARITY_2026-11-03.md`，域报告与核验记录 `/tmp/opencode/review/`。
@@ -1445,6 +1447,7 @@ G-165..G-210 全部 ✅（G-177 前轮已闭；G-211/212 维持 ℹ️ 登记）
 - ref `tool/runtime.ts:45-54,109-132`：对声明 output schema 的工具校验输出 + 两个边界（未声明却返回 output → die；声明却缺 output → error）。
 - rust `tool/registry.rs:297-300` output 原样透传零校验。缓解：生产面 MCP outputSchema 仅 wire 转发（mcp/registry.rs:1535）、插件工具无 output 字段，触发面极窄。低优先补齐或文档化。（归一化半边已撤销，见勘误 #2。）
 - **2026-11-08 第十六轮落地（范围裁定）**：声明 schema → 共享 G-100 校验器校验（ref 文案）；声明+缺 output → 错误。「未声明却返回 output → die」按 mcp.ts:48 `?? {}` 接受一切的范围裁定落地——rust 14 个内建工具返回 output 而无声明（ref 侧全部声明 Output），字面 die 会全断；die 分支登记为范围外，待内建声明补齐后启用（gb9 lane8 `2103cf92`）。
+- **2026-11-12 第二十四轮勘注（census 机械化确认）**：TOOLS census 复核 die 分支前置面——rust 内建 output 声明 **0/18**（registry.rs:185 `output_schema: None` 硬编码；ref 14 文件 18/18 全声明），范围较本条登记时的 0/14 扩大（mcp-resource 内联两工具计入）；die 分支 NOT_YET 维持，由 `tools/census/tools_registry.py` 盯守。
 
 ### G-231 ✅ repository-cache fetch 缺 `--all --prune`/`+refspec`（core）
 - rust `reference/repository_cache.rs:272-281` 仅 `git fetch origin`（+指定 branch 时再 fetch，无 `+`、不更新 remote-tracking、无 prune）。
@@ -2654,3 +2657,70 @@ G-334c 全局 Bun/process 面（Bun 钉死 non-writable/stdio 依赖——归 G-
 ## 第二十三轮判定
 
 G-334..G-383 全部 ✅（含 4 项审计勘误撤销/订正、取证无差族 13 项以证据关闭）；有界偏离 30+ 项就地登记；G-347 布线前提经双侧源码证伪按勘误处理。现存未关闭项=既有文档化决策族（G-12/G-16/G-17/G-28/G-32/G-38/G-39/G-40/G-49/G-161①/G-163/G-164/G-200②/G-211(已 OBSOLETE)/G-212/G-238/G-239/G-240/G-247 残余/G-289/G-290/G-313..G-318/G-326/G-328/G-329/G-331..G-333）+ 本节新增有界项。**无上游阻挡项。**
+
+---
+
+# 第二十四轮（2026-11-12，census 机械化普查立项 G-384..G-390）
+
+> 方法：14 通道机械普查（`tools/census/` 14 个幂等脚本 ← `http_surface.py` 模板 + `common.py` 共享库；`docs/audit/census/` 14 份报告 + INDEX.md）。每通道三件套：双侧权威自报对拍（spec/枚举/注册表 dump）→ 生产面静态提取（测试区剥除、多行解析、归一化声明）→ 已知锚交叉验证。全部脚本连跑两次逐字节一致；差异项经 orchestrator 逐项亲读双侧当前代码复核后裁定。**14 通道总覆盖率 100%**（双侧并集逐项归属 BOTH/REF_ONLY/RUST_ONLY/已登记裁定）。11/14 通道 REF_ONLY=0。
+
+## 🟢 低
+
+### G-384 ❌ ctx.integration.transform 的 editor CRUD 残余半边（G-24 后续）
+- ref：`packages/plugin/src/promise/adapter.ts:386-400` transform(editor) 回调暴露 `{list, get, update, remove, method:{list, update}}` 全 CRUD。
+- rust：`host.js:1551` 仅有 `integration.method.update`（=G-24 已修半边，authorize/refresh 包装在内）；transform 键与 editor 的 list/get/update/remove/method.list 全缺。
+- 影响：插件无法枚举/修改/删除集成方法定义（只能 update 单个）。
+- 修法：host.js integration 命名空间补 transform + editor 表（复用 G-379.7 vcs 读面同型模式）。
+- 出处：census PLUGIN-API（docs/audit/census/PLUGIN-API.md）。
+
+### G-385 ❌ ctx.integration.reload guest 直调面（后端在、键缺）
+- ref：`adapter.ts:426` `reload: () => run(host.integration.reload())`。
+- rust：后端等价物在——`oc-core/src/integration/mod.rs:213-220` `reload_catalog`（注释自证 v2 `ctx.integration.reload()` 对应，`models-dev.refreshed` 自动路径已接）；`host.js` integration 命名空间无 `reload` 键。
+- 修法：host.js 补 `reload: () => hostRequest("integration.reload", …)` + supervisor 派发（半小时级纯接线）。
+- 出处：census PLUGIN-API / RPC。
+
+### G-387 ❌ OPENCODE_LOG_LEVEL 运行时日志级别旋钮缺失
+- ref：`packages/util/src/observability/logging.ts:165` 运行时读 env 调日志级别。
+- rust：生产代码零读取（仅测试区出现）——env 旋钮面缺口（rust 日志级别如何配置另行核对，至少 env 面不等价）。
+- 出处：census ENV-VARS。
+
+### G-388 ❌ TERM_PROGRAM_VERSION 终端版本探测缺失（口径差待核）
+- ref：`packages/tui/src/util/system.ts:17` 读 TERM_PROGRAM_VERSION 参与终端类型/版本判定。
+- rust：未读；TUI 有自有 kitty/ghostty 探测（G-368 簇）——探测策略差异是否产生可观察行为差（如版本门控的转义序列选择）待行为通道核。
+- 出处：census ENV-VARS。
+
+## ℹ️ 登记
+
+### G-386 ℹ️ 插件 RPC/ctx 桥层形状差打包（ref 14 读面 + rust command.add 扁平化）
+- ref 经桥派发而 rust 于 guest 本地实现的 14 项读面：`agent.get/list/reload`（adapter.ts:296-299）、`command.list/reload`（:308,:322）、`integration.reload`（:426，直调面单立 G-385）、`mcp.list/reload`（:434,:436）、`skill.list/reload`（:455,:457）、`tool.list/reload`（:467,:466）、`websearch.reload`（:542）、`worktree.reload`（:563）。rust 对应能力在 host.js 编辑器表/本地表（行为面等价性归行为/差分通道复核；`vcs.transform`/`vcs.reload` 已于 G-24 lane5 清偿，不在列）。
+- 反向：`ctx.command.add`（host.js:987）为 rust 对 ref transform editor 之 add 的扁平化直调（transform 两键并存）——形状超集，登记不改码。
+- 出处：census RPC / PLUGIN-API。
+
+### G-389 ℹ️ keybind rust-extra 8 动作打包（超集，登记不改码）
+- `composer.close`（table.rs:915）、`composer.subagent.toggle-activity`（:902）、`composer.tab.next/prev`（:917/:916）、`dialog.select.section.next/prev`（:829/:828）、`stats.open/close`（:641/:642）——ref `Definitions`（keybind.ts）无此可绑定键；ref 侧 stats 为运行时命令（stats.tsx:197）未开成键位。用户配置面超集，无破坏性。
+- 出处：census KEYBINDS。
+
+### G-390 ℹ️ experimental.file_retention.cleanup_interval rust 加固旋钮（超集键）
+- rust `oc-schema/src/config/experimental.rs:11`；ref `experimental.ts` 无此键——rust 独有的清理间隔调优面，登记不改码。
+- 出处：census CONFIG-KEYS。
+
+## 归类与机械化复认（不另立项）
+
+- **G-295**（rpc.events.emit 通路）：PLUGIN-API census 显现为 ref 独有键（adapter.ts:77），登记册 STILL_OPEN 状态与代码一致。
+- **G-230**：见上文勘注（0/18，NOT_YET 延续，census 盯守）。
+- **G-239/G-331/G-332/G-148②**：ref 插件 tui 入口面 13 键（Context interface）在 PLUGIN-API 轴 2 全数显现为 REF_ONLY，与各条登记一致（plugin_slots.rs:46-48 现场复核）。
+- **D3-7/tui-full-convergence 终扫**（本册 :1300）：TMUX/STY/OPENCODE_NODE_ASSETS_DIR 维持有据 bounded，census 归类一致。
+- **G-174**：`providers.models.compatibility.requireSignature` 键为 G-174 修复产物（CONFIG-KEYS census 归类）。
+- **G-10/G-383b**：persistent-pty wire rust 超集 op（`read` wire.rs:333、`restore` :361）与 `replay_complete` tag（:459）census 显现一致，双侧版本钉定 v7（persistent_pty.rs:509 ↔ daemon.ts:8）。
+- **G-373 系（round-23 决策族）**：provider 3 个 rust-native 入口（`amazon-bedrock/mantle/messages` facade.rs:119、`xai/chat`、`anthropic-compatible`）——ref 走 aisdk/npm 桥或不在 builtins 表，rust native 化为已裁决架构分歧。
+- **RC-11**：CLI `completion` 命令 rust 独有，既有背书维持。
+
+## 旧锚修正（勘正，勿沿用旧数字）
+
+1. **"52 会话事件"→实为 51**：EVENTS census 三轴（ref union tag ↔ rust serde 枚举 ↔ event_type() 匹配臂）双侧均 51、集合一致；"52"系旧口径分桶计数，非差异、非提取漂移。
+2. **"keybind 230/230"→243/243**：ref `Definitions` 已演进至 243 个可绑定动作，rust 同步 243 + 8 超集（G-389）。
+3. **"~180 catalog-only 推定"→确凿 226 = 49 BOTH_NATIVE + 168 BOTH_COMPAT + 9 REF_AISDK_ONLY**：第二十二轮盲区#2 销项；9 家 npm 桥（aihubmix/gitlab/merge-gateway/perplexity/qvac/salad-cloud/sap-ai-core/v0/watsonx）为登记册豁免的 typed `UnsupportedProtocol`（facade.rs:2151-2156）。
+
+## 第二十四轮判定汇总
+
+census 把"缺口扫描"从自由读码改为可度量普查：14 通道覆盖率 100%、11 通道零缺口、新立项仅 7 条（🟢×4 可修 + ℹ️×3 登记）——**这正是收敛的证据：枚举面已不再产出大批新缺口，剩余缺口密度集中在插件 ctx 桥层与两个 env 旋钮**。修复优先序：G-385（纯接线半小时）> G-384（vcs 读面同型）> G-387 > G-388（先核行为差）> G-230 die 前置（1-2 天中等 lane 维持 R21 建议）。本轮起扫描循环的操作定义=14 条幂等命令 + INDEX 复核；上游 bump 工作流=重跑 census 取轴 1 diff → diff-scoped lane。工具与报告：`tools/census/`、`docs/audit/census/`（INDEX.md 为总索引）。
