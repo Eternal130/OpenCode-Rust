@@ -497,10 +497,10 @@ impl ChannelStorage {
         // The locks directory (storage.tsx:52): created alongside the
         // storage directory; best-effort (a read-only state root still
         // allows the atomic write below).
-        let lock_name = path
-            .file_name()
-            .map(|name| format!("{}.lock", name.to_string_lossy()))
-            .unwrap_or_else(|| "storage.lock".to_owned());
+        let lock_name = path.file_name().map_or_else(
+            || "storage.lock".to_owned(),
+            |name| format!("{}.lock", name.to_string_lossy()),
+        );
         let lock_path = self.directory.parent().map(|parent| {
             let mut locks = parent.to_path_buf();
             locks.push("locks");
@@ -512,13 +512,13 @@ impl ChannelStorage {
             oc_util::flock::FileLock::exclusive(lock_path, std::time::Duration::from_millis(5_000))
                 .ok()
         });
-        let result = self.write_locked(&path, &body);
+        let result = Self::write_locked(&path, &body);
         drop(guard);
         result
     }
 
     /// The temp-file + rename write under the flock.
-    fn write_locked(&self, path: &Path, body: &[u8]) -> Result<(), String> {
+    fn write_locked(path: &Path, body: &[u8]) -> Result<(), String> {
         let temporary =
             path.with_extension(format!("{}.{}.tmp", std::process::id(), write_counter()));
         std::fs::write(&temporary, body).and_then(|()| std::fs::rename(&temporary, path)).map_err(

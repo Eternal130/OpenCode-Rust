@@ -193,7 +193,9 @@ pub fn subagent_tool_row_with_models(
         label.push_str(" · ");
         label.push_str(name);
         if let Some(variant) = variant {
-            label.push_str(&format!(" ({variant})"));
+            label.push_str(" (");
+            label.push_str(variant);
+            label.push(')');
         }
     }
     // `isBackgroundSubagent` (:3135-3139): completed tool, child still
@@ -1861,7 +1863,7 @@ mod g370_subagent_tests {
         render
             .placed
             .iter()
-            .flat_map(|p| p.lines.iter().map(|l| l.text()))
+            .flat_map(|p| p.lines.iter().map(crate::layout::PlacedLine::text))
             .collect::<Vec<_>>()
             .join("|")
     }

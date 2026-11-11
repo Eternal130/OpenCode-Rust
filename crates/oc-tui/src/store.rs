@@ -14241,7 +14241,7 @@ fn picker_fallback_title(info: &crate::notifications_plugin::SessionInfo) -> Str
 /// `isFallbackTitle` (session-title-fallback.ts:4,32-34): the
 /// `^(New session|Child session) - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`
 /// pattern, matched shape-by-shape (no regex dep) — the window-title
-/// effect (app.tsx:610) collapses these to "OpenCode".
+/// effect (app.tsx:610) collapses these to `OpenCode`.
 fn is_fallback_session_title(title: &str) -> bool {
     let Some(rest) =
         title.strip_prefix("New session - ").or_else(|| title.strip_prefix("Child session - "))

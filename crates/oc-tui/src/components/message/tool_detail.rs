@@ -1396,7 +1396,7 @@ mod g370_diag_tests {
         assert_eq!(rows[0], (4, 9, "bad type".to_owned()), "severity 1 only");
         assert_eq!(rows[2], (2, 3, "third".to_owned()), "the 4th is dropped");
         // Nothing for an absent path.
-        assert!(parse_diagnostics(&state, "other.ts").is_empty());
+        assert_eq!(parse_diagnostics(&state, "other.ts"), Vec::<(usize, usize, String)>::new());
     }
 
     #[test]
@@ -1407,8 +1407,11 @@ mod g370_diag_tests {
         let state = state_with_diagnostics("src/a.ts", raw);
         let styles = crate::theme::ThemeState::v2_dark().styles();
         let render = with_diagnostics(edit_block(&state, &styles, 80), &state, &styles, 80);
-        let text: Vec<String> =
-            render.placed.iter().flat_map(|p| p.lines.iter().map(|l| l.text())).collect();
+        let text: Vec<String> = render
+            .placed
+            .iter()
+            .flat_map(|p| p.lines.iter().map(crate::layout::PlacedLine::text))
+            .collect();
         let joined = text.join("\n");
         assert!(joined.contains("Error [3:5] cannot find x"), "1-based range: {joined}");
         let height = render.height;
@@ -1450,14 +1453,20 @@ mod g370_websearch_tests {
                 &theme,
                 80,
             );
-            let text: Vec<String> =
-                render.placed.iter().flat_map(|p| p.lines.iter().map(|l| l.text())).collect();
+            let text: Vec<String> = render
+                .placed
+                .iter()
+                .flat_map(|p| p.lines.iter().map(crate::layout::PlacedLine::text))
+                .collect();
             assert!(text.join("\n").contains(expected), "{provider}: {text:?}");
         }
         // No provider metadata → the plain label.
         let render = tool_detail_row("websearch", &websearch_state(None), false, 0, &theme, 80);
-        let text: Vec<String> =
-            render.placed.iter().flat_map(|p| p.lines.iter().map(|l| l.text())).collect();
+        let text: Vec<String> = render
+            .placed
+            .iter()
+            .flat_map(|p| p.lines.iter().map(crate::layout::PlacedLine::text))
+            .collect();
         assert!(text.join("\n").contains("Web Search \"rust tui\""), "no provider: {text:?}");
     }
 }

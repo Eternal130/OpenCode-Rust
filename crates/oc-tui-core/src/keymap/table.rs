@@ -1007,7 +1007,7 @@ mod g381_rebind_tests {
         let undo = overrides.iter().find(|entry| entry.name == "input.undo").expect("entry");
         assert_eq!(undo.specs, vec!["ctrl+z", "ctrl+-", "super+z"]);
         // Non-win32: nothing changes.
-        assert!(terminal_suspend_rebind(Vec::new(), true).is_empty());
+        assert_eq!(terminal_suspend_rebind(Vec::new(), true), Vec::<KeybindOverride>::new());
         // A user's own input.undo override stands untouched.
         let user = vec![KeybindOverride {
             name: "input.undo".to_owned(),
@@ -1023,6 +1023,6 @@ mod g381_rebind_tests {
         }];
         let overrides = terminal_suspend_rebind(user, false);
         assert_eq!(overrides[0].name, "terminal_suspend");
-        assert!(overrides[0].specs.is_empty());
+        assert_eq!(overrides[0].specs, Vec::<String>::new());
     }
 }
