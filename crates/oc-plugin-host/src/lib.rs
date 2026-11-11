@@ -106,8 +106,7 @@ pub use context::{
     update::{collect_stale, global_cache as update_cache, npm_check, update, UpdateCache},
     Bridge, HostState, IntegrationPort, ModelPort, NoSessionEngine, NoToolEngine, PermissionPort,
     ProviderPort, ReferencePort, SessionPort, TerminalPort, ToolPort, VcsPort, WebsearchPort,
-    WorktreePort,
-    MUTATING_DISPATCH_TIMEOUT, SESSION_METHODS,
+    WorktreePort, MUTATING_DISPATCH_TIMEOUT, SESSION_METHODS,
 };
 pub use registrations::{
     PluginAgent, PluginCommand, PluginDialog, PluginGroupRule, PluginHomeAction, PluginHook,

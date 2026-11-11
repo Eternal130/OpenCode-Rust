@@ -5,7 +5,7 @@
 //! handler cores the `/api/vcs/*` + `/api/worktree` routes ride (ref
 //! promise adapter.ts:510-514 + 558-566).
 //!
-//! Hermetic (the plugin_guest_wiring.rs pattern): sandboxed
+//! Hermetic (the `plugin_guest_wiring.rs` pattern): sandboxed
 //! HOME/XDG, a git-repo project whose `opencode.json` loads the
 //! g379faces fixture, bun-gated, no network.
 
@@ -50,7 +50,7 @@ fn git(dir: &std::path::Path, args: &[&str]) -> String {
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .output()
-        .unwrap_or_else(|error| panic!("git {:?}: {error}", args));
+        .unwrap_or_else(|error| panic!("git {args:?}: {error}"));
     assert!(
         output.status.success(),
         "git {args:?} failed: {}",
@@ -128,7 +128,8 @@ async fn g379_guest_vcs_read_faces() {
     git(&box_.project, &["add", "."]);
     git(&box_.project, &["commit", "-m", "seed"]);
     git(&box_.project, &["branch", "feature-lane5b"]);
-    std::fs::write(box_.project.join("notes.md"), "seed\nplus an uncommitted line\n").expect("edit");
+    std::fs::write(box_.project.join("notes.md"), "seed\nplus an uncommitted line\n")
+        .expect("edit");
     std::fs::write(box_.project.join("untracked.txt"), "new\n").expect("untracked");
     box_.write_project_config();
     redirect_env(&box_.home);
@@ -153,17 +154,16 @@ async fn g379_guest_vcs_read_faces() {
     let status = &result["status"];
     assert_eq!(status["ok"], json!(true), "status ok: {status}");
     let rows = status["value"].as_array().expect("status array").clone();
-    let files: Vec<String> = rows
-        .iter()
-        .map(|row| row["file"].as_str().unwrap_or_default().to_owned())
-        .collect();
+    let files: Vec<String> =
+        rows.iter().map(|row| row["file"].as_str().unwrap_or_default().to_owned()).collect();
     assert!(files.contains(&"notes.md".to_owned()), "modified file listed: {rows:?}");
     assert!(files.contains(&"untracked.txt".to_owned()), "untracked file listed: {rows:?}");
 
     let diff = &result["diff"];
     assert_eq!(diff["ok"], json!(true), "working diff ok: {diff}");
     let patches = diff["value"].as_array().expect("diff array").clone();
-    let notes = patches.iter().find(|entry| entry["file"] == json!("notes.md")).expect("notes.md diff");
+    let notes =
+        patches.iter().find(|entry| entry["file"] == json!("notes.md")).expect("notes.md diff");
     assert!(notes["patch"].as_str().unwrap_or("").contains("+plus an uncommitted line"));
 
     let diff_branch = &result["diffBranch"];
@@ -206,8 +206,11 @@ async fn g379_guest_worktree_roundtrip_and_refresh() {
     let before = &roundtrip["listBefore"];
     assert_eq!(before["ok"], json!(true), "list ok: {before}");
     assert!(
-        before["value"].as_array().unwrap().iter().any(|row| row["directory"]
-            == json!(box_.project.display().to_string())),
+        before["value"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["directory"] == json!(box_.project.display().to_string())),
         "the canonical checkout is a saved row: {before}"
     );
 
@@ -251,8 +254,11 @@ async fn g379_guest_worktree_roundtrip_and_refresh() {
     let after = &refresh["after"];
     assert_eq!(after["ok"], json!(true), "post-refresh list ok: {after}");
     assert!(
-        after["value"].as_array().unwrap().iter().any(|row| row["directory"]
-            == json!(stray.display().to_string())),
+        after["value"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["directory"] == json!(stray.display().to_string())),
         "the host-made linked worktree is discovered: {after}"
     );
 

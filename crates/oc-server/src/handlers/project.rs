@@ -345,7 +345,7 @@ async fn worktree_create(
 }
 
 /// G-379.8 — the `worktree.create` data core (shared by the HTTP
-/// handler and the plugin WorktreePort).
+/// handler and the plugin `WorktreePort`).
 ///
 /// v2 `Worktree.create` (worktree.ts:192-238) with the git strategy
 /// (worktree/git.ts): source validation → parent resolution → slug
@@ -426,7 +426,7 @@ pub(crate) async fn worktree_create_data(
     // `<data>/worktree/<project id prefix>` (v2 strategies.ts initial
     // state; `global.data` ≙ the engine data root).
     let parent = parent_override
-        .or_else(|| configured_worktree_directory(&state, &project_worktree))
+        .or_else(|| configured_worktree_directory(state, &project_worktree))
         .unwrap_or_else(|| {
             let prefix: String = project_id.chars().take(6).collect();
             state.engine.data_root.join("worktree").join(prefix)
@@ -490,7 +490,7 @@ pub(crate) async fn worktree_create_data(
         )
         .await;
     if written {
-        publish_worktree_updated(&state, &project_id).await;
+        publish_worktree_updated(state, &project_id).await;
     }
 
     // The project's `commands.start` (v2 worktree.ts:231-246): bash -lc in
@@ -583,7 +583,7 @@ async fn worktree_refresh(
 }
 
 /// G-379.8 — the `worktree.refresh` data core (shared by the HTTP
-/// handler and the plugin WorktreePort).
+/// handler and the plugin `WorktreePort`).
 ///
 /// v2 worktree.ts:273-327 — project row → strategy `load` (the
 /// canonical checkout must be a directory) → stored rows with on-disk
@@ -748,7 +748,7 @@ async fn worktree_remove(
 }
 
 /// G-379.8 — the `worktree.remove` data core (shared by the HTTP
-/// handler and the plugin WorktreePort).
+/// handler and the plugin `WorktreePort`).
 ///
 /// v2 worktree.ts:257-271 — project row → canonicalize → stored
 /// strategy check → strategy remove (`git worktree remove [--force]`,
@@ -1322,29 +1322,29 @@ async fn vcs_branch_list(
     let limit = query_field(&uri, "limit")
         .and_then(|value| value.parse::<usize>().ok())
         .map(|value| value.min(100));
-    let data = vcs_branch_list_data(&services, search, limit)?;
+    let data = vcs_branch_list_data(&services, search.as_deref(), limit);
     Ok(super::common::json_location_data(&location.as_path().to_string_lossy(), data))
 }
 
 /// G-379.8 — the location-independent `vcs.branch.list` data core
-/// (shared by the HTTP handler and the plugin VcsPort).
+/// (shared by the HTTP handler and the plugin `VcsPort`).
 pub(crate) fn vcs_branch_list_data(
     services: &oc_core::engine::LocationServices,
-    search: Option<String>,
+    search: Option<&str>,
     limit: Option<usize>,
-) -> Result<Value, ApiError> {
+) -> Value {
     // v2 vcs.branch.list → `Vcs.BranchList` = bare string[]
     // (git.ts:228-241): case-insensitive for-each-ref over local+remote
     // namespaces, committerdate-then-refname ordering, /HEAD filtered.
     // The hg adapter's branch list is always empty (hg.ts:121-123) —
     // named branches are not the git branch analog.
     if is_hg(services) {
-        return Ok(Value::Array(Vec::new()));
+        return Value::Array(Vec::new());
     }
     let limit = limit.unwrap_or(50).min(100);
     let scope = services.project.canonical.as_path();
 
-    let escaped = search.as_ref().map(|value| {
+    let escaped = search.map(|value| {
         let trimmed = value.trim();
         let mut out = String::with_capacity(trimmed.len());
         for character in trimmed.chars() {
@@ -1381,7 +1381,7 @@ pub(crate) fn vcs_branch_list_data(
         .filter(|line| !line.is_empty() && !line.ends_with("/HEAD"))
         .map(|line| json!(line))
         .collect();
-    Ok(Value::Array(branches))
+    Value::Array(branches)
 }
 
 // ---------------------------------------------------------------------------
@@ -1465,18 +1465,18 @@ async fn vcs_diff(
             "Expected \"working\" | \"branch\" | \"committed\"\n  at [\"mode\"]".to_owned(),
         ));
     }
-    let data = vcs_diff_data(&services, &mode, base_param, context)?;
+    let data = vcs_diff_data(&services, &mode, base_param.as_deref(), context)?;
     Ok(super::common::json_location_data(&location.as_path().to_string_lossy(), data))
 }
 
 /// G-379.8 — the location-independent `vcs.diff` data core (shared by
-/// the HTTP handler and the plugin VcsPort). `mode` must already be
+/// the HTTP handler and the plugin `VcsPort`). `mode` must already be
 /// one of working/branch/committed.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn vcs_diff_data(
     services: &oc_core::engine::LocationServices,
     mode: &str,
-    base_param: Option<String>,
+    base_param: Option<&str>,
     context_param: Option<i64>,
 ) -> Result<Value, ApiError> {
     let scope = services.project.canonical.as_path();
@@ -1534,7 +1534,7 @@ pub(crate) fn vcs_diff_data(
         (None, None)
     } else {
         let Some(base) = base_param
-            .clone()
+            .map(str::to_owned)
             .or_else(|| git_default_branch(scope).map(|(_, reference)| reference))
         else {
             return Err(unavailable("No review base available"));
@@ -1893,16 +1893,16 @@ async fn vcs_status(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let services = services(&state, &location).await?;
-    let data = vcs_status_data(&services, location.as_path())?;
+    let data = vcs_status_data(&services, location.as_path());
     Ok(super::common::json_location_data(&location.as_path().to_string_lossy(), data))
 }
 
 /// G-379.8 — the location-independent `vcs.status` data core (shared
-/// by the HTTP handler and the plugin VcsPort).
+/// by the HTTP handler and the plugin `VcsPort`).
 pub(crate) fn vcs_status_data(
     services: &oc_core::engine::LocationServices,
     directory: &std::path::Path,
-) -> Result<Value, ApiError> {
+) -> Value {
     // The hg adapter (hg.ts:124-134): status = diffAgainst(parent) mapped
     // to the FileStatus wire shape.
     if is_hg(services) {
@@ -1917,7 +1917,7 @@ pub(crate) fn vcs_status_data(
                 })
             })
             .collect();
-        return Ok(Value::Array(data));
+        return Value::Array(data);
     }
     // Git status (plugin/vcs/git.ts:81-99): the porcelain scan AND the
     // numstat stats run scoped to the LOCATION directory (`--", "."` in
@@ -1952,7 +1952,7 @@ pub(crate) fn vcs_status_data(
             "deletions": deletions,
         }));
     }
-    Ok(Value::Array(data))
+    Value::Array(data)
 }
 
 async fn vcs_init(

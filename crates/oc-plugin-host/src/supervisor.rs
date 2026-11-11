@@ -515,7 +515,9 @@ impl Shared {
                 data.as_ref(),
             ) {
                 if let Some(issue) = json_schema::first_issue(declared, data) {
-                    return Ok(crate::RpcOutcome::Internal(format!("Invalid RPC error data: {issue}")));
+                    return Ok(crate::RpcOutcome::Internal(format!(
+                        "Invalid RPC error data: {issue}"
+                    )));
                 }
             }
             if type_ == "rpc.internal" || type_ == "rpc.invalid_output" {
@@ -527,7 +529,9 @@ impl Shared {
         if let Some(output) = result.get("output") {
             if let Some(schema) = method_definition.as_ref().and_then(|d| d.get("output")) {
                 if let Some(message) = json_schema::first_issue(schema, output) {
-                    return Ok(crate::RpcOutcome::Internal(format!("Invalid RPC output: {message}")));
+                    return Ok(crate::RpcOutcome::Internal(format!(
+                        "Invalid RPC output: {message}"
+                    )));
                 }
             }
         }
@@ -560,6 +564,7 @@ impl Shared {
     ///
     /// `None` = the reply is deferred (the `session.*` async path
     /// spawns the port call; the reply is enqueued when it settles).
+    #[allow(clippy::too_many_lines)] // one routing table, one arm per face
     fn answer_guest(self: &Arc<Self>, id: u64, method: &str, params: &Value) -> Option<String> {
         match method {
             "command.add" | "theme.register" => Some(answer_wave1(self, id, method, params)),
@@ -1056,7 +1061,9 @@ impl Shared {
                     Ok(()) => protocol::response(id, Value::Null),
                     Err(message) => protocol::error_response(id, &message),
                 },
-                other => protocol::error_response(id, &format!("unknown worktree method {other:?}")),
+                other => {
+                    protocol::error_response(id, &format!("unknown worktree method {other:?}"))
+                }
             };
             let _ = outbound.send(reply);
         });
