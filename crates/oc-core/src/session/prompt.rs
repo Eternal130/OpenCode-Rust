@@ -80,58 +80,9 @@ impl std::error::Error for AttachmentError {}
 /// `application/octet-stream`. Empty payloads are text.
 #[must_use]
 pub fn detect_mime(bytes: &[u8]) -> &'static str {
-    fn starts_with(bytes: &[u8], prefix: &[u8]) -> bool {
-        bytes.len() >= prefix.len() && &bytes[..prefix.len()] == prefix
-    }
-    if starts_with(bytes, &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
-        return "image/png";
-    }
-    if starts_with(bytes, &[0xFF, 0xD8, 0xFF]) {
-        return "image/jpeg";
-    }
-    if starts_with(bytes, &[0x47, 0x49, 0x46, 0x38]) {
-        return "image/gif";
-    }
-    if starts_with(bytes, &[0x42, 0x4D]) {
-        return "image/bmp";
-    }
-    if starts_with(bytes, &[0x25, 0x50, 0x44, 0x46, 0x2D]) {
-        return "application/pdf";
-    }
-    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
-        return "image/webp";
-    }
-    if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" && matches!(&bytes[8..12], b"avif" | b"avis") {
-        return "image/avif";
-    }
-    if is_text(bytes) {
-        "text/plain"
-    } else {
-        "application/octet-stream"
-    }
+    // Unified through the shared G-92 sniffer table (`oc_util::mime`).
+    oc_util::mime::detect_mime(bytes)
 }
-
-/// `isText` (mime.ts): empty ⇒ text; NUL bytes ⇒ binary; strict UTF-8
-/// (`TextDecoder { fatal: true }`); ≤30% control bytes
-/// (`< 9 || (> 13 && < 32)`).
-fn is_text(bytes: &[u8]) -> bool {
-    if bytes.is_empty() {
-        return true;
-    }
-    if bytes.contains(&0) {
-        return false;
-    }
-    if std::str::from_utf8(bytes).is_err() {
-        return false;
-    }
-    let controls = bytes.iter().filter(|byte| **byte < 9 || (**byte > 13 && **byte < 32)).count();
-    // ratio over counts: intentional usize->f64 (clippy::cast_precision_loss)
-    #[allow(clippy::cast_precision_loss)]
-    {
-        controls as f64 / bytes.len() as f64 <= 0.3
-    }
-}
-
 /// `attachmentLabel` (prompt.ts:206-208) — the data URL is the whole
 /// file; errors and logs must name the attachment, not echo its bytes.
 fn attachment_label(input: &InputFileAttachment) -> String {

@@ -93,6 +93,7 @@ pub fn discover(scope: &Scope, flags: DiscoveryFlags) -> InstructionState {
     let mut files: Vec<InstructionFile> = Vec::new();
     let mut seen: Vec<PathBuf> = Vec::new();
     for candidate in candidates {
+        let is_global = candidate == global_file;
         let resolved = resolve_path(&candidate);
         if seen.contains(&resolved) {
             continue;
@@ -103,6 +104,12 @@ pub fn discover(scope: &Scope, flags: DiscoveryFlags) -> InstructionState {
         }
         match std::fs::read_to_string(&candidate) {
             Ok(content) => files.push(InstructionFile { path: candidate, content }),
+            // Ref (config/plugin/instruction.ts): a GLOBAL read failure
+            // (`globalSource` — `read` returns undefined, `[]` result)
+            // only skips that file; a PROJECT read failure makes the
+            // whole source `Instructions.unavailable`
+            // (`projectSource` — `files.some(f => f === undefined)`).
+            Err(_) if is_global => {}
             Err(_) => return InstructionState::Unavailable,
         }
     }
@@ -274,6 +281,38 @@ mod tests {
             assert_eq!(state, InstructionState::Unavailable);
         } else {
             assert!(state.files().is_some());
+        }
+    }
+
+    #[test]
+    fn config_instruction_unreadable_global_file_is_skipped_not_fatal() {
+        let dir = tempdir("instr-global-unreadable");
+        let project = dir.join("project");
+        write(&project.join("AGENTS.md"), "inside");
+        let global_file = dir.join("global").join("AGENTS.md");
+        write(&global_file, "locked");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&global_file, fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        let scope = Scope {
+            start: &project,
+            home: &dir.join("home"),
+            project_root: Some(&project),
+            global_file: &global_file,
+        };
+        let state = discover(&scope, DiscoveryFlags::all());
+        // Root can read 0o000 files; only assert the skip when the read
+        // is actually blocked. Ref: a global read failure yields [] for
+        // that source (`globalSource`), never `Instructions.unavailable`.
+        let read_blocked = std::fs::read_to_string(&global_file).is_err();
+        if read_blocked {
+            let files = state.files().expect("project files survive");
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].content, "inside");
+        } else {
+            assert_eq!(state.files().expect("files").len(), 2);
         }
     }
 

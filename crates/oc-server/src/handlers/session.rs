@@ -103,7 +103,8 @@ pub(crate) async fn services(
 ) -> Result<std::sync::Arc<LocationServices>, ApiError> {
     state.engine.location(location.clone()).await.map_err(|error| {
         match &error {
-            oc_core::location::BootError::MissingDirectory(directory) => {
+            oc_core::location::BootError::MissingDirectory(directory)
+            | oc_core::location::BootError::LocationOutsideProject(directory) => {
                 return crate::errors::location_not_found_path(directory.display());
             }
             oc_core::location::BootError::Database(_) => {}
@@ -1604,7 +1605,8 @@ async fn diff(
     } else {
         state.engine.location(plan_location).await.map_err(|error| {
             match &error {
-                oc_core::location::BootError::MissingDirectory(directory) => {
+                oc_core::location::BootError::MissingDirectory(directory)
+                | oc_core::location::BootError::LocationOutsideProject(directory) => {
                     return crate::errors::location_not_found_path(directory.display());
                 }
                 oc_core::location::BootError::Database(_) => {}

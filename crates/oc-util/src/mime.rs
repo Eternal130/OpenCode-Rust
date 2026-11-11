@@ -66,9 +66,80 @@ pub fn from_path(path: &str) -> Option<&'static str> {
     path.rsplit_once('.').and_then(|(_, tail)| from_extension(tail))
 }
 
+/// `Mime.detect` (core mime.ts:3-21) — magic-byte sniff; PNG requires the
+/// FULL 8-byte signature (`\x89PNG\r\n\x1a\n`), GIF is the 4-byte `GIF8`
+/// prefix; `text/plain` for textual payloads (no NUL bytes, strict UTF-8,
+/// ≤30% control bytes); fallback `application/octet-stream`. Empty
+/// payloads are text. The single canonical sniffer — read.rs / prompt.rs
+/// delegate here (G-382⑥: the private copies had drifted to a 4-byte PNG
+/// and 6-byte `GIF87a`/`GIF89a` match).
+#[must_use]
+pub fn detect_mime(bytes: &[u8]) -> &'static str {
+    fn starts_with(bytes: &[u8], prefix: &[u8]) -> bool {
+        bytes.len() >= prefix.len() && &bytes[..prefix.len()] == prefix
+    }
+    if starts_with(bytes, &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return "image/png";
+    }
+    if starts_with(bytes, &[0xFF, 0xD8, 0xFF]) {
+        return "image/jpeg";
+    }
+    if starts_with(bytes, &[0x47, 0x49, 0x46, 0x38]) {
+        return "image/gif";
+    }
+    if starts_with(bytes, &[0x42, 0x4D]) {
+        return "image/bmp";
+    }
+    if starts_with(bytes, &[0x25, 0x50, 0x44, 0x46, 0x2D]) {
+        return "application/pdf";
+    }
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return "image/webp";
+    }
+    if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" && matches!(&bytes[8..12], b"avif" | b"avis") {
+        return "image/avif";
+    }
+    if is_text(bytes) {
+        "text/plain"
+    } else {
+        "application/octet-stream"
+    }
+}
+
+/// `isText` (mime.ts): empty ⇒ text; NUL bytes ⇒ binary; strict UTF-8
+/// (`TextDecoder { fatal: true }`); ≤30% control bytes
+/// (`< 9 || (> 13 && < 32)`).
+fn is_text(bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return true;
+    }
+    if bytes.contains(&0) {
+        return false;
+    }
+    if std::str::from_utf8(bytes).is_err() {
+        return false;
+    }
+    let controls = bytes.iter().filter(|byte| **byte < 9 || (**byte > 13 && **byte < 32)).count();
+    // ratio over counts: intentional usize->f64 (clippy::cast_precision_loss)
+    #[allow(clippy::cast_precision_loss)]
+    {
+        controls as f64 / bytes.len() as f64 <= 0.3
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detect_png_needs_full_signature_gif_is_4_bytes() {
+        // mime.ts:4 matches all 8 PNG bytes; a 4-byte prefix alone is NOT png.
+        assert_eq!(detect_mime(&[0x89, 0x50, 0x4E, 0x47]), "text/plain");
+        assert_eq!(detect_mime(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), "image/png");
+        // mime.ts:6 matches the `GIF8` prefix regardless of version bytes.
+        assert_eq!(detect_mime(b"GIF8"), "image/gif");
+        assert_eq!(detect_mime(b"GIF89a"), "image/gif");
+    }
 
     #[test]
     fn union_table_lookups() {

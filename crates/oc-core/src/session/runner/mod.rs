@@ -474,10 +474,7 @@ pub enum ModelError {
     /// Ref (`session/runner/model.ts` `ModelUnavailableError.message`): the
     /// two deprecated provider aliases carry a migration notice in the copy.
     #[error("{}", ModelError::unavailable_message(provider, model))]
-    Unavailable {
-        provider: String,
-        model: String,
-    },
+    Unavailable { provider: String, model: String },
     #[error("{0}")]
     Resolver(String),
 }

@@ -260,14 +260,8 @@ mod tests {
         // Ref maps any non-array value to [String(value)] — bools included.
         assert_eq!(form_value_to_answer(None), Vec::<String>::new());
         assert_eq!(form_value_to_answer(Some(&FormValue::Bool(true))), vec!["true"]);
-        assert_eq!(
-            form_value_to_answer(Some(&FormValue::Bool(false))),
-            vec!["false"]
-        );
-        assert_eq!(
-            form_value_to_answer(Some(&FormValue::String("Yes".into()))),
-            vec!["Yes"]
-        );
+        assert_eq!(form_value_to_answer(Some(&FormValue::Bool(false))), vec!["false"]);
+        assert_eq!(form_value_to_answer(Some(&FormValue::String("Yes".into()))), vec!["Yes"]);
         assert_eq!(
             form_value_to_answer(Some(&FormValue::Strings(vec!["a".into(), "b".into()]))),
             vec!["a", "b"]

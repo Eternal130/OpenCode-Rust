@@ -405,8 +405,9 @@ impl CatalogModelResolver {
                     .iter()
                     .find(|model| model.id.eq_ignore_ascii_case(&reference.id.0))
                     .map(|model| model.id.clone())
-                    .ok_or_else(|| {
-                        ModelError::Unavailable { provider: provider.id.clone(), model: reference.id.0.clone() }
+                    .ok_or_else(|| ModelError::Unavailable {
+                        provider: provider.id.clone(),
+                        model: reference.id.0.clone(),
                     })?;
                 let model = custom_language_model(&self.context, &provider, &canonical_model)
                     .map_err(|error| map_custom(error, &provider.id, &canonical_model))?;
@@ -530,7 +531,10 @@ impl CatalogModelResolver {
                 // Both segments in the error — v2 never drops the model id
                 // (ModelUnavailableError carries providerID + modelID,
                 // session/runner/model.ts:20-31,86-89).
-                ModelError::Unavailable { provider: reference.provider_id.0.clone(), model: reference.id.0.clone() }
+                ModelError::Unavailable {
+                    provider: reference.provider_id.0.clone(),
+                    model: reference.id.0.clone(),
+                }
             })?;
         let mut connection = self.connection_for(&reference.provider_id.0);
         // CRED-A4: a config entry with this provider id contributes its
@@ -633,15 +637,19 @@ impl CatalogModelResolver {
         } else if let Some(state) = &digitalocean_state {
             &state.merged
         } else {
-            catalog.provider(&provider_id).ok_or_else(|| {
-                ModelError::Unavailable { provider: provider_id.clone(), model: reference.id.0.clone() }
+            catalog.provider(&provider_id).ok_or_else(|| ModelError::Unavailable {
+                provider: provider_id.clone(),
+                model: reference.id.0.clone(),
             })?
         };
         let base_info = snapshot
             .models
             .iter()
             .find(|model| model.id.0 == reference.id.0)
-            .ok_or_else(|| ModelError::Unavailable { provider: provider_id.clone(), model: reference.id.0.clone() })?
+            .ok_or_else(|| ModelError::Unavailable {
+                provider: provider_id.clone(),
+                model: reference.id.0.clone(),
+            })?
             .clone();
         // CRED-A3: the selected variant's settings/headers/body merge
         // into the model info BEFORE binding (v2 withVariant,
@@ -664,7 +672,10 @@ impl CatalogModelResolver {
         // chatgpt.ts:267-306).
         if let Some(shaping) = chatgpt_shaping {
             if !crate::integration::copilot::chatgpt_model_available(&info, shaping) {
-                return Err(ModelError::Unavailable { provider: provider_id.clone(), model: reference.id.0.clone() });
+                return Err(ModelError::Unavailable {
+                    provider: provider_id.clone(),
+                    model: reference.id.0.clone(),
+                });
             }
             crate::integration::copilot::apply_chatgpt_shaping(&mut info, shaping);
         }

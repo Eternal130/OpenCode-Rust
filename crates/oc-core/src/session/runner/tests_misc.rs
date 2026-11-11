@@ -549,6 +549,19 @@ fn runner_instruction_hash_is_canonical() {
 }
 
 #[test]
+fn runner_instruction_hash_floats_render_like_json_stringify() {
+    // JS JSON.stringify(1.0) === "1" — integral f64 must hash like the
+    // integer; serde_json alone would render "1.0" (a different hash).
+    assert_eq!(instruction_hash(&serde_json::json!(1.0)), instruction_hash(&serde_json::json!(1)));
+    assert_eq!(
+        instruction_hash(&serde_json::json!({"v": 2.0})),
+        instruction_hash(&serde_json::json!({"v": 2}))
+    );
+    // Non-integral floats keep their shortest repr (JS parity).
+    assert_ne!(instruction_hash(&serde_json::json!(1.5)), instruction_hash(&serde_json::json!(1)));
+}
+
+#[test]
 fn runner_render_initial_joins_with_blank_lines() {
     let list = vec![constant_source("a", "1"), constant_source("b", "2")];
     let values = BTreeMap::from([

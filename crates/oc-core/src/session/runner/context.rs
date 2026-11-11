@@ -183,8 +183,10 @@ pub fn apply_hash_delta(
     result
 }
 
-/// Canonical JSON (instructions/index.ts:206-216): sorted keys, no
-/// whitespace.
+/// Canonical JSON (instructions/index.ts:206-216 / canonical :243-251):
+/// sorted keys, no whitespace. Scalars render via `JSON.stringify`
+/// semantics — an integral f64 (`1.0`) renders as `1` (JS drops the
+/// trailing `.0`; serde_json keeps it, which would change the hash).
 fn canonical_json(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::Array(items) => {
@@ -205,6 +207,18 @@ fn canonical_json(value: &serde_json::Value) -> String {
                     .collect::<Vec<_>>()
                     .join(",")
             )
+        }
+        serde_json::Value::Number(number) => {
+            // Only float-encoded numbers diverge: integers already render
+            // identically. JS renders integral doubles < 1e21 without a
+            // decimal point (Number::toString).
+            if number.is_f64() {
+                let float = number.as_f64().unwrap_or(f64::NAN);
+                if float.is_finite() && float.fract() == 0.0 && float.abs() < 1e21 {
+                    return format!("{}", float as i64);
+                }
+            }
+            serde_json::to_string(number).unwrap_or_else(|_| "null".to_string())
         }
         other => serde_json::to_string(other).unwrap_or_else(|_| "null".to_string()),
     }

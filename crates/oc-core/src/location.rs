@@ -127,6 +127,13 @@ pub enum BootError {
     /// The shared database failed its boot probe.
     #[error("location database check failed: {0}")]
     Database(#[from] crate::database::DbError),
+    /// The location directory lies outside the project worktree. Ref
+    /// (snapshot.ts `scope()` :108-111) fails every capture with
+    /// "Location is outside the project" — the port surfaces the typed
+    /// error at boot instead of silently widening the snapshot scope to
+    /// the whole repo.
+    #[error("location outside the project: {}", .0.display())]
+    LocationOutsideProject(PathBuf),
 }
 
 // =============================================================================
