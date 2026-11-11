@@ -277,6 +277,7 @@ pub fn js_number(raw: &str) -> Option<f64> {
         Some(b'+') => (1.0, &trimmed[1..]),
         _ => (1.0, trimmed),
     };
+    #[allow(clippy::cast_precision_loss)] // JS number semantics
     let radix = |prefixes: [&str; 2], radix: u32| {
         prefixes
             .iter()
@@ -285,7 +286,9 @@ pub fn js_number(raw: &str) -> Option<f64> {
             .and_then(|digits| u128::from_str_radix(digits, radix).ok())
             .map(|value| value as f64)
     };
-    // JS radix literals carry NO sign (`Number("-0x10")` is NaN).
+    // JS radix literals carry NO sign (`Number("-0x10")` is NaN); the
+    // sentinel is a plain float compare, not a bit-pattern probe.
+    #[allow(clippy::float_cmp)]
     let value = if signed == 1.0 && body.len() > 1 {
         radix(["0x", "0X"], 16)
             .or_else(|| radix(["0o", "0O"], 8))

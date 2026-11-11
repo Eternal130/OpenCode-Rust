@@ -136,7 +136,7 @@ pub struct PluginVcsProvider {
     pub name: String,
     /// G-350 — the definition carried an `init` closure (ref vcs.ts:182:
     /// a provider without `init` maps to the 501 "unsupported"
-    /// InitializeError kind on vcs.init).
+    /// `InitializeError` kind on vcs.init).
     pub has_init: bool,
 }
 

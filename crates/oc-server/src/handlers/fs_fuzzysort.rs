@@ -21,6 +21,22 @@
 //!   `if(!search) return noResults` — `single`'s `!search || !target`
 //!   guard makes empty queries unmatchable), replacing the old
 //!   approximation's match-everything behavior.
+//!
+//! The port mirrors the JS numerics verbatim (f64 score arithmetic,
+//! index-as-f64 penalties), so the cast/float lints are allowed
+//! module-wide: the whole point is byte-for-byte scoring parity.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::float_cmp,
+    clippy::doc_markdown,
+    clippy::too_many_lines,
+    clippy::cast_lossless,
+    clippy::needless_borrow,
+    clippy::nonminimal_bool  // keep the JS branch structure verbatim
+)]
 
 /// One prepared search (fuzzysort `prepareSearch`): the trimmed
 /// lowercased query as UTF-16 code units, its alphabet/number bitflags
@@ -307,9 +323,8 @@ fn algorithm(search: &PreparedSearch, target: &mut PreparedTarget) -> Option<Mat
         if matches[0] != 0 {
             score -= matches[0] as f64 * matches[0] as f64 * 0.2;
         }
-        if !success_strict {
-            score *= 1000.0;
-        } else {
+        // (JS: `if(!successStrict) score *= 1000; else {…}`.)
+        if success_strict {
             let mut unique_beginning_indexes = 1usize;
             let mut index = next_beginning_indexes[0];
             while index < target_len {
@@ -319,6 +334,8 @@ fn algorithm(search: &PreparedSearch, target: &mut PreparedTarget) -> Option<Mat
             if unique_beginning_indexes > 24 {
                 score *= (unique_beginning_indexes - 24) as f64 * 10.0;
             }
+        } else {
+            score *= 1000.0;
         }
         score -= (target_len - search_len) as f64 / 2.0;
         if is_substring {
@@ -465,8 +482,8 @@ mod tests {
     /// `go`'s `if(!search) return noResults`).
     #[test]
     fn empty_query_matches_nothing() {
-        assert!(rank("", &["a.txt", "b.txt"]).is_empty());
-        assert!(rank("   ", &["a.txt"]).is_empty());
+        assert_eq!(rank("", &["a.txt", "b.txt"]).len(), 0);
+        assert_eq!(rank("   ", &["a.txt"]).len(), 0);
     }
 
     /// Non-matching targets drop out; scattered subsequence matches

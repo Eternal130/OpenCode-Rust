@@ -480,9 +480,9 @@ impl ScanExclusions {
 /// [`super::fs_fuzzysort`] (see that module's docs for the documented
 /// deviations); the substring-first property autocomplete depends on
 /// is pinned by `fs_fuzzysort::tests::substring_completion_ranks_first`
-/// and the fs_find integration tests.
+/// and the `fs_find` integration tests.
 ///
-/// The budget counts ENTRIES VISITED (read from a directory), not
+/// The budget counts *entries visited* (read from a directory), not
 /// candidates pushed: with `type=file` over huge trees of directories,
 /// counting pushes would leave the walk unbounded.
 #[allow(clippy::too_many_arguments)] // walk filters mirror the ref fs walk options
