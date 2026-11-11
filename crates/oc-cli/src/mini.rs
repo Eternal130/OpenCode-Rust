@@ -114,8 +114,12 @@ fn parse_model(value: Option<&str>) -> Result<Option<(String, String, Option<Str
 }
 
 /// `resolveMiniTarget` (`mini.ts:157-180`): resolve the session
-/// target, retrying TRANSPORT failures through the reconnect seam with
-/// a 250 ms cadence. Ref retries indefinitely until the abort signal
+/// target, retrying only TRANSPORT-class failures through the
+/// reconnect seam with a 250 ms cadence. Ref condition
+/// (`mini.ts:168`): `error instanceof ClientError && error.reason ===
+/// "Transport"` — every other error (decode, unexpected status, api)
+/// is rethrown to the caller instead of entering the retry loop
+/// (G-353). Ref retries indefinitely until the abort signal
 /// (`Effect.repeat` + `Schedule.spaced(250)`); there is no total
 /// deadline — the 30 s cap added in the port had no ref counterpart
 /// and aborted slow server starts, so it is removed (G-157).
@@ -123,22 +127,47 @@ async fn resolve_mini_target<F, Fut>(
     client: &oc_client::Client,
     input: &RunInput,
     directory: &str,
-    mut reconnect: F,
+    reconnect: F,
 ) -> Result<run::MiniSessionTarget, String>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Option<oc_client::Client>>,
 {
-    let mut client = client.clone();
+    resolve_with_retry(
+        client.clone(),
+        |client| async move { run::resolve_mini_session_target(&client, input, directory).await },
+        reconnect,
+    )
+    .await
+    .map_err(|error| error.message)
+}
+
+/// The retry core of `resolveMiniTarget`, split out so the reconnect
+/// condition is testable without a live server (G-353): each step gets
+/// the current client (reconnect swaps it), and only transport-class
+/// step errors re-enter the loop.
+async fn resolve_with_retry<S, SFut, F, Fut>(
+    mut client: oc_client::Client,
+    mut step: S,
+    mut reconnect: F,
+) -> Result<run::MiniSessionTarget, run::ResolveError>
+where
+    S: FnMut(oc_client::Client) -> SFut,
+    SFut: std::future::Future<Output = Result<run::MiniSessionTarget, run::ResolveError>>,
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Option<oc_client::Client>>,
+{
     loop {
-        match run::resolve_mini_session_target(&client, input, directory).await {
+        match step(client.clone()).await {
             Ok(target) => return Ok(target),
-            Err(message) => {
-                if message == "Session not found" {
-                    // Surfaced as a user-facing input error (`mini.ts:64-66`).
-                    return Err(message);
+            Err(error) => {
+                if !error.transport {
+                    // Non-transport failures surface to the caller
+                    // (`mini.ts:168` rethrows everything that is not a
+                    // Transport `ClientError`).
+                    return Err(error);
                 }
-                let Some(next) = reconnect().await else { return Err(message) };
+                let Some(next) = reconnect().await else { return Err(error) };
                 client = next;
                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             }
@@ -394,5 +423,88 @@ mod tests {
             Some(Some("turbo".to_string()))
         );
         assert!(parse_model(None).unwrap().is_none());
+    }
+
+    /// A client pointed at an unreachable loopback endpoint; the retry
+    /// seam tests never contact it (steps are canned).
+    fn dummy_client() -> oc_client::Client {
+        oc_client::Client::new("http://127.0.0.1:9").expect("valid base url")
+    }
+
+    fn transport_error() -> run::ResolveError {
+        run::ResolveError { message: "transport: connection refused".into(), transport: true }
+    }
+
+    fn decode_error() -> run::ResolveError {
+        run::ResolveError { message: "malformed response: not json".into(), transport: false }
+    }
+
+    fn ok_target() -> run::MiniSessionTarget {
+        run::MiniSessionTarget { session_id: "ses_1".into(), ..Default::default() }
+    }
+
+    /// G-353 — a transport-class failure re-enters the loop through the
+    /// reconnect seam (ref `mini.ts:168`: `ClientError` with
+    /// `reason === "Transport"` is the only retryable class) and the
+    /// next successful step resolves.
+    #[tokio::test]
+    async fn transport_errors_reconnect_until_resolution() {
+        let steps = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let step_client = steps.clone();
+        let target = resolve_with_retry(
+            dummy_client(),
+            move |_client| {
+                let count = step_client.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async move {
+                    if count == 0 {
+                        Err(transport_error())
+                    } else {
+                        Ok(ok_target())
+                    }
+                }
+            },
+            || async { Some(dummy_client()) },
+        )
+        .await
+        .expect("second step resolves");
+        assert_eq!(target.session_id, "ses_1");
+        assert_eq!(steps.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    /// G-353 — a non-transport failure (decode/protocol/api) fails out
+    /// with the error surfaced; the reconnect seam is never invoked.
+    #[tokio::test]
+    async fn non_transport_errors_fail_out_without_reconnecting() {
+        let reconnected = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = reconnected.clone();
+        let error = resolve_with_retry(
+            dummy_client(),
+            |_client| async { Err(decode_error()) },
+            move || {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async { Some(dummy_client()) }
+            },
+        )
+        .await
+        .expect_err("decode errors are not retryable");
+        assert_eq!(error.message, "malformed response: not json");
+        assert!(!error.transport);
+        assert_eq!(reconnected.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// G-353 — a transport failure with no reconnect seam available
+    /// (explicit `--server` target) surfaces the error instead of
+    /// looping.
+    #[tokio::test]
+    async fn transport_error_without_reconnect_seam_surfaces() {
+        let error = resolve_with_retry(
+            dummy_client(),
+            |_client| async { Err(transport_error()) },
+            || async { None },
+        )
+        .await
+        .expect_err("no seam means surfaced");
+        assert!(error.transport);
+        assert_eq!(error.message, "transport: connection refused");
     }
 }

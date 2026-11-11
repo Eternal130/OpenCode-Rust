@@ -211,7 +211,6 @@ fn title_script() -> Vec<Chunk> {
 /// A slow script: one delta, then a long pause before finishing — the
 /// cancel window (kept for future live-delta streaming; the current
 /// server projects deltas at stream end).
-#[allow(dead_code)]
 fn slow_script() -> Vec<Chunk> {
     let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"starting\"}}]}\n\n".to_owned();
     let tail = "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n".to_owned();
@@ -921,6 +920,76 @@ async fn cancel_mid_prompt_returns_cancelled() {
     tokio::time::timeout(Duration::from_secs(60), done_rx)
         .await
         .expect("cancel flow completes")
+        .expect("done signal");
+    let _ = stderr_path;
+    drop(child);
+}
+
+/// G-355 — cancelling while the event stream is SILENT (the fake LLM
+/// mid-pause, no updates flowing) must still settle the prompt via the
+/// cancel arm of the consume race instead of pending on the feed until
+/// the stream resumes: `windDown` interrupts the server and the drain
+/// is bounded by the 5 s `CancelDrainTimeout` (turn.ts:39-42, 256-274).
+#[allow(clippy::too_many_lines)]
+#[tokio::test]
+async fn cancel_during_silent_stream_settles_prompt() {
+    let sandbox = sandbox("cancel_silent");
+    // The completion stalls 8 s after its first delta; the cancel lands
+    // inside that silent window and the prompt must settle well before
+    // the stall would end on its own.
+    let fake = FakeLlm::start(vec![slow_script(), title_script()]).await;
+    std::fs::write(sandbox.join("opencode.json"), fake.provider_config()).unwrap();
+    let mut child = spawn_acp(&sandbox);
+    let stderr_path = child.stderr_path.clone();
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+    drive_client(&mut child.child, ClientDrive::new(), async move |cx| {
+        let _initialize: InitializeResponse =
+            cx.send_request(initialize_request()).block_task().await.expect("initialize");
+        let cwd = sandbox.join("project");
+        std::fs::create_dir_all(&cwd).unwrap();
+        drop(sandbox);
+        let session =
+            cx.send_request(NewSessionRequest::new(cwd)).block_task().await.expect("session/new");
+
+        let prompt_cx = cx.clone();
+        let prompt_session = session.session_id.clone();
+        let prompt = tokio::spawn(async move {
+            prompt_cx
+                .send_request(PromptRequest::new(
+                    prompt_session,
+                    vec![ContentBlock::Text(TextContent::new("take your time"))],
+                ))
+                .block_task()
+                .await
+                .expect("prompt")
+        });
+
+        // Let the turn start, then cancel inside the silent pause.
+        tokio::time::sleep(Duration::from_millis(1_500)).await;
+        let cancelled_at = std::time::Instant::now();
+        cx.send_notification(agent_client_protocol::schema::v1::CancelNotification::new(
+            session.session_id.clone(),
+        ))
+        .expect("cancel notification");
+
+        // The prompt must settle (Cancelled) via the bounded wind-down —
+        // bounded by the 5 s drain timeout, far below the 8 s stall.
+        let response = tokio::time::timeout(Duration::from_secs(6), prompt)
+            .await
+            .expect("prompt settles while the stream is silent")
+            .expect("prompt task");
+        assert_eq!(response.stop_reason, agent_client_protocol::schema::v1::StopReason::Cancelled);
+        assert!(
+            cancelled_at.elapsed() < Duration::from_secs(6),
+            "settled through the bounded drain, not the stream stall"
+        );
+        let _ = done_tx.send(());
+        Ok(())
+    })
+    .await;
+    tokio::time::timeout(Duration::from_secs(60), done_rx)
+        .await
+        .expect("silent-cancel flow completes")
         .expect("done signal");
     let _ = stderr_path;
     drop(child);

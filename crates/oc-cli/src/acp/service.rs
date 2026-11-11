@@ -310,17 +310,20 @@ pub async fn set_session_mode(
     Ok(SetSessionModeResponse::new())
 }
 
-/// `prompt` (service.ts:234 → turn.prompt).
+/// `prompt` (service.ts:234 → turn.prompt). The `$/cancel_request`
+/// marker passes through so the turn watches it after registering
+/// (turn.ts:385-387).
 pub async fn prompt(
     app: &Arc<App>,
     conn: &Conn,
     request: PromptRequest,
+    cancellation: Option<agent_client_protocol::RequestCancellation>,
 ) -> Result<PromptResponse, AcpError> {
     let session_id = request.session_id.to_string();
     let attached = app.sessions.require(&session_id).await?;
     let catalog = app.catalogs.get(&attached.cwd).await?;
     let prepared = prompt::prepare(&catalog, &request.prompt)?;
-    crate::acp::turn::prompt(app, conn, &attached, &prepared).await
+    crate::acp::turn::prompt(app, conn, &attached, &prepared, cancellation).await
 }
 
 /// `cancel` (service.ts:235 → turn.cancel).

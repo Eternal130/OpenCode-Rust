@@ -27,12 +27,6 @@ pub struct Turn {
     cancelled: watch::Sender<bool>,
 }
 
-impl Turn {
-    fn is_cancelled(&self) -> bool {
-        *self.cancelled.borrow()
-    }
-}
-
 /// A future that resolves once the turn is cancelled.
 type Cancelled<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
 
@@ -90,15 +84,35 @@ impl Turns {
     }
 }
 
-/// `prompt` (turn.ts:366-388).
+/// `prompt` (turn.ts:366-388). The `$/cancel_request` cancellation
+/// marker rides along: the watcher only arms AFTER the turn is
+/// registered (ref registers the turn, then forks the abort watcher —
+/// turn.ts:372-387), so a cancel that raced the registration still
+/// lands on the registered turn instead of being lost to a no-op map
+/// lookup, and a pre-cancelled request still winds down through
+/// `windDown` (posting `session/interrupt`) rather than short-circuiting.
 pub async fn prompt(
     app: &Arc<App>,
     conn: &Conn,
     attached: &Arc<Attached>,
     prepared: &Prepared,
+    cancellation: Option<agent_client_protocol::RequestCancellation>,
 ) -> Result<PromptResponse, AcpError> {
     let turn = app.turns.register(&attached.id).await?;
+    let watcher = cancellation.map(|cancellation| {
+        let app = Arc::clone(app);
+        let session_id = attached.id.clone();
+        tokio::spawn(async move {
+            if !cancellation.is_cancelled() {
+                cancellation.cancelled().await;
+            }
+            app.turns.cancel(&session_id).await;
+        })
+    });
     let result = run(app, conn, attached, prepared, &turn).await;
+    if let Some(watcher) = watcher {
+        watcher.abort();
+    }
     app.turns.remove(&attached.id).await;
     result
 }
@@ -217,60 +231,87 @@ async fn execute(
 
     // `consume` (turn.ts:204-212): fold until a terminal event, racing
     // the submission's HTTP result (a fast 4xx fails the turn promptly).
-    let terminal =
-        match consume(app, conn, ctx, state, turn, &mut consumer, false, &mut submit_rx).await {
-            Outcome::Terminal(terminal) => terminal,
-            Outcome::Failed(error) => {
-                reader.abort();
-                return Err(error);
-            }
-            Outcome::Cancelled => {
-                // `windDown` (turn.ts:256-274).
-                let _ = app
-                    .client
-                    .session()
-                    .interrupt(
-                        &ctx.session_id,
-                        &oc_client::types::SessionInterruptQuery { resume: None },
-                    )
-                    .await;
-                let started = state.lock().await.started;
-                let drained = if started {
-                    let (_spent_tx, mut spent_rx) = mpsc::channel(1);
-                    tokio::time::timeout(
-                        CANCEL_DRAIN_TIMEOUT,
-                        consume(app, conn, ctx, state, turn, &mut consumer, false, &mut spent_rx),
-                    )
-                    .await
-                    .ok()
-                } else {
-                    None
-                };
-                // Whatever settles during the drain, the turn was
-                // cancelled: `session/cancel` MUST report stopReason
-                // `cancelled` (StopReason docs; turn.ts:269 keeps the
-                // interrupted exit over any drained terminal).
-                #[allow(clippy::single_match_else)]
-                let drained_terminal = match drained {
-                    Some(Outcome::Terminal(_) | Outcome::Cancelled) => Terminal::Interrupted,
-                    _ => {
-                        reader.abort();
-                        // `abandon` (translate.ts:163-187): fail the tracked
-                        // tools and the root compaction.
-                        let (next, outputs) = {
-                            let guard = state.lock().await;
-                            translate::abandon(&guard, ctx)
-                        };
-                        *state.lock().await = next;
-                        for output in outputs {
-                            interpret(app, conn, ctx, state, turn, output, false).await;
-                        }
-                        Terminal::Interrupted
+    let terminal = match consume(
+        app,
+        conn,
+        ctx,
+        state,
+        turn,
+        &mut consumer,
+        false,
+        true,
+        &mut submit_rx,
+    )
+    .await
+    {
+        Outcome::Terminal(terminal) => terminal,
+        Outcome::Failed(error) => {
+            reader.abort();
+            return Err(error);
+        }
+        Outcome::Cancelled => {
+            // `windDown` (turn.ts:256-274).
+            let _ = app
+                .client
+                .session()
+                .interrupt(
+                    &ctx.session_id,
+                    &oc_client::types::SessionInterruptQuery { resume: None },
+                )
+                .await;
+            let started = state.lock().await.started;
+            let drained = if started {
+                let (_spent_tx, mut spent_rx) = mpsc::channel(1);
+                // The drain keeps folding (observe_cancel = false):
+                // ref awaits its `consume` fiber for up to
+                // `CancelDrainTimeout` (turn.ts:269), so trailing
+                // updates during the cancel settle still reach the
+                // client instead of being dropped at the first
+                // post-cancel event.
+                tokio::time::timeout(
+                    CANCEL_DRAIN_TIMEOUT,
+                    consume(
+                        app,
+                        conn,
+                        ctx,
+                        state,
+                        turn,
+                        &mut consumer,
+                        false,
+                        false,
+                        &mut spent_rx,
+                    ),
+                )
+                .await
+                .ok()
+            } else {
+                None
+            };
+            // Whatever settles during the drain, the turn was
+            // cancelled: `session/cancel` MUST report stopReason
+            // `cancelled` (StopReason docs; turn.ts:269 keeps the
+            // interrupted exit over any drained terminal).
+            #[allow(clippy::single_match_else)]
+            let drained_terminal = match drained {
+                Some(Outcome::Terminal(_) | Outcome::Cancelled) => Terminal::Interrupted,
+                _ => {
+                    reader.abort();
+                    // `abandon` (translate.ts:163-187): fail the tracked
+                    // tools and the root compaction.
+                    let (next, outputs) = {
+                        let guard = state.lock().await;
+                        translate::abandon(&guard, ctx)
+                    };
+                    *state.lock().await = next;
+                    for output in outputs {
+                        interpret(app, conn, ctx, state, turn, output, false).await;
                     }
-                };
-                drained_terminal
-            }
-        };
+                    Terminal::Interrupted
+                }
+            };
+            drained_terminal
+        }
+    };
     // `handoff` (turn.ts:290-307): children outlive a cancelled turn, so
     // their asks still reach the client.
     follow_children_if_any(app, conn, ctx, state, turn, &mut consumer, terminal).await;
@@ -285,7 +326,11 @@ enum Outcome {
 
 /// `consume`/`advance` (turn.ts:191-212): fold each event and interpret
 /// its outputs. In `background` mode only tracked-child events advance
-/// the fold and root session updates are suppressed.
+/// the fold and root session updates are suppressed. `observe_cancel`
+/// races the turn's cancel signal only for the primary consume — the
+/// cancel drain and the background child follow keep folding (the ref's
+/// `windDown` awaits its `consume` fiber with `CancelDrainTimeout`
+/// instead of stopping at the first post-cancel event, turn.ts:269).
 #[allow(clippy::too_many_arguments)]
 async fn consume(
     app: &Arc<App>,
@@ -295,9 +340,11 @@ async fn consume(
     turn: &Arc<Turn>,
     consumer: &mut Consumer,
     background: bool,
+    observe_cancel: bool,
     submit_rx: &mut mpsc::Receiver<Result<(), AcpError>>,
 ) -> Outcome {
     loop {
+        let mut cancel = observe_cancel.then(|| cancelled_future(turn));
         let event = tokio::select! {
             event = consumer.events.recv() => match event {
                 Some(Ok(event)) => event,
@@ -310,10 +357,19 @@ async fn consume(
                 }
                 continue;
             }
+            () = async {
+                match cancel.as_mut() {
+                    Some(future) => future.as_mut().await,
+                    // Never resolves when the cancel signal is not being
+                    // observed (drain / background follow).
+                    None => std::future::pending().await,
+                }
+            } => {
+                // A cancel with a silent event stream still winds the
+                // turn down promptly instead of pending on the feed.
+                return Outcome::Cancelled;
+            }
         };
-        if turn.is_cancelled() {
-            return Outcome::Cancelled;
-        }
         let folded = {
             let mut guard = state.lock().await;
             if background && !translate::from_tracked_child(&guard, &event) {
@@ -536,7 +592,10 @@ async fn follow_children_if_any(
         return;
     }
     let (_spent_tx, mut spent_rx) = mpsc::channel(1);
-    let _ = consume(app, conn, ctx, state, turn, consumer, true, &mut spent_rx).await;
+    // The background follow has its own fresh `cancelled` deferred in
+    // the ref (turn.ts:301-307), so it does not observe the parent's
+    // cancel — children stream until they close.
+    let _ = consume(app, conn, ctx, state, turn, consumer, true, false, &mut spent_rx).await;
 }
 
 /// `settle` (turn.ts:309-319) + `sendUsageUpdate` (turn.ts:321-343).
