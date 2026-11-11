@@ -44,6 +44,13 @@ pub fn consume(state: &AppState, code: &str, now_ms: i64) -> bool {
 }
 
 /// Evicts the oldest (nearest-expiry) entry when the cache reached capacity.
+///
+/// G-375③ — pinned equivalent to the ref's eviction: Effect `Cache`
+/// with `capacity: 1_000` makes room by dropping the least-recently-
+/// used entry, but the pairing cache has NO reads (`issue` sets,
+/// `consume` invalidates — the lookup is `die`), so LRU order equals
+/// insertion order; with the fixed 5-minute TTL, `min(expires_at)` IS
+/// the oldest-inserted entry. FIFO-by-expiry ≡ LRU here.
 fn evict_if_full(map: &dashmap::DashMap<String, PairingEntry>, capacity: usize) {
     if map.len() < capacity {
         return;

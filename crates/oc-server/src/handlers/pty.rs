@@ -272,9 +272,13 @@ async fn connect(
         }
     }
 
+    // G-375② — `Number(cursor)` + safe-integer/≥-1, else `undefined`
+    // (pty.ts:160-165); the JS acceptance set (whitespace, exponents,
+    // hex, "" → 0).
     let cursor = parse_query_field(query, "cursor")
-        .and_then(|value| value.parse::<i64>().ok())
-        .filter(|value| *value >= -1);
+        .and_then(|value| super::common::js_number(&value))
+        .filter(|value| super::common::js_safe_integer(*value) && *value >= -1.0)
+        .map(|value| value as i64);
 
     upgrade.on_upgrade(move |socket| async move {
         pty_session(shared, socket, pty_id, cursor, state.shutdown.subscribe()).await;
@@ -408,13 +412,16 @@ fn replay_chunks(data: &str, size: usize) -> Vec<&str> {
     out
 }
 
-/// Decodes inbound binary frames. Mirrors `protocol.ts:30-36`: invalid UTF-8
-/// is dropped — only the valid prefix (if any) is forwarded, never U+FFFD
-/// replacement characters.
+/// Decodes inbound binary frames. Mirrors `protocol.ts:28-37`: the
+/// ref's `TextDecoder("utf-8", { fatal: true })` throws on ANY invalid
+/// or truncated sequence and the catch drops the whole chunk — invalid
+/// UTF-8 is DROPPED ENTIRELY (G-375④: the doc header used to claim the
+/// valid prefix is forwarded; the implementation — and the ref — drop
+/// it all, never U+FFFD replacement characters).
 fn decode_pty_input(bytes: &[u8]) -> Option<String> {
-    // Mirrors ref protocol.ts:30-36: TextDecoder with `fatal: true` throws on
-    // ANY invalid or truncated sequence and the catch drops the whole chunk —
-    // the valid prefix is NOT forwarded.
+    // Ref protocol.ts:10/28-37: `TextDecoder("utf-8", { fatal: true })`
+    // throws on ANY invalid or truncated sequence and the catch drops
+    // the whole chunk — the valid prefix is NOT forwarded.
     std::str::from_utf8(bytes).ok().map(str::to_owned).filter(|text| !text.is_empty())
 }
 

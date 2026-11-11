@@ -88,6 +88,7 @@ impl Sandbox {
             data_root: self.data_root.clone(),
             home: self.home.clone(),
             config_location: Some(self.project.clone()),
+            events_persist: None,
         }
     }
 }

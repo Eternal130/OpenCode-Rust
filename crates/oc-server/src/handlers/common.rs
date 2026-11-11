@@ -259,6 +259,60 @@ pub fn percent_decode(input: &str) -> String {
     crate::auth::percent_decode(input)
 }
 
+/// G-375② — the JS `Number(value)` acceptance set for wire cursors
+/// (ref pty.ts:161 / persistent-pty.ts:120's
+/// `Number(url.searchParams.get("cursor"))`): whitespace is trimmed,
+/// an EMPTY string is `0`, exponent decimal and `0x`/`0o`/`0b`
+/// literals parse, and any other spelling is `None` (JS `NaN`).
+/// Rust's `str::parse` rejects `""`, `" 12"`, `"1e3"`, and `"0x10"`,
+/// which are all valid numbers on the ref's wire.
+#[must_use]
+pub fn js_number(raw: &str) -> Option<f64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Some(0.0);
+    }
+    let (signed, body) = match trimmed.as_bytes().first() {
+        Some(b'-') => (-1.0, &trimmed[1..]),
+        Some(b'+') => (1.0, &trimmed[1..]),
+        _ => (1.0, trimmed),
+    };
+    let radix = |prefixes: [&str; 2], radix: u32| {
+        prefixes
+            .iter()
+            .find_map(|prefix| body.strip_prefix(prefix))
+            .filter(|digits| !digits.is_empty())
+            .and_then(|digits| u128::from_str_radix(digits, radix).ok())
+            .map(|value| value as f64)
+    };
+    // JS radix literals carry NO sign (`Number("-0x10")` is NaN).
+    let value = if signed == 1.0 && body.len() > 1 {
+        radix(["0x", "0X"], 16)
+            .or_else(|| radix(["0o", "0O"], 8))
+            .or_else(|| radix(["0b", "0B"], 2))
+            .or_else(|| js_decimal(body))
+    } else {
+        js_decimal(body)
+    }?;
+    Some(signed * value)
+}
+
+/// JS decimal acceptance: digits with optional `.`/exponent (the
+/// charset gate rejects JS non-numbers like `Infinity` and `12pt`
+/// before handing the rest to the float parser).
+fn js_decimal(body: &str) -> Option<f64> {
+    let charset_ok = !body.is_empty()
+        && body.chars().all(|c| matches!(c, '0'..='9' | '.' | 'e' | 'E' | '+' | '-'))
+        && body.chars().any(|c| c.is_ascii_digit());
+    charset_ok.then(|| body.parse::<f64>().ok()).flatten()
+}
+
+/// `Number.isSafeInteger` (±2^53-1, integral, finite).
+#[must_use]
+pub fn js_safe_integer(value: f64) -> bool {
+    value.is_finite() && value.fract() == 0.0 && value.abs() <= 9_007_199_254_740_991.0
+}
+
 // ---------------------------------------------------------------------------
 // Session-row → location (§1 "session routes resolve the session row")
 // ---------------------------------------------------------------------------
@@ -658,6 +712,29 @@ pub fn prompt_error(message: &str) -> ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// G-375② — the JS `Number()` acceptance set for wire cursors.
+    #[test]
+    fn js_number_matches_the_ref_acceptance_set() {
+        assert_eq!(js_number("12"), Some(12.0));
+        assert_eq!(js_number(" 12 "), Some(12.0)); // JS trims whitespace
+        assert_eq!(js_number(""), Some(0.0)); // Number("") === 0
+        assert_eq!(js_number("1e3"), Some(1000.0)); // exponent
+        assert_eq!(js_number("0x10"), Some(16.0)); // hex
+        assert_eq!(js_number("0o10"), Some(8.0)); // octal
+        assert_eq!(js_number("0b10"), Some(2.0)); // binary
+        assert_eq!(js_number("+5"), Some(5.0));
+        assert_eq!(js_number("-3"), Some(-3.0));
+        assert_eq!(js_number("-0x10"), None); // JS: sign + radix literal is NaN
+        assert_eq!(js_number("abc"), None);
+        assert_eq!(js_number("Infinity"), None); // not a decimal spelling here
+        assert_eq!(js_number("12pt"), None);
+        // The safe-integer gate the callers apply.
+        assert!(js_safe_integer(9_007_199_254_740_991.0));
+        assert!(!js_safe_integer(9_007_199_254_740_992.0));
+        assert!(!js_safe_integer(1.5));
+        assert!(!js_safe_integer(f64::INFINITY));
+    }
 
     #[test]
     fn session_cursor_round_trip() {

@@ -202,6 +202,14 @@ pub struct EngineOptions {
     /// `enabled`; the server's `fs.filewatcher` flag). Default true; off
     /// boots a disabled watcher whose subscriptions end immediately.
     pub file_watcher: bool,
+    /// G-375① — whether durable publishes insert `event` table rows
+    /// (v2 `BusOptions.persist`, bus.ts:203 `options?.persist ?? false`;
+    /// the server's `ServerOptions.events.persist` switch —
+    /// server/options.ts:22-24 → routes.ts:118). The port defaults ON
+    /// (its event-log reads are load-bearing; the ref's CLI leaves the
+    /// option unset and only workerd pins `true`); the server
+    /// composition root exposes the embedder opt-out.
+    pub event_persistence: bool,
     /// The Code Mode interpreter seam. When present, every location
     /// registers the synthesized `execute` tool and code-mode-eligible
     /// tools (MCP, plugin tools) become invisible-direct behind it
@@ -244,6 +252,7 @@ impl EngineOptions {
             file_retention: crate::file_retention::FileRetentionSettings::default(),
             tool_output_limits: crate::tool_output::Limits::default(),
             file_watcher: true,
+            event_persistence: true,
             code_mode_runtime: None,
             code_mode_timeout: std::time::Duration::from_secs(120),
             plugin_source: None,
@@ -470,7 +479,7 @@ impl Engine {
             BusOptions {
                 clock: options.clock.clone(),
                 ids: options.ids.clone(),
-                persist: true,
+                persist: options.event_persistence,
                 ..BusOptions::deterministic()
             },
         ));

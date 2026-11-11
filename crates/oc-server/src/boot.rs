@@ -62,6 +62,17 @@ pub struct BootOptions {
     /// The location whose config seeds boot-time custom providers
     /// (defaults to the process working directory).
     pub config_location: Option<PathBuf>,
+    /// G-375① — `ServerOptions.events.persist` (ref
+    /// server/options.ts:22-24 → routes.ts:118's
+    /// `Bus.configured({ persist })`): an embedder-level switch that
+    /// disables durable event-row persistence (the sequence allocation
+    /// still runs; `event` table inserts are skipped). `None` keeps the
+    /// engine default — the port keeps persistence ON (the ref's CLI
+    /// launch leaves the option unset, which lands on Bus's own
+    /// `persist ?? false`; the port's event-log reads treat the rows
+    /// as load-bearing, so the default stays true and the switch is
+    /// opt-out for embedders mirroring workerd's explicit `true`).
+    pub events_persist: Option<bool>,
 }
 
 impl BootOptions {
@@ -79,6 +90,7 @@ impl BootOptions {
             data_root: roots.data,
             home: roots.home,
             config_location: None,
+            events_persist: None,
         }
     }
 }
@@ -308,6 +320,9 @@ pub async fn boot_and_serve_with_listener(
     }
 
     let mut engine_options = EngineOptions::new(options.data_root.clone(), options.home.clone());
+    // G-375① — the `events.persist` server switch (ServerOptions.events
+    // → Bus.configured); `None` keeps the engine's on-by-default.
+    engine_options.event_persistence = options.events_persist.unwrap_or(true);
     engine_options.custom_providers = providers.custom;
     engine_options.default_model = providers.default_model;
     // G-14 — `experimental.file_retention.cleanup_interval` (highest-priority
@@ -997,6 +1012,7 @@ mod tests {
             data_root: root.path().join("data"),
             home,
             config_location: Some(project.clone()),
+            events_persist: None,
         };
         let handle = boot_and_serve(&options).await.expect("boot and serve");
 
@@ -1218,6 +1234,7 @@ mod tests {
             data_root: data_root.clone(),
             home,
             config_location: Some(project.clone()),
+            events_persist: None,
         };
         std::env::set_var("OPENCODE_CATALOG_FETCH", "0");
         let _fetch_env = FetchEnv(prior_fetch);
@@ -1291,6 +1308,7 @@ mod tests {
             data_root: root.path().join("data"),
             home,
             config_location: Some(project.clone()),
+            events_persist: None,
         };
         let handle = boot_and_serve(&options).await.expect("boot and serve");
         assert!(handle.state.watched_config.is_some(), "the boot started the watcher");
@@ -1397,6 +1415,7 @@ mod tests {
             data_root: root.path().join("data"),
             home,
             config_location: Some(project.clone()),
+            events_persist: None,
         };
         let handle = boot_and_serve(&options).await.expect("boot and serve");
         assert!(handle.state.watched_config.is_some(), "the boot started the watcher");
@@ -1500,6 +1519,7 @@ mod tests {
             data_root: root.path().join("data"),
             home,
             config_location: Some(project.clone()),
+            events_persist: None,
         };
         let handle = boot_and_serve(&options).await.expect("boot and serve");
 

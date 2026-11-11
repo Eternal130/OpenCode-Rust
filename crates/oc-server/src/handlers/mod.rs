@@ -34,6 +34,7 @@ pub mod config;
 pub mod credential;
 pub mod form;
 pub mod fs;
+pub mod fs_fuzzysort;
 pub mod integration;
 pub mod location;
 pub mod mcp;
