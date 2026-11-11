@@ -19,3 +19,4 @@
 *.log
 tools/parity/tui-diff/cache/
 .test-logs/
+__pycache__/
