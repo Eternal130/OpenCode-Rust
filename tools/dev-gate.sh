@@ -35,6 +35,34 @@ if [[ $# -ne 1 ]]; then
   exit 2
 fi
 
+# --- harness discipline (register 2.2#1) ------------------------------------
+# Canonical harness = nextest. Plain `cargo test` is forbidden as evidence or
+# iteration harness; the ONLY sanctioned libtest form is `cargo test --exact
+# <name>` single-test repro. Enforced structurally after a lane drifted back
+# to libtest by habit (2026-11-11, gap-burndown-12 lane 14). CI is exempt.
+deny_plain_cargo_test() {
+  local segment
+  # cargo as a word, boundary incl. inside quotes (\x27=\x27-quote, \x22=dquote)
+  local cargo_word=$'(^|[[:space:]\x27\x22])cargo([[:space:]]|$)'
+  # Split the command on shell separators; inspect each segment's shape.
+  while IFS= read -r segment; do
+    # Only segments that invoke cargo…
+    [[ "$segment" =~ $cargo_word ]] || continue
+    # …nextest invocations are the sanctioned harness.
+    [[ "$segment" =~ [[:space:]]nextest([[:space:]]|$) ]] && continue
+    # …a bare `test` subcommand (word-boundary; --tests flags do not match).
+    if [[ "$segment" =~ [[:space:]]test([[:space:]]|$) ]]; then
+      if [[ "$segment" =~ --exact ]]; then
+        continue # allowed: --exact single-test repro (2.2#1 carve-out)
+      fi
+      echo "dev-gate: plain 'cargo test' is forbidden (register 2.2#1) — use 'cargo nextest run' (or 'cargo nextest run --no-run' to compile only)." >&2
+      echo "dev-gate: offending segment: ${segment}" >&2
+      exit 4
+    fi
+  done < <(printf '%s\n' "$1" | sed -e 's/&&/\n/g' -e 's/||/\n/g' -e 's/;/\n/g' -e 's/|/\n/g')
+}
+deny_plain_cargo_test "$1"
+
 # --- load backstop ---------------------------------------------------------
 LOAD1=$(cut -d' ' -f1 /proc/loadavg)
 if awk -v l="$LOAD1" 'BEGIN{exit !(l>=6)}'; then
