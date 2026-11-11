@@ -1321,6 +1321,15 @@ impl Bus {
 
     /// Re-commits a serialized durable event idempotently under the
     /// aggregate lock (`bus.ts:671-701`).
+    ///
+    /// DEVIATION (G-382⑨, bounded): ref replay validates `event.data`
+    /// against the definition's schema (`Schema.decodeUnknownSync`). The
+    /// port's [`EventDefinition`] carries no per-type data schema (data
+    /// is an opaque `serde_json::Value` end-to-end; writers serialize
+    /// typed payloads at publish), so replay passes rows through
+    /// leniently like the read path. Attaching ~52 decode schemas is a
+    /// cross-cutting change; lenient replay also keeps replays of rows
+    /// written by older port versions working.
     pub async fn replay(
         &self,
         event: SerializedEvent,

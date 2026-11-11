@@ -487,6 +487,10 @@ pub async fn completion_text(store: &SessionStore, session_id: &str) -> String {
         })
         .await
         .unwrap_or_default();
+    // Ref (subagent-job.ts:41-52): `find` the NEWEST completed non-error
+    // assistant, then `SubagentCompletion.text` over that ONE message —
+    // an all-empty-text candidate yields NO_TEXT; it does NOT rescan
+    // older messages.
     for row in rows {
         let Some(MessageInfo::Assistant { time, content, error, .. }) = decode_message(&row) else {
             continue;
@@ -505,10 +509,7 @@ pub async fn completion_text(store: &SessionStore, session_id: &str) -> String {
             .filter(|text| !text.is_empty())
             .collect::<Vec<_>>()
             .join("\n\n");
-        if !text.is_empty() {
-            return text;
-        }
-        return NO_TEXT.to_string();
+        return if text.is_empty() { NO_TEXT.to_string() } else { text };
     }
     NO_TEXT.to_string()
 }

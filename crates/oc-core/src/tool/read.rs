@@ -119,34 +119,16 @@ pub enum ReadOutput {
 }
 
 /// `Mime.detect` (core mime.ts:3-21) — magic-byte sniffing for the full
-/// media set. NOTE (G-278①): BMP and AVIF ARE detected here exactly like
+/// media set, unified through `oc_util::mime::detect_mime` (the shared
+/// G-92 table; PNG needs the FULL 8-byte signature, GIF is `GIF8`).
+/// NOTE (G-278①): BMP and AVIF ARE detected here exactly like
 /// ref, but ref's read tool only INGESTS [`MEDIA_MIMES`] members
 /// (read-filesystem.ts:137 `MEDIA_MIMES.has(media)`) — a BMP/AVIF falls
 /// through to the text/binary path (a real one has NULs → BinaryFileError).
 fn detect_mime(bytes: &[u8]) -> Option<&'static str> {
-    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
-        Some("image/png")
-    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
-        Some("image/jpeg")
-    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
-        Some("image/gif")
-    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
-        Some("image/webp")
-    } else if bytes.starts_with(&[0x42, 0x4d]) {
-        // G-278① — `BM` (mime.ts:8): detected but NOT ingested (ref
-        // MEDIA_MIMES has no image/bmp).
-        Some("image/bmp")
-    } else if bytes.starts_with(b"%PDF") {
-        Some("application/pdf")
-    } else if bytes.len() >= 12
-        && &bytes[4..8] == b"ftyp"
-        && (&bytes[8..12] == b"avif" || &bytes[8..12] == b"avis")
-    {
-        // G-278① — ISO-BMFF `ftyp` box with an avif/avis brand
-        // (mime.ts:14-19): detected but NOT ingested.
-        Some("image/avif")
-    } else {
-        None
+    match oc_util::mime::detect_mime(bytes) {
+        "text/plain" | "application/octet-stream" => None,
+        media => Some(media),
     }
 }
 

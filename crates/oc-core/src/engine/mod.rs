@@ -1889,8 +1889,11 @@ impl Engine {
             Arc::clone(&context),
             Arc::clone(&self.clock),
         ));
+        // Ref (snapshot.ts scope():108-111): a location outside the
+        // worktree is a typed error ("Location is outside the project"),
+        // never a silent whole-repo widening of the snapshot scope.
         let scope = crate::snapshot::location_scope(&worktree, location.as_path())
-            .unwrap_or_else(|| ".".to_string());
+            .ok_or_else(|| BootError::LocationOutsideProject(location.as_path().to_path_buf()))?;
         let snapshot: Arc<dyn SnapshotService> = Arc::new(
             crate::snapshot::GitSnapshotStore::open(
                 &self.data_root,
