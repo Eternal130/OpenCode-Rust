@@ -1045,3 +1045,116 @@ async fn g198_diff_binary_file_yields_empty_patch() {
     assert_eq!(entry["deletions"], 0, "numstat \"-\" → 0 deletions: {entry}");
     assert_eq!(entry["patch"], "", "binary patch body is empty: {entry}");
 }
+
+/// G-361 — the git command family's ref parity: every invocation
+/// carries the flag group (`--no-optional-locks` + the `-c core.*`
+/// overrides, plugin/vcs/git.ts:158-168), the status scan runs scoped
+/// to the LOCATION directory (git.ts:81-99's `ctx.directory` + the
+/// `--", "."` pathspec), additions/deletions come from `diff --numstat
+/// HEAD` with the untracked `--no-index --numstat` fallback, and the
+/// status letters map through the shared `kind` matrix (git.ts:171-178
+/// — "AM" contains `A` and no `D` → "added").
+#[tokio::test]
+async fn g361_git_status_flags_scope_and_stats() {
+    let workspace = tempfile::tempdir().expect("workspace").keep();
+    seed_repo(&workspace);
+    // AM: staged add + working edit.
+    std::fs::write(workspace.join("staged.txt"), "one\n").expect("staged");
+    git(&workspace, &["add", "staged.txt"]);
+    std::fs::write(workspace.join("staged.txt"), "one\nTWO\nthree\n").expect("edit staged");
+    // M: tracked modification.
+    std::fs::write(workspace.join("README.md"), "changed\n").expect("modified");
+    // ??: untracked at the root + one inside a subdirectory.
+    std::fs::write(workspace.join("new.txt"), "brand new\n").expect("untracked");
+    std::fs::create_dir_all(workspace.join("sub")).expect("subdir");
+    std::fs::write(workspace.join("sub").join("subfile.txt"), "x\ny\n").expect("sub untracked");
+
+    // A fake `git` on PATH capturing (cwd, argv) then execing the real
+    // binary — asserts the flag group and the scoped cwd.
+    let bin = tempfile::tempdir().expect("fake bin").keep();
+    let argv_log = tempfile::tempdir().expect("argv log").keep().join("git-argv.log");
+    let script = bin.join("git");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/usr/bin/env bash\nprintf '%s\\t%s\\n' \"$PWD\" \"$*\" >> {argv}\nexec /usr/bin/git \"$@\"\n",
+            argv = argv_log.display(),
+        ),
+    )
+    .expect("write fake git");
+    let mut permissions = std::fs::metadata(&script).expect("stat").permissions();
+    use std::os::unix::fs::PermissionsExt as _;
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&script, permissions).expect("chmod");
+    let path = std::env::var("PATH").unwrap_or_default();
+    std::env::set_var("PATH", format!("{}:{path}", bin.display()));
+
+    let server = boot(workspace.clone()).await;
+    let query = location_query(&workspace);
+
+    // Status at the project root: mapping matrix + counted stats.
+    let (status, body) = raw_get(server.addr, &format!("/api/vcs/status?{query}")).await;
+    assert_eq!(status, 200, "git status: {body}");
+    let entries = body["data"].as_array().cloned().unwrap_or_default();
+    let by_file = |name: &str| {
+        entries
+            .iter()
+            .find(|entry| entry["file"] == name)
+            .unwrap_or_else(|| panic!("no {name} in status: {entries:?}"))
+            .clone()
+    };
+    // AM → "added" (the shared kind matrix — NOT the old
+    // status_code_to_kind "modified" bucket).
+    let staged = by_file("staged.txt");
+    assert_eq!(staged["status"], "added", "AM → added: {staged}");
+    assert_eq!(staged["additions"], 3, "numstat HEAD counts: {staged}");
+    assert_eq!(staged["deletions"], 0, "numstat HEAD counts: {staged}");
+    let readme = by_file("README.md");
+    assert_eq!(readme["status"], "modified", "M → modified: {readme}");
+    assert_eq!(readme["additions"], 1, "numstat HEAD counts: {readme}");
+    assert_eq!(readme["deletions"], 1, "numstat HEAD counts: {readme}");
+    let new = by_file("new.txt");
+    assert_eq!(new["status"], "added", "?? → added: {new}");
+    assert_eq!(new["additions"], 1, "untracked --no-index numstat: {new}");
+    assert_eq!(new["deletions"], 0, "untracked --no-index numstat: {new}");
+
+    // Status scoped to the SUBDIRECTORY location: only subfile.txt is
+    // listed (the old whole-repo scan from the project root leaked the
+    // root entries).
+    let sub = location_query(&workspace.join("sub"));
+    let (status, body) = raw_get(server.addr, &format!("/api/vcs/status?{sub}")).await;
+    assert_eq!(status, 200, "subdir status: {body}");
+    let entries = body["data"].as_array().cloned().unwrap_or_default();
+    assert_eq!(entries.len(), 1, "subdir scope lists only subfile.txt: {entries:?}");
+    // porcelain -z paths are REPO-ROOT-relative even from a subdir cwd
+    // (git.ts's file ids), so the untracked statUntracked fallback from
+    // the worktree root resolves the same path.
+    assert_eq!(entries[0]["file"], "sub/subfile.txt", "{entries:?}");
+    assert_eq!(entries[0]["status"], "added", "{entries:?}");
+    assert_eq!(entries[0]["additions"], 2, "untracked --no-index numstat: {entries:?}");
+    assert_eq!(entries[0]["deletions"], 0, "untracked --no-index numstat: {entries:?}");
+
+    // Every captured git invocation from the server carries the ref
+    // flag group (plugin/vcs/git.ts:158-168).
+    let log = std::fs::read_to_string(&argv_log).unwrap_or_default();
+    assert!(!log.is_empty(), "the fake git captured invocations");
+    for line in log.lines() {
+        assert!(
+            line.contains("--no-optional-locks")
+                && line.contains("core.autocrlf=false")
+                && line.contains("core.fsmonitor=false")
+                && line.contains("core.longpaths=true")
+                && line.contains("core.symlinks=true")
+                && line.contains("core.quotepath=false"),
+            "flag group on {line}"
+        );
+    }
+    // The subdir status scan ran with cwd = the location directory.
+    assert!(
+        log.lines().any(|line| {
+            line.starts_with(workspace.join("sub").display().to_string().as_str())
+                && line.contains("status")
+        }),
+        "scoped cwd in {log}"
+    );
+}
