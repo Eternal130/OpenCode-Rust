@@ -490,13 +490,17 @@ async fn run_inner(input: RunInput) -> Result<i32, String> {
             } else {
                 title.clone()
             };
-            let _ = client
+            // Ref awaits the title update unguarded (run.ts:130-136): a
+            // failed update rejects and fails the run — mirrored here
+            // instead of silently dropping the failure (G-377).
+            client
                 .session()
                 .update(
                     &target.session.id,
                     &SessionUpdateBody { title: Some(effective), ..Default::default() },
                 )
-                .await;
+                .await
+                .map_err(|error| util::error_message(&error.to_string()))?;
         }
     }
 
