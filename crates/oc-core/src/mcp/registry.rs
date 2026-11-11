@@ -1265,10 +1265,20 @@ impl McpRegistry {
         };
         let result = connection.call_tool(name, args.as_ref(), session_id).await;
         let result = match result {
-            Err(error) if error.is_session_expired() => self
-                .replay_after_recovery(server, &entry, &connection, |connection| async move {
-                    connection.call_tool(name, args.as_ref(), session_id).await
+            Err(error) if error.is_session_expired() => {
+                let args = args.clone();
+                self.replay_after_recovery(server, &entry, &connection, move |connection| {
+                    let args = args.clone();
+                    async move { connection.call_tool(name, args.as_ref(), session_id).await }
                 })
+                .await
+                .unwrap_or(Err(error))
+            }
+            // G-359 — runtime 401/403: the SDK's OAuth provider would
+            // auto-refresh here; this port refreshes the stored grant and
+            // reconnects once (see [`Self::replay_after_unauthorized`]).
+            Err(error) if error.is_unauthorized() => self
+                .replay_after_unauthorized(server, &entry, &connection, name, args, session_id)
                 .await
                 .unwrap_or(Err(error)),
             outcome => outcome,
@@ -1320,6 +1330,100 @@ impl McpRegistry {
         }
         let replacement = entry.client.lock().await.clone()?;
         Some(replay(replacement).await)
+    }
+
+    /// G-359 — runtime OAuth token-expiry recovery (the TS SDK's
+    /// `OAuthClientProvider` auto-refreshes on 401; client.ts:149-151):
+    /// when an OAuth-credentialed remote server answers 401/403 on a
+    /// live connection, refresh the stored grant ONCE, reconnect (the
+    /// bearer rides headers baked into the transport's reqwest client at
+    /// connect time — the token swap is a stop+start under the server
+    /// lock, which also re-runs [`Self::connect_bearer`] against the
+    /// rotated credential), and replay the call exactly once. No loop: a
+    /// second 401 surfaces as the plain unauthorized error.
+    ///
+    /// A server without an integration credential, a credential without
+    /// a refresh token, or a failed refresh settles the server at
+    /// `needs_auth` (G-110's face — the UI re-auth path engages) and the
+    /// original unauthorized error surfaces to the caller. A REJECTED
+    /// grant additionally drops the dead credential row (G-110③).
+    async fn replay_after_unauthorized(
+        &self,
+        server: &str,
+        entry: &Arc<ServerEntry>,
+        failed: &client::Connection,
+        name: &str,
+        args: Option<serde_json::Map<String, serde_json::Value>>,
+        session_id: Option<&str>,
+    ) -> Option<Result<client::CallToolResult, client::RequestError>> {
+        let integration_id = entry.integration_id.clone()?;
+        let ServerConfig::Remote(remote) = &entry.config else {
+            return None;
+        };
+        let stored = self.inner.credentials.oauth_credential(&integration_id).await?;
+        if stored.refresh.is_empty() {
+            self.settle_needs_auth(
+                server,
+                entry,
+                "no refresh token for the expired access token".to_string(),
+            )
+            .await;
+            return None;
+        }
+        match super::oauth::refresh(&self.inner.http, remote, &stored).await {
+            Ok(tokens) => {
+                if let Err(error) = self
+                    .inner
+                    .credentials
+                    .save_oauth_tokens(&integration_id, &stored.id, &tokens)
+                    .await
+                {
+                    eprintln!(
+                        "opencode mcp: token rotation for \"{}\" could not be stored: {error}",
+                        entry.integration_label()
+                    );
+                }
+            }
+            Err(error) => {
+                eprintln!(
+                    "opencode mcp: runtime credential refresh for \"{}\" failed: {error}",
+                    entry.integration_label()
+                );
+                // G-110③: a REJECTED grant invalidates the credential;
+                // discovery/network failures do not.
+                if super::oauth::is_token_rejected(&error) {
+                    if let Err(remove_error) =
+                        self.inner.credentials.remove_credential(&stored.id).await
+                    {
+                        eprintln!(
+                            "opencode mcp: could not remove the dead credential for \"{}\": {remove_error}",
+                            entry.integration_label()
+                        );
+                    }
+                }
+                self.settle_needs_auth(server, entry, error).await;
+                return None;
+            }
+        }
+        // The reconnect mirrors `replay_after_recovery`: only when the
+        // FAILED connection is still the entry's live client.
+        {
+            let lock = Self::server_lock(&self.inner, server);
+            let _guard = lock.lock().await;
+            if entry.client.lock().await.as_ref().is_some_and(|current| current.is_same(failed)) {
+                self.stop_server(server, entry).await;
+                self.start_server(server, entry).await;
+            }
+        }
+        let replacement = entry.client.lock().await.clone()?;
+        Some(replacement.call_tool(name, args.as_ref(), session_id).await)
+    }
+
+    /// G-359: settles one server at `needs_auth` with the refresh
+    /// failure's text so the re-auth UI path engages.
+    async fn settle_needs_auth(&self, server: &str, entry: &Arc<ServerEntry>, error: String) {
+        entry.set_status(Status::NeedsAuth { error });
+        self.publish("mcp.status.changed", server).await;
     }
 
     /// `Mcp.instructions` — connected servers with initialization
@@ -1667,19 +1771,46 @@ pub const OUTPUT_METADATA_KEY: &str = "mcp.output";
 #[async_trait::async_trait]
 impl ToolExecute for McpToolExecutor {
     async fn execute(&self, input: &serde_json::Value) -> Result<ToolRunResult, ToolRunFailure> {
+        self.run(input, None).await
+    }
+
+    /// G-360① — the context-aware surface threads the invoking session
+    /// into the tool-call metadata (`sessionID: context.sessionID`,
+    /// mcp.ts:69/124) so per-session servers (Code Mode included) can
+    /// attribute the call.
+    async fn execute_with_context(
+        &self,
+        input: &serde_json::Value,
+        context: &crate::location::ToolCallContext,
+    ) -> Result<ToolRunResult, ToolRunFailure> {
+        self.run(input, Some(context.session_id.0.as_str())).await
+    }
+}
+
+impl McpToolExecutor {
+    /// The leaf body: `mcp.callTool` with the structured-output
+    /// preference (`structuredContent` → JSON-parsed text when the
+    /// server declares no schema → raw text); media → file parts; tool
+    /// errors join the text parts or fall back to the generic message.
+    async fn run(
+        &self,
+        input: &serde_json::Value,
+        session_id: Option<&str>,
+    ) -> Result<ToolRunResult, ToolRunFailure> {
         let args = input.as_object().cloned();
-        let result =
-            self.registry.call_tool(&self.tool.server, &self.tool.name, args, None).await.map_err(
-                |error| ToolRunFailure::Error {
-                    message: match error {
-                        McpError::NotFound(error) => {
-                            format!("MCP server \"{}\" is not available", error.server)
-                        }
-                        McpError::ToolCall(error) => error.message,
-                    },
-                    metadata: None,
+        let result = self
+            .registry
+            .call_tool(&self.tool.server, &self.tool.name, args, session_id)
+            .await
+            .map_err(|error| ToolRunFailure::Error {
+                message: match error {
+                    McpError::NotFound(error) => {
+                        format!("MCP server \"{}\" is not available", error.server)
+                    }
+                    McpError::ToolCall(error) => error.message,
                 },
-            )?;
+                metadata: None,
+            })?;
         if result.is_error {
             let joined = result
                 .content
@@ -1829,6 +1960,15 @@ impl McpToolBridge {
         services: &Arc<crate::tool::ToolServices>,
     ) -> McpToolBridge {
         let (flush_tx, flush_rx) = tokio::sync::watch::channel(false);
+        // G-360② — the ref serializes the initial registration and the
+        // debounced reload through `Semaphore.makeUnsafe(1)` (mcp.ts
+        // 132-138): `sync` reads the catalog and swaps the registration
+        // table without internal await points, but the initial task and
+        // the refresh task run on separate workers, so unserialized syncs
+        // could interleave capture/apply and land a STALE table last (a
+        // lost-registration overwrite). One bridge-wide lock makes every
+        // sync a serialized full reconcile.
+        let sync_lock = Arc::new(SyncMutex::new(()));
         // Initial registration: register once after initial discovery; only
         // subsequent updates need the debounced reload.
         let owned = Arc::new(SyncMutex::new(std::collections::BTreeSet::new()));
@@ -1839,8 +1979,9 @@ impl McpToolBridge {
             let hooks = Arc::clone(hooks);
             let services = Arc::clone(services);
             let owned = Arc::clone(&owned);
+            let sync_lock = Arc::clone(&sync_lock);
             async move {
-                Self::sync(&registry, &tools, &permission, &hooks, &services, &owned);
+                Self::sync(&registry, &tools, &permission, &hooks, &services, &owned, &sync_lock);
                 let _ = flush_tx.send(true);
             }
         };
@@ -1864,6 +2005,7 @@ impl McpToolBridge {
             let hooks = Arc::clone(hooks);
             let services = Arc::clone(services);
             let owned = Arc::clone(&owned);
+            let sync_lock = Arc::clone(&sync_lock);
             async move {
                 while signal_rx.recv().await.is_some() {
                     // Sliding debounce: collapse bursts within 100ms.
@@ -1875,7 +2017,15 @@ impl McpToolBridge {
                             _ = signal_rx.recv() => {},
                         }
                     }
-                    Self::sync(&registry, &tools, &permission, &hooks, &services, &owned);
+                    Self::sync(
+                        &registry,
+                        &tools,
+                        &permission,
+                        &hooks,
+                        &services,
+                        &owned,
+                        &sync_lock,
+                    );
                 }
             }
         };
@@ -1891,7 +2041,13 @@ impl McpToolBridge {
         hooks: &Arc<crate::hooks::HookRegistry>,
         services: &Arc<crate::tool::ToolServices>,
         owned: &SyncMutex<std::collections::BTreeSet<String>>,
+        sync_lock: &SyncMutex<()>,
     ) {
+        // G-360② — serialize capture+apply across the initial and refresh
+        // tasks (the ref's `Semaphore.makeUnsafe(1)`): without the guard a
+        // sync captured before a catalog change could apply after a newer
+        // sync and overwrite the table with stale registrations.
+        let _guard = sync_lock.lock();
         let discovered = registry.tools();
         // v2 registration shape (tool/mcp.ts:40-45): bare `tool.name` +
         // `options.namespace = server` — the registry derives the
@@ -1901,15 +2057,40 @@ impl McpToolBridge {
         // G-291 — the EFFECTIVE registry key: both the registration
         // table and the executor table key by it, so two servers
         // exposing the same bare tool name coexist (tool.ts:188).
-        let current: std::collections::BTreeSet<String> =
-            discovered.iter().map(|tool| tool_name(&tool.server, &tool.name)).collect();
+        //
+        // G-360③ — the ref routes every registration through
+        // `editor.add`'s `registrationError` gate (tool.ts:177-183):
+        // violators are logged (`Skipping invalid tool registration`,
+        // tool.ts:203-211) and SKIPPED, never registered. The bridge
+        // applies the same rules here (name/namespace charset + length,
+        // the Code Mode `execute` reservation) before touching the
+        // tables.
+        let mut current: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut valid: Vec<&Tool> = Vec::new();
+        for tool in &discovered {
+            let action = tool_name(&tool.server, &tool.name);
+            let server_namespace = namespace(&tool.server);
+            if let Some(error) = crate::tool::registry::namespaced_registration_error(
+                Some(&server_namespace),
+                &tool.name,
+                tool.codemode_enabled(),
+            ) {
+                eprintln!(
+                    "opencode mcp: skipping invalid MCP tool registration \"{action}\" on server \"{}\": {error}",
+                    tool.server
+                );
+                continue;
+            }
+            current.insert(action);
+            valid.push(tool);
+        }
         // Remove bridge-owned registrations that left the catalog; other
         // registrations are never touched.
         for stale in owned.lock().difference(&current) {
             tools.remove(stale);
             tools.remove_executor(stale);
         }
-        for tool in discovered {
+        for tool in valid {
             let name = tool.name.clone();
             let action = tool_name(&tool.server, &tool.name);
             let executor = McpToolExecutor {

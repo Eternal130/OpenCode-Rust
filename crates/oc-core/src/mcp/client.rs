@@ -87,8 +87,8 @@ use parking_lot::Mutex;
 use rmcp::model::{
     CallToolRequestParams, ClientCapabilities, ContentBlock, GetPromptRequestParams,
     Implementation, InitializeRequestParams, ListPromptsRequest, ListResourceTemplatesRequest,
-    ListResourcesRequest, ListToolsRequest, ProtocolVersion, ReadResourceRequestParams,
-    RequestMetaObject, ServerPeerInfo, ServerResult,
+    ListResourcesRequest, ListToolsRequest, PaginatedRequestParams, ProtocolVersion,
+    ReadResourceRequestParams, RequestMetaObject, ServerPeerInfo, ServerResult,
 };
 use rmcp::service::{
     ClientLifecycleMode, ClientServiceExt, NotificationContext, Peer, PeerRequestOptions,
@@ -115,6 +115,13 @@ pub const TERMINATE_TIMEOUT: Duration = Duration::from_secs(1);
 /// `SessionExpiredError.message` prefix — matches v2
 /// `MCP server session expired: {server}`.
 pub const SESSION_EXPIRED_MESSAGE: &str = "MCP server session expired: ";
+
+/// G-358 — the catalog pagination safety cap. The ref SDK follows
+/// `nextCursor` in an unbounded loop (rmcp's own `list_all_*` helpers
+/// are likewise unbounded); this port keeps the loop but bounds it so a
+/// misbehaving server that always answers a cursor cannot spin forever.
+/// 1000 pages × any page size comfortably exceeds every real catalog.
+const MAX_LIST_PAGES: usize = 1000;
 
 /// `MCP.NeedsAuthError` — the server answered 401/403 and OAuth has no token.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -154,6 +161,16 @@ impl RequestError {
     #[must_use]
     pub fn is_session_expired(&self) -> bool {
         self.message.starts_with(SESSION_EXPIRED_MESSAGE)
+    }
+
+    /// G-359: whether this failure was a 401/403 authentication
+    /// rejection — [`Connection::classify`] shapes exactly this message
+    /// suffix for [`unauthorized`] chains (the registry keys its runtime
+    /// token-refresh recovery off it, mirroring the SDK's 401
+    /// auto-refresh hook).
+    #[must_use]
+    pub fn is_unauthorized(&self) -> bool {
+        self.message.ends_with(" (unauthorized)")
     }
 }
 
@@ -852,84 +869,145 @@ impl Connection {
     }
 
     /// `tools()` — listing under the catalog timeout with transient retry.
+    /// G-358: follows `nextCursor` until the server answers none (the
+    /// SDK's `listAllTools` pagination), merging pages in order.
     pub async fn tools(&self) -> Result<Vec<rmcp::model::Tool>, RequestError> {
         let timeout = self.catalog_timeout;
         let this = self.clone();
         retrying(move || {
             let this = this.clone();
             Box::pin(async move {
-                let result = this
-                    .call(
-                        rmcp::model::ClientRequest::ListToolsRequest(ListToolsRequest::default()),
-                        timeout,
-                    )
-                    .await
-                    .map_err(|error| this.request_error("list MCP tools", error))?;
-                match result {
-                    ServerResult::ListToolsResult(result) => Ok(result.tools),
-                    _ => Err(RequestError {
-                        server: this.server_name().to_string(),
-                        message: "unexpected tools/list response".to_string(),
-                    }),
+                let mut tools = Vec::new();
+                let mut cursor: Option<String> = None;
+                for _ in 0..MAX_LIST_PAGES {
+                    let result = this
+                        .call(
+                            rmcp::model::ClientRequest::ListToolsRequest(
+                                ListToolsRequest::with_param(
+                                    PaginatedRequestParams::default().with_cursor(cursor),
+                                ),
+                            ),
+                            timeout,
+                        )
+                        .await
+                        .map_err(|error| this.request_error("list MCP tools", error))?;
+                    match result {
+                        ServerResult::ListToolsResult(result) => {
+                            tools.extend(result.tools);
+                            cursor = result.next_cursor;
+                            if cursor.is_none() {
+                                return Ok(tools);
+                            }
+                        }
+                        _ => {
+                            return Err(RequestError {
+                                server: this.server_name().to_string(),
+                                message: "unexpected tools/list response".to_string(),
+                            })
+                        }
+                    }
                 }
+                Err(RequestError {
+                    server: this.server_name().to_string(),
+                    message: format!(
+                        "tools/list exceeded {MAX_LIST_PAGES} pagination rounds without completing"
+                    ),
+                })
             })
             .boxed()
         })
         .await
     }
 
-    /// `prompts()`.
+    /// `prompts()` — G-358: follows `nextCursor` like [`Connection::tools`].
     pub async fn prompts(&self) -> Result<Vec<rmcp::model::Prompt>, RequestError> {
         let timeout = self.catalog_timeout;
         let this = self.clone();
         retrying(move || {
             let this = this.clone();
             Box::pin(async move {
-                let result = this
-                    .call(
-                        rmcp::model::ClientRequest::ListPromptsRequest(
-                            ListPromptsRequest::default(),
-                        ),
-                        timeout,
-                    )
-                    .await
-                    .map_err(|error| this.request_error("list MCP prompts", error))?;
-                match result {
-                    ServerResult::ListPromptsResult(result) => Ok(result.prompts),
-                    _ => Err(RequestError {
-                        server: this.server_name().to_string(),
-                        message: "unexpected prompts/list response".to_string(),
-                    }),
+                let mut prompts = Vec::new();
+                let mut cursor: Option<String> = None;
+                for _ in 0..MAX_LIST_PAGES {
+                    let result = this
+                        .call(
+                            rmcp::model::ClientRequest::ListPromptsRequest(
+                                ListPromptsRequest::with_param(PaginatedRequestParams::default().with_cursor(cursor)),
+                            ),
+                            timeout,
+                        )
+                        .await
+                        .map_err(|error| this.request_error("list MCP prompts", error))?;
+                    match result {
+                        ServerResult::ListPromptsResult(result) => {
+                            prompts.extend(result.prompts);
+                            cursor = result.next_cursor;
+                            if cursor.is_none() {
+                                return Ok(prompts);
+                            }
+                        }
+                        _ => {
+                            return Err(RequestError {
+                                server: this.server_name().to_string(),
+                                message: "unexpected prompts/list response".to_string(),
+                            })
+                        }
+                    }
                 }
+                Err(RequestError {
+                    server: this.server_name().to_string(),
+                    message: format!(
+                        "prompts/list exceeded {MAX_LIST_PAGES} pagination rounds without completing"
+                    ),
+                })
             })
             .boxed()
         })
         .await
     }
 
-    /// `resources()`.
+    /// `resources()` — G-358: follows `nextCursor` like
+    /// [`Connection::tools`].
     pub async fn resources(&self) -> Result<Vec<rmcp::model::Resource>, RequestError> {
         let timeout = self.catalog_timeout;
         let this = self.clone();
         retrying(move || {
             let this = this.clone();
             Box::pin(async move {
-                let result = this
-                    .call(
-                        rmcp::model::ClientRequest::ListResourcesRequest(
-                            ListResourcesRequest::default(),
-                        ),
-                        timeout,
-                    )
-                    .await
-                    .map_err(|error| this.request_error("list MCP resources", error))?;
-                match result {
-                    ServerResult::ListResourcesResult(result) => Ok(result.resources),
-                    _ => Err(RequestError {
-                        server: this.server_name().to_string(),
-                        message: "unexpected resources/list response".to_string(),
-                    }),
+                let mut resources = Vec::new();
+                let mut cursor: Option<String> = None;
+                for _ in 0..MAX_LIST_PAGES {
+                    let result = this
+                        .call(
+                            rmcp::model::ClientRequest::ListResourcesRequest(
+                                ListResourcesRequest::with_param(PaginatedRequestParams::default().with_cursor(cursor)),
+                            ),
+                            timeout,
+                        )
+                        .await
+                        .map_err(|error| this.request_error("list MCP resources", error))?;
+                    match result {
+                        ServerResult::ListResourcesResult(result) => {
+                            resources.extend(result.resources);
+                            cursor = result.next_cursor;
+                            if cursor.is_none() {
+                                return Ok(resources);
+                            }
+                        }
+                        _ => {
+                            return Err(RequestError {
+                                server: this.server_name().to_string(),
+                                message: "unexpected resources/list response".to_string(),
+                            })
+                        }
+                    }
                 }
+                Err(RequestError {
+                    server: this.server_name().to_string(),
+                    message: format!(
+                        "resources/list exceeded {MAX_LIST_PAGES} pagination rounds without completing"
+                    ),
+                })
             })
             .boxed()
         })
@@ -938,6 +1016,7 @@ impl Connection {
 
     /// `resourceTemplates()` — some servers declare resources without
     /// implementing template listing; callers collapse failures to empty.
+    /// G-358: follows `nextCursor` like [`Connection::tools`].
     pub async fn resource_templates(
         &self,
     ) -> Result<Vec<rmcp::model::ResourceTemplate>, RequestError> {
@@ -946,24 +1025,42 @@ impl Connection {
         retrying(move || {
             let this = this.clone();
             Box::pin(async move {
-                let result = this
-                    .call(
-                        rmcp::model::ClientRequest::ListResourceTemplatesRequest(
-                            ListResourceTemplatesRequest::default(),
-                        ),
-                        timeout,
-                    )
-                    .await
-                    .map_err(|error| this.request_error("list MCP resource templates", error))?;
-                match result {
-                    ServerResult::ListResourceTemplatesResult(result) => {
-                        Ok(result.resource_templates)
+                let mut templates = Vec::new();
+                let mut cursor: Option<String> = None;
+                for _ in 0..MAX_LIST_PAGES {
+                    let result = this
+                        .call(
+                            rmcp::model::ClientRequest::ListResourceTemplatesRequest(
+                                ListResourceTemplatesRequest::with_param(PaginatedRequestParams::default().with_cursor(cursor)),
+                            ),
+                            timeout,
+                        )
+                        .await
+                        .map_err(|error| {
+                            this.request_error("list MCP resource templates", error)
+                        })?;
+                    match result {
+                        ServerResult::ListResourceTemplatesResult(result) => {
+                            templates.extend(result.resource_templates);
+                            cursor = result.next_cursor;
+                            if cursor.is_none() {
+                                return Ok(templates);
+                            }
+                        }
+                        _ => {
+                            return Err(RequestError {
+                                server: this.server_name().to_string(),
+                                message: "unexpected resources/templates/list response".to_string(),
+                            })
+                        }
                     }
-                    _ => Err(RequestError {
-                        server: this.server_name().to_string(),
-                        message: "unexpected resources/templates/list response".to_string(),
-                    }),
                 }
+                Err(RequestError {
+                    server: this.server_name().to_string(),
+                    message: format!(
+                        "resources/templates/list exceeded {MAX_LIST_PAGES} pagination rounds without completing"
+                    ),
+                })
             })
             .boxed()
         })

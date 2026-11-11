@@ -71,6 +71,12 @@ pub(crate) struct Script {
     /// session-expiry probe — list-changed refreshes observe it), then
     /// behave.
     expire_list_once: Arc<std::sync::atomic::AtomicBool>,
+    /// G-358 — when set, list answers page over the catalog with this
+    /// many items per page (cursor = the next start index as a string).
+    page_size: Option<usize>,
+    /// G-360① — the serialized `tools/call` params of every call
+    /// (asserts the `sessionID` request metadata).
+    call_metas: Arc<parking_lot::Mutex<Vec<serde_json::Value>>>,
 }
 
 impl Script {
@@ -269,6 +275,24 @@ fn mock_pair(script: Script) -> (MockTransport, Mock) {
     )
 }
 
+/// G-358 — one `tools/list`-shaped page over `items`: `cursor` carries
+/// the next start index; the answer includes `nextCursor` while items
+/// remain (index-cursor paging like the SDK's example servers).
+fn paged(
+    items: &[serde_json::Value],
+    cursor: Option<&str>,
+    page_size: usize,
+    key: &str,
+) -> serde_json::Value {
+    let start = cursor.and_then(|cursor| cursor.parse::<usize>().ok()).unwrap_or(0);
+    let end = (start + page_size).max(start).min(items.len());
+    let mut value = serde_json::json!({ key: &items[start..end] });
+    if end < items.len() {
+        value["nextCursor"] = serde_json::json!(end.to_string());
+    }
+    value
+}
+
 #[allow(clippy::unnecessary_wraps)] // the `_` request arm has no response
 #[allow(clippy::too_many_lines)] // scripted mock responder; 1:1 with the fixture scripts
 fn respond(
@@ -327,7 +351,7 @@ fn respond(
             result.set_server_info(rmcp::model::Implementation::new("mock", "1"));
             Some(JsonRpcMessage::response(ServerResult::DiscoverResult(result), id))
         }
-        ClientRequest::ListToolsRequest(_) => {
+        ClientRequest::ListToolsRequest(request) => {
             if script.expire_list_once.swap(false, std::sync::atomic::Ordering::SeqCst) {
                 // Same single-session expiry rejection as `expire_once`,
                 // observed by a BACKGROUND catalog refresh.
@@ -340,15 +364,44 @@ fn respond(
                     Some(id),
                 ));
             }
-            response(serde_json::json!({ "tools": *script.tools.lock() }), id)
+            let cursor = request.params.as_ref().and_then(|params| params.cursor.clone());
+            match script.page_size {
+                Some(size) => {
+                    response(paged(&script.tools.lock(), cursor.as_deref(), size, "tools"), id)
+                }
+                None => response(serde_json::json!({ "tools": *script.tools.lock() }), id),
+            }
         }
-        ClientRequest::ListResourcesRequest(_) => {
-            response(serde_json::json!({ "resources": *script.resources.lock() }), id)
+        ClientRequest::ListResourcesRequest(request) => {
+            let cursor = request.params.as_ref().and_then(|params| params.cursor.clone());
+            match script.page_size {
+                Some(size) => response(
+                    paged(&script.resources.lock(), cursor.as_deref(), size, "resources"),
+                    id,
+                ),
+                None => response(serde_json::json!({ "resources": *script.resources.lock() }), id),
+            }
         }
-        ClientRequest::ListResourceTemplatesRequest(_) => {
-            response(serde_json::json!({ "resourceTemplates": *script.templates.lock() }), id)
+        ClientRequest::ListResourceTemplatesRequest(request) => {
+            let cursor = request.params.as_ref().and_then(|params| params.cursor.clone());
+            match script.page_size {
+                Some(size) => response(
+                    paged(&script.templates.lock(), cursor.as_deref(), size, "resourceTemplates"),
+                    id,
+                ),
+                None => response(
+                    serde_json::json!({ "resourceTemplates": *script.templates.lock() }),
+                    id,
+                ),
+            }
         }
-        ClientRequest::ListPromptsRequest(_) => response(serde_json::json!({ "prompts": [] }), id),
+        ClientRequest::ListPromptsRequest(request) => {
+            let cursor = request.params.as_ref().and_then(|params| params.cursor.clone());
+            match script.page_size {
+                Some(size) => response(paged(&[], cursor.as_deref(), size, "prompts"), id),
+                None => response(serde_json::json!({ "prompts": [] }), id),
+            }
+        }
         ClientRequest::ReadResourceRequest(request) => {
             let uri = &request.params.uri;
             if uri.starts_with("mock://text") {
@@ -372,6 +425,11 @@ fn respond(
         }
         ClientRequest::CallToolRequest(request) => {
             let name = request.params.name.as_ref();
+            // G-360① — record the request `_meta` (deserialization strips
+            // `params._meta` into the envelope extensions; the sessionID
+            // rides there on the mock side).
+            let meta = request.extensions.get::<rmcp::model::RequestMetaObject>();
+            script.call_metas.lock().push(serde_json::to_value(meta).unwrap_or_default());
             if let Some(required) = script.input_required.get(name) {
                 if request.params.input_responses.is_none() {
                     return response(required.clone(), id);
@@ -549,6 +607,19 @@ async fn wait_for_status(registry: &McpRegistry, server: &str, want: Status) {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
     panic!("server {server} never reached {want:?}: {:?}", registry.servers());
+}
+
+/// G-359 — polls until the server settles at ANY `needs_auth` (the
+/// error text varies with the refresh failure).
+async fn wait_for_needs_auth(registry: &McpRegistry, server: &str) {
+    for _ in 0..400 {
+        let found = registry.servers().into_iter().find(|info| info.name == server);
+        if found.as_ref().is_some_and(|info| matches!(info.status, Status::NeedsAuth { .. })) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("server {server} never reached needs_auth: {:?}", registry.servers());
 }
 
 // ---------------------------------------------------------------------------
@@ -2438,6 +2509,562 @@ fn test_services(permission: &crate::permission::Permission) -> Arc<crate::tool:
     };
     std::mem::forget(dir); // keep the tempdir for the test's lifetime
     Arc::new(services)
+}
+
+// ---------------------------------------------------------------------------
+// G-358 — catalog pagination: the client follows `nextCursor` (the SDK's
+// list pagination) instead of reading one page.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn g358_client_follows_next_cursor_across_pages() {
+    // Five tools, page size 2 → pages [t1,t2] [t3,t4] [t5]; the merged
+    // listing keeps page order.
+    let mut script = Script::new();
+    for index in 1..=5 {
+        script.tools.lock().push(serde_json::json!({
+            "name": format!("t{index}"),
+            "description": "paged",
+            "inputSchema": { "type": "object" },
+        }));
+    }
+    for index in 1..=3 {
+        script.resources.lock().push(serde_json::json!({
+            "uri": format!("mock://r{index}"),
+            "name": format!("r{index}"),
+        }));
+    }
+    script.page_size = Some(2);
+    let (connection, _mock) = connect_mock(script).await;
+
+    let names: Vec<String> = connection
+        .tools()
+        .await
+        .expect("tools")
+        .into_iter()
+        .map(|tool| tool.name.to_string())
+        .collect();
+    assert_eq!(names, vec!["t1", "t2", "t3", "t4", "t5"], "all pages merged in order");
+
+    let resources = connection.resources().await.expect("resources");
+    assert_eq!(resources.len(), 3, "resources paginate too: {resources:?}");
+
+    let prompts = connection.prompts().await.expect("prompts");
+    assert!(prompts.is_empty(), "empty catalogs page to empty: {prompts:?}");
+}
+
+// ---------------------------------------------------------------------------
+// G-359 — runtime OAuth token expiry: 401 on a live connection refreshes
+// the stored grant, reconnects, and replays once; a failed/missing
+// refresh settles `needs_auth`.
+// ---------------------------------------------------------------------------
+
+/// In-memory [`CredentialStore`] (the fake credential-row seam).
+#[derive(Default)]
+struct FakeCredentials {
+    credential: parking_lot::Mutex<Option<super::oauth::StoredCredential>>,
+    saved: parking_lot::Mutex<Vec<(String, String)>>, // (credential id, access)
+    removed: parking_lot::Mutex<Vec<String>>,
+}
+
+impl FakeCredentials {
+    fn with(credential: super::oauth::StoredCredential) -> Arc<Self> {
+        Arc::new(Self {
+            credential: parking_lot::Mutex::new(Some(credential)),
+            saved: parking_lot::Mutex::new(Vec::new()),
+            removed: parking_lot::Mutex::new(Vec::new()),
+        })
+    }
+}
+
+impl super::registry::CredentialStore for FakeCredentials {
+    fn oauth_credential(
+        &self,
+        _integration_id: &oc_schema::id::IntegrationId,
+    ) -> futures::future::BoxFuture<'static, Option<super::oauth::StoredCredential>> {
+        let stored = self.credential.lock().clone();
+        Box::pin(async move { stored })
+    }
+
+    fn save_oauth_tokens(
+        &self,
+        _integration_id: &oc_schema::id::IntegrationId,
+        credential_id: &str,
+        tokens: &super::oauth::StoredTokens,
+    ) -> futures::future::BoxFuture<'static, Result<(), String>> {
+        let mut stored = self.credential.lock();
+        let Some(previous) = stored.as_mut() else {
+            let missing = format!("credential {credential_id} not found");
+            return Box::pin(async { Err(missing) });
+        };
+        previous.access = tokens.access_token.clone();
+        if let Some(refresh) = &tokens.refresh_token {
+            previous.refresh = refresh.clone();
+        }
+        if let Some(expires_in) = tokens.expires_in {
+            previous.expires = now_ms() + i64::try_from(expires_in).unwrap_or(i64::MAX / 2) * 1000;
+        }
+        self.saved.lock().push((credential_id.to_string(), tokens.access_token.clone()));
+        Box::pin(async { Ok(()) })
+    }
+
+    fn remove_credential(
+        &self,
+        credential_id: &str,
+    ) -> futures::future::BoxFuture<'static, Result<(), String>> {
+        *self.credential.lock() = None;
+        self.removed.lock().push(credential_id.to_string());
+        Box::pin(async { Ok(()) })
+    }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or_default())
+        .unwrap_or_default()
+}
+
+/// A hermetic OAuth authorization-server stub (plain HTTP over a
+/// loopback socket): `GET /metadata` answers the server document,
+/// `POST /token` answers the refresh grant (`ok`) or rejects it
+/// (`reject`), everything else 404s.
+async fn oauth_stub(ok: bool) -> (String, reqwest::Url) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    let base = format!("http://{address}");
+    let metadata = format!("{base}/metadata");
+    let base = std::sync::Arc::new(base);
+    let returned = base.to_string();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else { return };
+            let base = Arc::clone(&base);
+            let ok = ok;
+            tokio::spawn(async move {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buffer = [0u8; 8192];
+                let read = socket.read(&mut buffer).await.unwrap_or(0);
+                let text = String::from_utf8_lossy(&buffer[..read]).to_string();
+                let Some(request_line) = text.lines().next() else { return };
+                let mut parts = request_line.split(' ');
+                let method = parts.next().unwrap_or_default();
+                let path = parts.next().unwrap_or_default();
+                let (status, content_type, body) = match (method, path) {
+                    ("GET", "/metadata") => (
+                        "200 OK",
+                        "application/json",
+                        format!(
+                            "{{\"authorization_endpoint\":\"{base}/authorize\",\"token_endpoint\":\"{base}/token\"}}"
+                        ),
+                    ),
+                    ("POST", "/token") if ok => (
+                        "200 OK",
+                        "application/json",
+                        "{\"access_token\":\"tok-new\",\"refresh_token\":\"r2\",\"token_type\":\"Bearer\",\"expires_in\":3600}".to_owned(),
+                    ),
+                    ("POST", "/token") => ("400 Bad Request", "application/json", "{\"error\":\"invalid_grant\"}".to_owned()),
+                    _ => ("404 Not Found", "text/plain", "not found".to_owned()),
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+    (returned, reqwest::Url::parse(&metadata).expect("metadata url"))
+}
+
+fn oauth_remote_config(metadata: &str) -> ServerConfig {
+    ServerConfig::Remote(Box::new(oc_schema::mcp::RemoteConfig {
+        url: format!("{metadata}/server"),
+        headers: None,
+        oauth: Some(oc_schema::mcp::OAuthValue::Config(oc_schema::mcp::OAuthConfig {
+            auth_server_metadata_url: Some(metadata.to_string()),
+            ..oc_schema::mcp::OAuthConfig::default()
+        })),
+        disabled: None,
+        codemode: None,
+        timeout: None,
+        protocol: None,
+    }))
+}
+
+fn oauth_credential(refresh: &str) -> super::oauth::StoredCredential {
+    super::oauth::StoredCredential {
+        id: "cred1".to_string(),
+        method_id: "mcp_test".to_string(),
+        access: "tok-old".to_string(),
+        refresh: refresh.to_string(),
+        // far-future: the connect-time prepare passes the token through
+        // so the runtime 401 is what triggers the refresh.
+        expires: now_ms() + 3_600_000,
+        token_type: "Bearer".to_string(),
+        scope: None,
+        client: Some(super::oauth::StoredClient {
+            client_id: "client-1".to_string(),
+            client_secret: None,
+        }),
+    }
+}
+
+/// A scripted connector that records the bearer each connect received
+/// (asserting the refreshed token rode the reconnect).
+fn bearer_recording_connector(
+    scripts: Vec<Script>,
+    bearers: Arc<parking_lot::Mutex<Vec<Option<String>>>>,
+) -> Connector {
+    let scripts = Arc::new(parking_lot::Mutex::new(scripts));
+    Arc::new(move |input: ConnectInput<'_>| {
+        let script = scripts.lock().remove(0);
+        let (transport, _mock) = mock_pair(script);
+        bearers.lock().push(input.bearer.clone());
+        let server = input.server.to_string();
+        let config = input.config.clone();
+        let directory = input.directory.to_string();
+        let bearer = input.bearer.clone();
+        let elicitation = input.elicitation.clone();
+        Box::pin(async move {
+            client::connect_with_transport(
+                &ConnectInput {
+                    server: &server,
+                    config: &config,
+                    directory: &directory,
+                    bearer,
+                    elicitation,
+                    stdio: None,
+                },
+                transport,
+                false,
+            )
+            .await
+        })
+    })
+}
+
+/// The 401 trigger: the mock answers the tool call with a JSON-RPC error
+/// whose text ends in the client's unauthorized suffix — the exact
+/// [`RequestError`] shape `classify` produces for a typed 401 (mock
+/// transports cannot emit a real HTTP status).
+fn unauthorized_error() -> String {
+    "expired token (unauthorized)".to_string()
+}
+
+#[tokio::test]
+async fn g359_runtime_401_refreshes_reconnects_and_replays_once() {
+    let (_db, bus) = test_bus().await;
+    let (_base, metadata) = oauth_stub(true).await;
+
+    // First connection: the tool call answers the unauthorized error;
+    // the reconnect (second script) answers it.
+    let mut rejected = Script::new();
+    rejected.tools.lock().push(serde_json::json!({
+        "name": "echo", "description": "Echo", "inputSchema": { "type": "object" },
+    }));
+    rejected.call_errors.insert("echo".to_string(), unauthorized_error());
+    let mut healthy = Script::new();
+    healthy.tools.lock().push(serde_json::json!({
+        "name": "echo", "description": "Echo", "inputSchema": { "type": "object" },
+    }));
+    healthy.calls.insert(
+        "echo".to_string(),
+        serde_json::json!({ "content": [{ "type": "text", "text": "recovered" }], "isError": false }),
+    );
+
+    let bearers = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let connector = bearer_recording_connector(vec![rejected, healthy], Arc::clone(&bearers));
+    let credentials = FakeCredentials::with(oauth_credential("r1"));
+    let mut servers = BTreeMap::new();
+    servers.insert("oauth-srv".to_string(), oauth_remote_config(metadata.as_str()));
+    let registry = super::registry::McpRegistry::with_connector(
+        bus.clone(),
+        connector,
+        credentials.clone() as Arc<dyn super::registry::CredentialStore>,
+    )
+    .with_config_source(Arc::new(move || servers.clone()))
+    .with_directory("/tmp");
+    registry.reconcile().await;
+    wait_for_status(&registry, "oauth-srv", Status::Connected).await;
+
+    let result = registry
+        .call_tool("oauth-srv", "echo", Some(serde_json::Map::new()), None)
+        .await
+        .expect("the refreshed replay succeeds");
+    assert!(!result.is_error);
+    assert_eq!(
+        bearers.lock().as_slice(),
+        [Some("tok-old".to_string()), Some("tok-new".to_string())]
+    );
+    assert_eq!(
+        credentials.saved.lock().as_slice(),
+        [("cred1".to_string(), "tok-new".to_string())].as_slice(),
+        "the rotated grant persisted"
+    );
+    assert!(credentials.removed.lock().is_empty(), "a successful refresh keeps the credential");
+    registry.shutdown().await;
+}
+
+#[tokio::test]
+async fn g359_refresh_failure_settles_needs_auth_and_drops_dead_credential() {
+    let (_db, bus) = test_bus().await;
+    let (_base, metadata) = oauth_stub(false).await;
+
+    let mut script = Script::new();
+    script.tools.lock().push(serde_json::json!({
+        "name": "echo", "description": "Echo", "inputSchema": { "type": "object" },
+    }));
+    script.call_errors.insert("echo".to_string(), unauthorized_error());
+
+    let bearers = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let connector = bearer_recording_connector(vec![script], Arc::clone(&bearers));
+    let credentials = FakeCredentials::with(oauth_credential("r1"));
+    let mut servers = BTreeMap::new();
+    servers.insert("oauth-srv".to_string(), oauth_remote_config(metadata.as_str()));
+    let registry = super::registry::McpRegistry::with_connector(
+        bus.clone(),
+        connector,
+        credentials.clone() as Arc<dyn super::registry::CredentialStore>,
+    )
+    .with_config_source(Arc::new(move || servers.clone()))
+    .with_directory("/tmp");
+    registry.reconcile().await;
+    wait_for_status(&registry, "oauth-srv", Status::Connected).await;
+
+    let error = registry
+        .call_tool("oauth-srv", "echo", Some(serde_json::Map::new()), None)
+        .await
+        .expect_err("the original unauthorized error surfaces");
+    assert!(error.to_string().ends_with("(unauthorized)"), "surfaces the 401 text: {error}");
+    wait_for_needs_auth(&registry, "oauth-srv").await;
+    assert_eq!(credentials.removed.lock().as_slice(), ["cred1".to_string()]);
+    assert_eq!(bearers.lock().len(), 1, "no reconnect without a fresh token");
+    registry.shutdown().await;
+}
+
+#[tokio::test]
+async fn g359_no_refresh_token_settles_needs_auth_without_invalidating() {
+    let (_db, bus) = test_bus().await;
+    let (_base, metadata) = oauth_stub(true).await;
+
+    let mut script = Script::new();
+    script.tools.lock().push(serde_json::json!({
+        "name": "echo", "description": "Echo", "inputSchema": { "type": "object" },
+    }));
+    script.call_errors.insert("echo".to_string(), unauthorized_error());
+
+    let bearers = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let connector = bearer_recording_connector(vec![script], Arc::clone(&bearers));
+    // No refresh token: the SDK would refuse the unrefreshable token —
+    // needs_auth engages, the credential row is NOT invalidated.
+    let credentials = FakeCredentials::with(oauth_credential(""));
+    let mut servers = BTreeMap::new();
+    servers.insert("oauth-srv".to_string(), oauth_remote_config(metadata.as_str()));
+    let registry = super::registry::McpRegistry::with_connector(
+        bus.clone(),
+        connector,
+        credentials.clone() as Arc<dyn super::registry::CredentialStore>,
+    )
+    .with_config_source(Arc::new(move || servers.clone()))
+    .with_directory("/tmp");
+    registry.reconcile().await;
+    wait_for_status(&registry, "oauth-srv", Status::Connected).await;
+
+    let _ = registry
+        .call_tool("oauth-srv", "echo", Some(serde_json::Map::new()), None)
+        .await
+        .expect_err("no refresh path");
+    wait_for_needs_auth(&registry, "oauth-srv").await;
+    assert!(
+        credentials.removed.lock().is_empty(),
+        "an unrefreshable token is not a rejected grant"
+    );
+    assert_eq!(bearers.lock().len(), 1);
+    registry.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// G-360 — bridge: sessionID metadata, sync serialization, name
+// validation.
+// ---------------------------------------------------------------------------
+
+/// G-360① — the bridge threads the invoking session id into the
+/// `tools/call` request metadata (`sessionID: context.sessionID`,
+/// mcp.ts:69/124).
+#[tokio::test]
+async fn g360_bridge_threads_session_id_into_call_metadata() {
+    let (_db, bus) = test_bus().await;
+    let mut servers = BTreeMap::new();
+    servers.insert("alpha".to_string(), local_config());
+    let mut script = Script::new();
+    script.tools.lock().push(serde_json::json!({
+        "name": "echo", "description": "Echo", "inputSchema": { "type": "object" },
+    }));
+    script.calls.insert(
+        "echo".to_string(),
+        serde_json::json!({ "content": [{ "type": "text", "text": "pong" }], "isError": false }),
+    );
+    let metas = Arc::clone(&script.call_metas);
+    let registry = registry_with(&bus, scripted_connector(move || script.clone()), servers);
+    registry.reconcile().await;
+    wait_for_status(&registry, "alpha", Status::Connected).await;
+
+    let tools = Arc::new(crate::location::ToolRegistryState::new());
+    let (permission, _rx) = test_permission_with_rules(&bus, Some(allow_all_rules()));
+    let hooks = Arc::new(crate::hooks::HookRegistry::new());
+    let services = test_services(&permission);
+    let bridge =
+        super::registry::McpToolBridge::install(&registry, &tools, &permission, &hooks, &services);
+    bridge.flush().await;
+
+    let result = tools
+        .executor("alpha_echo")
+        .expect("alpha_echo registered")
+        .execute_with_context(&serde_json::json!({}), &g242_context())
+        .await
+        .expect("executes");
+    let _ = result;
+    let recorded = metas.lock().clone();
+    assert_eq!(recorded.len(), 1, "one tools/call: {recorded:?}");
+    assert_eq!(
+        recorded[0].get("ai.opencode/sessionID"),
+        Some(&serde_json::json!("ses_g242")),
+        "sessionID rides the request metadata: {recorded:?}"
+    );
+    registry.shutdown().await;
+}
+
+/// G-360③ — invalid MCP tool names are skipped with a logged error while
+/// valid siblings register (ref editor.add's registrationError gate,
+/// tool.ts:177-183 + 304-320).
+#[tokio::test]
+async fn g360_bridge_skips_invalid_tool_names() {
+    let (_db, bus) = test_bus().await;
+    let mut servers = BTreeMap::new();
+    servers.insert("alpha".to_string(), local_config());
+    let script = Script::new();
+    for (name, register) in [
+        ("ok", true),
+        // 129 chars after sanitization — over the 128 limit.
+        (&"x".repeat(129)[..], false),
+        // empty name — under the 1 minimum.
+        ("", false),
+    ] {
+        if register {
+            script.tools.lock().push(serde_json::json!({
+                "name": name, "description": "ok", "inputSchema": { "type": "object" },
+            }));
+        } else {
+            script.tools.lock().push(serde_json::json!({
+                "name": name, "description": "invalid", "inputSchema": { "type": "object" },
+            }));
+        }
+    }
+    let registry = registry_with(&bus, scripted_connector(move || script.clone()), servers);
+    registry.reconcile().await;
+    wait_for_status(&registry, "alpha", Status::Connected).await;
+
+    let tools = Arc::new(crate::location::ToolRegistryState::new());
+    let permission = test_permission(&bus);
+    let hooks = Arc::new(crate::hooks::HookRegistry::new());
+    let services = test_services(&permission);
+    let bridge =
+        super::registry::McpToolBridge::install(&registry, &tools, &permission, &hooks, &services);
+    bridge.flush().await;
+
+    let effective: Vec<String> =
+        tools.list().into_iter().map(|tool| tool.effective_name()).collect();
+    assert_eq!(
+        effective,
+        vec!["alpha_ok".to_string()],
+        "only the valid tool registers: {effective:?}"
+    );
+    assert!(tools.executor("alpha_ok").is_some(), "the valid tool has an executor");
+    registry.shutdown().await;
+}
+
+/// G-360② — the initial registration and the debounced reload serialize
+/// (the ref's `Semaphore.makeUnsafe(1)`): rapid catalog mutations racing
+/// the first flush never lose registrations.
+#[tokio::test]
+async fn g360_initial_registration_and_reload_race_keeps_latest_table() {
+    let (_db, bus) = test_bus().await;
+    let mut servers = BTreeMap::new();
+    servers.insert("live".to_string(), local_config());
+    let catalog: Arc<parking_lot::Mutex<Vec<serde_json::Value>>> =
+        Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let push_slot: Arc<parking_lot::Mutex<Vec<mpsc::UnboundedSender<ServerJsonRpcMessage>>>> =
+        Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let push_capture = Arc::clone(&push_slot);
+    let catalog_capture = Arc::clone(&catalog);
+    let connector: Connector = Arc::new(move |input: ConnectInput<'_>| {
+        let script = Script { tools: Arc::clone(&catalog_capture), ..Script::new() };
+        let (transport, mock) = mock_pair(script);
+        push_capture.lock().push(mock.push.clone());
+        let server = input.server.to_string();
+        let config = input.config.clone();
+        let directory = input.directory.to_string();
+        let bearer = input.bearer.clone();
+        let elicitation = input.elicitation.clone();
+        Box::pin(async move {
+            client::connect_with_transport(
+                &ConnectInput {
+                    server: &server,
+                    config: &config,
+                    directory: &directory,
+                    bearer,
+                    elicitation,
+                    stdio: None,
+                },
+                transport,
+                false,
+            )
+            .await
+        })
+    });
+    let registry = registry_with(&bus, connector, servers);
+    registry.reconcile().await;
+    wait_for_status(&registry, "live", Status::Connected).await;
+
+    // Install the bridge and, concurrently with its initial flush, grow
+    // the catalog a burst of times — each growth announces
+    // tools/list_changed (a debounced reload per burst).
+    let tools = Arc::new(crate::location::ToolRegistryState::new());
+    let permission = test_permission(&bus);
+    let hooks = Arc::new(crate::hooks::HookRegistry::new());
+    let services = test_services(&permission);
+    let bridge =
+        super::registry::McpToolBridge::install(&registry, &tools, &permission, &hooks, &services);
+    for index in 0..12 {
+        catalog.lock().push(serde_json::json!({
+            "name": format!("tool{index}"),
+            "description": "raced",
+            "inputSchema": { "type": "object" },
+        }));
+        let push = push_slot.lock().last().cloned().expect("connector ran");
+        let _ = push.send(JsonRpcMessage::notification(
+            rmcp::model::ServerNotification::ToolListChangedNotification(
+                rmcp::model::ToolListChangedNotification {
+                    method: Default::default(),
+                    extensions: Default::default(),
+                },
+            ),
+        ));
+    }
+    bridge.flush().await;
+    // The debounced reload settles after the burst; the final table must
+    // be the union of every registered tool — no lost registrations.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if tools.list().len() == 12 {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "never converged: {:?}", tools.list());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    registry.shutdown().await;
 }
 
 // ---------------------------------------------------------------------------
