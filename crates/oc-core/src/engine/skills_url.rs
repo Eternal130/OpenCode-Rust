@@ -155,12 +155,18 @@ async fn pull(client: &reqwest::Client, url: &str, cache_root: &Path) -> Vec<Pat
         Ok(body) => match serde_json::from_slice(&body) {
             Ok(index) => index,
             Err(error) => {
-                eprintln!("[skill-url] failed to parse skill index at {index}: {error}");
+                oc_util::logging::log(
+                    oc_util::logging::Level::Warn,
+                    &format!("[skill-url] failed to parse skill index at {index}: {error}"),
+                );
                 return Vec::new();
             }
         },
         Err(error) => {
-            eprintln!("[skill-url] failed to fetch skill index at {index}: {error}");
+            oc_util::logging::log(
+                oc_util::logging::Level::Warn,
+                &format!("[skill-url] failed to fetch skill index at {index}: {error}"),
+            );
             return Vec::new();
         }
     };
@@ -285,16 +291,22 @@ async fn download(client: &reqwest::Client, url: reqwest::Url, destination: Path
             match std::fs::write(&destination, &body) {
                 Ok(()) => true,
                 Err(error) => {
-                    eprintln!(
-                        "[skill-url] failed to write skill file {}: {error}",
-                        destination.display()
+                    oc_util::logging::log(
+                        oc_util::logging::Level::Warn,
+                        &format!(
+                            "[skill-url] failed to write skill file {}: {error}",
+                            destination.display()
+                        ),
                     );
                     false
                 }
             }
         }
         Err(error) => {
-            eprintln!("[skill-url] failed to download skill file {url}: {error}");
+            oc_util::logging::log(
+                oc_util::logging::Level::Warn,
+                &format!("[skill-url] failed to download skill file {url}: {error}"),
+            );
             false
         }
     }
@@ -308,7 +320,10 @@ async fn refresh_versioned(client: &reqwest::Client, skill: &PlannedSkill, versi
     let staging = suffixed_sibling(&skill.root, "tmp", token);
     let backup = suffixed_sibling(&skill.root, "old", token);
     if let Err(error) = stage_and_swap(client, skill, version, &staging, &backup).await {
-        eprintln!("[skill-url] failed to refresh skill {}: {error}", skill.name);
+        oc_util::logging::log(
+            oc_util::logging::Level::Warn,
+            &format!("[skill-url] failed to refresh skill {}: {error}", skill.name),
+        );
     }
     // Effect.ensuring: the staging dir never survives a refresh.
     let _ = std::fs::remove_dir_all(&staging);

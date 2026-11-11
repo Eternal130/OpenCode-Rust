@@ -119,9 +119,14 @@ pub fn apply_models_env(options: &mut oc_core::engine::EngineOptions) -> ModelsE
                 options.catalog = std::sync::Arc::new(catalog);
             }
             Err(error) => {
-                eprintln!(
-                    "opencode: OPENCODE_MODELS_PATH {} unusable ({error}); using the embedded catalog",
-                    file.display()
+                // G-387: routed through the shared logging gate (v2
+                // logWarning) — file always, stderr under PRINT_LOGS.
+                oc_util::logging::log(
+                    oc_util::logging::Level::Warn,
+                    &format!(
+                        "opencode: OPENCODE_MODELS_PATH {} unusable ({error}); using the embedded catalog",
+                        file.display()
+                    ),
                 );
             }
         }
@@ -173,13 +178,17 @@ pub fn simulate_requested() -> bool {
 /// `start` consumes them).
 pub fn log_env_switch_notes() {
     if !fff_enabled() {
-        eprintln!(
-            "opencode: OPENCODE_DISABLE_FFF honored — fast-file-search is off; using the pure ripgrep path"
+        // G-387: routed through the shared logging gate — file always,
+        // stderr only under OPENCODE_PRINT_LOGS=1.
+        oc_util::logging::log(
+            oc_util::logging::Level::Warn,
+            "opencode: OPENCODE_DISABLE_FFF honored — fast-file-search is off; using the pure ripgrep path",
         );
     }
     if simulate_requested() {
-        eprintln!(
-            "opencode: OPENCODE_SIMULATE is set, but the simulation backend is not supported in this build; continuing with real providers"
+        oc_util::logging::log(
+            oc_util::logging::Level::Warn,
+            "opencode: OPENCODE_SIMULATE is set, but the simulation backend is not supported in this build; continuing with real providers",
         );
     }
 }

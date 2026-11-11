@@ -597,13 +597,67 @@ impl Breakpoints {
 /// The breakpoint-drop warning (G-309; ref anthropic-messages.ts:1060-1064
 /// `Effect.logWarning`): emitted after lowering when callers over-marked
 /// and the 4-breakpoint budget shed hints. Pure message builder so the
-/// shape is testable; the warn site prints it to stderr (oc-ai has no
-/// logging facade — eprintln matches the oc-http convention).
+/// shape is testable; the warn site goes through [`warn_gated`].
 #[must_use]
 pub fn breakpoint_drop_warning(dropped: u32) -> String {
     format!(
         "Anthropic Messages: dropped {dropped} cache breakpoint(s); the API allows at most {ANTHROPIC_BREAKPOINT_CAP} per request."
     )
+}
+
+/// Log levels for the G-387 `OPENCODE_LOG_LEVEL` floor, ordered
+/// `Debug < Info < Warn < Error` (v2 logging.ts:166-171).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum LogLevel {
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+/// `minimumLogLevel()` (logging.ts:164-173): case-insensitive
+/// {DEBUG,INFO,WARN,ERROR}; invalid or absent → `Info`.
+#[must_use]
+pub(crate) fn parse_log_level(value: Option<&str>) -> LogLevel {
+    let Some(value) = value else {
+        return LogLevel::Info;
+    };
+    match value.to_uppercase().as_str() {
+        "DEBUG" => LogLevel::Debug,
+        "INFO" => LogLevel::Info,
+        "WARN" => LogLevel::Warn,
+        "ERROR" => LogLevel::Error,
+        _ => LogLevel::Info,
+    }
+}
+
+/// The process-wide floor, parsed once (v2 evaluates the env when the
+/// logging layer is constructed at boot).
+fn log_floor() -> LogLevel {
+    static FLOOR: std::sync::OnceLock<LogLevel> = std::sync::OnceLock::new();
+    *FLOOR.get_or_init(|| parse_log_level(std::env::var("OPENCODE_LOG_LEVEL").ok().as_deref()))
+}
+
+/// The stderr gate (logging.ts:159-162): a per-message
+/// `OPENCODE_PRINT_LOGS === "1"` check.
+#[must_use]
+pub(crate) fn log_prints_stderr() -> bool {
+    std::env::var("OPENCODE_PRINT_LOGS").as_deref() == Ok("1")
+}
+
+/// G-387 — oc-ai deliberately does NOT depend on oc-util (G-162②), so
+/// this mirrors `oc_util::logging`'s gate locally: the
+/// `OPENCODE_LOG_LEVEL` floor suppresses below-Warn lines, and the
+/// stderr copy requires `OPENCODE_PRINT_LOGS=1` per message. Bounded
+/// deviation: no shared log-file sink — the SDK crate cannot reach the
+/// host process's data roots.
+pub(crate) fn warn_gated(line: &str) {
+    if LogLevel::Warn < log_floor() {
+        return;
+    }
+    if log_prints_stderr() {
+        eprintln!("Warning: {line}");
+    }
 }
 
 /// Requests of at least one hour use the explicit `"1h"` bucket (port of
@@ -1832,9 +1886,10 @@ pub fn body_from_request(request: &LLMRequest) -> Result<Value, AiError> {
     };
     let messages = lower_messages(&flattened_request, &mut breakpoints)?;
     // G-309 — the ref logs a warning when the 4-breakpoint budget shed
-    // caller hints (anthropic-messages.ts:1060-1064).
+    // caller hints (anthropic-messages.ts:1060-1064); G-387 routes it
+    // through the gated stderr copy.
     if breakpoints.dropped > 0 {
-        eprintln!("Warning: {}", breakpoint_drop_warning(breakpoints.dropped));
+        warn_gated(&breakpoint_drop_warning(breakpoints.dropped));
     }
     let output_config_value = match (&effort, &format) {
         (None, None) => None,
