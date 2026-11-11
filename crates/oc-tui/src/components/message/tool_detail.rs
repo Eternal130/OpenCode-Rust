@@ -933,7 +933,32 @@ pub fn tool_detail_row(
             )
         }
         "websearch" => {
-            let label = format!("Web Search \"{}\"", input("query"));
+            // G-370⑩ — `WebSearch` (index.tsx:3062-3084): the
+            // settled label carries the provider name
+            // (`webSearchProviderLabel`: "Web Search via {Name}",
+            // "opencode" → "OpenCode", first-letter titlecase); no
+            // provider metadata → plain "Web Search". The ref's
+            // RetryProvider fade/morph between providers mid-retry
+            // (retry-provider.tsx) stays bounded — the G-128 pump
+            // drives only the rail spring, and no oracle frame
+            // exercises a provider swap.
+            let label = match state.metadata.get("provider").map(String::as_str) {
+                Some(provider) if !provider.is_empty() => {
+                    let name = if provider == "opencode" {
+                        "OpenCode".to_owned()
+                    } else {
+                        let mut chars = provider.chars();
+                        match chars.next() {
+                            Some(first) => {
+                                first.to_uppercase().collect::<String>() + chars.as_str()
+                            }
+                            None => String::new(),
+                        }
+                    };
+                    format!("Web Search via {name} \"{}\"", input("query"))
+                }
+                _ => format!("Web Search \"{}\"", input("query")),
+            };
             detail_inline_row(&label, "Searching web…", state, clock_ms, theme, width, expanded)
         }
         "execute" => {
@@ -1336,5 +1361,103 @@ mod tests {
         let row = tool_detail_row("question", &pending, false, 0, &theme(), 60);
         let grid = frame_of(&row).text_grid();
         assert!(grid[0].contains("Asking questions…"), "{}", grid[0]);
+    }
+}
+
+// -- G-370⑨: the diagnostics rows under write/edit blocks ----------------------
+
+#[cfg(test)]
+mod g370_diag_tests {
+    use super::*;
+
+    fn state_with_diagnostics(path: &str, raw: &str) -> ToolState {
+        ToolState {
+            status: ToolStatus::Completed,
+            input: [("path".to_owned(), path.to_owned())].into_iter().collect(),
+            metadata_json: Some(serde_json::from_str(raw).expect("diagnostics json")),
+            ..ToolState::default()
+        }
+    }
+
+    #[test]
+    fn parse_keeps_severity1_only_caps_three_and_normalizes_paths() {
+        let raw = r#"{"diagnostics": {
+            "./app.ts": [
+                {"severity":1,"range":{"start":{"line":4,"character":9}},"message":"bad type"},
+                {"severity":2,"range":{"start":{"line":0,"character":0}},"message":"warning skipped"},
+                {"severity":1,"range":{"start":{"line":1,"character":2}},"message":"unused"},
+                {"severity":1,"range":{"start":{"line":2,"character":3}},"message":"third"},
+                {"severity":1,"range":{"start":{"line":8,"character":8}},"message":"fourth dropped"}
+            ]
+        }}"#;
+        let state = state_with_diagnostics("app.ts", raw);
+        let rows = parse_diagnostics(&state, "app.ts");
+        assert_eq!(rows.len(), 3, "capped at the ref's 3");
+        assert_eq!(rows[0], (4, 9, "bad type".to_owned()), "severity 1 only");
+        assert_eq!(rows[2], (2, 3, "third".to_owned()), "the 4th is dropped");
+        // Nothing for an absent path.
+        assert!(parse_diagnostics(&state, "other.ts").is_empty());
+    }
+
+    #[test]
+    fn edit_block_renders_the_error_rows_under_the_block() {
+        let raw = r#"{"diagnostics": {"src/a.ts": [
+            {"severity":1,"range":{"start":{"line":2,"character":4}},"message":"cannot find x"}
+        ]}}"#;
+        let state = state_with_diagnostics("src/a.ts", raw);
+        let styles = crate::theme::ThemeState::v2_dark().styles();
+        let render = with_diagnostics(edit_block(&state, &styles, 80), &state, &styles, 80);
+        let text: Vec<String> =
+            render.placed.iter().flat_map(|p| p.lines.iter().map(|l| l.text())).collect();
+        let joined = text.join("\n");
+        assert!(joined.contains("Error [3:5] cannot find x"), "1-based range: {joined}");
+        let height = render.height;
+        let bare = edit_block(&state, &styles, 80).height;
+        assert!(height > bare, "the diagnostics row stacked under the block");
+    }
+}
+
+#[cfg(test)]
+mod g370_websearch_tests {
+    use super::*;
+
+    fn websearch_state(provider: Option<&str>) -> ToolState {
+        ToolState {
+            status: ToolStatus::Completed,
+            input: [("query".to_owned(), "rust tui".to_owned())].into_iter().collect(),
+            metadata: provider
+                .map(|provider| [("provider".to_owned(), provider.to_owned())])
+                .unwrap_or_default()
+                .into_iter()
+                .collect(),
+            ..ToolState::default()
+        }
+    }
+
+    #[test]
+    fn websearch_label_carries_the_provider_name() {
+        let theme = crate::theme::ThemeState::v2_dark().styles();
+        // "opencode" → "OpenCode"; raw providers titlecase.
+        for (provider, expected) in [
+            ("opencode", "Web Search via OpenCode \"rust tui\""),
+            ("tavily", "Web Search via Tavily \"rust tui\""),
+        ] {
+            let render = tool_detail_row(
+                "websearch",
+                &websearch_state(Some(provider)),
+                false,
+                0,
+                &theme,
+                80,
+            );
+            let text: Vec<String> =
+                render.placed.iter().flat_map(|p| p.lines.iter().map(|l| l.text())).collect();
+            assert!(text.join("\n").contains(expected), "{provider}: {text:?}");
+        }
+        // No provider metadata → the plain label.
+        let render = tool_detail_row("websearch", &websearch_state(None), false, 0, &theme, 80);
+        let text: Vec<String> =
+            render.placed.iter().flat_map(|p| p.lines.iter().map(|l| l.text())).collect();
+        assert!(text.join("\n").contains("Web Search \"rust tui\""), "no provider: {text:?}");
     }
 }

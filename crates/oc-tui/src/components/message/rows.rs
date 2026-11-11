@@ -133,8 +133,14 @@ pub fn completed_tool_row(icon: char, label: &str, theme: &ThemeStyles, width: u
 ///
 /// `session_running` carries the child session's live status (the
 /// `metadata.sessionID` lookup — `isRunning`'s second clause); the
-/// `· {model}` suffix appends when the input names a model (the raw
-/// reference — the model-list name resolution is the store's to add).
+/// `· {model}` suffix resolves through the model list
+/// (`subagentModelLabel`, index.tsx:3122-3132: the name for
+/// `providerID/id`, else the raw reference, plus ` ({variant})` for a
+/// `#variant` suffix). G-370⑪ — a completed tool whose child session
+/// still runs (`isBackgroundSubagent`, :3135-3139) renders the
+/// `Background` status badge (`StatusBadge`, :2671-2679 — muted text
+/// on a decreased background; the port approximates with
+/// `background_prompt`, `decrease(raised.base)`).
 #[must_use]
 pub fn subagent_tool_row(
     state: &crate::components::message::model::ToolState,
@@ -142,6 +148,20 @@ pub fn subagent_tool_row(
     clock_ms: u64,
     theme: &ThemeStyles,
     width: usize,
+) -> RowRender {
+    self::subagent_tool_row_with_models(state, session_running, clock_ms, theme, width, &[])
+}
+
+/// [`subagent_tool_row`] with the model-list name resolution
+/// (`model_names` keys are `providerID/id`).
+#[must_use]
+pub fn subagent_tool_row_with_models(
+    state: &crate::components::message::model::ToolState,
+    session_running: Option<bool>,
+    clock_ms: u64,
+    theme: &ThemeStyles,
+    width: usize,
+    model_names: &[(String, String)],
 ) -> RowRender {
     use crate::components::message::model::ToolStatus;
     let continuation = state.input.contains_key("sessionID");
@@ -161,8 +181,50 @@ pub fn subagent_tool_row(
     label.push_str(" — ");
     label.push_str(description.unwrap_or("Subagent"));
     if let Some(model) = state.input.get("model") {
+        // `subagentModelLabel` (index.tsx:3122-3132).
+        let (reference, variant) = match model.split_once('#') {
+            Some((reference, variant)) => (reference, Some(variant)),
+            None => (model.as_str(), None),
+        };
+        let name = model_names
+            .iter()
+            .find(|(key, _)| key == reference)
+            .map_or(reference, |(_, name)| name.as_str());
         label.push_str(" · ");
-        label.push_str(model);
+        label.push_str(name);
+        if let Some(variant) = variant {
+            label.push_str(&format!(" ({variant})"));
+        }
+    }
+    // `isBackgroundSubagent` (:3135-3139): completed tool, child still
+    // running → the `Background` badge after the label.
+    let background = state.status == ToolStatus::Completed
+        && state.metadata.get("status").map(String::as_str) == Some("running");
+    let label_width = width.saturating_sub(ROW_PADDING_LEFT + ICON_WIDTH);
+    let label_x = ROW_PADDING_LEFT + ICON_WIDTH;
+    if background {
+        let badge = " Background ";
+        let badge_width = crate::wrap::display_width(badge);
+        let text_width = crate::wrap::display_width(&label);
+        if text_width + badge_width <= label_width {
+            let mut placed = vec![text_at(ROW_PADDING_LEFT, 0, '✓', theme.text_muted)];
+            placed.extend(wrapped_label(
+                label_x,
+                0,
+                &label,
+                label_width.saturating_sub(badge_width + 1),
+                theme.text_muted,
+            ));
+            placed.push(text_at(
+                label_x + text_width + 1,
+                0,
+                badge,
+                Style::new()
+                    .fg(theme.text_muted.fg.unwrap_or(theme.background))
+                    .bg(theme.background_prompt),
+            ));
+            return RowRender { placed, fills: Vec::new(), height: 1, images: Vec::new() };
+        }
     }
     let spinner = !continuation && running;
     if spinner {
@@ -1773,5 +1835,75 @@ mod tests {
             &ImageStripOptions::default(),
         );
         assert!(wrapped.height > 4, "the long segment wraps ({} rows)", wrapped.height);
+    }
+}
+
+// -- G-370⑪: the subagent row's model label + Background badge ------------------
+
+#[cfg(test)]
+mod g370_subagent_tests {
+    use super::*;
+    use crate::components::message::model::{ToolState, ToolStatus};
+
+    fn subagent_state(model: Option<&str>, status: &str) -> ToolState {
+        let mut input = std::collections::BTreeMap::new();
+        input.insert("description".to_owned(), "ship it".to_owned());
+        if let Some(model) = model {
+            input.insert("model".to_owned(), model.to_owned());
+        }
+        let mut metadata = std::collections::BTreeMap::new();
+        metadata.insert("sessionID".to_owned(), "ses_child".to_owned());
+        metadata.insert("status".to_owned(), status.to_owned());
+        ToolState { status: ToolStatus::Completed, input, metadata, ..ToolState::default() }
+    }
+
+    fn row_text(render: &RowRender) -> String {
+        render
+            .placed
+            .iter()
+            .flat_map(|p| p.lines.iter().map(|l| l.text()))
+            .collect::<Vec<_>>()
+            .join("|")
+    }
+
+    #[test]
+    fn model_suffix_resolves_through_the_model_list() {
+        let theme = crate::theme::ThemeState::v2_dark().styles();
+        let names = vec![("anthropic/claude".to_owned(), "Claude Sonnet".to_owned())];
+        // Resolved: the list's display name.
+        let state = subagent_state(Some("anthropic/claude"), "completed");
+        let render = subagent_tool_row_with_models(&state, None, 0, &theme, 80, &names);
+        assert!(row_text(&render).contains("· Claude Sonnet"), "{}", row_text(&render));
+        // Unknown reference stays raw; the #variant appends.
+        let state = subagent_state(Some("other/model#thinking"), "completed");
+        let render = subagent_tool_row_with_models(&state, None, 0, &theme, 80, &names);
+        assert!(row_text(&render).contains("· other/model (thinking)"), "{}", row_text(&render));
+        // No model → no suffix.
+        let state = subagent_state(None, "completed");
+        let render = subagent_tool_row_with_models(&state, None, 0, &theme, 80, &names);
+        assert!(!row_text(&render).contains("·"), "{}", row_text(&render));
+    }
+
+    #[test]
+    fn background_badge_renders_for_a_completed_tool_with_a_running_child() {
+        let theme = crate::theme::ThemeState::v2_dark().styles();
+        // isBackgroundSubagent: tool completed + metadata.status running.
+        let state = subagent_state(None, "running");
+        let render = subagent_tool_row_with_models(&state, Some(true), 0, &theme, 80, &[]);
+        let text = row_text(&render);
+        assert!(text.contains("Background"), "the badge lands: {text}");
+        // The badge carries its own (prompt-bg) background style.
+        let badge = render
+            .placed
+            .iter()
+            .flat_map(|p| &p.lines)
+            .flat_map(|l| &l.runs)
+            .find(|run| run.text.trim() == "Background")
+            .expect("badge run");
+        assert_eq!(badge.style.bg, Some(theme.background_prompt));
+        // A fully completed child keeps the plain row.
+        let state = subagent_state(None, "completed");
+        let render = subagent_tool_row_with_models(&state, Some(false), 0, &theme, 80, &[]);
+        assert!(!row_text(&render).contains("Background"));
     }
 }
