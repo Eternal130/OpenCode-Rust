@@ -967,3 +967,34 @@ async fn g191_subagent_tool_runs_through_the_pipeline() {
         ]
     );
 }
+
+/// G-230 — the subagent builtin DECLARES its output
+/// (`{sessionID, status, output}`); a real foreground run through the
+/// pipeline returns output that validates against the declared schema
+/// (the pipeline's own encodeOutput validation runs implicitly).
+#[tokio::test]
+async fn g230_subagent_declared_output_validates() {
+    let sub = harness().await;
+    install_harness_setup(&sub);
+    let parent = create_session(&sub, None, "g230parent", Some(model_ref("parent")), None).await;
+    let reg = crate::tool::tests::harness().await;
+    let hooks = std::sync::Arc::new(crate::hooks::HookRegistry::new());
+    crate::tool::subagent::register(&reg.tools, &hooks, &reg.services, std::sync::Arc::new(sub.tool))
+        .expect("register subagent");
+    let executor = reg.tools.executor("subagent").expect("executor");
+    let result = executor
+        .execute_with_context(
+            &json!({ "agent": "reviewer", "description": "review", "prompt": "review this" }),
+            &crate::location::ToolCallContext {
+                session_id: parent,
+                agent: AgentId::parse("build"),
+                message_id: "msg_g230".into(),
+                call_id: "call_g230".into(),
+            },
+        )
+        .await
+        .expect("subagent executes");
+    let output = result.output.expect("subagent returns declared output");
+    let issues = crate::tool::registry::validate_input(&super::subagent::output_schema(), &output);
+    assert!(issues.is_empty(), "subagent output {output} failed schema: {issues:?}");
+}

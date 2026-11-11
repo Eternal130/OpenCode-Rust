@@ -176,11 +176,44 @@ pub fn schema() -> Value {
     })
 }
 
+/// The DECLARED output schema (edit.ts:36-39 `Output` —
+/// `{files: FileDiff.Info[], replacements: number}`).
+#[must_use]
+pub fn output_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "files": { "type": "array", "items": file_diff_info_schema() },
+            "replacements": { "type": "number" }
+        },
+        "required": ["files", "replacements"],
+        "additionalProperties": false
+    })
+}
+
+/// `FileDiff.Info` (schema/file-diff.ts:6-12) — shared by edit + patch.
+#[must_use]
+pub fn file_diff_info_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "file": { "type": "string" },
+            "patch": { "type": "string" },
+            "additions": { "type": "integer", "minimum": 0 },
+            "deletions": { "type": "integer", "minimum": 0 },
+            "status": { "enum": ["added", "deleted", "modified"] }
+        },
+        "required": ["file", "patch", "additions", "deletions", "status"],
+        "additionalProperties": false
+    })
+}
+
 pub fn tool(_services: &std::sync::Arc<ToolServices>) -> BuiltinTool {
     BuiltinTool {
         name: "edit",
         description: description(),
         input: schema(),
+        output: output_schema(),
         permission: Some("edit"),
         codemode: false,
         namespace: None,

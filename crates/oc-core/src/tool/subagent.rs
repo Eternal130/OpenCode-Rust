@@ -696,6 +696,21 @@ pub fn run_failure_to_failure(failure: ToolRunFailure) -> super::ToolFailure {
     }
 }
 
+/// The DECLARED output schema (subagent.ts:50-54 `Output`).
+#[must_use]
+pub fn output_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "sessionID": { "type": "string" },
+            "status": { "enum": ["completed", "running"] },
+            "output": { "type": "string" }
+        },
+        "required": ["sessionID", "status", "output"],
+        "additionalProperties": false
+    })
+}
+
 /// The `BuiltinTool` shape (G-191): the same registration fields
 /// [`SubagentTool::registration`] carries, for the pipeline register.
 #[must_use]
@@ -704,6 +719,7 @@ pub fn builtin(tool: Arc<SubagentTool>) -> super::BuiltinTool {
         name: NAME,
         description: DESCRIPTION.to_string(),
         input: input_schema(),
+        output: output_schema(),
         permission: Some(NAME),
         codemode: false,
         namespace: None,

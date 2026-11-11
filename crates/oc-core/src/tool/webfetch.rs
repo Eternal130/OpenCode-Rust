@@ -283,11 +283,28 @@ impl ToolExecuteWithContext for WebFetchExecute {
     }
 }
 
+/// The DECLARED output schema (webfetch.ts:33-38 `Output`).
+#[must_use]
+pub fn output_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "url": { "type": "string" },
+            "contentType": { "type": "string" },
+            "format": { "enum": ["text", "markdown", "html"] },
+            "output": { "type": "string" }
+        },
+        "required": ["url", "contentType", "format", "output"],
+        "additionalProperties": false
+    })
+}
+
 /// The webfetch builtin registration.
 pub fn tool() -> BuiltinTool {
     BuiltinTool {
         name: "webfetch",
         description: description(),
+        output: output_schema(),
         input: serde_json::json!({
             "type": "object",
             "properties": {

@@ -382,6 +382,11 @@ pub struct ToolRegistration {
     pub description: String,
     /// JSON-Schema of the input.
     pub input: serde_json::Value,
+    /// JSON-Schema of the DECLARED output (runtime.ts:24-25
+    /// `outputSchema` — flows to the model-facing tool definition; the
+    /// pipeline's `encodeOutput` validation reads the executor-side
+    /// copy, not this one).
+    pub output: Option<serde_json::Value>,
     /// `options.namespace` — namespacing prefixes the effective name.
     pub namespace: Option<String>,
     /// `options.permission` — the permission action; defaults to the
@@ -499,6 +504,7 @@ impl ToolRegistration {
             name: name.into(),
             description: description.into(),
             input,
+            output: None,
             namespace: None,
             permission: None,
             codemode: true,

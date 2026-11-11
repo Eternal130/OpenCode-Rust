@@ -321,11 +321,53 @@ pub fn schema() -> Value {
     })
 }
 
+/// The DECLARED output schema (grep.ts:40 `Output` —
+/// `Schema.Array(FileSystem.Match)`).
+#[must_use]
+pub fn output_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "entry": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "type": { "enum": ["file", "directory"] }
+                    },
+                    "required": ["path", "type"],
+                    "additionalProperties": false
+                },
+                "line": { "type": "integer", "minimum": 1 },
+                "offset": { "type": "integer", "minimum": 0 },
+                "text": { "type": "string" },
+                "submatches": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "text": { "type": "string" },
+                            "start": { "type": "integer", "minimum": 0 },
+                            "end": { "type": "integer", "minimum": 0 }
+                        },
+                        "required": ["text", "start", "end"],
+                        "additionalProperties": false
+                    }
+                }
+            },
+            "required": ["entry", "line", "offset", "text", "submatches"],
+            "additionalProperties": false
+        }
+    })
+}
+
 pub fn tool(_services: &std::sync::Arc<ToolServices>) -> BuiltinTool {
     BuiltinTool {
         name: "grep",
         description: description(),
         input: schema(),
+        output: output_schema(),
         permission: None,
         codemode: false,
         namespace: None,

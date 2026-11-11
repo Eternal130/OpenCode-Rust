@@ -1290,6 +1290,7 @@ fn g279_estimate_uses_effective_tool_name() {
         name: "create".into(),
         description: "create a thing".into(),
         input: serde_json::json!({ "type": "object", "properties": {} }),
+        output: None,
         namespace: Some("slack.admin".into()),
         permission: None,
         codemode: true,

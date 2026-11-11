@@ -870,10 +870,45 @@ impl crate::hooks::HookHandler<crate::hooks::SessionCompactionEvent> for Disable
     }
 }
 
+/// The DECLARED output schema (websearch.ts:28-31 `Output` — note the
+/// required `time` OBJECT with optional `published`, schema/websearch.ts:24-33).
+#[must_use]
+pub fn output_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "provider": { "type": "string" },
+            "results": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "url": { "type": "string" },
+                        "title": { "type": "string" },
+                        "content": { "type": "string" },
+                        "time": {
+                            "type": "object",
+                            "properties": {
+                                "published": { "type": "number" }
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "required": ["url", "time"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        "required": ["provider", "results"],
+        "additionalProperties": false
+    })
+}
+
 pub fn tool(execute: Arc<WebSearchExecute>) -> BuiltinTool {
     BuiltinTool {
         name: "websearch",
         description: description(),
+        output: output_schema(),
         input: serde_json::json!({
             "type": "object",
             "properties": {

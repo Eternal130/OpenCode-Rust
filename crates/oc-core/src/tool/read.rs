@@ -42,11 +42,70 @@ pub fn schema() -> Value {
     })
 }
 
+/// The DECLARED output schema (read.ts:27 `Output` — the union of
+/// read-filesystem.ts:75-101 FileContent | TextPage | ListPage).
+#[must_use]
+pub fn output_schema() -> serde_json::Value {
+    serde_json::json!({
+        "anyOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "type": { "const": "file" },
+                    "uri": { "type": "string" },
+                    "name": { "type": "string" },
+                    "content": { "type": "string" },
+                    "encoding": { "enum": ["utf8", "base64"] },
+                    "mime": { "type": "string" }
+                },
+                "required": ["type", "uri", "content", "encoding", "mime"],
+                "additionalProperties": false
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "type": { "const": "text-page" },
+                    "content": { "type": "string" },
+                    "mime": { "type": "string" },
+                    "offset": { "type": "integer", "minimum": 1 },
+                    "truncated": { "type": "boolean" },
+                    "next": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["type", "content", "mime", "offset", "truncated"],
+                "additionalProperties": false
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "type": { "const": "list-page" },
+                    "entries": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": { "type": "string" },
+                                "type": { "enum": ["file", "directory", "symlink"] }
+                            },
+                            "required": ["path", "type"],
+                            "additionalProperties": false
+                        }
+                    },
+                    "truncated": { "type": "boolean" },
+                    "next": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["type", "entries", "truncated"],
+                "additionalProperties": false
+            }
+        ]
+    })
+}
+
 pub fn tool(_services: &std::sync::Arc<ToolServices>) -> BuiltinTool {
     BuiltinTool {
         name: "read",
         description: description(),
         input: schema(),
+        output: output_schema(),
         permission: None,
         codemode: false,
         namespace: None,

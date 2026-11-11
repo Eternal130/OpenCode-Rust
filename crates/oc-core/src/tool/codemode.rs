@@ -96,7 +96,49 @@ pub fn execute_registration() -> ToolRegistration {
     let mut registration =
         ToolRegistration::new(EXECUTE_NAME, EXECUTE_DESCRIPTION, execute_input_schema());
     registration.codemode = false;
+    registration.output = Some(execute_output_schema());
     registration
+}
+
+/// The DECLARED output schema (codemode/tool.ts:32-37,79
+/// `ExecuteOutput`): `{output, toolCalls, error?, files}`.
+#[must_use]
+pub fn execute_output_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "output": { "type": "string" },
+            "toolCalls": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "tool": { "type": "string" },
+                        "status": { "enum": ["running", "completed", "error"] },
+                        "input": { "type": "object" }
+                    },
+                    "required": ["tool", "status"],
+                    "additionalProperties": false
+                }
+            },
+            "error": { "const": true },
+            "files": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "data": { "type": "string" },
+                        "mime": { "type": "string" },
+                        "name": { "type": "string" }
+                    },
+                    "required": ["data", "mime"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        "required": ["output", "toolCalls", "files"],
+        "additionalProperties": false
+    })
 }
 
 /// `Tool.snapshot` split (tool.ts:225-241). `code_mode_registered` —
@@ -1732,6 +1774,29 @@ impl CodeModeLeaf {
             Value::String(text)
         }
     }
+
+    /// `outputFiles(content)` (codemode/tool.ts:109-111 + :128-131):
+    /// the `file` content parts of a nested tool result become
+    /// `ExecuteFile` rows — `{data, mime, name?}` with `data` the raw
+    /// base64 payload of the `data:` URI.
+    fn output_files(content: &[Content]) -> Vec<Value> {
+        content
+            .iter()
+            .filter_map(|part| match part {
+                Content::File { uri, mime, name } => {
+                    let data = uri.rsplit_once("base64,").map(|(_, data)| data.to_string())?;
+                    let mut file = serde_json::Map::new();
+                    file.insert("data".to_string(), Value::String(data));
+                    file.insert("mime".to_string(), Value::String(mime.clone()));
+                    if let Some(name) = name {
+                        file.insert("name".to_string(), Value::String(name.clone()));
+                    }
+                    Some(Value::Object(file))
+                }
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 impl super::ToolExecuteWithContext for CodeModeLeaf {
@@ -1770,10 +1835,18 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
                 let mut metadata = BTreeMap::new();
                 metadata.insert("toolCalls".to_string(), Value::Array(Vec::new()));
                 metadata.insert("error".to_string(), Value::Bool(true));
+                // The declared ExecuteOutput for the rejected program
+                // (codemode/tool.ts:121-127): the message IS the output.
+                let output = serde_json::json!({
+                    "output": MODULE_LOADING_REJECTED,
+                    "toolCalls": [],
+                    "error": true,
+                    "files": [],
+                });
                 return Ok(super::ToolOutcome {
                     content: vec![Content::Text { text: MODULE_LOADING_REJECTED.to_string() }],
                     metadata: Some(metadata),
-                    output: None,
+                    output: Some(output),
                 });
             }
             let registry = Arc::clone(&self.registry);
@@ -1783,11 +1856,20 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
             // pipeline; the (n+1)-th rejects inside the program.
             let admitted = Arc::new(std::sync::atomic::AtomicU64::new(0));
             let max_tool_calls = limits.max_tool_calls;
+            // The per-call index for the collected `files` ordering
+            // (codemode/tool.ts:122-124 sorts by call index).
+            let call_index = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let collected_files: std::sync::Arc<
+                std::sync::Mutex<Vec<(u64, Vec<Value>)>>,
+            > = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let collected_files_out = Arc::clone(&collected_files);
             let call: ToolCallFn = Arc::new(move |name: &str, input: Value| {
                 let registry = Arc::clone(&registry);
                 let context = call_context.clone();
                 let name = name.to_string();
                 let admitted = Arc::clone(&admitted);
+                let call_index = Arc::clone(&call_index);
+                let collected_files = Arc::clone(&collected_files);
                 Box::pin(async move {
                     if let Some(max) = max_tool_calls {
                         let nth = admitted.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
@@ -1797,6 +1879,7 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
                             ));
                         }
                     }
+                    let index = call_index.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     // The boundary walk's depth guard (data.ts:53) on
                     // tool inputs crossing guest→host.
                     check_value_depth(&input)?;
@@ -1821,7 +1904,18 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
                     executor
                         .execute_with_context(&input, &context)
                         .await
-                        .map(|result| Self::nested_value(&result))
+                        .map(|result| {
+                            // outputFiles(content) rides the nested
+                            // call (codemode/tool.ts:107-111).
+                            let files = Self::output_files(&result.content);
+                            if !files.is_empty() {
+                                collected_files
+                                    .lock()
+                                    .expect("files lock")
+                                    .push((index, files));
+                            }
+                            Self::nested_value(&result)
+                        })
                         .map_err(|failure| failure.message().to_string())
                 })
             });
@@ -1911,10 +2005,29 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
                     metadata.get("toolCalls").cloned().unwrap_or(Value::Array(Vec::new()));
                 progress(context, serde_json::json!({ "toolCalls": tool_calls }));
             }
+            // The DECLARED ExecuteOutput (codemode/tool.ts:121-137):
+            // `{output, toolCalls, files, ...(failed ? {error: true})}`.
+            // `files` are the nested calls' file content parts sorted by
+            // call index (:122-124).
+            let files = {
+                let mut collected = collected_files_out
+                    .lock()
+                    .expect("files lock")
+                    .clone();
+                collected.sort_by_key(|(index, _)| *index);
+                collected.into_iter().flat_map(|(_, files)| files).collect::<Vec<_>>()
+            };
+            let mut output_value = serde_json::Map::new();
+            output_value.insert("output".to_string(), Value::String(output.clone()));
+            output_value.insert("toolCalls".to_string(), metadata["toolCalls"].clone());
+            if outcome.error.is_some() {
+                output_value.insert("error".to_string(), Value::Bool(true));
+            }
+            output_value.insert("files".to_string(), Value::Array(files));
             Ok(super::ToolOutcome {
                 content: vec![Content::Text { text: output }],
                 metadata: Some(metadata.into_iter().collect()),
-                output: None,
+                output: Some(Value::Object(output_value)),
             })
         })
     }
@@ -1959,9 +2072,12 @@ pub fn register_code_mode_with_limits(
     progress: Option<crate::tool::ProgressFn>,
 ) {
     state.register(execute_registration());
-    let executor = registry::pipeline_executor(
+    // G-230 — `execute` DECLARES its output (codemode/tool.ts:33
+    // `output: ExecuteOutput`): the schema enters `encodeOutput`.
+    let executor = registry::pipeline_executor_with_output(
         EXECUTE_NAME,
         execute_input_schema(),
+        Some(execute_output_schema()),
         Arc::new(CodeModeLeaf { runtime, registry: Arc::clone(state), timeout, limits, progress }),
         services,
         hooks,
@@ -2400,6 +2516,7 @@ mod executor_tests {
             name,
             description: format!("Test tool {name}"),
             input: serde_json::json!({ "type": "object", "properties": { "name": { "type": "string" } } }),
+            output: serde_json::Value::Null,
             permission: None,
             codemode: true,
             namespace: None,
@@ -2504,6 +2621,63 @@ mod executor_tests {
             .await
             .expect_err("hard timeout");
         assert!(failure.message().contains("timed out after 50 ms"), "{}", failure.message());
+    }
+    /// G-230 — `execute` DECLARES its output (codemode/tool.ts:33
+    /// `ExecuteOutput`): a real run through the pipeline returns
+    /// `{output, toolCalls, files}` that validates (the pipeline's own
+    /// encodeOutput validation runs implicitly; error legs carry
+    /// `error: true`).
+    #[tokio::test]
+    async fn g230_execute_declared_output_validates() {
+        let harness = harness_for_codemode().await;
+        let state = Arc::new(ToolRegistryState::new());
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        crate::tool::registry::register(
+            &state,
+            &hooks,
+            &harness.services,
+            codemoded("greet", "hello g230", false),
+        )
+        .expect("register greet");
+        register_code_mode(
+            &state,
+            &hooks,
+            &harness.services,
+            Arc::new(ScriptRuntime { fail: false }),
+            std::time::Duration::from_secs(5),
+        );
+        let result = call(&state, EXECUTE_NAME, serde_json::json!({ "code": "greet" }))
+            .await
+            .expect("execute completes");
+        let output = result.output.expect("execute returns declared output");
+        let issues = crate::tool::registry::validate_input(&execute_output_schema(), &output);
+        assert!(issues.is_empty(), "execute output {output} failed schema: {issues:?}");
+        assert!(output["toolCalls"].as_array().expect("toolCalls").len() >= 1);
+        assert_eq!(output["files"], serde_json::json!([]));
+        // The failing program carries `error: true` and still validates.
+        let state = Arc::new(ToolRegistryState::new());
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        crate::tool::registry::register(
+            &state,
+            &hooks,
+            &harness.services,
+            codemoded("greet", "hello g230", true),
+        )
+        .expect("register greet");
+        register_code_mode(
+            &state,
+            &hooks,
+            &harness.services,
+            Arc::new(ScriptRuntime { fail: true }),
+            std::time::Duration::from_secs(5),
+        );
+        let result = call(&state, EXECUTE_NAME, serde_json::json!({ "code": "greet" }))
+            .await
+            .expect("failing program is still a tool success");
+        let output = result.output.expect("error leg returns declared output");
+        let issues = crate::tool::registry::validate_input(&execute_output_schema(), &output);
+        assert!(issues.is_empty(), "error output {output} failed schema: {issues:?}");
+        assert_eq!(output["error"], serde_json::json!(true));
     }
 }
 
@@ -2766,6 +2940,7 @@ mod limits_tests {
                 name: "greet",
                 description: "Greet".to_string(),
                 input: json!({ "type": "object", "properties": {} }),
+                output: serde_json::Value::Null,
                 permission: None,
                 codemode: true,
                 namespace: None,

@@ -56,6 +56,98 @@ pub fn read_input_schema() -> serde_json::Value {
     })
 }
 
+/// The DECLARED output schema (mcp-resource.ts:27-30 —
+/// `{resources: Mcp.Resource[], templates: Mcp.ResourceTemplate[]}`).
+#[must_use]
+pub fn list_output_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "resources": { "type": "array", "items": mcp_resource_schema() },
+            "templates": { "type": "array", "items": mcp_resource_template_schema() }
+        },
+        "required": ["resources", "templates"],
+        "additionalProperties": false
+    })
+}
+
+/// The DECLARED output schema (mcp-resource.ts:62 — `Mcp.ResourceContent`).
+#[must_use]
+pub fn read_output_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "server": { "type": "string" },
+            "uri": { "type": "string" },
+            "contents": {
+                "type": "array",
+                "items": {
+                    "anyOf": [
+                        {
+                            "type": "object",
+                            "properties": {
+                                "type": { "const": "text" },
+                                "uri": { "type": "string" },
+                                "text": { "type": "string" },
+                                "mimeType": { "type": "string" }
+                            },
+                            "required": ["type", "uri", "text"],
+                            "additionalProperties": false
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "type": { "const": "blob" },
+                                "uri": { "type": "string" },
+                                "blob": { "type": "string" },
+                                "mimeType": { "type": "string" }
+                            },
+                            "required": ["type", "uri", "blob"],
+                            "additionalProperties": false
+                        }
+                    ]
+                }
+            }
+        },
+        "required": ["server", "uri", "contents"],
+        "additionalProperties": false
+    })
+}
+
+/// `Mcp.Resource` (schema/mcp.ts:190-199).
+#[must_use]
+fn mcp_resource_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "server": { "type": "string" },
+            "name": { "type": "string" },
+            "uri": { "type": "string" },
+            "description": { "type": "string" },
+            "mimeType": { "type": "string" }
+        },
+        "required": ["server", "name", "uri"],
+        "additionalProperties": false
+    })
+}
+
+/// `Mcp.ResourceTemplate` (schema/mcp.ts:201-214).
+#[must_use]
+fn mcp_resource_template_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "server": { "type": "string" },
+            "name": { "type": "string" },
+            "uriTemplate": { "type": "string" },
+            "description": { "type": "string" },
+            "mimeType": { "type": "string" }
+        },
+        "required": ["server", "name", "uriTemplate"],
+        "additionalProperties": false
+    })
+}
+
 /// `list_mcp_resources` (mcp-resource.ts:18-48): listing every server
 /// checks each server name so per-server rules still apply.
 pub async fn list_resources(
@@ -287,6 +379,7 @@ pub fn register(
             name: "list_mcp_resources",
             description: LIST_DESCRIPTION.to_string(),
             input: list_input_schema(),
+            output: list_output_schema(),
             permission: Some(LIST_ACTION),
             codemode: true,
             namespace: Some("opencode"),
@@ -304,6 +397,7 @@ pub fn register(
             name: "read_mcp_resource",
             description: READ_DESCRIPTION.to_string(),
             input: read_input_schema(),
+            output: read_output_schema(),
             permission: Some(READ_ACTION),
             codemode: true,
             namespace: Some("opencode"),
