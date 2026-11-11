@@ -321,10 +321,15 @@ impl Sessions {
     }
 
     /// `release` (sessions.ts:169-172): only when this exact attachment
-    /// still owns the slot.
-    pub async fn release(&self, attached: &Attached) {
+    /// still owns the slot. Ref compares the stored `entry.attached`
+    /// against the caller's object by reference identity; the Rust
+    /// equivalent is `Arc::ptr_eq` on the stored attachment (G-354) —
+    /// comparing session ids alone was a tautology, so a concurrent
+    /// re-attach of the same session by another client would have been
+    /// torn down by the old owner's error path.
+    pub async fn release(&self, attached: &Arc<Attached>) {
         let mut entries = self.entries.lock().await;
-        if entries.get(&attached.id).is_some_and(|current| current.id == attached.id) {
+        if entries.get(&attached.id).is_some_and(|current| Arc::ptr_eq(current, attached)) {
             entries.remove(&attached.id);
         }
     }
@@ -418,5 +423,48 @@ mod tests {
             &servers[1].kind,
             McpKind::Stdio { command, .. } if command == &vec!["npx".to_owned(), "-y".to_owned(), "server".to_owned()]
         ));
+    }
+
+    fn make_attached(id: &str) -> Arc<Attached> {
+        let (selected_tx, _selected_rx) = mpsc::unbounded_channel();
+        Arc::new(Attached {
+            id: id.to_owned(),
+            cwd: "/tmp".to_owned(),
+            selection: Arc::new(RwLock::new(Selection::default())),
+            selected_tx,
+        })
+    }
+
+    /// G-354 — `release` mirrors the ref's reference-identity check
+    /// (sessions.ts:169-172): after a concurrent re-attach of the same
+    /// session id replaced the slot, the OLD attachment's release must
+    /// not tear the NEW attachment's entry down.
+    #[tokio::test]
+    async fn release_after_re_attach_keeps_the_new_attachment() {
+        let sessions =
+            Sessions::new(oc_client::Client::new("http://127.0.0.1:9").expect("valid base url"));
+        let first = make_attached("ses_1");
+        sessions.entries.lock().await.insert("ses_1".into(), Arc::clone(&first));
+        // A concurrent re-attach swapped the entry for a new attachment.
+        let second = make_attached("ses_1");
+        sessions.entries.lock().await.insert("ses_1".into(), Arc::clone(&second));
+        // The old owner's error path releases its (stale) attachment.
+        sessions.release(&first).await;
+        assert!(sessions.has("ses_1").await, "the new attachment survives");
+        // And the owning client's release does remove the entry.
+        sessions.release(&second).await;
+        assert!(!sessions.has("ses_1").await);
+    }
+
+    /// G-354 — the owning attachment's release removes its own entry.
+    #[tokio::test]
+    async fn release_by_owner_removes_the_entry() {
+        let sessions =
+            Sessions::new(oc_client::Client::new("http://127.0.0.1:9").expect("valid base url"));
+        let attached = make_attached("ses_2");
+        sessions.entries.lock().await.insert("ses_2".into(), Arc::clone(&attached));
+        assert!(sessions.has("ses_2").await);
+        sessions.release(&attached).await;
+        assert!(!sessions.has("ses_2").await);
     }
 }

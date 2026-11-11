@@ -189,7 +189,7 @@ pub async fn resolve_mini_session_target(
     client: &Client,
     input: &RunInput,
     directory: &str,
-) -> Result<MiniSessionTarget, String> {
+) -> Result<MiniSessionTarget, ResolveError> {
     let target = resolve_session_target(client, input, directory, None).await?;
     let model_label =
         target.model.as_ref().map(|model| format!("{}/{}", model.provider_id, model.id));
@@ -215,8 +215,40 @@ pub struct MiniSessionTarget {
     pub resume: bool,
 }
 
-fn client_error(error: &oc_client::ClientError) -> String {
-    util::error_message(&error.to_string())
+/// A target-resolution failure with its transport classification. The
+/// ref's `resolveMiniTarget` (`mini.ts:168`) only retries when the
+/// thrown error is a `ClientError` with `reason === "Transport"`
+/// (oc-client's `ClientError::Transport`); every other error — decode,
+/// unexpected status, api error — is rethrown to the caller. The
+/// message-only plumbing of the port lost that class, so it rides
+/// alongside here (G-353).
+#[derive(Debug, Clone)]
+pub struct ResolveError {
+    pub message: String,
+    /// True only for transport-class failures (connection refused /
+    /// dropped), the single retryable class.
+    pub transport: bool,
+}
+
+impl ResolveError {
+    fn msg(message: impl Into<String>) -> Self {
+        Self { message: message.into(), transport: false }
+    }
+}
+
+/// `std::fmt::Display` keeps the flattened message for the non-interactive
+/// `run` path, which reports plain strings.
+impl std::fmt::Display for ResolveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+fn client_error(error: &oc_client::ClientError) -> ResolveError {
+    ResolveError {
+        message: util::error_message(&error.to_string()),
+        transport: matches!(error, oc_client::ClientError::Transport(_)),
+    }
 }
 
 /// `findSession` (session-target.ts:134-139): ONLY a declared
@@ -224,7 +256,10 @@ fn client_error(error: &oc_client::ClientError) -> String {
 /// new session with the requested id); every other failure — network,
 /// 5xx, auth — propagates as a fatal error instead of silently
 /// masquerading as "session does not exist".
-async fn find_session(client: &Client, session_id: &str) -> Result<Option<SessionInfo>, String> {
+async fn find_session(
+    client: &Client,
+    session_id: &str,
+) -> Result<Option<SessionInfo>, ResolveError> {
     match client.session().get(session_id).await {
         Ok(session) => Ok(Some(session)),
         Err(error) if error.api_name() == Some("SessionNotFoundError") => Ok(None),
@@ -232,7 +267,10 @@ async fn find_session(client: &Client, session_id: &str) -> Result<Option<Sessio
     }
 }
 
-async fn resolve_location(client: &Client, directory: &str) -> Result<LocationPublicInfo, String> {
+async fn resolve_location(
+    client: &Client,
+    directory: &str,
+) -> Result<LocationPublicInfo, ResolveError> {
     client
         .location()
         .get(&oc_client::types::LocationGetQuery {
@@ -248,7 +286,7 @@ async fn latest_session(
     client: &Client,
     directory: &str,
     cursor: Option<String>,
-) -> Result<Option<SessionInfo>, String> {
+) -> Result<Option<SessionInfo>, ResolveError> {
     let page = client
         .session()
         .list(&oc_client::types::SessionListQuery {
@@ -277,13 +315,13 @@ async fn resolve_session_target(
     input: &RunInput,
     directory: &str,
     environment: Option<std::collections::BTreeMap<String, String>>,
-) -> Result<SessionTarget, String> {
+) -> Result<SessionTarget, ResolveError> {
     let explicit = match &input.session {
         Some(id) => find_session(client, id).await?,
         None => None,
     };
     if input.session.is_some() && explicit.is_none() && input.fork {
-        return Err("Session not found".to_owned());
+        return Err(ResolveError::msg("Session not found"));
     }
     // A missing --session ID becomes the new session's ID (falls
     // through to creation with the requested id).
@@ -436,8 +474,9 @@ async fn run_inner(input: RunInput) -> Result<i32, String> {
     // (v2 gates on `input.server.service`): an explicit `--server` target
     // never receives this client's local environment (gate-7 F7).
     let environment = input.server.managed.then(util::env_session);
-    let target =
-        resolve_session_target(&client, &input, &local.display().to_string(), environment).await?;
+    let target = resolve_session_target(&client, &input, &local.display().to_string(), environment)
+        .await
+        .map_err(|error| error.message)?;
 
     if !target.resume {
         if let Some(title) = &input.title {
@@ -615,7 +654,7 @@ mod tests {
             session_get_stub("500 Internal Server Error", r#"{"message":"boom"}"#).await;
         let client = Client::new(&base).expect("client");
         let error = find_session(&client, "ses_x").await.expect_err("500 must propagate");
-        assert!(error.contains("500"), "error surfaces the status: {error}");
+        assert!(error.message.contains("500"), "error surfaces the status: {}", error.message);
         stub.await.expect("stub join");
     }
 
@@ -629,7 +668,11 @@ mod tests {
         .await;
         let client = Client::new(&base).expect("client");
         let error = find_session(&client, "ses_x").await.expect_err("401 must propagate");
-        assert!(error.contains("401") || error.contains("Unauthorized"), "auth error: {error}");
+        assert!(
+            error.message.contains("401") || error.message.contains("Unauthorized"),
+            "auth error: {}",
+            error.message
+        );
         stub.await.expect("stub join");
     }
 }

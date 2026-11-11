@@ -173,31 +173,23 @@ pub async fn serve(app: Arc<App>, transport: CappedNdJson) -> Result<(), AcpErro
                     // spawn the turn and respond when it settles
                     // (ordering.md — "Escaping the Loop"). A `$/cancel_request`
                     // for this prompt cancels its turn like `session/cancel`
-                    // rather than failing the request (turn.ts:385-387).
+                    // rather than failing the request (turn.ts:385-387) —
+                    // including one that arrives before the request lands:
+                    // the turn registers, the watcher arms on the already
+                    // aborted marker, and `windDown` interrupts the server
+                    // (no short-circuit response that would strand the
+                    // server-side run, G-355).
                     let cancellation = responder.cancellation();
                     let prompt_app = Arc::clone(&prompt_app);
                     cx.spawn(async move {
-                        if cancellation.is_cancelled() {
-                            let _ = responder.respond(
-                                agent_client_protocol::schema::v1::PromptResponse::new(
-                                    agent_client_protocol::schema::v1::StopReason::Cancelled,
-                                ),
-                            );
-                            return Ok(());
-                        }
                         let conn = prompt_app.conn().await;
-                        let session_id = request.session_id.to_string();
-                        let watcher = {
-                            let app = Arc::clone(&prompt_app);
-                            let cancellation = cancellation.clone();
-                            tokio::spawn(async move {
-                                cancellation.cancelled().await;
-                                app.turns.cancel(&session_id).await;
-                            })
-                        };
-                        let outcome =
-                            crate::acp::service::prompt(&prompt_app, &conn, request).await;
-                        watcher.abort();
+                        let outcome = crate::acp::service::prompt(
+                            &prompt_app,
+                            &conn,
+                            request,
+                            Some(cancellation),
+                        )
+                        .await;
                         match outcome {
                             Ok(response) => {
                                 let _ = responder.respond(response);
