@@ -61,8 +61,8 @@ pub async fn serve(app: Arc<App>, transport: CappedNdJson) -> Result<(), AcpErro
             {
                 let app = Arc::clone(&app);
                 async move |request: NewSessionRequest, responder, cx| {
-                    respond_with(&app, cx, responder, |app, conn| async move {
-                        crate::acp::service::new_session(&app, &conn, request).await
+                    respond_with_responded(&app, cx, responder, |app, conn, responded| async move {
+                        crate::acp::service::new_session(&app, &conn, request, responded).await
                     })
                     .await
                 }
@@ -73,8 +73,8 @@ pub async fn serve(app: Arc<App>, transport: CappedNdJson) -> Result<(), AcpErro
             {
                 let app = Arc::clone(&app);
                 async move |request: LoadSessionRequest, responder, cx| {
-                    respond_with(&app, cx, responder, |app, conn| async move {
-                        crate::acp::service::load_session(&app, &conn, request).await
+                    respond_with_responded(&app, cx, responder, |app, conn, responded| async move {
+                        crate::acp::service::load_session(&app, &conn, request, responded).await
                     })
                     .await
                 }
@@ -109,8 +109,8 @@ pub async fn serve(app: Arc<App>, transport: CappedNdJson) -> Result<(), AcpErro
             {
                 let app = Arc::clone(&app);
                 async move |request: ResumeSessionRequest, responder, cx| {
-                    respond_with(&app, cx, responder, |app, conn| async move {
-                        crate::acp::service::resume_session(&app, &conn, request).await
+                    respond_with_responded(&app, cx, responder, |app, conn, responded| async move {
+                        crate::acp::service::resume_session(&app, &conn, request, responded).await
                     })
                     .await
                 }
@@ -133,8 +133,8 @@ pub async fn serve(app: Arc<App>, transport: CappedNdJson) -> Result<(), AcpErro
             {
                 let app = Arc::clone(&app);
                 async move |request: ForkSessionRequest, responder, cx| {
-                    respond_with(&app, cx, responder, |app, conn| async move {
-                        crate::acp::service::fork_session(&app, &conn, request).await
+                    respond_with_responded(&app, cx, responder, |app, conn, responded| async move {
+                        crate::acp::service::fork_session(&app, &conn, request, responded).await
                     })
                     .await
                 }
@@ -309,6 +309,40 @@ async fn boot(app: &Arc<App>, conn: ConnectionTo<ClientRole>) -> Result<(), AcpE
 /// run the service call off-loop, respond with the result or the
 /// mapped request error.
 #[allow(clippy::unused_async)]
+/// `respond_with` + the `ACPConnection.Responded` gate: `responded` is
+/// notified once the request's response has been queued, so watchers
+/// spawned by the service call (`sessions.ts:144` `yield* responded`)
+/// never push notifications ahead of the response (G-378 D-8).
+async fn respond_with_responded<T, F, Fut>(
+    app: &Arc<App>,
+    cx: ConnectionTo<ClientRole>,
+    responder: Responder<T>,
+    call: F,
+) -> Result<(), AcpError>
+where
+    T: JsonRpcResponse + Send + 'static,
+    F: FnOnce(Arc<App>, ConnectionTo<ClientRole>, Arc<tokio::sync::Notify>) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<T, ServiceError>> + Send,
+{
+    let app = Arc::clone(app);
+    let responded = Arc::new(tokio::sync::Notify::new());
+    let gate = Arc::clone(&responded);
+    cx.spawn(async move {
+        let conn = app.conn().await;
+        match call(app, conn, responded).await {
+            Ok(response) => {
+                let _ = responder.respond(response);
+            }
+            Err(error) => {
+                let _ = responder.respond_with_error(error.to_request_error());
+            }
+        }
+        gate.notify_waiters();
+        Ok(())
+    })
+    .map_err(|error| AcpError::internal_error().data(format!("{error}")))
+}
+
 async fn respond_with<T, F, Fut>(
     app: &Arc<App>,
     cx: ConnectionTo<ClientRole>,

@@ -334,6 +334,39 @@ fn data_uri_base64(uri: &str) -> Option<String> {
     Some(tail.to_owned())
 }
 
+/// `readDisplayText` (tui/mini/tool.ts:167-187): read's model content is
+/// a JSON page envelope — unwrap the human-facing text (`content` for a
+/// text page, or the `entries` paths joined).
+#[must_use]
+pub fn read_display_text(text: &str) -> Option<String> {
+    if !text.starts_with('{') {
+        return None;
+    }
+    let Ok(Value::Object(envelope)) = serde_json::from_str::<Value>(text) else {
+        return None;
+    };
+    let content = envelope.get("content").and_then(Value::as_str);
+    let type_ = envelope.get("type").and_then(Value::as_str);
+    let encoding = envelope.get("encoding").and_then(Value::as_str);
+    if let Some(content) = content {
+        if type_ == Some("text-page") || encoding == Some("utf8") {
+            return Some(content.to_owned());
+        }
+    }
+    let Some(Value::Array(entries)) = envelope.get("entries") else {
+        return None;
+    };
+    let paths: Vec<String> = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            Value::String(path) => Some(path.clone()),
+            Value::Object(object) => object.get("path").and_then(Value::as_str).map(str::to_owned),
+            _ => None,
+        })
+        .collect();
+    Some(paths.join("\n"))
+}
+
 /// `completedToolUpdate` (tool.ts:93-125).
 #[must_use]
 pub fn completed_tool_update(
@@ -345,33 +378,31 @@ pub fn completed_tool_update(
     cwd: &str,
 ) -> ToolCallUpdate {
     let normalized = tool_content(content);
-    let lacks_images = !normalized.iter().any(|part| {
-        matches!(
-            part,
-            ToolCallContent::Content(wrapped) if matches!(wrapped.content, ContentBlock::Image(_))
-        )
-    });
-    // `readDisplayText` strips the line-number gutter the read tool adds;
-    // the Rust port renders read output without a gutter, so the text is
-    // used as-is (readDisplayText is TUI display shaping, tool.ts:103).
-    let images: Vec<ToolCallContent> = if lacks_images {
-        Vec::new()
-    } else {
-        normalized
+    // `read` unwraps its JSON page envelope into the human-facing text
+    // (tool.ts:103 `readDisplayText`, D-9/G-378).
+    let read = if canonical_name(tool_name) == "read" {
+        content
             .iter()
-            .filter(|part| {
-                matches!(
-                    part,
-                    ToolCallContent::Content(wrapped) if matches!(wrapped.content, ContentBlock::Image(_))
-                )
-            })
-            .cloned()
-            .collect()
-    };
-    let primary: Vec<ToolCallContent> = if lacks_images {
-        normalized
+            .find_map(|part| part.get("text").and_then(Value::as_str))
+            .and_then(read_display_text)
     } else {
-        normalized
+        None
+    };
+    let images: Vec<ToolCallContent> = normalized
+        .iter()
+        .filter(|part| {
+            matches!(
+                part,
+                ToolCallContent::Content(wrapped) if matches!(wrapped.content, ContentBlock::Image(_))
+            )
+        })
+        .cloned()
+        .collect();
+    let primary: Vec<ToolCallContent> = match &read {
+        Some(read) => vec![ToolCallContent::Content(ToolWrap::new(ContentBlock::Text(
+            TextContent::new(read.clone()),
+        )))],
+        None => normalized
             .into_iter()
             .filter(|part| {
                 !matches!(
@@ -379,7 +410,7 @@ pub fn completed_tool_update(
                     ToolCallContent::Content(wrapped) if matches!(wrapped.content, ContentBlock::Image(_))
                 )
             })
-            .collect()
+            .collect(),
     };
     // Edit-style diff content (tool.ts:112-115).
     let old_text = string_value(input.get("oldString"));
@@ -559,5 +590,48 @@ mod tests {
     fn non_image_data_uris_are_dropped() {
         let content = vec![json!({"type": "file", "uri": "data:text/plain;base64,aGk="})];
         assert_eq!(tool_content(&content).len(), 0);
+    }
+
+    /// G-378 D-9 — `readDisplayText` unwraps read's JSON page envelope
+    /// (tui/mini/tool.ts:167-187): text-page content, utf8 content, and
+    /// entries paths; non-JSON text stays untouched.
+    #[test]
+    fn read_display_text_unwraps_the_page_envelope() {
+        assert_eq!(
+            read_display_text(r#"{"type":"text-page","content":"line one\nline two"}"#).as_deref(),
+            Some("line one\nline two")
+        );
+        assert_eq!(
+            read_display_text(r#"{"encoding":"utf8","content":"raw utf8 body"}"#).as_deref(),
+            Some("raw utf8 body")
+        );
+        assert_eq!(
+            read_display_text(r#"{"entries":["a.ts",{"path":"b.rs"}]}"#).as_deref(),
+            Some("a.ts\nb.rs")
+        );
+        assert_eq!(read_display_text("plain text, no envelope"), None);
+        assert_eq!(read_display_text("{not json"), None);
+        assert_eq!(read_display_text(r#"{"unrelated":true}"#), None);
+    }
+
+    /// G-378 D-9 — a completed `read` tool call shows the unwrapped
+    /// page text instead of the raw envelope JSON.
+    #[test]
+    fn completed_read_update_uses_the_unwrapped_text() {
+        let envelope = json!({"type":"text-page","content":"file body"});
+        let update = completed_tool_update(
+            "call_read",
+            "read",
+            &input(&json!({"filePath": "a.ts"})),
+            &[json!({"text": envelope.to_string()})],
+            None,
+            "/tmp",
+        );
+        let content = update.fields.content.clone().expect("content");
+        let ToolCallContent::Content(wrapped) = content.first().expect("content block") else {
+            panic!("content block");
+        };
+        let ContentBlock::Text(text) = &wrapped.content else { panic!("text block") };
+        assert_eq!(text.text, "file body");
     }
 }

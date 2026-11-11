@@ -46,7 +46,22 @@ pub fn update(root_session_id: &str, child: &ChildSession, event: &ChildEvent) -
     match event {
         ChildEvent::Update { update } => {
             value["type"] = json!("update");
-            value["update"] = serde_json::to_value(update.as_ref()).unwrap_or_else(|_| json!({}));
+            let mut projected = serde_json::to_value(update.as_ref()).unwrap_or_else(|_| json!({}));
+            // `project` (child.ts:39-47) merges the child tag into the
+            // projected update's `_meta` (G-378): `{...projected._meta,
+            // ...meta(child)}`. The rust `SessionUpdate` enum has no
+            // inline `_meta`, so the merge happens at serialization.
+            if let Some(object) = projected.as_object_mut() {
+                let mut merged =
+                    object.get("_meta").and_then(Value::as_object).cloned().unwrap_or_default();
+                if let Some(tag) = meta(child).as_object() {
+                    merged.extend(tag.clone());
+                }
+                if !merged.is_empty() {
+                    object.insert("_meta".to_owned(), Value::Object(merged));
+                }
+            }
+            value["update"] = projected;
         }
         ChildEvent::Status { status, error } => {
             value["type"] = json!("status");
@@ -165,5 +180,22 @@ mod tests {
     #[test]
     fn meta_tags_the_child_session() {
         assert_eq!(meta(&child())["opencode/child-session"]["id"], json!("ses_child"));
+    }
+
+    /// G-378 — the projected child update carries the `_meta` child tag
+    /// (ref `child.ts:39-47` spreads `meta(child)` into the projected
+    /// update's `_meta`).
+    #[test]
+    fn update_event_carries_the_meta_child_tag() {
+        let chunk = SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+            TextContent::new("hi"),
+        )));
+        let value = update("ses_root", &child(), &ChildEvent::Update { update: Box::new(chunk) });
+        assert_eq!(value["type"], "update");
+        assert_eq!(value["update"]["_meta"]["opencode/child-session"]["id"], json!("ses_child"));
+        assert_eq!(
+            value["update"]["_meta"]["opencode/child-session"]["parentID"],
+            json!("ses_root")
+        );
     }
 }
