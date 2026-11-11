@@ -68,6 +68,14 @@ impl KeyStroke {
                 match token.to_ascii_lowercase().as_str() {
                     "ctrl" => stroke.ctrl = true,
                     "shift" => stroke.shift = true,
+                    // G-381② (bounded): the ref's `KeyStroke` schema
+                    // keeps `meta` and `hyper` as DISTINCT names
+                    // (keybind.ts:9-15) — the port folds them onto
+                    // `alt`/`super_key` because its terminal driver
+                    // cannot distinguish them (POSIX reports meta as
+                    // alt; hyper as super/cmd) and the engine models
+                    // four modifiers — a documented, matching-safe
+                    // alias on every terminal the port runs on.
                     "alt" | "meta" => stroke.alt = true,
                     "super" | "hyper" => stroke.super_key = true,
                     _ => return None,
@@ -348,33 +356,19 @@ impl KeybindOverride {
     pub fn parse_value(name: &str, value: &serde_json::Value) -> Option<Self> {
         let specs = match value {
             serde_json::Value::String(text) => parse_binding_string(text),
+            // G-381① — `BindingValueSchema` admits a TOP-LEVEL
+            // `BindingObject` (`Schema.Union([…, BindingItem, …])`,
+            // BindingItem ⊇ BindingObject, keybind.ts:22-32): parse
+            // it exactly like the array element arm instead of
+            // dropping it as unparseable.
+            serde_json::Value::Object(object) => Self::binding_object_spec(object)?,
             serde_json::Value::Array(items) => {
                 let mut specs = Vec::new();
                 for item in items {
                     match item {
                         serde_json::Value::String(text) => specs.extend(parse_binding_string(text)),
                         serde_json::Value::Object(object) => {
-                            // BindingObject: `{ key: "…" | {name,…} }`.
-                            let text = match object.get("key")? {
-                                serde_json::Value::String(text) => text.clone(),
-                                serde_json::Value::Object(stroke) => {
-                                    let key = stroke.get("name")?.as_str()?.to_owned();
-                                    let mut parts = Vec::new();
-                                    for modifier in
-                                        ["ctrl", "shift", "alt", "meta", "super", "hyper"]
-                                    {
-                                        if stroke.get(modifier).and_then(serde_json::Value::as_bool)
-                                            == Some(true)
-                                        {
-                                            parts.push(modifier.to_owned());
-                                        }
-                                    }
-                                    parts.push(key);
-                                    parts.join("+")
-                                }
-                                _ => return None,
-                            };
-                            specs.extend(parse_binding_string(&text));
+                            specs.extend(Self::binding_object_spec(object)?);
                         }
                         _ => return None,
                     }
@@ -386,6 +380,75 @@ impl KeybindOverride {
         };
         Some(Self { name: name.to_owned(), specs })
     }
+
+    /// `BindingObject` → its binding spec(s): `{ key: "…" | {name,…
+    /// modifiers} }` (the extra rest-keys the struct allows are
+    /// ignored, matching the ref decode).
+    fn binding_object_spec(
+        object: &serde_json::Map<String, serde_json::Value>,
+    ) -> Option<Vec<String>> {
+        let text = match object.get("key")? {
+            serde_json::Value::String(text) => text.clone(),
+            serde_json::Value::Object(stroke) => {
+                let key = stroke.get("name")?.as_str()?.to_owned();
+                let mut parts = Vec::new();
+                for modifier in ["ctrl", "shift", "alt", "meta", "super", "hyper"] {
+                    if stroke.get(modifier).and_then(serde_json::Value::as_bool) == Some(true) {
+                        parts.push(modifier.to_owned());
+                    }
+                }
+                parts.push(key);
+                parts.join("+")
+            }
+            _ => return None,
+        };
+        Some(parse_binding_string(&text))
+    }
+}
+
+/// G-381③ — `resolve`'s win32 adaptation (config/index.tsx:288-296,
+/// mirrored in v1/index.tsx:104-112): when `terminalSuspend` is off
+/// (win32 — `process.platform !== "win32"`, app.tsx:208),
+/// `terminal.suspend` is unset AND `ctrl+z` is prepended to
+/// `input.undo`'s DEFAULT alternatives (dedup'd) — unless the user
+/// overrode `input.undo` themselves. Pure: the caller passes the
+/// platform verdict (`!cfg!(windows)`).
+#[must_use]
+pub fn terminal_suspend_rebind(
+    mut overrides: Vec<KeybindOverride>,
+    terminal_suspend: bool,
+) -> Vec<KeybindOverride> {
+    if terminal_suspend {
+        return overrides;
+    }
+    // keybinds["terminal.suspend"] = "none" (both the dot id and the
+    // v1 bind name).
+    match overrides
+        .iter_mut()
+        .find(|entry| entry.name == "terminal.suspend" || entry.name == "terminal_suspend")
+    {
+        Some(entry) => entry.specs = Vec::new(),
+        None => overrides
+            .push(KeybindOverride { name: "terminal.suspend".to_owned(), specs: Vec::new() }),
+    }
+    // if (keybinds["input.undo"] === undefined) — the user's own
+    // override stands untouched.
+    let user_set =
+        overrides.iter().any(|entry| entry.name == "input.undo" || entry.name == "input_undo");
+    if !user_set {
+        let defaults = default_table()
+            .iter()
+            .find(|def| def.command == "input.undo")
+            .map_or_else(Vec::new, |def| parse_binding_string(def.defaults));
+        let mut specs = vec!["ctrl+z".to_owned()];
+        for spec in defaults {
+            if !specs.contains(&spec) {
+                specs.push(spec);
+            }
+        }
+        overrides.push(KeybindOverride { name: "input.undo".to_owned(), specs });
+    }
+    overrides
 }
 
 /// Split a comma-form binding string into alternatives; `"none"`
@@ -926,5 +989,40 @@ mod sequence_tests {
 
         let leader_spec = Chord::parse("<leader>gg", &leader()).expect("leader chord parses");
         assert_eq!(leader_spec.strokes.len(), 3, "leader + gg");
+    }
+}
+
+#[cfg(test)]
+mod g381_rebind_tests {
+    use super::*;
+
+    #[test]
+    fn win32_unbinds_suspend_and_folds_ctrl_z_into_input_undo() {
+        // config/index.tsx:288-296 — no user overrides: terminal.suspend
+        // becomes "none" and input.undo prepends ctrl+z (dedup'd).
+        let overrides = terminal_suspend_rebind(Vec::new(), false);
+        let suspend =
+            overrides.iter().find(|entry| entry.name == "terminal.suspend").expect("entry");
+        assert!(suspend.specs.is_empty(), "suspend unset");
+        let undo = overrides.iter().find(|entry| entry.name == "input.undo").expect("entry");
+        assert_eq!(undo.specs, vec!["ctrl+z", "ctrl+-", "super+z"]);
+        // Non-win32: nothing changes.
+        assert!(terminal_suspend_rebind(Vec::new(), true).is_empty());
+        // A user's own input.undo override stands untouched.
+        let user = vec![KeybindOverride {
+            name: "input.undo".to_owned(),
+            specs: vec!["ctrl+u".to_owned()],
+        }];
+        let overrides = terminal_suspend_rebind(user, false);
+        let undo = overrides.iter().find(|entry| entry.name == "input.undo").expect("entry");
+        assert_eq!(undo.specs, vec!["ctrl+u"]);
+        // An existing terminal.suspend override flips to unset in place.
+        let user = vec![KeybindOverride {
+            name: "terminal_suspend".to_owned(),
+            specs: vec!["ctrl+g".to_owned()],
+        }];
+        let overrides = terminal_suspend_rebind(user, false);
+        assert_eq!(overrides[0].name, "terminal_suspend");
+        assert!(overrides[0].specs.is_empty());
     }
 }

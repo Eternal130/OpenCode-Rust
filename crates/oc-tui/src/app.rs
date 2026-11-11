@@ -379,7 +379,10 @@ impl App {
         if let Some(timeout) = config.leader_timeout_ms {
             self.keymap.set_timeout(timeout);
         }
-        let overrides = crate::keymap::parse_keybind_overrides(&config.keybinds);
+        let overrides = crate::keymap::terminal_suspend_rebind(
+            crate::keymap::parse_keybind_overrides(&config.keybinds),
+            !cfg!(windows),
+        );
         self.store.set_keybinds(overrides);
         self.remerge_keybinds();
         // R-07: the transcript image strip's gate (`session.image_preview`).
@@ -3054,12 +3057,20 @@ impl App {
         key: &str,
         mut prompt: crate::components::composer::SubmittedPrompt,
     ) -> crate::components::composer::SubmittedPrompt {
+        // G-381④ — `fileContextEnabled` (prompt/index.tsx:223):
+        // `config.prompt?.editor ?? true` gates the whole editor
+        // context face (the selection memo never forms when off).
+        let file_context_enabled = self.store.settings_snapshot_value("prompt.editor") != "false";
         if let Route::Session { .. } = self.store.route() {
-            if let (true, Some(selection)) =
-                (self.store.editor_label_pending().unwrap_or(false), self.store.editor_context())
-            {
-                prompt.editor_context = Some(crate::editor_zed::format_editor_context(&selection));
-                self.store.editor_mark_sent();
+            if file_context_enabled {
+                if let (true, Some(selection)) = (
+                    self.store.editor_label_pending().unwrap_or(false),
+                    self.store.editor_context(),
+                ) {
+                    prompt.editor_context =
+                        Some(crate::editor_zed::format_editor_context(&selection));
+                    self.store.editor_mark_sent();
+                }
             }
         }
         let _ = key;
