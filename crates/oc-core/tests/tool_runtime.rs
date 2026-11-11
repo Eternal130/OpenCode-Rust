@@ -283,6 +283,9 @@ async fn config_shell_key() {
     // configured shell as well.
     let session = allow_all_session(&engine, &location, "ses_tool_c3", None).await;
     let executor = services.graph.tools.executor("shell").expect("shell executor");
+    // Foreground: G-230 — ref's foreground shell output/metadata carry
+    // NO shellID (shell.ts:226-234 + toolResult :86-91; only
+    // backgroundResult :95-99 sets it).
     let outcome = executor
         .execute_with_context(
             &json!({ "command": "printf tool-path", "workdir": dir.path().to_string_lossy() }),
@@ -292,13 +295,32 @@ async fn config_shell_key() {
         .expect("shell tool runs");
     let output = serde_json::to_string(&outcome.content).unwrap_or_default();
     assert!(output.contains("tool-path"), "tool output: {output}");
+    assert!(
+        outcome.metadata.as_ref().and_then(|m| m.get("shellID")).is_none(),
+        "foreground metadata must not carry shellID (ref-exact)"
+    );
+    // Background: the output DOES carry the `shellID` wire key — use it
+    // to look up the shell row and pin the compat resolve.
+    let outcome = executor
+        .execute_with_context(
+            &json!({
+                "command": "sleep 5",
+                "workdir": dir.path().to_string_lossy(),
+                "background": true
+            }),
+            &call_context(&session),
+        )
+        .await
+        .expect("background shell tool runs");
     let shell_id = outcome
-        .metadata
+        .output
         .as_ref()
-        .and_then(|metadata| metadata.get("shellID").and_then(Value::as_str).map(str::to_string));
-    let shell_id = shell_id.expect("shellID metadata");
-    let shell_id = oc_schema::id::ShellId::parse(shell_id)
-        .unwrap_or_else(|error| oc_schema::id::ShellId(error.value));
+        .and_then(|output| output.get("shellID"))
+        .and_then(Value::as_str)
+        .expect("background output carries shellID")
+        .to_string();
+    let shell_id =
+        oc_schema::id::ShellId::parse(shell_id).unwrap_or_else(|e| oc_schema::id::ShellId(e.value));
     let tool_info = services.shell.get(&shell_id).expect("shell info");
     assert_eq!(
         tool_info.shell,
