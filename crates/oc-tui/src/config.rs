@@ -538,9 +538,9 @@ impl TuiConfig {
 mod tests {
     use super::*;
 
-    /// G-367 — `session.tps` defaults TRUE (ref config/index.tsx:322
+    /// G-367 — `session.tps` defaults TRUE (ref `config/index.tsx:322`
     /// `input.session?.tps ?? true`); an explicit false survives the
-    /// default merge on every decode path (parse, from_info, Default).
+    /// default merge on every decode path (parse, `from_info`, Default).
     #[test]
     fn session_tps_defaults_true_and_explicit_false_survives() {
         assert!(TuiConfig::default().session_tps, "Default = true");
