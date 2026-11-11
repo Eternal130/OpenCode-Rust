@@ -78,6 +78,7 @@ pub mod storage;
 pub mod store;
 pub mod style;
 pub mod suspend;
+pub mod system;
 pub mod terminal_pane;
 pub mod terminal_proto;
 pub mod theme;

@@ -274,9 +274,14 @@ pub fn build_issue_report(message: &str, stack: &str, version: &str) -> String {
         out
     };
     let prefix = format!(
-        "https://github.com/anomalyco/opencode/issues/new?template=bug-report.yml&title={}&opencode-version={}",
+        "https://github.com/anomalyco/opencode/issues/new?template=bug-report.yml&title={}&opencode-version={}&os={}&terminal={}",
         encode(&format!("TUI crash: {message}")),
-        encode(version)
+        encode(version),
+        // G-388: the ref pre-fills os/terminal (error-component.tsx:227-228)
+        // so the report passes the contributing-guidelines compliance
+        // check that pushes for system info.
+        encode(&crate::system::describe_os()),
+        encode(&crate::system::describe_terminal()),
     );
     let body_of = |stack_text: &str| {
         format!(
@@ -439,5 +444,46 @@ mod tests {
             url.contains("%E2%80%A6%20%28truncated%29"),
             "the truncation marker: … (truncated)"
         );
+    }
+
+    /// G-388 — the crash-issue URL pre-fills the `os=`/`terminal=`
+    /// params (error-component.tsx:227-228) with the
+    /// `describeOS()`/`describeTerminal()` values, form-encoded.
+    #[test]
+    fn issue_report_carries_os_and_terminal_params() {
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let names = ["TERM_PROGRAM", "TERM_PROGRAM_VERSION", "TMUX", "STY", "TERM"];
+        let saved: Vec<(_, _)> = names
+            .iter()
+            .map(|name| (*name, std::env::var_os(name)))
+            .collect();
+        for name in names {
+            std::env::remove_var(name);
+        }
+        std::env::set_var("TERM_PROGRAM", "iTerm.app");
+        std::env::set_var("TERM_PROGRAM_VERSION", "3.5.13");
+        let url = build_issue_report("boom", "at frame (x.rs:1)", "2.0.24");
+        for (name, value) in &saved {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+
+        assert!(
+            url.contains("&os="),
+            "the os param rides the URL (describeOS): {url}"
+        );
+        assert!(
+            url.contains("&terminal=iTerm.app%203.5.13"),
+            "the terminal param carries the G-388 description: {url}"
+        );
+        // Param order mirrors the ref (title, version, os, terminal, body).
+        let os_at = url.find("&os=").expect("os param");
+        let terminal_at = url.find("&terminal=").expect("terminal param");
+        let version_at = url.find("opencode-version=").expect("version param");
+        assert!(version_at < os_at && os_at < terminal_at, "ref param order: {url}");
+        assert!(url.len() <= 6000);
     }
 }
