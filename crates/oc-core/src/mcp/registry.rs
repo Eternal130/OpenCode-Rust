@@ -2108,10 +2108,11 @@ impl McpToolBridge {
             registration.codemode = tool.codemode_enabled();
             // runtime.ts:24-25 — the output rides the model-facing
             // definition; ref's MCP face ALWAYS declares (mcp.ts:48
-            // `output: tool.outputSchema ?? {}`).
-            registration.output = Some(
-                tool.output_schema.clone().unwrap_or_else(|| serde_json::json!({})),
-            );
+            // `output: tool.outputSchema ?? {}`). Bound once, used by
+            // both the registration and the pipeline executor below.
+            let declared_output =
+                tool.output_schema.clone().unwrap_or_else(|| serde_json::json!({}));
+            registration.output = Some(declared_output.clone());
             tools.register(registration);
             // G-242 — the pipeline wrap (`editor.add` → tool.ts:150):
             // hooks + decodeInput + normalizeContent around the leaf's
@@ -2126,9 +2127,7 @@ impl McpToolBridge {
                 crate::tool::registry::pipeline_executor_with_output(
                     &action,
                     tool.input_schema.clone(),
-                    Some(
-                        tool.output_schema.clone().unwrap_or_else(|| serde_json::json!({})),
-                    ),
+                    Some(declared_output),
                     Arc::new(executor),
                     services,
                     hooks,

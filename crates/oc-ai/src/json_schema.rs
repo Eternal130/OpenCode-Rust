@@ -4,7 +4,7 @@
 //! `generateObject`'s output validation (G-100) reuses the exact same
 //! engine — `oc-core` depends on `oc-ai`, never the reverse).
 //!
-//! Keywords: object `required`, per-property `type`, `enum`,
+//! Keywords: object `required`, per-property `type`, `enum`, `const`,
 //! `minLength`/`maxLength`, `minimum`/`maximum`, nested object/array
 //! `items`, plus the G-59 additions: `pattern`, `oneOf`/`anyOf`/`allOf`,
 //! `$defs` + local `$ref` resolution, `minItems`/`maxItems`,
@@ -235,6 +235,21 @@ fn validate(
                     });
                 }
             }
+        }
+    }
+    // `const` (draft-06+): strict deep equality against the schema's
+    // JSON value, INCLUDING types — serde_json's `Value: PartialEq`
+    // never coerces, so `true` does not match `1` and `"true"` does
+    // not match `true` (modeled on the `enum` arm above).
+    if let Some(const_value) = object.get("const") {
+        if value != const_value {
+            issues.push(Issue {
+                path: if path.is_empty() { "root".to_string() } else { path.to_string() },
+                message: format!(
+                    "must be equal to constant {}",
+                    serde_json::to_string(const_value).unwrap_or_default()
+                ),
+            });
         }
     }
     if let Some(enum_values) = object.get("enum").and_then(|v| v.as_array()) {
