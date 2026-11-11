@@ -237,7 +237,7 @@ impl Sessions {
         servers: &[SupportedMcpServer],
     ) -> Result<(), AcpError> {
         for server in servers {
-            let config = self.mcp_config(server)?;
+            let config = Self::mcp_config(server)?;
             let config_value = serde_json::to_value(&config).unwrap_or(serde_json::Value::Null);
             let mut registered = self.registered_mcp.lock().await;
             let session_registered = registered.entry(attached.id.clone()).or_default();
@@ -259,7 +259,7 @@ impl Sessions {
                 )
                 .await;
             match result {
-                Ok(_) => {
+                Ok(()) => {
                     self.registered_mcp
                         .lock()
                         .await
@@ -286,7 +286,6 @@ impl Sessions {
     /// `mcpConfig` (sessions.ts:201-219): the wire config for one
     /// supported server.
     fn mcp_config(
-        &self,
         server: &SupportedMcpServer,
     ) -> Result<oc_client::types::ExperimentalMcpAddBodyConfig, AcpError> {
         let config = match &server.kind {
@@ -528,7 +527,7 @@ mod tests {
             name: "docs".to_owned(),
             kind: McpKind::Http { url: "https://example.test/mcp".to_owned(), headers: Vec::new() },
         };
-        let config = sessions.mcp_config(&server).expect("config");
+        let config = Sessions::mcp_config(&server).expect("config");
         sessions.registered_mcp.lock().await.insert(
             "ses_mcp".to_owned(),
             [("docs".to_owned(), serde_json::to_value(&config).unwrap())].into_iter().collect(),

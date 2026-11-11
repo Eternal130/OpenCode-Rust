@@ -158,11 +158,10 @@ fn resource_link_to_part(uri: &str, name: Option<String>, mime: Mime) -> PromptP
         return PromptPart::File { url: uri.to_owned(), filename, mime };
     }
     if uri.starts_with("zed://") {
-        if let Some(path) = uri
-            .split_once("?path=")
-            .map(|(_, path)| path.split('&').next().unwrap_or_default().to_owned())
-            .filter(|path| !path.is_empty())
-        {
+        // `new URL(uri).searchParams.get("path")` (content.ts:147-149):
+        // the param is matched anywhere in the query, not only as the
+        // first one, and is percent-decoded (D-11/G-378).
+        if let Some(path) = zed_query_path(uri).filter(|path| !path.is_empty()) {
             let filename = match name {
                 Some(name) if !name.is_empty() => Some(name),
                 _ => path
@@ -245,7 +244,7 @@ fn prompt_part_chunks(message_id: &str, part: &PromptPart) -> Vec<ContentChunk> 
             if mime_part.is_empty() || data.is_empty() {
                 return Vec::new();
             }
-            let file_url = format!("file:///{name}");
+            let file_url = file_url_for(&name);
             if mime_part.starts_with("image/") {
                 return vec![ContentChunk::new(ContentBlock::Image(
                     ImageContent::new(data, mime_part).uri(file_url),
@@ -301,16 +300,63 @@ fn percent_decode(value: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// `new URL(uri).searchParams.get("path")` for `zed://` links: the
+/// `path` query parameter at ANY position, percent-decoded (`+` counts
+/// as a space, like `searchParams`).
+fn zed_query_path(uri: &str) -> Option<String> {
+    let query = uri.strip_prefix("zed://")?.split_once('?')?.1;
+    query.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        (percent_decode_component(&key.replace('+', " ")) == "path")
+            .then(|| percent_decode_component(&value.replace('+', " ")))
+    })
+}
+
+/// Minimal `application/x-www-form-urlencoded` component decoding
+/// (`URLSearchParams` semantics): `%XX` hex escapes.
+fn percent_decode_component(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hex = bytes.get(index + 1..index + 3).and_then(|slice| {
+                std::str::from_utf8(slice).ok().and_then(|slice| u8::from_str_radix(slice, 16).ok())
+            });
+            if let Some(byte) = hex {
+                out.push(byte);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// `pathToFileURL(part.filename)` (content.ts:111,123,128): a bare
+/// filename resolves against the process working directory, so the
+/// file URL carries directory context instead of pointing at the
+/// filesystem root (D-12/G-378). Absolute paths pass through.
+fn file_url_for(name: &str) -> String {
+    let path = std::path::Path::new(name);
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_default().join(path)
+    };
+    format!("file://{}", absolute.display())
+}
+
 /// `filenameFromUri` (content.ts:164-171).
 fn filename_from_uri(uri: Option<&str>) -> Option<String> {
     let uri = uri?;
     if uri.starts_with("data:") {
         return None;
     }
-    let path = if let Some(query) =
-        uri.strip_prefix("zed://").and_then(|rest| rest.split_once("?path="))
-    {
-        query.1.split('&').next().unwrap_or_default().to_owned()
+    let path = if uri.starts_with("zed://") {
+        zed_query_path(uri)?
     } else if uri.contains("://") {
         uri.split("://").nth(1)?.split(['?', '#']).next()?.to_owned()
     } else {
@@ -441,5 +487,23 @@ mod tests {
             vec![PromptPart::Text { text: "hello".to_owned(), synthetic: false, ignored: false }]
         );
         let _ = text("x"); // silence unused warnings in certain builds
+    }
+
+    /// G-378 D-11 — `path` is read from ANY position of the zed:// query
+    /// and percent-decoded (URL.searchParams semantics).
+    #[test]
+    fn zed_link_path_reads_any_query_position() {
+        assert_eq!(zed_query_path("zed://file?path=/tmp/a%20b.ts").as_deref(), Some("/tmp/a b.ts"));
+        assert_eq!(
+            zed_query_path("zed://file?line=1&path=/tmp/second.ts").as_deref(),
+            Some("/tmp/second.ts")
+        );
+        assert_eq!(zed_query_path("zed://file?other=1"), None);
+        assert_eq!(zed_query_path("zed://file"), None);
+        // filenameFromUri goes through the same query parse.
+        assert_eq!(
+            filename_from_uri(Some("zed://file?x=1&path=/tmp/name.rs")).as_deref(),
+            Some("name.rs")
+        );
     }
 }
