@@ -10387,7 +10387,14 @@ pub async fn run_with_size(
         // Input / tick wait — while the marquee scrolls, the wake
         // lands exactly on the next 80 ms step boundary (the steady
         // ticker above pins the clock to it); otherwise the plain
-        // 100 ms poll.
+        // 100 ms poll. G-368⑥: this 100 ms tick is the port's frame
+        // PACER (app.rs:10197 — not the ref's `targetFps: 60`,
+        // app.tsx:234): frames are drawn on invalidation (one per
+        // batch via `settle(1)`), the ref's 60 fps scheduler only
+        // matters for its animation clock, which the store's virtual
+        // clock reproduces deterministically — so 100 ms caps the
+        // IDLE tick, not the frame rate; input and invalidation
+        // wake immediately through the select.
         let wait_ms = match marquee_deadline {
             Some(deadline) => (deadline.saturating_sub(now_ms)).clamp(1, 100),
             None => 100,

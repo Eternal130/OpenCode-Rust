@@ -140,8 +140,8 @@ pub enum SelectionKeyAction {
     /// Copy the selection (`ctrl+y`, or `ctrl+c` in manual mode) and
     /// consume the stroke.
     CopyAndConsume,
-    /// Clear the selection and consume the stroke (`ctrl+c` in
-    /// copy-on-select mode; `escape` with text).
+    /// Clear the selection and consume the stroke (`escape` with
+    /// text).
     ClearAndConsume,
     /// Clear the selection, let the stroke through (any other key —
     /// selection.ts:96-98 clears then falls through).
@@ -160,9 +160,13 @@ pub fn selection_key_action(spec: &str, copy_on_select: bool) -> SelectionKeyAct
         "ctrl+c" | "ctrl+C" | "ctrl+c:99" | "ctrl+c:67" => {
             if copy_on_select {
                 // The release already copied: the stroke only clears
-                // (selection.ts:82-86's first arm).
-                SelectionKeyAction::ClearAndConsume
+                // and FALLS THROUGH (selection.ts:76-79's first arm —
+                // no preventDefault, so ctrl+c still reaches the app
+                // bindings and interrupts).
+                SelectionKeyAction::ClearAndPass
             } else {
+                // Manual mode: the copy consumed the stroke
+                // (selection.ts:80-84's preventDefault).
                 SelectionKeyAction::CopyAndConsume
             }
         }
@@ -221,8 +225,10 @@ mod tests {
 
     #[test]
     fn key_actions_follow_the_copy_mode() {
-        // Copy-on-select: ctrl+c clears (the release already copied).
-        assert_eq!(selection_key_action("ctrl+c", true), SelectionKeyAction::ClearAndConsume);
+        // Copy-on-select: ctrl+c clears AND falls through (the
+        // release already copied; selection.ts:76-79 returns without
+        // preventDefault so the interrupt still fires).
+        assert_eq!(selection_key_action("ctrl+c", true), SelectionKeyAction::ClearAndPass);
         // Manual: ctrl+c COPIES.
         assert_eq!(selection_key_action("ctrl+c", false), SelectionKeyAction::CopyAndConsume);
         // ctrl+y (the console's copy-selection binding) always copies.

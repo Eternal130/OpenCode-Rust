@@ -5171,6 +5171,11 @@ impl Store {
         if !self.terminal_title_enabled() {
             return String::new();
         }
+        // app.tsx:620-622 — the plugin route arm:
+        // `setTerminalTitle(`OC | ${route.data.name}`)`.
+        if let Some(page) = self.plugin_route.get() {
+            return format!("OC | {}", page.name);
+        }
         match &self.route.get() {
             Route::Home => "OpenCode".to_owned(),
             Route::Session { session_id, .. } => {
@@ -5182,7 +5187,11 @@ impl Store {
                     .and_then(|tab| self.display_title(tab))
                     .or_else(|| self.session_title(session_id));
                 match title {
+                    // app.tsx:610 — `!title || isFallbackTitle(title)`
+                    // collapses missing AND timestamped fallback
+                    // titles to "OpenCode".
                     None => "OpenCode".to_owned(),
+                    Some(title) if is_fallback_session_title(&title) => "OpenCode".to_owned(),
                     Some(title) if title.chars().count() > 40 => {
                         let head: String = title.chars().take(37).collect();
                         format!("OC | {head}…")
@@ -14229,6 +14238,48 @@ fn picker_fallback_title(info: &crate::notifications_plugin::SessionInfo) -> Str
     }
 }
 
+/// `isFallbackTitle` (session-title-fallback.ts:4,32-34): the
+/// `^(New session|Child session) - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`
+/// pattern, matched shape-by-shape (no regex dep) — the window-title
+/// effect (app.tsx:610) collapses these to "OpenCode".
+fn is_fallback_session_title(title: &str) -> bool {
+    let Some(rest) =
+        title.strip_prefix("New session - ").or_else(|| title.strip_prefix("Child session - "))
+    else {
+        return false;
+    };
+    let bytes = rest.as_bytes();
+    if bytes.len() != 24 {
+        return false;
+    }
+    let digit = |i: usize| bytes[i].is_ascii_digit();
+    let dash = |i: usize| bytes[i] == b'-';
+    digit(0)
+        && digit(1)
+        && digit(2)
+        && digit(3)
+        && dash(4)
+        && digit(5)
+        && digit(6)
+        && dash(7)
+        && digit(8)
+        && digit(9)
+        && bytes[10] == b'T'
+        && digit(11)
+        && digit(12)
+        && bytes[13] == b':'
+        && digit(14)
+        && digit(15)
+        && bytes[16] == b':'
+        && digit(17)
+        && digit(18)
+        && bytes[19] == b'.'
+        && digit(20)
+        && digit(21)
+        && digit(22)
+        && bytes[23] == b'Z'
+}
+
 /// `new Date(ms).toISOString()` — UTC `YYYY-MM-DDTHH:MM:SS.mmmZ`
 /// (the session-title fallback's timestamp; days-from-civil inverse,
 /// Howard Hinnant's `civil_from_days`).
@@ -18431,5 +18482,41 @@ mod g273_mention_tests {
         )]);
         assert_eq!(store.session_cost("s1"), 0.42);
         assert_eq!(store.session_tokens("s1"), 60_400, "the token total lands live");
+    }
+}
+
+// -- G-368①: the window-title fallback pattern + the plugin route arm ----------
+
+#[cfg(test)]
+mod g368_title_tests {
+    use super::*;
+
+    #[test]
+    fn fallback_timestamped_titles_collapse_to_opencode() {
+        let store = Store::new(crate::reactive::Runtime::new());
+        store.open_tab("s1", Some("New session - 2026-11-11T10:00:00.000Z".to_owned()));
+        store.navigate(Route::session("s1"));
+        assert_eq!(store.terminal_title(), "OpenCode", "root fallback collapses");
+        store.open_tab("s1", Some("Child session - 2026-11-11T10:00:00.123Z".to_owned()));
+        assert_eq!(store.terminal_title(), "OpenCode", "child fallback collapses");
+        store.open_tab("s1", Some("My session".to_owned()));
+        assert_eq!(store.terminal_title(), "OC | My session");
+        // Near-miss shapes stay real titles.
+        store.open_tab("s1", Some("New session - not-a-timestamp".to_owned()));
+        assert_eq!(store.terminal_title(), "OC | New session - not-a-timestamp");
+        store.open_tab("s1", Some("New session - 2026-11-11T10:00:00.00Z".to_owned()));
+        assert_eq!(store.terminal_title(), "OC | New session - 2026-11-11T10:00:00.00Z");
+    }
+
+    #[test]
+    fn plugin_route_titles_with_the_route_name() {
+        let store = Store::new(crate::reactive::Runtime::new());
+        store.open_tab("s1", Some("My session".to_owned()));
+        store.navigate(Route::session("s1"));
+        assert_eq!(store.terminal_title(), "OC | My session");
+        store.open_plugin_route("diff-viewer", "stats", None);
+        assert_eq!(store.terminal_title(), "OC | stats", "the plugin arm wins");
+        store.close_plugin_route();
+        assert_eq!(store.terminal_title(), "OC | My session", "back to the session arm");
     }
 }
