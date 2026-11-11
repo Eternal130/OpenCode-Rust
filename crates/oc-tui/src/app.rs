@@ -5301,6 +5301,43 @@ pub fn model_preference_repository() -> Option<crate::mini::model_pref::ModelPre
     Some(crate::mini::model_pref::host_preferences(&state))
 }
 
+/// G-343 — the pinned-sessions document (`<state>/session.json`,
+/// `{pinned: [...]}` — context/local.tsx:508-526: the same path the
+/// v1→v2 migration lands the doc on, so a migrated pin set boots
+/// intact).
+#[must_use]
+pub fn pinned_sessions_path() -> Option<std::path::PathBuf> {
+    Some(oc_util::global_roots::resolve().state.join("session.json"))
+}
+
+/// Read the persisted pinned set (absent/corrupt file = empty —
+/// local.tsx:528-541's readJson catch).
+#[must_use]
+pub fn read_pinned_sessions(path: &std::path::Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|doc| {
+            doc.get("pinned").and_then(serde_json::Value::as_array).map(|ids| {
+                ids.iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<String>>()
+            })
+        })
+        .unwrap_or_default()
+}
+
+/// Write the pinned set atomically (tmp + rename — local.tsx:518-526
+/// `writeJsonAtomic`).
+fn write_pinned_sessions(path: &std::path::Path, pinned: &[String]) -> std::io::Result<()> {
+    let document = serde_json::json!({ "pinned": pinned });
+    let mut tmp = path.to_path_buf();
+    tmp.set_extension("json.tmp");
+    std::fs::write(&tmp, document.to_string())?;
+    std::fs::rename(&tmp, path)
+}
+
 /// The run loop's on-demand fetch requests (the dogfood wave-1 data
 /// side): transcript hydration for newly opened sessions (F12) and the
 /// session-list refresh the /sessions dialog fires on open (F13).
@@ -8273,6 +8310,12 @@ pub async fn run_with_size(
         app.store.set_model_ring(crate::store::ModelRing { document });
     }
     let model_preference_path = model_preference_repository();
+    // G-343 — the pinned-set boot (`<state>/session.json`,
+    // local.tsx:528-541): the persisted pins seed the tabs' pinned
+    // list (the sessions dialog's Pinned group + quick-switch slots).
+    if let Some(path) = pinned_sessions_path() {
+        app.store.seed_pinned(read_pinned_sessions(&path));
+    }
 
     // Production sinks: clipboard writes OSC 52; model/agent picks POST
     // session.switchModel / session.switchAgent.
@@ -9351,6 +9394,13 @@ pub async fn run_with_size(
             (&model_preference_path, app.store.take_model_ring_dirty())
         {
             repository.write(&ring.document);
+        }
+        // G-343 — the pinned-set persistence drain (the model-ring
+        // pattern): a toggle's dirty set writes `<state>/session.json`
+        // atomically (local.tsx:518-526).
+        if let (Some(path), Some(pinned)) = (pinned_sessions_path(), app.store.take_pinned_dirty())
+        {
+            let _ = write_pinned_sessions(&path, &pinned);
         }
         // G-271① — the terminal-selection persistence drain (the
         // model-ring pattern): the staged picks persist as one batch —
@@ -10540,6 +10590,19 @@ fn cache_tty_input_fd(
 /// (SA-F13's one-reader gate)).
 #[allow(unsafe_code)] // poll/read/ioctl on the tty fd are libc FFI
 fn read_session_input(fd: std::os::fd::RawFd, timeout_ms: i32) -> Vec<u8> {
+    // G-342 — stdin has exactly one owner at a time: the same lock
+    // the OSC 52 clipboard query window holds. The input thread's
+    // 50 ms poll passes release quickly; when a query window is in
+    // flight this parks until it closes (≤150 ms + the query's own
+    // wait), so the two fd 0 consumers never interleave reads.
+    let _stdin_guard =
+        crate::terminal_proto::STDIN_READ_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    // Keystrokes the query window read (bytes that were not its
+    // reply) come back first — delayed, never lost.
+    let pushed = crate::terminal_proto::take_stdin_pushback();
+    if !pushed.is_empty() {
+        return pushed;
+    }
     let mut poll_fd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
     // SAFETY: poll(2) with a bounded timeout on the session's tty fd.
     let ready = unsafe { libc::poll(std::ptr::from_mut(&mut poll_fd), 1, timeout_ms) };
@@ -14956,6 +15019,7 @@ fn home_footer_chips_are_clickable() {
 /// merged away).
 #[cfg(test)]
 mod render_scheduler_equiv_tests {
+    use super::{read_pinned_sessions, write_pinned_sessions};
     use opentui_core::renderer::{create_cli_renderer, CliRendererConfig};
 
     fn renderer() -> opentui_core::renderer::CliRenderer {
@@ -15078,5 +15142,37 @@ mod render_scheduler_equiv_tests {
             r.request_render(); // a second invalidation in the same batch
             assert_eq!(r.settle(1), 1, "N requests between settles → exactly 1 frame");
         }
+    }
+
+    /// G-343 — the pinned-set persistence round-trip: save → reload
+    /// restores the set verbatim (`<state>/session.json`,
+    /// `{pinned: [...]}` — local.tsx:508-541), and a missing or
+    /// corrupt doc reads empty.
+    #[test]
+    fn pinned_sessions_persist_and_reload() {
+        let dir = std::env::temp_dir().join(format!("gb12-g343-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("tmp dir");
+        let path = dir.join("session.json");
+
+        // Missing file → empty (readJson's catch).
+        assert!(read_pinned_sessions(&path).is_empty());
+
+        // Save → reload round-trip.
+        write_pinned_sessions(&path, &["ses_a".to_owned(), "ses_b".to_owned()])
+            .expect("atomic write");
+        assert_eq!(read_pinned_sessions(&path), vec!["ses_a".to_owned(), "ses_b".to_owned()]);
+        let raw = std::fs::read_to_string(&path).expect("doc");
+        assert_eq!(raw, r#"{"pinned":["ses_a","ses_b"]}"#, "the ref's document shape");
+
+        // Overwrite with the empty set, then corrupt-file resilience.
+        write_pinned_sessions(&path, &[]).expect("atomic write");
+        assert!(read_pinned_sessions(&path).is_empty());
+        std::fs::write(&path, "{not json").expect("corrupt");
+        assert!(
+            read_pinned_sessions(&path).is_empty(),
+            "corrupt doc = empty, never a boot failure"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

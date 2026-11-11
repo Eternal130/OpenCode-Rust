@@ -522,6 +522,16 @@ pub fn handle_dialog_key(
         }
     }
     if let DialogKind::ServerList { command: "session.list", .. } = entry.kind {
+        // G-343 — `session.pin.toggle` (dialog-session-list.tsx:249,
+        // keybind "ctrl+f"): toggle the CURSOR row's pin through the
+        // local session store (local.tsx:583-590 — the Pinned group
+        // re-derives reactively off `session_list_options`).
+        if keymap.stroke_triggers(&stroke, "session.pin.toggle") {
+            if let Some(option) = entry.select.submit(&props) {
+                store.toggle_pin(&option.value);
+            }
+            return DialogKeyOutcome::Consumed;
+        }
         if keymap.stroke_triggers(&stroke, "session.delete") {
             if let Some(option) = entry.select.submit(&props) {
                 store.session_delete_pressed(&option.value.clone());
@@ -2118,6 +2128,55 @@ mod tests {
             height: usize::from(height),
             clusters: None,
         }
+    }
+
+    /// G-343 — the sessions dialog's `session.pin.toggle` binding
+    /// (ctrl+f, dialog-session-list.tsx:249): the stroke pins the
+    /// CURSOR row (and un-pins on repeat) through the store's
+    /// persisted toggle.
+    #[test]
+    fn sessions_dialog_pin_toggle_key_flips_the_cursor_row() {
+        use crate::data::Ingest;
+        let store = Store::new(Runtime::new());
+        store.ingest_all([Ingest::Resync {
+            sessions: vec![crate::data::SessionSnapshot {
+                id: "s_pin".into(),
+                title: Some("Pin me".into()),
+                ..Default::default()
+            }],
+            unread: Vec::new(),
+            messages: Vec::new(),
+            cursors: Vec::new(),
+            permissions: Vec::new(),
+            forms: Vec::new(),
+        }]);
+        store.replace_dialog(
+            DialogKind::ServerList { command: "session.list", title: "Sessions" },
+            DialogSize::Medium,
+        );
+        let mut keymap = Keymap::new();
+        keymap.push_mode("dialog");
+        let clock = crate::keymap::ManualClock::default();
+        let outcome = handle_dialog_key(
+            &store,
+            &mut keymap,
+            &clock,
+            crate::keymap::KeyStroke::parse("ctrl+f").expect("ctrl+f"),
+            (100, 30),
+        );
+        assert_eq!(outcome, DialogKeyOutcome::Consumed);
+        assert_eq!(store.tabs().pinned, vec!["s_pin".to_owned()], "the row pinned");
+        assert!(store.take_pinned_dirty().is_some(), "the pin persists");
+        // Repeat → un-pin.
+        let outcome = handle_dialog_key(
+            &store,
+            &mut keymap,
+            &clock,
+            crate::keymap::KeyStroke::parse("ctrl+f").expect("ctrl+f"),
+            (100, 30),
+        );
+        assert_eq!(outcome, DialogKeyOutcome::Consumed);
+        assert!(store.tabs().pinned.is_empty(), "the repeat un-pins");
     }
 
     /// The modal layer through the pump-shaped path: escape closes,

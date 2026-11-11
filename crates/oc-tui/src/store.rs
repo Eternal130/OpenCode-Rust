@@ -1506,6 +1506,10 @@ pub struct Store {
     /// [`Store::session_cost`] is the sidebar/footer read (the
     /// family-summed `data.session.cost`, data.ts:1369-1379).
     session_costs: Signal<HashMap<String, f64>>,
+    /// G-352 — per-session token totals (`session.usage.updated`'s
+    /// `tokens` field — client/solid/data.ts:645-651 writes
+    /// `info[id].tokens`); the cost map's sibling.
+    session_tokens: Signal<HashMap<String, u64>>,
     /// The session HISTORY from the resync's `session.list` — the
     /// session-list dialog's data source (v2 lists history there,
     /// never the tab strip).
@@ -1888,6 +1892,10 @@ pub struct Store {
     inline_shells: std::cell::RefCell<std::collections::HashMap<String, InlineShellStream>>,
     /// The model-ring persistence flag (the run loop drains it).
     model_ring_dirty: Cell<bool>,
+    /// G-343 — the pinned-set persistence flag (the run loop drains
+    /// it: write `<state>/session.json` when set — local.tsx:504-523
+    /// `save()`).
+    pinned_dirty: Cell<bool>,
     /// #4: the footer's `{directory}:{branch}` location label — the
     /// launch cwd's vcs info (`prompt.footer.status`'s default,
     /// `prompt/index.tsx:1605-1619`); the app's location worker sets
@@ -3781,6 +3789,7 @@ struct StoreSignals {
     tabs_numbers: Signal<bool>,
     vertical_tabs_width: Signal<usize>,
     session_costs: Signal<HashMap<String, f64>>,
+    session_tokens: Signal<HashMap<String, u64>>,
     session_history: Signal<Vec<crate::data::SessionSnapshot>>,
     terminal_available: Signal<bool>,
     terminal_registry: Signal<Vec<TerminalListed>>,
@@ -3894,6 +3903,7 @@ impl Store {
                 watchers.tabs_layout.get(),
                 watchers.vertical_tabs_width.get(),
                 watchers.session_costs.get(),
+                watchers.session_tokens.get(),
                 watchers.route.get(),
                 watchers.dialogs.get(),
                 watchers.theme.get(),
@@ -3951,6 +3961,7 @@ impl Store {
             tabs_numbers,
             vertical_tabs_width,
             session_costs,
+            session_tokens,
             session_history,
             terminal_available,
             terminal_registry,
@@ -4038,6 +4049,7 @@ impl Store {
             vertical_tabs_width,
             session_pane_width,
             session_costs,
+            session_tokens,
             session_history,
             terminal_available,
             terminal_registry,
@@ -4223,6 +4235,7 @@ impl Store {
             shell_view,
             inline_shells: std::cell::RefCell::new(std::collections::HashMap::new()),
             model_ring_dirty: Cell::new(false),
+            pinned_dirty: Cell::new(false),
             revert_sink: std::cell::RefCell::new(Rc::new(RecordingRevertSink::default())),
             integration_sink: std::cell::RefCell::new(Rc::new(NoIntegrationSink)),
             project_sink: std::cell::RefCell::new(Rc::new(NoProjectSink)),
@@ -4345,6 +4358,7 @@ impl Store {
         let vertical_tabs_width =
             Signal::new(&runtime, crate::components::session_tabs_rail::SESSION_SIDEBAR_WIDTH);
         let session_costs = Signal::new(&runtime, HashMap::<String, f64>::new());
+        let session_tokens = Signal::new(&runtime, HashMap::<String, u64>::new());
         Self::build(
             runtime,
             StoreSignals {
@@ -4354,6 +4368,7 @@ impl Store {
                 tabs_numbers,
                 vertical_tabs_width,
                 session_costs,
+                session_tokens,
                 session_history,
                 terminal_available,
                 terminal_registry,
@@ -4677,6 +4692,13 @@ impl Store {
             }
         }
         total
+    }
+
+    /// G-352 — the session's token total (`info[id].tokens` from
+    /// `session.usage.updated`); `0` when no usage event has landed.
+    #[must_use]
+    pub fn session_tokens(&self, session_id: &str) -> u64 {
+        self.session_tokens.get().get(session_id).copied().unwrap_or(0)
     }
 
     /// The session history from the last resync — the session-list
@@ -6926,6 +6948,12 @@ impl Store {
     }
 
     /// Toggle pinning a session in the session list.
+    ///
+    /// G-343 — the toggle is live (the sessions dialog's
+    /// `session.pin.toggle` action, ctrl+f) AND persisted: the flip
+    /// marks the set dirty and the run loop writes
+    /// `<state>/session.json` (`{pinned: [...]}`, local.tsx:576-590's
+    /// `togglePin` → `save()`).
     pub fn toggle_pin(&self, session_id: &str) {
         self.tabs.update(|state| {
             if let Some(position) = state.pinned.iter().position(|id| id == session_id) {
@@ -6934,6 +6962,26 @@ impl Store {
                 state.pinned.push(session_id.to_owned());
             }
         });
+        self.pinned_dirty.set(true);
+    }
+
+    /// G-343 — boot seed: the persisted `<state>/session.json` pinned
+    /// set (local.tsx:528-541's readJson) replaces the empty default.
+    pub fn seed_pinned(&self, pinned: Vec<String>) {
+        self.tabs.update(|state| {
+            state.pinned = pinned;
+        });
+    }
+
+    /// G-343 — the pinned-set persistence drain (the run loop's side:
+    /// write `<state>/session.json` when a toggle marked it dirty).
+    #[must_use]
+    pub fn take_pinned_dirty(&self) -> Option<Vec<String>> {
+        if self.pinned_dirty.replace(false) {
+            Some(self.tabs.get().pinned)
+        } else {
+            None
+        }
     }
 
     /// Mark a tab's unread state (activity/error); selecting the tab
@@ -12921,6 +12969,11 @@ impl Store {
             }
             "session.deleted" => {
                 let Some(id) = event.string("sessionID") else { return };
+                // G-343 — the pinned set prunes with the session
+                // (local.tsx:556-566's `prune` → `save()`).
+                if self.tabs.get().pinned.iter().any(|pinned| pinned == &id) {
+                    self.toggle_pin(&id);
+                }
                 // CONFIG-C8 — `session.deleted` clears the family's
                 // cached data (removeSession → the evict surface,
                 // client/solid/data.ts:642-644): the message trees,
@@ -12958,19 +13011,229 @@ impl Store {
                         apply_session_move(row, &moved);
                     }
                 });
+                // G-352 — the `location-switched` transcript row
+                // (client/solid/data.ts:704-726's message.insert):
+                // projected live for a KNOWN session, never waiting
+                // for the resync to carry it.
+                if self.session_index.borrow().get(&id).is_some() {
+                    if let Some(directory) = moved.directory.clone() {
+                        self.project_message(
+                            &id,
+                            Message::LocationSwitched {
+                                id: live_message_id(event),
+                                directory,
+                                created: event.created.unwrap_or(0),
+                            },
+                        );
+                    }
+                }
             }
-            // `session.usage.updated` (client/solid/data.ts:646-652,
-            // TUI-13): the per-session cost total rides the public
-            // event — `info[id].cost = data.cost`. The sidebar's
-            // `$X.XX spent` row and the composer footer's money
-            // segment read it through [`Store::session_cost`].
+            // `session.usage.updated` (client/solid/data.ts:645-651,
+            // TUI-13): the per-session cost AND token totals ride the
+            // public event — `info[id] = {cost, tokens}`. The
+            // sidebar's `$X.XX spent` row reads cost through
+            // [`Store::session_cost`]; G-352 keeps the token total
+            // beside it ([`Store::session_tokens`]) so the projection
+            // no longer waits for a resync to carry it.
             "session.usage.updated" => {
                 let Some(id) = event.string("sessionID") else { return };
-                let Some(cost) = event.data.get("cost").and_then(serde_json::Value::as_f64) else {
+                let cost = event.data.get("cost").and_then(serde_json::Value::as_f64);
+                let tokens = event.data.get("tokens").and_then(serde_json::Value::as_u64);
+                if cost.is_none() && tokens.is_none() {
+                    return;
+                }
+                if let Some(cost) = cost {
+                    self.session_costs.update(|costs| {
+                        costs.insert(id.clone(), cost);
+                    });
+                }
+                if let Some(tokens) = tokens {
+                    self.session_tokens.update(|totals| {
+                        totals.insert(id, tokens);
+                    });
+                }
+            }
+            // G-352 — `session.agent.selected` (client/solid/data.ts:
+            // 652-664): the info.agent write PLUS the `agent-switched`
+            // transcript row (inserted live, previous carried from the
+            // projection's current selection).
+            "session.agent.selected" => {
+                let Some(id) = event.string("sessionID") else { return };
+                let Some(agent) = event.string("agent") else { return };
+                let known = self.session_index.borrow().get(&id).is_some();
+                let previous = self.selection_for(&id).agent.filter(|_| known);
+                if known {
+                    self.selection.update(|state| {
+                        state.by_session.entry(id.clone()).or_default().agent = Some(agent.clone());
+                    });
+                }
+                self.project_message(
+                    &id,
+                    Message::AgentSwitched {
+                        id: live_message_id(event),
+                        agent,
+                        previous,
+                        created: event.created.unwrap_or(0),
+                    },
+                );
+            }
+            // G-352 — `session.model.selected` (client/solid/data.ts:
+            // 665-686): the info.model write + the `model-switched`
+            // transcript row, only when the session's transcript is
+            // loaded (ref gates the insert on
+            // `store.session.message[sessionID]`).
+            "session.model.selected" => {
+                let Some(id) = event.string("sessionID") else { return };
+                let Some(model) = event.data.get("model") else { return };
+                let selection = model_ref_selection(model);
+                if self.session_index.borrow().get(&id).is_some() {
+                    if let Some(model) = &selection {
+                        self.selection.update(|state| {
+                            state.by_session.entry(id.clone()).or_default().model =
+                                Some(model.clone());
+                        });
+                    }
+                }
+                if !self.messages.get().by_session.contains_key(&id) {
+                    return;
+                }
+                self.project_message(
+                    &id,
+                    Message::ModelSwitched {
+                        id: live_message_id(event),
+                        provider_id: selection
+                            .as_ref()
+                            .map(|model| model.provider_id.clone())
+                            .unwrap_or_default(),
+                        model_id: selection
+                            .as_ref()
+                            .map(|model| model.model_id.clone())
+                            .unwrap_or_default(),
+                        variant: selection.as_ref().and_then(|model| model.variant.clone()),
+                        previous: None,
+                        created: event.created.unwrap_or(0),
+                    },
+                );
+            }
+            // G-352 — `session.instructions.updated` (client/solid/
+            // data.ts:791-804): the `system` transcript row, only when
+            // the delta carries text (the baseline/empty-rendering
+            // deltas produce no message).
+            "session.instructions.updated" => {
+                let Some(id) = event.string("sessionID") else { return };
+                let Some(text) = event.string("text") else { return };
+                if text.is_empty() {
+                    return;
+                }
+                let keys = event
+                    .data
+                    .get("delta")
+                    .and_then(serde_json::Value::as_object)
+                    .map(|delta| delta.keys().cloned().collect::<Vec<String>>().join(", "))
+                    .unwrap_or_default();
+                self.project_message(
+                    &id,
+                    Message::System {
+                        id: live_message_id(event),
+                        description: Some(format!("Instructions updated: {keys}")),
+                        created: event.created.unwrap_or(0),
+                    },
+                );
+            }
+            // G-352 — `session.synthetic` (client/solid/data.ts:805-814):
+            // the `synthetic` transcript row (text, description,
+            // metadata) inserted live.
+            "session.synthetic" => {
+                let Some(id) = event.string("sessionID") else { return };
+                let (instruction_paths, source, state, agent, child_id) = synthetic_fields(event);
+                self.project_message(
+                    &id,
+                    Message::Synthetic {
+                        id: live_message_id(event),
+                        instruction_paths,
+                        description: event.string("description"),
+                        source,
+                        state,
+                        agent,
+                        child_id,
+                        created: event.created.unwrap_or(0),
+                    },
+                );
+            }
+            // G-352 — `session.shell.started` (client/solid/data.ts:
+            // 815-827): the `shell` transcript row opens live
+            // (`status` defaults running when the payload omits it).
+            "session.shell.started" => {
+                let Some(id) = event.string("sessionID") else { return };
+                let Some(shell) = event.data.get("shell") else { return };
+                let string_field = |key: &str| {
+                    shell.get(key).and_then(serde_json::Value::as_str).map(str::to_owned)
+                };
+                let Some(shell_id) = string_field("id") else { return };
+                self.project_message(
+                    &id,
+                    Message::Shell {
+                        id: live_message_id(event),
+                        shell_id,
+                        command: string_field("command").unwrap_or_default(),
+                        status: string_field("status").unwrap_or_else(|| "running".to_owned()),
+                        exit: shell
+                            .get("exit")
+                            .and_then(serde_json::Value::as_f64)
+                            .map(|code| code.round() as i64),
+                        output: None,
+                        created: event.created.unwrap_or(0),
+                    },
+                );
+            }
+            // G-352 — `session.shell.ended` (client/solid/data.ts:
+            // 828-837): the matching `shell` row updates in place —
+            // status, exit, output and completion time.
+            "session.shell.ended" => {
+                let Some(id) = event.string("sessionID") else { return };
+                let Some(shell_id) = event
+                    .data
+                    .pointer("/shell/id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                else {
                     return;
                 };
-                self.session_costs.update(|costs| {
-                    costs.insert(id, cost);
+                let status = event
+                    .data
+                    .pointer("/shell/status")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned);
+                let exit = event
+                    .data
+                    .pointer("/shell/exit")
+                    .and_then(serde_json::Value::as_f64)
+                    .map(|code| code.round() as i64);
+                let output = event
+                    .data
+                    .pointer("/output/output")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned);
+                self.update_messages(&id, |messages| {
+                    if let Some(Message::Shell {
+                        status: row_status,
+                        exit: row_exit,
+                        output: row_output,
+                        ..
+                    }) = messages
+                        .iter_mut()
+                        .find(|message| matches!(message, Message::Shell { shell_id: row, .. } if *row == shell_id))
+                    {
+                        if let Some(status) = status {
+                            *row_status = status;
+                        }
+                        if let Some(exit) = exit {
+                            *row_exit = Some(exit);
+                        }
+                        if output.is_some() {
+                            *row_output = output;
+                        }
+                    }
                 });
             }
             "permission.asked" => {
@@ -14049,6 +14312,45 @@ fn files_from_event(data: &Value) -> Vec<crate::components::message::model::User
         })
         .collect();
     crate::components::message::model::deduplicate_visible_files(&mapped)
+}
+
+/// G-352 — the transcript row id a live-inserted event carries (the
+/// ref's `messageIDFromEvent(event.id)` — same `msg_` convention as
+/// the step/part reducers).
+fn live_message_id(event: &BusEvent) -> String {
+    format!("msg_{}", event.id.trim_start_matches("evt_"))
+}
+
+/// G-352 — `{providerID, id, variant?}` → the selection triple
+/// (`session.model.selected`'s payload shape).
+fn model_ref_selection(model: &Value) -> Option<ModelSelection> {
+    Some(ModelSelection {
+        provider_id: model.get("providerID").and_then(Value::as_str)?.to_owned(),
+        model_id: model.get("id").and_then(Value::as_str)?.to_owned(),
+        variant: model.get("variant").and_then(Value::as_str).map(str::to_owned),
+    })
+}
+
+/// G-352 — the `synthetic` row's metadata fields (the same extraction
+/// as the resync-side parser).
+fn synthetic_fields(
+    event: &BusEvent,
+) -> (Vec<String>, Option<String>, Option<String>, Option<String>, Option<String>) {
+    let metadata = event.data.get("metadata");
+    let instruction_paths = metadata
+        .and_then(|map| map.get("instruction"))
+        .and_then(|value| value.get("paths"))
+        .and_then(Value::as_array)
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(|path| path.as_str().map(str::to_owned))
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
+    let field =
+        |key: &str| metadata.and_then(|map| map.get(key)).and_then(crate::data::stringify_value);
+    (instruction_paths, field("source"), field("state"), field("agent"), field("childID"))
 }
 
 /// Parse a full message payload off `message.updated` (`SessionMessageInfo`
@@ -17940,5 +18242,185 @@ mod g273_mention_tests {
             1,
             "the mention dedupes by name"
         );
+    }
+
+    /// G-343 — the pin toggle's persistence contract: a flip marks
+    /// the set dirty (the run loop writes `<state>/session.json`) and
+    /// the drain yields it exactly once.
+    #[test]
+    fn pin_toggle_marks_the_pinned_set_dirty_once() {
+        let store = Store::new(Runtime::new());
+        assert!(store.take_pinned_dirty().is_none(), "boot is clean");
+        store.toggle_pin("ses_1");
+        assert_eq!(store.take_pinned_dirty(), Some(vec!["ses_1".to_owned()]));
+        assert!(store.take_pinned_dirty().is_none(), "drained once");
+        store.toggle_pin("ses_2");
+        store.toggle_pin("ses_1");
+        assert_eq!(
+            store.take_pinned_dirty(),
+            Some(vec!["ses_2".to_owned()]),
+            "toggle-off removes: {:?}",
+            store.tabs().pinned
+        );
+        // The boot seed replaces the whole set.
+        store.seed_pinned(vec!["ses_9".to_owned()]);
+        assert_eq!(store.tabs().pinned, vec!["ses_9".to_owned()]);
+    }
+
+    /// G-343 — `session.deleted` prunes the pinned set (local.tsx's
+    /// prune → save).
+    #[test]
+    fn session_deleted_prunes_the_pinned_set() {
+        let store = Store::new(Runtime::new());
+        store.seed_pinned(vec!["p1".to_owned(), "p2".to_owned()]);
+        let mut event = BusEvent::new("session.deleted", serde_json::json!({"sessionID": "p1"}));
+        event.id = "evt_del".into();
+        store.ingest_all([Ingest::Event(event)]);
+        assert_eq!(store.tabs().pinned, vec!["p2".to_owned()]);
+        assert!(store.take_pinned_dirty().is_some(), "the prune persists");
+    }
+
+    /// G-352 — the six live projection gaps: agent / model /
+    /// location-switched / system / synthetic / shell transcript rows
+    /// land immediately off their events, no resync needed; usage
+    /// carries tokens beside cost.
+    #[test]
+    fn live_reducers_project_six_event_types_without_resync() {
+        fn bus_event(id: &str, type_: &str, data: serde_json::Value) -> Ingest {
+            let mut event = BusEvent::new(type_, data);
+            event.id = id.to_owned();
+            event.created = Some(1_000);
+            Ingest::Event(event)
+        }
+        let store = Store::new(Runtime::new());
+        // A known session (the resync indexes s1) with a loaded
+        // transcript (one user message hydrates the tree).
+        store.ingest_all([Ingest::Resync {
+            sessions: vec![crate::data::SessionSnapshot {
+                id: "s1".to_owned(),
+                ..Default::default()
+            }],
+            unread: Vec::new(),
+            messages: Vec::new(),
+            cursors: Vec::new(),
+            permissions: Vec::new(),
+            forms: Vec::new(),
+        }]);
+        store.ingest_all([bus_event(
+            "evt_u",
+            "message.updated",
+            serde_json::json!({"id": "m_u", "type": "user", "text": "hi", "time": {"created": 1}}),
+        )]);
+
+        // agent.selected: the selection updates AND the row lands.
+        store.ingest_all([bus_event(
+            "evt_a",
+            "session.agent.selected",
+            serde_json::json!({"sessionID": "s1", "agent": "plan"}),
+        )]);
+        assert_eq!(store.selection_for("s1").agent.as_deref(), Some("plan"));
+        assert!(matches!(
+            store.messages("s1").iter().find(|message| message.id() == "msg_a"),
+            Some(Message::AgentSwitched { agent, .. }) if agent == "plan"
+        ));
+
+        // model.selected: the selection updates AND the row lands
+        // (transcript loaded).
+        store.ingest_all([bus_event(
+            "evt_m",
+            "session.model.selected",
+            serde_json::json!({"sessionID": "s1", "model": {"providerID": "anthropic", "id": "claude"}}),
+        )]);
+        assert_eq!(store.selection_for("s1").model.as_ref().expect("model").model_id, "claude");
+        assert!(matches!(
+            store.messages("s1").iter().find(|message| message.id() == "msg_m"),
+            Some(Message::ModelSwitched { model_id, .. }) if model_id == "claude"
+        ));
+
+        // moved: the location-switched row lands (history row already
+        // covered by the G-236 tests).
+        store.ingest_all([bus_event(
+            "evt_l",
+            "session.moved",
+            serde_json::json!({"sessionID": "s1", "location": {"directory": "/tmp/other"}}),
+        )]);
+        assert!(matches!(
+            store.messages("s1").iter().find(|message| message.id() == "msg_l"),
+            Some(Message::LocationSwitched { directory, .. }) if directory == "/tmp/other"
+        ));
+
+        // instructions.updated (with text): the system row lands.
+        store.ingest_all([bus_event(
+            "evt_i",
+            "session.instructions.updated",
+            serde_json::json!({"sessionID": "s1", "text": "be terse", "delta": {"AGENTS.md": 1}}),
+        )]);
+        assert!(matches!(
+            store.messages("s1").iter().find(|message| message.id() == "msg_i"),
+            Some(Message::System { description, .. }) if description.as_deref() == Some("Instructions updated: AGENTS.md")
+        ));
+        // A textless delta (the baseline) produces no row.
+        store.ingest_all([bus_event(
+            "evt_i2",
+            "session.instructions.updated",
+            serde_json::json!({"sessionID": "s1", "delta": {}}),
+        )]);
+        assert!(store.messages("s1").iter().all(|message| message.id() != "msg_i2"));
+
+        // synthetic: the row lands with its metadata fields.
+        store.ingest_all([bus_event(
+            "evt_y",
+            "session.synthetic",
+            serde_json::json!({"sessionID": "s1", "text": "done", "description": "Subagent finished",
+                                "metadata": {"state": "completed", "agent": "build", "childID": "ses_child"}}),
+        )]);
+        assert!(matches!(
+            store.messages("s1").iter().find(|message| message.id() == "msg_y"),
+            Some(Message::Synthetic { description, state, child_id, .. })
+                if description.as_deref() == Some("Subagent finished")
+                    && state.as_deref() == Some("completed")
+                    && child_id.as_deref() == Some("ses_child")
+        ));
+
+        // shell.started → shell.ended: the row opens live and the end
+        // updates it IN PLACE.
+        store.ingest_all([bus_event(
+            "evt_s",
+            "session.shell.started",
+            serde_json::json!({"sessionID": "s1", "shell": {"id": "sh_1", "command": "cargo test", "status": "running"}}),
+        )]);
+        assert!(matches!(
+            store.messages("s1").iter().find(|message| message.id() == "msg_s"),
+            Some(Message::Shell { shell_id, status, .. }) if shell_id == "sh_1" && status == "running"
+        ));
+        store.ingest_all([bus_event(
+            "evt_e",
+            "session.shell.ended",
+            serde_json::json!({"sessionID": "s1", "shell": {"id": "sh_1", "status": "exited", "exit": 0},
+                                "output": {"output": "ok", "cursor": 2, "size": 2, "truncated": false}}),
+        )]);
+        assert!(matches!(
+            store.messages("s1").iter().find(|message| message.id() == "msg_s"),
+            Some(Message::Shell { status, exit, output, .. })
+                if status == "exited" && *exit == Some(0) && output.as_deref() == Some("ok")
+        ));
+        // Exactly one shell row: the end updated, never appended.
+        assert_eq!(
+            store
+                .messages("s1")
+                .iter()
+                .filter(|message| matches!(message, Message::Shell { .. }))
+                .count(),
+            1
+        );
+
+        // usage.updated: cost AND tokens land without a resync.
+        store.ingest_all([bus_event(
+            "evt_c",
+            "session.usage.updated",
+            serde_json::json!({"sessionID": "s1", "cost": 0.42, "tokens": 60_400}),
+        )]);
+        assert_eq!(store.session_cost("s1"), 0.42);
+        assert_eq!(store.session_tokens("s1"), 60_400, "the token total lands live");
     }
 }

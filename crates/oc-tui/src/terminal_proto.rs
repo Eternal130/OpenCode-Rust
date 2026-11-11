@@ -467,9 +467,74 @@ pub fn clipboard_read_host() -> Option<Vec<u8>> {
     None
 }
 
+/// G-342 — the single stdin ownership lock: the OSC 52 query window
+/// (this module) and the live input thread (`read_session_input`)
+/// are the ONLY two readers of fd 0; every raw poll/read sequence
+/// runs under this mutex so exactly one reader owns the tty at a
+/// time (the query window can never steal a keystroke mid-poll, and
+/// the input thread can never swallow the OSC 52 reply burst).
+pub static STDIN_READ_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Keystrokes that arrived INSIDE an OSC 52 query window (bytes the
+/// window read that were not part of the reply): pushed back here so
+/// the input thread's next `read_session_input` pass delivers them
+/// to the key pipeline — a keystroke typed during the 150 ms query
+/// window is delayed, never lost.
+static STDIN_PUSHBACK: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
+
+/// Take the pending pushback bytes (the input thread's first read
+/// arm — drained before any fresh poll under the stdin lock).
+#[must_use]
+pub fn take_stdin_pushback() -> Vec<u8> {
+    let mut pending = STDIN_PUSHBACK.lock().unwrap_or_else(|poison| poison.into_inner());
+    std::mem::take(&mut *pending)
+}
+
+/// Queue bytes for the input thread (the OSC 52 window's leftover
+/// arm).
+fn push_stdin_bytes(bytes: Vec<u8>) {
+    let mut pending = STDIN_PUSHBACK.lock().unwrap_or_else(|poison| poison.into_inner());
+    pending.extend_from_slice(&bytes);
+}
+
+/// Split a raw OSC 52 read window into `(reply, leftover)`: the
+/// reply span is the `ESC ] 52 ; …` sequence through its BEL/ST
+/// terminator (decoded by [`parse_osc52_reply`]); everything around
+/// it — keystrokes that raced the window — is the leftover the
+/// caller must push back for the input thread. A window with no
+/// reply is ALL leftover.
+#[must_use]
+fn split_osc52_window(collected: &[u8]) -> (Option<Vec<u8>>, Vec<u8>) {
+    let Some(start) = collected.windows(5).position(|window| window == b"\x1b]52;") else {
+        return (None, collected.to_vec());
+    };
+    // The terminator: BEL anywhere after the preamble, or ST
+    // (`ESC \`) — whichever comes first.
+    let tail = &collected[start + 5..]; // past the 5-byte `ESC ] 5 2 ;` preamble
+    let bel = tail.iter().position(|byte| *byte == 0x07);
+    let st = tail.windows(2).position(|window| window == b"\x1b\\");
+    let (end, terminator_len) = match (bel, st) {
+        (Some(bel), Some(st)) if bel <= st => (bel, 1),
+        (Some(_), Some(st)) => (st, 2),
+        (Some(bel), None) => (bel, 1),
+        (None, Some(st)) => (st, 2),
+        (None, None) => (tail.len(), 0), // unterminated: consume the window
+    };
+    let reply_end = (start + 5 + end + terminator_len).min(collected.len());
+    let reply_span = collected[..reply_end].to_vec();
+    let mut leftover = collected[..start].to_vec();
+    leftover.extend_from_slice(&collected[reply_end..]);
+    (parse_osc52_reply(&reply_span), leftover)
+}
+
 /// The terminal arm: `OSC 52 ; c ; ?` + a 150 ms raw read window (the
 /// same probe discipline as the boot OSC 11 background query — the
 /// caller must own the terminal, i.e. run between frames).
+///
+/// G-342: the whole window runs under [`STDIN_READ_LOCK`] — the same
+/// mutex the input thread's `read_session_input` holds — so the two
+/// fd 0 consumers serialize; non-reply bytes read inside the window
+/// are pushed back for the input thread instead of being dropped.
 #[must_use]
 pub fn clipboard_read_osc52() -> Option<Vec<u8>> {
     use std::io::{IsTerminal, Read as _, Write as _};
@@ -478,6 +543,11 @@ pub fn clipboard_read_osc52() -> Option<Vec<u8>> {
     }
     // The run loop already holds raw mode when this arm runs (the
     // opentui session Terminal); the window just polls and reads.
+    // G-342: hold the stdin lock for the whole window — the input
+    // thread parks on the mutex instead of racing fd 0 (its 50 ms
+    // poll passes release quickly; no response just runs out the
+    // 150 ms deadline and releases).
+    let _stdin_guard = STDIN_READ_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
     let answer = (|| {
         {
             let mut stdout = std::io::stdout().lock();
@@ -509,11 +579,18 @@ pub fn clipboard_read_osc52() -> Option<Vec<u8>> {
                 break;
             }
             collected.extend_from_slice(&buffer[..n]);
-            if collected.windows(2).any(|w| w == b"\x07" || w == b"\x1b\\") {
+            if split_osc52_window(&collected).0.is_some() {
                 break;
             }
         }
-        parse_osc52_reply(&collected)
+        let (reply, leftover) = split_osc52_window(&collected);
+        // G-342: the window's non-reply bytes belong to the input
+        // thread (keystrokes that raced the query) — push them back,
+        // never drop them.
+        if !leftover.is_empty() {
+            push_stdin_bytes(leftover);
+        }
+        reply
     })();
     answer
 }
@@ -628,6 +705,74 @@ mod tests {
         assert_eq!(parse_osc52_reply(b"\x1b]52;c;?\x07"), None);
         // Not an OSC 52 line at all.
         assert_eq!(parse_osc52_reply(b"\x1b[?997;1n"), None);
+    }
+
+    /// G-342 — the window splitter: a keystroke racing the query
+    /// window is separated from the reply and BOTH survive — the
+    /// reply decodes, the keystroke lands in the leftover the input
+    /// thread receives.
+    #[test]
+    fn osc52_window_splits_reply_from_racing_keystrokes() {
+        // Keystroke BEFORE the reply (typed as the window opened).
+        let (reply, leftover) = split_osc52_window(b"ax\x1b]52;c;aGk=\x07");
+        assert_eq!(reply, Some(b"hi".to_vec()));
+        assert_eq!(leftover, b"ax".to_vec());
+        // Keystroke AFTER the reply's BEL terminator.
+        let (reply, leftover) = split_osc52_window(b"\x1b]52;c;aGk=\x07\x1b[Cq");
+        assert_eq!(reply, Some(b"hi".to_vec()));
+        assert_eq!(leftover, b"\x1b[Cq".to_vec());
+        // ST terminator, keystrokes on both sides.
+        let (reply, leftover) = split_osc52_window(b"j\x1b]52;c;aGk=\x1b\\k");
+        assert_eq!(reply, Some(b"hi".to_vec()));
+        assert_eq!(leftover, b"jk".to_vec());
+        // A window with NO reply is all leftover (pure keystrokes).
+        let (reply, leftover) = split_osc52_window(b"\x1b[Cabc");
+        assert_eq!(reply, None);
+        assert_eq!(leftover, b"\x1b[Cabc".to_vec());
+        // A refused reply (`?`) consumes its span (no reply decoded,
+        // nothing pushed back for it) but keeps surrounding keys.
+        let (reply, leftover) = split_osc52_window(b"x\x1b]52;c;?\x07y");
+        assert_eq!(reply, None);
+        assert_eq!(leftover, b"xy".to_vec());
+    }
+
+    /// G-342 — the serialized path, field-level: while a query window
+    /// is in flight (its bytes split and the keystroke half pushed
+    /// back), the input thread's next read delivers the pushed
+    /// keystroke — both consumers get their bytes — and the mutex
+    /// serializes two concurrent fd 0 readers.
+    #[test]
+    fn stdin_pushback_delivers_racing_keystrokes_to_the_input_thread() {
+        use std::sync::Arc;
+        // The "query window" side: one burst holding a reply AND a
+        // keystroke — the reply goes to its consumer, the keystroke
+        // is queued for the input thread.
+        let (reply, leftover) = split_osc52_window(b"\x1b]52;c;aGk=\x07\x1b[C");
+        assert_eq!(reply, Some(b"hi".to_vec()), "the clipboard consumer gets the reply");
+        assert_eq!(leftover, b"\x1b[C".to_vec(), "the keystroke is the leftover");
+        push_stdin_bytes(leftover);
+        // The input thread's read arm: pushback first, exactly once.
+        assert_eq!(take_stdin_pushback(), b"\x1b[C".to_vec());
+        assert!(take_stdin_pushback().is_empty(), "drained — no double delivery");
+
+        // The lock serializes two concurrent "readers": one holds the
+        // stdin lock (an in-flight query window) while the other
+        // parks; both complete in order, never interleaved.
+        let order = Arc::new(std::sync::Mutex::new(Vec::<&'static str>::new()));
+        let mut handles = Vec::new();
+        for label in ["query", "input"] {
+            let order = Arc::clone(&order);
+            handles.push(std::thread::spawn(move || {
+                let _guard = STDIN_READ_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+                order.lock().expect("order").push(label);
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("reader thread");
+        }
+        let order = order.lock().expect("order").clone();
+        assert_eq!(order.len(), 2, "both readers completed");
     }
 
     /// G-210 — the palette query burst asks OSC 4 for all 16 ANSI slots
