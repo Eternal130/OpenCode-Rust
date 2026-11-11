@@ -325,8 +325,7 @@ fn probe_url(registration_url: &str) -> Option<String> {
         return None;
     }
     // Authority runs to the first path/query/fragment delimiter.
-    let authority_end =
-        rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let authority = &rest[..authority_end];
     if authority.is_empty() {
         return None;

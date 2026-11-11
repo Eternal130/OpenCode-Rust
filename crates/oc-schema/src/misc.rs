@@ -240,7 +240,7 @@ pub struct WebSearchProvider {
 }
 
 /// `WebSearch.Result`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WebSearchResult {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -251,14 +251,20 @@ pub struct WebSearchResult {
 }
 
 /// `WebSearch.Result.time`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WebSearchResultTime {
+    /// Publication time in milliseconds since the Unix epoch. The ref
+    /// types it `Schema.Finite` (websearch.ts:29) — any finite NUMBER,
+    /// not an unsigned integer (G-380④); the generated openapi/client
+    /// face already says `type: number` (types.gen.rs `published: f64`).
+    /// JSON cannot encode NaN/Inf, so `f64` here is finite by
+    /// construction on decode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub published: Option<NonNegativeInt>,
+    pub published: Option<f64>,
 }
 
 /// `WebSearch.Response`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WebSearchResponse {
     #[serde(rename = "providerID")]
     pub provider_id: crate::id::WebSearchId,

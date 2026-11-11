@@ -806,8 +806,10 @@ impl ToolExecuteWithContext for WebSearchExecute {
     }
 }
 
-fn iso8601(millis: u64) -> String {
-    // Render ISO-8601 UTC (new Date(...).toISOString()).
+fn iso8601(millis: f64) -> String {
+    // Render ISO-8601 UTC (new Date(...).toISOString()). G-380④: the
+    // ref schema types `published` as a finite number, not an integer.
+    let millis = millis as u64;
     let seconds = millis / 1000;
     let days = seconds / 86_400;
     let rem = seconds % 86_400;
@@ -911,7 +913,7 @@ mod tests {
                 url: format!("https://{}", self.id),
                 title: Some(format!("{} result", self.name)),
                 content: Some("content".into()),
-                time: oc_schema::misc::WebSearchResultTime { published: Some(1_700_000_000_000) },
+                time: oc_schema::misc::WebSearchResultTime { published: Some(1_700_000_000_000.0) },
             }])
         }
     }
@@ -1131,7 +1133,7 @@ mod tests {
                 url: "https://a".into(),
                 title: Some("A".into()),
                 content: Some("body".into()),
-                time: oc_schema::misc::WebSearchResultTime { published: Some(1_700_000_000_000) },
+                time: oc_schema::misc::WebSearchResultTime { published: Some(1_700_000_000_000.0) },
             },
             WebSearchResult {
                 url: "https://b".into(),

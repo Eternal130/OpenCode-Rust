@@ -64,7 +64,9 @@ pub enum ToolState {
     /// Terminal success.
     Completed {
         input: Record,
-        /// Non-empty on the wire (`NonEmptyArray<Content>`).
+        /// Non-empty on the wire (`NonEmptyArray<Content>`,
+        /// session-message.ts:142 — G-380② gates decode).
+        #[serde(deserialize_with = "crate::common::non_empty::vec")]
         content: Vec<Content>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         metadata: Option<Record>,
@@ -73,7 +75,13 @@ pub enum ToolState {
     Error {
         input: Record,
         error: SessionError,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Optional but non-empty when present (`NonEmptyArray(Content)
+        /// .pipe(optional)`, session-message.ts:151 — G-380②).
+        #[serde(
+            default,
+            deserialize_with = "crate::common::non_empty::option_vec",
+            skip_serializing_if = "Option::is_none"
+        )]
         content: Option<Vec<Content>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         metadata: Option<Record>,
