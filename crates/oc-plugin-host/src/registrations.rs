@@ -134,6 +134,10 @@ pub struct PluginVcsProvider {
     pub plugin_id: String,
     pub id: String,
     pub name: String,
+    /// G-350 — the definition carried an `init` closure (ref vcs.ts:182:
+    /// a provider without `init` maps to the 501 "unsupported"
+    /// InitializeError kind on vcs.init).
+    pub has_init: bool,
 }
 
 /// One tool registered through `ctx.tool.transform` (v2 `Tool.Info`
@@ -699,22 +703,23 @@ impl Registrations {
     /// (whole-table, by vcs provider id; the closures stay in the
     /// guest).
     pub fn merge_vcs_providers(&mut self, plugin_id: &str, providers: &[Value]) {
-        let incoming: Vec<(String, String)> = providers
+        let incoming: Vec<(String, String, bool)> = providers
             .iter()
             .filter_map(|definition| {
                 let id = definition.get("id")?.as_str()?;
                 let name = definition.get("name").and_then(Value::as_str).unwrap_or(id);
-                Some((id.to_owned(), name.to_owned()))
+                let has_init = definition.get("init").and_then(Value::as_bool).unwrap_or(false);
+                Some((id.to_owned(), name.to_owned(), has_init))
             })
             .collect();
         self.vcs_providers.retain(|_, provider| {
             provider.plugin_id != plugin_id
-                || incoming.iter().any(|(id, _)| id == provider.id.as_str())
+                || incoming.iter().any(|(id, _, _)| id == provider.id.as_str())
         });
-        for (id, name) in incoming {
+        for (id, name, has_init) in incoming {
             self.vcs_providers.insert(
                 id.clone(),
-                PluginVcsProvider { plugin_id: plugin_id.to_owned(), id, name },
+                PluginVcsProvider { plugin_id: plugin_id.to_owned(), id, name, has_init },
             );
         }
     }

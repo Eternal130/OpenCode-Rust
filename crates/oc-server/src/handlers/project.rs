@@ -1253,6 +1253,7 @@ fn git_lines(scope: &std::path::Path, args: &[&str]) -> Vec<String> {
 
 fn git_status(scope: &std::path::Path, args: &[&str]) -> bool {
     std::process::Command::new("git")
+        .args(GIT_CFG_ARGS)
         .args(args)
         .current_dir(scope)
         .stdin(std::process::Stdio::null())
@@ -1336,6 +1337,23 @@ const MAX_PATCH_BYTES: usize = 10_000_000;
 const MAX_TOTAL_PATCH_BYTES: usize = 10_000_000;
 /// `PATCH_CONTEXT_LINES` (vcs/patch.ts:7) — effectively full context.
 const PATCH_CONTEXT_LINES: i64 = 2_147_483_647;
+
+/// The ref's git invocation flag group (plugin/vcs/git.ts:158-168):
+/// every `makeGit` run carries `--no-optional-locks` plus the `-c`
+/// config overrides (G-361①).
+const GIT_CFG_ARGS: [&str; 11] = [
+    "--no-optional-locks",
+    "-c",
+    "core.autocrlf=false",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.longpaths=true",
+    "-c",
+    "core.symlinks=true",
+    "-c",
+    "core.quotepath=false",
+];
 
 /// One changed file (git.ts:129-133).
 #[derive(Debug, Clone)]
@@ -1520,6 +1538,7 @@ async fn vcs_diff(
             args.push(".".to_owned());
             let refs: Vec<&str> = args.iter().map(String::as_str).collect();
             let output = std::process::Command::new("git")
+                .args(GIT_CFG_ARGS)
                 .args(refs.as_slice())
                 .current_dir(scope)
                 .stdin(std::process::Stdio::null())
@@ -1682,6 +1701,7 @@ fn git_numstat(
 /// (git.ts:442-458).
 fn git_stat_untracked(scope: &std::path::Path, file: &str) -> Option<(i64, i64, bool)> {
     let output = std::process::Command::new("git")
+        .args(GIT_CFG_ARGS)
         .args(["diff", "--no-index", "--numstat", "--", "/dev/null", file])
         .current_dir(scope)
         .stdin(std::process::Stdio::null())
@@ -1722,6 +1742,7 @@ fn native_patch(
             item.file.clone(),
         ]);
         std::process::Command::new("git")
+            .args(GIT_CFG_ARGS)
             .args(args.iter().map(String::as_str).collect::<Vec<_>>().as_slice())
             .current_dir(scope)
             .stdin(std::process::Stdio::null())
@@ -1734,6 +1755,7 @@ fn native_patch(
         args.push("--".to_owned());
         args.push(item.file.clone());
         std::process::Command::new("git")
+            .args(GIT_CFG_ARGS)
             .args(args.iter().map(String::as_str).collect::<Vec<_>>().as_slice())
             .current_dir(scope)
             .stdin(std::process::Stdio::null())
@@ -1829,34 +1851,41 @@ async fn vcs_status(
             Value::Array(data),
         ));
     }
-    let output =
-        git_output(services.project.canonical.as_path(), &["status", "--porcelain=v1", "-z"])
-            .unwrap_or_default();
+    // Git status (plugin/vcs/git.ts:81-99): the porcelain scan AND the
+    // numstat stats run scoped to the LOCATION directory (`--", "."` in
+    // `ctx.directory` — G-361②: the old whole-repo scan from the
+    // project root widened the scope); additions/deletions come from
+    // `diff --numstat <ref>` with the untracked fallback
+    // (`statUntracked` from the worktree root — G-361③); the status
+    // letter mapping is the shared `kind` matrix (G-361④).
+    let directory = location.as_path();
+    let worktree = services.project.canonical.as_path();
+    let items = git_status_items(directory);
+    let stats: std::collections::HashMap<String, (i64, i64, bool)> = if git_has_head(directory) {
+        git_numstat(directory, "HEAD", None)
+    } else {
+        std::collections::HashMap::new()
+    };
     let mut data = Vec::new();
-    for record in output.split('\0') {
-        if record.len() < 4 {
-            continue;
-        }
-        let (code, path) = record.split_at(3);
-        let path = path.trim_start();
+    let mut items = items;
+    items.sort_by(|a, b| a.file.cmp(&b.file));
+    for item in items {
+        let stat: Option<(i64, i64)> =
+            stats.get(&item.file).map(|&(a, d, _)| (a, d)).or_else(|| {
+                (item.status == "added")
+                    .then(|| git_stat_untracked(worktree, &item.file))
+                    .flatten()
+                    .map(|(additions, deletions, _)| (additions, deletions))
+            });
+        let (additions, deletions) = stat.unwrap_or((0, 0));
         data.push(json!({
-            "file": path,
-            "status": status_code_to_kind(code),
-            "additions": 0,
-            "deletions": 0,
+            "file": item.file,
+            "status": item.status,
+            "additions": additions,
+            "deletions": deletions,
         }));
     }
     Ok(super::common::json_location_data(&location.as_path().to_string_lossy(), Value::Array(data)))
-}
-
-fn status_code_to_kind(code: &str) -> &'static str {
-    match code.trim() {
-        "A" | "A " | "AM " | "??" => "added",
-        "D" | "D " | "AD" => "deleted",
-        // Everything else (M/MM/AM/R/C and unknown codes) reads as
-        // modified — the v2 mapping buckets renames/copies there too.
-        _ => "modified",
-    }
 }
 
 async fn vcs_init(
@@ -1871,15 +1900,40 @@ async fn vcs_init(
     //   missing directory → 400 InvalidRequestError field:"location"
     //   existing root     → 409 ConflictError {resource: directory}
     //   init failure      → 503 ServiceUnavailableError {service}
-    //   registered provider without init → 501 (unreachable with the
-    //   builtin registry — both git and hg plugin providers ship `init`).
+    //   registered provider without init → 501 (G-350: plugin
+    //   providers without an `init` closure — ref vcs.ts:182).
     let provider = query_field(&uri, "provider").unwrap_or_else(|| "git".to_owned());
-    if provider != "git" && provider != "hg" {
-        return Err(crate::errors::invalid_request_message_field(
-            "Unknown VCS provider",
-            "provider",
-        ));
-    }
+    // G-350 — plugin-registered providers (G-24's vcs provider registry)
+    // dispatch their `init` closure in the guest through the "vcs"
+    // domain "init" hook seam, mirroring ref vcs.ts:178-191
+    // (`initialize` → `state.providers.get(id).init(scope)`); the
+    // builtins stay direct subprocess inits and the raw
+    // `Command::new(provider)` execution path is gone.
+    let plugin_init = if provider != "git" && provider != "hg" {
+        match state.plugins.as_ref().and_then(|boot| {
+            boot.host
+                .registrations()
+                .vcs_providers
+                .iter()
+                .find(|row| row.id == provider)
+                .map(|row| (std::sync::Arc::clone(&boot.host), row.clone()))
+        }) {
+            None => {
+                return Err(crate::errors::invalid_request_message_field(
+                    "Unknown VCS provider",
+                    "provider",
+                ));
+            }
+            // ref vcs.ts:182 — a registered provider without `init` is
+            // the "unsupported" InitializeError kind → 501.
+            Some((_host, row)) if !row.has_init => {
+                return Err(crate::errors::vcs_init_not_supported(&provider));
+            }
+            found => found,
+        }
+    } else {
+        None
+    };
     // The location's services may pre-date the init (cached bundle with
     // vcs = None); the filesystem is the source of truth.
     let directory = services.project.canonical.clone();
@@ -1895,23 +1949,48 @@ async fn vcs_init(
             &directory.to_string_lossy(),
         ));
     }
-    let output = std::process::Command::new(&provider)
-        .arg("init")
-        .current_dir(&directory)
-        .output()
-        .map_err(|error| {
+    if let Some((host, row)) = plugin_init {
+        // ref vcs.ts:183-191 — `provider.init(scope)`; the guest
+        // closure's failure is the "failed" InitializeError kind.
+        let scope = json!({
+            "provider": provider,
+            "input": {
+                "directory": location.as_path().to_string_lossy(),
+                "worktree": directory.to_string_lossy(),
+                "canonical": directory.to_string_lossy(),
+            },
+        });
+        if let Err(error) = host.dispatch_hook_async(&row.plugin_id, "vcs", "init", scope).await {
             crate::errors::debug_cause("project:vcs_init_failed", &error);
-            crate::errors::service_unavailable_named("VCS initialization failed", &provider)
-        })?;
-    if !output.status.success() {
-        crate::errors::debug_cause(
-            "project:vcs_init_failed",
-            String::from_utf8_lossy(&output.stderr),
-        );
-        return Err(crate::errors::service_unavailable_named(
-            "VCS initialization failed",
-            &provider,
-        ));
+            return Err(crate::errors::service_unavailable_named(
+                "VCS initialization failed",
+                &provider,
+            ));
+        }
+    } else {
+        // The builtin providers (plugin/vcs/git.ts:36-40's `git init`,
+        // hg's `hg init`) — explicit program names, never the provider
+        // string itself.
+        let program = if provider == "git" { "git" } else { "hg" };
+        let output = std::process::Command::new(program)
+            .arg("init")
+            .current_dir(&directory)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(|error| {
+                crate::errors::debug_cause("project:vcs_init_failed", &error);
+                crate::errors::service_unavailable_named("VCS initialization failed", &provider)
+            })?;
+        if !output.status.success() {
+            crate::errors::debug_cause(
+                "project:vcs_init_failed",
+                String::from_utf8_lossy(&output.stderr),
+            );
+            return Err(crate::errors::service_unavailable_named(
+                "VCS initialization failed",
+                &provider,
+            ));
+        }
     }
     // vcs.ts:47-49 — re-resolve; a directory that STILL has no VCS after a
     // successful init is a 503, never a silent success.
@@ -1954,7 +2033,11 @@ fn marker_at_or_above(directory: &std::path::Path) -> bool {
 }
 
 fn git_output(directory: &std::path::Path, args: &[&str]) -> Option<String> {
-    let output =
-        std::process::Command::new("git").args(args).current_dir(directory).output().ok()?;
+    let output = std::process::Command::new("git")
+        .args(GIT_CFG_ARGS)
+        .args(args)
+        .current_dir(directory)
+        .output()
+        .ok()?;
     output.status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
