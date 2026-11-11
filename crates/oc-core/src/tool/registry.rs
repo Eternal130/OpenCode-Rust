@@ -824,6 +824,48 @@ mod tests {
         );
     }
 
+    /// G-230 review fix — the shared validator's `const` arm now bites
+    /// at the pipeline level: a builtin-style declared schema with a
+    /// `const` violation fails the call (previously `const` was an
+    /// unknown keyword and validated vacuously).
+    #[tokio::test]
+    async fn g230_declared_schema_rejects_const_violation() {
+        // write.rs-style declaration: `operation` is const "write".
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "operation": { "const": "write" },
+                "target": { "type": "string" },
+            },
+            "required": ["operation", "target"],
+            "additionalProperties": false,
+        });
+        let harness = crate::tool::tests::harness().await;
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        let executor = pipeline_executor_with_output(
+            "g230.const",
+            json!({}),
+            Some(schema),
+            Arc::new(FixedLeaf {
+                outcome: ToolOutcome {
+                    output: Some(json!({ "operation": "delete", "target": "/tmp/x" })),
+                    ..Default::default()
+                },
+            }),
+            &harness.services,
+            &hooks,
+        );
+        let failure = executor.execute(&json!({})).await.unwrap_err();
+        let ToolRunFailure::Error { message, .. } = &failure else {
+            panic!("const violation must be a plain error: {failure:?}");
+        };
+        assert!(
+            message.starts_with("Tool returned an invalid value for its output schema: "),
+            "ref wording (runtime.ts:116): {message}"
+        );
+        assert!(message.contains("must be equal to constant"), "{message}");
+    }
+
     #[tokio::test]
     async fn g230_declared_schema_accepts_valid_output() {
         let schema = json!({

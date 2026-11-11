@@ -2017,15 +2017,30 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
                 collected.sort_by_key(|(index, _)| *index);
                 collected.into_iter().flat_map(|(_, files)| files).collect::<Vec<_>>()
             };
+            // codemode/tool.ts:126-133 — outer content is the text part
+            // FOLLOWED BY the collected files as `file` content parts
+            // (the same ExecuteFile rows the `files` field carries,
+            // rehydrated as `data:` URIs).
+            let mut content = Vec::with_capacity(files.len() + 1);
+            content.push(Content::Text { text: output.clone() });
+            for file in &files {
+                let mime = file["mime"].as_str().unwrap_or_default().to_string();
+                let data = file["data"].as_str().unwrap_or_default().to_string();
+                content.push(Content::File {
+                    uri: format!("data:{mime};base64,{data}"),
+                    mime,
+                    name: file.get("name").and_then(serde_json::Value::as_str).map(str::to_string),
+                });
+            }
             let mut output_value = serde_json::Map::new();
-            output_value.insert("output".to_string(), Value::String(output.clone()));
+            output_value.insert("output".to_string(), Value::String(output));
             output_value.insert("toolCalls".to_string(), metadata["toolCalls"].clone());
             if outcome.error.is_some() {
                 output_value.insert("error".to_string(), Value::Bool(true));
             }
             output_value.insert("files".to_string(), Value::Array(files));
             Ok(super::ToolOutcome {
-                content: vec![Content::Text { text: output }],
+                content,
                 metadata: Some(metadata.into_iter().collect()),
                 output: Some(Value::Object(output_value)),
             })
@@ -2678,6 +2693,89 @@ mod executor_tests {
         let issues = crate::tool::registry::validate_input(&execute_output_schema(), &output);
         assert!(issues.is_empty(), "error output {output} failed schema: {issues:?}");
         assert_eq!(output["error"], serde_json::json!(true));
+    }
+
+    /// codemode/tool.ts:126-133 — when nested calls produced files, the
+    /// OUTER content carries the text part FOLLOWED BY one `file`
+    /// content part per collected ExecuteFile row (same source as the
+    /// `files` field, rehydrated as `data:` URIs).
+    #[tokio::test]
+    async fn execute_outer_content_carries_file_parts() {
+        struct FileLeaf;
+        #[async_trait]
+        impl crate::tool::ToolExecuteWithContext for FileLeaf {
+            fn execute<'a>(
+                &'a self,
+                _services: &'a crate::tool::ToolServices,
+                _input: &'a serde_json::Value,
+                _context: &'a crate::location::ToolCallContext,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<
+                            Output = Result<crate::tool::ToolOutcome, crate::tool::ToolFailure>,
+                        > + Send
+                        + 'a,
+                >,
+            > {
+                Box::pin(std::future::ready(Ok(crate::tool::ToolOutcome {
+                    content: vec![
+                        oc_schema::tool::Content::Text { text: "snapshot".to_string() },
+                        oc_schema::tool::Content::File {
+                            uri: "data:image/png;base64,QUJD".to_string(),
+                            mime: "image/png".to_string(),
+                            name: Some("chart.png".to_string()),
+                        },
+                    ],
+                    metadata: None,
+                    output: None,
+                })))
+            }
+        }
+        let harness = harness_for_codemode().await;
+        let state = Arc::new(ToolRegistryState::new());
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        crate::tool::registry::register(
+            &state,
+            &hooks,
+            &harness.services,
+            crate::tool::BuiltinTool {
+                name: "snap",
+                description: "snap".to_string(),
+                input: serde_json::json!({
+                    "type": "object", "properties": { "name": { "type": "string" } }
+                }),
+                output: serde_json::Value::Null,
+                permission: None,
+                codemode: true,
+                namespace: None,
+                execute: Arc::new(FileLeaf),
+            },
+        )
+        .expect("register snap");
+        register_code_mode(
+            &state,
+            &hooks,
+            &harness.services,
+            Arc::new(ScriptRuntime { fail: false }),
+            std::time::Duration::from_secs(5),
+        );
+        let result = call(&state, EXECUTE_NAME, serde_json::json!({ "code": "snap" }))
+            .await
+            .expect("execute completes");
+        let expected_file = oc_schema::tool::Content::File {
+            uri: "data:image/png;base64,QUJD".to_string(),
+            mime: "image/png".to_string(),
+            name: Some("chart.png".to_string()),
+        };
+        assert_eq!(
+            result.content,
+            vec![oc_schema::tool::Content::Text { text: "snapshot".to_string() }, expected_file]
+        );
+        let output = result.output.expect("declared output");
+        assert_eq!(
+            output["files"],
+            serde_json::json!([{ "data": "QUJD", "mime": "image/png", "name": "chart.png" }])
+        );
     }
 }
 
