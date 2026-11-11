@@ -74,8 +74,8 @@
 
 ## 锚点核对（提取器正确性验证；三锚来自上轮修复）
 
-- **mcp.timeout 文档级合并（曾 G-362b）**：rust [crates/oc-core/src/engine/mod.rs:3443] vs ref [packages/core/src/config/plugin/mcp.ts:44] → ✅ 对齐
-- **snapshots:false 开关（曾 G-362a）**：rust [crates/oc-core/src/engine/mod.rs:1920] vs ref [packages/core/src/config/plugin/snapshot.ts:16] → ✅ 对齐
+- **mcp.timeout 文档级合并（曾 G-362b）**：rust [crates/oc-core/src/engine/mod.rs:3480] vs ref [packages/core/src/config/plugin/mcp.ts:44] → ✅ 对齐
+- **snapshots:false 开关（曾 G-362a）**：rust [crates/oc-core/src/engine/mod.rs:1957] vs ref [packages/core/src/config/plugin/snapshot.ts:16] → ✅ 对齐
 - **snapshots 默认值 true**：rust [crates/oc-core/src/snapshot.rs:369] vs ref [packages/core/src/snapshot.ts:82] → ✅ 对齐
 - **session.tps 默认值 true（曾 G-367）**：rust [crates/oc-tui/src/config.rs:237] vs ref [packages/tui/src/config/index.tsx:322] → ✅ 对齐
 
