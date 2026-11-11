@@ -10587,7 +10587,10 @@ fn cache_tty_input_fd(
 /// a poll parked on the lock stalls the render loop a full 50 ms tick
 /// per pass; the fd is refreshed on session rebuilds via
 /// [`cache_tty_input_fd`], and the reads below are the only reader
-/// (SA-F13's one-reader gate)).
+/// (SA-F13's one-reader gate) — serialized against the OSC 52
+/// clipboard query window through [`crate::terminal_proto`]'s stdin
+/// lock (G-342), with the window's leftover keystrokes drained
+/// first.
 #[allow(unsafe_code)] // poll/read/ioctl on the tty fd are libc FFI
 fn read_session_input(fd: std::os::fd::RawFd, timeout_ms: i32) -> Vec<u8> {
     // G-342 — stdin has exactly one owner at a time: the same lock
