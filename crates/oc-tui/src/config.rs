@@ -231,7 +231,10 @@ impl Default for TuiConfig {
             session_permissions: None,
             session_thinking: false,
             session_verbosity: None,
-            session_tps: false,
+            // G-367 — `session.tps` defaults TRUE (ref index.tsx:322
+            // `input.session?.tps ?? true`); an explicit false in the
+            // config document still wins (the parse arm below).
+            session_tps: true,
             debug_turn_tokens: false,
             session_markdown_source: false,
             session_grouping: true,
@@ -375,7 +378,7 @@ impl TuiConfig {
             session_thinking: info.session.as_ref().and_then(|session| session.thinking.as_deref())
                 == Some("show"),
             session_verbosity: info.session.as_ref().and_then(|session| session.verbosity.clone()),
-            session_tps: info.session.as_ref().and_then(|session| session.tps).unwrap_or(false),
+            session_tps: info.session.as_ref().and_then(|session| session.tps).unwrap_or(true),
             // G-140② — `debug.turn_tokens` (any truthy JSON value;
             // the ref is Boolean(coerced)).
             debug_turn_tokens: info
@@ -498,7 +501,7 @@ impl TuiConfig {
                 .get("session")
                 .and_then(|session| session.get("tps"))
                 .and_then(Value::as_bool)
-                .unwrap_or(false),
+                .unwrap_or(true),
             debug_turn_tokens: value
                 .get("debug")
                 .and_then(|debug| debug.get("turn_tokens"))
@@ -534,6 +537,28 @@ impl TuiConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// G-367 — `session.tps` defaults TRUE (ref config/index.tsx:322
+    /// `input.session?.tps ?? true`); an explicit false survives the
+    /// default merge on every decode path (parse, from_info, Default).
+    #[test]
+    fn session_tps_defaults_true_and_explicit_false_survives() {
+        assert!(TuiConfig::default().session_tps, "Default = true");
+        assert!(TuiConfig::parse("{}", None).session_tps, "absent key = true");
+        assert!(TuiConfig::parse(r#"{"session": {"tps": true}}"#, None).session_tps);
+        assert!(!TuiConfig::parse(r#"{"session": {"tps": false}}"#, None).session_tps);
+        // from_info: absent → true, explicit Some(false) → false.
+        let info = oc_core::cli_config::Info::default();
+        assert!(TuiConfig::from_info(&info, None).session_tps);
+        let info = oc_core::cli_config::Info {
+            session: Some(oc_core::cli_config::SessionInfo {
+                tps: Some(false),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(!TuiConfig::from_info(&info, None).session_tps);
+    }
 
     /// Test roots with an injected config dir (state/cache/tmp beside
     /// it — hermetic; the `CliConfig` service only touches `config` +
