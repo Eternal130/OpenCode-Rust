@@ -131,6 +131,9 @@ pub fn is_mutating_hook(domain: &str, name: &str) -> bool {
         // (authorize/callback/refresh) ride token exchanges.
         "websearch" => name == "execute",
         "integration" => matches!(name, "authorize" | "callback" | "refresh"),
+        // G-350 — a guest vcs provider's init rides a full VCS
+        // initialization round trip.
+        "vcs" => name == "init",
         _ => false,
     }
 }

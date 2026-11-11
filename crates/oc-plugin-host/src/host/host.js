@@ -790,7 +790,7 @@ async function handleRpcCall({ pluginId, rpcId, method, input }) {
 // ---------------------------------------------------------------------------
 // Runtime hook registry (guest-side handlers; coverage registered)
 // ---------------------------------------------------------------------------
-const hookHandlers = { session: new Map(), tool: new Map(), shell: new Map(), permission: new Map(), aisdk: new Map(), websearch: new Map(), worktree: new Map(), integration: new Map() };
+const hookHandlers = { session: new Map(), tool: new Map(), shell: new Map(), permission: new Map(), aisdk: new Map(), websearch: new Map(), worktree: new Map(), integration: new Map(), vcs: new Map() };
 
 const SESSION_HOOKS = new Set([
   "prompt", "context", "compaction", "generate", "title", "model.request",
@@ -821,6 +821,11 @@ const worktreeImpls = new Map();
 // formerly inverted — it kept `pluginId:`-prefixed ids and dropped
 // everyone else's) prefix test on the store keys.
 const vcsOwners = new Map();
+// G-350 — the vcs init closure table (functions never cross the JSON
+// boundary; the host's vcs.init dispatch reaches them through the
+// "vcs" domain "init" hook). Keyed `${pluginId}:${id}` like the
+// websearch executors.
+const vcsInits = new Map();
 // G-379③ — the vcs default editor's selection (ref vcs.ts:85-88:
 // `get: () => editor.selection, set: (selection) => editor.selection
 // = selection` — the State editor's in-memory selection; initially
@@ -829,6 +834,10 @@ let vcsSelection;
 let pendingIntegrationCallback = null;
 const WORKTREE_HOOKS = new Set(["create", "remove", "list"]);
 const INTEGRATION_HOOKS = new Set(["authorize", "callback", "refresh"]);
+// G-350 — the vcs init closure (ref vcs.ts:178-191 initialize →
+// provider.init): the host's vcs.init endpoint dispatches into the
+// guest through this hook point, mirroring the websearch execute seam.
+const VCS_HOOKS = new Set(["init"]);
 
 async function registerHook(pluginId, domain, name, handlers) {
   const known =
@@ -848,7 +857,9 @@ async function registerHook(pluginId, domain, name, handlers) {
                   ? WORKTREE_HOOKS
                   : domain === "integration"
                     ? INTEGRATION_HOOKS
-                    : null;
+                    : domain === "vcs"
+                      ? VCS_HOOKS
+                      : null;
   if (!known || !known.has(name)) {
     throw new Error(`unknown ${domain} hook ${name}`);
   }
@@ -1141,9 +1152,14 @@ function makeCtx(pluginId, options) {
             const id = String(definition?.id ?? "");
             if (!id) return;
             vcsOwners.set(`${pluginId}:${id}`, id);
+            vcsInits.set(`${pluginId}:${id}`, definition?.init);
             domainStores.vcs.set(id, {
               id,
               name: String(definition?.name ?? definition?.id ?? id),
+              // G-350 — ref vcs.ts:182: a provider without `init` is the
+              // 501 "unsupported" InitializeError kind; the host reads
+              // this flag before dispatching.
+              init: typeof definition?.init === "function",
             });
           },
           default: {
@@ -1155,6 +1171,17 @@ function makeCtx(pluginId, options) {
             },
           },
         });
+        // G-350 — the init dispatch seam: one handler per plugin, the
+        // event's `provider` selects the registered provider; a throw
+        // fails the dispatch (the host maps it to the 503 "failed"
+        // InitializeError kind).
+        await registerHook(pluginId, "vcs", "init", async (event) => {
+          if (!event || typeof event !== "object") return;
+          if (String(event.provider ?? "") === "") return;
+          const run = vcsInits.get(`${pluginId}:${String(event.provider)}`);
+          if (typeof run !== "function") return;
+          await run(event.input ?? {});
+        });
         await materializeDomain("vcs", pluginId);
         return {
           async dispose() {
@@ -1164,6 +1191,7 @@ function makeCtx(pluginId, options) {
             for (const [key, id] of Array.from(vcsOwners.entries())) {
               if (key.startsWith(`${pluginId}:`)) {
                 vcsOwners.delete(key);
+                vcsInits.delete(key);
                 domainStores.vcs.delete(id);
               }
             }
@@ -1989,6 +2017,7 @@ function snapshotPluginState() {
     keymapRuns: new Map(keymapRuns),
     websearchExecutors: new Map(websearchExecutors),
     worktreeImpls: new Map(worktreeImpls),
+    vcsInits: new Map(vcsInits),
     pendingIntegrationCallback,
   };
 }
@@ -2015,6 +2044,7 @@ function restorePluginState(snap) {
   reinstate(keymapRuns, snap.keymapRuns);
   reinstate(websearchExecutors, snap.websearchExecutors);
   reinstate(worktreeImpls, snap.worktreeImpls);
+  reinstate(vcsInits, snap.vcsInits);
   pendingIntegrationCallback = snap.pendingIntegrationCallback;
 }
 
