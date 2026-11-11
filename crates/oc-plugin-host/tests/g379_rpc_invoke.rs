@@ -34,7 +34,8 @@ fn run(host: &oc_plugin_host::PluginHost, command: &str) -> Value {
         .unwrap_or_else(|error| panic!("{command}: {error}"));
     // The fixture returns a JSON string; decode it.
     let text = outcome.as_str().unwrap_or_else(|| panic!("{command}: non-string {outcome}"));
-    serde_json::from_str(text).unwrap_or_else(|error| panic!("{command}: bad json ({error}): {text}"))
+    serde_json::from_str(text)
+        .unwrap_or_else(|error| panic!("{command}: bad json ({error}): {text}"))
 }
 
 /// The happy path: plugin B's call reaches plugin A's handler and the

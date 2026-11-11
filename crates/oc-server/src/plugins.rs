@@ -486,9 +486,7 @@ pub fn boot(
         // G-379.8: ctx.worktree.list/create/remove/refresh over the
         // shared worktree handler cores (slot filled after Engine::boot
         // with the AppState handle, the same pattern).
-        worktree_port: Some(
-            Arc::clone(&worktree_slot) as Arc<dyn oc_plugin_host::WorktreePort>
-        ),
+        worktree_port: Some(Arc::clone(&worktree_slot) as Arc<dyn oc_plugin_host::WorktreePort>),
         // G-64: ctx.provider.*/reference.*/experimental.terminal.read/
         // integration.* over the boot location's engine services (slots
         // filled after Engine::boot, the same pattern).
@@ -2670,20 +2668,11 @@ impl oc_plugin_host::VcsPort for EngineVcsPort {
     /// G-379.8 — `vcs.branch.list({search?, limit?})`: the shared
     /// handler core (handlers/project.rs `vcs_branch_list_data` — the
     /// same service the HTTP `/api/vcs/branch` route rides).
-    async fn branch_list(
-        &self,
-        search: Option<&str>,
-        limit: Option<u64>,
-    ) -> Result<Value, String> {
+    async fn branch_list(&self, search: Option<&str>, limit: Option<u64>) -> Result<Value, String> {
         let services =
             self.engine.location(self.location.clone()).await.map_err(|e| e.to_string())?;
         let limit = limit.map(|value| value.min(100) as usize);
-        crate::handlers::project::vcs_branch_list_data(
-            &services,
-            search.map(str::to_owned),
-            limit,
-        )
-        .map_err(|error| error.to_string())
+        Ok(crate::handlers::project::vcs_branch_list_data(&services, search, limit))
     }
 
     /// G-379.8 — `vcs.status()`: the shared handler core scoped to the
@@ -2691,9 +2680,7 @@ impl oc_plugin_host::VcsPort for EngineVcsPort {
     async fn status(&self) -> Result<Value, String> {
         let services =
             self.engine.location(self.location.clone()).await.map_err(|e| e.to_string())?;
-        let directory = self.location.as_path().to_path_buf();
-        crate::handlers::project::vcs_status_data(&services, &directory)
-            .map_err(|error| error.to_string())
+        Ok(crate::handlers::project::vcs_status_data(&services, self.location.as_path()))
     }
 
     /// G-379.8 — `vcs.diff({mode, base?, context?})`: the shared
@@ -2709,13 +2696,8 @@ impl oc_plugin_host::VcsPort for EngineVcsPort {
         }
         let services =
             self.engine.location(self.location.clone()).await.map_err(|e| e.to_string())?;
-        crate::handlers::project::vcs_diff_data(
-            &services,
-            mode,
-            base.map(str::to_owned),
-            context,
-        )
-        .map_err(|error| error.to_string())
+        crate::handlers::project::vcs_diff_data(&services, mode, base, context)
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -2757,11 +2739,7 @@ impl oc_plugin_host::VcsPort for EngineVcsSlot {
     }
 
     /// G-379.8 — the branch.list forwarder.
-    async fn branch_list(
-        &self,
-        search: Option<&str>,
-        limit: Option<u64>,
-    ) -> Result<Value, String> {
+    async fn branch_list(&self, search: Option<&str>, limit: Option<u64>) -> Result<Value, String> {
         self.port()?.branch_list(search, limit).await
     }
 
@@ -2794,7 +2772,7 @@ impl oc_plugin_host::WorktreePort for EngineWorktreePort {
     async fn list(&self, project_id: &str) -> Result<Value, String> {
         crate::handlers::project::worktree_list_data(&self.state, project_id)
             .await
-            .map(|directories| Value::Array(directories))
+            .map(Value::Array)
             .map_err(|error| error.to_string())
     }
 

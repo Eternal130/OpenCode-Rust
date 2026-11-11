@@ -566,9 +566,8 @@ pub async fn boot_and_serve_with_listener(
     // strategy registry seed + every later mutation stay visible; a
     // pre-Arc clone would freeze a stale registry).
     if let Some(boot) = &state.plugins {
-        boot.worktree_slot.fill(Arc::new(crate::plugins::EngineWorktreePort {
-            state: Arc::clone(&state),
-        }));
+        boot.worktree_slot
+            .fill(Arc::new(crate::plugins::EngineWorktreePort { state: Arc::clone(&state) }));
     }
     // RUNTIME-L01 — restart continuity (`installRestartContinuity`,
     // server process.ts:237-240 → `SessionRestart.resumeSuspendedSessions`
