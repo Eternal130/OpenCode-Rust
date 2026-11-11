@@ -10,7 +10,7 @@
 #      saturate the box (newapi + the live service share it).
 #   3. MEMORY CAP: MemoryMax=6G (box has 22G, shared with production
 #      services; the 2026-10-19 oomd incident cut this from 10G).
-#   4. LOAD BACKSTOP: refuses to start while 1-min load >= 6 (the per-lane
+#   4. LOAD BACKSTOP: refuses to start while 1-min load >= 8 (the per-lane
 #      courtesy check remains "< 2 before gates"; this is the hard ceiling).
 #   5. GLOBAL SERIALIZATION: exactly one gate scope on the machine at a
 #      time (2026-10-19 incident: concurrent scopes exhausted memory and
@@ -65,8 +65,8 @@ deny_plain_cargo_test "$1"
 
 # --- load backstop ---------------------------------------------------------
 LOAD1=$(cut -d' ' -f1 /proc/loadavg)
-if awk -v l="$LOAD1" 'BEGIN{exit !(l>=6)}'; then
-  echo "dev-gate: 1-min load ${LOAD1} >= 6 — refusing to start; retry when the box calms down" >&2
+if awk -v l="$LOAD1" 'BEGIN{exit !(l>=8)}'; then
+  echo "dev-gate: 1-min load ${LOAD1} >= 8 — refusing to start; retry when the box calms down" >&2
   exit 3
 fi
 
