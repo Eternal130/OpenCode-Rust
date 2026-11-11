@@ -102,11 +102,20 @@ impl Attached {
 pub struct Sessions {
     client: oc_client::Client,
     entries: Arc<Mutex<HashMap<String, Arc<Attached>>>>,
+    /// `registeredMcpBySession` (sessions.ts:24): the per-session map of
+    /// already-registered MCP server configs. Outlives a single entry —
+    /// only `remove` (owner-checked) clears it — so a re-attach with the
+    /// same config skips the `mcp.add` call (D-5/G-378).
+    registered_mcp: Arc<Mutex<HashMap<String, HashMap<String, Value>>>>,
 }
 
 impl Sessions {
     pub fn new(client: oc_client::Client) -> Self {
-        Self { client, entries: Arc::new(Mutex::new(HashMap::new())) }
+        Self {
+            client,
+            entries: Arc::new(Mutex::new(HashMap::new())),
+            registered_mcp: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     pub async fn has(&self, session_id: &str) -> bool {
@@ -197,19 +206,89 @@ impl Sessions {
         // Swap synchronously so concurrent attaches of one ID cannot both
         // keep a slot (sessions.ts:136-139).
         self.entries.lock().await.insert(session.id.clone(), Arc::clone(&attached));
-        // registerMcp (sessions.ts:93-112).
-        for server in mcp_servers {
-            self.register_mcp(&attached, server).await?;
+        // registerMcp (sessions.ts:93-112) with the attach-level error
+        // rollback: a failed registration removes the entry
+        // (`Effect.onError(() => remove(...))`, sessions.ts:141).
+        if let Err(error) = self.register_mcp_all(&attached, mcp_servers).await {
+            self.remove(&attached).await;
+            return Err(error);
         }
         let options = config_option::config_options(&catalog, &attached.selection().await);
         Ok((attached, options, selected_rx))
     }
 
-    async fn register_mcp(
+    /// `remove` (sessions.ts:114-119): owner-checked entry teardown that
+    /// also clears the session's registered-MCP map.
+    async fn remove(&self, attached: &Arc<Attached>) {
+        let mut entries = self.entries.lock().await;
+        if entries.get(&attached.id).is_some_and(|current| Arc::ptr_eq(current, attached)) {
+            entries.remove(&attached.id);
+            self.registered_mcp.lock().await.remove(&attached.id);
+        }
+    }
+
+    /// `registerMcp` (sessions.ts:93-112): register every server this
+    /// attach requests, skipping ones already registered with an
+    /// identical config (cross-attach dedup) and rolling the bookkeeping
+    /// back when an `mcp.add` fails.
+    async fn register_mcp_all(
         &self,
         attached: &Attached,
-        server: &SupportedMcpServer,
+        servers: &[SupportedMcpServer],
     ) -> Result<(), AcpError> {
+        for server in servers {
+            let config = self.mcp_config(server)?;
+            let config_value = serde_json::to_value(&config).unwrap_or(serde_json::Value::Null);
+            let mut registered = self.registered_mcp.lock().await;
+            let session_registered = registered.entry(attached.id.clone()).or_default();
+            if session_registered.get(&server.name) == Some(&config_value) {
+                continue;
+            }
+            drop(registered);
+            let result = self
+                .client
+                .mcp()
+                .add(
+                    &server.name,
+                    &oc_client::types::ExperimentalMcpAddQuery {
+                        location: Some(oc_client::types::QueryLocation {
+                            directory: Some(attached.cwd.clone()),
+                        }),
+                    },
+                    &oc_client::types::ExperimentalMcpAddBody { config },
+                )
+                .await;
+            match result {
+                Ok(_) => {
+                    self.registered_mcp
+                        .lock()
+                        .await
+                        .entry(attached.id.clone())
+                        .or_default()
+                        .insert(server.name.clone(), config_value);
+                }
+                Err(error) => {
+                    // `Effect.onError(() => registered.delete(name))`:
+                    // the failed name is rolled back so a later attach
+                    // retries it.
+                    if let Some(session_registered) =
+                        self.registered_mcp.lock().await.get_mut(&attached.id)
+                    {
+                        session_registered.remove(&server.name);
+                    }
+                    return Err(classify(&error));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `mcpConfig` (sessions.ts:201-219): the wire config for one
+    /// supported server.
+    fn mcp_config(
+        &self,
+        server: &SupportedMcpServer,
+    ) -> Result<oc_client::types::ExperimentalMcpAddBodyConfig, AcpError> {
         let config = match &server.kind {
             McpKind::Stdio { command, environment } => {
                 serde_json::to_value(oc_client::types::McpLocalConfigEncoded {
@@ -240,26 +319,11 @@ impl Sessions {
                 .unwrap_or(serde_json::Value::Null)
             }
         };
-        let config: oc_client::types::ExperimentalMcpAddBodyConfig = serde_json::from_value(config)
-            .map_err(|error| AcpError::ServiceFailure {
-                safe_message: format!("mcp config encode failed: {error}"),
-                service: Some("mcp".to_owned()),
-                error_name: None,
-            })?;
-        self.client
-            .mcp()
-            .add(
-                &server.name,
-                &oc_client::types::ExperimentalMcpAddQuery {
-                    location: Some(oc_client::types::QueryLocation {
-                        directory: Some(attached.cwd.clone()),
-                    }),
-                },
-                &oc_client::types::ExperimentalMcpAddBody { config },
-            )
-            .await
-            .map_err(|error| classify(&error))?;
-        Ok(())
+        serde_json::from_value(config).map_err(|error| AcpError::ServiceFailure {
+            safe_message: format!("mcp config encode failed: {error}"),
+            service: Some("mcp".to_owned()),
+            error_name: None,
+        })
     }
 
     /// The per-attach watcher (sessions.ts:141-159): once the ACP
@@ -273,7 +337,14 @@ impl Sessions {
         conn: Conn,
         catalogs: Arc<Catalogs>,
         selected_rx: mpsc::UnboundedReceiver<config_option::Change>,
+        responded: Arc<tokio::sync::Notify>,
     ) {
+        // `sessions.ts:144` — the fold watcher only starts pushing after
+        // the ACP response for the attach request went out
+        // (`ACPConnection.Responded`), so `available_commands_update`
+        // never precedes the `session/new`/`session/load`/… response
+        // (G-378 D-8).
+        responded.notified().await;
         if !self.has(&attached.id).await {
             return;
         }
@@ -315,9 +386,13 @@ impl Sessions {
         }
     }
 
-    /// `detach` (sessions.ts:165-168).
+    /// `detach` (sessions.ts:165-168) → `remove` (clears the entry and
+    /// its registered-MCP map).
     pub async fn detach(&self, session_id: &str) {
-        self.entries.lock().await.remove(session_id);
+        let current = self.entries.lock().await.remove(session_id);
+        if current.is_some() {
+            self.registered_mcp.lock().await.remove(session_id);
+        }
     }
 
     /// `release` (sessions.ts:169-172): only when this exact attachment
@@ -326,11 +401,13 @@ impl Sessions {
     /// equivalent is `Arc::ptr_eq` on the stored attachment (G-354) —
     /// comparing session ids alone was a tautology, so a concurrent
     /// re-attach of the same session by another client would have been
-    /// torn down by the old owner's error path.
+    /// torn down by the old owner's error path. The teardown mirrors
+    /// `remove`: the registered-MCP map goes with the entry.
     pub async fn release(&self, attached: &Arc<Attached>) {
         let mut entries = self.entries.lock().await;
         if entries.get(&attached.id).is_some_and(|current| Arc::ptr_eq(current, attached)) {
             entries.remove(&attached.id);
+            self.registered_mcp.lock().await.remove(&attached.id);
         }
     }
 
@@ -425,6 +502,10 @@ mod tests {
         ));
     }
 
+    fn client() -> oc_client::Client {
+        oc_client::Client::new("http://127.0.0.1:9").expect("valid base url")
+    }
+
     fn make_attached(id: &str) -> Arc<Attached> {
         let (selected_tx, _selected_rx) = mpsc::unbounded_channel();
         Arc::new(Attached {
@@ -433,6 +514,52 @@ mod tests {
             selection: Arc::new(RwLock::new(Selection::default())),
             selected_tx,
         })
+    }
+
+    /// G-378 — a server already registered with an identical config is
+    /// skipped (`registeredMcpBySession` dedup, sessions.ts:100-104):
+    /// with the map pre-seeded, no `mcp.add` call is made (the client
+    /// points at an unreachable endpoint — any call would fail).
+    #[tokio::test]
+    async fn register_mcp_dedups_identical_configs() {
+        let sessions = Sessions::new(client());
+        let attached = make_attached("ses_mcp");
+        let server = SupportedMcpServer {
+            name: "docs".to_owned(),
+            kind: McpKind::Http { url: "https://example.test/mcp".to_owned(), headers: Vec::new() },
+        };
+        let config = sessions.mcp_config(&server).expect("config");
+        sessions.registered_mcp.lock().await.insert(
+            "ses_mcp".to_owned(),
+            [("docs".to_owned(), serde_json::to_value(&config).unwrap())].into_iter().collect(),
+        );
+        sessions
+            .register_mcp_all(&attached, &[server])
+            .await
+            .expect("dedup skips the unreachable add");
+    }
+
+    /// G-378 — a failed `mcp.add` rolls the name back out of the
+    /// registered map (sessions.ts:108 `onError` delete) so a later
+    /// attach retries it.
+    #[tokio::test]
+    async fn register_mcp_failure_rolls_back_the_name() {
+        let sessions = Sessions::new(client());
+        let attached = make_attached("ses_mcp2");
+        let server = SupportedMcpServer {
+            name: "docs".to_owned(),
+            kind: McpKind::Http { url: "https://example.test/mcp".to_owned(), headers: Vec::new() },
+        };
+        // Unreachable endpoint: the add must fail.
+        sessions
+            .register_mcp_all(&attached, &[server])
+            .await
+            .expect_err("unreachable endpoint fails the add");
+        let registered = sessions.registered_mcp.lock().await;
+        let session_registered = registered
+            .get("ses_mcp2")
+            .expect("the session bucket exists (registeredMcpBySession keyed on attach)");
+        assert!(!session_registered.contains_key("docs"), "failed name rolled back for retry");
     }
 
     /// G-354 — `release` mirrors the ref's reference-identity check

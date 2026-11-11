@@ -92,6 +92,7 @@ pub async fn new_session(
     app: &Arc<App>,
     conn: &Conn,
     request: NewSessionRequest,
+    responded: Arc<tokio::sync::Notify>,
 ) -> Result<NewSessionResponse, AcpError> {
     let cwd = request.cwd.to_string_lossy().into_owned();
     let additional = request
@@ -117,7 +118,7 @@ pub async fn new_session(
         .map_err(|error| classify(&error))?;
     let (attached, options, selected_rx) =
         app.sessions.attach(&created, &mcp_servers, &app.catalogs).await?;
-    spawn_watch(app, conn, &attached, selected_rx);
+    spawn_watch(app, conn, &attached, selected_rx, responded);
     Ok(NewSessionResponse::new(attached.id.clone()).config_options(options))
 }
 
@@ -126,6 +127,7 @@ pub async fn load_session(
     app: &Arc<App>,
     conn: &Conn,
     request: LoadSessionRequest,
+    responded: Arc<tokio::sync::Notify>,
 ) -> Result<LoadSessionResponse, AcpError> {
     let cwd = request.cwd.to_string_lossy().into_owned();
     let additional = request
@@ -149,7 +151,7 @@ pub async fn load_session(
     }
     let catalog = app.catalogs.get(&attached.cwd).await?;
     let options = config_option::config_options(&catalog, &attached.selection().await);
-    spawn_watch(app, conn, &attached, selected_rx);
+    spawn_watch(app, conn, &attached, selected_rx, responded);
     Ok(LoadSessionResponse::new().config_options(options))
 }
 
@@ -223,6 +225,7 @@ pub async fn resume_session(
     app: &Arc<App>,
     conn: &Conn,
     request: ResumeSessionRequest,
+    responded: Arc<tokio::sync::Notify>,
 ) -> Result<ResumeSessionResponse, AcpError> {
     let cwd = request.cwd.to_string_lossy().into_owned();
     let additional = request
@@ -238,7 +241,7 @@ pub async fn resume_session(
         app.sessions.attach(&session, &mcp_servers, &app.catalogs).await?;
     let catalog = app.catalogs.get(&attached.cwd).await?;
     let options = config_option::config_options(&catalog, &attached.selection().await);
-    spawn_watch(app, conn, &attached, selected_rx);
+    spawn_watch(app, conn, &attached, selected_rx, responded);
     Ok(ResumeSessionResponse::new().config_options(options))
 }
 
@@ -258,6 +261,7 @@ pub async fn fork_session(
     app: &Arc<App>,
     conn: &Conn,
     request: ForkSessionRequest,
+    responded: Arc<tokio::sync::Notify>,
 ) -> Result<ForkSessionResponse, AcpError> {
     let cwd = request.cwd.to_string_lossy().into_owned();
     let additional = request
@@ -279,7 +283,7 @@ pub async fn fork_session(
     activate_directories(app, &forked, &directories).await?;
     let (attached, options, selected_rx) =
         app.sessions.attach(&forked, &mcp_servers, &app.catalogs).await?;
-    spawn_watch(app, conn, &attached, selected_rx);
+    spawn_watch(app, conn, &attached, selected_rx, responded);
     Ok(ForkSessionResponse::new(attached.id.clone()).config_options(options))
 }
 
@@ -438,13 +442,14 @@ fn spawn_watch(
     conn: &Conn,
     attached: &Arc<Attached>,
     selected_rx: tokio::sync::mpsc::UnboundedReceiver<Change>,
+    responded: Arc<tokio::sync::Notify>,
 ) {
     let sessions = app.sessions.clone();
     let catalogs = Arc::clone(&app.catalogs);
     let attached = Arc::clone(attached);
     let conn = conn.clone();
     tokio::spawn(async move {
-        sessions.start_watch(attached, conn, catalogs, selected_rx).await;
+        sessions.start_watch(attached, conn, catalogs, selected_rx, responded).await;
     });
 }
 

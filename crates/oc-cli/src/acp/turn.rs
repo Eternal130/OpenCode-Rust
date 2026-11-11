@@ -210,6 +210,17 @@ async fn execute(
     // `resume` resolves with the run's `Exit`), so the HTTP call is
     // fired in the background; errors surface through the consume race
     // below.
+    if std::env::var("OPENCODE_ACP_DEBUG").is_ok() {
+        eprintln!("[acp] turn submitting start={}", prepared.start.id);
+    }
+    if prepared.command.is_some() {
+        // `turn.ts:283-286` — commands await the submission's HTTP
+        // result, then settle `succeeded` (the endpoint is inbox-style
+        // 204, so this returns once the command is enqueued). The old
+        // fire-and-forget swallowed submission failures (G-378 D-7).
+        submit(app, attached, prepared).await?;
+        return Ok(Terminal::Succeeded);
+    }
     let (submit_tx, mut submit_rx) = mpsc::channel::<Result<(), AcpError>>(1);
     {
         let app = Arc::clone(app);
@@ -220,13 +231,6 @@ async fn execute(
             let result = submit(&app, &attached, &prepared).await;
             let _ = submit_tx.send(result).await;
         });
-    }
-    if std::env::var("OPENCODE_ACP_DEBUG").is_ok() {
-        eprintln!("[acp] turn submitting start={}", prepared.start.id);
-    }
-    if prepared.command.is_some() {
-        // Commands settle server-side; the spawned submit carries them.
-        return Ok(Terminal::Succeeded);
     }
 
     // `consume` (turn.ts:204-212): fold until a terminal event, racing
@@ -402,7 +406,7 @@ async fn interpret(
     let debug = std::env::var("OPENCODE_ACP_DEBUG").is_ok();
     if debug {
         let kind = match &output {
-            Output::SessionUpdate(_) => "session-update",
+            Output::SessionUpdate { .. } => "session-update",
             Output::ChildUpdate(_) => "child-update",
             Output::PermissionAsk { .. } => "permission-ask",
             Output::FormAsk { .. } => "form-ask",
@@ -411,12 +415,20 @@ async fn interpret(
         eprintln!("[acp] interpret {kind}");
     }
     match output {
-        Output::SessionUpdate(update) => {
+        Output::SessionUpdate { update, meta } => {
             if background {
                 return;
             }
-            let _ =
-                conn.send_notification(SessionNotification::new(ctx.session_id.clone(), update));
+            // The child-session `_meta` tag rides the notification's
+            // `_meta` (the rust `SessionUpdate` enum cannot carry it
+            // inline like the ref's projected object, child.ts:39-47).
+            let mut notification = SessionNotification::new(ctx.session_id.clone(), update);
+            if let Some(meta) = meta {
+                if let Some(map) = meta.as_object() {
+                    notification.meta = Some(map.clone());
+                }
+            }
+            let _ = conn.send_notification(notification);
         }
         Output::ChildUpdate(update) => {
             send_ext(conn, child::UPDATE_METHOD, &update);
@@ -584,7 +596,11 @@ async fn follow_children_if_any(
     consumer: &mut Consumer,
     terminal: Terminal,
 ) {
-    if terminal != Terminal::Interrupted {
+    // `handoff` (turn.ts:290-307): children outlive the turn — the
+    // background follow runs for every non-failure exit (success AND
+    // interrupt; ref only skips it when the exit failed without
+    // interruption). Their asks still reach the client.
+    if terminal == Terminal::Failed {
         return;
     }
     let open = state.lock().await.open_children.clone();

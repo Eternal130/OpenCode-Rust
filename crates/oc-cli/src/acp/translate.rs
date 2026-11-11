@@ -115,7 +115,13 @@ pub struct TurnState {
 /// `Output` (translate.ts:58-68).
 #[derive(Debug, Clone)]
 pub enum Output {
-    SessionUpdate(SessionUpdate),
+    SessionUpdate {
+        update: SessionUpdate,
+        /// `_meta` to merge onto the update's serialization — the child
+        /// session tag (`child.ts:39-47` sets `projected._meta`); `None`
+        /// for plain root-session updates.
+        meta: Option<Value>,
+    },
     ChildUpdate(Value),
     PermissionAsk {
         /// The raw `permission.asked` data.
@@ -321,6 +327,30 @@ pub fn response(state: &TurnState, session_id: &str, terminal: Terminal) -> Prom
         .map(|error| string_in(error, "type"));
     let stop_reason = resolve_stop_reason(terminal, state.finish.as_deref(), error.as_deref());
     let mut response = PromptResponse::new(stop_reason);
+    // `response` (translate.ts:139-160): turn usage rides the response
+    // (SDK 1.6.0 ships it; the vendored crate gates the same wire field
+    // behind `unstable_end_turn_token_usage`, now enabled) — G-378 D-3.
+    if let Some((turn, _last)) = state.usage {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let usage = {
+            let mut usage = agent_client_protocol::schema::v1::Usage::new(
+                turn.total(),
+                turn.input as u64,
+                turn.output as u64,
+            );
+            if turn.reasoning > 0.0 {
+                usage.thought_tokens = Some(turn.reasoning as u64);
+            }
+            if turn.cache_read > 0.0 {
+                usage.cached_read_tokens = Some(turn.cache_read as u64);
+            }
+            if turn.cache_write > 0.0 {
+                usage.cached_write_tokens = Some(turn.cache_write as u64);
+            }
+            usage
+        };
+        response.usage = Some(usage);
+    }
     // Interruption clears the projected retry, so a retry pending at
     // interrupt is reported here (translate.ts:157-159).
     if let Some(retry) = state.retries.get(session_id) {
@@ -729,13 +759,15 @@ fn pending_update(
 /// `route` (translate.ts:408-413).
 fn route(ctx: &TurnContext, child: Option<&ChildSession>, update: SessionUpdate) -> Vec<Output> {
     let Some(child) = child else {
-        return vec![Output::SessionUpdate(update)];
+        return vec![Output::SessionUpdate { update, meta: None }];
     };
     let projected = child::project(update, child);
     if ctx.child_updates {
         return child_status(ctx, child, &ChildEvent::Update { update: Box::new(projected) });
     }
-    vec![Output::SessionUpdate(projected)]
+    // `child.ts:39-47` — the projected update carries the child tag in
+    // its `_meta`; the notification seam carries it (G-378).
+    vec![Output::SessionUpdate { update: projected, meta: Some(child::meta(child)) }]
 }
 
 /// `childStatus` (translate.ts:415-418).
@@ -857,7 +889,7 @@ mod tests {
         );
         assert!(matches!(
             folded.outputs[0],
-            Output::SessionUpdate(SessionUpdate::AgentMessageChunk(_))
+            Output::SessionUpdate { update: SessionUpdate::AgentMessageChunk(_), .. }
         ));
         let folded = fold(
             &state,
@@ -867,7 +899,8 @@ mod tests {
             ),
             &ctx(),
         );
-        let Output::SessionUpdate(SessionUpdate::AgentThoughtChunk(chunk)) = &folded.outputs[0]
+        let Output::SessionUpdate { update: SessionUpdate::AgentThoughtChunk(chunk), .. } =
+            &folded.outputs[0]
         else {
             panic!("thought chunk");
         };
@@ -922,7 +955,9 @@ mod tests {
             ),
             &ctx(),
         );
-        let Output::SessionUpdate(SessionUpdate::ToolCall(call)) = folded.outputs[0].clone() else {
+        let Output::SessionUpdate { update: SessionUpdate::ToolCall(call), .. } =
+            folded.outputs[0].clone()
+        else {
             panic!("tool call");
         };
         assert_eq!(call.title, "shell");
@@ -937,7 +972,8 @@ mod tests {
             ),
             &ctx(),
         );
-        let Output::SessionUpdate(SessionUpdate::ToolCallUpdate(update)) = &folded.outputs[0]
+        let Output::SessionUpdate { update: SessionUpdate::ToolCallUpdate(update), .. } =
+            &folded.outputs[0]
         else {
             panic!("tool update");
         };
@@ -957,7 +993,8 @@ mod tests {
             ),
             &ctx(),
         );
-        let Output::SessionUpdate(SessionUpdate::ToolCallUpdate(update)) = &folded.outputs[0]
+        let Output::SessionUpdate { update: SessionUpdate::ToolCallUpdate(update), .. } =
+            &folded.outputs[0]
         else {
             panic!("tool update");
         };
@@ -1123,7 +1160,8 @@ mod tests {
             ),
             &ctx,
         );
-        let Output::SessionUpdate(SessionUpdate::AgentMessageChunk(chunk)) = &folded.outputs[0]
+        let Output::SessionUpdate { update: SessionUpdate::AgentMessageChunk(chunk), .. } =
+            &folded.outputs[0]
         else {
             panic!("projected chunk");
         };
@@ -1173,7 +1211,8 @@ mod tests {
             ),
             &ctx(),
         );
-        let Output::SessionUpdate(SessionUpdate::SessionInfoUpdate(info)) = &folded.outputs[0]
+        let Output::SessionUpdate { update: SessionUpdate::SessionInfoUpdate(info), .. } =
+            &folded.outputs[0]
         else {
             panic!("info update");
         };
@@ -1199,7 +1238,9 @@ mod tests {
         );
         let (next, outputs) = abandon(&state, &ctx());
         assert_eq!(next.tools.len(), 0);
-        let Output::SessionUpdate(SessionUpdate::ToolCallUpdate(update)) = &outputs[0] else {
+        let Output::SessionUpdate { update: SessionUpdate::ToolCallUpdate(update), .. } =
+            &outputs[0]
+        else {
             panic!("tool update");
         };
         assert_eq!(
