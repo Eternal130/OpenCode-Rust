@@ -565,6 +565,7 @@ fn custom_provider_from_def(
         canonical: None,
         package: None,
         models,
+        ..CustomProvider::default()
     })
 }
 

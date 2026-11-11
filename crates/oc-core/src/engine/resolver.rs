@@ -557,7 +557,17 @@ impl CatalogModelResolver {
         let mut chatgpt_shaping = None;
         if let Some(bindings) = &self.credentials {
             if let Some(binding) = bindings.get(&provider_id) {
-                connection.api_key = Some(binding.api_key.clone());
+                // G-356 — the google-vertex ADC binding is the
+                // accessToken (google-vertex-shared.ts oauth lane), NOT
+                // an apiKey: folding it into `api_key` made a configured
+                // Express key silently lose (first-wins) and hid the
+                // ref's apiKey/accessToken mutual exclusion. Every other
+                // binding keeps the token as the api key.
+                if provider_id == "google-vertex" {
+                    connection.access_token = Some(binding.api_key.clone());
+                } else {
+                    connection.api_key = Some(binding.api_key.clone());
+                }
                 connection.base_url = binding.base_url.clone().or(connection.base_url);
                 for (key, value) in &binding.headers {
                     connection.headers.insert(key.clone(), value.clone());
@@ -1389,6 +1399,7 @@ mod console_merge_tests {
             name: "Acme AI".into(),
             base_url: "https://gw.acme.test/v1".into(),
             api_key: None,
+            auth_token: None,
             headers: None,
             body: None,
             canonical: None,
@@ -1750,6 +1761,7 @@ mod console_merge_tests {
             name: "Acme Cohere".into(),
             base_url: String::new(),
             api_key: None,
+            auth_token: None,
             headers: None,
             body: None,
             canonical: Some("cohere".into()),
@@ -1998,8 +2010,7 @@ mod local_discovery_tests {
                 region: None,
                 profile: None,
                 endpoint: None,
-                headers: BTreeMap::new(),
-                transport: None,
+                ..ModelConnection::default()
             },
         );
         map
@@ -2081,8 +2092,7 @@ mod local_discovery_tests {
                 region: None,
                 profile: None,
                 endpoint: None,
-                headers: BTreeMap::new(),
-                transport: None,
+                ..ModelConnection::default()
             },
         );
         discovery.refresh(&connections).await;

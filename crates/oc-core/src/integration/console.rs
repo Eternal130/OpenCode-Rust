@@ -436,6 +436,7 @@ pub fn to_custom_providers(config: &ConsoleConfig) -> Vec<CustomProvider> {
                 models,
                 canonical: provider.canonical.clone(),
                 package: provider.package(),
+                ..CustomProvider::default()
             })
         })
         .collect()

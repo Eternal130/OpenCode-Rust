@@ -3374,6 +3374,39 @@ pub fn zai_chat_route(transport: SharedTransport, auth: Option<AuthDefinition>) 
     )
 }
 
+/// xAI chat (`providers/xai.ts` chatRoute): the OpenAI chat protocol at
+/// `https://api.x.ai/v1` with the conversation-affinity header — the
+/// request's prompt cache key rides `x-grok-conv-id`
+/// (xai.ts:62-64), the same session-affinity seam the vercel gateway
+/// uses for `x-session-affinity`.
+pub fn xai_chat_route(transport: SharedTransport, auth: Option<AuthDefinition>) -> Route {
+    let ext = OpenAiChatExt {
+        id: "xai-chat",
+        cache_control: false,
+        allow_string_error: false,
+        reasoning_opaque: false,
+        assistant: None,
+        body: None,
+    };
+    let mut route = chat_route(
+        "xai-chat",
+        Some("xai"),
+        Some("xai"),
+        Some("https://api.x.ai/v1"),
+        Arc::new(OpenAiChat::new(ext)),
+        Framing::sse_with_done(),
+        auth,
+        transport,
+    );
+    route.headers = Some(Arc::new(|request: &crate::schema::LLMRequest| {
+        match &request.prompt_cache_key {
+            Some(key) => BTreeMap::from([("x-grok-conv-id".to_string(), key.clone())]),
+            None => BTreeMap::new(),
+        }
+    }));
+    route
+}
+
 /// Alibaba DashScope compatible-mode chat (`providers/alibaba.ts`). Alibaba
 /// uses plain `sse` framing — `[DONE]` never reaches the protocol.
 pub fn alibaba_chat_route(transport: SharedTransport, auth: Option<AuthDefinition>) -> Route {

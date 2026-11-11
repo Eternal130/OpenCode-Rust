@@ -51,6 +51,11 @@ pub mod meta_responses;
 // provider_metadata.gateway usage/cost merged into finish events.
 pub mod vercel_gateway;
 
+// Cloudflare AI Gateway (G-348) — account-synthesized REST + provider-native
+// passthrough routes on gateway.ai.cloudflare.com with the cf-aig-* header
+// set and cf-aig-authorization passthrough auth.
+pub mod cloudflare_ai_gateway;
+
 // Open Responses channel transport (AI-M1) — the WS form of an Open
 // Responses request: create message, base channel driver, HTTP fallback,
 // and the stream glue over a WebSocketChannelExecutor.
