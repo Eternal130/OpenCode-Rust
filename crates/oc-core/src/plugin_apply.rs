@@ -156,6 +156,25 @@ pub trait LocationPluginSource: Send + Sync {
         Vec::new()
     }
 
+    /// G-384 — plugin-registered integration rows (the
+    /// `ctx.integration.transform` editor table: upserts with
+    /// create-if-missing name = id).
+    fn integrations(&self) -> Vec<PluginIntegrationDef> {
+        Vec::new()
+    }
+
+    /// G-384 — the plugin integration removal markers
+    /// (`editor.remove`): the engine retracts these ids.
+    fn integration_removals(&self) -> Vec<PluginIntegrationRemovalDef> {
+        Vec::new()
+    }
+
+    /// G-384 — the plugin integration METHOD removal markers
+    /// (`editor.method.remove`).
+    fn integration_method_removals(&self) -> Vec<PluginIntegrationMethodRemovalDef> {
+        Vec::new()
+    }
+
     /// Plugin-registered commands (`command.add` registrations: name +
     /// description; execution dispatches back into the guest through
     /// the host's `command.execute` — CD-34's unsurfaced surface).
@@ -368,6 +387,40 @@ pub struct PluginIntegrationMethodDef {
     pub plugin_id: String,
     /// v2 `IntegrationMethodRegistration` JSON.
     pub registration: Value,
+}
+
+/// G-384 — one plugin-registered integration row as the engine sees
+/// it (the `ctx.integration.transform` editor table): an upsert of
+/// `{id, name, metadata?}` into the engine's `IntegrationHost`
+/// (create-if-missing with the name defaulting to the id — ref
+/// integration.ts:300-308).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginIntegrationDef {
+    pub plugin_id: String,
+    pub id: String,
+    pub name: String,
+    /// `None` = leave the entry's metadata untouched (the guest row
+    /// carried none); `Some(map)` sets/clears it.
+    pub metadata: Option<std::collections::BTreeMap<String, Value>>,
+}
+
+/// G-384 — one integration removal marker (`editor.remove`): the
+/// engine drops the whole entry (methods + implementations go with
+/// it; credential rows stay owned by the store, as in the ref).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginIntegrationRemovalDef {
+    pub plugin_id: String,
+    pub id: String,
+}
+
+/// G-384 — one integration METHOD removal marker
+/// (`editor.method.remove`): the raw `Integration.Method` JSON; the
+/// identity is `Method::same_slot` (type + id).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginIntegrationMethodRemovalDef {
+    pub plugin_id: String,
+    pub integration_id: String,
+    pub method: Value,
 }
 
 /// One plugin-registered websearch provider bridged onto
@@ -775,6 +828,54 @@ pub fn apply_plugin_integration_methods(
             label: None,
         });
         integration.update_method(integration_id, method, implementation);
+        applied += 1;
+    }
+    applied
+}
+
+/// G-384 — apply the `ctx.integration.transform` editor table into
+/// the engine's [`crate::integration::IntegrationHost`]: upserts via
+/// `update_integration`/`set_integration_metadata` (create-if-missing
+/// with name = id — ref integration.ts:300-308), method removals via
+/// `remove_method`, whole-entry removals via `remove_integration`
+/// (applied LAST so a remove wins over the same id's upsert). Rows
+/// whose id carries ANY plugin's removal marker skip their upsert.
+/// The caller publishes `integration.updated` afterwards (the ref
+/// notifies on every registration AND disposal — see the engine's
+/// apply loop). Returns the applied op count.
+pub fn apply_plugin_integrations(
+    integration: &crate::integration::IntegrationHost,
+    defs: &[PluginIntegrationDef],
+    removals: &[PluginIntegrationRemovalDef],
+    method_removals: &[PluginIntegrationMethodRemovalDef],
+) -> usize {
+    use crate::integration::types::Method;
+    let removed_ids: std::collections::HashSet<&str> =
+        removals.iter().map(|removal| removal.id.as_str()).collect();
+    let mut applied = 0usize;
+    for def in defs {
+        if removed_ids.contains(def.id.as_str()) {
+            continue;
+        }
+        integration.update_integration(&def.id, &def.name);
+        if let Some(metadata) = &def.metadata {
+            integration.set_integration_metadata(&def.id, Some(metadata.clone()));
+        }
+        applied += 1;
+    }
+    for removal in method_removals {
+        let Ok(method) = serde_json::from_value::<Method>(removal.method.clone()) else {
+            eprintln!(
+                "opencode plugin-apply: skipping malformed integration method removal {:?}",
+                removal.integration_id
+            );
+            continue;
+        };
+        integration.remove_method(&removal.integration_id, &method);
+        applied += 1;
+    }
+    for removal in removals {
+        integration.remove_integration(&removal.id);
         applied += 1;
     }
     applied
@@ -2777,5 +2878,154 @@ mod guest_hook_domain_tests {
         fn default_shim() -> Arc<MockGuest> {
             Arc::new(MockGuest { calls: std::sync::Mutex::new(Vec::new()) })
         }
+    }
+}
+
+#[cfg(test)]
+mod g384_tests {
+    use super::*;
+    use crate::bus::BusOptions;
+    use std::collections::BTreeMap;
+
+    async fn test_integration_host(
+    ) -> (Arc<crate::integration::IntegrationHost>, Arc<crate::bus::Bus>) {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let db = std::sync::Arc::new(
+            crate::database::Database::open_file(dir.path().join("t.db")).await.expect("db"),
+        );
+        std::mem::forget(dir);
+        let bus = Arc::new(crate::bus::Bus::new(
+            (*db).clone(),
+            BusOptions { persist: false, ..BusOptions::deterministic() },
+        ));
+        let host = crate::integration::IntegrationHost::new(
+            db,
+            bus.clone(),
+            crate::provider_catalog::catalog::Catalog::embedded(),
+            "opencode-test",
+        );
+        (host, bus)
+    }
+
+    fn row(
+        id: &str,
+        name: &str,
+        metadata: Option<BTreeMap<String, Value>>,
+    ) -> PluginIntegrationDef {
+        PluginIntegrationDef {
+            plugin_id: "p".to_owned(),
+            id: id.to_owned(),
+            name: name.to_owned(),
+            metadata,
+        }
+    }
+
+    /// G-384 — upserts (create-if-missing name = id, metadata set),
+    /// method removal, and whole-entry removal (the removal wins over
+    /// the same id's upsert).
+    #[tokio::test]
+    async fn apply_plugin_integrations_upserts_and_retracts() {
+        let (host, _bus) = test_integration_host().await;
+        // A pre-existing integration the editor renames + tags.
+        host.update_integration("base", "Base");
+        let metadata: BTreeMap<String, Value> =
+            [("source".to_owned(), Value::String("plugin".to_owned()))].into();
+        let applied = apply_plugin_integrations(
+            &host,
+            &[row("base", "Renamed", Some(metadata)), row("brandnew", "brandnew", None)],
+            &[PluginIntegrationRemovalDef { plugin_id: "p".into(), id: "gone".into() }],
+            &[PluginIntegrationMethodRemovalDef {
+                plugin_id: "p".into(),
+                integration_id: "base".into(),
+                method: serde_json::json!({ "type": "key" }),
+            }],
+        );
+        assert_eq!(applied, 4, "three upserts/removals + the method removal");
+        let base = host.get("base").await.expect("get").expect("present");
+        assert_eq!(base.name, "Renamed");
+        assert_eq!(
+            base.metadata.as_ref().expect("metadata").get("source"),
+            Some(&serde_json::json!("plugin"))
+        );
+        let brandnew = host.get("brandnew").await.expect("get").expect("created");
+        assert_eq!(brandnew.name, "brandnew", "name defaults to the id");
+        assert!(host.get("gone").await.expect("get").is_none(), "removal retracted");
+
+        // Method removal: install a key method on `base`, remove it.
+        host.update_method(
+            "base",
+            crate::integration::types::Method::Key { label: None, form: None },
+            None,
+        );
+        assert!(
+            host.get("base")
+                .await
+                .expect("get")
+                .expect("present")
+                .methods
+                .iter()
+                .any(|m| matches!(m, crate::integration::types::Method::Key { .. })),
+            "key method installed"
+        );
+        apply_plugin_integrations(
+            &host,
+            &[],
+            &[],
+            &[PluginIntegrationMethodRemovalDef {
+                plugin_id: "p".into(),
+                integration_id: "base".into(),
+                method: serde_json::json!({ "type": "key" }),
+            }],
+        );
+        assert!(
+            !host
+                .get("base")
+                .await
+                .expect("get")
+                .expect("present")
+                .methods
+                .iter()
+                .any(|m| matches!(m, crate::integration::types::Method::Key { .. })),
+            "key method removed"
+        );
+
+        // A removal marker beats the same id's upsert (remove wins).
+        apply_plugin_integrations(
+            &host,
+            &[row("brandnew", "zombie", None)],
+            &[PluginIntegrationRemovalDef { plugin_id: "p".into(), id: "brandnew".into() }],
+            &[],
+        );
+        assert!(host.get("brandnew").await.expect("get").is_none(), "removal wins the upsert");
+    }
+
+    /// G-385 — `reload_catalog` re-installs the catalog key/env methods
+    /// over a refreshed catalog and `notify_updated` publishes
+    /// `integration.updated` (integration.ts:355 — the ref reload
+    /// invalidates + publishes; it does NOT refetch models.dev).
+    #[tokio::test]
+    async fn reload_catalog_reinstalls_methods_and_notify_publishes() {
+        use futures::StreamExt as _;
+        let (host, bus) = test_integration_host().await;
+        let mut subscription = bus.subscribe_types(&[crate::bus::registry::INTEGRATION_UPDATED]);
+        let catalog = crate::provider_catalog::catalog::Catalog::embedded();
+        // Drop every entry (simulating a first boot over an empty
+        // catalog), then reload over the real one: the methods return.
+        for info in host.list().await.expect("list") {
+            host.remove_integration(&info.id);
+        }
+        assert!(host.list().await.expect("list").is_empty());
+        host.reload_catalog(&catalog);
+        assert!(
+            !host.list().await.expect("list").is_empty(),
+            "catalog methods re-installed after reload"
+        );
+        host.notify_updated().await;
+        let event = tokio::time::timeout(std::time::Duration::from_secs(5), subscription.next())
+            .await
+            .expect("event within timeout")
+            .expect("event present");
+        assert_eq!(event.type_, crate::bus::registry::INTEGRATION_UPDATED, "published: {event:?}");
+        assert_eq!(event.data, serde_json::json!({}), "ephemeral, data {{}}");
     }
 }

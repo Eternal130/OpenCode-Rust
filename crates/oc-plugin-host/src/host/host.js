@@ -304,7 +304,19 @@ const domainStores = {
   modelDefault: undefined,
   references: new Map(), // G-64: name -> Reference.Source
   vcs: new Map(), // G-24 residual: id -> vcs provider row
+  // G-384: the integration editor's derived table — id -> {id, name,
+  // metadata} rows this host's plugins registered (per-plugin rows;
+  // the whole table re-crosses at every materialization).
+  integrations: new Map(),
 };
+
+// G-384 — integration editor ownership + tombstones (the vcs.transform
+// pattern): `${pluginId}:${id}` → id for live rows, and the remove
+// markers (integration removals and method removals) the next
+// materialization carries so the engine retracts them.
+const integrationOwners = new Map();
+const integrationRemovals = new Map(); // `${pluginId}:${id}` -> id
+const integrationMethodRemovals = new Map(); // `${pluginId}:${iid}:${methodKey}` -> {integrationID, method}
 
 /** Registered editors per domain, in registration order. */
 const domainEditors = { agent: [], mcp: [], skill: [], tool: [], command: [], provider: [], reference: [], model: [] };
@@ -589,6 +601,10 @@ function resetDomainsToBase() {
   domainStores.references = new Map();
   domainStores.vcs = new Map();
   vcsOwners.clear();
+  domainStores.integrations = new Map();
+  integrationOwners.clear();
+  integrationRemovals.clear();
+  integrationMethodRemovals.clear();
   // G-147: the model editor's derived state resets with the base
   // (the next transform re-fetches the catalog).
   domainStores.modelBase = undefined;
@@ -677,6 +693,15 @@ async function materializeDomain(kind, pluginId) {
       pluginId,
       providers: Array.from(domainStores.vcs.values()),
     });
+  } else if (kind === "integration") {
+    // G-384 — the whole derived table + this host's remove markers
+    // cross at once; rows keep plugin attribution, removals retract.
+    await hostRequest("integration.transform", {
+      pluginId,
+      integrations: Array.from(domainStores.integrations.values()),
+      removed: Array.from(integrationRemovals.values()),
+      removedMethods: Array.from(integrationMethodRemovals.values()),
+    });
   }
 }
 
@@ -718,6 +743,55 @@ async function rederiveDomain(kind, pluginId) {
     entry.cb(editors[kind]);
   }
   await materializeDomain(kind, pluginId);
+}
+
+// ---------------------------------------------------------------------------
+// G-384 — the shared `ctx.integration.method.update` implementation: the
+// plain `ctx.integration.method.update` face AND the transform editor's
+// `editor.method.update` both route here, so the authorize/refresh
+// closure markers always ride the existing G-24 hook dispatch
+// (`integration/authorize|callback|refresh`) into the SAME
+// integration_methods registration table (never forked).
+// ---------------------------------------------------------------------------
+
+async function integrationMethodUpdate(pluginId, input) {
+  const hasAuthorize = typeof input?.authorize === "function";
+  const hasRefresh = typeof input?.refresh === "function";
+  const args = {
+    integrationID: input?.integrationID,
+    method: input?.method,
+    authorize: hasAuthorize,
+    refresh: hasRefresh,
+  };
+  if (hasAuthorize) {
+    await registerHook(pluginId, "integration", "authorize", async (event) => {
+      if (!event || typeof event !== "object") return;
+      const authorization = await input.authorize(event.answer ?? {});
+      if (!authorization || typeof authorization !== "object") return;
+      if (authorization.mode === "auto" && typeof authorization.callback === "function") {
+        pendingIntegrationCallback = authorization.callback;
+        const credential = await authorization.callback();
+        event.result = { ...authorization, callback: undefined, credential };
+      } else {
+        pendingIntegrationCallback = authorization.callback ?? null;
+        event.result = { ...authorization, callback: undefined };
+      }
+    });
+    await registerHook(pluginId, "integration", "callback", async (event) => {
+      if (!event || typeof event !== "object" || typeof pendingIntegrationCallback !== "function") {
+        return;
+      }
+      const credential = await pendingIntegrationCallback(event.code);
+      event.credential = credential;
+    });
+  }
+  if (hasRefresh) {
+    await registerHook(pluginId, "integration", "refresh", async (event) => {
+      if (!event || typeof event !== "object") return;
+      event.credential = await input.refresh(event.credential);
+    });
+  }
+  await hostRequest("integration.method.update", { pluginId, args });
 }
 
 // ---------------------------------------------------------------------------
@@ -1549,44 +1623,156 @@ function makeCtx(pluginId, options) {
       },
       method: {
         async update(input) {
-          const hasAuthorize = typeof input?.authorize === "function";
-          const hasRefresh = typeof input?.refresh === "function";
-          const args = {
-            integrationID: input?.integrationID,
-            method: input?.method,
-            authorize: hasAuthorize,
-            refresh: hasRefresh,
-          };
-          if (hasAuthorize) {
-            await registerHook(pluginId, "integration", "authorize", async (event) => {
-              if (!event || typeof event !== "object") return;
-              const authorization = await input.authorize(event.answer ?? {});
-              if (!authorization || typeof authorization !== "object") return;
-              if (authorization.mode === "auto" && typeof authorization.callback === "function") {
-                pendingIntegrationCallback = authorization.callback;
-                const credential = await authorization.callback();
-                event.result = { ...authorization, callback: undefined, credential };
-              } else {
-                pendingIntegrationCallback = authorization.callback ?? null;
-                event.result = { ...authorization, callback: undefined };
-              }
-            });
-            await registerHook(pluginId, "integration", "callback", async (event) => {
-              if (!event || typeof event !== "object" || typeof pendingIntegrationCallback !== "function") {
-                return;
-              }
-              const credential = await pendingIntegrationCallback(event.code);
-              event.credential = credential;
-            });
-          }
-          if (hasRefresh) {
-            await registerHook(pluginId, "integration", "refresh", async (event) => {
-              if (!event || typeof event !== "object") return;
-              event.credential = await input.refresh(event.credential);
-            });
-          }
-          return hostRequest("integration.method.update", { pluginId, args });
+          return integrationMethodUpdate(pluginId, input);
         },
+        // G-384 — the editor's read face: the method definitions of
+        // one integration (ref editor.method.list).
+        async list(id) {
+          const result = await hostRequest("integration.method.list", {
+            pluginId,
+            args: { integrationID: String(id ?? "") },
+          });
+          return result && typeof result === "object" && "value" in result ? result.value : result;
+        },
+      },
+      // G-385 — ref adapter.ts:426 `reload: () => run(host.integration
+      // .reload())`: the host invalidates its registry (re-installing
+      // the catalog methods) and publishes `integration.updated`.
+      async reload() {
+        await hostRequest("integration.reload", { pluginId, args: {} });
+      },
+      // G-384 — ref adapter.ts:386-425 `ctx.integration.transform(cb)`:
+      // the editor CRUD face. BOUNDED DEVIATION (G-5 precedent, like
+      // vcs.transform): the ref replays transforms lazily on every
+      // read; the rust port materializes EAGERLY at registration time
+      // (mutations write the guest-side pending table, then the whole
+      // derived table crosses via `integration.transform`). Results
+      // are session-scoped in-memory rows — never persisted.
+      async transform(cb) {
+        await cb({
+          list: async () => {
+            const result = await hostRequest("integration.list", { pluginId, args: {} });
+            return result && typeof result === "object" && "value" in result ? result.value : result;
+          },
+          get: async (id) => {
+            const result = await hostRequest("integration.get", {
+              pluginId,
+              args: { integrationID: String(id ?? "") },
+            });
+            return result && typeof result === "object" && "value" in result ? result.value : result;
+          },
+          // ref editor.update (integration.ts:299-309): upsert — a
+          // missing integration is created with the name defaulting to
+          // its id; an existing one's untouched fields survive (the
+          // base is fetched through the live port first).
+          update: async (id, update) => {
+            const integrationId = String(id ?? "");
+            if (!integrationId) return;
+            let row = domainStores.integrations.get(integrationId);
+            if (!row) {
+              let name = integrationId;
+              let metadata;
+              try {
+                const current = await hostRequest("integration.get", {
+                  pluginId,
+                  args: { integrationID: integrationId },
+                });
+                const info =
+                  current && typeof current === "object" && "value" in current
+                    ? current.value
+                    : current;
+                if (info && typeof info === "object") {
+                  if (typeof info.name === "string" && info.name) name = info.name;
+                  if (info.metadata !== undefined && info.metadata !== null) {
+                    metadata = info.metadata;
+                  }
+                }
+              } catch {
+                // unknown id → create-if-missing with name = id
+              }
+              row = { id: integrationId, name, metadata };
+            }
+            if (typeof update === "function") {
+              update(row);
+            } else if (update && typeof update === "object") {
+              if (typeof update.name === "string" && update.name) row.name = update.name;
+              if ("metadata" in update) row.metadata = update.metadata;
+            }
+            row.id = integrationId;
+            if (typeof row.name !== "string" || !row.name) row.name = integrationId;
+            integrationOwners.set(`${pluginId}:${integrationId}`, integrationId);
+            integrationRemovals.delete(`${pluginId}:${integrationId}`);
+            domainStores.integrations.set(integrationId, row);
+          },
+          remove: (id) => {
+            const integrationId = String(id ?? "");
+            if (!integrationId) return;
+            integrationOwners.delete(`${pluginId}:${integrationId}`);
+            domainStores.integrations.delete(integrationId);
+            integrationRemovals.set(`${pluginId}:${integrationId}`, integrationId);
+          },
+          method: {
+            // MUST route through the same path as
+            // ctx.integration.method.update (the G-24 hook dispatch
+            // owns the authorize/refresh closures) — plus a
+            // materialization so a remove→update sequence in one
+            // transform settles to the upsert.
+            update: async (input) => {
+              const result = await integrationMethodUpdate(pluginId, input);
+              const methodKey =
+                input?.method?.id !== undefined && input?.method?.id !== null
+                  ? String(input.method.id)
+                  : String(input?.method?.type ?? "");
+              if (methodKey) {
+                integrationMethodRemovals.delete(
+                  `${pluginId}:${String(input?.integrationID ?? "")}:${methodKey}`,
+                );
+              }
+              return result;
+            },
+            list: async (id) => {
+              const result = await hostRequest("integration.method.list", {
+                pluginId,
+                args: { integrationID: String(id ?? "") },
+              });
+              return result && typeof result === "object" && "value" in result
+                ? result.value
+                : result;
+            },
+            remove: (id, method) => {
+              const integrationId = String(id ?? "");
+              const methodKey =
+                method && (method.id !== undefined || method.type !== undefined)
+                  ? String(method.id ?? method.type)
+                  : "";
+              if (!integrationId || !methodKey) return;
+              integrationMethodRemovals.set(`${pluginId}:${integrationId}:${methodKey}`, {
+                integrationID: integrationId,
+                method,
+              });
+            },
+          },
+        });
+        await materializeDomain("integration", pluginId);
+        return {
+          async dispose() {
+            // Only THIS plugin's rows retract (the ownership index),
+            // then re-materialize; other plugins' rows survive.
+            for (const key of Array.from(integrationOwners.keys())) {
+              if (key.startsWith(`${pluginId}:`)) {
+                integrationOwners.delete(key);
+                domainStores.integrations.delete(key.slice(pluginId.length + 1));
+              }
+            }
+            for (const key of Array.from(integrationRemovals.keys())) {
+              if (key.startsWith(`${pluginId}:`)) integrationRemovals.delete(key);
+            }
+            for (const key of Array.from(integrationMethodRemovals.keys())) {
+              if (key.startsWith(`${pluginId}:`)) integrationMethodRemovals.delete(key);
+            }
+            await materializeDomain("integration", pluginId);
+          },
+        };
       },
     },
 
