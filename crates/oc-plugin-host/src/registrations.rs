@@ -92,6 +92,38 @@ pub struct PluginIntegrationMethod {
     pub registration: Value,
 }
 
+/// G-384 — one integration row from a `ctx.integration.transform`
+/// materialization (the editor's whole derived table crosses; rows
+/// keep plugin attribution like the other transform domains).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginIntegrationDef {
+    pub plugin_id: String,
+    pub id: String,
+    pub name: String,
+    /// The `ref.metadata` JSON object (`None` = the row carries no
+    /// metadata — the engine leaves the entry's metadata untouched).
+    pub metadata: Option<Value>,
+}
+
+/// G-384 — one integration removal marker (`editor.remove`): the
+/// engine retracts the integration on the next apply pass.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginIntegrationRemoval {
+    pub plugin_id: String,
+    pub id: String,
+}
+
+/// G-384 — one integration METHOD removal marker
+/// (`editor.method.remove`): the raw `Integration.Method` JSON crosses
+/// (identity by type + id, `Method::same_slot` at apply time).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginIntegrationMethodRemoval {
+    pub plugin_id: String,
+    pub integration_id: String,
+    /// The `Integration.Method` JSON.
+    pub method: Value,
+}
+
 /// One provider definition from a `ctx.provider.transform`
 /// materialization (G-64 — the whole derived table crosses; the
 /// definition JSON mirrors the v2 provider editor's records).
@@ -387,6 +419,14 @@ pub struct RegistrationSnapshot {
     pub worktree_strategies: Vec<PluginWorktreeStrategy>,
     /// G-24 — plugin-registered integration methods, by key.
     pub integration_methods: Vec<PluginIntegrationMethod>,
+    /// G-384 — plugin-registered integration rows, by id.
+    pub integrations: Vec<PluginIntegrationDef>,
+    /// G-384 — plugin integration removal markers, keyed
+    /// `plugin_id:id`.
+    pub integration_removals: Vec<PluginIntegrationRemoval>,
+    /// G-384 — plugin integration METHOD removal markers, keyed
+    /// `plugin_id:integration_id:method`.
+    pub integration_method_removals: Vec<PluginIntegrationMethodRemoval>,
     /// G-64 — plugin provider definitions, by id.
     pub providers: Vec<PluginProviderDef>,
     /// G-64 — plugin reference sources, by name.
@@ -448,6 +488,13 @@ pub struct Registrations {
     pub worktree_strategies: BTreeMap<String, PluginWorktreeStrategy>,
     /// G-24 — plugin integration methods by key.
     pub integration_methods: BTreeMap<String, PluginIntegrationMethod>,
+    /// G-384 — plugin integration rows by id.
+    pub integrations: BTreeMap<String, PluginIntegrationDef>,
+    /// G-384 — plugin integration removal markers by `plugin_id:id`.
+    pub integration_removals: BTreeMap<String, PluginIntegrationRemoval>,
+    /// G-384 — plugin integration METHOD removal markers by
+    /// `plugin_id:integration_id:method`.
+    pub integration_method_removals: BTreeMap<String, PluginIntegrationMethodRemoval>,
     /// G-64 — plugin provider definitions by id.
     pub providers: BTreeMap<String, PluginProviderDef>,
     /// G-64 — plugin reference sources by name.
@@ -481,6 +528,9 @@ impl Registrations {
         self.websearch_providers.retain(|_, provider| provider.plugin_id != plugin_id);
         self.worktree_strategies.retain(|_, strategy| strategy.plugin_id != plugin_id);
         self.integration_methods.retain(|_, method| method.plugin_id != plugin_id);
+        self.integrations.retain(|_, integration| integration.plugin_id != plugin_id);
+        self.integration_removals.retain(|_, removal| removal.plugin_id != plugin_id);
+        self.integration_method_removals.retain(|_, removal| removal.plugin_id != plugin_id);
         self.providers.retain(|_, provider| provider.plugin_id != plugin_id);
         self.references.retain(|_, reference| reference.plugin_id != plugin_id);
         self.vcs_providers.retain(|_, provider| provider.plugin_id != plugin_id);
@@ -596,6 +646,10 @@ impl Registrations {
             return;
         }
         let key = format!("{integration_id}:{method_key}");
+        // G-384 — a later method.update by the SAME plugin clears its
+        // matching removal marker (update wins, ref editor semantics).
+        self.integration_method_removals
+            .remove(&format!("{plugin_id}:{integration_id}:{method_key}"));
         self.integration_methods.insert(
             key.clone(),
             PluginIntegrationMethod {
@@ -604,6 +658,85 @@ impl Registrations {
                 registration: registration.clone(),
             },
         );
+    }
+
+    /// G-384 — merge one `ctx.integration.transform` materialization
+    /// (whole-table per plugin): incoming rows replace THIS plugin's
+    /// rows (others' provenance survives), `removed` becomes exactly
+    /// this plugin's integration-removal markers, `removed_methods`
+    /// its method-removal markers. An update for a previously removed
+    /// id clears that removal marker (the ref's editor mutates one
+    /// shared table; the markers encode the retract set).
+    pub fn merge_integrations(
+        &mut self,
+        plugin_id: &str,
+        rows: &[Value],
+        removed: &[Value],
+        removed_methods: &[Value],
+    ) {
+        let incoming: Vec<(String, String, Option<Value>)> = rows
+            .iter()
+            .filter_map(|row| {
+                let id = row.get("id").and_then(Value::as_str)?;
+                let name = row
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or(id);
+                let metadata = row.get("metadata").filter(|value| !value.is_null()).cloned();
+                Some((id.to_owned(), name.to_owned(), metadata))
+            })
+            .collect();
+        self.integrations.retain(|id, integration| {
+            integration.plugin_id != plugin_id || incoming.iter().any(|(row_id, _, _)| row_id == id)
+        });
+        for (id, name, metadata) in incoming {
+            self.integration_removals.remove(&format!("{plugin_id}:{id}"));
+            let provenance = self
+                .integrations
+                .get(&id)
+                .map_or_else(|| plugin_id.to_owned(), |i| i.plugin_id.clone());
+            self.integrations.insert(
+                id.clone(),
+                PluginIntegrationDef { plugin_id: provenance, id, name, metadata },
+            );
+        }
+        // The removal markers are whole-table for THIS plugin.
+        self.integration_removals.retain(|_, removal| removal.plugin_id != plugin_id);
+        for id in removed.iter().filter_map(Value::as_str) {
+            let key = format!("{plugin_id}:{id}");
+            self.integrations.retain(|row_id, integration| {
+                !(row_id == id && integration.plugin_id == plugin_id)
+            });
+            self.integration_removals.insert(
+                key.clone(),
+                PluginIntegrationRemoval { plugin_id: plugin_id.to_owned(), id: id.to_owned() },
+            );
+        }
+        self.integration_method_removals.retain(|_, removal| removal.plugin_id != plugin_id);
+        for marker in removed_methods {
+            let Some(integration_id) = marker.get("integrationID").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(method) = marker.get("method") else { continue };
+            let method_key = method
+                .get("id")
+                .and_then(Value::as_str)
+                .or_else(|| method.get("type").and_then(Value::as_str))
+                .unwrap_or_default();
+            if method_key.is_empty() {
+                continue;
+            }
+            let key = format!("{plugin_id}:{integration_id}:{method_key}");
+            self.integration_method_removals.insert(
+                key,
+                PluginIntegrationMethodRemoval {
+                    plugin_id: plugin_id.to_owned(),
+                    integration_id: integration_id.to_owned(),
+                    method: method.clone(),
+                },
+            );
+        }
     }
 
     /// G-64 — merge one `ctx.provider.transform` materialization
@@ -821,6 +954,13 @@ impl Registrations {
             websearch_providers: self.websearch_providers.values().cloned().collect(),
             worktree_strategies: self.worktree_strategies.values().cloned().collect(),
             integration_methods: self.integration_methods.values().cloned().collect(),
+            integrations: self.integrations.values().cloned().collect(),
+            integration_removals: self.integration_removals.values().cloned().collect(),
+            integration_method_removals: self
+                .integration_method_removals
+                .values()
+                .cloned()
+                .collect(),
             providers: self.providers.values().cloned().collect(),
             references: self.references.values().cloned().collect(),
             vcs_providers: self.vcs_providers.values().cloned().collect(),
@@ -867,6 +1007,97 @@ mod tests {
                 ("sales".into(), true, Some("registry.search".into())),
             ]
         );
+    }
+
+    /// G-384 — the integration transform merge: whole-table per plugin,
+    /// removal markers, and other plugins' rows surviving.
+    #[test]
+    fn merge_integrations_upserts_marks_removals_and_retains_other_plugins() {
+        let mut registrations = Registrations::default();
+        registrations.merge_integrations(
+            "a",
+            &[
+                json!({ "id": "acme", "name": "Acme", "metadata": { "source": "plugin" } }),
+                // name defaults to the id (create-if-missing, ref
+                // integration.ts:300-308)
+                json!({ "id": "brandnew" }),
+            ],
+            &[],
+            &[],
+        );
+        assert_eq!(registrations.integrations.len(), 2);
+        assert_eq!(registrations.integrations["acme"].name, "Acme");
+        assert_eq!(registrations.integrations["acme"].plugin_id, "a");
+        assert_eq!(registrations.integrations["brandnew"].name, "brandnew");
+        assert!(registrations.integration_removals.is_empty());
+
+        // Plugin B's row for another id + a method removal marker.
+        registrations.merge_integrations(
+            "b",
+            &[json!({ "id": "other", "name": "Other" })],
+            &[],
+            &[json!({ "integrationID": "acme", "method": { "type": "oauth", "id": "m1", "label": "M" } })],
+        );
+        assert_eq!(registrations.integrations.len(), 3);
+        assert_eq!(registrations.integration_method_removals.len(), 1);
+
+        // Plugin A removes acme: its row drops, the marker lands.
+        registrations.merge_integrations(
+            "a",
+            &[json!({ "id": "brandnew" })],
+            &[json!("acme")],
+            &[],
+        );
+        assert!(!registrations.integrations.contains_key("acme"));
+        assert_eq!(registrations.integration_removals.len(), 1);
+        assert_eq!(
+            registrations.integration_removals.values().next().map(|r| r.id.as_str()),
+            Some("acme")
+        );
+        // B's row + B's method marker survive A's re-materialization.
+        assert!(registrations.integrations.contains_key("other"));
+        assert_eq!(registrations.integration_method_removals.len(), 1);
+
+        // A re-registers acme: the removal marker clears (update wins).
+        registrations.merge_integrations(
+            "a",
+            &[json!({ "id": "acme", "name": "Back" }), json!({ "id": "brandnew" })],
+            &[],
+            &[],
+        );
+        assert!(registrations.integrations.contains_key("acme"));
+        assert!(registrations.integration_removals.is_empty());
+
+        // A method.update by the same plugin clears its matching
+        // method-removal marker.
+        registrations.upsert_integration_method(
+            "b",
+            &json!({ "integrationID": "acme", "method": { "type": "oauth", "id": "m1", "label": "M" } }),
+        );
+        assert!(registrations.integration_method_removals.is_empty());
+        assert_eq!(registrations.integration_methods.len(), 1);
+
+        // clear_plugin drops only that plugin's rows/markers.
+        registrations.clear_plugin("a");
+        assert!(!registrations.integrations.contains_key("acme"));
+        assert!(!registrations.integrations.contains_key("brandnew"));
+        assert!(registrations.integrations.contains_key("other"));
+        assert_eq!(registrations.integration_methods.len(), 1);
+        registrations.clear_plugin("b");
+        assert!(registrations.integrations.is_empty());
+        assert!(registrations.integration_methods.is_empty());
+
+        // The snapshot carries the three new tables.
+        registrations.merge_integrations(
+            "a",
+            &[json!({ "id": "x", "name": "X" })],
+            &[json!("y")],
+            &[json!({ "integrationID": "z", "method": { "type": "key" } })],
+        );
+        let snapshot = registrations.snapshot();
+        assert_eq!(snapshot.integrations.len(), 1);
+        assert_eq!(snapshot.integration_removals.len(), 1);
+        assert_eq!(snapshot.integration_method_removals.len(), 1);
     }
 
     #[test]

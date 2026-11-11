@@ -448,9 +448,10 @@ pub trait TerminalPort: Send + Sync {
 
 /// `ctx.integration.*` routing target (G-64 — ref host.ts:274-357's
 /// method channel: list/get/connect.key/oauth.*/command.*/connection.*
-/// over the engine's `IntegrationHost`). One `call` carrying the ref
-/// method name keeps the supervisor arm flat; the engine port maps
-/// 1:1 onto the `IntegrationHost` surface.
+/// over the engine's `IntegrationHost`; G-385 adds `reload`, G-384 the
+/// read face `method.list`). One `call` carrying the ref method name
+/// keeps the supervisor arm flat; the engine port maps 1:1 onto the
+/// `IntegrationHost` surface.
 #[async_trait]
 pub trait IntegrationPort: Send + Sync {
     /// One integration-domain call (`method`: the ref method name,

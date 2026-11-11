@@ -1735,6 +1735,38 @@ impl Engine {
                         &integration_defs,
                     );
                 }
+                // G-384 — the `ctx.integration.transform` editor table
+                // lands in the engine-level IntegrationHost; the ref
+                // publishes `integration.updated` on every
+                // registration AND disposal (integration.ts:355), so
+                // the notify rides every non-empty apply pass.
+                let integration_rows: Vec<_> = source
+                    .integrations()
+                    .into_iter()
+                    .filter(|def| is_active(&def.plugin_id))
+                    .collect();
+                let integration_removals: Vec<_> = source
+                    .integration_removals()
+                    .into_iter()
+                    .filter(|def| is_active(&def.plugin_id))
+                    .collect();
+                let integration_method_removals: Vec<_> = source
+                    .integration_method_removals()
+                    .into_iter()
+                    .filter(|def| is_active(&def.plugin_id))
+                    .collect();
+                if !(integration_rows.is_empty()
+                    && integration_removals.is_empty()
+                    && integration_method_removals.is_empty())
+                {
+                    crate::plugin_apply::apply_plugin_integrations(
+                        &self.integration,
+                        &integration_rows,
+                        &integration_removals,
+                        &integration_method_removals,
+                    );
+                    self.integration.notify_updated().await;
+                }
             }
         }
 

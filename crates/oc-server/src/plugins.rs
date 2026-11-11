@@ -1429,6 +1429,54 @@ impl LocationPluginSource for HostPluginSource {
             .collect()
     }
 
+    /// G-384 — plugin-registered integration rows (the
+    /// `ctx.integration.transform` editor table).
+    fn integrations(&self) -> Vec<oc_core::plugin_apply::PluginIntegrationDef> {
+        self.host
+            .registrations()
+            .integrations
+            .iter()
+            .map(|def| oc_core::plugin_apply::PluginIntegrationDef {
+                plugin_id: def.plugin_id.clone(),
+                id: def.id.clone(),
+                name: def.name.clone(),
+                metadata: def
+                    .metadata
+                    .as_ref()
+                    .and_then(|value| serde_json::from_value(value.clone()).ok()),
+            })
+            .collect()
+    }
+
+    /// G-384 — the plugin integration removal markers.
+    fn integration_removals(&self) -> Vec<oc_core::plugin_apply::PluginIntegrationRemovalDef> {
+        self.host
+            .registrations()
+            .integration_removals
+            .iter()
+            .map(|def| oc_core::plugin_apply::PluginIntegrationRemovalDef {
+                plugin_id: def.plugin_id.clone(),
+                id: def.id.clone(),
+            })
+            .collect()
+    }
+
+    /// G-384 — the plugin integration METHOD removal markers.
+    fn integration_method_removals(
+        &self,
+    ) -> Vec<oc_core::plugin_apply::PluginIntegrationMethodRemovalDef> {
+        self.host
+            .registrations()
+            .integration_method_removals
+            .iter()
+            .map(|def| oc_core::plugin_apply::PluginIntegrationMethodRemovalDef {
+                plugin_id: def.plugin_id.clone(),
+                integration_id: def.integration_id.clone(),
+                method: def.method.clone(),
+            })
+            .collect()
+    }
+
     /// PLUG-D07: reduce THIS location's operations (the boot pass's
     /// dedup/remove semantics) and map the surviving targets onto the
     /// loaded plugins' ids — a location's registrations come only from
@@ -3261,6 +3309,32 @@ impl oc_plugin_host::IntegrationPort for EngineIntegrationPort {
                 };
                 host.connection_status(&integration_id, &connection, status).await;
                 Ok(Value::Null)
+            }
+            // G-385 — ref adapter.ts:426 `ctx.integration.reload()`:
+            // invalidate the registry (re-install the catalog key/env
+            // methods from the LIVE catalog service — the same source
+            // the models-dev auto path reads, engine/mod.rs:822-835)
+            // and publish `integration.updated` (integration.ts:355).
+            // No models.dev refetch happens here.
+            "reload" => {
+                let catalog = self.engine.catalog_service.get();
+                host.reload_catalog(&catalog);
+                host.notify_updated().await;
+                Ok(Value::Null)
+            }
+            // G-384 — the transform editor's method read face
+            // (`editor.method.list`): the method definitions of one
+            // integration (ref integration.ts:312-340's table).
+            "method.list" => {
+                let integration_id = field("integrationID");
+                if integration_id.is_empty() {
+                    return Err("integration.method.list requires an integrationID".into());
+                }
+                let info = host.get(&integration_id).await.map_err(|e| e.to_string())?;
+                match info {
+                    Some(info) => serde_json::to_value(&info.methods).map_err(|e| e.to_string()),
+                    None => Ok(Value::Array(Vec::new())),
+                }
             }
             other => Err(format!("unknown integration method {other:?}")),
         }

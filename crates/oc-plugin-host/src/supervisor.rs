@@ -579,7 +579,8 @@ impl Shared {
             //    G-64/G-24 residual: the provider/reference/vcs
             //    transform tables follow the same merge.
             "websearch.transform" | "worktree.transform" | "provider.transform"
-            | "reference.transform" | "vcs.transform" | "model.transform" => {
+            | "reference.transform" | "vcs.transform" | "model.transform"
+            | "integration.transform" => {
                 Some(answer_registration_transform(self, id, method, params))
             }
             // -- G-24: `ctx.integration.method.update` — the v2
@@ -684,7 +685,9 @@ impl Shared {
             | "integration.command.cancel"
             | "integration.connection.active"
             | "integration.connection.resolve"
-            | "integration.connection.status" => {
+            | "integration.connection.status"
+            | "integration.reload"
+            | "integration.method.list" => {
                 self.answer_integration_async(id, method, params);
                 None
             }
@@ -1555,6 +1558,24 @@ fn answer_registration_transform(shared: &Shared, id: u64, method: &str, params:
         "model.transform" => registrations.merge_models(
             plugin_id,
             params.get("models").and_then(Value::as_array).cloned().unwrap_or_default().as_slice(),
+        ),
+        // G-384 — the integration editor's whole derived table + this
+        // plugin's remove markers.
+        "integration.transform" => registrations.merge_integrations(
+            plugin_id,
+            params
+                .get("integrations")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .as_slice(),
+            params.get("removed").and_then(Value::as_array).cloned().unwrap_or_default().as_slice(),
+            params
+                .get("removedMethods")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .as_slice(),
         ),
         _ => registrations.merge_worktree_strategies(
             plugin_id,
