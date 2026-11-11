@@ -94,7 +94,7 @@ pub fn gateway_id(configured: Option<&str>) -> String {
 /// id rewrite, cloudflare-ai-gateway.ts:124-135): `openai/` and
 /// `anthropic/` strip their prefix on the native endpoints (anthropic
 /// also dashes its dots), `workers-ai/` always strips, and a custom
-/// baseURL keeps the full id.
+/// `baseURL` keeps the full id.
 #[must_use]
 pub fn wire_model_id(model_id: &str, native: bool) -> String {
     if let Some(id) = model_id.strip_prefix("openai/") {
@@ -131,8 +131,7 @@ pub fn gateway_headers(options: &GatewayOptions) -> BTreeMap<String, String> {
         // a JSON string re-encoded to its canonical compact form.
         let encoded = match metadata {
             Value::String(text) => serde_json::from_str::<Value>(text)
-                .map(|value| value.to_string())
-                .unwrap_or_else(|_| metadata.to_string()),
+                .map_or_else(|_| metadata.to_string(), |value| value.to_string()),
             other => other.to_string(),
         };
         headers.insert("cf-aig-metadata".to_string(), encoded);
@@ -169,7 +168,7 @@ pub fn credential(api_key: Option<Secret>, env: &[String]) -> Credential {
 pub struct CloudflareGatewaySpec {
     /// `accountId` — required unless `base_url` is supplied.
     pub account_id: Option<String>,
-    /// A custom baseURL standing in for the REST API (every model then
+    /// A custom `baseURL` standing in for the REST API (every model then
     /// keeps it with the full gateway model ids).
     pub base_url: Option<String>,
     pub gateway_id: Option<String>,
@@ -182,21 +181,21 @@ pub struct CloudflareGatewaySpec {
 }
 
 impl CloudflareGatewaySpec {
-    /// The REST base: the custom baseURL or the account-synthesized
+    /// The REST base: the custom `baseURL` or the account-synthesized
     /// root (`baseURL()`; `requireAccountId` throws without either,
     /// cloudflare-ai-gateway.ts:53-59).
     fn rest_base(&self) -> Result<String, String> {
         match (&self.base_url, &self.account_id) {
             (Some(url), _) => Ok(url.clone()),
             (None, Some(account)) => Ok(rest_base_url(account)),
-            (None, None) => Err(
-                "CloudflareAIGateway.configure requires accountId unless baseURL is supplied"
-                    .to_string(),
-            ),
+            (None, None) => {
+                Err("CloudflareAIGateway.configure requires accountId unless baseURL is supplied"
+                    .to_string())
+            }
         }
     }
 
-    /// `native` — no custom baseURL, so the provider-native gateway
+    /// `native` — no `baseURL`, so the provider-native gateway
     /// endpoints apply (cloudflare-ai-gateway.ts:109).
     fn native(&self) -> bool {
         self.base_url.is_none()
@@ -211,8 +210,8 @@ fn rest_headers(spec: &CloudflareGatewaySpec) -> BTreeMap<String, String> {
     headers
 }
 
-/// The REST chat route — the OpenAI chat protocol at the REST base
-/// with the plain bearer credential (`route.with(rest)`, :121).
+/// The REST chat route — the chat protocol at the REST base
+/// with the plain bearer credential (`route.with(rest)`, line 121).
 fn chat_route(spec: &CloudflareGatewaySpec, base: &str, id: &str) -> Route {
     Route::new(RouteInput {
         id: id.to_string(),
@@ -294,7 +293,7 @@ fn responses_route(spec: &CloudflareGatewaySpec) -> Route {
 /// translation, `anthropic/` the messages translation, `workers-ai/`
 /// and unprefixed ids the REST chat route. Returns the route plus the
 /// wire model id (prefix stripped — and dots dashed for anthropic —
-/// only on the native endpoints; a custom baseURL keeps full ids,
+/// only on the native endpoints; a custom `baseURL` keeps full ids,
 /// riding the REST config with the route's own id).
 pub fn route_for_model(
     spec: &CloudflareGatewaySpec,
@@ -313,11 +312,8 @@ pub fn route_for_model(
         return Ok((route, wire_model_id(model_id, native)));
     }
     if model_id.starts_with("anthropic/") {
-        let route = if native {
-            messages_route(spec)
-        } else {
-            chat_route(spec, &rest, MESSAGES_ID)
-        };
+        let route =
+            if native { messages_route(spec) } else { chat_route(spec, &rest, MESSAGES_ID) };
         return Ok((route, wire_model_id(model_id, native)));
     }
     if let Some(id) = model_id.strip_prefix("workers-ai/") {
@@ -443,8 +439,10 @@ mod tests {
 
     #[test]
     fn gateway_metadata_header_is_json_encoded() {
-        let mut options = GatewayOptions::default();
-        options.metadata = Some(serde_json::json!({ "team": "core" }));
+        let options = GatewayOptions {
+            metadata: Some(serde_json::json!({ "team": "core" })),
+            ..GatewayOptions::default()
+        };
         let headers = gateway_headers(&options);
         assert_eq!(headers.get("cf-aig-metadata").map(String::as_str), Some(r#"{"team":"core"}"#));
         assert!(gateway_headers(&GatewayOptions::default()).is_empty());

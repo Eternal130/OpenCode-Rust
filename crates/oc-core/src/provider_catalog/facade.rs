@@ -650,37 +650,33 @@ pub fn language_model_for_model(
                     .to_string(),
             });
         }
-        match family {
-            ProtocolFamily::VertexGemini => {
-                // Express mode: `apiKey` (settings or the
-                // GOOGLE_VERTEX_API_KEY env stand-in) + a tuned model.
-                let express_key =
-                    connection.api_key.is_some() || env_first(env, "GOOGLE_VERTEX_API_KEY").is_some();
-                if express_key && model.id.as_str().starts_with("endpoints/") {
-                    return Err(ProviderError::Configuration {
-                        provider: provider_id.to_string(),
-                        message: "Google Vertex tuned models do not support Express Mode API keys"
-                            .to_string(),
-                    });
-                }
+        if matches!(family, ProtocolFamily::VertexGemini) {
+            // Express mode: `apiKey` (settings or the
+            // GOOGLE_VERTEX_API_KEY env stand-in) + a tuned model.
+            let express_key =
+                connection.api_key.is_some() || env_first(env, "GOOGLE_VERTEX_API_KEY").is_some();
+            if express_key && model.id.as_str().starts_with("endpoints/") {
+                return Err(ProviderError::Configuration {
+                    provider: provider_id.to_string(),
+                    message: "Google Vertex tuned models do not support Express Mode API keys"
+                        .to_string(),
+                });
             }
-            ProtocolFamily::VertexChat => {
-                if connection.api_key.is_some() {
-                    return Err(ProviderError::Configuration {
-                        provider: provider_id.to_string(),
-                        message: "Google Vertex Chat does not support API keys".to_string(),
-                    });
-                }
+        }
+        let api_key_ban = match family {
+            ProtocolFamily::VertexChat if connection.api_key.is_some() => {
+                Some("Google Vertex Chat does not support API keys")
             }
-            ProtocolFamily::VertexMessages => {
-                if connection.api_key.is_some() {
-                    return Err(ProviderError::Configuration {
-                        provider: provider_id.to_string(),
-                        message: "Google Vertex Messages does not support API keys".to_string(),
-                    });
-                }
+            ProtocolFamily::VertexMessages if connection.api_key.is_some() => {
+                Some("Google Vertex Messages does not support API keys")
             }
-            _ => {}
+            _ => None,
+        };
+        if let Some(message) = api_key_ban {
+            return Err(ProviderError::Configuration {
+                provider: provider_id.to_string(),
+                message: message.to_string(),
+            });
         }
     }
 
@@ -1612,11 +1608,13 @@ fn anthropic_messages_base_url(
             // `zhipuai-coding-plan` host that rides the same package
             // via native.rs HOSTS).
             Ok(match base_url.as_deref() {
-                Some(url) => Some(
-                    url.strip_suffix("/api/coding/paas/v4")
-                        .map(|host_root| format!("{host_root}/api/anthropic/v1"))
-                        .unwrap_or_else(|| url.to_string()),
-                ),
+                Some(url) => {
+                    Some(if let Some(host_root) = url.strip_suffix("/api/coding/paas/v4") {
+                        format!("{host_root}/api/anthropic/v1")
+                    } else {
+                        url.to_string()
+                    })
+                }
                 None => Some("https://api.z.ai/api/anthropic/v1".to_string()),
             })
         }
@@ -4042,8 +4040,14 @@ mod tests {
             .iter()
             .find(|model| model.id.as_str().starts_with("anthropic/"))
             .expect("an anthropic/ gateway model");
-        let model = language_model(&context, catalog, "cloudflare-ai-gateway", claude.id.as_str(), &connection)
-            .expect("gateway messages binds");
+        let model = language_model(
+            &context,
+            catalog,
+            "cloudflare-ai-gateway",
+            claude.id.as_str(),
+            &connection,
+        )
+        .expect("gateway messages binds");
         assert_eq!(model.route.id, "cloudflare-ai-gateway-messages");
         assert_eq!(
             model.route.endpoint.base_url.as_deref(),
@@ -4071,14 +4075,17 @@ mod tests {
         // openai/ → the responses passthrough route.
         let catalog2 = Catalog::embedded();
         let gateway2 = catalog2.provider("cloudflare-ai-gateway").expect("gateway in catalog");
-        if let Some(gpt) = gateway2
-            .models
-            .iter()
-            .find(|model| model.id.as_str().starts_with("openai/"))
+        if let Some(gpt) =
+            gateway2.models.iter().find(|model| model.id.as_str().starts_with("openai/"))
         {
-            let model =
-                language_model(&context, catalog2, "cloudflare-ai-gateway", gpt.id.as_str(), &connection)
-                    .expect("gateway responses binds");
+            let model = language_model(
+                &context,
+                catalog2,
+                "cloudflare-ai-gateway",
+                gpt.id.as_str(),
+                &connection,
+            )
+            .expect("gateway responses binds");
             assert_eq!(model.route.id, "cloudflare-ai-gateway-responses");
             assert_eq!(
                 model.route.endpoint.base_url.as_deref(),
@@ -4113,11 +4120,8 @@ mod tests {
         let context = context();
         let catalog = Catalog::embedded();
         let vertex = catalog.provider("google-vertex").expect("vertex in catalog");
-        let gemini = vertex
-            .models
-            .iter()
-            .find(|model| model.package.is_none())
-            .expect("a gemini model");
+        let gemini =
+            vertex.models.iter().find(|model| model.package.is_none()).expect("a gemini model");
 
         // apiKey + accessToken never combine.
         let error = language_model(
@@ -4232,13 +4236,12 @@ mod tests {
             catalog,
             "alibaba",
             alibaba.models.first().expect("a qwen model").id.as_str(),
-            &ModelConnection {
-                region: Some("mars-1".into()),
-                ..ModelConnection::default()
-            },
+            &ModelConnection { region: Some("mars-1".into()), ..ModelConnection::default() },
         )
         .unwrap_err();
-        assert!(error.to_string().contains("Alibaba region mars-1 requires workspaceID or baseURL"));
+        assert!(error
+            .to_string()
+            .contains("Alibaba region mars-1 requires workspaceID or baseURL"));
 
         // The messages lane derives the apps/anthropic root.
         assert_eq!(
@@ -4356,17 +4359,13 @@ mod tests {
     /// conversation-affinity header from the prompt cache key.
     #[test]
     fn provider_facade_xai_chat_conv_id_header() {
-        assert_eq!(
-            family_of("@opencode/ai/providers/xai/chat"),
-            Some(ProtocolFamily::OpenAIChat)
-        );
+        assert_eq!(family_of("@opencode/ai/providers/xai/chat"), Some(ProtocolFamily::OpenAIChat));
         let route = oc_ai::protocols::openai_chat::xai_chat_route(
             Arc::new(oc_ai::route::transport::FailingTransport { message: "unit" }),
             None,
         );
-        let mut request = oc_ai::test_support::request_for_tests(vec![oc_ai::schema::Message::user(
-            "hi",
-        )]);
+        let mut request =
+            oc_ai::test_support::request_for_tests(vec![oc_ai::schema::Message::user("hi")]);
         request.prompt_cache_key = Some("conv-42".into());
         let prepared = route.prepare_request(&request);
         let body = route.build_body(&prepared).expect("body");

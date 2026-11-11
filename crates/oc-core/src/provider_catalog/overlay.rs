@@ -79,88 +79,14 @@ pub fn providers_from_config(loaded: &Loaded) -> ConfigProviders {
                 // `transport ?? "websocket"` AFTER config merges,
                 // openai.ts:262/xai.ts:102).
                 let transport = settings.transport;
-                // G-356/G-373: the protocol inputs beyond the endpoint
-                // (region/workspaceID for alibaba, accessToken/authToken
-                // for vertex/anthropic-compatible, the cloudflare
-                // gateway keys) ride the same connection overlay. The
-                // config `rest` record keeps `Option<Value>` values, so
-                // read them locally.
-                let str_setting =
-                    |key: &str| settings.rest.get(key).and_then(|v| v.as_ref()).and_then(Value::as_str).map(str::to_owned);
-                let region = str_setting("region");
-                let workspace_id = str_setting("workspaceID");
-                let access_token = str_setting("accessToken");
-                let auth_token = str_setting("authToken");
-                let account_id = str_setting("accountId");
-                let gateway_id = str_setting("gatewayId");
-                let gateway_api_key = str_setting("gatewayApiKey");
-                let gateway_options_set = ["metadata", "cacheTtl", "cacheKey", "skipCache", "collectLog"]
-                    .iter()
-                    .any(|key| settings.rest.get(*key).is_some_and(|value| value.is_some()));
-                let cloudflare_gateway = (account_id.is_some()
-                    || gateway_id.is_some()
-                    || gateway_api_key.is_some()
-                    || gateway_options_set)
-                    .then(|| crate::provider_catalog::facade::CloudflareGatewayConnection {
-                        account_id,
-                        gateway_id,
-                        gateway_api_key,
-                        metadata: settings.rest.get("metadata").cloned().flatten(),
-                        cache_ttl: settings
-                            .rest
-                            .get("cacheTtl")
-                            .and_then(|value| value.as_ref().and_then(Value::as_i64)),
-                        cache_key: str_setting("cacheKey"),
-                        skip_cache: settings
-                            .rest
-                            .get("skipCache")
-                            .and_then(|value| value.as_ref().and_then(Value::as_bool)),
-                        collect_log: settings
-                            .rest
-                            .get("collectLog")
-                            .and_then(|value| value.as_ref().and_then(Value::as_bool)),
-                    });
-                // CRED-A4: every apiKey/baseURL lands as a connection
-                // overlay for the provider id — apiKey-only entries are
-                // no longer dropped, and catalog-matching ids take the
-                // overlay without rebinding to openai-compatible. Later
-                // documents merge per key (v2 foldSettings /
-                // mergeOverlay, plugin/provider/configured.ts:14-18).
-                if base_url.is_some()
-                    || api_key.is_some()
-                    || transport.is_some()
-                    || region.is_some()
-                    || workspace_id.is_some()
-                    || access_token.is_some()
-                    || auth_token.is_some()
-                    || cloudflare_gateway.is_some()
-                {
-                    let entry = out.connections.entry(id.clone()).or_default();
-                    if base_url.is_some() {
-                        entry.base_url.clone_from(&base_url);
-                    }
-                    if api_key.is_some() {
-                        entry.api_key.clone_from(&api_key);
-                    }
-                    if transport.is_some() {
-                        entry.transport = transport;
-                    }
-                    if region.is_some() {
-                        entry.region = region;
-                    }
-                    if workspace_id.is_some() {
-                        entry.workspace_id = workspace_id;
-                    }
-                    if access_token.is_some() {
-                        entry.access_token = access_token;
-                    }
-                    if auth_token.is_some() {
-                        entry.auth_token = auth_token;
-                    }
-                    if cloudflare_gateway.is_some() {
-                        entry.cloudflare_gateway = cloudflare_gateway;
-                    }
-                }
+                overlay_connection_entry(
+                    &mut out.connections,
+                    id,
+                    settings,
+                    base_url.as_deref(),
+                    api_key.as_deref(),
+                    transport,
+                );
                 // The openai-compatible custom binding only covers
                 // entries with a baseURL AND no catalog record of their
                 // own (the resolver overlays the connection onto the
@@ -243,6 +169,103 @@ pub fn providers_from_config(loaded: &Loaded) -> ConfigProviders {
     out
 }
 
+/// CRED-A4 + G-356/G-373: fold one provider's settings onto the
+/// connection overlay — every apiKey/baseURL/transport plus the protocol
+/// inputs beyond the endpoint (region/workspaceID for alibaba,
+/// accessToken/authToken for vertex/anthropic-compatible, the cloudflare
+/// gateway keys). Later documents merge per key (v2 foldSettings /
+/// mergeOverlay, plugin/provider/configured.ts:14-18). The config `rest`
+/// record keeps `Option<Value>` values, so read them locally.
+fn overlay_connection_entry(
+    connections: &mut BTreeMap<String, ModelConnection>,
+    id: &str,
+    settings: &oc_schema::config::provider::Settings,
+    base_url: Option<&str>,
+    api_key: Option<&str>,
+    transport: Option<oc_schema::provider::Transport>,
+) {
+    // The protocol inputs beyond the endpoint (region/workspaceID for
+    // alibaba, accessToken/authToken for vertex/anthropic-compatible,
+    // the cloudflare gateway keys) read from the config `rest` record
+    // (`Option<Value>` values, unwrapped locally).
+    let str_setting = |key: &str| {
+        settings.rest.get(key).and_then(|v| v.as_ref()).and_then(Value::as_str).map(str::to_owned)
+    };
+    let region = str_setting("region");
+    let workspace_id = str_setting("workspaceID");
+    let access_token = str_setting("accessToken");
+    let auth_token = str_setting("authToken");
+    let account_id = str_setting("accountId");
+    let gateway_id = str_setting("gatewayId");
+    let gateway_api_key = str_setting("gatewayApiKey");
+    let gateway_options_set = ["metadata", "cacheTtl", "cacheKey", "skipCache", "collectLog"]
+        .iter()
+        .any(|key| settings.rest.get(*key).is_some_and(Option::is_some));
+    let cloudflare_gateway = (account_id.is_some()
+        || gateway_id.is_some()
+        || gateway_api_key.is_some()
+        || gateway_options_set)
+        .then(|| crate::provider_catalog::facade::CloudflareGatewayConnection {
+            account_id,
+            gateway_id,
+            gateway_api_key,
+            metadata: settings.rest.get("metadata").cloned().flatten(),
+            cache_ttl: settings
+                .rest
+                .get("cacheTtl")
+                .and_then(|value| value.as_ref().and_then(Value::as_i64)),
+            cache_key: str_setting("cacheKey"),
+            skip_cache: settings
+                .rest
+                .get("skipCache")
+                .and_then(|value| value.as_ref().and_then(Value::as_bool)),
+            collect_log: settings
+                .rest
+                .get("collectLog")
+                .and_then(|value| value.as_ref().and_then(Value::as_bool)),
+        });
+    // CRED-A4: every apiKey/baseURL lands as a connection
+    // overlay for the provider id — apiKey-only entries are
+    // no longer dropped, and catalog-matching ids take the
+    // overlay without rebinding to openai-compatible. Later
+    // documents merge per key (v2 foldSettings /
+    // mergeOverlay, plugin/provider/configured.ts:14-18).
+    if base_url.is_some()
+        || api_key.is_some()
+        || transport.is_some()
+        || region.is_some()
+        || workspace_id.is_some()
+        || access_token.is_some()
+        || auth_token.is_some()
+        || cloudflare_gateway.is_some()
+    {
+        let entry = connections.entry(id.to_string()).or_default();
+        if let Some(base_url) = base_url {
+            entry.base_url = Some(base_url.to_string());
+        }
+        if let Some(api_key) = api_key {
+            entry.api_key = Some(api_key.to_string());
+        }
+        if transport.is_some() {
+            entry.transport = transport;
+        }
+        if region.is_some() {
+            entry.region = region;
+        }
+        if workspace_id.is_some() {
+            entry.workspace_id = workspace_id;
+        }
+        if access_token.is_some() {
+            entry.access_token = access_token;
+        }
+        if auth_token.is_some() {
+            entry.auth_token = auth_token;
+        }
+        if cloudflare_gateway.is_some() {
+            entry.cloudflare_gateway = cloudflare_gateway;
+        }
+    }
+}
 /// Map a config `models.<id>.settings` record onto the model settings
 /// carried to binding: drop the credential keys (withoutCredentials,
 /// opencode.ts:547-551), the endpoint keys (consumed by the baseURL
