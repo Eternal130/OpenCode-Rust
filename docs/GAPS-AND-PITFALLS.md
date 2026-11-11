@@ -26,6 +26,9 @@
 
 > **2026-11-12 第二十四轮（census 机械化普查立项）**：基于 14 通道机械普查（`tools/census/*.py` 14 个幂等脚本 + `docs/audit/census/` 14 报告 + INDEX，双侧权威自报对拍/生产面提取/已知锚交叉验证，全部连跑逐字节可复现）：**新立项 G-384..G-390（7 条：🟢×4 / ℹ️×3）**；G-230 加勘注（die 分支前置面机械化确认：内建 output 声明 0/18，范围自 0/14 扩大，NOT_YET 延续）；9 族既有条目机械化复认（G-295 rpc.events、G-239/G-331/G-332/G-148② 插件 tui 入口面 13 键、D3-7 TMUX/STY/NODE_ASSETS_DIR、G-174 requireSignature 键、G-10 pty read/restore、G-383b replay_complete、G-373 系 provider 3 native 入口、RC-11 completion）；三处旧锚修正（事件 52→实 51 系旧口径分桶、keybind 230→243 系 ref 演进、catalog-only "~180 推定"→确凿 226=49 native+168 compat+9 npm 桥豁免——第二十二轮盲区#2 销项）。**14 通道总覆盖率 100%（双侧并集逐项归属）**；此后每轮缺口扫描边际成本=14 条命令，上游 bump 时轴 1 类 diff 自动产出变更面清单。
 
+> **2026-11-12 第二十五轮 burndown 收口（gap-burndown-13）**：第二十四轮可行动项 G-384/G-385/G-387/G-388 + G-230 die 前置（18 内建 Output 声明）经 lanes A-C 串行落地合并 main（`b97f6ee5`/`75d746a7`/`80995995`+`58174fd4`+`7be6317b`），逐条 ✅；每 lane 独立评审（Lane C 经一轮 fix round：校验器补 `const` 关键字后复审通过）。census 复跑：PLUGIN-API REF_ONLY 3→1（余 rpc.events=G-295 ✅ 提取器口径）、ENV-VARS REF_ONLY 63→59（LOG_LEVEL/TERM_PROGRAM_VERSION/TMUX/STY 转 BOTH）、TOOLS die 面 18/18+die 在位（提取器随新形状更新）。**无 opentui-rust 依赖的上游阻挡项**；唯一上游阻挡=G-247 残余全局 Bun/process 面（Bun 运行时钉死，已标注搁置）。明细见文末「第二十五轮 burndown 收口」节。
+
+
 > **2026-11-10 第二十二轮（全功能逐行对比审查 parity-line-review-v2024：27 lane + P1/FINAL 双门）**：对 ref v2.0.24 与当前树做第四轮独立全量逐行对读（27 条域 lane：oc-core×12 / oc-ai×5 / oc-tui×4 / server·client·cli·acp·plugin-host·schema-util×6，双侧 file:line 证据、不采信已有审查文档），两道 oracle 一致性门裁定 5 处跨 lane 矛盾、抽查 11/11 成立、0 未裁定矛盾。**新立项 G-334..G-383（50 项：🔴×12 / 🟡×22 / 🟢 簇×16）**；归类既有 12 处、撤销初报 1 条、勘正旧勘误 1 处（R17#13 locale_duration 括注）。核心新事实：CodeMode 沙箱逃逸残余具体化（`__rawFetch`/eval/Function/限位仅桥上，G-334）、WebSocketSeams 与 permission.evaluate 两条插件钩子生产断线（G-337/G-338）、非持久 PTY reader 逐 chunk lossy UTF-8（G-335）、中断后 hosted 工具多发持久 tool.failed（G-336）、媒体 provider 协议全移植但部署接线为零（G-347，产品级）、cloudflare-ai-gateway 网关语义全降级（G-348）、TUI 时长格式化 `%10_000` 取模 bug（G-341）与 stdin 双读竞争（G-342）。总报告 `docs/audit/port-parity-line-review/{REPORT,TABLE}.md`，32 份 lane/门原始报告归档 `docs/audit/port-parity-line-review/lanes/`。正面互证：keybind 230/230、主题资产 33+1 md5 全等、openapi 141 operation 字节级 0 diff、48 迁移 ID 全同、52 会话事件分类一致、models-dev 快照 md5 相同、session-message parts 全集无缺漏。
 
 > **2026-11-03 第十二轮（全量对比审查）**：22 通道逐文件全文对读（TS ~21 万行 / Rust ~40 万行生产代码）+ 3 通道缺口核验，对 50 项缺口声称逐项双侧源码取证：**新立项 46 项（G-165..G-210，含 🔴×6：Azure 未接线/Mcp.Protocol wire bug/Copilot anthropic 车道/第三方 anthropic 根 URL/shell 注释换行权限逃逸/transfer 脱敏弱）**、撤销 4 项初报 + 6 项子句修正（见文末第十二轮勘误）、5 项归类既有条目。总报告 `CODE_REVIEW_PARITY_2026-11-03.md`，域报告与核验记录 `/tmp/opencode/review/`。
@@ -1448,6 +1451,7 @@ G-165..G-210 全部 ✅（G-177 前轮已闭；G-211/212 维持 ℹ️ 登记）
 - rust `tool/registry.rs:297-300` output 原样透传零校验。缓解：生产面 MCP outputSchema 仅 wire 转发（mcp/registry.rs:1535）、插件工具无 output 字段，触发面极窄。低优先补齐或文档化。（归一化半边已撤销，见勘误 #2。）
 - **2026-11-08 第十六轮落地（范围裁定）**：声明 schema → 共享 G-100 校验器校验（ref 文案）；声明+缺 output → 错误。「未声明却返回 output → die」按 mcp.ts:48 `?? {}` 接受一切的范围裁定落地——rust 14 个内建工具返回 output 而无声明（ref 侧全部声明 Output），字面 die 会全断；die 分支登记为范围外，待内建声明补齐后启用（gb9 lane8 `2103cf92`）。
 - **2026-11-12 第二十四轮勘注（census 机械化确认）**：TOOLS census 复核 die 分支前置面——rust 内建 output 声明 **0/18**（registry.rs:185 `output_schema: None` 硬编码；ref 14 文件 18/18 全声明），范围较本条登记时的 0/14 扩大（mcp-resource 内联两工具计入）；die 分支 NOT_YET 维持，由 `tools/census/tools_registry.py` 盯守。
+- **2026-11-12 第二十五轮收口 ✅（gb13-laneC `80995995`/`58174fd4`/`7be6317b`）**：die 前置+die 分支全量落地——①18/18 内建声明 ref-exact Output（闭对象 json! 字面，逐工具 `*_output_schema()`；BuiltinTool 增 `output` 字段，register 经 `pipeline_executor_with_output` 线入，`Value::Null`=未声明 scope）；②die 分支启用（未声明却返回 output → 失败，ref runtime.ts:46 原文；Effect.die 缺陷语义以 ToolRunFailure::Error 承载=有界偏离）；③顺修 shell 输出 `shell_id`→`shellID` serde 改名（wire bug vs shell.ts:65）+ 前台 shell metadata 不带 shellID（ref shell.ts:226-234/result.ts:26-34 对齐）；④codemode execute 全量 parity（叶内构建 ExecuteOutput `{output,toolCalls,error?,files}` + 外层 content 携 file parts（tool.ts:126-133））；⑤`outputSchema` 经 ToolDefinition 上模型面定义（runtime.ts:24-25 对位；协议 lowering 与 ref 同样只投 inputSchema）；⑥共享校验器补 `const` 关键字（严格深等、无类型强转——评审发现的空转验证缺口）。census 盯守翻绿：rust 18/18 声明、die 在位（提取器随新形状更新）。
 
 ### G-231 ✅ repository-cache fetch 缺 `--all --prune`/`+refspec`（core）
 - rust `reference/repository_cache.rs:272-281` 仅 `git fetch origin`（+指定 branch 时再 fetch，无 `+`、不更新 remote-tracking、无 prune）。
@@ -1611,6 +1615,7 @@ G-213..G-237 全部 ✅（G-226/G-230 含上述范围裁定）；G-116 ✅（回
 - 修法（择一）：①静态扫描程序体拒绝 `import(`/`require` token（最接近 ref 契约）；②描述如实声明（parity 破坏，需裁决）；③结构隔离（无 import 能力的域）。至少先登记+描述与实际二选一对齐。
 
 - 2026-11-09 第十八轮勘注：方案①（静态扫描）落地（leaf+guest 双侧 token 级扫描 + timers 抛错占位）；`Bun.file/Bun.spawn/process/Function/eval` 仍在 guest 可达——静态扫描的固有边界，结构性收口登记为后续项（lane3 report）。
+- **2026-11-12 第二十五轮上游阻挡标注（搁置）**：round-23 G-334 已消除 `__rawFetch`/eval/Function/AsyncFunction 面（Bun/process 求值作用域影子参数）；残余面=**全局 `Bun`/`globalThis.process` 直达**——Bun 运行时将自身全局钉为 non-writable，替换 `globalThis.process` 会断 Bun stdio（gb12-lane5 取证，G-334 有界注记）。该残余依赖 Bun 上游提供隔离/可替换全局面（非本移植可解，也非 opentui-rust 缺口），按上游阻挡项登记搁置；最小路径（构造处影参+权限门 Proxy）已备于 G-247 结构隔离后续项，Bun 提供能力面后按此恢复。
 ## 🟡 中
 
 ### G-248 ✅ steer 收件箱后不 wake
@@ -2666,33 +2671,38 @@ G-334..G-383 全部 ✅（含 4 项审计勘误撤销/订正、取证无差族 1
 
 ## 🟢 低
 
-### G-384 ❌ ctx.integration.transform 的 editor CRUD 残余半边（G-24 后续）
+### G-384 ✅ ctx.integration.transform 的 editor CRUD 残余半边（G-24 后续）
 - ref：`packages/plugin/src/promise/adapter.ts:386-400` transform(editor) 回调暴露 `{list, get, update, remove, method:{list, update}}` 全 CRUD。
 - rust：`host.js:1551` 仅有 `integration.method.update`（=G-24 已修半边，authorize/refresh 包装在内）；transform 键与 editor 的 list/get/update/remove/method.list 全缺。
 - 影响：插件无法枚举/修改/删除集成方法定义（只能 update 单个）。
 - 修法：host.js integration 命名空间补 transform + editor 表（复用 G-379.7 vcs 读面同型模式）。
 - 出处：census PLUGIN-API（docs/audit/census/PLUGIN-API.md）。
+- **2026-11-12 第二十五轮收口 ✅（gb13-laneA `b97f6ee5`）**：transform editor 全 CRUD 落地——guest 编辑器（list/get 复用 integration.list/get、method.list 新读面、update/remove/method.update/method.remove）→ 物化 `integration.transform` 同步臂 → registrations `merge_integrations` 插件归属表（卸载保留清除）→ engine location 激活环（PLUG-D07 过滤）→ `apply_plugin_integrations` 落 IntegrationHost 写手（update_integration/set_integration_metadata/update_method/remove_method/remove_integration）+ notify_updated；method.update 原文复用 G-24 hook 派发（`integration/authorize|callback|refresh`），无第二套闭包转运。bun guest e2e（transform 往返/创建缺省 name=id/删除/method.list/dispose 回撤/integration.updated）+ 单测。
+- 有界偏离（评审登记）：①注册期物化（ref 为读时惰性重放，G-5 先例）；②注册/卸载效果落在下一次 location 激活 pass（G-24 integration_methods 同型）——含 integration.updated 发布时序与 removal 标记存活窗（评审 F1/F2，零现役消费方）；③editor.list 返回完整 Info[]（ref 为 Ref[] 超集）。
 
-### G-385 ❌ ctx.integration.reload guest 直调面（后端在、键缺）
+### G-385 ✅ ctx.integration.reload guest 直调面（后端在、键缺）
 - ref：`adapter.ts:426` `reload: () => run(host.integration.reload())`。
 - rust：后端等价物在——`oc-core/src/integration/mod.rs:213-220` `reload_catalog`（注释自证 v2 `ctx.integration.reload()` 对应，`models-dev.refreshed` 自动路径已接）；`host.js` integration 命名空间无 `reload` 键。
 - 修法：host.js 补 `reload: () => hostRequest("integration.reload", …)` + supervisor 派发（半小时级纯接线）。
 - 出处：census PLUGIN-API / RPC。
+- **2026-11-12 第二十五轮收口 ✅（gb13-laneA `b97f6ee5`）**：host.js `integration.reload` 键 → supervisor 异步臂 → EngineIntegrationPort `"reload"` → `reload_catalog`（catalog 来源同 models-dev 自动路径）+ `notify_updated()`（ref reload 必发 integration.updated，integration.ts:355；models-dev 拉取维持自动路径不重触）。单测钉发布。
 
-### G-387 ❌ OPENCODE_LOG_LEVEL 运行时日志级别旋钮缺失
+### G-387 ✅ OPENCODE_LOG_LEVEL 运行时日志级别旋钮缺失
 - ref：`packages/util/src/observability/logging.ts:165` 运行时读 env 调日志级别。
 - rust：生产代码零读取（仅测试区出现）——env 旋钮面缺口（rust 日志级别如何配置另行核对，至少 env 面不等价）。
 - 出处：census ENV-VARS。
+- **2026-11-12 第二十五轮收口 ✅（gb13-laneB `ec4897c2`）**：`oc_util::logging` 落地——`Level{Debug,Info,Warn,Error}`、`minimum_log_level()`（OPENCODE_LOG_LEVEL 大写映射，非法/缺省→INFO，OnceLock；ref logging.ts:164-173 逐字）、`log(level,line)`=文件恒写（sink 自 oc-server errors.rs **字节级搬迁**：路径/append/trim 50/25MiB/陈旧锁/OPENCODE_LOG_FILE 覆盖全保，oc-server 侧 re-export 调用方零变化）+ stderr 仅 `OPENCODE_PRINT_LOGS=="1"`（逐次读，ref 同型）。路由面=有 ref logWarning 对应位的站点：errors.rs tracing_like_warn/debug_cause（其注释自认的偏差就此闭）、oc-core engine models-dev+skills_url、server_process_env 警告；oc-ai 断点告警（G-309 位）经本地 `warn_gated`（oc-ai 不依赖 oc-util，G-162② 先例）。有界偏离：oc-ai 侧无文件 sink（SDK crate 不可达 host roots，代码注释）；~85 站 eprintln 全量清扫范围外。预期行为变化（parity 方向）：被路由站点默认 stderr 静默、改入日志文件。
 
-### G-388 ❌ TERM_PROGRAM_VERSION 终端版本探测缺失（口径差待核）
+### G-388 ✅ TERM_PROGRAM_VERSION 终端版本探测缺失（口径差待核）
 - ref：`packages/tui/src/util/system.ts:17` 读 TERM_PROGRAM_VERSION 参与终端类型/版本判定。
 - rust：未读；TUI 有自有 kitty/ghostty 探测（G-368 簇）——探测策略差异是否产生可观察行为差（如版本门控的转义序列选择）待行为通道核。
 - 出处：census ENV-VARS。
+- **2026-11-12 第二十五轮收口 ✅（gb13-laneB `75d746a7`）**：核验结论——ref 的 TERM_PROGRAM_VERSION **无任何行为门控**（全树唯一消费=describeTerminal 拼串，喂 debug 对话框行与 buildIssueURL 的 `terminal=`/`os=` 参数，error-component.tsx:221-233）；rust 各能力面全部探针驱动无版本门。按信息面 parity 落地：oc-tui `system.rs` `describe_terminal()`（system.ts:15-19 逐字：TERM_PROGRAM‖TERM‖"unknown" + ` ${TERM_PROGRAM_VERSION}` + " in tmux"/" in screen"）+ `describe_os()`（linux 读 /proc/sys/kernel/osrelease，他平台省 release=有界）接入崩溃 issue URL `terminal=`/`os=` 参数（编码对齐 URL.toString()）。TMUX/STY 由此进入 describe 串（信息面），D3-7 bounded 面不受影响。
 
 ## ℹ️ 登记
 
 ### G-386 ℹ️ 插件 RPC/ctx 桥层形状差打包（ref 14 读面 + rust command.add 扁平化）
-- ref 经桥派发而 rust 于 guest 本地实现的 14 项读面：`agent.get/list/reload`（adapter.ts:296-299）、`command.list/reload`（:308,:322）、`integration.reload`（:426，直调面单立 G-385）、`mcp.list/reload`（:434,:436）、`skill.list/reload`（:455,:457）、`tool.list/reload`（:467,:466）、`websearch.reload`（:542）、`worktree.reload`（:563）。rust 对应能力在 host.js 编辑器表/本地表（行为面等价性归行为/差分通道复核；`vcs.transform`/`vcs.reload` 已于 G-24 lane5 清偿，不在列）。
+- ref 经桥派发而 rust 于 guest 本地实现的 14 项读面：`agent.get/list/reload`（adapter.ts:296-299）、`command.list/reload`（:308,:322）、`integration.reload`（:426，直调面单立 G-385——**已于第二十五轮收口 ✅，本清单实际余 13 项**）、`mcp.list/reload`（:434,:436）、`skill.list/reload`（:455,:457）、`tool.list/reload`（:467,:466）、`websearch.reload`（:542）、`worktree.reload`（:563）。rust 对应能力在 host.js 编辑器表/本地表（行为面等价性归行为/差分通道复核；`vcs.transform`/`vcs.reload` 已于 G-24 lane5 清偿，不在列）。
 - 反向：`ctx.command.add`（host.js:987）为 rust 对 ref transform editor 之 add 的扁平化直调（transform 两键并存）——形状超集，登记不改码。
 - 出处：census RPC / PLUGIN-API。
 
@@ -2724,3 +2734,39 @@ G-334..G-383 全部 ✅（含 4 项审计勘误撤销/订正、取证无差族 1
 ## 第二十四轮判定汇总
 
 census 把"缺口扫描"从自由读码改为可度量普查：14 通道覆盖率 100%、11 通道零缺口、新立项仅 7 条（🟢×4 可修 + ℹ️×3 登记）——**这正是收敛的证据：枚举面已不再产出大批新缺口，剩余缺口密度集中在插件 ctx 桥层与两个 env 旋钮**。修复优先序：G-385（纯接线半小时）> G-384（vcs 读面同型）> G-387 > G-388（先核行为差）> G-230 die 前置（1-2 天中等 lane 维持 R21 建议）。本轮起扫描循环的操作定义=14 条幂等命令 + INDEX 复核；上游 bump 工作流=重跑 census 取轴 1 diff → diff-scoped lane。工具与报告：`tools/census/`、`docs/audit/census/`（INDEX.md 为总索引）。
+
+---
+
+# 第二十五轮 burndown 收口（2026-11-12，gap-burndown-13）
+
+> 第二十四轮立项的可行动项 G-384/G-385/G-387/G-388 + 第二十四轮优先序末位的 G-230 die 前置（R21/R24 建议：先补 18 内建 Output 声明再启 die 分支），经 lanes A-C 串行落地并 fast-forward 合并 main。每 lane 独立 worktree（`.worktrees/gb13-lane*`，合并后即时回收、分支已清）、dev-gate 单入口、nextest 未过滤证据、每 lane 合并门复跑、独立评审（oracle）过门后合并；Lane C 评审 REQUEST_CHANGES 一轮（校验器 `const` 空转）→ fix round → 复审 ADDRESSED-APPROVE 后合并。一切门命令全量 tee 落盘 `.test-logs/*gb13*`（含 e1 白名单隔离复跑证据）。
+
+## 逐 lane 落地清单
+
+- **laneA `b97f6ee5`（插件 integration ctx 桥）**：G-385（`ctx.integration.reload` guest 面：host.js 键 → supervisor 异步臂 → EngineIntegrationPort `"reload"` → `reload_catalog`+`notify_updated`）；G-384（`ctx.integration.transform(editor)` 全 CRUD：guest 编辑器+物化同步臂+registrations `merge_integrations` 插件归属表+engine 激活环应用+notify_updated；method.update 原文复用 G-24 hook 派发；method.list 新读面）。合并门 2299/2299（`.test-logs/final-20261112-011601-gb13laneA.log`）。评审 APPROVE（F1/F2 时序偏离按 G-24 先例登记有界，见 G-384 条目）。
+- **laneB `ec4897c2`+`75d746a7`（env 旋钮）**：G-387（`oc_util::logging`：level 旋钮+共享文件 sink（oc-server errors.rs 字节级搬迁）+stderr 逐次 PRINT_LOGS 门；路由 ref logWarning 对应站点；oc-ai 本地 `warn_gated`（无文件 sink=有界））；G-388（describe_terminal/describe_os + 崩溃 issue URL `terminal=`/`os=` 参数；核验 ref 无版本行为门控）。合并门 4911/4911（`final-20261112-014542-gb13laneB.log`）。评审 APPROVE（4 minors 入台账）。
+- **laneC `80995995`+`58174fd4`+`7be6317b`（G-230 die 前置+die 分支）**：18/18 内建 Output 声明（ref-exact 闭对象）、BuiltinTool.output 字段、die 分支启用（ref 原文）、shell `shellID` 输出改名+前台 metadata 对齐、codemode execute ExecuteOutput 全量 parity+外层 content file parts、ToolDefinition.outputSchema 上定义面（协议侧与 ref 同剥）、校验器补 `const`。工作区门 5881/5881 全绿（`workspace-1794427105-gb13laneC-fix1.log`；e1 白名单放行依据=隔离 try-2 过+基线单跑过）。评审一轮 REQUEST_CHANGES→fix→复审通过。
+- **census 随轮更新（主检出直提，无 crate 面）**：`tools_registry.py` 提取器随内建 output 新形状重写（轴 3 动态化：per-tool 声明计数+die 分支在位检测，幂等复跑逐字节一致）；HTTP-SURFACE 手写「验证记录」节再生成后回贴（该节为手工维护面，复跑需回贴——已在 INDEX 注明）。
+
+## census 复跑对账（14 通道全跑）
+
+- ENV-VARS：REF_ONLY 63→**59**、BOTH 72→**76**（OPENCODE_LOG_LEVEL/TERM_PROGRAM_VERSION/TMUX/STY 转 BOTH；后两者为 describe 串信息面读取，D3-7 bounded 不受影响）。
+- PLUGIN-API：REF_ONLY 3→**1**（integration.transform/reload 转 BOTH；余 `rpc.events`=提取器对运行时构造 rpc 域的口径限制，G-295 ✅ 在册背书）；RUST_ONLY 28→29（integration.method.list 新读面，G-384 产物）。
+- TOOLS：轴 3 翻绿——rust 18/18 声明+die 在位（G-230 盯守项就此闭合）。
+- RPC：integration.reload/method.list 新增 rust 面（行锚随漂移）；其余 10 通道零变化（CONFIG-KEYS/HTTP-SURFACE 仅锚点行漂移/手写节回贴）。
+
+## 有界偏离（本轮新增，均已代码注释或条目登记）
+
+- G-384：注册期物化（ref 读时重放）；注册/卸载效果落下次激活 pass（含 integration.updated 时序与 removal 标记窗，G-24 同型）；editor.list Info[] 超集；跨插件同 id 归属边角（评审 F3，台账）。
+- G-387：oc-ai warn_gated 无文件 sink；~85 站 eprintln 全量清扫范围外；被路由站点默认 stderr 静默=预期 parity 变化。
+- G-388：describe_os 非 linux 平台省 release。
+- G-230：die 以 ToolRunFailure::Error 承载（Effect.die 缺陷语义无对应变体）；session_move 以 schema-only 覆盖（其余 17 工具真执行验证）；MODULE_LOADING_REJECTED 早退腿合成 output=注释自证扩展。
+
+## 上游阻挡项（按用户指示标记搁置）
+
+- **G-247 残余（全局 Bun/process guest 直达）**：Bun 运行时将全局钉为 non-writable、替换 `globalThis.process` 断 Bun stdio——依赖 Bun 上游能力面，非本移植可解（详见 G-247 条目 2026-11-12 标注）。无 opentui-rust 依赖项。
+
+## 第二十五轮判定
+
+G-384/G-385/G-387/G-388 ✅；G-230 die 前置+die 分支 ✅（census 盯守翻绿）；G-386 注记（14→13 项）；G-389/G-390 维持 ℹ️ 超集登记。现存未关闭项=既有文档化决策族（G-12/G-16/G-17/G-28/G-32/G-38/G-39/G-40/G-49/G-161①/G-163/G-164/G-200②/G-211(已 OBSOLETE)/G-212/G-238/G-239/G-240/G-247 残余(上游阻挡)/G-272⑩/G-289/G-290/G-313..G-318/G-326/G-328/G-329/G-331..G-333/G-386/G-389/G-390）——全部为文档化决策/登记项，无可行动缺口。**无 opentui-rust 依赖的上游阻挡项。** 证据：lane 报告 `.superpowers/sdd/gb13/`、门日志 `.test-logs/*gb13*`。
+
