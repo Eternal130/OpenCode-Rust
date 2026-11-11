@@ -133,8 +133,9 @@ mod tests {
 
     #[test]
     fn detect_png_needs_full_signature_gif_is_4_bytes() {
-        // mime.ts:4 matches all 8 PNG bytes; a 4-byte prefix alone is NOT png.
-        assert_eq!(detect_mime(&[0x89, 0x50, 0x4E, 0x47]), "text/plain");
+        // mime.ts:4 matches all 8 PNG bytes; a 4-byte prefix alone is NOT
+        // png (and 0x89 is not UTF-8, so it falls to octet-stream).
+        assert_eq!(detect_mime(&[0x89, 0x50, 0x4E, 0x47]), "application/octet-stream");
         assert_eq!(detect_mime(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), "image/png");
         // mime.ts:6 matches the `GIF8` prefix regardless of version bytes.
         assert_eq!(detect_mime(b"GIF8"), "image/gif");

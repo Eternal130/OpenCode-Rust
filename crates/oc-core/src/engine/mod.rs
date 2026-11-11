@@ -1891,8 +1891,12 @@ impl Engine {
         ));
         // Ref (snapshot.ts scope():108-111): a location outside the
         // worktree is a typed error ("Location is outside the project"),
-        // never a silent whole-repo widening of the snapshot scope.
-        let scope = crate::snapshot::location_scope(&worktree, location.as_path())
+        // never a silent whole-repo widening of the snapshot scope. Ref
+        // location directories are AbsolutePaths; resolve a relative
+        // client spelling against the process cwd first (`fs.resolve`).
+        let scope_directory = std::fs::canonicalize(location.as_path())
+            .unwrap_or_else(|_| location.as_path().to_path_buf());
+        let scope = crate::snapshot::location_scope(&worktree, &scope_directory)
             .ok_or_else(|| BootError::LocationOutsideProject(location.as_path().to_path_buf()))?;
         let snapshot: Arc<dyn SnapshotService> = Arc::new(
             crate::snapshot::GitSnapshotStore::open(

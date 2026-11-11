@@ -23,6 +23,11 @@ struct TestServer {
     state: Arc<AppState>,
     #[allow(dead_code)] // the workspace root the server was booted in
     workspace: std::path::PathBuf,
+    // Keeps the workspace directory alive: `boot()` chdirs into it, so
+    // dropping the TempDir guard would delete the process cwd (getcwd
+    // then fails and project resolution degrades to "/").
+    #[allow(dead_code)]
+    _workspace_dir: tempfile::TempDir,
     _data: tempfile::TempDir,
 }
 
@@ -52,7 +57,7 @@ async fn boot() -> TestServer {
         let _ = axum::serve(listener, router).await;
     });
     let client = Client::new(&format!("http://{addr}")).expect("client");
-    TestServer { client, state, workspace, _data: data }
+    TestServer { client, state, workspace, _workspace_dir: dir, _data: data }
 }
 
 // ---------------------------------------------------------------------------
