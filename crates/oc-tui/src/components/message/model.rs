@@ -733,22 +733,6 @@ pub fn reduce_rows_with_rules<S: std::hash::BuildHasher>(
                     });
                 }
             }
-            Message::User { id, .. }
-            | Message::Compaction { id, .. }
-            | Message::Skill { id, .. }
-            | Message::Shell { id, .. }
-            | Message::AgentSwitched { id, .. }
-            | Message::ModelSwitched { id, .. }
-            | Message::LocationSwitched { id, .. }
-            | Message::System { id, .. } => {
-                projections.push(Projection {
-                    entry: Entry::Message { message_id: id.clone() },
-                    part: None,
-                    path: message_path(message, low_verbosity),
-                    closes_previous: Some(!is_pending),
-                    reasoning_completed: false,
-                });
-            }
             // G-370④ — rows.ts:383: a synthetic message with an EMPTY
             // description is skipped entirely (`if (message.type ===
             // "synthetic" && !message.description?.trim()) return
@@ -762,7 +746,15 @@ pub fn reduce_rows_with_rules<S: std::hash::BuildHasher>(
             Message::Synthetic { description, instruction_paths, .. }
                 if instruction_paths.is_empty()
                     && description.as_deref().is_none_or(|text| text.trim().is_empty()) => {}
-            Message::Synthetic { id, .. } => {
+            Message::User { id, .. }
+            | Message::Compaction { id, .. }
+            | Message::Skill { id, .. }
+            | Message::Synthetic { id, .. }
+            | Message::Shell { id, .. }
+            | Message::AgentSwitched { id, .. }
+            | Message::ModelSwitched { id, .. }
+            | Message::LocationSwitched { id, .. }
+            | Message::System { id, .. } => {
                 projections.push(Projection {
                     entry: Entry::Message { message_id: id.clone() },
                     part: None,
@@ -1012,8 +1004,7 @@ pub fn turn_duration(message_id: &str, messages: &[Message]) -> u64 {
     let Some(completed) = time.completed else { return 0 };
     let input_created = input_index(messages, index, legacy_turns(messages)).and_then(|input| {
         match &messages[input] {
-            Message::User { created, .. } => Some(*created),
-            Message::Synthetic { created, .. } => Some(*created),
+            Message::User { created, .. } | Message::Synthetic { created, .. } => Some(*created),
             _ => None,
         }
     });

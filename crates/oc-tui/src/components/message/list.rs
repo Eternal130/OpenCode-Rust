@@ -295,7 +295,7 @@ pub fn render_transcript(
             *y = row_y + render.height;
             measured.push(MeasuredRow { y: row_y, height: render.height, placed, fills, key });
         };
-    let mut rows_iter = rows.iter().peekable();
+    let rows_iter = rows.iter().peekable();
     // G-188 — `PendingEntries` (group-view.tsx:293-312): the group's
     // permission-blocked tools render BELOW the header, even while
     // collapsed ("Permission-blocked tools stay visible below the
@@ -317,7 +317,7 @@ pub fn render_transcript(
             })
             .collect()
     };
-    while let Some(row) = rows_iter.next() {
+    for row in rows_iter {
         // The disclosure expansion: an expanded reasoning group emits
         // the header unit plus one unit per thought child; an expanded
         // exploration/activity group emits the header plus one detail
@@ -1124,7 +1124,7 @@ fn group_row(
                     if let Some((name, streaming)) = first_running {
                         label = super::model::activity_busy_label(&name, streaming);
                     } else if thinking {
-                        label = "Thinking…".to_owned();
+                        "Thinking…".clone_into(&mut label);
                     }
                 }
                 let _ = active;
