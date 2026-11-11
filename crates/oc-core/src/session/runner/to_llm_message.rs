@@ -34,10 +34,9 @@ fn record_to_value(record: &Record) -> serde_json::Value {
 }
 
 fn provider_metadata(provider: &str, state: Option<&Record>) -> Option<ProviderMetadata> {
+    // Ref (to-llm-message.ts:106-109): only `undefined` is dropped — an
+    // EMPTY provider state `{}` still round-trips as `{provider: {}}`.
     let state = state?;
-    if state.is_empty() {
-        return None;
-    }
     let mut metadata = ProviderMetadata::new();
     metadata.insert(provider.to_string(), state.clone());
     Some(metadata)

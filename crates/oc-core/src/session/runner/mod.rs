@@ -471,10 +471,31 @@ impl ResolvedModel {
 pub enum ModelError {
     #[error("No model is available for session {0}")]
     NotSelected(String),
-    #[error("Model unavailable: {0}/{1}")]
-    Unavailable(String, String),
+    /// Ref (`session/runner/model.ts` `ModelUnavailableError.message`): the
+    /// two deprecated provider aliases carry a migration notice in the copy.
+    #[error("{}", ModelError::unavailable_message(provider, model))]
+    Unavailable {
+        provider: String,
+        model: String,
+    },
     #[error("{0}")]
     Resolver(String),
+}
+
+impl ModelError {
+    fn unavailable_message(provider: &str, model: &str) -> String {
+        if provider == "azure-cognitive-services" {
+            return format!(
+                "Model unavailable: {provider}/{model}. This provider has been deprecated; use azure/{model} instead."
+            );
+        }
+        if provider == "google-vertex-anthropic" {
+            return format!(
+                "Model unavailable: {provider}/{model}. This provider has been deprecated; use google-vertex/{model} instead."
+            );
+        }
+        format!("Model unavailable: {provider}/{model}")
+    }
 }
 
 /// `SessionRunnerModel.Interface.resolve` — availability is sampled lazily
