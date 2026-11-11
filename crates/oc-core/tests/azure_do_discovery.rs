@@ -651,7 +651,7 @@ async fn resolver_serves_the_synced_snapshots() {
     let gone = resolver
         .resolve_selected(&session, &model_ref("azure", "gpt-5-mini"))
         .expect_err("an undeployed catalog model no longer resolves");
-    assert!(matches!(gone, oc_core::session::runner::ModelError::Unavailable(_, _)));
+    assert!(matches!(gone, oc_core::session::runner::ModelError::Unavailable { .. }));
 
     let router = resolver
         .resolve_selected(&session, &model_ref("digitalocean", "router:alpha"))

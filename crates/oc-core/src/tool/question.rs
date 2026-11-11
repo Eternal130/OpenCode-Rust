@@ -42,6 +42,19 @@ pub fn to_model_content(questions: &[QuestionPrompt], answers: &[QuestionAnswer]
 }
 
 /// `toField` — one question becomes one form field.
+/// Maps a single form answer to the wire answer list. Ref (question.ts):
+/// `undefined → []`, array → as-is, anything else → `[String(value)]`
+/// (booleans render as "true"/"false").
+fn form_value_to_answer(value: Option<&FormValue>) -> QuestionAnswer {
+    match value {
+        None => vec![],
+        Some(FormValue::Bool(flag)) => vec![flag.to_string()],
+        Some(FormValue::String(text)) => vec![text.clone()],
+        Some(FormValue::Number(number)) => vec![number.to_string()],
+        Some(FormValue::Strings(items)) => items.clone(),
+    }
+}
+
 fn to_field(question: &QuestionPrompt, index: usize) -> Field {
     let options = question
         .options
@@ -158,13 +171,7 @@ impl ToolExecuteWithContext for QuestionExecute {
                         .enumerate()
                         .map(|(index, _)| {
                             let value = answer.get(&format!("q{index}"));
-                            match value {
-                                None | Some(FormValue::Bool(false)) => vec![],
-                                Some(FormValue::String(text)) => vec![text.clone()],
-                                Some(FormValue::Number(number)) => vec![number.to_string()],
-                                Some(FormValue::Bool(true)) => vec![],
-                                Some(FormValue::Strings(items)) => items.clone(),
-                            }
+                            form_value_to_answer(value)
                         })
                         .collect();
                     let content = to_model_content(&questions, &answers);
@@ -247,6 +254,25 @@ pub fn tool(forms: Forms) -> BuiltinTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_question_boolean_answers_render_as_strings() {
+        // Ref maps any non-array value to [String(value)] — bools included.
+        assert_eq!(form_value_to_answer(None), Vec::<String>::new());
+        assert_eq!(form_value_to_answer(Some(&FormValue::Bool(true))), vec!["true"]);
+        assert_eq!(
+            form_value_to_answer(Some(&FormValue::Bool(false))),
+            vec!["false"]
+        );
+        assert_eq!(
+            form_value_to_answer(Some(&FormValue::String("Yes".into()))),
+            vec!["Yes"]
+        );
+        assert_eq!(
+            form_value_to_answer(Some(&FormValue::Strings(vec!["a".into(), "b".into()]))),
+            vec!["a", "b"]
+        );
+    }
 
     fn prompt(question: &str, header: &str) -> QuestionPrompt {
         QuestionPrompt {

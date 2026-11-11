@@ -318,6 +318,25 @@ fn match_shell(info: &oc_schema::session_message::Info) -> oc_schema::session_me
 }
 
 #[test]
+fn runner_assistant_preserves_empty_provider_state() {
+    // Ref (to-llm-message.ts:106-109): only `undefined` state is dropped;
+    // `{provider: {}}` must still ride the wire.
+    let info = assistant_content(
+        same_model(),
+        vec![AssistantContent::Text { text: "answer".into(), state: Some(Record::default()) }],
+        None,
+    );
+    let messages = to_llm_messages(&[info], &same_model(), "anthropic");
+    match &messages[0].content[0] {
+        ContentPart::Text { provider_metadata, .. } => {
+            let metadata = provider_metadata.as_ref().expect("empty state preserved");
+            assert!(metadata.get("anthropic").expect("object").is_empty());
+        }
+        other => panic!("expected text part, got {other:?}"),
+    }
+}
+
+#[test]
 fn runner_assistant_reuses_provider_state_only_same_model_no_error() {
     let state = Record::from([("sig".to_string(), serde_json::json!("abc"))]);
     let info = assistant_content(

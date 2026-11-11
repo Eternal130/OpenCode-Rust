@@ -1479,7 +1479,7 @@ impl crate::session::runner::ModelResolver for FailingResolver {
         &self,
         _session: &crate::database::schema::SessionRow,
     ) -> Result<crate::session::runner::ResolvedModel, crate::session::runner::ModelError> {
-        Err(crate::session::runner::ModelError::Unavailable("own".into(), "glm-5.3".into()))
+        Err(crate::session::runner::ModelError::Unavailable { provider: "own".into(), model: "glm-5.3".into() })
     }
 
     fn resolve_selected(
@@ -1487,7 +1487,7 @@ impl crate::session::runner::ModelResolver for FailingResolver {
         _session: &crate::database::schema::SessionRow,
         _reference: &ModelRef,
     ) -> Result<crate::session::runner::ResolvedModel, crate::session::runner::ModelError> {
-        Err(crate::session::runner::ModelError::Unavailable("own".into(), "glm-5.3".into()))
+        Err(crate::session::runner::ModelError::Unavailable { provider: "own".into(), model: "glm-5.3".into() })
     }
 }
 

@@ -228,7 +228,7 @@ async fn resolver_binds_dynamic_models() {
     let gone = resolver
         .resolve_selected(&session, &model_ref("github-copilot", "gpt-5.4"))
         .expect_err("a model absent from the live listing fails");
-    assert!(matches!(gone, oc_core::session::runner::ModelError::Unavailable(_, _)));
+    assert!(matches!(gone, oc_core::session::runner::ModelError::Unavailable { .. }));
 }
 
 /// Without a sync the static catalog still serves copilot, and the
