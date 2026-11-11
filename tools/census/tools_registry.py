@@ -11,8 +11,10 @@ Axis 1 — tool-name universe: rust builtin static registrations — every
 Axis 2 — per-tool INPUT schema presence (declared / not declared). Presence
   only; schema CONTENT is out of scope.
 Axis 3 — per-tool OUTPUT schema declaration presence (the G-230 anchor:
-  rust builtin path hardcodes `output_schema: None` in
-  tool/registry.rs::register).
+  rust builtin path threads a per-tool declared output through
+  tool/registry.rs::register into `pipeline_executor_with_output`, and
+  the undeclared-output die branch (ref runtime.ts:46) lives in
+  PipelineExecutor::run).
 
 Scope declaration (out of scope, stated): MCP dynamic tool registration
   (rust mcp/registry.rs — `pipeline_executor_with_output` with a live
@@ -83,6 +85,7 @@ def rust_builtin_tools() -> list[dict]:
                 "name": name,
                 "namespace": ns.group(1) if ns else None,
                 "input": re.search(r"input:\s", region) is not None,
+                "output": re.search(r"output:\s*(?:[A-Za-z_]*output_schema\(\)|json!)", region) is not None,
                 "file": str(f),
                 "line": line,
             })
@@ -101,6 +104,7 @@ def rust_execute_tool() -> dict | None:
         "name": const.group(1),
         "namespace": None,
         "input": "ToolRegistration::new(" in region,
+        "output": re.search(r"registration\.output\s*=\s*Some\(", region) is not None,
         "file": str(TOOL_DIR / "codemode.rs"),
         "line": body[: reg.start()].count("\n") + 1,
     }
@@ -118,27 +122,22 @@ def rust_registration_sites() -> list[tuple[str, int]]:
     return hits
 
 
-def rust_output_schema_none() -> tuple[int, int]:
-    """(line of `output_schema: None` inside registry::register, count of
-    production `pipeline_executor_with_output` calls passing `Some`)."""
+def rust_output_face() -> tuple[int, int]:
+    """(line of the `pipeline_executor_with_output(` threading inside
+    registry::register, line of the undeclared-output die branch arm).
+    Either is 0 when absent (drift guard)."""
     body = REGISTRY.read_text()
-    m = re.search(r"pub fn register\(", body)
-    line = 0
-    if m:
-        idx = body.find("output_schema: None,", m.end())
+    reg = re.search(r"pub fn register\(", body)
+    thread_line = 0
+    die_line = 0
+    if reg:
+        idx = body.find("pipeline_executor_with_output(", reg.end())
         if idx != -1:
-            line = body[:idx].count("\n") + 1
-    some_calls = 0
-    for f in sorted(TOOL_DIR.rglob("*.rs")):
-        src = strip_tests(f.read_text())
-        for c in re.finditer(r"pipeline_executor_with_output\(", src):
-            tail = src[c.end(): c.end() + 400]
-            # third argument (after name, schema) — look for a `Some(` used
-            # as an argument before the closing paren region of the args
-            args = tail.split(",")
-            if len(args) > 2 and "Some(" in args[2]:
-                some_calls += 1
-    return line, some_calls
+            thread_line = body[:idx].count("\n") + 1
+    idx = body.find('message: "Tool result declared output without an output schema"')
+    if idx != -1:
+        die_line = body[:idx].count("\n") + 1
+    return thread_line, die_line
 
 
 # ---------------------------------------------------------------- ref side
@@ -218,7 +217,7 @@ def main() -> int:
     rust_only = sorted(set(rust_idx) - set(ref_idx))
 
     sites = rust_registration_sites()
-    none_line, some_calls = rust_output_schema_none()
+    thread_line, die_line = rust_output_face()
 
     rep = Report(
         "TOOLS Census（内建工具注册表 · 通道 2）",
@@ -232,7 +231,7 @@ def main() -> int:
     rep.w("- rust 侧提取：`crates/oc-core/src/tool/*.rs` 生产区 `BuiltinTool { … }` 构造（`#[cfg(test)]`/`#[test]` 区已剥除，tests*.rs 跳过；`name: NAME` 常量已展开）+ `codemode.rs::execute_registration` 合成的 `execute`。")
     rep.w("- ref 侧提取：`packages/core/src/tool/plugin/*.ts` 每个 `.add({ … })` draft（`export const name` 简写已归并；`draft.namespace({name:\"opencode\"})` 命名空间声明行不算工具）+ `packages/core/src/codemode/tool.ts` 的 `execute`。")
     rep.w("- 轴 2 只比 input schema **存在性**（有/无），不比内容。")
-    rep.w("- 范围外：MCP 动态注册（rust `mcp/registry.rs`（含唯一传 `Some` 的 `pipeline_executor_with_output` 调用）、ref `tool/mcp.ts`）、运行时插件动态工具。`file-diff.ts` 无工具登记（辅助文件）。")
+    rep.w("- 范围外：MCP 动态注册（rust `mcp/registry.rs`（动态 outputSchema 经 `pipeline_executor_with_output` 传入）、ref `tool/mcp.ts`）、运行时插件动态工具。`file-diff.ts` 无工具登记（辅助文件）。")
     rep.w()
     rep.w("## 轴 1：工具名全集 diff（有效名）")
     rep.w()
@@ -271,15 +270,25 @@ def main() -> int:
     rep.w()
     ref_out = [t for t in ref_tools if t["output"]]
     ref_files_out = sorted({t["file"] for t in ref_out})
+    rust_out = [t for t in rust if t["output"]]
     rep.w(f"- ref 声明 output：**{len(ref_out)}/{len(ref_tools)}** 个工具"
           f"（{len(ref_files_out)} 个文件：{', '.join(Path(p).name for p in ref_files_out)}）")
-    rep.w(f"- rust 内建路径声明 output_schema：**0/{len(rust)}** —— `tool/registry.rs::register` 对所有内建工具硬编码"
-          f" `output_schema: None`（{REGISTRY}:{none_line}，注释自引 G-230：走 mcp.ts:48 式 accept-all 回退）；"
-          f"`pipeline_executor_with_output` 带 `Some` 的生产调用在内建范围内为 **{some_calls}** 处"
-          f"（唯一 Some 调用在 MCP 动态路径 `mcp/registry.rs`，范围外）。")
-    rep.w(f"- 锚核对：登记册 G-230 记载「rust 0/14 声明 vs ref 13 文件全声明」——当前 census 实测 rust 内建总数 {len(rust)}"
-          f"（仍 0 声明，**锚的 rust 侧结论成立、数量已从 14 涨到 {len(rust)}**），ref 侧实测 {len(ref_files_out)} 文件/{len(ref_out)} 工具声明"
-          f"（与锚的「13 文件」相差 +1：现为 mcp-resource 内联两工具也计入；如实呈现）。**G-230 缺口未修复。**")
+    rust_no_out = [eff(t) for t in rust if not t["output"]]
+    rep.w(f"- rust 内建声明 output：**{len(rust_out)}/{len(rust)}** 个工具"
+          f"（每模块 `output_schema()` json! 字面 / codemode `registration.output = Some(...)`；"
+          f"`registry.rs::register` 经 `pipeline_executor_with_output` 线入（{REGISTRY}:{thread_line}），"
+          f"`Value::Null` 仍为未声明 scope）")
+    for name in rust_no_out:
+        t = next(x for x in rust if eff(x) == name)
+        rep.w(f"  - 🔴 rust 未声明 output `{name}` — {t['file']}:{t['line']}")
+    if die_line:
+        rep.w(f"- die 分支（未声明却返回 output → 失败，ref runtime.ts:46 原文）：**在位**（{REGISTRY}:{die_line}）")
+    else:
+        rep.w("- die 分支：**缺失**（registry.rs 无 `Tool result declared output without an output schema` 臂 → 回退 accept-all，G-230 缺口复现）")
+    fixed = len(rust_out) == len(rust) and die_line and thread_line
+    rep.w(f"- 锚核对：登记册 G-230 记载「rust 0/14 声明 vs ref 13 文件全声明」（round-24 census 扩为 0/18）；"
+          f"当前 census 实测 rust {len(rust_out)}/{len(rust)} 声明、die 分支{'在位' if die_line else '缺失'}。"
+          + ("**G-230 前置与 die 分支已修复（round 25）。**" if fixed else "**G-230 缺口未完全修复。**"))
     rep.w()
     rep.w("## rust 注册挂载点（交叉核对）")
     rep.w()
