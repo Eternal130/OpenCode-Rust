@@ -32,9 +32,9 @@ pub use opentui::{
     ActiveKey, DispatchOutcome, EngineBinding, Layer, LayerMode, TargetId, TargetMode,
 };
 pub use table::{
-    default_table, log_skip, parse_keybind_overrides, take_config_errors, Chord, Clock, CommandDef,
-    CommandGroup, KeyStroke, KeybindOverride, ManualClock, OwnedCommandDef, SystemClock,
-    LEADER_DEFAULT, LEADER_TIMEOUT_MS,
+    default_table, log_skip, parse_keybind_overrides, take_config_errors, terminal_suspend_rebind,
+    Chord, Clock, CommandDef, CommandGroup, KeyStroke, KeybindOverride, ManualClock,
+    OwnedCommandDef, SystemClock, LEADER_DEFAULT, LEADER_TIMEOUT_MS,
 };
 
 use std::collections::HashMap;
