@@ -589,8 +589,16 @@ fn part_path(
     group_exploration: bool,
     low_verbosity: bool,
 ) -> Vec<GroupKind> {
+    // `if (part.type === "tool" && part.name.toLowerCase() ===
+    // "question") return []` (session.ts:88) — G-370②: questions
+    // ALWAYS stand alone, never folded into an activity summary (or
+    // any group), even at low verbosity.
+    if let PartKind::Tool(name) = part {
+        if name.eq_ignore_ascii_case("question") {
+            return Vec::new();
+        }
+    }
     // `const activity = verbosity === "low" && part.type !== "text" ?
-    // ["activity"] : []` (session.ts:89).
     let activity = |path: &mut Vec<GroupKind>| {
         if low_verbosity {
             path.insert(0, GroupKind::Activity);
@@ -618,11 +626,15 @@ fn part_path(
 
 /// `messagePath` for non-assistant messages: instruction loads
 /// (synthetic messages) group; everything else stands alone
-/// (`grouping/session.ts:94-97`, medium verbosity — "low" would wrap
-/// them in an activity group too).
-fn message_path(message: &Message) -> Vec<GroupKind> {
+/// (`grouping/session.ts:94-97`). G-370① — at LOW verbosity the
+/// instructions group is wrapped in an ACTIVITY summary
+/// (`verbosity === "low" ? ["activity", "instructions"] :
+/// ["instructions"]`, session.ts:95-96).
+fn message_path(message: &Message, low_verbosity: bool) -> Vec<GroupKind> {
     if message.instruction_paths().is_empty() {
         Vec::new()
+    } else if low_verbosity {
+        vec![GroupKind::Activity, GroupKind::Instructions]
     } else {
         vec![GroupKind::Instructions]
     }
@@ -724,7 +736,6 @@ pub fn reduce_rows_with_rules<S: std::hash::BuildHasher>(
             Message::User { id, .. }
             | Message::Compaction { id, .. }
             | Message::Skill { id, .. }
-            | Message::Synthetic { id, .. }
             | Message::Shell { id, .. }
             | Message::AgentSwitched { id, .. }
             | Message::ModelSwitched { id, .. }
@@ -733,7 +744,29 @@ pub fn reduce_rows_with_rules<S: std::hash::BuildHasher>(
                 projections.push(Projection {
                     entry: Entry::Message { message_id: id.clone() },
                     part: None,
-                    path: message_path(message),
+                    path: message_path(message, low_verbosity),
+                    closes_previous: Some(!is_pending),
+                    reasoning_completed: false,
+                });
+            }
+            // G-370④ — rows.ts:383: a synthetic message with an EMPTY
+            // description is skipped entirely (`if (message.type ===
+            // "synthetic" && !message.description?.trim()) return
+            // rows`) — no bare `◈ Notice` row. Instruction loads are
+            // exempt: the server ALWAYS publishes them with a
+            // description ("Loaded …", instructions.ts:78), so the
+            // ref never skips one; the port keys the exemption on
+            // the instruction paths themselves (its fixtures model
+            // the description as optional) — oracle-safe, same
+            // visible behavior on every wire-representable input.
+            Message::Synthetic { description, instruction_paths, .. }
+                if instruction_paths.is_empty()
+                    && description.as_deref().is_none_or(|text| text.trim().is_empty()) => {}
+            Message::Synthetic { id, .. } => {
+                projections.push(Projection {
+                    entry: Entry::Message { message_id: id.clone() },
+                    part: None,
+                    path: message_path(message, low_verbosity),
                     closes_previous: Some(!is_pending),
                     reasoning_completed: false,
                 });
@@ -939,9 +972,37 @@ pub fn locale_duration(input: u64) -> String {
     }
 }
 
+/// `inputIndex` (rows.ts:469-481) — G-370⑫: the input walk-back for
+/// turn boundaries. Walking back from `end`: an idle marker returns
+/// the OLDEST input found since it; `user` AND `synthetic` messages
+/// both count as inputs; legacy history (no idle markers) returns the
+/// nearest input. `None` when no input precedes `end`.
+pub(crate) fn input_index(messages: &[Message], end: usize, legacy: bool) -> Option<usize> {
+    let mut input = None;
+    for index in (0..end).rev() {
+        match &messages[index] {
+            Message::Idle { .. } => return input,
+            Message::User { .. } | Message::Synthetic { .. } => {
+                if legacy {
+                    return Some(index);
+                }
+                input = Some(index);
+            }
+            _ => {}
+        }
+    }
+    input
+}
+
+/// The `legacy` flag (`legacyTurns`, rows.ts:465-467): sessions
+/// without idle markers end turns at the next prompt.
+pub(crate) fn legacy_turns(messages: &[Message]) -> bool {
+    !messages.iter().any(|message| matches!(message, Message::Idle { .. }))
+}
+
 /// `turnDuration`: the assistant step's completed time minus the
-/// creating user message's time (nearest input walking back — legacy
-/// sessions have no idle markers).
+/// creating input message's time (`inputIndex`'s walk-back — user OR
+/// synthetic inputs; legacy sessions have no idle markers).
 #[must_use]
 pub fn turn_duration(message_id: &str, messages: &[Message]) -> u64 {
     let Some(index) = messages.iter().position(|m| m.id() == message_id) else {
@@ -949,17 +1010,13 @@ pub fn turn_duration(message_id: &str, messages: &[Message]) -> u64 {
     };
     let Message::Assistant { time, .. } = &messages[index] else { return 0 };
     let Some(completed) = time.completed else { return 0 };
-    let mut input_created = None;
-    for message in messages.iter().take(index + 1).rev() {
-        match message {
-            Message::Idle { .. } => break,
-            Message::User { created, .. } => {
-                input_created = Some(*created);
-                break;
-            }
-            _ => {}
+    let input_created = input_index(messages, index, legacy_turns(messages)).and_then(|input| {
+        match &messages[input] {
+            Message::User { created, .. } => Some(*created),
+            Message::Synthetic { created, .. } => Some(*created),
+            _ => None,
         }
-    }
+    });
     completed.saturating_sub(input_created.unwrap_or_else(|| message_created(&messages[index])))
 }
 
@@ -1509,7 +1566,8 @@ mod tests {
         // The label counts DISTINCT files across the group.
         assert_eq!(instructions_label(1), "Instructions: 1 file");
         assert_eq!(instructions_label(2), "Instructions: 2 files");
-        // A synthetic message with no paths stands alone (no group).
+        // A synthetic message with no paths and NO description is
+        // skipped entirely (rows.ts:383 — no bare `◈` line).
         let bare = vec![Message::Synthetic {
             id: "s".into(),
             instruction_paths: vec![],
@@ -1521,6 +1579,158 @@ mod tests {
             created: 0,
         }];
         let rows = reduce_rows(&bare, &std::collections::HashSet::<String>::new());
-        assert_eq!(row_shape(&rows[0]), "message:s");
+        assert!(rows.is_empty(), "empty-description synthetic renders nothing");
+        // A DESCRIBED synthetic stands alone as a notice row.
+        let described = vec![Message::Synthetic {
+            id: "s2".into(),
+            instruction_paths: vec![],
+            description: Some("Task queued".into()),
+            source: None,
+            state: None,
+            agent: None,
+            child_id: None,
+            created: 0,
+        }];
+        let rows = reduce_rows(&described, &std::collections::HashSet::<String>::new());
+        assert_eq!(row_shape(&rows[0]), "message:s2");
+    }
+}
+
+// -- G-370①: messagePath's low-verbosity activity wrapper ----------------------
+
+#[cfg(test)]
+mod g370_path_tests {
+    use super::*;
+
+    fn instruction_load(id: &str, created: u64) -> Message {
+        Message::Synthetic {
+            id: id.to_owned(),
+            instruction_paths: vec!["AGENTS.md".to_owned(), "README.md".to_owned()],
+            description: None,
+            source: None,
+            state: None,
+            agent: None,
+            child_id: None,
+            created,
+        }
+    }
+
+    #[test]
+    fn instructions_wrap_in_activity_only_at_low_verbosity() {
+        let message = instruction_load("s1", 0);
+        // grouping/session.ts:95-96 — medium/high: bare instructions.
+        assert_eq!(message_path(&message, false), vec![GroupKind::Instructions]);
+        // Low: the activity summary wraps the instructions group.
+        assert_eq!(
+            message_path(&message, true),
+            vec![GroupKind::Activity, GroupKind::Instructions]
+        );
+        // Non-instruction messages stand alone at every verbosity.
+        assert_eq!(message_path(&plain_user("u1"), true), Vec::new());
+    }
+
+    fn plain_user(id: &str) -> Message {
+        Message::User { id: id.to_owned(), text: "?".to_owned(), created: 0, files: Vec::new() }
+    }
+}
+
+#[cfg(test)]
+mod g370_question_tests {
+    use super::*;
+
+    #[test]
+    fn question_tools_never_group_even_at_low_verbosity() {
+        // session.ts:88 — the question tool returns [] before the
+        // activity wrap, so it renders distinctly at low verbosity.
+        assert_eq!(
+            part_path(&PartKind::Tool("question".into()), &GroupRules::empty(), true, true),
+            Vec::new()
+        );
+        assert_eq!(
+            part_path(&PartKind::Tool("Question".into()), &GroupRules::empty(), true, true),
+            Vec::new()
+        );
+        // Other tools still wrap at low verbosity.
+        assert_eq!(
+            part_path(&PartKind::Tool("bash".into()), &GroupRules::empty(), true, true),
+            vec![GroupKind::Activity]
+        );
+    }
+}
+
+#[cfg(test)]
+mod g370_input_index_tests {
+    use super::*;
+
+    fn user_at(id: &str, created: u64) -> Message {
+        Message::User { id: id.into(), text: "?".into(), created, files: Vec::new() }
+    }
+
+    fn synthetic_at(id: &str, created: u64) -> Message {
+        Message::Synthetic {
+            id: id.into(),
+            instruction_paths: vec![],
+            description: Some("Loaded AGENTS.md".into()),
+            source: None,
+            state: None,
+            agent: None,
+            child_id: None,
+            created,
+        }
+    }
+
+    fn assistant_at(id: &str, created: u64, completed: u64) -> Message {
+        Message::Assistant {
+            id: id.into(),
+            agent: "build".into(),
+            model: "fixture/fixture".into(),
+            parts: vec![],
+            finish: Some("stop".into()),
+            error: None,
+            time: PartTime { created: Some(created), completed: Some(completed) },
+            tokens: None,
+            usage_total: None,
+            cache_read: None,
+            retry: None,
+        }
+    }
+
+    #[test]
+    fn input_index_counts_synthetic_inputs_and_bounds_at_idle() {
+        // rows.ts:477: user AND synthetic are inputs; the walk stops
+        // at the idle marker, returning the OLDEST input since it.
+        let messages = vec![
+            user_at("u1", 0),
+            synthetic_at("s1", 10),
+            assistant_at("a1", 20, 30),
+            Message::Idle { id: "i1".into(), created: 31 },
+            user_at("u2", 40),
+            assistant_at("a2", 50, 60),
+        ];
+        let legacy = legacy_turns(&messages);
+        assert!(!legacy, "the idle marker arms the marker rule");
+        // a2's turn (end past a2 at index 5): the oldest input after
+        // the idle is u2 (index 4).
+        assert_eq!(input_index(&messages, 6, legacy), Some(4));
+        // a1's turn (end past a1 at index 2): both s1 (synthetic,
+        // index 1) and u1 (index 0) are inputs; no idle marker
+        // precedes them, so the OLDEST (u1) wins.
+        assert_eq!(input_index(&messages, 3, legacy), Some(0), "synthetic inputs count too");
+        // turn_duration rides the same walk.
+        assert_eq!(turn_duration("a2", &messages), 20, "spans from u2's created");
+        assert_eq!(turn_duration("a1", &messages), 30, "spans from u1 (s1 counted as an input)");
+    }
+
+    #[test]
+    fn legacy_history_takes_the_nearest_input() {
+        let messages = vec![
+            user_at("u1", 0),
+            assistant_at("a1", 10, 20),
+            user_at("u2", 30),
+            assistant_at("a2", 40, 55),
+        ];
+        assert!(legacy_turns(&messages), "no idle markers");
+        assert_eq!(input_index(&messages, 3, true), Some(2), "nearest input");
+        assert_eq!(turn_duration("a2", &messages), 25);
     }
 }

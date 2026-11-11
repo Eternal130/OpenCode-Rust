@@ -433,13 +433,13 @@ pub fn render_transcript(
         // the summary line carries the gate's surface.
         if options.turn_tokens {
             if let Row::Entry(Entry::AssistantFooter { message_id }) = row {
-                let turn_ends_here = rows_iter.next().is_none_or(|next| match next {
-                    Row::Entry(Entry::Message { message_id: next_id }) => messages
-                        .iter()
-                        .find(|m| m.id() == next_id.as_str())
-                        .is_some_and(|message| matches!(message, Message::User { .. })),
-                    _ => false,
-                });
+                // G-370⑥ — the ref's actual turn boundary
+                // (rows.ts:355-407): with IDLE markers a turn closes
+                // at the marker (steers keep it open — the LAST
+                // terminal footer before the next idle ends it); the
+                // LEGACY pre-marker rule closes at the assistant's
+                // own terminal finish (not at the next user row).
+                let turn_ends_here = turn_ends_at_footer(message_id, messages);
                 if turn_ends_here {
                     if let Some(render) =
                         turn_token_usage_row(message_id, messages, theme, content_width)
@@ -507,6 +507,39 @@ pub fn render_transcript(
     Transcript { rows: measured, content_height: y, inset, images, background_hint }
 }
 
+/// G-370⑥ — the ref's turn-boundary rule for the debug turn-usage row
+/// (`reduceSessionRows`, rows.ts:355-407): with IDLE markers the turn
+/// closes AT the marker, so the LAST terminal assistant before the
+/// next marker ends it (steered user rows in between never close a
+/// turn); without markers (legacy history) the turn closes at the
+/// assistant's own terminal finish. Retry-only footers never close a
+/// turn (`if (terminal && legacy) flushTurn`, :406 — retry pushes the
+/// footer row but flushes nothing).
+fn turn_ends_at_footer(message_id: &str, messages: &[Message]) -> bool {
+    let Some(index) = messages.iter().position(|message| message.id() == message_id) else {
+        return false;
+    };
+    let terminal = |message: &Message| match message {
+        Message::Assistant { finish, error, .. } => {
+            finish.as_deref().is_some_and(|value| value != "tool-calls" && value != "unknown")
+                || error.is_some()
+        }
+        _ => false,
+    };
+    if !messages.iter().any(|message| matches!(message, Message::Idle { .. })) {
+        // Legacy: the footer's own step closes the turn.
+        return terminal(&messages[index]);
+    }
+    // Marker history: an idle marker must follow, with NO later
+    // terminal step before it (that one closes the turn instead).
+    let following = &messages[index + 1..];
+    following.iter().any(|message| matches!(message, Message::Idle { .. }))
+        && !following
+            .iter()
+            .take_while(|message| !matches!(message, Message::Idle { .. }))
+            .any(terminal)
+}
+
 /// G-140② — the collapsed `TurnTokenUsage` summary line
 /// (index.tsx:1659-1672): `+ Tokens: N steps · latest: A new · B
 /// cached · C total` over the turn's assistant messages (the walk
@@ -519,9 +552,9 @@ fn turn_token_usage_row(
     width: usize,
 ) -> Option<RowRender> {
     let end = messages.iter().position(|message| message.id() == message_id)?;
-    let turn_start = messages[..end]
-        .iter()
-        .rposition(|message| matches!(message, Message::User { .. }))
+    // G-370⑫ — `inputIndex` (rows.ts:469-481): user AND synthetic
+    // inputs open a turn; idle markers bound the walk-back.
+    let turn_start = super::model::input_index(messages, end, super::model::legacy_turns(messages))
         .map_or(0, |index| index + 1);
     let steps: Vec<&Message> = messages[turn_start..=end]
         .iter()
@@ -853,12 +886,13 @@ fn render_row(
                         .metadata
                         .get("sessionID")
                         .and_then(|id| options.subagent_running.get(id).copied());
-                    crate::components::message::rows::subagent_tool_row(
+                    crate::components::message::rows::subagent_tool_row_with_models(
                         state,
                         session_running,
                         options.clock_ms,
                         theme,
                         width,
+                        &options.model_names,
                     )
                 }
                 // SURF-1: ungrouped tool parts render their detail cell
@@ -889,9 +923,17 @@ fn render_row(
             // tok/s (`turnTokensPerSecond`, rows.ts:442-463): the
             // step's output+reasoning tokens over its streamed span —
             // the VALUE is per-run (b); the row + `X.X tok/s` format
-            // is the (a) surface this pins. `session.tps` gates the
-            // span (index.tsx:1892 `config.data.session.tps &&
-            // tokensPerSecond()` — default off).
+            // is the (a) surface this pins. G-370⑧ (bounded): the
+            // ref's exact basis is TURN-aggregated —
+            // Σ(output+reasoning) over the turn's steps divided by
+            // Σ(`time.streamed − time.created`) per step — and
+            // `time.streamed` is not modeled on the port's wire
+            // (PartTime carries created/completed only); modeling it
+            // means new ingest plumbing through every step event and
+            // re-basing every footer value (needs oracle re-pin if
+            // taken). `session.tps` gates the span (index.tsx:1892
+            // `config.data.session.tps && tokensPerSecond()` —
+            // default off).
             let tps = match (tokens, time.created, time.completed) {
                 (Some(tokens), Some(created), Some(created_end))
                     if created_end > created && options.tps_enabled =>
@@ -1026,7 +1068,12 @@ fn group_row(
             // finished commands/edits/thoughts/reads instead of the
             // exploration label's tool-name census.
             if kind == GroupKind::Activity && options.verbosity == Verbosity::Low {
+                // `items.find(isActive)`'s busy label: the FIRST
+                // active item wins — a running thought yields
+                // "Thinking…", a running tool its `Running noun…`
+                // (activity-summary.ts:31,44-53).
                 let mut first_running: Option<(String, bool)> = None;
+                let mut thinking = false;
                 let items: Vec<super::model::ActivityItem> = refs
                     .iter()
                     .filter_map(|(message_id, part_id)| {
@@ -1038,7 +1085,7 @@ fn group_row(
                                     state.status,
                                     crate::components::message::model::ToolStatus::Completed | crate::components::message::model::ToolStatus::Error
                                 );
-                                if running && first_running.is_none() {
+                                if running && first_running.is_none() && !thinking {
                                     first_running = Some((
                                         name.clone(),
                                         state.status == crate::components::message::model::ToolStatus::Streaming,
@@ -1050,11 +1097,23 @@ fn group_row(
                                     visible_thought: true,
                                 }
                             }
-                            Part::Reasoning { text, time } => super::model::ActivityItem {
-                                tool: None,
-                                active: time.completed.is_none() && !completed,
-                                visible_thought: !text.trim().is_empty(),
-                            },
+                            Part::Reasoning { text, time } => {
+                                let running =
+                                    time.completed.is_none() && !completed;
+                                // G-370⑦ — a running thought carries the
+                                // "Thinking…" busy label
+                                // (`busyLabel(reasoning)`,
+                                // activity-summary.ts:48) — including a
+                                // PURE-thought group with no tools at all.
+                                if running && first_running.is_none() {
+                                    thinking = true;
+                                }
+                                super::model::ActivityItem {
+                                    tool: None,
+                                    active: running,
+                                    visible_thought: !text.trim().is_empty(),
+                                }
+                            }
                             // Text parts never contribute to the activity row.
                             Part::Text { .. } => return None,
                         })
@@ -1064,6 +1123,8 @@ fn group_row(
                 if label.is_empty() {
                     if let Some((name, streaming)) = first_running {
                         label = super::model::activity_busy_label(&name, streaming);
+                    } else if thinking {
+                        label = "Thinking…".to_owned();
                     }
                 }
                 let _ = active;
@@ -1829,6 +1890,45 @@ mod surf1_tests {
         assert!(tool_row.height > 4, "the strip stacked under the tool row");
     }
 
+    /// G-370⑦ — a pure-thought activity group (low verbosity) still
+    /// shows the "Thinking…" busy label (busyLabel(reasoning),
+    /// activity-summary.ts:48).
+    #[test]
+    fn pure_thought_activity_group_shows_the_thinking_busy_label() {
+        let theme = theme();
+        let messages = vec![
+            Message::User { id: "u1".into(), text: "go".into(), created: 0, files: Vec::new() },
+            Message::Assistant {
+                id: "a1".into(),
+                agent: "build".into(),
+                model: "fixture/fixture".into(),
+                parts: vec![Part::Reasoning {
+                    text: "let me consider".into(),
+                    time: crate::components::message::model::PartTime {
+                        created: Some(1),
+                        completed: None,
+                    },
+                }],
+                finish: None,
+                error: None,
+                time: crate::components::message::model::PartTime::default(),
+                tokens: None,
+                usage_total: None,
+                cache_read: None,
+                retry: None,
+            },
+        ];
+        let options = TranscriptOptions {
+            verbosity: Verbosity::Low,
+            group_exploration: false,
+            ..Default::default()
+        };
+        let transcript = render_transcript(&messages, &options, &theme, 80);
+        let frame = transcript.paint(FollowState::Sticky, &theme, (80, 30), None);
+        let text = frame.text_grid().join("\n");
+        assert!(text.contains("Thinking…"), "the busy label renders: {text}");
+    }
+
     /// G-184 — a RUNNING shell tool with `metadata.shellID` renders
     /// the live inline poll's output (not the static `state.output`).
     #[test]
@@ -1905,5 +2005,80 @@ mod surf1_tests {
             .find(|row| row.key.starts_with("group:"))
             .expect("the exploration group header");
         assert!(pending_row.y > header_row.y, "below the group header");
+    }
+}
+
+// -- G-370⑥: the turn-boundary rule (rows.ts:355-407) ---------------------------
+
+#[cfg(test)]
+mod g370_turn_tests {
+    use super::*;
+
+    fn assistant(id: &str, finish: Option<&str>) -> Message {
+        Message::Assistant {
+            id: id.into(),
+            agent: "build".into(),
+            model: "fixture/fixture".into(),
+            parts: vec![Part::Text { text: "hi".into(), time: PartTime::default() }],
+            finish: finish.map(str::to_owned),
+            error: None,
+            time: PartTime::default(),
+            tokens: Some(10),
+            usage_total: Some(10),
+            cache_read: None,
+            retry: None,
+        }
+    }
+
+    fn user(id: &str) -> Message {
+        Message::User { id: id.into(), text: "?".into(), created: 0, files: Vec::new() }
+    }
+
+    #[test]
+    fn legacy_turns_close_at_the_terminal_step() {
+        // No idle markers: the assistant's own terminal finish closes
+        // the turn — even with the next row NOT being a user row.
+        let messages = vec![
+            user("u1"),
+            assistant("a1", Some("stop")),
+            Message::Idle { id: "i1".into(), created: 0 },
+        ];
+        assert!(turn_ends_at_footer("a1", &messages), "marker history: the idle follows");
+        let legacy = vec![user("u1"), assistant("a1", Some("stop")), assistant("a2", Some("stop"))];
+        assert!(turn_ends_at_footer("a1", &legacy), "legacy: terminal step closes it");
+        assert!(turn_ends_at_footer("a2", &legacy));
+        // A tool-calls finish never closes.
+        let tool_call = vec![user("u1"), assistant("a1", Some("tool-calls"))];
+        assert!(!turn_ends_at_footer("a1", &tool_call));
+    }
+
+    #[test]
+    fn marker_history_closes_at_the_idle_not_the_steer() {
+        // Steer: user row inside the turn must NOT close it; the last
+        // terminal assistant before the idle does.
+        let messages = vec![
+            user("u1"),
+            assistant("a1", Some("stop")),
+            user("steer"),
+            assistant("a2", Some("stop")),
+            Message::Idle { id: "i1".into(), created: 9 },
+        ];
+        assert!(!turn_ends_at_footer("a1", &messages), "a later terminal step owns the close");
+        assert!(turn_ends_at_footer("a2", &messages), "the last terminal before idle closes");
+        // Without any idle yet, the turn stays open (no usage row).
+        let open = vec![user("u1"), assistant("a1", Some("stop"))];
+        // No idle marker anywhere in `open` → legacy rule applies
+        // (terminal closes it), matching the ref's pre-marker rule.
+        assert!(turn_ends_at_footer("a1", &open));
+        // An idle BEFORE the assistant doesn't close its turn.
+        let closed_earlier = vec![
+            Message::Idle { id: "i0".into(), created: 0 },
+            user("u1"),
+            assistant("a1", Some("stop")),
+        ];
+        assert!(
+            !turn_ends_at_footer("a1", &closed_earlier),
+            "an earlier marker alone leaves the turn open (no later idle)"
+        );
     }
 }
