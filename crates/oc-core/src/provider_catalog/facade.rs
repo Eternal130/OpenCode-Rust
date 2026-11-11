@@ -2382,6 +2382,16 @@ fn custom_native_language_model(
         },
         ..Default::default()
     });
+    // No configured credential: anonymous, exactly like the fallback
+    // lane (config-declared packages previously ignored the package
+    // field and rode the keyless openai-compatible binding — a declared
+    // package must not turn a keyless local provider into a credential
+    // error; the keyless-downgrade seam, CRED-AUTHNONE-DOWNGRADE).
+    let route = if custom.api_key.is_none() && custom.auth_token.is_none() {
+        route.with(RoutePatch { auth: Some(auth::Definition::none()), ..Default::default() })
+    } else {
+        route
+    };
     bind_custom_native_model(&route, wire_id, &package, model, &custom.id)
 }
 
