@@ -57,7 +57,8 @@ use oc_ai::protocols::openai_chat::{
     meta_chat_compatibility, minimax_chat_compatibility, minimax_chat_route,
     moonshot_chat_compatibility, moonshot_chat_route, openai_chat_route,
     openrouter_chat_compatibility, openrouter_chat_route, togetherai_chat_compatibility,
-    venice_chat_compatibility, venice_chat_route, zai_chat_compatibility, zai_chat_route,
+    venice_chat_compatibility, venice_chat_route, xai_chat_route, zai_chat_compatibility,
+    zai_chat_route,
 };
 use oc_ai::protocols::openai_compatible::{
     openai_compatible_chat_configured, openai_compatible_responses_route,
@@ -156,6 +157,20 @@ pub struct ModelConnection {
     /// migrates to the base URL once, under an explicit `baseURL` —
     /// amazon-bedrock.ts:48-52).
     pub endpoint: Option<String>,
+    /// `settings.workspaceID` — the Alibaba workspace host input
+    /// (`{workspaceID}.{region}.maas.aliyuncs.com`, alibaba.ts:79-84).
+    pub workspace_id: Option<String>,
+    /// `settings.accessToken` — the Vertex OAuth token (kept apart from
+    /// `api_key` so the ref's apiKey/accessToken mutual exclusion holds,
+    /// google-vertex-shared.ts:44-46).
+    pub access_token: Option<String>,
+    /// `settings.authToken` — the anthropic-compatible bearer token
+    /// (`Auth.bearer(authToken)`, anthropic-compatible.ts:74-75).
+    pub auth_token: Option<String>,
+    /// The Cloudflare AI Gateway connection (G-348): `accountId` /
+    /// `gatewayId` / `gatewayApiKey` plus the `cf-aig-*` cache/log knobs
+    /// (cloudflare-ai-gateway.ts Settings).
+    pub cloudflare_gateway: Option<CloudflareGatewayConnection>,
     pub headers: BTreeMap<String, String>,
     /// `settings.transport` — the user's explicit session-transport
     /// choice (G-245: it wins over the openai/xai/azure websocket
@@ -169,6 +184,7 @@ impl ModelConnection {
     #[must_use]
     pub fn from_settings(settings: &ProviderSettings) -> Self {
         let string = |key: &str| settings.rest.get(key).and_then(Value::as_str).map(str::to_string);
+        let cloudflare_gateway = CloudflareGatewayConnection::from_settings(settings);
         Self {
             base_url: string("baseURL"),
             api_key: string("apiKey"),
@@ -176,6 +192,10 @@ impl ModelConnection {
             region: string("region"),
             profile: string("profile"),
             endpoint: string("endpoint"),
+            workspace_id: string("workspaceID"),
+            access_token: string("accessToken"),
+            auth_token: string("authToken"),
+            cloudflare_gateway,
             headers: BTreeMap::new(),
             transport: settings.transport,
         }
@@ -183,6 +203,46 @@ impl ModelConnection {
 
     fn secret(&self) -> Option<Secret> {
         self.api_key.clone().map(Secret::Value)
+    }
+}
+
+/// The Cloudflare AI Gateway connection settings (G-348,
+/// cloudflare-ai-gateway.ts `Settings`): the account-driven URL
+/// inputs, the gateway-scoped key, and the `cf-aig-*` cache/log knobs.
+#[derive(Debug, Clone, Default)]
+pub struct CloudflareGatewayConnection {
+    pub account_id: Option<String>,
+    pub gateway_id: Option<String>,
+    pub gateway_api_key: Option<String>,
+    pub metadata: Option<Value>,
+    pub cache_ttl: Option<i64>,
+    pub cache_key: Option<String>,
+    pub skip_cache: Option<bool>,
+    pub collect_log: Option<bool>,
+}
+
+impl CloudflareGatewayConnection {
+    fn from_settings(settings: &ProviderSettings) -> Option<Self> {
+        let string = |key: &str| settings.rest.get(key).and_then(Value::as_str).map(str::to_string);
+        let connection = Self {
+            account_id: string("accountId"),
+            gateway_id: string("gatewayId"),
+            gateway_api_key: string("gatewayApiKey"),
+            metadata: settings.rest.get("metadata").cloned(),
+            cache_ttl: settings.rest.get("cacheTtl").and_then(Value::as_i64),
+            cache_key: string("cacheKey"),
+            skip_cache: settings.rest.get("skipCache").and_then(Value::as_bool),
+            collect_log: settings.rest.get("collectLog").and_then(Value::as_bool),
+        };
+        (connection.account_id.is_some()
+            || connection.gateway_id.is_some()
+            || connection.gateway_api_key.is_some()
+            || connection.metadata.is_some()
+            || connection.cache_ttl.is_some()
+            || connection.cache_key.is_some()
+            || connection.skip_cache.is_some()
+            || connection.collect_log.is_some())
+        .then_some(connection)
     }
 }
 
@@ -280,6 +340,9 @@ pub struct CustomProvider {
     /// model-level overlay or a catalog base supplies the endpoint.
     pub base_url: String,
     pub api_key: Option<String>,
+    /// G-373⑤ — `settings.authToken` (the anthropic-compatible bearer
+    /// token; `Auth.bearer(authToken)`, anthropic-compatible.ts:74-75).
+    pub auth_token: Option<String>,
     /// Provider-level overlays (`providers.<id>.headers|body`) — merged
     /// under every model's own overlays.
     pub headers: Option<BTreeMap<String, String>>,
@@ -363,6 +426,11 @@ pub enum ProtocolFamily {
     /// by the gateway protocol seam (`providerOptions.gateway` body
     /// injection + gateway usage/cost metadata on finish events).
     VercelGateway,
+    /// Cloudflare AI Gateway (G-348): account-synthesized REST chat +
+    /// provider-native passthrough Messages/Responses routes on
+    /// gateway.ai.cloudflare.com with the `cf-aig-*` header set and
+    /// `cf-aig-authorization` passthrough auth.
+    CloudflareAiGateway,
 }
 
 /// Classify a native package into a ported family (`None` → unsupported).
@@ -370,6 +438,7 @@ pub enum ProtocolFamily {
 pub fn family_of(package: &str) -> Option<ProtocolFamily> {
     Some(match package {
         "@opencode/ai/providers/anthropic"
+        | "@opencode/ai/providers/anthropic-compatible"
         | "@opencode/ai/providers/alibaba/messages"
         | "@opencode/ai/providers/meta/messages"
         | "@opencode/ai/providers/minimax/messages"
@@ -426,9 +495,16 @@ pub fn family_of(package: &str) -> Option<ProtocolFamily> {
         | "@opencode/ai/providers/venice"
         | "@opencode/ai/providers/zai/chat"
         | "@opencode/ai/providers/zai-coding-plan/chat"
+        | "@opencode/ai/providers/xai/chat"
         | "@opencode/ai/providers/openrouter"
-        | "@opencode/ai/providers/cloudflare-workers-ai"
-        | "@opencode/ai/providers/cloudflare-ai-gateway" => ProtocolFamily::OpenAIChat,
+        | "@opencode/ai/providers/cloudflare-workers-ai" => ProtocolFamily::OpenAIChat,
+
+        // Cloudflare AI Gateway (G-348): its own native lane — the
+        // account-synthesized REST root + the provider-native
+        // gateway.ai.cloudflare.com passthrough routes with per-prefix
+        // dispatch (providers/cloudflare-ai-gateway.ts), NOT the plain
+        // chat family.
+        "@opencode/ai/providers/cloudflare-ai-gateway" => ProtocolFamily::CloudflareAiGateway,
 
         // Vercel AI Gateway (G-81): its own native lane — per-model dispatch
         // over the gateway-wrapped Messages/Responses/Chat routes
@@ -559,6 +635,55 @@ pub fn language_model_for_model(
     let base_url = base_url.map(|url| expand_env_templates(&url));
     let env = &snapshot.environment;
 
+    // G-356 — the vertex guards (google-vertex-shared.ts / the vertex
+    // provider files): apiKey never combines with accessToken, tuned
+    // (`endpoints/`) models reject Express API keys, and the chat +
+    // messages OpenAPI lanes reject API keys outright.
+    if matches!(
+        family,
+        ProtocolFamily::VertexGemini | ProtocolFamily::VertexChat | ProtocolFamily::VertexMessages
+    ) {
+        if connection.api_key.is_some() && connection.access_token.is_some() {
+            return Err(ProviderError::Configuration {
+                provider: provider_id.to_string(),
+                message: "Google Vertex apiKey cannot be combined with accessToken or auth"
+                    .to_string(),
+            });
+        }
+        match family {
+            ProtocolFamily::VertexGemini => {
+                // Express mode: `apiKey` (settings or the
+                // GOOGLE_VERTEX_API_KEY env stand-in) + a tuned model.
+                let express_key =
+                    connection.api_key.is_some() || env_first(env, "GOOGLE_VERTEX_API_KEY").is_some();
+                if express_key && model.id.as_str().starts_with("endpoints/") {
+                    return Err(ProviderError::Configuration {
+                        provider: provider_id.to_string(),
+                        message: "Google Vertex tuned models do not support Express Mode API keys"
+                            .to_string(),
+                    });
+                }
+            }
+            ProtocolFamily::VertexChat => {
+                if connection.api_key.is_some() {
+                    return Err(ProviderError::Configuration {
+                        provider: provider_id.to_string(),
+                        message: "Google Vertex Chat does not support API keys".to_string(),
+                    });
+                }
+            }
+            ProtocolFamily::VertexMessages => {
+                if connection.api_key.is_some() {
+                    return Err(ProviderError::Configuration {
+                        provider: provider_id.to_string(),
+                        message: "Google Vertex Messages does not support API keys".to_string(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
     let route = build_route(
         context,
         family,
@@ -674,12 +799,24 @@ pub fn language_model_for_model(
         })
     };
     let route = apply_model_overlays(&route, model);
+    // G-348 — the gateway's id rewrite (`configure().model()`,
+    // cloudflare-ai-gateway.ts:124-135): prefix stripped (anthropic
+    // dots dashed) on the native endpoints, kept whole on a custom
+    // baseURL. Everything downstream binds the rewritten wire id.
+    let bind_model_id = if package == "@opencode/ai/providers/cloudflare-ai-gateway" {
+        oc_ai::protocols::cloudflare_ai_gateway::wire_model_id(
+            model.id.as_str(),
+            base_url.as_deref().is_none(),
+        )
+    } else {
+        model.id.as_str().to_string()
+    };
     // G-119/G-121: the package compatibility presets the TS provider files
     // inject at `configure().model()`, under the model-level overlay
     // (opencode.ts:270-271).
     bind_model_with_compat(
         &route,
-        model.id.as_str(),
+        &bind_model_id,
         &package,
         model.compatibility.as_ref(),
         provider_id,
@@ -822,11 +959,17 @@ fn build_route(
             }))
         }
         ProtocolFamily::VertexGemini => {
-            // connection.api_key carries the resolved access token (the
-            // integration ADC binding or an explicit config token); the
-            // Express API key rides its own env chain.
-            let access_token =
-                api_key.or_else(|| env_first(env, "GOOGLE_OAUTH_ACCESS_TOKEN").map(Secret::Env));
+            // G-356: `accessToken` (the explicit setting or the ADC
+            // binding the resolver folds into `access_token`) is the
+            // OAuth bearer; `apiKey` stays the Express lane's own
+            // credential — kept apart so the ref's mutual exclusion and
+            // precedence (apiKey wins, ADC only without it) hold.
+            let access_token = connection
+                .access_token
+                .clone()
+                .map(Secret::Value)
+                .or(api_key)
+                .or_else(|| env_first(env, "GOOGLE_OAUTH_ACCESS_TOKEN").map(Secret::Env));
             let route = vertex_route_for_model(
                 transport,
                 VertexConfig {
@@ -982,10 +1125,36 @@ fn build_route(
                 // own anthropic root (moonshot.ts:86, zai-coding-plan.ts:45,
                 // alibaba.ts:102) — the catalog `api` is the CHAT root and
                 // must not be reused for `/messages`.
-                let base_url = anthropic_messages_base_url(package, base_url, provider_id)?;
+                let base_url =
+                    anthropic_messages_base_url(package, base_url, provider_id, connection)?;
                 let mut patch = RoutePatch {
                     provider: Some(provider_id.to_string()),
-                    auth: Some(bearer_auth(api_key, env)),
+                    // G-373⑤: the anthropic-compatible package's auth
+                    // (anthropic-compatible.ts:34-37,69-75) — `authToken`
+                    // rides a bearer header, `apiKey` the x-api-key
+                    // header (never the generic bearer), and the two
+                    // never combine.
+                    auth: Some(if package == "@opencode/ai/providers/anthropic-compatible" {
+                        if connection.api_key.is_some() && connection.auth_token.is_some() {
+                            return Err(ProviderError::Configuration {
+                                provider: provider_id.to_string(),
+                                message:
+                                    "Anthropic-compatible apiKey cannot be combined with authToken"
+                                        .to_string(),
+                            });
+                        }
+                        match &connection.auth_token {
+                            Some(token) => auth::value(token.clone()).bearer(),
+                            None => match &connection.api_key {
+                                Some(key) => auth::value(key.clone()).header("x-api-key"),
+                                // No credential configured: optional auth
+                                // (local/loopback anthropic-compatible hosts).
+                                None => auth::Definition::none(),
+                            },
+                        }
+                    } else {
+                        bearer_auth(api_key, env)
+                    }),
                     ..Default::default()
                 };
                 // G-172: the meta messages lane defaults thinking to adaptive
@@ -1057,9 +1226,55 @@ fn build_route(
             )
             .with(RoutePatch { provider: Some(provider_id.to_string()), ..Default::default() }))
         }
+        ProtocolFamily::CloudflareAiGateway => {
+            // G-348 — the gateway lane (providers/cloudflare-ai-gateway.ts):
+            // account-synthesized REST root + provider-native passthrough
+            // routes, per-prefix dispatch, the cf-aig-* header set, and the
+            // gatewayApiKey ?? apiKey → CLOUDFLARE_API_TOKEN → CF_AIG_TOKEN
+            // chain (NEVER the raw catalog env list — CLOUDFLARE_ACCOUNT_ID
+            // / CLOUDFLARE_GATEWAY_ID are not tokens).
+            let gateway = connection.cloudflare_gateway.clone().unwrap_or_default();
+            let api_key = gateway
+                .gateway_api_key
+                .clone()
+                .or_else(|| connection.api_key.clone())
+                .map(Secret::Value);
+            let spec = oc_ai::protocols::cloudflare_ai_gateway::CloudflareGatewaySpec {
+                account_id: gateway.account_id.clone(),
+                base_url,
+                gateway_id: gateway.gateway_id.clone(),
+                api_key,
+                env: Vec::new(),
+                options: oc_ai::protocols::cloudflare_ai_gateway::GatewayOptions {
+                    metadata: gateway.metadata.clone(),
+                    cache_ttl: gateway.cache_ttl,
+                    cache_key: gateway.cache_key.clone(),
+                    skip_cache: gateway.skip_cache,
+                    collect_log: gateway.collect_log,
+                },
+                transport,
+            };
+            let (route, _) =
+                oc_ai::protocols::cloudflare_ai_gateway::route_for_model(&spec, model.id.as_str())
+                    .map_err(|message| ProviderError::Configuration {
+                        provider: provider_id.to_string(),
+                        message,
+                    })?;
+            Ok(route
+                .with(RoutePatch { provider: Some(provider_id.to_string()), ..Default::default() }))
+        }
         ProtocolFamily::AlibabaResponses => {
             // G-84: the Model Studio responses lane at the dashscope
             // compatible-mode root (the catalog `api` / provider baseURL).
+            // G-373①: a configured region/workspaceID derives the host
+            // (under an explicit user baseURL, which wins per ref).
+            let base_url = if connection.base_url.is_none() {
+                alibaba_derived_base(connection, provider_id)?
+                    .map(|(chat_root, _)| chat_root)
+                    .or(base_url)
+            } else {
+                base_url
+            };
             let base_url = base_url.ok_or_else(|| ProviderError::Configuration {
                 provider: provider_id.to_string(),
                 message: format!(
@@ -1097,6 +1312,19 @@ fn build_route(
                     true,
                 );
             }
+            // G-373①: the alibaba chat lane's region/workspaceID host
+            // derivation (alibaba.ts:79-95) — the derived compatible-mode
+            // root replaces the catalog's intl default; an explicit user
+            // baseURL still wins.
+            let base_url = if package == "@opencode/ai/providers/alibaba/chat"
+                && connection.base_url.is_none()
+            {
+                alibaba_derived_base(connection, provider_id)?
+                    .map(|(chat_root, _)| chat_root)
+                    .or(base_url)
+            } else {
+                base_url
+            };
             // G-123: the provider env fallback chains hardcoded in the TS
             // provider files that the models-dev snapshot doesn't carry
             // (togetherai.ts:37, digitalocean.ts:36) — appended after the
@@ -1122,6 +1350,10 @@ fn build_route(
                     zai_chat_route(transport, Some(auth))
                 }
                 "@opencode/ai/providers/alibaba/chat" => alibaba_chat_route(transport, Some(auth)),
+                // G-373③: the xai chat lane — OpenAI chat at api.x.ai/v1
+                // with the `x-grok-conv-id` conversation-affinity header
+                // (xai.ts:62-64).
+                "@opencode/ai/providers/xai/chat" => xai_chat_route(transport, Some(auth)),
                 // G-172: the minimax chat dialect — OpenAI chat body plus the
                 // `thinking` passthrough and `reasoning_split` default true
                 // (minimax.ts:54-94).
@@ -1345,6 +1577,7 @@ fn anthropic_messages_base_url(
     package: &str,
     base_url: Option<String>,
     provider_id: &str,
+    connection: &ModelConnection,
 ) -> Result<Option<String>, ProviderError> {
     let rewrite = |chat_default: &str, anthropic_root: &str| -> Option<String> {
         match base_url.as_deref() {
@@ -1361,15 +1594,31 @@ fn anthropic_messages_base_url(
             _ => rewrite("https://api.moonshot.ai/v1", "https://api.moonshot.ai/anthropic/v1"),
         }),
         "@opencode/ai/providers/zai-coding-plan/messages" => {
-            Ok(rewrite("https://api.z.ai/api/coding/paas/v4", "https://api.z.ai/api/anthropic/v1"))
+            // G-373②: the coding-plan chat root rewrites onto the
+            // anthropic root on EVERY zai host — api.z.ai (the ref
+            // default, zai-coding-plan.ts:45) and open.bigmodel.cn (the
+            // `zhipuai-coding-plan` host that rides the same package
+            // via native.rs HOSTS).
+            Ok(match base_url.as_deref() {
+                Some(url) => Some(
+                    url.strip_suffix("/api/coding/paas/v4")
+                        .map(|host_root| format!("{host_root}/api/anthropic/v1"))
+                        .unwrap_or_else(|| url.to_string()),
+                ),
+                None => Some("https://api.z.ai/api/anthropic/v1".to_string()),
+            })
         }
         "@opencode/ai/providers/alibaba/messages" => match base_url {
-            // alibaba.ts:85-92: without baseURL the resource host is
-            // region-derived; unconfigured is a ProviderConfigurationError.
-            None => Err(ProviderError::Configuration {
-                provider: provider_id.to_string(),
-                message: "alibaba requires region or baseURL".to_string(),
-            }),
+            // G-373①: without a baseURL the host is region-derived
+            // (alibaba.ts:85-92,102); neither region nor baseURL is a
+            // ProviderConfigurationError.
+            None => match alibaba_derived_base(connection, provider_id)? {
+                Some((_, messages_root)) => Ok(Some(messages_root)),
+                None => Err(ProviderError::Configuration {
+                    provider: provider_id.to_string(),
+                    message: "alibaba requires region or baseURL".to_string(),
+                }),
+            },
             // `https://{host}/compatible-mode/v1` → `https://{host}/apps/anthropic/v1`
             // for every dashscope host (intl/cn/region variants).
             Some(url) => Ok(Some(
@@ -1385,6 +1634,45 @@ fn anthropic_messages_base_url(
         },
         _ => Ok(base_url),
     }
+}
+
+/// G-373① — the Alibaba region host table (alibaba.ts:43-48).
+fn alibaba_region_host(region: &str) -> Option<&'static str> {
+    Some(match region {
+        "ap-southeast-1" => "dashscope-intl.aliyuncs.com",
+        "cn-beijing" => "dashscope.aliyuncs.com",
+        "cn-hongkong" => "cn-hongkong.dashscope.aliyuncs.com",
+        "us-east-1" => "dashscope-us.aliyuncs.com",
+        _ => return None,
+    })
+}
+
+/// G-373① — the derived Alibaba endpoints (alibaba.ts:77-105): the
+/// region host (`{workspaceID}.{region}.maas.aliyuncs.com` when a
+/// workspace is set, else the region table) yields the chat/responses
+/// root `https://{host}/compatible-mode/v1` and the messages root
+/// `https://{host}/apps/anthropic/v1`. `None` when no region is
+/// configured (the caller's base URL ladder applies); an unknown
+/// region without a workspace/baseURL is the ref's typed error
+/// (`Alibaba region {region} requires workspaceID or baseURL`).
+fn alibaba_derived_base(
+    connection: &ModelConnection,
+    provider_id: &str,
+) -> Result<Option<(String, String)>, ProviderError> {
+    let Some(region) = connection.region.as_deref() else { return Ok(None) };
+    let host = match connection.workspace_id.as_deref() {
+        Some(workspace) => format!("{workspace}.{region}.maas.aliyuncs.com"),
+        None => alibaba_region_host(region).map(str::to_string).ok_or_else(|| {
+            ProviderError::Configuration {
+                provider: provider_id.to_string(),
+                message: format!("Alibaba region {region} requires workspaceID or baseURL"),
+            }
+        })?,
+    };
+    Ok(Some((
+        format!("https://{host}/compatible-mode/v1"),
+        format!("https://{host}/apps/anthropic/v1"),
+    )))
 }
 
 /// G-171: the gpt-5 family default options (openai-options.ts:35-47):
@@ -2024,17 +2312,16 @@ fn custom_native_language_model(
     let connection = ModelConnection {
         base_url: base_url.clone(),
         api_key: custom.api_key.clone(),
+        // G-373⑤: the custom lane's authToken reaches the package arms
+        // (anthropic-compatible's bearer).
+        auth_token: custom.auth_token.clone(),
         resource_name: model
             .settings
             .as_ref()
             .and_then(|settings| settings.rest.get("resourceName"))
             .and_then(Value::as_str)
             .map(str::to_string),
-        region: None,
-        profile: None,
-        endpoint: None,
-        transport: None,
-        headers: BTreeMap::new(),
+        ..ModelConnection::default()
     };
     let route = build_route(
         context,
@@ -2915,12 +3202,7 @@ mod tests {
             &ModelConnection {
                 base_url: None,
                 api_key: Some("ghu_bound_token".into()),
-                resource_name: None,
-                region: None,
-                profile: None,
-                endpoint: None,
-                headers: BTreeMap::new(),
-                transport: None,
+                ..ModelConnection::default()
             },
         )
         .expect("copilot binds");
@@ -3527,12 +3809,7 @@ mod tests {
             &ModelConnection {
                 base_url: Some("https://api.anthropic.test".into()),
                 api_key: Some("test-key".into()),
-                resource_name: None,
-                region: None,
-                profile: None,
-                endpoint: None,
-                headers: BTreeMap::new(),
-                transport: None,
+                ..ModelConnection::default()
             },
         )
         .expect("anthropic binds");
@@ -3762,6 +4039,7 @@ mod tests {
                         | ProtocolFamily::AlibabaResponses
                         | ProtocolFamily::MetaResponses
                         | ProtocolFamily::VercelGateway
+                        | ProtocolFamily::CloudflareAiGateway
                 ),
                 "`{package}` maps to a real family"
             );

@@ -268,9 +268,10 @@ impl IntegrationHost {
         .ok()?;
         Some(ProviderBinding {
             base_url: None,
-            // The resolver merges this into the model connection as the
-            // explicit access token; a config/env key still wins per v2
-            // precedence (apiKey cannot combine with accessToken upstream).
+            // G-356: the resolver folds this into the connection's
+            // `access_token` (the ref accessToken/oauth lane) — a
+            // configured apiKey wins per v2 precedence instead of being
+            // silently replaced, and both never combine.
             api_key: token,
             headers: BTreeMap::new(),
             chatgpt: None,

@@ -79,13 +79,62 @@ pub fn providers_from_config(loaded: &Loaded) -> ConfigProviders {
                 // `transport ?? "websocket"` AFTER config merges,
                 // openai.ts:262/xai.ts:102).
                 let transport = settings.transport;
+                // G-356/G-373: the protocol inputs beyond the endpoint
+                // (region/workspaceID for alibaba, accessToken/authToken
+                // for vertex/anthropic-compatible, the cloudflare
+                // gateway keys) ride the same connection overlay. The
+                // config `rest` record keeps `Option<Value>` values, so
+                // read them locally.
+                let str_setting =
+                    |key: &str| settings.rest.get(key).and_then(|v| v.as_ref()).and_then(Value::as_str).map(str::to_owned);
+                let region = str_setting("region");
+                let workspace_id = str_setting("workspaceID");
+                let access_token = str_setting("accessToken");
+                let auth_token = str_setting("authToken");
+                let account_id = str_setting("accountId");
+                let gateway_id = str_setting("gatewayId");
+                let gateway_api_key = str_setting("gatewayApiKey");
+                let gateway_options_set = ["metadata", "cacheTtl", "cacheKey", "skipCache", "collectLog"]
+                    .iter()
+                    .any(|key| settings.rest.get(*key).is_some_and(|value| value.is_some()));
+                let cloudflare_gateway = (account_id.is_some()
+                    || gateway_id.is_some()
+                    || gateway_api_key.is_some()
+                    || gateway_options_set)
+                    .then(|| crate::provider_catalog::facade::CloudflareGatewayConnection {
+                        account_id,
+                        gateway_id,
+                        gateway_api_key,
+                        metadata: settings.rest.get("metadata").cloned().flatten(),
+                        cache_ttl: settings
+                            .rest
+                            .get("cacheTtl")
+                            .and_then(|value| value.as_ref().and_then(Value::as_i64)),
+                        cache_key: str_setting("cacheKey"),
+                        skip_cache: settings
+                            .rest
+                            .get("skipCache")
+                            .and_then(|value| value.as_ref().and_then(Value::as_bool)),
+                        collect_log: settings
+                            .rest
+                            .get("collectLog")
+                            .and_then(|value| value.as_ref().and_then(Value::as_bool)),
+                    });
                 // CRED-A4: every apiKey/baseURL lands as a connection
                 // overlay for the provider id — apiKey-only entries are
                 // no longer dropped, and catalog-matching ids take the
                 // overlay without rebinding to openai-compatible. Later
                 // documents merge per key (v2 foldSettings /
                 // mergeOverlay, plugin/provider/configured.ts:14-18).
-                if base_url.is_some() || api_key.is_some() || transport.is_some() {
+                if base_url.is_some()
+                    || api_key.is_some()
+                    || transport.is_some()
+                    || region.is_some()
+                    || workspace_id.is_some()
+                    || access_token.is_some()
+                    || auth_token.is_some()
+                    || cloudflare_gateway.is_some()
+                {
                     let entry = out.connections.entry(id.clone()).or_default();
                     if base_url.is_some() {
                         entry.base_url.clone_from(&base_url);
@@ -95,6 +144,21 @@ pub fn providers_from_config(loaded: &Loaded) -> ConfigProviders {
                     }
                     if transport.is_some() {
                         entry.transport = transport;
+                    }
+                    if region.is_some() {
+                        entry.region = region;
+                    }
+                    if workspace_id.is_some() {
+                        entry.workspace_id = workspace_id;
+                    }
+                    if access_token.is_some() {
+                        entry.access_token = access_token;
+                    }
+                    if auth_token.is_some() {
+                        entry.auth_token = auth_token;
+                    }
+                    if cloudflare_gateway.is_some() {
+                        entry.cloudflare_gateway = cloudflare_gateway;
                     }
                 }
                 // The openai-compatible custom binding only covers
@@ -128,6 +192,10 @@ pub fn providers_from_config(loaded: &Loaded) -> ConfigProviders {
                                 // (withoutCredentials, opencode.ts:547-551);
                                 // baseURL is consumed by the endpoint ladder.
                                 settings: model.settings.as_ref().map(model_overlay_settings),
+                                // G-373④ — the model-level `package`
+                                // (config/provider.ts:83) overrides the
+                                // provider's at binding.
+                                package: model.package.clone(),
                                 ..CustomModel::default()
                             })
                             .collect()
@@ -138,6 +206,18 @@ pub fn providers_from_config(loaded: &Loaded) -> ConfigProviders {
                     name: provider.name.clone().unwrap_or_else(|| id.clone()),
                     base_url,
                     api_key,
+                    // G-373⑤ — `settings.authToken` (the
+                    // anthropic-compatible bearer credential).
+                    auth_token: settings
+                        .rest
+                        .get("authToken")
+                        .and_then(|value| value.as_ref().and_then(Value::as_str))
+                        .map(str::to_owned),
+                    // G-373④ — the provider-level `package` (config/
+                    // provider.ts:97) reaches the native-protocol-binding
+                    // lane (`custom_native_language_model`) instead of
+                    // being parsed-and-dropped.
+                    package: provider.package.clone(),
                     // Provider-level overlays (`providers.<id>.headers|body`)
                     // — merged under every model's own overlays.
                     headers: provider.headers.clone(),

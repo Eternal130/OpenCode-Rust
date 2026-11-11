@@ -106,12 +106,8 @@ fn keyed_connection(
         ModelConnection {
             base_url: base_url.map(str::to_string),
             api_key: Some("test-key".into()),
-            resource_name: None,
-            region: None,
-            profile: None,
-            endpoint: None,
-            headers: BTreeMap::new(),
             transport,
+            ..ModelConnection::default()
         },
     )])
 }
@@ -151,12 +147,8 @@ async fn nvidia_gets_billing_origin_default() {
         ModelConnection {
             base_url: None,
             api_key: Some("nv-key".into()),
-            resource_name: None,
-            region: None,
-            profile: None,
-            endpoint: None,
-            headers: BTreeMap::new(),
             transport: None,
+            ..ModelConnection::default()
         },
     )]);
     let resolved = resolve(None, connections, "nvidia", "baai/bge-m3");
@@ -176,12 +168,8 @@ async fn llmgateway_requires_registered_integration() {
         ModelConnection {
             base_url: None,
             api_key: Some("lgw-key".into()),
-            resource_name: None,
-            region: None,
-            profile: None,
-            endpoint: None,
-            headers: BTreeMap::new(),
             transport: None,
+            ..ModelConnection::default()
         },
     )]);
     let resolved = resolve(None, connections.clone(), "llmgateway", "grok-4-1-fast-reasoning");
@@ -208,12 +196,8 @@ async fn cerebras_package_gets_third_party_integration_header() {
             // no baseURL gate, any base exercises the package match.
             base_url: Some("https://api.cerebras.ai/v1".into()),
             api_key: Some("csk-key".into()),
-            resource_name: None,
-            region: None,
-            profile: None,
-            endpoint: None,
-            headers: BTreeMap::new(),
             transport: None,
+            ..ModelConnection::default()
         },
     )]);
     let resolved = resolve(None, connections, "cerebras", "qwen-3.8-27b");
@@ -232,12 +216,8 @@ async fn unmatched_providers_get_no_plugin_headers() {
         ModelConnection {
             base_url: None,
             api_key: Some("gsk-key".into()),
-            resource_name: None,
-            region: None,
-            profile: None,
-            endpoint: None,
-            headers: BTreeMap::new(),
             transport: None,
+            ..ModelConnection::default()
         },
     )]);
     let (host, _dir) = host().await;
@@ -277,15 +257,12 @@ async fn zenmux_catalog_baseurl_gets_pair_under_user_headers() {
         ModelConnection {
             base_url: None,
             api_key: Some("zenmux-key".into()),
-            resource_name: None,
-            region: None,
-            profile: None,
-            endpoint: None,
             headers: BTreeMap::from([(
                 "HTTP-Referer".to_string(),
                 "https://mine.example/".to_string(),
             )]),
             transport: None,
+            ..ModelConnection::default()
         },
     )]);
     let resolved = resolve(None, connections, "zenmux", "anthropic/claude-sonnet-4.5");
@@ -314,11 +291,8 @@ async fn websocket_transport_defaults() {
             base_url: None,
             api_key: Some("az-key".into()),
             resource_name: Some("my-resource".into()),
-            region: None,
-            profile: None,
-            endpoint: None,
-            headers: BTreeMap::new(),
             transport: None,
+            ..ModelConnection::default()
         },
     )]);
     let resolved = resolve(None, connections, "azure", "gpt-5.5");
@@ -333,12 +307,8 @@ async fn websocket_transport_defaults() {
         ModelConnection {
             base_url: Some("https://gateway.example.com/v1".into()),
             api_key: Some("az-key".into()),
-            resource_name: None,
-            region: None,
-            profile: None,
-            endpoint: None,
-            headers: BTreeMap::new(),
             transport: None,
+            ..ModelConnection::default()
         },
     )]);
     let resolved = resolve(None, connections, "azure", "gpt-5.5");
@@ -349,12 +319,8 @@ async fn websocket_transport_defaults() {
         ModelConnection {
             base_url: Some("https://my-resource.openai.azure.com/openai".into()),
             api_key: Some("az-key".into()),
-            resource_name: None,
-            region: None,
-            profile: None,
-            endpoint: None,
-            headers: BTreeMap::new(),
             transport: None,
+            ..ModelConnection::default()
         },
     )]);
     let resolved = resolve(None, connections, "azure", "gpt-5.5");
@@ -372,11 +338,8 @@ async fn websocket_transport_defaults() {
                 base_url: None,
                 api_key: Some("k".into()),
                 resource_name: (provider == "azure").then(|| "my-resource".to_string()),
-                region: None,
-                profile: None,
-                endpoint: None,
-                headers: BTreeMap::new(),
                 transport: Some(Transport::Http),
+                ..ModelConnection::default()
             },
         )]);
         let resolved = resolve(None, connections, provider, model);

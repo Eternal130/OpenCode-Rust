@@ -240,8 +240,19 @@ pub fn resolve_specifier(
     {
         return Some("@opencode/ai/providers/azure/chat".to_string());
     }
-    // Already a native entrypoint: accept exactly the builtin table.
-    BUILTIN_ENTRYPOINTS.contains(&npm.as_str()).then(|| npm.clone())
+    // Already a native entrypoint: accept exactly the builtin table,
+    // plus the direct-resolve `@opencode/ai/*` entrypoints the port has
+    // families for but the ref builtin map never listed (provider.ts
+    // loadPackage accepts any `@opencode/ai/` specifier when the module
+    // resolves — G-373③ xai's chat lane, G-373⑤ anthropic-compatible).
+    const PORTED_NON_BUILTIN: &[&str] = &[
+        "@opencode/ai/providers/anthropic-compatible",
+        "@opencode/ai/providers/xai/chat",
+    ];
+    if BUILTIN_ENTRYPOINTS.contains(&npm.as_str()) || PORTED_NON_BUILTIN.contains(&npm.as_str()) {
+        return Some(npm.clone());
+    }
+    None
 }
 
 fn host_lookup(provider_id: &str, npm: &str) -> Option<String> {

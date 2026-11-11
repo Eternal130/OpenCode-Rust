@@ -601,8 +601,7 @@ mod tests {
                 region: None,
                 profile: None,
                 endpoint: None,
-                headers: BTreeMap::new(),
-                transport: None,
+                ..ModelConnection::default()
             },
         );
         map
@@ -755,8 +754,7 @@ mod tests {
                 region: None,
                 profile: None,
                 endpoint: None,
-                headers: BTreeMap::new(),
-                transport: None,
+                ..ModelConnection::default()
             },
         );
         discovery.refresh(&connections).await;
@@ -802,8 +800,7 @@ mod tests {
                 region: None,
                 profile: None,
                 endpoint: None,
-                headers: BTreeMap::new(),
-                transport: None,
+                ..ModelConnection::default()
             },
         );
         discovery.refresh(&connections).await;
@@ -832,8 +829,7 @@ mod tests {
                 region: None,
                 profile: None,
                 endpoint: None,
-                headers: BTreeMap::new(),
-                transport: None,
+                ..ModelConnection::default()
             },
         );
         assert!(!discovery.refresh(&connections).await, "no change on outage");

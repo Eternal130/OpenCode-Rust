@@ -264,6 +264,14 @@ impl Credential {
         self.render(|value| vec![("authorization".to_string(), format!("Bearer {value}"))])
     }
 
+    /// `<name>: Bearer <secret>` (the credential-level
+    /// `Auth.bearerHeader` — cloudflare-ai-gateway passthrough auth).
+    #[must_use]
+    pub fn bearer_header(&self, name: impl Into<String>) -> Definition {
+        let name = name.into();
+        self.render(move |value| vec![(name.clone(), format!("Bearer {value}"))])
+    }
+
     pub fn header(&self, name: impl Into<String>) -> Definition {
         let name = name.into();
         self.render(move |value| vec![(name.clone(), value)])
