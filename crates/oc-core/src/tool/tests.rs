@@ -2608,3 +2608,407 @@ fn grep_match_text_clamps_at_utf16_code_units() {
     // A short ASCII line passes through untouched.
     assert_eq!(crate::tool::grep::clamp_match_text("let x = 1"), "let x = 1");
 }
+
+// ---------------------------------------------------------------------------
+// G-230 — declared output schemas: every builtin's REAL output validates
+// against its declared schema through the full pipeline (the pipeline's
+// own `encodeOutput` validation is implicit — a call that returns Ok
+// with `output` validated; these assertions re-validate explicitly).
+// Coverage map (18/18): see `g230_builtin_declared_outputs_validate`
+// (14 in this module) + subagent (tests_subagent.rs) + the two MCP
+// resource tools (mcp/tests.rs) + `execute` (codemode.rs).
+// ---------------------------------------------------------------------------
+
+mod g230 {
+    use super::{call, harness, Harness};
+    use crate::tool::registry::validate_input;
+    use serde_json::{json, Value};
+    use std::sync::Arc;
+
+    fn assert_validates(name: &str, schema: &Value, output: &Value) {
+        let issues = validate_input(schema, output);
+        assert!(
+            issues.is_empty(),
+            "{name} output {output} failed its declared schema: {issues:?}"
+        );
+    }
+
+    fn output_of<'a>(name: &str, result: &'a crate::location::ToolRunResult) -> &'a Value {
+        result.output.as_ref().unwrap_or_else(|| panic!("{name} must return declared output"))
+    }
+
+    #[tokio::test]
+    async fn g230_builtin_declared_outputs_validate() {
+        let harness = harness().await;
+        let tools = &harness.tools;
+
+        // write — {operation:"write", target, resource, existed}.
+        let result = call(
+            tools,
+            "write",
+            json!({ "path": "w.txt", "content": "line1\nline2\n" }),
+        )
+        .await
+        .expect("write executes");
+        assert_validates("write", &super::super::write::output_schema(), output_of("write", &result));
+
+        // edit — {files, replacements}.
+        let result = call(
+            tools,
+            "edit",
+            json!({ "path": "w.txt", "oldString": "line1", "newString": "lineA" }),
+        )
+        .await
+        .expect("edit executes");
+        assert_validates("edit", &super::super::edit::output_schema(), output_of("edit", &result));
+
+        // patch — {applied, files}.
+        let result = call(
+            tools,
+            "patch",
+            json!({ "patchText": "*** Begin Patch\n*** Update File: w.txt\n@@\n-line2\n+lineB\n*** End Patch" }),
+        )
+        .await
+        .expect("patch executes");
+        assert_validates("patch", &super::super::patch::output_schema(), output_of("patch", &result));
+
+        // read — the three union arms (file / text-page / list-page).
+        let result =
+            call(tools, "read", json!({ "path": "w.txt" })).await.expect("read file executes");
+        assert_validates("read:file", &super::super::read::output_schema(), output_of("read", &result));
+        let result = call(
+            tools,
+            "read",
+            json!({ "path": "w.txt", "offset": 1, "limit": 1 }),
+        )
+        .await
+        .expect("read text-page executes");
+        assert_validates(
+            "read:text-page",
+            &super::super::read::output_schema(),
+            output_of("read", &result),
+        );
+        let result =
+            call(tools, "read", json!({ "path": "." })).await.expect("read list-page executes");
+        assert_validates(
+            "read:list-page",
+            &super::super::read::output_schema(),
+            output_of("read", &result),
+        );
+
+        // glob + grep — through the ripgrep shim (relative paths).
+        let shim = super::install_rg_shim("w.txt\n");
+        std::env::set_var("OPENCODE_RG_PATH", &shim);
+        let result =
+            call(tools, "glob", json!({ "pattern": "*.txt" })).await.expect("glob executes");
+        assert_validates("glob", &super::super::glob::output_schema(), output_of("glob", &result));
+
+        let fixture = "w.txt:2:0:lineB:lineB,0,5\n";
+        let shim = super::install_rg_shim(fixture);
+        std::env::set_var("OPENCODE_RG_PATH", &shim);
+        let result = call(
+            tools,
+            "grep",
+            json!({ "pattern": "lineB", "literal": true }),
+        )
+        .await
+        .expect("grep executes");
+        assert_validates("grep", &super::super::grep::output_schema(), output_of("grep", &result));
+
+        // shell — foreground `printf` (exit present, output text,
+        // `shellID` wire key comes from the serde rename).
+        let shell = g230_shell_tool(&harness).await;
+        crate::tool::register_builtin(
+            tools,
+            &std::sync::Arc::new(crate::hooks::HookRegistry::new()),
+            &harness.services,
+            shell,
+        )
+        .expect("register shell");
+        let result =
+            call(tools, "shell", json!({ "command": "echo hi" })).await.expect("shell executes");
+        let output = output_of("shell", &result);
+        assert_validates("shell", &super::super::shell::output_schema(), output);
+        assert_eq!(output["output"], "hi\n");
+        assert!(output.get("shellID").is_none(), "completed foreground call carries no shellID");
+        assert!(output.get("shell_id").is_none(), "wire bug: snake_case shell_id leaked");
+
+        // skill — {name, directory, output}.
+        let skill = crate::tool::skill::tool(std::sync::Arc::new(
+            crate::tool::skill::MemorySkillTable {
+                skills: vec![oc_schema::skill::Skill {
+                    id: oc_schema::id::SkillId::parse("g230"),
+                    name: oc_schema::id::SkillName::parse("G230"),
+                    description: None,
+                    auto_invoke: None,
+                    path: oc_schema::common::AbsolutePath::parse(
+                        harness.dir().join("SKILL.md").to_str().expect("utf8"),
+                    ),
+                    content: "# hello".to_string(),
+                }],
+            },
+        ));
+        crate::tool::register_builtin(
+            tools,
+            &std::sync::Arc::new(crate::hooks::HookRegistry::new()),
+            &harness.services,
+            skill,
+        )
+        .expect("register skill");
+        std::fs::write(harness.dir().join("SKILL.md"), "# hello").expect("skill file");
+        let result =
+            call(tools, "skill", json!({ "id": "g230" })).await.expect("skill executes");
+        assert_validates("skill", &super::super::skill::output_schema(), output_of("skill", &result));
+
+        // models — real catalog query through the pipeline.
+        let models = crate::tool::opencode_tools::models_tool(
+            g230_catalog().await,
+            crate::session::store::SessionStore::new(crate::database::Database::open_in_memory().await.expect("db")),
+        );
+        crate::tool::register_builtin(
+            tools,
+            &std::sync::Arc::new(crate::hooks::HookRegistry::new()),
+            &harness.services,
+            models,
+        )
+        .expect("register models");
+        let result = call(tools, "opencode_models", json!({})).await.expect("models executes");
+        assert_validates(
+            "models",
+            &crate::tool::opencode_tools::models_output_schema(),
+            output_of("models", &result),
+        );
+    }
+
+    async fn g230_shell_tool(_harness: &Harness) -> crate::tool::BuiltinTool {
+        let ids: Arc<dyn oc_util::determinism::IdGen> =
+            Arc::new(oc_util::determinism::SequentialIdGen::new());
+        let clock: Arc<dyn oc_util::determinism::Clock> =
+            Arc::new(oc_util::determinism::SystemClock);
+        let dir = tempfile::tempdir_in("/tmp/opencode").expect("shell data dir");
+        let shell = crate::shell::Shell::new(dir.path(), "proj_g230", ids.clone(), clock.clone());
+        // Keep the capture dir alive for the process lifetime (the
+        // reader task writes the .out file here; a dropped tempdir
+        // deletes it mid-run and the child dies with SIGPIPE).
+        std::mem::forget(dir);
+        let jobs = crate::jobs::Jobs::new(
+            crate::database::Database::open_in_memory().await.expect("db"),
+            ids,
+            clock,
+        );
+        crate::tool::shell::tool(std::sync::Arc::new(crate::tool::shell::ShellToolServices {
+            shell,
+            jobs,
+            env: crate::env::SessionEnv::default(),
+            portable_scanner: false,
+            config_shell: Some("sh".into()),
+            synthetic: std::sync::Arc::new(crate::tool::shell::NoopSynthetic),
+            progress: None,
+        }))
+    }
+
+    async fn g230_catalog() -> crate::provider_catalog::catalog::Catalog {
+        crate::provider_catalog::catalog::Catalog::parse(
+            &serde_json::to_string(&json!({
+                "mine": {
+                    "name": "Mine", "id": "mine",
+                    "models": {
+                        "new": {
+                            "id": "new", "name": "Mine New", "family": "mine",
+                            "release_date": "2024-06-01",
+                            "attachment": false, "reasoning": false, "tool_call": false,
+                            "cost": { "input": 1, "output": 2, "cache_read": 0.5, "cache_write": 0 },
+                            "limit": { "context": 1000, "output": 10 }
+                        }
+                    }
+                }
+            }))
+            .expect("catalog json"),
+        )
+        .expect("catalog")
+    }
+
+    /// question — the form is settled from the test side; the declared
+    /// `answers` (array of string arrays) validates.
+    #[tokio::test]
+    async fn g230_question_declared_output_validates() {
+        let harness = harness().await;
+        let forms = crate::forms::Forms::new(
+            Arc::new(oc_util::determinism::SequentialIdGen::new()),
+            Arc::new(oc_util::determinism::SystemClock),
+        );
+        crate::tool::register_builtin(
+            &harness.tools,
+            &std::sync::Arc::new(crate::hooks::HookRegistry::new()),
+            &harness.services,
+            crate::tool::question::tool(forms.clone()),
+        )
+        .expect("register question");
+        let tools = harness.tools.clone();
+        let spawned = tokio::spawn(async move {
+            call(
+                &tools,
+                "question",
+                json!({ "questions": [{ "question": "Pick", "header": "Pick", "options": [
+                    { "label": "A", "description": "a" }, { "label": "B", "description": "b" }
+                ]}] }),
+            )
+            .await
+        });
+        // Settle the pending form with q0 = "A".
+        let form_id = loop {
+            let pending = forms.list(Some(super::SESSION));
+            if let Some(info) = pending.first() {
+                break info.id.clone();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        };
+        let mut answer = std::collections::BTreeMap::new();
+        answer.insert("q0".to_string(), oc_schema::form::FormValue::String("A".to_string()));
+        forms.reply(&form_id, answer).await.expect("reply");
+        let result = spawned.await.expect("join").expect("question executes");
+        assert_validates(
+            "question",
+            &super::super::question::output_schema(),
+            output_of("question", &result),
+        );
+    }
+
+    /// websearch — a single fixed provider auto-selects (no form); the
+    /// required nested `time` object validates.
+    #[tokio::test]
+    async fn g230_websearch_declared_output_validates() {
+        struct Fixed;
+        #[async_trait::async_trait]
+        impl crate::tool::websearch_providers::SearchProvider for Fixed {
+            fn id(&self) -> &str {
+                "exa"
+            }
+            fn name(&self) -> &str {
+                "Exa"
+            }
+            async fn execute(
+                &self,
+                _query: &str,
+            ) -> Result<Vec<oc_schema::misc::WebSearchResult>, crate::tool::websearch_providers::ProviderError> {
+                Ok(vec![oc_schema::misc::WebSearchResult {
+                    url: "https://example.com".into(),
+                    title: Some("Example".into()),
+                    content: None,
+                    time: oc_schema::misc::WebSearchResultTime { published: Some(1_700_000_000_000.0) },
+                }])
+            }
+        }
+        let harness = harness().await;
+        let db = crate::database::Database::open_in_memory().await.expect("db");
+        let forms = crate::forms::Forms::new(
+            Arc::new(oc_util::determinism::SequentialIdGen::new()),
+            Arc::new(oc_util::determinism::SystemClock),
+        );
+        let search = crate::tool::websearch::WebSearch::new(db, vec![Arc::new(Fixed)])
+            .with_config_selection(Some(crate::tool::websearch::Selection::Provider("exa".into())));
+        let execute = crate::tool::websearch::WebSearchExecute::new(Arc::new(search), forms);
+        crate::tool::register_builtin(
+            &harness.tools,
+            &std::sync::Arc::new(crate::hooks::HookRegistry::new()),
+            &harness.services,
+            crate::tool::websearch::tool(Arc::new(execute)),
+        )
+        .expect("register websearch");
+        let result = call(&harness.tools, "websearch", json!({ "query": "rust" }))
+            .await
+            .expect("websearch executes");
+        assert_validates(
+            "websearch",
+            &super::super::websearch::output_schema(),
+            output_of("websearch", &result),
+        );
+    }
+
+    /// webfetch — hermetic: a one-shot local HTTP server answers the
+    /// fetch, so the REAL tool path runs end to end.
+    #[tokio::test]
+    async fn g230_webfetch_declared_output_validates() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut buf = [0u8; 4096];
+            use std::io::{Read, Write};
+            let _ = stream.read(&mut buf); // drain the request head
+            let body = "hello world";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+        let harness = harness().await;
+        crate::tool::register_builtin(
+            &harness.tools,
+            &std::sync::Arc::new(crate::hooks::HookRegistry::new()),
+            &harness.services,
+            crate::tool::webfetch::tool(),
+        )
+        .expect("register webfetch");
+        let result = call(
+            &harness.tools,
+            "webfetch",
+            json!({ "url": format!("http://127.0.0.1:{port}/"), "format": "text" }),
+        )
+        .await
+        .expect("webfetch executes");
+        assert_validates(
+            "webfetch",
+            &super::super::webfetch::output_schema(),
+            output_of("webfetch", &result),
+        );
+    }
+
+    /// session_rename — a staged session row, renamed through the
+    /// pipeline; `{sessionID, title}` validates.
+    #[tokio::test]
+    async fn g230_session_rename_declared_output_validates() {
+        let harness = harness().await;
+        let db = crate::database::Database::open_in_memory().await.expect("db");
+        let bus = crate::bus::Bus::new(db.clone(), crate::bus::BusOptions::deterministic());
+        {
+            let project =
+                crate::database::schema::ProjectRow::new("proj_g230", "/tmp/opencode", None)
+                    .expect("project");
+            db.transaction(move |tx| crate::database::schema::ProjectRow::insert(tx, &project))
+                .await
+                .expect("project insert");
+        }
+        let row = crate::database::schema::SessionRow::new(
+            "ses_g230", "proj_g230", "/tmp/opencode", "slug", "1",
+        )
+        .expect("row");
+        db.transaction(move |tx| crate::database::schema::SessionRow::insert(tx, &row))
+            .await
+            .expect("insert");
+        crate::tool::register_builtin(
+            &harness.tools,
+            &std::sync::Arc::new(crate::hooks::HookRegistry::new()),
+            &harness.services,
+            crate::tool::opencode_tools::session_rename_tool(
+                crate::session::store::SessionStore::new(db),
+                bus,
+            ),
+        )
+        .expect("register rename");
+        let result = call(
+            &harness.tools,
+            "opencode_session_rename",
+            json!({ "sessionID": "ses_g230", "title": "Renamed" }),
+        )
+        .await
+        .expect("rename executes");
+        assert_validates(
+            "session_rename",
+            &crate::tool::opencode_tools::rename_output_schema(),
+            output_of("session_rename", &result),
+        );
+    }
+}

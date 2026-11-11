@@ -26,11 +26,28 @@ pub fn schema() -> Value {
     })
 }
 
+/// The DECLARED output schema (write.ts:30-35 `Output`).
+#[must_use]
+pub fn output_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "operation": { "const": "write" },
+            "target": { "type": "string" },
+            "resource": { "type": "string" },
+            "existed": { "type": "boolean" }
+        },
+        "required": ["operation", "target", "resource", "existed"],
+        "additionalProperties": false
+    })
+}
+
 pub fn tool(_services: &std::sync::Arc<ToolServices>) -> BuiltinTool {
     BuiltinTool {
         name: "write",
         description: description(),
         input: schema(),
+        output: output_schema(),
         permission: Some("edit"),
         codemode: false,
         namespace: None,

@@ -184,11 +184,27 @@ impl ToolExecuteWithContext for SkillExecute {
     }
 }
 
+/// The DECLARED output schema (skill.ts:16-20 `Output`).
+#[must_use]
+pub fn output_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string" },
+            "directory": { "type": "string" },
+            "output": { "type": "string" }
+        },
+        "required": ["name", "directory", "output"],
+        "additionalProperties": false
+    })
+}
+
 /// The skill builtin registration.
 pub fn tool(table: Arc<dyn SkillTable>) -> BuiltinTool {
     BuiltinTool {
         name: "skill",
         description: description(),
+        output: output_schema(),
         input: serde_json::json!({
             "type": "object",
             "properties": {

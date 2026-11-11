@@ -508,6 +508,20 @@ impl ToolExecuteWithContext for ModelsExecute {
     }
 }
 
+/// The DECLARED output schema (opencode.ts:16 `RenameOutput`).
+#[must_use]
+pub fn rename_output_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "sessionID": { "type": "string" },
+            "title": { "type": "string" }
+        },
+        "required": ["sessionID", "title"],
+        "additionalProperties": false
+    })
+}
+
 /// `session_rename` registration (namespace `opencode`).
 pub fn session_rename_tool(
     store: crate::session::store::SessionStore,
@@ -515,6 +529,7 @@ pub fn session_rename_tool(
 ) -> BuiltinTool {
     BuiltinTool {
         name: "session_rename",
+        output: rename_output_schema(),
         description: "Rename a session, or omit sessionID to rename the current session. Use a short, specific title that summarizes the work being done.".into(),
         input: serde_json::json!({
             "type": "object",
@@ -531,10 +546,25 @@ pub fn session_rename_tool(
     }
 }
 
+/// The DECLARED output schema (opencode.ts:25 `MoveOutput`).
+#[must_use]
+pub fn move_output_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "sessionID": { "type": "string" },
+            "directory": { "type": "string" }
+        },
+        "required": ["sessionID", "directory"],
+        "additionalProperties": false
+    })
+}
+
 /// `session_move` registration (namespace `opencode`).
 pub fn session_move_tool(deps: SessionMoveServices) -> BuiltinTool {
     BuiltinTool {
         name: "session_move",
+        output: move_output_schema(),
         description: "Move a session to another directory, or omit sessionID to move the current session. The current session moves at the next safe boundary; do not run destination-dependent tools in the same execute call.".into(),
         input: serde_json::json!({
             "type": "object",
@@ -551,6 +581,79 @@ pub fn session_move_tool(deps: SessionMoveServices) -> BuiltinTool {
     }
 }
 
+/// The DECLARED output schema (opencode.ts:45-66 `ModelsOutput`; `cost`
+/// is `Model.Info.fields.cost` — `Schema.Array(Model.Cost)`, and
+/// `Model.Cost.tier.type` is the const `"context"`).
+#[must_use]
+pub fn models_output_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "providers": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string" },
+                        "name": { "type": "string" },
+                        "models": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": { "type": "string" },
+                                    "name": { "type": "string" },
+                                    "released": { "type": "number" },
+                                    "variants": { "type": "array", "items": { "type": "string" } },
+                                    "cost": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "tier": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "type": { "const": "context" },
+                                                        "size": { "type": "integer" }
+                                                    },
+                                                    "required": ["type", "size"],
+                                                    "additionalProperties": false
+                                                },
+                                                "input": { "type": "number" },
+                                                "output": { "type": "number" },
+                                                "cache": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "read": { "type": "number" },
+                                                        "write": { "type": "number" }
+                                                    },
+                                                    "required": ["read", "write"],
+                                                    "additionalProperties": false
+                                                }
+                                            },
+                                            "required": ["input", "output", "cache"],
+                                            "additionalProperties": false
+                                        }
+                                    },
+                                    "status": { "enum": ["alpha", "beta", "deprecated", "active"] }
+                                },
+                                "required": ["id", "name", "released", "variants", "cost", "status"],
+                                "additionalProperties": false
+                            }
+                        }
+                    },
+                    "required": ["id", "name", "models"],
+                    "additionalProperties": false
+                }
+            },
+            "total": { "type": "integer" },
+            "next": { "type": ["integer", "null"] }
+        },
+        "required": ["providers", "total", "next"],
+        "additionalProperties": false
+    })
+}
+
 /// `models` registration.
 pub fn models_tool(
     catalog: crate::provider_catalog::catalog::Catalog,
@@ -558,6 +661,7 @@ pub fn models_tool(
 ) -> BuiltinTool {
     BuiltinTool {
         name: "models",
+        output: models_output_schema(),
         description: "Search the models available to use. Use this to turn a model name the user mentions into an exact reference before running a subagent on it. Check your own provider first.".into(),
         input: serde_json::json!({
             "type": "object",

@@ -165,6 +165,11 @@ pub fn register(
     }
     let mut registration =
         ToolRegistration::new(tool.name, tool.description.clone(), tool.input.clone());
+    // runtime.ts:24-25 — a declared output rides the model-facing
+    // definition (`outputSchema`). A `Null` schema means undeclared
+    // (test/inline leaves that never return an output).
+    let output_schema = if tool.output.is_null() { None } else { Some(tool.output.clone()) };
+    registration.output = output_schema.clone();
     // `options.namespace` survives registration (v2 editor.add keys the
     // table by effectiveName and keeps options.namespace — opencode.ts's
     // three tools advertise `opencode_*` and the Code Mode catalog lists
@@ -175,28 +180,29 @@ pub fn register(
     state.register(registration);
 
     let effective = effective_name(tool.namespace, tool.name);
-    let pipeline = PipelineExecutor {
-        name: effective.clone(),
-        schema: tool.input,
-        // G-230 — no builtin declares an output schema yet (see the
-        // `output_schema` field doc): the mcp.ts:48 accept-all fallback
-        // applies until the ref plugin-tool Output declarations are
-        // ported.
-        output_schema: None,
-        leaf: tool.execute,
-        services: Arc::clone(services),
-        hooks: Arc::clone(hooks),
-    };
+    // G-230 — every builtin DECLARES its output schema (the ref
+    // plugin-tool Output declarations, edit.ts:127 / glob.ts:61 / …):
+    // the declared schema enters `encodeOutput` via the with-output
+    // constructor (runtime.ts:110-132). A `Null` schema stays the
+    // undeclared accept-all scope (test/inline leaves).
+    let pipeline = pipeline_executor_with_output(
+        &effective,
+        tool.input,
+        output_schema,
+        tool.execute,
+        services,
+        hooks,
+    );
     // G-291 — the executor table is keyed by the SAME effective name
     // as the registration table (tool.ts:188 `editor.tools.set(id, …)`).
-    state.register_executor(effective, Arc::new(pipeline));
+    state.register_executor(effective, pipeline);
     Ok(())
 }
 
-/// The pipeline executor around an arbitrary leaf (the
-/// [`super::codemode`] surface: the synthesized `execute` tool skips
-/// [`registration_error`]'s reserved-name rule the way v2's snapshot
-/// synthesizes it outside the editor path).
+/// The pipeline executor around an arbitrary leaf with NO declared
+/// output (the undeclared scope: no `output` key passes through, an
+/// `output` key DIES — runtime.ts:45-46). Used by the g230 tests.
+#[cfg(test)]
 pub(crate) fn pipeline_executor(
     name: &str,
     schema: serde_json::Value,
@@ -239,22 +245,13 @@ struct PipelineExecutor {
     name: String,
     schema: serde_json::Value,
     /// G-230 — the tool's DECLARED output schema (v2 `output`,
-    /// runtime.ts:110 `encodeOutput`). `None` scopes the port exactly
-    /// like the ref's MCP surface: `output: tool.outputSchema ?? {}`
-    /// (mcp.ts:48) — the effective schema is accept-all `{}`, the
-    /// output passes through unvalidated, and runtime.ts:46's die
-    /// (`"Tool result declared output without an output schema"`)
-    /// never fires for these tools. Every builtin today is in that
-    /// state: ref's plugin-tool family DECLARES its Output schemas
-    /// (tool/plugin/edit.ts:127, glob.ts:61, …) but the Rust port has
-    /// not ported those declarations — the compat survey found 14
-    /// builtin tools returning `output` with no declaration, so the
-    /// die rule would break all of them (the fallback is the honest
-    /// scope until the declarations land). The MCP bridge is the one
-    /// surface that DOES declare: a server-declared `outputSchema`
-    /// flows through `pipeline_executor_with_output` (G-242, the
-    /// mcp.ts:48 `tool.outputSchema` half), undeclared stays `None`
-    /// (the `?? {}` accept-all fallback).
+    /// runtime.ts:110 `encodeOutput`). `None` is the undeclared scope:
+    /// runtime.ts:45-46 DIES when the tool still returns an `output`
+    /// key. Every BUILTIN declares its output (the ref plugin-tool
+    /// Output declarations, ported as `BuiltinTool::output`); the MCP
+    /// bridge mirrors mcp.ts:48 `output: tool.outputSchema ?? {}` —
+    /// a server-undeclared tool is declared against the accept-all
+    /// `{}`, never `None` (G-242).
     output_schema: Option<serde_json::Value>,
     leaf: Arc<dyn super::ToolExecuteWithContext>,
     services: Arc<ToolServices>,
@@ -382,10 +379,13 @@ impl PipelineExecutor {
         //   wording from the standard-schema branch, :119).
         // * DECLARED + missing → `Tool did not return its declared
         //   output` (runtime.ts:53).
-        // * UNDECLARED → the mcp.ts:48 `?? {}` accept-all fallback
-        //   (see `output_schema`): pass through unvalidated;
-        //   runtime.ts:46's die branch is scoped out for this port's
-        //   builtin surface.
+        // * UNDECLARED → runtime.ts:46's die rule: an undeclared tool
+        //   that returns an `output` key is a contract violation and
+        //   fails the call (ref dies; this port surfaces it as the
+        //   standard ToolRunFailure::Error shape — Rust has no defect
+        //   variant, a bounded deviation).
+        // * UNDECLARED + no output → the mcp.ts:48 `?? {}` accept-all
+        //   fallback (see `output_schema`): pass through unvalidated.
         let outcome = match (&self.output_schema, outcome) {
             (Some(output_schema), mut outcome) => {
                 let Some(output) = outcome.output.take() else {
@@ -411,11 +411,19 @@ impl PipelineExecutor {
                 outcome.output = Some(output);
                 outcome
             }
-            // UNDECLARED → the mcp.ts:48 `?? {}` accept-all fallback
-            // (see `output_schema`): pass through unvalidated;
-            // runtime.ts:46's die branch is scoped out for this port's
-            // builtin surface.
-            (None, outcome) => outcome,
+            // UNDECLARED → runtime.ts:45-46: `"output" in result` on an
+            // undeclared tool DIES in ref ("Tool result declared output
+            // without an output schema"); surfaced here as the standard
+            // ToolRunFailure::Error shape (Rust has no defect variant —
+            // bounded deviation). No output key keeps the mcp.ts:48
+            // `?? {}` accept-all pass-through.
+            (None, outcome) => match outcome.output {
+                Some(_) => Err(ToolRunFailure::Error {
+                    message: "Tool result declared output without an output schema".to_owned(),
+                    metadata: None,
+                }),
+                None => Ok(outcome),
+            }?,
         };
         // tool.execute.after (result mutation). The event carries the
         // declared output when present (tool.ts:142-146:
@@ -860,11 +868,11 @@ mod tests {
         assert_eq!(message, "Tool did not return its declared output");
     }
 
-    /// The UNDECLARED scope (established in `output_schema`'s doc): the
-    /// mcp.ts:48 `?? {}` accept-all fallback — runtime.ts:46's die
-    /// branch does NOT fire for the port's builtin surface (no builtin
-    /// declares an output schema today; the compat survey found 14
-    /// returning output). The output passes through unvalidated.
+    /// The UNDECLARED scope — runtime.ts:45-46's die rule: an
+    /// undeclared tool that returns an `output` key fails the call
+    /// with ref's EXACT text ("Tool result declared output without an
+    /// output schema"); surfaced as the standard ToolRunFailure::Error
+    /// shape (Rust has no defect variant — bounded deviation).
     #[tokio::test]
     async fn g230_undeclared_output_passes_through_fallback() {
         let harness = crate::tool::tests::harness().await;
@@ -881,12 +889,38 @@ mod tests {
             &harness.services,
             &hooks,
         );
-        let result = executor.execute(&json!({})).await.expect("fallback accepts");
-        assert_eq!(result.output, Some(json!({ "count": "many" })));
+        let failure = executor.execute(&json!({})).await.unwrap_err();
+        let ToolRunFailure::Error { message, .. } = &failure else {
+            panic!("undeclared output must be a plain error: {failure:?}");
+        };
+        assert_eq!(message, "Tool result declared output without an output schema");
+    }
+
+    /// The undeclared + NO-output scope keeps the mcp.ts:48 `?? {}`
+    /// accept-all pass-through (the MCP fallback face).
+    #[tokio::test]
+    async fn g230_undeclared_without_output_passes_through() {
+        let harness = crate::tool::tests::harness().await;
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        let executor = pipeline_executor(
+            "g230.no-output",
+            json!({}),
+            Arc::new(FixedLeaf {
+                outcome: ToolOutcome {
+                    content: vec![oc_schema::tool::Content::Text { text: "ok".into() }],
+                    ..Default::default()
+                },
+            }),
+            &harness.services,
+            &hooks,
+        );
+        let result = executor.execute(&json!({})).await.expect("no output passes through");
+        assert_eq!(result.output, None);
     }
 
     /// The builtin regression: an output-returning builtin (glob —
-    /// undeclared, the fallback scope) still executes end to end.
+    /// now DECLARED, G-230) still executes end to end and its output
+    /// validates against the declared schema.
     #[tokio::test]
     async fn g230_builtin_returning_output_still_executes() {
         let harness = crate::tool::tests::harness().await;
@@ -902,8 +936,8 @@ mod tests {
         let result =
             crate::tool::tests::call(&harness.tools, "glob", json!({ "pattern": "**/*.rs" }))
                 .await
-                .expect("glob executes");
-        let output = result.output.expect("glob returns output (undeclared → fallback)");
+                .expect("glob executes (declared schema validates)");
+        let output = result.output.expect("glob returns declared output");
         assert!(output.to_string().contains("lib.rs"), "glob output: {output}");
     }
 }

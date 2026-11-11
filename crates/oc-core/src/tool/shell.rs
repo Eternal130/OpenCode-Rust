@@ -118,7 +118,8 @@ pub struct ShellToolOutput {
     pub exit: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signal: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// ref wire key is `shellID` (shell.ts:65).
+    #[serde(rename = "shellID", skip_serializing_if = "Option::is_none")]
     pub shell_id: Option<String>,
     pub truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -365,7 +366,6 @@ impl ToolExecuteWithContext for ShellExecute {
             let shell = deps.shell.clone();
             let info_for_run = info.clone();
             let final_timeout_for_run = final_timeout;
-            let shell_id = info.id.to_string();
             let run: crate::jobs::Run = Box::pin(async move {
                 let result = shell.result(info_for_run).await;
                 let Some(capture) = result.capture else {
@@ -378,7 +378,10 @@ impl ToolExecuteWithContext for ShellExecute {
                 let mut tool_output = ShellToolOutput {
                     exit: output.exit,
                     signal: output.signal.clone(),
-                    shell_id: Some(shell_id),
+                    // Ref's foreground run body (shell.ts:226-234) is
+                    // `ShellResult.output(result) + status` — NO shellID;
+                    // only `backgroundResult` (:95-99) carries it.
+                    shell_id: None,
                     truncated: output.truncated,
                     timeout: output.timeout,
                     output: output.output.clone(),
@@ -627,6 +630,26 @@ fn tool_result(output: &ShellToolOutput) -> ToolOutcome {
     }
 }
 
+/// The DECLARED output schema (shell.ts:62-74 `Output` —
+/// StructuredOutput + `output` + optional `status`).
+#[must_use]
+pub fn output_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "exit": { "type": "number" },
+            "signal": { "type": "string" },
+            "shellID": { "type": "string" },
+            "truncated": { "type": "boolean" },
+            "timeout": { "type": "boolean" },
+            "output": { "type": "string" },
+            "status": { "enum": ["completed", "running"] }
+        },
+        "required": ["truncated", "output"],
+        "additionalProperties": false
+    })
+}
+
 /// The shell builtin registration. The description is registered WITHOUT
 /// the shell name (REF shell.ts:193 `description()`); the resolved shell
 /// arrives later — the engine's session context/compaction/generate hooks
@@ -635,6 +658,7 @@ pub fn tool(deps: Arc<ShellToolServices>) -> BuiltinTool {
     BuiltinTool {
         name: NAME,
         description: description(None),
+        output: output_schema(),
         input: serde_json::json!({
             "type": "object",
             "properties": {

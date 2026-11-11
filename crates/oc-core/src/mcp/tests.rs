@@ -3736,3 +3736,78 @@ mod g223_classification {
         assert!(!client::session_expired(&error, false));
     }
 }
+
+// ---------------------------------------------------------------------------
+// G-230 — the two MCP resource builtins declare their outputs; real
+// executions through the pipeline validate against the schemas.
+// ---------------------------------------------------------------------------
+
+async fn g230_resources_fixture()
+-> (McpRegistry, Arc<crate::location::ToolRegistryState>, Arc<crate::hooks::HookRegistry>, crate::permission::Permission) {
+    let (_db, bus) = test_bus().await;
+    let mut servers = BTreeMap::new();
+    servers.insert("alpha".to_string(), local_config());
+    let script = Script::new();
+    script.resources.lock().push(serde_json::json!({
+        "uri": "mock://text/1", "name": "Text one", "mimeType": "text/plain",
+        "description": "A text resource"
+    }));
+    script.templates.lock().push(serde_json::json!({
+        "uriTemplate": "mock://doc/{id}", "name": "Docs", "mimeType": "text/plain",
+    }));
+    let registry = registry_with(&bus, scripted_connector(move || script.clone()), servers);
+    registry.reconcile().await;
+    wait_for_status(&registry, "alpha", Status::Connected).await;
+    let tools = Arc::new(crate::location::ToolRegistryState::new());
+    let hooks = Arc::new(crate::hooks::HookRegistry::new());
+    let (permission, _rx) = test_permission_with_rules(&bus, Some(allow_all_rules()));
+    let services = test_services(&permission);
+    crate::tool::mcp_resource::register(
+        &tools,
+        &hooks,
+        &services,
+        registry.clone(),
+        permission.clone(),
+    )
+    .expect("register resource tools");
+    (registry, tools, hooks, permission)
+}
+
+#[tokio::test]
+async fn g230_list_mcp_resources_declared_output_validates() {
+    let (registry, tools, _hooks, _permission) = g230_resources_fixture().await;
+    let executor = tools.executor("opencode_list_mcp_resources").expect("executor");
+    let result = executor
+        .execute_with_context(&serde_json::json!({}), &g242_context())
+        .await
+        .expect("list executes");
+    let output = result.output.expect("list returns declared output");
+    let issues = crate::tool::registry::validate_input(
+        &crate::tool::mcp_resource::list_output_schema(),
+        &output,
+    );
+    assert!(issues.is_empty(), "list output {output} failed schema: {issues:?}");
+    assert_eq!(output["resources"][0]["uri"], "mock://text/1");
+    registry.shutdown().await;
+}
+
+#[tokio::test]
+async fn g230_read_mcp_resource_declared_output_validates() {
+    let (registry, tools, _hooks, _permission) = g230_resources_fixture().await;
+    let executor = tools.executor("opencode_read_mcp_resource").expect("executor");
+    let result = executor
+        .execute_with_context(
+            &serde_json::json!({ "server": "alpha", "uri": "mock://text/1" }),
+            &g242_context(),
+        )
+        .await
+        .expect("read executes");
+    let output = result.output.expect("read returns declared output");
+    let issues = crate::tool::registry::validate_input(
+        &crate::tool::mcp_resource::read_output_schema(),
+        &output,
+    );
+    assert!(issues.is_empty(), "read output {output} failed schema: {issues:?}");
+    assert_eq!(output["contents"][0]["text"], "resource body");
+    registry.shutdown().await;
+}

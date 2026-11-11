@@ -501,11 +501,15 @@ pub struct SessionModelRequest {
 fn tool_definition(registration: &crate::location::ToolRegistration) -> ToolDefinition {
     // `definition(tool).name = effectiveName(tool)` (runtime.ts:22 — the
     // model sees `opencode_session_move`, not the bare registration key).
-    ToolDefinition::new(
+    let mut definition = ToolDefinition::new(
         registration.effective_name(),
         registration.description.clone(),
         registration.input.clone(),
-    )
+    );
+    // runtime.ts:24-25 — a declared output rides the definition as
+    // `outputSchema` (provider wire, ai/tool.ts:229).
+    definition.output_schema = registration.output.clone();
+    definition
 }
 
 impl SessionModelRequest {

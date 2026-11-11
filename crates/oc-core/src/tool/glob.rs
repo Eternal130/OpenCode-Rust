@@ -28,11 +28,30 @@ pub fn schema() -> Value {
     })
 }
 
+/// The DECLARED output schema (glob.ts:30 `Output` —
+/// `Schema.Array(FileSystem.Entry)`).
+#[must_use]
+pub fn output_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "path": { "type": "string" },
+                "type": { "enum": ["file", "directory"] }
+            },
+            "required": ["path", "type"],
+            "additionalProperties": false
+        }
+    })
+}
+
 pub fn tool(_services: &std::sync::Arc<ToolServices>) -> BuiltinTool {
     BuiltinTool {
         name: "glob",
         description: description(),
         input: schema(),
+        output: output_schema(),
         permission: None,
         codemode: false,
         namespace: None,

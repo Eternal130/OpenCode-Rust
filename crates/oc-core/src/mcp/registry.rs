@@ -2106,20 +2106,29 @@ impl McpToolBridge {
             registration.namespace = Some(namespace(&tool.server));
             registration.permission = Some(action.clone());
             registration.codemode = tool.codemode_enabled();
+            // runtime.ts:24-25 — the output rides the model-facing
+            // definition; ref's MCP face ALWAYS declares (mcp.ts:48
+            // `output: tool.outputSchema ?? {}`).
+            registration.output = Some(
+                tool.output_schema.clone().unwrap_or_else(|| serde_json::json!({})),
+            );
             tools.register(registration);
             // G-242 — the pipeline wrap (`editor.add` → tool.ts:150):
             // hooks + decodeInput + normalizeContent around the leaf's
-            // permission assert + callTool. G-230's MCP face: a server
-            // DECLARED `outputSchema` enters the `encodeOutput` path
-            // (`tool.outputSchema` ≠ undefined, mcp.ts:48); undeclared
-            // stays the accept-all pass-through fallback. G-291: the
+            // permission assert + callTool. G-230's MCP face mirrors
+            // mcp.ts:48 `output: tool.outputSchema ?? {}`: the tool is
+            // ALWAYS declared — a server-undeclared tool validates
+            // against the accept-all `{}` (the executor always returns
+            // an output, mcp.ts:100-110 `output()`). G-291: the
             // executor is keyed by the EFFECTIVE `server_tool` name.
             tools.register_executor(
                 action.clone(),
                 crate::tool::registry::pipeline_executor_with_output(
                     &action,
                     tool.input_schema.clone(),
-                    tool.output_schema.clone(),
+                    Some(
+                        tool.output_schema.clone().unwrap_or_else(|| serde_json::json!({})),
+                    ),
                     Arc::new(executor),
                     services,
                     hooks,

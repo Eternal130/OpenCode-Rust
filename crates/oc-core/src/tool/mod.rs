@@ -178,6 +178,12 @@ pub struct BuiltinTool {
     pub description: String,
     /// JSON-Schema of the input (v2 shape).
     pub input: serde_json::Value,
+    /// JSON-Schema of the DECLARED output (v2 `options.output`,
+    /// runtime.ts:24 `outputSchema`). Every builtin declares one (the
+    /// ref plugin-tool family, edit.ts:127 / glob.ts:61 / …); `Null`
+    /// would mean undeclared (the mcp.ts:48 accept-all `?? {}` scope
+    /// plus runtime.ts:46's die rule — no builtin is in that state).
+    pub output: serde_json::Value,
     /// `options.permission` (defaults to the effective tool name).
     pub permission: Option<&'static str>,
     /// All six filesystem tools are direct (`codemode: false`).

@@ -209,11 +209,26 @@ impl ToolExecuteWithContext for QuestionExecute {
     }
 }
 
+/// The DECLARED output schema (question.ts:27-29 `Output` —
+/// `Schema.Array(Question.Answer)`, an array of string arrays).
+#[must_use]
+pub fn output_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "answers": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } }
+        },
+        "required": ["answers"],
+        "additionalProperties": false
+    })
+}
+
 /// The question builtin registration.
 pub fn tool(forms: Forms) -> BuiltinTool {
     BuiltinTool {
         name: "question",
         description: description(),
+        output: output_schema(),
         input: serde_json::json!({
             "type": "object",
             "properties": {

@@ -36,11 +36,39 @@ pub fn schema() -> Value {
     })
 }
 
+/// The DECLARED output schema (patch.ts:27-36 `Output` —
+/// `{applied: Applied[], files: FileDiff.Info[]}`).
+#[must_use]
+pub fn output_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "applied": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "type": { "enum": ["add", "update", "delete"] },
+                        "resource": { "type": "string" },
+                        "target": { "type": "string" }
+                    },
+                    "required": ["type", "resource", "target"],
+                    "additionalProperties": false
+                }
+            },
+            "files": { "type": "array", "items": super::edit::file_diff_info_schema() }
+        },
+        "required": ["applied", "files"],
+        "additionalProperties": false
+    })
+}
+
 pub fn tool(_services: &std::sync::Arc<ToolServices>) -> BuiltinTool {
     BuiltinTool {
         name: "patch",
         description: description(),
         input: schema(),
+        output: output_schema(),
         permission: Some("edit"),
         codemode: false,
         namespace: None,
