@@ -409,6 +409,7 @@ pub fn options(check_version: bool) -> EnsureOptions {
         command: Some(command),
         env: read().env.unwrap_or_default().into_iter().collect(),
         on_start: None,
+        version_predicate: None,
         timing: lifecycle::EnsureTiming::default(),
     }
 }
