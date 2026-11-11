@@ -237,9 +237,16 @@ pub fn parse_exa_results(text: &str) -> Vec<WebSearchResult> {
 /// optional time/offset, RFC-822/1123 (`Mon, 09 Nov 2026 12:00:00 GMT`),
 /// and long-month forms (`November 9, 2026`). The old parser only read
 /// the leading `YYYY-MM-DD`. Returns milliseconds since the Unix epoch.
-fn parse_date_millis(value: &str) -> Option<u64> {
+fn parse_date_millis(value: &str) -> Option<f64> {
     let value = value.trim();
-    parse_iso_datetime(value).or_else(|| parse_loose_date(value))
+    parse_iso_datetime(value).or_else(|| parse_loose_date(value)).map(u64_to_finite)
+}
+
+/// G-380④: `WebSearch.Result.time.published` is a finite NUMBER on the
+/// wire (`Schema.Finite`, websearch.ts:29), so parsed millis convert to
+/// the float face.
+fn u64_to_finite(millis: u64) -> f64 {
+    millis as f64
 }
 
 /// `YYYY-MM-DD` or `YYYY-MM-DD[T ]HH:MM[:SS[.frac]][Z|±HH[:MM]]`.
@@ -806,7 +813,7 @@ mod tests {
         assert_eq!(results[0].url, "https://a.example");
         assert_eq!(results[0].title.as_deref(), Some("A"));
         assert_eq!(results[0].content.as_deref(), Some("great content"));
-        assert_eq!(results[0].time.published, Some(1_705_276_800_000));
+        assert_eq!(results[0].time.published, Some(1_705_276_800_000.0));
         assert_eq!(results[1].title, None);
         assert_eq!(results[1].content.as_deref(), Some("body"));
     }
@@ -817,18 +824,18 @@ mod tests {
     #[test]
     fn tool_websearch_exa_dates_parse_dateparse_classes() {
         // ISO datetime, Z.
-        assert_eq!(parse_date_millis("2024-01-15T12:30:45Z"), Some(1_705_321_845_000));
+        assert_eq!(parse_date_millis("2024-01-15T12:30:45Z"), Some(1_705_321_845_000.0));
         // ISO datetime with a numeric offset (+02:00 shifts back).
-        assert_eq!(parse_date_millis("2024-01-15T12:30:45+02:00"), Some(1_705_314_645_000));
+        assert_eq!(parse_date_millis("2024-01-15T12:30:45+02:00"), Some(1_705_314_645_000.0));
         // Space separator + GMT zone word.
-        assert_eq!(parse_date_millis("2024-01-15 12:30:45 GMT"), Some(1_705_321_845_000));
+        assert_eq!(parse_date_millis("2024-01-15 12:30:45 GMT"), Some(1_705_321_845_000.0));
         // RFC-822/1123.
-        assert_eq!(parse_date_millis("Mon, 15 Jan 2024 12:30:45 GMT"), Some(1_705_321_845_000));
+        assert_eq!(parse_date_millis("Mon, 15 Jan 2024 12:30:45 GMT"), Some(1_705_321_845_000.0));
         // Long month, day-first and month-first.
-        assert_eq!(parse_date_millis("15 January 2024"), Some(1_705_276_800_000));
-        assert_eq!(parse_date_millis("January 15, 2024"), Some(1_705_276_800_000));
+        assert_eq!(parse_date_millis("15 January 2024"), Some(1_705_276_800_000.0));
+        assert_eq!(parse_date_millis("January 15, 2024"), Some(1_705_276_800_000.0));
         // The legacy date-only shape keeps its epoch.
-        assert_eq!(parse_date_millis("2024-01-15"), Some(1_705_276_800_000));
+        assert_eq!(parse_date_millis("2024-01-15"), Some(1_705_276_800_000.0));
         // Garbage still rejects.
         assert_eq!(parse_date_millis("not a date"), None);
         assert_eq!(parse_date_millis("2024-13-99"), None);
@@ -996,7 +1003,7 @@ mod tests {
         let results = provider.execute("rust mcp").await.unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].url, "https://a.example");
-        assert_eq!(results[0].time.published, Some(1_705_276_800_000));
+        assert_eq!(results[0].time.published, Some(1_705_276_800_000.0));
         assert_eq!(results[1].title, None);
         // The v2 `WebSearchMcp.call` request contract: a `tools/call`
         // JSON-RPC POST with the key in the URL query (`exaApiKey`) and
@@ -1063,7 +1070,7 @@ mod tests {
         let results = provider.execute("objective").await.unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].content.as_deref(), Some("e1\n\ne2"));
-        assert_eq!(results[0].time.published, Some(1_717_200_000_000));
+        assert_eq!(results[0].time.published, Some(1_717_200_000_000.0));
         let request = last_request(&server);
         let body_start = request.split("\r\n\r\n").nth(1).expect("body");
         let rpc: serde_json::Value = serde_json::from_str(body_start.trim()).unwrap();

@@ -42,6 +42,9 @@ use serde::Serialize;
 use crate::bus_event::BusEventFrame;
 use crate::error::ClientError;
 
+/// The filtered event stream returned by [`RpcClient::subscribe_events`].
+type FilteredBusEvents = Pin<Box<dyn Stream<Item = Result<BusEventFrame, ClientError>> + Send>>;
+
 impl crate::methods::rpc::RpcApi<'_> {
     /// `rpc.call` with typed input and output: serializes `input` into
     /// the `RpcInput` envelope, calls the generic method, then decodes
@@ -218,11 +221,7 @@ impl RpcClient {
     /// definition's `rpc.<id>.<name>` wire type. Unknown event names
     /// error loudly (`Unknown RPC event: <id>.<name>`), exactly like
     /// the ref.
-    pub async fn subscribe_events(
-        &self,
-        name: &str,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<BusEventFrame, ClientError>> + Send>>, ClientError>
-    {
+    pub fn subscribe_events(&self, name: &str) -> Result<FilteredBusEvents, ClientError> {
         let type_ = self.event_type(name)?;
         let shared = self.client.shared_bus_events();
         Ok(filter_rpc_events(shared.subscribe(), type_))
@@ -233,12 +232,12 @@ impl RpcClient {
     /// guard is dropped (the ref's unsubscribe aborts the controller).
     /// Source errors terminate the loop; a fresh `on`/`subscribe_events`
     /// reopens the connection (no auto-retry, G-14).
-    pub async fn on<F, Fut>(&self, name: &str, mut handler: F) -> Result<RpcEventGuard, ClientError>
+    pub fn on<F, Fut>(&self, name: &str, mut handler: F) -> Result<RpcEventGuard, ClientError>
     where
         F: FnMut(BusEventFrame) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = ()> + Send,
     {
-        let mut events = self.subscribe_events(name).await?;
+        let mut events = self.subscribe_events(name)?;
         let task = tokio::spawn(async move {
             use futures::StreamExt;
             while let Some(item) = events.next().await {
@@ -280,10 +279,7 @@ impl Drop for RpcEventGuard {
 /// The `rpc.<id>.<event>` filter (promise/rpc.ts:63-65): only frames
 /// whose wire `type` equals `type_` pass; everything else is skipped,
 /// and the filtered stream ends when the source ends.
-pub fn filter_rpc_events<S>(
-    source: S,
-    type_: String,
-) -> Pin<Box<dyn Stream<Item = Result<BusEventFrame, ClientError>> + Send>>
+pub fn filter_rpc_events<S>(source: S, type_: String) -> FilteredBusEvents
 where
     S: Stream<Item = Result<BusEventFrame, ClientError>> + Send + 'static,
 {
@@ -448,7 +444,6 @@ mod tests {
                     let _ = tx.send(frame.type_);
                 }
             })
-            .await
             .expect("subscribe");
         let mut seen = Vec::new();
         while seen.len() < 2 {
@@ -481,9 +476,8 @@ mod tests {
                         sse_payload("server.connected"),
                         sse_payload("rpc.demo.updated")
                     );
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n{body}"
-                    );
+                    let response =
+                        format!("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n{body}");
                     let _ = socket.write_all(response.as_bytes()).await;
                     // Hold the connection open so both subscribers join it.
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -502,7 +496,6 @@ mod tests {
                     let _ = tx.send(frame.type_);
                 }
             })
-            .await
             .expect("first subscribe");
         let second = rpc
             .on("updated", move |frame| {
@@ -511,17 +504,11 @@ mod tests {
                     let _ = tx.send(frame.type_);
                 }
             })
-            .await
             .expect("second subscribe");
 
         for received in [&mut rx1, &mut rx2] {
-            let mut seen = Vec::new();
-            while seen.len() < 1 {
-                seen.push(
-                    received.recv().await.unwrap_or_else(|| panic!("got {:?}", seen.len())),
-                );
-            }
-            assert_eq!(seen, ["rpc.demo.updated"]);
+            let event = received.recv().await.unwrap_or_else(|| panic!("handler never fired"));
+            assert_eq!(event, "rpc.demo.updated");
         }
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         assert_eq!(

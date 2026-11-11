@@ -129,6 +129,7 @@ async fn daemon_closes_inherited_fds() {
         command: Some(command),
         env: Vec::new(),
         on_start: None,
+        version_predicate: None,
         timing: EnsureTiming {
             poll_interval: Duration::from_millis(100),
             request_timeout: Duration::from_millis(500),

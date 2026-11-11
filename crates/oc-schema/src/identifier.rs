@@ -45,6 +45,15 @@ fn random_byte() -> u8 {
 }
 
 fn create(descending: bool, timestamp_millis: i64) -> String {
+    // G-380③: the naive check-then-act (load LAST_TIMESTAMP, then store
+    // LAST_TIMESTAMP + COUNTER as two steps) lets two threads on the
+    // same NEW millisecond both "transition" and both observe counter 1,
+    // duplicating counter prefixes. The ref is single-threaded
+    // (identifier.ts mutates plain lets); the port serializes exactly
+    // that sequence with a mutex — atomic cleverness (CAS re-arming)
+    // still leaves a window where a re-arm clobbers live counters.
+    static CREATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = CREATE_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let last = LAST_TIMESTAMP.load(Ordering::Relaxed);
     let counter = if last == timestamp_millis {
         COUNTER.fetch_add(1, Ordering::Relaxed) + 1
@@ -125,5 +134,31 @@ mod tests {
         let early = create_at(true, 1_700_000_000_000);
         let late = create_at(true, 1_700_000_010_000);
         assert!(late < early);
+    }
+
+    /// G-380③: concurrent generators on the SAME millisecond take unique
+    /// counter slots — the encoded `timestamp * 0x1000 + counter` prefixes
+    /// are all distinct (the old check-then-act duplicated counter 1).
+    #[test]
+    fn concurrent_same_millisecond_counters_are_unique() {
+        const THREADS: usize = 16;
+        const EACH: usize = 64;
+        let prefixes = std::sync::Mutex::new(std::collections::HashSet::new());
+        std::thread::scope(|scope| {
+            for _ in 0..THREADS {
+                scope.spawn(|| {
+                    for _ in 0..EACH {
+                        let id = create_at(false, 1_700_000_123_456);
+                        prefixes.lock().unwrap().insert(id[..12].to_string());
+                    }
+                });
+            }
+        });
+        let prefixes = prefixes.into_inner().unwrap();
+        assert_eq!(
+            prefixes.len(),
+            THREADS * EACH,
+            "every same-millisecond id must carry a distinct counter prefix"
+        );
     }
 }

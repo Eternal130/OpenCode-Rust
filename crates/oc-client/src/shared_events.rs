@@ -282,7 +282,8 @@ impl<A: SharedEvent> SharedEvents<A> {
                     sub.shared.finish_overflow(Arc::new(ClientError::SubscriberCapacity(
                         SUBSCRIBER_CAPACITY,
                     )));
-                }            }
+                }
+            }
         }
     }
 }

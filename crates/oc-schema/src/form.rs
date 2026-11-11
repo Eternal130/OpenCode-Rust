@@ -187,6 +187,9 @@ pub struct Info {
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Record>,
+    /// Non-empty on the wire (`Fields = NonEmptyArray(Field)`,
+    /// form.ts:119 — G-380② gates decode).
+    #[serde(deserialize_with = "crate::common::non_empty::vec")]
     pub fields: Fields,
 }
 
@@ -227,6 +230,7 @@ pub struct Detail {
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Record>,
+    #[serde(deserialize_with = "crate::common::non_empty::vec")]
     pub fields: Fields,
     pub state: State,
 }

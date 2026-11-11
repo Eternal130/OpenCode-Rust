@@ -203,9 +203,67 @@ pub type NonNegativeInt = u64;
 /// `PositiveInt` — integer > 0.
 pub type PositiveInt = u64;
 
+/// Serde gate for `Schema.NonEmptyArray` fields (G-380②): ref decodes
+/// reject an EMPTY array; Rust mirrors that on decode (serialization is
+/// untouched — an empty Vec is a construction bug, not wire drift).
+pub mod non_empty {
+    use serde::{Deserialize, Deserializer};
+
+    /// `deserialize_with` gate: an empty array is wire drift.
+    pub fn vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+    where
+        T: Deserialize<'de>,
+        D: Deserializer<'de>,
+    {
+        let items = Vec::<T>::deserialize(deserializer)?;
+        if items.is_empty() {
+            Err(serde::de::Error::custom("non-empty array required, got []"))
+        } else {
+            Ok(items)
+        }
+    }
+
+    /// `NonEmptyArray(...).pipe(optional)`: absent is fine, `[]` is not.
+    pub fn option_vec<'de, D, T>(deserializer: D) -> Result<Option<Vec<T>>, D::Error>
+    where
+        T: Deserialize<'de>,
+        D: Deserializer<'de>,
+    {
+        let items = Option::<Vec<T>>::deserialize(deserializer)?;
+        match items {
+            Some(items) if items.is_empty() => {
+                Err(serde::de::Error::custom("non-empty array required, got []"))
+            }
+            other => Ok(other),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
+
+    #[derive(Debug, Deserialize)]
+    #[expect(dead_code, reason = "decode gates are exercised via serde, not field reads")]
+    struct Gated {
+        #[serde(deserialize_with = "non_empty::vec")]
+        required: Vec<u32>,
+        #[serde(default, deserialize_with = "non_empty::option_vec")]
+        optional: Option<Vec<u32>>,
+    }
+
+    /// G-380②: `Schema.NonEmptyArray` decode gates — `[]` is rejected,
+    /// absent/null optional and non-empty arrays decode.
+    #[test]
+    fn non_empty_gates_reject_empty_arrays() {
+        assert!(serde_json::from_str::<Gated>(r#"{"required":[1]}"#).is_ok());
+        assert!(serde_json::from_str::<Gated>(r#"{"required":[1],"optional":[2]}"#).is_ok());
+        let err = serde_json::from_str::<Gated>(r#"{"required":[]}"#).unwrap_err();
+        assert!(err.to_string().contains("non-empty"), "{err}");
+        let err = serde_json::from_str::<Gated>(r#"{"required":[1],"optional":[]}"#).unwrap_err();
+        assert!(err.to_string().contains("non-empty"), "{err}");
+    }
 
     #[test]
     fn token_usage_total() {

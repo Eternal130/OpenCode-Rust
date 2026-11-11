@@ -557,6 +557,9 @@ pub struct ToolSuccess {
     #[serde(rename = "assistantMessageID")]
     pub assistant_message_id: MessageId,
     pub id: String,
+    /// Non-empty on the wire (`NonEmptyArray<Content>`,
+    /// session-event.ts:538 — G-380② gates decode).
+    #[serde(deserialize_with = "crate::common::non_empty::vec")]
     pub content: Vec<Content>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Record>,
@@ -574,7 +577,13 @@ pub struct ToolFailed {
     pub assistant_message_id: MessageId,
     pub id: String,
     pub error: SessionError,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Optional but non-empty when present (`NonEmptyArray(Content)
+    /// .pipe(optional)`, session-event.ts:560 — G-380②).
+    #[serde(
+        default,
+        deserialize_with = "crate::common::non_empty::option_vec",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub content: Option<Vec<Content>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Record>,
