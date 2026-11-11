@@ -22,6 +22,8 @@
 
 > **2026-11-10 第二十一轮 burndown 收口（gap-burndown-11）**：第二十轮重验确认未闭合的 G-291..G-312 全部 22 项 + 第三类补立可行动项（G-319..G-325/G-327，其中 G-324 为决策落地）+ G-330 体积护栏 + G-128 🧹，经 lanes A-H 串行落地合并 main（e82f4037/e8de0341/9d85f709/66f8337b/bf5b2e4e/7bc929c1/488bbb8f/3e3233ff），逐条 ✅；每 lane workspace 合并门全绿（白名单项按证据链放行）。**无上游阻挡项、无搁置项**。明细见文末「第二十一轮 burndown 收口」节。
 >
+> **2026-11-11 第二十三轮 burndown 收口（gap-burndown-12）**：第二十二轮立项的 G-334..G-383 全部 50 项经 17 个串行 lane 落地合并 main（L1 快赢/L2 engine/L3 hooks/L4 PTY/L5+L5b plugin-host/L6 媒体/L7a+b 协议/L8 providers/L9 server-vcs/L10 MCP/L11-12 TUI/L13 CLI-ACP/L14 schema-client/L15 core 杂项），逐条 ✅；**无上游阻挡项**。G-347 布线前提经双侧源码证伪（ref 无 /api/media 面）按勘误处理，残余（decode 严格化+薄 client 门面）落地；另 4 项审计文本失实/前提不成立以证据订正。工具面硬化：dev-gate 结构化禁裸 cargo test（`c4aa35ae`）、负载门 6→8（`47cd5ab1`）。明细见文末「第二十三轮 burndown 收口」节。
+
 > **2026-11-10 第二十二轮（全功能逐行对比审查 parity-line-review-v2024：27 lane + P1/FINAL 双门）**：对 ref v2.0.24 与当前树做第四轮独立全量逐行对读（27 条域 lane：oc-core×12 / oc-ai×5 / oc-tui×4 / server·client·cli·acp·plugin-host·schema-util×6，双侧 file:line 证据、不采信已有审查文档），两道 oracle 一致性门裁定 5 处跨 lane 矛盾、抽查 11/11 成立、0 未裁定矛盾。**新立项 G-334..G-383（50 项：🔴×12 / 🟡×22 / 🟢 簇×16）**；归类既有 12 处、撤销初报 1 条、勘正旧勘误 1 处（R17#13 locale_duration 括注）。核心新事实：CodeMode 沙箱逃逸残余具体化（`__rawFetch`/eval/Function/限位仅桥上，G-334）、WebSocketSeams 与 permission.evaluate 两条插件钩子生产断线（G-337/G-338）、非持久 PTY reader 逐 chunk lossy UTF-8（G-335）、中断后 hosted 工具多发持久 tool.failed（G-336）、媒体 provider 协议全移植但部署接线为零（G-347，产品级）、cloudflare-ai-gateway 网关语义全降级（G-348）、TUI 时长格式化 `%10_000` 取模 bug（G-341）与 stdin 双读竞争（G-342）。总报告 `docs/audit/port-parity-line-review/{REPORT,TABLE}.md`，32 份 lane/门原始报告归档 `docs/audit/port-parity-line-review/lanes/`。正面互证：keybind 230/230、主题资产 33+1 md5 全等、openapi 141 operation 字节级 0 diff、48 迁移 ID 全同、52 会话事件分类一致、models-dev 快照 md5 相同、session-message parts 全集无缺漏。
 
 > **2026-11-03 第十二轮（全量对比审查）**：22 通道逐文件全文对读（TS ~21 万行 / Rust ~40 万行生产代码）+ 3 通道缺口核验，对 50 项缺口声称逐项双侧源码取证：**新立项 46 项（G-165..G-210，含 🔴×6：Azure 未接线/Mcp.Protocol wire bug/Copilot anthropic 车道/第三方 anthropic 根 URL/shell 注释换行权限逃逸/transfer 脱敏弱）**、撤销 4 项初报 + 6 项子句修正（见文末第十二轮勘误）、5 项归类既有条目。总报告 `CODE_REVIEW_PARITY_2026-11-03.md`，域报告与核验记录 `/tmp/opencode/review/`。
@@ -2271,235 +2273,285 @@ G-291..G-312 全部 ✅；G-319/G-320/G-321/G-322/G-323/G-325/G-327 ✅（代码
 
 ## 🔴 高
 
-### G-334 ❌ CodeMode 沙箱逃逸残余面具体化（G-247 残余 + 新证据 `__rawFetch`）
+### G-334 ✅ CodeMode 沙箱逃逸残余面具体化（G-247 残余 + 新证据 `__rawFetch`）
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane5 86165976）**：`__rawFetch` 全局键消除（原生 fetch 仅存 wrapper 闭包+WeakMap）；eval/Function/AsyncFunction 置换抛错 Proxy（含 prototype.constructor 逃逸面，19-accept 语料零合法依赖）；Bun/process 求值作用域影子参数。全局 Bun/process 面 Bun 自身钉死（non-writable）/换 globalThis.process 断 Bun stdio——有界残差归 G-247 结构隔离后续项。
 - rust：`oc-plugin-host/src/host/host.js:2833-2856` guest 求值前仅换装 console/fetch/timers 三面；**:2841 把原生 fetch 挂到 `globalThis.__rawFetch`**（换装后仍可直连）；:2863 AsyncFunction 在 guest 全局执行；:104-139/:2666-2668 结构上限（MAX_STRING/ARRAY）**仅桥接层生效**，guest 内部可自造超大对象；静态扫描只拦 import()/require token——`eval("require(…)")`/`(0,eval)`/`new Function` 全部可绕。
 - ref：interpreter.ts 结构性无进程面。
 - 后果：Bun.file/Bun.spawn/process/env/`__rawFetch` guest 全可达——G-247 登记的"静态扫描固有边界"残余被本轮证据具体化且加重（raw fetch 残留为全局键）。
 - 修法：求值期全局白名单 Proxy + 删 :2841 `__rawFetch` + eval/Function 置换；最小步=先删 `__rawFetch` 一行（P1 门建议）。
 - 出处：cmp-C8 / P1-G01+G05（门抽查 ✅）。
 
-### G-335 ❌ 非持久 PTY reader 逐 chunk lossy UTF-8
+### G-335 ✅ 非持久 PTY reader 逐 chunk lossy UTF-8
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane4 35bfd4b1）**：Utf8StreamDecoder 携带缓冲增量解码（最长合法前缀发射、确定非法即替换、EOF lossy 冲洗）；逐字节读 mock 端到端钉定。
 - rust：`oc-core/src/pty.rs:623-638`（:631）reader 线程对每次 ≤8192B read 结果直接 `String::from_utf8_lossy`——多字节序列跨 read 边界即损坏（CJK/emoji 乱码）；persistent_pty 全程字节缓冲无此问题。
 - ref：node-pty 解码层按流缓冲。
 - 修法：字节缓冲/增量解码器（P1 门建议"pty 字节缓冲化"）。
 - 出处：cmp-C7a / P1-G02（门抽查 ✅）。
 
-### G-336 ❌ 中断后 hosted 工具多发持久 `tool.failed(result-missing)`
+### G-336 ✅ 中断后 hosted 工具多发持久 `tool.failed(result-missing)`
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane1 afea43cd）**：RESULT_MISSING 清扫门补 `!stream_interrupted`；中断路径 hosted 工具由 §9 tools_interrupted 收口，不再误落持久 tool.failed(result-missing)。
 - rust：`oc-core/src/session/runner/step.rs:557` RESULT_MISSING 清扫门只查 `stream_error.is_none() && !provider_failed`，未排除 :482 已独立存在的 `stream_interrupted` 标志——中断路径把正常收尾的 hosted 工具误落失败并持久化。
 - ref：step.ts:220 以 `Exit.isSuccess` 判定，中断不算失败。
 - 修法：门补 `&& !stream_interrupted`。
 - 出处：cmp-C2a / P1-G03（门抽查 ✅）。
 
-### G-337 ❌ WebSocketSeams（experimental.ws.*）构建后零消费
+### G-337 ✅ WebSocketSeams（experimental.ws.*）构建后零消费
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane3 a4799e1e）**：seams 经 `SessionChannels::bind_with_seams` 骑上会话 WS 通道：handshake 在 affinity 键前重写 url/headers（重写即重开）、send 在 driver.create 后变换出帧、receive 在 driver.observe 前变换入帧（model-transport.ts 三拦截点对位）；生产 prepare→channel 边界测试覆盖。
 - rust：`oc-core/src/session/runner/model_request.rs:974-1318` 构建 handshake/send/receive 三 seam 并存入 Prepared（:473/:1065）；全仓消费点仅 `tests/plugin_guest_wiring.rs:276-307`，SessionChannel::execute / open_responses_channel 均不接收——插件 WS 改写静默失效。
 - ref：WS channel 消费 seams（第九轮勘误 #2 修的是握手派发面，与此"hook seam 死线"不同层）。
 - 出处：cmp-A2+cmp-S4a / FINAL-G21（门抽查 ✅，互证裁定#1）。
 
-### G-338 ❌ permission.evaluate 生产派发断线（G-2 修复未达面）
+### G-338 ✅ permission.evaluate 生产派发断线（G-2 修复未达面）
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane3 a4799e1e）**：permission.evaluate 生产派发接入 Permission 引擎：managed-policy（ref config policy 即首个注册 hook）→插件 hook 顺序组合、规则硬 deny 短路最先、hook 返回 effect/message 胜出（permission.ts:176-195 对位）；handler Err 保 pre-trigger 裁决（HookOverride 无错误通道，注释钉定）。
 - rust：`oc-core/src/hooks.rs:1959`、`oc-core/src/plugin_apply.rs:2727` —— `dispatch_permission_evaluate` 全仓仅 2 个调用点且均在 `#[tokio::test]` 内；Permission 引擎只消费 managed-policy 的 HookOverride，guest hook 注册成功（G-2 ✅ 的桥接面）但永不生效。
 - ref：permission engine 对插件 hook 派发。
 - 后果：G-2 的 ✅ 只覆盖注册/白名单面；行为面断线。
 - 修法：Permission 决策点接入 dispatch_permission_evaluate（叠加 managed-policy 语义按 ref 优先序）。
 - 出处：cmp-S4a / FINAL-G22（门抽查 ✅）。
 
-### G-339 ❌ ACP `edit` 工具 added 文件权限 diff 预览全丢
+### G-339 ✅ ACP `edit` 工具 added 文件权限 diff 预览全丢
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane1 afea43cd）**：added 文件按 ref permission.ts:98-99 对空基线应用补丁，产 `Preview{old_text:None}` 新内容预览，不再 continue 跳过。
 - rust：`oc-cli/src/acp/permission.rs:194-197` `status=="added"` → `old_text=None` → `let Some(old_text) = … else { continue }` 直接跳过，不产预览（对照同文件 patch 工具 :210-219 对 add hunk 正确推 `Preview{old_text:None}`）。
 - ref：permission.ts added 文件产出 new-content-only 预览。
 - 出处：cmp-S3b / FINAL-G23。
 
-### G-340 ❌ ACP `session.retry.scheduled` 的 nextRetryAt 恒空串
+### G-340 ✅ ACP `session.retry.scheduled` 的 nextRetryAt 恒空串
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane1 afea43cd）**：数值 epoch-ms `at` 读取 + `iso_from_epoch_ms` 渲染 ISO 时间串（ref toISOString 对位，无新依赖）。
 - rust：`oc-schema` session_event.rs:594 `at: NonNegativeInt`（数字）；`oc-cli/src/acp/translate.rs:529` 经 `string(&event.data,"at")`（as_str→unwrap_or("")）取值——恒回 `""`。
 - ref：nextRetryAt 为 ISO 时间串。
 - 修法：数字 → ISO 时间串格式化。
 - 出处：cmp-S3b / FINAL-G24（门抽查 ✅）。
 
-### G-341 ❌ TUI locale_duration 秒档 `%10_000` 取模 bug（10–60s 时长全错）
+### G-341 ✅ TUI locale_duration 秒档 `%10_000` 取模 bug（10–60s 时长全错）
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane1 afea43cd）**：删 `%10_000` 取模；15_000→"15.0s"、59_999→"60.0s"（ref toFixed(1) 舍入，brief 预期值按 ref 修正）。
 - rust：`oc-tui/src/message/model.rs:916-917` `f64::from(input as u32 % 10_000)/1000.0`——15000ms→"5.0s"（应为 15.0s）；10s–60s 区间全部显示 `x−10.0s`。
 - ref：locale.ts 秒档直接 `/1000`。
 - 修法：删 `% 10_000` 一行。
 - ⚠️ 勘正：第十七轮勘误 #13 括注"locale_duration（model.rs:915-931，ref locale.ts 逐字数学）"与代码不符——T3 lane 与 FINAL 门两次独立读码均证实取模存在（见本轮勘误节#2）。
 - 出处：cmp-T3 / FINAL-G25（门抽查 ✅）。
 
-### G-342 ❌ TUI stdin 双读竞争（OSC52 查询 vs 输入线程）
+### G-342 ✅ TUI stdin 双读竞争（OSC52 查询 vs 输入线程）
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane11 089a8a2d）**：STDIN_READ_LOCK 单一 fd0 所有权 + pushback 分流：OSC52 查询窗内竞态击键回送输入线程而非吞键；顺带修 BEL 终止符 2 字节窗永不匹配隐性 bug；150ms 查询窗/无响应不死锁保持。
 - rust：`oc-tui/src/terminal_proto.rs:474-519` `clipboard_read_osc52` 自行 poll/read fd 0；`oc-tui/src/app.rs:8717-8830` 输入线程并发 `read_session_input(tty_input_fd,…)`——两路并发消费同一 stdin，OSC52 查询窗口可吞用户按键。
 - ref：单一输入读取路径。
 - 修法：stdin 读取串行化（查询经输入线程代理或互斥）。
 - 出处：cmp-T1 / FINAL-G26。
 
-### G-343 ❌ Sessions 对话框 pin/unpin 死键（且 pinned 仅内存不持久）
+### G-343 ✅ Sessions 对话框 pin/unpin 死键（且 pinned 仅内存不持久）
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane11 089a8a2d）**：session.pin.toggle（ctrl+f）接线光标行；pinned 集持久化 `<state>/session.json {pinned}`（=v1→v2 迁移落点同形，tmp+rename 原子写）；session.deleted 修剪；boot 回灌。点击面 ref 本就仅 footer 提示（无处理器）——键位面对齐即闭环。
 - rust：`oc-tui/src/store.rs:6929` `toggle_pin` 全仓 3 处——定义 + 测试 :14443/:14445，无 UI 分发；pinned 集合也不落盘（ref 持久化）。
 - 出处：cmp-T2 / FINAL-G27（门抽查 ✅；不持久子项自 FINAL-G50 并入）。
 
-### G-344 ⚠️ runway cancel 路径重复 `/v1` → 404（当前无消费方缓冲）
+### G-344 ✅ runway cancel 路径重复 `/v1` → 404（当前无消费方缓冲）
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane1 afea43cd）**：cancel_path 改 `/tasks/{id}`；拼接 URL 单一 `/v1/` 段钉定（`https://api.dev.runwayml.com/v1/tasks/...`）。
 - rust：`oc-ai/src/media/video/runway.rs:20` `DEFAULT_BASE_URL` 已含 `/v1`；:310-312 `cancel_path` 返回 `"/v1/tasks/{id}"` 再拼一次 → `…/v1/v1/tasks/…`。与 G-347（媒体未接线）叠加故暂无用户可见面。
 - 修法：cancel_path 改 `/tasks/{id}`。
 - 出处：cmp-A4 / FINAL-G28。
 
-### G-345 ❌ replicate/stability `unsupported` 字段声明未强制（行为反转）
+### G-345 ✅ replicate/stability `unsupported` 字段声明未强制（行为反转）
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane6 dd1f0a6f）**：replicate 7 字段/stability generate 2+upscale 4 字段 check_unsupported 于 body_from 强制；错误文案=ref route/media.ts:423-448 逐字节（"{provider}/{route} does not support {fields}"）。
 - rust：`oc-ai/src/media/image/replicate.rs:270` 声明 `fn unsupported()` 但 body_from 无 check_unsupported、route 不读（对照 openai.rs:151,373 / google.rs:106,399 / xai.rs:57,126 均有强制）；stability 同。
 - ref："never silently dropped"——unsupported 请求参数必须显式报错。
 - 出处：cmp-A4 / FINAL-G29。
 
 ## 🟡 中
 
-### G-346 ⚠️ 错误体先 2KB 截断后分类：嵌套 error.code 漏检误判 retryable
+### G-346 ✅ 错误体先 2KB 截断后分类：嵌套 error.code 漏检误判 retryable
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane7a 08d620ae）**：分类读上限 256KB（MAX_ERROR_BODY_CHARS）、展示截断 2KB 保持（provider_message=ref 截断位）；client.rs/responses_compaction/checkpoint/media status_failure 五处对齐；>2KB 嵌套 error.code 可重试分类测试钉定。
 - rust：`oc-ai/src/route/client.rs:457`（frame path）`read_body_limited(response.body, MAX_BODY_CHARS)` + `route/executor.rs:13` `MAX_BODY_CHARS=2000` + `route/transport.rs:171-186`——截断先于 classifyProviderFailure，>2KB 的嵌套 `error.code` 丢失 → 429/限流类被误判不可重试。（与 G-288⑦ 的客户端 64KiB 诊断上限不同位点。）
 - 修法：分类先行、截断仅用于展示。
 - 出处：cmp-A2 / FINAL-G31。
 
-### G-347 ❌ 媒体 provider 部署接线整体缺失（产品级，13+ 家协议不可达）
+### G-347 ✅ 媒体 provider 部署接线整体缺失（产品级，13+ 家协议不可达）
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane6 dd1f0a6f + 勘误）**：**布线前提失实（勘误撤销）**：ref v2.0.24 无 /api/media HTTP 面（protocol 组清单无 media、无 SSE；媒体=packages/ai SDK 库层，monorepo 零消费者——G-17 AIClient 族同类裁决，exlorer+orchestrator 双侧 file:line 取证）。可行动残余落地：①10 处 decode unwrap_or_default 严格化（required 字段→InvalidProviderOutput，逐站 ref Schema 对照；route.rs:179/utils.rs:206 为序列化非位点、protocol.rs:535 无生产调用，取证保留）②薄 media client 门面（client.rs：generate/stream/start/resume 按 lane kind 分发、非队列 lane start/resume=UnsupportedOperation，media-client.ts:35-62 对位）。
 - rust：oc-core/oc-server 对 `oc_ai::media` **零引用**；`media/model.rs:6-8`、`media/route.rs:1004-1006` 注释自认 seam（"deployment lives with a future media-route lane"）；13+ 家 image/video 协议+route 已移植但无任何 HTTP 路由挂载；decode 族 `unwrap_or_default` 系统性宽松。
 - ref：/api/media 路由族完整消费。
 - 出处：cmp-A3+cmp-A4 / FINAL-G32（互证裁定#1，产品级单列）。
 
-### G-348 ⚠️ cloudflare-ai-gateway 网关语义全降级（产品级）
+### G-348 ✅ cloudflare-ai-gateway 网关语义全降级（产品级）
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane8 941ebcd7）**：cloudflare-ai-gateway 原生车道全量：REST 根 `api.cloudflare.com/client/v4/accounts/{id}/ai/v1` + passthrough 根合成（encodeURIComponent 语义）、cf-aig-* 计费/缓存头、native 车道 cf-aig-authorization Bearer 透传 vs REST Authorization、`gatewayApiKey ?? apiKey → CLOUDFLARE_API_TOKEN → CF_AIG_TOKEN` 链、openai/anthropic（dot→dash id 重写）/workers-ai/else 前缀分派、requireAccountId typed error；CloudflareGatewayConnection 设置项+connection overlay 接线。
 - rust：URL 合成 / `cf-aig-*` 计费头 / 前缀分派 / passthrough 鉴权全缺；仅 plain openai-chat 需用户显式 baseURL——经网关的 anthropic/google 等流量语义降级为直连。
 - ref：gateway provider 完整实现。
 - 出处：cmp-A3 / FINAL-G34（产品级单列）。
 
-### G-349 ❌ shell DELETE 非幂等（404 vs 204）
+### G-349 ✅ shell DELETE 非幂等（404 vs 204）
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane1 afea43cd）**：remove 分支恒 204（NotFound 吞并对齐 ref delete handler）；HTTP wire 双删测试。
 - rust：`oc-server/src/handlers/shell.rs:119-122` remove 分支映射 404；ref 吞 NotFoundError 恒 204。
 - 出处：cmp-S1 / FINAL-G35（门抽查 ✅）。
 
-### G-350 ❌ vcs.init 插件 provider 不可达（硬编码 git|hg 旁路）
+### G-350 ✅ vcs.init 插件 provider 不可达（硬编码 git|hg 旁路）
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane9 405af21c）**：vcs.init 插件 provider 经 guest `vcs` hook 域（init 闭包表+provider 过滤+snapshot/reinstate+dispose 清理）派发；`Command::new(provider)` 直执行路径删除；git/hg 内建走显式子进程；缺 init 501/未知 400（G-270④ 面）保持；bun guest e2e + HTTP e2e。
 - rust：`oc-server/src/handlers/project.rs:1876-1898` `provider != "git" && provider != "hg"` → 400，随后 `std::process::Command::new(&provider)` 直执行——G-270④ 修的错误族未触及执行通道；插件注册的 VCS provider 永不可达。
 - ref：经 Plugin.awaitActivation → vcs.initialize 走插件 provider。
 - 出处：cmp-S1+cmp-C5b / FINAL-G36。
 
-### G-351 ❌ 空白 delta 丢弃（流式空行/缩进丢失）
+### G-351 ✅ 空白 delta 丢弃（流式空行/缩进丢失）
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane1 afea43cd）**：session.text.delta 空白 delta 原样追加（仅缺字段跳过）；同根终值门 text.ended `!trim().is_empty()`→`!is_empty()`（present-but-whitespace 终值落位、真空串仍跳过）；"Hello"/" "/"world" 增量钉定。
 - rust：`oc-tui/src/store.rs:13193`（"session.text.delta" reducer）`delta.trim().is_empty() → return`；ref data.ts:909-913 原样追加——纯空白 delta 丢弃后终值可与 transcript 不一致（同根终值非空门）。
 - 出处：cmp-S2 / FINAL-G37。
 
-### G-352 ⚠️ live 投影缺口：6 类 transcript 事件延迟到 resync；usage 只取 cost
+### G-352 ✅ live 投影缺口：6 类 transcript 事件延迟到 resync；usage 只取 cost
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane11 089a8a2d）**：六类事件 live reducer：agent.selected/model.selected（gated on transcript）/moved 扩 location-switched 行/instructions.updated（textless 跳过）/synthetic/shell.started+ended（原地状态/退出更新）——全部经 project_message 插入（msg_{event.id}），resync 幂等去重兜底保持；usage reducer 增 tokens（session_tokens 信号）。
 - rust：agent/model/location-switched/system/synthetic/shell 六类事件无 live reducer（仅 resync 填充）；渲染变体全集在（model.rs:262-361，T3 互证）——"能渲染、但延迟到下一次 resync"；`session.usage.updated` 只取 cost 漏 tokens。
 - 出处：cmp-S2+cmp-T3 / FINAL-G38（拼合口径见 FINAL 门裁定#3）。
 
-### G-353 ⚠️ mini 重连条件过宽：任何非 "Session not found" 错误无限重试
+### G-353 ✅ mini 重连条件过宽：任何非 "Session not found" 错误无限重试
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane13 14c8c5f0）**：重连收窄为 transport 类错误（ResolveError{transport} 分类，ref mini.ts:157-180 对位）；非 transport 错误浮出失败、重连计数=0 钉定。
 - rust：`oc-cli/src/mini.rs:122-147`（:137 仅排除 "Session not found"）任意 `Err(String)` 进 250ms 无上限 reconnect；ref 仅对 Transport 错误重连。G-181④/G-157 修的是重连存在性，条件宽度为残面。
 - 出处：cmp-S3a / FINAL-G39。
 
-### G-354 ❌ ACP `Sessions::release` 身份判定恒真
+### G-354 ✅ ACP `Sessions::release` 身份判定恒真
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane13 14c8c5f0）**：release 改 `Arc::ptr_eq` 附件身份判定（ref 引用相等语义）；teardown 顺带清 registered-MCP 映射；re-attach 保持/owner 释放两测。
 - rust：`oc-cli/src/acp/sessions.rs:325-330` `entries.get(&attached.id).is_some_and(|current| current.id == attached.id)`——以 attached.id 查表再比 id 必然相等，条件 ≡ 条目存在 → 无条件删除；注释自称"only when this exact attachment still owns the slot"与实现不符。
 - ref：按 attachment 身份判定（sessions.ts:169-172），并发重 attach 后不误拆。
 - 出处：cmp-S3b / FINAL-G40。
 
-### G-355 ⚠️ ACP cancel/drain 语义族（打包）
+### G-355 ✅ ACP cancel/drain 语义族（打包）
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane13 14c8c5f0）**：①drain 观察取消不再短路（observe_cancel=false 两臂）、静默流经取消 select 臂有界收敛（2.2s 收敛于 8s 停流测试）②$/cancel_request 预取消短路移除（标记在 turn 注册后武装，ref turn.ts:372-387 序）；ask 折叠链取证结构性等价。
 - turn 取消后首事件短路 drain 丢弃收尾更新 + 事件流静默则 prompt 永不返回（FINAL-G41）；`$/cancel_request` 预取消不 interrupt server + ask 阻塞折叠循环（FINAL-G42）。
 - 出处：cmp-S3b / FINAL-G41+G42。
 
-### G-356 ⚠️ vertex Express+tuned 守卫缺失 + apiKey/accessToken 互斥缺
+### G-356 ✅ vertex Express+tuned 守卫缺失 + apiKey/accessToken 互斥缺
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane8 941ebcd7）**：vertex 四守卫（google-vertex-shared.ts:44-46 互斥、tuned `endpoints/` 拒 Express key、chat/messages 拒 API key）+ `access_token` 从 api_key 拆分（ModelConnection/overlay/resolver ADC 绑定改道——ADC token 不再静默覆盖已配 Express key）。
 - rust：`oc-core/src/integration/vertex.rs:212-274` ADC binding 把 token 塞 `api_key`（:274），:273 注释自认 "apiKey cannot combine with accessToken upstream" 但代码不拒绝组合只静默取先者；Express 模式/tuned 模型守卫（ref 明确拒绝的组合）全缺。
 - 出处：cmp-A1a / FINAL-G43。
 
-### G-357 ⚠️ /compact 响应宽容解析 → "成功但空/残"历史
+### G-357 ✅ /compact 响应宽容解析 → "成功但空/残"历史
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane7a 08d620ae）**：compaction 响应严格化：encrypted_content 必填、summary 数组（空数组仍重放一空 part=ref `summary.length ? : [{text:""}]`）、role 字面量、content 必填非空、assistant 纯文本、input_image/file 字段族、phase 枚举；未知 item→InvalidProviderOutput 整体失败（responses-compaction.ts:52-77+open-responses.ts 对位）。
 - rust：`oc-ai/src/protocols/utils/responses_compaction.rs:253-264`（compaction 缺 `encrypted_content` 填 `""`）、:311-319（未知 item → 空 user 消息；未知 role 一律归 User）；ref 严格 union 校验整体失败。
 - 出处：cmp-A1a / FINAL-G44。
 
-### G-358 ⚠️ MCP 目录分页截断（单发不跟 nextCursor）
+### G-358 ✅ MCP 目录分页截断（单发不跟 nextCursor）
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane10 1bc113f3）**：tools/prompts/resources/templates 四类 list 跟随 nextCursor（rmcp PaginatedRequestParams::with_cursor；1000 页安全上限=有界，ref/SDK 无界）；页大小 2×5 项 mock 服务器合并序测试。真实分页服务器对测：仓库无 env-gated 真实集成缝，mock 服务器为规范最低门（闭环）。
 - rust：`oc-core/src/mcp/client.rs:863-869` ListTools/ListResources 等 `Request::default()` 单发直取 `result.tools`，全文件无 nextCursor 跟随（rmcp all-variants 未用）；>页大小目录静默截断。
 - 修法：跟随 cursor 循环或启用分页变体；**放行后以真实分页服务器对测闭环**（P1 门条件#4）。
 - 出处：cmp-C6a / P1-G07。
 
-### G-359 ❌ MCP 运行期 OAuth token 过期无 refresh/恢复
+### G-359 ✅ MCP 运行期 OAuth token 过期无 refresh/恢复
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane10 1bc113f3）**：运行期 401（typed is_unauthorized，G-223 分类族）→ OAuth refresh（旋转持久化）→ 锁下 stop+start 重连换 bearer（headers 烘焙于连接期，重连即换牌——注释钉定）→ 单次重放不循环；缺凭证/无 refresh token/刷新失败→NeedsAuth 发布（拒绝的 grant 按 G-110③ 弃行）；hermetic loopback OAuth 桩三测。
 - rust：`oc-core/src/mcp/client.rs:1496-1502` 连接期静态 bearer 快照（`input.bearer` 直插 header）；运行期 401 仅 unauthorized 文本，不续期、不转 needs_auth。
 - ref：OAuthClientProvider 由 SDK 自动 refresh（client.ts:149-151）；与 G-110（已修的失效凭证清理）不同面。
 - 出处：cmp-C6a / P1-G08。
 
-### G-360 ⚠️ MCP 工具桥缺 sessionID 元数据 + 桥同步竞窗 + 注册面无名称校验
+### G-360 ✅ MCP 工具桥缺 sessionID 元数据 + 桥同步竞窗 + 注册面无名称校验
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane10 1bc113f3）**：①call_tool 携带 sessionID 元数据（execute_with_context 线程，ref tool/mcp.ts:69,124）②桥同步竞窗以桥级 SyncMutex 串行（ref Semaphore.makeUnsafe(1)；12 路并发 catalog 突变无损注册测试）③注册名 namespaced_registration_error（segment `^[A-Za-z0-9_-]{1,64}$`/名≤128/charset/Code Mode execute 保留，ref tool.ts:177-183/304-320；违规 skip+log）。
 - rust：`oc-core/src/mcp/registry.rs:1672` `call_tool(..., None)` sessionID 丢弃（ref tool/mcp.ts:33,69,124 透传）；:1831-1882 初始注册与去抖 reload 的桥表同步存在竞窗；P1 裁定#2：MCP 工具注册直插 BTreeMap，**完全没有** ref tool.ts:177-218 的 RegistrationError 名称校验（超长/非法名静默注册）。
 - 出处：cmp-C6a / P1-G14+裁定#2。
 
-### G-361 ⚠️ vcs git 命令族偏差（打包）
+### G-361 ✅ vcs git 命令族偏差（打包）
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane9 405af21c）**：①`--no-optional-locks`+5×`-c core.*` 旗标组（ref plugin/vcs/git.ts:158-168）全 git spawn 点②status cwd=location 目录+`--untracked-files=all --no-renames -z -- .` 裁剪（scope 收回）③增删计数 numstat HEAD+untracked `--no-index` 回退④状态字母经共享 diff_kind 矩阵——AM→**added**（**审计文本「ref 映射 modified」失实：git.ts:171-178 实为 added，按代码真值对齐**）；fake-git argv 捕获钉定。
 - rust `oc-server/src/handlers/project.rs`：:1255/:1522/:1684/:1724/:1736 `Command::new("git")` 直行、无 `--no-optional-locks`/`-c` cfg 标志组（ref git.ts:63-99）；:1833-1837 列表命令 cwd=`services.project.canonical` 而非 location.directory → **scope 放大至全仓**；:1849-1850 git status `additions/deletions` 恒 0（hg 侧 :885-894/:992 有 count_patch，git 侧无）；:1857-1863 `"AM "` 映射 added（ref 映射 modified）。
 - 出处：cmp-C5b / P1-G11。
 
-### G-362 ❌ `snapshots:false` 配置键无消费者 + 文档级 `mcp.timeout` 未合并（双键打包）
+### G-362 ✅ `snapshots:false` 配置键无消费者 + 文档级 `mcp.timeout` 未合并（双键打包）
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane2 095a7d32）**：①snapshots 键 latest-wins 消费→SnapshotService::configure：false=capture no-op 返 None（=ref snapshot.ts:83-87,115 语义，restore 同门）②mcp.timeout 文档级 per-field spread 合并（`{...timeout,...server.timeout}`，Local/Remote 双变体；per-server 胜出/未设继承/无文档 timeout 不动三测）。
 - rust：`GitSnapshotStore::configure` 全仓仅 `snapshot/tests.rs:168-170` 调用，engine 只 configure compaction/tool_output——`snapshots:false` 被接受但快照恒写（ref config/plugin/snapshot.ts:15-19→snapshot.ts:83-87,115 为开关）；`engine/mod.rs:3330-3337` `mcp_servers_from_config` 只读 `mcp.servers`，ref config/plugin/mcp.ts:44-59 的 `{...timeout,...server.timeout}` 文档级合并缺失（per-server timeout 生效 ✅——P1 门裁定#1 两口径）。
 - 出处：cmp-C4+cmp-C5b+cmp-C6a / P1-G04+裁定#1。
 
-### G-363 ❌ 默认模型无"首个可用 text 模型"回退
+### G-363 ✅ 默认模型无"首个可用 text 模型"回退
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane2 095a7d32）**：first_available_text_model 回退链尾（model-resolver.ts:402-417+model.ts:259-289：available_models 同 listing 可用性折叠+supportsText+release 降序）；**仅叶子 resolver opt-in**——链序 pin→location default→engine default→首个 text 模型（location overlay 误触发回归驱动的设计修正）；空 catalog→NotSelected 保持。
 - rust：`oc-core/src/engine/resolver.rs:660-675` 仅 pin/config default，否则直接 NotSelected；ref model-resolver.ts:402-417 明确回退链。
 - 出处：cmp-C6b / P1-G06（门抽查 ✅）。
 
-### G-364 ❌ location 关闭缺 rpc.close
+### G-364 ✅ location 关闭缺 rpc.close
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane2 095a7d32）**：shutdown 四步序=ref（isClosed 先置→permissions→forms→close_rpc→publish）；rpc.close 以 per-location 门实现（closed/rpc_closed 标志+engine invalidate 钉 shutdown 标记+重装配清除）——/api/rpc 对失效位置回 400 rpc.unavailable（ref rpc.ts:105-107 文案）；单 guest 架构（G-289）下为门而非注册表丢弃（注释钉定）。
 - rust：`oc-core/src/location.rs:978-992` shutdown 仅 permissions.close→forms.close→publish 三步；ref location-lifecycle.ts:44-54 四步含 rpc.close+race——失效 location 的 RPC 域仍可经 /api/rpc 命中。
 - 出处：cmp-C7b / P1-G09。
 
-### G-365 ❌ plugin install 无原子性（staging 从未创建）
+### G-365 ✅ plugin install 无原子性（staging 从未创建）
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane5 86165976）**：`.staging-<ms>-<pid>-<seq>` 暂存目录（=update.rs GC 1h 清扫布局）→ manifest+installer+verify 全程暂存 → 成功 rename 落位（入口路径重定基+stamp 冲突重试）；失败 best-effort 清扫；latest_install 只认数字代。失败不可复用/成功暂存清空两测。
 - rust：`oc-plugin-host/src/context/install.rs` 直接写最终目录；staging 目录仅存在于 GC 代码、从未创建——残缺安装可被 `latest_install` 复用。⚠️ 置信度受限：S3a updater/plugin 安装路径未逐行（盲区#1）。
 - 出处：cmp-S4a / FINAL-G46。
 
-### G-366 ⚠️ google-interactions 事件形状零校验 + options 硬失败违背 lenient
+### G-366 ✅ google-interactions 事件形状零校验 + options 硬失败违背 lenient
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane7a 08d620ae）**：step.start/delta/stop 要求数值 index、step/delta 须对象（缺省→frame_decode_error，不再折 0 串扰；ref Event schema index:Number 必填）；options 解码 lenient 化（wrong-type→None、未知键忽略，ref lenient+knownString 对位）——不再 invalid_request 硬失败。
 - rust：`oc-ai/src/protocols/google_interactions.rs` index 缺失折叠 0 → 步骤串扰；step 缺失错误语义错位；options 校验硬失败（ref lenient 容忍未知字段）。
 - 出处：cmp-A1a / FINAL-G47+G63（options 子项）。
 
-### G-367 ⚠️ session.tps 默认值反转
+### G-367 ✅ session.tps 默认值反转
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane11 089a8a2d）**：三解码路径默认翻 true（ref config `?? true`）；显式 false 存活（unwrap_or 仅缺键适用）；组件级 TranscriptOptions::default 未动→**零金帧变化**（oracle 门通过无重钉）。
 - rust：`oc-tui/src/config.rs:234/378/501` `session_tps: false`（:181 注释自证对应 ref index.tsx:1892）；ref 默认 true。
 - 出处：cmp-T4 / FINAL-G48。
 
 ## 🟢 低（打包簇）
 
-### G-368 ⚠️ T1 运行时边角簇
+### G-368 ✅ T1 运行时边角簇
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane12 6529e522）**：标题 fallback regex+插件路由臂（session-title-fallback.ts 对位）/选区 ctrl+c 清除选择并放行中断（ref 不 preventDefault 语义）/帧率 100ms 钉注（vs ref targetFps:60 理由）/storage 写 flock（storage.tsx:52,72-80 对位）；SIGHUP=异步信号安全超集、kitty 探测门控、量化近似既有注释三取证无差；fs.watch 活面有界（端口无反应式 entry map）。
 标题 fallback regex 缺 + 插件路由标题臂缺 / SIGHUP 无 epilogue `_exit(1)` / 选区 ctrl+c 吞键 / kitty 探测时序 / 颜色量化经验推导（上游漂移风险）/ 帧率 100ms 上限 / storage 无跨进程 flock+watch。（剪贴板宿主写臂→G-39、boot 300ms 窗→G-17③，归类不重复。）
 - 出处：cmp-T1 / FINAL-G49。
 
-### G-369 ⚠️ T2 composer 对话框簇
+### G-369 ✅ T2 composer 对话框簇
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane12 6529e522）**：附件复用键 uri(≡mime+data)+name 且 Image-only（ref attachment.ts:85-90）/非图像 data-URI（image/*+pdf 外）拒装不再误标 `[PDF N]`/历史导航 edited-draft 守卫（history.tsx:106-110）；palette 插件命令合并取证已在位（G-186 落地面覆盖 palette 而非仅 slash）；ctrl+f 五层声明=ref keybind.ts 真值钉注。
 附件标签复用判据 mime+data vs ref uri+meta+text / 非 image data: URI 误标 `[PDF N]` 而非报错 / 命令面板静态表不含插件命令 / 历史导航守卫缺 / ctrl+f 双绑定注记。（pinned 不持久已并入 G-343。）
 - 出处：cmp-T2 / FINAL-G50。
 
-### G-370 ⚠️ T3 渲染簇
+### G-370 ✅ T3 渲染簇
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane12 6529e522）**：低 verbosity messagePath=[Activity,Instructions] 包裹/question 空组/synthetic 空描述跳过/turn 边界=ref idle-marker 规则/纯 thought 组 Thinking busyLabel（运行中 thought 胜后续工具）/subagent 模型后缀 `#variant`+Background 徽章/inputIndex 回溯（synthetic 计输入）8 修；diagnostics 臂取证在位并补测；mount 权重/tok/s 基准（time.streamed 未上 wire，重基需 oracle 重钉）/RetryProvider 渐变 3 项有界注释钉定。零金帧重钉。
 低 verbosity messagePath 缺 activity,instructions 包裹 / question 包进 Activity / pending 不重排行尾 / synthetic 空 description 裸 ◈ 行 / mount flat 权重 / turn 摘要"下一行 User"启发式 / 纯-thought 组无 Thinking busyLabel / tok/s 口径 / Diagnostics 行 / RetryProvider 动画 / subagent 模型后缀原始串 + Background 徽章 + 点击跳转 / 输入回溯不认 synthetic。（语法高亮默认构建窄面→G-13。）
 - 出处：cmp-T3 / FINAL-G51。
 
-### G-371 ⚠️ A1a/A1b 协议簇
+### G-371 ✅ A1a/A1b 协议簇
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane7b 83d0b84b）**：AWS 默认凭证链四腿（credential_process shell→JSON、role_arn→SigV4 STS AssumeRole+单跳 source_profile、web-identity→AssumeRoleWithWebIdentity、ECS RELATIVE/FULL_URI+token；env→env web-id→profile(static→process→web-id→assume-role→SSO)→ECS→IMDS 序=ref bedrock-auth.ts；多跳链有声失败=有界）+gemini 命名空间展平保留 provider_executed/cache/metadata+baseURL `${VAR}` 模板（未解析→UnresolvedProviderVariablesError 语义）+converse metadataKey=provider 派生+event-stream rawBody 2048B 诊断+copilot kind 经 `x-opencode-request-kind` 会话缝权威化（title→conversation-background）+media:617 分类先于截断并案；mistral 哈希（无 8 位截断，取证）/thinking delta 五路径（取证无差）/partial-json NaN（不可表示+fallback 等价）/轻校验+路由字段（makeRouteLanguageModel 两查已在）/D-Metric 四取证无差；bedrock_invoke_route 钉超集。
 gemini 命名空间扁平重写丢 provider_executed/cache/metadata（FINAL-G30）/ partial-json NaN 宽容 / thinking delta 丢失路径 / error.code 截断族 / 轻校验 / route 字段 / baseURL `${VAR}` 模板（FINAL-G63）+ bedrock converse metadataKey 硬编码 "bedrock" / 事件流错误无 rawBody 诊断 / AWS 默认凭证链无 credential_process·assume-role·web-identity·ECS / bedrock_invoke_route rust 独有 / mistral converse 哈希 `&0xFF` 截断 / copilot kind（FINAL-G52）。
 - 出处：cmp-A1a+cmp-A1b / FINAL-G30+G52+G63。
 
-### G-372 ⚠️ A2 管线簇
+### G-372 ✅ A2 管线簇
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane7b 83d0b84b）**：pending values() 迭代序=JS Object.values（整键数值升序→字符串插入序；"10">"2" 分歧测试）+providerExecuted Some(false) 不再被 `.map(|_| true)` 强转真（保持本地执行）+complete() 全终点触发（错误交换无 pending 暂存=no-op，可观察行为=ref）；D-Metric 取证 ref 路由层双侧皆无；send_text 30s 钉有界超集（SendFn 防梗塞界）。
 pending BTreeMap id 序 vs 插入序 / `Some(false)` 不入 pending（providerExecuted 布尔回案同根）/ complete() 仅 clean 结束调用 / D-Metric 计数器缺 / send_text 30s 超集。（typed generateObject 子集=G-100 已修，归类不重复。）
 - 出处：cmp-A2 / FINAL-G53。
 
-### G-373 ⚠️ A3 provider 簇
+### G-373 ✅ A3 provider 簇
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane8 941ebcd7）**：alibaba region 表+`{workspaceID}.{region}.mams...` host 派生（chat/responses `compatible-mode/v1`、messages `apps/anthropic/v1`；未知 region typed error、用户 baseURL 胜出；cn 区不再静默打 intl）/zai bigmodel.cn `api/coding/paas/v4→api/anthropic/v1` 重写入表/xai chat `x-grok-conv-id`（prompt_cache_key→header 缝=vercel affinity 同款）/custom `package` 透传至 native lane（providers_from_config provider+model 双级；无 key 声明包保持匿名）/anthropic-compatible 车道（authToken→Authorization Bearer、apiKey→x-api-key、互斥错、keyless 可选）。
 alibaba region/workspaceID host 派生缺 → cn 流量打 intl / zai bigmodel.cn messages 根未入重写表 / xai chat `x-grok-conv-id` 缺 / 自定义 provider `package` 字段解而不用 / anthropic-compatible 自定义 host 降级 openai-chat + authToken bearer 缺。
 - 出处：cmp-A3 / FINAL-G54。
 
-### G-374 ⚠️ A4 媒体簇
+### G-374 ✅ A4 媒体簇
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane6 dd1f0a6f）**：READ_RETRY jittered_delay [0.8,1.2]×（Effect Schedule.jittered 语义，64 样本界测试）+multipart 边界 `opencode-media-{2×16hex}` 随机；cancel 取证**本就正确**——无 CancelSpec 即 UnsupportedOperation（route.rs:1145-1151，审计「no-op 反转」断言不成立，证据关闭）。
 Generation.cancel no-op vs ref UnsupportedOperation（语义反转）/ READ_RETRY 去抖动 / multipart 边界可预测。（unsupported 拒绝时机后移已并入 G-345 主面。）
 - 出处：cmp-A4 / FINAL-G55。
 
-### G-375 ⚠️ S1 server 簇
+### G-375 ✅ S1 server 簇
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane9 405af21c）**：events.persist 服务级开关（ServerOptions 对位：EngineOptions.event_persistence+BootOptions.events_persist 嵌入者可关；**默认维持开=文档化分歧**——ref CLI 缺省 Bus false 但端口 event-log 消费面 load-bearing，仅 workerd 钉 true）/persistent-pty 游标 JS Number() 宽容集（trim/""→0/指数/0x/0o/0b/符号规则+isSafeInteger 门）/pty.rs decode 注释对齐实现（ref fatal-drop 全 chunk 真值）；pairing 逐出取证等价（TTL+消费即删+零读→FIFO-by-expiry≡LRU）；fs find=fuzzysort 3.1.0 忠实移植（G-383⑦ 并案：go/algorithm/prepare/bitflags 全量，bun 探针逐字 fixture 钉序；无音调折叠/UTF-16 码元算术=精确，平手按输入序=有界）。
 events.persist 无服务器级开关 / persistent-pty cursor `Number()` 宽集合 vs `usize::parse` / pairing 容量逐出策略 / pty.rs:415-424 注释与实现矛盾。（workerd/simulation 剖面→G-163/G-8；replay 分块按字符边界→G-10 关联、G-105 已修。）
 - 出处：cmp-S1 / FINAL-G56。
 
-### G-376 ⚠️ S2 client 簇
+### G-376 ✅ S2 client 簇
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane14 97629310）**：RPC 订阅共享单 SSE 连接（client 级 SharedEvents OnceLock 缓存多路复用，ref make() 一连接模型；两 on() 连接数=1 测试）/probe URL 绝对路径替换（`new URL("/api/info", base)` 语义，live server 反代测试）/DiscoverOptions 版本谓词（string|谓词，exact 优先，matchesVersion 对位）；deny_unknown_fields 取证 no-delta（ref promise client json()=JSON.parse+cast，唯一严面 rpc-runtime 已由 call_into 边界镜像）；shared-events 错误完成先放缓冲再终错（Failed vs Overflow 分裂=ref finish(result,false)）+4096 off-by-one 取证一一对位（第 4097 个未投递事件即错）。
 RPC 订阅每 `on()` 独占 SSE 连接（连接放大）/ probe URL 保留 basePath 与 ref 相反 / serde 宽松解码无 deny_unknown_fields 门 / DiscoverOptions 版本谓词仅 string / shared-events 错误完成弃缓冲 + 4096 off-by-one。（effect 面→G-28/G-148。）
 - 出处：cmp-S2 / FINAL-G57。
 
-### G-377 ⚠️ S3a cli 簇
+### G-377 ✅ S3a cli 簇
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane13 14c8c5f0）**：run 新会话 title 更新失败浮出（`let _` 移除，ref run.ts:130-136 无守卫 await 对位）；--param 重复键取证=ref Object.assign 后写胜（no-delta）；service stop pty 策略取证 ref 未显式（默认 Clear 两侧同，no-delta）。
 api `--param` 重复键后写覆盖 / title 更新失败静默 / service stop pty 策略 Clear vs ref 未显式（待核）。（升级换源/端口错开/TTY 权限交互/诊断信号缺席→G-17 rust-extra 族、G-238、G-38；ssh-askpass→G-316。）
 - 出处：cmp-S3a / FINAL-G58。
 
-### G-378 ⚠️ S3b ACP 簇
+### G-378 ✅ S3b ACP 簇
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane13 14c8c5f0）**：_meta opencode/child-session 注入（child update+fallback 双面）/MCP 跨 attach 去重（同 config 不重发）+失败回滚+owner 检查移除/后台 follow 扩全非失败终点（Succeeded 含）/command 提交等待 HTTP 结果/available_commands Responded 门（session new/load/resume/fork 四口）/PromptResponse usage 全字段（vendored crate unstable_end_turn_token_usage 门开）/readDisplayText 解包（text-page envelope→entries join）/zed:// path 全查询位+百分号解码/replay data-url 按 cwd 组 file:// URL/directories realpath+词法回退；child-session 创建取证 ref 本就无（仅服务端 session.created）；API 签名小改（subscribe/on 同步化=共享多路复用后无 HTTP await）。
 child 投影缺 `_meta opencode` / child-session / MCP 跨 attach 去重缺 + 失败回滚缺 / handoff 仅 Interrupted 跟随 / command prompt 后台不等结果 / available_commands 先于响应 / PromptResponse usage 缺（unstable feature 未启用）/ readDisplayText 跳过 / zed:// 仅 ?path= 首参 / replay file URL 无目录 / directories 缺 realpath。
 - 出处：cmp-S3b / FINAL-G59。
 
-### G-379 ⚠️ S4a 插件宿主簇
+### G-379 ✅ S4a 插件宿主簇
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane5 86165976 + gb12-lane5b 2a8fee08）**：宿主簇 7 项（tui 子路径探测统一 no-fallback/vcs dispose 所有权索引修复（原谓词反置恒 false 清整表）+默认 editor 实现（共享内存 selection get/set）/merge_skills 严格 id（ref 品牌化 id 必填）/事件 best-effort 丢弃计数（BroadcastTap.dropped_count）/plugin.list 补 source|state(active|failed+error)|features(server/tui/rpc) 投影/命令调用形状=ref CommandInvocation）+guest 调用面 2 项（rpc.invoke 客户面：ctx.rpc.call/client→共享 rpc_dispatch（/api/rpc 同核），跨插件 typed e2e×5；vcs branch.list/status/diff+worktree list/create/remove/refresh 端口化：VcsPort 扩三读面+新 WorktreePort，HTTP handler 与插件面共乘同 data core，真 git 工程 bun e2e）；sidebar 行可点击取证 ALREADY_PRESENT（PluginSectionHits/plugin_section_click/slot_click e2e 在位）。
 tui 子路径探测自相矛盾（probe 无回退 vs resolve_subpath 有）/ vcs dispose 过滤恒 false 清空整表 / vcs default editor no-op stub / merge_skills `id??name` 键回退 / 事件 best-effort 丢弃计数 / ui.sidebar.section 行不可点击 / rpc client 调用面缺 / vcs branch.list·status·diff 与 worktree list·create·refresh·remove guest 调用面缺（G-24 修的是 transform/reload，读面三件未覆盖）/ plugin.list 投影 4 字段 / 命令调用形状近似。（markdown 渲染器→G-332；effect 拒载→G-28/G-148。）
 - 出处：cmp-S4a / FINAL-G60。
 
-### G-380 ⚠️ S4b schema 簇
+### G-380 ✅ S4b schema 簇
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane14 97629310）**：NonEmptyArray 解码门（common.rs non_empty::{vec,option_vec}→ToolState.content×2/ToolSuccess.content/ToolFailed.content/form fields×2 六面，decode-only=ref 解码期校验、序列化/openapi 面零影响）/identifier 同毫秒计数器 Mutex 串行化（CAS 方案仍有碾压窗——注释载明；16×64 前缀并发唯一性测试）/websearch published→Option<f64>（JSON 构造性有限=ref Finite；iso8601/parse_date_millis 适配；openapi 钉基线零 diff——served doc 本就 number）；BTreeMap 键序有界维持（workspace R-03 刻意 patch 掉 preserve_order 保排序确定性——如需对 ref 输出序做字节级金样再升级）。
 BTreeMap 键序重排影响逐字节快照 / NonEmptyArray→Vec 宽松 / identifier check-then-act 竞窗 / websearch published Finite→NonNegativeInt。（simulation→G-8；flock 简化=第七轮勘误 #6 已裁定；glob 子集→G-92；theme null→G-160③ 已修。）
 - 出处：cmp-S4b / FINAL-G61。
 
-### G-381 ⚠️ T4 键位簇
+### G-381 ✅ T4 键位簇
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane12 6529e522）**：顶层 BindingObject 按 BindingValueSchema union 解析（不再丢弃）/win32 terminal.suspend 解绑+ctrl+z 前插 input.undo（用户覆盖除外，ref config/index.tsx:288-296；纯逻辑+测试，cfg(windows) 门控接线）/prompt.editor 门控 editor-context 附加；meta→alt·hyper→super 折叠钉注（4 修饰引擎匹配安全）；scroll.speed/terminal.title/animations 消费取证在位。
 BindingValue 顶层对象不可解析被丢弃 / meta→alt·hyper→super 折叠 / win32 ctrl+z suspend/undo 反转 / 解析未消费键（scroll.speed/prompt.editor 等）。（插件目录发现初报经十九轮勘误 #13 证据复核**撤销**，见勘误节#1。）
 - 出处：cmp-T4 / FINAL-G62（去掉已撤销子项）。
 
-### G-382 ⚠️ core 杂项簇（C 系 residual）
+### G-382 ✅ core 杂项簇（C 系 residual）
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane15 161e6d99）**：question 布尔回案→[String(value)]（ref question.ts:99-107）/ModelUnavailable deprecation notice 文案（azure-cognitive-services/google-vertex-anthropic 迁移提示）/空 provider state `{provider:{}}` 保留（ref 仅丢 undefined）/越界 location→BootError::LocationOutsideProject typed error（相对拼写先 fs.resolve 归一；parity 测试自弃 TempDir 隐性 bug 顺修）/全局 AGENTS.md 读失败跳过（仅 project 源可 unavailable=ref instruction.ts 语义）/mime 嗅探收敛 oc_util::mime::detect_mime（PNG 8 字节全签名+GIF8 4 字节=ref；read.rs/prompt.rs 私副本删除）/canonical_json 浮点 JSON.stringify parity（1.0→1，instruction hash 面）；no-finish 事件面（G-105/G-336 已覆盖）/"opencode" 常量/lsp 键/subagent 回扫首完成即 NO_TEXT/instruction scrub（ref 无该 scrub——前提不成立）五项取证无差；reload_all 无生产调用（返回失败数据=ref fail-first 超集）；replay 无逐型 schema 解码登记 DEVIATION（EventDefinition 不载 data schema，52 型解码器属跨切工程且会破旧行回放——bus.rs 注释+本条盯守）。
 question 布尔回案映射（question.rs:160-167）/ 事件面族：无 finish 判失败超集、弃用提示文案缺、experimental generate service 恒 "opencode"、空 provider state `{provider:{}}` 省略（misc.rs:39、mod.rs:445、to_llm_message.rs:36-44）/ location 越界静默全仓快照（engine/mod.rs:1807，与 G-362 叠加放大）/ AGENTS.md 全局文件读失败过度降级 + lsp 键惰性（instruction.rs:104-107）/ mime 三副本不一致（read.rs:126-151 PNG 4 字节签名/GIF 双值）+ reload_all 吞失败 / subagent completion_text 空文本回扫旧消息 / replay 不做 schema 解码（宽容 vs ref die）/ canonical_json 浮点序列化差异 / instruction scrub 不中止在途交换。（output schema 豁免→G-230 bounded；60s/10s 有界窗→G-317；boot 悬置点已由 P1 门条件#2a 关闭——boot.rs:670-686 有守卫。）
 - 出处：cmp-C1+C2a+C3+C4+C5a+C6b+C7b / P1-G12+G13+G16+G17+G18+G19+G20。
 
-### G-383 ⚠️ pty/shell 服务簇（C7a residual）
+### G-383 ✅ pty/shell 服务簇（C7a residual）
+- **2026-11-11 第二十三轮收口 ✅（gb12-lane4 35bfd4b1 + gb12-lane9 405af21c）**：reader 携带缓冲解码（=G-335 同 lane 落地）+pty/shell 服务 ShutdownGuard teardown（pty 杀全部活子进程+终订；shell 解阻 waiter/abort 超时纤维，子进程按 ref shell.ts:141-147 不杀；pump/watcher 改持 Arc<Inner> 防 pin）/wire 超集以 chunked-replay 订阅 opt-in 谈判收口（`subscribe{chunked_replay}` 字段：老服务器忽略、ref 客户端永不收未知形状；title/foreground 两变体取证本就在 ref daemon.ts:97-98 非超集）/buffer 保留上限 UTF-16 码元口径（cursor-buffer_cursor 不变量 O(1)；persistent_pty 字节环=设计保持）/pty.exited exitCode Option+省略序列化（信号路径不再 unwrap_or(0)，node-pty undefined 对位）/发布时序+20ms try_wait 合并窗注释钉定良性/daemon prepare_handoff IO 出锁（所有权检查锁内、handoff 文件 IO 锁外、重锁后复查）；fs find 评分并案 G-375。
 服务无 teardown（pty/shell 子进程与 waiter 无终态化，无 Drop；ref pty.ts:128-134）/ persistent-pty wire 协议超集共用版本号 7 的互操作风险（建议版本协商或升 v8）/ pty buffer 字节 vs ref UTF-16 单位口径差（更保守）/ pty.exited exitCode `unwrap_or(0)` / 事件异步发布时序 / watcher 25ms 合并窗 / fs find 无 fff+贪心评分（G-324 关联面）/ daemon prepare_handoff 持锁 IO。
 - 出处：cmp-C7a / P1-G10+G15+FINAL-G60（超时/进程模型子项）。
 
@@ -2547,3 +2599,58 @@ keybind 230/230 全对齐；主题资产 33+1 md5 全等；openapi 141 operation
 ## 第二十二轮判定汇总
 
 27 lane 初报候选经两门合并登记册（G-01..G-63）→ 去重/归并/撤销后**正式立项 50 项**：🔴×12（G-334..G-345）/ 🟡×22（G-346..G-367）/ 🟢 打包簇×16（G-368..G-383）；**归类既有 12 处**、**撤销初报 1 条**（T4 插件目录发现）、**勘正旧勘误 1 处**（R17#13 locale_duration 括注）。产品级缺口单列不混入行为偏差：G-347（媒体部署接线）、G-348（cf-ai-gateway）、evaluation 域（归 G-7/G-17）。修复优先序（两门建议合并）：小成本高收益先行——G-341（删 `% 10_000` 一行）→ G-334 最小步（删 `__rawFetch`）→ G-336（补 `!stream_interrupted`）→ G-343（toggle_pin 分发）→ G-344（cancel_path 去 /v1）→ G-339/G-340（ACP 预览/时间串）→ G-337/G-338（插件钩子断线对）→ G-335（pty 字节缓冲化）→ G-342（stdin 串行化）→ G-362（snapshots/mcp.timeout 双键）→ G-363（默认模型回退）→ 其余 🟡 → 🟢 簇按域随手收；G-358 放行后以真实分页服务器对测闭环。质量口径：0 处未裁定矛盾、抽查 11/11 成立、盲区 10 项如实披露。记录：`docs/audit/port-parity-line-review/{REPORT,TABLE}.md` + `lanes/`（32 份）。
+
+---
+
+# 第二十三轮 burndown 收口（2026-11-11，gap-burndown-12）
+
+> 第二十二轮立项的 G-334..G-383 全部 50 项（🔴×12 / 🟡×22 / 🟢 簇×16）经 17 个串行 lane（L1 快赢、L2 engine、L3 hooks、L4 PTY、L5 plugin-host、L5b guest 调用面、L6 媒体、L7a/b 协议、L8 providers、L9 server/vcs、L10 MCP、L11 TUI 核心、L12 TUI 簇、L13 CLI/ACP、L14 schema/client、L15 core 杂项）落地并 fast-forward 合并 main，逐条 ✅。每 lane 独立 worktree（`.worktrees/gb12-*`，合并后即时回收）、dev-gate 单入口、nextest 未过滤证据、每 lane workspace 合并门复跑（日志 `.test-logs/*gb12*`）；PTY 面 lane（L4/L11）另过 `--profile pty` 序列化门。**无上游阻挡项**（无 opentui-rust 未移植功能依赖；全部有界面为文档化决策而非搁置）。工具面随轮硬化两件：dev-gate 结构化禁裸 cargo test（`c4aa35ae`）与负载门 6→8（`47cd5ab1`，owner ruling）。
+
+## 逐 lane 落地清单
+
+- **lane1 `afea43cd`（跨 crate 快赢）**：G-336/339/340/341/344/349/351。
+- **lane2 `095a7d32`（oc-core engine）**：G-362a/b、G-363（回退链尾设计修正）、G-364（rpc 门语义）。
+- **lane3 `a4799e1e`（插件契约断线对）**：G-337 WS seams 全链消费、G-338 permission.evaluate 生产派发（managed-policy+插件 hook ref 序组合）。
+- **lane4 `35bfd4b1`（PTY 族，+pty 门）**：G-335 增量解码、G-383a-f（teardown/谈判/UTF-16 口径/exitCode/锁外 IO）。
+- **lane5 `86165976`（plugin-host）**：G-334 沙箱逃逸面（__rawFetch 消除+eval/Function 置换+作用域影子）、G-365 安装原子性、G-379 宿主簇 7 项。
+- **lane5b `2a8fee08`（guest 调用面）**：G-379.7 rpc.invoke 客户面（共享 dispatch）、G-379.8 vcs/worktree 读+操作端口化（HTTP/插件同核）。
+- **lane6 `dd1f0a6f`（媒体，范围按勘误调）**：G-345 unsupported 强制、G-374 jitter/边界（cancel 取证已正确）、G-347 残余（decode 严格化×10+薄 client 门面）。
+- **lane7a `08d620ae`（协议聚焦）**：G-346 分类先于截断、G-357 compaction 严格化、G-366 interactions 形状/lenient。
+- **lane7b `83d0b84b`（协议/管线簇）**：G-371（AWS 凭证链四腿优先）+G-372（pending 序/complete 时机）。
+- **lane8 `941ebcd7`（providers）**：G-348 cf-ai-gateway 原生车道、G-356 vertex 守卫+token 拆分、G-373 五项。
+- **lane9 `405af21c`（server/vcs）**：G-350 vcs.init 插件派发、G-361 git 族（含 AM 映射审计文本订正）、G-375 簇+fs find fuzzysort 移植（G-383⑦ 并案）。
+- **lane10 `1bc113f3`（MCP）**：G-358 分页跟随、G-359 运行期刷新+NeedsAuth、G-360 三子项。
+- **lane11 `089a8a2d`（TUI 核心，+pty 门）**：G-342 stdin 串行化、G-343 pin 接线+持久化、G-352 live reducer 族、G-367 tps 默认（零金帧）。
+- **lane12 `6529e522`（TUI 簇）**：G-368/369/370/381（28 子项：20 修、8 有界/无差取证；零 oracle 重钉）。
+- **lane13 `14c8c5f0`（CLI/ACP）**：G-353/354/355、G-377、G-378（11 修 4 无差）。
+- **lane14 `97629310`（schema/client；rebase 后 ff）**：G-376（SSE 复用门为最大项）、G-380（BTreeMap 键序按 R-03 有界）。
+- **lane15 `161e6d99`（core 杂项簇；rebase 后 ff）**：G-382（8 修 3 无差 2 有界，含 scrub 前提证伪）。
+- **工具硬化（主检出直提）**：`c4aa35ae` dev-gate 结构化禁裸 cargo test；`47cd5ab1` 负载门 6→8。
+
+## 勘误与前提订正（对第二十二轮审计）
+
+1. **G-347 布线前提失实**：ref v2.0.24 无 /api/media HTTP 面（protocol 组清单枚举无 media、无生成 SSE；媒体=packages/ai SDK 库层经 AIClient 暴露、monorepo 零消费者）——「ref：/api/media 路由族完整消费」不成立，按 G-17 AIClient SDK 面同类裁决处理；可行动残余（decode 宽松+client 门面）已落地。
+2. **G-361④ 审计文本失实**：ref git.ts:171-178 状态矩阵实为 AM→**added**（登记称 ref 映射 modified）；按代码真值对齐。
+3. **G-374① 断言不成立**：cancel 无 CancelSpec 时本就 UnsupportedOperation（route.rs 现行实现），非 no-op 反转；证据关闭。
+4. **G-382⑪ 前提不成立**：ref v2.0.24 无 instruction scrub（仅 integration-attempt scrub 与 transfer sanitize，均已移植）；「不中止在途交换」为 ref 本征行为。
+5. **取证无差族（勿再立项）**：mistral converse 哈希（无 8 位截断）、thinking delta 五路径、partial-json NaN（serde 不可表示+fallback 等价）、轻校验/路由字段（makeRouteLanguageModel 两查已在）、D-Metric（ref 路由层双侧皆无）、--param 重复键（ref Object.assign 后写胜）、pairing 逐出（TTL+FIFO≡LRU）、shared-events 4096 off-by-one（第 4097 个事件即错=一一对位）、subagent 回扫（首完成即 NO_TEXT）、SIGHUP epilogue（异步信号安全超集）、deny_unknown_fields（ref promise client 本就不校验）、G-379 sidebar 可点击（L5b 取证在位）、G-378 child-session 创建（ref 本就仅服务端）。
+
+## 有界偏离（本轮新增，均已代码注释/落地注记）
+
+G-334c 全局 Bun/process 面（Bun 钉死 non-writable/stdio 依赖——归 G-247 结构隔离后续）；G-335 确定非法序列即替换（流式 TextDecoder 语义）；G-338 hook Err 保 pre-trigger 裁决；G-343 键位面（ref footer 仅提示）；G-347 client 门面 `'_'` 借用+RandomState 随机（非加密）；G-352 model-switched 行 previous:None（wire 无活源）；G-358 分页 1000 页上限；G-359 token 换牌=重连；G-363 回退仅叶子 resolver；G-364 rpc.close=per-location 门（G-289 单 guest）；G-367 组件默认未动（零金帧）；G-368 fs.watch 活面/kitty 探测门控；G-370 mount 权重/tok/s 基准（time.streamed 未上 wire）/RetryProvider 渐变；G-371 多跳 assume-role 链有声失败+bedrock_invoke_route 超集钉定；G-372 send_text 30s 防梗塞界；G-373 无 key 声明包保持匿名；G-375 events.persist 默认开（ref CLI 缺省关、端口 event-log 消费 load-bearing）+fuzzysort 无音调折叠/平手输入序；G-376 subscribe/on 同步化；G-379.7 `ctx.rpc.client(definition)`（ref 为 callable ctx.rpc）；G-380 BTreeMap 键序（R-03）；G-382 replay 无逐型 schema 解码（DEVIATION 盯守）；G-383 persistent_pty 字节环/chunked-replay opt-in 谈判（超集仅对声明客户端）。
+
+## flake 白名单/观察名单勘注（2.2#4）
+
+- **oc-pty `second_subscribe_on_a_connection_is_rejected` 族（含 `subscribe_connections_end_at_stream_end`）入白名单**：gb10-lane10/16/17 三见后又于 gb12 L4/L13/L14 门内四见（均 try-N 重试或 --exact 复现通过）——满足「复发三次以上再议」条件，正式入白名单（重试即过、勿误判回归）。
+- **新增观察名单**：`scenario_config_touch`（oc-server，L12 门内首见——frame 19 金序列分歧 command.updated vs skill.updated，try-2 过）、`parent_up_returns`（oc-tui pty_session_route，L6 门内首见，重试过）、`provider_refresh_engine_boot_loop_updates_and_publishes`（第二见，R18 已观察在册）。复发三次以上再议白名单。
+- 本轮全部 lane 门证据（含白名单/观察名单 --exact 复现日志）在 `.test-logs/*gb12*`。
+
+## 制度速查订正
+
+- **2.1#1**：负载门 1-min load **≥8** 拒启动（owner ruling 2026-11-11，`47cd5ab1`；原 6——稳态常驻 6.x 频繁卡门）。
+- **2.2#1 补强**：dev-gate **结构化拒绝**裸 `cargo test`（exit 4；`c4aa35ae`）——canonical harness=nextest 由脚本强制，唯一豁免 `--exact` 单测复现（引号内嵌套调用同受检）。tee 铁律（2.1#3）仍为纪律面（tee 在调用方管道、dev-gate 参数外不可结构化），L14/L15 两起违规均当日 steer 纠正+nextest 重跑取证。
+- **2.3 补注**：lane 分支若因主检出工具提交前移而非最新基，rebase 后 ff（L14/L15 先例）；lane 报告日志路径一律以盘上 `ls -t` 实测为准。
+
+## 第二十三轮判定
+
+G-334..G-383 全部 ✅（含 4 项审计勘误撤销/订正、取证无差族 13 项以证据关闭）；有界偏离 30+ 项就地登记；G-347 布线前提经双侧源码证伪按勘误处理。现存未关闭项=既有文档化决策族（G-12/G-16/G-17/G-28/G-32/G-38/G-39/G-40/G-49/G-161①/G-163/G-164/G-200②/G-211(已 OBSOLETE)/G-212/G-238/G-239/G-240/G-247 残余/G-289/G-290/G-313..G-318/G-326/G-328/G-329/G-331..G-333）+ 本节新增有界项。**无上游阻挡项。**
