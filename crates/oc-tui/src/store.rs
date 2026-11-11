@@ -13180,7 +13180,7 @@ impl Store {
                         exit: shell
                             .get("exit")
                             .and_then(serde_json::Value::as_f64)
-                            .map(|code| code.round() as i64),
+                            .map(wire_exit_code),
                         output: None,
                         created: event.created.unwrap_or(0),
                     },
@@ -13208,7 +13208,7 @@ impl Store {
                     .data
                     .pointer("/shell/exit")
                     .and_then(serde_json::Value::as_f64)
-                    .map(|code| code.round() as i64);
+                    .map(wire_exit_code);
                 let output = event
                     .data
                     .pointer("/output/output")
@@ -14331,8 +14331,16 @@ fn model_ref_selection(model: &Value) -> Option<ModelSelection> {
     })
 }
 
+/// Wire `exit` code: f64 → i64 (integral codes survive the round
+/// trip — the snapshot parser's same truncation allowance).
+#[allow(clippy::cast_possible_truncation)] // wire numerics: integral values survive the f64 round-trip
+fn wire_exit_code(code: f64) -> i64 {
+    code.round() as i64
+}
+
 /// G-352 — the `synthetic` row's metadata fields (the same extraction
 /// as the resync-side parser).
+#[allow(clippy::type_complexity)] // the five metadata fields, mirroring the resync-side parser
 fn synthetic_fields(
     event: &BusEvent,
 ) -> (Vec<String>, Option<String>, Option<String>, Option<String>, Option<String>) {
@@ -18284,6 +18292,7 @@ mod g273_mention_tests {
     /// location-switched / system / synthetic / shell transcript rows
     /// land immediately off their events, no resync needed; usage
     /// carries tokens beside cost.
+    #[allow(clippy::too_many_lines)] // one fold assertion per event type — kept whole
     #[test]
     fn live_reducers_project_six_event_types_without_resync() {
         fn bus_event(id: &str, type_: &str, data: serde_json::Value) -> Ingest {

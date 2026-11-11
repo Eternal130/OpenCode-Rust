@@ -10595,8 +10595,9 @@ fn read_session_input(fd: std::os::fd::RawFd, timeout_ms: i32) -> Vec<u8> {
     // 50 ms poll passes release quickly; when a query window is in
     // flight this parks until it closes (≤150 ms + the query's own
     // wait), so the two fd 0 consumers never interleave reads.
-    let _stdin_guard =
-        crate::terminal_proto::STDIN_READ_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let _stdin_guard = crate::terminal_proto::STDIN_READ_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // Keystrokes the query window read (bytes that were not its
     // reply) come back first — delayed, never lost.
     let pushed = crate::terminal_proto::take_stdin_pushback();
@@ -15156,7 +15157,7 @@ mod render_scheduler_equiv_tests {
         let path = dir.join("session.json");
 
         // Missing file → empty (readJson's catch).
-        assert!(read_pinned_sessions(&path).is_empty());
+        assert_eq!(read_pinned_sessions(&path), Vec::<String>::new());
 
         // Save → reload round-trip.
         write_pinned_sessions(&path, &["ses_a".to_owned(), "ses_b".to_owned()])
@@ -15167,7 +15168,7 @@ mod render_scheduler_equiv_tests {
 
         // Overwrite with the empty set, then corrupt-file resilience.
         write_pinned_sessions(&path, &[]).expect("atomic write");
-        assert!(read_pinned_sessions(&path).is_empty());
+        assert_eq!(read_pinned_sessions(&path), Vec::<String>::new());
         std::fs::write(&path, "{not json").expect("corrupt");
         assert!(
             read_pinned_sessions(&path).is_empty(),

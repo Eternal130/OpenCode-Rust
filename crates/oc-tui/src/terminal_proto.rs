@@ -486,15 +486,15 @@ static STDIN_PUSHBACK: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::ne
 /// arm — drained before any fresh poll under the stdin lock).
 #[must_use]
 pub fn take_stdin_pushback() -> Vec<u8> {
-    let mut pending = STDIN_PUSHBACK.lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut pending = STDIN_PUSHBACK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     std::mem::take(&mut *pending)
 }
 
 /// Queue bytes for the input thread (the OSC 52 window's leftover
 /// arm).
-fn push_stdin_bytes(bytes: Vec<u8>) {
-    let mut pending = STDIN_PUSHBACK.lock().unwrap_or_else(|poison| poison.into_inner());
-    pending.extend_from_slice(&bytes);
+fn push_stdin_bytes(bytes: &[u8]) {
+    let mut pending = STDIN_PUSHBACK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    pending.extend_from_slice(bytes);
 }
 
 /// Split a raw OSC 52 read window into `(reply, leftover)`: the
@@ -513,11 +513,11 @@ fn split_osc52_window(collected: &[u8]) -> (Option<Vec<u8>>, Vec<u8>) {
     let tail = &collected[start + 5..]; // past the 5-byte `ESC ] 5 2 ;` preamble
     let bel = tail.iter().position(|byte| *byte == 0x07);
     let st = tail.windows(2).position(|window| window == b"\x1b\\");
+    // ST spans two bytes past its match position; BEL one.
     let (end, terminator_len) = match (bel, st) {
         (Some(bel), Some(st)) if bel <= st => (bel, 1),
-        (Some(_), Some(st)) => (st, 2),
+        (_, Some(st)) => (st, 2),
         (Some(bel), None) => (bel, 1),
-        (None, Some(st)) => (st, 2),
         (None, None) => (tail.len(), 0), // unterminated: consume the window
     };
     let reply_end = (start + 5 + end + terminator_len).min(collected.len());
@@ -547,8 +547,8 @@ pub fn clipboard_read_osc52() -> Option<Vec<u8>> {
     // thread parks on the mutex instead of racing fd 0 (its 50 ms
     // poll passes release quickly; no response just runs out the
     // 150 ms deadline and releases).
-    let _stdin_guard = STDIN_READ_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
-    let answer = (|| {
+    let _stdin_guard = STDIN_READ_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    (|| {
         {
             let mut stdout = std::io::stdout().lock();
             if stdout.write_all(b"\x1b]52;c;?\x07").is_err() || stdout.flush().is_err() {
@@ -588,11 +588,10 @@ pub fn clipboard_read_osc52() -> Option<Vec<u8>> {
         // thread (keystrokes that raced the query) — push them back,
         // never drop them.
         if !leftover.is_empty() {
-            push_stdin_bytes(leftover);
+            push_stdin_bytes(&leftover);
         }
         reply
-    })();
-    answer
+    })()
 }
 
 /// Parse `OSC 52 ; c ; <base64|?> BEL|ST` out of the read window;
@@ -750,7 +749,7 @@ mod tests {
         let (reply, leftover) = split_osc52_window(b"\x1b]52;c;aGk=\x07\x1b[C");
         assert_eq!(reply, Some(b"hi".to_vec()), "the clipboard consumer gets the reply");
         assert_eq!(leftover, b"\x1b[C".to_vec(), "the keystroke is the leftover");
-        push_stdin_bytes(leftover);
+        push_stdin_bytes(&leftover);
         // The input thread's read arm: pushback first, exactly once.
         assert_eq!(take_stdin_pushback(), b"\x1b[C".to_vec());
         assert!(take_stdin_pushback().is_empty(), "drained — no double delivery");
@@ -763,7 +762,8 @@ mod tests {
         for label in ["query", "input"] {
             let order = Arc::clone(&order);
             handles.push(std::thread::spawn(move || {
-                let _guard = STDIN_READ_LOCK.lock().unwrap_or_else(|poison| poison.into_inner());
+                let _guard =
+                    STDIN_READ_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 order.lock().expect("order").push(label);
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }));
