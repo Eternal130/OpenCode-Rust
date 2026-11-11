@@ -48,7 +48,12 @@ pub struct AttachmentPayload {
 
 impl AttachmentPayload {
     /// Decode a `data:<mime>;base64,<payload>` URI (the attachment
-    /// form `pasteAttachment` stages); `None` for foreign shapes.
+    /// form `pasteAttachment` stages); `None` for foreign shapes AND
+    /// for unsupported mimes — G-369②: the ref's
+    /// `attachmentKind` (prompt/attachment.ts:7-10) recognizes only
+    /// `data:image/*` and `data:application/pdf;`; anything else
+    /// THROWS `Unsupported inline attachment` and stages nothing.
+    /// The port's `paste_attachment` skips those the same way.
     #[must_use]
     pub fn from_data_uri(uri: &str) -> Option<Self> {
         let rest = uri.strip_prefix("data:")?;
@@ -57,6 +62,9 @@ impl AttachmentPayload {
             return None;
         }
         let mime = header.split(';').next().unwrap_or_default();
+        if !mime.starts_with("image/") && mime != "application/pdf" {
+            return None;
+        }
         Some(Self { mime: mime.to_owned(), data: payload.to_owned() })
     }
 
@@ -448,11 +456,31 @@ impl PromptHistory {
         self
     }
 
+    /// G-369④ — `move`'s edited-draft guard (history.tsx:106-110): the
+    /// currently-displayed entry (`history.at(index)` — at the live
+    /// position that is `at(0)`, the OLDEST entry, per the ref's
+    /// positive-index-0 reading) must match the live text, or the
+    /// text must be empty; otherwise navigation is refused (an edited
+    /// draft never silently swaps out from under the user).
+    fn guard_blocks(&self, draft: &PromptDraft) -> bool {
+        let current = match self.cursor {
+            None => self.entries.first(),
+            Some(index) => self.entries.get(index),
+        };
+        let Some(current) = current else {
+            // `if (!current) return undefined` — no displayed entry
+            // (shouldn't happen with a non-empty history, but the
+            // empty-text pass-through below needs the entry).
+            return false;
+        };
+        current.text != draft.text && !draft.text.is_empty()
+    }
+
     /// Previous (older) entry; the first call stashes the live draft
     /// (chips included) for the round-trip restore.
     #[must_use]
     pub fn previous(mut self, draft: &PromptDraft) -> (Self, Option<HistoryEntry>) {
-        if self.entries.is_empty() {
+        if self.entries.is_empty() || self.guard_blocks(draft) {
             return (self, None);
         }
         let index = match self.cursor {
@@ -472,6 +500,9 @@ impl PromptHistory {
     /// Next (newer) entry; past the end restores the stashed draft.
     #[must_use]
     pub fn next(mut self, draft: &PromptDraft) -> (Self, Option<HistoryEntry>) {
+        if !self.entries.is_empty() && self.guard_blocks(draft) {
+            return (self, None);
+        }
         let Some(index) = self.cursor else {
             return (self.clone(), Some(HistoryEntry::from_draft(draft)));
         };
@@ -1200,6 +1231,15 @@ impl Composer {
     /// staged mentions, reused for identical payloads) inserts at the
     /// caret as an atomic chip followed by a space.
     pub fn paste_attachment(&mut self, filename: Option<&str>, uri: &str) {
+        // G-369② — the ref's `promptAttachmentLabel` throws
+        // `Unsupported inline attachment` for a data URI whose mime is
+        // neither image/* nor application/pdf (attachment.ts:10-11);
+        // the throw aborts the staging, so nothing inserts. The port
+        // skips the same shapes BEFORE the label would misnumber them
+        // as `[PDF N]`.
+        if uri.starts_with("data:") && AttachmentPayload::from_data_uri(uri).is_none() {
+            return;
+        }
         let payload = AttachmentPayload::from_data_uri(uri);
         let label = attachment::prompt_attachment_label(&self.draft.files, &payload, filename);
         let start = self.edit.caret();
@@ -1921,16 +1961,23 @@ mod tests {
             .clone()
             .push(&PromptDraft { text: "oldest".into(), ..PromptDraft::default() });
         state.set(PromptDraft { text: "draft".into(), ..PromptDraft::default() });
-        // Up on the first line → history.previous.
+        // G-369④ — the edited-draft guard (history.tsx:108): a
+        // non-empty draft that doesn't match the displayed entry
+        // refuses navigation, so Up only moves the caret.
+        state.handle_key(&ComposerKey::Up);
+        assert_eq!(state.draft.text, "draft", "an edited draft never swaps out");
+        // From an EMPTY draft, Up reaches history.
+        state.set(PromptDraft::default());
         state.handle_key(&ComposerKey::Up);
         assert_eq!(state.draft.text, "oldest");
         state.handle_key(&ComposerKey::Up);
         assert_eq!(state.draft.text, "older");
-        // Down walks forward and restores the stashed draft.
+        // Down walks forward and restores the stashed (empty) draft —
+        // the stash was taken at the first Up, from the empty draft.
         state.handle_key(&ComposerKey::Down);
         assert_eq!(state.draft.text, "oldest");
         state.handle_key(&ComposerKey::Down);
-        assert_eq!(state.draft.text, "draft");
+        assert_eq!(state.draft.text, "");
         // Up/down INSIDE a multiline draft moves the caret, not history.
         let mut multi = composer("one\ntwo");
         multi.handle_key(&ComposerKey::Up);
@@ -2111,6 +2158,13 @@ mod tests {
         state.handle_key(&ComposerKey::Backspace);
         assert_eq!(state.draft.text, "[Image 1] [Image 2] ");
         assert_eq!(state.draft.files.len(), 2);
+
+        // G-369② — an unsupported data-URI mime stages NOTHING (the
+        // ref throws `Unsupported inline attachment`).
+        let before = state.draft.text.clone();
+        state.paste_attachment(Some("data.bin"), "data:application/octet-stream;base64,QUJD");
+        assert_eq!(state.draft.text, before, "no chip inserted");
+        assert_eq!(state.draft.files.len(), 2, "no file staged");
     }
 
     #[test]
@@ -2230,6 +2284,28 @@ mod tests {
         // valid_prompt_info gate agrees).
         assert!(HistoryEntry::from_json(&serde_json::json!({ "text": "x" })).is_none());
         assert!(HistoryEntry::from_json(&serde_json::json!({ "pasted": [] })).is_none());
+    }
+
+    /// G-369④ — `move`'s edited-draft guard (history.tsx:106-110):
+    /// navigation from a NON-EMPTY draft that doesn't match the
+    /// displayed entry is refused; an empty draft always navigates.
+    #[test]
+    fn history_navigation_refuses_an_edited_draft() {
+        let mut state = composer("first");
+        state.handle_key(&ComposerKey::Enter);
+        state.handle_key(&ComposerKey::Up);
+        assert_eq!(state.draft.text, "first", "empty draft navigates");
+        // Edit the displayed entry → both directions refuse.
+        state.draft.text = "first (edited)".into();
+        state.handle_key(&ComposerKey::Up);
+        assert_eq!(state.draft.text, "first (edited)", "up refused");
+        state.handle_key(&ComposerKey::Down);
+        assert_eq!(state.draft.text, "first (edited)", "down refused");
+        // Clearing the draft unblocks navigation again (but the
+        // cursor already sits at the oldest entry, so Up is a no-op).
+        state.draft.text = String::new();
+        state.handle_key(&ComposerKey::Up);
+        assert_eq!(state.draft.text, "", "already at the oldest entry");
     }
 
     /// G-185 — the ref's cap is 50 (`MAX_HISTORY_ENTRIES`,

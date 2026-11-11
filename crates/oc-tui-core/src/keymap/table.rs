@@ -547,6 +547,14 @@ static DEFAULT_TABLE: &[CommandDef] = defs! {
     "diff_switch_focus" => "diff.switch_focus", "none", "Deprecated: keyboard navigation always controls the diff", "diff";
     "diff_down" => "diff.down", "j,down", "Move diff viewer down", "diff";
     "diff_up" => "diff.up", "k,up", "Move diff viewer up", "diff";
+    // G-369⑤ — ctrl+f is claimed by FIVE commands across layers
+    // (diff.page.down here, session.pin.toggle + model.dialog.favorite
+    // + permission.prompt.fullscreen in "dialog", input.move.right in
+    // "input") — verbatim the ref keybind.ts truth (keybind.ts:68/
+    // 140/163/209/277); the keymap's layer stack resolves the winner
+    // (diff layer while the viewer is mounted, dialog layer while a
+    // dialog is focused, input otherwise), so the overlap is
+    // intentional, not a bug.
     "diff_page_down" => "diff.page.down", "pagedown,ctrl+f", "Page diff viewer down", "diff";
     "diff_page_up" => "diff.page.up", "pageup,ctrl+b", "Page diff viewer up", "diff";
     "diff_half_page_down" => "diff.half_page.down", "ctrl+d", "Scroll diff viewer down half a page", "diff";

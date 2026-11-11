@@ -304,13 +304,25 @@ pub fn prompt_attachment_label(
         return name.unwrap_or("file").to_owned();
     };
     let kind = if payload.mime.starts_with("image/") { "Image" } else { "PDF" };
-    // Reuse: the identical payload already staged → its mention.
-    if let Some(file) = existing.iter().find(|file| {
-        file.payload
-            .as_ref()
-            .is_some_and(|other| other.data == payload.data && other.mime == payload.mime)
-    }) {
-        return file.mention_text();
+    // Reuse (prompt/attachment.ts:85-90 — the Image-only arm): the
+    // identical payload (uri ≡ mime+data for data URIs) with the SAME
+    // metadata (name/description — description is unmodeled, so both
+    // sides are null) and a non-empty mention → its mention is
+    // reused. PDF attachments always re-number (the ref computes
+    // `existing` only for `kind === "Image"`).
+    if kind == "Image" {
+        if let Some(file) = existing.iter().find(|file| {
+            let same_payload = file
+                .payload
+                .as_ref()
+                .is_some_and(|other| other.data == payload.data && other.mime == payload.mime);
+            let staged_name = if file.name.is_empty() { None } else { Some(file.name.as_str()) };
+            same_payload
+                && staged_name == name
+                && file.mention.as_deref().is_some_and(|t| !t.is_empty())
+        }) {
+            return file.mention.clone().unwrap_or_else(|| file.name.clone());
+        }
     }
     let pattern_prefix = format!("[{kind} ");
     let count = existing.iter().fold(0usize, |highest, file| {
@@ -475,14 +487,38 @@ mod tests {
             },
         ];
         // Same payload again → its own staged mention is reused.
-        assert_eq!(prompt_attachment_label(&staged, &Some(png), Some("two.png")), "[Image 2]");
+        assert_eq!(
+            prompt_attachment_label(&staged, &Some(png.clone()), Some("two.png")),
+            "[Image 2]"
+        );
         // New payload numbers past the highest existing image.
         let fresh = AttachmentPayload { mime: "image/png".into(), data: "////////".into() };
         assert_eq!(prompt_attachment_label(&staged, &Some(fresh), None), "[Image 3]");
         // PDFs number their own series.
         let pdf = AttachmentPayload { mime: "application/pdf".into(), data: "AAAA".into() };
-        assert_eq!(prompt_attachment_label(&staged, &Some(pdf), None), "[PDF 1]");
+        assert_eq!(prompt_attachment_label(&staged, &Some(pdf.clone()), None), "[PDF 1]");
         // Mentions without payloads (plain @-file chips) label by name.
         assert_eq!(prompt_attachment_label(&staged, &None, Some("notes.md")), "notes.md");
+        // G-369①: the reuse key is payload+name (uri+meta,
+        // promptAttachmentLabel) — a same-payload attach under a
+        // DIFFERENT name re-numbers instead of reusing.
+        assert_eq!(
+            prompt_attachment_label(&staged, &Some(png), Some("renamed.png")),
+            "[Image 3]",
+            "same payload, different metadata does not reuse"
+        );
+        // PDFs never reuse (the ref computes `existing` for Image only).
+        let staged_pdf = vec![FileMention {
+            name: "doc.pdf".into(),
+            start: 0,
+            end: 9,
+            payload: Some(pdf.clone()),
+            mention: Some("[PDF 1]".into()),
+        }];
+        assert_eq!(
+            prompt_attachment_label(&staged_pdf, &Some(pdf.clone()), Some("doc.pdf")),
+            "[PDF 2]",
+            "PDF attachments always re-number"
+        );
     }
 }
