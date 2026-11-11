@@ -88,6 +88,7 @@ fn boot_options(root: &Path, home: &Path, project: &Path) -> BootOptions {
         data_root: root.join("data"),
         home: home.to_owned(),
         config_location: Some(project.to_owned()),
+        events_persist: None,
     }
 }
 

@@ -82,16 +82,20 @@ async fn find_substring_completion_ranks_first_and_fuzzy_falls_back() {
     assert_ne!(found.len(), 0);
     assert!(found[0].ends_with("readme.md"), "substring completion first: {found:?}");
 
-    // Fuzzy subsequence: "rdm" matches readme.md (tight: d-m adjacent)
-    // and the scattered rust/.../todo.md path; the tighter match wins.
+    // Fuzzy subsequence: "rdm" matches readme.md and the scattered
+    // rust/.../todo.md path. G-375⑤: with the faithful fuzzysort
+    // port, the BOUNDARY-ALIGNED scattered match (rust/.../docs →
+    // r,d,m each at a word beginning → strict) outranks readme.md's
+    // interior d..m span — the pinned library order (verified against
+    // fuzzysort 3.1.0: todo.md -129, readme.md -17006). Both present.
     let envelope = find_raw(&server, "rdm").await;
     let found = paths(&envelope);
     assert!(found.iter().any(|p| p.ends_with("readme.md")), "subsequence matches: {found:?}");
     assert!(found.iter().any(|p| p.ends_with("todo.md")), "subsequence matches: {found:?}");
     assert!(
-        found.iter().position(|p| p.ends_with("readme.md"))
-            < found.iter().position(|p| p.ends_with("todo.md")),
-        "substring match outranks scattered subsequence: {found:?}"
+        found.iter().position(|p| p.ends_with("todo.md"))
+            < found.iter().position(|p| p.ends_with("readme.md")),
+        "boundary-aligned scattered match outranks the interior span (fuzzysort 3.1.0 order): {found:?}"
     );
 
     // No match → empty data array.

@@ -51,6 +51,7 @@ async fn engine_permission_port_round_trip() {
         data_root: box_.join("data"),
         home: box_.join("home"),
         config_location: Some(box_.join("project")),
+        events_persist: None,
     };
     let handle = boot_and_serve(&options).await.expect("boot and serve");
     let location = oc_core::location::LocationRef::new(box_.join("project"), None);

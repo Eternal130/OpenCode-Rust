@@ -300,6 +300,7 @@ async fn find(
     // canonical root is a different slot).
     let root = std::fs::canonicalize(&root).unwrap_or(root);
     let root_for_entries = root.clone();
+    let root_for_scoring = root.clone();
     let exclusions = ScanExclusions::for_root(&root);
     // G-31: VCS-rooted non-home scans are unbounded (ref search.ts:72
     // `location.vcs && !home ? MAX_SAFE_INTEGER : 100_000`); the
@@ -320,31 +321,33 @@ async fn find(
         .await;
 
     // REF (filesystem/search.ts): every find path ranks the index
-    // entries — fuzzysort.go in the ripgrep fallback, score-desc then
-    // path-length-asc in the fff layer — and defaults the limit to 50.
-    // Ranking equivalent: subsequence fuzzy score (substring matches
-    // win via the consecutive-run bonus), then shorter paths first.
-    // Scoring runs on spawn_blocking like the index build.
+    // entries — fuzzysort.go in the ripgrep fallback — and defaults
+    // the limit to 50. G-375⑤: the ranking is a faithful port of
+    // fuzzysort 3.1.0's `go` over the RELATIVE index paths
+    // (directories carry the trailing separator, like the ref's index
+    // keys). Scoring runs on spawn_blocking like the index build.
     let query_for_blocking = query.clone();
     let blocking = tokio::task::spawn_blocking(move || {
         let effective_limit = limit.unwrap_or(50);
-        let lowered = query_for_blocking.to_lowercase();
-        let query_chars: Vec<char> = lowered.chars().collect();
-        let mut scored: Vec<_> = entries
+        let targets: Vec<String> = entries
             .iter()
             .filter(|(_, is_dir)| (*is_dir && want_dirs) || (!*is_dir && want_files))
-            .filter_map(|(path, is_dir)| {
-                let target = path.to_string_lossy().to_lowercase();
-                fuzzy_score(&query_chars, &target)
-                    .map(|score| (score, target.chars().count(), target, path, is_dir))
+            .map(|(path, is_dir)| {
+                let mut relative = path_relative(&root_for_scoring, path);
+                if *is_dir {
+                    relative.push('/');
+                }
+                relative
             })
             .collect();
-        scored
-            .sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)).then_with(|| a.2.cmp(&b.2)));
-        scored.truncate(effective_limit);
-        scored
+        let ranked = super::fs_fuzzysort::go(&query_for_blocking, &targets, effective_limit);
+        let filtered: Vec<&(std::path::PathBuf, bool)> = entries
+            .iter()
+            .filter(|(_, is_dir)| (*is_dir && want_dirs) || (!*is_dir && want_files))
+            .collect();
+        ranked
             .into_iter()
-            .map(|(_, _, _, path, is_dir)| (path.clone(), *is_dir))
+            .map(|index| (filtered[index].0.clone(), filtered[index].1))
             .collect::<Vec<_>>()
     });
     let scored = blocking.await.map_err(|error| {
@@ -472,57 +475,12 @@ impl ScanExclusions {
     }
 }
 
-/// Fuzzy subsequence score, the ranking equivalent of REF's fuzzysort/fff
-/// usage: case-insensitive subsequence over the whole path string with a
-/// consecutive-run bonus (so substring completions — what the web UI's
-/// fsFind relies on — outrank scattered acronyms) and a word-start bonus
-/// after separators. Tighter matches edge out longer ones. `None` = no
-/// match. Deviation from fuzzysort's exact algorithm: single-pass greedy
-/// alignment (documented in the lane report).
-fn fuzzy_score(query: &[char], target: &str) -> Option<i64> {
-    let chars: Vec<char> = target.chars().collect();
-    let mut score: i64 = 0;
-    let mut matched = 0usize;
-    let mut previous: i64 = -2;
-    for (index, character) in chars.iter().enumerate() {
-        if matched < query.len() && *character == query[matched] {
-            score += 1;
-            // char-index arithmetic against a running i64 cursor
-            #[allow(clippy::cast_possible_wrap)]
-            let index = index as i64;
-            if index == previous + 1 {
-                score += 4;
-            }
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let previous_char = (index - 1) as usize;
-            let boundary =
-                index == 0 || matches!(chars[previous_char], '/' | '-' | '_' | ' ' | '.');
-            if boundary {
-                score += 3;
-            }
-            previous = index;
-            matched += 1;
-        }
-    }
-    if matched < query.len() {
-        return None;
-    }
-    // Prefer tighter matches (fuzzysort's "closer spread" heuristic).
-    // fuzzysort's spread heuristic: intentional usize->i64 crossings
-    #[allow(clippy::cast_possible_wrap)]
-    {
-        Some(score - (chars.len() as i64 - query.len() as i64) / 8)
-    }
-}
-
-/// REF (search.ts ranking): fuzzysort.go in the ripgrep fallback, then
-/// score-desc / path-length-asc in the fff layer. The port's ranking is
-/// a greedy-subsequence approximation of fuzzysort/fff — single-pass
-/// left-to-right alignment rather than fuzzysort's optimal scoring —
-/// whose substring-first property (consecutive-run bonus outranks
-/// scattered acronym matches) is what autocomplete depends on; that
-/// property is pinned by test
-/// `fuzzy_substring_completion_outranks_scattered_subsequence`.
+/// REF (search.ts ranking): fuzzysort.go in the ripgrep fallback.
+/// G-375⑤ — the ranking is the faithful fuzzysort 3.1.0 port in
+/// [`super::fs_fuzzysort`] (see that module's docs for the documented
+/// deviations); the substring-first property autocomplete depends on
+/// is pinned by `fs_fuzzysort::tests::substring_completion_ranks_first`
+/// and the fs_find integration tests.
 ///
 /// The budget counts ENTRIES VISITED (read from a directory), not
 /// candidates pushed: with `type=file` over huge trees of directories,
@@ -987,36 +945,9 @@ fn _query(uri: &Uri, name: &str) -> Option<String> {
 mod find_tests {
     use super::*;
 
-    fn chars(value: &str) -> Vec<char> {
-        value.chars().collect()
-    }
-
-    #[test]
-    fn fuzzy_substring_completion_outranks_scattered_subsequence() {
-        let substring = fuzzy_score(&chars("read"), "/a/readme.md").expect("substring matches");
-        let scattered = fuzzy_score(&chars("read"), "/a/rusty/example/asset/do.txt")
-            .expect("subsequence matches");
-        let missing = fuzzy_score(&chars("zzz"), "/a/readme.md");
-        assert!(substring > scattered, "substring completion must rank first");
-        assert_eq!(missing, None);
-    }
-
-    #[test]
-    fn fuzzy_is_case_insensitive_and_matches_empty_query() {
-        // Call-site contract: targets arrive lowercased (the handler
-        // lowercases both query and path like fuzzysort's prepare).
-        assert!(fuzzy_score(&chars("rdm"), "/a/readme.md").is_some());
-        // REF fuzzysort: empty query matches everything (score equal,
-        // shorter paths first).
-        assert!(fuzzy_score(&chars(""), "/anything/at/all.txt").is_some());
-    }
-
-    #[test]
-    fn fuzzy_prefers_tighter_matches() {
-        let tight = fuzzy_score(&chars("ab"), "/ab").expect("tight");
-        let loose = fuzzy_score(&chars("ab"), "/a/super/long/path/b").expect("loose");
-        assert!(tight > loose);
-    }
+    // G-375⑤ — the ranking tests moved to `fs_fuzzysort` (the
+    // faithful fuzzysort 3.1.0 port); the old approximation's unit
+    // tests were removed with `fuzzy_score`.
 
     #[test]
     fn exclusions_skip_home_names_only_when_rooted_at_home() {

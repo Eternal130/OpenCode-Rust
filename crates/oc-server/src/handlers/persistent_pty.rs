@@ -320,11 +320,16 @@ async fn connect(
             return (StatusCode::FORBIDDEN, "").into_response();
         }
     }
+    // G-375② — `Number(cursor ?? "0")` + the safe-integer/≥0 gate
+    // (persistent-pty.ts:120-124): the JS acceptance set (whitespace,
+    // exponents, hex) parses, everything else is the 400.
     let cursor = match parse_query_field(query, "cursor") {
         None => 0usize,
-        Some(raw) => match raw.parse::<usize>() {
-            Ok(value) => value,
-            Err(_) => return (StatusCode::BAD_REQUEST, "").into_response(),
+        Some(raw) => match super::common::js_number(&raw)
+            .filter(|value| super::common::js_safe_integer(*value) && *value >= 0.0)
+        {
+            Some(value) => value as usize,
+            None => return (StatusCode::BAD_REQUEST, "").into_response(),
         },
     };
     let role = match parse_query_field(query, "role").as_deref() {

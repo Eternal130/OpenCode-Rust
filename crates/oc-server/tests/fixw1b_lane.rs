@@ -477,6 +477,7 @@ async fn cd34_plugin_commands_surface_and_execute_through_the_real_boot() {
         data_root: root.join("data"),
         home: home.clone(),
         config_location: Some(project.clone()),
+        events_persist: None,
     })
     .await
     .expect("boot and serve");

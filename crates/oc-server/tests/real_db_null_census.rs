@@ -292,6 +292,7 @@ async fn real_migrated_db_serves_create_list_and_messages_without_500s() {
         data_root: data,
         home,
         config_location: Some(project),
+        events_persist: None,
     };
     let handle = boot_and_serve(&options).await.expect("boot and serve on the real DB copy");
     let client = oc_client::Client::new(&format!("http://{}/", handle.addr)).expect("client");
