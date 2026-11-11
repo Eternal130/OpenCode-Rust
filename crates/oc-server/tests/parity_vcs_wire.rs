@@ -1083,7 +1083,6 @@ async fn g361_git_status_flags_scope_and_stats() {
     )
     .expect("write fake git");
     let mut permissions = std::fs::metadata(&script).expect("stat").permissions();
-    use std::os::unix::fs::PermissionsExt as _;
     permissions.set_mode(0o755);
     std::fs::set_permissions(&script, permissions).expect("chmod");
     let path = std::env::var("PATH").unwrap_or_default();

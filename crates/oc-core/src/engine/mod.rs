@@ -154,6 +154,10 @@ use oc_ai::route::SharedTransport;
 
 /// Engine boot options; every field has a production default except the
 /// filesystem roots.
+// The options struct intentionally reads as a flat settings bag (one
+// field per composition-root switch); the bool count mirrors the
+// switch set rather than a state machine.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone)]
 pub struct EngineOptions {
     /// Global data root (`<data>/opencode.db`, tool-output spills,
