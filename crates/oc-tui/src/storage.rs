@@ -43,10 +43,13 @@
 //!
 //! The Rust port mirrors that byte-for-byte so a v2 TUI and the Rust
 //! TUI pointed at the same state directory interoperate on the same
-//! tab list. Cross-process flock serialization and fs.watch
-//! live-reload are v2 implementation details not required for the
-//! single-owner TUI path (documented divergence; safe because writes
-//! are atomic renames either way).
+//! tab list. Cross-process write serialization uses the same
+//! `<root>/<channel>/locks` directory (v2's `Flock.withLock` lease →
+//! the port's OS flock). v2's fs.watch live-reload face
+//! (storage.tsx:114-125) stays unported: the port's consumers read at
+//! boot and write explicitly (no reactive entry map to refresh), and
+//! writes are atomic renames either way (documented divergence for
+//! the single-owner TUI path).
 //!
 //! No oc-server endpoint exists or is needed — v2 has none.
 
@@ -482,13 +485,43 @@ impl ChannelStorage {
     }
 
     /// Write one key atomically (temp file + rename; compact JSON like
-    /// v2's `writeJsonAtomic`).
+    /// v2's `writeJsonAtomic`), serialized cross-process by an flock
+    /// at `<root>/<channel>/locks/<key>.json.lock` (v2's
+    /// `Flock.withLock(file, …, { dir: locks })`, storage.tsx:72-80 —
+    /// the port uses the repo's OS-level [`oc_util::flock::FileLock`]
+    /// instead of v2's lease files; same one-writer-at-a-time
+    /// contract for the short write window).
     pub fn write(&self, key: &str, value: &serde_json::Value) -> Result<(), String> {
         let path = self.path_for(key);
         let body = serde_json::to_vec(value).map_err(|error| error.to_string())?;
+        // The locks directory (storage.tsx:52): created alongside the
+        // storage directory; best-effort (a read-only state root still
+        // allows the atomic write below).
+        let lock_name = path
+            .file_name()
+            .map(|name| format!("{}.lock", name.to_string_lossy()))
+            .unwrap_or_else(|| "storage.lock".to_owned());
+        let lock_path = self.directory.parent().map(|parent| {
+            let mut locks = parent.to_path_buf();
+            locks.push("locks");
+            locks.push(lock_name);
+            locks
+        });
+        let guard = lock_path.as_ref().and_then(|lock_path| {
+            let _ = std::fs::create_dir_all(lock_path.parent().unwrap_or(lock_path));
+            oc_util::flock::FileLock::exclusive(lock_path, std::time::Duration::from_millis(5_000))
+                .ok()
+        });
+        let result = self.write_locked(&path, &body);
+        drop(guard);
+        result
+    }
+
+    /// The temp-file + rename write under the flock.
+    fn write_locked(&self, path: &Path, body: &[u8]) -> Result<(), String> {
         let temporary =
             path.with_extension(format!("{}.{}.tmp", std::process::id(), write_counter()));
-        std::fs::write(&temporary, &body).and_then(|()| std::fs::rename(&temporary, &path)).map_err(
+        std::fs::write(&temporary, body).and_then(|()| std::fs::rename(&temporary, path)).map_err(
             |error| {
                 let _ = std::fs::remove_file(&temporary);
                 format!("storage write: {error}")
@@ -868,6 +901,34 @@ mod tests {
             std::fs::read_to_string(root.join("local").join("tui").join("tabs.json")).unwrap(),
             r#"{"global":{"tabs":[{"sessionID":"ses_old"}],"unread":{}},"cwd":{}}"#
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+// -- G-368⑦: the write path's cross-process flock ------------------------------
+
+#[cfg(test)]
+mod g368_storage_tests {
+    use super::*;
+
+    #[test]
+    fn write_takes_the_channel_lock_and_leaves_no_temp_files() {
+        let root = std::env::temp_dir().join(format!("g368-storage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let storage = ChannelStorage::open(&root, "stable").unwrap();
+        let value = serde_json::json!({"a": 1});
+        storage.write("tabs", &value).unwrap();
+        // The lock file landed beside the channel's tui/ directory
+        // (storage.tsx:52's `<root>/<channel>/locks`).
+        assert!(root.join("stable").join("locks").join("tabs.json.lock").exists());
+        // The value is readable back and no temp file lingers.
+        assert_eq!(storage.read("tabs"), Some(serde_json::json!({"a": 1})));
+        let entries: Vec<_> = std::fs::read_dir(root.join("stable").join("tui"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, vec!["tabs.json".to_owned()]);
         let _ = std::fs::remove_dir_all(&root);
     }
 }
