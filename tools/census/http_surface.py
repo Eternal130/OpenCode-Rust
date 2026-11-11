@@ -28,7 +28,8 @@ import re
 import sys
 from pathlib import Path
 
-VERBS = ("get", "post", "put", "delete", "patch")
+from common import VERBS, Report, canon_axum, canon_ref, strip_tests  # noqa: E402
+
 
 
 # ---------------------------------------------------------------- axis 1
@@ -42,91 +43,8 @@ def spec_ops(path: Path) -> set[tuple[str, str, str]]:
     return ops
 
 
-def canon_ref(path: str) -> str:
-    """openapi `{param}` -> canonical `{}`; keep literal `*` suffix."""
-    return re.sub(r"\{[^}]+\}", "{}", path)
-
-
-def canon_axum(path: str) -> str:
-    """axum `:param` / `*wild` -> canonical; `*name` tail -> `*`."""
-    p = re.sub(r":\w+", "{}", path)
-    p = re.sub(r"\*\w+", "*", p)
-    return p
-
-
 # ---------------------------------------------------------------- axis 2
-def _skip_ws_noncode(src: str, start: int) -> int:
-    """Advance past string literals, char literals and comments from start."""
-    i = start
-    n = len(src)
-    while i < n:
-        c = src[i]
-        if c == '"':
-            i += 1
-            while i < n and src[i] != '"':
-                i += 2 if src[i] == "\\" else 1
-            i += 1
-        elif c == "'":
-            i += 1
-            while i < n and src[i] != "'":
-                i += 2 if src[i] == "\\" else 1
-            i += 1
-        elif src.startswith("//", i):
-            nl = src.find("\n", i)
-            i = n if nl == -1 else nl
-        elif src.startswith("/*", i):
-            end = src.find("*/", i)
-            i = n if end == -1 else end + 2
-        else:
-            return i
-    return n
 
-
-def _match_brace(src: str, open_idx: int) -> int:
-    """Index of the brace matching src[open_idx]=='{' (literal-safe), or -1."""
-    depth = 0
-    i = open_idx
-    n = len(src)
-    while i < n:
-        i = _skip_ws_noncode(src, i)
-        if i >= n:
-            break
-        c = src[i]
-        if c == "{":
-            depth += 1
-        elif c == "}":
-            depth -= 1
-            if depth == 0:
-                return i
-        i += 1
-    return -1
-
-
-def strip_tests(src: str) -> str:
-    """Blank out `#[cfg(test)]` items and `#[test]`/`#[tokio::test]` fns."""
-    out = list(src)
-    for pat in (r"#\[cfg\(test\)\]", r"#\[tokio::test[^\]]*\]", r"#\[test\]"):
-        for m in re.finditer(pat, src):
-            head = src[m.end():]
-            head_ns = _skip_ws_noncode(head, 0)
-            brace = head.find("{", head_ns) if head_ns < len(head) else -1
-            # keep the search inside this item: stop at `;` or attribute boundary
-            stop = len(head)
-            for delim in (";", "#["):
-                d = head.find(delim, head_ns)
-                if d != -1:
-                    stop = min(stop, d)
-            if brace != -1 and brace < stop:
-                close = _match_brace(head, brace)
-                if close != -1:
-                    for j in range(m.start(), min(m.end() + close + 1, len(out))):
-                        out[j] = " "
-                    continue
-            nl = head.find("\n")
-            if nl != -1:
-                for j in range(m.start(), min(m.end() + nl, len(out))):
-                    out[j] = " "
-    return "".join(out)
 
 
 def axum_routes(src_dir: Path) -> list[tuple[str, set[str], str, int]]:
