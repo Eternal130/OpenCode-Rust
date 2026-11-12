@@ -1596,6 +1596,28 @@ fn serialize_atoms_row(atoms: &[crate::wrap::Atom], width: usize) -> String {
     sequence
 }
 
+/// G-272⑩ — the append dispatch: the mono flag picks the writer for
+/// the NEXT commit (mono → plain rows, else styled entry rows through
+/// the opentui styled commit seam). Free-standing so the live-toggle
+/// semantics (`setMono`, footer.ts:932) pin in unit tests without a
+/// tty.
+fn append_rows(
+    mono: bool,
+    prev: Option<&Commit>,
+    commit: &Commit,
+    width: usize,
+    shell_output: bool,
+    look: &crate::mini::entry_styled::EntryLook,
+) -> PendingRows {
+    if mono {
+        PendingRows::Plain(format_commit_with(prev, commit, width, shell_output))
+    } else {
+        PendingRows::EntryStyled(crate::mini::entry_styled::format_commit_styled_with(
+            prev, commit, width, shell_output, look,
+        ))
+    }
+}
+
 /// The mini terminal session — opentui's `Terminal` over the real
 /// tty + stdout (the main app's [`crate::app::SessionTerminal`]
 /// shape).
@@ -1902,32 +1924,35 @@ impl Lifecycle {
         }
     }
 
+    /// G-272⑩ — the live `mini.mono` toggle (`scrollback.setMono`,
+    /// footer.ts:932): the append dispatch follows the setting
+    /// mid-session (not just at boot), so toggling "Monochrome UI"
+    /// switches the NEXT append's writer mode.
+    pub fn set_mono(&mut self, mono: bool) {
+        self.mono = mono;
+    }
+
     /// `footer.append` → scrollback rows (`entryWriter`,
     /// `scrollback.writer.tsx:278-295`) — the `mini.shell_output`
     /// knob rides the entry-body call (`scrollback.surface.ts:457`).
-    /// G-272⑩: the mono flag dispatches — mono keeps the plain
-    /// writer (the ref's `mono.ts` gate); styled commits carry theme
-    /// colors + syntax highlight through the styled seam.
+    /// G-272⑩: the mono flag dispatches ([`append_rows`]) — mono
+    /// keeps the plain writer (the ref's `mono.ts` gate); styled
+    /// commits carry theme colors + syntax highlight through the
+    /// styled seam.
     pub fn append(&mut self, commit: Commit) {
-        if self.mono {
-            let rows = format_commit_with(
-                self.last_commit.as_ref(),
-                &commit,
-                self.width.max(1),
-                self.shell_output,
-            );
-            self.last_commit = Some(commit);
-            self.queue_rows(rows);
-        } else {
-            let rows = crate::mini::entry_styled::format_commit_styled_with(
-                self.last_commit.as_ref(),
-                &commit,
-                self.width.max(1),
-                self.shell_output,
-                &self.entry_look,
-            );
-            self.last_commit = Some(commit);
-            self.queue_entry_styled_rows(rows);
+        let rows = append_rows(
+            self.mono,
+            self.last_commit.as_ref(),
+            &commit,
+            self.width.max(1),
+            self.shell_output,
+            &self.entry_look,
+        );
+        self.last_commit = Some(commit);
+        match rows {
+            PendingRows::Plain(rows) => self.queue_rows(rows),
+            PendingRows::EntryStyled(rows) => self.queue_entry_styled_rows(rows),
+            PendingRows::Styled(_) => unreachable!("append_rows never produces the splash arm"),
         }
     }
 
@@ -2364,9 +2389,44 @@ mod tests {
     /// payload carries: one SGR run per style boundary, a trailing
     /// reset, plain rows stay plain text, and the width clamps the
     /// atom walk.
+    /// G-272⑩ — the live `mini.mono` toggle (`scrollback.setMono`,
+    /// footer.ts:932; runtime.rs's "mono" arm calls `set_mono`):
+    /// the writer mode the NEXT append uses follows the toggle —
+    /// mono → plain rows, styled → styled entry rows.
     #[test]
-    fn ansi_rows_carry_style_runs_and_reset() {
-        use super::PendingRows;
+    fn append_rows_follow_the_live_mono_toggle() {
+        use crate::mini::entry_styled::EntryLook;
+        use crate::mini::scrollback::{Commit, CommitKind, Phase};
+
+        let commit = Commit {
+            kind: CommitKind::Assistant,
+            phase: Phase::Progress,
+            text: "**bold** body".to_owned(),
+            ..Commit::default()
+        };
+        let look = EntryLook::fallback_dark();
+        // mono: the plain writer's unstyled rows.
+        match append_rows(true, None, &commit, 40, true, &look) {
+            PendingRows::Plain(rows) => {
+                assert!(rows.iter().any(|row| row.contains("bold")), "{rows:?}")
+            }
+            other => panic!("mono append must be plain rows: {other:?}"),
+        }
+        // toggled off (set_mono(false) mid-session): the next append
+        // produces styled entry rows (markdown-rendered, spanned).
+        match append_rows(false, None, &commit, 40, true, &look) {
+            PendingRows::EntryStyled(rows) => {
+                assert!(
+                    rows.iter().any(|row| row.iter().any(|span| span.style != crate::style::Style::new())),
+                    "styled spans present: {rows:?}"
+                );
+            }
+            other => panic!("styled append must be entry-styled rows: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ansi_rows_carry_style_runs_and_reset() {        use super::PendingRows;
         let plain = PendingRows::Plain(vec!["hello".to_owned(), String::new()]);
         // A plain row carries only the reset bookends (no color/attr
         // runs) plus the trailing CR — the retired writer's exact

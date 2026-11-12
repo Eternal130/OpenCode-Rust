@@ -31,34 +31,16 @@ use crate::render::CellColor;
 use crate::style::{Color, Modifier, Style};
 use crate::wrap::{flatten_spans, styled_runs, wrap_atoms};
 
-/// `toolFiletype` (tool.ts:1340-1349): the file-extension → language
-/// table the structured Code snapshot's fenced body keys on.
+/// `toolFiletype` (tool.ts:1340-1355): the file's extension resolved
+/// through the G-302 extension table (the port of v2's
+/// `LANGUAGE_EXTENSIONS`, util/filetype.ts — ~70 entries, js →
+/// typescript normalization included, ref tool.ts:1353-1355), falling
+/// back to a plain fence (`""`) for unknown extensions — the ref's
+/// graceful degrade. Delegated rather than duplicated: one table, two
+/// consumers.
 #[must_use]
 pub fn tool_filetype(file: &str) -> &'static str {
-    let ext = file.rsplit('.').next().unwrap_or_default();
-    match ext {
-        "rs" => "rust",
-        "ts" | "tsx" | "mts" | "cts" => "typescript",
-        "js" | "jsx" | "mjs" | "cjs" => "javascript",
-        "py" => "python",
-        "go" => "go",
-        "c" | "h" => "c",
-        "cpp" | "cc" | "cxx" | "hpp" => "cpp",
-        "java" => "java",
-        "json" => "json",
-        "yaml" | "yml" => "yaml",
-        "toml" => "toml",
-        "md" | "markdown" => "markdown",
-        "sh" | "bash" | "zsh" => "bash",
-        "css" => "css",
-        "html" | "htm" => "html",
-        "sql" => "sql",
-        "rb" => "ruby",
-        "php" => "php",
-        "swift" => "swift",
-        "kt" | "kts" => "kotlin",
-        _ => "",
-    }
+    crate::components::syntax::filetype_for_path(file).unwrap_or("")
 }
 
 /// The per-kind scrollback entry look (`entryLook` /
@@ -219,7 +201,14 @@ fn entry_body_styled(
 
     // Assistant + reasoning bodies render as MARKDOWN (the ref mounts
     // a Markdown renderable per entry and re-sets content per commit;
-    // the port re-renders each commit's text — streaming-friendly).
+    // the port re-renders each commit's chunk). DIVERGENCE (bounded,
+    // documented): the ref renders markdown over the ACCUMULATED entry
+    // content with a committedRows/committedBlocks high-water
+    // (scrollback.surface.ts:287-328), while the port's transcript is
+    // append-only and each chunk delta renders independently — so
+    // constructs split across chunk boundaries (an unclosed fence, a
+    // list growing across deltas) render per-chunk. The mono writer
+    // has the same per-chunk granularity; the styled path keeps it.
     if !commit.compaction && !commit.summary {
         match (commit.kind, commit.phase) {
             (CommitKind::Assistant, Phase::Progress) if !raw.trim().is_empty() => {
@@ -437,12 +426,17 @@ mod tests {
         assert!(bytes.contains("hi\r"), "the CR rides the payload: {bytes:?}");
     }
 
-    /// toolFiletype: the extension → language table.
+    /// toolFiletype: the G-302 extension table (js → typescript per
+    /// the ref's tool.ts:1353-1355 normalization) + graceful degrade.
     #[test]
     fn tool_filetype_maps_extensions() {
         assert_eq!(tool_filetype("src/main.rs"), "rust");
         assert_eq!(tool_filetype("x.tsx"), "typescript");
+        assert_eq!(tool_filetype("app.js"), "typescript", "v2 collapses js → ts");
+        assert_eq!(tool_filetype("run.sh"), "bash");
+        assert_eq!(tool_filetype("README.MD"), "markdown", "case-insensitive extension");
         assert_eq!(tool_filetype("noext"), "");
+        assert_eq!(tool_filetype("x.weirdext"), "", "unknown → plain fence");
     }
 
     /// Plain-shape parity: the styled writer keeps the mono writer's
