@@ -127,7 +127,14 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variants: Option<Vec<ModelVariant>>,
     /// A single cost entry or a list of tiered entries.
-    #[serde(default, deserialize_with = "cost_one_or_many::deserialize")]
+    // G-391: ref keeps an optional `cost` off the wire when unset; without
+    // the skip the normalize typed round-trip (decode -> re-serialize) and
+    // `Info.providers` via GET /api/config materialize `"cost": null`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "cost_one_or_many::deserialize"
+    )]
     pub cost: Option<CostList>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disabled: Option<bool>,
