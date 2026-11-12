@@ -829,6 +829,53 @@ async fn mini_pty_prompt_reply_scrollback_and_exit_splash() {
     );
 }
 
+/// G-272⑩ — styled scrollback write-back: with `mini.mono` OFF (the
+/// v2 default), the assistant reply lands in the native scrollback as
+/// STYLED bytes — a mini oklab-quantized SGR color run opens the
+/// reply's span row (the opentui styled commit seam; the mono path
+/// emits the same text with no SGR before it).
+#[tokio::test(flavor = "multi_thread")]
+async fn mini_pty_styled_scrollback_commits_carry_sgr() {
+    let stub = start_stub(PromptMode::PlainReply).await;
+    let mut mini = MiniPty::spawn_with_cli(
+        stub.port,
+        &[],
+        r#"{ "mini": { "tools": "show", "mono": false } }"#,
+    );
+
+    assert!(
+        mini.wait_for("oc mini", Duration::from_secs(30)),
+        "the entry splash booted: {}",
+        mini.output()
+    );
+    mini.type_text("hello stub\r");
+    assert!(
+        mini.wait_for("Stub says hello.", Duration::from_secs(30)),
+        "the stub's reply landed in the scrollback: {}",
+        mini.output()
+    );
+    // The reply's span row opens with a quantized SGR fg run — look
+    // back from the text for the color byte (footer frames carry SGR
+    // too, but only the styled scrollback row puts one immediately
+    // before the reply text).
+    let out = mini.output();
+    let styled = out
+        .match_indices("Stub says hello.")
+        .any(|(at, _)| out[at.saturating_sub(48)..at].contains("\x1b[38;5;"));
+    assert!(styled, "an SGR color run precedes the reply text: tail of {out:?}");
+    // The user echo still carries the mono `>` prefix shape.
+    assert!(out.contains("> hello stub"), "the user echo row keeps its shape");
+
+    mini.exit_sequence();
+    assert!(
+        mini.wait_for("opencode mini -s ses_min_stub", Duration::from_secs(30)),
+        "the exit splash resume row: {}",
+        mini.output()
+    );
+    let code = mini.finish();
+    assert_eq!(code, 0, "clean exit");
+}
+
 /// The permission ask mounts the footer body; accepting posts the
 /// reply and the turn continues to completion.
 #[tokio::test(flavor = "multi_thread")]

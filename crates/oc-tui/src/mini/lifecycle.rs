@@ -1510,11 +1510,17 @@ pub struct LifecycleInput {
 
 /// The split-footer renderer handle (`createRuntimeLifecycle`'s
 /// Pending scrollback rows: plain text (mono/default styling) or
-/// styled spans (the exit splash's per-cell half-block mark).
+/// styled spans (the exit splash's per-cell half-block mark; G-272⑩
+/// styled ENTRY bodies when the mono flag is off).
 #[derive(Debug, Clone)]
 enum PendingRows {
     Plain(Vec<String>),
     Styled(Vec<Vec<crate::layout::StyledSpan>>),
+    /// G-272⑩ — styled entry bodies (theme colors + syntax
+    /// highlight): flush through the opentui styled commit seam
+    /// (`write_styled_to_scrollback`), NOT the legacy SGR-in-lines
+    /// path the exit splash keeps byte-identically.
+    EntryStyled(Vec<Vec<crate::layout::StyledSpan>>),
 }
 
 impl PendingRows {
@@ -1522,6 +1528,7 @@ impl PendingRows {
         match self {
             PendingRows::Plain(rows) => rows.len(),
             PendingRows::Styled(rows) => rows.len(),
+            PendingRows::EntryStyled(rows) => rows.len(),
         }
     }
 
@@ -1535,6 +1542,7 @@ impl PendingRows {
                 crate::wrap::flatten(&rows[index], crate::style::Style::new())
             }
             PendingRows::Styled(rows) => crate::wrap::flatten_spans(&rows[index]),
+            PendingRows::EntryStyled(rows) => crate::wrap::flatten_spans(&rows[index]),
         }
     }
 
@@ -1695,6 +1703,9 @@ pub struct Lifecycle {
     drawn_footer_rows: usize,
     splash_enabled: bool,
     mono: bool,
+    /// G-272⑩ — the styled entry look (per-kind scrollback colors,
+    /// fallback_dark basis; see `mini/entry_styled.rs`).
+    entry_look: crate::mini::entry_styled::EntryLook,
     /// CONFIG-T4 `mini.shell_output`: shell-family tools stream their
     /// live rows while set (`entryBody(commit, { shellOutput })`,
     /// `scrollback.surface.ts:457`).
@@ -1802,6 +1813,7 @@ impl Lifecycle {
             region_bottom: 0,
             splash_enabled: input.splash,
             mono: input.mono,
+            entry_look: crate::mini::entry_styled::EntryLook::fallback_dark(),
             shell_output: input.shell_output,
             version: input.version,
             home: input.home,
@@ -1882,18 +1894,41 @@ impl Lifecycle {
         }
     }
 
+    /// G-272⑩ — queue styled ENTRY rows (theme-colored scrollback
+    /// bodies; flushes through the opentui styled commit seam).
+    fn queue_entry_styled_rows(&mut self, rows: Vec<Vec<crate::layout::StyledSpan>>) {
+        if !rows.is_empty() {
+            self.pending.push(PendingRows::EntryStyled(rows));
+        }
+    }
+
     /// `footer.append` → scrollback rows (`entryWriter`,
     /// `scrollback.writer.tsx:278-295`) — the `mini.shell_output`
     /// knob rides the entry-body call (`scrollback.surface.ts:457`).
+    /// G-272⑩: the mono flag dispatches — mono keeps the plain
+    /// writer (the ref's `mono.ts` gate); styled commits carry theme
+    /// colors + syntax highlight through the styled seam.
     pub fn append(&mut self, commit: Commit) {
-        let rows = format_commit_with(
-            self.last_commit.as_ref(),
-            &commit,
-            self.width.max(1),
-            self.shell_output,
-        );
-        self.last_commit = Some(commit);
-        self.queue_rows(rows);
+        if self.mono {
+            let rows = format_commit_with(
+                self.last_commit.as_ref(),
+                &commit,
+                self.width.max(1),
+                self.shell_output,
+            );
+            self.last_commit = Some(commit);
+            self.queue_rows(rows);
+        } else {
+            let rows = crate::mini::entry_styled::format_commit_styled_with(
+                self.last_commit.as_ref(),
+                &commit,
+                self.width.max(1),
+                self.shell_output,
+                &self.entry_look,
+            );
+            self.last_commit = Some(commit);
+            self.queue_entry_styled_rows(rows);
+        }
     }
 
     /// Flush pending scrollback rows above the dock, then repaint the
@@ -1964,6 +1999,39 @@ impl Lifecycle {
         let row_columns = u32::try_from(self.width.max(1)).unwrap_or(u32::MAX);
         let mut lines_written = 0usize;
         while let Some(batch) = self.pending.first().cloned() {
+            // G-272⑩ — styled ENTRY batches ride the opentui styled
+            // commit seam (span payloads: row widths count span text,
+            // SGR runs serialized by the engine). The newline flags
+            // stay EXACTLY the plain path's (start/trailing on — the
+            // append-only contract and the G-68/G-221 folds keep
+            // their shape).
+            if let PendingRows::EntryStyled(rows) = &batch {
+                let styled = crate::mini::entry_styled::styled_rows_to_captured(rows);
+                if !styled.is_empty() {
+                    lines_written += styled.len();
+                    self.solid
+                        .renderer
+                        .write_styled_to_scrollback(Box::new(move |_ctx| {
+                            opentui_core::scrollback::StyledScrollbackSnapshot {
+                                lines: styled,
+                                row_columns: Some(row_columns),
+                                start_on_new_line: Some(true),
+                                trailing_newline: Some(true),
+                            }
+                        }))
+                        .map_err(|error| match error {
+                            opentui_core::renderer::ScrollbackWriteError::CaptureNotActive => {
+                                "writeToScrollback: the split-footer capture is not active"
+                                    .to_owned()
+                            }
+                            opentui_core::renderer::ScrollbackWriteError::EmptySnapshot => {
+                                "writeToScrollback: the writer returned no rows".to_owned()
+                            }
+                        })?;
+                }
+                self.pending.remove(0);
+                continue;
+            }
             let lines = batch.ansi_rows(self.width.max(1));
             if !lines.is_empty() {
                 lines_written += lines.len();

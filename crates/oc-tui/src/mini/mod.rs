@@ -37,6 +37,7 @@
 //! `mini/footer*.tsx`.
 
 pub mod demo;
+pub mod entry_styled;
 pub mod footer_subagent;
 pub mod footer_tree;
 pub mod fragment;
