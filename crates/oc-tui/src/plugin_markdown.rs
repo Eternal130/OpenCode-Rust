@@ -105,6 +105,11 @@ pub fn install_table(host: Option<Arc<PluginHost>>, renderers: &[(String, String
     if let Ok(mut state) = state().lock() {
         if state.fingerprint != fingerprint {
             state.cache.clear();
+            // The in-flight dedup keys embed the OLD fingerprint — a
+            // pending render's reply would land under a stale key, so
+            // drop the dedup map too (an in-flight thread's insert
+            // under the new fingerprint is harmless).
+            state.inflight.clear();
             state.fingerprint = fingerprint;
         }
         state.table = table;
@@ -199,5 +204,61 @@ pub fn reset_for_test() {
         state.host = None;
         state.cache.clear();
         state.inflight.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Cache invalidation on unregister (a table change): a seeded
+    /// HIT reverts to a MISS when the renderer leaves the table —
+    /// the fingerprint changes and the cache (keyed by it) drops,
+    /// so the pipeline falls back to the default path.
+    #[test]
+    fn cache_invalidates_when_the_table_changes() {
+        reset_for_test();
+        install_table(None, &[("plugin-a".to_owned(), "wormlang".to_owned())]);
+        let Some((_, _, fingerprint)) = lookup("wormlang") else {
+            panic!("the renderer registered");
+        };
+        // Seed the cache the way a landed render reply would.
+        {
+            let Ok(mut state) = state().lock() else { panic!("state lock") };
+            state
+                .cache
+                .insert(("wormlang".to_owned(), 7, fingerprint, 11), Ok(vec!["plugin row".into()]));
+        }
+        assert!(cached_rows("wormlang", fingerprint, 7, 11).is_some(), "the seeded entry hits");
+
+        // The renderer unregistered (a snapshot without it): the same
+        // (content, syntax) pair must MISS — the default path renders.
+        install_table(None, &[]);
+        assert!(lookup("wormlang").is_none(), "the renderer left the table");
+        assert!(
+            cached_rows("wormlang", fingerprint, 7, 11).is_none(),
+            "the cache dropped on the table change"
+        );
+        reset_for_test();
+    }
+
+    /// The in-flight dedup map clears together with the cache on a
+    /// table change (its keys embed the OLD fingerprint).
+    #[test]
+    fn inflight_clears_on_table_change() {
+        reset_for_test();
+        install_table(None, &[("plugin-a".to_owned(), "wormlang".to_owned())]);
+        {
+            let Ok(mut state) = state().lock() else { panic!("state lock") };
+            let fingerprint = state.fingerprint;
+            state.inflight.insert(("wormlang".to_owned(), 1, fingerprint, 2), ());
+            assert_eq!(state.inflight.len(), 1, "the dedup entry landed");
+        }
+        install_table(None, &[]);
+        {
+            let Ok(state) = state().lock() else { panic!("state lock") };
+            assert!(state.inflight.is_empty(), "inflight cleared with the cache");
+        }
+        reset_for_test();
     }
 }

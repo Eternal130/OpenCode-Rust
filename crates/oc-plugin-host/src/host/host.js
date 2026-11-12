@@ -2299,6 +2299,7 @@ function snapshotPluginState() {
     pluginRoutes: new Map(pluginRoutes),
     keymapRuns: new Map(keymapRuns),
     markdownRenderers: new Map(markdownRenderers),
+    websearchExecutors: new Map(websearchExecutors),
     worktreeImpls: new Map(worktreeImpls),
     vcsInits: new Map(vcsInits),
     pendingIntegrationCallback,
@@ -2326,6 +2327,7 @@ function restorePluginState(snap) {
   reinstate(pluginRoutes, snap.pluginRoutes);
   reinstate(keymapRuns, snap.keymapRuns);
   reinstate(markdownRenderers, snap.markdownRenderers);
+  reinstate(websearchExecutors, snap.websearchExecutors);
   reinstate(worktreeImpls, snap.worktreeImpls);
   reinstate(vcsInits, snap.vcsInits);
   pendingIntegrationCallback = snap.pendingIntegrationCallback;
