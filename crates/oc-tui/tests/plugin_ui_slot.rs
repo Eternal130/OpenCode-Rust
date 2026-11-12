@@ -423,10 +423,7 @@ fn panel_open_materializes_and_closes() {
         (160, 30),
     );
     let grid = frame.text_grid();
-    assert!(
-        grid.iter().any(|row| row.contains("name: board")),
-        "the claim row rendered: {grid:?}"
-    );
+    assert!(grid.iter().any(|row| row.contains("name: board")), "the claim row rendered: {grid:?}");
     assert!(store.panel_rect().is_some(), "the focus rect recorded");
     let rect = store.panel_rect().expect("rect");
     assert!(rect.x >= 78 && rect.x <= 82, "the docked pane sits at the split: {rect:?}");
@@ -446,10 +443,7 @@ fn panel_open_materializes_and_closes() {
         (80, 30),
     );
     let grid = frame.text_grid();
-    let panel_row = grid
-        .iter()
-        .find(|row| row.contains("presentation: "))
-        .expect("the props row");
+    let panel_row = grid.iter().find(|row| row.contains("presentation: ")).expect("the props row");
     let col = panel_row.find("presentation: ").expect("col");
     assert!(col < 20, "fullscreen paints from the frame's left edge: {panel_row}");
     let rect = store.panel_rect().expect("rect");
