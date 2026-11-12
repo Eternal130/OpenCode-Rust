@@ -138,6 +138,23 @@ impl Catalog {
         pairs
     }
 
+    /// The AVAILABLE catalog providers — the provider-level half of the
+    /// availability fold `Provider.available()` serves over
+    /// `GET /api/provider` (`packages/core/src/provider.ts:393-406`;
+    /// the per-model filters of [`Catalog::available_models`] do not
+    /// apply here). A catalog provider is available under the same
+    /// rules documented on [`Catalog::available_models`]: keyless zen,
+    /// an env/credential connection, or the bedrock activation chain.
+    /// (The ref fold's other branches — `activation: "disabled"` and
+    /// the console `sourceConnection` guard — never occur at the
+    /// static-catalog tier: no catalog record is disabled and only
+    /// console-configured providers carry a source connection, handled
+    /// by the serving layer.)
+    #[must_use]
+    pub fn available_providers(&self, has_env: impl Fn(&str) -> bool) -> Vec<&Snapshot> {
+        self.providers.iter().filter(|snapshot| snapshot_available(snapshot, &has_env)).collect()
+    }
+
     /// The AVAILABLE catalog pairs — what v2's `Model.available()`
     /// serves over `GET /api/model` (`packages/core/src/model.ts:221`,
     /// `all.filter((model) => model.enabled)` over the providers that
@@ -176,20 +193,7 @@ impl Catalog {
         for snapshot in &self.providers {
             let keyless_zen =
                 snapshot.info.id.as_str() == "opencode" && !has_env("OPENCODE_API_KEY");
-            // G-262② — bedrock availability follows the AmazonBedrockPlugin
-            // (plugin/provider/amazon-bedrock.ts:31-53): the env credential
-            // is the narrowed bearer token (integration/providers.rs), and
-            // the ambient chain above ACTIVATES the provider. The raw
-            // models.dev names (AWS_SECRET_ACCESS_KEY, AWS_REGION) feed the
-            // SigV4 chain but are not keys and must not gate visibility on
-            // their own.
-            let gated = if snapshot.info.id.as_str() == "amazon-bedrock" {
-                has_env("AWS_BEARER_TOKEN_BEDROCK")
-                    || BEDROCK_CHAIN_ENV.iter().any(|name| has_env(name))
-            } else {
-                snapshot.environment.iter().any(|name| has_env(name))
-            };
-            if !keyless_zen && !gated {
+            if !snapshot_available(snapshot, &has_env) {
                 continue;
             }
             for model in &snapshot.models {
@@ -260,6 +264,25 @@ const BEDROCK_CHAIN_ENV: [&str; 5] = [
     "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
     "AWS_CONTAINER_CREDENTIALS_FULL_URI",
 ];
+
+/// The provider-level availability gate shared by
+/// [`Catalog::available_models`] and [`Catalog::available_providers`] —
+/// the ref fold's catalog tier (`provider.ts:393-406`): the keyless zen
+/// tier, an env credential connection, or (G-262②) the bedrock
+/// activation chain (the raw models.dev names feed the SigV4 chain but
+/// are not keys and never gate visibility on their own,
+/// `plugin/provider/amazon-bedrock.ts:31-53`).
+fn snapshot_available(snapshot: &Snapshot, has_env: &impl Fn(&str) -> bool) -> bool {
+    if snapshot.info.id.as_str() == "opencode" {
+        // The zen provider is always available (keyless tier or keyed).
+        return true;
+    }
+    if snapshot.info.id.as_str() == "amazon-bedrock" {
+        return has_env("AWS_BEARER_TOKEN_BEDROCK")
+            || BEDROCK_CHAIN_ENV.iter().any(|name| has_env(name));
+    }
+    snapshot.environment.iter().any(|name| has_env(name))
+}
 
 /// G-285 — catalog providers with chat-completions `prompt_cache_key` body
 /// support but no dedicated AI package; the ref plugin sets

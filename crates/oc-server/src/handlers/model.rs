@@ -23,13 +23,135 @@ fn provider_json(snapshot: &oc_core::provider_catalog::Snapshot) -> Value {
         .unwrap_or_else(|_| json!({ "id": snapshot.info.id.0, "name": snapshot.info.name }))
 }
 
+/// `Provider.mergeOverlay` (core provider.ts:172-189) at the JSON tier:
+/// per-key deep merge, the overlay winning; nested records merge
+/// recursively. `None` models the ref's `undefined` (absent overlay).
+fn merge_overlay(base: Option<Value>, overlay: Option<Value>) -> Option<Value> {
+    match (base, overlay) {
+        (None, overlay) => overlay,
+        (base, None) => base,
+        (Some(mut base), Some(overlay)) => {
+            merge_overlay_into(&mut base, &overlay);
+            Some(base)
+        }
+    }
+}
+
+fn merge_overlay_into(base: &mut Value, overlay: &Value) {
+    if let (Value::Object(base_map), Value::Object(overlay_map)) = (base, overlay) {
+        for (key, right) in overlay_map {
+            let merged = match base_map.get(key) {
+                Some(left) if left.is_object() && right.is_object() => {
+                    let mut nested = left.clone();
+                    merge_overlay_into(&mut nested, right);
+                    nested
+                }
+                _ => right.clone(),
+            };
+            base_map.insert(key.clone(), merged);
+        }
+    }
+}
+
+/// The keyless-zen flag (`plugin/provider/opencode.ts:319-325`): the
+/// zen tier runs on the public `apiKey` when NO opencode credential
+/// exists — neither the `OPENCODE_API_KEY` env var nor a stored
+/// credential row for the `opencode` integration.
+async fn zen_public(engine: &oc_core::engine::Engine) -> bool {
+    if std::env::var_os("OPENCODE_API_KEY").is_some() {
+        return false;
+    }
+    engine
+        .integration
+        .store()
+        .all()
+        .await
+        .map(|rows| !rows.iter().any(|row| row.integration_id == "opencode"))
+        .unwrap_or(false)
+}
+
+/// `Provider.modelSettings` (core provider.ts:142-151): the provider
+/// settings a served model inherits — everything except the
+/// provider-only keys (`timeout`, `headerTimeout`, `chunkTimeout`,
+/// `transport`). The keyless zen tier's public `apiKey` rides the same
+/// base (`plugin/provider/opencode.ts:323`).
+fn provider_model_settings(
+    snapshot: &oc_core::provider_catalog::Snapshot,
+    public_zen: bool,
+) -> Option<Value> {
+    let mut value = serde_json::to_value(&snapshot.info.settings).unwrap_or(Value::Null);
+    if value.is_null() {
+        value = json!({});
+    }
+    let Value::Object(map) = &mut value else {
+        return None;
+    };
+    for key in ["timeout", "headerTimeout", "chunkTimeout", "transport"] {
+        map.remove(key);
+    }
+    if public_zen && snapshot.info.id.as_str() == "opencode" {
+        map.insert("apiKey".to_owned(), json!("public"));
+    }
+    (!map.is_empty()).then_some(value)
+}
+
 fn model_json(
     snapshot: &oc_core::provider_catalog::Snapshot,
     model: &oc_schema::model::Info,
+    public_zen: bool,
 ) -> Value {
     let mut value = serde_json::to_value(model).unwrap_or_else(|_| json!({}));
     if let Value::Object(map) = &mut value {
         map.insert("providerID".to_owned(), json!(snapshot.info.id.0));
+        // The serving merge every served Model.Info carries (core
+        // model.ts:200-210 — `read()` folds the provider record into
+        // each model): the provider's canonical wins, `package` falls
+        // back to the provider's, and settings/headers/body deep-merge
+        // the provider overlays UNDER the model's own.
+        if let Some(canonical) = &snapshot.info.canonical {
+            map.insert("canonical".to_owned(), json!(canonical.0));
+        }
+        let package = model.package.clone().unwrap_or_else(|| snapshot.info.package.clone());
+        if package.is_empty() {
+            map.remove("package");
+        } else {
+            map.insert("package".to_owned(), json!(package));
+        }
+        let model_settings = map.get("settings").cloned().filter(|settings| !settings.is_null());
+        match merge_overlay(provider_model_settings(snapshot, public_zen), model_settings) {
+            Some(merged) => {
+                map.insert("settings".to_owned(), merged);
+            }
+            None => {
+                map.remove("settings");
+            }
+        }
+        let model_headers = map.get("headers").cloned().filter(|headers| !headers.is_null());
+        let provider_headers = snapshot.info.headers.as_ref().map(|headers| {
+            Value::Object(headers.iter().map(|(key, value)| (key.clone(), json!(value))).collect())
+        });
+        match merge_overlay(provider_headers, model_headers) {
+            Some(merged) => {
+                map.insert("headers".to_owned(), merged);
+            }
+            None => {
+                map.remove("headers");
+            }
+        }
+        let model_body = map.get("body").cloned().filter(|body| !body.is_null());
+        let provider_body = snapshot
+            .info
+            .body
+            .as_ref()
+            .map(|body| Value::Object(body.clone().into_iter().collect()));
+        match merge_overlay(provider_body, model_body) {
+            Some(merged) => {
+                map.insert("body".to_owned(), merged);
+            }
+            None => {
+                map.remove("body");
+            }
+        }
     }
     value
 }
@@ -175,6 +297,7 @@ pub(crate) async fn location_model_entries(
             credential_env.extend(snapshot.environment.iter().cloned());
         }
     }
+    let public_zen = zen_public(engine).await;
     // G-259 — the dynamic credential-gated syncs ride the SAME listing
     // seam `bind` reads: when a sync has state for its provider id, its
     // merged snapshot REPLACES the static catalog record's models in
@@ -207,7 +330,7 @@ pub(crate) async fn location_model_entries(
             sync_gate_passed.insert(id);
             continue;
         }
-        data.push((model.time.released.0, model_json(snapshot, model)));
+        data.push((model.time.released.0, model_json(snapshot, model, public_zen)));
     }
     for (id, synced) in &dynamic {
         if !sync_gate_passed.contains(id) {
@@ -222,7 +345,7 @@ pub(crate) async fn location_model_entries(
             if !model.capabilities.output.iter().any(|item| item == "text") {
                 continue;
             }
-            data.push((model.time.released.0, model_json(synced, model)));
+            data.push((model.time.released.0, model_json(synced, model, public_zen)));
         }
     }
     let configured = crate::boot::location_custom_providers(engine, location);
@@ -375,6 +498,7 @@ async fn model_default(
                 .map(|model| console_model_json(&provider, model, &catalog).1)
         } else {
             let catalog = state.engine.catalog_service.get();
+            let public_zen = zen_public(&state.engine).await;
             // G-259 — a dynamic-synced provider renders its default
             // through the SAME synced snapshot the listing serves
             // (listing/bind parity: azure's narrowed surface must not
@@ -389,7 +513,7 @@ async fn model_default(
                     .models
                     .iter()
                     .find(|model| model.id.0 == selection.model.as_str())
-                    .map(|model| model_json(&synced, model))
+                    .map(|model| model_json(&synced, model, public_zen))
             } else {
                 catalog
                     .providers()
@@ -400,7 +524,7 @@ async fn model_default(
                             .models
                             .iter()
                             .find(|model| model.id.0 == selection.model.as_str())
-                            .map(|model| model_json(snapshot, model))
+                            .map(|model| model_json(snapshot, model, public_zen))
                     })
             }
         };
@@ -425,6 +549,164 @@ async fn model_default(
     Ok(json_location_data(&location.as_path().to_string_lossy(), default))
 }
 
+/// The configured overlay rendered onto a provider record
+/// (`config/plugin/provider.ts:81-93`): activation flips "enabled",
+/// and `name`/`package`/`settings` merge over the record.
+fn apply_custom_overlay(
+    value: &mut Value,
+    custom: &oc_core::provider_catalog::facade::CustomProvider,
+) {
+    let Value::Object(map) = value else { return };
+    map.insert("activation".to_owned(), json!("enabled"));
+    map.insert("name".to_owned(), json!(custom.name));
+    if let Some(package) = custom.package.as_deref().filter(|package| !package.is_empty()) {
+        map.insert("package".to_owned(), json!(package));
+    }
+    let mut overlay = json!({});
+    if !custom.base_url.is_empty() {
+        overlay["baseURL"] = json!(custom.base_url);
+    }
+    if let Some(api_key) = &custom.api_key {
+        overlay["apiKey"] = json!(api_key);
+    }
+    if overlay.as_object().is_some_and(|settings| !settings.is_empty()) {
+        let settings = map.entry("settings").or_insert_with(|| json!({}));
+        merge_overlay_into(settings, &overlay);
+    }
+}
+
+/// A standalone (non-catalog) provider record — `Info.empty` +
+/// the configured/console overlay (`config/plugin/provider.ts:67`,
+/// `opencode.ts:245-261`): activation "enabled", the configured
+/// name/package, and the settings the facade carried.
+fn standalone_provider_json(
+    custom: &oc_core::provider_catalog::facade::CustomProvider,
+    integration_id: Option<&str>,
+) -> Value {
+    let mut value = json!({
+        "id": custom.id,
+        "name": custom.name,
+        "activation": "enabled",
+        "package": custom.package.clone().unwrap_or_default(),
+    });
+    apply_custom_overlay(&mut value, custom);
+    if let Some(integration_id) = integration_id {
+        if let Value::Object(map) = &mut value {
+            map.insert("integrationID".to_owned(), json!(integration_id));
+        }
+    }
+    value
+}
+
+/// The served `Provider.Info` for a catalog snapshot — the record the
+/// ref provider registry serves: the models-dev registration's
+/// `integrationID` (`plugin/models-dev.ts:41`), the keyless zen flip
+/// (activation "enabled" + the public `apiKey`,
+/// `plugin/provider/opencode.ts:317-325`), and the configured overlay
+/// when a config custom shares the id.
+fn served_provider_json(
+    snapshot: &oc_core::provider_catalog::Snapshot,
+    configured: Option<&oc_core::provider_catalog::facade::CustomProvider>,
+    public_zen: bool,
+) -> Value {
+    let mut value = provider_json(snapshot);
+    if let Value::Object(map) = &mut value {
+        // `plugin/models-dev.ts:41` — every catalog provider registers
+        // its env/key integration under its own id.
+        map.insert("integrationID".to_owned(), json!(snapshot.info.id.0));
+    }
+    if public_zen && snapshot.info.id.as_str() == "opencode" {
+        if let Value::Object(map) = &mut value {
+            map.insert("activation".to_owned(), json!("enabled"));
+            let settings = map.entry("settings").or_insert_with(|| json!({}));
+            if let Value::Object(settings) = settings {
+                settings.insert("apiKey".to_owned(), json!("public"));
+            }
+        }
+    }
+    if let Some(custom) = configured {
+        apply_custom_overlay(&mut value, custom);
+    }
+    value
+}
+
+/// The location's served provider entries — `Provider.available()`
+/// over `GET /api/provider` (`core provider.ts:393-443`): ONLY the
+/// providers that passed the availability fold (keyless zen, an
+/// env/credential connection, the bedrock chain, or a configured
+/// custom flipping its catalog record enabled), never the full
+/// catalog. Console providers ride the `opencode` integration's
+/// connection (`opencode.ts:245-261`); discovered local providers
+/// register activation-enabled through the local plugin transform.
+pub(crate) async fn location_provider_entries(
+    engine: &oc_core::engine::Engine,
+    location: &oc_core::location::LocationRef,
+) -> Vec<Value> {
+    let catalog = engine.catalog_service.get();
+    // CRED-B1 — availability reads the credential store exactly like
+    // the model listing's gate (a stored credential for a provider's
+    // integration satisfies it like its env variables do).
+    let credential_integrations: std::collections::HashSet<String> = engine
+        .integration
+        .store()
+        .all()
+        .await
+        .map(|rows| rows.into_iter().map(|row| row.integration_id).collect())
+        .unwrap_or_default();
+    let mut credential_env: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for snapshot in catalog.providers() {
+        if credential_integrations.contains(snapshot.info.id.as_str()) {
+            credential_env.extend(snapshot.environment.iter().cloned());
+        }
+    }
+    let has_env = |name: &str| std::env::var_os(name).is_some() || credential_env.contains(name);
+    let public_zen = zen_public(engine).await;
+    let configured = crate::boot::location_custom_providers(engine, location);
+    let local = engine.local.providers();
+
+    let available: std::collections::HashSet<&str> = catalog
+        .available_providers(&has_env)
+        .into_iter()
+        .map(|snapshot| snapshot.info.id.as_str())
+        .collect();
+    let mut data: Vec<Value> = Vec::new();
+    for snapshot in catalog.providers() {
+        let id = snapshot.info.id.as_str();
+        let configured_hit = configured.iter().find(|custom| custom.id == id);
+        if !available.contains(id) && configured_hit.is_none() {
+            continue;
+        }
+        data.push(served_provider_json(snapshot, configured_hit, public_zen));
+    }
+    // Standalone config customs (no catalog record under the id).
+    for provider in &configured {
+        if catalog.provider(&provider.id).is_none()
+            && !local.iter().any(|entry| entry.id == provider.id)
+        {
+            data.push(standalone_provider_json(provider, None));
+        }
+    }
+    // Console-issued providers (integration `opencode`, I1): visible
+    // through the console connection the fetch required — a config
+    // custom with the same id wins (the id already rendered above).
+    if credential_integrations.contains("opencode") {
+        for provider in crate::boot::console_custom_providers(engine) {
+            if configured.iter().any(|custom| custom.id == provider.id)
+                || local.iter().any(|entry| entry.id == provider.id)
+            {
+                continue;
+            }
+            data.push(standalone_provider_json(&provider, Some("opencode")));
+        }
+    }
+    // Discovered local providers (RF-01): the runtime discovery
+    // registers activation-enabled records.
+    for provider in &local {
+        data.push(standalone_provider_json(provider, None));
+    }
+    data
+}
+
 async fn provider_list(
     State(state): State<SharedState>,
     uri: Uri,
@@ -432,8 +714,7 @@ async fn provider_list(
 ) -> Result<Response, ApiError> {
     let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
-    let catalog = state.engine.catalog_service.get();
-    let data: Vec<Value> = catalog.providers().iter().map(provider_json).collect();
+    let data = location_provider_entries(&state.engine, &location).await;
     Ok(json_location_data(&location.as_path().to_string_lossy(), Value::Array(data)))
 }
 
@@ -446,9 +727,16 @@ async fn provider_get(
     let location = resolve_location(&state, uri.query().unwrap_or_default(), &headers)?;
     let _services = services(&state, &location).await?;
     let catalog = state.engine.catalog_service.get();
+    let public_zen = zen_public(&state.engine).await;
+    let configured = crate::boot::location_custom_providers(&state.engine, &location)
+        .into_iter()
+        .find(|custom| custom.id == provider_id);
     let snapshot =
         catalog.provider(&provider_id).ok_or_else(|| ApiError::provider_not_found(&provider_id))?;
-    Ok(json_location_data(&location.as_path().to_string_lossy(), provider_json(snapshot)))
+    Ok(json_location_data(
+        &location.as_path().to_string_lossy(),
+        served_provider_json(snapshot, configured.as_ref(), public_zen),
+    ))
 }
 
 #[cfg(test)]
@@ -1123,5 +1411,219 @@ mod tests {
             .find(supports_text)
             .expect("an available text model exists");
         assert_eq!(data, &expected, "the miss falls back to the first available text model");
+    }
+
+    // ------------------------------------------------------------------
+    // G-394/G-397 — the provider listing and the model serving merge,
+    // pinned against the ref server's probed wire shapes (fresh ref
+    // boot, no credentials: provider list = the single keyless zen
+    // entry; model/default carries package + settings {apiKey,
+    // baseURL, provider}).
+    // ------------------------------------------------------------------
+
+    /// Scrub every credential var the catalog gate reads so the
+    /// keyless expectation holds regardless of ambient environment
+    /// (nextest runs each test in its own process, so the mutation is
+    /// race-free).
+    fn scrub_provider_env() {
+        let catalog =
+            oc_core::provider_catalog::Catalog::parse(oc_core::provider_catalog::SNAPSHOT_TEXT)
+                .expect("catalog parses");
+        for snapshot in catalog.providers() {
+            for name in &snapshot.environment {
+                std::env::remove_var(name);
+            }
+        }
+    }
+
+    async fn provider_list_payload(
+        tmp: &tempfile::TempDir,
+    ) -> (std::sync::Arc<crate::state::AppState>, Value) {
+        let engine = oc_core::engine::Engine::boot(oc_core::engine::EngineOptions::new(
+            tmp.path().to_owned(),
+            tmp.path().to_owned(),
+        ))
+        .await;
+        let state = std::sync::Arc::new(crate::state::AppState::new(
+            engine,
+            crate::state::AuthConfig { password: None },
+            "test".to_owned(),
+            std::sync::Arc::new(oc_util::determinism::UuidV4IdGen),
+            std::sync::Arc::new(oc_util::determinism::SystemClock),
+        ));
+        let uri: Uri =
+            format!("http://localhost/api/provider?location[directory]={}", tmp.path().display())
+                .parse()
+                .expect("request uri");
+        let response = provider_list(State(state.clone()), uri, HeaderMap::new())
+            .await
+            .expect("provider.list responds");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let payload: Value = serde_json::from_slice(&bytes).expect("envelope json");
+        (state, payload)
+    }
+
+    /// G-394 — the provider listing serves ONLY the availability fold's
+    /// survivors (the ref's single keyless zen entry), never the full
+    /// catalog, and the entry carries the ref registry's served shape:
+    /// the models-dev `integrationID`, the keyless flip (activation
+    /// "enabled" + the public `apiKey`), and the catalog baseURL.
+    #[tokio::test]
+    async fn provider_list_serves_only_available_providers() {
+        scrub_provider_env();
+        let tmp = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let (_state, payload) = provider_list_payload(&tmp).await;
+
+        assert_eq!(
+            payload["location"]["directory"],
+            json!(tmp.path().display().to_string()),
+            "the location-wrapped envelope"
+        );
+        let data = payload["data"].as_array().expect("data array");
+        assert_eq!(
+            data.len(),
+            1,
+            "keyless: only the zen provider lists, got {:?}",
+            data.iter().filter_map(|e| e.get("id")).collect::<Vec<_>>()
+        );
+        let zen = &data[0];
+        // The ref's probed entry (fresh boot): activation flipped
+        // enabled, the public apiKey, the models-dev integrationID.
+        assert_eq!(zen["id"], json!("opencode"));
+        assert_eq!(zen["name"], json!("OpenCode Zen"));
+        assert_eq!(zen["activation"], json!("enabled"));
+        assert_eq!(zen["integrationID"], json!("opencode"));
+        assert_eq!(zen["settings"]["apiKey"], json!("public"));
+        assert_eq!(zen["settings"]["baseURL"], json!("https://opencode.ai/zen/v1"));
+        let object = zen.as_object().expect("entry object");
+        let expected_keys = ["id", "name", "activation", "integrationID", "package", "settings"];
+        assert_eq!(object.len(), expected_keys.len(), "exact ref key set: {object:?}");
+        for key in expected_keys {
+            assert!(object.contains_key(key), "missing {key}");
+        }
+    }
+
+    /// G-394 — an env credential surfaces the provider; without it the
+    /// catalog record stays hidden (`provider.ts:393-406`'s connection
+    /// rule).
+    #[tokio::test]
+    async fn provider_list_env_credential_gates_visibility() {
+        scrub_provider_env();
+        let tmp = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        std::env::set_var("ANTHROPIC_API_KEY", "test-key");
+        let (_state, payload) = provider_list_payload(&tmp).await;
+        let ids: Vec<&str> = payload["data"]
+            .as_array()
+            .expect("data array")
+            .iter()
+            .filter_map(|entry| entry.get("id").and_then(Value::as_str))
+            .collect();
+        assert!(ids.contains(&"anthropic"), "the credentialed provider lists: {ids:?}");
+        let anthropic = payload["data"]
+            .as_array()
+            .expect("data array")
+            .iter()
+            .find(|entry| entry["id"] == json!("anthropic"))
+            .expect("anthropic entry");
+        // No keyless flip, no public apiKey: the catalog record as the
+        // models-dev registration serves it (integrationID; the
+        // native-SDK anthropic record carries no settings at all).
+        assert_eq!(anthropic["activation"], json!("auto"));
+        assert_eq!(anthropic["integrationID"], json!("anthropic"));
+        assert!(
+            anthropic["settings"].get("apiKey").is_none(),
+            "no public apiKey outside the keyless zen flip: {anthropic}"
+        );
+    }
+
+    /// G-394 — a config custom flips its record enabled
+    /// (`config/plugin/provider.ts:81-93`): a standalone custom lists
+    /// as its own entry, and a catalog-id custom surfaces the catalog
+    /// record WITHOUT any credential (activation enabled).
+    #[tokio::test]
+    async fn provider_list_configured_customs_list_enabled() {
+        scrub_provider_env();
+        let tmp = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        std::fs::write(
+            tmp.path().join("opencode.json"),
+            r#"{
+                "providers": {
+                    "own": {
+                        "name": "Own Gateway",
+                        "package": "@opencode/ai/providers/openai-compatible",
+                        "settings": { "baseURL": "http://127.0.0.1:9/v1" },
+                        "models": { "own-model": { "name": "Own Model" } }
+                    },
+                    "anthropic": {
+                        "settings": { "baseURL": "https://proxy.test/v1" }
+                    }
+                }
+            }"#,
+        )
+        .expect("write config");
+        let (_state, payload) = provider_list_payload(&tmp).await;
+        let data = payload["data"].as_array().expect("data array");
+        let own = data
+            .iter()
+            .find(|entry| entry["id"] == json!("own"))
+            .expect("the standalone custom lists");
+        assert_eq!(own["name"], json!("Own Gateway"));
+        assert_eq!(own["activation"], json!("enabled"));
+        assert_eq!(own["package"], json!("@opencode/ai/providers/openai-compatible"));
+        assert_eq!(own["settings"]["baseURL"], json!("http://127.0.0.1:9/v1"));
+        let anthropic = data
+            .iter()
+            .find(|entry| entry["id"] == json!("anthropic"))
+            .expect("the catalog-id custom surfaces the catalog record");
+        assert_eq!(anthropic["activation"], json!("enabled"));
+        assert_eq!(anthropic["settings"]["baseURL"], json!("https://proxy.test/v1"));
+        assert_eq!(anthropic["integrationID"], json!("anthropic"));
+    }
+
+    /// G-397 — the served Model.Info carries the provider fold
+    /// (`model.ts:200-210`): `package` falls back to the provider's,
+    /// and settings deep-merge the provider overlays (baseURL, the
+    /// keyless public apiKey) UNDER the model's own (the
+    /// openai-compatible `provider` key).
+    #[tokio::test]
+    async fn model_default_serves_the_provider_fold() {
+        scrub_provider_env();
+        let tmp = tempfile::tempdir_in("/tmp/opencode").expect("sandbox");
+        let engine = oc_core::engine::Engine::boot(oc_core::engine::EngineOptions::new(
+            tmp.path().to_owned(),
+            tmp.path().to_owned(),
+        ))
+        .await;
+        let state = std::sync::Arc::new(crate::state::AppState::new(
+            engine,
+            crate::state::AuthConfig { password: None },
+            "test".to_owned(),
+            std::sync::Arc::new(oc_util::determinism::UuidV4IdGen),
+            std::sync::Arc::new(oc_util::determinism::SystemClock),
+        ));
+        let uri: Uri = format!(
+            "http://localhost/api/model/default?location[directory]={}",
+            tmp.path().display()
+        )
+        .parse()
+        .expect("request uri");
+        let response = model_default(State(state), uri, HeaderMap::new())
+            .await
+            .expect("model.default responds");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("body");
+        let payload: Value = serde_json::from_slice(&bytes).expect("envelope json");
+        let data = &payload["data"];
+        assert_eq!(data["providerID"], json!("opencode"), "the keyless zen default");
+        // The ref's probed default (fledge-alpha-free at probe time —
+        // the exact model is release-order dependent, the FIELDS are
+        // the contract): package + merged settings.
+        assert_eq!(
+            data["package"],
+            json!("@opencode/ai/providers/openai-compatible"),
+            "package falls back to the provider's"
+        );
+        assert_eq!(data["settings"]["apiKey"], json!("public"));
+        assert_eq!(data["settings"]["baseURL"], json!("https://opencode.ai/zen/v1"));
+        assert_eq!(data["settings"]["provider"], json!("opencode"));
     }
 }
