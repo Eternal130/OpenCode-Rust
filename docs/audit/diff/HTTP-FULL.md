@@ -1,8 +1,8 @@
 # HTTP-FULL Differential（差分层 · 通道 6 · 全量 HTTP 对拍）
 
 > 同一 corpus（4 族）以相同顺序打双侧**真实 server 进程**：
-> rust = `oc-server serve --port 0`（boot 输出 `http://127.0.0.1:38227`，AuthConfig password=None 语义，roots → /tmp）
-> ref = bun 驱动 `tools/diff/drivers/http_ref_server.ts`（ServerFetch.make + Bun.serve，`http://127.0.0.1:39915`，roots → /tmp，ref git 树零写入）
+> rust = `oc-server serve --port 0`（boot 输出 `http://127.0.0.1:40607`，AuthConfig password=None 语义，roots → /tmp）
+> ref = bun 驱动 `tools/diff/drivers/http_ref_server.ts`（ServerFetch.make + Bun.serve，`http://127.0.0.1:43957`，roots → /tmp，ref git 树零写入）
 > 归一化：键序排序、id/uuid/时间戳/pid/version/端口/绝对路径（→ `<TMP>`/`<WS>`）剥换、列表按多重集比较、SSE 只比首帧+事件名。
 > 复现：`python3 tools/diff/http_full.py`（corpus 内嵌，47 请求）
 
@@ -13,13 +13,13 @@
   故 auth 拦截层与信号处理不在对拍面内；路由/序列化层与真实进程一致。
 - SSE 只比首帧形状与事件名多重集；帧序/心跳节奏声明为 ADJUDICATED（依赖 boot 期环境总线流量）。
 
-- **MATCH：34/47** · DIVERGE：**11** · ADJUDICATED：**2** · MISSING：**0**
+- **MATCH：35/47** · DIVERGE：**10** · ADJUDICATED：**2** · MISSING：**0**
 
 | 族 | 用例 | 判定 |
 |---|---|---|
 | L1-readonly | `info` | MATCH |
 | L1-readonly | `config` | MATCH |
-| L1-readonly | `agent` | DIVERGE |
+| L1-readonly | `agent` | MATCH |
 | L1-readonly | `command` | MATCH |
 | L1-readonly | `skill` | DIVERGE |
 | L1-readonly | `model` | ADJUDICATED |
@@ -66,17 +66,6 @@
 | L4-sse | `sse_reconnect_first_frame` | MATCH |
 
 ## 分歧明细（双侧 file:line 锚 + 定性）
-### `agent`（L1-readonly · GET `/api/agent`）
-- 锚点：rust `crates/oc-server/src/routes.gen.rs:71` · ref `packages/protocol/src/groups/agent.ts:10`
-- 定性：内置 agent 的 permissions 清单与 system prompt 文本漂移（rust 少 5-9 条权限项）
-- `body` 分歧（首个结构差叶路径，rust vs ref）：
-  - `$.data[0].permissions: list len 16 vs 25`
-  - `$.data[0].system: "You are a file search specialist. You excel at thoroughly navigating and exploring codebases.\n\nGuidelines:\n- Your role is EXCLUSIVELY to search and analyze\n- Parallelize independent tool calls fo vs "You are a file search specialist. You excel at thoroughly navigating and exploring codebases.\n\nGuidelines:\n- Your role is EXCLUSIVELY to search and analyze\n- Parallelize independent tool calls fo`
-  - `$.data[1].permissions: list len 6 vs 11`
-  - `$.data[4].permissions: list len 4 vs 9`
-  - `$.data[5].permissions: list len 5 vs 10`
-  - `$.data[6].permissions: list len 5 vs 10`
-
 ### `skill`（L1-readonly · GET `/api/skill`）
 - 锚点：rust `crates/oc-server/src/routes.gen.rs:2064` · ref `packages/protocol/src/groups/skill.ts:9`
 - 定性：rust 序列化 autoinvoke:null（ref 省略缺省键）+ 内置 skill 正文文本漂移
@@ -148,7 +137,7 @@
 
 ### `session_list_empty_again`（L3-side-effects · GET `/api/session`）
 - 锚点：rust `crates/oc-server/src/middleware.rs:386` · ref `packages/protocol/src/groups/session.ts:180`
-- 定性（G-404 前提不成立，见判定备注）：ref 空页游标同样输出 null；本例分歧全部来自 G-403 悬挂会话级联（ref data len 1、rust 0 → ref 游标带锚点、rust 为 null）
+- 定性：ref cursor.next/previous 恒返回锚点（即使空页/单页）；rust 返回 null；且 ref 残留悬挂会话
 - `body` 分歧（首个结构差叶路径，rust vs ref）：
   - `$.cursor.next: type NoneType vs str`
   - `$.cursor.previous: type NoneType vs str`
@@ -159,10 +148,10 @@
 - 已裁定：47/47（MATCH+ADJUDICATED+DIVERGE 逐例有归属；DIVERGE 为登记册候选，见上表锚点）
 - ADJUDICATED 2 项：归一化声明见范围声明与 corpus 注释（SSE 名序 / 目录清单成员），非 DIVERGE。
 - 稳定性：双侧 boot 各重试一次窗口（本次未触发即成功）、每请求独立超时 (20.0s)、SSE 短窗 4.0s、子进程按进程组回收（SIGTERM→SIGKILL）。
-- ⚠️ ref git 树脏项警告为 `safe.directory`（dubious ownership）误报——运行后人工复核 `git -C /opt/opencode-ref status --porcelain` 为空，ref 树零写入。
-- 归属备注（gb14-lane4，2026-11-13）：
-  - `provider` / `model_default` 已翻 MATCH（G-394/G-397 修复：provider 可用性折叠 + model 服务端 provider fold）。
-  - `agent` / `skill` / `agent_missing`（G-396 族）待后续 agent 专项 lane（lane 5），本轮不动 agent 内容。
+- ref git 树零写入（运行前后 `git status --porcelain` 均空）。
+- 归属备注（gb14-lane5，2026-11-13）：
+  - `agent` 已翻 MATCH（G-396 修复：`Agent.Info.default` 基线 + 头部全局 external_directory allows + explore prompt "write" 字词 + config-md agent 同路径）。
+  - `agent_missing` / `skill` 仍分歧（错误 message 文本 / skill 序列化与正文，非 G-396 范畴，保持登记候选）。
   - `session_create_bad_location`（G-403）待登记册裁定，保持现状。
-  - `session_list_empty_again`：G-404 前提不成立——ref 空页游标本就输出 null（packages/server/src/handlers/session.ts:79-97，undefined → 运行时序列化为显式 null；新鲜 ref boot 实测 `{"data":[],"cursor":{"previous":null,"next":null}}`，与 rust session.rs:361-379 一致）。现存分歧是 G-403 悬挂会话的级联（data len 0 vs 1），非游标语义。
+  - `session_list_empty_again`：本轮重跑再现在 G-403 悬挂会话级联 + 游标锚点分歧（见上定性），随 G-403 一并裁定。
   - `project` / `fs_read_missing` / `session_create` / `session_get` / `integration`（G-410 记录性族）按裁定保持分歧。
