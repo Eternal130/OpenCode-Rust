@@ -1,0 +1,1 @@
+{"mcp":{"servers":{"s1":{"type":"stdio","command":"npx","args":["-y","x"],"env":{"K":"V"}}}}}
