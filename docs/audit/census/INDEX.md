@@ -18,7 +18,7 @@
 | 键位动作 | KEYBINDS.md | keybinds.py | 251/251 | 0 | 0 | **8**（composer.close/tab、dialog.select.section、stats.open/close、subagent.toggle-activity） |
 | 错误族 | ERRORS.md | errors.py | 33/33 + 3/3 readiness | 0 | 0 | 0 |
 | 配置键 | CONFIG-KEYS.md | config_keys.py | 133/133 + 59/59 + 默认值锚全过 | 0 | 3（requireSignature=G-174、$schema、attention.bell=P11） | **1**（experimental.file_retention.cleanup_interval） |
-| 环境变量 | ENV-VARS.md | env_vars.py | 178/178 | 59（round-25 复跑：LOG_LEVEL/TERM_PROGRAM_VERSION/TMUX/STY 转 BOTH；已逐项裁定：2 已文档化、3 有据、8 生态资产、8 注册表族、36 ref 独有包胶水、2 其他） | 43（逐项有据） | 0 |
+| 环境变量 | ENV-VARS.md | env_vars.py | 179/179 | 59（round-25 复跑：LOG_LEVEL/TERM_PROGRAM_VERSION/TMUX/STY 转 BOTH；已逐项裁定：2 已文档化、3 有据、8 生态资产、8 注册表族、36 ref 独有包胶水、2 其他） | 44（逐项有据；+1 OC_PLUGIN_NODE=G-333 node 备轨产物） | 0 |
 | provider 家族 | PROVIDERS.md | providers.py | 55 entrypoint + 226 catalog | 0（家族级） | 3（mantle/messages、xai/chat、anthropic-compatible——round-23 决策族） | 0 |
 | provider 配置面 | 同上 | 同上 | env 226/226 · api 200/226（26 双侧皆无） | 0 | — | — |
 | 插件 RPC | RPC.md | rpc_methods.py | 112/112 | **14**（桥层读面，见裁定） | 22 | 1（ctx.command.add 扁平化） |
@@ -30,6 +30,8 @@
 **14 通道全集逐项归属 100%**（双侧并集每项都有 BOTH/REF_ONLY/RUST_ONLY/已登记裁定之一）。
 **第二十四轮已入册：新立项 G-384..G-390（7 条：🟢×4 + ℹ️×3）+ G-230 勘注**；已登记项被机械化复认 9 族。
 **第二十五轮复跑（2026-11-12，gap-burndown-13 收口后）：全 14 通道重跑**——ENV-VARS REF_ONLY 63→59 / BOTH 72→76；PLUGIN-API REF_ONLY 3→1；TOOLS 轴 3 翻绿（rust 18/18 output 声明+die 分支在位，G-230 盯守闭合）；RPC 新增 integration.reload/method.list rust 面；其余通道零实质变化（CONFIG-KEYS/HTTP-SURFACE 仅锚点漂移）。`tools_registry.py` 提取器随内建 output 新形状更新（轴 3 动态化）。**注：HTTP-SURFACE 的「验证记录」节为手工维护，脚本再生成后需回贴（本轮已回贴）。**
+
+**第二十五轮增补复跑（2026-11-12，amendment lanes H-K 后）：全 14 通道重跑**——ENV-VARS RUST_ONLY 43→44（`OC_PLUGIN_NODE`=G-333 产物，有据）；RPC/PLUGIN-API 仅锚点漂移与新 rust 面（markdown.renderer.*/ui.panel.*），**无新 REF_ONLY**；EVENTS/HTTP-SURFACE 仅锚点漂移（HTTP 验证记录节已再次回贴）。四项增补（panel/markdown 渲染器/node 备轨/mini 样式化）不在 census 枚举轴内（属行为/生态面），由登记册条目钉守。
 
 ## 入册裁定（2026-11-12 复核，详见登记册第二十四轮节）
 
