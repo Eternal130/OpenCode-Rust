@@ -1,0 +1,74 @@
+{
+ "name": "tool-lifecycle-shell",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/tmp/opencode/diff-acp",
+  "start": {
+   "type": "input",
+   "id": "msg_inbox"
+  },
+  "childUpdates": false,
+  "compaction": true
+ },
+ "events": [
+  {
+   "id": "evt_boot",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_inbox"
+   }
+  },
+  {
+   "type": "session.tool.input.started",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_asst_1",
+    "id": "call_1",
+    "name": "shell"
+   },
+   "id": "evt_1"
+  },
+  {
+   "type": "session.tool.called",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_asst_1",
+    "id": "call_1",
+    "input": {
+     "command": "ls -la"
+    },
+    "executed": true
+   },
+   "id": "evt_2"
+  },
+  {
+   "type": "session.tool.progress",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_asst_1",
+    "id": "call_1",
+    "metadata": {
+     "p": 1
+    }
+   },
+   "id": "evt_3"
+  },
+  {
+   "type": "session.tool.success",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_asst_1",
+    "id": "call_1",
+    "content": [
+     {
+      "type": "text",
+      "text": "total 0"
+     }
+    ],
+    "executed": true
+   },
+   "id": "evt_4"
+  }
+ ]
+}

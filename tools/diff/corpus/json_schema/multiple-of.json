@@ -1,0 +1,23 @@
+{
+ "name": "multiple-of",
+ "keywords": [
+  "multipleOf"
+ ],
+ "schema": {
+  "multipleOf": 2
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": 4
+  },
+  {
+   "label": "odd",
+   "value": 3
+  },
+  {
+   "label": "float",
+   "value": 2.5
+  }
+ ]
+}

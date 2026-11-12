@@ -1,0 +1,30 @@
+{
+ "name": "one-of",
+ "keywords": [
+  "oneOf"
+ ],
+ "schema": {
+  "oneOf": [
+   {
+    "type": "string"
+   },
+   {
+    "type": "integer"
+   }
+  ]
+ },
+ "instances": [
+  {
+   "label": "str",
+   "value": "a"
+  },
+  {
+   "label": "int",
+   "value": 5
+  },
+  {
+   "label": "bool",
+   "value": true
+  }
+ ]
+}

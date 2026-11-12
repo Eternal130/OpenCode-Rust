@@ -1,0 +1,33 @@
+{
+ "name": "type-union-int-number",
+ "keywords": [
+  "type",
+  "union",
+  "integer",
+  "number"
+ ],
+ "schema": {
+  "type": [
+   "integer",
+   "number"
+  ]
+ },
+ "instances": [
+  {
+   "label": "float",
+   "value": 2.5
+  },
+  {
+   "label": "int",
+   "value": 2
+  },
+  {
+   "label": "str",
+   "value": "2"
+  },
+  {
+   "label": "null",
+   "value": null
+  }
+ ]
+}

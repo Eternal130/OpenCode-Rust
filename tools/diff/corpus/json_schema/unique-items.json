@@ -1,0 +1,41 @@
+{
+ "name": "unique-items",
+ "keywords": [
+  "uniqueItems"
+ ],
+ "schema": {
+  "type": "array",
+  "uniqueItems": true
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": [
+    1,
+    2,
+    3
+   ]
+  },
+  {
+   "label": "dup",
+   "value": [
+    1,
+    1
+   ]
+  },
+  {
+   "label": "obj-dup",
+   "value": [
+    {},
+    {}
+   ]
+  },
+  {
+   "label": "int-float-dup",
+   "value": [
+    1,
+    1.0
+   ]
+  }
+ ]
+}

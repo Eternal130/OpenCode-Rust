@@ -1,0 +1,40 @@
+{
+ "name": "prefix-items",
+ "keywords": [
+  "prefixItems"
+ ],
+ "schema": {
+  "type": "array",
+  "prefixItems": [
+   {
+    "type": "string"
+   },
+   {
+    "type": "integer"
+   }
+  ]
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": [
+    "a",
+    1
+   ]
+  },
+  {
+   "label": "bad-first",
+   "value": [
+    1,
+    1
+   ]
+  },
+  {
+   "label": "bad-second",
+   "value": [
+    "a",
+    "b"
+   ]
+  }
+ ]
+}

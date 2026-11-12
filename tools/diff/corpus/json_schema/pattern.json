@@ -1,0 +1,24 @@
+{
+ "name": "pattern",
+ "keywords": [
+  "pattern"
+ ],
+ "schema": {
+  "type": "string",
+  "pattern": "^[a-z]+$"
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": "abc"
+  },
+  {
+   "label": "upper",
+   "value": "ABC"
+  },
+  {
+   "label": "space",
+   "value": "a b"
+  }
+ ]
+}

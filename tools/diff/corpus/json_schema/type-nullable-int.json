@@ -1,0 +1,27 @@
+{
+ "name": "type-nullable-int",
+ "keywords": [
+  "type",
+  "union"
+ ],
+ "schema": {
+  "type": [
+   "integer",
+   "null"
+  ]
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": 5
+  },
+  {
+   "label": "null",
+   "value": null
+  },
+  {
+   "label": "float",
+   "value": 5.5
+  }
+ ]
+}

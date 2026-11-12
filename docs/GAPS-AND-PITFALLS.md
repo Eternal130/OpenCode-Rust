@@ -32,6 +32,8 @@
 
 > **2026-11-12 第二十六轮收口（G-391）**：差分通道 1 唯一可行动缺口 G-391（provider `Model.cost` 缺 `skip_serializing_if` → wire 物化 `"cost": null`）经单 lane TDD 落地合并 main（`568213c8`）；差分复跑 **MATCH 42/43**，唯一残余分歧 `16-experimental`=G-390 已裁定超集旋钮（预期分歧）——通道 1 零未裁定分歧、可行动缺口清零。下一差分通道=ACP 转译（按成本升序）。明细见文末「第二十六轮收口」节。
 
+> **2026-11-12 第二十七轮（差分层通道 2-6 全量铺开）**：5 条并行 lane 复制通道 1 模式（ACP 转译/SSE store 投影/JSON Schema 校验器对拍//compact 管线/HTTP 全量——双侧真实驱动：bun staging、rust env 门控测试、通道 6 双进程真实 boot 47 请求）。**6 通道合计 384 对拍单元：MATCH 323 · DIVERGE 74 · ADJUDICATED 2 · 覆盖率 100%**；74 项分歧归并 **G-392..G-411（20 条：🟡×6 / 🟢×9 / ℹ️×5）** 入册。核心新事实：ACP child toolCallId 双重前缀 wire bug（G-392）、SSE reasoning 空白 delta 丢弃=G-351 姊妹缺口（G-393）、HTTP provider.list wire 形状整差（G-394）、校验器 7 关键字缺口（G-395）、agent 内容漂移（G-396）、**ref 生产校验器把编译错洗成 accept-all**（G-407：pattern/additionalProperties:false/结构化 const 在 ref 生产不校验——rust 更严属规范正确）。已知锚：G-357 四修复位全对齐、G-351 text 半边对齐、G-339/G-340/G-230c 对齐。工具 `tools/diff/`（6 编排器），报告与 INDEX `docs/audit/diff/`；扫描循环现口径=census 14 命令 + diff 6 命令。明细见文末「第二十七轮」节。
+
 > **2026-11-12 第二十六轮（差分层通道 1：配置解析语义差分）**：同一 corpus（43 例：合法/畸形/边界/JSONC/未知键/大小写/重复键/UNSUPPORTED 族）喂双侧**纯函数管线**（jsonc-parse → normalize → Info decode；ref=bun 驱动 staging+node_modules 链接、git 树零改动；rust=env 门控集成测试零常态成本），归一化（kind 小写、诊断排序、encoded 键序排序）后五字段对拍。**MATCH 41/43 · DIVERGE 2**：新立项 **G-391** 🟡（provider `Model.cost` 为 13 字段中唯一缺 `skip_serializing_if` 者——normalize 类型化往返物化 `"cost": null` 且经 `Info.providers` 逃逸到 `GET /api/config` wire；修法一行+差分复跑即验证）+ G-390 复认（rust 超集旋钮预期分歧，非缺口）。验证"存在性全面 ≠ 等价性全面"：census CONFIG-KEYS 曾确认键集/默认值对齐，序列化物化只有差分能抓到。工具 `tools/diff/{config_parse.py,corpus/config/,drivers/}`，报告 `docs/audit/diff/CONFIG-PARSE.md`，复现 `python3 tools/diff/config_parse.py`。后续差分通道按成本升序：ACP 转译 → SSE store 投影 → JSON Schema 校验器对拍 → /compact 管线 → HTTP 全量。明细见文末「第二十六轮」节。
 
 
@@ -2854,3 +2856,114 @@ G-239 ✅ / G-331 ✅ / G-332 ✅ / G-333 ✅ / G-272⑩ ✅（五项全部从 �
 ### 第二十六轮收口（2026-11-12，G-391）
 
 G-391 经单 lane worktree（`.worktrees/g391`，TDD red→green）落地并 ff 合并 main：`Model.cost` 补 `skip_serializing_if`（commit `568213c8`，含 wire_format 单测）；差分复跑 **MATCH 42/43 · DIVERGE 1**（唯一残余 `16-experimental`=G-390 已裁定超集旋钮，预期分歧非缺口）——通道 1 就此**零未裁定分歧**。合并门 workspace 5909/5908（白名单 `composer_tabs_walk` 隔离复跑 PASS 放行）；门与差分日志 `.test-logs/*-g391*`。现存可行动缺口清零；下一差分通道=ACP 转译（按成本升序）。
+
+---
+
+# 第二十七轮（2026-11-12，差分层通道 2-6 全量铺开 + 裁定入册 G-392..G-411）
+
+> 方法：5 条并行 lane 复制通道 1 模式（corpus + 双侧真实驱动（bun staging/rust env 门控测试/双侧真实进程）+ 归一化对拍 + 报告），全部幂等可复现（orchestrator 独立复跑 6 通道计数与 lane 报告一致）。**6 通道合计 384 对拍单元：MATCH 323 · DIVERGE 74 · ADJUDICATED 2 · 覆盖率 100%**。74 项分歧归并 20 条入册（🟡×6 / 🟢×9 / ℹ️×5）。总索引 `docs/audit/diff/INDEX.md`。附产：oc-cli 新增 lib target（测试暴露 acp 纯管线用，`#[path]` 重挂真实文件，bin 不动——oc-cli 420/420 PASS 核验）。
+
+## 🟡 中
+
+### G-392 ❌ ACP child 会话 toolCallId 双重前缀（wire bug）
+- rust：`oc-cli/src/acp/translate.rs:753` `pending_update` 构造时 `child::tool_call_id(child, &tool.id)` 前缀一次 → `route()`（:764）`child::project(update, child)` 再前缀（child.rs:112 `format!("{}:{}", …)` 非幂等）→ child 会话的 pending tool_call wire 输出 `childId:childId:toolId`。
+- ref：child.ts 仅 project 处前缀一次。
+- 影响：ACP 客户端（Zed 等）工具调用追踪键错位，update/call 对不上。
+- 修法：pending_update 不前缀（交 project 统一）或 project 幂等化；差分复跑即验证。
+- 出处：diff ACP-TRANSLATE A1。
+
+### G-393 ❌ SSE reasoning 空白 delta 丢弃（G-351 姊妹缺口）
+- rust：`oc-tui/src/store.rs:13709-13722` reasoning delta 臂仍是 `trim().is_empty() → return`（G-357 只修了 text 臂 store.rs:13193 族）。
+- ref：`data.ts:992-996` 原样追加。
+- 影响：reasoning 流式空白丢失，终值可与 transcript 不一致。
+- 修法：镜像 G-351 的 text 修法。
+- 出处：diff SSE-PROJECTION 成因族 4。
+
+### G-394 ❌ HTTP `GET /api/provider` wire 形状整差
+- rust：全量目录 224 条、无 location 包裹（routes.gen.rs:1216 侧 handler 直吐 catalog）。
+- ref：仅启用 provider + location 包裹结构（groups/provider.ts:10）。
+- 影响：客户端按 ref 形状写的 provider 选择逻辑整面失效（数量级+包裹双层差）。
+- 修法：handler 按请求 location 过滤启用项并加包裹（wire 测试钉定）。
+- 出处：diff HTTP-FULL（运行时双进程实证）。
+
+### G-395 ❌ JSON Schema 校验器关键字缺口打包（7 项）
+- rust `oc-ai/src/json_schema.rs`（G-59/G-100/G-230 面）缺：`prefixItems`（未实现×2 + items 全量应用误拒前缀合法元素的副作用×1）、`exclusiveMinimum`×2、`exclusiveMaximum`、`multipleOf`×2、`minProperties`、`boolean schema false`×2、畸形 type（"banana"）处置差。
+- ref（effect JsonSchema 全量 draft 语义）均正确拒绝/接受。
+- 影响：带这些关键字的 MCP/插件 schema 在 rust 侧静默放行非法输入（或误拒合法输入——prefixItems 副作用）。
+- 修法：校验器补 7 关键字（纯函数扩展+对拍复跑）。
+- 出处：diff JSON-SCHEMA（rust-accept-ref-reject 12 对中的 9 对，余 3 对为 G-408 安全整数域差）。
+
+### G-396 ❌ HTTP agent 端点内容漂移（permissions 计数 + system prompt 文本）
+- rust vs ref（双进程运行时实证）：`GET /api/agent` 的 permissions 少 5-9 项/agent、部分 agent 的 system prompt 文本与 ref 不一致（正文漂移，非形状）。
+- 影响：模型行为面（system prompt 是行为输入）与权限可见面漂移。
+- 修法：逐 agent 对拍种子定义与 permissions 表（内容级 lane，需先定位漂移源——内建 seed vs ref agent.ts）。
+- 出处：diff HTTP-FULL `agent`。
+
+### G-397 ❌ HTTP `GET /api/model/default` 字段缺口
+- rust 缺 `package/apiKey/baseURL` 字段（ref model-default 投影含之）；客户端默认模型展示/诊断面信息少。
+- 出处：diff HTTP-FULL `model_default`。
+
+## 🟢 低
+
+### G-398 ❌ SSE 空终值族（text/reasoning ended "" 跳过 + step.ended finish ""）
+- rust：`store.rs:13683+/13725+` 终值为空串时跳过 part（不置 completed）；`step.ended` finish "" → None。ref：赋值并置 completed（data.ts:914-917/997-1002）。终态可分叉（空 part 存在性）。
+- 出处：diff SSE-PROJECTION 成因族 5。
+
+### G-399 ❌ SSE 完成后迟到 delta：rust 丢弃、ref 追加
+- rust `store.rs:14287-14296`；ref 追加到已完成 part。竞窗内服务端补发时终值差一段。
+- 出处：diff SSE-PROJECTION 成因族 6。
+
+### G-400 ❌ compaction null/错型校验残差打包（4 项）
+- `message.id/status` 数字：rust 接受透传（responses_compaction.rs:365-373）vs ref 拒绝（responses-compaction.ts:54-59）；`reasoning.id` 显式 null：rust as_str→None 接受 vs ref 拒（open-responses.ts:85）；`usage` 显式 null：rust 视为无 usage vs ref 拒（:80）；另 b21 拒绝次序差（双侧均拒，记录性）。G-357 的 null/错型残边。
+- 修法：四点补类型/null 门（对拍复跑验证）。
+- 出处：diff RESPONSES-COMPACTION b44/b45/v10/v19。
+
+### G-401 ❌ ACP shell rawInput `cwd:null` 不回填
+- rust `oc-cli/src/acp/tool.rs:179-187` 按键存在性判断（null 视为已给）；ref `tool.ts:165-168` 真值判断（null 回填 cwd）。客户端展示的 shell 命令 cwd 字段差。
+- 出处：diff ACP-TRANSLATE A2。
+
+### G-402 ❌ ACP compaction 起始 id 回退源错位
+- rust 用 `data.id` 得 ""；ref 用 envelope id 得 `msg_N`（compaction 起始更新在无 data.id 时的 fallback id）。修复需上游传入 envelope id（提取注记）。
+- 出处：diff ACP-TRANSLATE A3。
+
+### G-403 ⚠️ HTTP session create 坏 location：rust 404 vs ref 200（悬挂 session）
+- rust `middleware.rs:386` LocationNotFound 拒绝；ref 创建引用不可解析 location 的悬挂 session（groups/session.ts:180 无前置解析）。方向=rust 更严；**裁决待定**：对齐 ref（放行悬挂）或登记有意纠偏（倾向后者——悬挂 session 是 ref 侧可疑行为，但 wire 兼容面需权衡）。
+- 出处：diff HTTP-FULL `session_create_bad_location`。
+
+### G-404 ❌ HTTP session.list 空页 cursor：ref 恒返回锚点 vs rust null
+- 分页游标形状差（ref 恒回显 cursor 锚点；rust 空页回 null）。客户端分页循环终止条件差。
+- 出处：diff HTTP-FULL `session_list_empty_again`。
+
+### G-405 ❌ compaction 空 data 的 data-URL 回退差
+- rust `schema/media.rs:342-352` 要求 data 非空 → 空 data 回退整串当 base64；ref `media.ts:290` 正则允许空 payload。空 `data:` URL 的 media part 形状差。
+- 出处：diff RESPONSES-COMPACTION v14。
+
+### G-406 ❌ SSE instructions.updated 空串 guard
+- rust `store.rs:13323-13342` 空 text guard 丢弃；ref 仅 guard undefined（空串生效）。
+- 出处：diff SSE-PROJECTION 成因族 8。
+
+## ℹ️ 登记
+
+### G-407 ℹ️ ref 生产校验器编译错→accept-all（rust 有意超严，插件兼容面声明）
+- ref 生产路径（runtime.ts JsonSchema→SchemaRepresentation + Cache catch）把 pattern 编译错、additionalProperties:false/子 schema、结构化 const 的编译失败**洗成接受一切**——即 ref 生产根本不校验这三类。rust（json_schema.rs）忠实实现（对拍 rust-reject-ref-accept 的 7/12 对系此因）。裁决：保留 rust 规范正确实现，登记为有意分歧；插件生态声明：依赖 ref 宽松性的 schema 在 rust 侧会被拒。
+- 出处：diff JSON-SCHEMA（probe 直证 runtime.ts 消费方式）。
+
+### G-408 ℹ️ 数字/相等语义记录族（effect 安全整数域）
+- integer ≥2^53 ×3（effect 安全整数域 vs rust u64/i64 全域）、`5.0` integer ×1、enum `1.0` ×1、uniqueItems 结构相等 vs 引用恒等 ×2（`[{},{}]`、`[1,1.0]`）——JS 数字模型固有差，无行动面。
+- 出处：diff JSON-SCHEMA。
+
+### G-409 ℹ️ SSE 投影架构差打包（4 族）
+- 无锚 delta：rust 建件+G-288⑧ 乱序补位 vs ref 丢弃（宽容方向反，rust 超集）；text.started 惰性建件（瞬态差、终态收敛）；replay 去重层位（rust Store 内 `is_replayed` vs ref app SSE 层）；session.moved 纯事件流门控（ref 需 API 装载 session.info——通道外）。终态口径差已在 G-393/G-398/G-399/G-406 单列，本条收架构性部分。
+- 出处：diff SSE-PROJECTION 成因族 1/2/3/7。
+
+### G-410 ℹ️ HTTP wire 记录性族（5 项）
+- cost `0.0` vs `0`（serde f64 vs JS number 序列化）；session 多 `slug/subpath` 键（超集）；project/skill 缺省键 null vs ref 省略；`agent_missing/fs_read_missing` message 缺 offender 后缀；integration 目录 224 vs 229 条（成员新鲜度依赖构建期目录，形状可比已比）。
+- 出处：diff HTTP-FULL。
+
+### G-411 ℹ️ ACP 有据形状差族（3 项）
+- pending tool_call 恒置 `name`+vendored crate skip 掉默认 `status:"pending"`/空 `locations`（tool_call.rs:41/51/56，G-27 vendored patch 域）；异常 ordinal `unwrap_or(0)` vs ref 模板串；缺 delta 字段 `""` 上 wire vs ref 丢键。
+- 出处：diff ACP-TRANSLATE B1-B3。
+
+## 第二十七轮判定汇总
+
+差分层 6 通道全量落地：**384 单元 100% 归属，74 分歧归并 20 条（🟡×6 / 🟢×9 / ℹ️×5）**。修复优先序：G-392（wire bug，双重前缀）> G-393（G-351 姊妹，一行族）> G-394（provider wire 整差）> G-395（校验器 7 关键字，纯函数）> G-396（agent 内容漂移，需定位源）> G-397 > 🟢 族（G-400 打包四点/G-398/G-399/G-401/G-402/G-404/G-405/G-406）> G-403 裁决。工具：`tools/diff/`（6 编排器+corpus+驱动），报告 `docs/audit/diff/`（INDEX 总索引）。扫描循环现口径=**census 14 命令 + diff 6 命令**，全部幂等。

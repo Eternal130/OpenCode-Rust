@@ -1,0 +1,29 @@
+{
+ "name": "min-items",
+ "keywords": [
+  "minItems"
+ ],
+ "schema": {
+  "type": "array",
+  "minItems": 2
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": [
+    1,
+    2
+   ]
+  },
+  {
+   "label": "one",
+   "value": [
+    1
+   ]
+  },
+  {
+   "label": "empty",
+   "value": []
+  }
+ ]
+}

@@ -1,0 +1,21 @@
+{
+ "name": "pattern-invalid",
+ "keywords": [
+  "pattern",
+  "malformed-schema"
+ ],
+ "schema": {
+  "type": "string",
+  "pattern": "[unclosed"
+ },
+ "instances": [
+  {
+   "label": "x",
+   "value": "x"
+  },
+  {
+   "label": "empty",
+   "value": ""
+  }
+ ]
+}

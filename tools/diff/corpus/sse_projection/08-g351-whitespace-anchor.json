@@ -1,0 +1,22 @@
+{
+  "name": "08-g351-whitespace-anchor",
+  "description": "G-351 修复位专项：空白 delta 原样追加（' '、'\\n\\n'、'  ind'）与含空白终值",
+  "events": [
+    { "type": "session.step.started", "id": "evt_701", "created": 8000,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "agent": "build", "model": { "providerID": "anthropic", "id": "claude-sonnet-4-5" }, "started": 8000 } },
+    { "type": "session.text.started", "id": "evt_702", "created": 8001,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0 } },
+    { "type": "session.text.delta", "id": "evt_703", "created": 8002,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "delta": " " } },
+    { "type": "session.text.delta", "id": "evt_704", "created": 8003,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "delta": "\n\n" } },
+    { "type": "session.text.delta", "id": "evt_705", "created": 8004,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "delta": "  indented" } },
+    { "type": "session.text.delta", "id": "evt_706", "created": 8005,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "delta": "\n" } },
+    { "type": "session.text.ended", "id": "evt_707", "created": 8006,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "text": " \n\n  indented\n" } },
+    { "type": "session.step.ended", "id": "evt_708", "created": 8007,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "finish": "stop" } }
+  ]
+}

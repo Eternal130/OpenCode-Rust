@@ -1,0 +1,23 @@
+{
+ "name": "type-object",
+ "keywords": [
+  "type"
+ ],
+ "schema": {
+  "type": "object"
+ },
+ "instances": [
+  {
+   "label": "empty",
+   "value": {}
+  },
+  {
+   "label": "arr",
+   "value": []
+  },
+  {
+   "label": "null",
+   "value": null
+  }
+ ]
+}

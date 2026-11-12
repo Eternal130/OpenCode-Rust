@@ -1,0 +1,24 @@
+{
+ "name": "max-length",
+ "keywords": [
+  "maxLength"
+ ],
+ "schema": {
+  "type": "string",
+  "maxLength": 3
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": "abc"
+  },
+  {
+   "label": "four",
+   "value": "abcd"
+  },
+  {
+   "label": "unicode-ok",
+   "value": "日本語"
+  }
+ ]
+}

@@ -1,0 +1,51 @@
+{
+ "name": "retry-cleared-by-step-start",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/tmp/opencode/diff-acp",
+  "start": {
+   "type": "input",
+   "id": "msg_inbox"
+  },
+  "childUpdates": false,
+  "compaction": true
+ },
+ "events": [
+  {
+   "id": "evt_boot",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_inbox"
+   }
+  },
+  {
+   "type": "session.retry.scheduled",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_asst_1",
+    "attempt": 1,
+    "at": 1731400000000,
+    "error": {
+     "type": "provider.http",
+     "message": "5xx"
+    }
+   },
+   "id": "evt_1"
+  },
+  {
+   "type": "session.step.started",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_asst_1",
+    "agent": "build",
+    "model": {
+     "providerID": "a",
+     "modelID": "m"
+    },
+    "started": 0
+   },
+   "id": "evt_2"
+  }
+ ]
+}

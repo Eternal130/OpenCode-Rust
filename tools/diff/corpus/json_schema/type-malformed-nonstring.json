@@ -1,0 +1,20 @@
+{
+ "name": "type-malformed-nonstring",
+ "keywords": [
+  "type",
+  "malformed-schema"
+ ],
+ "schema": {
+  "type": 42
+ },
+ "instances": [
+  {
+   "label": "num",
+   "value": 1
+  },
+  {
+   "label": "str",
+   "value": "x"
+  }
+ ]
+}

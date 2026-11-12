@@ -1,0 +1,28 @@
+{
+ "name": "type-integer",
+ "keywords": [
+  "type",
+  "integer"
+ ],
+ "schema": {
+  "type": "integer"
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": 5
+  },
+  {
+   "label": "float",
+   "value": 5.5
+  },
+  {
+   "label": "float-int",
+   "value": 5.0
+  },
+  {
+   "label": "str",
+   "value": "5"
+  }
+ ]
+}

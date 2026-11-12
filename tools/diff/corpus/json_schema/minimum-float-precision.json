@@ -1,0 +1,19 @@
+{
+ "name": "minimum-float-precision",
+ "keywords": [
+  "minimum"
+ ],
+ "schema": {
+  "minimum": 0.1
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": 0.1
+  },
+  {
+   "label": "below",
+   "value": 0.05
+  }
+ ]
+}

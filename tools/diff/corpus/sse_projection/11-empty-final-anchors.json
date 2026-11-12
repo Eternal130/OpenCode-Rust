@@ -1,0 +1,22 @@
+{
+  "name": "11-empty-final-anchors",
+  "description": "边界值：text.ended 空串 / reasoning.ended 空串 / reasoning 空白 delta / step.ended 空 finish",
+  "events": [
+    { "type": "session.step.started", "id": "evt_a01", "created": 11000,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "agent": "build", "model": { "providerID": "anthropic", "id": "claude-sonnet-4-5" }, "started": 11000 } },
+    { "type": "session.reasoning.started", "id": "evt_a02", "created": 11001,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0 } },
+    { "type": "session.reasoning.delta", "id": "evt_a03", "created": 11002,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "delta": " " } },
+    { "type": "session.reasoning.ended", "id": "evt_a04", "created": 11003,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "text": "" } },
+    { "type": "session.text.started", "id": "evt_a05", "created": 11004,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0 } },
+    { "type": "session.text.delta", "id": "evt_a06", "created": 11005,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "delta": "kept" } },
+    { "type": "session.text.ended", "id": "evt_a07", "created": 11006,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "text": "" } },
+    { "type": "session.step.ended", "id": "evt_a08", "created": 11007,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "finish": "" } }
+  ]
+}

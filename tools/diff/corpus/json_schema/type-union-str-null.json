@@ -1,0 +1,27 @@
+{
+ "name": "type-union-str-null",
+ "keywords": [
+  "type",
+  "union"
+ ],
+ "schema": {
+  "type": [
+   "string",
+   "null"
+  ]
+ },
+ "instances": [
+  {
+   "label": "str",
+   "value": "a"
+  },
+  {
+   "label": "null",
+   "value": null
+  },
+  {
+   "label": "num",
+   "value": 1
+  }
+ ]
+}

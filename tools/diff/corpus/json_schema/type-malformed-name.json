@@ -1,0 +1,20 @@
+{
+ "name": "type-malformed-name",
+ "keywords": [
+  "type",
+  "malformed-schema"
+ ],
+ "schema": {
+  "type": "banana"
+ },
+ "instances": [
+  {
+   "label": "str",
+   "value": "x"
+  },
+  {
+   "label": "num",
+   "value": 1
+  }
+ ]
+}

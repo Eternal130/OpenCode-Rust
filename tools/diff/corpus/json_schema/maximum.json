@@ -1,0 +1,23 @@
+{
+ "name": "maximum",
+ "keywords": [
+  "maximum"
+ ],
+ "schema": {
+  "maximum": 10
+ },
+ "instances": [
+  {
+   "label": "ten",
+   "value": 10
+  },
+  {
+   "label": "eleven",
+   "value": 11
+  },
+  {
+   "label": "big",
+   "value": 1000
+  }
+ ]
+}

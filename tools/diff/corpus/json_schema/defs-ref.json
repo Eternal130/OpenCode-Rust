@@ -1,0 +1,30 @@
+{
+ "name": "defs-ref",
+ "keywords": [
+  "$defs",
+  "$ref"
+ ],
+ "schema": {
+  "$defs": {
+   "pos": {
+    "type": "integer",
+    "minimum": 0
+   }
+  },
+  "$ref": "#/$defs/pos"
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": 3
+  },
+  {
+   "label": "neg",
+   "value": -1
+  },
+  {
+   "label": "str",
+   "value": "3"
+  }
+ ]
+}

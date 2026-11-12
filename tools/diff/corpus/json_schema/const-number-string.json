@@ -1,0 +1,19 @@
+{
+ "name": "const-number-string",
+ "keywords": [
+  "const"
+ ],
+ "schema": {
+  "const": "1"
+ },
+ "instances": [
+  {
+   "label": "str",
+   "value": "1"
+  },
+  {
+   "label": "num",
+   "value": 1
+  }
+ ]
+}

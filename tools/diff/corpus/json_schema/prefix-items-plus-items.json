@@ -1,0 +1,35 @@
+{
+ "name": "prefix-items-plus-items",
+ "keywords": [
+  "prefixItems",
+  "items"
+ ],
+ "schema": {
+  "type": "array",
+  "prefixItems": [
+   {
+    "type": "string"
+   }
+  ],
+  "items": {
+   "type": "integer"
+  }
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": [
+    "a",
+    2,
+    3
+   ]
+  },
+  {
+   "label": "bad-tail",
+   "value": [
+    "a",
+    "b"
+   ]
+  }
+ ]
+}

@@ -1,0 +1,30 @@
+{
+ "name": "additional-properties-schema",
+ "keywords": [
+  "additionalProperties"
+ ],
+ "schema": {
+  "properties": {
+   "a": {}
+  },
+  "additionalProperties": {
+   "type": "integer"
+  }
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": {
+    "a": "x",
+    "b": 1
+   }
+  },
+  {
+   "label": "bad-extra",
+   "value": {
+    "a": "x",
+    "b": "s"
+   }
+  }
+ ]
+}

@@ -1,0 +1,20 @@
+{
+  "name": "06-ordinal-stress",
+  "description": "乱序/重复 ordinal：gap（ordinal 2 先到）、回填 ordinal 1、同 id 重放、无 id 重复投递",
+  "events": [
+    { "type": "session.step.started", "id": "evt_501", "created": 6000,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "agent": "build", "model": { "providerID": "anthropic", "id": "claude-sonnet-4-5" }, "started": 6000 } },
+    { "type": "session.text.delta", "id": "evt_502", "created": 6001,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "delta": "A" } },
+    { "type": "session.text.delta", "id": "evt_503", "created": 6002,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 2, "delta": "C" } },
+    { "type": "session.text.delta", "id": "evt_504", "created": 6003,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 1, "delta": "B" } },
+    { "type": "session.text.delta", "id": "evt_504", "created": 6003,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 1, "delta": "B" } },
+    { "type": "session.text.delta", "id": "evt_505", "created": 6004,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "delta": "A" } },
+    { "type": "session.step.ended", "id": "evt_506", "created": 6005,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "finish": "stop" } }
+  ]
+}

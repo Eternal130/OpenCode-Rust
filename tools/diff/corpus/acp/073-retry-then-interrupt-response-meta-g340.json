@@ -1,0 +1,45 @@
+{
+ "name": "retry-then-interrupt-response-meta-g340",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/tmp/opencode/diff-acp",
+  "start": {
+   "type": "input",
+   "id": "msg_inbox"
+  },
+  "childUpdates": false,
+  "compaction": true
+ },
+ "events": [
+  {
+   "id": "evt_boot",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_inbox"
+   }
+  },
+  {
+   "type": "session.retry.scheduled",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_asst_1",
+    "attempt": 2,
+    "at": 1731400060123,
+    "error": {
+     "type": "provider.http",
+     "message": "5xx"
+    }
+   },
+   "id": "evt_1"
+  },
+  {
+   "type": "session.execution.interrupted",
+   "data": {
+    "sessionID": "ses_root",
+    "reason": "user"
+   },
+   "id": "evt_2"
+  }
+ ]
+}

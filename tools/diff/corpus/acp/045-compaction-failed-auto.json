@@ -1,0 +1,36 @@
+{
+ "name": "compaction-failed-auto",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/tmp/opencode/diff-acp",
+  "start": {
+   "type": "input",
+   "id": "msg_inbox"
+  },
+  "childUpdates": false,
+  "compaction": true
+ },
+ "events": [
+  {
+   "id": "evt_boot",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_inbox"
+   }
+  },
+  {
+   "type": "session.compaction.failed",
+   "data": {
+    "sessionID": "ses_root",
+    "reason": "auto",
+    "error": {
+     "type": "provider.http",
+     "message": "boom"
+    },
+    "inputID": "msg_cx"
+   },
+   "id": "evt_1"
+  }
+ ]
+}

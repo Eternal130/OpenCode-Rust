@@ -1,0 +1,1 @@
+{"object": "response.compaction", "output": [{"type": "compaction", "id": "cmp_1", "encrypted_content": "enc-secret-1"}, {"type": "web_search_call", "id": "ws_1", "status": "completed"}], "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12}}

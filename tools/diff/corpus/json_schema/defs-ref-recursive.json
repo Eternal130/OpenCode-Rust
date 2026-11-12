@@ -1,0 +1,57 @@
+{
+ "name": "defs-ref-recursive",
+ "keywords": [
+  "$defs",
+  "$ref",
+  "recursion"
+ ],
+ "schema": {
+  "$defs": {
+   "node": {
+    "type": "object",
+    "required": [
+     "name"
+    ],
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "next": {
+      "$ref": "#/$defs/node"
+     }
+    }
+   }
+  },
+  "$ref": "#/$defs/node"
+ },
+ "instances": [
+  {
+   "label": "leaf",
+   "value": {
+    "name": "a"
+   }
+  },
+  {
+   "label": "nested-ok",
+   "value": {
+    "name": "a",
+    "next": {
+     "name": "b"
+    }
+   }
+  },
+  {
+   "label": "nested-bad",
+   "value": {
+    "name": "a",
+    "next": {
+     "name": 1
+    }
+   }
+  },
+  {
+   "label": "empty",
+   "value": {}
+  }
+ ]
+}

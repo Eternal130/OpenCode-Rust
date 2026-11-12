@@ -1,0 +1,23 @@
+{
+ "name": "minimum",
+ "keywords": [
+  "minimum"
+ ],
+ "schema": {
+  "minimum": 0
+ },
+ "instances": [
+  {
+   "label": "zero",
+   "value": 0
+  },
+  {
+   "label": "neg",
+   "value": -1
+  },
+  {
+   "label": "str-not-checked",
+   "value": "0"
+  }
+ ]
+}

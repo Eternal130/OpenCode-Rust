@@ -1,0 +1,23 @@
+{
+ "name": "exclusive-minimum",
+ "keywords": [
+  "exclusiveMinimum"
+ ],
+ "schema": {
+  "exclusiveMinimum": 0
+ },
+ "instances": [
+  {
+   "label": "pos",
+   "value": 1
+  },
+  {
+   "label": "zero",
+   "value": 0
+  },
+  {
+   "label": "neg",
+   "value": -1
+  }
+ ]
+}

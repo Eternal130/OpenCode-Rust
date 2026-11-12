@@ -1,0 +1,17 @@
+{
+ "name": "schema-false",
+ "keywords": [
+  "malformed-schema"
+ ],
+ "schema": false,
+ "instances": [
+  {
+   "label": "num",
+   "value": 1
+  },
+  {
+   "label": "null",
+   "value": null
+  }
+ ]
+}

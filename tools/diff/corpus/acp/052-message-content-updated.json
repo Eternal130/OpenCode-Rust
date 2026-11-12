@@ -1,0 +1,37 @@
+{
+ "name": "message-content-updated",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/tmp/opencode/diff-acp",
+  "start": {
+   "type": "input",
+   "id": "msg_inbox"
+  },
+  "childUpdates": false,
+  "compaction": true
+ },
+ "events": [
+  {
+   "id": "evt_boot",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_inbox"
+   }
+  },
+  {
+   "type": "session.message.content.updated",
+   "data": {
+    "sessionID": "ses_root",
+    "messageID": "msg_asst_1",
+    "content": [
+     {
+      "type": "text",
+      "text": "edited"
+     }
+    ]
+   },
+   "id": "evt_1"
+  }
+ ]
+}

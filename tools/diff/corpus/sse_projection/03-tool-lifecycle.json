@@ -1,0 +1,26 @@
+{
+  "name": "03-tool-lifecycle",
+  "description": "tool 状态机：input.started → input.delta → input.ended → called → progress → success",
+  "events": [
+    { "type": "session.step.started", "id": "evt_201", "created": 3000,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "agent": "build", "model": { "providerID": "anthropic", "id": "claude-sonnet-4-5" }, "started": 3000 } },
+    { "type": "session.tool.input.started", "id": "evt_202", "created": 3001,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "id": "tool_1", "name": "read" } },
+    { "type": "session.tool.input.delta", "id": "evt_203", "created": 3002,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "id": "tool_1", "delta": "{\"filePath\":" } },
+    { "type": "session.tool.input.ended", "id": "evt_204", "created": 3003,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "id": "tool_1", "text": "{\"filePath\":\"/tmp/a.ts\"}" } },
+    { "type": "session.tool.called", "id": "evt_205", "created": 3004,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "id": "tool_1", "input": { "filePath": "/tmp/a.ts" } } },
+    { "type": "session.tool.progress", "id": "evt_206", "created": 3005,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "id": "tool_1", "metadata": { "sessionID": "ses_child_1" } } },
+    { "type": "session.tool.success", "id": "evt_207", "created": 3006,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "id": "tool_1",
+        "content": [ { "type": "text", "text": "line1" }, { "type": "text", "text": "line2" } ],
+        "metadata": { "done": "true" } } },
+    { "type": "session.text.delta", "id": "evt_208", "created": 3007,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "delta": "done" } },
+    { "type": "session.step.ended", "id": "evt_209", "created": 3008,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "finish": "stop" } }
+  ]
+}
