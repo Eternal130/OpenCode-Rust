@@ -16,7 +16,11 @@ fn json_schema_diff_driver() {
     let Some(corpus) = std::env::var_os("JSON_SCHEMA_DIFF_CORPUS") else {
         return; // no corpus staged: driver inactive
     };
-    let out = PathBuf::from(std::env::var_os("JSON_SCHEMA_OUT").or(std::env::var_os("JSON_SCHEMA_DIFF_OUT")).expect("JSON_SCHEMA_DIFF_OUT"));
+    let out = PathBuf::from(
+        std::env::var_os("JSON_SCHEMA_OUT")
+            .or(std::env::var_os("JSON_SCHEMA_DIFF_OUT"))
+            .expect("JSON_SCHEMA_DIFF_OUT"),
+    );
     let corpus = PathBuf::from(corpus);
 
     let mut names: Vec<String> = std::fs::read_dir(&corpus)
@@ -30,7 +34,8 @@ fn json_schema_diff_driver() {
     let mut results: Vec<serde_json::Value> = Vec::new();
     for name in names {
         let doc: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(corpus.join(&name)).expect("read case")).expect("parse case");
+            serde_json::from_str(&std::fs::read_to_string(corpus.join(&name)).expect("read case"))
+                .expect("parse case");
         let case = doc["name"].as_str().unwrap_or(name.as_str()).to_string();
         let keywords: Vec<String> = doc["keywords"]
             .as_array()

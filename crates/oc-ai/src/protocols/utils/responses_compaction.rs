@@ -240,10 +240,17 @@ pub fn parse_compaction_response(
         .iter()
         .map(|item| to_message(item, request, &key, &route_id, text))
         .collect::<Result<Vec<_>, AiError>>()?;
-    Ok(CompactionResponse {
-        replacement,
-        usage: map_usage(document.get("usage").filter(|value| !value.is_null()), &key),
-    })
+    // G-400: `usage` is `Schema.optional(StructWithRest)` in the ref —
+    // absent is fine, but explicit null (or a non-object) fails the
+    // decode rather than being treated as "no usage".
+    let usage = match document.get("usage") {
+        None => None,
+        Some(value) if value.is_object() => map_usage(Some(value), &key),
+        Some(_) => {
+            return Err(invalid("Invalid compaction response: usage must be an object"));
+        }
+    };
+    Ok(CompactionResponse { replacement, usage })
 }
 
 /// `{key: {fields}}` provider metadata from a JSON object value.
@@ -296,7 +303,16 @@ fn to_message(
     }
 
     if kind == "reasoning" {
-        let id = item.get("id").and_then(Value::as_str).map(str::to_string);
+        // `id` is `optionalKey(String)` in the ref (open-responses.ts:85):
+        // absent is fine, but explicit null (or any non-string) fails the
+        // decode (G-400) — unlike `encrypted_content`, which is
+        // optionalNull and accepts null (corpus v08).
+        let id = match item.get("id") {
+            None => None,
+            Some(value) => Some(value.as_str().map(str::to_string).ok_or_else(|| {
+                invalid("Invalid compaction response: reasoning item id must be a string")
+            })?),
+        };
         let encrypted = item.get("encrypted_content").and_then(Value::as_str).map(str::to_string);
         let empty = SummaryPart { text: String::new() };
         let parts = item.get("summary").and_then(Value::as_array).ok_or_else(|| {
@@ -360,6 +376,19 @@ fn to_message(
             phase.is_null() || matches!(phase.as_str(), Some("commentary" | "final_answer"));
         if !legal {
             return Err(invalid("Invalid compaction response: invalid message phase"));
+        }
+    }
+    // G-400: `id`/`status` are `Schema.optional(String)` in the ref
+    // (responses-compaction.ts:54-59) — absent is fine, but a present
+    // non-string (number, explicit null) fails the decode instead of
+    // being cloned into provider metadata verbatim.
+    for field in ["id", "status"] {
+        if let Some(value) = item.get(field) {
+            if !value.is_string() {
+                return Err(invalid(&format!(
+                    "Invalid compaction response: message item {field} must be a string"
+                )));
+            }
         }
     }
     let item_metadata = provider_meta(
@@ -564,5 +593,75 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(parsed.replacement[1].content.len(), 1);
+    }
+
+    // G-400 residuals: explicit null / wrong-typed fields the ref schema
+    // rejects but the rust port used to launder into metadata or ignore.
+
+    #[test]
+    fn message_id_and_status_must_be_strings_when_present() {
+        for (field, bad) in [("id", json!(5)), ("status", json!(7))] {
+            let mut message = json!({ "type": "message", "role": "user",
+                "content": [{ "type": "input_text", "text": "u" }] });
+            message[field] = bad;
+            let error = parse(&json!({
+                "object": "response.compaction",
+                "output": [checkpoint(), message],
+            }))
+            .unwrap_err();
+            assert!(
+                error.message().contains(&format!("{field} must be a string")),
+                "got {}",
+                error.message()
+            );
+        }
+    }
+
+    #[test]
+    fn reasoning_id_null_is_rejected_but_encrypted_null_is_fine() {
+        let error = parse(&json!({
+            "object": "response.compaction",
+            "output": [checkpoint(), { "type": "reasoning", "id": null,
+                "summary": [{ "type": "summary_text", "text": "T" }] }],
+        }))
+        .unwrap_err();
+        assert!(error.message().contains("id must be a string"), "got {}", error.message());
+
+        // v08 parity: encrypted_content null stays accepted (optionalNull).
+        parse(&json!({
+            "object": "response.compaction",
+            "output": [checkpoint(), { "type": "reasoning", "id": "rs",
+                "summary": [{ "type": "summary_text", "text": "T" }],
+                "encrypted_content": null }],
+        }))
+        .unwrap();
+    }
+
+    #[test]
+    fn explicit_null_usage_is_rejected() {
+        let error = parse(&json!({
+            "object": "response.compaction",
+            "output": [checkpoint()],
+            "usage": null,
+        }))
+        .unwrap_err();
+        assert!(error.message().contains("usage must be an object"), "got {}", error.message());
+    }
+
+    #[test]
+    fn empty_payload_data_url_image_replays_with_empty_base64() {
+        // G-405 (v14): data:image/png;base64, is a data URL with an empty
+        // payload, not a whole-string base64 fallback.
+        let parsed = parse(&json!({
+            "object": "response.compaction",
+            "output": [checkpoint(), { "type": "message", "id": "msg_4", "role": "user",
+                "content": [{ "type": "input_image", "image_url": "data:image/png;base64," }] }],
+        }))
+        .unwrap();
+        let ContentPart::Media { media, .. } = &parsed.replacement[1].content[0] else {
+            panic!("expected media part");
+        };
+        assert_eq!(media.inline().unwrap().base64, "");
+        assert_eq!(media.media_type, "image/png");
     }
 }

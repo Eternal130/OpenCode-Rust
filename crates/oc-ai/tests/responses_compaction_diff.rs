@@ -49,10 +49,12 @@ fn norm_meta(meta: &oc_ai::schema::ProviderMetadata) -> Value {
 
 fn norm_media(asset: &oc_ai::schema::media::Asset) -> Value {
     match &asset.source {
-        Source::Base64 { data, media_type } =>
-            json!({ "source": "base64", "mediaType": media_type, "data": data }),
-        Source::Url { url, media_type, .. } =>
-            json!({ "source": "url", "mediaType": media_type, "url": url }),
+        Source::Base64 { data, media_type } => {
+            json!({ "source": "base64", "mediaType": media_type, "data": data })
+        }
+        Source::Url { url, media_type, .. } => {
+            json!({ "source": "url", "mediaType": media_type, "url": url })
+        }
         Source::Bytes { .. } => json!({ "source": "bytes" }),
         Source::Ref { .. } => json!({ "source": "ref" }),
     }

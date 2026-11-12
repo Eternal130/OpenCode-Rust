@@ -2825,7 +2825,7 @@ fn breakpoint_drop_warning_matches_the_ref_shape() {
 /// explicitly requested — v2's `stderrLogger`).
 #[test]
 fn breakpoint_warning_is_gated_by_log_level_and_print_logs() {
-    use crate::protocols::anthropic_messages::{parse_log_level, log_prints_stderr, LogLevel};
+    use crate::protocols::anthropic_messages::{log_prints_stderr, parse_log_level, LogLevel};
 
     // minimumLogLevel parse matrix (logging.ts:164-173).
     assert_eq!(parse_log_level(Some("debug")), LogLevel::Debug);
