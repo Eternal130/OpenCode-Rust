@@ -30,6 +30,8 @@
 
 > **2026-11-12 第二十五轮增补收口（gap-burndown-13 amendment）**：用户下令把登记/搁置态的 G-239/G-331（session.panel+PanelInput）、G-332（markdown 代码块渲染器注册链）、G-333（node 备轨）、G-272⑩（mini 样式化滚动回写）转修复，经 lanes H/I/J/K 串行落地合并 main（`78cbda37`/`b6d66a5f`/`06232e6c`/`6fea30de`）+ opentui-rust 三提交（`a8e41e9`/`5a079fa`/`34a5ac4`，oc pin 56a9eda→34a5ac4），逐条 ✅；Lane H/K 各经一轮 fix round 后复审通过；opentui 差分 127 IDENTICAL 零重钉。G-28 生态 breaking 声明面相应收窄（见 G-28 增补轮勘注）。明细见文末「第二十五轮增补收口」节。
 
+> **2026-11-12 第二十六轮收口（G-391）**：差分通道 1 唯一可行动缺口 G-391（provider `Model.cost` 缺 `skip_serializing_if` → wire 物化 `"cost": null`）经单 lane TDD 落地合并 main（`568213c8`）；差分复跑 **MATCH 42/43**，唯一残余分歧 `16-experimental`=G-390 已裁定超集旋钮（预期分歧）——通道 1 零未裁定分歧、可行动缺口清零。下一差分通道=ACP 转译（按成本升序）。明细见文末「第二十六轮收口」节。
+
 > **2026-11-12 第二十六轮（差分层通道 1：配置解析语义差分）**：同一 corpus（43 例：合法/畸形/边界/JSONC/未知键/大小写/重复键/UNSUPPORTED 族）喂双侧**纯函数管线**（jsonc-parse → normalize → Info decode；ref=bun 驱动 staging+node_modules 链接、git 树零改动；rust=env 门控集成测试零常态成本），归一化（kind 小写、诊断排序、encoded 键序排序）后五字段对拍。**MATCH 41/43 · DIVERGE 2**：新立项 **G-391** 🟡（provider `Model.cost` 为 13 字段中唯一缺 `skip_serializing_if` 者——normalize 类型化往返物化 `"cost": null` 且经 `Info.providers` 逃逸到 `GET /api/config` wire；修法一行+差分复跑即验证）+ G-390 复认（rust 超集旋钮预期分歧，非缺口）。验证"存在性全面 ≠ 等价性全面"：census CONFIG-KEYS 曾确认键集/默认值对齐，序列化物化只有差分能抓到。工具 `tools/diff/{config_parse.py,corpus/config/,drivers/}`，报告 `docs/audit/diff/CONFIG-PARSE.md`，复现 `python3 tools/diff/config_parse.py`。后续差分通道按成本升序：ACP 转译 → SSE store 投影 → JSON Schema 校验器对拍 → /compact 管线 → HTTP 全量。明细见文末「第二十六轮」节。
 
 
@@ -2834,12 +2836,13 @@ G-239 ✅ / G-331 ✅ / G-332 ✅ / G-333 ✅ / G-272⑩ ✅（五项全部从 �
 
 **MATCH 41/43 · DIVERGE 2 · MISSING 0**（覆盖率 43/43；json-parse/normalize 判定/诊断三元组/decode 判定四字段全对齐，含 malformed、JSONC 容错、未知键、大小写、重复键、UNSUPPORTED 族）。
 
-### G-391 🟡 provider `Model.cost` 序列化缺 `skip_serializing_if` → 往返物化 `"cost": null`（wire 可观察）
+### G-391 ✅ provider `Model.cost` 序列化缺 `skip_serializing_if` → 往返物化 `"cost": null`（wire 可观察）
 - rust：`oc-schema/src/config/provider.rs:130-131` `cost: Option<CostList>` 是该结构体 13 个字段中**唯一**缺 `skip_serializing_if = "Option::is_none"` 的字段——normalize 的类型化往返（normalize.rs `decode_provider_entry` decode→re-serialize）把缺省 cost 物化为显式 null；`Info.providers`（config/mod.rs:134）内嵌同型，`GET /api/config`（handlers/config.rs:39 `serde_json::to_value(entry)`）在 wire 上为每个已配置 provider model 输出 `"cost": null`。
 - ref：normalize（schema 变换，optional 保留缺省）与 GET config 均不出现该键（provider.ts:88 optional）。
 - 影响：客户端可见 wire 差异；Info decode 不受影响（null 与缺省同归 None，decode_ok 双侧一致）；潜在语义面=任何把"显式 null"当"覆盖为免费/未知"的消费者。
 - 修法：一行——`Model.cost` 补 `skip_serializing_if = "Option::is_none"`（保留 `deserialize_with`）；差分复跑即验证。
 - 出处：diff CONFIG-PARSE `13-provider-models`。
+- **2026-11-12 第二十六轮收口 ✅（`568213c8`，TDD red→green）**：`Model.cost` 补 `skip_serializing_if`（`deserialize_with` one-or-many 语义保留）；单测 `provider_model_cost_omitted_when_unset` 钉定缺省省键 + 显式 cost（单条形态）往返不丢；差分复跑 **MATCH 42/43**——`13-provider-models` 转对齐，唯一残余 `16-experimental`=G-390 已裁定超集旋钮（手工裁定注已回贴报告「判定」节，复跑后需重贴）。合并门 workspace 5909 跑 5908 过（唯一失败 `composer_tabs_walk`=白名单项，隔离复跑 PASS 落盘）；无受影响测试断言旧 `"cost":null` 形状（grep 零命中）。
 
 ### 归类与复认
 - `16-experimental` 分歧（rust 保留 `experimental.file_retention.cleanup_interval`、ref 静默剥除）= **G-390** rust 超集旋钮的预期表现，有据分歧非新缺口。ref 剥除未知 experimental 键不发诊断——与 rust 行为一致（18-unknown-nested 对齐）。
@@ -2847,3 +2850,7 @@ G-239 ✅ / G-331 ✅ / G-332 ✅ / G-333 ✅ / G-272⑩ ✅（五项全部从 �
 ## 第二十六轮判定
 
 差分层首通道即产出 1 项 wire 级新缺口（G-391）+ 1 项既有背书复认（G-390），验证了"存在性全面 ≠ 等价性全面"的预判：census CONFIG-KEYS 曾确认键集与默认值对齐，但**序列化物化**只有差分能抓到。修复优先序：G-391（一行）→ 差分复扫。后续差分通道按成本升序：ACP 转译 → SSE store 投影 → JSON Schema 校验器对拍 → /compact 管线 → HTTP 全量。
+
+### 第二十六轮收口（2026-11-12，G-391）
+
+G-391 经单 lane worktree（`.worktrees/g391`，TDD red→green）落地并 ff 合并 main：`Model.cost` 补 `skip_serializing_if`（commit `568213c8`，含 wire_format 单测）；差分复跑 **MATCH 42/43 · DIVERGE 1**（唯一残余 `16-experimental`=G-390 已裁定超集旋钮，预期分歧非缺口）——通道 1 就此**零未裁定分歧**。合并门 workspace 5909/5908（白名单 `composer_tabs_walk` 隔离复跑 PASS 放行）；门与差分日志 `.test-logs/*-g391*`。现存可行动缺口清零；下一差分通道=ACP 转译（按成本升序）。
