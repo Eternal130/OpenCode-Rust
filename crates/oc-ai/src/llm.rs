@@ -459,14 +459,12 @@ mod tests {
         assert!(validate_json_schema(&json!(true), &json!({ "const": true }), "").is_ok());
         assert!(validate_json_schema(&json!(1), &json!({ "const": 1 }), "").is_ok());
         let nested = json!({ "const": { "type": "file", "meta": { "a": [1, true, null] } } });
-        assert!(
-            validate_json_schema(
-                &json!({ "type": "file", "meta": { "a": [1, true, null] } }),
-                &nested,
-                ""
-            )
-            .is_ok()
-        );
+        assert!(validate_json_schema(
+            &json!({ "type": "file", "meta": { "a": [1, true, null] } }),
+            &nested,
+            ""
+        )
+        .is_ok());
         // negatives: type-strict — bool `true` must NOT match number 1
         // or string "true" (no coercion).
         assert!(validate_json_schema(&json!(1), &json!({ "const": true }), "").is_err());
@@ -480,19 +478,16 @@ mod tests {
         let exec_error = json!({ "type": "object", "properties": { "error": { "const": true } }, "required": ["error"], "additionalProperties": false });
         assert!(validate_json_schema(&json!({ "error": true }), &exec_error, "").is_ok());
         assert!(validate_json_schema(&json!({ "error": false }), &exec_error, "").is_err());
-        let read_disc =
-            json!({ "anyOf": [ { "type": "object", "properties": { "type": { "const": "file" } }, "required": ["type"], "additionalProperties": false } ] });
+        let read_disc = json!({ "anyOf": [ { "type": "object", "properties": { "type": { "const": "file" } }, "required": ["type"], "additionalProperties": false } ] });
         assert!(validate_json_schema(&json!({ "type": "file" }), &read_disc, "").is_ok());
         assert!(validate_json_schema(&json!({ "type": "filex" }), &read_disc, "").is_err());
         // nested-object const mismatch is also rejected.
-        assert!(
-            validate_json_schema(
-                &json!({ "type": "file", "meta": { "a": [1, false, null] } }),
-                &nested,
-                ""
-            )
-            .is_err()
-        );
+        assert!(validate_json_schema(
+            &json!({ "type": "file", "meta": { "a": [1, false, null] } }),
+            &nested,
+            ""
+        )
+        .is_err());
     }
 
     #[test]

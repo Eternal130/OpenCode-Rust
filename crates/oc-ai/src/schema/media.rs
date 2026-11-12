@@ -347,9 +347,11 @@ pub fn parse_data_url(value: &str) -> Option<Asset> {
         return None;
     }
     let mime = meta.split(';').next()?;
-    if mime.is_empty() || data.is_empty() {
+    if mime.is_empty() {
         return None;
     }
+    // An EMPTY payload is still a data URL (ref media.ts:290 DATA_URL
+    // regex `(.*)$` allows it, G-405) — only a missing mime disqualifies.
     Some(base64(data, mime))
 }
 
@@ -400,6 +402,15 @@ mod tests {
         assert_eq!(inline.base64, "QUJD");
         assert!(parse_data_url("https://example.test/x").is_none());
         assert!(parse_data_url("data:text/plain,hello").is_none());
+    }
+
+    #[test]
+    fn empty_payload_data_urls_parse_with_empty_base64() {
+        // G-405: ref media.ts:290 DATA_URL regex allows an empty payload —
+        // the whole string must NOT fall back to being treated as base64.
+        let asset = parse_data_url("data:image/png;base64,").expect("empty payload is a data url");
+        assert_eq!(asset.media_type, "image/png");
+        assert_eq!(asset.inline().unwrap().base64, "");
     }
 
     #[test]

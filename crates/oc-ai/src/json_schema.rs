@@ -10,7 +10,9 @@
 //! `$defs` + local `$ref` resolution, `minItems`/`maxItems`,
 //! `additionalProperties` (bool + schema), and `uniqueItems`. `format`
 //! stays lenient; unknown keywords are ignored (like effect's conversion
-//! passthrough).
+//! passthrough). G-395 adds draft-2020-12 `prefixItems` (tuple positions,
+//! with `items` demoted to the tail), `exclusiveMinimum`/`exclusiveMaximum`
+//! (numeric form), `multipleOf`, and `minProperties`.
 
 /// One validation issue (path + message).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,6 +227,54 @@ fn validate(
             }
         }
     }
+    // Numeric exclusive bounds (draft-2020-12 form: a number, strict
+    // inequality — draft-04's boolean-on-`minimum` form is not used by
+    // the corpus and is ignored like any unknown shape).
+    if let Some(bound) = object.get("exclusiveMinimum").and_then(serde_json::Value::as_f64) {
+        if let serde_json::Value::Number(number) = value {
+            if let Some(n) = number.as_f64() {
+                if n <= bound {
+                    issues.push(Issue {
+                        path: if path.is_empty() { "root".to_string() } else { path.to_string() },
+                        message: format!("must be greater than {bound}"),
+                    });
+                }
+            }
+        }
+    }
+    if let Some(bound) = object.get("exclusiveMaximum").and_then(serde_json::Value::as_f64) {
+        if let serde_json::Value::Number(number) = value {
+            if let Some(n) = number.as_f64() {
+                if n >= bound {
+                    issues.push(Issue {
+                        path: if path.is_empty() { "root".to_string() } else { path.to_string() },
+                        message: format!("must be less than {bound}"),
+                    });
+                }
+            }
+        }
+    }
+    // `multipleOf`: the quotient must be an integer (f64 division; the
+    // corpus uses small whole divisors where this is exact).
+    if let Some(divisor) = object.get("multipleOf").and_then(serde_json::Value::as_f64) {
+        if divisor > 0.0 {
+            if let serde_json::Value::Number(number) = value {
+                if let Some(n) = number.as_f64() {
+                    let quotient = n / divisor;
+                    if quotient.fract() != 0.0 {
+                        issues.push(Issue {
+                            path: if path.is_empty() {
+                                "root".to_string()
+                            } else {
+                                path.to_string()
+                            },
+                            message: format!("must be a multiple of {divisor}"),
+                        });
+                    }
+                }
+            }
+        }
+    }
     if let Some(maximum) = object.get("maximum").and_then(serde_json::Value::as_f64) {
         if let serde_json::Value::Number(number) = value {
             if let Some(n) = number.as_f64() {
@@ -265,6 +315,16 @@ fn validate(
     }
     match value {
         serde_json::Value::Object(fields) => {
+            if let Some(min_properties) =
+                object.get("minProperties").and_then(serde_json::Value::as_u64)
+            {
+                if (fields.len() as u64) < min_properties {
+                    issues.push(Issue {
+                        path: if path.is_empty() { "root".to_string() } else { path.to_string() },
+                        message: format!("must NOT have fewer than {min_properties} properties"),
+                    });
+                }
+            }
             // `required` applies regardless of `properties`.
             if let Some(required) = object.get("required").and_then(|v| v.as_array()) {
                 for key in required {
@@ -346,8 +406,14 @@ fn validate(
                     });
                 }
             }
+            // Draft-2020-12 tuple semantics (G-395): `prefixItems`
+            // validates positionally, and `items` only applies to the
+            // elements BEYOND the prefix (applying it to all elements
+            // wrongly rejected valid prefix positions).
+            let prefix = object.get("prefixItems").and_then(|v| v.as_array());
             if let Some(item_schema) = object.get("items") {
-                for (index, item) in items.iter().enumerate() {
+                let skip = prefix.map_or(0, Vec::len);
+                for (index, item) in items.iter().enumerate().skip(skip) {
                     validate(
                         item_schema,
                         root,
@@ -358,7 +424,79 @@ fn validate(
                     );
                 }
             }
+            if let Some(prefix) = prefix {
+                for (index, sub) in prefix.iter().enumerate() {
+                    if let Some(item) = items.get(index) {
+                        validate(sub, root, item, &format!("{path}[{index}]"), issues, depth + 1);
+                    }
+                }
+            }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_input;
+    use serde_json::json;
+
+    fn accepts(schema: &serde_json::Value, value: &serde_json::Value) -> bool {
+        validate_input(schema, value).is_empty()
+    }
+
+    // G-395 keyword gaps, mirroring tools/diff/corpus/json_schema cases.
+
+    #[test]
+    fn prefix_items_validates_positions() {
+        let schema = json!({
+            "type": "array",
+            "prefixItems": [{ "type": "string" }, { "type": "integer" }]
+        });
+        assert!(accepts(&schema, &json!(["a", 1])));
+        assert!(!accepts(&schema, &json!([1, 1])), "bad-first");
+        assert!(!accepts(&schema, &json!(["a", "b"])), "bad-second");
+    }
+
+    #[test]
+    fn items_only_applies_beyond_the_prefix() {
+        let schema = json!({
+            "type": "array",
+            "prefixItems": [{ "type": "string" }],
+            "items": { "type": "integer" }
+        });
+        assert!(accepts(&schema, &json!(["a", 2, 3])), "prefix ok, tail ok");
+        assert!(!accepts(&schema, &json!(["a", "b"])), "bad tail");
+    }
+
+    #[test]
+    fn items_still_applies_to_all_elements_without_prefix() {
+        let schema = json!({ "type": "array", "items": { "type": "integer" } });
+        assert!(accepts(&schema, &json!([1, 2])));
+        assert!(!accepts(&schema, &json!([1, "b"])));
+    }
+
+    #[test]
+    fn exclusive_minimum_and_maximum_are_strict() {
+        assert!(!accepts(&json!({ "exclusiveMinimum": 0 }), &json!(0)));
+        assert!(!accepts(&json!({ "exclusiveMinimum": 0 }), &json!(-1)));
+        assert!(accepts(&json!({ "exclusiveMinimum": 0 }), &json!(1)));
+        assert!(!accepts(&json!({ "exclusiveMaximum": 10 }), &json!(10)));
+        assert!(accepts(&json!({ "exclusiveMaximum": 10 }), &json!(9)));
+    }
+
+    #[test]
+    fn multiple_of_requires_an_integer_quotient() {
+        let schema = json!({ "multipleOf": 2 });
+        assert!(accepts(&schema, &json!(4)));
+        assert!(!accepts(&schema, &json!(3)), "odd");
+        assert!(!accepts(&schema, &json!(2.5)), "float");
+    }
+
+    #[test]
+    fn min_properties_counts_object_fields() {
+        let schema = json!({ "type": "object", "minProperties": 1 });
+        assert!(accepts(&schema, &json!({ "a": 1 })));
+        assert!(!accepts(&schema, &json!({})));
     }
 }
