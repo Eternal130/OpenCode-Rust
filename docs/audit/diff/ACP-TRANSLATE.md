@@ -10,7 +10,7 @@
 > 复现：`python3 tools/diff/acp_translate.py`（corpus：/opt/opencode-rust/tools/diff/corpus/acp，
 > 由 `tools/diff/gen_acp_corpus.py` 幂等生成）。
 
-- **MATCH：78/97** · DIVERGE：**19** · MISSING：**0**
+- **MATCH：79/97** · DIVERGE：**18** · MISSING：**0**
 - corpus 覆盖：97 例 · 全部 51 种 session 事件类型 + 载荷边界
 - 观测到的 SessionUpdate kind（7/11 census 对齐）：agent_message_chunk, agent_thought_chunk, compaction_summary_chunk, compaction_update, session_info_update, tool_call, tool_call_update
 
@@ -19,7 +19,6 @@
 | `abandon-child-tool` | events |
 | `abandon-tools-and-compaction` | events |
 | `child-projection-meta` | events |
-| `compaction-id-from-envelope` | events |
 | `permission-ask-tracked-tool` | events |
 | `reasoning-delta-ordinal-missing` | events |
 | `reasoning-delta-ordinal-negative` | events |
@@ -41,7 +40,7 @@
 - ref:
   - `{"abandon_outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child1", "parentID": "ses_root"}}, "content": [{"content": {"text": "Cancelled", "type": "text"}, "type": "content"}], "kind": "read", "locations": [], "rawInput": {}, "rawOutput": {"error": "Cancelled", "metadata": {}}, "sessionUpdate": "tool_call_update", "status": "failed", "title": "read", "toolCallId": "ses_child1:call_c"}}], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child1", "parentID": "ses_root"}}, "kind": "read", "locations": [], "rawInput": {}, "sessionUpdate": "tool_call", "status": "pending", "title": "read", "toolCallId": "ses_child1:call_c"}}], "response": null, "terminal": null}]}`
 - rust:
-  - `{"abandon_outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child1", "parentID": "ses_root"}}, "content": [{"content": {"text": "Cancelled", "type": "text"}, "type": "content"}], "kind": "read", "locations": [], "rawInput": {}, "rawOutput": {"error": "Cancelled", "metadata": {}}, "sessionUpdate": "tool_call_update", "status": "failed", "title": "read", "toolCallId": "ses_child1:call_c"}}], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child1", "parentID": "ses_root"}}, "kind": "read", "name": "read", "rawInput": {}, "sessionUpdate": "tool_call", "title": "read", "toolCallId": "ses_child1:ses_child1:call_c"}}], "response": null, "terminal": null}]}`
+  - `{"abandon_outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child1", "parentID": "ses_root"}}, "content": [{"content": {"text": "Cancelled", "type": "text"}, "type": "content"}], "kind": "read", "locations": [], "rawInput": {}, "rawOutput": {"error": "Cancelled", "metadata": {}}, "sessionUpdate": "tool_call_update", "status": "failed", "title": "read", "toolCallId": "ses_child1:call_c"}}], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child1", "parentID": "ses_root"}}, "kind": "read", "name": "read", "rawInput": {}, "sessionUpdate": "tool_call", "title": "read", "toolCallId": "ses_child1:call_c"}}], "response": null, "terminal": null}]}`
 
 ### `abandon-tools-and-compaction` — events
 - ref:
@@ -53,13 +52,7 @@
 - ref:
   - `{"abandon_outputs": [], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child1", "parentID": "ses_root", "title": "Helper"}}, "content": {"text": "child says hi", "type": "text"}, "messageId": "msg_c1", "sessionUpdate": "agent_message_chunk"}}], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child1", "parentID": "ses_root", "title": "Helper"}}, "kind": "read", "locations": [], "rawInput": {}, "sessionUpdate": "tool_call", "status": "pending", "title": "Helper: read", "toolCallId": "ses_child1:call_c"}}], "response": null, "terminal": null}]}`
 - rust:
-  - `{"abandon_outputs": [], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child1", "parentID": "ses_root", "title": "Helper"}}, "content": {"text": "child says hi", "type": "text"}, "messageId": "msg_c1", "sessionUpdate": "agent_message_chunk"}}], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child1", "parentID": "ses_root", "title": "Helper"}}, "kind": "read", "name": "read", "rawInput": {}, "sessionUpdate": "tool_call", "title": "Helper: read", "toolCallId": "ses_child1:ses_child1:call_c"}}], "response": null, "terminal": null}]}`
-
-### `compaction-id-from-envelope` — events
-- ref:
-  - `{"abandon_outputs": [], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"compactionId": "msg_7", "sessionUpdate": "compaction_update", "status": "in_progress"}}], "response": null, "terminal": null}]}`
-- rust:
-  - `{"abandon_outputs": [], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"compactionId": "", "sessionUpdate": "compaction_update", "status": "in_progress"}}], "response": null, "terminal": null}]}`
+  - `{"abandon_outputs": [], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child1", "parentID": "ses_root", "title": "Helper"}}, "content": {"text": "child says hi", "type": "text"}, "messageId": "msg_c1", "sessionUpdate": "agent_message_chunk"}}], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child1", "parentID": "ses_root", "title": "Helper"}}, "kind": "read", "name": "read", "rawInput": {}, "sessionUpdate": "tool_call", "title": "Helper: read", "toolCallId": "ses_child1:call_c"}}], "response": null, "terminal": null}]}`
 
 ### `permission-ask-tracked-tool` — events
 - ref:
@@ -95,7 +88,7 @@
 - ref:
   - `{"abandon_outputs": [], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"kind": "execute", "locations": [{"path": "/tmp/opencode/diff-acp"}], "rawInput": {"cwd": "/tmp/opencode/diff-acp"}, "sessionUpdate": "tool_call", "status": "pending", "title": "shell", "toolCallId": "call_1"}}], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"kind": "execute", "locations": [{"path": "/tmp/opencode/diff-acp"}], "rawInput": {"command": "ls", "cwd": "/tmp/opencode/diff-acp"}, "sessionUpdate": "tool_call_update", "status": "in_progress", "title": "ls", "toolCallId": "call_1"}}], "response": null, "terminal": null}]}`
 - rust:
-  - `{"abandon_outputs": [], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"kind": "execute", "locations": [{"path": "/tmp/opencode/diff-acp"}], "name": "shell", "rawInput": {"cwd": "/tmp/opencode/diff-acp"}, "sessionUpdate": "tool_call", "title": "shell", "toolCallId": "call_1"}}], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"kind": "execute", "locations": [{"path": "/tmp/opencode/diff-acp"}], "rawInput": {"command": "ls", "cwd": null}, "sessionUpdate": "tool_call_update", "status": "in_progress", "title": "ls", "toolCallId": "call_1"}}], "response": null, "terminal": null}]}`
+  - `{"abandon_outputs": [], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"kind": "execute", "locations": [{"path": "/tmp/opencode/diff-acp"}], "name": "shell", "rawInput": {"cwd": "/tmp/opencode/diff-acp"}, "sessionUpdate": "tool_call", "title": "shell", "toolCallId": "call_1"}}], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"kind": "execute", "locations": [{"path": "/tmp/opencode/diff-acp"}], "rawInput": {"command": "ls", "cwd": "/tmp/opencode/diff-acp"}, "sessionUpdate": "tool_call_update", "status": "in_progress", "title": "ls", "toolCallId": "call_1"}}], "response": null, "terminal": null}]}`
 
 ### `tool-failed` — events
 - ref:
@@ -154,23 +147,25 @@
 ## 判定
 
 - 已裁定：97/97（每例双侧一致或分歧字段明确归属）
-- 分歧 19 项逐项人工定性后入册（缺口候选/有据分歧/提取噪声）或背书
+- 分歧 18 项逐项人工定性后入册（缺口候选/有据分歧/提取噪声）或背书
 
 ## 分歧定性（人工亲读双侧当前代码）
 
 ### A. 缺口候选（rust 侧 wire 行为与 ref 不一致，待入册）
 
-| # | 语义 | ref 侧 | rust 侧 | 涉及用例 |
+> 2026-11-12（gap-burndown-14 lane1）：A1/A2/A3 已修复入册 G-392/G-401/G-402 并关闭，以下为历史裁定记录；对应用例仅剩 B1 有据分歧（`tool-called`/`child-projection-meta`/`abandon-child-tool` 等）或已全绿（`compaction-id-from-envelope`）。
+
+| # | 语义 | ref 侧 | rust 侧（修复后） | 涉及用例 |
 |---|---|---|---|---|
-| A1 | child toolCallId 双重前缀 | `translate.ts:309-320` 发出裸 id，`child.ts:39-47` `project` 前缀一次 | `translate.rs:749-757` `pending_update` 已调 `child::tool_call_id` 前缀，`route`→`child.rs:113` `project` 再前缀一次（`ses_child1:ses_child1:call_c`） | `child-projection-meta`、`abandon-child-tool` |
-| A2 | shell `rawInput` 的 `cwd:null` 不回填 | `tool.ts:165-168` 真值判断（`input.cwd \|\| input.workdir`），null 视为缺省并回填 ctx.cwd | `tool.rs:179-187` 按键存在性（`contains_key`），`cwd:null` 保留原值 | `tool-called` |
-| A3 | compaction 起始消息 id 回退源 | `compaction.ts:102-108` `inputID ?? SessionMessage.ID.fromEvent(envelope event.id)`（`evt_7`→`msg_7`） | `translate.rs:588-594` 以 `data.id` 为事件 id，缺 `data.inputID` 时得 `""`（`Event` 结构不携带 envelope id） | `compaction-id-from-envelope` |
+| ~~A1~~ | child toolCallId 双重前缀（G-392 已修） | `translate.ts:309-320` 发出裸 id，`child.ts:39-47` `project` 前缀一次 | `pending_update` 不再前缀，`route`→`child::project` 单次前缀（`ses_child1:call_c`） | `child-projection-meta`、`abandon-child-tool`（剩 B1） |
+| ~~A2~~ | shell `rawInput` 的 `cwd:null` 不回填（G-401 已修） | `tool.ts:165-168` 真值判断（`input.cwd \|\| input.workdir`），null 视为缺省并回填 ctx.cwd | `raw_input` 改真值判断（`is_truthy`），`cwd:null`/空串回填 ctx.cwd | `tool-called`（剩 B1） |
+| ~~A3~~ | compaction 起始消息 id 回退源（G-402 已修） | `compaction.ts:102-108` `inputID ?? SessionMessage.ID.fromEvent(envelope event.id)`（`evt_7`→`msg_7`） | `Event` 携带 envelope id，translate 侧 `message_id_from_event` 映射 `evt_`→`msg_` 作回退 | `compaction-id-from-envelope`（已 MATCH） |
 
 ### B. 有据分歧（SDK 序列化形状 / 超 schema 输入容错，双侧代码如实呈现）
 
 | # | 语义 | ref 侧 | rust 侧 | 涉及用例 |
 |---|---|---|---|---|
-| B1 | pending `tool_call` 形状 | `tool.ts:61-75` 对象字面量：带 `status:"pending"`、空 `locations:[]`、无 `name` | `tool.rs:215-234` 经 vendored crate 序列化：`name` 恒置（tool.rs:228）、`status` 默认值被 `tool_call.rs:51` skip、空 `locations` 被 `:56` skip | 全部含 `session.tool.input.started` 的 19 例中的 14 例（`tool-*`、`abandon-*`、`permission-ask-tracked-tool`、`child-projection-meta`） |
+| B1 | pending `tool_call` 形状 | `tool.ts:61-75` 对象字面量：带 `status:"pending"`、空 `locations:[]`、无 `name` | `tool.rs:215-234` 经 vendored crate 序列化：`name` 恒置（tool.rs:228）、`status` 默认值被 `tool_call.rs:51` skip、空 `locations` 被 `:56` skip | 全部含 `session.tool.input.started` 的 18 例中的 14 例（`tool-*`、`abandon-*`、`permission-ask-tracked-tool`、`child-projection-meta`） |
 | B2 | reasoning ordinal 异常值 | `translate.ts:277-283` 模板串接（缺省→`undefined`、负数/字符串原样） | `translate.rs:638-641` `as_u64().unwrap_or(0)` | `reasoning-delta-ordinal-{missing,negative,string}`（schema 要求 ordinal 必填非负，属超 schema 输入容差分歧） |
 | B3 | text.delta 缺 `delta` 字段 | `translate.ts:283-291` `{text: undefined}` 经 JSON 序列化丢键 | `translate.rs:618-630`+`:835-837` 回退 `""` 显式上 wire | `text-delta-missing-field`（同上，超 schema 输入） |
 
