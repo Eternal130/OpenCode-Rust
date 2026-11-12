@@ -43,7 +43,7 @@ RUST_ANCHORS = {
     "properties": "json_schema.rs:289-302",
     "additionalProperties": "json_schema.rs:289-317",
     "items": "json_schema.rs:349-360",
-    "prefixItems": "json_schema.rs — NOT IMPLEMENTED (absent keyword)",
+    "prefixItems": "json_schema.rs (G-395, tuple positions; items demoted to tail)",
     "minItems": "json_schema.rs:320-327",
     "maxItems": "json_schema.rs:328-335",
     "uniqueItems": "json_schema.rs:336-348",
@@ -52,10 +52,10 @@ RUST_ANCHORS = {
     "pattern": "json_schema.rs:199-215",
     "minimum": "json_schema.rs:216-227",
     "maximum": "json_schema.rs:228-239",
-    "exclusiveMinimum": "json_schema.rs — NOT IMPLEMENTED (absent keyword)",
-    "exclusiveMaximum": "json_schema.rs — NOT IMPLEMENTED (absent keyword)",
-    "multipleOf": "json_schema.rs — NOT IMPLEMENTED (absent keyword)",
-    "minProperties": "json_schema.rs — NOT IMPLEMENTED (absent keyword)",
+    "exclusiveMinimum": "json_schema.rs (G-395, numeric strict bound)",
+    "exclusiveMaximum": "json_schema.rs (G-395, numeric strict bound)",
+    "multipleOf": "json_schema.rs (G-395, integer-quotient check)",
+    "minProperties": "json_schema.rs (G-395)",
     "oneOf": "json_schema.rs:135-143",
     "anyOf": "json_schema.rs:127-134",
     "allOf": "json_schema.rs:122-126",
@@ -74,7 +74,7 @@ CLASSIFICATIONS = {
     "enum-mixed/float-1": ("rust-reject-ref-accept", "记录性严格差：enum 含 u64(1)，实例 f64(1.0)，serde_json Number 按变体判等→不等；JS 数值 1===1.0。与上一条同根因。"),
     "prefix-items/bad-first": ("rust-accept-ref-reject", "缺口候选：rust 未实现 prefixItems（关键字被忽略），draft-2020-12 语义丢失。"),
     "prefix-items/bad-second": ("rust-accept-ref-reject", "缺口候选：同上（prefixItems 未实现）。"),
-    "prefix-items-plus-items/bad-tail": ("rust-accept-ref-reject", "缺口候选：同上（prefixItems 之外的前缀位置未校验，items 只约束尾部）。"),
+    "prefix-items-plus-items/bad-tail": ("rust-accept-ref-reject", "G-395 修复前登记；修复后 items 仅约束尾部，双侧一致拒绝（实测 MATCH）。"),
     "exclusive-minimum/zero": ("rust-accept-ref-reject", "缺口候选：rust 未实现 exclusiveMinimum。"),
     "exclusive-minimum/neg": ("rust-accept-ref-reject", "缺口候选：rust 未实现 exclusiveMinimum。"),
     "exclusive-maximum/ten": ("rust-accept-ref-reject", "缺口候选：rust 未实现 exclusiveMaximum。"),
@@ -85,8 +85,8 @@ CLASSIFICATIONS = {
     "unique-items/int-float-dup": ("rust-reject-ref-accept", "语义差（记录性）：serde_json 1(u64) 与 1.0(f64) 判不相等→非重复；JS 1===1.0 判重复。与数字表示差同根因。"),
     "type-malformed-name/str": ("rust-reject-ref-accept", "畸形 schema 处置差：rust 将未知 type 名当作永不匹配→拒绝一切；ref 编译 codec 失败→Cache catch→accept-all。双侧都不是 spec 行为；ref 侧宽松来自 catch 通道。"),
     "type-malformed-name/num": ("rust-reject-ref-accept", "畸形 schema 处置差：同上。"),
-    "schema-false/num": ("rust-accept-ref-reject", "缺口候选：布尔 schema `false`（拒绝一切）rust 未处理——as_object 守卫直接放行。"),
-    "schema-false/null": ("rust-accept-ref-reject", "缺口候选：同上（boolean schema false）。"),
+    "schema-false/num": ("rust-accept-ref-reject", "预登记方向与实测不符（实测 MATCH）：ref 生产路径对布尔 schema false 构建 codec 成功且 accept（driver codec_ok=true）——两侧都放行，非缺口。"),
+    "schema-false/null": ("rust-accept-ref-reject", "预登记方向与实测不符（实测 MATCH）：同上（ref 生产对 schema:false accept）。"),
     "type-boolean/one": ("rust-accept-ref-reject", "待观察：若出现——rust matches_type 对 bool 严格（1 非 true）。"),
     "one-of-both-match/int": ("rust-reject-ref-accept", "待观察：rust oneOf 计数匹配数（integer 5 同时匹配 number）→拒绝；若 ref 判定不同则记录。"),
     # --- ref 侧 effect 编译器宽松（build-error → Cache catch → accept-all），probe 证实 ---
@@ -254,7 +254,7 @@ def main() -> int:
     if unclassified:
         for n in unclassified:
             w(f"  - 未定性：`{n}`")
-    w("- 缺口候选（rust 未实现关键字/布尔 schema）：prefixItems（含 items 全量应用的误拒副作用）、exclusiveMinimum/Maximum、multipleOf、minProperties、schema:false ——登记册候选。")
+    w("- G-395 已修：prefixItems（含 items 尾部语义）、exclusiveMinimum/Maximum、multipleOf、minProperties 全部 MATCH。schema:false 实测 ref 生产同样放行（codec_ok=true）——非缺口，预登记撤销。")
     w("- 记录性宽松差（ref 侧，probe 直证）：pattern、结构化 const、additionalProperties、|n|≥2^53 integer——effect 编译器限制经 Cache catch launder，rust 侧为能力超集。")
     w("- 记录性数字/相等语义差（5.0、1.0、[{},{}]、[1,1.0]）：JS 数值模型 vs serde_json 表示差，双侧各自自洽。")
     report = "\n".join(lines) + "\n"
