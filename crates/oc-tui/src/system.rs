@@ -69,7 +69,10 @@ mod tests {
     fn describe_terminal_covers_every_branch() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let names = ["TERM_PROGRAM", "TERM", "TERM_PROGRAM_VERSION", "TMUX", "STY"];
-        let saved: Vec<(_, _)> = names.iter().map(|name| (*name, std::env::var_os(name))).collect();
+        let saved: Vec<(_, _)> = names
+            .iter()
+            .map(|name| (*name, std::env::var_os(name)))
+            .collect();
         for name in names {
             std::env::remove_var(name);
         }
@@ -106,7 +109,10 @@ mod tests {
     #[test]
     fn describe_os_has_platform_and_arch() {
         let text = describe_os();
-        assert!(text.contains(platform_name()), "platform name present: {text}");
+        assert!(
+            text.contains(platform_name()),
+            "platform name present: {text}"
+        );
         assert!(text.contains('('), "arch is parenthesized: {text}");
         assert!(text.ends_with(')'), "arch closes the string: {text}");
     }
