@@ -2117,10 +2117,7 @@ fn answer_ui_registration(shared: &Shared, id: u64, method: &str, params: &Value
         "markdown.renderer.register" => {
             let language = params.get("language").and_then(Value::as_str).unwrap_or_default();
             if language.trim().is_empty() {
-                return protocol::error_response(
-                    id,
-                    "Markdown code-block language is required",
-                );
+                return protocol::error_response(id, "Markdown code-block language is required");
             }
             if registrations
                 .markdown_renderers
@@ -2132,12 +2129,10 @@ fn answer_ui_registration(shared: &Shared, id: u64, method: &str, params: &Value
                     &format!("Markdown code-block renderer already registered: {language}"),
                 );
             }
-            registrations
-                .markdown_renderers
-                .push(crate::registrations::PluginMarkdownRenderer {
-                    plugin_id,
-                    language: language.to_owned(),
-                });
+            registrations.markdown_renderers.push(crate::registrations::PluginMarkdownRenderer {
+                plugin_id,
+                language: language.to_owned(),
+            });
             protocol::response(id, Value::Null)
         }
         "markdown.renderer.unregister" => {

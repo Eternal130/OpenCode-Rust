@@ -62,8 +62,7 @@ fn snapshot_carries_markdown_renderer() {
             .registrations()
             .markdown_renderers
             .iter()
-            .any(|renderer| renderer.plugin_id == "mdrenderer"
-                && renderer.language == "wormlang")),
+            .any(|renderer| renderer.plugin_id == "mdrenderer" && renderer.language == "wormlang")),
         "the renderer registered"
     );
     // The dispose unregistered the FIRST registration; the
