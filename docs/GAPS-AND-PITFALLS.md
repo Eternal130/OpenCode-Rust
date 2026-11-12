@@ -2814,3 +2814,10 @@ G-384/G-385/G-387/G-388 ✅；G-230 die 前置+die 分支 ✅（census 盯守翻
 ## 第二十五轮增补判定
 
 G-239 ✅ / G-331 ✅ / G-332 ✅ / G-333 ✅ / G-272⑩ ✅（五项全部从 ℹ️/bounded 转 ✅）；G-28 生态 breaking 声明面收窄（见 G-28 增补轮勘注）。census 增补复跑无新 REF_ONLY。现存未关闭项=文档化决策族（G-12/G-16/G-17/G-28（收窄面）/G-32/G-38/G-39/G-40/G-49/G-148②/G-161①/G-163/G-164/G-200②/G-211(OBSOLETE)/G-212/G-238/G-240/G-247 残余(上游阻挡)/G-289/G-290/G-313..G-318/G-326/G-328/G-329/G-386/G-389/G-390）——均为登记项。**无 opentui-rust 依赖的上游阻挡项**。证据：lane 报告 `.superpowers/sdd/gb13/lane{H,I,J,K}-report.md`、门日志 `.test-logs/*gb13lane{H,I,J,K}*`、opentui 差分 `opentui-diff*-gb13laneK.log`。
+
+## 第二十五轮增补复扫注记（2026-11-12，census 独立复扫）
+
+- **复扫结论**：14 通道重跑，12/14 与修复方刷新后报告逐字节一致（HTTP 手工附录、ENV-VARS 背书计数 6→8 系登记册本轮新提及所致，非分歧变化，已刷新落盘）。**G-239/G-331、G-332、G-333、G-272⑩ 经代码级独立确认**：host.js:2095 `markdown.registerCodeBlockRenderer`（G-332 guest 面）与 :2301 `ui.panel`（G-239 激活面）、supervisor.rs:2758/lib.rs:935（session.panel 活态推送）、resolve.rs:14+（node 备轨 npm 缓存）、mini entry_styled（G-272⑩ 样式化滚动回写）。
+- **运行时证据**：oc-plugin-host 全量 134/134 PASS（含 panel/markdown/node 族）、oc-tui entry_styled 12/12 + scrollback 14/14 PASS。
+- **census 侧新增记账**：PLUGIN-API RUST_ONLY 29→31（`markdown.registerCodeBlockRenderer`、`ui.panel`——G-332/G-239 产物，ref 对应面在 tui 入口而非 server-ctx，属入口形状差非缺口）；ENV-VARS RUST_ONLY 43→44（`OC_PLUGIN_NODE`=G-333 旋钮，已由 435ee145 记账）。**REF_ONLY 无新增，缺口候选 0**。
+- **上轮 flake 跟踪**：`g384_integration` 本轮复扫（oc-plugin-host 全量含该测试 134/134）未见复发；观察维持登记。
