@@ -1,0 +1,37 @@
+{
+ "name": "enum-mixed",
+ "keywords": [
+  "enum"
+ ],
+ "schema": {
+  "enum": [
+   "a",
+   "b",
+   1,
+   true,
+   null
+  ]
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": "a"
+  },
+  {
+   "label": "ok-num",
+   "value": 1
+  },
+  {
+   "label": "str-coerce",
+   "value": "1"
+  },
+  {
+   "label": "two",
+   "value": 2
+  },
+  {
+   "label": "float-1",
+   "value": 1.0
+  }
+ ]
+}

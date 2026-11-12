@@ -1,0 +1,35 @@
+{
+ "name": "properties-open",
+ "keywords": [
+  "properties",
+  "additionalProperties"
+ ],
+ "schema": {
+  "properties": {
+   "a": {
+    "type": "string"
+   }
+  }
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": {
+    "a": "x"
+   }
+  },
+  {
+   "label": "bad-type",
+   "value": {
+    "a": 1
+   }
+  },
+  {
+   "label": "extra-open",
+   "value": {
+    "a": "x",
+    "zz": 1
+   }
+  }
+ ]
+}

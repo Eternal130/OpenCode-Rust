@@ -1,0 +1,51 @@
+{
+ "name": "response-cancelled-aborted",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/tmp/opencode/diff-acp",
+  "start": {
+   "type": "input",
+   "id": "msg_inbox"
+  },
+  "childUpdates": false,
+  "compaction": true
+ },
+ "events": [
+  {
+   "id": "evt_boot",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_inbox"
+   }
+  },
+  {
+   "type": "session.step.failed",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_asst_1",
+    "error": {
+     "type": "aborted",
+     "message": "cancelled"
+    },
+    "tokens": {
+     "input": 10,
+     "output": 5,
+     "reasoning": 2,
+     "cache": {
+      "read": 3,
+      "write": 1
+     }
+    }
+   },
+   "id": "evt_1"
+  },
+  {
+   "type": "session.execution.succeeded",
+   "data": {
+    "sessionID": "ses_root"
+   },
+   "id": "evt_2"
+  }
+ ]
+}

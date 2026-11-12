@@ -1,0 +1,43 @@
+{
+ "name": "all-of",
+ "keywords": [
+  "allOf"
+ ],
+ "schema": {
+  "allOf": [
+   {
+    "type": "object",
+    "required": [
+     "a"
+    ]
+   },
+   {
+    "properties": {
+     "a": {
+      "type": "integer"
+     }
+    }
+   }
+  ]
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": {
+    "a": 1
+   }
+  },
+  {
+   "label": "missing",
+   "value": {
+    "b": 1
+   }
+  },
+  {
+   "label": "bad-type",
+   "value": {
+    "a": "x"
+   }
+  }
+ ]
+}

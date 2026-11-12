@@ -1,0 +1,1 @@
+{"object": "response.compaction", "output": [{"type": "mystery"}, {"type": "reasoning", "id": "r", "summary": []}], "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12}}

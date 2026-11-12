@@ -1,0 +1,33 @@
+{
+ "name": "reasoning-delta-ordinal-large",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/tmp/opencode/diff-acp",
+  "start": {
+   "type": "input",
+   "id": "msg_inbox"
+  },
+  "childUpdates": false,
+  "compaction": true
+ },
+ "events": [
+  {
+   "id": "evt_boot",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_inbox"
+   }
+  },
+  {
+   "type": "session.reasoning.delta",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_asst_1",
+    "ordinal": 9007199254740991,
+    "delta": "d"
+   },
+   "id": "evt_1"
+  }
+ ]
+}

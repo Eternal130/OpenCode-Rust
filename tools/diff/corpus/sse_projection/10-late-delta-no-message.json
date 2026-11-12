@@ -1,0 +1,16 @@
+{
+  "name": "10-late-delta-no-message",
+  "description": "乱序容错：delta 先于 step.started 到达（rust 惰性建消息 vs ref 丢弃）",
+  "events": [
+    { "type": "session.text.delta", "id": "evt_901", "created": 10000,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "delta": "early" } },
+    { "type": "session.reasoning.delta", "id": "evt_902", "created": 10001,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "delta": "early-think" } },
+    { "type": "session.step.started", "id": "evt_903", "created": 10002,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "agent": "build", "model": { "providerID": "anthropic", "id": "claude-sonnet-4-5" }, "started": 10002 } },
+    { "type": "session.text.delta", "id": "evt_904", "created": 10003,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "delta": "-late" } },
+    { "type": "session.step.ended", "id": "evt_905", "created": 10004,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "finish": "stop" } }
+  ]
+}

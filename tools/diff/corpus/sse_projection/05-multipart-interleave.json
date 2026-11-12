@@ -1,0 +1,33 @@
+{
+  "name": "05-multipart-interleave",
+  "description": "multipart 交错：reasoning/text/tool/第二 text（text.started 重开）→ 终态",
+  "events": [
+    { "type": "session.step.started", "id": "evt_401", "created": 5000,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "agent": "plan", "model": { "providerID": "openai", "id": "gpt-5" }, "started": 5000 } },
+    { "type": "session.reasoning.started", "id": "evt_402", "created": 5001,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0 } },
+    { "type": "session.reasoning.delta", "id": "evt_403", "created": 5002,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "delta": "planning" } },
+    { "type": "session.reasoning.ended", "id": "evt_404", "created": 5003,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "text": "planning" } },
+    { "type": "session.text.started", "id": "evt_405", "created": 5004,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0 } },
+    { "type": "session.text.delta", "id": "evt_406", "created": 5005,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "delta": "first part" } },
+    { "type": "session.tool.input.started", "id": "evt_407", "created": 5006,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "id": "tool_x", "name": "grep" } },
+    { "type": "session.tool.called", "id": "evt_408", "created": 5007,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "id": "tool_x", "input": { "pattern": "todo", "path": "true" } } },
+    { "type": "session.tool.success", "id": "evt_409", "created": 5008,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "id": "tool_x",
+        "content": [ { "type": "text", "text": "3 matches" } ], "metadata": {} } },
+    { "type": "session.text.started", "id": "evt_410", "created": 5009,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 1 } },
+    { "type": "session.text.delta", "id": "evt_411", "created": 5010,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 1, "delta": "second part" } },
+    { "type": "session.text.ended", "id": "evt_412", "created": 5011,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 1, "text": "second part" } },
+    { "type": "session.step.ended", "id": "evt_413", "created": 5012,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "finish": "tool_use" } }
+  ]
+}

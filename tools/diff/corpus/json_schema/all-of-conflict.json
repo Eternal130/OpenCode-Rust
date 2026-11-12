@@ -1,0 +1,26 @@
+{
+ "name": "all-of-conflict",
+ "keywords": [
+  "allOf"
+ ],
+ "schema": {
+  "allOf": [
+   {
+    "type": "string"
+   },
+   {
+    "type": "integer"
+   }
+  ]
+ },
+ "instances": [
+  {
+   "label": "str",
+   "value": "a"
+  },
+  {
+   "label": "bool",
+   "value": true
+  }
+ ]
+}

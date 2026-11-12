@@ -1,0 +1,26 @@
+{
+  "name": "09-g352-live-six",
+  "description": "G-352 修复位专项：agent/model/moved/instructions/synthetic/shell 六类 live 投影事件（step.started 先装载 transcript）",
+  "events": [
+    { "type": "session.step.started", "id": "evt_801", "created": 9000,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "agent": "build", "model": { "providerID": "anthropic", "id": "claude-sonnet-4-5" }, "started": 9000 } },
+    { "type": "session.step.ended", "id": "evt_802", "created": 9001,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "finish": "stop" } },
+    { "type": "session.agent.selected", "id": "evt_803", "created": 9002,
+      "data": { "sessionID": "ses_diff", "agent": "plan" } },
+    { "type": "session.model.selected", "id": "evt_804", "created": 9003,
+      "data": { "sessionID": "ses_diff", "model": { "providerID": "openai", "id": "gpt-5" } } },
+    { "type": "session.moved", "id": "evt_805", "created": 9004,
+      "data": { "sessionID": "ses_diff", "location": { "directory": "/work/wt-1" }, "subpath": "wt-1" } },
+    { "type": "session.instructions.updated", "id": "evt_806", "created": 9005,
+      "data": { "sessionID": "ses_diff", "text": "Be terse", "delta": { "AGENTS.md": "modified" } } },
+    { "type": "session.instructions.updated", "id": "evt_807", "created": 9006,
+      "data": { "sessionID": "ses_diff", "text": "", "delta": { "AGENTS.md": "render" } } },
+    { "type": "session.synthetic", "id": "evt_808", "created": 9007,
+      "data": { "sessionID": "ses_diff", "text": "child done", "description": "Subagent completed", "metadata": { "source": "subagent", "state": "completed" } } },
+    { "type": "session.shell.started", "id": "evt_809", "created": 9008,
+      "data": { "sessionID": "ses_diff", "shell": { "id": "shl_1", "command": "ls -la", "status": "running", "metadata": {} }, "metadata": {} } },
+    { "type": "session.shell.ended", "id": "evt_810", "created": 9009,
+      "data": { "sessionID": "ses_diff", "shell": { "id": "shl_1", "status": "exited", "exit": 0, "metadata": {} }, "output": { "output": "total 0\n" }, "metadata": {} } }
+  ]
+}

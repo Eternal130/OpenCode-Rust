@@ -1,0 +1,20 @@
+{
+  "name": "12-post-completion-late-delta",
+  "description": "G11-F1 锚：消息已完成（text.ended+step.ended）后迟到的 delta（rust 丢弃 vs ref 追加）",
+  "events": [
+    { "type": "session.step.started", "id": "evt_b01", "created": 12000,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "agent": "build", "model": { "providerID": "anthropic", "id": "claude-sonnet-4-5" }, "started": 12000 } },
+    { "type": "session.text.started", "id": "evt_b02", "created": 12001,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0 } },
+    { "type": "session.text.delta", "id": "evt_b03", "created": 12002,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "delta": "final text" } },
+    { "type": "session.text.ended", "id": "evt_b04", "created": 12003,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "text": "final text" } },
+    { "type": "session.step.ended", "id": "evt_b05", "created": 12004,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "finish": "stop" } },
+    { "type": "session.text.delta", "id": "evt_b06", "created": 12005,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "delta": " LATE" } },
+    { "type": "session.reasoning.delta", "id": "evt_b07", "created": 12006,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "delta": " late-think" } }
+  ]
+}

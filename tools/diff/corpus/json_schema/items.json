@@ -1,0 +1,32 @@
+{
+ "name": "items",
+ "keywords": [
+  "items"
+ ],
+ "schema": {
+  "type": "array",
+  "items": {
+   "type": "integer"
+  }
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": [
+    1,
+    2
+   ]
+  },
+  {
+   "label": "mixed",
+   "value": [
+    1,
+    "a"
+   ]
+  },
+  {
+   "label": "not-array",
+   "value": "nope"
+  }
+ ]
+}

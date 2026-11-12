@@ -1,0 +1,24 @@
+{
+ "name": "format-lenient",
+ "keywords": [
+  "format"
+ ],
+ "schema": {
+  "type": "string",
+  "format": "email"
+ },
+ "instances": [
+  {
+   "label": "email",
+   "value": "a@b.c"
+  },
+  {
+   "label": "garbage",
+   "value": "not-an-email"
+  },
+  {
+   "label": "empty",
+   "value": ""
+  }
+ ]
+}

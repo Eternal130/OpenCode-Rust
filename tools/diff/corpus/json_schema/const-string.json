@@ -1,0 +1,23 @@
+{
+ "name": "const-string",
+ "keywords": [
+  "const"
+ ],
+ "schema": {
+  "const": "hello"
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": "hello"
+  },
+  {
+   "label": "other",
+   "value": "world"
+  },
+  {
+   "label": "num",
+   "value": 5
+  }
+ ]
+}

@@ -1,0 +1,33 @@
+{
+ "name": "skill-activated",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/tmp/opencode/diff-acp",
+  "start": {
+   "type": "input",
+   "id": "msg_inbox"
+  },
+  "childUpdates": false,
+  "compaction": true
+ },
+ "events": [
+  {
+   "id": "evt_boot",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_inbox"
+   }
+  },
+  {
+   "type": "session.skill.activated",
+   "data": {
+    "sessionID": "ses_root",
+    "id": "skill_1",
+    "name": "deploy",
+    "text": "how to deploy"
+   },
+   "id": "evt_1"
+  }
+ ]
+}

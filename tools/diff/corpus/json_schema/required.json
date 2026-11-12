@@ -1,0 +1,41 @@
+{
+ "name": "required",
+ "keywords": [
+  "required",
+  "properties"
+ ],
+ "schema": {
+  "type": "object",
+  "required": [
+   "a",
+   "b"
+  ],
+  "properties": {
+   "a": {
+    "type": "string"
+   },
+   "b": {
+    "type": "integer"
+   }
+  }
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": {
+    "a": "x",
+    "b": 1
+   }
+  },
+  {
+   "label": "missing-b",
+   "value": {
+    "a": "x"
+   }
+  },
+  {
+   "label": "empty",
+   "value": {}
+  }
+ ]
+}

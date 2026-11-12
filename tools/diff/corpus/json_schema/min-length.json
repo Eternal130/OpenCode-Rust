@@ -1,0 +1,28 @@
+{
+ "name": "min-length",
+ "keywords": [
+  "minLength"
+ ],
+ "schema": {
+  "type": "string",
+  "minLength": 2
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": "ab"
+  },
+  {
+   "label": "one",
+   "value": "a"
+  },
+  {
+   "label": "unicode-ok",
+   "value": "日本"
+  },
+  {
+   "label": "empty",
+   "value": ""
+  }
+ ]
+}

@@ -1,0 +1,65 @@
+{
+ "name": "tool-success-multipart-all-parts",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/tmp/opencode/diff-acp",
+  "start": {
+   "type": "input",
+   "id": "msg_inbox"
+  },
+  "childUpdates": false,
+  "compaction": true
+ },
+ "events": [
+  {
+   "id": "evt_boot",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_inbox"
+   }
+  },
+  {
+   "type": "session.tool.input.started",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_asst_1",
+    "id": "call_1",
+    "name": "screenshot"
+   },
+   "id": "evt_1"
+  },
+  {
+   "type": "session.tool.success",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_asst_1",
+    "id": "call_1",
+    "content": [
+     {
+      "type": "text",
+      "text": "captured"
+     },
+     {
+      "type": "file",
+      "uri": "data:image/png;base64,aGVsbG8=",
+      "mime": "image/png"
+     },
+     {
+      "type": "file",
+      "uri": "data:application/json;base64,e30=",
+      "mime": "application/json",
+      "name": "out.json"
+     },
+     {
+      "type": "file",
+      "uri": "file:///tmp/opencode/x.txt",
+      "mime": "text/plain"
+     }
+    ],
+    "executed": true
+   },
+   "id": "evt_2"
+  }
+ ]
+}

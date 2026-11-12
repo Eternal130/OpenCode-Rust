@@ -1,0 +1,24 @@
+{
+ "name": "integer-big-int",
+ "keywords": [
+  "type",
+  "integer"
+ ],
+ "schema": {
+  "type": "integer"
+ },
+ "instances": [
+  {
+   "label": "big",
+   "value": 9007199254740993
+  },
+  {
+   "label": "big-ok",
+   "value": 9007199254740992
+  },
+  {
+   "label": "neg-big",
+   "value": -9007199254740993
+  }
+ ]
+}

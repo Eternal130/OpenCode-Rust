@@ -1,0 +1,57 @@
+{
+ "name": "deep-nesting",
+ "keywords": [
+  "properties",
+  "items",
+  "required"
+ ],
+ "schema": {
+  "type": "object",
+  "properties": {
+   "list": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "required": [
+      "id"
+     ],
+     "properties": {
+      "id": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  }
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": {
+    "list": [
+     {
+      "id": "a"
+     }
+    ]
+   }
+  },
+  {
+   "label": "missing-id",
+   "value": {
+    "list": [
+     {}
+    ]
+   }
+  },
+  {
+   "label": "bad-id",
+   "value": {
+    "list": [
+     {
+      "id": 1
+     }
+    ]
+   }
+  }
+ ]
+}

@@ -1,0 +1,20 @@
+{
+ "name": "type-integer-negative",
+ "keywords": [
+  "type",
+  "integer"
+ ],
+ "schema": {
+  "type": "integer"
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": -3
+  },
+  {
+   "label": "neg-float",
+   "value": -3.5
+  }
+ ]
+}

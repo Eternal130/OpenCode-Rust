@@ -1,0 +1,46 @@
+{
+ "name": "nested-composition",
+ "keywords": [
+  "anyOf",
+  "minLength",
+  "maximum",
+  "properties"
+ ],
+ "schema": {
+  "type": "object",
+  "properties": {
+   "v": {
+    "anyOf": [
+     {
+      "type": "string",
+      "minLength": 1
+     },
+     {
+      "type": "integer",
+      "maximum": 10
+     }
+    ]
+   }
+  }
+ },
+ "instances": [
+  {
+   "label": "str",
+   "value": {
+    "v": "x"
+   }
+  },
+  {
+   "label": "empty-str",
+   "value": {
+    "v": ""
+   }
+  },
+  {
+   "label": "too-big",
+   "value": {
+    "v": 11
+   }
+  }
+ ]
+}

@@ -1,0 +1,45 @@
+{
+ "name": "tool-progress",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/tmp/opencode/diff-acp",
+  "start": {
+   "type": "input",
+   "id": "msg_inbox"
+  },
+  "childUpdates": false,
+  "compaction": true
+ },
+ "events": [
+  {
+   "id": "evt_boot",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_inbox"
+   }
+  },
+  {
+   "type": "session.tool.input.started",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_asst_1",
+    "id": "call_1",
+    "name": "read"
+   },
+   "id": "evt_1"
+  },
+  {
+   "type": "session.tool.progress",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_asst_1",
+    "id": "call_1",
+    "metadata": {
+     "progress": 0.5
+    }
+   },
+   "id": "evt_2"
+  }
+ ]
+}

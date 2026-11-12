@@ -1,0 +1,15 @@
+{
+ "name": "schema-empty",
+ "keywords": [],
+ "schema": {},
+ "instances": [
+  {
+   "label": "null",
+   "value": null
+  },
+  {
+   "label": "num",
+   "value": 1
+  }
+ ]
+}

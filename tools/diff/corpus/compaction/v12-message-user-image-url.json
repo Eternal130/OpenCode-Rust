@@ -1,0 +1,1 @@
+{"object": "response.compaction", "output": [{"type": "compaction", "id": "cmp_1", "encrypted_content": "enc-secret-1"}, {"type": "message", "id": "msg_2", "role": "user", "content": [{"type": "input_text", "text": "see"}, {"type": "input_image", "image_url": "https://example.test/a.png", "detail": "high"}]}], "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12}}

@@ -1,0 +1,23 @@
+{
+ "name": "type-array",
+ "keywords": [
+  "type"
+ ],
+ "schema": {
+  "type": "array"
+ },
+ "instances": [
+  {
+   "label": "empty",
+   "value": []
+  },
+  {
+   "label": "obj",
+   "value": {}
+  },
+  {
+   "label": "str",
+   "value": "[]"
+  }
+ ]
+}

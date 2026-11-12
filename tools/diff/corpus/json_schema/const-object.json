@@ -1,0 +1,32 @@
+{
+ "name": "const-object",
+ "keywords": [
+  "const"
+ ],
+ "schema": {
+  "const": {
+   "a": 1
+  }
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": {
+    "a": 1
+   }
+  },
+  {
+   "label": "str-val",
+   "value": {
+    "a": "1"
+   }
+  },
+  {
+   "label": "extra",
+   "value": {
+    "a": 1,
+    "b": 2
+   }
+  }
+ ]
+}

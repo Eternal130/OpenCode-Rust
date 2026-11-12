@@ -1,0 +1,59 @@
+{
+ "name": "form-ask-and-settle",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/tmp/opencode/diff-acp",
+  "start": {
+   "type": "input",
+   "id": "msg_inbox"
+  },
+  "childUpdates": false,
+  "compaction": true
+ },
+ "events": [
+  {
+   "id": "evt_boot",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_inbox"
+   }
+  },
+  {
+   "type": "form.created",
+   "data": {
+    "form": {
+     "id": "form_1",
+     "sessionID": "ses_root",
+     "title": "T"
+    }
+   },
+   "id": "evt_1"
+  },
+  {
+   "type": "form.replied",
+   "data": {
+    "id": "form_1"
+   },
+   "id": "evt_2"
+  },
+  {
+   "type": "form.created",
+   "data": {
+    "form": {
+     "id": "form_2",
+     "sessionID": "ses_root",
+     "title": "T2"
+    }
+   },
+   "id": "evt_3"
+  },
+  {
+   "type": "form.cancelled",
+   "data": {
+    "id": "form_2"
+   },
+   "id": "evt_4"
+  }
+ ]
+}

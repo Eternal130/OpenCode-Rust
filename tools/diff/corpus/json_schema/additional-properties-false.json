@@ -1,0 +1,33 @@
+{
+ "name": "additional-properties-false",
+ "keywords": [
+  "additionalProperties"
+ ],
+ "schema": {
+  "properties": {
+   "a": {}
+  },
+  "additionalProperties": false
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": {
+    "a": 1
+   }
+  },
+  {
+   "label": "extra",
+   "value": {
+    "a": 1,
+    "b": 2
+   }
+  },
+  {
+   "label": "only-extra",
+   "value": {
+    "b": 2
+   }
+  }
+ ]
+}

@@ -1,0 +1,52 @@
+{
+ "name": "permission-ask-tracked-tool",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/tmp/opencode/diff-acp",
+  "start": {
+   "type": "input",
+   "id": "msg_inbox"
+  },
+  "childUpdates": false,
+  "compaction": true
+ },
+ "events": [
+  {
+   "id": "evt_boot",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_inbox"
+   }
+  },
+  {
+   "type": "session.tool.input.started",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_asst_1",
+    "id": "call_1",
+    "name": "shell"
+   },
+   "id": "evt_1"
+  },
+  {
+   "type": "permission.asked",
+   "data": {
+    "id": "perm_1",
+    "sessionID": "ses_root",
+    "source": {
+     "id": "call_1"
+    },
+    "tool": "bash"
+   },
+   "id": "evt_2"
+  },
+  {
+   "type": "permission.replied",
+   "data": {
+    "requestID": "perm_1"
+   },
+   "id": "evt_3"
+  }
+ ]
+}

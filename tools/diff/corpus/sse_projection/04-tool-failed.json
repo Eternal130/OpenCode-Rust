@@ -1,0 +1,17 @@
+{
+  "name": "04-tool-failed",
+  "description": "tool 失败路径：called → failed（error.message + metadata）→ step.failed",
+  "events": [
+    { "type": "session.step.started", "id": "evt_301", "created": 4000,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "agent": "build", "model": { "providerID": "anthropic", "id": "claude-sonnet-4-5" }, "started": 4000 } },
+    { "type": "session.tool.input.started", "id": "evt_302", "created": 4001,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "id": "tool_bad", "name": "bash" } },
+    { "type": "session.tool.called", "id": "evt_303", "created": 4002,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "id": "tool_bad", "input": { "command": "ls /nope" } } },
+    { "type": "session.tool.failed", "id": "evt_304", "created": 4003,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "id": "tool_bad",
+        "error": { "message": "exit 2" }, "metadata": { "exit": "2" } } },
+    { "type": "session.step.failed", "id": "evt_305", "created": 4004,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "error": { "message": "tool failed" } } }
+  ]
+}

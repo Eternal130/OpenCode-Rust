@@ -1,0 +1,18 @@
+{
+  "name": "07-interrupted-mid-tool",
+  "description": "中断流：tool running 中 step.failed（tool 留在 running 态）",
+  "events": [
+    { "type": "session.step.started", "id": "evt_601", "created": 7000,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "agent": "build", "model": { "providerID": "anthropic", "id": "claude-sonnet-4-5" }, "started": 7000 } },
+    { "type": "session.text.delta", "id": "evt_602", "created": 7001,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "ordinal": 0, "delta": "working" } },
+    { "type": "session.tool.input.started", "id": "evt_603", "created": 7002,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "id": "tool_slow", "name": "task" } },
+    { "type": "session.tool.called", "id": "evt_604", "created": 7003,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "id": "tool_slow", "input": { "prompt": "x" } } },
+    { "type": "session.tool.progress", "id": "evt_605", "created": 7004,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "id": "tool_slow", "metadata": { "loaded": 2 } } },
+    { "type": "session.step.failed", "id": "evt_606", "created": 7005,
+      "data": { "sessionID": "ses_diff", "assistantMessageID": "msg_asst_1", "error": { "message": "aborted" } } }
+  ]
+}

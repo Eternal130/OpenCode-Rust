@@ -1,0 +1,13 @@
+{
+ "name": "schema-nonobject",
+ "keywords": [
+  "malformed-schema"
+ ],
+ "schema": "string",
+ "instances": [
+  {
+   "label": "num",
+   "value": 1
+  }
+ ]
+}

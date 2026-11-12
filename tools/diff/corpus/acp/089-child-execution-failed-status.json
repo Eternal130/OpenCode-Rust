@@ -1,0 +1,48 @@
+{
+ "name": "child-execution-failed-status",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/tmp/opencode/diff-acp",
+  "start": {
+   "type": "input",
+   "id": "msg_inbox"
+  },
+  "childUpdates": true,
+  "compaction": true
+ },
+ "events": [
+  {
+   "id": "evt_boot",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_inbox"
+   }
+  },
+  {
+   "type": "session.created",
+   "data": {
+    "sessionID": "ses_child1",
+    "projectID": "global",
+    "location": {
+     "directory": "/repo"
+    },
+    "slug": "s",
+    "parentID": "ses_root",
+    "version": "2"
+   },
+   "id": "evt_1"
+  },
+  {
+   "type": "session.execution.failed",
+   "data": {
+    "sessionID": "ses_child1",
+    "error": {
+     "type": "provider.http",
+     "message": "down"
+    }
+   },
+   "id": "evt_2"
+  }
+ ]
+}

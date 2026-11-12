@@ -1,0 +1,27 @@
+{
+ "name": "type-number",
+ "keywords": [
+  "type"
+ ],
+ "schema": {
+  "type": "number"
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": 5.5
+  },
+  {
+   "label": "int",
+   "value": 5
+  },
+  {
+   "label": "str",
+   "value": "5"
+  },
+  {
+   "label": "null",
+   "value": null
+  }
+ ]
+}

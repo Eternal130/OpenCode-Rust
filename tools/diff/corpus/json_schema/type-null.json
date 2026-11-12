@@ -1,0 +1,23 @@
+{
+ "name": "type-null",
+ "keywords": [
+  "type"
+ ],
+ "schema": {
+  "type": "null"
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": null
+  },
+  {
+   "label": "zero",
+   "value": 0
+  },
+  {
+   "label": "empty-str",
+   "value": ""
+  }
+ ]
+}

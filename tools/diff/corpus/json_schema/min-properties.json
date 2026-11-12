@@ -1,0 +1,22 @@
+{
+ "name": "min-properties",
+ "keywords": [
+  "minProperties"
+ ],
+ "schema": {
+  "type": "object",
+  "minProperties": 1
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": {
+    "a": 1
+   }
+  },
+  {
+   "label": "empty",
+   "value": {}
+  }
+ ]
+}

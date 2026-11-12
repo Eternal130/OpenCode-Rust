@@ -1,0 +1,23 @@
+{
+ "name": "type-boolean",
+ "keywords": [
+  "type"
+ ],
+ "schema": {
+  "type": "boolean"
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": true
+  },
+  {
+   "label": "one",
+   "value": 1
+  },
+  {
+   "label": "str",
+   "value": "true"
+  }
+ ]
+}

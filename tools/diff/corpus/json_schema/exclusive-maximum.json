@@ -1,0 +1,19 @@
+{
+ "name": "exclusive-maximum",
+ "keywords": [
+  "exclusiveMaximum"
+ ],
+ "schema": {
+  "exclusiveMaximum": 10
+ },
+ "instances": [
+  {
+   "label": "nine",
+   "value": 9
+  },
+  {
+   "label": "ten",
+   "value": 10
+  }
+ ]
+}

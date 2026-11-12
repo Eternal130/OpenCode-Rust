@@ -1,0 +1,27 @@
+{
+ "name": "max-items",
+ "keywords": [
+  "maxItems"
+ ],
+ "schema": {
+  "type": "array",
+  "maxItems": 2
+ },
+ "instances": [
+  {
+   "label": "ok",
+   "value": [
+    1,
+    2
+   ]
+  },
+  {
+   "label": "three",
+   "value": [
+    1,
+    2,
+    3
+   ]
+  }
+ ]
+}
