@@ -24,7 +24,7 @@ use oc_tui::components::message::model::{Message, Part};
 use oc_tui::data::{BusEvent, Ingest};
 use oc_tui::reactive::Runtime;
 use oc_tui::store::Store;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 fn norm_tool_state_input(
     status: &str,
