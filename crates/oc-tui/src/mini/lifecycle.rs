@@ -1613,7 +1613,11 @@ fn append_rows(
         PendingRows::Plain(format_commit_with(prev, commit, width, shell_output))
     } else {
         PendingRows::EntryStyled(crate::mini::entry_styled::format_commit_styled_with(
-            prev, commit, width, shell_output, look,
+            prev,
+            commit,
+            width,
+            shell_output,
+            look,
         ))
     }
 }
@@ -2417,7 +2421,8 @@ mod tests {
         match append_rows(false, None, &commit, 40, true, &look) {
             PendingRows::EntryStyled(rows) => {
                 assert!(
-                    rows.iter().any(|row| row.iter().any(|span| span.style != crate::style::Style::new())),
+                    rows.iter()
+                        .any(|row| row.iter().any(|span| span.style != crate::style::Style::new())),
                     "styled spans present: {rows:?}"
                 );
             }
@@ -2426,7 +2431,8 @@ mod tests {
     }
 
     #[test]
-    fn ansi_rows_carry_style_runs_and_reset() {        use super::PendingRows;
+    fn ansi_rows_carry_style_runs_and_reset() {
+        use super::PendingRows;
         let plain = PendingRows::Plain(vec!["hello".to_owned(), String::new()]);
         // A plain row carries only the reset bookends (no color/attr
         // runs) plus the trailing CR — the retired writer's exact
