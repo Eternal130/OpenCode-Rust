@@ -1,8 +1,8 @@
 # HTTP-FULL Differential（差分层 · 通道 6 · 全量 HTTP 对拍）
 
 > 同一 corpus（4 族）以相同顺序打双侧**真实 server 进程**：
-> rust = `oc-server serve --port 0`（boot 输出 `http://127.0.0.1:37563`，AuthConfig password=None 语义，roots → /tmp）
-> ref = bun 驱动 `tools/diff/drivers/http_ref_server.ts`（ServerFetch.make + Bun.serve，`http://127.0.0.1:38891`，roots → /tmp，ref git 树零写入）
+> rust = `oc-server serve --port 0`（boot 输出 `http://127.0.0.1:38227`，AuthConfig password=None 语义，roots → /tmp）
+> ref = bun 驱动 `tools/diff/drivers/http_ref_server.ts`（ServerFetch.make + Bun.serve，`http://127.0.0.1:39915`，roots → /tmp，ref git 树零写入）
 > 归一化：键序排序、id/uuid/时间戳/pid/version/端口/绝对路径（→ `<TMP>`/`<WS>`）剥换、列表按多重集比较、SSE 只比首帧+事件名。
 > 复现：`python3 tools/diff/http_full.py`（corpus 内嵌，47 请求）
 
@@ -13,7 +13,7 @@
   故 auth 拦截层与信号处理不在对拍面内；路由/序列化层与真实进程一致。
 - SSE 只比首帧形状与事件名多重集；帧序/心跳节奏声明为 ADJUDICATED（依赖 boot 期环境总线流量）。
 
-- **MATCH：32/47** · DIVERGE：**13** · ADJUDICATED：**2** · MISSING：**0**
+- **MATCH：34/47** · DIVERGE：**11** · ADJUDICATED：**2** · MISSING：**0**
 
 | 族 | 用例 | 判定 |
 |---|---|---|
@@ -23,8 +23,8 @@
 | L1-readonly | `command` | MATCH |
 | L1-readonly | `skill` | DIVERGE |
 | L1-readonly | `model` | ADJUDICATED |
-| L1-readonly | `model_default` | DIVERGE |
-| L1-readonly | `provider` | DIVERGE |
+| L1-readonly | `model_default` | MATCH |
+| L1-readonly | `provider` | MATCH |
 | L1-readonly | `form` | MATCH |
 | L1-readonly | `location` | MATCH |
 | L1-readonly | `integration` | DIVERGE |
@@ -84,20 +84,6 @@
   - `$.data[0].autoinvoke: <absent on ref>`
   - `$.data[1].autoinvoke: <absent on ref>`
   - `$.data[1].content: "<!--\n  Built-in skill. Name and description are registered in code at\n  packages/core/src/plugin/skill.ts. The body below becomes the skill's\n  content.\n-->\n\n# Report an opencode Issue\n\nUse t vs "<!--\n  Built-in skill. Name and description are registered in code at\n  packages/core/src/plugin/skill.ts. The body below becomes the skill's\n  content.\n-->\n\n# Report an opencode Issue\n\nUse t`
-
-### `model_default`（L1-readonly · GET `/api/model/default`）
-- 锚点：rust `crates/oc-server/src/plugins.rs:2965` · ref `packages/protocol/src/groups/model.ts:26`
-- 定性：rust 静态目录缺 package/settings.apiKey/settings.baseURL（zen 接线在无凭据态未呈现）
-- `body` 分歧（首个结构差叶路径，rust vs ref）：
-  - `$.data.package: <absent on rust>`
-  - `$.data.settings.apiKey: <absent on rust>`
-  - `$.data.settings.baseURL: <absent on rust>`
-
-### `provider`（L1-readonly · GET `/api/provider`）
-- 锚点：rust `crates/oc-server/src/routes.gen.rs:1216` · ref `packages/protocol/src/groups/provider.ts:10`
-- 定性：语义分歧：rust 返回全量目录(224, activation=auto, 无 location 包裹)；ref 只返回已启用 provider(1) 且带 location 包裹
-- `body` 分歧（首个结构差叶路径，rust vs ref）：
-  - `$.data: list len 224 vs 1`
 
 ### `integration`（L1-readonly · GET `/api/integration`）
 - 锚点：rust `crates/oc-server/src/routes.gen.rs:779` · ref `packages/protocol/src/groups/integration.ts:16`
@@ -162,7 +148,7 @@
 
 ### `session_list_empty_again`（L3-side-effects · GET `/api/session`）
 - 锚点：rust `crates/oc-server/src/middleware.rs:386` · ref `packages/protocol/src/groups/session.ts:180`
-- 定性：ref cursor.next/previous 恒返回锚点（即使空页/单页）；rust 返回 null；且 ref 残留悬挂会话
+- 定性（G-404 前提不成立，见判定备注）：ref 空页游标同样输出 null；本例分歧全部来自 G-403 悬挂会话级联（ref data len 1、rust 0 → ref 游标带锚点、rust 为 null）
 - `body` 分歧（首个结构差叶路径，rust vs ref）：
   - `$.cursor.next: type NoneType vs str`
   - `$.cursor.previous: type NoneType vs str`
@@ -173,4 +159,10 @@
 - 已裁定：47/47（MATCH+ADJUDICATED+DIVERGE 逐例有归属；DIVERGE 为登记册候选，见上表锚点）
 - ADJUDICATED 2 项：归一化声明见范围声明与 corpus 注释（SSE 名序 / 目录清单成员），非 DIVERGE。
 - 稳定性：双侧 boot 各重试一次窗口（本次未触发即成功）、每请求独立超时 (20.0s)、SSE 短窗 4.0s、子进程按进程组回收（SIGTERM→SIGKILL）。
-- ref git 树零写入（运行前后 `git status --porcelain` 均空）。
+- ⚠️ ref git 树脏项警告为 `safe.directory`（dubious ownership）误报——运行后人工复核 `git -C /opt/opencode-ref status --porcelain` 为空，ref 树零写入。
+- 归属备注（gb14-lane4，2026-11-13）：
+  - `provider` / `model_default` 已翻 MATCH（G-394/G-397 修复：provider 可用性折叠 + model 服务端 provider fold）。
+  - `agent` / `skill` / `agent_missing`（G-396 族）待后续 agent 专项 lane（lane 5），本轮不动 agent 内容。
+  - `session_create_bad_location`（G-403）待登记册裁定，保持现状。
+  - `session_list_empty_again`：G-404 前提不成立——ref 空页游标本就输出 null（packages/server/src/handlers/session.ts:79-97，undefined → 运行时序列化为显式 null；新鲜 ref boot 实测 `{"data":[],"cursor":{"previous":null,"next":null}}`，与 rust session.rs:361-379 一致）。现存分歧是 G-403 悬挂会话的级联（data len 0 vs 1），非游标语义。
+  - `project` / `fs_read_missing` / `session_create` / `session_get` / `integration`（G-410 记录性族）按裁定保持分歧。
