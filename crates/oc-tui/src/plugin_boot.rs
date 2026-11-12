@@ -762,9 +762,8 @@ impl TuiPluginRuntime {
                 });
                 if *self.pushed_panel.borrow() != fingerprint {
                     *self.pushed_panel.borrow_mut() = fingerprint.clone();
-                    let params = fingerprint.map(
-                        |((plugin, name, session), _, _, _)| (plugin, name, session),
-                    );
+                    let params = fingerprint
+                        .map(|((plugin, name, session), _, _, _)| (plugin, name, session));
                     match params {
                         Some((plugin, name, session)) => {
                             self.booted.host.notify_tui_panel(
@@ -1174,13 +1173,11 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
         }
         // G-239/G-331: the panel open (deferred reply) and the
         // owner-scoped close.
-        UiRequest::PanelOpen { request_id, name, fullscreen, .. } => {
-            PluginUiEvent::PanelOpen {
-                request_id: *request_id,
-                name: name.clone(),
-                fullscreen: *fullscreen,
-            }
-        }
+        UiRequest::PanelOpen { request_id, name, fullscreen, .. } => PluginUiEvent::PanelOpen {
+            request_id: *request_id,
+            name: name.clone(),
+            fullscreen: *fullscreen,
+        },
         UiRequest::PanelClose { .. } => PluginUiEvent::PanelClose,
         UiRequest::DialogOpen { spec, .. } => PluginUiEvent::DialogOpen {
             content: PluginDialogContent {

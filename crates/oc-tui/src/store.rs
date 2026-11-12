@@ -4439,9 +4439,9 @@ impl Store {
                 plugin_sections,
                 plugin_slot_sections,
                 plugin_route,
-            session_panel,
-            panel_focused,
-            panel_width,
+                session_panel,
+                panel_focused,
+                panel_width,
                 sidebar_mode,
                 sidebar_open,
                 terminal_size,
@@ -11710,7 +11710,12 @@ impl Store {
     /// replaces. Mutual exclusion (session-frame.tsx:93-105): the
     /// open drops the selected terminal and the manual sidebar flag
     /// (panel > open-sidebar > terminal in the precedence chain).
-    pub fn open_session_panel(&self, plugin_id: &str, name: &str, fullscreen_requested: bool) -> bool {
+    pub fn open_session_panel(
+        &self,
+        plugin_id: &str,
+        name: &str,
+        fullscreen_requested: bool,
+    ) -> bool {
         let Route::Session { session_id, .. } = self.route.get() else {
             return false;
         };
@@ -11787,7 +11792,8 @@ impl Store {
     #[must_use]
     pub fn session_panel_fullscreen(&self, content_width: usize) -> bool {
         self.session_panel.get().is_some_and(|panel| {
-            panel.fullscreen_requested || content_width <= crate::components::session::PANEL_CAN_SPLIT_BREAKPOINT
+            panel.fullscreen_requested
+                || content_width <= crate::components::session::PANEL_CAN_SPLIT_BREAKPOINT
         })
     }
 
@@ -18742,10 +18748,7 @@ mod g368_title_tests {
         assert!(store.open_session_panel("omos", "board", false));
         assert!(store.terminal_pane_mounted("s1").is_none(), "the panel closed the terminal");
         store.select_terminal("s1", Some("pty1"));
-        assert!(
-            store.session_panel().is_none(),
-            "selecting a terminal closed the panel"
-        );
+        assert!(store.session_panel().is_none(), "selecting a terminal closed the panel");
 
         // The route change closes (app.tsx:579-589).
         assert!(store.open_session_panel("omos", "board", false));

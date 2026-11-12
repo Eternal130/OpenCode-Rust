@@ -319,12 +319,20 @@ pub fn render_session(
     // the right-side leg at `paneResize.size()` columns.
     let panel_fullscreen = store.session_panel_fullscreen(content_width);
     let panel_width = if session_panel.is_some() {
-        if panel_fullscreen { content_width } else { store.session_pane_width(content_width) }
+        if panel_fullscreen {
+            content_width
+        } else {
+            store.session_pane_width(content_width)
+        }
     } else {
         0
     };
     let column = if session_panel.is_some() {
-        if panel_fullscreen { 0 } else { content_width.saturating_sub(panel_width) }
+        if panel_fullscreen {
+            0
+        } else {
+            content_width.saturating_sub(panel_width)
+        }
     } else if let Some(terminal_width) = terminal_width {
         content_width.saturating_sub(terminal_width)
     } else if sidebar_docked {
@@ -439,13 +447,7 @@ pub fn render_session(
         // (`visible={!fullscreen()}`, session-frame.tsx:279-281): the
         // prompt mount is replaced by an empty frame exactly like the
         // picker's takeover, and nothing of the composer paints.
-        (
-            crate::components::chrome_solid::blank_frame(0, 0),
-            0,
-            0,
-            None,
-            None,
-        )
+        (crate::components::chrome_solid::blank_frame(0, 0), 0, 0, None, None)
     } else {
         composer_mount_frame(
             store,
@@ -1043,11 +1045,10 @@ pub fn render_session(
             .plugin_slot_sections("session.panel")
             .into_iter()
             .find(|section| section.plugin_id == panel.plugin_id);
-        let title =
-            section.as_ref().filter(|s| !s.title.is_empty()).map_or_else(
-                || panel.name.clone(),
-                |section| section.title.clone(),
-            );
+        let title = section
+            .as_ref()
+            .filter(|s| !s.title.is_empty())
+            .map_or_else(|| panel.name.clone(), |section| section.title.clone());
         let rows = section.as_ref().map_or_else(Vec::new, |section| section.rows.clone());
         let pane = crate::components::plugin_page_solid::plugin_page_solid_frame(
             &title,
@@ -1073,10 +1074,8 @@ pub fn render_session(
         // exclusive panes, so the rects never collide). Body row i
         // sits at panel-local y 3+i over columns [2, width−1]
         // (plugin_page_solid's geometry).
-        let mut hits = crate::store::PluginSectionHits {
-            session_id: session_id.to_owned(),
-            rows: Vec::new(),
-        };
+        let mut hits =
+            crate::store::PluginSectionHits { session_id: session_id.to_owned(), rows: Vec::new() };
         if let Some(section) = section {
             for (index, clickable) in section.clickable.iter().enumerate() {
                 if *clickable && index < rows.len() {

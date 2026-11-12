@@ -2758,7 +2758,12 @@ impl Shared {
     /// (the `tui.panel` notification, the `tui.route` mirror): the
     /// owning plugin id, the open content name, and the owning
     /// session (None = closed). `ctx.ui.panel.current()` reads it.
-    pub fn notify_tui_panel(&self, plugin_id: Option<&str>, name: Option<&str>, session: Option<&str>) {
+    pub fn notify_tui_panel(
+        &self,
+        plugin_id: Option<&str>,
+        name: Option<&str>,
+        session: Option<&str>,
+    ) {
         let params = match (plugin_id, name, session) {
             (Some(plugin), Some(name), Some(session)) => {
                 json!({ "pluginId": plugin, "name": name, "sessionID": session })

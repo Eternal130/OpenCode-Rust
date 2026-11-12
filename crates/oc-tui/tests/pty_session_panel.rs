@@ -109,9 +109,9 @@ fn pty_session_panel_opens_docked_and_closes() {
         // resolves through the pump): the DOCKED pane renders the
         // claim's rows inside cols 80..160.
         driver.write(b"\x1b[20~"); // f9 — the plugin open bind
-        // The plugin host may still be mid-boot when the session
-        // opens; re-stroke the bind (idempotent open) until the pane
-        // renders (bounded).
+                                   // The plugin host may still be mid-boot when the session
+                                   // opens; re-stroke the bind (idempotent open) until the pane
+                                   // renders (bounded).
         let name_row = {
             let mut found = None;
             for _ in 0..6 {
@@ -175,13 +175,14 @@ fn pty_session_panel_narrow_is_fullscreen_takeover() {
         }
         open_first_session(&mut driver, b"Alpha")?;
         driver.write(b"\x1b[20~"); // f9 — the plugin open bind
-        // Fullscreen: the row starts near the LEFT edge (the session
-        // column hides — `visible={!fullscreen()}`); re-stroke while
-        // the plugin host finishes booting (bounded, idempotent).
+                                   // Fullscreen: the row starts near the LEFT edge (the session
+                                   // column hides — `visible={!fullscreen()}`); re-stroke while
+                                   // the plugin host finishes booting (bounded, idempotent).
         let row = {
             let mut found = None;
             for _ in 0..6 {
-                if let Some(row) = wait_region(&driver, "name: board", 0, 80, Duration::from_secs(5))
+                if let Some(row) =
+                    wait_region(&driver, "name: board", 0, 80, Duration::from_secs(5))
                 {
                     found = Some(row);
                     break;
