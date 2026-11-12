@@ -2771,3 +2771,8 @@ census 把"缺口扫描"从自由读码改为可度量普查：14 通道覆盖�
 
 G-384/G-385/G-387/G-388 ✅；G-230 die 前置+die 分支 ✅（census 盯守翻绿）；G-386 注记（14→13 项）；G-389/G-390 维持 ℹ️ 超集登记。现存未关闭项=既有文档化决策族（G-12/G-16/G-17/G-28/G-32/G-38/G-39/G-40/G-49/G-161①/G-163/G-164/G-200②/G-211(已 OBSOLETE)/G-212/G-238/G-239/G-240/G-247 残余(上游阻挡)/G-272⑩/G-289/G-290/G-313..G-318/G-326/G-328/G-329/G-331..G-333/G-386/G-389/G-390）——全部为文档化决策/登记项，无可行动缺口。**无 opentui-rust 依赖的上游阻挡项。** 证据：lane 报告 `.superpowers/sdd/gb13/`、门日志 `.test-logs/*gb13*`。
 
+
+## 第二十五轮复扫注记（2026-11-12，census 独立复扫）
+
+- **复扫结论**：14 通道全量重跑，12/14 与修复方刷新后的报告逐字节一致（HTTP 附录与 ENV-VARS 行号漂移为预期差）；G-384/G-385/G-387/G-388 与 G-230 die 面**经代码级独立确认**（host.js:1641/:1651、oc-util/logging.rs:54、oc-tui/system.rs:47——TMUX :51 一并接线、超出翻绿清单；registry.rs:422 die 分支在位、18/18 声明，oc-core tool::registry 17/17 PASS）。PLUGIN-API 现 BOTH 95 / REF_ONLY 1（rpc.events=G-295 维持）；RPC BOTH 76 / REF_ONLY 13（integration.reload 转双侧）。修复轮新增 3 个扁平化键并入 G-386 注记。
+- **flake 观察登记（一次性）**：`oc-plugin-host::g384_integration` 于本次复扫中出现单次失败（同调用内 2 try 均 ~2s 快败），随后单跑与原过滤条件合计 **18/18 PASS（含 10 连压测）**，不复现。假设：测试前四个文件读（reload/list/methods/got）为无轮询立即读，`wait_ready` 只保证宿主就绪，guest 写文件存在竞窗（done.json 已用 wait_for，前四读未用）。建议低成本加固：前四读同样包 `wait_for`。按白名单纪律先登记观察，两次独立复现再升级处置；**不构成产品缺口**。
