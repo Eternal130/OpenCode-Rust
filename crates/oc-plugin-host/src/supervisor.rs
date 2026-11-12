@@ -124,8 +124,9 @@ pub trait RpcEventPort: Send + Sync {
 /// Everything the supervisor needs at spawn time.
 #[derive(Clone)]
 pub struct SupervisorConfig {
-    /// Resolved bun executable.
-    pub bun: PathBuf,
+    /// Resolved guest runtime (bun preferred, node fallback —
+    /// [`crate::bun::GuestRuntime`]).
+    pub runtime: crate::bun::GuestRuntime,
     /// Materialized host script (`host.js` on disk).
     pub host_js: PathBuf,
     /// Working directory for the guest (the sandbox).
@@ -200,7 +201,7 @@ pub struct SupervisorConfig {
 impl Default for SupervisorConfig {
     fn default() -> Self {
         Self {
-            bun: PathBuf::new(),
+            runtime: crate::bun::GuestRuntime::Bun(PathBuf::new()),
             host_js: PathBuf::new(),
             cwd: std::env::temp_dir(),
             entries: Vec::new(),
@@ -2954,7 +2955,16 @@ fn decode_digests(result: &Value) -> Option<HashMap<String, String>> {
 fn spawn_process(
     config: &SupervisorConfig,
 ) -> Result<(Child, tokio::process::ChildStdin, tokio::process::ChildStdout), String> {
-    let mut command = Command::new(&config.bun);
+    let runtime = &config.runtime;
+    let binary = runtime.binary();
+    let mut command = Command::new(binary);
+    // G-333 — the node track runs the same host.js; its only
+    // flavor-specific flag silences node's experimental-feature
+    // banners (type stripping, module warnings — v2's source.node
+    // nodeExecArgv posture).
+    if matches!(runtime, crate::bun::GuestRuntime::Node(_)) {
+        command.arg("--disable-warning=ExperimentalWarning");
+    }
     command
         .arg(&config.host_js)
         .current_dir(&config.cwd)
@@ -2974,8 +2984,7 @@ fn spawn_process(
     for (key, value) in &config.env {
         command.env(key, value);
     }
-    let mut child =
-        command.spawn().map_err(|error| format!("{}: {error}", config.bun.display()))?;
+    let mut child = command.spawn().map_err(|error| format!("{}: {error}", binary.display()))?;
     let stdin = child.stdin.take().ok_or_else(|| "no stdin".to_owned())?;
     let stdout = child.stdout.take().ok_or_else(|| "no stdout".to_owned())?;
     if let Some(stderr) = child.stderr.take() {

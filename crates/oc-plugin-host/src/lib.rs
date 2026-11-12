@@ -305,8 +305,8 @@ fn guest_error_text(error: HostError) -> String {
 /// caller for at most the configured hard timeout.
 pub struct PluginHost {
     facade: Option<Arc<Facade>>,
-    /// The resolved bun binary (diagnostics; `None` = disabled).
-    bun: Option<PathBuf>,
+    /// The resolved guest runtime (diagnostics; `None` = disabled).
+    runtime: Option<bun::GuestRuntime>,
 }
 
 struct Facade {
@@ -319,24 +319,31 @@ struct Facade {
 }
 
 impl PluginHost {
-    /// Resolve bun and prepare a host. No process spawns yet;
-    /// absent bun ⇒ disabled host (one clear log line).
+    /// Resolve the guest runtime (bun preferred, node fallback —
+    /// G-333) and prepare a host. No process spawns yet; neither
+    /// binary ⇒ disabled host (one clear log line).
     #[must_use]
     pub fn detect() -> Self {
-        if let Some(path) = bun::resolve_bun() {
-            Self { facade: None, bun: Some(path) }
+        if let Some(runtime) = bun::resolve_runtime() {
+            Self { facade: None, runtime: Some(runtime) }
         } else {
             eprintln!(
-                "opencode plugin-host: bun not found (looked in ~/.cache/opencode-rust/bin, /usr/local/bin/bun, PATH, ~/.bun/bin/bun); plugin subsystem disabled"
+                "opencode plugin-host: neither bun nor node found (bun: OC_PLUGIN_BUN, ~/.cache/opencode-rust/bin, /usr/local/bin/bun, PATH, ~/.bun/bin/bun; node: OC_PLUGIN_NODE, PATH); plugin subsystem disabled"
             );
-            Self { facade: None, bun: None }
+            Self { facade: None, runtime: None }
         }
     }
 
     /// Whether the subsystem is (or can be) live.
     #[must_use]
     pub fn enabled(&self) -> bool {
-        self.bun.is_some()
+        self.runtime.is_some()
+    }
+
+    /// The picked runtime track (diagnostics; `None` = disabled).
+    #[must_use]
+    pub fn runtime(&self) -> Option<&bun::GuestRuntime> {
+        self.runtime.as_ref()
     }
 
     /// Spawn the host on a dedicated thread and run the initial
@@ -360,19 +367,25 @@ impl PluginHost {
         mut config: PluginHostConfig,
         entries: &[PathBuf],
     ) -> Self {
-        let bun = match self.bun.clone() {
-            Some(bun) => bun,
+        let runtime = match self.runtime.clone() {
+            Some(runtime) => runtime,
             None if entries.is_empty() => {
                 eprintln!(
-                    "opencode plugin-host: start requested but bun is absent; staying disabled"
+                    "opencode plugin-host: start requested but no guest runtime (bun/node) is present; staying disabled"
                 );
                 return self;
             }
             None => match self.bootstrap_bun() {
-                Some(bun) => bun,
+                Some(bun) => bun::GuestRuntime::Bun(bun),
                 None => return self,
             },
         };
+        // The node track is not the default — name it so a fallback
+        // boot is diagnosable from the log alone (path only; no probe
+        // spawn for a version string).
+        if let bun::GuestRuntime::Node(path) = &runtime {
+            eprintln!("opencode plugin-host: using the node runtime track ({})", path.display());
+        }
         let sandbox = sandbox_dir();
         if let Err(error) = host_js::materialize(&sandbox, HOST_JS) {
             eprintln!(
@@ -381,7 +394,7 @@ impl PluginHost {
             );
             return self;
         }
-        let supervisor_config = supervisor_config(&mut config, bun, &sandbox, entries);
+        let supervisor_config = supervisor_config(&mut config, runtime, &sandbox, entries);
         let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
         let (parts_tx, parts_rx) = std::sync::mpsc::channel::<FacadeParts>();
         let thread = std::thread::Builder::new()
@@ -467,20 +480,21 @@ impl PluginHost {
     }
 
     /// The managed-bun bootstrap ([`PluginHost::start_detached_with`]'s
-    /// absent-bun arm): pinned download per MIGRATION §2.3, graceful
-    /// disable on any failure.
+    /// no-runtime arm — resolution already preferred node, so this
+    /// only runs when neither bun nor node exists): pinned download
+    /// per MIGRATION §2.3, graceful disable on any failure.
     fn bootstrap_bun(&mut self) -> Option<PathBuf> {
         match oc_util::bunman::ensure() {
             Ok(bun) => {
-                self.bun = Some(bun.clone());
+                self.runtime = Some(bun::GuestRuntime::Bun(bun.clone()));
                 eprintln!(
-                    "opencode plugin-host: plugins requested without a system bun; managed bun bootstrapped"
+                    "opencode plugin-host: plugins requested without a system bun or node; managed bun bootstrapped"
                 );
                 Some(bun)
             }
             Err(error) => {
                 eprintln!(
-                    "opencode plugin-host: bun bootstrap failed ({error}); plugin subsystem disabled. Install bun or set {}=1 to silence this, then retry.",
+                    "opencode plugin-host: bun bootstrap failed ({error}); plugin subsystem disabled. Install bun or node, or set {}=1 to silence this, then retry.",
                     oc_util::bunman::DISABLE_DOWNLOAD_ENV
                 );
                 None
@@ -1189,12 +1203,12 @@ impl PluginHost {
 /// the port seams landed).
 fn supervisor_config(
     config: &mut PluginHostConfig,
-    bun: PathBuf,
+    runtime: bun::GuestRuntime,
     sandbox: &std::path::Path,
     entries: &[PathBuf],
 ) -> SupervisorConfig {
     SupervisorConfig {
-        bun,
+        runtime,
         host_js: sandbox.join("host.js"),
         cwd: sandbox.to_owned(),
         entries: entries.to_vec(),

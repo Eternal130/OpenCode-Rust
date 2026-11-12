@@ -1,4 +1,6 @@
-//! The guest-side host script (`bun host.js`): module loading via
+//! The guest-side host script (`bun host.js` — or `node host.js` on
+//! the G-333 fallback track, where the BunShim below covers the
+//! three-API production surface): module loading via
 //! dynamic `import()` (native ESM + npm + CJS resolution — whatever
 //! Bun runs), per-plugin error containment, the Context bridge
 //! (wave 1: commands/themes/events; wave 2: the flagship's minimal
@@ -21,8 +23,9 @@
 //! materializes to the supervisor after every change. Nothing crosses
 //! IPC at render time.
 
-// The script runs under Bun; `require` is constructed for the CJS
-// cache eviction the hot-reload parity needs.
+// The script runs under Bun (or node — G-333); `require` is
+// constructed for the CJS cache eviction the hot-reload parity needs
+// (and shared with the BunShim's file reader).
 import { createRequire } from "node:module";
 import { existsSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -241,7 +244,58 @@ const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
 // hot-reload digest scan, the bun-version probe) goes through these
 // captured bindings instead of the global lookups.
 const nativeProcess = globalThis.process;
-const nativeBun = globalThis.Bun;
+// G-333 — the node fallback track: host.js runs under `node host.js`
+// when no bun exists (v2's source.node.ts distribution). The
+// production Bun surface is exactly three APIs (file().text(),
+// Transpiler.scanImports, version), so a ~40-line shim covers it.
+// Deliberately NOT assigned to globalThis: under node,
+// globalThis.Bun stays undefined, which strictly NARROWS the G-334c
+// sandbox face (a program resolving `Bun` still hits the throwing
+// facade below — never a real runtime binding).
+const BunShim = {
+  file(path) {
+    return {
+      async text() {
+        return require("node:fs").readFileSync(path, "utf8");
+      },
+    };
+  },
+  Transpiler: class {
+    // eslint-disable-next-line no-unused-constructor -- parity shape
+    constructor(_opts) {}
+    // Bounded regex scan (fidelity deviation, documented in the lane
+    // report): static import/export-from specifiers + dynamic
+    // import("...") literals. Bun's real parser would also catch
+    // exotic forms; a miss only degrades the hot-reload digest walk
+    // the same way an unparseable file already does (the digest still
+    // covers the entry). Never throws.
+    scanImports(source) {
+      try {
+        const text = String(source);
+        const specs = new Set();
+        // Static from-forms: `import x from "m"`, `import type {T} from
+        // "m"`, `export * from "m"`, `export {a as b} from "m"`.
+        const fromRe =
+          /\b(?:import|export)\s+(?:type\s+)?[\w*${}\s,]*?\bfrom\s*(["'])([^"'\n]+)\1/g;
+        // Bare + dynamic: `import "m"`, `import("m")`.
+        const bareRe = /\bimport\s*\(?\s*(["'])([^"'\n]+)\1/g;
+        for (const re of [fromRe, bareRe]) {
+          let match;
+          while ((match = re.exec(text)) !== null) specs.add(match[2]);
+        }
+        return [...specs];
+      } catch {
+        return [];
+      }
+    }
+  },
+  // The initialize reply reports this string; the supervisor does
+  // not parse it (diagnostics only).
+  get version() {
+    return "node-" + (nativeProcess.versions?.node ?? "unknown");
+  },
+};
+const nativeBun = globalThis.Bun ?? BunShim;
 {
   globalThis.setInterval = (fn, ms, ...args) =>
     typeof fn === "function" ? nativeSetInterval(shieldCallback(fn), ms, ...args) : nativeSetInterval(fn, ms, ...args);
