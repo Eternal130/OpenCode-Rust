@@ -8,140 +8,142 @@
 
 ## 轴 1：server-plugin ctx 面（host.js `const ctx = {` vs adapter.ts `context2`）
 
-- rust（host.js makeCtx ctx 字面量点路径 + rpc 归一）：124 个面
+- rust（host.js makeCtx ctx 字面量点路径 + rpc 归一）：126 个面
 - ref（adapter.ts context2 点路径 + rpc 归一）：96 个面
-- **BOTH：95** · REF_ONLY：**1** · RUST_ONLY：**29**
+- **BOTH：95** · REF_ONLY：**1** · RUST_ONLY：**31**
 
 ### REF_ONLY（ref 有、rust 无 → 缺口候选）
   - 🔴 `rpc.events` — /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:77
 
 ### RUST_ONLY（rust 额外面 → 登记册背书核对）
-  - 🔗 `command.add` — crates/oc-plugin-host/src/host/host.js:1061（待登记册决策）
-  - 🔗 `directory` — crates/oc-plugin-host/src/host/host.js:1001（rust 自报面（ref 经 host.location 派生同源值））
-  - 🔗 `hostFlavor` — crates/oc-plugin-host/src/host/host.js:1003（rust 自报面（hostFlavor: "v2"））
-  - 🔗 `integration.method.list` — crates/oc-plugin-host/src/host/host.js:1630（待登记册决策）
-  - 🔗 `integration.method.update` — crates/oc-plugin-host/src/host/host.js:1625（G-24（v2 IntegrationMethodRegistration 面））
-  - 🔗 `keymap.layer` — crates/oc-plugin-host/src/host/host.js:2195（PLUG-TUI-SLOT（api.tsx:179-199 keymap.layer 面））
-  - 🔗 `location.project.id` — crates/oc-plugin-host/src/host/host.js:1002（rust 自报面（location.project.id））
-  - 🔗 `log` — crates/oc-plugin-host/src/host/host.js:1993（rust 桥日志面（console 重路由，ref 无对应））
-  - 🔗 `ping` — crates/oc-plugin-host/src/host/host.js:1992（rust 桥活探面（死锁规则配套，ref 无对应））
-  - 🔗 `plugin.id` — crates/oc-plugin-host/src/host/host.js:991（rust 自报面（ctx.plugin.id））
-  - 🔗 `rpc.client` — crates/oc-plugin-host/src/host/host.js:1856（bounded deviation（host.js:1666-1669 注记：ref ctx.rpc 本身可调用 → rust rpc.client()））
-  - 🔗 `session.list` — crates/oc-plugin-host/src/host/host.js:1155（rust SESSION_METHODS 白名单注记（flagship 探针读面））
-  - 🔗 `session.messages` — crates/oc-plugin-host/src/host/host.js:1154（rust SESSION_METHODS 白名单注记（flagship 探针读面））
-  - 🔗 `theme.register` — crates/oc-plugin-host/src/host/host.js:1894（wave 1 rust 面（ref v2 ctx 无 theme 域））
-  - 🔗 `ui.alert` — crates/oc-plugin-host/src/host/host.js:2018（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
-  - 🔗 `ui.confirm` — crates/oc-plugin-host/src/host/host.js:2026（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
-  - 🔗 `ui.dialog.open` — crates/oc-plugin-host/src/host/host.js:2091（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
-  - 🔗 `ui.dialog.register` — crates/oc-plugin-host/src/host/host.js:2075（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
-  - 🔗 `ui.footer.setHint` — crates/oc-plugin-host/src/host/host.js:2067（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
-  - 🔗 `ui.grouping.addRule` — crates/oc-plugin-host/src/host/host.js:2097（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
-  - 🔗 `ui.home.addQuickAction` — crates/oc-plugin-host/src/host/host.js:2109（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
-  - 🔗 `ui.prompt` — crates/oc-plugin-host/src/host/host.js:2043（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
-  - 🔗 `ui.router.current` — crates/oc-plugin-host/src/host/host.js:2187（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
-  - 🔗 `ui.router.navigate` — crates/oc-plugin-host/src/host/host.js:2165（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
-  - 🔗 `ui.router.register` — crates/oc-plugin-host/src/host/host.js:2149（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
-  - 🔗 `ui.sidebar.removeSection` — crates/oc-plugin-host/src/host/host.js:2062（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
-  - 🔗 `ui.sidebar.setSection` — crates/oc-plugin-host/src/host/host.js:2054（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
-  - 🔗 `ui.slot` — crates/oc-plugin-host/src/host/host.js:2120（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
-  - 🔗 `ui.toast.show` — crates/oc-plugin-host/src/host/host.js:2003（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
+  - 🔗 `command.add` — crates/oc-plugin-host/src/host/host.js:1156（待登记册决策）
+  - 🔗 `directory` — crates/oc-plugin-host/src/host/host.js:1096（rust 自报面（ref 经 host.location 派生同源值））
+  - 🔗 `hostFlavor` — crates/oc-plugin-host/src/host/host.js:1098（rust 自报面（hostFlavor: "v2"））
+  - 🔗 `integration.method.list` — crates/oc-plugin-host/src/host/host.js:1725（待登记册决策）
+  - 🔗 `integration.method.update` — crates/oc-plugin-host/src/host/host.js:1720（G-24（v2 IntegrationMethodRegistration 面））
+  - 🔗 `keymap.layer` — crates/oc-plugin-host/src/host/host.js:2306（PLUG-TUI-SLOT（api.tsx:179-199 keymap.layer 面））
+  - 🔗 `location.project.id` — crates/oc-plugin-host/src/host/host.js:1097（rust 自报面（location.project.id））
+  - 🔗 `log` — crates/oc-plugin-host/src/host/host.js:2088（rust 桥日志面（console 重路由，ref 无对应））
+  - 🔗 `markdown.registerCodeBlockRenderer` — crates/oc-plugin-host/src/host/host.js:2095（G-332（插件 markdown 代码块渲染器注册链缺失））
+  - 🔗 `ping` — crates/oc-plugin-host/src/host/host.js:2087（rust 桥活探面（死锁规则配套，ref 无对应））
+  - 🔗 `plugin.id` — crates/oc-plugin-host/src/host/host.js:1086（rust 自报面（ctx.plugin.id））
+  - 🔗 `rpc.client` — crates/oc-plugin-host/src/host/host.js:1951（bounded deviation（host.js:1666-1669 注记：ref ctx.rpc 本身可调用 → rust rpc.client()））
+  - 🔗 `session.list` — crates/oc-plugin-host/src/host/host.js:1250（rust SESSION_METHODS 白名单注记（flagship 探针读面））
+  - 🔗 `session.messages` — crates/oc-plugin-host/src/host/host.js:1249（rust SESSION_METHODS 白名单注记（flagship 探针读面））
+  - 🔗 `theme.register` — crates/oc-plugin-host/src/host/host.js:1989（wave 1 rust 面（ref v2 ctx 无 theme 域））
+  - 🔗 `ui.alert` — crates/oc-plugin-host/src/host/host.js:2123（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
+  - 🔗 `ui.confirm` — crates/oc-plugin-host/src/host/host.js:2131（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
+  - 🔗 `ui.dialog.open` — crates/oc-plugin-host/src/host/host.js:2196（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
+  - 🔗 `ui.dialog.register` — crates/oc-plugin-host/src/host/host.js:2180（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
+  - 🔗 `ui.footer.setHint` — crates/oc-plugin-host/src/host/host.js:2172（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
+  - 🔗 `ui.grouping.addRule` — crates/oc-plugin-host/src/host/host.js:2202（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
+  - 🔗 `ui.home.addQuickAction` — crates/oc-plugin-host/src/host/host.js:2214（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
+  - 🔗 `ui.panel` — crates/oc-plugin-host/src/host/host.js:2301（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
+  - 🔗 `ui.prompt` — crates/oc-plugin-host/src/host/host.js:2148（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
+  - 🔗 `ui.router.current` — crates/oc-plugin-host/src/host/host.js:2292（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
+  - 🔗 `ui.router.navigate` — crates/oc-plugin-host/src/host/host.js:2270（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
+  - 🔗 `ui.router.register` — crates/oc-plugin-host/src/host/host.js:2254（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
+  - 🔗 `ui.sidebar.removeSection` — crates/oc-plugin-host/src/host/host.js:2167（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
+  - 🔗 `ui.sidebar.setSection` — crates/oc-plugin-host/src/host/host.js:2159（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
+  - 🔗 `ui.slot` — crates/oc-plugin-host/src/host/host.js:2225（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
+  - 🔗 `ui.toast.show` — crates/oc-plugin-host/src/host/host.js:2108（TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域））
 
 ### BOTH（双侧 file:line）
-  - ✅ `agent.get` — rust crates/oc-plugin-host/src/host/host.js:1031 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:296
-  - ✅ `agent.list` — rust crates/oc-plugin-host/src/host/host.js:1028 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:297
-  - ✅ `agent.reload` — rust crates/oc-plugin-host/src/host/host.js:1025 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:299
-  - ✅ `agent.transform` — rust crates/oc-plugin-host/src/host/host.js:1012 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:298
-  - ✅ `aisdk.hook` — rust crates/oc-plugin-host/src/host/host.js:1205 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:302
-  - ✅ `app.version` — rust crates/oc-plugin-host/src/host/host.js:1000 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:292
-  - ✅ `command.list` — rust crates/oc-plugin-host/src/host/host.js:1095 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:308
-  - ✅ `command.reload` — rust crates/oc-plugin-host/src/host/host.js:1094 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:322
-  - ✅ `command.transform` — rust crates/oc-plugin-host/src/host/host.js:1062 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:309
-  - ✅ `event.subscribe` — rust crates/oc-plugin-host/src/host/host.js:1911 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:325
-  - ✅ `experimental.terminal.read` — rust crates/oc-plugin-host/src/host/host.js:1404 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:336
-  - ✅ `generate.text` — rust crates/oc-plugin-host/src/host/host.js:1173 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:340
-  - ✅ `integration.command.cancel` — rust crates/oc-plugin-host/src/host/host.js:1599 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:381
-  - ✅ `integration.command.connect` — rust crates/oc-plugin-host/src/host/host.js:1591 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:373
-  - ✅ `integration.command.status` — rust crates/oc-plugin-host/src/host/host.js:1595 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:377
-  - ✅ `integration.connect.key` — rust crates/oc-plugin-host/src/host/host.js:1567 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:358
-  - ✅ `integration.connection.active` — rust crates/oc-plugin-host/src/host/host.js:1605 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:428
-  - ✅ `integration.connection.resolve` — rust crates/oc-plugin-host/src/host/host.js:1612 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:429
-  - ✅ `integration.connection.status` — rust crates/oc-plugin-host/src/host/host.js:1619 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:430
-  - ✅ `integration.get` — rust crates/oc-plugin-host/src/host/host.js:1559 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:356
-  - ✅ `integration.list` — rust crates/oc-plugin-host/src/host/host.js:1555 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:355
-  - ✅ `integration.oauth.cancel` — rust crates/oc-plugin-host/src/host/host.js:1585 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:370
-  - ✅ `integration.oauth.complete` — rust crates/oc-plugin-host/src/host/host.js:1581 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:366
-  - ✅ `integration.oauth.connect` — rust crates/oc-plugin-host/src/host/host.js:1573 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:361
-  - ✅ `integration.oauth.status` — rust crates/oc-plugin-host/src/host/host.js:1577 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:365
-  - ✅ `integration.reload` — rust crates/oc-plugin-host/src/host/host.js:1641 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:426
-  - ✅ `integration.transform` — rust crates/oc-plugin-host/src/host/host.js:1651 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:386
-  - ✅ `location.directory` — rust crates/oc-plugin-host/src/host/host.js:1002 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:293
-  - ✅ `mcp.list` — rust crates/oc-plugin-host/src/host/host.js:1054 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:434
-  - ✅ `mcp.reload` — rust crates/oc-plugin-host/src/host/host.js:1051 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:436
-  - ✅ `mcp.transform` — rust crates/oc-plugin-host/src/host/host.js:1038 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:435
-  - ✅ `model.default` — rust crates/oc-plugin-host/src/host/host.js:1350 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:344
-  - ✅ `model.list` — rust crates/oc-plugin-host/src/host/host.js:1342 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:343
-  - ✅ `model.reload` — rust crates/oc-plugin-host/src/host/host.js:1354 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:346
-  - ✅ `model.transform` — rust crates/oc-plugin-host/src/host/host.js:1359 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:345
-  - ✅ `options` — rust crates/oc-plugin-host/src/host/host.js:1007 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:294
-  - ✅ `permission.get` — rust crates/oc-plugin-host/src/host/host.js:1188 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:442
-  - ✅ `permission.hook` — rust crates/oc-plugin-host/src/host/host.js:1183 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:439
-  - ✅ `permission.list` — rust crates/oc-plugin-host/src/host/host.js:1184 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:441
-  - ✅ `permission.reply` — rust crates/oc-plugin-host/src/host/host.js:1192 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:443
-  - ✅ `plugin.list` — rust crates/oc-plugin-host/src/host/host.js:995 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:446
-  - ✅ `provider.get` — rust crates/oc-plugin-host/src/host/host.js:1315 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:350
-  - ✅ `provider.list` — rust crates/oc-plugin-host/src/host/host.js:1311 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:349
-  - ✅ `provider.reload` — rust crates/oc-plugin-host/src/host/host.js:1320 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:352
-  - ✅ `provider.transform` — rust crates/oc-plugin-host/src/host/host.js:1323 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:351
-  - ✅ `reference.list` — rust crates/oc-plugin-host/src/host/host.js:1379 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:449
-  - ✅ `reference.reload` — rust crates/oc-plugin-host/src/host/host.js:1383 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:451
-  - ✅ `reference.transform` — rust crates/oc-plugin-host/src/host/host.js:1386 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:450
-  - ✅ `rpc.call` — rust crates/oc-plugin-host/src/host/host.js:1836 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:77
-  - ✅ `rpc.register` — rust crates/oc-plugin-host/src/host/host.js:1781 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:77
-  - ✅ `session.command` — rust crates/oc-plugin-host/src/host/host.js:1158 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:591
-  - ✅ `session.compact` — rust crates/oc-plugin-host/src/host/host.js:1159 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:592
-  - ✅ `session.context` — rust crates/oc-plugin-host/src/host/host.js:1153 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:598
-  - ✅ `session.create` — rust crates/oc-plugin-host/src/host/host.js:1150 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:584
-  - ✅ `session.generate` — rust crates/oc-plugin-host/src/host/host.js:1157 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:590
-  - ✅ `session.get` — rust crates/oc-plugin-host/src/host/host.js:1151 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:585
-  - ✅ `session.hook` — rust crates/oc-plugin-host/src/host/host.js:1149 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:580
-  - ✅ `session.interrupt` — rust crates/oc-plugin-host/src/host/host.js:1152 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:594
-  - ✅ `session.move` — rust crates/oc-plugin-host/src/host/host.js:1163 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:596
-  - ✅ `session.prompt` — rust crates/oc-plugin-host/src/host/host.js:1156 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:589
-  - ✅ `session.remove` — rust crates/oc-plugin-host/src/host/host.js:1162 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:586
-  - ✅ `session.switchAgent` — rust crates/oc-plugin-host/src/host/host.js:1165 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:587
-  - ✅ `session.switchModel` — rust crates/oc-plugin-host/src/host/host.js:1166 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:588
-  - ✅ `session.synthetic` — rust crates/oc-plugin-host/src/host/host.js:1160 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:593
-  - ✅ `session.update` — rust crates/oc-plugin-host/src/host/host.js:1161 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:595
-  - ✅ `session.wait` — rust crates/oc-plugin-host/src/host/host.js:1164 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:597
-  - ✅ `shell.hook` — rust crates/oc-plugin-host/src/host/host.js:1199 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:601
-  - ✅ `skill.list` — rust crates/oc-plugin-host/src/host/host.js:1118 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:455
-  - ✅ `skill.reload` — rust crates/oc-plugin-host/src/host/host.js:1115 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:457
-  - ✅ `skill.transform` — rust crates/oc-plugin-host/src/host/host.js:1102 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:456
-  - ✅ `storage.get` — rust crates/oc-plugin-host/src/host/host.js:1869 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:460
-  - ✅ `storage.remove` — rust crates/oc-plugin-host/src/host/host.js:1876 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:462
-  - ✅ `storage.scan` — rust crates/oc-plugin-host/src/host/host.js:1879 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:463
-  - ✅ `storage.set` — rust crates/oc-plugin-host/src/host/host.js:1873 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:461
-  - ✅ `tool.hook` — rust crates/oc-plugin-host/src/host/host.js:1144 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:504
-  - ✅ `tool.list` — rust crates/oc-plugin-host/src/host/host.js:1141 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:467
-  - ✅ `tool.reload` — rust crates/oc-plugin-host/src/host/host.js:1138 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:466
-  - ✅ `tool.transform` — rust crates/oc-plugin-host/src/host/host.js:1125 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:471
-  - ✅ `vcs.base` — rust crates/oc-plugin-host/src/host/host.js:1216 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:509
-  - ✅ `vcs.branch` — rust crates/oc-plugin-host/src/host/host.js:1225 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:511
-  - ✅ `vcs.diff` — rust crates/oc-plugin-host/src/host/host.js:1240 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:514
-  - ✅ `vcs.get` — rust crates/oc-plugin-host/src/host/host.js:1212 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:508
-  - ✅ `vcs.reload` — rust crates/oc-plugin-host/src/host/host.js:1220 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:515
-  - ✅ `vcs.status` — rust crates/oc-plugin-host/src/host/host.js:1236 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:513
-  - ✅ `vcs.transform` — rust crates/oc-plugin-host/src/host/host.js:1252 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:516
-  - ✅ `websearch.providers` — rust crates/oc-plugin-host/src/host/host.js:1422 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:540
-  - ✅ `websearch.query` — rust crates/oc-plugin-host/src/host/host.js:1426 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:541
-  - ✅ `websearch.reload` — rust crates/oc-plugin-host/src/host/host.js:1430 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:542
-  - ✅ `websearch.transform` — rust crates/oc-plugin-host/src/host/host.js:1433 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:543
-  - ✅ `worktree.create` — rust crates/oc-plugin-host/src/host/host.js:1499 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:560
-  - ✅ `worktree.list` — rust crates/oc-plugin-host/src/host/host.js:1491 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:559
-  - ✅ `worktree.refresh` — rust crates/oc-plugin-host/src/host/host.js:1506 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:562
-  - ✅ `worktree.reload` — rust crates/oc-plugin-host/src/host/host.js:1485 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:563
-  - ✅ `worktree.remove` — rust crates/oc-plugin-host/src/host/host.js:1503 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:561
-  - ✅ `worktree.transform` — rust crates/oc-plugin-host/src/host/host.js:1510 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:564
+  - ✅ `agent.get` — rust crates/oc-plugin-host/src/host/host.js:1126 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:296
+  - ✅ `agent.list` — rust crates/oc-plugin-host/src/host/host.js:1123 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:297
+  - ✅ `agent.reload` — rust crates/oc-plugin-host/src/host/host.js:1120 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:299
+  - ✅ `agent.transform` — rust crates/oc-plugin-host/src/host/host.js:1107 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:298
+  - ✅ `aisdk.hook` — rust crates/oc-plugin-host/src/host/host.js:1300 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:302
+  - ✅ `app.version` — rust crates/oc-plugin-host/src/host/host.js:1095 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:292
+  - ✅ `command.list` — rust crates/oc-plugin-host/src/host/host.js:1190 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:308
+  - ✅ `command.reload` — rust crates/oc-plugin-host/src/host/host.js:1189 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:322
+  - ✅ `command.transform` — rust crates/oc-plugin-host/src/host/host.js:1157 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:309
+  - ✅ `event.subscribe` — rust crates/oc-plugin-host/src/host/host.js:2006 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:325
+  - ✅ `experimental.terminal.read` — rust crates/oc-plugin-host/src/host/host.js:1499 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:336
+  - ✅ `generate.text` — rust crates/oc-plugin-host/src/host/host.js:1268 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:340
+  - ✅ `integration.command.cancel` — rust crates/oc-plugin-host/src/host/host.js:1694 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:381
+  - ✅ `integration.command.connect` — rust crates/oc-plugin-host/src/host/host.js:1686 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:373
+  - ✅ `integration.command.status` — rust crates/oc-plugin-host/src/host/host.js:1690 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:377
+  - ✅ `integration.connect.key` — rust crates/oc-plugin-host/src/host/host.js:1662 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:358
+  - ✅ `integration.connection.active` — rust crates/oc-plugin-host/src/host/host.js:1700 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:428
+  - ✅ `integration.connection.resolve` — rust crates/oc-plugin-host/src/host/host.js:1707 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:429
+  - ✅ `integration.connection.status` — rust crates/oc-plugin-host/src/host/host.js:1714 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:430
+  - ✅ `integration.get` — rust crates/oc-plugin-host/src/host/host.js:1654 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:356
+  - ✅ `integration.list` — rust crates/oc-plugin-host/src/host/host.js:1650 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:355
+  - ✅ `integration.oauth.cancel` — rust crates/oc-plugin-host/src/host/host.js:1680 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:370
+  - ✅ `integration.oauth.complete` — rust crates/oc-plugin-host/src/host/host.js:1676 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:366
+  - ✅ `integration.oauth.connect` — rust crates/oc-plugin-host/src/host/host.js:1668 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:361
+  - ✅ `integration.oauth.status` — rust crates/oc-plugin-host/src/host/host.js:1672 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:365
+  - ✅ `integration.reload` — rust crates/oc-plugin-host/src/host/host.js:1736 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:426
+  - ✅ `integration.transform` — rust crates/oc-plugin-host/src/host/host.js:1746 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:386
+  - ✅ `location.directory` — rust crates/oc-plugin-host/src/host/host.js:1097 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:293
+  - ✅ `mcp.list` — rust crates/oc-plugin-host/src/host/host.js:1149 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:434
+  - ✅ `mcp.reload` — rust crates/oc-plugin-host/src/host/host.js:1146 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:436
+  - ✅ `mcp.transform` — rust crates/oc-plugin-host/src/host/host.js:1133 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:435
+  - ✅ `model.default` — rust crates/oc-plugin-host/src/host/host.js:1445 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:344
+  - ✅ `model.list` — rust crates/oc-plugin-host/src/host/host.js:1437 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:343
+  - ✅ `model.reload` — rust crates/oc-plugin-host/src/host/host.js:1449 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:346
+  - ✅ `model.transform` — rust crates/oc-plugin-host/src/host/host.js:1454 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:345
+  - ✅ `options` — rust crates/oc-plugin-host/src/host/host.js:1102 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:294
+  - ✅ `permission.get` — rust crates/oc-plugin-host/src/host/host.js:1283 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:442
+  - ✅ `permission.hook` — rust crates/oc-plugin-host/src/host/host.js:1278 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:439
+  - ✅ `permission.list` — rust crates/oc-plugin-host/src/host/host.js:1279 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:441
+  - ✅ `permission.reply` — rust crates/oc-plugin-host/src/host/host.js:1287 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:443
+  - ✅ `plugin.list` — rust crates/oc-plugin-host/src/host/host.js:1090 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:446
+  - ✅ `provider.get` — rust crates/oc-plugin-host/src/host/host.js:1410 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:350
+  - ✅ `provider.list` — rust crates/oc-plugin-host/src/host/host.js:1406 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:349
+  - ✅ `provider.reload` — rust crates/oc-plugin-host/src/host/host.js:1415 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:352
+  - ✅ `provider.transform` — rust crates/oc-plugin-host/src/host/host.js:1418 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:351
+  - ✅ `reference.list` — rust crates/oc-plugin-host/src/host/host.js:1474 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:449
+  - ✅ `reference.reload` — rust crates/oc-plugin-host/src/host/host.js:1478 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:451
+  - ✅ `reference.transform` — rust crates/oc-plugin-host/src/host/host.js:1481 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:450
+  - ✅ `rpc.call` — rust crates/oc-plugin-host/src/host/host.js:1931 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:77
+  - ✅ `rpc.register` — rust crates/oc-plugin-host/src/host/host.js:1876 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:77
+  - ✅ `session.command` — rust crates/oc-plugin-host/src/host/host.js:1253 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:591
+  - ✅ `session.compact` — rust crates/oc-plugin-host/src/host/host.js:1254 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:592
+  - ✅ `session.context` — rust crates/oc-plugin-host/src/host/host.js:1248 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:598
+  - ✅ `session.create` — rust crates/oc-plugin-host/src/host/host.js:1245 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:584
+  - ✅ `session.generate` — rust crates/oc-plugin-host/src/host/host.js:1252 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:590
+  - ✅ `session.get` — rust crates/oc-plugin-host/src/host/host.js:1246 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:585
+  - ✅ `session.hook` — rust crates/oc-plugin-host/src/host/host.js:1244 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:580
+  - ✅ `session.interrupt` — rust crates/oc-plugin-host/src/host/host.js:1247 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:594
+  - ✅ `session.move` — rust crates/oc-plugin-host/src/host/host.js:1258 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:596
+  - ✅ `session.prompt` — rust crates/oc-plugin-host/src/host/host.js:1251 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:589
+  - ✅ `session.remove` — rust crates/oc-plugin-host/src/host/host.js:1257 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:586
+  - ✅ `session.switchAgent` — rust crates/oc-plugin-host/src/host/host.js:1260 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:587
+  - ✅ `session.switchModel` — rust crates/oc-plugin-host/src/host/host.js:1261 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:588
+  - ✅ `session.synthetic` — rust crates/oc-plugin-host/src/host/host.js:1255 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:593
+  - ✅ `session.update` — rust crates/oc-plugin-host/src/host/host.js:1256 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:595
+  - ✅ `session.wait` — rust crates/oc-plugin-host/src/host/host.js:1259 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:597
+  - ✅ `shell.hook` — rust crates/oc-plugin-host/src/host/host.js:1294 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:601
+  - ✅ `skill.list` — rust crates/oc-plugin-host/src/host/host.js:1213 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:455
+  - ✅ `skill.reload` — rust crates/oc-plugin-host/src/host/host.js:1210 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:457
+  - ✅ `skill.transform` — rust crates/oc-plugin-host/src/host/host.js:1197 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:456
+  - ✅ `storage.get` — rust crates/oc-plugin-host/src/host/host.js:1964 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:460
+  - ✅ `storage.remove` — rust crates/oc-plugin-host/src/host/host.js:1971 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:462
+  - ✅ `storage.scan` — rust crates/oc-plugin-host/src/host/host.js:1974 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:463
+  - ✅ `storage.set` — rust crates/oc-plugin-host/src/host/host.js:1968 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:461
+  - ✅ `tool.hook` — rust crates/oc-plugin-host/src/host/host.js:1239 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:504
+  - ✅ `tool.list` — rust crates/oc-plugin-host/src/host/host.js:1236 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:467
+  - ✅ `tool.reload` — rust crates/oc-plugin-host/src/host/host.js:1233 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:466
+  - ✅ `tool.transform` — rust crates/oc-plugin-host/src/host/host.js:1220 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:471
+  - ✅ `vcs.base` — rust crates/oc-plugin-host/src/host/host.js:1311 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:509
+  - ✅ `vcs.branch` — rust crates/oc-plugin-host/src/host/host.js:1320 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:511
+  - ✅ `vcs.diff` — rust crates/oc-plugin-host/src/host/host.js:1335 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:514
+  - ✅ `vcs.get` — rust crates/oc-plugin-host/src/host/host.js:1307 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:508
+  - ✅ `vcs.reload` — rust crates/oc-plugin-host/src/host/host.js:1315 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:515
+  - ✅ `vcs.status` — rust crates/oc-plugin-host/src/host/host.js:1331 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:513
+  - ✅ `vcs.transform` — rust crates/oc-plugin-host/src/host/host.js:1347 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:516
+  - ✅ `websearch.providers` — rust crates/oc-plugin-host/src/host/host.js:1517 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:540
+  - ✅ `websearch.query` — rust crates/oc-plugin-host/src/host/host.js:1521 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:541
+  - ✅ `websearch.reload` — rust crates/oc-plugin-host/src/host/host.js:1525 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:542
+  - ✅ `websearch.transform` — rust crates/oc-plugin-host/src/host/host.js:1528 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:543
+  - ✅ `worktree.create` — rust crates/oc-plugin-host/src/host/host.js:1594 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:560
+  - ✅ `worktree.list` — rust crates/oc-plugin-host/src/host/host.js:1586 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:559
+  - ✅ `worktree.refresh` — rust crates/oc-plugin-host/src/host/host.js:1601 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:562
+  - ✅ `worktree.reload` — rust crates/oc-plugin-host/src/host/host.js:1580 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:563
+  - ✅ `worktree.remove` — rust crates/oc-plugin-host/src/host/host.js:1598 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:561
+  - ✅ `worktree.transform` — rust crates/oc-plugin-host/src/host/host.js:1605 · ref /opt/opencode-ref/packages/plugin/src/promise/adapter.ts:564
 
 ### 已知锚点核对（登记册背书逐项）
 
@@ -175,8 +177,8 @@
 
 ## Census 裁定
 
-- 轴 1 已裁定：125/125（覆盖率 125/125 = 100.0%：双侧全集逐项归属）；轴 2 已裁定：13/13（全部 REF_ONLY，逐项登记册背书标注）。
-- 结论：轴 1 REF_ONLY 1 项为缺口候选；RUST_ONLY 29 项中 27 项有登记册背书；轴 2 13 项 REF_ONLY 均落 G-28 族声明范围（G-148②/G-239/G-331/G-332）。
+- 轴 1 已裁定：127/127（覆盖率 127/127 = 100.0%：双侧全集逐项归属）；轴 2 已裁定：13/13（全部 REF_ONLY，逐项登记册背书标注）。
+- 结论：轴 1 REF_ONLY 1 项为缺口候选；RUST_ONLY 31 项中 29 项有登记册背书；轴 2 13 项 REF_ONLY 均落 G-28 族声明范围（G-148②/G-239/G-331/G-332）。
 
 ## 验证记录
 

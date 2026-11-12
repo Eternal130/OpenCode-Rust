@@ -28,6 +28,9 @@
 
 > **2026-11-12 第二十五轮 burndown 收口（gap-burndown-13）**：第二十四轮可行动项 G-384/G-385/G-387/G-388 + G-230 die 前置（18 内建 Output 声明）经 lanes A-C 串行落地合并 main（`b97f6ee5`/`75d746a7`/`80995995`+`58174fd4`+`7be6317b`），逐条 ✅；每 lane 独立评审（Lane C 经一轮 fix round：校验器补 `const` 关键字后复审通过）。census 复跑：PLUGIN-API REF_ONLY 3→1（余 rpc.events=G-295 ✅ 提取器口径）、ENV-VARS REF_ONLY 63→59（LOG_LEVEL/TERM_PROGRAM_VERSION/TMUX/STY 转 BOTH）、TOOLS die 面 18/18+die 在位（提取器随新形状更新）。**无 opentui-rust 依赖的上游阻挡项**；唯一上游阻挡=G-247 残余全局 Bun/process 面（Bun 运行时钉死，已标注搁置）。明细见文末「第二十五轮 burndown 收口」节。
 
+> **2026-11-12 第二十五轮增补收口（gap-burndown-13 amendment）**：用户下令把登记/搁置态的 G-239/G-331（session.panel+PanelInput）、G-332（markdown 代码块渲染器注册链）、G-333（node 备轨）、G-272⑩（mini 样式化滚动回写）转修复，经 lanes H/I/J/K 串行落地合并 main（`78cbda37`/`b6d66a5f`/`06232e6c`/`6fea30de`）+ opentui-rust 三提交（`a8e41e9`/`5a079fa`/`34a5ac4`，oc pin 56a9eda→34a5ac4），逐条 ✅；Lane H/K 各经一轮 fix round 后复审通过；opentui 差分 127 IDENTICAL 零重钉。G-28 生态 breaking 声明面相应收窄（见 G-28 增补轮勘注）。明细见文末「第二十五轮增补收口」节。
+
+
 
 > **2026-11-10 第二十二轮（全功能逐行对比审查 parity-line-review-v2024：27 lane + P1/FINAL 双门）**：对 ref v2.0.24 与当前树做第四轮独立全量逐行对读（27 条域 lane：oc-core×12 / oc-ai×5 / oc-tui×4 / server·client·cli·acp·plugin-host·schema-util×6，双侧 file:line 证据、不采信已有审查文档），两道 oracle 一致性门裁定 5 处跨 lane 矛盾、抽查 11/11 成立、0 未裁定矛盾。**新立项 G-334..G-383（50 项：🔴×12 / 🟡×22 / 🟢 簇×16）**；归类既有 12 处、撤销初报 1 条、勘正旧勘误 1 处（R17#13 locale_duration 括注）。核心新事实：CodeMode 沙箱逃逸残余具体化（`__rawFetch`/eval/Function/限位仅桥上，G-334）、WebSocketSeams 与 permission.evaluate 两条插件钩子生产断线（G-337/G-338）、非持久 PTY reader 逐 chunk lossy UTF-8（G-335）、中断后 hosted 工具多发持久 tool.failed（G-336）、媒体 provider 协议全移植但部署接线为零（G-347，产品级）、cloudflare-ai-gateway 网关语义全降级（G-348）、TUI 时长格式化 `%10_000` 取模 bug（G-341）与 stdin 双读竞争（G-342）。总报告 `docs/audit/port-parity-line-review/{REPORT,TABLE}.md`，32 份 lane/门原始报告归档 `docs/audit/port-parity-line-review/lanes/`。正面互证：keybind 230/230、主题资产 33+1 md5 全等、openapi 141 operation 字节级 0 diff、48 迁移 ID 全同、52 会话事件分类一致、models-dev 快照 md5 相同、session-message parts 全集无缺漏。
 
@@ -203,6 +206,7 @@
 - rust 有 JSX 面（host.js:1857-1900 @opentui/solid shim 的 createElement/setProp/insert + supervisor.rs:1051-1111 ui.slot.register/router.register），但渲染树跨 IPC 时拍平为 `{title, rows, clickable}` 有界结构（supervisor.rs:964-966）。无任意组件树/markdown code-block renderer 注册面。
 - 行式插件（sidebar 类）可跑；富 TSX 布局插件无法忠实渲染。ℹ️ 属有界化设计而非疏漏，但需作为插件生态 breaking change 显式声明。
 - 2026-11-10 勘注：族成员清单转正入册——**G-332**（插件 markdown 代码块渲染器注册链缺失，第十九轮 L16 发现原仅归类本条备注）、**G-333**（node 运行时备轨不移植，bun-only+托管下载兜底）；另有 G-148②（effect API）、G-289（单 guest per-Location）、G-313（npm 启动安装）为族内既有条目。发布说明应按此清单声明生态面。
+- **2026-11-12 增补轮勘注（族面收窄）**：G-332（markdown 渲染器注册链，有界行形状）与 G-331/G-239（session.panel slot+PanelInput，有界 claim 形状）、G-333（node 备轨，FEASIBLE-BOUNDED）均已落地——发布说明的生态 breaking 声明面相应收窄为：TSX 渲染保真度（panel/代码块内容为有界行形状而非任意 renderable 树）、G-148②（effect 导入面）、G-289（单 guest per-Location）、G-313（npm 启动安装）、node 轨加载限制（无扩展名导入/.tsx）。
 
 ### G-29 ✅(bounded) TUI 插件管理页：安装/更新/检查流无操作
 - rust command_palette.rs:2905-2909 有插件列表+active 翻转+错误详情；但 `plugins.install | dialog.plugins.install | update | check` 显式 `Dispatch::Handled` 无操作（:3033-3047，注释 "registered-but-surfaceless"）。ref system/plugins.tsx 358 行完整管理 UI。CLI `opencode plugin add` 可绕过。
@@ -1487,11 +1491,12 @@ G-165..G-210 全部 ✅（G-177 前轮已闭；G-211/212 维持 ℹ️ 登记）
 ### G-238 ℹ️ heap 快照（SIGUSR1）/CPU profile（SIGPROF）不移植（cli；V8 平台性）
 - ref `cli/src/heap.ts`（v8.writeHeapSnapshot）、`cpu-profile.ts`（inspector Profiler），index.ts:82-83 生产接线；rust 全仓 grep 零命中，V8 inspector 依赖结构性不可移植。native 侧可选替代路径：pprof/tokio-console。登记为平台性范围裁剪（G-17 族体例）。
 
-### G-239 ℹ️ 插件 panel/PanelHost 双形态豁免正式登记（tui/plugin；G-28 族）
+### G-239 ✅ 插件 panel/PanelHost 双形态豁免正式登记（tui/plugin；G-28 族）——已解除豁免并激活
 - ref `packages/plugin/src/tui/context.ts:165-177,501-507`（ctx.ui.panel.open/close/current + toggleFullscreen）+ `tui/src/context/panel.tsx:12-39`（width>80 双形态）+ panel-host.tsx。
 - rust `oc-plugin-host/ui.rs` 无 panel API；`oc-tui/components/plugin_slots.rs:43-51` 注释明言 session.panel "deliberately UNMOUNTED documented exemption"（注引 "G-04"，非本册条目）。本条将该豁免裁决正式入册（G-28 生态 breaking 声明并列）；若后续需要再补 panel 形态。
 - 2026-11-08 勘注：plugin_slots.rs 豁免注引已订正（G-04→G-239，gb9 lane10）。
 - 2026-11-10 勘注：激活规格（基建评估 + 最小实现路径 ~300-450 行 + 触发条件）已立目 **G-331**；2026-11-10 X-B 核查确认现状不变（仍 unmounted、无消费方）。
+- **2026-11-12 第二十五轮增补收口 ✅（gb13-laneI `34550de6`/`b6d66a5f`）**：用户下令激活——豁免解除，`session.panel` 入 MOUNTED_SLOT_PATHS（豁免注释收窄至仅 session.composer.top），panel 形态全量落地（详见 G-331 增补注）。
 
 ### G-240 ℹ️ opencode-pty 二进制免 sha256 钉扎（oc-core；RW-T2 已自declare）
 - ref `persistent-pty/binary.bun.ts:17-85`：嵌入式资产安装全程 sha256 校验+缓存复验、uid 属主校验、符号链接拒绝（lstat）、0700、原子 rename。
@@ -1695,6 +1700,7 @@ azure：ref azure.ts:189-313（ResourceGraph→deployments 分页→模型收窄
 catalog（无 agent catalog/无刷新，runtime.rs:275-276/1140）；footer 路由族（FooterKey 仅 10 键 lifecycle.rs:98-112——ctrl+p/agent/model/variant/settings/queued-menu（ref footer.ts:752）与 findFiles 不可达）；每轮 switchAgent/switchModel（仅 ctrl+t）；prompt parts 附件（RunPrompt 仅 {text,shell,delivery} queue.rs:20-26；ref types.ts:37-52 RunPromptPart+`<file name>` 包裹）；`!` shell 直通**半接线**（queue.rs:22-23 解析 shell 模式但 run_turn runtime.rs:792-820 无执行臂，死字段）；inbox 队列操作 UI（仅 len 显示 runtime.rs:682-686；ref QueuedPromptAction）；session.background；根会话 session.renamed（子代理标题在 transport.rs:1395）；**SIGINT（ref runtime.lifecycle.ts:9 两击退出+草稿清理；rust kill -INT 默认终止）**；终端标题；verbosity 三档预设；样式化滚动回写 surface（Text/Code/Markdown/高亮/主题色/图片预览整层缺）；TOOL_RULES 完整文案/view 门/structuredFallback；usage 显示+step.failed 错误行（transport.rs:206 step.* 全 Ignored）；**重连 hydrate 不恢复 pending permission/form（族内最重）**：runtime.rs:890-916 仅消息+inbox；ref transport.ts:952-1004 并行 permission.list+form.list+session.active→syncBlockers。建议拆 2-3 条落地，优先 hydrate blockers ≈ footer 路由族/catalog。
 
 - 2026-11-09 第十八轮勘注：15 子项中 ①-⑨ + lane1 的 5 个优先块全部落地（hydrate blockers/footer 路由族/catalog/usage+step.failed/renamed 由 gb10-lane1 落地）；⑩ 样式化滚动回写 surface 登记为有界偏离（mini mono 直写惯例，G-68/G-134 同族先例；ref 为 ≈1410 行 renderable 层）。
+- **2026-11-12 第二十五轮增补收口 ⑩ ✅（gb13-laneK，opentui-rust `a8e41e9`/`5a079fa`/`34a5ac4` + oc `fad7fd8`/`6ae37997`/`6fea30de`）**：用户下令落地——opentui-core `ExternalOutputCommit` 增 styled 载荷（`Option<Vec<CapturedLine>>`，None=plain 路径字节恒等；`transcript_bytes`/`row_widths` 分派：styled 转储 SGR 行+行宽按 span 文本图距计（不数 ANSI，含 raw-mode CR 排除修），`commit_rows_styled` 经 `get_span_lines()` 提取）+ PORT-MATRIX 记账；差分 127 IDENTICAL 零重钉（无场景构造 commit，可证不受影响）；oc 侧 rev bump 56a9eda→34a5ac4 + `mini/entry_styled.rs` 按 ref kind 映射样式化发射（assistant markdown 走 `render_markdown`、reasoning→code(markdown)、工具 Code 快照 filetype 委托 G-302 `filetype_for_path` 表（含 js→typescript 归一）、user/system/error 按 entryLook 着色、oklab 量化色），经 `write_styled_to_scrollback`→styled commit 走同一 FIFO/flush；mono 开关全程保留（`Lifecycle::set_mono` 实时达写入手，footer.ts:932 对位；mono=true=旧 plain 路径字节恒等、exit splash 不动）；append-only 契约保持。有界偏离：逐 chunk 独立渲染（ref 为累计内容+committedRows/Blocks 高水位——跨 chunk 构造按块解析，mono 同粒度）；主题基座 fallback_dark（OSC 探针实时换肤 v1 范围外）；图片预览 v1 范围外。
 ### G-273 ✅ 编辑器集成族（打包四子项，前二为主）
 ① at_mentioned 完全缺失（ref editor.ts:242-247→mentionListeners；editor_ide.rs 零命中）。② IDE 锁文件仅启动解析一次：editor_ide.rs:213-227 重连恒用同一连接（注释自认）；ref editor.ts:175-176 每次 connect() 重跑 resolveEditorConnection——中途重启/切换 IDE 后上下文静默失效。③ Zed contents 失败不回退读盘（editor_zed.rs:132-135 仅 Ok(None) 读盘，Err 直接 Unavailable；ref editor-zed.ts:63-67 失败或 null 都 readFile）。④ is_dir vs existsSync（🟢）。修法：②重连重跑 discover；③Err 臂补读盘。
 
@@ -2208,20 +2214,23 @@ G-291..G-312 全部维持未闭合（22/22）；本轮更新波次（fmt/clippy/
 - 缺口：护栏纯手工——CI（ci.yml/release.yml）无任何二进制体积记录/门（2026-11-10 X-A 核查 grep 零命中）；M-retire 后 release 68,144,160 B ≈ 64.98 MiB 的数据点只活在 ROADMAP 日志里。**后果**：G-13 的重评条件（体积复核）无法执行；后续任何 lane 都可能在无感知下把默认二进制推过 67.6 顶。
 - 修法：CI 增 release 构建体积记录 + 软门（超 67.6 MiB 报警/硬门按裁决），一条 workflow 的事。立本项目体：把「护栏存在但不可执行」从隐性状态转为盯守项。
 
-### G-331 ℹ️ G-239 激活规格入册：session.panel slot 与 PanelInput API 的最小实现路径
+### G-331 ✅ G-239 激活规格入册：session.panel slot 与 PanelInput API 的最小实现路径
 - 现状（2026-11-10 X-B 核查）：`oc-plugin-host/ui.rs` 无 panel 符号；`plugin_slots.rs:46` session.panel 明列 deliberate unmounted，`tests/plugin_ui_slot.rs:146-150` 断言其保持 unmounted；无 PanelInput（focus/close，ref context.ts:168-178）对应面。
 - 激活规格（X-B 评估，基建已部分具备）：① `session.panel` 入 MOUNTED_SLOT_PATHS；② dock 区 renderable 承载 claim 输出（mini split-footer dock 几何 + 共享树 mount 通道 plugin_boot.rs:376-381 现成）；③ PanelInput focus()/close() 以宿主有界命令对实现（render_slot_claim 同款通道）；④ 键路由 KeyPipeline 分流。规模 ~300-450 行。
 - 触发条件：出现认领该 slot 的 shipping plugin。未触发前维持 G-239 豁免（无消费方不建面）。
+- **2026-11-12 第二十五轮增补收口 ✅（gb13-laneI `34550de6`）**：用户下令激活，规格全量落地——①`session.panel` 入 MOUNTED_SLOT_PATHS+豁免测试翻转；②**右侧 pane**（对齐 ref session-frame：rightPane 优先级 panel>terminal>sidebar、与 terminal 互斥、宽度>80 docked 于 session_pane_width、窄幅 fullscreen 接管隐藏会话列、路由切换关闭），pane 体经 plugin_page_solid 承载有界 claim 输出；③guest 面 `ui.panel.open`（deferred reply 返回 ref 布尔路由判定）/`close`（owner 范围释放）/`current()`（宿主推送 tui.panel 视图），PanelInput props `{name,sessionID,width,presentation,focused}` 驱动指纹重物化；④KeyPipeline `panel_focus_live` 臂（对话框先行、escape 关闭、插件键位层可达、未绑定消费）+鼠标命中聚焦。PTY `pty_session_panel.rs`（docked/窄幅 fullscreen/聚焦/关闭）+ CI 双 filter 更新。有界偏离：claim 内容为 G-28 有界行形状（非活 TSX）；focus/toggleFullscreen 闭包不可跨线（focus=鼠标/键宿主面，toggleFullscreen v1 省略）；面板行点击 v1 未接 transcript 命中层。
 
-### G-332 ℹ️ G-28 族成员转正①：插件 markdown 代码块渲染器注册链缺失
+### G-332 ✅ G-28 族成员转正①：插件 markdown 代码块渲染器注册链缺失
 - ref：`packages/plugin/src/tui/api.tsx:168-176` + `plugin/markdown.ts`——插件可注册自定义语言代码块渲染器。
 - rust：全 crates 无对应（第十九轮 L16 通道发现，当时仅归类 G-28 备注，从未立目）。**用户可见后果**：依赖该 API 的第三方插件在 rust 宿主静默失效（无报错）。
 - 维持 G-28 生态 breaking change 声明族；本条转正入册供发布说明引用与将来按需恢复（恢复路径：host.js markdown 注册面 + oc-tui markdown.rs 渲染分派缝）。
+- **2026-11-12 第二十五轮增补收口 ✅（gb13-laneH `c9c7afb6`/`4b93504d`/`78cbda37`）**：用户下令落地——guest 面 `ctx.markdown.registerCodeBlockRenderer`（空语言/插件内重复报错文案 ref 逐字、dispose 幂等、G-293 快照/复辟/退役全镜像）→ supervisor `markdown.renderer.register/unregister` 臂 → registrations `markdown_renderers` 表（Clone 保持）→ facade `render_markdown_block`（硬超时）→ oc-tui `plugin_markdown.rs` 分派表（`info_string_to_filetype` 归一键控；**插件表先于 latex/mermaid 内建咨询**=ref last-wins 遮蔽语义）+ 内容哈希缓存（表指纹+syntax_hash 盐；miss→本帧默认路径+`offload_bounded` 异步渲染→缓存+重绘；in-flight 去重防每帧重派）+ `BlockSpec::CodeBlock` 臂接入。空表=默认路径字节恒等（goldens 未动全绿）。有界偏离：注册期键归一在消费侧（"ts"+"typescript" 同插件不报重复、错误文案用原始语言名）；未归一语言静默死信（ref 报错）；行形状为有界 {title,rows}（title 并入首行）；transcript 行 v1 不可点击；缓存 miss 首帧为默认渲染（ref 同帧同步替换）。评审 F1（websearchExecutors 快照行误删）经 fix round 修复复原。
 
-### G-333 ℹ️ G-28 族成员转正②：插件运行时单轨 bun-only（node 备轨不移植）
+### G-333 ✅ G-28 族成员转正②：插件运行时单轨 bun-only（node 备轨不移植）
 - ref：`plugin/src/source.bun.ts` / `source.node.ts` 双运行时实现。
 - rust：仅 bun 子进程（`oc-plugin-host/lib.rs:1-7`、`bun.rs:1-13`）；缺 bun 时=插件子系统禁用+单条日志，另有 oc_util::bunman 托管钉定 1.3.10 下载兜底（非纯降级，2026-11-09 V-D 核查）。**用户可见后果**：无 bun 且不可下载环境（离线/受限网络）插件功能整体不可用——ref 的 node 路径可跑。
 - 维持 G-28 族裁决；转正入册供发布说明引用。
+- **2026-11-12 第二十五轮增补收口 ✅（gb13-laneJ `06232e6c`）**：用户下令落地——`GuestRuntime{Bun,Node}`+解析链 `OC_PLUGIN_BUN`（显式终决，同 bunman 语义）→ **`OC_PLUGIN_NODE`（显式强制 node，即使 bun 在场——实现者裁决修正：置于 bun 链前，否则 override 在有 bun 机器上恒空转；双 override 并设 bun 胜出）** → bun 链（cache//usr/local/PATH/~/.bun）→ PATH node → bunman 下载 → 禁用；spawn 按轨选二进制（node 加 `--disable-warning=ExperimentalWarning`，ref nodeExecArgv 姿态）；sandbox 物化 `package.json {"type":"module"}`（双运行时确定性 ESM）；host.js `BunShim`（模块作用域、**不上 globalThis**）覆盖生产面全部 3 个 Bun API（`file().text()`→node:fs、`Transpiler.scanImports`→有界正则扫描返回字符串、`version`→node-<ver>）。真 node 22.22 本机 e2e×3（hello_world/hot_reload/globalThis.Bun undefined）+解析单测 6 行裁决表+全量 bun 套件不动全绿。有界偏离：node 轨插件代码不可加载无扩展名相对导入与 `.tsx` 条目（无 registerHooks/JSX 移植）；热重载 import-graph 为正则保真（失败按不可解析降级）；node 下 `globalThis.Bun===undefined`（沙箱面收窄=更安全）。评审注记：坏 `OC_PLUGIN_BUN` 显式终决后若仍有插件条目会走 bunman 下载兜底（既有 bunman 行为，模块文档已澄清）。
 
 ## 第四类补立判定
 
@@ -2776,3 +2785,32 @@ G-384/G-385/G-387/G-388 ✅；G-230 die 前置+die 分支 ✅（census 盯守翻
 
 - **复扫结论**：14 通道全量重跑，12/14 与修复方刷新后的报告逐字节一致（HTTP 附录与 ENV-VARS 行号漂移为预期差）；G-384/G-385/G-387/G-388 与 G-230 die 面**经代码级独立确认**（host.js:1641/:1651、oc-util/logging.rs:54、oc-tui/system.rs:47——TMUX :51 一并接线、超出翻绿清单；registry.rs:422 die 分支在位、18/18 声明，oc-core tool::registry 17/17 PASS）。PLUGIN-API 现 BOTH 95 / REF_ONLY 1（rpc.events=G-295 维持）；RPC BOTH 76 / REF_ONLY 13（integration.reload 转双侧）。修复轮新增 3 个扁平化键并入 G-386 注记。
 - **flake 观察登记（一次性）**：`oc-plugin-host::g384_integration` 于本次复扫中出现单次失败（同调用内 2 try 均 ~2s 快败），随后单跑与原过滤条件合计 **18/18 PASS（含 10 连压测）**，不复现。假设：测试前四个文件读（reload/list/methods/got）为无轮询立即读，`wait_ready` 只保证宿主就绪，guest 写文件存在竞窗（done.json 已用 wait_for，前四读未用）。建议低成本加固：前四读同样包 `wait_for`。按白名单纪律先登记观察，两次独立复现再升级处置；**不构成产品缺口**。
+
+---
+
+# 第二十五轮增补收口（2026-11-12，gap-burndown-13 amendment：G-239/G-331/G-332/G-333/G-272⑩）
+
+> 用户下令将登记册中登记/搁置态四项转修复。经 lanes H/I/J/K 串行落地：每 lane 独立 worktree（`.worktrees/gb13-lane{H,I,J,K}`，合并后回收、分支已清）、dev-gate 单入口、nextest 未过滤证据、每 lane 合并门复跑 + 独立评审（oracle）过门后合并；Lane H/K 各一轮 REQUEST_CHANGES→fix→复审通过。Lane K 跨仓：opentui-rust 三提交直落其 main 并推送（git rev pin 解析所需，G-177 先例）+ oc 侧 rev bump；**opentui 差分 127 IDENTICAL 零重钉**（可证：无场景构造 ExternalOutputCommit）。一切门命令全量 tee 落盘 `.test-logs/*gb13*`。
+
+## 逐 lane 落地清单
+
+- **laneH `c9c7afb6`+`4b93504d`+`78cbda37`（G-332 markdown 渲染器注册链）**：guest `ctx.markdown.registerCodeBlockRenderer`（ref 逐字错误文案/dispose 幂等/G-293 快照镜像）→ supervisor 臂 → registrations 表 → facade `render_markdown_block` → oc-tui `plugin_markdown.rs` 分派表（归一键控、**插件表先于 latex/mermaid**=ref last-wins）+ 内容哈希缓存 + offload 异步升级 + `BlockSpec::CodeBlock` 接入；空表默认路径字节恒等。合并门 1769/1769。评审 fix round：websearchExecutors 快照行误删复原 + in-flight 清理 + 缓存失效钉定测试。
+- **laneI `34550de6`+`b6d66a5f`（G-239/G-331 panel 激活）**：session.panel 入 MOUNTED_SLOT_PATHS；右侧 pane（panel>terminal>sidebar 优先级、terminal 互斥、>80 docked/窄幅 fullscreen、路由切换关闭）；guest `ui.panel.open`（deferred 布尔回执）/close（owner 释放）/current（tui.panel 推送）；PanelInput props 指纹重物化；KeyPipeline panel_focus_live 臂+鼠标聚焦；PTY `pty_session_panel.rs`+CI 双 filter。合并门 2213/2213 + pty profile 1644/1644。
+- **laneJ `06232e6c`（G-333 node 备轨）**：`GuestRuntime{Bun,Node}` 解析链（OC_PLUGIN_BUN 显式终决→**OC_PLUGIN_NODE 显式强制（置于 bun 链前——实现者裁决修正，否则有 bun 机器上恒空转）**→bun 链→PATH node→bunman 下载→禁用）；spawn 选轨；sandbox `package.json {"type":"module"}`；host.js BunShim（模块作用域，覆盖生产面全部 3 个 Bun API，不上 globalThis=沙箱面收窄）。真 node e2e×3 + 解析单测 6 行裁决表 + bun 套件不动全绿（541/541×2）。
+- **laneK（G-272⑩ 样式化滚动回写）**：opentui-rust `a8e41e9`（ExternalOutputCommit styled 载荷 + transcript_bytes/row_widths 分派（SGR 行宽不数 ANSI）+ commit_rows_styled）+ `5a079fa`（PORT-MATRIX）+ `34a5ac4`（raw-mode CR 行宽修）；oc `fad7fd8`（rev bump 56a9eda→34a5ac4 + `mini/entry_styled.rs` 按 ref kind 映射样式化发射：markdown/代码高亮/entryLook 着色/oklab 量化）+ `6ae37997`（fix round：`set_mono` 实时达写入手（footer.ts:932 对位）+ filetype 委托 G-302 表（js→typescript 归一）+ 逐 chunk 粒度偏离文档化）+ `6fea30de`（fmt）。工作区 5907/5907 + pty profile 1973/1973 + 差分 127 IDENTICAL。
+
+## census 增补复跑（14 通道全跑）
+
+- ENV-VARS：RUST_ONLY 43→**44**（`OC_PLUGIN_NODE` 新增，G-333 产物有据）；EVENTS/PLUGIN-API/RPC 仅锚点漂移与新 rust 面（markdown.renderer.*/ui.panel.*），无新 REF_ONLY。
+- HTTP-SURFACE 手写「验证记录」节再生成后回贴（维护口径同前）。
+
+## 有界偏离（增补轮新增，均已代码注释或条目登记）
+
+- G-332：消费侧归一（同插件 "ts"/"typescript" 不报重复、错误文案用原始名）；未归一语言静默死信；有界行形状（title 并入首行）；首帧默认渲染后异步升级；transcript 行 v1 不可点击。
+- G-239/G-331：claim 内容 G-28 有界行形状；focus/toggleFullscreen 闭包不跨线（focus=宿主鼠标/键面，toggleFullscreen v1 省略）；面板行点击 v1 未接；面板 deferred open 无超时（与 dialog seam 共有属性，评审注记）。
+- G-333：node 轨不可加载无扩展名相对导入/.tsx 条目；热重载 import-graph 正则保真；`globalThis.Bun===undefined`（更窄=更安全）；坏 OC_PLUGIN_BUN + 插件条目存在时仍走 bunman 下载兜底（既有语义，文档澄清）。
+- G-272⑩：逐 chunk 独立渲染（ref 累计+高水位）；fallback_dark 主题基座（OSC 实时换肤范围外）；图片预览范围外；mono=true 旧 plain 路径字节恒等保留。
+
+## 第二十五轮增补判定
+
+G-239 ✅ / G-331 ✅ / G-332 ✅ / G-333 ✅ / G-272⑩ ✅（五项全部从 ℹ️/bounded 转 ✅）；G-28 生态 breaking 声明面收窄（见 G-28 增补轮勘注）。census 增补复跑无新 REF_ONLY。现存未关闭项=文档化决策族（G-12/G-16/G-17/G-28（收窄面）/G-32/G-38/G-39/G-40/G-49/G-148②/G-161①/G-163/G-164/G-200②/G-211(OBSOLETE)/G-212/G-238/G-240/G-247 残余(上游阻挡)/G-289/G-290/G-313..G-318/G-326/G-328/G-329/G-386/G-389/G-390）——均为登记项。**无 opentui-rust 依赖的上游阻挡项**。证据：lane 报告 `.superpowers/sdd/gb13/lane{H,I,J,K}-report.md`、门日志 `.test-logs/*gb13lane{H,I,J,K}*`、opentui 差分 `opentui-diff*-gb13laneK.log`。

@@ -16,8 +16,8 @@
 
 ## Census
 
-- rust 读取面：119 个字面名（另动态 6 处）；ref 读取面：135 个字面名（另动态 10 处）
-- **BOTH：76** · REF_ONLY：**59** · RUST_ONLY：**43**（全集 178，逐项归属，覆盖率 100%）
+- rust 读取面：120 个字面名（另动态 6 处）；ref 读取面：135 个字面名（另动态 10 处）
+- **BOTH：76** · REF_ONLY：**59** · RUST_ONLY：**44**（全集 179，逐项归属，覆盖率 100%）
 
 ### REF_ONLY（ref 读取、rust 不读 → 缺口候选）
 
@@ -131,12 +131,13 @@
 - 🔗 `OC_BUILD_PROFILE` — rust: compile crates/oc-cli/src/main.rs:54
 - 🔗 `OC_BUILD_STAMP` — rust: compile crates/oc-server/src/lifecycle.rs:35
 - 🔗 `OC_FRAME_BUDGET_SCALE` — rust: read crates/oc-tui/src/frame_budget_tests.rs:52
-- 🔗 `OC_PLUGIN_BUN` — rust: indirect crates/oc-util/src/bunman.rs:0
+- 🔗 `OC_PLUGIN_BUN` — rust: indirect crates/oc-plugin-host/src/bun.rs:0; indirect crates/oc-util/src/bunman.rs:0
+- 🔗 `OC_PLUGIN_NODE` — rust: indirect crates/oc-plugin-host/src/bun.rs:0
 - 🔗 `OC_PTY_DAEMON` — rust: read crates/oc-core/src/persistent_pty/frontend.rs:54
 - 🔗 `OC_RELEASE_TAG` — rust: read crates/oc-cli/build.rs:18; read crates/oc-server/build.rs:67; compile crates/oc-cli/src/services/updater.rs:46
   - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [2270]
-- 🔗 `OC_TUI_DEBUG` — rust: read crates/oc-tui/src/app.rs:1337; read crates/oc-tui/src/app.rs:1432
-- 🔗 `OC_TUI_TEST_RENDER_PANIC` — rust: read crates/oc-tui/src/app.rs:3361
+- 🔗 `OC_TUI_DEBUG` — rust: read crates/oc-tui/src/app.rs:1347; read crates/oc-tui/src/app.rs:1442
+- 🔗 `OC_TUI_TEST_RENDER_PANIC` — rust: read crates/oc-tui/src/app.rs:3424
 - 🔗 `OPENCODE_ACP_DEBUG` — rust: read crates/oc-cli/src/acp/service.rs:335; read crates/oc-cli/src/acp/transport.rs:65
 - 🔗 `OPENCODE_APP_ARCHIVE` — rust: read crates/oc-server/build.rs:42
 - 🔗 `OPENCODE_APP_ASSETS` — rust: read crates/oc-server/src/app_archive.rs:354
@@ -192,7 +193,7 @@
 - ✅ `OPENCODE_CHANNEL` — rust: read crates/oc-server/src/observability.rs:139; read crates/oc-tui/src/storage.rs:74; compile crates/oc-core/src/engine/skills.rs:105 | ref: read /opt/opencode-ref/packages/app/vite.js:46; read /opt/opencode-ref/packages/app/vite.js:50
 - ✅ `OPENCODE_CLIENT` — rust: read crates/oc-core/src/session/runner/model_request.rs:75; write crates/oc-cli/src/acp/mod.rs:114 | ref: read /opt/opencode-ref/packages/cli/src/commands/handlers/default.ts:98; read /opt/opencode-ref/packages/cli/src/index.ts:129; write /opt/opencode-ref/packages/cli/src/commands/handlers/acp.ts:16
 - ✅ `OPENCODE_CLI_CONFIG_CONTENT` — rust: read crates/oc-core/src/cli_config/mod.rs:472 | ref: read /opt/opencode-ref/packages/cli/src/config/config.ts:32; read /opt/opencode-ref/packages/cli/src/config/config.ts:33
-- ✅ `OPENCODE_CONFIG` — rust: read crates/oc-core/src/config.rs:438; read crates/oc-tui/src/plugin_boot.rs:153 | ref: read /opt/opencode-ref/packages/cli/src/server-process.ts:117
+- ✅ `OPENCODE_CONFIG` — rust: read crates/oc-core/src/config.rs:438; read crates/oc-tui/src/plugin_boot.rs:162 | ref: read /opt/opencode-ref/packages/cli/src/server-process.ts:117
 - ✅ `OPENCODE_CONFIG_CONTENT` — rust: read crates/oc-core/src/config.rs:442 | ref: read /opt/opencode-ref/packages/cli/src/server-process.ts:118
 - ✅ `OPENCODE_CONFIG_DIR` — rust: indirect crates/oc-util/src/global_roots.rs:98 | ref: read /opt/opencode-ref/packages/cli/src/index.ts:120; read /opt/opencode-ref/packages/cli/src/index.ts:120
 - ✅ `OPENCODE_CONFIG_PROJECT_DISABLE` — rust: read crates/oc-core/src/config.rs:398; indirect crates/oc-server/src/server_process_env.rs:87 | ref: read /opt/opencode-ref/packages/cli/src/server-process.ts:115
@@ -203,7 +204,7 @@
 - ✅ `OPENCODE_DISABLE_MODELS_FETCH` — rust: indirect crates/oc-server/src/server_process_env.rs:78 | ref: read /opt/opencode-ref/packages/cli/src/server-process.ts:110
 - ✅ `OPENCODE_DISABLE_PROJECT_CONFIG` — rust: read crates/oc-core/src/config.rs:399; indirect crates/oc-server/src/server_process_env.rs:87 | ref: read /opt/opencode-ref/packages/cli/src/server-process.ts:115
 - ✅ `OPENCODE_EDITOR_SSE_PORT` — rust: read crates/oc-tui/src/editor_ide.rs:161 | ref: read /opt/opencode-ref/packages/tui/src/context/editor.ts:117
-- ✅ `OPENCODE_FAST_BOOT` — rust: read crates/oc-tui/src/app.rs:8207 | ref: read /opt/opencode-ref/packages/tui/src/app.tsx:351
+- ✅ `OPENCODE_FAST_BOOT` — rust: read crates/oc-tui/src/app.rs:8270 | ref: read /opt/opencode-ref/packages/tui/src/app.tsx:351
 - ✅ `OPENCODE_GIT_BASH_PATH` — rust: read crates/oc-core/src/shell/select.rs:172 | ref: read /opt/opencode-ref/packages/cli/src/server-process.ts:121; read /opt/opencode-ref/packages/cli/src/services/updater.ts:186
 - ✅ `OPENCODE_LOG_LEVEL` — rust: read crates/oc-ai/src/protocols/anthropic_messages.rs:638; read crates/oc-util/src/logging.rs:54 | ref: read /opt/opencode-ref/packages/util/src/observability/logging.ts:165
 - ✅ `OPENCODE_MODELS_PATH` — rust: indirect crates/oc-server/src/server_process_env.rs:77 | ref: read /opt/opencode-ref/packages/cli/src/server-process.ts:109
@@ -219,7 +220,7 @@
 - ✅ `OPENCODE_SSH_ASKPASS_TOKEN` — rust: read crates/oc-cli/src/ssh_askpass.rs:22 | ref: read /opt/opencode-ref/packages/cli/src/ssh-askpass.ts:24
 - ✅ `OPENCODE_TEST_HOME` — rust: indirect crates/oc-util/src/global_roots.rs:74; write crates/oc-cli/src/services/updater.rs:1524 | ref: read /opt/opencode-ref/packages/util/src/global.ts:17
 - ✅ `OPENCODE_TUI_CHANNEL` — rust: read crates/oc-tui/src/storage.rs:69 | ref: read /opt/opencode-ref/packages/cli/src/commands/handlers/default.ts:100
-- ✅ `OPENCODE_ZED_DB` — rust: read crates/oc-tui/src/app.rs:4163 | ref: read /opt/opencode-ref/packages/tui/src/editor-zed.ts:189
+- ✅ `OPENCODE_ZED_DB` — rust: read crates/oc-tui/src/app.rs:4226 | ref: read /opt/opencode-ref/packages/tui/src/editor-zed.ts:189
 - ✅ `OTEL_EXPORTER_OTLP_ENDPOINT` — rust: read crates/oc-server/src/observability.rs:138 | ref: read /opt/opencode-ref/packages/cli/src/index.ts:127; read /opt/opencode-ref/packages/util/src/observability.ts:22
 - ✅ `OTEL_EXPORTER_OTLP_HEADERS` — rust: read crates/oc-server/src/observability.rs:144 | ref: read /opt/opencode-ref/packages/cli/src/index.ts:128; read /opt/opencode-ref/packages/util/src/observability.ts:23
 - ✅ `OTEL_RESOURCE_ATTRIBUTES` — rust: read crates/oc-server/src/observability.rs:75 | ref: read /opt/opencode-ref/packages/util/src/observability/otlp.ts:30
@@ -231,7 +232,7 @@
 - ✅ `SSH_ASKPASS_PROMPT` — rust: read crates/oc-cli/src/ssh_askpass.rs:29 | ref: read /opt/opencode-ref/packages/cli/src/ssh-askpass.ts:26
 - ✅ `STY` — rust: read crates/oc-tui/src/system.rs:53 | ref: read /opt/opencode-ref/packages/tui/src/util/system.ts:18
 - ✅ `TERM` — rust: read crates/oc-core/src/engine/skills.rs:202; read crates/oc-tui/src/components/command_palette.rs:1691 | ref: read /opt/opencode-ref/packages/core/src/plugin/skill.ts:83; read /opt/opencode-ref/packages/core/src/plugin/skill.ts:83
-- ✅ `TERM_PROGRAM` — rust: read crates/oc-core/src/engine/skills.rs:201; read crates/oc-tui/src/app.rs:4158 | ref: read /opt/opencode-ref/packages/core/src/plugin/skill.ts:82; read /opt/opencode-ref/packages/core/src/plugin/skill.ts:82
+- ✅ `TERM_PROGRAM` — rust: read crates/oc-core/src/engine/skills.rs:201; read crates/oc-tui/src/app.rs:4221 | ref: read /opt/opencode-ref/packages/core/src/plugin/skill.ts:82; read /opt/opencode-ref/packages/core/src/plugin/skill.ts:82
 - ✅ `TERM_PROGRAM_VERSION` — rust: read crates/oc-tui/src/system.rs:47 | ref: read /opt/opencode-ref/packages/tui/src/util/system.ts:17; read /opt/opencode-ref/packages/tui/src/util/system.ts:17
 - ✅ `TMUX` — rust: read crates/oc-tui/src/system.rs:51 | ref: read /opt/opencode-ref/packages/tui/src/util/system.ts:18
 - ✅ `VERTEX_LOCATION` — rust: indirect crates/oc-ai/src/protocols/vertex.rs:64 | ref: read /opt/opencode-ref/packages/ai/src/providers/google-vertex-shared.ts:28; read /opt/opencode-ref/packages/core/src/plugin/provider/google-vertex.ts:22
@@ -241,12 +242,12 @@
 - ✅ `XDG_DATA_HOME` — rust: indirect crates/oc-util/src/global_roots.rs:96 | ref: read /opt/opencode-ref/packages/desktop/src/main/native/logging.ts:259; read /opt/opencode-ref/packages/util/src/global-roots.ts:5; write /opt/opencode-ref/packages/desktop/src/main/lifecycle/configure.ts:67
 - ✅ `XDG_STATE_HOME` — rust: read crates/oc-server/src/lifecycle.rs:89; indirect crates/oc-util/src/global_roots.rs:100 | ref: read /opt/opencode-ref/packages/client/src/service-probe.ts:19; read /opt/opencode-ref/packages/desktop/src/main/lifecycle/environment.ts:26; write /opt/opencode-ref/packages/desktop/src/main/lifecycle/configure.ts:70
 - ✅ `ZDOTDIR` — rust: read crates/oc-cli/src/services/updater.rs:1326 | ref: read /opt/opencode-ref/packages/cli/src/commands/handlers/uninstall.ts:141
-- ✅ `ZED_TERM` — rust: read crates/oc-tui/src/app.rs:4157 | ref: read /opt/opencode-ref/packages/tui/src/context/editor.ts:121
+- ✅ `ZED_TERM` — rust: read crates/oc-tui/src/app.rs:4220 | ref: read /opt/opencode-ref/packages/tui/src/context/editor.ts:121
 
 ## Census 裁定
 
-- 已裁定 178/178（全集逐项归属，覆盖率 100%）。
-- RUST_ONLY 43 项中 6 项有 GAPS-AND-PITFALLS.md 背书（有据分歧，如 OPENCODE_PTY_BIN）；其余为待登记 rust 旋钮。
+- 已裁定 179/179（全集逐项归属，覆盖率 100%）。
+- RUST_ONLY 44 项中 6 项有 GAPS-AND-PITFALLS.md 背书（有据分歧，如 OPENCODE_PTY_BIN）；其余为待登记 rust 旋钮。
 - REF_ONLY 59 项中：共享包侧 23 项已逐项定性（裁定表：已文档化缺口/缺口候选/有据分歧/生态资产不适用/注册表族待集成通道）；ref 独有包 36 项为生态胶水（非本移植进程边界）。
 
 ## 提取不确定性
