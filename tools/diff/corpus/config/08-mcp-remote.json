@@ -1,0 +1,1 @@
+{"mcp":{"servers":{"r1":{"type":"remote","url":"https://example.com/sse","headers":{"a":"b"}}}}}

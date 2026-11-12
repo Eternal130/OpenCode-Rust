@@ -2821,3 +2821,27 @@ G-239 ✅ / G-331 ✅ / G-332 ✅ / G-333 ✅ / G-272⑩ ✅（五项全部从 �
 - **运行时证据**：oc-plugin-host 全量 134/134 PASS（含 panel/markdown/node 族）、oc-tui entry_styled 12/12 + scrollback 14/14 PASS。
 - **census 侧新增记账**：PLUGIN-API RUST_ONLY 29→31（`markdown.registerCodeBlockRenderer`、`ui.panel`——G-332/G-239 产物，ref 对应面在 tui 入口而非 server-ctx，属入口形状差非缺口）；ENV-VARS RUST_ONLY 43→44（`OC_PLUGIN_NODE`=G-333 旋钮，已由 435ee145 记账）。**REF_ONLY 无新增，缺口候选 0**。
 - **上轮 flake 跟踪**：`g384_integration` 本轮复扫（oc-plugin-host 全量含该测试 134/134）未见复发；观察维持登记。
+
+---
+
+# 第二十六轮（2026-11-12，差分层通道 1：配置解析语义差分）
+
+> 方法：同一 corpus（43 例，合法/畸形/边界/JSONC/未知键/v1 形状）喂双侧**纯函数管线**（jsonc-parse → normalize → Info decode），归一化（kind 小写、诊断排序、encoded 键序排序）后逐字段对拍。ref 侧 bun 驱动（staging + node_modules 链接，ref 仓库 git 树未动，`bun install --frozen-lockfile` 4833 包）；rust 侧 env 门控集成测试（`CONFIG_DIFF_CORPUS/OUT`，未设时零成本）。工具：`tools/diff/{config_parse.py,corpus/config/,drivers/config_ref.ts}` + `crates/oc-core/tests/config_diff_driver.rs`；报告 `docs/audit/diff/CONFIG-PARSE.md`。
+
+## 结果
+
+**MATCH 41/43 · DIVERGE 2 · MISSING 0**（覆盖率 43/43；json-parse/normalize 判定/诊断三元组/decode 判定四字段全对齐，含 malformed、JSONC 容错、未知键、大小写、重复键、UNSUPPORTED 族）。
+
+### G-391 🟡 provider `Model.cost` 序列化缺 `skip_serializing_if` → 往返物化 `"cost": null`（wire 可观察）
+- rust：`oc-schema/src/config/provider.rs:130-131` `cost: Option<CostList>` 是该结构体 13 个字段中**唯一**缺 `skip_serializing_if = "Option::is_none"` 的字段——normalize 的类型化往返（normalize.rs `decode_provider_entry` decode→re-serialize）把缺省 cost 物化为显式 null；`Info.providers`（config/mod.rs:134）内嵌同型，`GET /api/config`（handlers/config.rs:39 `serde_json::to_value(entry)`）在 wire 上为每个已配置 provider model 输出 `"cost": null`。
+- ref：normalize（schema 变换，optional 保留缺省）与 GET config 均不出现该键（provider.ts:88 optional）。
+- 影响：客户端可见 wire 差异；Info decode 不受影响（null 与缺省同归 None，decode_ok 双侧一致）；潜在语义面=任何把"显式 null"当"覆盖为免费/未知"的消费者。
+- 修法：一行——`Model.cost` 补 `skip_serializing_if = "Option::is_none"`（保留 `deserialize_with`）；差分复跑即验证。
+- 出处：diff CONFIG-PARSE `13-provider-models`。
+
+### 归类与复认
+- `16-experimental` 分歧（rust 保留 `experimental.file_retention.cleanup_interval`、ref 静默剥除）= **G-390** rust 超集旋钮的预期表现，有据分歧非新缺口。ref 剥除未知 experimental 键不发诊断——与 rust 行为一致（18-unknown-nested 对齐）。
+
+## 第二十六轮判定
+
+差分层首通道即产出 1 项 wire 级新缺口（G-391）+ 1 项既有背书复认（G-390），验证了"存在性全面 ≠ 等价性全面"的预判：census CONFIG-KEYS 曾确认键集与默认值对齐，但**序列化物化**只有差分能抓到。修复优先序：G-391（一行）→ 差分复扫。后续差分通道按成本升序：ACP 转译 → SSE store 投影 → JSON Schema 校验器对拍 → /compact 管线 → HTTP 全量。
