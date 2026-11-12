@@ -30,7 +30,7 @@ pub const PLACEMENT_KINDS: [&str; 5] = ["prepend", "append", "before", "after", 
 /// rendered `{title, rows}` claims land as prepend/append rows in
 /// the composer footer hint list / the home screen's hint list, per
 /// the ref `SlotMap`, packages/plugin/src/tui/context.ts:191-204).
-pub const MOUNTED_SLOT_PATHS: [&str; 8] = [
+pub const MOUNTED_SLOT_PATHS: [&str; 9] = [
     "app",
     "sidebar.content",
     "sidebar.footer",
@@ -39,14 +39,14 @@ pub const MOUNTED_SLOT_PATHS: [&str; 8] = [
     "prompt.footer",
     "prompt.footer.status",
     "prompt.footer.file",
+    // G-239/G-331 — the session panel's interactive mount
+    // (panel-host.tsx:36-53 renders `<Slot path="session.panel">`
+    // inside the right pane's focusable box).
+    "session.panel",
 ];
 
 // Deliberately UNMOUNTED paths (documented exemptions):
 //
-// * `session.panel` — the interactive PanelInput API (focus()/
-//   close(), context.ts:168-178) has no native surface; no shipping
-//   plugin claims it (the registered exemption, G-239 in
-//   docs/GAPS-AND-PITFALLS.md).
 // * `session.composer.top` — rows above the composer input need a
 //   new PromptView layout surface (not a trivial addition beside
 //   the footer faces); skipped in this pass.

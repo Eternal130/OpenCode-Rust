@@ -291,18 +291,41 @@ pub fn render_session(
     // TUI-4 — `rightPane()` (session-frame.tsx:112-118): a SELECTED
     // terminal takes the right pane over the sidebar (the precedence
     // chain's `selectedTerminal()` leg).
-    let terminal_pane = store.terminal_pane_mounted(session_id);
+    // G-239/G-331 — the PANEL heads the precedence chain
+    // (session-frame.tsx:112-117: panel > open-sidebar > terminal >
+    // sidebar); the store already enforces mutual exclusion at the
+    // seams (opening a panel drops the selected terminal, selecting
+    // a terminal closes the panel) — the render-level gate is the
+    // belt-and-braces twin.
+    let session_panel = store.session_panel_mounted(session_id);
+    let terminal_pane =
+        if session_panel.is_some() { None } else { store.terminal_pane_mounted(session_id) };
     // G-287③ — the right pane's width follows the persisted/preferred
     // value (`paneResize.size()`, session-frame.tsx:45-56): the
     // default stays the equal split; the drag-resize seeds the store.
     let terminal_width = terminal_pane.as_ref().map(|_| store.session_pane_width(content_width));
-    let sidebar_shown = terminal_pane.is_none() && store.sidebar_shown(session_id, content_width);
+    let sidebar_shown = session_panel.is_none()
+        && terminal_pane.is_none()
+        && store.sidebar_shown(session_id, content_width);
     // The session column's padding (v2's prompt mounts inside
     // paddingLeft/Right 2): the composer `┃` and footer paste at x2.
     let inset = 2;
     let sidebar_docked = sidebar_shown && content_width > SIDEBAR_AUTO_BREAKPOINT;
     let sidebar_overlay = sidebar_shown && !sidebar_docked;
-    let column = if let Some(terminal_width) = terminal_width {
+    // G-239/G-331 — the panel pane's geometry (panel.tsx:14-15 +
+    // session-frame.tsx:329-331): `canSplit = width > 80`; a NARROW
+    // frame is a FULLSCREEN takeover (the session column hides —
+    // `visible={!fullscreen()}`), not an overlay. Docked, the pane is
+    // the right-side leg at `paneResize.size()` columns.
+    let panel_fullscreen = store.session_panel_fullscreen(content_width);
+    let panel_width = if session_panel.is_some() {
+        if panel_fullscreen { content_width } else { store.session_pane_width(content_width) }
+    } else {
+        0
+    };
+    let column = if session_panel.is_some() {
+        if panel_fullscreen { 0 } else { content_width.saturating_sub(panel_width) }
+    } else if let Some(terminal_width) = terminal_width {
         content_width.saturating_sub(terminal_width)
     } else if sidebar_docked {
         content_width - crate::components::session_tabs::SESSION_SIDEBAR_WIDTH
@@ -408,6 +431,18 @@ pub fn render_session(
             // `height − rows` like the composer (the paste anchor).
             crate::components::location_missing::LOCATION_MISSING_ROWS,
             crate::components::location_missing::LOCATION_MISSING_ROWS,
+            None,
+            None,
+        )
+    } else if session_panel.is_some() && panel_fullscreen {
+        // G-239/G-331 — the fullscreen panel hides the session column
+        // (`visible={!fullscreen()}`, session-frame.tsx:279-281): the
+        // prompt mount is replaced by an empty frame exactly like the
+        // picker's takeover, and nothing of the composer paints.
+        (
+            crate::components::chrome_solid::blank_frame(0, 0),
+            0,
+            0,
             None,
             None,
         )
@@ -991,6 +1026,80 @@ pub fn render_session(
         );
         let () = store.terminal_pane_sync(session_id, pane_size, column + shift, content_top);
     }
+    // G-239/G-331 — the session panel's pane (panel-host.tsx:8-64):
+    // the focusable `#session-panel` box — a docked RIGHT-SIDE leg
+    // (raised surface, `paneResize.size()` columns) or, when narrow,
+    // the FULLSCREEN takeover hiding the session column. The body is
+    // the bounded claim content (title + rows — the sidebar pane's
+    // paste mechanics; BOUNDED DEVIATION: one materialize per state
+    // change, not live reactive TSX; rows clip to the pane width).
+    if session_panel.is_some() {
+        let panel = store.session_panel().expect("mounted above");
+        let pane_height = height - content_top;
+        let origin_x = column + shift;
+        // The mounted claim's content (the route-name title until the
+        // bounded materialize lands — the plugin-route pattern).
+        let section = store
+            .plugin_slot_sections("session.panel")
+            .into_iter()
+            .find(|section| section.plugin_id == panel.plugin_id);
+        let title =
+            section.as_ref().filter(|s| !s.title.is_empty()).map_or_else(
+                || panel.name.clone(),
+                |section| section.title.clone(),
+            );
+        let rows = section.as_ref().map_or_else(Vec::new, |section| section.rows.clone());
+        let pane = crate::components::plugin_page_solid::plugin_page_solid_frame(
+            &title,
+            &rows,
+            styles,
+            (
+                u16::try_from(panel_width).unwrap_or(u16::MAX),
+                u16::try_from(pane_height).unwrap_or(u16::MAX),
+            ),
+        );
+        paste(&mut frame, &pane, origin_x, content_top);
+        // The props' `width` input + the focus-target rect (the mouse
+        // arm's `onMouseDown → focus`).
+        store.set_panel_width(panel_width);
+        store.set_panel_rect(Some(crate::store::HitRect {
+            x: origin_x,
+            y: content_top,
+            width: panel_width.max(1),
+            height: pane_height.max(1),
+        }));
+        // The content's clickable rows ride the generic plugin click
+        // sink (the same registry the sidebar rows use — mutually
+        // exclusive panes, so the rects never collide). Body row i
+        // sits at panel-local y 3+i over columns [2, width−1]
+        // (plugin_page_solid's geometry).
+        let mut hits = crate::store::PluginSectionHits {
+            session_id: session_id.to_owned(),
+            rows: Vec::new(),
+        };
+        if let Some(section) = section {
+            for (index, clickable) in section.clickable.iter().enumerate() {
+                if *clickable && index < rows.len() {
+                    hits.rows.push(crate::store::PluginRowHit {
+                        plugin_id: section.plugin_id.clone(),
+                        row: index,
+                        rect: crate::store::HitRect {
+                            x: origin_x + 2,
+                            y: content_top + 3 + index,
+                            width: panel_width.saturating_sub(3).max(1),
+                            height: 1,
+                        },
+                    });
+                }
+            }
+        }
+        store.set_plugin_section_hits(hits);
+    } else {
+        // Unmounted: clear the stale focus rect (a hidden pane must
+        // not zombie-focus). The plugin rows registry is already
+        // cleared by the sidebar else-branch above.
+        store.set_panel_rect(None);
+    }
     frame
 }
 
@@ -1013,6 +1122,11 @@ pub fn render_session_composed(
 /// `clampSessionPaneWidth` (ui/layout.ts:22-26): the pane keeps the
 /// equal split when both minima cannot fit; `max(min(24, half),
 /// min(width, max(half, total − 44)))`.
+/// G-239/G-331 — the panel split breakpoint (`canSplit =
+/// width() > 80`, context/panel.tsx:14): at or below 80 content
+/// columns the panel is a FULLSCREEN takeover, never a docked leg.
+pub const PANEL_CAN_SPLIT_BREAKPOINT: usize = 80;
+
 pub(crate) fn clamp_session_pane_width(width: usize, total: usize) -> usize {
     let half = (total / 2).max(1);
     width.min(half.max(total.saturating_sub(44))).max(24.min(half))

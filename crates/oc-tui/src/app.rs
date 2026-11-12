@@ -1069,6 +1069,16 @@ impl App {
                             return;
                         }
                     }
+                    // G-239/G-331 — the panel pane's focus grab
+                    // (panel-host.tsx:32: `onMouseDown → focus`): a
+                    // release inside the pane (outside the clickable
+                    // rows above) moves the input scope to the panel.
+                    if let Some(rect) = self.store.panel_rect() {
+                        if rect.contains(col, row) {
+                            self.store.set_panel_focused(true);
+                            return;
+                        }
+                    }
                 }
                 // #33 — the footer location label opens the Working
                 // directory select on release
@@ -1913,6 +1923,15 @@ impl App {
             if stroke.key == "return" && !stroke.ctrl && !stroke.alt {
                 self.store.open_worktrees_dialog();
             }
+        } else if self.panel_focus_live() {
+            // G-239/G-331 — the focused panel's input scope
+            // (panel-host.tsx:32/60-62: the focusable box inside
+            // InteractivityProvider(focused) — the keymap layers'
+            // commands resolve, an unbound stroke is consumed by the
+            // panel, and escape closes (focus back to the session
+            // pane). Dialogs/forms/permission already branched above
+            // (ref-faithful: they preempt the panel's keys).
+            self.stroke_in_panel(&stroke);
         } else {
             self.stroke_on_route(&stroke);
         }
@@ -1934,6 +1953,50 @@ impl App {
     fn picker_live(&self) -> bool {
         matches!(self.store.route(), crate::store::Route::Session { session_id, .. }
             if self.store.picker_live(&session_id))
+    }
+
+    /// G-239/G-331 — the session panel holds the input scope
+    /// (`activePane === "right"` over a mounted panel,
+    /// session-frame.tsx:70/140-145).
+    fn panel_focus_live(&self) -> bool {
+        self.store.panel_focused()
+            && matches!(self.store.route(), Route::Session { session_id, .. }
+                if self.store.session_panel_mounted(&session_id).is_some())
+    }
+
+    /// The focused panel's key walk (InteractivityProvider(focused)
+    /// + the focusable `#session-panel` box, panel-host.tsx:32/60-62):
+    /// reachable keymap commands dispatch (a plugin's `<plugin>::cmd`
+    /// layer binds ride the owned surface); escape closes (focus
+    /// falls back to the session pane); every other unbound stroke is
+    /// consumed — the panel never types into the composer under it.
+    fn stroke_in_panel(&mut self, stroke: &KeyStroke) {
+        match self.keymap.lookup(stroke.clone(), &self.clock) {
+            Outcome::Command { command, .. } if command == "app.exit" => {
+                // The exit chord still exits from the panel's scope
+                // (the ref's global keymap keeps the base chords over
+                // the focusable panel box).
+                self.request_exit();
+            }
+            Outcome::Command { command, args } => {
+                let dispatch = self.dispatcher.dispatch(&self.store, &command, args.as_deref());
+                if let Dispatch::ServerPending(reason) = dispatch {
+                    let _ = reason;
+                }
+                self.keymap.clear_pending();
+            }
+            Outcome::Pending { .. } | Outcome::Cancelled => {}
+            Outcome::Unhandled => {
+                let plain = !stroke.ctrl && !stroke.alt;
+                if plain && stroke.key == "escape" {
+                    // `panels.close()` — the panel's own dismiss; the
+                    // focus flag falls with it (onTarget(undefined) →
+                    // setActivePane("session")).
+                    self.store.close_session_panel();
+                }
+                self.keymap.clear_pending();
+            }
+        }
     }
 
     /// The diff viewer's plugin route is mounted (SURF-2).

@@ -31,6 +31,20 @@ fn sandbox() -> PathBuf {
     dir
 }
 
+/// G-239/G-331 — the panelclaim fixture's sandbox twin.
+fn sandbox_panel() -> PathBuf {
+    let dir = PathBuf::from(format!("/tmp/opencode/oc-tui-panel-claim-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("sandbox");
+    std::fs::copy(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../oc-plugin-host/tests/fixtures/panelclaim.ts"),
+        dir.join("panelclaim.ts"),
+    )
+    .expect("fixture copy");
+    dir
+}
+
 fn wait_for(timeout: Duration, mut probe: impl FnMut() -> bool) -> bool {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
@@ -74,6 +88,58 @@ fn boot() -> Option<(
     let store = Store::new(Runtime::new());
     let projection = runtime.attach(&store);
     Some((runtime, store, sandbox, projection.owned))
+}
+
+/// G-239/G-331 — the panel boot twin (the panelclaim fixture through
+/// the same harness).
+fn boot_panel() -> Option<(
+    oc_tui::plugin_boot::TuiPluginRuntime,
+    Store,
+    PathBuf,
+    Vec<oc_tui::keymap::OwnedCommandDef>,
+)> {
+    let sandbox = sandbox_panel();
+    let config = oc_plugin_host::PluginHostConfig {
+        env: vec![("OC_PLUGIN_TEST_SANDBOX".to_owned(), sandbox.display().to_string())],
+        ..oc_plugin_host::PluginHostConfig::default()
+    };
+    let host = Arc::new(
+        oc_plugin_host::PluginHost::detect()
+            .start_detached_with(config, &[sandbox.join("panelclaim.ts")]),
+    );
+    if !host.enabled() {
+        eprintln!("bun unavailable; skipping");
+        return None;
+    }
+    assert!(host.wait_ready(Duration::from_secs(20)), "host ready: {:?}", host.start_error());
+    let booted = oc_tui::plugin_boot::BootedPluginHost {
+        host,
+        resolution: oc_plugin_host::resolve(&[], None),
+        ready: true,
+    };
+    let runtime = oc_tui::plugin_boot::TuiPluginRuntime::new(booted);
+    let store = Store::new(Runtime::new());
+    let projection = runtime.attach(&store);
+    Some((runtime, store, sandbox, projection.owned))
+}
+
+/// Pump helper: drain UI requests until `probe` holds (the deferred
+/// open's resolution + the re-materialize both ride the pump).
+fn pump_until(
+    runtime: &oc_tui::plugin_boot::TuiPluginRuntime,
+    store: &Store,
+    timeout: Duration,
+    mut probe: impl FnMut() -> bool,
+) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        runtime.drain_ui_requests(store);
+        if probe() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    false
 }
 
 /// The pure router resolves the fixture's claims onto the mounted
@@ -137,8 +203,9 @@ fn footer_face_claims_resolve_onto_mounted_paths() {
     }
     assert!(resolution.suppressed.is_empty(), "no suppression: {:?}", resolution.suppressed);
     assert!(resolution.degraded.is_empty(), "no degradation: {:?}", resolution.degraded);
-    // `session.panel` stays unmounted (interactive API — documented
-    // exemption): its claims keep the pre-G-04 degradation.
+    // G-239/G-331 — `session.panel` is MOUNTED (the interactive
+    // PanelInput API's native surface): its claims resolve into
+    // `slotted` like every other mounted path.
     let panel = project_claims(&[oc_plugin_host::registrations::PluginSlotClaim {
         plugin_id: "slotclaims".into(),
         key: "slot#9".into(),
@@ -146,8 +213,8 @@ fn footer_face_claims_resolve_onto_mounted_paths() {
         target: "session.panel".into(),
     }]);
     let panel = resolve_slots(&oc_tui::components::plugin_slots::mounted_paths(), &panel);
-    assert!(panel.slotted.is_empty());
-    assert_eq!(panel.suppressed.len(), 1, "session.panel stays unmounted");
+    assert!(panel.slotted.contains_key("session.panel"), "session.panel slotted");
+    assert!(panel.suppressed.is_empty() && panel.degraded.is_empty());
 }
 
 #[test]
@@ -273,6 +340,152 @@ fn slot_renders_and_clicks() {
     // visible route).
     store.navigate(oc_tui::store::Route::Home);
     assert!(store.plugin_route_page().is_none(), "the plugin page closed");
+
+    runtime.shutdown();
+}
+
+/// G-239/G-331 — the session.panel activation: the deferred open
+/// resolves the route-check boolean, the mounted claim materializes
+/// with its PanelInput props, the pane renders as the right leg, the
+/// fullscreen takeover covers a narrow frame, and the owner-scoped
+/// close tears it down.
+#[test]
+#[allow(clippy::too_many_lines)] // one phase per seam
+fn panel_open_materializes_and_closes() {
+    let Some((runtime, store, sandbox, owned)) = boot_panel() else { return };
+    let host = Arc::clone(&runtime.booted.host);
+    let theme = oc_tui::theme::ThemeState::v2_dark();
+
+    // The open requires a session route (the route-check boolean).
+    store.open_tab("ses_panel", Some("Panel session".to_owned()));
+    store.navigate(oc_tui::store::Route::session("ses_panel"));
+    // The app loop pushes the live size each frame (the props'
+    // presentation input derives from it).
+    store.set_terminal_size((160, 30));
+    assert!(
+        wait_for(Duration::from_secs(10), || sandbox.join("setup-done.txt").exists()),
+        "the fixture setup ran"
+    );
+    runtime.drain_ui_requests(&store);
+
+    // The layer bind is reachable on the owned surface
+    // (`panelclaim::panel.open`).
+    let snapshot = host.registrations();
+    assert!(
+        snapshot.keymap_commands.iter().any(|command| command.id == "panel.open"),
+        "the panel layer landed"
+    );
+    assert!(!owned.is_empty());
+
+    let runner = std::thread::spawn(move || {
+        host.run_keymap_command("panelclaim", "panel.open", Duration::from_secs(10))
+    });
+    assert!(
+        pump_until(&runtime, &store, Duration::from_secs(10), || {
+            store.session_panel().is_some()
+        }),
+        "the open landed in the store"
+    );
+    assert!(runner.join().expect("run thread").expect("run dispatches"));
+    assert!(
+        wait_for(Duration::from_secs(5), || {
+            std::fs::read_to_string(sandbox.join("panel-open.txt"))
+                .is_ok_and(|text| text.trim() == "true")
+        }),
+        "the deferred open resolved true (on a session route)"
+    );
+
+    // The claim re-materialized with the PanelInput props (the pump's
+    // panel fingerprint fired the bounded render).
+    assert!(
+        pump_until(&runtime, &store, Duration::from_secs(10), || {
+            store
+                .plugin_slot_sections("session.panel")
+                .iter()
+                .any(|section| section.rows.iter().any(|row| row.contains("name: board")))
+        }),
+        "the panel claim materialized"
+    );
+    let section = store
+        .plugin_slot_sections("session.panel")
+        .into_iter()
+        .find(|section| section.plugin_id == "panelclaim")
+        .expect("the panel section");
+    assert!(section.rows.iter().any(|row| row.contains("focus: yes")));
+    assert!(section.rows.iter().any(|row| row.contains("presentation: panel")));
+
+    // (a) DOCKED at 160: the pane is the right leg (the equal split —
+    // 80 cols) and the rows paint inside it.
+    let frame = oc_tui::components::session::render_session_composed(
+        &store,
+        "ses_panel",
+        &theme.styles(),
+        (160, 30),
+    );
+    let grid = frame.text_grid();
+    assert!(
+        grid.iter().any(|row| row.contains("name: board")),
+        "the claim row rendered: {grid:?}"
+    );
+    assert!(store.panel_rect().is_some(), "the focus rect recorded");
+    let rect = store.panel_rect().expect("rect");
+    assert!(rect.x >= 78 && rect.x <= 82, "the docked pane sits at the split: {rect:?}");
+    assert_eq!(store.panel_width(), 80, "the props' width input follows the pane");
+
+    // The clickable row's hit rect rides the generic click sink.
+    let hits = store.plugin_section_hits();
+    assert_eq!(hits.rows.len(), 1, "the focus row is clickable");
+    assert_eq!(hits.rows[0].plugin_id, "panelclaim");
+
+    // (b) NARROW at 80: the fullscreen takeover (canSplit = width >
+    // 80 — the session column hides, not an overlay).
+    let frame = oc_tui::components::session::render_session_composed(
+        &store,
+        "ses_panel",
+        &theme.styles(),
+        (80, 30),
+    );
+    let grid = frame.text_grid();
+    let panel_row = grid
+        .iter()
+        .find(|row| row.contains("presentation: "))
+        .expect("the props row");
+    let col = panel_row.find("presentation: ").expect("col");
+    assert!(col < 20, "fullscreen paints from the frame's left edge: {panel_row}");
+    let rect = store.panel_rect().expect("rect");
+    assert_eq!(rect.x, 0, "the fullscreen pane covers the frame");
+    assert_eq!(rect.width, 80);
+
+    // (c) The owner-scoped close (`ctx.ui.panel.close()`): current()
+    // read the host-pushed view, then the panel dropped.
+    let host = Arc::clone(&runtime.booted.host);
+    let runner = std::thread::spawn(move || {
+        host.run_keymap_command("panelclaim", "panel.close", Duration::from_secs(10))
+    });
+    assert!(
+        pump_until(&runtime, &store, Duration::from_secs(10), || {
+            store.session_panel().is_none()
+        }),
+        "the owner-scoped close landed"
+    );
+    assert!(runner.join().expect("run thread").expect("close dispatches"));
+    assert!(
+        wait_for(Duration::from_secs(5), || {
+            std::fs::read_to_string(sandbox.join("panel-current.txt"))
+                .is_ok_and(|text| text.contains("board") && text.contains("ses_panel"))
+        }),
+        "current() is plugin-filtered and session-carrying"
+    );
+    // The pane unmounted: the frame reflows and the rect clears.
+    let frame = oc_tui::components::session::render_session_composed(
+        &store,
+        "ses_panel",
+        &theme.styles(),
+        (160, 30),
+    );
+    let grid = frame.text_grid();
+    assert!(!grid.iter().any(|row| row.contains("name: board")));
+    assert!(store.panel_rect().is_none());
 
     runtime.shutdown();
 }

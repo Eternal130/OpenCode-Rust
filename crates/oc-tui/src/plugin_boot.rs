@@ -120,6 +120,12 @@ pub struct TuiPluginRuntime {
     /// `Some(None)` = home, `None` = never materialized.
     #[allow(clippy::option_option)]
     slot_session: Rc<RefCell<Option<Option<String>>>>,
+    /// G-239/G-331 — the last panel state (target + focused +
+    /// effective presentation + rendered width) materialized against:
+    /// a change re-renders the session.panel claims (the props are
+    /// reactive in the ref's Slot input) AND re-pushes the `tui.panel`
+    /// view (`ctx.ui.panel.current()`'s source). `None` = closed.
+    pushed_panel: Rc<RefCell<Option<((String, String, String), bool, bool, usize)>>>,
     /// The MCP server names already pushed into the server's real
     /// registry (PLUG-D33: `registrations.mcps` → `experimental.
     /// mcp.add` — the ref's `ctx.mcp.transform` → real-registry
@@ -239,6 +245,7 @@ impl TuiPluginRuntime {
             pushed_layout: Rc::new(RefCell::new(false)),
             sidebar_claim_keys: Rc::new(RefCell::new(BTreeMap::new())),
             slot_session: Rc::new(RefCell::new(None)),
+            pushed_panel: Rc::new(RefCell::new(None)),
             pushed_mcps: Rc::new(RefCell::new(BTreeSet::new())),
             mcp_rows_rx: Rc::new(RefCell::new(None)),
             owned_updates: Rc::new(RefCell::new(None)),
@@ -405,6 +412,27 @@ impl TuiPluginRuntime {
                 })
             } else if path == "sidebar.footer" {
                 serde_json::json!({ "sessionID": session })
+            } else if path == "session.panel" {
+                // G-239/G-331 — the PanelInput props (context.ts:
+                // 168-178; the focus()/close()/toggleFullscreen()
+                // closures cannot cross the wire — BOUNDED DEVIATION:
+                // focus is mouse/key-reachable host-side and
+                // ctx.ui.panel.close() is the plugin-side close; the
+                // presentation prop still reflects the state).
+                let session_id = session.clone().unwrap_or_default();
+                match store.session_panel_mounted(&session_id) {
+                    Some(panel) => {
+                        let content_width = usize::from(store.terminal_size().0);
+                        serde_json::json!({
+                            "name": panel.name,
+                            "sessionID": panel.session_id,
+                            "width": store.panel_width(),
+                            "presentation": if store.session_panel_fullscreen(content_width) { "fullscreen" } else { "panel" },
+                            "focused": store.panel_focused(),
+                        })
+                    }
+                    None => serde_json::json!({}),
+                }
             } else {
                 serde_json::json!({})
             }
@@ -472,6 +500,34 @@ impl TuiPluginRuntime {
                                     clickable: spec.clickable,
                                 },
                             );
+                        } else if path == "session.panel" {
+                            // G-239/G-331: the session panel's mount
+                            // (panel-host.tsx:36-53) — the ref's Slot
+                            // unmounts with the pane, so claims'
+                            // renders only run while the panel is
+                            // OPEN on the routed session. Content
+                            // lands as a bounded section on the
+                            // "session.panel" surface; the claim key
+                            // rides the generic click sink
+                            // (`or_insert`: a plugin claiming both
+                            // sidebar.content and session.panel keeps
+                            // its content claim's key).
+                            let session_id = session.clone().unwrap_or_default();
+                            if store.session_panel_mounted(&session_id).is_some() {
+                                self.sidebar_claim_keys
+                                    .borrow_mut()
+                                    .entry(claim.plugin.clone())
+                                    .or_insert_with(|| claim.key.clone());
+                                store.set_plugin_slot_section(
+                                    "session.panel",
+                                    &crate::components::sidebar::SidebarSection {
+                                        plugin_id: claim.plugin.clone(),
+                                        title: spec.title,
+                                        rows: spec.rows,
+                                        clickable: spec.clickable,
+                                    },
+                                );
+                            }
                         }
                         // `app` claims run for their side effects (the
                         // renders install keymap layers guest-side;
@@ -687,6 +743,42 @@ impl TuiPluginRuntime {
             if changed {
                 *self.pushed_route.borrow_mut() = Some(route_session.clone());
                 self.booted.host.notify_tui_route(route_session.as_deref());
+            }
+            // G-239/G-331 — the live panel state push (`tui.panel`,
+            // the `tui.route` mirror): the target triple + the
+            // focused flag + the effective presentation + the
+            // rendered width form the fingerprint; a change both
+            // notifies the guest (`ctx.ui.panel.current()`'s view)
+            // AND re-materializes the session.panel claims (the
+            // PanelInput props are reactive in the ref's Slot).
+            {
+                let fingerprint = store.session_panel().map(|panel| {
+                    (
+                        (panel.plugin_id.clone(), panel.name.clone(), panel.session_id.clone()),
+                        store.panel_focused(),
+                        store.session_panel_fullscreen(usize::from(store.terminal_size().0)),
+                        store.panel_width(),
+                    )
+                });
+                if *self.pushed_panel.borrow() != fingerprint {
+                    *self.pushed_panel.borrow_mut() = fingerprint.clone();
+                    let params = fingerprint.map(
+                        |((plugin, name, session), _, _, _)| (plugin, name, session),
+                    );
+                    match params {
+                        Some((plugin, name, session)) => {
+                            self.booted.host.notify_tui_panel(
+                                Some(plugin.as_str()),
+                                Some(name.as_str()),
+                                Some(session.as_str()),
+                            );
+                        }
+                        None => {
+                            self.booted.host.notify_tui_panel(None, None, None);
+                        }
+                    }
+                    self.materialize_slot_claims(store);
+                }
             }
             let theme = store.theme();
             let fingerprint = (theme.name.clone(), theme.mode == oc_theme::types::Mode::Light);
@@ -1080,6 +1172,16 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
         UiRequest::NavigateToPluginRoute { name, data, .. } => {
             PluginUiEvent::NavigateToPluginRoute { name: name.clone(), data: data.clone() }
         }
+        // G-239/G-331: the panel open (deferred reply) and the
+        // owner-scoped close.
+        UiRequest::PanelOpen { request_id, name, fullscreen, .. } => {
+            PluginUiEvent::PanelOpen {
+                request_id: *request_id,
+                name: name.clone(),
+                fullscreen: *fullscreen,
+            }
+        }
+        UiRequest::PanelClose { .. } => PluginUiEvent::PanelClose,
         UiRequest::DialogOpen { spec, .. } => PluginUiEvent::DialogOpen {
             content: PluginDialogContent {
                 title: spec.title.clone(),

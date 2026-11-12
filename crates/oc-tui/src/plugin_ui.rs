@@ -78,6 +78,18 @@ pub enum PluginUiEvent {
         placeholder: Option<String>,
         value: Option<String>,
     },
+    /// G-239/G-331: `ctx.ui.panel.open(name, {presentation?})` — the
+    /// session panel opens on the current session route; the guest's
+    /// deferred promise resolves with the route-check boolean
+    /// (`request_id` rides the same resolution queue as the dialogs).
+    PanelOpen {
+        request_id: u64,
+        name: String,
+        fullscreen: bool,
+    },
+    /// G-239/G-331: `ctx.ui.panel.close()` — the owner-scoped release
+    /// (only the requesting plugin's panel closes).
+    PanelClose,
 }
 
 impl PluginUiEvent {
@@ -176,6 +188,17 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
                 Some(*request_id),
                 None,
             );
+        }
+        // G-239/G-331: the open applies through the store seam and
+        // the route-check boolean settles the guest's deferred
+        // promise through the same resolution queue the dialogs use.
+        PluginUiEvent::PanelOpen { request_id, name, fullscreen } => {
+            let opened = store.open_session_panel(plugin_id, name, *fullscreen);
+            store.enqueue_ui_dialog_resolution(*request_id, serde_json::Value::Bool(opened));
+        }
+        // The owner-scoped close (`release`, panel.tsx:33-36).
+        PluginUiEvent::PanelClose => {
+            store.release_session_panel(plugin_id);
         }
     }
 }
