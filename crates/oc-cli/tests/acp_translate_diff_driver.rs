@@ -14,8 +14,7 @@ use serde_json::{json, Value};
 
 use oc_cli::acp::child::ChildSession;
 use oc_cli::acp::translate::{
-    self as x, Event as XEvent, Output as XOutput, Terminal, TurnContext, TurnStart,
-    TurnStartKind,
+    self as x, Event as XEvent, Output as XOutput, Terminal, TurnContext, TurnStart, TurnStartKind,
 };
 
 fn norm_update(update: &SessionUpdate, meta: &Option<Value>) -> Value {
@@ -98,14 +97,10 @@ fn terminal_str(terminal: Terminal) -> &'static str {
 
 #[test]
 fn acp_translate_diff_driver() {
-    let Some(corpus) = std::env::var_os("ACP_DIFF_CORPUS")
-        .filter(|value| !value.is_empty())
-    else {
-        return // no corpus staged: driver inactive
+    let Some(corpus) = std::env::var_os("ACP_DIFF_CORPUS").filter(|value| !value.is_empty()) else {
+        return; // no corpus staged: driver inactive
     };
-    let out = std::path::PathBuf::from(
-        std::env::var_os("ACP_DIFF_OUT").expect("ACP_DIFF_OUT"),
-    );
+    let out = std::path::PathBuf::from(std::env::var_os("ACP_DIFF_OUT").expect("ACP_DIFF_OUT"));
     let corpus = std::path::PathBuf::from(corpus);
 
     let mut names: Vec<String> = std::fs::read_dir(&corpus)
@@ -138,13 +133,13 @@ fn acp_translate_diff_driver() {
         let mut state = x::TurnState::default();
         let mut events: Vec<Value> = Vec::new();
         for event in case["events"].as_array().cloned().unwrap_or_default() {
-            let (type_, data) = (
-                event["type"].as_str().unwrap_or_default().to_owned(),
-                event["data"].clone(),
-            );
-            let folded = std::panic::catch_unwind(|| {
-                x::fold(&state, &XEvent::new(&type_, data), &ctx)
-            });
+            let (type_, data) =
+                (event["type"].as_str().unwrap_or_default().to_owned(), event["data"].clone());
+            let mut xe = XEvent::new(&type_, data);
+            if let Some(id) = event["id"].as_str() {
+                xe = xe.with_id(id);
+            }
+            let folded = std::panic::catch_unwind(|| x::fold(&state, &xe, &ctx));
             let folded = match folded {
                 Ok(folded) => folded,
                 Err(error) => {

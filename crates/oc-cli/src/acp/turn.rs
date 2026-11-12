@@ -663,7 +663,11 @@ async fn send_usage_update(
 #[must_use]
 pub fn parse_event(value: &Value) -> Option<Event> {
     let type_ = value.get("type").and_then(Value::as_str)?;
-    Some(Event::new(type_, value.get("data").cloned().unwrap_or(Value::Null)))
+    let mut event = Event::new(type_, value.get("data").cloned().unwrap_or(Value::Null));
+    if let Some(id) = value.get("id").and_then(Value::as_str) {
+        event = event.with_id(id);
+    }
+    Some(event)
 }
 
 /// `close` (turn.ts:392-399): unlike cancel, interrupts an idle session

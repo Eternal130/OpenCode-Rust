@@ -149,17 +149,28 @@ pub struct Folded {
     state: Option<TurnState>,
 }
 
-/// One bus event off the SSE feed (the wire envelope's `type` + `data`).
+/// One bus event off the SSE feed (the wire envelope's `type` + `data`,
+/// plus the envelope `id` when present).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Event {
     pub type_: String,
     pub data: Value,
+    /// The envelope event id (`evt_…`), used where ref falls back to
+    /// `SessionMessage.ID.fromEvent(event.id)` (G-402).
+    pub id: Option<String>,
 }
 
 impl Event {
     #[must_use]
     pub fn new(type_: &str, data: Value) -> Self {
-        Self { type_: type_.to_owned(), data }
+        Self { type_: type_.to_owned(), data, id: None }
+    }
+
+    /// Attach the wire envelope's event id.
+    #[must_use]
+    pub fn with_id(mut self, id: &str) -> Self {
+        self.id = Some(id.to_owned());
+        self
     }
 
     fn session_id(&self) -> Option<&str> {
@@ -586,12 +597,16 @@ fn session_event(
                 .with_state(next)
         }
         "session.compaction.started" | "session.compaction.ended" | "session.compaction.failed" => {
+            // G-402 — ref falls back to the ENVELOPE event id mapped
+            // through `SessionMessage.ID.fromEvent` (`compaction.ts:102-108`),
+            // not `data.id`.
+            let envelope_id = event.id.as_deref().map(message_id_from_event).unwrap_or_default();
             let mut next = state.clone();
             let updates = compaction::apply(
                 &event.type_,
                 &session_id,
                 &event.data,
-                &string(&event.data, "id"),
+                &envelope_id,
                 &mut next.compactions,
                 compaction::uses_standard_updates(
                     ctx.compaction,
@@ -654,7 +669,7 @@ fn session_event(
             };
             let mut next = state.clone();
             next.tools.insert(tool_key(&tool.session_id, &tool.id), tool.clone());
-            let update = pending_update(ctx, child, &tool, None);
+            let update = pending_update(ctx, &tool, None);
             Folded { outputs: send(SessionUpdate::ToolCall(update)), ..Folded::default() }
                 .with_state(next)
         }
@@ -748,12 +763,13 @@ fn session_event(
 
 fn pending_update(
     ctx: &TurnContext,
-    child: Option<&ChildSession>,
     tool: &Tool,
     title: Option<&str>,
 ) -> agent_client_protocol::schema::v1::ToolCall {
-    let id = child::tool_call_id(child, &tool.id);
-    tool::pending_tool_call(&id, &tool.name, &tool.input, title, &ctx.cwd, None)
+    // G-392 — the child prefix is applied exactly once, at projection
+    // time (`child.ts:39-47` `project`); construction keeps the bare id
+    // (ref `translate.ts:309-320`).
+    tool::pending_tool_call(&tool.id, &tool.name, &tool.input, title, &ctx.cwd, None)
 }
 
 /// `route` (translate.ts:408-413).
@@ -820,6 +836,12 @@ fn resolve_stop_reason(
 
 fn tool_key(session_id: &str, id: &str) -> String {
     format!("{session_id}:{id}")
+}
+
+/// `SessionMessage.ID.fromEvent` (ref `schema/src/session-message.ts:27`):
+/// `evt_` → `msg_` (non-`evt_` ids pass through unchanged).
+fn message_id_from_event(event_id: &str) -> String {
+    event_id.strip_prefix("evt_").map_or_else(|| event_id.to_owned(), |rest| format!("msg_{rest}"))
 }
 
 fn info_update_with_meta(meta: serde_json::Map<String, Value>) -> SessionUpdate {
@@ -1131,6 +1153,88 @@ mod tests {
         );
         assert!(matches!(settled.outputs[0], Output::AskSettled { .. }));
         assert_eq!(settled.state().asks.len(), 0);
+    }
+
+    /// G-392 — the child toolCallId prefix is applied exactly once (at
+    /// projection time, ref `child.ts:39-47`), never at construction.
+    #[test]
+    fn child_pending_tool_call_prefixes_the_id_exactly_once() {
+        let ctx = TurnContext { child_updates: false, ..ctx() };
+        let state = started(&TurnState::default());
+        let created = fold(
+            &state,
+            &Event::new(
+                "session.created",
+                json!({ "sessionID": "ses_child", "parentID": "ses_root", "title": "Helper" }),
+            ),
+            &ctx,
+        );
+        let folded = fold(
+            &created.state(),
+            &Event::new(
+                "session.tool.input.started",
+                json!({ "sessionID": "ses_child", "id": "tsk_1", "name": "read" }),
+            ),
+            &ctx,
+        );
+        let Output::SessionUpdate { update: SessionUpdate::ToolCall(call), .. } =
+            folded.outputs[0].clone()
+        else {
+            panic!("tool call");
+        };
+        assert_eq!(call.tool_call_id.0.as_ref(), "ses_child:tsk_1");
+        assert_eq!(call.title, "Helper: read");
+    }
+
+    /// G-392 — same guarantee through the child_update extension seam.
+    #[test]
+    fn child_pending_tool_call_prefixes_exactly_once_via_extension() {
+        let ctx = TurnContext { child_updates: true, ..ctx() };
+        let state = started(&TurnState::default());
+        let created = fold(
+            &state,
+            &Event::new(
+                "session.created",
+                json!({ "sessionID": "ses_child", "parentID": "ses_root" }),
+            ),
+            &ctx,
+        );
+        let folded = fold(
+            &created.state(),
+            &Event::new(
+                "session.tool.input.started",
+                json!({ "sessionID": "ses_child", "id": "tsk_1", "name": "read" }),
+            ),
+            &ctx,
+        );
+        let Output::ChildUpdate(update) = &folded.outputs[0] else {
+            panic!("child update");
+        };
+        assert_eq!(update["update"]["toolCallId"], serde_json::json!("ses_child:tsk_1"));
+    }
+
+    /// G-402 — when `data.inputID` is absent, the compaction id falls
+    /// back to the ENVELOPE event id mapped evt_→msg_
+    /// (`SessionMessage.ID.fromEvent`, ref `compaction.ts:102-108`).
+    #[test]
+    fn compaction_started_falls_back_to_the_envelope_event_id() {
+        let ctx = TurnContext { compaction: true, ..ctx() };
+        let state = started(&TurnState::default());
+        let folded = fold(
+            &state,
+            &Event::new(
+                "session.compaction.started",
+                json!({ "sessionID": "ses_root", "reason": "manual" }),
+            )
+            .with_id("evt_7"),
+            &ctx,
+        );
+        let Output::SessionUpdate { update: SessionUpdate::CompactionUpdate(update), .. } =
+            &folded.outputs[0]
+        else {
+            panic!("compaction update");
+        };
+        assert_eq!(update.compaction_id.0.as_ref(), "msg_7");
     }
 
     #[test]

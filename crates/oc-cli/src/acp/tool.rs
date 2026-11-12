@@ -176,13 +176,32 @@ fn tool_title(tool_name: &str, input: &Map<String, Value>, fallback: Option<&str
 }
 
 /// `rawInput` (tool.ts:165-168): shell input gains the cwd when absent.
+/// G-401 — ref tests TRUTHINESS (`input.cwd || input.workdir`), so an
+/// explicit `cwd: null` (or empty string) falls back to the backfill.
 fn raw_input(tool_name: &str, input: &Map<String, Value>, cwd: &str) -> Value {
-    if !is_shell(tool_name) || input.contains_key("cwd") || input.contains_key("workdir") {
+    if !is_shell(tool_name) || input.get("cwd").is_truthy() || input.get("workdir").is_truthy() {
         Value::Object(input.clone())
     } else {
         let mut with_cwd = input.clone();
         with_cwd.insert("cwd".to_owned(), Value::String(cwd.to_owned()));
         Value::Object(with_cwd)
+    }
+}
+
+/// JS truthiness for a JSON value: null/absent/false/0/"" are falsy.
+trait Truthy {
+    fn is_truthy(&self) -> bool;
+}
+
+impl Truthy for Option<&Value> {
+    fn is_truthy(&self) -> bool {
+        match self {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(b)) => *b,
+            Some(Value::Number(n)) => n.as_f64().is_some_and(|f| f != 0.0),
+            Some(Value::String(s)) => !s.is_empty(),
+            Some(_) => true,
+        }
     }
 }
 
@@ -542,6 +561,41 @@ mod tests {
         );
         assert_eq!(call.title, "cargo test");
         assert_eq!(call.raw_input, Some(json!({"command": "cargo test", "cwd": "/w"})));
+    }
+
+    /// G-401 — ref tests truthiness (`tool.ts:165-168` `input.cwd ||
+    /// input.workdir`): an explicit `cwd: null` (or empty string) is
+    /// falsy and falls back to the ctx cwd backfill.
+    #[test]
+    fn shell_raw_input_null_or_empty_cwd_falls_back_to_backfill() {
+        let call = pending_tool_call(
+            "tc_1",
+            "shell",
+            &input(&json!({"command": "ls", "cwd": null})),
+            None,
+            "/w",
+            None,
+        );
+        assert_eq!(call.raw_input, Some(json!({"command": "ls", "cwd": "/w"})));
+        let call = pending_tool_call(
+            "tc_1",
+            "shell",
+            &input(&json!({"command": "ls", "cwd": ""})),
+            None,
+            "/w",
+            None,
+        );
+        assert_eq!(call.raw_input, Some(json!({"command": "ls", "cwd": "/w"})));
+        // A truthy cwd is kept as-is.
+        let call = pending_tool_call(
+            "tc_1",
+            "shell",
+            &input(&json!({"command": "ls", "cwd": "/kept"})),
+            None,
+            "/w",
+            None,
+        );
+        assert_eq!(call.raw_input, Some(json!({"command": "ls", "cwd": "/kept"})));
     }
 
     #[test]
