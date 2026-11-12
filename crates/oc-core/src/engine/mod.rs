@@ -3218,8 +3218,9 @@ impl crate::subagent::ModelSource for CatalogModelSource {
 
 const PROMPT_TITLE: &str = "You are a title generator. You output ONLY a thread title. Nothing else.\n\n<task>\nGenerate a brief title that would help the user find this conversation later.\n\nFollow all rules in <rules>\nUse the <examples> so you know what a good title looks like.\nYour output must be:\n- A single line\n- <=50 characters\n- No explanations\n</task>\n\n<rules>\n- you MUST use the same language as the user message you are summarizing\n- Title must be grammatically correct and read naturally - no word salad\n- Never include tool names in the title (e.g. \"read tool\", \"bash tool\", \"edit tool\")\n- Focus on the main topic or question the user needs to retrieve\n- Vary your phrasing - avoid repetitive patterns like always starting with \"Analyzing\"\n- When a file is mentioned, focus on WHAT the user wants to do WITH the file, not just that they shared it\n- Keep exact: technical terms, numbers, filenames, HTTP codes\n- Remove: the, this, my, a, an\n- Never assume tech stack\n- Never use tools\n- NEVER respond to questions, just generate a title for the conversation\n- The title should NEVER include \"summarizing\" or \"generating\" when generating a title\n- DO NOT SAY YOU CANNOT GENERATE A TITLE OR COMPLAIN ABOUT THE INPUT\n- Always output something meaningful, even if the input is minimal.\n- If the user message is short or conversational (e.g. \"hello\", \"lol\", \"what's up\", \"hey\"):\n  -> create a title that reflects the user's tone or intent (such as Greeting, Quick check-in, Light chat, Intro message, etc.)\n</rules>\n\n<examples>\n\"debug 500 errors in production\" -> Debugging production 500 errors\n\"refactor user service\" -> Refactoring user service\n\"why is app.js failing\" -> app.js failure investigation\n\"implement rate limiting\" -> Rate limiting implementation\n\"how do I connect postgres to my API\" -> Postgres API connection\n\"best practices for React hooks\" -> React hooks best practices\n\"@src/credential.ts can you add refresh token support\" -> Credential refresh token support\n\"@utils/parser.ts this is broken\" -> Parser bug fix\n\"look at @config.json\" -> Config review\n\"@App.tsx add dark mode toggle\" -> Dark mode toggle in App\n</examples>";
 
-/// `PROMPT_EXPLORE` (ref plugin/agent.ts:8-18, copied verbatim).
-const PROMPT_EXPLORE: &str = "You are a file search specialist. You excel at thoroughly navigating and exploring codebases.\n\nGuidelines:\n- Your role is EXCLUSIVELY to search and analyze\n- Parallelize independent tool calls for searches and reads whenever possible\n- Adapt your search approach based on the thoroughness level specified by the caller\n- Return file paths as absolute paths in your final response\n- You MUST NOT create, modify, delete, move, or copy files, including temporary files and reports\n- Shell commands MUST be read-only. NEVER run commands that writes files or change system state\n\nComplete the user's search request efficiently and report your findings clearly.";
+/// `PROMPT_EXPLORE` (ref plugin/agent.ts:8-18; the wording matches the
+/// ref text — one G-396 drift ("write", not "writes") corrected).
+const PROMPT_EXPLORE: &str = "You are a file search specialist. You excel at thoroughly navigating and exploring codebases.\n\nGuidelines:\n- Your role is EXCLUSIVELY to search and analyze\n- Parallelize independent tool calls for searches and reads whenever possible\n- Adapt your search approach based on the thoroughness level specified by the caller\n- Return file paths as absolute paths in your final response\n- You MUST NOT create, modify, delete, move, or copy files, including temporary files and reports\n- Shell commands MUST be read-only. NEVER run commands that write files or change system state\n\nComplete the user's search request efficiently and report your findings clearly.";
 
 /// `PROMPT_SUMMARY` (ref plugin/agent.ts:65-75, copied verbatim).
 const PROMPT_SUMMARY: &str = "Summarize what was done in this conversation. Write like a pull request description.\n\nRules:\n- 2-3 sentences max\n- Describe the changes made, not the process\n- Do not mention running tests, builds, or other validation steps\n- Do not explain what the user asked for\n- Write in first person (I added..., I fixed...)\n- Never ask questions or add new questions\n- If the conversation ends with an unanswered question to the user, preserve that exact question\n- If the conversation ends with an imperative statement or request to the user (e.g. \"Now please run the command and paste the console output\"), always include that exact request in the summary";
@@ -3279,6 +3280,13 @@ fn seed_builtin_agents(
             .into(),
     );
     explore.system = Some(PROMPT_EXPLORE.to_string());
+    // G-396 — the update-seed head globals: ref creates explore through
+    // `Agent.Editor.update`, which seeds `Agent.Info.default` + the four
+    // global allows BEFORE the mutator runs (agent.ts:76-83). The
+    // mutator's own `Permission.merge` tail re-appends them (no dedup in
+    // ref — the head copies are shadowed by the trailing
+    // `external_directory * ask` but still on the wire).
+    explore.permissions.extend(globals.iter().cloned());
     explore.permissions.push(rule("*", "*", oc_schema::permission::Effect::Deny));
     explore.permissions.push(rule("shell", "*", oc_schema::permission::Effect::Allow));
     explore.permissions.push(rule("grep", "*", oc_schema::permission::Effect::Allow));
@@ -3370,25 +3378,23 @@ pub fn native_agent_seed(
     registry.list().into_iter().filter_map(|info| serde_json::to_value(&info).ok()).collect()
 }
 
+/// G-396 — every agent rides the `Agent.Editor.update` creation seed:
+/// `current = {...defaults, permissions: [...defaults.permissions,
+/// ...globalAllows]}` (ref agent.ts:76-83), so the base is the schema
+/// baseline (`Agent.Info.default`, schema agent.ts:39-54: allow-all,
+/// external_directory ask, env-file asks) — NOT an empty ruleset. The
+/// four global allows are layered by the callers after this base.
 fn agent_info(
     id: &str,
     name: &str,
     mode: oc_schema::agent::Mode,
     hidden: bool,
 ) -> oc_schema::agent::Info {
-    oc_schema::agent::Info {
-        id: oc_schema::id::AgentId::parse(id),
-        name: oc_schema::id::AgentName::parse(name),
-        model: None,
-        request: oc_schema::provider::Request::default(),
-        system: None,
-        description: None,
-        mode,
-        hidden,
-        color: None,
-        steps: None,
-        permissions: Vec::new(),
-    }
+    let mut info = oc_schema::agent::Info::default_for(oc_schema::id::AgentId::parse(id));
+    info.name = oc_schema::id::AgentName::parse(name);
+    info.mode = mode;
+    info.hidden = hidden;
+    info
 }
 
 fn rule(
@@ -3443,12 +3449,14 @@ impl crate::config::agent_md::AgentEditor for RegistryAgentEditor<'_> {
         if existing.is_some() {
             return true;
         }
+        // G-396 — ref config/plugin/agent.ts:99-104 rides the same
+        // `Agent.Editor.update` path: a brand-new agent seeds from
+        // `Agent.Info.default` + the four global allows (agent.ts:76-83)
+        // BEFORE the config's own permission pushes, so the baseline and
+        // the global allows precede both the document-level and the
+        // agent-level rules (findLast keeps them effective unless a
+        // later rule deliberately overrides).
         let mut info = agent_info(id, id, oc_schema::agent::Mode::Primary, false);
-        // G-265 — ref config/plugin/agent.ts:103-104 seeds a new agent
-        // with `[...defaults, ...globalAllows]` BEFORE the config's own
-        // permission pushes, so the global allows precede both the
-        // document-level and the agent-level rules (findLast keeps them
-        // effective unless a later rule deliberately overrides).
         info.permissions.extend(self.globals.iter().cloned());
         info.permissions.extend(base_permissions.iter().cloned());
         self.agents.set(info);

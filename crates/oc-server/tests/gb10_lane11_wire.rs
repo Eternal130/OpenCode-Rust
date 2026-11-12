@@ -364,6 +364,33 @@ async fn agent_list_returns_every_agent_with_the_default_first() {
         "hidden agents present: {:?}",
         data.iter().map(|a| (a["id"].clone(), a["hidden"].clone())).collect::<Vec<_>>()
     );
+    // G-396 — every agent rides the `Agent.Editor.update` creation seed
+    // (`Agent.Info.default` baseline + the four global external_directory
+    // allows), so the wire rulesets carry the baseline `*,*,allow` and the
+    // ref entry counts (explore's mutator re-appends the globals at the
+    // tail → 25).
+    let expected: &[(&str, usize)] = &[
+        ("build", 10),
+        ("general", 11),
+        ("explore", 25),
+        ("plan", 13),
+        ("compaction", 9),
+        ("title", 10),
+        ("summary", 10),
+    ];
+    for (id, len) in expected {
+        let agent = data
+            .iter()
+            .find(|a| a["id"] == json!(id))
+            .unwrap_or_else(|| panic!("{id} missing: {data:?}"));
+        let perms = agent["permissions"].as_array().unwrap_or_else(|| panic!("{id} perms"));
+        assert_eq!(perms.len(), *len, "{id} wire permission count (G-396): {perms:?}");
+        assert_eq!(
+            perms[0],
+            json!({"action": "*", "resource": "*", "effect": "allow"}),
+            "{id} baseline rule"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

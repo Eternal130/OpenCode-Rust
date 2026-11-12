@@ -1853,8 +1853,14 @@ fn engine_seeds_global_external_directory_allows() {
     // before it, mirroring the ref update-seed order).
     assert!(!allows("title", "external_directory", "/tmp/opencode/x"));
     assert!(!allows("summary", "external_directory", "/data/opencode/shell/ses_1/sh_1"));
-    // The ruleset carries exactly the four global allow rules (no
-    // duplicates for explore's tail re-append).
+    // G-396 — ref explore carries the four global allows TWICE: once in
+    // the update-seed head (creation via `Agent.Editor.update` starts
+    // from `Agent.Info.default` + the global allows, agent.ts:76-83) and
+    // once at the tail via the mutator's `Permission.merge(...,
+    // [ask, ...externalDirectories])` (plugin/agent.ts:99-123), where
+    // they must land to beat the trailing `external_directory * ask`.
+    // `Permission.merge` is a plain flat() with no dedup — ref genuinely
+    // carries 8 copies of the glob family.
     let explore = registry.get(&oc_schema::id::AgentId::parse("explore")).expect("explore");
     let global_count = explore
         .permissions
@@ -1868,7 +1874,62 @@ fn engine_seeds_global_external_directory_allows() {
                     || rule.resource == "/config/opencode/*")
         })
         .count();
-    assert_eq!(global_count, 4, "explore seeds the four global allows once at the tail");
+    assert_eq!(global_count, 8, "G-396: explore carries the globals twice (head 4 + tail 4)");
+}
+
+/// G-396 — every builtin agent's permissions start from the
+/// `Agent.Info.default` baseline (schema agent.ts:39-54) because ref
+/// creates EVERY agent through `Agent.Editor.update`
+/// (`current = {...defaults, permissions: [...defaults.permissions,
+/// ...globalAllows]}`, agent.ts:76-83), so the seeded rulesets are:
+/// baseline(5) → globals(4) → agent-specifics (explore adds the tail
+/// globals again). The total lengths pin the exact ruleset shapes; the
+/// index-0 assertion pins the `*,*,allow` baseline every agent now
+/// carries.
+#[test]
+fn engine_seeds_agent_permission_baseline_and_lengths() {
+    let registry = Arc::new(crate::location::AgentRegistry::new());
+    super::seed_builtin_agents(&registry, &std::path::Path::new("/home/test"), &test_roots());
+    use oc_schema::permission::Effect;
+
+    let expected: &[(&str, usize)] = &[
+        ("build", 10),
+        ("general", 11),
+        ("explore", 25),
+        ("plan", 13),
+        ("compaction", 9),
+        ("title", 10),
+        ("summary", 10),
+    ];
+    for (id, len) in expected {
+        let agent =
+            registry.get(&oc_schema::id::AgentId::parse(*id)).unwrap_or_else(|| panic!("{id}"));
+        assert_eq!(agent.permissions.len(), *len, "{id} ruleset length (G-396)");
+        assert_eq!(
+            agent.permissions[0],
+            oc_schema::permission::Rule {
+                action: "*".into(),
+                resource: "*".into(),
+                effect: Effect::Allow,
+            },
+            "{id} carries the Agent.Info.default allow-all baseline at the head"
+        );
+    }
+
+    // G-396 behavioral consequence — with the baseline `*,*,allow`,
+    // general-agent tool actions now ALLOW (ref parity) instead of
+    // falling to the no-rule ASK fallback; the trailing question/
+    // subagent denies still win (findLast).
+    let general = registry.get(&oc_schema::id::AgentId::parse("general")).expect("general");
+    let rulesets = [general.permissions.clone()];
+    let effect = |action: &str, resource: &str| {
+        crate::permission::evaluate(action, resource, &rulesets).effect
+    };
+    assert_eq!(effect("bash", "cargo build"), Effect::Allow, "general allows tool actions");
+    assert_eq!(effect("edit", "src/main.rs"), Effect::Allow);
+    assert_eq!(effect("question", "*"), Effect::Deny);
+    assert_eq!(effect("subagent", "explore"), Effect::Deny);
+    assert_eq!(effect("external_directory", "/etc"), Effect::Ask);
 }
 
 /// The seeded registry: `explore` is a visible subagent, `summary` a
