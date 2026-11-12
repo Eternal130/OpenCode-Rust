@@ -897,6 +897,10 @@ impl Runtime {
             "mono" => {
                 settings.mono = value == "true";
                 self.lifecycle.pane.mono = settings.mono;
+                // G-272⑩ — the live toggle reaches the WRITER too
+                // (`scrollback.setMono(settings.mono)`,
+                // footer.ts:932): the next append switches mode.
+                self.lifecycle.set_mono(settings.mono);
                 touched.push(("mono", value.to_owned()));
             }
             "work_spinner" => {
