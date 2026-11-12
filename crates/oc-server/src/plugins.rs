@@ -391,7 +391,7 @@ pub fn boot(
     let rpc_event_slot = Arc::new(EngineRpcEventSlot::default());
     if !detected.enabled() && resolution.entries().is_empty() {
         eprintln!(
-            "opencode plugin: no plugins configured and bun is unavailable; staying flat (no Code Mode runtime)"
+            "opencode plugin: no plugins configured and bun/node are unavailable; staying flat (no Code Mode runtime)"
         );
         return Arc::new(PluginBoot {
             host: Arc::new(detected),
