@@ -2703,7 +2703,8 @@ G-334..G-383 全部 ✅（含 4 项审计勘误撤销/订正、取证无差族 1
 
 ### G-386 ℹ️ 插件 RPC/ctx 桥层形状差打包（ref 14 读面 + rust command.add 扁平化）
 - ref 经桥派发而 rust 于 guest 本地实现的 14 项读面：`agent.get/list/reload`（adapter.ts:296-299）、`command.list/reload`（:308,:322）、`integration.reload`（:426，直调面单立 G-385——**已于第二十五轮收口 ✅，本清单实际余 13 项**）、`mcp.list/reload`（:434,:436）、`skill.list/reload`（:455,:457）、`tool.list/reload`（:467,:466）、`websearch.reload`（:542）、`worktree.reload`（:563）。rust 对应能力在 host.js 编辑器表/本地表（行为面等价性归行为/差分通道复核；`vcs.transform`/`vcs.reload` 已于 G-24 lane5 清偿，不在列）。
-- 反向：`ctx.command.add`（host.js:987）为 rust 对 ref transform editor 之 add 的扁平化直调（transform 两键并存）——形状超集，登记不改码。
+- 反向：`ctx.command.add`（host.js:1061）为 rust 对 ref transform editor 之 add 的扁平化直调（transform 两键并存）——形状超集，登记不改码。
+- **2026-11-12 第二十五轮复扫补注（census）**：G-384 修复新增同型扁平化键并入本打包——`ctx.integration.list/get`（host.js 编辑器直调经 `integration.list`/`integration.get` hostRequest）与 `ctx.integration.method.list`（:1630，ref 仅在 transform editor 内暴露 method.list）——RPC 通道 RUST_ONLY 23→25、PLUGIN-API 28→29 均系此因，无行为缺口。
 - 出处：census RPC / PLUGIN-API。
 
 ### G-389 ℹ️ keybind rust-extra 8 动作打包（超集，登记不改码）

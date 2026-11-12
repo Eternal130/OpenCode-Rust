@@ -40,12 +40,12 @@
 - 🔴 `OPENCODE_DISABLE_FILEWATCHER` — ref[cli]: read /opt/opencode-ref/packages/cli/src/server-process.ts:124
   - 裁定【已文档化缺口】：同上（同名旧拼写，ref server-process.ts:124 双名兼容）。
 - 🔴 `OPENCODE_DRIVE` — ref[tui]: read /opt/opencode-ref/packages/tui/src/app.tsx:253
-  - GAPS-AND-PITFALLS.md 提及行：[1302]
+  - GAPS-AND-PITFALLS.md 提及行：[1305]
   - 裁定【有据分歧】：ref tui/src/app.tsx:253 drive 集成；GAPS:1300 段提及。
 - 🔴 `OPENCODE_FILEWATCHER_DISABLE` — ref[cli]: read /opt/opencode-ref/packages/cli/src/server-process.ts:124
   - 裁定【已文档化缺口】：rust `crates/oc-server/src/server_process_env.rs:22-24` 注释明示 "Not claimable in this port … flagged, not faked"（v2 `Watcher.configured`）；ref `packages/cli/src/server-process.ts:124`。
 - 🔴 `OPENCODE_NODE_ASSETS_DIR` — ref[tui]: read /opt/opencode-ref/packages/tui/src/attention-sounds.node.ts:7; read /opt/opencode-ref/packages/tui/src/attention-sounds.node.ts:8
-  - GAPS-AND-PITFALLS.md 提及行：[1302, 2712]
+  - GAPS-AND-PITFALLS.md 提及行：[1305, 2723]
   - 裁定【生态资产类·不适用】：node 资产目录（tui/attention-sounds.node.ts:7-8）；rust 资产经 OPENCODE_APP_ASSETS（rust-only）。
 - 🔴 `OPENCODE_NODE_PTY_PATH` — ref[core]: read /opt/opencode-ref/packages/core/src/pty/pty.node.ts:8
   - 裁定【生态资产类·不适用】：node 侧 pty 原生模块路径覆盖（core/src/pty/pty.node.ts:8）；rust 自带 oc-pty 进程，无 node 模块加载。
@@ -54,12 +54,12 @@
 - 🔴 `OPENCODE_PHOTON_WASM_PATH` — ref[core]: read /opt/opencode-ref/packages/core/src/image/photon-wasm.node.ts:3
   - 裁定【生态资产类·不适用】：WASM 图像处理模块路径（image/photon-wasm.node.ts:3）；rust 原生图像路径。
 - 🔴 `OPENCODE_ROUTE` — ref[tui]: read /opt/opencode-ref/packages/tui/src/app.tsx:348; read /opt/opencode-ref/packages/tui/src/app.tsx:349
-  - GAPS-AND-PITFALLS.md 提及行：[1302]
+  - GAPS-AND-PITFALLS.md 提及行：[1305]
   - 裁定【有据分歧】：ref tui/src/app.tsx:348-349 演示路由；GAPS-AND-PITFALLS.md:1300 段已提及同族。
 - 🔴 `OPENCODE_SHOW_TTFD` — ref[cli]: read /opt/opencode-ref/packages/cli/src/mini-host.ts:164
   - 裁定【演示/诊断类·低优先】：ref cli/src/mini-host.ts:164 TTFD 显示；同上。
 - 🔴 `OPENCODE_STORY` — ref[tui]: read /opt/opencode-ref/packages/tui/src/app.tsx:337; read /opt/opencode-ref/packages/tui/src/app.tsx:344
-  - GAPS-AND-PITFALLS.md 提及行：[1302]
+  - GAPS-AND-PITFALLS.md 提及行：[1305]
   - 裁定【有据分歧】：ref tui/src/app.tsx:337/344 storybook 演示模式；GAPS:1300 段提及。
 - 🔴 `OPENCODE_TREE_SITTER_BASH_WASM_PATH` — ref[core]: read /opt/opencode-ref/packages/core/src/shell/parser-wasm.node.ts:7
   - 裁定【生态资产类·不适用】：同上（:7）。
@@ -68,7 +68,7 @@
 - 🔴 `OPENCODE_TREE_SITTER_WASM_PATH` — ref[core]: read /opt/opencode-ref/packages/core/src/shell/parser-wasm.node.ts:6
   - 裁定【生态资产类·不适用】：WASM 语法分析模块（shell/parser-wasm.node.ts:6）；rust 内置 tree-sitter。
 - 🔴 `PATHEXT` — ref[core]: read /opt/opencode-ref/packages/core/src/util/which.ts:10
-  - GAPS-AND-PITFALLS.md 提及行：[625]
+  - GAPS-AND-PITFALLS.md 提及行：[628]
   - 裁定【半缺口候选】：ref `packages/core/src/util/which.ts:10` Windows 可执行扩展解析；rust `oc-core/src/environment/local.rs:23` 注释提及 PATHEXT 解析但 census 未见生产读取（GAPS:623 提及）——windows which 通道复核。
 - 🔴 `SNOWFLAKE_ACCOUNT` — ref[core]: read /opt/opencode-ref/packages/core/src/plugin/provider/snowflake-cortex.ts:176
   - 裁定【注册表族·待集成通道】：ref core/src/plugin/provider/snowflake-cortex.ts:176；rust providers_enterprise.rs 只列 SNOWFLAKE_CORTEX_TOKEN/PAT。
@@ -121,12 +121,12 @@
 - 🔗 `CARGO_PKG_VERSION` — rust: compile crates/oc-cli/src/cli.rs:22; compile crates/oc-cli/src/util.rs:8
 - 🔗 `CLOUDFLARE_API_KEY` — rust: table crates/oc-core/src/integration/providers.rs:73
 - 🔗 `CLOUDFLARE_API_TOKEN` — rust: table crates/oc-core/src/integration/providers.rs:73
-  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [2375]
+  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [2380]
 - 🔗 `CLOUDFLARE_WORKERS_AI_TOKEN` — rust: table crates/oc-core/src/integration/providers.rs:73
 - 🔗 `GOOGLE_APPLICATION_CREDENTIALS` — rust: read crates/oc-core/src/integration/vertex.rs:34
 - 🔗 `HERDR_ENV` — rust: read crates/oc-tui/src/config.rs:128; read crates/oc-tui/src/config.rs:331
 - 🔗 `NODE_EXTRA_CA_CERTS` — rust: indirect crates/oc-http/src/lib.rs:0
-  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [1918, 1919, 1922, 2072, 2239]
+  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [1923, 1924, 1927, 2077, 2244]
 - 🔗 `OC_BUILD_GIT_HASH` — rust: compile crates/oc-cli/src/main.rs:53
 - 🔗 `OC_BUILD_PROFILE` — rust: compile crates/oc-cli/src/main.rs:54
 - 🔗 `OC_BUILD_STAMP` — rust: compile crates/oc-server/src/lifecycle.rs:35
@@ -134,7 +134,7 @@
 - 🔗 `OC_PLUGIN_BUN` — rust: indirect crates/oc-util/src/bunman.rs:0
 - 🔗 `OC_PTY_DAEMON` — rust: read crates/oc-core/src/persistent_pty/frontend.rs:54
 - 🔗 `OC_RELEASE_TAG` — rust: read crates/oc-cli/build.rs:18; read crates/oc-server/build.rs:67; compile crates/oc-cli/src/services/updater.rs:46
-  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [2265]
+  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [2270]
 - 🔗 `OC_TUI_DEBUG` — rust: read crates/oc-tui/src/app.rs:1337; read crates/oc-tui/src/app.rs:1432
 - 🔗 `OC_TUI_TEST_RENDER_PANIC` — rust: read crates/oc-tui/src/app.rs:3361
 - 🔗 `OPENCODE_ACP_DEBUG` — rust: read crates/oc-cli/src/acp/service.rs:335; read crates/oc-cli/src/acp/transport.rs:65
@@ -144,9 +144,10 @@
 - 🔗 `OPENCODE_DEBUG_ERRORS` — rust: read crates/oc-server/src/errors.rs:706
 - 🔗 `OPENCODE_DISABLE_PLUGINS` — rust: read crates/oc-server/src/plugins.rs:340
 - 🔗 `OPENCODE_INSTALLER_URL` — rust: indirect crates/oc-cli/src/services/updater.rs:0
-  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [760]
+  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [763]
 - 🔗 `OPENCODE_LOCAL_DISCOVERY` — rust: read crates/oc-server/src/boot.rs:642
 - 🔗 `OPENCODE_LOG_FILE` — rust: read crates/oc-server/src/boot.rs:1093; read crates/oc-util/src/logging.rs:120; write crates/oc-server/src/boot.rs:1094
+  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [2694]
 - 🔗 `OPENCODE_MODELS_DEV_URL` — rust: indirect crates/oc-server/src/server_process_env.rs:76
 - 🔗 `OPENCODE_NO_TTY_PROMPT` — rust: read crates/oc-cli/src/run/noninteractive.rs:400
 - 🔗 `OPENCODE_PACKAGE` — rust: indirect crates/oc-cli/src/services/updater.rs:0
@@ -159,7 +160,7 @@
 - 🔗 `PARITY_UPDATE` — rust: read crates/oc-tui/src/components/chrome_golden_tests.rs:65; read crates/oc-tui/src/components/footer/golden_tests.rs:59
 - 🔗 `PROFILE` — rust: read crates/oc-cli/build.rs:38
 - 🔗 `TZ` — rust: read crates/oc-cli/src/handlers/session.rs:123; read crates/oc-cli/src/handlers/stats.rs:137
-  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [992]
+  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [995]
 - 🔗 `USERPROFILE` — rust: read crates/oc-core/src/filesystem/protected.rs:65
 - 🔗 `WT_SESSION` — rust: read crates/oc-tui/src/render/color_mode.rs:97
 
@@ -245,7 +246,7 @@
 ## Census 裁定
 
 - 已裁定 178/178（全集逐项归属，覆盖率 100%）。
-- RUST_ONLY 43 项中 5 项有 GAPS-AND-PITFALLS.md 背书（有据分歧，如 OPENCODE_PTY_BIN）；其余为待登记 rust 旋钮。
+- RUST_ONLY 43 项中 6 项有 GAPS-AND-PITFALLS.md 背书（有据分歧，如 OPENCODE_PTY_BIN）；其余为待登记 rust 旋钮。
 - REF_ONLY 59 项中：共享包侧 23 项已逐项定性（裁定表：已文档化缺口/缺口候选/有据分歧/生态资产不适用/注册表族待集成通道）；ref 独有包 36 项为生态胶水（非本移植进程边界）。
 
 ## 提取不确定性
