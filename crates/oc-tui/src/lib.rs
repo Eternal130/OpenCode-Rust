@@ -63,6 +63,7 @@ pub mod notifications_plugin;
 mod opentui_emit_diff_tests;
 pub mod os_notify;
 pub mod plugin_boot;
+pub mod plugin_markdown;
 pub mod plugin_ui;
 pub mod presentation;
 pub mod reactive;

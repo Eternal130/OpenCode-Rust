@@ -278,6 +278,58 @@ fn render_spec(
             let filetype = options.filetype.as_deref();
             let fence_key = format!("fence:{}", *fence_counter);
             *fence_counter += 1;
+            // G-332 — the plugin markdown code-block renderer table
+            // (`ctx.markdown.registerCodeBlockRenderer`): consulted
+            // BEFORE the hardcoded latex/mermaid arms — in the ref
+            // those builtins are THEMSELVES plugins, so a later
+            // plugin shadows them. Cache HIT → the plugin's flattened
+            // rows emit as base-styled single spans (clipped at the
+            // content width, the plain-fence path); cache MISS → the
+            // default path renders THIS frame and a bounded off-loop
+            // render fills the cache (the next frame flips); a cached
+            // error keeps the default path permanently for that
+            // (code, fingerprint) pair.
+            if let Some(filetype) = filetype {
+                if let Some((plugin_id, raw_language, fingerprint)) =
+                    crate::plugin_markdown::lookup(filetype)
+                {
+                    let content_hash = {
+                        use std::hash::{Hash, Hasher};
+                        let mut hash = std::collections::hash_map::DefaultHasher::new();
+                        content.hash(&mut hash);
+                        hash.finish()
+                    };
+                    match crate::plugin_markdown::cached_rows(
+                        filetype,
+                        fingerprint,
+                        content_hash,
+                        styles.syntax_hash,
+                    ) {
+                        Some(Ok(rows)) => {
+                            for row in &rows {
+                                lines.push(MarkdownLine(vec![StyledSpan {
+                                    link: None,
+                                    text: crate::wrap::take_width(row, content_width),
+                                    style: styles.code_block,
+                                }]));
+                            }
+                            push_margins(*margin_bottom, lines);
+                            return;
+                        }
+                        Some(Err(())) => {}
+                        None => crate::plugin_markdown::spawn_render(
+                            plugin_id,
+                            raw_language,
+                            content.clone(),
+                            filetype.to_owned(),
+                            fingerprint,
+                            content_hash,
+                            styles.syntax_hash,
+                            content_width,
+                        ),
+                    }
+                }
+            }
             if matches!(filetype, Some("latex" | "math")) {
                 if let Some(rows) = render_latex_block(content, styles) {
                     lines.extend(rows);

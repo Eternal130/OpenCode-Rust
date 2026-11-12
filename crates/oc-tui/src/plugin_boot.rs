@@ -33,7 +33,7 @@
 //! a plugin-less TUI — unlike the server, which keeps the host up for
 //! the core Code Mode runtime).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -137,6 +137,9 @@ pub struct TuiPluginRuntime {
     /// The plugin route page's materialized content (the bounded
     /// `route.render` replies, applied by the pump).
     route_content_rx: RouteContentRx,
+    /// The last plugin-markdown render-landing version the pump saw
+    /// (G-332: a completed off-loop render requests a redraw).
+    markdown_rendered: Rc<Cell<u64>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -241,6 +244,7 @@ impl TuiPluginRuntime {
             owned_updates: Rc::new(RefCell::new(None)),
             dynamic_fingerprint: Rc::new(RefCell::new(String::new())),
             route_content_rx: Rc::new(RefCell::new(None)),
+            markdown_rendered: Rc::new(Cell::new(0)),
         }
     }
 
@@ -346,6 +350,7 @@ impl TuiPluginRuntime {
             *self.slot_session.borrow_mut() = Some(route_session);
         }
         let snapshot = host.registrations();
+        self.install_markdown_renderers(&snapshot);
         let projection = project_registrations(store, &snapshot);
         let owned = Self::owned_keymap_entries(&snapshot);
         *self.dynamic_fingerprint.borrow_mut() = dynamic_fingerprint(&owned, &snapshot);
@@ -524,12 +529,30 @@ impl TuiPluginRuntime {
         owned
     }
 
+    /// G-332 — install the plugin markdown code-block renderer table
+    /// from the snapshot (raw languages normalize + merge last-wins
+    /// inside [`crate::plugin_markdown`]). The table's fingerprint
+    /// rides [`dynamic_fingerprint`], so a registration change both
+    /// invalidates the content cache and re-projects.
+    fn install_markdown_renderers(&self, snapshot: &RegistrationSnapshot) {
+        if !self.booted.host.enabled() {
+            return;
+        }
+        let renderers: Vec<(String, String)> = snapshot
+            .markdown_renderers
+            .iter()
+            .map(|renderer| (renderer.plugin_id.clone(), renderer.language.clone()))
+            .collect();
+        crate::plugin_markdown::install_table(Some(Arc::clone(&self.booted.host)), &renderers);
+    }
+
     /// The dynamic keymap refresh (the pump's post-drain step): a
     /// claim render that installed a layer mid-flight re-projects
     /// the owned set when its fingerprint changed, and the palette
     /// rows pick up palette-visible layer commands.
     fn refresh_dynamic_registrations(&self, store: &Store) {
         let snapshot = self.booted.host.registrations();
+        self.install_markdown_renderers(&snapshot);
         let owned = Self::owned_keymap_entries(&snapshot);
         let fingerprint = dynamic_fingerprint(&owned, &snapshot);
         if fingerprint == *self.dynamic_fingerprint.borrow() {
@@ -748,6 +771,13 @@ impl TuiPluginRuntime {
         self.materialize_open_route(store);
         self.apply_route_content(store);
         self.refresh_dynamic_registrations(store);
+        // G-332: a plugin markdown render landed since the last pump —
+        // request a redraw (the ui.slot.rerender repaint precedent).
+        let rendered = crate::plugin_markdown::rendered_version();
+        if rendered != self.markdown_rendered.get() {
+            self.markdown_rendered.set(rendered);
+            store.request_redraw();
+        }
     }
 
     /// Refresh the palette sink's active session (the run loop's
@@ -1228,7 +1258,8 @@ fn owned_fingerprint(owned: &[OwnedCommandDef]) -> String {
 }
 
 /// The dynamic-registration fingerprint (owned entries + the
-/// palette-visible command table — one string, one comparison).
+/// palette-visible command table + the plugin markdown renderer table
+/// — one string, one comparison).
 fn dynamic_fingerprint(owned: &[OwnedCommandDef], snapshot: &RegistrationSnapshot) -> String {
     let palette = snapshot
         .commands
@@ -1244,7 +1275,12 @@ fn dynamic_fingerprint(owned: &[OwnedCommandDef], snapshot: &RegistrationSnapsho
         )
         .collect::<Vec<_>>()
         .join(",");
-    format!("{}#{}", owned_fingerprint(owned), palette)
+    let markdown = snapshot
+        .markdown_renderers
+        .iter()
+        .map(|renderer| format!("{}:{};", renderer.plugin_id, renderer.language))
+        .collect::<String>();
+    format!("{}#{}#{}", owned_fingerprint(owned), palette, markdown)
 }
 
 // ---------------------------------------------------------------------------

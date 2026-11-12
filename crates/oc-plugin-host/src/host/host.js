@@ -1992,6 +1992,16 @@ function makeCtx(pluginId, options) {
     ping: async () => hostRequest("ping", { pluginId }),
     log: (...args) => notify("log", { pluginId, level: "info", message: args.join(" ") }),
 
+    // -- markdown code-block renderers (api.tsx:168-178; G-332) —
+    //    the render function stays in the guest; the TUI consults the
+    //    registration table and materializes content through the
+    //    bounded `markdown.render` call.
+    markdown: {
+      registerCodeBlockRenderer(language, render) {
+        return registerMarkdownRenderer(pluginId, language, render);
+      },
+    },
+
     // -- ui (wave 3's TUI slot bridge) --------------------------------------
     // Runtime requests land on the host's UI-request queue (the TUI
     // drains it between frames); registrations (dialog providers,
@@ -2288,7 +2298,7 @@ function snapshotPluginState() {
     slotClaimCounters: new Map(slotClaimCounters),
     pluginRoutes: new Map(pluginRoutes),
     keymapRuns: new Map(keymapRuns),
-    websearchExecutors: new Map(websearchExecutors),
+    markdownRenderers: new Map(markdownRenderers),
     worktreeImpls: new Map(worktreeImpls),
     vcsInits: new Map(vcsInits),
     pendingIntegrationCallback,
@@ -2315,7 +2325,7 @@ function restorePluginState(snap) {
   reinstate(slotClaimCounters, snap.slotClaimCounters);
   reinstate(pluginRoutes, snap.pluginRoutes);
   reinstate(keymapRuns, snap.keymapRuns);
-  reinstate(websearchExecutors, snap.websearchExecutors);
+  reinstate(markdownRenderers, snap.markdownRenderers);
   reinstate(worktreeImpls, snap.worktreeImpls);
   reinstate(vcsInits, snap.vcsInits);
   pendingIntegrationCallback = snap.pendingIntegrationCallback;
@@ -2369,6 +2379,7 @@ async function handleLoad({ entry, generation, seed, options, staged }) {
     retireKeyed(slotClaimCounters, id);
     retireKeyed(pluginRoutes, id);
     retireKeyed(keymapRuns, id);
+    retireKeyed(markdownRenderers, id);
     plugins.delete(id);
   }
   return result;
@@ -2498,6 +2509,7 @@ async function handleUnload({ pluginId }) {
   slotClaimCounters.delete(pluginId);
   pluginRoutes.delete(pluginId);
   keymapRuns.delete(pluginId);
+  markdownRenderers.delete(pluginId);
   return { ok: true };
 }
 
@@ -3535,6 +3547,11 @@ const slotClaimCounters = new Map();
 const pluginRoutes = new Map();
 /** pluginId -> Map(command id -> run) — `ctx.keymap.layer` runs. */
 const keymapRuns = new Map();
+/** pluginId -> Map(raw language -> {language, render}) —
+ * `ctx.markdown.registerCodeBlockRenderer` (api.tsx:168-178; keys are
+ * the RAW language — normalization happens at consumption). Mirrors
+ * the slotClaims lifecycle (snapshot/reinstate/retire/unload). */
+const markdownRenderers = new Map();
 
 function slotClaimCounter(pluginId) {
   const next = (slotClaimCounters.get(pluginId) ?? 0) + 1;
@@ -3908,6 +3925,11 @@ async function handleLoadTui({ entry, options }) {
       request: () => {},
       notify: () => Promise.resolve({ ok: false, reason: "attention_disabled" }),
     },
+    markdown: {
+      registerCodeBlockRenderer(language, render) {
+        return registerMarkdownRenderer(pluginId, language, render);
+      },
+    },
     kv: { get: async () => undefined, set: async () => {} },
     ui: {
       toast: () => {},
@@ -3968,6 +3990,42 @@ function registerSidebarSlot(pluginId, render) {
   hostRequest("ui.slot.register", { pluginId, slot: "sidebar.content" }).catch(() => {});
 }
 
+/** `ctx.markdown.registerCodeBlockRenderer(language, render)`
+ * (api.tsx:168-178): blank language and INTRA-PLUGIN duplicates throw
+ * ref-exact (cross-plugin duplicates are allowed — the registry
+ * merges last-wins at consumption). The language crosses the wire
+ * RAW; the host-side registration keys on it and oc-tui normalizes
+ * at consumption. Returns an idempotent dispose closure. */
+function registerMarkdownRenderer(pluginId, language, render) {
+  const raw = String(language ?? "");
+  if (raw.trim() === "") throw new Error("Markdown code-block language is required");
+  if (typeof render !== "function") {
+    throw new Error("Markdown code-block renderer requires a render function");
+  }
+  if (!markdownRenderers.has(pluginId)) markdownRenderers.set(pluginId, new Map());
+  if (markdownRenderers.get(pluginId).has(raw)) {
+    throw new Error(`Markdown code-block renderer already registered: ${raw}`);
+  }
+  markdownRenderers.get(pluginId).set(raw, { language: raw, render });
+  hostRequest("markdown.renderer.register", { pluginId, language: raw }).catch((error) => {
+    // The host is authoritative for duplicates too — surface the
+    // failure and unwind the guest-side stash.
+    notify("log", {
+      pluginId,
+      level: "error",
+      message: `markdown renderer register failed: ${errText(error)}`,
+    });
+    markdownRenderers.get(pluginId)?.delete(raw);
+  });
+  let registered = true;
+  return () => {
+    if (!registered) return;
+    registered = false;
+    markdownRenderers.get(pluginId)?.delete(raw);
+    hostRequest("markdown.renderer.unregister", { pluginId, language: raw }).catch(() => {});
+  };
+}
+
 /** `slot.materialize` — run the plugin's render function NOW and
  *  flatten the tree into the native section shape. Rows that carry
  *  the plugin's own `onMouseUp` (v2 `decorateInteractiveRow` — the
@@ -3988,8 +4046,8 @@ async function handleSlotMaterialize({ pluginId }) {
  *  native section shape as the sidebar bridge — PLUG-TUI-SLOT):
  *  `{title, rows:[{text,click}]}` plus the per-row activate handler
  *  table (index-aligned with the body rows). */
-function flattenRenderTree(tree) {
-  const lines = treeLines(tree)
+function flattenRenderTree(tree, width = tuiSidebarContentWidth) {
+  const lines = treeLines(tree, width)
     .map((line) => line.replace(/\s+$/, ""))
     .filter((line) => line.trim() !== "");
   const handlers = new Map();
@@ -4062,6 +4120,28 @@ async function handleKeymapRun({ pluginId, id }) {
   return { ok: true };
 }
 
+/** `markdown.render` — run one registered markdown code-block
+ *  renderer NOW (api.tsx:168-178's render receives `{code,
+ *  language}`) and flatten to the native section shape against the
+ *  caller's content width. The language key is the RAW registration
+ *  language. Unlike the sidebar section shape, EVERY flattened line
+ *  lands as a row (the block's content — the flatten tree's
+ *  section-title split would otherwise eat the first line). */
+async function handleMarkdownRender({ pluginId, language, code, width }) {
+  const entry = markdownRenderers.get(pluginId)?.get(String(language ?? ""));
+  if (!entry || typeof entry.render !== "function") {
+    throw new Error(`${pluginId}: no markdown renderer for ${language}`);
+  }
+  const budget = Number(width) > 0 ? Number(width) : tuiSidebarContentWidth;
+  const lines = treeLines(
+    entry.render({ code: String(code ?? ""), language: entry.language }),
+    budget,
+  )
+    .map((line) => line.replace(/\s+$/, ""))
+    .filter((line) => line.trim() !== "");
+  return { title: "", rows: lines.map((text) => ({ text, click: false })) };
+}
+
 /** `slot.click` — run one row's stashed activate handler (the click
  *  side of the bridge: the handler navigates / opens what the plugin
  *  wants; navigation flows back through `tui.route.navigate`). */
@@ -4097,6 +4177,7 @@ const METHODS = {
   "slot.claim.click": handleClaimClick,
   "route.render": handleRouteRender,
   "keymap.command.run": handleKeymapRun,
+  "markdown.render": handleMarkdownRender,
   scan: async ({ entry }) => ({ digests: await scanDigests(entry) }),
 };
 

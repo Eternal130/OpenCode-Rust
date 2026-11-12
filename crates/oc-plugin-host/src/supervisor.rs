@@ -732,7 +732,10 @@ impl Shared {
             // -- the v2 TUI-plugin slot/router/keymap registrations
             //    (PLUG-TUI-SLOT): native snapshot entries, answered
             //    inline like every registration surface.
-            | "ui.slot.claim" | "ui.router.register" | "keymap.layer" => {
+            | "ui.slot.claim" | "ui.router.register" | "keymap.layer"
+            // -- G-332: plugin markdown code-block renderer
+            //    registrations (api.tsx:168-178).
+            | "markdown.renderer.register" | "markdown.renderer.unregister" => {
                 Some(answer_ui_registration(self, id, method, params))
             }
             "log" => {
@@ -2103,6 +2106,45 @@ fn answer_ui_registration(shared: &Shared, id: u64, method: &str, params: &Value
                         .to_owned(),
                 });
             }
+            protocol::response(id, Value::Null)
+        }
+        // G-332 — the markdown code-block renderer registration
+        // (`ctx.markdown.registerCodeBlockRenderer`, api.tsx:168-178):
+        // blank language and INTRA-PLUGIN duplicates throw ref-exact
+        // (the guest surfaces the host error string); cross-plugin
+        // duplicates are allowed — the table merges last-wins at
+        // consumption. The language stays RAW on the wire.
+        "markdown.renderer.register" => {
+            let language = params.get("language").and_then(Value::as_str).unwrap_or_default();
+            if language.trim().is_empty() {
+                return protocol::error_response(
+                    id,
+                    "Markdown code-block language is required",
+                );
+            }
+            if registrations
+                .markdown_renderers
+                .iter()
+                .any(|renderer| renderer.plugin_id == plugin_id && renderer.language == language)
+            {
+                return protocol::error_response(
+                    id,
+                    &format!("Markdown code-block renderer already registered: {language}"),
+                );
+            }
+            registrations
+                .markdown_renderers
+                .push(crate::registrations::PluginMarkdownRenderer {
+                    plugin_id,
+                    language: language.to_owned(),
+                });
+            protocol::response(id, Value::Null)
+        }
+        "markdown.renderer.unregister" => {
+            let language = params.get("language").and_then(Value::as_str).unwrap_or_default();
+            registrations.markdown_renderers.retain(|renderer| {
+                !(renderer.plugin_id == plugin_id && renderer.language == language)
+            });
             protocol::response(id, Value::Null)
         }
         other => protocol::error_response(id, &format!("unknown ui registration {other:?}")),
