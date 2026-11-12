@@ -208,6 +208,24 @@ pub enum UiRequest {
         placeholder: Option<String>,
         value: Option<String>,
     },
+    /// G-239/G-331: `ctx.ui.panel.open(name, {presentation?})` (the
+    /// v2 UI face, context.ts:501-508) — the DEFERRED-reply seam
+    /// (alert/confirm/prompt's pattern): the TUI applies the open and
+    /// the reply resolves `true`/`false` (false when the TUI is not
+    /// on a session route or the registry is inactive). `request_id`
+    /// is the GUEST's jsonrpc request id.
+    PanelOpen {
+        request_id: u64,
+        plugin_id: String,
+        name: String,
+        /// `true` when the plugin requested `presentation:
+        /// "fullscreen"` (the default is the docked "panel").
+        fullscreen: bool,
+    },
+    /// G-239/G-331: `ctx.ui.panel.close()` — owner-scoped (only the
+    /// owning plugin's panel closes), fire-and-forget like the toast
+    /// queue arm.
+    PanelClose { plugin_id: String },
 }
 
 impl UiRequest {
@@ -222,7 +240,9 @@ impl UiRequest {
             | UiRequest::NavigateToPluginRoute { plugin_id, .. }
             | UiRequest::Alert { plugin_id, .. }
             | UiRequest::Confirm { plugin_id, .. }
-            | UiRequest::Prompt { plugin_id, .. } => plugin_id,
+            | UiRequest::Prompt { plugin_id, .. }
+            | UiRequest::PanelOpen { plugin_id, .. }
+            | UiRequest::PanelClose { plugin_id } => plugin_id,
             UiRequest::NavigateToSession { .. } => "",
         }
     }

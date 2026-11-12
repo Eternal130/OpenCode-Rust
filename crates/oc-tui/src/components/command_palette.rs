@@ -3313,13 +3313,19 @@ impl CommandDispatcher for StoreDispatcher {
             }
             "pane.focus.left" => {
                 // focusSession (session-frame.tsx:150-157).
+                store.set_panel_focused(false);
                 store.set_terminal_focus_right(false);
                 Dispatch::Handled
             }
             "pane.focus.right" => {
-                // focusRightPane — only while a right pane exists.
+                // focusRightPane — only while a right pane exists
+                // (terminal OR the mounted session panel,
+                // session-frame.tsx:164-179's `terminal ||
+                // activePanel` gate).
                 if let Route::Session { session_id, .. } = store.route() {
-                    if store.terminal_pane_mounted(&session_id).is_some() {
+                    if store.session_panel_mounted(&session_id).is_some() {
+                        store.set_panel_focused(true);
+                    } else if store.terminal_pane_mounted(&session_id).is_some() {
                         store.set_terminal_focus_right(true);
                     }
                 }

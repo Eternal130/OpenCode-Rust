@@ -130,6 +130,15 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
         UiRequest::NavigateToPluginRoute { name, data, .. } => {
             PluginUiEvent::NavigateToPluginRoute { name: name.clone(), data: data.clone() }
         }
+        // G-239/G-331: the panel open/close conversions.
+        UiRequest::PanelOpen { request_id, name, fullscreen, .. } => {
+            PluginUiEvent::PanelOpen {
+                request_id: *request_id,
+                name: name.clone(),
+                fullscreen: *fullscreen,
+            }
+        }
+        UiRequest::PanelClose { .. } => PluginUiEvent::PanelClose,
         UiRequest::DialogOpen { spec, .. } => PluginUiEvent::DialogOpen {
             content: PluginDialogContent {
                 title: spec.title.clone(),

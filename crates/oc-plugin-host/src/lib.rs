@@ -918,6 +918,18 @@ impl PluginHost {
         facade.shared.notify_tui_route(session);
     }
 
+    /// G-239/G-331 — push the live session-panel state to the guest
+    /// (the `tui.panel` notification; the None triple is "closed").
+    pub fn notify_tui_panel(
+        &self,
+        plugin_id: Option<&str>,
+        name: Option<&str>,
+        session: Option<&str>,
+    ) {
+        let Some(facade) = &self.facade else { return };
+        facade.shared.notify_tui_panel(plugin_id, name, session);
+    }
+
     /// PLUG-D07 — push the latest activated location into the guest
     /// (`ctx.location`/`ctx.directory` follow; the engine calls this
     /// through [`crate::LocationPluginSource::location_activated`]

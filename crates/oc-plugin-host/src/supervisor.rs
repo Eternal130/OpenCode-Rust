@@ -707,14 +707,22 @@ impl Shared {
             "event.subscribe" | "ping" => Some(protocol::response(id, Value::Null)),
             // -- wave 3: the TUI slot bridge (registration entries +
             //    the runtime UI-request queue; answered inline).
-            "ui.toast.show" | "ui.sidebar.section" | "ui.footer.hint" | "ui.dialog.open" => {
+            "ui.toast.show" | "ui.sidebar.section" | "ui.footer.hint" | "ui.dialog.open"
+            // -- G-239/G-331: `ctx.ui.panel.close()` — owner-scoped
+            //    release, fire-and-forget on the queue.
+            | "ui.panel.close" => {
                 Some(answer_ui_runtime(self, id, method, params))
             }
             // -- TUI-25: `ctx.ui.alert` / `ctx.ui.confirm` / (G-237)
             //    `ctx.ui.prompt` — the reply is DEFERRED until the
             //    embedder resolves the dialog (the guest's promise
             //    settles on it); the request id rides the queue.
-            "ui.alert" | "ui.confirm" | "ui.prompt" => answer_ui_dialog(self, id, method, params),
+            // -- G-239/G-331: `ctx.ui.panel.open` rides the same
+            //    deferred seam (the route-check boolean resolves
+            //    after the TUI applies the open).
+            "ui.alert" | "ui.confirm" | "ui.prompt" | "ui.panel.open" => {
+                answer_ui_dialog(self, id, method, params)
+            }
             // -- the v2 TUI-plugin slot surface (beta.13 bug 1): the
             //    flagship's sidebar_content registration + its
             //    rerender asks. Both spawn the bounded materialize
@@ -1907,6 +1915,9 @@ fn answer_ui_runtime(shared: &Shared, id: u64, method: &str, params: &Value) -> 
             };
             UiRequest::DialogOpen { plugin_id, spec: crate::ui::PluginDialogSpec::from_json(spec) }
         }
+        // G-239/G-331: the owner-scoped close (context.ts:504-505 —
+        // "Other plugins' panels are unaffected").
+        "ui.panel.close" => UiRequest::PanelClose { plugin_id },
         other => return protocol::error_response(id, &format!("unknown ui method {other:?}")),
     };
     shared.ui_requests.lock().expect("ui request queue poisoned").push_back(request);
@@ -1944,6 +1955,16 @@ fn answer_ui_dialog(shared: &Shared, id: u64, method: &str, params: &Value) -> O
             description: params.get("description").and_then(Value::as_str).map(str::to_owned),
             placeholder: params.get("placeholder").and_then(Value::as_str).map(str::to_owned),
             value: params.get("value").and_then(Value::as_str).map(str::to_owned),
+        },
+        // G-239/G-331: `ctx.ui.panel.open(name, {presentation?})`
+        // (context.ts:501-503) — the deferred route-check boolean
+        // resolves after the TUI applies the open (the ref resolves
+        // `false` when not on a session route).
+        "ui.panel.open" => UiRequest::PanelOpen {
+            request_id: id,
+            plugin_id,
+            name: params.get("name").and_then(Value::as_str).unwrap_or_default().to_owned(),
+            fullscreen: params.get("presentation").and_then(Value::as_str) == Some("fullscreen"),
         },
         other => {
             return Some(protocol::error_response(id, &format!("unknown ui method {other:?}")));
@@ -2731,6 +2752,20 @@ impl Shared {
             None => json!({ "sessionID": null }),
         };
         self.send_notification("tui.route", params);
+    }
+
+    /// G-239/G-331 — push the live session-panel state to the guest
+    /// (the `tui.panel` notification, the `tui.route` mirror): the
+    /// owning plugin id, the open content name, and the owning
+    /// session (None = closed). `ctx.ui.panel.current()` reads it.
+    pub fn notify_tui_panel(&self, plugin_id: Option<&str>, name: Option<&str>, session: Option<&str>) {
+        let params = match (plugin_id, name, session) {
+            (Some(plugin), Some(name), Some(session)) => {
+                json!({ "pluginId": plugin, "name": name, "sessionID": session })
+            }
+            _ => json!({ "pluginId": null, "name": null, "sessionID": null }),
+        };
+        self.send_notification("tui.panel", params);
     }
 
     /// Push the live theme view (the flat `TuiThemeCurrent` sidebar

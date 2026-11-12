@@ -963,6 +963,47 @@ const dialogProviders = new Map();
 // The Context
 // ---------------------------------------------------------------------------
 
+/** G-239/G-331: the `ctx.ui.panel` face (context.ts:501-508). Shared by
+ *  the v2 makeCtx and the legacy TUI stub — the open ask rides the
+ *  deferred-reply seam (`ui.panel.open` resolves the route-check
+ *  boolean), the close is the owner-scoped fire-and-forget ask, and
+ *  `current()` is plugin-filtered over the host-pushed `tui.panel`
+ *  view. */
+function makePanelFace(pluginId) {
+  return {
+    /** Opens the session.panel slot in the current session; resolves
+     *  false when the TUI is not on a session route. */
+    open(name, options) {
+      const presentation =
+        options && typeof options === "object" && options.presentation === "fullscreen"
+          ? "fullscreen"
+          : "panel";
+      return hostRequest("ui.panel.open", {
+        pluginId,
+        name: String(name ?? ""),
+        presentation,
+      }).then(
+        (result) => result === true,
+        (error) => {
+          notify("log", { pluginId, level: "error", message: `panel.open failed: ${errText(error)}` });
+          return false;
+        },
+      );
+    },
+    /** Closes THIS plugin's active panel (other plugins' panels are
+     *  unaffected). */
+    async close() {
+      await hostRequest("ui.panel.close", { pluginId }).catch(() => {});
+    },
+    /** This plugin's active panel, if any (the `tui.panel` view). */
+    current() {
+      return tuiPanel && tuiPanel.pluginId === pluginId
+        ? { name: tuiPanel.name, sessionID: tuiPanel.sessionID }
+        : undefined;
+    },
+  };
+}
+
 function makeCtx(pluginId, options) {
   const commands = plugins.get(pluginId).commands;
   const subscriptions = plugins.get(pluginId).subscriptions;
@@ -2198,6 +2239,12 @@ function makeCtx(pluginId, options) {
           return tuiRoute;
         },
       },
+      // -- G-239/G-331: the session-panel face (context.ts:501-508) --
+      // `open` resolves the route-check boolean through the DEFERRED
+      // reply (the alert/confirm seam); `close` is owner-scoped
+      // (only this plugin's panel closes); `current` is
+      // plugin-filtered over the host-pushed `tui.panel` view.
+      panel: makePanelFace(pluginId),
     },
 
     // -- keymap (api.tsx:179-199: `ctx.keymap.layer(factory)`) -------
@@ -3563,6 +3610,12 @@ function slotClaimCounter(pluginId) {
 /** The host-pushed current route ({type:"session",sessionID}|{name:"home"}). */
 let tuiRoute = { name: "home" };
 
+/** G-239/G-331: the host-pushed session-panel view (`tui.panel`,
+ *  the `tui.route` mirror) — `{pluginId, name, sessionID}` or null
+ *  while no panel is open. `ctx.ui.panel.current()` reads it
+ *  (plugin-filtered). */
+let tuiPanel = null;
+
 // PLUG-D07: the host pushes the LATEST activated location (the one-guest
 // approximation of v2's per-instance hosts); every live ctx object's
 // location view follows it.
@@ -3936,6 +3989,10 @@ async function handleLoadTui({ entry, options }) {
     ui: {
       toast: () => {},
       dialog: { open: () => {}, close: () => {}, alert: () => {}, confirm: () => {} },
+      // G-239/G-331: the session-panel face (the same seam the v2 ctx
+      // exposes — the deferred open, the owner-scoped close, the
+      // plugin-filtered `tui.panel` view).
+      panel: makePanelFace(pluginId),
       slot: (spec) => {
         const append = String(spec?.append ?? "");
         const render = spec?.render;
@@ -4244,6 +4301,22 @@ async function handleLine(line) {
       typeof sessionID === "string" && sessionID
         ? { name: "session", params: { sessionID } }
         : { name: "home" };
+    return;
+  }
+  if (message.method === "tui.panel") {
+    // G-239/G-331: host-pushed session-panel state (the `tui.route`
+    // mirror) — `ctx.ui.panel.current()` reads it (plugin-filtered).
+    const params = message.params ?? {};
+    const usable =
+      typeof params.pluginId === "string" &&
+      params.pluginId &&
+      typeof params.name === "string" &&
+      params.name &&
+      typeof params.sessionID === "string" &&
+      params.sessionID;
+    tuiPanel = usable
+      ? { pluginId: params.pluginId, name: params.name, sessionID: params.sessionID }
+      : null;
     return;
   }
   if (message.method === "tui.theme") {

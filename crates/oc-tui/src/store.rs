@@ -1664,6 +1664,18 @@ pub struct Store {
     /// The open plugin route page (PLUG-TUI-SLOT's router surface);
     /// `None` = no plugin page open.
     plugin_route: Signal<Option<PluginRoutePage>>,
+    /// G-239/G-331 — the open session panel (`usePanel().current()`,
+    /// context/panel.tsx:10-42): the owning plugin, the selected
+    /// content name, the owning session, and the REQUESTED
+    /// presentation (the effective one re-derives per render from
+    /// `canSplit`); `None` = closed.
+    session_panel: Signal<Option<SessionPanel>>,
+    /// The panel's input-scope flag (`activePane === "right"`,
+    /// session-frame.tsx:70).
+    panel_focused: Signal<bool>,
+    /// The panel pane's rendered width (`panels.setWidth`, pushed by
+    /// the session render — the materialize props' `width` input).
+    panel_width: Signal<usize>,
     /// `session.sidebar` — the config mode (auto/hide) after the
     /// boot merge (cli.json, then the last toggle's persisted value).
     sidebar_mode: Signal<crate::components::sidebar::SidebarMode>,
@@ -1796,6 +1808,11 @@ pub struct Store {
     /// The MCP section's pointer targets (SURF-1).
     sidebar_mcp_hits: std::cell::RefCell<SidebarMcpHits>,
     picker_entry_hits: std::cell::RefCell<PickerEntryHits>,
+    /// G-239/G-331 — the session panel's pane rect (the last
+    /// render's absolute cells; `None` while unmounted). A release
+    /// inside focuses the panel (`onMouseDown → focus`,
+    /// panel-host.tsx:32).
+    panel_rect: std::cell::RefCell<Option<HitRect>>,
     plugin_section_hits: std::cell::RefCell<PluginSectionHits>,
     plugin_click_sink: std::cell::RefCell<Option<PluginSectionClickSink>>,
     /// The session sidebar's wheel-scroll state (auditA #1): the
@@ -2621,6 +2638,20 @@ pub struct PluginRoutePage {
     /// `PluginRouteMissing` fallback screen renders instead of a
     /// page).
     pub missing: bool,
+}
+
+/// G-239/G-331 — the open session panel (context/panel.tsx:4-8's
+/// `PanelTarget` + the requested presentation): the owning plugin,
+/// the selected content name (`ui.panel.open(name)`), the owning
+/// session, and the REQUESTED presentation (the effective one
+/// re-derives per render — `canSplit ? requested : "fullscreen"`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionPanel {
+    pub plugin_id: String,
+    pub name: String,
+    pub session_id: String,
+    /// `true` = the plugin requested `"fullscreen"`.
+    pub fullscreen_requested: bool,
 }
 
 /// The diff viewer's source (`DIFF_SOURCES`, diff-viewer.tsx:73-78):
@@ -3817,6 +3848,9 @@ struct StoreSignals {
     plugin_slot_sections:
         Signal<std::collections::BTreeMap<String, Vec<crate::components::sidebar::SidebarSection>>>,
     plugin_route: Signal<Option<PluginRoutePage>>,
+    session_panel: Signal<Option<SessionPanel>>,
+    panel_focused: Signal<bool>,
+    panel_width: Signal<usize>,
     /// `session.sidebar` — the config mode (auto/hide) after the
     /// boot merge (cli.json, then the last toggle's persisted value).
     sidebar_mode: Signal<crate::components::sidebar::SidebarMode>,
@@ -3988,6 +4022,9 @@ impl Store {
             plugin_sections,
             plugin_slot_sections,
             plugin_route,
+            session_panel,
+            panel_focused,
+            panel_width,
             sidebar_mode,
             sidebar_open,
             terminal_size,
@@ -4091,6 +4128,9 @@ impl Store {
             plugin_sections,
             plugin_slot_sections,
             plugin_route,
+            session_panel,
+            panel_focused,
+            panel_width,
             sidebar_mode,
             sidebar_open,
             terminal_size,
@@ -4159,6 +4199,7 @@ impl Store {
             sidebar_onboarding_hits: std::cell::RefCell::new(None),
             sidebar_mcp_hits: std::cell::RefCell::new(SidebarMcpHits::default()),
             picker_entry_hits: std::cell::RefCell::new(PickerEntryHits::default()),
+            panel_rect: std::cell::RefCell::new(None),
             plugin_section_hits: std::cell::RefCell::new(PluginSectionHits::default()),
             plugin_click_sink: std::cell::RefCell::new(None),
             sidebar_scroll: std::cell::RefCell::new(SidebarScrollState::default()),
@@ -4300,6 +4341,9 @@ impl Store {
             std::collections::BTreeMap::<String, Vec<crate::components::sidebar::SidebarSection>>::new(),
         );
         let plugin_route = Signal::new(&runtime, Option::<PluginRoutePage>::None);
+        let session_panel = Signal::new(&runtime, Option::<SessionPanel>::None);
+        let panel_focused = Signal::new(&runtime, false);
+        let panel_width = Signal::new(&runtime, 0usize);
         let sidebar_mode =
             Signal::new(&runtime, crate::components::sidebar::SidebarMode::default());
         let sidebar_open = Signal::new(&runtime, false);
@@ -4395,6 +4439,9 @@ impl Store {
                 plugin_sections,
                 plugin_slot_sections,
                 plugin_route,
+            session_panel,
+            panel_focused,
+            panel_width,
                 sidebar_mode,
                 sidebar_open,
                 terminal_size,
@@ -5909,6 +5956,10 @@ impl Store {
     /// input focus on mount (`shouldFocus`).
     pub fn select_terminal(&self, session_id: &str, pty_id: Option<&str>) {
         if let Some(pty) = pty_id {
+            // G-239/G-331 — session-frame.tsx:100-103: selecting a
+            // terminal closes the panel (the panes are mutually
+            // exclusive; the panel owns the pane while open).
+            self.close_session_panel();
             self.terminal_selection.set(Some((session_id.to_owned(), pty.to_owned())));
             self.terminal_focus_right.set(true);
             // The attach-storm guard: the explicit selection IS the
@@ -10245,6 +10296,10 @@ impl Store {
         // (PLUG-TUI-SLOT: the plugin route is replaced exactly like
         // the ref's router replaces the visible route).
         self.close_plugin_route();
+        // G-239/G-331 — app.tsx:579-589: a route change closes the
+        // session panel (fullscreen only ever covers the panel's OWN
+        // session; navigating away drops it).
+        self.close_session_panel();
         // RE-14: the stats page rides the same rule — it is mounted
         // over the visible route, a navigation replaces it too.
         if self.stats_page.get().open {
@@ -11640,6 +11695,137 @@ impl Store {
     #[must_use]
     pub fn plugin_route_page(&self) -> Option<PluginRoutePage> {
         self.plugin_route.get()
+    }
+
+    // ---------------------------------------------------------------------
+    // G-239/G-331 — the session panel (context/panel.tsx:10-42 +
+    // session-frame.tsx:88-117's right-pane leg)
+    // ---------------------------------------------------------------------
+
+    /// `ui.panel.open(name, {presentation?})` (context.ts:501-503):
+    /// returns the route-check boolean — `false` when the TUI is not
+    /// on a session route (the ref resolves false there; the registry
+    /// gate is the mounted-claims seam itself). Idempotent on the
+    /// same target (panel.tsx:25-30 keeps `current`); a NEW target
+    /// replaces. Mutual exclusion (session-frame.tsx:93-105): the
+    /// open drops the selected terminal and the manual sidebar flag
+    /// (panel > open-sidebar > terminal in the precedence chain).
+    pub fn open_session_panel(&self, plugin_id: &str, name: &str, fullscreen_requested: bool) -> bool {
+        let Route::Session { session_id, .. } = self.route.get() else {
+            return false;
+        };
+        let same_target = self.session_panel.get().is_some_and(|panel| {
+            panel.plugin_id == plugin_id && panel.name == name && panel.session_id == *session_id
+        });
+        if !same_target {
+            // A selected terminal closes (opening the panel wins the
+            // pane); the manual sidebar flag drops too.
+            self.select_terminal(&session_id, None);
+            self.sidebar_open.set(false);
+            self.session_panel.set(Some(SessionPanel {
+                plugin_id: plugin_id.to_owned(),
+                name: name.to_owned(),
+                session_id,
+                fullscreen_requested,
+            }));
+            // A freshly opened panel takes the input scope
+            // (panel-host's onTarget → focusRightPane).
+            self.panel_focused.set(true);
+        } else if self
+            .session_panel
+            .get()
+            .is_some_and(|panel| panel.fullscreen_requested != fullscreen_requested)
+        {
+            self.session_panel.update(|panel| {
+                if let Some(panel) = panel.as_mut() {
+                    panel.fullscreen_requested = fullscreen_requested;
+                }
+            });
+        }
+        self.request_redraw();
+        true
+    }
+
+    /// `panels.close()` — close whatever panel is open (the host-side
+    /// arm: the escape bind and the route change).
+    pub fn close_session_panel(&self) {
+        if self.session_panel.get().is_some() {
+            self.session_panel.set(None);
+            self.panel_focused.set(false);
+            self.request_redraw();
+        }
+    }
+
+    /// `panels.release(plugin)` (panel.tsx:33-36) — the owner-scoped
+    /// close behind `ctx.ui.panel.close()`: only the OWNING plugin's
+    /// panel closes, other plugins' panels are unaffected.
+    pub fn release_session_panel(&self, plugin_id: &str) {
+        if self.session_panel.get().is_some_and(|panel| panel.plugin_id == plugin_id) {
+            self.close_session_panel();
+        }
+    }
+
+    /// The mounted panel for a session route (`activePanel`,
+    /// session-frame.tsx:88-91 — only when the panel's sessionID
+    /// matches the routed session).
+    #[must_use]
+    pub fn session_panel_mounted(&self, session_id: &str) -> Option<SessionPanel> {
+        self.session_panel.get().filter(|panel| panel.session_id == session_id)
+    }
+
+    /// The open panel regardless of route (drain/fingerprint reads).
+    #[must_use]
+    pub fn session_panel(&self) -> Option<SessionPanel> {
+        self.session_panel.get()
+    }
+
+    /// The effective presentation (`presentation`,
+    /// panel.tsx:14-15): `canSplit = width > 80` — a NARROW frame is
+    /// a FULLSCREEN takeover, not an overlay; `toggleFullscreen` is
+    /// a no-op when narrow (bounded deviation: the toggle closure
+    /// cannot cross the wire, so only the requested flag moves it).
+    #[must_use]
+    pub fn session_panel_fullscreen(&self, content_width: usize) -> bool {
+        self.session_panel.get().is_some_and(|panel| {
+            panel.fullscreen_requested || content_width <= crate::components::session::PANEL_CAN_SPLIT_BREAKPOINT
+        })
+    }
+
+    /// The panel's input-scope flag (`activePane === "right"`).
+    #[must_use]
+    pub fn panel_focused(&self) -> bool {
+        self.panel_focused.get()
+    }
+
+    /// `focusRightPane`/`focusSession` for the panel leg (the mouse
+    /// and key arms drive it).
+    pub fn set_panel_focused(&self, focused: bool) {
+        self.panel_focused.set(focused);
+        self.request_redraw();
+    }
+
+    /// The panel pane's rendered width (`panels.setWidth` — pushed by
+    /// the session render; the materialize props' `width` input).
+    pub fn set_panel_width(&self, width: usize) {
+        self.panel_width.set(width);
+    }
+
+    /// The last-pushed panel width.
+    #[must_use]
+    pub fn panel_width(&self) -> usize {
+        self.panel_width.get()
+    }
+
+    /// The panel pane's rect (the last render's absolute cells).
+    #[must_use]
+    pub fn panel_rect(&self) -> Option<HitRect> {
+        self.panel_rect.borrow().clone()
+    }
+
+    /// Record the panel pane's rect (the render pass; `None` clears
+    /// a stale rect when the pane unmounts).
+    pub fn set_panel_rect(&self, rect: Option<HitRect>) {
+        *self.panel_rect.borrow_mut() = rect;
     }
 
     // ---------------------------------------------------------------------
@@ -18518,5 +18704,67 @@ mod g368_title_tests {
         assert_eq!(store.terminal_title(), "OC | stats", "the plugin arm wins");
         store.close_plugin_route();
         assert_eq!(store.terminal_title(), "OC | My session", "back to the session arm");
+    }
+
+    /// G-239/G-331 — the session-panel store semantics (panel.tsx:
+    /// 10-42): route check, idempotent same-target open, owner-scoped
+    /// release, mutual exclusion with the terminal pane, and the
+    /// route-change close.
+    #[test]
+    fn session_panel_open_close_release_semantics() {
+        let store = Store::new(crate::reactive::Runtime::new());
+        // Off a session route the open resolves false (context.ts:
+        // 501-503).
+        assert!(!store.open_session_panel("omos", "board", false));
+        assert!(store.session_panel().is_none());
+
+        store.open_tab("s1", None);
+        store.navigate(Route::session("s1"));
+        assert!(store.open_session_panel("omos", "board", false));
+        assert!(store.panel_focused(), "a fresh open takes the input scope");
+        // Idempotent same-target: stays open, same target.
+        assert!(store.open_session_panel("omos", "board", false));
+        assert_eq!(store.session_panel().expect("open").name, "board");
+        assert!(store.session_panel_mounted("s1").is_some());
+        assert!(store.session_panel_mounted("other").is_none(), "per-session mount");
+
+        // Owner-scoped release: another plugin's close is a no-op.
+        store.release_session_panel("other");
+        assert!(store.session_panel().is_some(), "other plugins' panels unaffected");
+        store.release_session_panel("omos");
+        assert!(store.session_panel().is_none());
+        assert!(!store.panel_focused(), "the focus flag falls with the pane");
+
+        // Mutual exclusion both ways (session-frame.tsx:93-105).
+        store.set_terminal_available(true);
+        store.select_terminal("s1", Some("pty1"));
+        assert!(store.terminal_pane_mounted("s1").is_some());
+        assert!(store.open_session_panel("omos", "board", false));
+        assert!(store.terminal_pane_mounted("s1").is_none(), "the panel closed the terminal");
+        store.select_terminal("s1", Some("pty1"));
+        assert!(
+            store.session_panel().is_none(),
+            "selecting a terminal closed the panel"
+        );
+
+        // The route change closes (app.tsx:579-589).
+        assert!(store.open_session_panel("omos", "board", false));
+        store.navigate(Route::Home);
+        assert!(store.session_panel().is_none(), "the route change closed the panel");
+    }
+
+    /// The canSplit gate (panel.tsx:14-15): narrow frames are
+    /// fullscreen takeovers regardless of the requested presentation.
+    #[test]
+    fn session_panel_presentation_gates() {
+        let store = Store::new(crate::reactive::Runtime::new());
+        store.open_tab("s1", None);
+        store.navigate(Route::session("s1"));
+        store.open_session_panel("omos", "board", false);
+        assert!(!store.session_panel_fullscreen(160), "wide + panel = docked");
+        assert!(store.session_panel_fullscreen(80), "narrow = fullscreen takeover");
+        store.close_session_panel();
+        store.open_session_panel("omos", "board", true);
+        assert!(store.session_panel_fullscreen(160), "requested fullscreen holds");
     }
 }
