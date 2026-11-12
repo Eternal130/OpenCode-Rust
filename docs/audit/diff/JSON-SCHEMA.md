@@ -8,7 +8,7 @@
 >（含 Cache 查找 catch→undefined→accept 的宽松语义）。bun 驱动逐对校验。
 > 复现：`python3 tools/diff/json_schema_validate.py`（corpus：/opt/opencode-rust/tools/diff/corpus/json_schema）
 
-- **MATCH：128/152** · rust-accept-ref-reject：**12** · rust-reject-ref-accept：**12** · MISSING：**0**
+- **MATCH：137/152** · rust-accept-ref-reject：**4** · rust-reject-ref-accept：**11** · MISSING：**0**
 
 ## 关键字覆盖矩阵
 
@@ -21,24 +21,24 @@
 | `anyOf` | 6 | 6 | 0 | 0 |
 | `const` | 11 | 9 | 0 | 2 |
 | `enum` | 5 | 4 | 0 | 1 |
-| `exclusiveMaximum` | 2 | 1 | 1 | 0 |
-| `exclusiveMinimum` | 3 | 1 | 2 | 0 |
+| `exclusiveMaximum` | 2 | 2 | 0 | 0 |
+| `exclusiveMinimum` | 3 | 3 | 0 | 0 |
 | `format` | 3 | 3 | 0 | 0 |
 | `integer` | 13 | 9 | 3 | 1 |
-| `items` | 8 | 7 | 0 | 1 |
+| `items` | 8 | 8 | 0 | 0 |
 | `malformed-schema` | 11 | 9 | 0 | 2 |
 | `maxItems` | 2 | 2 | 0 | 0 |
 | `maxLength` | 3 | 3 | 0 | 0 |
 | `maximum` | 6 | 6 | 0 | 0 |
 | `minItems` | 3 | 3 | 0 | 0 |
 | `minLength` | 7 | 7 | 0 | 0 |
-| `minProperties` | 2 | 1 | 1 | 0 |
+| `minProperties` | 2 | 2 | 0 | 0 |
 | `minimum` | 5 | 5 | 0 | 0 |
-| `multipleOf` | 3 | 1 | 2 | 0 |
+| `multipleOf` | 3 | 3 | 0 | 0 |
 | `number` | 4 | 4 | 0 | 0 |
 | `oneOf` | 5 | 5 | 0 | 0 |
 | `pattern` | 5 | 3 | 0 | 2 |
-| `prefixItems` | 5 | 2 | 2 | 1 |
+| `prefixItems` | 5 | 5 | 0 | 0 |
 | `properties` | 12 | 12 | 0 | 0 |
 | `recursion` | 4 | 4 | 0 | 0 |
 | `required` | 6 | 6 | 0 | 0 |
@@ -56,20 +56,11 @@
 | `const-object/extra` | rust-reject-ref-accept | 同上（结构化 const 编译失败）。 |
 | `const-object/str-val` | rust-reject-ref-accept | effect 对结构化（对象/数组）const 编译抛错（"Unsupported structured JSON Schema value for const |
 | `enum-mixed/float-1` | rust-reject-ref-accept | enum 含 u64(1)，实例 f64(1.0)，serde_json Number 按变体判等→不等；JS 数值 1===1.0。与上一条同根因。 |
-| `exclusive-maximum/ten` | rust-accept-ref-reject | rust 未实现 exclusiveMaximum。 |
-| `exclusive-minimum/neg` | rust-accept-ref-reject | rust 未实现 exclusiveMinimum。 |
-| `exclusive-minimum/zero` | rust-accept-ref-reject | rust 未实现 exclusiveMinimum。 |
 | `integer-big-int/big` | rust-accept-ref-reject | effect integer AST 以 JS 安全整数域为界，2^53 起拒绝（probe 直证）；rust u64/i64 覆盖全 64 位。另注：JS J |
 | `integer-big-int/big-ok` | rust-accept-ref-reject | 2^53 恰可精确表示但 effect 仍拒绝——安全整数边界取 < 2^53。 |
 | `integer-big-int/neg-big` | rust-accept-ref-reject | 同上，负方向对称。 |
-| `min-properties/empty` | rust-accept-ref-reject | rust 未实现 minProperties。 |
-| `multiple-of/float` | rust-accept-ref-reject | rust 未实现 multipleOf。 |
-| `multiple-of/odd` | rust-accept-ref-reject | rust 未实现 multipleOf。 |
 | `pattern/space` | rust-reject-ref-accept | 同上（pattern 编译抛错→catch→accept-all）。 |
 | `pattern/upper` | rust-reject-ref-accept | effect Draft2020-12 编译器对 pattern 默认抛错（"Pattern encountered while patterns is set |
-| `prefix-items-plus-items/ok` | rust-reject-ref-accept | items 被应用到全部元素，前缀位置的 "a" 也按 {type:"integer"} 校验→误拒合法输入。 |
-| `prefix-items/bad-first` | rust-accept-ref-reject | rust 未实现 prefixItems（关键字被忽略），draft-2020-12 语义丢失。 |
-| `prefix-items/bad-second` | rust-accept-ref-reject | 同上（prefixItems 未实现）。 |
 | `type-integer/float-int` | rust-reject-ref-accept | serde_json 保留 `5.0` 为 f64（is_i64=false→非 integer），JS 中 5.0===5 为整数。数字表示差，非能力缺口。 |
 | `type-malformed-name/num` | rust-reject-ref-accept | 同上。 |
 | `type-malformed-name/str` | rust-reject-ref-accept | rust 将未知 type 名当作永不匹配→拒绝一切；ref 编译 codec 失败→Cache catch→accept-all。双侧都不是 spec 行为； |
@@ -118,27 +109,6 @@
 - rust accept = `False` · ref accept = `True`
 - 定性：记录性严格差：enum 含 u64(1)，实例 f64(1.0)，serde_json Number 按变体判等→不等；JS 数值 1===1.0。与上一条同根因。
 
-### `exclusive-maximum/ten` — rust-accept-ref-reject
-- 关键字：`exclusiveMaximum`
-- rust 锚点：`exclusiveMaximum`→json_schema.rs — NOT IMPLEMENTED (absent keyword)
-- ref 锚点：`packages/core/src/tool/runtime.ts:101-107 (jsonSchema) / :78 (decodeUnknownEffect) / :9-18 (Cache catch->undefined->accept)`
-- rust accept = `True` · ref accept = `False`
-- 定性：缺口候选：rust 未实现 exclusiveMaximum。
-
-### `exclusive-minimum/neg` — rust-accept-ref-reject
-- 关键字：`exclusiveMinimum`
-- rust 锚点：`exclusiveMinimum`→json_schema.rs — NOT IMPLEMENTED (absent keyword)
-- ref 锚点：`packages/core/src/tool/runtime.ts:101-107 (jsonSchema) / :78 (decodeUnknownEffect) / :9-18 (Cache catch->undefined->accept)`
-- rust accept = `True` · ref accept = `False`
-- 定性：缺口候选：rust 未实现 exclusiveMinimum。
-
-### `exclusive-minimum/zero` — rust-accept-ref-reject
-- 关键字：`exclusiveMinimum`
-- rust 锚点：`exclusiveMinimum`→json_schema.rs — NOT IMPLEMENTED (absent keyword)
-- ref 锚点：`packages/core/src/tool/runtime.ts:101-107 (jsonSchema) / :78 (decodeUnknownEffect) / :9-18 (Cache catch->undefined->accept)`
-- rust accept = `True` · ref accept = `False`
-- 定性：缺口候选：rust 未实现 exclusiveMinimum。
-
 ### `integer-big-int/big` — rust-accept-ref-reject
 - 关键字：`type`, `integer`
 - rust 锚点：`type`→json_schema.rs:146-170 (union parse) / :31-43 (matches_type); `integer`→json_schema.rs:34-36
@@ -160,27 +130,6 @@
 - rust accept = `True` · ref accept = `False`
 - 定性：记录性严格差（ref 侧）：同上，负方向对称。
 
-### `min-properties/empty` — rust-accept-ref-reject
-- 关键字：`minProperties`
-- rust 锚点：`minProperties`→json_schema.rs — NOT IMPLEMENTED (absent keyword)
-- ref 锚点：`packages/core/src/tool/runtime.ts:101-107 (jsonSchema) / :78 (decodeUnknownEffect) / :9-18 (Cache catch->undefined->accept)`
-- rust accept = `True` · ref accept = `False`
-- 定性：缺口候选：rust 未实现 minProperties。
-
-### `multiple-of/float` — rust-accept-ref-reject
-- 关键字：`multipleOf`
-- rust 锚点：`multipleOf`→json_schema.rs — NOT IMPLEMENTED (absent keyword)
-- ref 锚点：`packages/core/src/tool/runtime.ts:101-107 (jsonSchema) / :78 (decodeUnknownEffect) / :9-18 (Cache catch->undefined->accept)`
-- rust accept = `True` · ref accept = `False`
-- 定性：缺口候选：rust 未实现 multipleOf。
-
-### `multiple-of/odd` — rust-accept-ref-reject
-- 关键字：`multipleOf`
-- rust 锚点：`multipleOf`→json_schema.rs — NOT IMPLEMENTED (absent keyword)
-- ref 锚点：`packages/core/src/tool/runtime.ts:101-107 (jsonSchema) / :78 (decodeUnknownEffect) / :9-18 (Cache catch->undefined->accept)`
-- rust accept = `True` · ref accept = `False`
-- 定性：缺口候选：rust 未实现 multipleOf。
-
 ### `pattern/space` — rust-reject-ref-accept
 - 关键字：`pattern`
 - rust 锚点：`pattern`→json_schema.rs:199-215
@@ -194,27 +143,6 @@
 - ref 锚点：`packages/core/src/tool/runtime.ts:101-107 (jsonSchema) / :78 (decodeUnknownEffect) / :9-18 (Cache catch->undefined->accept)`
 - rust accept = `False` · ref accept = `True`
 - 定性：记录性宽松差（ref 侧，重大）：effect Draft2020-12 编译器对 pattern 默认抛错（"Pattern encountered while patterns is set to error"）→ runtime.ts Cache catch → accept-all。ref 生产路径不校验 pattern；rust（G-59 补充）执行校验。
-
-### `prefix-items-plus-items/ok` — rust-reject-ref-accept
-- 关键字：`prefixItems`, `items`
-- rust 锚点：`prefixItems`→json_schema.rs — NOT IMPLEMENTED (absent keyword); `items`→json_schema.rs:349-360
-- ref 锚点：`packages/core/src/tool/runtime.ts:101-107 (jsonSchema) / :78 (decodeUnknownEffect) / :9-18 (Cache catch->undefined->accept)`
-- rust accept = `False` · ref accept = `True`
-- 定性：缺口候选（rust prefixItems 未实现的直接后果）：items 被应用到全部元素，前缀位置的 "a" 也按 {type:"integer"} 校验→误拒合法输入。
-
-### `prefix-items/bad-first` — rust-accept-ref-reject
-- 关键字：`prefixItems`
-- rust 锚点：`prefixItems`→json_schema.rs — NOT IMPLEMENTED (absent keyword)
-- ref 锚点：`packages/core/src/tool/runtime.ts:101-107 (jsonSchema) / :78 (decodeUnknownEffect) / :9-18 (Cache catch->undefined->accept)`
-- rust accept = `True` · ref accept = `False`
-- 定性：缺口候选：rust 未实现 prefixItems（关键字被忽略），draft-2020-12 语义丢失。
-
-### `prefix-items/bad-second` — rust-accept-ref-reject
-- 关键字：`prefixItems`
-- rust 锚点：`prefixItems`→json_schema.rs — NOT IMPLEMENTED (absent keyword)
-- ref 锚点：`packages/core/src/tool/runtime.ts:101-107 (jsonSchema) / :78 (decodeUnknownEffect) / :9-18 (Cache catch->undefined->accept)`
-- rust accept = `True` · ref accept = `False`
-- 定性：缺口候选：同上（prefixItems 未实现）。
 
 ### `type-integer/float-int` — rust-reject-ref-accept
 - 关键字：`type`, `integer`
@@ -266,6 +194,6 @@
 ## 判定
 
 - 已裁定：152/152（每对 MATCH 或分歧方向+定性明确；未定性 0 对待人工）
-- 缺口候选（rust 未实现关键字/布尔 schema）：prefixItems（含 items 全量应用的误拒副作用）、exclusiveMinimum/Maximum、multipleOf、minProperties、schema:false ——登记册候选。
+- G-395 已修：prefixItems（含 items 尾部语义）、exclusiveMinimum/Maximum、multipleOf、minProperties 全部 MATCH。schema:false 实测 ref 生产同样放行（codec_ok=true）——非缺口，预登记撤销。
 - 记录性宽松差（ref 侧，probe 直证）：pattern、结构化 const、additionalProperties、|n|≥2^53 integer——effect 编译器限制经 Cache catch launder，rust 侧为能力超集。
 - 记录性数字/相等语义差（5.0、1.0、[{},{}]、[1,1.0]）：JS 数值模型 vs serde_json 表示差，双侧各自自洽。
