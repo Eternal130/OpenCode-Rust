@@ -102,9 +102,21 @@ oc-uqr = { path = "third_party/oc-uqr" }
 # mini footer content rides the renderer root tree; the dock's
 # Canvas→into_frame→GridEmitter path and the "never pump" ruling
 # retire (mini frame bytes flow through the renderer pump exit).
-opentui-core = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "56a9eda" }
-opentui-keymap = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "56a9eda" }
-opentui-solid = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "56a9eda" }
+# retire (mini frame bytes flow through the renderer pump exit).
+# Rev 34a5ac4 (G-272⑩) adds the styled scrollback commit payload:
+# ExternalOutputCommit::styled (Option<Vec<CapturedLine>>) with
+# span-text row-width math and SGR-run transcript serialization,
+# StyledScrollbackSnapshot/Writer, CliRenderer::
+# write_styled_to_scrollback/enqueue_styled_scrollback_commit, and
+# ScrollbackSurface::commit_rows_styled (extraction via
+# get_span_lines). Differential suite stays 127 IDENTICAL (the
+# payload arm is additive — no scenario constructs the commit).
+# Consumed by oc-tui lane K (gb13): mini scrollback bodies emit
+# styled commits (theme colors + syntax highlight) instead of
+# mono plain text.
+opentui-core = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "34a5ac4" }
+opentui-keymap = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "34a5ac4" }
+opentui-solid = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "34a5ac4" }
 
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

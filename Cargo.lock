@@ -998,7 +998,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2678,7 +2678,7 @@ dependencies = [
 [[package]]
 name = "opentui-core"
 version = "0.1.0"
-source = "git+https://github.com/Eternal130/opentui-rust.git?rev=56a9eda#56a9eda7589a1d67dde3a5ab5adc5c97547e4472"
+source = "git+https://github.com/Eternal130/opentui-rust.git?rev=34a5ac4#34a5ac4a8962c480a6b3753297d3efe8d9823d14"
 dependencies = [
  "cc",
  "minimp3",
@@ -2696,7 +2696,7 @@ dependencies = [
 [[package]]
 name = "opentui-diff"
 version = "0.1.0"
-source = "git+https://github.com/Eternal130/opentui-rust.git?rev=56a9eda#56a9eda7589a1d67dde3a5ab5adc5c97547e4472"
+source = "git+https://github.com/Eternal130/opentui-rust.git?rev=34a5ac4#34a5ac4a8962c480a6b3753297d3efe8d9823d14"
 dependencies = [
  "anyhow",
  "opentui-core",
@@ -2710,7 +2710,7 @@ dependencies = [
 [[package]]
 name = "opentui-keymap"
 version = "0.1.0"
-source = "git+https://github.com/Eternal130/opentui-rust.git?rev=56a9eda#56a9eda7589a1d67dde3a5ab5adc5c97547e4472"
+source = "git+https://github.com/Eternal130/opentui-rust.git?rev=34a5ac4#34a5ac4a8962c480a6b3753297d3efe8d9823d14"
 dependencies = [
  "serde",
  "serde_json",
@@ -2719,7 +2719,7 @@ dependencies = [
 [[package]]
 name = "opentui-solid"
 version = "0.1.0"
-source = "git+https://github.com/Eternal130/opentui-rust.git?rev=56a9eda#56a9eda7589a1d67dde3a5ab5adc5c97547e4472"
+source = "git+https://github.com/Eternal130/opentui-rust.git?rev=34a5ac4#34a5ac4a8962c480a6b3753297d3efe8d9823d14"
 dependencies = [
  "opentui-core",
 ]
@@ -3067,7 +3067,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3438,7 +3438,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3497,7 +3497,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4083,7 +4083,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
