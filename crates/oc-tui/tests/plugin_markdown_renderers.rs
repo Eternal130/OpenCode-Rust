@@ -135,9 +135,7 @@ fn boot_chain_caches_plugin_rows() {
     // The off-loop render lands: the version bumps and the rows cache.
     let before = plugin_markdown::rendered_version();
     assert!(
-        wait_for(Duration::from_secs(10), || {
-            plugin_markdown::rendered_version() > before
-        }),
+        wait_for(Duration::from_secs(10), || { plugin_markdown::rendered_version() > before }),
         "the bounded render landed"
     );
     let hit = render_markdown(source, 40, &styles);
