@@ -34,6 +34,8 @@
 
 > **2026-11-12 第二十七轮（差分层通道 2-6 全量铺开）**：5 条并行 lane 复制通道 1 模式（ACP 转译/SSE store 投影/JSON Schema 校验器对拍//compact 管线/HTTP 全量——双侧真实驱动：bun staging、rust env 门控测试、通道 6 双进程真实 boot 47 请求）。**6 通道合计 384 对拍单元：MATCH 323 · DIVERGE 74 · ADJUDICATED 2 · 覆盖率 100%**；74 项分歧归并 **G-392..G-411（20 条：🟡×6 / 🟢×9 / ℹ️×5）** 入册。核心新事实：ACP child toolCallId 双重前缀 wire bug（G-392）、SSE reasoning 空白 delta 丢弃=G-351 姊妹缺口（G-393）、HTTP provider.list wire 形状整差（G-394）、校验器 7 关键字缺口（G-395）、agent 内容漂移（G-396）、**ref 生产校验器把编译错洗成 accept-all**（G-407：pattern/additionalProperties:false/结构化 const 在 ref 生产不校验——rust 更严属规范正确）。已知锚：G-357 四修复位全对齐、G-351 text 半边对齐、G-339/G-340/G-230c 对齐。工具 `tools/diff/`（6 编排器），报告与 INDEX `docs/audit/diff/`；扫描循环现口径=census 14 命令 + diff 6 命令。明细见文末「第二十七轮」节。
 
+> **2026-11-13 第二十八轮 burndown 收口（gap-burndown-14）**：第二十七轮 G-392..G-411 中 13 项可行动缺口经 5 个串行 lane（oc-cli ACP/oc-tui SSE store/oc-ai 校验/oc-server wire/oc-core agent 种子）落地合并 main，逐条 ✅；G-403 按登记倾向裁决为有意纠偏（ℹ️）；G-404 整条+G-395 两子项经差分复跑**证伪撤销**。差分稳态 **399 单元：MATCH 341 · DIVERGE 56 · ADJUDICATED 2——残余分歧 100% 登记归属，可行动缺口清零**；census 零新 REF_ONLY；终局 workspace 门 6038/6038。无 opentui-rust 依赖的上游阻挡项（唯一上游阻挡维持=G-247 残余 Bun 全局面）。明细见文末「第二十八轮 burndown 收口」节。
+
 > **2026-11-12 第二十六轮（差分层通道 1：配置解析语义差分）**：同一 corpus（43 例：合法/畸形/边界/JSONC/未知键/大小写/重复键/UNSUPPORTED 族）喂双侧**纯函数管线**（jsonc-parse → normalize → Info decode；ref=bun 驱动 staging+node_modules 链接、git 树零改动；rust=env 门控集成测试零常态成本），归一化（kind 小写、诊断排序、encoded 键序排序）后五字段对拍。**MATCH 41/43 · DIVERGE 2**：新立项 **G-391** 🟡（provider `Model.cost` 为 13 字段中唯一缺 `skip_serializing_if` 者——normalize 类型化往返物化 `"cost": null` 且经 `Info.providers` 逃逸到 `GET /api/config` wire；修法一行+差分复跑即验证）+ G-390 复认（rust 超集旋钮预期分歧，非缺口）。验证"存在性全面 ≠ 等价性全面"：census CONFIG-KEYS 曾确认键集/默认值对齐，序列化物化只有差分能抓到。工具 `tools/diff/{config_parse.py,corpus/config/,drivers/}`，报告 `docs/audit/diff/CONFIG-PARSE.md`，复现 `python3 tools/diff/config_parse.py`。后续差分通道按成本升序：ACP 转译 → SSE store 投影 → JSON Schema 校验器对拍 → /compact 管线 → HTTP 全量。明细见文末「第二十六轮」节。
 
 
@@ -2865,82 +2867,98 @@ G-391 经单 lane worktree（`.worktrees/g391`，TDD red→green）落地并 ff 
 
 ## 🟡 中
 
-### G-392 ❌ ACP child 会话 toolCallId 双重前缀（wire bug）
+### G-392 ✅ ACP child 会话 toolCallId 双重前缀（wire bug）
 - rust：`oc-cli/src/acp/translate.rs:753` `pending_update` 构造时 `child::tool_call_id(child, &tool.id)` 前缀一次 → `route()`（:764）`child::project(update, child)` 再前缀（child.rs:112 `format!("{}:{}", …)` 非幂等）→ child 会话的 pending tool_call wire 输出 `childId:childId:toolId`。
 - ref：child.ts 仅 project 处前缀一次。
 - 影响：ACP 客户端（Zed 等）工具调用追踪键错位，update/call 对不上。
 - 修法：pending_update 不前缀（交 project 统一）或 project 幂等化；差分复跑即验证。
 - 出处：diff ACP-TRANSLATE A1。
+- **2026-11-13 第二十八轮收口 ✅（`55a44d61`）**：pending_update 不再前缀，project 独占单次前缀（ref translate.ts:309-320 + child.ts:39-47 形状）；双测试钉定 exactly-once。差分 A1 修复（A1/A2 残余分歧=已登记 G-411 B1 pending 形状差）。
 
-### G-393 ❌ SSE reasoning 空白 delta 丢弃（G-351 姊妹缺口）
+### G-393 ✅ SSE reasoning 空白 delta 丢弃（G-351 姊妹缺口）
 - rust：`oc-tui/src/store.rs:13709-13722` reasoning delta 臂仍是 `trim().is_empty() → return`（G-357 只修了 text 臂 store.rs:13193 族）。
 - ref：`data.ts:992-996` 原样追加。
 - 影响：reasoning 流式空白丢失，终值可与 transcript 不一致。
 - 修法：镜像 G-351 的 text 修法。
 - 出处：diff SSE-PROJECTION 成因族 4。
+- **2026-11-13 第二十八轮收口 ✅（`002e541e`）**：reasoning delta 臂空白原样追加，仅缺字段跳过（G-351 text 修法镜像）。
 
-### G-394 ❌ HTTP `GET /api/provider` wire 形状整差
+### G-394 ✅ HTTP `GET /api/provider` wire 形状整差
 - rust：全量目录 224 条、无 location 包裹（routes.gen.rs:1216 侧 handler 直吐 catalog）。
 - ref：仅启用 provider + location 包裹结构（groups/provider.ts:10）。
 - 影响：客户端按 ref 形状写的 provider 选择逻辑整面失效（数量级+包裹双层差）。
 - 修法：handler 按请求 location 过滤启用项并加包裹（wire 测试钉定）。
 - 出处：diff HTTP-FULL（运行时双进程实证）。
+- **2026-11-13 第二十八轮收口 ✅（`20a51901`）**：`Catalog::available_providers` 可用性折叠（keyless zen/env 凭据/bedrock 链规则）+ ref 服务形状五来源（models-dev integrationID/keyless zen 激活翻转/config customs 双路/console/local）；provider_get 同形状。openapi 钉定文档本就描述 ref 形状——修复=向自身钉定 spec 对齐，零 baseline 变化；oc-tui 消费侧经核验无需适配。差分 provider 族翻 MATCH。
 
-### G-395 ❌ JSON Schema 校验器关键字缺口打包（7 项）
+### G-395 ✅ JSON Schema 校验器关键字缺口打包（7 项 → 4 族落地 + 2 子项证伪撤销）
 - rust `oc-ai/src/json_schema.rs`（G-59/G-100/G-230 面）缺：`prefixItems`（未实现×2 + items 全量应用误拒前缀合法元素的副作用×1）、`exclusiveMinimum`×2、`exclusiveMaximum`、`multipleOf`×2、`minProperties`、`boolean schema false`×2、畸形 type（"banana"）处置差。
 - ref（effect JsonSchema 全量 draft 语义）均正确拒绝/接受。
 - 影响：带这些关键字的 MCP/插件 schema 在 rust 侧静默放行非法输入（或误拒合法输入——prefixItems 副作用）。
 - 修法：校验器补 7 关键字（纯函数扩展+对拍复跑）。
 - 出处：diff JSON-SCHEMA（rust-accept-ref-reject 12 对中的 9 对，余 3 对为 G-408 安全整数域差）。
+- **2026-11-13 第二十八轮收口 ✅（`c9b75516`，四族落地）**：prefixItems（draft-2020-12 元组语义 + items 仅施于前缀之外元素——误拒副作用同修）、exclusiveMinimum/exclusiveMaximum、multipleOf、minProperties；6 单测镜像 corpus。
+- **勘误（两子项证伪撤销）**：①boolean schema `false`×2 经 ref 生产驱动复跑为 `codec_ok=true, accept=true`——ref 侧同样接受（G-407 洗错机制的又一显现），基线即 MATCH，登记撤回（脚本分类已订正）；②畸形 type（"banana"）经复跑归 rust-reject-ref-accept 方向=ref 编译失败→accept-all，属 G-407 pack（rust 更严维持），非缺口。JSON 通道 128→137 MATCH。
 
-### G-396 ❌ HTTP agent 端点内容漂移（permissions 计数 + system prompt 文本）
+### G-396 ✅ HTTP agent 端点内容漂移（permissions 计数 + system prompt 文本）
 - rust vs ref（双进程运行时实证）：`GET /api/agent` 的 permissions 少 5-9 项/agent、部分 agent 的 system prompt 文本与 ref 不一致（正文漂移，非形状）。
 - 影响：模型行为面（system prompt 是行为输入）与权限可见面漂移。
 - 修法：逐 agent 对拍种子定义与 permissions 表（内容级 lane，需先定位漂移源——内建 seed vs ref agent.ts）。
 - 出处：diff HTTP-FULL `agent`。
+- **2026-11-13 第二十八轮收口 ✅（`5ac33286`）**：根因=①`agent_info()` 种子 `permissions: Vec::new()`——改以 `oc_schema::agent::Info::default_for`（5 条基线 `*,*,allow`+external_directory ask+3 条 env 规则）为基（ref 每代理经 Agent.Editor.update 创建，schema/agent.ts:39-54 + agent.ts:59-63,76-83）；②explore 头部全局缺复制（ref 双份不 dedup：creation 头 + merge 尾 flat()，permission.ts:99-101）——头部随 agent_info 基线补位、尾部既有 extend 保留（8 条全局=ref 真值）；③prompt 1 字节漂移 "writes"→"write"（PROMPT_EXPLORE，doc 注释的 verbatim 声明一并修正）；④`RegistryAgentEditor::ensure`（config-md 代理）同修 defaults+globals+docPerms；⑤金测 4→8（原钉错态）+ 逐 agent 长度钉定 10/11/25/13/9/10/10 + HTTP wire 计数钉定。语义后果（预期 parity 修复）：general/compaction/title/summary 恢复 `*,*,allow`——工具动作由 fallback ask 回到 ref 的 allow。第二十二轮 `optimize/*.txt` 盲区就此清账（该族与 agent prompt 无关）。差分 agent 族翻 MATCH。
 
-### G-397 ❌ HTTP `GET /api/model/default` 字段缺口
+### G-397 ✅ HTTP `GET /api/model/default` 字段缺口
 - rust 缺 `package/apiKey/baseURL` 字段（ref model-default 投影含之）；客户端默认模型展示/诊断面信息少。
 - 出处：diff HTTP-FULL `model_default`。
+- **2026-11-13 第二十八轮收口 ✅（`20a51901`）**：model_json 应用 ref 服务合并（model.ts:200-210）：package 回退 provider canonical、settings/headers/body 深合并（剥离 provider 专属 timeout/transport 键）、keyless zen 公钥随 provider settings 基座。差分 model_default 翻 MATCH。
 
 ## 🟢 低
 
-### G-398 ❌ SSE 空终值族（text/reasoning ended "" 跳过 + step.ended finish ""）
+### G-398 ✅ SSE 空终值族（text/reasoning ended "" 跳过 + step.ended finish ""）
 - rust：`store.rs:13683+/13725+` 终值为空串时跳过 part（不置 completed）；`step.ended` finish "" → None。ref：赋值并置 completed（data.ts:914-917/997-1002）。终态可分叉（空 part 存在性）。
 - 出处：diff SSE-PROJECTION 成因族 5。
+- **2026-11-13 第二十八轮收口 ✅（`002e541e`）**：空串终值赋值+置 completed（presence 语义对齐）；finish "" 持久化为 ""。
 
-### G-399 ❌ SSE 完成后迟到 delta：rust 丢弃、ref 追加
+### G-399 ✅ SSE 完成后迟到 delta：rust 丢弃、ref 追加
 - rust `store.rs:14287-14296`；ref 追加到已完成 part。竞窗内服务端补发时终值差一段。
 - 出处：diff SSE-PROJECTION 成因族 6。
+- **2026-11-13 第二十八轮收口 ✅（`002e541e`）**：流式（STREAM）完成后迟到 delta 追加到已完成 part；守卫重键为 `snapshot_authoritative`（set_messages/快照装载 populate、step.started 清除）——快照权威消息仍丢弃（ref data.ts:905-913 语义），g11f1_proof 族不动全绿。
 
 ### G-400 ❌ compaction null/错型校验残差打包（4 项）
 - `message.id/status` 数字：rust 接受透传（responses_compaction.rs:365-373）vs ref 拒绝（responses-compaction.ts:54-59）；`reasoning.id` 显式 null：rust as_str→None 接受 vs ref 拒（open-responses.ts:85）；`usage` 显式 null：rust 视为无 usage vs ref 拒（:80）；另 b21 拒绝次序差（双侧均拒，记录性）。G-357 的 null/错型残边。
 - 修法：四点补类型/null 门（对拍复跑验证）。
 - 出处：diff RESPONSES-COMPACTION b44/b45/v10/v19。
+- **2026-11-13 第二十八轮收口 ✅（`c9b75516`）**：message.id/status 非字符串拒（不再透传进 provider metadata）、reasoning.id 显式 null/非串拒（encrypted_content null 维持接受=corpus v08 parity）、usage 显式 null/非对象拒。b44/b45/v10/v19 翻对齐；compaction 通道 42→47 MATCH（余 1=b21 次序，记录性维持）。
 
-### G-401 ❌ ACP shell rawInput `cwd:null` 不回填
+### G-401 ✅ ACP shell rawInput `cwd:null` 不回填
 - rust `oc-cli/src/acp/tool.rs:179-187` 按键存在性判断（null 视为已给）；ref `tool.ts:165-168` 真值判断（null 回填 cwd）。客户端展示的 shell 命令 cwd 字段差。
 - 出处：diff ACP-TRANSLATE A2。
+- **2026-11-13 第二十八轮收口 ✅（`55a44d61`）**：rawInput cwd 改真值判定（is_truthy），null/"" 回填 ctx-cwd。差分 A2 修复（残余=G-411 B1 pending 形状差）。
 
-### G-402 ❌ ACP compaction 起始 id 回退源错位
+### G-402 ✅ ACP compaction 起始 id 回退源错位
 - rust 用 `data.id` 得 ""；ref 用 envelope id 得 `msg_N`（compaction 起始更新在无 data.id 时的 fallback id）。修复需上游传入 envelope id（提取注记）。
 - 出处：diff ACP-TRANSLATE A3。
+- **2026-11-13 第二十八轮收口 ✅（`55a44d61`）**：`translate::Event` 增 `id: Option<String>`（+with_id），turn.rs parse_event 与 diff driver 贯通 envelope id；compaction 臂回退 `message_id_from_event(envelope_id)`（evt_→msg_ helper，ref schema/session-message.ts:27）。差分 A3 全 MATCH。
 
-### G-403 ⚠️ HTTP session create 坏 location：rust 404 vs ref 200（悬挂 session）
+### G-403 ℹ️ HTTP session create 坏 location：rust 404 vs ref 200（有意纠偏，裁决落地）
 - rust `middleware.rs:386` LocationNotFound 拒绝；ref 创建引用不可解析 location 的悬挂 session（groups/session.ts:180 无前置解析）。方向=rust 更严；**裁决待定**：对齐 ref（放行悬挂）或登记有意纠偏（倾向后者——悬挂 session 是 ref 侧可疑行为，但 wire 兼容面需权衡）。
 - 出处：diff HTTP-FULL `session_create_bad_location`。
+- **2026-11-13 第二十八轮裁决（按登记倾向落定：有意纠偏，ℹ️）**：维持 rust 404 拒绝——悬挂 session 为 ref 侧可疑行为（引用不存在 location 的会话行，后续 location 出现前不可用、易成孤儿）。wire 兼容面声明：客户端在 ref 上可能拿到 200+悬挂会话而 rust 得 404，按 404 处理即可。`session_list_empty_again` 的残余分歧即其下游显现（data 0 vs 1），随本条一并归属已裁定分歧。
 
-### G-404 ❌ HTTP session.list 空页 cursor：ref 恒返回锚点 vs rust null
+### G-404 ✅→撤销 HTTP session.list 空页 cursor：~~ref 恒返回锚点 vs rust null~~（登记前提经复跑证伪）
 - 分页游标形状差（ref 恒回显 cursor 锚点；rust 空页回 null）。客户端分页循环终止条件差。
 - 出处：diff HTTP-FULL `session_list_empty_again`。
+- **2026-11-13 第二十八轮勘误（整条撤销）**：初报不实——ref 对空页同样发 null cursor（packages/server/src/handlers/session.ts:79-97 undefined 运行时序列化为 null；新鲜 ref boot 探针实证 `{"data":[],"cursor":{"previous":null,"next":null}}`），与 rust session.rs:361-379（2026-10-19 探针同款）逐字节一致。`session_list_empty_again` 的实际分歧=data 0 vs 1，系 G-403 级联，已随该条归属已裁定分歧。无独立行动面。
 
-### G-405 ❌ compaction 空 data 的 data-URL 回退差
+### G-405 ✅ compaction 空 data 的 data-URL 回退差
 - rust `schema/media.rs:342-352` 要求 data 非空 → 空 data 回退整串当 base64；ref `media.ts:290` 正则允许空 payload。空 `data:` URL 的 media part 形状差。
 - 出处：diff RESPONSES-COMPACTION v14。
+- **2026-11-13 第二十八轮收口 ✅（`c9b75516`）**：`parse_data_url` 不再要求非空载荷，`data:image/png;base64,`（空载荷）按 data URL 解析、不再整串回退 base64。v14 翻对齐。
 
-### G-406 ❌ SSE instructions.updated 空串 guard
+### G-406 ✅ SSE instructions.updated 空串 guard
 - rust `store.rs:13323-13342` 空 text guard 丢弃；ref 仅 guard undefined（空串生效）。
 - 出处：diff SSE-PROJECTION 成因族 8。
+- **2026-11-13 第二十八轮收口 ✅（`002e541e`）**：空串 text 落 system 行，仅缺字段跳过。
 
 ## ℹ️ 登记
 
@@ -2967,3 +2985,52 @@ G-391 经单 lane worktree（`.worktrees/g391`，TDD red→green）落地并 ff 
 ## 第二十七轮判定汇总
 
 差分层 6 通道全量落地：**384 单元 100% 归属，74 分歧归并 20 条（🟡×6 / 🟢×9 / ℹ️×5）**。修复优先序：G-392（wire bug，双重前缀）> G-393（G-351 姊妹，一行族）> G-394（provider wire 整差）> G-395（校验器 7 关键字，纯函数）> G-396（agent 内容漂移，需定位源）> G-397 > 🟢 族（G-400 打包四点/G-398/G-399/G-401/G-402/G-404/G-405/G-406）> G-403 裁决。工具：`tools/diff/`（6 编排器+corpus+驱动），报告 `docs/audit/diff/`（INDEX 总索引）。扫描循环现口径=**census 14 命令 + diff 6 命令**，全部幂等。
+
+---
+
+# 第二十八轮 burndown 收口（2026-11-13，gap-burndown-14）
+
+> 第二十七轮立项的 G-392..G-411：**13 项可行动缺口经 5 个串行 lane 落地并 ff 合并 main**（lane1 oc-cli ACP / lane2 oc-tui SSE store / lane3 oc-ai 校验 / lane4 oc-server wire / lane5 oc-core agent 种子）+ G-403 按登记倾向裁决为有意纠偏（ℹ️）+ G-404 整条与 G-395 两子项经差分复跑**证伪撤销**。差分 6 通道收尾合并复跑全绿（零回归）、census 14 通道零新 REF_ONLY、终局 workspace 门 **6038/6038**（证据 `.test-logs/workspace-021220-gb14-final.log`）。每 lane 独立 worktree（`.worktrees/gb14-*`，合并后回收）、dev-gate 单入口、nextest 未过滤证据、每 lane workspace 合并门复跑；一切门命令全量 tee 落盘 `.test-logs/*gb14*`。**无 opentui-rust 依赖的上游阻挡项**（唯一上游阻挡维持=G-247 残余全局 Bun/process 面，Bun 运行时钉死，按前轮标注搁置）。
+
+## 逐 lane 落地清单
+
+- **lane1 `55a44d61`+`0f9a80a1`（oc-cli ACP）**：G-392（pending_update 不再前缀、project 独占单次前缀；exactly-once 双测试）、G-401（rawInput cwd 真值判定，null/"" 回填）、G-402（envelope id 贯通 + evt_→msg_ helper）。ACP 通道 78→79 MATCH（A3 全 MATCH；A1/A2 残余=已登记 G-411 B1 pending 形状差）。
+- **lane2 `002e541e`+`b4ade368`+`df03bae5`（oc-tui SSE store）**：G-393（reasoning 空白 delta 原样追加）、G-398（空串终值赋值+completed；finish "" 持久化）、G-399（流式完成后迟到 delta 追加；守卫重键 `snapshot_authoritative` 区分快照权威与流式完成，g11f1_proof 不动全绿）、G-406（instructions.updated 空串生效）。**oracle 门零金帧变化**（`dual_engine_matches_frozen_oracle` PASS、goldens 无 diff）。SSE 通道残余 11 序列分歧全数归属 G-409 架构族（登记面），seq11 终态已一致。
+- **lane3 `c9b75516`+`a07ce40e`（oc-ai/oc-schema 校验）**：G-395 四族（prefixItems 元组语义+items 副作用、exclusiveMin/Max、multipleOf、minProperties；6 单测）、G-400 四门（message.id/status 错型拒、reasoning.id null 拒、usage null 拒；encrypted_content null 维持接受=v08 parity）、G-405（data: 空 base64 载荷合法）。JSON 通道 128→137 MATCH；compaction 42→47 MATCH（余 1=b21 次序，记录性）。
+- **lane4 `20a51901`+`af3572c9`（oc-server wire）**：G-394（`Catalog::available_providers` 可用性折叠 + ref 服务形状五来源：models-dev integrationID / keyless zen 激活翻转 / config customs 双路 / console / local；provider_get 同形状；openapi 钉定文档本就描述 ref 形状=向自身 spec 对齐零 baseline 变化；oc-tui 消费侧核验免适配）、G-397（model/default 服务合并：package 回退+settings 深合并+zen 公钥）。HTTP 通道 32→34 MATCH。
+- **lane5 `5ac33286`+`90272cab`（oc-core agent 种子）**：G-396（`agent_info()` 改 `Info::default_for` 基线；explore 头部全局补位——ref 双份不 dedup；PROMPT_EXPLORE "writes"→"write"+doc 注释修正；`RegistryAgentEditor::ensure` 同修；金测 4→8+逐 agent 长度钉定 10/11/25/13/9/10/10+HTTP wire 计数钉定；语义修复=general/compaction/title/summary 工具动作回 `*,*,allow`）。HTTP 通道 34→35 MATCH（agent 族翻绿）。
+- **verify（零代码 lane）**：6 通道差分合并复跑（稳态对账零回归）+ census 14 通道（零新 REF_ONLY）+ oc-tui 三 straggler 隔离取证 + 终局 workspace 门 6038/6038。
+
+## 勘误与裁决（本轮）
+
+1. **G-404 整条撤销**：双侧空页 cursor 均为 null——ref session.ts:79-97（undefined→运行时 null）+ 新鲜 ref boot 探针 `{"data":[],"cursor":{"previous":null,"next":null}}`，与 rust session.rs:361-379 逐字节一致；初报「ref 恒返回锚点」不实。`session_list_empty_again` 的实际分歧=data 0 vs 1（G-403 级联），随 G-403 归属已裁定分歧。
+2. **G-395 两子项撤销**：boolean schema `false`×2 在 ref 生产驱动下 `codec_ok=true, accept=true`（G-407 洗错机制又一显现）——基线即 MATCH，登记撤回；畸形 type 复跑归 rust-reject-ref-accept=ref 编译失败→accept-all，属 G-407 pack，非缺口。JSON 通道脚本分类已随证订正。
+3. **G-403 裁决落定（有意纠偏，ℹ️）**：维持 rust 404——悬挂 session 为 ref 侧可疑行为；wire 兼容声明：客户端在 ref 上可能拿到 200+悬挂会话而 rust 得 404。
+4. **INDEX 算术勘正**：第二十七轮「384 对拍单元」为求和笔误，按通道行实际合计 **399**（323+74+2）；本轮起以 399 为基（现稳态 341+56+2）。
+5. **第二十二轮盲区#2 关联盲区清账**：`optimize/*.txt` 字节 diff 疑点经 G-396 调查证实与 agent prompt 无关（ref optimize 为 per-provider system prompt，rust 侧无对应缺口信号）。
+
+## 现行差分稳态（6 通道，收尾合并复跑）
+
+| 通道 | MATCH | 残余分歧（全部登记归属） |
+|---|---|---|
+| 1 config | 42/43 | 1=G-390 已裁定超集旋钮 |
+| 2 ACP | 79/97 | 18=G-411 B1-B3 有据形状差族 |
+| 3 SSE | 1/12 | 11=G-409 架构族（1/2/3/7） |
+| 4 JSON | 137/152 | 4=G-408 数字域 + 11=G-407 ref 生产洗错（rust 有意更严） |
+| 5 compaction | 47/48 | 1=b21 拒绝次序（记录性） |
+| 6 HTTP | 35/47 | 10 DIVERGE + 2 ADJUDICATED = G-403 对（含级联）+ G-410 记录性族 |
+
+**合计 399 单元：MATCH 341 · DIVERGE 56 · ADJUDICATED 2——残余分歧 100% 有登记归属，可行动缺口清零。**
+
+## flake 观察（登记，不入白名单）
+
+- oc-tui `pty_boot_with_answering_terminal_dark/light`、`vt_temporal_busy_strip_spinner_paints_interactive_token`：lane4 门内败（同提交基线同败）+ 收尾隔离复跑 3/3 PASS——负载相关环境噪声，观察名单（复发三次再议白名单）。
+
+## 事故与流程注记（并入 lane 模板）
+
+- **ENOSPC**：lane5 worktree 私有 target（136G）一度打满磁盘（96%→100%）；以 `CARGO_TARGET_DIR` 复用主 target 走完门后回收。收尾按 2.1#6（主 target 255G>100G）执行整清。
+- **陈旧 worktree 二进制污染**：verify 门首轮 122 假红——已删 worktree 编译的测试二进制烘焙死绝对路径（ENOENT）；以 touch 源强制重编译消除。教训：worktree 回收后如遇大面积 ENOENT 假红，先疑陈旧二进制再归因代码。
+
+## 第二十八轮判定
+
+G-392 ✅ · G-393 ✅ · G-394 ✅ · G-395 ✅（四族落地+两子项证伪撤销）· G-396 ✅ · G-397 ✅ · G-398 ✅ · G-399 ✅ · G-400 ✅ · G-401 ✅ · G-402 ✅ · G-403 ℹ️（裁决：有意纠偏）· G-404 撤销（勘误）· G-405 ✅ · G-406 ✅ · G-407..G-411 ℹ️ 维持。现存未关闭项=文档化决策/登记族（G-12/G-16/G-17/G-28（收窄面）/G-32/G-38/G-39/G-40/G-49/G-148②/G-161①/G-163/G-164/G-200②/G-211(OBSOLETE)/G-212/G-238/G-240/G-247 残余(上游阻挡)/G-289/G-290/G-313..G-318/G-326/G-328/G-329/G-386/G-389/G-390/G-403/G-407..G-411）——均可行动面为零。证据：门与差分日志 `.test-logs/*gb14*`，差分报告 `docs/audit/diff/`（INDEX 已刷新）。

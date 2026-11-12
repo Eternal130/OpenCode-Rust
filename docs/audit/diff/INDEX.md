@@ -4,21 +4,21 @@
 > 与 census 的分工：census 证"面存在且键集对齐"，差分证"行为等价"。
 > 全部脚本幂等（连跑逐字节一致）、exit 0、双侧 file:line 证据。生成于 2026-11-12（round-23/25/26 修复后基线）。
 
-## 通道总表
+## 通道总表（2026-11-13 第二十八轮收口后稳态；括号内为 2026-11-12 建基值）
 
 | # | 通道 | 脚本 | 报告 | 规模 | MATCH | DIVERGE | ADJUDICATED |
 |---|---|---|---|---|---|---|---|
-| 1 | 配置解析 | config_parse.py | CONFIG-PARSE.md | 43 例 | 42 | 1（G-390 已裁决旋钮） | — |
-| 2 | ACP 转译 | acp_translate.py | ACP-TRANSLATE.md | 97 例（51/51 事件类型） | 78 | 19（3 缺口+3 有据+噪声已消解） | — |
-| 3 | SSE store 投影 | sse_projection.py | SSE-PROJECTION.md | 12 序列/93 事件 | 1 | 11（8 成因族） | — |
-| 4 | JSON Schema 校验器 | json_schema_validate.py | JSON-SCHEMA.md | 152 对/54 schema | 128 | 24（双向各 12） | — |
-| 5 | /compact 管线 | responses_compaction.py | RESPONSES-COMPACTION.md | 48 文档/86 item | 42 | 6 | — |
-| 6 | HTTP 全量 | http_full.py | HTTP-FULL.md | 47 请求/4 族（双侧真实 boot） | 32 | 13 | 2 |
+| 1 | 配置解析 | config_parse.py | CONFIG-PARSE.md | 43 例 | 42（42） | 1（G-390 已裁决旋钮） | — |
+| 2 | ACP 转译 | acp_translate.py | ACP-TRANSLATE.md | 97 例（51/51 事件类型） | 79（78） | 18（19）→全数 G-411 B1-B3 | — |
+| 3 | SSE store 投影 | sse_projection.py | SSE-PROJECTION.md | 12 序列/93 事件 | 1（1） | 11（11）→全数 G-409 族 1/2/3/7 | — |
+| 4 | JSON Schema 校验器 | json_schema_validate.py | JSON-SCHEMA.md | 152 对/54 schema | 137（128） | 15（24）=G-407×11 + G-408×4 | — |
+| 5 | /compact 管线 | responses_compaction.py | RESPONSES-COMPACTION.md | 48 文档/86 item | 47（42） | 1（6）=b21 次序（记录性） | — |
+| 6 | HTTP 全量 | http_full.py | HTTP-FULL.md | 47 请求/4 族（双侧真实 boot） | 35（32） | 10（13）=G-403 对+G-410 族 | 2（2） |
 
 ## 总计
 
-**384 个对拍单元：MATCH 323 · DIVERGE 74 · ADJUDICATED 2 · MISSING 0**（覆盖率 100%：每单元 MATCH/DIVERGE/ADJUDICATED 三态归属）。
-74 项分歧归并为 **20 个登记册条目（G-392..G-411：🟡×6 / 🟢×9 / ℹ️×5）**——见登记册第二十七轮。
+**399 个对拍单元：MATCH 341 · DIVERGE 56 · ADJUDICATED 2 · MISSING 0**（覆盖率 100%）。〔勘正：第二十七轮所记「384 单元」为求和笔误——通道行实际合计 399（323+74+2），通道行始终为权威口径。〕
+残余 56 项分歧 100% 有登记归属（G-390/G-409/G-407/G-408/G-411/b21/G-403+G-410），**可行动缺口清零**；第二十八轮关闭 13 项（G-392..G-402/G-405/G-406）、裁决 1 项（G-403 有意纠偏）、证伪撤销 1 条+2 子项（G-404、G-395⑤⑥）——见登记册第二十八轮。
 
 ## 关键发现（按严重度）
 
