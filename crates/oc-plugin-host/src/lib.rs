@@ -1014,6 +1014,32 @@ impl PluginHost {
         Ok(PluginSectionSpec::from_json(&result))
     }
 
+    /// Materialize one plugin-registered markdown code-block
+    /// renderer's content (`ctx.markdown.registerCodeBlockRenderer`,
+    /// api.tsx:168-178 — G-332): the guest runs the render function
+    /// NOW with `{code, language}`, bounded by `timeout`, flattened
+    /// against `width` — rendering afterwards is native, no per-frame
+    /// IPC. `language` is the RAW registration language.
+    pub fn render_markdown_block(
+        &self,
+        plugin_id: &str,
+        language: &str,
+        code: &str,
+        width: usize,
+        timeout: Duration,
+    ) -> Result<PluginSectionSpec, String> {
+        let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
+        let Some(runtime) = &facade.runtime else { return Err("plugin host unavailable".into()) };
+        let result = runtime
+            .block_on(facade.shared.request(
+                "markdown.render",
+                json!({ "pluginId": plugin_id, "language": language, "code": code, "width": width }),
+                timeout,
+            ))
+            .map_err(|error| error.to_string())?;
+        Ok(PluginSectionSpec::from_json(&result))
+    }
+
     /// Run one slot-claim row's `onMouseUp` (the click side of the
     /// claim surface; navigation asks flow back as UI requests).
     pub fn click_slot_claim(

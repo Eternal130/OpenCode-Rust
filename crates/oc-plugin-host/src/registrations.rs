@@ -333,6 +333,21 @@ pub struct PluginRoute {
     pub name: String,
 }
 
+/// One plugin-registered markdown code-block renderer
+/// (`ctx.markdown.registerCodeBlockRenderer(language, render)` —
+/// api.tsx:168-178, G-332): the render function stays in the guest;
+/// the TUI consults the table (normalized filetype → owning plugin,
+/// LAST registration wins across plugins) and materializes content
+/// through [`crate::PluginHost::render_markdown_block`]. The
+/// `language` is the RAW registration language — normalization
+/// happens at consumption (oc-tui's
+/// `opentui_core::tree_sitter::info_string_to_filetype`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginMarkdownRenderer {
+    pub plugin_id: String,
+    pub language: String,
+}
+
 /// One command contributed through `ctx.keymap.layer(factory)` (the
 /// v2 keymap-layer surface, api.tsx:179-199): a bind + title (+
 /// group/slash/palette metadata) whose `run` callback stays in the
@@ -410,6 +425,10 @@ pub struct RegistrationSnapshot {
     pub routes: Vec<PluginRoute>,
     /// Keymap-layer commands (`ctx.keymap.layer`), registration order.
     pub keymap_commands: Vec<PluginKeymapCommand>,
+    /// Plugin markdown code-block renderers
+    /// (`ctx.markdown.registerCodeBlockRenderer` — G-332),
+    /// registration order (last-wins per language at consumption).
+    pub markdown_renderers: Vec<PluginMarkdownRenderer>,
     pub plugins: Vec<PluginStatus>,
     /// The table-global default agent (`draft.default(id)`), when set.
     pub default_agent: Option<String>,
@@ -478,6 +497,9 @@ pub struct Registrations {
     pub routes: BTreeMap<String, PluginRoute>,
     /// Keymap-layer commands (`ctx.keymap.layer`), registration order.
     pub keymap_commands: Vec<PluginKeymapCommand>,
+    /// Plugin markdown code-block renderers (G-332), registration
+    /// order — the TUI's table build resolves last-wins per language.
+    pub markdown_renderers: Vec<PluginMarkdownRenderer>,
     /// entry path (string) → status.
     pub plugins: BTreeMap<String, PluginStatus>,
     /// The table-global default agent id.
@@ -525,6 +547,7 @@ impl Registrations {
         self.slot_claims.retain(|claim| claim.plugin_id != plugin_id);
         self.routes.retain(|_, route| route.plugin_id != plugin_id);
         self.keymap_commands.retain(|command| command.plugin_id != plugin_id);
+        self.markdown_renderers.retain(|renderer| renderer.plugin_id != plugin_id);
         self.websearch_providers.retain(|_, provider| provider.plugin_id != plugin_id);
         self.worktree_strategies.retain(|_, strategy| strategy.plugin_id != plugin_id);
         self.integration_methods.retain(|_, method| method.plugin_id != plugin_id);
@@ -951,6 +974,7 @@ impl Registrations {
             slot_claims: self.slot_claims.clone(),
             routes: self.routes.values().cloned().collect(),
             keymap_commands: self.keymap_commands.clone(),
+            markdown_renderers: self.markdown_renderers.clone(),
             websearch_providers: self.websearch_providers.values().cloned().collect(),
             worktree_strategies: self.worktree_strategies.values().cloned().collect(),
             integration_methods: self.integration_methods.values().cloned().collect(),
@@ -1126,5 +1150,32 @@ mod tests {
         registrations.clear_plugin("helloworld");
         assert_eq!(registrations.commands.len(), 1);
         assert!(registrations.commands.contains_key("other.cmd"));
+    }
+
+    /// G-332 — markdown code-block renderer registrations: registration
+    /// order preserved (last-wins at consumption), cross-plugin
+    /// duplicates allowed, `clear_plugin` retains other plugins'
+    /// entries, the snapshot carries them.
+    #[test]
+    fn markdown_renderers_register_clear_and_snapshot() {
+        let mut registrations = Registrations::default();
+        for (plugin_id, language) in [("a", "raku"), ("b", "raku"), ("a", "mermaid")] {
+            registrations.markdown_renderers.push(PluginMarkdownRenderer {
+                plugin_id: plugin_id.into(),
+                language: language.into(),
+            });
+        }
+        assert_eq!(registrations.markdown_renderers.len(), 3);
+        registrations.clear_plugin("a");
+        let remaining: Vec<(&str, &str)> = registrations
+            .markdown_renderers
+            .iter()
+            .map(|renderer| (renderer.plugin_id.as_str(), renderer.language.as_str()))
+            .collect();
+        assert_eq!(remaining, vec![("b", "raku")]);
+        let snapshot = registrations.snapshot();
+        assert_eq!(snapshot.markdown_renderers.len(), 1);
+        assert_eq!(snapshot.markdown_renderers[0].plugin_id, "b");
+        assert_eq!(snapshot.markdown_renderers[0].language, "raku");
     }
 }
