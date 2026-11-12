@@ -22,9 +22,7 @@
 //! theme switching. The mono flag keeps the ENTIRE plain path (the
 //! ref's `mono.ts` gate): `Lifecycle::append` dispatches on it.
 
-use super::scrollback::{
-    Commit, CommitKind, Phase, entry_body_with, entry_flags, separator_rows,
-};
+use super::scrollback::{entry_body_with, entry_flags, separator_rows, Commit, CommitKind, Phase};
 use super::theme::scrollback_color;
 use crate::layout::StyledSpan;
 use crate::render::CellColor;
@@ -114,11 +112,7 @@ pub fn format_commit_styled_with(
         rows.push(Vec::new());
     }
     if commit.compaction {
-        rows.push(styled_row(
-            &format!("─── {} ───", commit.text.trim()),
-            look.muted,
-            width,
-        ));
+        rows.push(styled_row(&format!("─── {} ───", commit.text.trim()), look.muted, width));
         return rows;
     }
     if commit.summary {
@@ -151,10 +145,7 @@ fn styled_row(text: &str, style: Style, width: usize) -> Vec<StyledSpan> {
 /// flatten → wrap → runs shape).
 fn wrap_styled(spans: &[StyledSpan], width: usize) -> Vec<Vec<StyledSpan>> {
     let atoms = flatten_spans(spans);
-    wrap_atoms(&atoms, width.max(1))
-        .into_iter()
-        .map(|line| styled_runs(&line))
-        .collect()
+    wrap_atoms(&atoms, width.max(1)).into_iter().map(|line| styled_runs(&line)).collect()
 }
 
 /// `entryBody` styled arm (`entry.body.ts:189-234`): the markdown /
@@ -185,11 +176,8 @@ fn entry_body_styled(
         {
             let lang = tool_filetype(file);
             let source = format!("```{lang}\n{content}\n```");
-            let mut rows = vec![vec![StyledSpan {
-                text: title.clone(),
-                style: look.muted,
-                link: None,
-            }]];
+            let mut rows =
+                vec![vec![StyledSpan { text: title.clone(), style: look.muted, link: None }]];
             rows.extend(
                 crate::components::message::markdown::render_markdown(&source, width, &md)
                     .into_iter()
@@ -234,8 +222,11 @@ fn entry_body_styled(
     let plain = entry_body_with(commit, shell_output);
     let mut rows = Vec::with_capacity(plain.len());
     for row in &plain {
-        let style =
-            if commit.shell.is_some() && commit.phase == Phase::Start { look.muted } else { kind_style };
+        let style = if commit.shell.is_some() && commit.phase == Phase::Start {
+            look.muted
+        } else {
+            kind_style
+        };
         rows.push(vec![StyledSpan { text: row.clone(), style, link: None }]);
     }
     rows
@@ -250,37 +241,40 @@ fn entry_body_styled(
 /// session is in raw mode, so the engine's LF separator needs the CR
 /// half to return the cursor).
 #[must_use]
-pub fn styled_rows_to_captured(rows: &[Vec<StyledSpan>]) -> Vec<opentui_core::buffer::CapturedLine> {
-    rows.iter().map(|spans| {
-        // Coalesce same-style spans (get_span_lines' run shape).
-        let mut runs: Vec<(Style, String)> = Vec::new();
-        for span in spans {
-            match runs.last_mut() {
-                Some((style, text)) if *style == span.style => text.push_str(&span.text),
-                _ => runs.push((span.style, span.text.clone())),
-            }
-        }
-        let mut spans: Vec<opentui_core::buffer::CapturedSpan> = runs
-            .into_iter()
-            .map(|(style, text)| {
-                let width = crate::wrap::display_width(&text) as u32;
-                opentui_core::buffer::CapturedSpan {
-                    text,
-                    fg: captured_fg(style.fg),
-                    bg: opentui_core::Rgba::default_color(0, 0, 0, 255),
-                    attributes: captured_attributes(style.add_modifier),
-                    width,
+pub fn styled_rows_to_captured(
+    rows: &[Vec<StyledSpan>],
+) -> Vec<opentui_core::buffer::CapturedLine> {
+    rows.iter()
+        .map(|spans| {
+            // Coalesce same-style spans (get_span_lines' run shape).
+            let mut runs: Vec<(Style, String)> = Vec::new();
+            for span in spans {
+                match runs.last_mut() {
+                    Some((style, text)) if *style == span.style => text.push_str(&span.text),
+                    _ => runs.push((span.style, span.text.clone())),
                 }
-            })
-            .collect();
-        // The raw-mode CR rides the final span (cluster width 0 —
-        // the tail-column math is unaffected).
-        if let Some(last) = spans.last_mut() {
-            last.text.push('\r');
-        }
-        opentui_core::buffer::CapturedLine { spans }
-    })
-    .collect()
+            }
+            let mut spans: Vec<opentui_core::buffer::CapturedSpan> = runs
+                .into_iter()
+                .map(|(style, text)| {
+                    let width = crate::wrap::display_width(&text) as u32;
+                    opentui_core::buffer::CapturedSpan {
+                        text,
+                        fg: captured_fg(style.fg),
+                        bg: opentui_core::Rgba::default_color(0, 0, 0, 255),
+                        attributes: captured_attributes(style.add_modifier),
+                        width,
+                    }
+                })
+                .collect();
+            // The raw-mode CR rides the final span (cluster width 0 —
+            // the tail-column math is unaffected).
+            if let Some(last) = spans.last_mut() {
+                last.text.push('\r');
+            }
+            opentui_core::buffer::CapturedLine { spans }
+        })
+        .collect()
 }
 
 /// fg → opentui `Rgba`: Rgb quantizes through the mini oklab
@@ -358,9 +352,9 @@ mod tests {
         assert!(flat.iter().any(|r| r.contains("body")));
         // the heading row carries a non-default style (theme heading
         // color), unlike the mono base
-        let heading = rows.iter().find(|row| {
-            row.iter().any(|s| s.text.contains("Title") && s.style.fg.is_some())
-        });
+        let heading = rows
+            .iter()
+            .find(|row| row.iter().any(|s| s.text.contains("Title") && s.style.fg.is_some()));
         assert!(heading.is_some(), "styled heading span");
     }
 
