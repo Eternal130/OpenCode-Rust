@@ -1547,6 +1547,17 @@ pub struct Store {
     /// mount's storm guard: one attach per selection until the
     /// snapshot lands).
     terminal_pending_attach: std::cell::RefCell<std::collections::HashSet<String>>,
+    /// G11-F1 / G-399 — per session, the assistant message ids whose
+    /// completion came from a FETCHED SNAPSHOT (wholesale replace /
+    /// page fetch), not from the live event stream. The G11-F1
+    /// overlap guard drops stream deltas only for these: a snapshot's
+    /// final text is authoritative and an overlapped replay would
+    /// double-append. A message completed by `session.step.ended` on
+    /// the live stream is NOT here — ref (data.ts:905-913/992-996)
+    /// appends a late delta to it (G-399), and `session.step.started`
+    /// reopens either kind.
+    snapshot_authoritative:
+        std::cell::RefCell<std::collections::HashMap<String, std::collections::HashSet<String>>>,
     /// G-271① — the staged `session-terminal-selection` writes
     /// (last-wins per session); the run loop's drain persists the
     /// batch once per pass (the model-ring dirty pattern — the pick
@@ -4097,6 +4108,7 @@ impl Store {
             terminal_panes: std::cell::RefCell::new(std::collections::HashMap::new()),
             terminal_sink: std::cell::RefCell::new(Rc::new(NoTerminals)),
             terminal_pending_attach: std::cell::RefCell::new(std::collections::HashSet::new()),
+            snapshot_authoritative: std::cell::RefCell::new(std::collections::HashMap::new()),
             terminal_selection_outbox: std::cell::RefCell::new(Vec::new()),
             route,
             dialogs,
@@ -6718,9 +6730,27 @@ impl Store {
     /// Replace one session's messages wholesale (history hydration /
     /// message.list resync — wave 3 wires the fetch).
     pub fn set_messages(&self, session_id: &str, messages: Vec<Message>) {
+        // G11-F1 / G-399 — the fetched snapshot is the authoritative
+        // completion source for this session: completed assistant ids
+        // from the fetch join the overlap-guard set (wholesale
+        // replace: the session's previous marks go).
+        let mut authoritative = std::collections::HashSet::new();
+        for message in &messages {
+            if matches!(message, Message::Assistant { time, .. } if time.completed.is_some()) {
+                authoritative.insert(message.id().to_owned());
+            }
+        }
+        self.snapshot_authoritative.borrow_mut().insert(session_id.to_owned(), authoritative);
         self.messages.update(|state| {
             state.by_session.insert(session_id.to_owned(), messages);
         });
+    }
+
+    /// G11-F1 / G-399 — whether `assistant`'s completion came from a
+    /// fetched snapshot (the overlap window where a replayed delta
+    /// must not double-append onto authoritative snapshot text).
+    fn snapshot_completed(&self, session: &str, assistant: &str) -> bool {
+        self.snapshot_authoritative.borrow().get(session).is_some_and(|ids| ids.contains(assistant))
     }
 
     /// Mutate one session's message tree through a closure (the SSE
@@ -12926,6 +12956,20 @@ impl Store {
             // admitted between the fetch and its arrival must not be
             // wiped: `[...fetched, ...local]`).
             Ingest::MessagesSnapshot { session_id, messages } => {
+                // G11-F1 / G-399 — the fetched page's completed
+                // assistants join the overlap-guard set (the page is
+                // authoritative for them; local in-flight rows merged
+                // below are NOT — the stream still owns their text).
+                for message in &messages {
+                    if matches!(message, Message::Assistant { time, .. } if time.completed.is_some())
+                    {
+                        self.snapshot_authoritative
+                            .borrow_mut()
+                            .entry(session_id.clone())
+                            .or_default()
+                            .insert(message.id().to_owned());
+                    }
+                }
                 self.messages.update(|state| {
                     let local = state.by_session.remove(&session_id).unwrap_or_default();
                     let mut ids = std::collections::HashSet::new();
@@ -12942,6 +12986,18 @@ impl Store {
             // client/solid/data.ts:1703-1704) and the cursor advances.
             Ingest::MessagesOlder { session_id, messages, cursor } => {
                 self.set_message_cursor(&session_id, cursor);
+                // G11-F1 / G-399 — older pages are fetched history:
+                // completed assistants are snapshot-authoritative.
+                for message in &messages {
+                    if matches!(message, Message::Assistant { time, .. } if time.completed.is_some())
+                    {
+                        self.snapshot_authoritative
+                            .borrow_mut()
+                            .entry(session_id.clone())
+                            .or_default()
+                            .insert(message.id().to_owned());
+                    }
+                }
                 self.messages.update(|state| {
                     let known = state.by_session.remove(&session_id).unwrap_or_default();
                     let mut ids = std::collections::HashSet::new();
@@ -13317,15 +13373,15 @@ impl Store {
                 );
             }
             // G-352 — `session.instructions.updated` (client/solid/
-            // data.ts:791-804): the `system` transcript row, only when
-            // the delta carries text (the baseline/empty-rendering
-            // deltas produce no message).
+            // data.ts:791-804): the `system` transcript row whenever
+            // the delta carries a text field (G-406 — presence, not
+            // emptiness: an empty string takes effect, mirroring the
+            // ref's `undefined`-only guard; the baseline/empty-
+            // rendering deltas that OMIT the field produce no
+            // message).
             "session.instructions.updated" => {
                 let Some(id) = event.string("sessionID") else { return };
-                let Some(text) = event.string("text") else { return };
-                if text.is_empty() {
-                    return;
-                }
+                let Some(_text) = event.string("text") else { return };
                 let keys = event
                     .data
                     .get("delta")
@@ -13659,15 +13715,18 @@ impl Store {
                 // indentation) must accumulate, not be dropped.
                 let Some(delta) = event.string("delta") else { return };
                 let ordinal = event.ordinal();
+                // G11-F1 / G-399 — a delta overlapping a SNAPSHOT-built
+                // complete message (the first-connect snapshot/stream
+                // overlap window double-appends text) is dropped — the
+                // snapshot's text is authoritative. A message completed
+                // on the live stream (`session.step.ended`) KEEPS
+                // appending (ref data.ts:905-913 has no such guard), and
+                // a legitimate new step reopens the message
+                // (`session.step.started` clears the mark) before its
+                // deltas arrive.
+                let snapshot_authoritative = self.snapshot_completed(&session, &assistant);
                 self.update_messages(&session, |messages| {
-                    // G11-F1: a delta for a message a snapshot already
-                    // completed (the first-connect snapshot/stream
-                    // overlap window double-appends text) is dropped —
-                    // the snapshot's text is authoritative. A
-                    // legitimate new step reopens the message
-                    // (`session.step.started` clears completion)
-                    // before its deltas arrive.
-                    if message_already_complete(messages, &assistant) {
+                    if snapshot_authoritative {
                         return;
                     }
                     with_part(messages, &assistant, "text", ordinal, |part| {
@@ -13679,12 +13738,11 @@ impl Store {
             }
             "session.text.ended" => {
                 let Some((session, assistant)) = session_and_assistant(event) else { return };
-                // G-351 — ref (solid/data.ts:914-917) assigns the final
-                // text verbatim: whitespace-only finals are present values
-                // and must settle (only a genuinely empty string skips).
-                let Some(text) = event.string("text").filter(|text| !text.is_empty()) else {
-                    return;
-                };
+                // G-351 / G-398 — ref (solid/data.ts:914-917) assigns
+                // the final text verbatim: an empty string is a real
+                // present value and must settle (only a missing field
+                // skips).
+                let Some(text) = event.string("text") else { return };
                 let ordinal = event.ordinal();
                 self.update_messages(&session, |messages| {
                     with_part(messages, &assistant, "text", ordinal, |part| {
@@ -13703,8 +13761,11 @@ impl Store {
                 let Some((session, assistant)) = session_and_assistant(event) else { return };
                 let ordinal = event.ordinal();
                 let created = event.created;
+                // G11-F1 / G-399 — same snapshot-only guard as the
+                // deltas.
+                let snapshot_authoritative = self.snapshot_completed(&session, &assistant);
                 self.update_messages(&session, |messages| {
-                    if message_already_complete(messages, &assistant) {
+                    if snapshot_authoritative {
                         return;
                     }
                     with_part(messages, &assistant, "reasoning", ordinal, |part| {
@@ -13716,14 +13777,20 @@ impl Store {
             }
             "session.reasoning.delta" => {
                 let Some((session, assistant)) = session_and_assistant(event) else { return };
-                if event.string("delta").is_none_or(|delta| delta.trim().is_empty()) {
-                    return;
-                }
+                // G-393 — ref (solid/data.ts:992-996) appends the
+                // reasoning delta verbatim: whitespace-only deltas are
+                // present values and must accumulate (the G-351
+                // text-arm fix's sister); only a missing/malformed
+                // field skips.
+                let Some(delta) = event.string("delta") else { return };
                 let ordinal = event.ordinal();
-                let delta = event.string("delta").unwrap_or_default();
+                // G11-F1 / G-399 — only SNAPSHOT-completed messages
+                // drop deltas (the fetch's text is authoritative); a
+                // stream-completed message keeps appending (ref
+                // parity).
+                let snapshot_authoritative = self.snapshot_completed(&session, &assistant);
                 self.update_messages(&session, |messages| {
-                    // G11-F1 (same window, same rule as text deltas).
-                    if message_already_complete(messages, &assistant) {
+                    if snapshot_authoritative {
                         return;
                     }
                     with_part(messages, &assistant, "reasoning", ordinal, |part| {
@@ -13735,11 +13802,12 @@ impl Store {
             }
             "session.reasoning.ended" => {
                 let Some((session, assistant)) = session_and_assistant(event) else { return };
-                if event.string("text").is_none_or(|text| text.trim().is_empty()) {
-                    return;
-                }
+                // G-398 — ref (solid/data.ts:997-1002) assigns the
+                // final text verbatim AND marks the part completed:
+                // an empty string is a real value (only a missing
+                // field skips).
+                let Some(text) = event.string("text") else { return };
                 let ordinal = event.ordinal();
-                let text = event.string("text").unwrap_or_default();
                 let completed = event.created;
                 self.update_messages(&session, |messages| {
                     with_part(messages, &assistant, "reasoning", ordinal, |part| {
@@ -13914,6 +13982,12 @@ impl Store {
                     })
                     .unwrap_or_default();
                 let created = event.created;
+                // G-399 — a new step reopens the message: the G11-F1
+                // snapshot-authoritative mark clears with the
+                // completion (its deltas are a fresh generation).
+                if let Some(ids) = self.snapshot_authoritative.borrow_mut().get_mut(&session) {
+                    ids.remove(&assistant);
+                }
                 self.update_messages(&session, |messages| {
                     match messages.iter_mut().find(|m| m.id() == assistant.as_str()) {
                         Some(Message::Assistant { finish, time, .. }) => {
@@ -13943,7 +14017,10 @@ impl Store {
                 let Some((session, assistant)) = session_and_assistant(event) else { return };
                 let finish = match event.type_.as_str() {
                     "session.step.failed" => Some("error".to_owned()),
-                    _ => event.string("finish").filter(|finish| !finish.is_empty()),
+                    // G-398 — ref (data.ts:878-889) keeps the finish
+                    // verbatim: an empty string is a real value; only a
+                    // missing field leaves the slot untouched.
+                    _ => event.string("finish"),
                 };
                 let completed = event.created;
                 // #13: the footer's tok/s numerator + the context
@@ -14280,15 +14357,6 @@ impl Store {
 /// `(sessionID, assistantMessageID)` off a part event.
 fn session_and_assistant(event: &BusEvent) -> Option<(String, String)> {
     Some((event.string("sessionID")?, event.string("assistantMessageID")?))
-}
-
-/// G11-F1: whether the assistant message exists and is already
-/// complete (a snapshot's fully-formed tree — `time.completed` set).
-fn message_already_complete(messages: &[Message], assistant: &str) -> bool {
-    messages.iter().any(|message| {
-        message.id() == assistant
-            && matches!(message, Message::Assistant { time, .. } if time.completed.is_some())
-    })
 }
 
 /// Find or create the `kind:ordinal` text/reasoning part on the
@@ -16296,6 +16364,158 @@ mod tests {
         let Message::Assistant { parts, .. } = &messages[0] else { panic!("assistant") };
         let Part::Text { text, .. } = &parts[0] else { panic!("text part") };
         assert_eq!(text, "final answernew turn", "reopened message accumulates");
+    }
+
+    #[test]
+    fn g393_whitespace_reasoning_delta_accumulates() {
+        let store = Store::new(Runtime::new());
+        let delta = |id: &str, body: &str| {
+            Ingest::Event(BusEvent {
+                id: id.into(),
+                kind: oc_client::bus_event::EventKind::SessionReasoningDelta,
+                type_: "session.reasoning.delta".into(),
+                data: serde_json::json!({
+                    "sessionID": "ses_g393", "assistantMessageID": "msg_a",
+                    "ordinal": 0, "delta": body
+                }),
+                created: Some(1),
+            })
+        };
+        store.ingest_all([delta("evt_r1", " \n")]);
+        store.ingest_all([delta("evt_r2", "thought")]);
+        store.ingest_all([delta("evt_r3", " ")]);
+        let messages = store.messages("ses_g393");
+        let Message::Assistant { parts, .. } = &messages[0] else { panic!("assistant") };
+        let Part::Reasoning { text, .. } = &parts[0] else { panic!("reasoning part") };
+        assert_eq!(text, " \nthought ", "whitespace deltas append verbatim");
+    }
+
+    #[test]
+    fn g398_empty_finals_and_empty_finish_settle() {
+        let store = Store::new(Runtime::new());
+        let event = |id: &str, type_: &str, data: serde_json::Value| {
+            Ingest::Event(BusEvent {
+                id: id.into(),
+                kind: oc_client::bus_event::EventKind::parse(type_),
+                type_: type_.to_owned(),
+                data,
+                created: Some(2),
+            })
+        };
+        let base = |type_: &str, extra: serde_json::Value| {
+            let mut data = serde_json::json!({
+                "sessionID": "ses_g398", "assistantMessageID": "msg_a", "ordinal": 0
+            });
+            if let (serde_json::Value::Object(to), serde_json::Value::Object(eo)) =
+                (&mut data, extra)
+            {
+                for (key, value) in eo {
+                    to.insert(key, value);
+                }
+            }
+            event("", type_, data)
+        };
+        // text.ended with "" assigns and settles over accumulated text.
+        store.ingest_all([base("session.text.delta", serde_json::json!({ "delta": "kept" }))]);
+        store.ingest_all([base("session.text.ended", serde_json::json!({ "text": "" }))]);
+        // reasoning.ended with "" assigns AND marks completed.
+        store.ingest_all([base("session.reasoning.ended", serde_json::json!({ "text": "" }))]);
+        // step.ended with finish "" persists as "".
+        store.ingest_all([event(
+            "evt_se",
+            "session.step.ended",
+            serde_json::json!({
+                "sessionID": "ses_g398", "assistantMessageID": "msg_a", "finish": ""
+            }),
+        )]);
+        let messages = store.messages("ses_g398");
+        let Message::Assistant { parts, finish, .. } = &messages[0] else { panic!("assistant") };
+        let Part::Text { text, .. } = &parts[0] else { panic!("text part") };
+        assert_eq!(text, "", "empty final assigns verbatim");
+        let Part::Reasoning { text, time } = &parts[1] else { panic!("reasoning part") };
+        assert_eq!(text, "", "empty reasoning final assigns verbatim");
+        assert!(time.completed.is_some(), "empty reasoning final still completes");
+        assert_eq!(finish.as_deref(), Some(""), "empty finish persists as an empty string");
+    }
+
+    #[test]
+    fn g399_late_delta_after_stream_completion_appends() {
+        let store = Store::new(Runtime::new());
+        let event = |id: &str, type_: &str, data: serde_json::Value| {
+            Ingest::Event(BusEvent {
+                id: id.into(),
+                kind: oc_client::bus_event::EventKind::parse(type_),
+                type_: type_.to_owned(),
+                data,
+                created: Some(1),
+            })
+        };
+        let base = |extra: serde_json::Value| {
+            let mut data = serde_json::json!({
+                "sessionID": "ses_g399", "assistantMessageID": "msg_a", "ordinal": 0
+            });
+            if let (serde_json::Value::Object(to), serde_json::Value::Object(eo)) =
+                (&mut data, extra)
+            {
+                for (key, value) in eo {
+                    to.insert(key, value);
+                }
+            }
+            data
+        };
+        // The message completes ON THE STREAM (step.ended), not via a
+        // snapshot: ref data.ts:905-913 appends the late delta.
+        store.ingest_all([event(
+            "evt_d1",
+            "session.text.delta",
+            base(serde_json::json!({ "delta": "final text" })),
+        )]);
+        store.ingest_all([event(
+            "evt_se",
+            "session.step.ended",
+            serde_json::json!({
+                "sessionID": "ses_g399", "assistantMessageID": "msg_a", "finish": "stop"
+            }),
+        )]);
+        store.ingest_all([event(
+            "evt_d2",
+            "session.text.delta",
+            base(serde_json::json!({ "delta": " LATE" })),
+        )]);
+        let messages = store.messages("ses_g399");
+        let Message::Assistant { parts, time, .. } = &messages[0] else { panic!("assistant") };
+        let Part::Text { text, .. } = &parts[0] else { panic!("text part") };
+        assert_eq!(text, "final text LATE", "late delta appends to the stream-completed message");
+        assert!(time.completed.is_some(), "the late delta does not un-complete the message");
+    }
+
+    #[test]
+    fn g406_instructions_updated_empty_text_lands() {
+        let store = Store::new(Runtime::new());
+        store.ingest_all([Ingest::Event(BusEvent {
+            id: "evt_iu".into(),
+            kind: oc_client::bus_event::EventKind::SessionInstructionsUpdated,
+            type_: "session.instructions.updated".into(),
+            data: serde_json::json!({
+                "sessionID": "ses_g406", "text": "",
+                "delta": { "AGENTS.md": "…" }
+            }),
+            created: Some(1),
+        })]);
+        let messages = store.messages("ses_g406");
+        assert_eq!(messages.len(), 1, "empty-string text still lands the system row");
+        assert!(matches!(messages[0], Message::System { .. }));
+        // A missing text field produces no row (ref guards undefined only).
+        store.ingest_all([Ingest::Event(BusEvent {
+            id: "evt_iu2".into(),
+            kind: oc_client::bus_event::EventKind::SessionInstructionsUpdated,
+            type_: "session.instructions.updated".into(),
+            data: serde_json::json!({
+                "sessionID": "ses_g406", "delta": { "AGENTS.md": "…" }
+            }),
+            created: Some(2),
+        })]);
+        assert_eq!(store.messages("ses_g406").len(), 1, "missing text field skips");
     }
 
     #[test]
