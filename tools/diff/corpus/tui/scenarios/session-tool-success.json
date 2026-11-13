@@ -579,5 +579,5 @@
   ],
   "keys": [],
   "settle_ms": 200,
-  "note": "One tool part driven to success (tool.called -> tool.success with text output) then a closing text part; the stub message carries the completed tool state — both sides must render the same tool row (name, input, output summary) plus trailing text."
+  "note": "One tool part driven to success (tool.called -> tool.success with text output) then a closing text part; the stub message carries the completed tool state -- both sides must render the same tool row (name, input, output summary) plus trailing text."
 }
