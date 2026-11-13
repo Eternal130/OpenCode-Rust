@@ -1,0 +1,76 @@
+{
+ "name": "mined-repair-extras-closed-objects",
+ "keywords": [
+  "type",
+  "properties",
+  "additionalProperties",
+  "items"
+ ],
+ "schema": {
+  "type": "object",
+  "properties": {
+   "known": {
+    "type": "integer"
+   },
+   "closed": {
+    "type": "object",
+    "properties": {
+     "keep": {
+      "type": "integer"
+     }
+    },
+    "additionalProperties": false
+   },
+   "open": {
+    "type": "object",
+    "properties": {
+     "keep": {
+      "type": "integer"
+     }
+    }
+   },
+   "items": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "properties": {
+      "keep": {
+       "type": "integer"
+      }
+     },
+     "additionalProperties": false
+    }
+   }
+  },
+  "additionalProperties": false
+ },
+ "instances": [
+  {
+   "label": "in1",
+   "value": {
+    "known": "2",
+    "extra": true,
+    "closed": {
+     "keep": "3",
+     "extra": true
+    },
+    "open": {
+     "keep": "4",
+     "extra": true
+    },
+    "items": [
+     {
+      "keep": "5",
+      "extra": true
+     }
+    ]
+   }
+  },
+  {
+   "label": "in2",
+   "value": {
+    "extra": true
+   }
+  }
+ ]
+}

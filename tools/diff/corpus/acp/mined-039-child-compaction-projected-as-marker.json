@@ -1,0 +1,58 @@
+{
+ "name": "mined-child compaction projected as marker",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/workspace",
+  "start": {
+   "type": "input",
+   "id": "msg_input"
+  },
+  "childUpdates": false,
+  "compaction": true
+ },
+ "events": [
+  {
+   "id": "evt_1",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_input"
+   }
+  },
+  {
+   "id": "evt_2",
+   "type": "session.created",
+   "data": {
+    "sessionID": "ses_child",
+    "slug": "ses_child",
+    "projectID": "project",
+    "location": {
+     "directory": "/workspace"
+    },
+    "parentID": "ses_root",
+    "title": "Explore",
+    "version": "test"
+   }
+  },
+  {
+   "id": "evt_3",
+   "type": "session.compaction.started",
+   "data": {
+    "sessionID": "ses_child",
+    "reason": "manual",
+    "recent": "",
+    "inputID": "msg_compact"
+   }
+  },
+  {
+   "id": "evt_4",
+   "type": "session.compaction.ended",
+   "data": {
+    "sessionID": "ses_child",
+    "reason": "manual",
+    "text": "Summary",
+    "recent": ""
+   }
+  }
+ ]
+}

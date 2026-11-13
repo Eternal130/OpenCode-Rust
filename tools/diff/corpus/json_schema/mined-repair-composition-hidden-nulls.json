@@ -1,0 +1,54 @@
+{
+ "name": "mined-repair-composition-hidden-nulls",
+ "keywords": [
+  "type",
+  "anyOf",
+  "enum",
+  "const"
+ ],
+ "schema": {
+  "type": "object",
+  "properties": {
+   "wrapped": {
+    "anyOf": [
+     {
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    ]
+   },
+   "enumerated": {
+    "anyOf": [
+     {
+      "enum": [
+       null,
+       "keep"
+      ]
+     }
+    ]
+   },
+   "permissive": {
+    "anyOf": [
+     {}
+    ]
+   },
+   "constant": {
+    "type": "string",
+    "const": "keep"
+   }
+  }
+ },
+ "instances": [
+  {
+   "label": "in1",
+   "value": {
+    "wrapped": null,
+    "enumerated": null,
+    "permissive": null,
+    "constant": null
+   }
+  }
+ ]
+}

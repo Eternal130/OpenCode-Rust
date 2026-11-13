@@ -1,0 +1,48 @@
+{
+ "name": "mined-repair-stringified-root",
+ "keywords": [
+  "type",
+  "properties",
+  "items"
+ ],
+ "schema": {
+  "type": "object",
+  "properties": {
+   "count": {
+    "type": "integer"
+   },
+   "item": {
+    "type": "object",
+    "properties": {
+     "enabled": {
+      "type": "boolean"
+     }
+    }
+   },
+   "list": {
+    "type": "array",
+    "items": {
+     "type": "integer"
+    }
+   }
+  }
+ },
+ "instances": [
+  {
+   "label": "in1",
+   "value": "{\"count\":\"2\",\"item\":\"{\\\"enabled\\\":\\\"false\\\"}\",\"list\":\"[\\\"3\\\"]\"}"
+  },
+  {
+   "label": "in2",
+   "value": "{broken"
+  },
+  {
+   "label": "in3",
+   "value": "[]"
+  },
+  {
+   "label": "in4",
+   "value": null
+  }
+ ]
+}

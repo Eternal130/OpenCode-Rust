@@ -1,0 +1,85 @@
+{
+ "name": "mined-repair-ambiguous-unions",
+ "keywords": [
+  "anyOf",
+  "oneOf",
+  "allOf",
+  "type",
+  "required"
+ ],
+ "schema": {
+  "type": "object",
+  "properties": {
+   "numeric": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "integer"
+     }
+    ]
+   },
+   "objects": {
+    "oneOf": [
+     {
+      "type": "object",
+      "properties": {
+       "value": {
+        "type": "integer"
+       }
+      },
+      "required": [
+       "value"
+      ]
+     },
+     {
+      "type": "object",
+      "properties": {
+       "value": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "value"
+      ]
+     }
+    ]
+   },
+   "both": {
+    "anyOf": [
+     {
+      "type": "integer"
+     }
+    ],
+    "oneOf": [
+     {
+      "type": "integer"
+     }
+    ]
+   },
+   "composed": {
+    "allOf": [
+     {
+      "type": "integer"
+     }
+    ]
+   },
+   "unknown": {}
+  }
+ },
+ "instances": [
+  {
+   "label": "in1",
+   "value": {
+    "numeric": "2",
+    "objects": {
+     "value": "3"
+    },
+    "both": "4",
+    "composed": "5",
+    "unknown": "6"
+   }
+  }
+ ]
+}

@@ -1,0 +1,48 @@
+{
+ "name": "mined-child tool call projected with prefix",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/workspace",
+  "start": {
+   "type": "input",
+   "id": "msg_input"
+  },
+  "childUpdates": false,
+  "compaction": false
+ },
+ "events": [
+  {
+   "id": "evt_1",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_input"
+   }
+  },
+  {
+   "id": "evt_2",
+   "type": "session.created",
+   "data": {
+    "sessionID": "ses_child",
+    "slug": "ses_child",
+    "projectID": "project",
+    "location": {
+     "directory": "/workspace"
+    },
+    "parentID": "ses_root",
+    "title": "Explore",
+    "version": "test"
+   }
+  },
+  {
+   "id": "evt_3",
+   "type": "session.tool.input.started",
+   "data": {
+    "sessionID": "ses_child",
+    "assistantMessageID": "msg_tools",
+    "id": "call_1",
+    "name": "read"
+   }
+  }
+ ]
+}

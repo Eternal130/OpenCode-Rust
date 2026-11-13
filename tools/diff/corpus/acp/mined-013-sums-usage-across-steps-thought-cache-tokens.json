@@ -1,0 +1,68 @@
+{
+ "name": "mined-sums usage across steps thought cache tokens",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/workspace",
+  "start": {
+   "type": "input",
+   "id": "msg_input"
+  },
+  "childUpdates": false,
+  "compaction": false
+ },
+ "events": [
+  {
+   "id": "evt_1",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_input"
+   }
+  },
+  {
+   "id": "evt_2",
+   "type": "session.step.ended",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_1",
+    "finish": "tool-calls",
+    "cost": 0,
+    "tokens": {
+     "input": 100,
+     "output": 10,
+     "reasoning": 0,
+     "cache": {
+      "read": 0,
+      "write": 50
+     }
+    }
+   }
+  },
+  {
+   "id": "evt_3",
+   "type": "session.step.ended",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_2",
+    "finish": "stop",
+    "cost": 0,
+    "tokens": {
+     "input": 20,
+     "output": 5,
+     "reasoning": 3,
+     "cache": {
+      "read": 150,
+      "write": 0
+     }
+    }
+   }
+  },
+  {
+   "id": "evt_4",
+   "type": "session.execution.succeeded",
+   "data": {
+    "sessionID": "ses_root"
+   }
+  }
+ ]
+}

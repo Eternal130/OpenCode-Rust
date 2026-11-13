@@ -1,0 +1,104 @@
+{
+ "name": "mined-repair-optional-nulls-placeholders",
+ "keywords": [
+  "type",
+  "required",
+  "properties",
+  "anyOf",
+  "const",
+  "$ref",
+  "items"
+ ],
+ "schema": {
+  "type": "object",
+  "properties": {
+   "optional": {
+    "type": "string"
+   },
+   "required": {
+    "type": "string"
+   },
+   "nullable": {
+    "type": "string",
+    "nullable": true
+   },
+   "union": {
+    "anyOf": [
+     {
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "constant": {
+    "anyOf": [
+     {
+      "type": "integer"
+     },
+     {
+      "const": null
+     }
+    ]
+   },
+   "permissive": {
+    "anyOf": [
+     {
+      "type": "integer"
+     },
+     true
+    ]
+   },
+   "referenced": {
+    "anyOf": [
+     {
+      "type": "integer"
+     },
+     {
+      "$ref": "#/$defs/nullable"
+     }
+    ]
+   },
+   "placeholder": {
+    "type": "integer"
+   },
+   "array": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    }
+   },
+   "requiredPlaceholder": {
+    "type": "boolean"
+   },
+   "object": {
+    "type": "object"
+   },
+   "unknown": {}
+  },
+  "required": [
+   "required",
+   "requiredPlaceholder"
+  ]
+ },
+ "instances": [
+  {
+   "label": "in1",
+   "value": {
+    "optional": null,
+    "required": null,
+    "nullable": null,
+    "union": null,
+    "constant": null,
+    "permissive": null,
+    "referenced": null,
+    "placeholder": {},
+    "array": {},
+    "requiredPlaceholder": {},
+    "object": {},
+    "unknown": null
+   }
+  }
+ ]
+}

@@ -1,0 +1,42 @@
+{
+ "name": "mined-step auth failure auth required",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/workspace",
+  "start": {
+   "type": "input",
+   "id": "msg_input"
+  },
+  "childUpdates": false,
+  "compaction": false
+ },
+ "events": [
+  {
+   "id": "evt_1",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_input"
+   }
+  },
+  {
+   "id": "evt_2",
+   "type": "session.step.failed",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_1",
+    "error": {
+     "type": "provider.auth",
+     "message": "expired"
+    }
+   }
+  },
+  {
+   "id": "evt_3",
+   "type": "session.execution.succeeded",
+   "data": {
+    "sessionID": "ses_root"
+   }
+  }
+ ]
+}

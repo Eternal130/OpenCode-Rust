@@ -1,0 +1,62 @@
+{
+ "name": "mined-repair-question-like-nested",
+ "keywords": [
+  "type",
+  "properties",
+  "items",
+  "required"
+ ],
+ "schema": {
+  "type": "object",
+  "properties": {
+   "questions": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "properties": {
+      "question": {
+       "type": "string"
+      },
+      "multiple": {
+       "type": "boolean"
+      },
+      "options": {
+       "type": "array",
+       "items": {
+        "type": "object",
+        "properties": {
+         "label": {
+          "type": "string"
+         },
+         "description": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "label"
+        ]
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "instances": [
+  {
+   "label": "in1",
+   "value": {
+    "questions": [
+     {
+      "question": "Pick one",
+      "multiple": "false",
+      "options": {
+       "label": "First",
+       "description": null
+      }
+     }
+    ]
+   }
+  }
+ ]
+}

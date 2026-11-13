@@ -1,0 +1,58 @@
+{
+ "name": "mined-repair-numeric-boolean-coercion",
+ "keywords": [
+  "type"
+ ],
+ "schema": {
+  "type": "object",
+  "properties": {
+   "number": {
+    "type": "number"
+   },
+   "integer": {
+    "type": "integer"
+   },
+   "enabled": {
+    "type": "boolean"
+   },
+   "disabled": {
+    "type": "boolean"
+   },
+   "valid": {
+    "type": "integer"
+   },
+   "empty": {
+    "type": "number"
+   },
+   "infinite": {
+    "type": "number"
+   },
+   "fractional": {
+    "type": "integer"
+   },
+   "unsafe": {
+    "type": "integer"
+   },
+   "uppercase": {
+    "type": "boolean"
+   }
+  }
+ },
+ "instances": [
+  {
+   "label": "in1",
+   "value": {
+    "number": "1.5",
+    "integer": "42",
+    "enabled": "true",
+    "disabled": "false",
+    "valid": 3,
+    "empty": " ",
+    "infinite": "Infinity",
+    "fractional": "1.5",
+    "unsafe": "9007199254740992",
+    "uppercase": "TRUE"
+   }
+  }
+ ]
+}

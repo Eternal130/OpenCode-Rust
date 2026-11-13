@@ -1,0 +1,32 @@
+{
+ "name": "mined-repair-allof-required-parent",
+ "keywords": [
+  "type",
+  "properties",
+  "allOf",
+  "required"
+ ],
+ "schema": {
+  "type": "object",
+  "properties": {
+   "value": {
+    "type": "string"
+   }
+  },
+  "allOf": [
+   {
+    "required": [
+     "value"
+    ]
+   }
+  ]
+ },
+ "instances": [
+  {
+   "label": "in1",
+   "value": {
+    "value": null
+   }
+  }
+ ]
+}

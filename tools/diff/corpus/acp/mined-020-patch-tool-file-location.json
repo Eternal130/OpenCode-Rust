@@ -1,0 +1,63 @@
+{
+ "name": "mined-patch tool file location",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/workspace",
+  "start": {
+   "type": "input",
+   "id": "msg_input"
+  },
+  "childUpdates": false,
+  "compaction": false
+ },
+ "events": [
+  {
+   "id": "evt_1",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_input"
+   }
+  },
+  {
+   "id": "evt_2",
+   "type": "session.tool.input.started",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_tools",
+    "id": "call_patch",
+    "name": "patch"
+   }
+  },
+  {
+   "id": "evt_3",
+   "type": "session.tool.called",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_tools",
+    "id": "call_patch",
+    "input": {
+     "patchText": "*** Begin Patch\n*** Update File: /workspace/c.ts\n@@\n-one\n+two\n*** End Patch"
+    },
+    "executed": false
+   }
+  },
+  {
+   "id": "evt_4",
+   "type": "session.tool.success",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_tools",
+    "id": "call_patch",
+    "metadata": {},
+    "content": [
+     {
+      "type": "text",
+      "text": "patched"
+     }
+    ],
+    "executed": true
+   }
+  }
+ ]
+}

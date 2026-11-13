@@ -1,0 +1,34 @@
+{
+ "name": "mined-execution auth failure auth required",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/workspace",
+  "start": {
+   "type": "input",
+   "id": "msg_input"
+  },
+  "childUpdates": false,
+  "compaction": false
+ },
+ "events": [
+  {
+   "id": "evt_1",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_input"
+   }
+  },
+  {
+   "id": "evt_2",
+   "type": "session.execution.failed",
+   "data": {
+    "sessionID": "ses_root",
+    "error": {
+     "type": "provider.auth",
+     "message": "missing key"
+    }
+   }
+  }
+ ]
+}

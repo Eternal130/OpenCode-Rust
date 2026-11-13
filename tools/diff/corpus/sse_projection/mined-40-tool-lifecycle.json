@@ -1,0 +1,80 @@
+{
+ "name": "mined-40-tool-lifecycle",
+ "description": "ref translate.test.ts 'streams a tool call...'（补 step.started 锚）: pending → called → progress → success",
+ "events": [
+  {
+   "id": "evt_m001",
+   "created": 2001,
+   "type": "session.step.started",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_asst_1",
+    "agent": "build",
+    "model": {
+     "providerID": "test",
+     "id": "test-model"
+    },
+    "started": 1000
+   }
+  },
+  {
+   "id": "evt_m002",
+   "created": 2002,
+   "type": "session.tool.input.started",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_tools",
+    "id": "call_ok",
+    "name": "shell"
+   }
+  },
+  {
+   "id": "evt_m003",
+   "created": 2003,
+   "type": "session.tool.called",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_tools",
+    "id": "call_ok",
+    "input": {
+     "command": "printf done",
+     "workdir": "sub"
+    },
+    "executed": false
+   }
+  },
+  {
+   "id": "evt_m004",
+   "created": 2004,
+   "type": "session.tool.progress",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_tools",
+    "id": "call_ok",
+    "metadata": {
+     "phase": 1
+    }
+   }
+  },
+  {
+   "id": "evt_m005",
+   "created": 2005,
+   "type": "session.tool.success",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_tools",
+    "id": "call_ok",
+    "metadata": {
+     "exit": 0
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "done"
+     }
+    ],
+    "executed": true
+   }
+  }
+ ]
+}

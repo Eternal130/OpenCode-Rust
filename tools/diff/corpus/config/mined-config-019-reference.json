@@ -1,0 +1,12 @@
+{
+ "reference": {
+  "local": {
+   "path": "../library"
+  },
+  "sdk": {
+   "repository": "github.com/example/sdk",
+   "branch": "main"
+  },
+  "shorthand": "github.com/example/docs"
+ }
+}

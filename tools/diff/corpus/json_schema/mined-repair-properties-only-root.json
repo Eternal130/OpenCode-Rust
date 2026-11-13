@@ -1,0 +1,21 @@
+{
+ "name": "mined-repair-properties-only-root",
+ "keywords": [
+  "properties"
+ ],
+ "schema": {
+  "properties": {
+   "numeric": {
+    "type": "integer"
+   }
+  }
+ },
+ "instances": [
+  {
+   "label": "in1",
+   "value": {
+    "numeric": "2"
+   }
+  }
+ ]
+}

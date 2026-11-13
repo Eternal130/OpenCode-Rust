@@ -1,0 +1,75 @@
+{
+ "name": "mined-repair-tuple-prefix-items",
+ "keywords": [
+  "type",
+  "items",
+  "prefixItems"
+ ],
+ "schema": {
+  "type": "object",
+  "properties": {
+   "prefix": {
+    "type": "array",
+    "prefixItems": [
+     {
+      "type": "integer"
+     },
+     {
+      "type": "boolean"
+     }
+    ],
+    "items": {
+     "type": "number"
+    }
+   },
+   "draft": {
+    "type": "array",
+    "items": [
+     {
+      "type": "integer"
+     },
+     {
+      "type": "boolean"
+     }
+    ]
+   },
+   "valid": {
+    "type": "array",
+    "prefixItems": [
+     {
+      "type": "integer"
+     },
+     {
+      "type": "boolean"
+     }
+    ]
+   },
+   "scalar": {
+    "type": "array",
+    "prefixItems": [
+     {
+      "type": "integer"
+     }
+    ]
+   }
+  }
+ },
+ "instances": [
+  {
+   "label": "in1",
+   "value": {
+    "prefix": [
+     "2",
+     "false",
+     "3"
+    ],
+    "draft": "[\"4\",\"true\"]",
+    "valid": [
+     2,
+     false
+    ],
+    "scalar": "5"
+   }
+  }
+ ]
+}

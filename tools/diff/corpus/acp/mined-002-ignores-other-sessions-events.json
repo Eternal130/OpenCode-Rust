@@ -1,0 +1,51 @@
+{
+ "name": "mined-ignores other sessions events",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/workspace",
+  "start": {
+   "type": "input",
+   "id": "msg_input"
+  },
+  "childUpdates": false,
+  "compaction": false
+ },
+ "events": [
+  {
+   "id": "evt_1",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_input"
+   }
+  },
+  {
+   "id": "evt_2",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_other",
+    "inboxID": "msg_input"
+   }
+  },
+  {
+   "id": "evt_3",
+   "type": "session.text.delta",
+   "data": {
+    "sessionID": "ses_other",
+    "assistantMessageID": "msg_other",
+    "ordinal": 0,
+    "delta": "other"
+   }
+  },
+  {
+   "id": "evt_4",
+   "type": "session.text.delta",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_ok",
+    "ordinal": 0,
+    "delta": "accepted"
+   }
+  }
+ ]
+}

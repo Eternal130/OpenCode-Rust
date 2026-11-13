@@ -1,0 +1,69 @@
+{
+ "name": "mined-tool call failed partial content error",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/workspace",
+  "start": {
+   "type": "input",
+   "id": "msg_input"
+  },
+  "childUpdates": false,
+  "compaction": false
+ },
+ "events": [
+  {
+   "id": "evt_1",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_input"
+   }
+  },
+  {
+   "id": "evt_2",
+   "type": "session.tool.input.started",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_tools",
+    "id": "call_fail",
+    "name": "read"
+   }
+  },
+  {
+   "id": "evt_3",
+   "type": "session.tool.called",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_tools",
+    "id": "call_fail",
+    "input": {
+     "path": "/workspace/missing.ts"
+    },
+    "executed": false
+   }
+  },
+  {
+   "id": "evt_4",
+   "type": "session.tool.failed",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_tools",
+    "id": "call_fail",
+    "executed": true,
+    "error": {
+     "type": "tool.error",
+     "message": "not found"
+    },
+    "metadata": {
+     "bytes": 0
+    },
+    "content": [
+     {
+      "type": "text",
+      "text": "opening"
+     }
+    ]
+   }
+  }
+ ]
+}

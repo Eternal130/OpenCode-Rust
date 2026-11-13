@@ -1,0 +1,66 @@
+{
+ "name": "mined-child work routed to extension",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/workspace",
+  "start": {
+   "type": "input",
+   "id": "msg_input"
+  },
+  "childUpdates": true,
+  "compaction": false
+ },
+ "events": [
+  {
+   "id": "evt_1",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_input"
+   }
+  },
+  {
+   "id": "evt_2",
+   "type": "session.created",
+   "data": {
+    "sessionID": "ses_child",
+    "slug": "ses_child",
+    "projectID": "project",
+    "location": {
+     "directory": "/workspace"
+    },
+    "parentID": "ses_root",
+    "title": "Explore",
+    "version": "test"
+   }
+  },
+  {
+   "id": "evt_3",
+   "type": "session.execution.started",
+   "data": {
+    "sessionID": "ses_child"
+   }
+  },
+  {
+   "id": "evt_4",
+   "type": "session.text.delta",
+   "data": {
+    "sessionID": "ses_child",
+    "assistantMessageID": "msg_child",
+    "ordinal": 0,
+    "delta": "nested"
+   }
+  },
+  {
+   "id": "evt_5",
+   "type": "session.execution.failed",
+   "data": {
+    "sessionID": "ses_child",
+    "error": {
+     "type": "tool.error",
+     "message": "boom"
+    }
+   }
+  }
+ ]
+}

@@ -1,0 +1,53 @@
+{
+ "name": "mined-text reasoning one message id per ordinal",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/workspace",
+  "start": {
+   "type": "input",
+   "id": "msg_input"
+  },
+  "childUpdates": false,
+  "compaction": false
+ },
+ "events": [
+  {
+   "id": "evt_1",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_input"
+   }
+  },
+  {
+   "id": "evt_2",
+   "type": "session.reasoning.delta",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_a",
+    "ordinal": 0,
+    "delta": "think"
+   }
+  },
+  {
+   "id": "evt_3",
+   "type": "session.text.delta",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_a",
+    "ordinal": 1,
+    "delta": "answer"
+   }
+  },
+  {
+   "id": "evt_4",
+   "type": "session.reasoning.delta",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_a",
+    "ordinal": 1,
+    "delta": "more"
+   }
+  }
+ ]
+}

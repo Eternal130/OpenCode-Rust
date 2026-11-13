@@ -1,0 +1,35 @@
+{
+ "name": "mined-compaction fails before starts settles",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/workspace",
+  "start": {
+   "type": "input",
+   "id": "msg_input"
+  },
+  "childUpdates": false,
+  "compaction": true
+ },
+ "events": [
+  {
+   "id": "evt_1",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_input"
+   }
+  },
+  {
+   "id": null,
+   "type": "session.compaction.failed",
+   "data": {
+    "sessionID": "evt_2",
+    "reason": "auto",
+    "error": {
+     "type": "compaction.unavailable",
+     "message": "Nothing to compact yet"
+    }
+   }
+  }
+ ]
+}

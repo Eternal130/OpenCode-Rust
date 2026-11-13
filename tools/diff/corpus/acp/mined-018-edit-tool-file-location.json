@@ -1,0 +1,65 @@
+{
+ "name": "mined-edit tool file location",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/workspace",
+  "start": {
+   "type": "input",
+   "id": "msg_input"
+  },
+  "childUpdates": false,
+  "compaction": false
+ },
+ "events": [
+  {
+   "id": "evt_1",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_input"
+   }
+  },
+  {
+   "id": "evt_2",
+   "type": "session.tool.input.started",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_tools",
+    "id": "call_edit",
+    "name": "edit"
+   }
+  },
+  {
+   "id": "evt_3",
+   "type": "session.tool.called",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_tools",
+    "id": "call_edit",
+    "input": {
+     "path": "/workspace/a.ts",
+     "oldString": "a",
+     "newString": "b"
+    },
+    "executed": false
+   }
+  },
+  {
+   "id": "evt_4",
+   "type": "session.tool.success",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_tools",
+    "id": "call_edit",
+    "metadata": {},
+    "content": [
+     {
+      "type": "text",
+      "text": "edited"
+     }
+    ],
+    "executed": true
+   }
+  }
+ ]
+}
