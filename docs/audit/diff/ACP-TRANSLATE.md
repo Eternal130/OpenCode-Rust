@@ -7,7 +7,7 @@
 > 无生成源不同的 id/时间戳字段需剥除）后对 ACP SessionUpdate wire 形状逐例对拍。
 > 驱动：ref=bun（staging+`packages/cli/node_modules` 链接）/ rust=env 门控集成测试
 > （`ACP_DIFF_CORPUS`/`ACP_DIFF_OUT`，未设 env 零成本）。
-> 复现：`python3 tools/diff/acp_translate.py`（corpus：/opt/opencode-rust/tools/diff/corpus/acp，
+> 复现：`python3 tools/diff/acp_translate.py`（corpus：/opt/opencode-rust/.worktrees/gb15-lane1/tools/diff/corpus/acp，
 > 由 `tools/diff/gen_acp_corpus.py` 幂等生成）。
 
 - **MATCH：109/137** · DIVERGE：**28** · MISSING：**0**

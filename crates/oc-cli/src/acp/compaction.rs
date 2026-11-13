@@ -162,11 +162,13 @@ fn update(compaction: &Compaction, standard_updates: bool) -> SessionUpdate {
                 "messageId": started.message_id,
                 "reason": started.reason,
             }),
-            Compaction::Completed { started, summary, .. } => json!({
+            Compaction::Completed { started, .. } => json!({
+                // Marker key set is status/messageId/reason (+error when
+                // failed) ONLY — the summary never leaks into the marker
+                // (compaction.ts:112-118, G-416).
                 "status": "completed",
                 "messageId": started.message_id,
                 "reason": started.reason,
-                "summary": summary,
             }),
             Compaction::Failed { started, error, .. } => json!({
                 "status": "failed",
@@ -285,6 +287,37 @@ mod tests {
             panic!("info update");
         };
         assert_eq!(info.meta.as_ref().expect("meta")[MARKER_META]["status"], "started");
+    }
+
+    /// G-416 — the marker's key set is exactly status/messageId/reason
+    /// (plus `error` when failed); the summary text never leaks into the
+    /// marker (compaction.ts:112-118).
+    #[test]
+    fn marker_keys_are_status_message_id_reason_only() {
+        let mut tracked = HashMap::new();
+        apply(
+            "session.compaction.started",
+            "ses_1",
+            &json!({ "reason": "auto", "inputID": "msg_1" }),
+            "evt_1",
+            &mut tracked,
+            false,
+        );
+        let updates = apply(
+            "session.compaction.ended",
+            "ses_1",
+            &json!({ "reason": "auto", "text": "the summary" }),
+            "evt_2",
+            &mut tracked,
+            false,
+        );
+        let SessionUpdate::SessionInfoUpdate(info) = &updates[0] else {
+            panic!("info update");
+        };
+        let marker = info.meta.as_ref().expect("meta")[MARKER_META].as_object().expect("marker");
+        let mut keys: Vec<&str> = marker.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["messageId", "reason", "status"]);
     }
 
     #[test]
