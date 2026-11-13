@@ -156,23 +156,30 @@ function attrList(attrs: number): string[] {
 
 const SENTINEL = [-1, -1, -1]
 
-/** xterm 256-color palette → RGB (0-255) */
+/**
+ * indexed→RGB table of the reference `v1-migrate.ts` `ansi()` (lines 470-495):
+ * 0x80-based base colors, color cube `part === 0 ? 0 : part * 40 + 55`,
+ * grayscale ramp `(i - 232) * 10 + 8`. Controller ruling: both harnesses use
+ * THIS table (mirrored in the rust driver
+ * crates/oc-tui/tests/tui_fullscreen_diff_driver.rs `indexed_to_rgb`).
+ */
 function indexedToRgb(index: number): number[] {
   const i = index & 0xff
   if (i < 16) {
     const table = [
-      [0, 0, 0], [205, 0, 0], [0, 205, 0], [205, 205, 0], [0, 0, 238], [205, 0, 205],
-      [0, 205, 205], [229, 229, 229], [127, 127, 127], [255, 0, 0], [0, 255, 0], [255, 255, 0],
-      [92, 92, 255], [255, 0, 255], [0, 255, 255], [255, 255, 255],
+      [0x00, 0x00, 0x00], [0x80, 0x00, 0x00], [0x00, 0x80, 0x00], [0x80, 0x80, 0x00],
+      [0x00, 0x00, 0x80], [0x80, 0x00, 0x80], [0x00, 0x80, 0x80], [0xc0, 0xc0, 0xc0],
+      [0x80, 0x80, 0x80], [0xff, 0x00, 0x00], [0x00, 0xff, 0x00], [0xff, 0xff, 0x00],
+      [0x00, 0x00, 0xff], [0xff, 0x00, 0xff], [0x00, 0xff, 0xff], [0xff, 0xff, 0xff],
     ]
     return table[i] ?? SENTINEL
   }
   if (i < 232) {
-    const step = [0, 95, 135, 175, 215, 255]
     const n = i - 16
-    return [step[Math.floor(n / 36) % 6]!, step[Math.floor(n / 6) % 6]!, step[n % 6]!]
+    const value = (part: number) => (part === 0 ? 0 : part * 40 + 55)
+    return [value(Math.floor(n / 36)), value(Math.floor(n / 6) % 6), value(n % 6)]
   }
-  const g = 8 + (i - 232) * 10
+  const g = (i - 232) * 10 + 8
   return [g, g, g]
 }
 
