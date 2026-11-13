@@ -3412,6 +3412,20 @@ impl App {
         }
     }
 
+    /// The live loop's bus-command drain (`run_with_size`'s post-drain
+    /// dispatch, one `dispatch` per staged `tui.command.execute` —
+    /// the ref's `keymap.dispatch`, app.tsx:1253-1256). Exposed for
+    /// in-process replay harnesses (the channel-8 diff driver), which
+    /// pump the same sequence without the PTY loop.
+    pub fn drain_bus_commands(&mut self) {
+        for command in self.store.take_bus_commands() {
+            let dispatch = self.dispatcher.dispatch(&self.store, &command, None);
+            if command == "app.exit" && dispatch != Dispatch::Unknown {
+                self.exit_requested = true;
+            }
+        }
+    }
+
     /// The current frame (route + blockers + dialog overlay).
     #[must_use]
     #[allow(clippy::too_many_lines)] // the app frame: every overlay seam in one paint pass
