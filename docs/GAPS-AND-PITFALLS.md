@@ -32,7 +32,7 @@
 
 > **2026-11-12 第二十六轮收口（G-391）**：差分通道 1 唯一可行动缺口 G-391（provider `Model.cost` 缺 `skip_serializing_if` → wire 物化 `"cost": null`）经单 lane TDD 落地合并 main（`568213c8`）；差分复跑 **MATCH 42/43**，唯一残余分歧 `16-experimental`=G-390 已裁定超集旋钮（预期分歧）——通道 1 零未裁定分歧、可行动缺口清零。下一差分通道=ACP 转译（按成本升序）。明细见文末「第二十六轮收口」节。
 
-> **2026-11-13 第二十九轮（语料升级：ref 夹具挖掘 + 差分通道 7）**：①`mine_ref_fixtures.py` 把 ref 测试夹具机械转为 6 通道 corpus（123 语料+13 HTTP 请求——ref 畸形样本/translate 表/repair 对/内联事件/路由测试）；②新通道 7 provider 录制解码差分——HttpRecorder cassette 全量 264 可驱动交互（259 真实 SSE 流）双侧解码对拍。**7 通道 790 单元：MATCH 687 · DIVERGE 101 · 100% 归属**；挖掘新增 23 分歧归并 **G-412..G-422（11 条：🟡×1/🟢×10）**——最重为 abandon 输出顺序非确定（HashMap 迭代序，G-412）与 venice/google namespace 空 attaching 镜像族（G-419/420）；4 对归 G-407 catch→accept-all 族、unanchored 归 G-409。语料来源三级跳：自造→ref 验证输入→真实 provider 流量。扫描口径=census 14+diff 7 命令。明细见文末「第二十九轮」节。
+> **2026-11-13 第二十九轮（语料升级：ref 夹具挖掘 + 差分通道 7）**：①`mine_ref_fixtures.py` 把 ref 测试夹具机械转为 6 通道 corpus（123 语料+13 HTTP 请求——ref 畸形样本/translate 表/repair 对/内联事件/路由测试）；②新通道 7 provider 录制解码差分——HttpRecorder cassette 全量 264 可驱动交互（259 真实 SSE 流）双侧解码对拍。**7 通道 790 单元：MATCH 687 · DIVERGE 101 · 100% 归属**；挖掘新增 23 分歧归并 **G-412..G-422（11 条：🟡×1/🟢×10）**——最重为 abandon 输出顺序非确定（HashMap 迭代序，G-412）与 venice/google namespace 空 attaching 镜像族（G-419/420）；4 对归 G-407 catch→accept-all 族、unanchored 归 G-409。语料来源三级跳：自造→ref 验证输入→真实 provider 流量。扫描口径=census 14+diff 8 命令。明细见文末「第二十九轮」节。
 
 > **2026-11-13 第三十轮 burndown 收口（gap-burndown-15）**：第二十九轮立项的 G-412..G-422 全部 11 项经 3 个串行 lane（oc-cli ACP / oc-ai 协议 / oc-schema·core·server wire）落地合并 main——9 项实修 ✅、**G-419/G-421 经双侧源码取证为差分驱动器协议选择不对称所致、按勘误撤销**（rust 语义本就对齐，驱动器修复入库）、G-422 根因订正为 serde_json 快速浮点解析 1-ULP 误差（workspace `float_roundtrip` 特性收口）。差分 7 通道终态 **790 单元：MATCH 717 · DIVERGE 71 · ADJUDICATED 2——残余分歧 100% 登记归属，可行动缺口清零**；census 14 通道零分类变化。无上游阻挡项（G-247 残余维持既有搁置）。明细见文末「第三十轮 burndown 收口」节。
 
@@ -3121,7 +3121,7 @@ G-392 ✅ · G-393 ✅ · G-394 ✅ · G-395 ✅（四族落地+两子项证伪�
 
 ## 第二十九轮判定汇总
 
-语料来源三级跳完成：自造边界 → ref 验证过的输入集 → **真实 provider 流量**。790 单元 100% 归属，挖掘新增 23 分歧归并 11 条（🟡×1 + 🟢×10），其余入 G-407/409/410 既有族。修复优先序：G-412（非确定 wire）> G-417/G-415（类型吞/双 location）> G-419/G-420（namespace 附着族，同型可一并修）> G-413/G-414/G-416/G-418/G-421 > G-422（先核 f32 源）。工具：`tools/diff/mine_ref_fixtures.py` + `provider_recordings.py`；报告与 INDEX `docs/audit/diff/`。扫描循环口径=census 14 + diff 7 命令。
+语料来源三级跳完成：自造边界 → ref 验证过的输入集 → **真实 provider 流量**。790 单元 100% 归属，挖掘新增 23 分歧归并 11 条（🟡×1 + 🟢×10），其余入 G-407/409/410 既有族。修复优先序：G-412（非确定 wire）> G-417/G-415（类型吞/双 location）> G-419/G-420（namespace 附着族，同型可一并修）> G-413/G-414/G-416/G-418/G-421 > G-422（先核 f32 源）。工具：`tools/diff/mine_ref_fixtures.py` + `provider_recordings.py`；报告与 INDEX `docs/audit/diff/`。扫描循环口径=census 14 + diff 8 命令。
 
 ---
 
@@ -3163,3 +3163,13 @@ G-412/413/414/415/416/417/418/420/422 ✅；**G-419/G-421 勘误撤销**（登�
 - **复扫结论**：diff 7 通道独立复跑 **717/790 MATCH**（与 round-30 闭环一致）——provider 录制通道 **264/264 全绿**（G-419/G-421 撤销后 venice 聚类归零，撤销依据=diff 驱动协议选择不对称、ref 前提证伪）；config 77/78、compaction 60/61、http 47/60（余为 G-410 记录性族+G-403 裁决）。G-412 代码级确认：工具表改 Vec 插入序（translate.rs:99 注释自证 JS Map 语义对位 + abandon 按注册序输出）；G-422 根因=serde_json 快速浮点解析 1-ULP 偏差，workspace 级启用 `float_roundtrip`（Cargo.toml:123-128）——基础设施级修复，全 workspace JSON 浮点解析精度对齐 JS。
 - **census 14 通道**：11 份逐字节一致；3 份漂移全为良性（TOOLS 行号锚随修复漂移、ENV-VARS 登记册行号引用、HTTP 手工附录）——已刷新落盘（HTTP 附录按维护口径回贴）。
 - **稳态复验**：census 枚举层零缺口 + diff 语义层零可行动缺口（71 项登记分歧全为有据/记录性/架构族）。扫描口径 21 命令全部幂等可复现。
+
+---
+
+# 第三十一轮（2026-11-14）：差分通道 8 立项建成（TUI 整屏差分·发版回归门）
+
+> spec：docs/superpowers/specs/2026-11-13-tui-fullscreen-diff-channel-8-design.md。首基线 40 case：**EXACT 0 / STRUCTURAL 0 / CAUSES 0 / 未裁决 40**（门红，裁决循环 T9 进行中）。已知候选：屏级 fg 255vs238 系统差、session-tabs 加载态振荡（移植缺陷候选）。范围外收窄见 INDEX.md。
+
+## 第三十一轮判定
+
+差分通道 8（TUI 整屏差分·发版回归门）立项建成：同一 `tui-diff-scenario/1` 场景喂双侧 TUI 实现（rust nextest env 门控驱动 × ref bun staging 驱动），静息帧导出稠密网格归一化比对（RGB ≤8 容差=structural/仍是分歧；未命中 CAUSES 的一切非 exact 均未裁决 → exit 2）。首基线 40 case（20 场景×2 档）全未裁决——已知候选聚类：屏级 fg 255vs238 系统差（大面积 first_diff）、session-tabs 加载态振荡（移植缺陷候选）、home/session 族边框字符差。**登记册新增 G-ID 不在本轮范围**（T9 裁决时立项）。工具 `tools/diff/tui_fullscreen.py`；报告 `docs/audit/diff/TUI-FULLSCREEN.md`；扫描口径=census 14 + diff 8 命令。

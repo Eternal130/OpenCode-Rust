@@ -1,4 +1,4 @@
-# Differential INDEX —— 差分层总索引（7 通道 · 语料升级版）
+# Differential INDEX —— 差分层总索引（8 通道 · 语料升级版）
 
 > 语义等价性差分：同一 corpus 喂双侧真实实现（纯函数管线或真实进程），归一化后逐字段对拍。
 > 与 census 的分工：census 证"面存在且键集对齐"，差分证"行为等价"。
@@ -15,10 +15,11 @@
 | 5 | /compact 管线 | responses_compaction.py | RESPONSES-COMPACTION.md | 61 文档（13 mined） | 58 | 3 | — |
 | 6 | HTTP 全量 | http_full.py | HTTP-FULL.md | 60 请求（13 mined） | 46 | 12 | 2 |
 | 7 | **provider 录制解码** | provider_recordings.py | PROVIDER-RECORDINGS.md | **264 交互（259 真实 SSE）** | 241 | 23 | — |
+| 8 | TUI 整屏差分（无头静息帧） | tui_fullscreen.py | TUI-FULLSCREEN.md | 40 case（20 场景×2 档） | EXACT 0 | 未裁决 40 | — |
 
 ## 总计
 
-**790 对拍单元：MATCH 687 · DIVERGE 101 · ADJUDICATED 2 · MISSING 0**（100% 三态归属）。
+**通道 1-7：790 对拍单元：MATCH 687 · DIVERGE 101 · ADJUDICATED 2 · MISSING 0**（100% 三态归属）。**通道 8 首基线：40 case：EXACT 0 · STRUCTURAL 0 · CAUSES 0 · 未裁决 40**（门红，T9 裁决循环进行中；详见 TUI-FULLSCREEN.md）——合计 830 对拍单元。
 101 项分歧：既有 78（R27/R28 裁定族）+ 挖掘新增 23 → 归并 **G-412..G-422（11 条：🟡×1 / 🟢×10）**，其余归 G-407/409/410 既有族。
 
 ## 挖掘新增发现（关键项）
@@ -36,8 +37,8 @@ G-357/G-392/G-393/G-394/G-396/G-397 修复面在 mined 语料下保持对齐 ✅
 ## 语料来源构成
 
 通道 1-6：手造边界 + schema 推导 + 登记册锚 + **mined（ref 测试夹具：config 测试写盘样本/translate 表/tool-input-repair 对/open-responses 内联事件/server 路由测试）**；通道 7：**HttpRecorder cassette 全量**（ref 真实 provider 流量录制，220 SSE + 错误体；bedrock event-stream/websocket/vercel-native/cf-gateway/媒体族=范围外 32 组已声明）。
-挖掘器：`tools/diff/mine_ref_fixtures.py`（幂等；注意 gen_acp_corpus.py 再生成会清空 mined，重跑挖掘器即恢复）。
+挖掘器：`tools/diff/mine_ref_fixtures.py`（幂等；注意 gen_acp_corpus.py 再生成会清空 mined，重跑挖掘器即恢复）；通道 8：自造场景脚本 20×2（80x24/120x30 两档），双侧真实渲染（rust nextest 驱动 × ref bun staging 驱动）。
 
 ## 范围外声明（各报告详述）
 
-渲染层（opentui 差分 127 场景）· ref message.updated 全量投影 · session.moved 纯事件流门控 · HTTP 鉴权态/workerd/网络出口 · bedrock 二进制 event-stream/websocket/gateway 包裹族（通道 7）· minted-id（G-287⑦）
+通道 8 覆盖渲染层**无头静息整屏**（20 场景×2 档）；渲染层范围外余量：动画中间帧（G-128/G-49/G-368 文档化豁免）、活体交互序列（v2 扩展，parity::tui_diff 双 PTY rig 存在未收编）、mini 模式 footer（ref 独立入口 fixture 不可装配）、插件 TSX panel/plugin-*（两侧驱动无插件 boot，G-28 登记面由 G-332 markdown 有界场景部分承担）· ref message.updated 全量投影 · session.moved 纯事件流门控 · HTTP 鉴权态/workerd/网络出口 · bedrock 二进制 event-stream/websocket/gateway 包裹族（通道 7）· minted-id（G-287⑦）
