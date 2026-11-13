@@ -10,7 +10,7 @@
 > 复现：`python3 tools/diff/acp_translate.py`（corpus：/opt/opencode-rust/.worktrees/gb15-lane1/tools/diff/corpus/acp，
 > 由 `tools/diff/gen_acp_corpus.py` 幂等生成）。
 
-- **MATCH：109/137** · DIVERGE：**28** · MISSING：**0**
+- **MATCH：111/137** · DIVERGE：**26** · MISSING：**0**
 - corpus 覆盖：137 例 · 全部 51 种 session 事件类型 + 载荷边界
 - 观测到的 SessionUpdate kind（7/11 census 对齐）：agent_message_chunk, agent_thought_chunk, compaction_summary_chunk, compaction_update, session_info_update, tool_call, tool_call_update
 
@@ -19,10 +19,8 @@
 | `abandon-child-tool` | events |
 | `abandon-tools-and-compaction` | events |
 | `child-projection-meta` | events |
-| `mined-cancelled turn fails open tools incl child` | events, abandon_outputs |
-| `mined-child compaction projected as marker` | events |
+| `mined-cancelled turn fails open tools incl child` | events |
 | `mined-child tool call projected with prefix` | events |
-| `mined-compaction marker without capability` | events |
 | `mined-edit tool file location` | events |
 | `mined-nested child depth own parent` | events |
 | `mined-patch tool file location` | events |
@@ -64,29 +62,17 @@
 - rust:
   - `{"abandon_outputs": [], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child1", "parentID": "ses_root", "title": "Helper"}}, "content": {"text": "child says hi", "type": "text"}, "messageId": "msg_c1", "sessionUpdate": "agent_message_chunk"}}], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child1", "parentID": "ses_root", "title": "Helper"}}, "kind": "read", "name": "read", "rawInput": {}, "sessionUpdate": "tool_call", "title": "Helper: read", "toolCallId": "ses_child1:call_c"}}], "response": null, "terminal": null}]}`
 
-### `mined-cancelled turn fails open tools incl child` — events, abandon_outputs
+### `mined-cancelled turn fails open tools incl child` — events
 - ref:
   - `{"abandon_outputs": [{"tag": "session_update", "update": {"content": [{"content": {"text": "Cancelled", "type": "text"}, "type": "content"}], "kind": "execute", "locations": [{"path": "/workspace"}], "rawInput": {"command": "sleep 60", "cwd": "/workspace"}, "rawOutput": {"error": "Cancelled", "metadata": {"pid": 1}}, "sessionUpdate": "tool_call_update", "status": "failed", "title": "sleep 60", "toolCallId": "call_root"}}, {"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child", "parentID": "ses_root", "title": "Explore"}}, "content": [{"content": {"text": "Cancelled", "type": "text"}, "type": "content"}], "kind": "read", "locations": [], "rawInput": {}, "rawOutput": {"error": "Cancelled", "metadata": {}}, "sessionUpdate": "tool_call_update", "status": "failed", "title": "Explore: read", "toolCallId": "ses_child:call_child"}}], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"kind": "execute", "locations": [{"path": "/workspace"}], "rawInput": {"cwd": "/workspace"}, "sessionUpdate": "tool_call", "status": "pending", "t`
 - rust:
-  - `{"abandon_outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child", "parentID": "ses_root", "title": "Explore"}}, "content": [{"content": {"text": "Cancelled", "type": "text"}, "type": "content"}], "kind": "read", "locations": [], "rawInput": {}, "rawOutput": {"error": "Cancelled", "metadata": {}}, "sessionUpdate": "tool_call_update", "status": "failed", "title": "Explore: read", "toolCallId": "ses_child:call_child"}}, {"tag": "session_update", "update": {"content": [{"content": {"text": "Cancelled", "type": "text"}, "type": "content"}], "kind": "execute", "locations": [{"path": "/workspace"}], "rawInput": {"command": "sleep 60", "cwd": "/workspace"}, "rawOutput": {"error": "Cancelled", "metadata": {"pid": 1}}, "sessionUpdate": "tool_call_update", "status": "failed", "title": "sleep 60", "toolCallId": "call_root"}}], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"kind": "execute", "locations": [{"path": "/workspace"}], "name": "shell", "rawInput": {"cwd": "/workspace"}, "sessionUpdate": "tool_call", "title`
-
-### `mined-child compaction projected as marker` — events
-- ref:
-  - `{"abandon_outputs": [], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child", "parentID": "ses_root", "title": "Explore"}, "opencode/compaction": {"messageId": "msg_compact", "reason": "manual", "status": "started"}}, "sessionUpdate": "session_info_update"}}], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child", "parentID": "ses_root", "title": "Explore"}, "opencode/compaction": {"messageId": "msg_compact", "reason": "manual", "status": "completed"}}, "sessionUpdate": "session_info_update"}}], "response": null, "terminal": null}]}`
-- rust:
-  - `{"abandon_outputs": [], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child", "parentID": "ses_root", "title": "Explore"}, "opencode/compaction": {"messageId": "msg_compact", "reason": "manual", "status": "started"}}, "sessionUpdate": "session_info_update"}}], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child", "parentID": "ses_root", "title": "Explore"}, "opencode/compaction": {"messageId": "msg_compact", "reason": "manual", "status": "completed", "summary": "Summary"}}, "sessionUpdate": "session_info_update"}}], "response": null, "terminal": null}]}`
+  - `{"abandon_outputs": [{"tag": "session_update", "update": {"content": [{"content": {"text": "Cancelled", "type": "text"}, "type": "content"}], "kind": "execute", "locations": [{"path": "/workspace"}], "rawInput": {"command": "sleep 60", "cwd": "/workspace"}, "rawOutput": {"error": "Cancelled", "metadata": {"pid": 1}}, "sessionUpdate": "tool_call_update", "status": "failed", "title": "sleep 60", "toolCallId": "call_root"}}, {"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child", "parentID": "ses_root", "title": "Explore"}}, "content": [{"content": {"text": "Cancelled", "type": "text"}, "type": "content"}], "kind": "read", "locations": [], "rawInput": {}, "rawOutput": {"error": "Cancelled", "metadata": {}}, "sessionUpdate": "tool_call_update", "status": "failed", "title": "Explore: read", "toolCallId": "ses_child:call_child"}}], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"kind": "execute", "locations": [{"path": "/workspace"}], "name": "shell", "rawInput": {"cwd": "/workspace"}, "sessionUpdate": "tool_call", "title`
 
 ### `mined-child tool call projected with prefix` — events
 - ref:
   - `{"abandon_outputs": [], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child", "parentID": "ses_root", "title": "Explore"}}, "kind": "read", "locations": [], "rawInput": {}, "sessionUpdate": "tool_call", "status": "pending", "title": "Explore: read", "toolCallId": "ses_child:call_1"}}], "response": null, "terminal": null}]}`
 - rust:
   - `{"abandon_outputs": [], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/child-session": {"depth": 1, "id": "ses_child", "parentID": "ses_root", "title": "Explore"}}, "kind": "read", "name": "read", "rawInput": {}, "sessionUpdate": "tool_call", "title": "Explore: read", "toolCallId": "ses_child:call_1"}}], "response": null, "terminal": null}]}`
-
-### `mined-compaction marker without capability` — events
-- ref:
-  - `{"abandon_outputs": [], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/compaction": {"messageId": "msg_compact", "reason": "manual", "status": "started"}}, "sessionUpdate": "session_info_update"}}], "response": null, "terminal": null}, {"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/compaction": {"messageId": "msg_compact", "reason": "manual", "status": "completed"}}, "sessionUpdate": "session_info_update"}}], "response": null, "terminal": null}]}`
-- rust:
-  - `{"abandon_outputs": [], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/compaction": {"messageId": "msg_compact", "reason": "manual", "status": "started"}}, "sessionUpdate": "session_info_update"}}], "response": null, "terminal": null}, {"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"_meta": {"opencode/compaction": {"messageId": "msg_compact", "reason": "manual", "status": "completed", "summary": "Summary"}}, "sessionUpdate": "session_info_update"}}], "response": null, "terminal": null}]}`
 
 ### `mined-edit tool file location` — events
 - ref:
@@ -116,7 +102,7 @@
 - ref:
   - `{"abandon_outputs": [], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"kind": "execute", "locations": [{"path": "/workspace"}], "rawInput": {"cwd": "/workspace"}, "sessionUpdate": "tool_call", "status": "pending", "title": "shell", "toolCallId": "call_ok"}}], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"kind": "execute", "locations": [{"path": "/workspace/sub"}], "rawInput": {"command": "printf done", "workdir": "sub"}, "sessionUpdate": "tool_call_update", "status": "in_progress", "title": "printf done", "toolCallId": "call_ok"}}], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"kind": "execute", "locations": [{"path": "/workspace/sub"}], "rawInput": {"command": "printf done", "workdir": "sub"}, "sessionUpdate": "tool_call_update", "status": "in_progress", "title": "printf done", "toolCallId": "call_ok"}}], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"content": [{"content": {"text": "done", "type": "text"}, "type": "content"}], "locations": [{"path": "/workspace/sub"}], "rawOutput": {"metada`
 - rust:
-  - `{"abandon_outputs": [], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"kind": "execute", "locations": [{"path": "/workspace"}], "name": "shell", "rawInput": {"cwd": "/workspace"}, "sessionUpdate": "tool_call", "title": "shell", "toolCallId": "call_ok"}}], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"kind": "execute", "locations": [{"path": "/workspace/sub"}, {"path": "/workspace"}], "rawInput": {"command": "printf done", "workdir": "sub"}, "sessionUpdate": "tool_call_update", "status": "in_progress", "title": "printf done", "toolCallId": "call_ok"}}], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"kind": "execute", "locations": [{"path": "/workspace/sub"}, {"path": "/workspace"}], "rawInput": {"command": "printf done", "workdir": "sub"}, "sessionUpdate": "tool_call_update", "status": "in_progress", "title": "printf done", "toolCallId": "call_ok"}}], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"content": [{"content": {"text": "done", "type": "text"}, "type": "content"}], "locations": [{"path`
+  - `{"abandon_outputs": [], "events": [{"outputs": [], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"kind": "execute", "locations": [{"path": "/workspace"}], "name": "shell", "rawInput": {"cwd": "/workspace"}, "sessionUpdate": "tool_call", "title": "shell", "toolCallId": "call_ok"}}], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"kind": "execute", "locations": [{"path": "/workspace/sub"}], "rawInput": {"command": "printf done", "workdir": "sub"}, "sessionUpdate": "tool_call_update", "status": "in_progress", "title": "printf done", "toolCallId": "call_ok"}}], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"kind": "execute", "locations": [{"path": "/workspace/sub"}], "rawInput": {"command": "printf done", "workdir": "sub"}, "sessionUpdate": "tool_call_update", "status": "in_progress", "title": "printf done", "toolCallId": "call_ok"}}], "response": null, "terminal": null}, {"outputs": [{"tag": "session_update", "update": {"content": [{"content": {"text": "done", "type": "text"}, "type": "content"}], "locations": [{"path": "/workspace/sub"}], "rawOutput": {"metadata":`
 
 ### `mined-write tool file location` — events
 - ref:
@@ -217,7 +203,7 @@
 ## 判定
 
 - 已裁定：137/137（每例双侧一致或分歧字段明确归属）
-- 分歧 28 项逐项人工定性后入册（缺口候选/有据分歧/提取噪声）或背书
+- 分歧 26 项逐项人工定性后入册（缺口候选/有据分歧/提取噪声）或背书
 
 ## 分歧定性（人工亲读双侧当前代码）
 
@@ -233,7 +219,7 @@
 
 | # | 语义 | ref 侧 | rust 侧 | 涉及用例 |
 |---|---|---|---|---|
-| B1 | pending `tool_call` 形状 | `tool.ts:61-75` 对象字面量：带 `status:"pending"`、空 `locations:[]`、无 `name` | `tool.rs:215-234` 经 vendored crate 序列化：`name` 恒置（tool.rs:228）、`status` 默认值被 `tool_call.rs:51` skip、空 `locations` 被 `:56` skip | 全部含 `session.tool.input.started` 的 28 例中的 14 例（`tool-*`、`abandon-*`、`permission-ask-tracked-tool`、`child-projection-meta`） |
+| B1 | pending `tool_call` 形状 | `tool.ts:61-75` 对象字面量：带 `status:"pending"`、空 `locations:[]`、无 `name` | `tool.rs:215-234` 经 vendored crate 序列化：`name` 恒置（tool.rs:228）、`status` 默认值被 `tool_call.rs:51` skip、空 `locations` 被 `:56` skip | 全部含 `session.tool.input.started` 的 26 例中的 14 例（`tool-*`、`abandon-*`、`permission-ask-tracked-tool`、`child-projection-meta`） |
 | B2 | reasoning ordinal 异常值 | `translate.ts:277-283` 模板串接（缺省→`undefined`、负数/字符串原样） | `translate.rs:638-641` `as_u64().unwrap_or(0)` | `reasoning-delta-ordinal-{missing,negative,string}`（schema 要求 ordinal 必填非负，属超 schema 输入容差分歧） |
 | B3 | text.delta 缺 `delta` 字段 | `translate.ts:283-291` `{text: undefined}` 经 JSON 序列化丢键 | `translate.rs:618-630`+`:835-837` 回退 `""` 显式上 wire | `text-delta-missing-field`（同上，超 schema 输入） |
 
