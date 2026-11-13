@@ -44,6 +44,27 @@ files; every field semantic below is normative for both.
 - `note` — one-sentence scenario semantics; the place where
   equivalence between the two implementations is argued.
 
+### 尺寸档位 (size tiers)
+
+The v1 corpus always renders at **two tiers**: `80×24` and `120×30`. A
+scenario file carries a single `width`/`height` pair (the primary tier,
+`80×24` for every current scenario); the orchestrator/harness derives the
+second tier (`120×30`) by mirroring — same schema, id, fetch stubs, events,
+keys and settle budget, only the grid size changes. Scenario ids stay
+un-suffixed for the primary tier; harnesses report the mirrored tier as
+`<id>@120x30`. If a future scenario needs a non-default tier pair, it must
+state both explicitly via the reserved `tiers` array (none do in v1).
+
+### 主题 (theme pinning)
+
+Channel 8 renders every scenario under the reference default theme: the
+built-in `opencode` **v2 theme in dark mode**
+(`packages/tui/src/theme/assets/v2/opencode.json` in the ref tree) — the same
+corpus theme as the tui-dump goldens (`tools/parity/tui-dump/README.md`,
+`theme: { id: "opencode", label: "v2-dark", mode: "dark" }`). Both sides must
+resolve and mount that exact theme document; no scenario-level theme override
+exists in `tui-diff-scenario/1`.
+
 ### Session-route convention
 
 Session scenarios (`session-*`) stub the session endpoints with
@@ -87,11 +108,19 @@ run with `bun --preload @opentui/solid/preload` from the reference
 ```
 
 Every scenario's `fetch` map covers all 21 census paths (bodies mirror
-the reference fixture defaults in `tui-client.ts`). Session scenarios
-additionally stub the session-route endpoints
-(`/api/session`, `/api/session/<id>`, `/api/session/<id>/message`,
-`<id>/inbox`, `<id>/permission`, `<id>/form`,
-`/api/experimental/session/<id>/terminal`).
+the reference fixture defaults in `tui-client.ts`; note `/api/config`
+is a **bare array** `[]` — not the `{location, data}` envelope — and
+`/api/form`'s location omits `project.canonical`, both exactly as the
+fixture returns them). Session scenarios additionally stub the
+session-route endpoints (`/api/session`, `/api/session/<id>`,
+`/api/session/<id>/message`, `<id>/inbox`, `<id>/permission`,
+`<id>/form`, `/api/experimental/session/<id>/terminal`).
+
+**stub_gap rule**: any endpoint the TUI actually requests that a
+scenario's `fetch` map does not cover is a `stub_gap` and counts as an
+**infra failure** for that run (never a render diff, never a silent
+503/fallback). Harnesses (T2 bun-side, T4 rust-side) must detect and
+report stub_gaps before comparing frames.
 
 ## 键名表 (key vocabulary)
 
