@@ -300,6 +300,24 @@ fn shell_block(
             )]);
         }
     }
+    // W3 — `BlockTool`'s error row (index.tsx:2700-2702 + 2767-2769): a
+    // failed shell tool appends `state.error.message` inside the block,
+    // after the content, in the error color (`props.errorColor ??
+    // theme.text.feedback.error.base`) — unconditional in the block
+    // variant (the `errorExpanded` gate is the InlineToolRow's).
+    if matches!(state.status, ToolStatus::Error) {
+        if let Some(error) = state.error.as_deref() {
+            if !error.is_empty() {
+                rows.push(Vec::new()); // the box's gap 1
+                rows.push(vec![text_at(
+                    0,
+                    0,
+                    crate::wrap::take_width(error, width.saturating_sub(3)),
+                    Style::new().fg(theme.error).bg(raised),
+                )]);
+            }
+        }
+    }
     let height = rows.len() + 2; // + paddingTop/Bottom 1
     let mut placed = Vec::new();
     for (index, row) in rows.iter().enumerate() {
@@ -311,7 +329,9 @@ fn shell_block(
         }
     }
     for row in 0..height {
-        placed.push(text_at(0, row, "┃", Style::new().fg(theme.background).bg(theme.background)));
+        // W3 — the rail sits ON the raised fill (ref capture: the split
+        // border char carries fg=background.base, bg=background.raised).
+        placed.push(text_at(0, row, "┃", Style::new().fg(theme.background).bg(raised)));
     }
     if running && !command.is_empty() && !rows.is_empty() {
         // The running command's spinner glyph leads the first row
