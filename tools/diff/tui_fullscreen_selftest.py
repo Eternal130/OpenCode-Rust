@@ -23,7 +23,9 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from tools.diff.tui_fullscreen import compare, normalize, verdict  # noqa: E402
+from tools.diff.tui_fullscreen import (  # noqa: E402
+    CAUSES, adjudicate, compare, normalize, verdict,
+)
 
 
 def mkcell(ch: str = " ", attrs: list | None = None,
@@ -155,11 +157,141 @@ class NormalizeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             out = Path(td)
             (out / "c1.json").write_text(json.dumps(
-                {"schema": "tui-diff-grid/1", "id": "c1", "width": 8, "height": 4, "cells": []}))
+                {"schema": "tui-diff-grid/1", "id": "c1", "width": 8, "height": 4,
+                 "cells": [[None] * 8 for _ in range(4)]}))
             cases = [{"id": "c1", "scenario": "s", "width": 8, "height": 4}]
             grids = tf.load_side(out, cases, "test")
             self.assertEqual(grids["c1"].get("stub_gaps", []), [])
             self.assertIsNone(grids["c1"].get("error"))
+
+
+class CausesTest(unittest.TestCase):
+    """CAUSES matchers (T6): exact-shape hits and misses per cluster."""
+
+    def _rec(self, **kw):
+        base = {"id": "synthetic", "verdict": "diverge",
+                "first_diff": None, "cells_diff_count": 1}
+        base.update(kw)
+        return base
+
+    def _label(self, rec):
+        return adjudicate(rec)
+
+    def test_g368_structural_hits_quantize_cluster(self):
+        ref_cells, rust_cells = uniform("x"), uniform("x")
+        ref_cells[0][0] = mkcell("x", fg=[100, 100, 100])
+        rust_cells[0][0] = mkcell("x", fg=[104, 96, 108])
+        r = compare(normalize(mkgrid(ref_cells)), normalize(mkgrid(rust_cells)))
+        self.assertEqual(r["verdict"], "structural")
+        self.assertIn("G-368", self._label({"id": "any-scenario", **r}))
+
+    def test_g368_out_of_tolerance_rgb_does_not_hit(self):
+        # 255 vs 238 = delta 17 > tolerance 8 -> diverge, must stay
+        # unadjudicated (the smoke baseline's shape)
+        ref_cells, rust_cells = uniform("x"), uniform("x")
+        ref_cells[0][0] = mkcell("x", fg=[255, 255, 255])
+        rust_cells[0][0] = mkcell("x", fg=[238, 238, 238])
+        r = compare(normalize(mkgrid(ref_cells)), normalize(mkgrid(rust_cells)))
+        self.assertEqual(r["verdict"], "diverge")
+        self.assertIsNone(self._label({"id": "session-text", **r}))
+
+    def test_g28_plugin_prefix_diverge_hits(self):
+        rec = self._rec(id="plugin-boot-basic")
+        self.assertIn("G-28", self._label(rec))
+
+    def test_g28_wrong_prefix_or_exact_shape_misses(self):
+        self.assertIsNone(self._label(self._rec(id="home-empty")))
+        # plugin- prefix but exact verdict is not a divergence at all
+        self.assertIsNone(self._label(self._rec(id="plugin-x", verdict="exact")))
+
+    def test_g332_markdown_prefix_ch_diff_hits(self):
+        rec = self._rec(id="session-markdown-codeblock",
+                        first_diff={"row": 0, "col": 1, "field": "ch",
+                                    "ref": "a", "rust": "b"})
+        self.assertIn("G-332", self._label(rec))
+
+    def test_g332_fg_diff_or_bare_id_misses(self):
+        # same scenario family but fg field (not ch) -> not this cluster
+        rec_fg = self._rec(id="session-markdown-codeblock",
+                           first_diff={"row": 0, "col": 0, "field": "fg",
+                                       "ref": [1, 2, 3], "rust": [4, 5, 6]})
+        self.assertIsNone(self._label(rec_fg))
+        # the CURRENT corpus id has no trailing segment: prefix
+        # "session-markdown-" must not swallow bare "session-markdown"
+        rec_bare = self._rec(id="session-markdown",
+                             first_diff={"row": 0, "col": 0, "field": "ch",
+                                         "ref": "a", "rust": "b"})
+        self.assertIsNone(self._label(rec_bare))
+
+    def test_g239_panel_prefix_hits(self):
+        rec = self._rec(id="panel-focused")
+        self.assertIn("G-239", self._label(rec))
+
+    def test_panel_at_sign_suffix_misses(self):
+        # mirrored-tier ids like panel-x@120x30 still hit (prefix rule)
+        self.assertIn("G-239", self._label(self._rec(id="panel-x@120x30")))
+        # but the smoke baseline's ids must not
+        self.assertIsNone(self._label(self._rec(id="home-empty@120x30")))
+
+    def test_verdict_with_causes_adjudicated_passes(self):
+        ref_cells, rust_cells = uniform("x"), uniform("x")
+        ref_cells[0][0] = mkcell("x", fg=[100, 100, 100])
+        rust_cells[0][0] = mkcell("x", fg=[107, 93, 108])
+        r = compare(normalize(mkgrid(ref_cells)), normalize(mkgrid(rust_cells)))
+        self.assertEqual(verdict([{"id": "any", **r}], CAUSES), 0)
+
+    def test_verdict_with_causes_unknown_divergence_stays_red(self):
+        rec = self._rec(id="home-empty",
+                        first_diff={"row": 15, "col": 6, "field": "ch",
+                                    "ref": " ", "rust": "B"})
+        self.assertEqual(verdict([rec], CAUSES), 2)
+
+
+class CausesTableTest(unittest.TestCase):
+    def test_every_entry_is_label_matcher_judgment_triple(self):
+        for entry in CAUSES:
+            label, match, judgment = entry
+            self.assertIsInstance(label, str)
+            self.assertTrue(callable(match))
+            self.assertEqual(len(judgment), 3)
+            # both sides' file:line judgments must be present
+            self.assertIn("ref", judgment[1])
+            self.assertTrue("rust" in judgment[2] or "crates/" in judgment[2])
+
+
+class DefensiveCompareTest(unittest.TestCase):
+    """T5-review follow-ups: loud divergence instead of silent zip
+    truncation, and load_side cells-shape validation."""
+
+    def test_ragged_rows_diverge_loudly(self):
+        ref_cells, rust_cells = uniform(), uniform()
+        rust_cells[2].append(mkcell("x"))  # one row longer
+        res = compare(normalize(mkgrid(ref_cells)), normalize(mkgrid(rust_cells)))
+        self.assertEqual(res["verdict"], "diverge")
+        self.assertEqual(res["first_diff"]["field"], "cells_shape")
+
+    def test_fewer_rows_diverge_loudly(self):
+        ref_cells = uniform()
+        rust_cells = uniform()[:-1]  # a row short
+        res = compare(normalize(mkgrid(ref_cells)), normalize(mkgrid(rust_cells)))
+        self.assertEqual(res["verdict"], "diverge")
+        self.assertEqual(res["first_diff"]["field"], "cells_shape")
+
+    def test_load_side_rejects_cells_shape_mismatch(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        import tools.diff.tui_fullscreen as tf
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            # declares 8x4 but cells is 3 rows -> infra red (SystemExit 1)
+            (out / "c1.json").write_text(json.dumps(
+                {"schema": "tui-diff-grid/1", "id": "c1", "width": 8, "height": 4,
+                 "cells": [[mkcell() for _ in range(8)] for _ in range(3)]}))
+            cases = [{"id": "c1", "scenario": "s", "width": 8, "height": 4}]
+            with self.assertRaises(SystemExit) as cm:
+                tf.load_side(out, cases, "test")
+            self.assertEqual(cm.exception.code, 1)
 
 
 if __name__ == "__main__":
