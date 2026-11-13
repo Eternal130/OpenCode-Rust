@@ -25,94 +25,88 @@ cells 稠密化，None/缺省子字段补规范默认（ch=' '、attrs 排序去
 
 | 总量 | EXACT | STRUCTURAL | CAUSES 命中 | 未裁决 |
 |---|---|---|---|---|
-| 40 | 4 | 0 | 0 | 36 |
+| 40 | 10 | 0 | 0 | 30 |
 
-（verdict 分布：exact 4 / structural 0 / diverge 36；
+（verdict 分布：exact 10 / structural 0 / diverge 30；
 gate 见编排器输出，未裁决>0 ⇒ exit 2）
 
 ## 分歧明细
 
 | case | verdict | diff cells | first_diff | ref size | rust size | ref gaps | rust gaps | ref paths | rust paths |
 |---|---|---|---|---|---|---|---|---|---|
-| command-palette | diverge | 393 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| command-palette@120x30 | diverge | 567 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| dialog-open-recent | diverge | 533 | r0c7 attrs ref=[] rust=['bold'] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| dialog-open-recent@120x30 | diverge | 759 | r0c7 attrs ref=[] rust=['bold'] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| dialog-status | diverge | 1860 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| dialog-status@120x30 | diverge | 3600 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
+| command-palette | diverge | 112 | r0c10 attrs ref=[] rust=['bold'] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
+| command-palette@120x30 | diverge | 166 | r0c10 attrs ref=[] rust=['bold'] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
+| dialog-open-recent | diverge | 275 | r0c7 attrs ref=[] rust=['bold'] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
+| dialog-open-recent@120x30 | diverge | 305 | r0c7 attrs ref=[] rust=['bold'] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
+| dialog-status | diverge | 1860 | r0c0 bg ref=[30, 30, 30] rust=[12, 12, 12] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
+| dialog-status@120x30 | diverge | 3600 | r0c0 bg ref=[30, 30, 30] rust=[12, 12, 12] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
 | fetch-503-model | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 20 | 12 |
 | fetch-503-model@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 20 | 12 |
 | home-empty | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 20 | 12 |
 | home-empty@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 20 | 12 |
-| home-multi-session | diverge | 344 | r17c2 ch ref='┃' rust=' ' | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| home-multi-session@120x30 | diverge | 464 | r23c2 ch ref='┃' rust=' ' | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| models-dialog | diverge | 1920 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| models-dialog@120x30 | diverge | 3600 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-empty | diverge | 344 | r17c2 ch ref='┃' rust=' ' | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-empty@120x30 | diverge | 464 | r23c2 ch ref='┃' rust=' ' | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-markdown | diverge | 656 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-markdown@120x30 | diverge | 936 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-multi-turn | diverge | 1115 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-multi-turn@120x30 | diverge | 2646 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-reasoning | diverge | 808 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-reasoning@120x30 | diverge | 1168 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-scroll | diverge | 1080 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-scroll@120x30 | diverge | 1954 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-step-failed | diverge | 686 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-step-failed@120x30 | diverge | 966 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-stream-idle | diverge | 342 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-stream-idle@120x30 | diverge | 462 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-tabs | diverge | 1860 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-tabs@120x30 | diverge | 3600 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-text | diverge | 654 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-text@120x30 | diverge | 934 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-tool-failed | diverge | 536 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-tool-failed@120x30 | diverge | 736 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-tool-success | diverge | 810 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-tool-success@120x30 | diverge | 1170 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-wrap | diverge | 661 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-wrap@120x30 | diverge | 941 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| sidebar-toggle | diverge | 1645 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| sidebar-toggle@120x30 | diverge | 3273 | r0c0 fg ref=[255, 255, 255] rust=[238, 238, 238] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
+| home-multi-session | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
+| home-multi-session@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
+| models-dialog | diverge | 1920 | r0c0 bg ref=[30, 30, 30] rust=[12, 12, 12] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
+| models-dialog@120x30 | diverge | 3600 | r0c0 bg ref=[30, 30, 30] rust=[12, 12, 12] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
+| session-empty | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
+| session-empty@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
+| session-markdown | diverge | 304 | r9c2 ch ref='┃' rust=' ' | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
+| session-markdown@120x30 | diverge | 464 | r9c2 ch ref='┃' rust=' ' | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
+| session-multi-turn | diverge | 994 | r1c2 ch ref='┃' rust=' ' | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
+| session-multi-turn@120x30 | diverge | 2170 | r1c2 ch ref='┃' rust=' ' | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
+| session-reasoning | diverge | 456 | r6c2 ch ref='┃' rust=' ' | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
+| session-reasoning@120x30 | diverge | 696 | r6c2 ch ref='┃' rust=' ' | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
+| session-scroll | diverge | 706 | r1c5 ch ref='B' rust='d' | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
+| session-scroll@120x30 | diverge | 1597 | r1c5 ch ref='A' rust=' ' | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
+| session-step-failed | diverge | 331 | r4c2 ch ref='┃' rust=' ' | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
+| session-step-failed@120x30 | diverge | 491 | r4c2 ch ref='┃' rust=' ' | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
+| session-stream-idle | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
+| session-stream-idle@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
+| session-tabs | diverge | 1860 | r0c0 bg ref=[30, 30, 30] rust=[12, 12, 12] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
+| session-tabs@120x30 | diverge | 3600 | r0c0 bg ref=[30, 30, 30] rust=[12, 12, 12] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
+| session-text | diverge | 304 | r4c2 ch ref='┃' rust=' ' | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
+| session-text@120x30 | diverge | 464 | r4c2 ch ref='┃' rust=' ' | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
+| session-tool-failed | diverge | 182 | r2c2 bg ref=[20, 20, 20] rust=[10, 10, 10] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
+| session-tool-failed@120x30 | diverge | 262 | r2c2 bg ref=[20, 20, 20] rust=[10, 10, 10] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
+| session-tool-success | diverge | 456 | r6c2 ch ref='┃' rust=' ' | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
+| session-tool-success@120x30 | diverge | 696 | r6c2 ch ref='┃' rust=' ' | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
+| session-wrap | diverge | 304 | r7c2 ch ref='┃' rust=' ' | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
+| session-wrap@120x30 | diverge | 464 | r6c2 ch ref='┃' rust=' ' | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
+| sidebar-toggle | diverge | 1627 | r1c0 bg ref=[10, 10, 10] rust=[7, 7, 7] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
+| sidebar-toggle@120x30 | diverge | 3255 | r1c0 bg ref=[10, 10, 10] rust=[7, 7, 7] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
 
 ### first_diff 明细
 
-- `command-palette` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=393 — 未裁决（T9 候选）
-- `command-palette@120x30` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=567 — 未裁决（T9 候选）
-- `dialog-open-recent` [diverge] row=0 col=7 field=attrs ref=[] rust=['bold'] cells_diff_count=533 — 未裁决（T9 候选）
-- `dialog-open-recent@120x30` [diverge] row=0 col=7 field=attrs ref=[] rust=['bold'] cells_diff_count=759 — 未裁决（T9 候选）
-- `dialog-status` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=1860 — 未裁决（T9 候选）
-- `dialog-status@120x30` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=3600 — 未裁决（T9 候选）
-- `home-multi-session` [diverge] row=17 col=2 field=ch ref='┃' rust=' ' cells_diff_count=344 — 未裁决（T9 候选）
-- `home-multi-session@120x30` [diverge] row=23 col=2 field=ch ref='┃' rust=' ' cells_diff_count=464 — 未裁决（T9 候选）
-- `models-dialog` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=1920 — 未裁决（T9 候选）
-- `models-dialog@120x30` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=3600 — 未裁决（T9 候选）
-- `session-empty` [diverge] row=17 col=2 field=ch ref='┃' rust=' ' cells_diff_count=344 — 未裁决（T9 候选）
-- `session-empty@120x30` [diverge] row=23 col=2 field=ch ref='┃' rust=' ' cells_diff_count=464 — 未裁决（T9 候选）
-- `session-markdown` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=656 — 未裁决（T9 候选）
-- `session-markdown@120x30` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=936 — 未裁决（T9 候选）
-- `session-multi-turn` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=1115 — 未裁决（T9 候选）
-- `session-multi-turn@120x30` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=2646 — 未裁决（T9 候选）
-- `session-reasoning` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=808 — 未裁决（T9 候选）
-- `session-reasoning@120x30` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=1168 — 未裁决（T9 候选）
-- `session-scroll` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=1080 — 未裁决（T9 候选）
-- `session-scroll@120x30` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=1954 — 未裁决（T9 候选）
-- `session-step-failed` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=686 — 未裁决（T9 候选）
-- `session-step-failed@120x30` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=966 — 未裁决（T9 候选）
-- `session-stream-idle` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=342 — 未裁决（T9 候选）
-- `session-stream-idle@120x30` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=462 — 未裁决（T9 候选）
-- `session-tabs` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=1860 — 未裁决（T9 候选）
-- `session-tabs@120x30` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=3600 — 未裁决（T9 候选）
-- `session-text` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=654 — 未裁决（T9 候选）
-- `session-text@120x30` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=934 — 未裁决（T9 候选）
-- `session-tool-failed` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=536 — 未裁决（T9 候选）
-- `session-tool-failed@120x30` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=736 — 未裁决（T9 候选）
-- `session-tool-success` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=810 — 未裁决（T9 候选）
-- `session-tool-success@120x30` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=1170 — 未裁决（T9 候选）
-- `session-wrap` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=661 — 未裁决（T9 候选）
-- `session-wrap@120x30` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=941 — 未裁决（T9 候选）
-- `sidebar-toggle` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=1645 — 未裁决（T9 候选）
-- `sidebar-toggle@120x30` [diverge] row=0 col=0 field=fg ref=[255, 255, 255] rust=[238, 238, 238] cells_diff_count=3273 — 未裁决（T9 候选）
+- `command-palette` [diverge] row=0 col=10 field=attrs ref=[] rust=['bold'] cells_diff_count=112 — 未裁决（T9 候选）
+- `command-palette@120x30` [diverge] row=0 col=10 field=attrs ref=[] rust=['bold'] cells_diff_count=166 — 未裁决（T9 候选）
+- `dialog-open-recent` [diverge] row=0 col=7 field=attrs ref=[] rust=['bold'] cells_diff_count=275 — 未裁决（T9 候选）
+- `dialog-open-recent@120x30` [diverge] row=0 col=7 field=attrs ref=[] rust=['bold'] cells_diff_count=305 — 未裁决（T9 候选）
+- `dialog-status` [diverge] row=0 col=0 field=bg ref=[30, 30, 30] rust=[12, 12, 12] cells_diff_count=1860 — 未裁决（T9 候选）
+- `dialog-status@120x30` [diverge] row=0 col=0 field=bg ref=[30, 30, 30] rust=[12, 12, 12] cells_diff_count=3600 — 未裁决（T9 候选）
+- `models-dialog` [diverge] row=0 col=0 field=bg ref=[30, 30, 30] rust=[12, 12, 12] cells_diff_count=1920 — 未裁决（T9 候选）
+- `models-dialog@120x30` [diverge] row=0 col=0 field=bg ref=[30, 30, 30] rust=[12, 12, 12] cells_diff_count=3600 — 未裁决（T9 候选）
+- `session-markdown` [diverge] row=9 col=2 field=ch ref='┃' rust=' ' cells_diff_count=304 — 未裁决（T9 候选）
+- `session-markdown@120x30` [diverge] row=9 col=2 field=ch ref='┃' rust=' ' cells_diff_count=464 — 未裁决（T9 候选）
+- `session-multi-turn` [diverge] row=1 col=2 field=ch ref='┃' rust=' ' cells_diff_count=994 — 未裁决（T9 候选）
+- `session-multi-turn@120x30` [diverge] row=1 col=2 field=ch ref='┃' rust=' ' cells_diff_count=2170 — 未裁决（T9 候选）
+- `session-reasoning` [diverge] row=6 col=2 field=ch ref='┃' rust=' ' cells_diff_count=456 — 未裁决（T9 候选）
+- `session-reasoning@120x30` [diverge] row=6 col=2 field=ch ref='┃' rust=' ' cells_diff_count=696 — 未裁决（T9 候选）
+- `session-scroll` [diverge] row=1 col=5 field=ch ref='B' rust='d' cells_diff_count=706 — 未裁决（T9 候选）
+- `session-scroll@120x30` [diverge] row=1 col=5 field=ch ref='A' rust=' ' cells_diff_count=1597 — 未裁决（T9 候选）
+- `session-step-failed` [diverge] row=4 col=2 field=ch ref='┃' rust=' ' cells_diff_count=331 — 未裁决（T9 候选）
+- `session-step-failed@120x30` [diverge] row=4 col=2 field=ch ref='┃' rust=' ' cells_diff_count=491 — 未裁决（T9 候选）
+- `session-tabs` [diverge] row=0 col=0 field=bg ref=[30, 30, 30] rust=[12, 12, 12] cells_diff_count=1860 — 未裁决（T9 候选）
+- `session-tabs@120x30` [diverge] row=0 col=0 field=bg ref=[30, 30, 30] rust=[12, 12, 12] cells_diff_count=3600 — 未裁决（T9 候选）
+- `session-text` [diverge] row=4 col=2 field=ch ref='┃' rust=' ' cells_diff_count=304 — 未裁决（T9 候选）
+- `session-text@120x30` [diverge] row=4 col=2 field=ch ref='┃' rust=' ' cells_diff_count=464 — 未裁决（T9 候选）
+- `session-tool-failed` [diverge] row=2 col=2 field=bg ref=[20, 20, 20] rust=[10, 10, 10] cells_diff_count=182 — 未裁决（T9 候选）
+- `session-tool-failed@120x30` [diverge] row=2 col=2 field=bg ref=[20, 20, 20] rust=[10, 10, 10] cells_diff_count=262 — 未裁决（T9 候选）
+- `session-tool-success` [diverge] row=6 col=2 field=ch ref='┃' rust=' ' cells_diff_count=456 — 未裁决（T9 候选）
+- `session-tool-success@120x30` [diverge] row=6 col=2 field=ch ref='┃' rust=' ' cells_diff_count=696 — 未裁决（T9 候选）
+- `session-wrap` [diverge] row=7 col=2 field=ch ref='┃' rust=' ' cells_diff_count=304 — 未裁决（T9 候选）
+- `session-wrap@120x30` [diverge] row=6 col=2 field=ch ref='┃' rust=' ' cells_diff_count=464 — 未裁决（T9 候选）
+- `sidebar-toggle` [diverge] row=1 col=0 field=bg ref=[10, 10, 10] rust=[7, 7, 7] cells_diff_count=1627 — 未裁决（T9 候选）
+- `sidebar-toggle@120x30` [diverge] row=1 col=0 field=bg ref=[10, 10, 10] rust=[7, 7, 7] cells_diff_count=3255 — 未裁决（T9 候选）
 
 ## CAUSES 定性
 
