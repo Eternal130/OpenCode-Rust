@@ -541,5 +541,5 @@
   ],
   "keys": [],
   "settle_ms": 200,
-  "note": "One tool part driven to failure (tool.called -> tool.failed with a structured error and no content) — both sides must render the same failed tool row with the error styling; error-state rendering of tool parts is the equivalence target."
+  "note": "One tool part driven to failure (tool.called -> tool.failed with a structured error and no content) -- both sides must render the same failed tool row with the error styling; error-state rendering of tool parts is the equivalence target."
 }

@@ -552,5 +552,5 @@
   ],
   "keys": [],
   "settle_ms": 200,
-  "note": "One reasoning part (reasoning.started/ended full-value boundary) followed by a text part: the persisted message stub and the event replay agree; both sides must render the same collapsed/expanded reasoning block plus answer text — reasoning part rendering is the equivalence target."
+  "note": "One reasoning part (reasoning.started/ended full-value boundary) followed by a text part: the persisted message stub and the event replay agree; both sides must render the same collapsed/expanded reasoning block plus answer text -- reasoning part rendering is the equivalence target."
 }

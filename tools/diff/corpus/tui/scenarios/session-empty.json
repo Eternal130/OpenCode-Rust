@@ -408,5 +408,5 @@
   ],
   "keys": [],
   "settle_ms": 200,
-  "note": "Session route with zero messages: both sides must render the empty transcript surface plus the composer placeholder — the minimal session chrome is the equivalence target."
+  "note": "Session route with zero messages: both sides must render the empty transcript surface plus the composer placeholder -- the minimal session chrome is the equivalence target."
 }

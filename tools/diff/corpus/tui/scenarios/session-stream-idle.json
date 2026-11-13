@@ -485,5 +485,5 @@
   ],
   "keys": [],
   "settle_ms": 300,
-  "note": "Stream interrupted mid-part: session.text.started plus two deltas with NO text.ended and NO step.ended, then settle — both sides must render the same quiescent mid-stream state (partial text visible, step still marked busy); the settle budget freezes the same resting frame on both sides so the spinner/streaming markers compare deterministically."
+  "note": "Stream interrupted mid-part: session.text.started plus two deltas with NO text.ended and NO step.ended, then settle -- both sides must render the same quiescent mid-stream state (partial text visible, step still marked busy); the settle budget freezes the same resting frame on both sides so the spinner/streaming markers compare deterministically."
 }
