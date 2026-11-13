@@ -1,0 +1,33 @@
+{
+ "name": "mined-repair-pattern-ownership",
+ "keywords": [
+  "type",
+  "properties",
+  "additionalProperties",
+  "patternProperties"
+ ],
+ "schema": {
+  "type": "object",
+  "properties": {
+   "known": {
+    "type": "integer"
+   }
+  },
+  "additionalProperties": false,
+  "patternProperties": {
+   "^match$": {
+    "type": "integer"
+   }
+  }
+ },
+ "instances": [
+  {
+   "label": "in1",
+   "value": {
+    "known": 1,
+    "match": "2",
+    "extra": true
+   }
+  }
+ ]
+}

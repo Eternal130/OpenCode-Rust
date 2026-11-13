@@ -1,0 +1,168 @@
+{
+ "shell": "/bin/bash",
+ "model": "anthropic/claude",
+ "default_agent": "reviewer",
+ "update": "notify",
+ "share": "disabled",
+ "enterprise": {
+  "url": "https://share.example.com"
+ },
+ "username": "test-user",
+ "permissions": [
+  {
+   "action": "bash",
+   "resource": "*",
+   "effect": "ask"
+  },
+  {
+   "action": "bash",
+   "resource": "git status",
+   "effect": "allow"
+  }
+ ],
+ "agents": {
+  "reviewer": {
+   "model": "openrouter/openai/gpt-5#high",
+   "request": {
+    "headers": {
+     "x-agent": "reviewer"
+    },
+    "body": {
+     "reasoningEffort": "high"
+    }
+   },
+   "description": "Review changes for correctness",
+   "system": "Find regressions.",
+   "mode": "subagent",
+   "hidden": false,
+   "color": "#ff6b6b",
+   "steps": 12,
+   "disabled": false,
+   "permissions": [
+    {
+     "action": "edit",
+     "resource": "*",
+     "effect": "deny"
+    }
+   ]
+  }
+ },
+ "snapshots": false,
+ "watcher": {
+  "ignore": [
+   "node_modules/**",
+   "dist/**",
+   ".git"
+  ]
+ },
+ "formatter": {
+  "prettier": {
+   "disabled": true
+  },
+  "custom": {
+   "command": [
+    "custom-fmt",
+    "$FILE"
+   ],
+   "extensions": [
+    ".foo"
+   ]
+  }
+ },
+ "lsp": {
+  "typescript": {
+   "disabled": true
+  },
+  "custom": {
+   "command": [
+    "custom-lsp"
+   ],
+   "extensions": [
+    ".foo"
+   ]
+  }
+ },
+ "media": {
+  "image": {
+   "auto_resize": false,
+   "max_width": 1200,
+   "max_height": 900,
+   "max_base64_bytes": 1048576
+  }
+ },
+ "tool_output": {
+  "max_lines": 1000,
+  "max_bytes": 32768
+ },
+ "mcp": {
+  "timeout": {
+   "startup": 5000,
+   "catalog": 60000,
+   "execution": 43200000
+  },
+  "servers": {
+   "local": {
+    "type": "local",
+    "command": [
+     "node",
+     "./mcp/server.js"
+    ],
+    "environment": {
+     "API_KEY": "secret"
+    },
+    "disabled": false,
+    "codemode": false,
+    "timeout": {
+     "catalog": 10000
+    },
+    "protocol": "legacy"
+   },
+   "remote": {
+    "type": "remote",
+    "url": "https://mcp.example.com/mcp",
+    "headers": {
+     "Authorization": "Bearer token"
+    },
+    "oauth": {
+     "client_id": "client",
+     "scope": "read write",
+     "callback_port": 19876
+    },
+    "disabled": true,
+    "codemode": false,
+    "timeout": {
+     "startup": 15000
+    },
+    "protocol": "2026-07-28"
+   }
+  }
+ },
+ "compaction": {
+  "auto": true,
+  "prune": false,
+  "keep": {
+   "tokens": 2000
+  },
+  "buffer": 10000
+ },
+ "skills": [
+  "./skills",
+  "~/shared-skills",
+  "https://example.com/.well-known/skills/"
+ ],
+ "instructions": [
+  "CONTRIBUTING.md",
+  ".cursor/rules/*.md",
+  "https://example.com/shared-rules.md"
+ ],
+ "references": {
+  "local": {
+   "path": "../library"
+  },
+  "sdk": {
+   "repository": "github.com/example/sdk",
+   "branch": "main"
+  },
+  "shorthand": "github.com/example/docs"
+ }
+}

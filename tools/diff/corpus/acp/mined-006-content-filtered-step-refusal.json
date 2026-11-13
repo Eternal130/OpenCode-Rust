@@ -1,0 +1,49 @@
+{
+ "name": "mined-content filtered step refusal",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/workspace",
+  "start": {
+   "type": "input",
+   "id": "msg_input"
+  },
+  "childUpdates": false,
+  "compaction": false
+ },
+ "events": [
+  {
+   "id": "evt_1",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_input"
+   }
+  },
+  {
+   "id": "evt_2",
+   "type": "session.step.ended",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_1",
+    "finish": "content-filter",
+    "cost": 0,
+    "tokens": {
+     "input": 1,
+     "output": 1,
+     "reasoning": 0,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   }
+  },
+  {
+   "id": "evt_3",
+   "type": "session.execution.succeeded",
+   "data": {
+    "sessionID": "ses_root"
+   }
+  }
+ ]
+}

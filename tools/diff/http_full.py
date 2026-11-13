@@ -153,6 +153,17 @@ def corpus() -> dict:
                 "body": body, "capture": r[4] if len(r) > 4 else None,
                 "settle": r[5] if len(r) > 5 else 0.0,
             })
+    # mined fixtures (channel-6 addendum): error-path shapes and POST/PATCH
+    # bodies lifted from ref packages/server/test/*.test.ts by
+    # tools/diff/mine_ref_fixtures.py — appended after the hand-built
+    # cases, executed in file order against both sides.
+    mined_path = Path(__file__).resolve().parent / "corpus/http/mined-http.json"
+    if mined_path.exists():
+        for m in json.loads(mined_path.read_text())["requests"]:
+            cases.append({
+                "family": m["family"], "name": m["name"], "method": m["method"],
+                "path": m["path"], "body": m["body"], "capture": None, "settle": 0.0,
+            })
     return {"families": [f for f, _ in families], "cases": cases}
 
 

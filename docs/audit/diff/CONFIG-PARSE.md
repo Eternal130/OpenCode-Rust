@@ -5,11 +5,13 @@
 > 驱动：ref=bun（staging+node_modules 链接）/ rust=env 门控集成测试。
 > 复现：`python3 tools/diff/config_parse.py`（corpus：/opt/opencode-rust/tools/diff/corpus/config）
 
-- **MATCH：42/43** · DIVERGE：**1** · MISSING：**0**（覆盖率 43/43）
+- **MATCH：75/78** · DIVERGE：**3** · MISSING：**0**（覆盖率 78/78）
 
 | 用例 | 分歧字段 |
 |---|---|
 | `16-experimental.json` | encoded |
+| `mined-config-011-agent-attachment-autoshare-autoupdate-compaction.json` | encoded |
+| `mined-config-031-worktree.json` | diagnostics, encoded |
 
 ## 分歧明细
 ### `16-experimental.json` — encoded
@@ -18,7 +20,21 @@
 - rust:
   - `encoded` = `{"experimental": {"file_retention": {"cleanup_interval": 60}}}`
 
+### `mined-config-011-agent-attachment-autoshare-autoupdate-compaction.json` — encoded
+- ref:
+  - `encoded` = `{"agents": {"reviewer": {"disabled": true, "permissions": [{"action": "read", "effect": "allow", "resource": "*"}], "request": {"body": {"temperature": 0.2}}, "system": "Review changes."}}, "compaction": {"auto": true, "buffer": 10000, "keep": {"tokens": 2000}}, "default_agent": "reviewer", "mcp": {"servers": {"local": {"command": ["node", "server.js"], "disabled": true, "timeout": {"catalog": 100`
+- rust:
+  - `encoded` = `{"agents": {"reviewer": {"disabled": true, "permissions": [{"action": "read", "effect": "allow", "resource": "*"}], "request": {"body": {"temperature": 0.2}}, "system": "Review changes."}}, "compaction": {"auto": true, "buffer": 10000, "keep": {"tokens": 2000}}, "default_agent": "reviewer", "mcp": {"servers": {"local": {"command": ["node", "server.js"], "disabled": true, "timeout": {"catalog": 100`
+
+### `mined-config-031-worktree.json` — diagnostics, encoded
+- ref:
+  - `diagnostics` = `[{"kind": "invalid", "path": ["worktree"]}]`
+  - `encoded` = `{}`
+- rust:
+  - `diagnostics` = `[]`
+  - `encoded` = `{"worktree": {"directory": " "}}`
+
 ## 判定
 
-- 已裁定：43/43（每例双侧一致或分歧字段明确归属）
-- 分歧 1 项为登记册候选/待裁定面（见上表明细，逐项人工定性后入册或背书）
+- 已裁定：78/78（每例双侧一致或分歧字段明确归属）
+- 分歧 3 项为登记册候选/待裁定面（见上表明细，逐项人工定性后入册或背书）

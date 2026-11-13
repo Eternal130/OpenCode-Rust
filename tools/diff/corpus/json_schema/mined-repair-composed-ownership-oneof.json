@@ -1,0 +1,31 @@
+{
+ "name": "mined-repair-composed-ownership-oneof",
+ "keywords": [
+  "type",
+  "oneOf",
+  "additionalProperties"
+ ],
+ "schema": {
+  "type": "object",
+  "oneOf": [
+   {
+    "type": "object",
+    "properties": {
+     "name": {
+      "type": "string"
+     }
+    }
+   }
+  ],
+  "additionalProperties": false
+ },
+ "instances": [
+  {
+   "label": "in1",
+   "value": {
+    "name": "example",
+    "extra": true
+   }
+  }
+ ]
+}

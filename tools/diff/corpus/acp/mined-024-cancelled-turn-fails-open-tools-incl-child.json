@@ -1,0 +1,84 @@
+{
+ "name": "mined-cancelled turn fails open tools incl child",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/workspace",
+  "start": {
+   "type": "input",
+   "id": "msg_input"
+  },
+  "childUpdates": false,
+  "compaction": false
+ },
+ "events": [
+  {
+   "id": "evt_1",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_input"
+   }
+  },
+  {
+   "id": "evt_2",
+   "type": "session.created",
+   "data": {
+    "sessionID": "ses_child",
+    "slug": "ses_child",
+    "projectID": "project",
+    "location": {
+     "directory": "/workspace"
+    },
+    "parentID": "ses_root",
+    "title": "Explore",
+    "version": "test"
+   }
+  },
+  {
+   "id": "evt_3",
+   "type": "session.tool.input.started",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_tools",
+    "id": "call_root",
+    "name": "shell"
+   }
+  },
+  {
+   "id": "evt_4",
+   "type": "session.tool.called",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_tools",
+    "id": "call_root",
+    "input": {
+     "command": "sleep 60"
+    },
+    "executed": false
+   }
+  },
+  {
+   "id": "evt_5",
+   "type": "session.tool.progress",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_tools",
+    "id": "call_root",
+    "metadata": {
+     "pid": 1
+    }
+   }
+  },
+  {
+   "id": "evt_6",
+   "type": "session.tool.input.started",
+   "data": {
+    "sessionID": "ses_child",
+    "assistantMessageID": "msg_tools",
+    "id": "call_child",
+    "name": "read"
+   }
+  }
+ ],
+ "abandon": true
+}

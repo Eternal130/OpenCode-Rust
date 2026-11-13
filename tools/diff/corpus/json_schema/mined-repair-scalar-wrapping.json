@@ -1,0 +1,70 @@
+{
+ "name": "mined-repair-scalar-wrapping",
+ "keywords": [
+  "type",
+  "items"
+ ],
+ "schema": {
+  "type": "object",
+  "properties": {
+   "text": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    }
+   },
+   "integer": {
+    "type": "array",
+    "items": {
+     "type": "integer"
+    }
+   },
+   "boolean": {
+    "type": "array",
+    "items": {
+     "type": "boolean"
+    }
+   },
+   "item": {
+    "type": "array",
+    "items": {
+     "type": "object",
+     "properties": {
+      "count": {
+       "type": "integer"
+      }
+     }
+    }
+   },
+   "incompatible": {
+    "type": "array",
+    "items": {
+     "type": "string"
+    }
+   },
+   "fractional": {
+    "type": "array",
+    "items": {
+     "type": "integer"
+    }
+   },
+   "unconstrained": {
+    "type": "array"
+   }
+  }
+ },
+ "instances": [
+  {
+   "label": "in1",
+   "value": {
+    "text": "one",
+    "integer": "42",
+    "boolean": "false",
+    "item": "{\"count\":\"2\"}",
+    "incompatible": 2,
+    "fractional": 1.5,
+    "unconstrained": "4"
+   }
+  }
+ ]
+}

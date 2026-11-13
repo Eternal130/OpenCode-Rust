@@ -1,0 +1,10 @@
+{
+ "providers": {
+  "custom": {
+   "settings": {
+    "headerTimeout": false,
+    "chunkTimeout": 600000
+   }
+  }
+ }
+}

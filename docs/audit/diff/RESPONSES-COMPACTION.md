@@ -8,11 +8,13 @@
 > 可选字段 null/undefined 键统一剥除、usage 原文透传剥除、错误归一为粗桶
 > 复现：`python3 tools/diff/responses_compaction.py`（corpus：/opt/opencode-rust/tools/diff/corpus/compaction）
 
-- **MATCH：47/48** · DIVERGE：**1** · MISSING：**0**（覆盖率 48/48）
+- **MATCH：58/61** · DIVERGE：**3** · MISSING：**0**（覆盖率 61/61）
 
 | 用例 | 分歧字段 |
 |---|---|
 | `b21-no-checkpoint-and-bad-item.json` | reject |
+| `mined-r02-reject-unsupported-item.json` | accept, reject, payload |
+| `mined-r06-reject-unsupported-item.json` | accept, reject, payload |
 
 ## 分歧明细
 ### `b21-no-checkpoint-and-bad-item.json` — reject
@@ -22,9 +24,31 @@
 - rust:
   - `reject` = `"no-checkpoint"`
 
+### `mined-r02-reject-unsupported-item.json` — accept, reject, payload
+- 定性：待定性（无预置注解）
+- ref:
+  - `accept` = `false`
+  - `reject` = `"item-schema"`
+  - `payload` = `null`
+- rust:
+  - `accept` = `true`
+  - `reject` = `null`
+  - `payload` = `{"messages": [{"parts": [{"media": {"mediaType": "image/*", "source": "url", "url": "https://example.com/image.png"}, "type": "media"}], "providerMetadata": {"openresponses": {"type": "message"}}, "role": "user"}, {"parts": [{"encrypted": "opaque", "id": "cmp_1", "provider": "test-provider", "type": "compaction"}], "role": "assistant"}]}`
+
+### `mined-r06-reject-unsupported-item.json` — accept, reject, payload
+- 定性：待定性（无预置注解）
+- ref:
+  - `accept` = `false`
+  - `reject` = `"item-schema"`
+  - `payload` = `null`
+- rust:
+  - `accept` = `true`
+  - `reject` = `null`
+  - `payload` = `{"messages": [{"parts": [{"filename": "bad.pdf", "media": {"mediaType": "application/octet-stream", "source": "url", "url": "https://example.com/report.pdf"}, "type": "media"}], "providerMetadata": {"openresponses": {"type": "message"}}, "role": "user"}, {"parts": [{"encrypted": "opaque", "id": "cmp_1", "provider": "test-provider", "type": "compaction"}], "role": "assistant"}]}`
+
 ## 判定
 
-- 已裁定：48/48（每例双侧一致或分歧字段明确归属）
-- 分歧 1 项为登记册候选/待裁定面（见上表明细，逐项人工定性后入册或背书）
+- 已裁定：61/61（每例双侧一致或分歧字段明确归属）
+- 分歧 3 项为登记册候选/待裁定面（见上表明细，逐项人工定性后入册或背书）
 - 已知锚：G-357 修复面（encrypted_content 必填 / 未知 item 拒绝 / role 字面量 / 非空 content）全部双侧对齐：b22-b42 中相关用例均 MATCH
 - 已知锚：G-287⑦ minted-id：/compact 重放路径不铸 id（compaction item id 为 optionalNull，双侧一致透传），本通道未触及

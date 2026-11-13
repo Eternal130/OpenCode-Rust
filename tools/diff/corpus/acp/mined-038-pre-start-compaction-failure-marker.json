@@ -1,0 +1,35 @@
+{
+ "name": "mined-pre-start compaction failure marker",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/workspace",
+  "start": {
+   "type": "input",
+   "id": "msg_input"
+  },
+  "childUpdates": false,
+  "compaction": false
+ },
+ "events": [
+  {
+   "id": "evt_1",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_input"
+   }
+  },
+  {
+   "id": null,
+   "type": "session.compaction.failed",
+   "data": {
+    "sessionID": "evt_2",
+    "reason": "auto",
+    "error": {
+     "type": "provider.error",
+     "message": "summary request failed"
+    }
+   }
+  }
+ ]
+}

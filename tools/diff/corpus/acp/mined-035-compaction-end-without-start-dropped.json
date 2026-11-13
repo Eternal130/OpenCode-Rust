@@ -1,0 +1,33 @@
+{
+ "name": "mined-compaction end without start dropped",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/workspace",
+  "start": {
+   "type": "input",
+   "id": "msg_input"
+  },
+  "childUpdates": false,
+  "compaction": true
+ },
+ "events": [
+  {
+   "id": "evt_1",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_input"
+   }
+  },
+  {
+   "id": "evt_2",
+   "type": "session.compaction.ended",
+   "data": {
+    "sessionID": "ses_root",
+    "reason": "manual",
+    "text": "Summary",
+    "recent": ""
+   }
+  }
+ ]
+}

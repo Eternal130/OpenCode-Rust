@@ -1,0 +1,54 @@
+{
+ "name": "mined-41-reasoning-text-ordinals",
+ "description": "ref translate.test.ts 'streams text and reasoning...'（补锚）: 同一消息 reasoning/text 交错 ordinal",
+ "events": [
+  {
+   "id": "evt_m001",
+   "created": 2001,
+   "type": "session.step.started",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_asst_1",
+    "agent": "build",
+    "model": {
+     "providerID": "test",
+     "id": "test-model"
+    },
+    "started": 1000
+   }
+  },
+  {
+   "id": "evt_m002",
+   "created": 2002,
+   "type": "session.reasoning.delta",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_asst_1",
+    "ordinal": 0,
+    "delta": "think"
+   }
+  },
+  {
+   "id": "evt_m003",
+   "created": 2003,
+   "type": "session.text.delta",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_asst_1",
+    "ordinal": 1,
+    "delta": "answer"
+   }
+  },
+  {
+   "id": "evt_m004",
+   "created": 2004,
+   "type": "session.reasoning.delta",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_asst_1",
+    "ordinal": 1,
+    "delta": "more"
+   }
+  }
+ ]
+}

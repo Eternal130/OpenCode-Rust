@@ -1,0 +1,27 @@
+{
+ "name": "mined-repair-allof-only-root",
+ "keywords": [
+  "allOf",
+  "type"
+ ],
+ "schema": {
+  "allOf": [
+   {
+    "type": "object",
+    "properties": {
+     "numeric": {
+      "type": "integer"
+     }
+    }
+   }
+  ]
+ },
+ "instances": [
+  {
+   "label": "in1",
+   "value": {
+    "numeric": "2"
+   }
+  }
+ ]
+}

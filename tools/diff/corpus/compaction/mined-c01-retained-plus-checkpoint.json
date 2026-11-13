@@ -1,0 +1,1 @@
+{"object":"response.compaction","output":[{"type":"message","role":"user","id":"msg_1","status":"completed","content":[{"type":"input_text","text":"retained"}]},{"type":"compaction","id":"cmp_1","encrypted_content":"opaque"}]}

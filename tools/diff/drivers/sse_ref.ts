@@ -109,6 +109,27 @@ const normRow = (row: any) => {
         exit: row.exit ?? null,
         output: row.output?.output ?? null,
       }
+    case "compaction": {
+      // M2-rescan fix: mirror the rust driver's compaction arm (both
+      // drivers previously fell through to the bare-type fallback).
+      const failed = row.status === "failed"
+      const tokens = row.tokens
+      return {
+        row: "compaction",
+        id: row.id ?? null,
+        running: row.status === "running",
+        failed,
+        cancelled: failed && row.error?.type === "aborted",
+        summary: row.summary ?? "",
+        tokens_in:
+          tokens === undefined
+            ? null
+            : (tokens.input ?? 0) + (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0),
+        tokens_out:
+          tokens === undefined ? null : (tokens.output ?? 0) + (tokens.reasoning ?? 0),
+        provider_compaction: row.providerContext !== undefined,
+      }
+    }
     default:
       return { row: row.type ?? "unknown" }
   }

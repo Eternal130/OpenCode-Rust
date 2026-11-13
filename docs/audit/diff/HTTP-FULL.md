@@ -1,10 +1,10 @@
 # HTTP-FULL Differential（差分层 · 通道 6 · 全量 HTTP 对拍）
 
 > 同一 corpus（4 族）以相同顺序打双侧**真实 server 进程**：
-> rust = `oc-server serve --port 0`（boot 输出 `http://127.0.0.1:40607`，AuthConfig password=None 语义，roots → /tmp）
-> ref = bun 驱动 `tools/diff/drivers/http_ref_server.ts`（ServerFetch.make + Bun.serve，`http://127.0.0.1:43957`，roots → /tmp，ref git 树零写入）
+> rust = `oc-server serve --port 0`（boot 输出 `http://127.0.0.1:32791`，AuthConfig password=None 语义，roots → /tmp）
+> ref = bun 驱动 `tools/diff/drivers/http_ref_server.ts`（ServerFetch.make + Bun.serve，`http://127.0.0.1:45313`，roots → /tmp，ref git 树零写入）
 > 归一化：键序排序、id/uuid/时间戳/pid/version/端口/绝对路径（→ `<TMP>`/`<WS>`）剥换、列表按多重集比较、SSE 只比首帧+事件名。
-> 复现：`python3 tools/diff/http_full.py`（corpus 内嵌，47 请求）
+> 复现：`python3 tools/diff/http_full.py`（corpus 内嵌，60 请求）
 
 ## 范围声明
 
@@ -13,7 +13,7 @@
   故 auth 拦截层与信号处理不在对拍面内；路由/序列化层与真实进程一致。
 - SSE 只比首帧形状与事件名多重集；帧序/心跳节奏声明为 ADJUDICATED（依赖 boot 期环境总线流量）。
 
-- **MATCH：35/47** · DIVERGE：**10** · ADJUDICATED：**2** · MISSING：**0**
+- **MATCH：46/60** · DIVERGE：**12** · ADJUDICATED：**2** · MISSING：**0**
 
 | 族 | 用例 | 判定 |
 |---|---|---|
@@ -64,6 +64,19 @@
 | L4-sse | `sse_first_frame` | MATCH |
 | L4-sse | `sse_name_sequence` | ADJUDICATED |
 | L4-sse | `sse_reconnect_first_frame` | MATCH |
+| L2-errors | `vcs_uninit_get` | DIVERGE |
+| L2-errors | `vcs_base_uninit` | MATCH |
+| L2-errors | `vcs_diff_uninit` | MATCH |
+| L2-errors | `vcs_init_missing_dir` | MATCH |
+| L2-errors | `vcs_init_unknown_provider` | MATCH |
+| L2-errors | `worktree_get_empty` | MATCH |
+| L2-errors | `worktree_create_no_body` | MATCH |
+| L2-errors | `fs_list_missing_dir` | MATCH |
+| L2-errors | `provider_missing` | DIVERGE |
+| L2-errors | `session_missing_fork` | MATCH |
+| L2-errors | `config_patch_no_body` | MATCH |
+| L3-side-effects | `config_patch_shell` | MATCH |
+| L3-side-effects | `debug_location` | MATCH |
 
 ## 分歧明细（双侧 file:line 锚 + 定性）
 ### `skill`（L1-readonly · GET `/api/skill`）
@@ -143,15 +156,19 @@
   - `$.cursor.previous: type NoneType vs str`
   - `$.data: list len 0 vs 1`
 
+### `vcs_uninit_get`（L2-errors · GET `/api/vcs`）
+- 锚点：rust `crates/oc-server/src/request_validation.rs:1006` · ref `packages/protocol/src/groups/vcs.ts:36`
+- `body` 分歧（首个结构差叶路径，rust vs ref）：
+  - `$.data: type NoneType vs dict`
+
+### `provider_missing`（L2-errors · GET `/api/provider/does-not-exist`）
+- 锚点：rust `?` · ref `?`
+- `body` 分歧（首个结构差叶路径，rust vs ref）：
+  - `$.message: "Provider not found" vs "Provider not found: does-not-exist"`
+
 ## 判定
 
-- 已裁定：47/47（MATCH+ADJUDICATED+DIVERGE 逐例有归属；DIVERGE 为登记册候选，见上表锚点）
+- 已裁定：60/60（MATCH+ADJUDICATED+DIVERGE 逐例有归属；DIVERGE 为登记册候选，见上表锚点）
 - ADJUDICATED 2 项：归一化声明见范围声明与 corpus 注释（SSE 名序 / 目录清单成员），非 DIVERGE。
 - 稳定性：双侧 boot 各重试一次窗口（本次未触发即成功）、每请求独立超时 (20.0s)、SSE 短窗 4.0s、子进程按进程组回收（SIGTERM→SIGKILL）。
 - ref git 树零写入（运行前后 `git status --porcelain` 均空）。
-- 归属备注（gb14-lane5，2026-11-13）：
-  - `agent` 已翻 MATCH（G-396 修复：`Agent.Info.default` 基线 + 头部全局 external_directory allows + explore prompt "write" 字词 + config-md agent 同路径）。
-  - `agent_missing` / `skill` 仍分歧（错误 message 文本 / skill 序列化与正文，非 G-396 范畴，保持登记候选）。
-  - `session_create_bad_location`（G-403）待登记册裁定，保持现状。
-  - `session_list_empty_again`：本轮重跑再现在 G-403 悬挂会话级联 + 游标锚点分歧（见上定性），随 G-403 一并裁定。
-  - `project` / `fs_read_missing` / `session_create` / `session_get` / `integration`（G-410 记录性族）按裁定保持分歧。

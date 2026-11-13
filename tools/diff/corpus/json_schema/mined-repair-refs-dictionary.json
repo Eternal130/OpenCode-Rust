@@ -1,0 +1,77 @@
+{
+ "name": "mined-repair-refs-dictionary",
+ "keywords": [
+  "$ref",
+  "$defs",
+  "additionalProperties",
+  "type"
+ ],
+ "schema": {
+  "type": "object",
+  "properties": {
+   "modern": {
+    "$ref": "#/$defs/integer"
+   },
+   "legacy": {
+    "$ref": "#/definitions/boolean"
+   },
+   "nested": {
+    "$ref": "#/$defs/nested"
+   },
+   "dictionary": {
+    "type": "object",
+    "additionalProperties": {
+     "$ref": "#/$defs/integer"
+    }
+   },
+   "missing": {
+    "$ref": "#/$defs/missing"
+   },
+   "pointer": {
+    "$ref": "#/$defs/nested/properties/count"
+   },
+   "escaped": {
+    "$ref": "#/$defs/a~1b~0c"
+   }
+  },
+  "$defs": {
+   "integer": {
+    "type": "integer"
+   },
+   "a/b~c": {
+    "type": "integer"
+   },
+   "nested": {
+    "type": "object",
+    "properties": {
+     "count": {
+      "$ref": "#/$defs/integer"
+     }
+    }
+   }
+  },
+  "definitions": {
+   "boolean": {
+    "type": "boolean"
+   }
+  }
+ },
+ "instances": [
+  {
+   "label": "in1",
+   "value": {
+    "modern": "2",
+    "legacy": "false",
+    "nested": {
+     "count": "3"
+    },
+    "dictionary": {
+     "first": "4"
+    },
+    "missing": "5",
+    "pointer": "6",
+    "escaped": "7"
+   }
+  }
+ ]
+}

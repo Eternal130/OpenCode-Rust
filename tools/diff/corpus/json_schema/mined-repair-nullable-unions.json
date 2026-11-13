@@ -1,0 +1,85 @@
+{
+ "name": "mined-repair-nullable-unions",
+ "keywords": [
+  "type",
+  "anyOf",
+  "oneOf"
+ ],
+ "schema": {
+  "type": "object",
+  "properties": {
+   "number": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "boolean": {
+    "oneOf": [
+     {
+      "type": "boolean"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "nullable": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "typed": {
+    "type": [
+     "integer",
+     "null"
+    ]
+   },
+   "typedBoolean": {
+    "type": [
+     "boolean",
+     "null"
+    ]
+   },
+   "accepted": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "number"
+     }
+    ]
+   },
+   "valid": {
+    "type": [
+     "number",
+     "null"
+    ]
+   }
+  }
+ },
+ "instances": [
+  {
+   "label": "in1",
+   "value": {
+    "number": "2",
+    "boolean": "false",
+    "nullable": null,
+    "typed": "3",
+    "typedBoolean": "true",
+    "accepted": "4",
+    "valid": 5
+   }
+  }
+ ]
+}

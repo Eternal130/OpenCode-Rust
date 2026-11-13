@@ -1,0 +1,59 @@
+{
+ "name": "mined-summary chunks outside open compaction dropped",
+ "ctx": {
+  "sessionID": "ses_root",
+  "cwd": "/workspace",
+  "start": {
+   "type": "input",
+   "id": "msg_input"
+  },
+  "childUpdates": false,
+  "compaction": true
+ },
+ "events": [
+  {
+   "id": "evt_1",
+   "type": "session.inbox.delivered",
+   "data": {
+    "sessionID": "ses_root",
+    "inboxID": "msg_input"
+   }
+  },
+  {
+   "id": "evt_2",
+   "type": "session.compaction.delta",
+   "data": {
+    "sessionID": "ses_root",
+    "text": "early"
+   }
+  },
+  {
+   "id": "evt_3",
+   "type": "session.compaction.started",
+   "data": {
+    "sessionID": "ses_root",
+    "reason": "manual",
+    "recent": "",
+    "inputID": "msg_compact"
+   }
+  },
+  {
+   "id": "evt_4",
+   "type": "session.compaction.ended",
+   "data": {
+    "sessionID": "ses_root",
+    "reason": "manual",
+    "text": "Summary",
+    "recent": ""
+   }
+  },
+  {
+   "id": "evt_5",
+   "type": "session.compaction.delta",
+   "data": {
+    "sessionID": "ses_root",
+    "text": "late"
+   }
+  }
+ ]
+}

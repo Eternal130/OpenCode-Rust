@@ -39,7 +39,7 @@
 - tool error
 - live rows: agent/model/location/system/synthetic/shell
 
-- **MATCH：1/12** · DIVERGE：**11** · MISSING：**0**（序列 12 条 / 事件 93 个 / 快照 93 对）
+- **MATCH：2/15** · DIVERGE：**13** · MISSING：**0**（序列 15 条 / 事件 107 个 / 快照 107 对）
 
 | 序列 | 首个分歧 | 已归属已知成因 | 成因键 |
 |---|---|---|---|
@@ -54,6 +54,8 @@
 | `10-late-delta-no-message` | event[0] rows:0vs1; 终态分歧 | 是 | unanchored delta |
 | `11-empty-final-anchors` | event[4] parts:2vs1; 终态一致（瞬态分歧） | 是 | whitespace reasoning delta, empty final, empty finish |
 | `12-post-completion-late-delta` | event[1] parts:1vs0; 终态分歧 | 是 | session.text.started, post-completion delta |
+| `mined-40-tool-lifecycle` | event[1] rows:1vs2; 终态分歧 | 否 |  |
+| `mined-41-reasoning-text-ordinals` | event[1] parts:0vs1; 终态分歧 | 否 |  |
 
 ## 分歧明细（首个分歧事件的投影快照）
 
@@ -134,6 +136,20 @@
 - ref  终态：`[{"agent": "build", "finish": "stop", "model": "anthropic/claude-sonnet-4-5", "open": false, "parts": [{"text": "final text LATE", "type": "text"}], "row": "assistant"}]`
 - rust 终态：`[{"agent": "build", "finish": "stop", "model": "anthropic/claude-sonnet-4-5", "open": false, "parts": [{"text": "final text LATE", "type": "text"}, {"completed": false, "text": " late-think", "type": "reasoning"}], "row": "assistant"}]`
 
+### `mined-40-tool-lifecycle`
+- 首个分歧：事件 #1（`mined-40-tool-lifecycle` 序列内 0 基）；终态分歧
+- ref  #1：`[{"agent": "build", "finish": null, "model": "test/test-model", "open": true, "parts": [], "row": "assistant"}]`
+- rust #1：`[{"agent": "build", "finish": null, "model": "test/test-model", "open": true, "parts": [], "row": "assistant"}, {"agent": "build", "finish": null, "model": null, "open": true, "parts": [{"error": null, "id": "call_ok", "input": "<streaming-input>", "metadata": {}, "name": "shell", "output": null, "status": "streaming", "type": "tool"}], "row": "assistant"}]`
+- ref  终态：`[{"agent": "build", "finish": null, "model": "test/test-model", "open": true, "parts": [], "row": "assistant"}]`
+- rust 终态：`[{"agent": "build", "finish": null, "model": "test/test-model", "open": true, "parts": [], "row": "assistant"}, {"agent": "build", "finish": null, "model": null, "open": true, "parts": [{"error": null, "id": "call_ok", "input": {"command": "printf done", "workdir": "sub"}, "metadata": {"exit": 0}, "name": "shell", "output": "done", "status": "completed", "type": "tool"}], "row": "assistant"}]`
+
+### `mined-41-reasoning-text-ordinals`
+- 首个分歧：事件 #1（`mined-41-reasoning-text-ordinals` 序列内 0 基）；终态分歧
+- ref  #1：`[{"agent": "build", "finish": null, "model": "test/test-model", "open": true, "parts": [], "row": "assistant"}]`
+- rust #1：`[{"agent": "build", "finish": null, "model": "test/test-model", "open": true, "parts": [{"completed": false, "text": "think", "type": "reasoning"}], "row": "assistant"}]`
+- ref  终态：`[{"agent": "build", "finish": null, "model": "test/test-model", "open": true, "parts": [], "row": "assistant"}]`
+- rust 终态：`[{"agent": "build", "finish": null, "model": "test/test-model", "open": true, "parts": [{"completed": false, "text": "think", "type": "reasoning"}, {"text": "", "type": "text"}, {"text": "answer", "type": "text"}, {"completed": false, "text": "more", "type": "reasoning"}], "row": "assistant"}]`
+
 ## 成因清单（双侧 file:line）
 
 - **session.text.started** — ref pushes an empty text part (`session.text.started` handler); the rust reducer table has NO arm — parts are created lazily by the first delta (`with_part`)
@@ -148,24 +164,24 @@
 - **moved gating** — `session.moved` row gating asymmetry: rust inserts when the session_index learned the id from events; ref requires `store.session.info[sessionID]` (an API read) — never loaded in a pure event-stream diff
   - ref packages/client/src/solid/data.ts:704-726
   - rust crates/oc-tui/src/store.rs:13203-13228
-- **instructions empty text** — `session.instructions.updated` with text "": rust dropped (empty guard); ref inserts (guards only `undefined`)
+- **instructions empty text** — `session.instructions.updated` with text "": rust drops (empty guard); ref inserts (guards only `undefined`)
   - ref packages/client/src/solid/data.ts:791-804
-  - rust crates/oc-tui/src/store.rs:13323-13343（**已修复 G-406**：仅缺字段跳过，空串生效）
-- **whitespace reasoning delta** — whitespace-only reasoning delta: rust filtered (`trim().is_empty()` drop); ref appends verbatim — G-351 fixed TEXT only
+  - rust crates/oc-tui/src/store.rs:13323-13342
+- **whitespace reasoning delta** — whitespace-only reasoning delta: rust filters (`trim().is_empty()` drop); ref appends verbatim — G-351 fixed TEXT only
   - ref packages/client/src/solid/data.ts:992-996
-  - rust crates/oc-tui/src/store.rs:13717-13739（**已修复 G-393**：与 text 臂同规则）
-- **empty final** — empty/whitespace final (`text.ended`/`reasoning.ended` with ""): rust skipped (`!text.is_empty()` / `trim().is_empty()` guards); ref assigns verbatim — ref also marks reasoning completed
+  - rust crates/oc-tui/src/store.rs:13709-13722
+- **empty final** — empty/whitespace final (`text.ended`/`reasoning.ended` with ""): rust skips (`!text.is_empty()` / `trim().is_empty()` guards); ref assigns verbatim — ref also marks reasoning completed
   - ref packages/client/src/solid/data.ts:914-917,997-1002
-  - rust crates/oc-tui/src/store.rs:13680-13752（**已修复 G-398**：空串终值赋值 + reasoning 标记 completed）
-- **empty finish** — `step.ended` with finish "": rust filtered to None; ref keeps ""
+  - rust crates/oc-tui/src/store.rs:13683-13695,13725-13740
+- **empty finish** — `step.ended` with finish "": rust filters to None; ref keeps ""
   - ref packages/client/src/solid/data.ts:878-889
-  - rust crates/oc-tui/src/store.rs:13942-13948（**已修复 G-398**：finish 空串保留）
-- **post-completion delta** — delta after the message completed (G11-F1): rust dropped (`message_already_complete`); ref appends (no such guard)
+  - rust crates/oc-tui/src/store.rs:13962-13968
+- **post-completion delta** — delta after the message completed (G11-F1): rust drops (`message_already_complete`); ref appends (no such guard)
   - ref packages/client/src/solid/data.ts:905-913
-  - rust crates/oc-tui/src/store.rs:13655-13679（**已修复 G-399**：守卫改为仅快照权威完成（`snapshot_authoritative`，set_messages/MessagesSnapshot/MessagesOlder 标记、step.started 清除）；流内 step.ended 完成后迟到 delta 照 ref 追加）
+  - rust crates/oc-tui/src/store.rs:14287-14296
 
 ## 判定
 
-- 已裁定：12/12（每例双侧一致，或分歧已归属到上列成因并给出双侧 file:line）
-- MATCH 1 例；DIVERGE 11 例中全部命中已知成因族
+- 已裁定：15/15（每例双侧一致，或分歧已归属到上列成因并给出双侧 file:line）
+- MATCH 2 例；DIVERGE 13 例中全部命中已知成因族
 - 未归属成因的分歧为登记册候选（本批为 0；若后续 corpus 扩充出现新分歧，先人工定性再入册）

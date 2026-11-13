@@ -1,37 +1,43 @@
-# Differential INDEX —— 差分层总索引（6 通道）
+# Differential INDEX —— 差分层总索引（7 通道 · 语料升级版）
 
 > 语义等价性差分：同一 corpus 喂双侧真实实现（纯函数管线或真实进程），归一化后逐字段对拍。
 > 与 census 的分工：census 证"面存在且键集对齐"，差分证"行为等价"。
-> 全部脚本幂等（连跑逐字节一致）、exit 0、双侧 file:line 证据。生成于 2026-11-12（round-23/25/26 修复后基线）。
+> 全部脚本幂等、exit 0、双侧 file:line 证据。本轮（2026-11-13）完成 **ref 测试夹具挖掘**：123 个 mined 语料 + 13 个 HTTP 请求入既有通道，274 个 provider 录制落成**新通道 7**——语料来源从"自造"升级为"ref 验证过的输入集 + 真实 provider 流量"。
 
-## 通道总表（2026-11-13 第二十八轮收口后稳态；括号内为 2026-11-12 建基值）
+## 通道总表
 
 | # | 通道 | 脚本 | 报告 | 规模 | MATCH | DIVERGE | ADJUDICATED |
 |---|---|---|---|---|---|---|---|
-| 1 | 配置解析 | config_parse.py | CONFIG-PARSE.md | 43 例 | 42（42） | 1（G-390 已裁决旋钮） | — |
-| 2 | ACP 转译 | acp_translate.py | ACP-TRANSLATE.md | 97 例（51/51 事件类型） | 79（78） | 18（19）→全数 G-411 B1-B3 | — |
-| 3 | SSE store 投影 | sse_projection.py | SSE-PROJECTION.md | 12 序列/93 事件 | 1（1） | 11（11）→全数 G-409 族 1/2/3/7 | — |
-| 4 | JSON Schema 校验器 | json_schema_validate.py | JSON-SCHEMA.md | 152 对/54 schema | 137（128） | 15（24）=G-407×11 + G-408×4 | — |
-| 5 | /compact 管线 | responses_compaction.py | RESPONSES-COMPACTION.md | 48 文档/86 item | 47（42） | 1（6）=b21 次序（记录性） | — |
-| 6 | HTTP 全量 | http_full.py | HTTP-FULL.md | 47 请求/4 族（双侧真实 boot） | 35（32） | 10（13）=G-403 对+G-410 族 | 2（2） |
+| 1 | 配置解析 | config_parse.py | CONFIG-PARSE.md | 78 例（35 mined） | 75 | 3 | — |
+| 2 | ACP 转译 | acp_translate.py | ACP-TRANSLATE.md | 137 例（40 mined） | 109 | 28 | — |
+| 3 | SSE store 投影 | sse_projection.py | SSE-PROJECTION.md | 15 序列/107 事件 | 2 | 13 | — |
+| 4 | JSON Schema 校验器 | json_schema_validate.py | JSON-SCHEMA.md | 175 对（23 mined） | 156 | 19 | — |
+| 5 | /compact 管线 | responses_compaction.py | RESPONSES-COMPACTION.md | 61 文档（13 mined） | 58 | 3 | — |
+| 6 | HTTP 全量 | http_full.py | HTTP-FULL.md | 60 请求（13 mined） | 46 | 12 | 2 |
+| 7 | **provider 录制解码** | provider_recordings.py | PROVIDER-RECORDINGS.md | **264 交互（259 真实 SSE）** | 241 | 23 | — |
 
 ## 总计
 
-**399 个对拍单元：MATCH 341 · DIVERGE 56 · ADJUDICATED 2 · MISSING 0**（覆盖率 100%）。〔勘正：第二十七轮所记「384 单元」为求和笔误——通道行实际合计 399（323+74+2），通道行始终为权威口径。〕
-残余 56 项分歧 100% 有登记归属（G-390/G-409/G-407/G-408/G-411/b21/G-403+G-410），**可行动缺口清零**；第二十八轮关闭 13 项（G-392..G-402/G-405/G-406）、裁决 1 项（G-403 有意纠偏）、证伪撤销 1 条+2 子项（G-404、G-395⑤⑥）——见登记册第二十八轮。
+**790 对拍单元：MATCH 687 · DIVERGE 101 · ADJUDICATED 2 · MISSING 0**（100% 三态归属）。
+101 项分歧：既有 78（R27/R28 裁定族）+ 挖掘新增 23 → 归并 **G-412..G-422（11 条：🟡×1 / 🟢×10）**，其余归 G-407/409/410 既有族。
 
-## 关键发现（按严重度）
+## 挖掘新增发现（关键项）
 
-1. **ACP child toolCallId 双重前缀**（G-392，wire bug）：`pending_update` 前缀一次 + `route→child::project` 再前缀一次
-2. **SSE reasoning 空白 delta 丢弃**（G-393，G-351 姊妹缺口：只修了 text 臂）
-3. **HTTP provider.list wire 形状整差**（G-394：rust 全量目录无包裹 vs ref 仅启用+location 包裹）
-4. **JSON Schema 校验器 7 关键字缺口**（G-395：prefixItems 及其 items 副作用、exclusiveMin/Max、multipleOf、minProperties、schema:false、畸形 type）
-5. **ref 生产校验器把编译错误洗成 accept-all**（G-407：pattern/additionalProperties:false/结构化 const 在 ref 生产根本不校验——rust 更严属规范正确，登记为有意分歧）
+- **G-412 🟡 abandon 输出顺序不定**：rust 迭代 HashMap → tool 更新 wire 顺序**跨 run 不稳定**且与 ref 插入序反
+- G-413 v1 permission 迁移条目重排（serde 无 preserve_order 的可观察面）
+- G-419/G-420 providerMetadata 空 namespace 附着方向相反（venice rust 恒附 / google ref 恒附，13+6 交互）
+- G-417 compaction `detail` 非字符串被静默吞掉（ref 拒绝）
+- G-422 deepinfra estimated_cost 浮点精度（疑似 f32 截断）
 
-## 已知锚核对
+## 已知锚核对（挖掘轮）
 
-G-357（compact 严格化）四修复位全对齐 ✅ · G-351 半边对齐（text ✅ / reasoning ❌→G-393）· G-352 六类 live 事件对齐（终态口径差→G-409）· G-339/G-340（ACP 预览/ISO 串）对齐 ✅ · G-230c（const）对齐 ✅ · G-288⑧（乱序补位）产物显现并定向 ✅
+G-357/G-392/G-393/G-394/G-396/G-397 修复面在 mined 语料下保持对齐 ✅ · ref 自身畸形 config 样本（`"{ invalid"`/`$:invalid`）双侧对齐 ✅ · tool-input-repair 的 (schema,input) 对全部对齐 ✅
+
+## 语料来源构成
+
+通道 1-6：手造边界 + schema 推导 + 登记册锚 + **mined（ref 测试夹具：config 测试写盘样本/translate 表/tool-input-repair 对/open-responses 内联事件/server 路由测试）**；通道 7：**HttpRecorder cassette 全量**（ref 真实 provider 流量录制，220 SSE + 错误体；bedrock event-stream/websocket/vercel-native/cf-gateway/媒体族=范围外 32 组已声明）。
+挖掘器：`tools/diff/mine_ref_fixtures.py`（幂等；注意 gen_acp_corpus.py 再生成会清空 mined，重跑挖掘器即恢复）。
 
 ## 范围外声明（各报告详述）
 
-渲染层（opentui 差分 127 场景另行覆盖）· ref message.updated 全量投影（app 层）· session.moved 纯事件流门控（需 API 装载）· HTTP 鉴权态/workerd 剖面/网络出口 · minted-id（G-287⑦ 已记录）· ref 校验器内部（effect node_modules，以 runtime.ts 消费方式为锚）
+渲染层（opentui 差分 127 场景）· ref message.updated 全量投影 · session.moved 纯事件流门控 · HTTP 鉴权态/workerd/网络出口 · bedrock 二进制 event-stream/websocket/gateway 包裹族（通道 7）· minted-id（G-287⑦）

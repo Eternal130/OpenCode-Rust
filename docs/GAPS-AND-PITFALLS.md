@@ -32,6 +32,8 @@
 
 > **2026-11-12 第二十六轮收口（G-391）**：差分通道 1 唯一可行动缺口 G-391（provider `Model.cost` 缺 `skip_serializing_if` → wire 物化 `"cost": null`）经单 lane TDD 落地合并 main（`568213c8`）；差分复跑 **MATCH 42/43**，唯一残余分歧 `16-experimental`=G-390 已裁定超集旋钮（预期分歧）——通道 1 零未裁定分歧、可行动缺口清零。下一差分通道=ACP 转译（按成本升序）。明细见文末「第二十六轮收口」节。
 
+> **2026-11-13 第二十九轮（语料升级：ref 夹具挖掘 + 差分通道 7）**：①`mine_ref_fixtures.py` 把 ref 测试夹具机械转为 6 通道 corpus（123 语料+13 HTTP 请求——ref 畸形样本/translate 表/repair 对/内联事件/路由测试）；②新通道 7 provider 录制解码差分——HttpRecorder cassette 全量 264 可驱动交互（259 真实 SSE 流）双侧解码对拍。**7 通道 790 单元：MATCH 687 · DIVERGE 101 · 100% 归属**；挖掘新增 23 分歧归并 **G-412..G-422（11 条：🟡×1/🟢×10）**——最重为 abandon 输出顺序非确定（HashMap 迭代序，G-412）与 venice/google namespace 空 attaching 镜像族（G-419/420）；4 对归 G-407 catch→accept-all 族、unanchored 归 G-409。语料来源三级跳：自造→ref 验证输入→真实 provider 流量。扫描口径=census 14+diff 7 命令。明细见文末「第二十九轮」节。
+
 > **2026-11-12 第二十七轮（差分层通道 2-6 全量铺开）**：5 条并行 lane 复制通道 1 模式（ACP 转译/SSE store 投影/JSON Schema 校验器对拍//compact 管线/HTTP 全量——双侧真实驱动：bun staging、rust env 门控测试、通道 6 双进程真实 boot 47 请求）。**6 通道合计 384 对拍单元：MATCH 323 · DIVERGE 74 · ADJUDICATED 2 · 覆盖率 100%**；74 项分歧归并 **G-392..G-411（20 条：🟡×6 / 🟢×9 / ℹ️×5）** 入册。核心新事实：ACP child toolCallId 双重前缀 wire bug（G-392）、SSE reasoning 空白 delta 丢弃=G-351 姊妹缺口（G-393）、HTTP provider.list wire 形状整差（G-394）、校验器 7 关键字缺口（G-395）、agent 内容漂移（G-396）、**ref 生产校验器把编译错洗成 accept-all**（G-407：pattern/additionalProperties:false/结构化 const 在 ref 生产不校验——rust 更严属规范正确）。已知锚：G-357 四修复位全对齐、G-351 text 半边对齐、G-339/G-340/G-230c 对齐。工具 `tools/diff/`（6 编排器），报告与 INDEX `docs/audit/diff/`；扫描循环现口径=census 14 命令 + diff 6 命令。明细见文末「第二十七轮」节。
 
 > **2026-11-13 第二十八轮 burndown 收口（gap-burndown-14）**：第二十七轮 G-392..G-411 中 13 项可行动缺口经 5 个串行 lane（oc-cli ACP/oc-tui SSE store/oc-ai 校验/oc-server wire/oc-core agent 种子）落地合并 main，逐条 ✅；G-403 按登记倾向裁决为有意纠偏（ℹ️）；G-404 整条+G-395 两子项经差分复跑**证伪撤销**。差分稳态 **399 单元：MATCH 341 · DIVERGE 56 · ADJUDICATED 2——残余分歧 100% 登记归属，可行动缺口清零**；census 零新 REF_ONLY；终局 workspace 门 6038/6038。无 opentui-rust 依赖的上游阻挡项（唯一上游阻挡维持=G-247 残余 Bun 全局面）。明细见文末「第二十八轮 burndown 收口」节。
@@ -3040,3 +3042,70 @@ G-392 ✅ · G-393 ✅ · G-394 ✅ · G-395 ✅（四族落地+两子项证伪�
 - **复扫结论**：diff 6 通道编排器独立复跑，计数与修复方刷新后一致——**341/399 MATCH · 可行动缺口 0**（稳态）。G-392（pending_update 裸 id 构造 + project 单前缀，注释自证）、G-393（reasoning 臂 verbatim 追加）经代码级独立确认；G-394/G-396/G-397（provider.list 折叠+model_default 合并+agent 种子基线）经 HTTP 双进程复跑翻转 MATCH（35/47）；G-395/G-400/G-405 后 JSON-SCHEMA 137/152（rust-accept-ref-reject 12→4，余为 G-408 整数域族）、RESPONSES-COMPACTION 47/48（唯一残余=b21 双侧均拒的次序差，G-400 记录性）；ACP 79/97（余 18 全为 B1-B3 有据族+已声明噪声）；SSE 投影残余全归 G-409 架构包。
 - **census 抽查**：PROVIDERS/TOOLS 两通道复跑无波及。
 - **扫描循环最终口径复验**：census 14 + diff 6 命令全部幂等可复现；本轮起登记册稳态=枚举层零缺口 + 差分层零可行动缺口（残余全为有据分歧/记录性/架构包）。
+
+---
+
+# 第二十九轮（2026-11-13，语料升级：ref 夹具挖掘 + 通道 7，G-412..G-422）
+
+> 方法：两条并行 lane——①`tools/diff/mine_ref_fixtures.py`（幂等挖掘器）把 ref 测试夹具机械转为 6 通道 corpus（123 语料 + 13 HTTP 请求，来源含 ref 畸形 config 样本/translate 表/tool-input-repair 对/open-responses 内联事件/server 路由测试）；②新通道 7 `provider_recordings.py`——ref 的 HttpRecorder cassette 全量（264 可驱动交互，259 真实 SSE 流）喂双侧协议解码器（rust=生产 route+MockTransport 回放；ref=bun 无头驱动 protocols/* step 机），diff 归一化解码事件流。收口时双侧 sse 驱动补 compaction 归一化臂（mined-42 转 MATCH）。**7 通道合计 790 单元：MATCH 687 · DIVERGE 101 · ADJUDICATED 2**；挖掘新增 23 分歧归并 11 条入册。
+
+## 🟡 中
+
+### G-412 ❌ ACP abandon 输出顺序不定（HashMap 迭代序，wire 跨 run 不稳定）
+- rust：`oc-cli/src/acp/translate.rs:103` 工具表为 `HashMap<String,Tool>`，`:385-402` abandon 时按迭代序输出 tool_call updates——顺序跨 run 不稳定且实测 child 先于 root。
+- ref：`translate.ts:163-187` Map 插入序（root 先）。wire 顺序非确定性对 ACP 客户端是协议级缺陷（同 turn 重放顺序可变）。
+- 修法：表改 BTreeMap/IndexMap 或输出前按插入序排序。
+- 出处：diff ACP mined（cancelled turn fails open tools incl child）。
+
+## 🟢 低
+
+### G-413 ❌ v1 permission 迁移条目顺序重排（serde 无 preserve_order 可观察面）
+- rust：`oc-core/src/config/normalize.rs:1470` 迁移条目按 serde_json 对象迭代序输出；ref `normalize.ts:515-519` 按 `Object.entries` 插入序（`"*.md"` 先、`"*"` 后）→ v1 迁移后的 encoded 条目顺序恒不同。Cargo.toml:30 注释早已声明 preserve_order 弃用——本条为其首个 wire 可观察面。
+- 出处：diff CONFIG mined-011。
+
+### G-414 ❌ worktree directory 缺 Trim/非空校验
+- rust `oc-schema/src/config/worktree.rs:7-12` 裸 String 接受 `" "`；ref `schema/src/config/worktree.ts` Trim+isNonEmpty → invalid 剥除。
+- 出处：diff CONFIG mined-031。
+
+### G-415 ❌ ACP shell to_locations 双 location
+- rust `oc-cli/src/acp/tool.rs:89-95` 把 `workdir??cwd` 与 `cwd` 都传入 locations；ref `acp/tool.ts:38` 只传前者——rust 每个 shell update 多带 `{path: cwd}`。
+- 出处：diff ACP mined tool 族。
+
+### G-416 ❌ ACP compaction marker 多带 summary
+- rust `acp/compaction.rs:165-170` 在 `_meta["opencode/compaction"]` 写入 `summary`；ref `acp/compaction.ts:112-118` marker 仅 status/messageId/reason(+error)。
+- 出处：diff ACP mined compaction 族。
+
+### G-417 ❌ compaction input_image/file `detail` 非字符串静默吞掉
+- rust `responses_compaction.rs:426-427` `as_str` 把 `detail:42` 哞掉并接受整文档；ref `open-responses.ts:42,47` optional(String) 拒绝。
+- 出处：diff COMPACTION mined-r02/r06。
+
+### G-418 ❌ HTTP GET /api/vcs 未初始化 wire 形状
+- rust `handlers/project.rs:1085` 未初始化返回 `null`；ref `core/src/vcs.ts:67` 返回 `Info{branch:{}}`。
+- 出处：diff HTTP mined vcs_uninit_get。
+
+### G-419 ❌ venice providerMetadata 空命名空间恒附着（13 交互）
+- rust `openai_chat.rs:72,1477` 无条件附着空 `providerMetadata.venice={}`；ref `venice-chat.ts:325-345` 条件附着——真实流量回放证实 13 个交互 wire 多空对象。
+- 出处：diff PROVIDER-RECORDINGS 聚类①。
+
+### G-420 ❌ google-interactions 空 {google:{}} 附着方向反（6 交互）
+- ref `google-interactions.ts:291,377` 恒附着空命名空间；rust 条件附着——与 G-419 镜像的反向差。
+- 出处：diff PROVIDER-RECORDINGS 聚类②。
+
+### G-421 ❌ venice `__ENCRYPTED_REASONING__` marker 剥除差（3 交互）
+- ref 保留 marker 文本；rust 剥除——reasoning 占位语义差。
+- 出处：diff PROVIDER-RECORDINGS 聚类③。
+
+### G-422 ❌ deepinfra estimated_cost 浮点精度（1 交互）
+- rust `openai_chat.rs:432-457` map_usage 疑似 f32 截断（estimated_cost 末位偏差）；真实流量单交互证实。
+- 出处：diff PROVIDER-RECORDINGS 聚类④。
+
+## 归类与复认（不另立项）
+
+- JSON-Schema mined 4 对：extras-closed-objects（effect Draft2020-12 对空 properties+additionalProperties:false 不拒）、pattern-ownership、refs-dictionary（draft-07 选择+$defs 失效）→ **G-407 族**（ref 编译器 catch→accept-all）补注；optional-nulls → 提取噪声（源夹具悬空 $ref 的 repair 语境）。
+- SSE mined-41/40：unanchored delta 与 tool 变体 → **G-409 族**补注。
+- HTTP provider_missing offender 后缀 → **G-410 族**补注。
+- mined-42 compaction 行：双侧驱动归一化缺臂（提取噪声），收口已修双侧驱动，现 MATCH。
+
+## 第二十九轮判定汇总
+
+语料来源三级跳完成：自造边界 → ref 验证过的输入集 → **真实 provider 流量**。790 单元 100% 归属，挖掘新增 23 分歧归并 11 条（🟡×1 + 🟢×10），其余入 G-407/409/410 既有族。修复优先序：G-412（非确定 wire）> G-417/G-415（类型吞/双 location）> G-419/G-420（namespace 附着族，同型可一并修）> G-413/G-414/G-416/G-418/G-421 > G-422（先核 f32 源）。工具：`tools/diff/mine_ref_fixtures.py` + `provider_recordings.py`；报告与 INDEX `docs/audit/diff/`。扫描循环口径=census 14 + diff 7 命令。

@@ -1,0 +1,61 @@
+{
+ "name": "mined-42-compaction-stream",
+ "description": "ref translate.test.ts 'streams a compaction summary...'（补锚）: started → delta×2 → ended",
+ "events": [
+  {
+   "id": "evt_m001",
+   "created": 2001,
+   "type": "session.step.started",
+   "data": {
+    "sessionID": "ses_root",
+    "assistantMessageID": "msg_asst_1",
+    "agent": "build",
+    "model": {
+     "providerID": "test",
+     "id": "test-model"
+    },
+    "started": 1000
+   }
+  },
+  {
+   "id": "evt_m002",
+   "created": 2002,
+   "type": "session.compaction.started",
+   "data": {
+    "sessionID": "ses_root",
+    "reason": "manual",
+    "recent": "",
+    "inputID": "msg_compact"
+   }
+  },
+  {
+   "id": "evt_m003",
+   "created": 2003,
+   "type": "session.compaction.delta",
+   "data": {
+    "sessionID": "ses_root",
+    "text": "Sum"
+   }
+  },
+  {
+   "id": "evt_m004",
+   "created": 2004,
+   "type": "session.compaction.delta",
+   "data": {
+    "sessionID": "ses_root",
+    "text": "mary"
+   }
+  },
+  {
+   "id": "evt_m005",
+   "created": 2005,
+   "type": "session.compaction.ended",
+   "data": {
+    "sessionID": "ses_root",
+    "reason": "manual",
+    "text": "Summary",
+    "recent": ""
+   }
+  }
+ ]
+}

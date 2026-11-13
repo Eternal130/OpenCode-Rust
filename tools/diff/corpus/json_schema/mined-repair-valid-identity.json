@@ -1,0 +1,46 @@
+{
+ "name": "mined-repair-valid-identity",
+ "keywords": [
+  "type",
+  "properties",
+  "items"
+ ],
+ "schema": {
+  "type": "object",
+  "properties": {
+   "count": {
+    "type": "integer"
+   },
+   "nested": {
+    "type": "object",
+    "properties": {
+     "enabled": {
+      "type": "boolean"
+     }
+    }
+   },
+   "items": {
+    "type": "array",
+    "items": {
+     "type": "number"
+    }
+   }
+  }
+ },
+ "instances": [
+  {
+   "label": "in1",
+   "value": {
+    "count": 2,
+    "nested": {
+     "enabled": true
+    },
+    "items": [
+     2,
+     3
+    ],
+    "extra": "keep"
+   }
+  }
+ ]
+}

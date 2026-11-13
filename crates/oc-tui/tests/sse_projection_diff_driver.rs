@@ -116,6 +116,21 @@ fn norm_row(message: &Message) -> Value {
             "exit": exit,
             "output": output,
         }),
+        Message::Compaction { id, running, failed, cancelled, summary, tokens_in, tokens_out, provider_compaction, .. } => {
+            // M1 rescan fix: the fallback arm dropped every compaction
+            // field (extraction noise, not a product divergence).
+            json!({
+                "row": "compaction",
+                "id": id,
+                "running": running,
+                "failed": failed,
+                "cancelled": cancelled,
+                "summary": summary,
+                "tokens_in": tokens_in,
+                "tokens_out": tokens_out,
+                "provider_compaction": provider_compaction,
+            })
+        }
         other => json!({ "row": other.id() }),
     }
 }

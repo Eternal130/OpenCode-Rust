@@ -1,0 +1,14 @@
+{
+ "permissions": [
+  {
+   "action": "shell",
+   "resource": "*",
+   "effect": "ask"
+  },
+  {
+   "action": "shell",
+   "resource": "git status",
+   "effect": "allow"
+  }
+ ]
+}

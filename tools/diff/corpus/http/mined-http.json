@@ -1,0 +1,98 @@
+{
+ "_comment": "mined by tools/diff/mine_ref_fixtures.py from ref packages/server/test/*.test.ts",
+ "requests": [
+  {
+   "family": "L2-errors",
+   "name": "vcs_uninit_get",
+   "method": "GET",
+   "path": "/api/vcs",
+   "body": null
+  },
+  {
+   "family": "L2-errors",
+   "name": "vcs_base_uninit",
+   "method": "GET",
+   "path": "/api/vcs/base",
+   "body": null
+  },
+  {
+   "family": "L2-errors",
+   "name": "vcs_diff_uninit",
+   "method": "GET",
+   "path": "/api/vcs/diff",
+   "body": null
+  },
+  {
+   "family": "L2-errors",
+   "name": "vcs_init_missing_dir",
+   "method": "POST",
+   "path": "/api/vcs/init?location[directory]={WS}%2Fdiff-absent-dir",
+   "body": null
+  },
+  {
+   "family": "L2-errors",
+   "name": "vcs_init_unknown_provider",
+   "method": "POST",
+   "path": "/api/vcs/init?provider=unknown&location[directory]={WS}",
+   "body": null
+  },
+  {
+   "family": "L2-errors",
+   "name": "worktree_get_empty",
+   "method": "GET",
+   "path": "/api/worktree",
+   "body": null
+  },
+  {
+   "family": "L2-errors",
+   "name": "worktree_create_no_body",
+   "method": "POST",
+   "path": "/api/worktree",
+   "body": null
+  },
+  {
+   "family": "L2-errors",
+   "name": "fs_list_missing_dir",
+   "method": "GET",
+   "path": "/api/fs/list?location[directory]={WS}%2Fdiff-no-such",
+   "body": null
+  },
+  {
+   "family": "L2-errors",
+   "name": "provider_missing",
+   "method": "GET",
+   "path": "/api/provider/does-not-exist",
+   "body": null
+  },
+  {
+   "family": "L2-errors",
+   "name": "session_missing_fork",
+   "method": "POST",
+   "path": "/api/session/{SID_MISSING}/fork",
+   "body": null
+  },
+  {
+   "family": "L2-errors",
+   "name": "config_patch_no_body",
+   "method": "PATCH",
+   "path": "/api/experimental/config",
+   "body": null
+  },
+  {
+   "family": "L3-side-effects",
+   "name": "config_patch_shell",
+   "method": "PATCH",
+   "path": "/api/experimental/config",
+   "body": {
+    "shell": "/bin/zsh"
+   }
+  },
+  {
+   "family": "L3-side-effects",
+   "name": "debug_location",
+   "method": "GET",
+   "path": "/api/debug/location",
+   "body": null
+  }
+ ]
+}

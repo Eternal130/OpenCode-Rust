@@ -1,0 +1,7 @@
+{
+ "providers": {
+  "console-anthropic": {
+   "canonical": "anthropic"
+  }
+ }
+}
