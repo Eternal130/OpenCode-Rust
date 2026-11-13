@@ -578,9 +578,12 @@ pub fn render_session(
     // The VIEWPORT is the scrollbox alone: v2's transcript pane rows
     // are `scrollbox` + the 1-row jump-to-latest slot under it
     // (`session-frame.tsx`: the scrollbox is `flex: 1` beside a
-    // `height: 1` indicator row), so the scroll math sees
-    // `transcript_height - 1` — the long-reply corpus pins the page
-    // steps (-7/-7/+8 at 24 rows ⇒ viewport 15, not the pane's 16).
+    // `height: 1` indicator row) — the long-reply corpus pins the
+    // page steps (-7/-7/+8 at 24 rows ⇒ viewport 15). F3's column
+    // bottom pad (the `+ 1` in the budget above) already removes the
+    // indicator row from `transcript_height`, so the scroll math
+    // passes the budget through unchanged (W3: a further `− 1` here
+    // double-counted the slot).
     //
     // TUI-TD02 — the per-message row geometry records for the
     // navigation walk (`anchors.messagePositions()`): every message
@@ -621,7 +624,13 @@ pub fn render_session(
     store.set_transcript_metrics(
         session_id,
         crate::store::TranscriptMetrics {
-            viewport: transcript_height.saturating_sub(1),
+            // W3 — the scroll math sees the scrollbox alone. F3 added
+            // the column's bottom pad to the transcript budget (the
+            // `+ 1` above), which already embodies the jump slot's row;
+            // the old `− 1` double-counted it (viewport 14 at 24 rows —
+            // the long-reply corpus pin says 15) and left the sticky
+            // window one row high on every scrolled transcript.
+            viewport: transcript_height,
             content_height: transcript.content_height,
             rows: full_rows,
         },
