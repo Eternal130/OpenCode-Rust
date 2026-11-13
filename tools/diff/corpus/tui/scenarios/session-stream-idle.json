@@ -1,0 +1,489 @@
+{
+  "schema": "tui-diff-scenario/1",
+  "id": "session-stream-idle",
+  "width": 80,
+  "height": 24,
+  "fetch": {
+    "/api/agent": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/command": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/config": {
+      "status": 200,
+      "body": []
+    },
+    "/api/event": {
+      "status": 200,
+      "body": {
+        "sse": true,
+        "initial": {
+          "id": "evt_connected",
+          "type": "server.connected",
+          "data": {}
+        }
+      }
+    },
+    "/api/experimental/migration/v1": {
+      "status": 200,
+      "body": {
+        "status": "completed"
+      }
+    },
+    "/api/form": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/fs/list": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/info": {
+      "status": 200,
+      "body": {
+        "version": "test",
+        "pid": 0,
+        "urls": [],
+        "paths": {
+          "tmp": "/tmp"
+        },
+        "capabilities": {
+          "persistentPty": true
+        }
+      }
+    },
+    "/api/integration": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/location": {
+      "status": 200,
+      "body": {
+        "directory": "/tmp/opencode/packages/tui",
+        "project": {
+          "id": "proj_test",
+          "directory": "/tmp/opencode",
+          "canonical": "/tmp/opencode"
+        }
+      }
+    },
+    "/api/mcp": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/mcp/resource": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": {
+          "resources": [],
+          "templates": []
+        }
+      }
+    },
+    "/api/model": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/plugin": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/project": {
+      "status": 200,
+      "body": []
+    },
+    "/api/provider": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/reference": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/session": {
+      "status": 200,
+      "body": {
+        "data": [
+          {
+            "id": "ses_stream",
+            "title": "Streaming then quiescent",
+            "projectID": "proj_test",
+            "location": {
+              "directory": "/tmp/opencode/packages/tui"
+            },
+            "agent": "build",
+            "model": {
+              "providerID": "fixture",
+              "id": "model"
+            },
+            "cost": 0,
+            "tokens": {
+              "input": 0,
+              "output": 0,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            },
+            "time": {
+              "created": 1,
+              "updated": 2
+            }
+          }
+        ],
+        "cursor": {}
+      }
+    },
+    "/api/session/active": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "ses_stream"
+        }
+      }
+    },
+    "/api/shell": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/skill": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/vcs": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": {
+          "branch": {
+            "current": "main",
+            "default": "main"
+          }
+        }
+      }
+    },
+    "/api/experimental/session/ses_stream/terminal": {
+      "status": 200,
+      "body": {
+        "data": []
+      }
+    },
+    "/api/session/ses_stream": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "ses_stream",
+          "title": "Streaming then quiescent",
+          "projectID": "proj_test",
+          "location": {
+            "directory": "/tmp/opencode/packages/tui"
+          },
+          "agent": "build",
+          "model": {
+            "providerID": "fixture",
+            "id": "model"
+          },
+          "cost": 0,
+          "tokens": {
+            "input": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cache": {
+              "read": 0,
+              "write": 0
+            }
+          },
+          "time": {
+            "created": 1,
+            "updated": 2
+          }
+        }
+      }
+    },
+    "/api/session/ses_stream/form": {
+      "status": 200,
+      "body": {
+        "data": []
+      }
+    },
+    "/api/session/ses_stream/inbox": {
+      "status": 200,
+      "body": {
+        "data": []
+      }
+    },
+    "/api/session/ses_stream/message": {
+      "status": 200,
+      "body": {
+        "data": [
+          {
+            "id": "msg_user_1",
+            "sessionID": "ses_stream",
+            "type": "user",
+            "time": {
+              "created": 1
+            },
+            "text": "Keep going."
+          }
+        ],
+        "cursor": {}
+      }
+    },
+    "/api/session/ses_stream/permission": {
+      "status": 200,
+      "body": {
+        "data": []
+      }
+    }
+  },
+  "events": [
+    {
+      "id": "evt_session_updated",
+      "created": 1,
+      "type": "session.updated",
+      "durable": {
+        "aggregateID": "ses_stream",
+        "seq": 1,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_stream",
+        "info": {
+          "id": "ses_stream",
+          "title": "Streaming then quiescent",
+          "projectID": "proj_test",
+          "location": {
+            "directory": "/tmp/opencode/packages/tui"
+          },
+          "agent": "build",
+          "model": {
+            "providerID": "fixture",
+            "id": "model"
+          },
+          "cost": 0,
+          "tokens": {
+            "input": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cache": {
+              "read": 0,
+              "write": 0
+            }
+          },
+          "time": {
+            "created": 1,
+            "updated": 2
+          }
+        }
+      }
+    },
+    {
+      "id": "evt_step_started",
+      "created": 2,
+      "type": "session.step.started",
+      "durable": {
+        "aggregateID": "ses_stream",
+        "seq": 2,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_stream",
+        "assistantMessageID": "msg_asst_1",
+        "agent": "build",
+        "model": {
+          "providerID": "fixture",
+          "id": "model"
+        },
+        "started": 0
+      }
+    },
+    {
+      "id": "evt_text_started",
+      "created": 3,
+      "type": "session.text.started",
+      "durable": {
+        "aggregateID": "ses_stream",
+        "seq": 3,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_stream",
+        "assistantMessageID": "msg_asst_1",
+        "ordinal": 0
+      }
+    },
+    {
+      "id": "evt_d1",
+      "created": 4,
+      "type": "session.text.delta",
+      "durable": {
+        "aggregateID": "ses_stream",
+        "seq": 4,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_stream",
+        "assistantMessageID": "msg_asst_1",
+        "ordinal": 0,
+        "delta": "Partial answer "
+      }
+    },
+    {
+      "id": "evt_d2",
+      "created": 5,
+      "type": "session.text.delta",
+      "durable": {
+        "aggregateID": "ses_stream",
+        "seq": 5,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_stream",
+        "assistantMessageID": "msg_asst_1",
+        "ordinal": 0,
+        "delta": "still streaming"
+      }
+    }
+  ],
+  "keys": [],
+  "settle_ms": 300,
+  "note": "Stream interrupted mid-part: session.text.started plus two deltas with NO text.ended and NO step.ended, then settle — both sides must render the same quiescent mid-stream state (partial text visible, step still marked busy); the settle budget freezes the same resting frame on both sides so the spinner/streaming markers compare deterministically."
+}
