@@ -103,3 +103,18 @@ Commit: `feat(diff-tui): ref headless driver over createAppFixture`
   No smoke scenario exercises keys yet — worth one keyed scenario later.
 - `/api/config` bare-array quirk and the 21-path census held: home requests 20
   paths at rest, session routes 27; zero gaps in all 6 cases.
+
+## Post-review fix: indexed palette aligned with v1-migrate (controller ruling)
+
+The driver's indexed→RGB table was the classic xterm palette (205-step base
+colors, 95/135/… cube); per controller ruling it now mirrors the reference's
+own table — `v1-migrate.ts:470-495` `ansi()` (0x80-based base colors, cube
+`part === 0 ? 0 : part * 40 + 55`, grayscale `(i-232)*10+8`) — numerically
+identical to the rust driver's embedded `indexed_to_rgb`
+(crates/oc-tui/tests/tui_fullscreen_diff_driver.rs).
+
+Verification: smoke 3 scenarios × 2 tiers re-run twice — 6/6 grids valid,
+stub_gaps empty, double-run byte-identical (`/tmp/opencode/logs/t2-fix-indexed.log`).
+No grid changed bytes vs the pre-fix run (smoke corpus contains no indexed
+color cells), so the swap is behavior-neutral today and only matters for
+future indexed-color scenarios.
