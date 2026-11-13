@@ -183,6 +183,25 @@ async fn spawn_server(
 // the replay pump: the live loop's drain sequence, minus the PTY/clock
 // ---------------------------------------------------------------------------
 
+/// F1 — the footer location label (the live loop's arm verbatim,
+/// app.rs:9908-9921): `abbreviateHome(directory)` plus `:{branch}` when
+/// vcs resolves one. The driver fires the boot request the live loop's
+/// boot block sends (app.rs:8703-8707) with the scenario's location
+/// directory (the ref harness resolves it from /api/location — its
+/// census shows the boot walk).
+fn footer_location_label(directory: &str, branch: Option<String>) -> String {
+    let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
+    let mut label = match home {
+        Some(home) => oc_tui::components::dialog_worktrees::abbreviate_home(directory, &home),
+        None => directory.to_owned(),
+    };
+    if let Some(branch) = branch {
+        label.push(':');
+        label.push_str(&branch);
+    }
+    label
+}
+
 struct Pump {
     app: App,
     ingest_rx: tokio::sync::mpsc::Receiver<Ingest>,
@@ -283,6 +302,14 @@ impl Pump {
                         }]);
                     }
                 }
+                // F1 — the footer location label: the live loop's arm
+                // (app.rs:9908-9921) — see `footer_location_label`.
+                LoopFetch::LocationVcs { directory, branch: Ok(branch) } => {
+                    self.app.store.set_footer_location(footer_location_label(&directory, branch));
+                }
+                // app.rs:9926-9928: a failed/absent vcs lookup is
+                // silent (the label stays unset) — rides the wildcard
+                // drop arm below like the interactive fetches.
                 LoopFetch::SessionList(Ok(sessions)) => {
                     let unread = oc_tui::data::resync_unread(&sessions);
                     self.app.store.ingest_all([Ingest::Resync {
@@ -599,6 +626,29 @@ async fn tui_fullscreen_diff_driver() {
                     .map(str::to_owned)
             });
 
+        // F1 — the scenario's location directory (the /api/location
+        // stub's `directory`; any stub's `location.directory` as
+        // fallback): the ref harness's boot location worker resolves
+        // it from the server (its census shows /api/location +/vcs),
+        // and the live loop sends one boot LocationVcs for the launch
+        // cwd (app.rs:8703-8707) — the driver replays that request
+        // with the scenario's directory.
+        let location_directory = scenario
+            .fetch
+            .get("/api/location")
+            .and_then(|stub| stub.body.get("directory"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| {
+                scenario.fetch.values().find_map(|stub| {
+                    stub.body
+                        .get("location")
+                        .and_then(|location| location.get("directory"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+            });
+
         let fetch: BTreeMap<String, (u16, Value)> = scenario
             .fetch
             .into_iter()
@@ -648,6 +698,17 @@ async fn tui_fullscreen_diff_driver() {
                 connection_task,
             )
         };
+
+        // F1 — the ref harness's pinned `TuiApp { version: "test" }`
+        // injection (test/fixture/app.ts:35): the home footer's
+        // right-aligned label reads it (`context.app.version`,
+        // home/footer.tsx:99).
+        pump.app.store.set_app_version("test".to_owned());
+        if let Some(directory) = &location_directory {
+            if !directory.is_empty() {
+                let _ = pump.fetch_tx.send(LoopRequest::LocationVcs(directory.clone()));
+            }
+        }
 
         // Boot settle → scenario events → keys → settle.
         let mut error = pump.settle(&case.id).await.err();

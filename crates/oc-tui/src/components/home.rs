@@ -430,7 +430,10 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
             .map(|selection| crate::editor_zed::editor_file_label(&selection))
             .unwrap_or_default(),
         editor_file_pending: store.editor_label_pending().unwrap_or(false),
-        version: env!("CARGO_PKG_VERSION").to_owned(),
+        // F1 — the version rides the boot-injected TuiApp seam
+        // (`context.app.version`, home/footer.tsx:99), not a hardcoded
+        // build constant: the harness pins it like the ref fixture.
+        version: store.app_version(),
         metadata,
         plugin_hints: {
             // G-04: the `home.footer(.status)` slot rows append after

@@ -1929,6 +1929,13 @@ pub struct Store {
     /// `prompt/index.tsx:1605-1619`); the app's location worker sets
     /// it once per boot (a `/cd` or session move would refresh it).
     footer_location: std::cell::RefCell<String>,
+    /// F1 — the home footer's right-aligned version label's source
+    /// (`context.app.version`, feature-plugins/home/footer.tsx:99): ref
+    /// injects `TuiApp.version` at boot (runtime.tsx's `TuiAppProvider` —
+    /// the CLI build version in production, the fixture harness's
+    /// pinned value in tests). Defaults to the crate version; the
+    /// harness seam overrides it (`Store::set_app_version`).
+    app_version: std::cell::RefCell<String>,
     /// TUI-30 — `currentLocation.error?.location.directory`
     /// (context/location.tsx): the directory that FAILED to resolve
     /// (the location worker's error state). A routed session whose
@@ -4297,6 +4304,7 @@ impl Store {
                 RecordingSessionActionSink::default(),
             )),
             footer_location: std::cell::RefCell::new(String::new()),
+            app_version: std::cell::RefCell::new(env!("CARGO_PKG_VERSION").to_owned()),
             location_error: std::cell::RefCell::new(None),
             scroll_anchors: std::cell::RefCell::new(std::collections::HashMap::new()),
             pending_scroll_restore: std::cell::RefCell::new(std::collections::HashSet::new()),
@@ -5193,6 +5201,20 @@ impl Store {
     /// Set the footer location label (the boot location worker).
     pub fn set_footer_location(&self, label: String) {
         *self.footer_location.borrow_mut() = label;
+    }
+
+    /// F1 — the home footer's version label (`context.app.version`,
+    /// home/footer.tsx:99): the boot-injected `TuiApp.version`
+    /// (runtime.tsx) — the crate version until overridden.
+    #[must_use]
+    pub fn app_version(&self) -> String {
+        self.app_version.borrow().clone()
+    }
+
+    /// The harness seam for the boot-injected version (the ref
+    /// fixture's `app: { version: "test" }`, test/fixture/app.ts:35).
+    pub fn set_app_version(&self, version: String) {
+        *self.app_version.borrow_mut() = version;
     }
 
     /// TUI-30 — the location worker's error state
