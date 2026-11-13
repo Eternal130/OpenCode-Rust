@@ -1509,6 +1509,13 @@ async fn pty_d3_i15_full_buffer_chunked_replay_with_absolute_offsets() {
                     assert_eq!(end_offset, assembled_end, "marker lands exactly at the tail");
                     break end_offset;
                 }
+                // Ambient G-229(1) probes (fg/title) are live-event
+                // traffic that may ride pending/replay delivery; they
+                // are not replay corruption.
+                Some(
+                    WireResponse::ForegroundProcessChanged { .. }
+                    | WireResponse::TitleChanged { .. },
+                ) => {}
                 other => panic!("no stream frame may precede replay_complete: {other:?}"),
             }
         }
@@ -1519,8 +1526,18 @@ async fn pty_d3_i15_full_buffer_chunked_replay_with_absolute_offsets() {
     // The live competing event surfaces only AFTER the marker (§3.2
     // deferred completion): the resize fired mid-transfer, its
     // `resized` frame is the next frame past `replay_complete`.
-    let deferred = raw.frame().await;
-    match parse_json::<WireResponse>(&deferred) {
+    let deferred = loop {
+        let frame = raw.frame().await;
+        match parse_json::<WireResponse>(&frame) {
+            // Ambient G-229(1) probes may defer ahead of the resize;
+            // skip them (the resize is the frame under test).
+            Some(
+                WireResponse::ForegroundProcessChanged { .. } | WireResponse::TitleChanged { .. },
+            ) => {}
+            other => break other,
+        }
+    };
+    match deferred {
         Some(WireResponse::Resized { cols, rows, .. }) => {
             assert_eq!((cols, rows), (140, 30), "the resize follows replay_complete");
         }

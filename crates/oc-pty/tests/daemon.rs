@@ -239,6 +239,25 @@ impl Client {
             }
         }
     }
+
+    /// `next_stream_frame`, transparently skipping the ambient G-229(1)
+    /// probes (title/foreground): the 500ms foreground poller's first
+    /// tick can sample the create->fork->exec window and emit a
+    /// transitional "sh" frame that interleaves anywhere on slower
+    /// runners (the CI ubuntu-latest->26 rollout made it
+    /// deterministic) — order-sensitive assertions about OTHER frames
+    /// tolerate it here, mirroring the `request` exchange skip above.
+    async fn next_stream_frame_skipping_ambient(&mut self) -> StreamFrame {
+        loop {
+            match self.next_stream_frame().await {
+                StreamFrame::Response(
+                    WireResponse::ForegroundProcessChanged { .. }
+                    | WireResponse::TitleChanged { .. },
+                ) => {}
+                frame => return frame,
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1176,7 +1195,25 @@ async fn subscribe_connections_end_at_stream_end() {
         WireResponse::Ok
     ));
     let trailing = subscriber.read_to_close().await;
-    assert!(trailing.is_empty(), "terminate ends the stream with no trailing frame: {trailing:?}");
+    // The invariant under test is that TERMINATE itself adds no frame;
+    // the ambient G-229(1) fg/title probes may land in the attached ->
+    // terminate window and are not terminate artifacts.
+    let non_ambient: Vec<&Vec<u8>> = trailing
+        .iter()
+        .filter(|frame| {
+            !matches!(
+                parse_json::<WireResponse>(frame),
+                Some(
+                    WireResponse::ForegroundProcessChanged { .. }
+                        | WireResponse::TitleChanged { .. }
+                )
+            )
+        })
+        .collect();
+    assert!(
+        non_ambient.is_empty(),
+        "terminate ends the stream with no trailing frame (ambient fg/title probes excepted): {non_ambient:?}"
+    );
 
     // (b) natural exit: `exited` flushes BEFORE the close — the
     // subscriber reads the final frame, then EOF.
@@ -1258,7 +1295,7 @@ async fn second_subscribe_on_a_connection_is_rejected() {
         driver.request(WireRequest::Write { id, attachment_id: None, data_base64: payload }).await,
         WireResponse::Ok
     ));
-    match subscriber.next_stream_frame().await {
+    match subscriber.next_stream_frame_skipping_ambient().await {
         StreamFrame::Output(frame) => {
             assert_eq!(
                 frame.start, 0,
