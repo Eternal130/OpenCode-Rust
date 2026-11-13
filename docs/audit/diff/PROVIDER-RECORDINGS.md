@@ -17,18 +17,18 @@ provider/model id 作为解码器 initial 状态的 harness 上下文。
 数值按值比较（0==0.0）；usage/providerMetadata 全量保留比较；解码错误只比较 ok 位与
 错误前事件前缀（错误文案不比较）——双侧都错=MATCH，单侧错=DIVERGE。
 
-## 总量: 264 个可驱动交互，MATCH 241，DIVERGE 23
+## 总量: 264 个可驱动交互，MATCH 264，DIVERGE 0
 
 | 协议族 | 交互数 | MATCH | DIVERGE |
 |---|---|---|---|
 | anthropic-messages | 54 | 54 | 0 |
 | cohere-chat | 4 | 4 | 0 |
 | gemini | 9 | 9 | 0 |
-| google-interactions | 7 | 1 | 6 |
+| google-interactions | 7 | 7 | 0 |
 | meta-responses | 9 | 9 | 0 |
 | mistral-chat | 6 | 6 | 0 |
 | open-responses | 36 | 36 | 0 |
-| openai-chat | 122 | 105 | 17 |
+| openai-chat | 122 | 122 | 0 |
 | openai-responses | 15 | 15 | 0 |
 | xai-responses | 2 | 2 | 0 |
 
@@ -81,144 +81,7 @@ cassette 总数（目录内 .json）: 270；语料含 4 个顶层散装 fixture�
 
 ## 分歧明细
 
-### deepinfra-chat/deepinfra-llama-3-3-70b-tool-loop#0 — openai-chat
-- 差异: `$.events[5].usage.providerMetadata.deepinfra.estimated_cost: rust=2.878e-05 ref=2.8780000000000002e-05`
-- rust ok=True events=7 error=False
-- ref  ok=True events=7 error=False
-
-### google-interactions/continues-tool-results-with-previous-interaction-id#0 — google-interactions
-- 差异: `$.events[1].providerMetadata: missing on rust side`
-- rust ok=True events=9 error=False
-- ref  ok=True events=9 error=False
-
-### google-interactions/continues-tool-results-with-previous-interaction-id#1 — google-interactions
-- 差异: `$.events[1].providerMetadata: missing on rust side`
-- rust ok=True events=9 error=False
-- ref  ok=True events=9 error=False
-
-### google-interactions/replays-native-tool-results-and-signatures-statelessly#0 — google-interactions
-- 差异: `$.events[1].providerMetadata: missing on rust side`
-- rust ok=True events=9 error=False
-- ref  ok=True events=9 error=False
-
-### google-interactions/replays-native-tool-results-and-signatures-statelessly#1 — google-interactions
-- 差异: `$.events[1].providerMetadata: missing on rust side`
-- rust ok=True events=9 error=False
-- ref  ok=True events=9 error=False
-
-### google-interactions/streams-reasoning-and-retains-thought-signatures#0 — google-interactions
-- 差异: `$.events[1].providerMetadata: missing on rust side`
-- rust ok=True events=25 error=False
-- ref  ok=True events=25 error=False
-
-### google-interactions/streams-text-and-reports-usage#0 — google-interactions
-- 差异: `$.events[1].providerMetadata: missing on rust side`
-- rust ok=True events=8 error=False
-- ref  ok=True events=8 error=False
-
-### venice-chat/claude-opus-4-8-preserves-reasoning-through-a-tool-loop-and-follow-up#0 — openai-chat
-- 差异: `$.events[10].providerMetadata: missing on ref side`
-- rust ok=True events=14 error=False
-- ref  ok=True events=14 error=False
-
-### venice-chat/claude-opus-4-8-preserves-reasoning-through-a-tool-loop-and-follow-up#1 — openai-chat
-- 差异: `$.events[9].providerMetadata: missing on ref side`
-- rust ok=True events=12 error=False
-- ref  ok=True events=12 error=False
-
-### venice-chat/claude-opus-4-8-preserves-reasoning-through-a-tool-loop-and-follow-up#2 — openai-chat
-- 差异: `$.events[3].providerMetadata: missing on ref side`
-- rust ok=True events=6 error=False
-- ref  ok=True events=6 error=False
-
-### venice-chat/deepseek-v4-flash-preserves-reasoning-through-a-tool-loop-and-follow-up#0 — openai-chat
-- 差异: `$.events[15].providerMetadata: missing on ref side`
-- rust ok=True events=19 error=False
-- ref  ok=True events=19 error=False
-
-### venice-chat/deepseek-v4-flash-preserves-reasoning-through-a-tool-loop-and-follow-up#1 — openai-chat
-- 差异: `$.events[16].providerMetadata: missing on ref side`
-- rust ok=True events=19 error=False
-- ref  ok=True events=19 error=False
-
-### venice-chat/deepseek-v4-flash-preserves-reasoning-through-a-tool-loop-and-follow-up#2 — openai-chat
-- 差异: `$.events[14].providerMetadata: missing on ref side`
-- rust ok=True events=17 error=False
-- ref  ok=True events=17 error=False
-
-### venice-chat/gemini-3-1-pro-preview-preserves-reasoning-through-a-tool-loop-and-follow-up#0 — openai-chat
-- 差异: `$.events[6].providerMetadata: missing on ref side`
-- rust ok=True events=10 error=False
-- ref  ok=True events=10 error=False
-
-### venice-chat/gemini-3-1-pro-preview-preserves-reasoning-through-a-tool-loop-and-follow-up#1 — openai-chat
-- 差异: `$.events[5].providerMetadata: missing on ref side`
-- rust ok=True events=8 error=False
-- ref  ok=True events=8 error=False
-
-### venice-chat/gemini-3-1-pro-preview-preserves-reasoning-through-a-tool-loop-and-follow-up#2 — openai-chat
-- 差异: `$.events[5].providerMetadata: missing on ref side`
-- rust ok=True events=8 error=False
-- ref  ok=True events=8 error=False
-
-### venice-chat/gemini-preserves-per-call-signatures-through-parallel-tools#0 — openai-chat
-- 差异: `$.events[5].providerMetadata: missing on ref side`
-- rust ok=True events=11 error=False
-- ref  ok=True events=11 error=False
-
-### venice-chat/gemini-preserves-per-call-signatures-through-parallel-tools#1 — openai-chat
-- 差异: `$.events[7].providerMetadata: missing on ref side`
-- rust ok=True events=10 error=False
-- ref  ok=True events=10 error=False
-
-### venice-chat/gemini-preserves-per-call-signatures-through-parallel-tools#2 — openai-chat
-- 差异: `$.events[3].providerMetadata: missing on ref side`
-- rust ok=True events=6 error=False
-- ref  ok=True events=6 error=False
-
-### venice-chat/openai-gpt-54-mini-preserves-reasoning-through-a-tool-loop-and-follow-up#0 — openai-chat
-- 差异: `$.events[94].text: rust="\n\n" ref="\n\n__ENCRYPTED_REASONING__id=rs_014406f0f45e19c6016ac312f01d2487d2a5f2bdb7fbc42f76\ngAAAAABqwxLxEN4vtmI2WcZ_aDDttdmPwAHgnV2gLZBo_f_mmTdGm4oZzE2JVzcj72AeXHyABm`
-- rust ok=True events=100 error=False
-- ref  ok=True events=100 error=False
-
-### venice-chat/openai-gpt-54-mini-preserves-reasoning-through-a-tool-loop-and-follow-up#1 — openai-chat
-- 差异: `$.events[67].text: rust="\n\n" ref="\n\n__ENCRYPTED_REASONING__id=rs_014406f0f45e19c6016ac312f26e4887d2af2f777fa50f9801\ngAAAAABqwxL0Nl6Jl5EZuOS3A9KuObO5gPHpF1y4xbTEmtnZFQ3yz-u6TiK9EQuW1YliegqQQP`
-- rust ok=True events=72 error=False
-- ref  ok=True events=72 error=False
-
-### venice-chat/openai-gpt-54-mini-preserves-reasoning-through-a-tool-loop-and-follow-up#2 — openai-chat
-- 差异: `$.events[60].text: rust="\n\n" ref="\n\n__ENCRYPTED_REASONING__id=rs_014406f0f45e19c6016ac312f4e99887d2b9c8c820d5e078c9\ngAAAAABqwxL2s7RKHoOP95Fkym7ikKzN-DEIDdKIvEaCL9uxm3gpgY3MBOf5vMOPJi2RVbKfFS`
-- rust ok=True events=65 error=False
-- ref  ok=True events=65 error=False
-
-### venice-chat/qwen-disables-reasoning#0 — openai-chat
-- 差异: `$.events[5].providerMetadata: missing on ref side`
-- rust ok=True events=8 error=False
-- ref  ok=True events=8 error=False
-
+无分歧。
 ## 定性
 
-### deepinfra estimated_cost float precision（1 个交互）
-- 判定: 同一 wire 值 2.8780000000000002e-05：ref 原样保留 f64 wire 数值，rust 的 map_usage→providerMetadata 通路把数值精度截断（2.878e-05，疑似 f32 中转），usage.providerMetadata 数值不再逐位等于 wire
-- ref : ref packages/ai/src/protocols/openai-chat.ts（usage passthrough）
-- rust: rust crates/oc-ai/src/protocols/openai_chat.rs:432-457（map_usage/json_value_map）
-- 交互: deepinfra-chat/deepinfra-llama-3-3-70b-tool-loop#0
-
-### google-interactions 空 providerMetadata 命名空间（6 个交互）
-- 判定: ref 在 reasoning-start 等事件上无条件附着 providerMetadata 命名空间对象（metadata(state,step) 无内容时为 {google:{}} 空对象）；rust 仅在存在实际字段（如 thoughtSignature）时附着——空命名空间对象的附着语义差异
-- ref : ref packages/ai/src/protocols/google-interactions.ts:291,377
-- rust: rust crates/oc-ai/src/protocols/google_interactions.rs（事件投影按内容条件附着）
-- 交互: google-interactions/continues-tool-results-with-previous-interaction-id#0, google-interactions/continues-tool-results-with-previous-interaction-id#1, google-interactions/replays-native-tool-results-and-signatures-statelessly#0, google-interactions/replays-native-tool-results-and-signatures-statelessly#1, google-interactions/streams-reasoning-and-retains-thought-signatures#0, google-interactions/streams-text-and-reports-usage#0
-
-### venice 空 providerMetadata.venice 命名空间（13 个交互）
-- 判定: 与 google-interactions 相反方向: rust 在 tool-input-end/reasoning-end 等事件上附着空的 {venice:{}} 命名空间对象；ref 仅在存在实际字段（messageThoughtSignature/thoughtSignature/encryptedReasoningContent）时附着
-- ref : ref packages/ai/src/protocols/venice-chat.ts:325-345（条件附着）
-- rust: rust crates/oc-ai/src/protocols/openai_chat.rs:72,1477（venice 状态机无条件附着空命名空间）
-- 交互: venice-chat/claude-opus-4-8-preserves-reasoning-through-a-tool-loop-and-follow-up#0, venice-chat/claude-opus-4-8-preserves-reasoning-through-a-tool-loop-and-follow-up#1, venice-chat/claude-opus-4-8-preserves-reasoning-through-a-tool-loop-and-follow-up#2, venice-chat/deepseek-v4-flash-preserves-reasoning-through-a-tool-loop-and-follow-up#0, venice-chat/deepseek-v4-flash-preserves-reasoning-through-a-tool-loop-and-follow-up#1, venice-chat/deepseek-v4-flash-preserves-reasoning-through-a-tool-loop-and-follow-up#2, venice-chat/gemini-3-1-pro-preview-preserves-reasoning-through-a-tool-loop-and-follow-up#0, venice-chat/gemini-3-1-pro-preview-preserves-reasoning-through-a-tool-loop-and-follow-up#1, venice-chat/gemini-3-1-pro-preview-preserves-reasoning-through-a-tool-loop-and-follow-up#2, venice-chat/gemini-preserves-per-call-signatures-through-parallel-tools#0, venice-chat/gemini-preserves-per-call-signatures-through-parallel-tools#1, venice-chat/gemini-preserves-per-call-signatures-through-parallel-tools#2, venice-chat/qwen-disables-reasoning#0
-
-### venice encrypted reasoning text passthrough（3 个交互）
-- 判定: Venice 把加密推理以 `__ENCRYPTED_REASONING__` 文本内联在 reasoning delta 中流回；ref 原样保留该 marker 文本（后续靠 venice-chat.ts 的 assistant 回放约定消费），rust 侧把 marker 段从 reasoning 文本中剥除——两侧对 marker 文本的流内语义不同
-- ref : ref packages/ai/src/protocols/venice-chat.ts:180（MARKER）
-- rust: rust crates/oc-ai/src/protocols/openai_chat.rs:72,1477（VENICE_MARKER 剥除逻辑）
-- 交互: venice-chat/openai-gpt-54-mini-preserves-reasoning-through-a-tool-loop-and-follow-up#0, venice-chat/openai-gpt-54-mini-preserves-reasoning-through-a-tool-loop-and-follow-up#1, venice-chat/openai-gpt-54-mini-preserves-reasoning-through-a-tool-loop-and-follow-up#2
-
+- 全量一致。

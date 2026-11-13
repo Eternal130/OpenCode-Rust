@@ -97,12 +97,23 @@ const anthropicMod = await import(`${REF}/packages/ai/src/protocols/anthropic-me
 const modules: Record<string, any> = {}
 for (const family of Object.keys(protocolFor)) modules[family] = await protocolFor[family]()
 
+// G-419/G-421: the venice-chat cassette group is a protocol WRAPPER over
+// openai-chat (providers/venice.ts routes VeniceChat.protocol — marker
+// stripping, encrypted-reasoning replay, conditional venice metadata). The
+// manifest family is the shared carrier ("openai-chat"); select the real
+// wrapper protocol for that group so both sides run the venice machine.
+const veniceMod = await import(`${REF}/packages/ai/src/protocols/venice-chat.js`)
+
 // -- decode one case --------------------------------------------------------
 
 const isTerminalLLMEvent = (event: any) => event?.type === "finish" || event?.type === "provider-error"
 
 async function decodeCase(caseSpec: any): Promise<any> {
-  const { protocol, route } = modules[caseSpec.family]
+  const { route } = modules[caseSpec.family]
+  const protocol =
+    caseSpec.family === "openai-chat" && caseSpec.group === "venice-chat"
+      ? veniceMod.VeniceChat.protocol
+      : modules[caseSpec.family].protocol
   const events: any[] = []
   let err: any = undefined
   if (caseSpec.status >= 400) {

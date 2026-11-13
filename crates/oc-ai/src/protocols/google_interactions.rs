@@ -451,10 +451,16 @@ impl ParserState {
     }
 
     /// `{metadataKey: {interactionSignature}}` for one output step.
+    ///
+    /// G-420: ref `metadata()` (google-interactions.ts:343-345) ALWAYS
+    /// attaches the namespace — `{[key]: {interactionSignature:
+    /// step.signature}}` with the signature key dropped when absent, so the
+    /// (possibly empty) `{google: {}}` object rides the event regardless.
     fn signature_metadata(&self, step: &Value) -> Option<ProviderMetadata> {
-        let sig = step.get("signature").and_then(Value::as_str)?;
         let mut namespace = BTreeMap::new();
-        namespace.insert("interactionSignature".to_string(), json!(sig));
+        if let Some(sig) = step.get("signature").and_then(Value::as_str) {
+            namespace.insert("interactionSignature".to_string(), json!(sig));
+        }
         let mut metadata = ProviderMetadata::new();
         metadata.insert(self.metadata_key.clone(), namespace);
         Some(metadata)
@@ -1050,6 +1056,32 @@ mod tests {
 
     fn parser_state() -> ParserState {
         ParserState::new(&base_request())
+    }
+
+    #[test]
+    fn signatureless_step_still_carries_the_metadata_namespace() {
+        // G-420: ref metadata() (google-interactions.ts:343-345) always
+        // attaches `{[key]: {interactionSignature}}`, dropping only the
+        // signature key when absent — the empty namespace object rides the
+        // reasoning-start event regardless.
+        let state = parser_state();
+        let (_, events) = step(
+            state,
+            &json!({ "event_type": "step.start", "index": 0,
+                "step": { "type": "thought", "summary": [{ "type": "text", "text": "hmm" }] } }),
+        )
+        .unwrap();
+        let start = events
+            .iter()
+            .find(|event| matches!(event, LLMEvent::ReasoningStart { .. }))
+            .expect("reasoning-start emitted");
+        let LLMEvent::ReasoningStart { provider_metadata, .. } = start else { unreachable!() };
+        let metadata = provider_metadata.as_ref().expect("metadata attached");
+        assert_eq!(
+            serde_json::to_value(metadata).unwrap(),
+            json!({ "test-provider": {} }),
+            "empty namespace must still be attached"
+        );
     }
 
     #[test]
