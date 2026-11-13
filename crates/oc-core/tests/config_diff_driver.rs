@@ -13,7 +13,7 @@ use std::path::PathBuf;
 #[test]
 fn config_diff_driver() {
     let Some(corpus) = std::env::var_os("CONFIG_DIFF_CORPUS") else {
-        return // no corpus staged: driver inactive
+        return; // no corpus staged: driver inactive
     };
     let out = PathBuf::from(std::env::var_os("CONFIG_DIFF_OUT").expect("CONFIG_DIFF_OUT"));
     let corpus = PathBuf::from(corpus);
@@ -30,16 +30,15 @@ fn config_diff_driver() {
     for name in names {
         let text = std::fs::read_to_string(corpus.join(&name)).expect("read case");
         let mut rec = serde_json::json!({ "name": name });
-        match oc_core::config::jsonc_parse::parse_jsonc(&text) {
+        match oc_core::config::jsonc_parse::parse_jsonc_ordered(&text) {
             Err(_) => {
                 rec["json_parse_ok"] = serde_json::json!(false);
                 rec["normalize"] = serde_json::json!("not-reached");
                 rec["diagnostics"] = serde_json::json!([]);
                 rec["decode_ok"] = serde_json::json!(false);
             }
-            Ok(value) => {
+            Ok(json) => {
                 rec["json_parse_ok"] = serde_json::json!(true);
-                let json = oc_core::config::Json::from(value);
                 match oc_core::config::normalize::normalize(&json) {
                     oc_core::config::NormalizeResult::Normalized { encoded, diagnostics } => {
                         rec["normalize"] = serde_json::json!("normalized");
@@ -51,8 +50,10 @@ fn config_diff_driver() {
                         )
                         .unwrap();
                         let encoded_value = serde_json::Value::from(encoded);
-                        let decode_ok =
-                            serde_json::from_value::<oc_schema::config::Info>(encoded_value.clone()).is_ok();
+                        let decode_ok = serde_json::from_value::<oc_schema::config::Info>(
+                            encoded_value.clone(),
+                        )
+                        .is_ok();
                         rec["encoded"] = encoded_value;
                         rec["decode_ok"] = serde_json::json!(decode_ok);
                     }

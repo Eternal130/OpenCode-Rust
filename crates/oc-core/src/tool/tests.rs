@@ -2627,10 +2627,7 @@ mod g230 {
 
     fn assert_validates(name: &str, schema: &Value, output: &Value) {
         let issues = validate_input(schema, output);
-        assert!(
-            issues.is_empty(),
-            "{name} output {output} failed its declared schema: {issues:?}"
-        );
+        assert!(issues.is_empty(), "{name} output {output} failed its declared schema: {issues:?}");
     }
 
     fn output_of<'a>(name: &str, result: &'a crate::location::ToolRunResult) -> &'a Value {
@@ -2643,14 +2640,14 @@ mod g230 {
         let tools = &harness.tools;
 
         // write — {operation:"write", target, resource, existed}.
-        let result = call(
-            tools,
+        let result = call(tools, "write", json!({ "path": "w.txt", "content": "line1\nline2\n" }))
+            .await
+            .expect("write executes");
+        assert_validates(
             "write",
-            json!({ "path": "w.txt", "content": "line1\nline2\n" }),
-        )
-        .await
-        .expect("write executes");
-        assert_validates("write", &super::super::write::output_schema(), output_of("write", &result));
+            &super::super::write::output_schema(),
+            output_of("write", &result),
+        );
 
         // edit — {files, replacements}.
         let result = call(
@@ -2670,19 +2667,23 @@ mod g230 {
         )
         .await
         .expect("patch executes");
-        assert_validates("patch", &super::super::patch::output_schema(), output_of("patch", &result));
+        assert_validates(
+            "patch",
+            &super::super::patch::output_schema(),
+            output_of("patch", &result),
+        );
 
         // read — the three union arms (file / text-page / list-page).
         let result =
             call(tools, "read", json!({ "path": "w.txt" })).await.expect("read file executes");
-        assert_validates("read:file", &super::super::read::output_schema(), output_of("read", &result));
-        let result = call(
-            tools,
-            "read",
-            json!({ "path": "w.txt", "offset": 1, "limit": 1 }),
-        )
-        .await
-        .expect("read text-page executes");
+        assert_validates(
+            "read:file",
+            &super::super::read::output_schema(),
+            output_of("read", &result),
+        );
+        let result = call(tools, "read", json!({ "path": "w.txt", "offset": 1, "limit": 1 }))
+            .await
+            .expect("read text-page executes");
         assert_validates(
             "read:text-page",
             &super::super::read::output_schema(),
@@ -2706,13 +2707,9 @@ mod g230 {
         let fixture = "w.txt:2:0:lineB:lineB,0,5\n";
         let shim = super::install_rg_shim(fixture);
         std::env::set_var("OPENCODE_RG_PATH", &shim);
-        let result = call(
-            tools,
-            "grep",
-            json!({ "pattern": "lineB", "literal": true }),
-        )
-        .await
-        .expect("grep executes");
+        let result = call(tools, "grep", json!({ "pattern": "lineB", "literal": true }))
+            .await
+            .expect("grep executes");
         assert_validates("grep", &super::super::grep::output_schema(), output_of("grep", &result));
 
         // shell — foreground `printf` (exit present, output text,
@@ -2734,8 +2731,8 @@ mod g230 {
         assert!(output.get("shell_id").is_none(), "wire bug: snake_case shell_id leaked");
 
         // skill — {name, directory, output}.
-        let skill = crate::tool::skill::tool(std::sync::Arc::new(
-            crate::tool::skill::MemorySkillTable {
+        let skill =
+            crate::tool::skill::tool(std::sync::Arc::new(crate::tool::skill::MemorySkillTable {
                 skills: vec![oc_schema::skill::Skill {
                     id: oc_schema::id::SkillId::parse("g230"),
                     name: oc_schema::id::SkillName::parse("G230"),
@@ -2746,8 +2743,7 @@ mod g230 {
                     ),
                     content: "# hello".to_string(),
                 }],
-            },
-        ));
+            }));
         crate::tool::register_builtin(
             tools,
             &std::sync::Arc::new(crate::hooks::HookRegistry::new()),
@@ -2756,14 +2752,19 @@ mod g230 {
         )
         .expect("register skill");
         std::fs::write(harness.dir().join("SKILL.md"), "# hello").expect("skill file");
-        let result =
-            call(tools, "skill", json!({ "id": "g230" })).await.expect("skill executes");
-        assert_validates("skill", &super::super::skill::output_schema(), output_of("skill", &result));
+        let result = call(tools, "skill", json!({ "id": "g230" })).await.expect("skill executes");
+        assert_validates(
+            "skill",
+            &super::super::skill::output_schema(),
+            output_of("skill", &result),
+        );
 
         // models — real catalog query through the pipeline.
         let models = crate::tool::opencode_tools::models_tool(
             g230_catalog().await,
-            crate::session::store::SessionStore::new(crate::database::Database::open_in_memory().await.expect("db")),
+            crate::session::store::SessionStore::new(
+                crate::database::Database::open_in_memory().await.expect("db"),
+            ),
         );
         crate::tool::register_builtin(
             tools,
@@ -2890,12 +2891,17 @@ mod g230 {
             async fn execute(
                 &self,
                 _query: &str,
-            ) -> Result<Vec<oc_schema::misc::WebSearchResult>, crate::tool::websearch_providers::ProviderError> {
+            ) -> Result<
+                Vec<oc_schema::misc::WebSearchResult>,
+                crate::tool::websearch_providers::ProviderError,
+            > {
                 Ok(vec![oc_schema::misc::WebSearchResult {
                     url: "https://example.com".into(),
                     title: Some("Example".into()),
                     content: None,
-                    time: oc_schema::misc::WebSearchResultTime { published: Some(1_700_000_000_000.0) },
+                    time: oc_schema::misc::WebSearchResultTime {
+                        published: Some(1_700_000_000_000.0),
+                    },
                 }])
             }
         }
@@ -2982,7 +2988,11 @@ mod g230 {
                 .expect("project insert");
         }
         let row = crate::database::schema::SessionRow::new(
-            "ses_g230", "proj_g230", "/tmp/opencode", "slug", "1",
+            "ses_g230",
+            "proj_g230",
+            "/tmp/opencode",
+            "slug",
+            "1",
         )
         .expect("row");
         db.transaction(move |tx| crate::database::schema::SessionRow::insert(tx, &row))

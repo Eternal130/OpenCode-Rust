@@ -2459,6 +2459,74 @@ mod tests {
         serde_json::to_value(value).unwrap()
     }
 
+    /// G-413 — v1 permission migration preserves the source file's
+    /// textual key order (ref `normalize.ts:515-519` `Object.entries`);
+    /// `parse_jsonc_ordered` keeps the insertion order that a
+    /// materialized `serde_json::Value` (BTreeMap) would destroy, so
+    /// without it the migration would emit `"*"` before `"*.md"`.
+    #[test]
+    fn permission_migration_preserves_source_order() {
+        let text = r#"{
+            "permission": {
+                "webfetch": { "*": "ask", "https://x/*": "allow" },
+                "bash": "ask",
+                "edit": { "*.md": "allow", "*": "deny" }
+            }
+        }"#;
+        let input = crate::config::jsonc_parse::parse_jsonc_ordered(text).unwrap();
+        let (encoded, diagnostics) = match normalize(&input) {
+            NormalizeResult::Normalized { encoded, diagnostics } => (encoded, diagnostics),
+            NormalizeResult::Rejected { .. } => panic!("expected normalized config"),
+        };
+        assert!(diagnostics.is_empty());
+        let rules: Vec<(String, String)> = get(&encoded, "permissions")
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|rule| {
+                (
+                    rule.get("resource").and_then(Json::as_str).unwrap_or("?").to_string(),
+                    rule.get("action").and_then(Json::as_str).unwrap_or("?").to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rules,
+            vec![
+                ("*".to_string(), "webfetch".to_string()),
+                ("https://x/*".to_string(), "webfetch".to_string()),
+                ("*".to_string(), "shell".to_string()),
+                ("*.md".to_string(), "edit".to_string()),
+                ("*".to_string(), "edit".to_string()),
+            ]
+        );
+    }
+
+    /// G-413 fallback — callers without the raw text keep the previous
+    /// BTreeMap (sorted) iteration.
+    #[test]
+    fn permission_migration_without_order_still_normalizes() {
+        let (encoded, diagnostics) =
+            normalized(r#"{"permission": {"edit": {"*": "deny"}, "bash": "allow"}}"#);
+        assert!(diagnostics.is_empty());
+        assert_eq!(get(&encoded, "permissions").as_array().map(<[Json]>::len), Some(2));
+    }
+
+    /// G-414 — worktree.directory is Trim+isNonEmpty (ref
+    /// `schema/config/worktree.ts`): whitespace-only is invalid and the
+    /// entry is stripped with an `invalid` diagnostic; surrounding
+    /// whitespace on a valid value is trimmed.
+    #[test]
+    fn worktree_directory_trim_nonempty() {
+        let (encoded, diagnostics) = normalized(r#"{"worktree": {"directory": " "}}"#);
+        assert!(encoded.get("worktree").is_none());
+        assert_eq!(kinds(&diagnostics), vec![(DiagnosticKind::Invalid, "worktree".to_string())]);
+
+        let (encoded, diagnostics) = normalized(r#"{"worktree": {"directory": " ../wt "}}"#);
+        assert!(diagnostics.is_empty(), "diagnostics: {:?}", kinds(&diagnostics));
+        assert_eq!(get(get(&encoded, "worktree"), "directory").as_str(), Some("../wt"));
+    }
+
     #[test]
     fn config_normalize_rejects_non_object_roots() {
         for input in ["null", "[]", "\"config\"", "true", "1"] {

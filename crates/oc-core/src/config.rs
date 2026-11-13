@@ -584,7 +584,9 @@ impl Loader {
         // (config.ts:106: comments + trailing commas; every other
         // laxness fills `errors` and rejects). json5 previously
         // accepted single quotes/unquoted keys/hex silently.
-        let Ok(value) = jsonc_parse::parse_jsonc(text).map(Json::from) else {
+        // G-413 — parse into the insertion-ordered `Json` directly so
+        // the v1 permission migration sees the source key order.
+        let Ok(value) = jsonc_parse::parse_jsonc_ordered(text) else {
             diagnostics.push(SourceDiagnostic {
                 source: source.to_string(),
                 path: "$".to_string(),
@@ -593,6 +595,8 @@ impl Loader {
             });
             return None;
         };
+        // G-413 — `parse_jsonc_ordered` above keeps the insertion order
+        // a materialized `serde_json::Value` (BTreeMap) would destroy.
         let (encoded, result_diagnostics) = match normalize::normalize(&value) {
             NormalizeResult::Normalized { encoded, diagnostics: result } => (Some(encoded), result),
             NormalizeResult::Rejected { diagnostics: result } => (None, result),

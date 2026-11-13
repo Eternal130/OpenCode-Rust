@@ -1021,5 +1021,4 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         assert!(!log.exists(), "4xx envelopes are not logged");
     }
-
 }
