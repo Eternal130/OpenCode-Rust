@@ -24,6 +24,7 @@
 
 - 已裁定 operation：142/142（覆盖率 100%：双侧 spec 全集逐项归属）
 - 结论：BOTH 141 项由 `handlers_route_coverage.rs` 运行时探针钉定挂载；RUST_ONLY 1 项需登记册条目背书；REF_ONLY/RUST_EXTRA_MOUNT/REF_EXTRA_PATH > 0 时为**新缺口候选**。
+
 ## 验证记录（2026-11-11）
 
 1. **运行时探针复跑 PASS**：`cargo nextest run -p oc-server --test handlers_route_coverage` → `handlers_all_142_operations_mounted` 1 passed（真实 boot + tower oneshot，未挂载路由落空 404 即失败）。

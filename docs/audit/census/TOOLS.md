@@ -67,9 +67,9 @@
   - crates/oc-core/src/engine/mod.rs:2923
   - crates/oc-core/src/engine/mod.rs:2989
   - crates/oc-core/src/engine/mod.rs:3002
-  - crates/oc-core/src/mcp/tests.rs:1610
-  - crates/oc-core/src/tool/codemode.rs:2064
-  - crates/oc-core/src/tool/codemode.rs:2080
+  - crates/oc-core/src/mcp/tests.rs:1614
+  - crates/oc-core/src/tool/codemode.rs:2057
+  - crates/oc-core/src/tool/codemode.rs:2073
   - crates/oc-core/src/tool/mcp_resource.rs:374
   - crates/oc-core/src/tool/mcp_resource.rs:392
   - crates/oc-core/src/tool/mod.rs:283
