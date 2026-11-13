@@ -454,10 +454,7 @@ mod tests {
         static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let names = ["TERM_PROGRAM", "TERM_PROGRAM_VERSION", "TMUX", "STY", "TERM"];
-        let saved: Vec<(_, _)> = names
-            .iter()
-            .map(|name| (*name, std::env::var_os(name)))
-            .collect();
+        let saved: Vec<(_, _)> = names.iter().map(|name| (*name, std::env::var_os(name))).collect();
         for name in names {
             std::env::remove_var(name);
         }
@@ -471,10 +468,7 @@ mod tests {
             }
         }
 
-        assert!(
-            url.contains("&os="),
-            "the os param rides the URL (describeOS): {url}"
-        );
+        assert!(url.contains("&os="), "the os param rides the URL (describeOS): {url}");
         assert!(
             url.contains("&terminal=iTerm.app%203.5.13"),
             "the terminal param carries the G-388 description: {url}"
