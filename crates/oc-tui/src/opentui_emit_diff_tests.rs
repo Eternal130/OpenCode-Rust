@@ -136,8 +136,12 @@ fn replay_corpus_emission_is_pinned() {
         }
     }
     assert!(compared > 10, "the corpus must exercise real frames ({compared})");
-    // PINNED (lane D4.2, commit 41783d2a's differential proof).
-    assert_eq!(digest, 0xc663_d48d_7af3_8a77, "the corpus emission bytes drifted");
+    // PINNED (lane D4.2, commit 41783d2a's differential proof; re-pinned
+    // at channel-8 W2 — the F2/F3 semantics (event-driven running state,
+    // the session column's bottom pad + both-side inset) move composer
+    // frames in the corpus; the tree oracle re-freeze of the same wave
+    // proved the new frames render IDENTICAL through real @opentui).
+    assert_eq!(digest, 0x5827_fddc_9f5a_ad50, "the corpus emission bytes drifted");
 }
 
 // -- the emitter vocabulary -------------------------------------------------
