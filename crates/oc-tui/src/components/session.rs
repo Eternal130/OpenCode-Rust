@@ -1747,20 +1747,18 @@ pub fn composer_metadata(
 ) -> crate::components::composer::render::MetadataLine {
     let selection = store.selection_for(session_id);
     // `promptDisplay().agentLabel = Locale.titlecase(agent.id)` — the
-    // CURRENT agent (v2's `local.agent.current()` always resolves;
-    // build by default), never an empty label once the list loads.
+    // CURRENT agent (`local.agent.current()`, local.tsx:84-95:
+    // `agents().find(id === selected) ?? agents().at(0)`). With an
+    // EMPTY or unloaded list `current()` is undefined → no label (the
+    // metadata row's outer Show gate falls back to a blank row,
+    // metadata.tsx:46-48) — F1: no synthetic "build" default.
     let agent_id = selection.agent.or_else(|| {
-        store
-            .server_lists()
-            .agents
-            .rows()
-            .and_then(|rows| {
-                rows.iter()
-                    .find(|agent| !agent.hidden)
-                    .map(|agent| agent.id.clone())
-                    .or_else(|| rows.first().map(|agent| agent.id.clone()))
-            })
-            .or_else(|| Some("build".to_owned()))
+        store.server_lists().agents.rows().and_then(|rows| {
+            rows.iter()
+                .find(|agent| !agent.hidden)
+                .map(|agent| agent.id.clone())
+                .or_else(|| rows.first().map(|agent| agent.id.clone()))
+        })
     });
     let agent = agent_id.map(|agent| statusline_agent_label(store, &agent)).unwrap_or_default();
     // TUI-14 — shell mode's agentLabel override ("Shell",
