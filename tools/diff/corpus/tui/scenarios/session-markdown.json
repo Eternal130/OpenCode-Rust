@@ -339,14 +339,16 @@
               "id": "model"
             },
             "time": {
-              "created": 2
+              "created": 2,
+              "completed": 4
             },
             "content": [
               {
                 "type": "text",
                 "text": "# Smoke heading\n\n- first list item\n- second list item\n\n```text\nfenced code block\n```\n"
               }
-            ]
+            ],
+            "finish": "stop"
           }
         ],
         "cursor": {}
@@ -443,62 +445,6 @@
           "time": {
             "created": 1,
             "updated": 2
-          }
-        }
-      }
-    },
-    {
-      "id": "evt_text_started",
-      "created": 2,
-      "type": "session.text.started",
-      "durable": {
-        "aggregateID": "ses_smoke_md",
-        "seq": 2,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_smoke_md",
-        "assistantMessageID": "msg_asst_1",
-        "ordinal": 0
-      }
-    },
-    {
-      "id": "evt_text_ended",
-      "created": 3,
-      "type": "session.text.ended",
-      "durable": {
-        "aggregateID": "ses_smoke_md",
-        "seq": 3,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_smoke_md",
-        "assistantMessageID": "msg_asst_1",
-        "ordinal": 0,
-        "text": "# Smoke heading\n\n- first list item\n- second list item\n\n```text\nfenced code block\n```\n"
-      }
-    },
-    {
-      "id": "evt_step_ended",
-      "created": 4,
-      "type": "session.step.ended",
-      "durable": {
-        "aggregateID": "ses_smoke_md",
-        "seq": 4,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_smoke_md",
-        "assistantMessageID": "msg_asst_1",
-        "finish": "stop",
-        "cost": 0,
-        "tokens": {
-          "input": 0,
-          "output": 0,
-          "reasoning": 0,
-          "cache": {
-            "read": 0,
-            "write": 0
           }
         }
       }
