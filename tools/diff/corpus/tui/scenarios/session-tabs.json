@@ -1,0 +1,638 @@
+{
+  "schema": "tui-diff-scenario/1",
+  "id": "session-tabs",
+  "width": 80,
+  "height": 24,
+  "fetch": {
+    "/api/agent": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/command": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/config": {
+      "status": 200,
+      "body": []
+    },
+    "/api/event": {
+      "status": 200,
+      "body": {
+        "sse": true,
+        "initial": {
+          "id": "evt_connected",
+          "type": "server.connected",
+          "data": {}
+        }
+      }
+    },
+    "/api/experimental/migration/v1": {
+      "status": 200,
+      "body": {
+        "status": "completed"
+      }
+    },
+    "/api/form": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/fs/list": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/info": {
+      "status": 200,
+      "body": {
+        "version": "test",
+        "pid": 0,
+        "urls": [],
+        "paths": {
+          "tmp": "/tmp"
+        },
+        "capabilities": {
+          "persistentPty": true
+        }
+      }
+    },
+    "/api/integration": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/location": {
+      "status": 200,
+      "body": {
+        "directory": "/tmp/opencode/packages/tui",
+        "project": {
+          "id": "proj_test",
+          "directory": "/tmp/opencode",
+          "canonical": "/tmp/opencode"
+        }
+      }
+    },
+    "/api/mcp": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/mcp/resource": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": {
+          "resources": [],
+          "templates": []
+        }
+      }
+    },
+    "/api/model": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/plugin": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/project": {
+      "status": 200,
+      "body": []
+    },
+    "/api/provider": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/reference": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/session": {
+      "status": 200,
+      "body": {
+        "data": [
+          {
+            "id": "ses_tab_a",
+            "title": "Tab alpha",
+            "projectID": "proj_test",
+            "location": {
+              "directory": "/tmp/opencode/packages/tui"
+            },
+            "agent": "build",
+            "model": {
+              "providerID": "fixture",
+              "id": "model"
+            },
+            "cost": 0,
+            "tokens": {
+              "input": 0,
+              "output": 0,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            },
+            "time": {
+              "created": 1,
+              "updated": 2
+            }
+          },
+          {
+            "id": "ses_tab_b",
+            "title": "Tab beta",
+            "projectID": "proj_test",
+            "location": {
+              "directory": "/tmp/opencode/packages/tui"
+            },
+            "agent": "build",
+            "model": {
+              "providerID": "fixture",
+              "id": "model"
+            },
+            "cost": 0,
+            "tokens": {
+              "input": 0,
+              "output": 0,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            },
+            "time": {
+              "created": 1,
+              "updated": 2
+            }
+          }
+        ],
+        "cursor": {}
+      }
+    },
+    "/api/session/active": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "ses_tab_a"
+        }
+      }
+    },
+    "/api/shell": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/skill": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/vcs": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": {
+          "branch": {
+            "current": "main",
+            "default": "main"
+          }
+        }
+      }
+    },
+    "/api/experimental/session/ses_tab_a/terminal": {
+      "status": 200,
+      "body": {
+        "data": []
+      }
+    },
+    "/api/session/ses_tab_a": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "ses_tab_a",
+          "title": "Tab alpha",
+          "projectID": "proj_test",
+          "location": {
+            "directory": "/tmp/opencode/packages/tui"
+          },
+          "agent": "build",
+          "model": {
+            "providerID": "fixture",
+            "id": "model"
+          },
+          "cost": 0,
+          "tokens": {
+            "input": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cache": {
+              "read": 0,
+              "write": 0
+            }
+          },
+          "time": {
+            "created": 1,
+            "updated": 2
+          }
+        }
+      }
+    },
+    "/api/session/ses_tab_a/form": {
+      "status": 200,
+      "body": {
+        "data": []
+      }
+    },
+    "/api/session/ses_tab_a/inbox": {
+      "status": 200,
+      "body": {
+        "data": []
+      }
+    },
+    "/api/session/ses_tab_a/message": {
+      "status": 200,
+      "body": {
+        "data": [
+          {
+            "id": "msg_user_a",
+            "sessionID": "ses_tab_a",
+            "type": "user",
+            "time": {
+              "created": 1
+            },
+            "text": "First session question."
+          },
+          {
+            "id": "msg_asst_a",
+            "sessionID": "ses_tab_a",
+            "type": "assistant",
+            "agent": "build",
+            "model": {
+              "providerID": "fixture",
+              "id": "model"
+            },
+            "time": {
+              "created": 2
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "Answer from the first session."
+              }
+            ]
+          }
+        ],
+        "cursor": {}
+      }
+    },
+    "/api/session/ses_tab_a/permission": {
+      "status": 200,
+      "body": {
+        "data": []
+      }
+    },
+    "/api/session/ses_tab_b": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "ses_tab_b",
+          "title": "Tab beta",
+          "projectID": "proj_test",
+          "location": {
+            "directory": "/tmp/opencode/packages/tui"
+          },
+          "agent": "build",
+          "model": {
+            "providerID": "fixture",
+            "id": "model"
+          },
+          "cost": 0,
+          "tokens": {
+            "input": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cache": {
+              "read": 0,
+              "write": 0
+            }
+          },
+          "time": {
+            "created": 1,
+            "updated": 2
+          }
+        }
+      }
+    },
+    "/api/session/ses_tab_b/message": {
+      "status": 200,
+      "body": {
+        "data": [
+          {
+            "id": "msg_user_b",
+            "sessionID": "ses_tab_b",
+            "type": "user",
+            "time": {
+              "created": 1
+            },
+            "text": "Second session question."
+          },
+          {
+            "id": "msg_asst_b",
+            "sessionID": "ses_tab_b",
+            "type": "assistant",
+            "agent": "build",
+            "model": {
+              "providerID": "fixture",
+              "id": "model"
+            },
+            "time": {
+              "created": 2
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "Answer from the second session."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "/api/session/ses_tab_b/inbox": {
+      "status": 200,
+      "body": {
+        "data": []
+      }
+    },
+    "/api/session/ses_tab_b/permission": {
+      "status": 200,
+      "body": {
+        "data": []
+      }
+    },
+    "/api/session/ses_tab_b/form": {
+      "status": 200,
+      "body": {
+        "data": []
+      }
+    },
+    "/api/experimental/session/ses_tab_b/terminal": {
+      "status": 200,
+      "body": {
+        "data": []
+      }
+    }
+  },
+  "events": [
+    {
+      "id": "evt_session_updated",
+      "created": 1,
+      "type": "session.updated",
+      "durable": {
+        "aggregateID": "ses_tab_a",
+        "seq": 1,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_tab_a",
+        "info": {
+          "id": "ses_tab_a",
+          "title": "Tab alpha",
+          "projectID": "proj_test",
+          "location": {
+            "directory": "/tmp/opencode/packages/tui"
+          },
+          "agent": "build",
+          "model": {
+            "providerID": "fixture",
+            "id": "model"
+          },
+          "cost": 0,
+          "tokens": {
+            "input": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cache": {
+              "read": 0,
+              "write": 0
+            }
+          },
+          "time": {
+            "created": 1,
+            "updated": 2
+          }
+        }
+      }
+    },
+    {
+      "id": "evt_step_started",
+      "created": 2,
+      "type": "session.step.started",
+      "durable": {
+        "aggregateID": "ses_tab_a",
+        "seq": 2,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_tab_a",
+        "assistantMessageID": "msg_asst_a",
+        "agent": "build",
+        "model": {
+          "providerID": "fixture",
+          "id": "model"
+        },
+        "started": 0
+      }
+    },
+    {
+      "id": "evt_text_started",
+      "created": 3,
+      "type": "session.text.started",
+      "durable": {
+        "aggregateID": "ses_tab_a",
+        "seq": 3,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_tab_a",
+        "assistantMessageID": "msg_asst_a",
+        "ordinal": 0
+      }
+    },
+    {
+      "id": "evt_text_ended",
+      "created": 4,
+      "type": "session.text.ended",
+      "durable": {
+        "aggregateID": "ses_tab_a",
+        "seq": 4,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_tab_a",
+        "assistantMessageID": "msg_asst_a",
+        "ordinal": 0,
+        "text": "Answer from the first session."
+      }
+    },
+    {
+      "id": "evt_step_ended",
+      "created": 5,
+      "type": "session.step.ended",
+      "durable": {
+        "aggregateID": "ses_tab_a",
+        "seq": 5,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_tab_a",
+        "assistantMessageID": "msg_asst_a",
+        "finish": "stop",
+        "cost": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      }
+    }
+  ],
+  "keys": [
+    "leader",
+    "raw:l"
+  ],
+  "settle_ms": 200,
+  "note": "Two sessions persisted with the first active; the leader+l chord opens the session-list dialog over the session surface, both stub sessions listed. Both sides must render the same dialog overlay (two rows, cursor on the first) plus the underlying transcript. GAP (explicitly out of scope this round): driving the dialog further (down+enter, opening the second session and exposing the tab rail) never reaches a resting frame on the rust side (no settle within 64 pumps), so the tab-rail switch path is deferred to T9/T10 as a recorded finding; the ref fixture itself cannot assemble a multi-tab boot because the driver boots a single active session."
+}

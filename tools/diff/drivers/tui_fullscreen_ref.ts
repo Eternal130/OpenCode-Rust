@@ -102,7 +102,7 @@ function pressToken(mockInput: any, token: string) {
     mockInput.pressKey(token.slice(4))
     return
   }
-  const ctrl = /^ctrl+([a-z])$/.exec(token)
+  const ctrl = /^ctrl\+([a-z])$/.exec(token)
   if (ctrl) {
     // SCHEMA: 0x01..0x1a — the kitty path encodes the ctrl modifier natively,
     // which the reference keybinds match; the raw control byte would be

@@ -1,0 +1,444 @@
+{
+  "schema": "tui-diff-scenario/1",
+  "id": "sidebar-toggle",
+  "width": 80,
+  "height": 24,
+  "fetch": {
+    "/api/agent": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/command": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/config": {
+      "status": 200,
+      "body": []
+    },
+    "/api/event": {
+      "status": 200,
+      "body": {
+        "sse": true,
+        "initial": {
+          "id": "evt_connected",
+          "type": "server.connected",
+          "data": {}
+        }
+      }
+    },
+    "/api/experimental/migration/v1": {
+      "status": 200,
+      "body": {
+        "status": "completed"
+      }
+    },
+    "/api/form": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/fs/list": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/info": {
+      "status": 200,
+      "body": {
+        "version": "test",
+        "pid": 0,
+        "urls": [],
+        "paths": {
+          "tmp": "/tmp"
+        },
+        "capabilities": {
+          "persistentPty": true
+        }
+      }
+    },
+    "/api/integration": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/location": {
+      "status": 200,
+      "body": {
+        "directory": "/tmp/opencode/packages/tui",
+        "project": {
+          "id": "proj_test",
+          "directory": "/tmp/opencode",
+          "canonical": "/tmp/opencode"
+        }
+      }
+    },
+    "/api/mcp": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/mcp/resource": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": {
+          "resources": [],
+          "templates": []
+        }
+      }
+    },
+    "/api/model": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/plugin": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/project": {
+      "status": 200,
+      "body": []
+    },
+    "/api/provider": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/reference": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/session": {
+      "status": 200,
+      "body": {
+        "data": [
+          {
+            "id": "ses_side",
+            "title": "Sidebar target",
+            "projectID": "proj_test",
+            "location": {
+              "directory": "/tmp/opencode/packages/tui"
+            },
+            "agent": "build",
+            "model": {
+              "providerID": "fixture",
+              "id": "model"
+            },
+            "cost": 0,
+            "tokens": {
+              "input": 0,
+              "output": 0,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            },
+            "time": {
+              "created": 1,
+              "updated": 2
+            }
+          }
+        ],
+        "cursor": {}
+      }
+    },
+    "/api/session/active": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "ses_side"
+        }
+      }
+    },
+    "/api/shell": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/skill": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/vcs": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": {
+          "branch": {
+            "current": "main",
+            "default": "main"
+          }
+        }
+      }
+    },
+    "/api/experimental/session/ses_side/terminal": {
+      "status": 200,
+      "body": {
+        "data": []
+      }
+    },
+    "/api/session/ses_side": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "ses_side",
+          "title": "Sidebar target",
+          "projectID": "proj_test",
+          "location": {
+            "directory": "/tmp/opencode/packages/tui"
+          },
+          "agent": "build",
+          "model": {
+            "providerID": "fixture",
+            "id": "model"
+          },
+          "cost": 0,
+          "tokens": {
+            "input": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cache": {
+              "read": 0,
+              "write": 0
+            }
+          },
+          "time": {
+            "created": 1,
+            "updated": 2
+          }
+        }
+      }
+    },
+    "/api/session/ses_side/form": {
+      "status": 200,
+      "body": {
+        "data": []
+      }
+    },
+    "/api/session/ses_side/inbox": {
+      "status": 200,
+      "body": {
+        "data": []
+      }
+    },
+    "/api/session/ses_side/message": {
+      "status": 200,
+      "body": {
+        "data": [
+          {
+            "id": "msg_user_1",
+            "sessionID": "ses_side",
+            "type": "user",
+            "time": {
+              "created": 1
+            },
+            "text": "Show the sidebar."
+          },
+          {
+            "id": "msg_asst_1",
+            "sessionID": "ses_side",
+            "type": "assistant",
+            "agent": "build",
+            "model": {
+              "providerID": "fixture",
+              "id": "model"
+            },
+            "time": {
+              "created": 2
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "Sidebar body answer."
+              }
+            ]
+          }
+        ],
+        "cursor": {}
+      }
+    },
+    "/api/session/ses_side/permission": {
+      "status": 200,
+      "body": {
+        "data": []
+      }
+    }
+  },
+  "events": [
+    {
+      "id": "evt_session_updated",
+      "created": 1,
+      "type": "session.updated",
+      "durable": {
+        "aggregateID": "ses_side",
+        "seq": 1,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_side",
+        "info": {
+          "id": "ses_side",
+          "title": "Sidebar target",
+          "projectID": "proj_test",
+          "location": {
+            "directory": "/tmp/opencode/packages/tui"
+          },
+          "agent": "build",
+          "model": {
+            "providerID": "fixture",
+            "id": "model"
+          },
+          "cost": 0,
+          "tokens": {
+            "input": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cache": {
+              "read": 0,
+              "write": 0
+            }
+          },
+          "time": {
+            "created": 1,
+            "updated": 2
+          }
+        }
+      }
+    }
+  ],
+  "keys": [
+    "leader",
+    "raw:b"
+  ],
+  "settle_ms": 200,
+  "note": "Session route with one exchange, then the sidebar_toggle leader chord (leader+b): both sides must render the same session pane plus the right sidebar column (session context tree); the split geometry at 80 (below the auto-widen threshold, so the toggle forces it on) and 120 columns is the equivalence target."
+}
