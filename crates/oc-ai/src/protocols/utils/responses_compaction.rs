@@ -423,6 +423,17 @@ fn to_message(
                 "Invalid compaction response: assistant message content must be text",
             ));
         }
+        // G-417: `detail` is `Schema.optional(String)` in the ref
+        // (open-responses.ts:42,47) — absent is fine, but a present
+        // non-string fails the whole decode instead of being treated as
+        // absent.
+        if let Some(detail_value) = part.get("detail") {
+            if !detail_value.is_string() {
+                return Err(invalid(
+                    "Invalid compaction response: media part detail must be a string",
+                ));
+            }
+        }
         let detail = part.get("detail").and_then(Value::as_str).map(str::to_string);
         let part_metadata = detail.map(|detail| provider_meta(key, json!({ "detail": detail })));
         if part_kind == "input_image" {
@@ -646,6 +657,39 @@ mod tests {
         }))
         .unwrap_err();
         assert!(error.message().contains("usage must be an object"), "got {}", error.message());
+    }
+
+    #[test]
+    fn media_part_detail_must_be_a_string_when_present() {
+        // G-417: `detail` is Schema.optional(String) (open-responses.ts:42,47)
+        // — a present non-string (e.g. 42) fails the whole decode instead of
+        // being treated as absent.
+        for part in [
+            json!({ "type": "input_image", "image_url": "https://example.com/i.png", "detail": 42 }),
+            json!({ "type": "input_file", "filename": "bad.pdf",
+                "file_url": "https://example.com/report.pdf", "detail": 42 }),
+        ] {
+            let error = parse(&json!({
+                "object": "response.compaction",
+                "output": [checkpoint(), { "type": "message", "role": "user", "content": [part] }],
+            }))
+            .unwrap_err();
+            assert!(error.message().contains("detail must be a string"), "got {}", error.message());
+        }
+
+        // Absent and string detail stay accepted.
+        for detail in [None, Some(json!("low"))] {
+            let mut part =
+                json!({ "type": "input_image", "image_url": "https://example.com/i.png" });
+            if let Some(detail) = detail {
+                part["detail"] = detail;
+            }
+            parse(&json!({
+                "object": "response.compaction",
+                "output": [checkpoint(), { "type": "message", "role": "user", "content": [part] }],
+            }))
+            .unwrap();
+        }
     }
 
     #[test]
