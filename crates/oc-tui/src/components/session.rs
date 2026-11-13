@@ -20,7 +20,7 @@ use crate::components::sidebar::{
     SidebarContextWidget, SidebarMcpWidget, SidebarSections, SidebarView, SIDEBAR_AUTO_BREAKPOINT,
 };
 use crate::render::{paint_placed_with_fills, Frame};
-use crate::store::{SessionTab, Store};
+use crate::store::{ListState, SessionTab, Store};
 use crate::style::Style;
 
 /// The agent label for the composer's statusline hint: the server
@@ -1747,20 +1747,28 @@ pub fn composer_metadata(
 ) -> crate::components::composer::render::MetadataLine {
     let selection = store.selection_for(session_id);
     // `promptDisplay().agentLabel = Locale.titlecase(agent.id)` — the
-    // CURRENT agent (`local.agent.current()`, local.tsx:84-95:
-    // `agents().find(id === selected) ?? agents().at(0)`). With an
-    // EMPTY or unloaded list `current()` is undefined → no label (the
-    // metadata row's outer Show gate falls back to a blank row,
-    // metadata.tsx:46-48) — F1: no synthetic "build" default.
+    // CURRENT agent (v2's `local.agent.current()` always resolves;
+    // build by default), never an empty label once the list loads.
     let agent_id = selection.agent.or_else(|| {
-        store.server_lists().agents.rows().and_then(|rows| {
-            rows.iter()
-                .find(|agent| !agent.hidden)
-                .map(|agent| agent.id.clone())
-                .or_else(|| rows.first().map(|agent| agent.id.clone()))
-        })
+        store
+            .server_lists()
+            .agents
+            .rows()
+            .and_then(|rows| {
+                rows.iter()
+                    .find(|agent| !agent.hidden)
+                    .map(|agent| agent.id.clone())
+                    .or_else(|| rows.first().map(|agent| agent.id.clone()))
+            })
+            .or_else(|| Some("build".to_owned()))
     });
-    let agent = agent_id.map(|agent| statusline_agent_label(store, &agent)).unwrap_or_default();
+    // `promptDisplay().agentLabel = Locale.titlecase(agent.id)`
+    // (prompt/index.tsx:1550) — titlecase of the ID, never the list's
+    // display name (F1 重裁: the server default build agent's name is
+    // "build"; the composer label is "Build").
+    let agent = agent_id
+        .map(|agent| crate::components::message::model::titlecase(&agent))
+        .unwrap_or_default();
     // TUI-14 — shell mode's agentLabel override ("Shell",
     // prompt/index.tsx:1570: `store.mode === "shell" ? "Shell" : …`).
     let agent =
@@ -1771,27 +1779,38 @@ pub fn composer_metadata(
         };
     let model_ref = store.effective_model(session_id);
     let lists = store.server_lists();
-    let (model, provider) = match &model_ref {
-        Some(reference) => {
-            let model = lists
-                .models
-                .rows()
-                .and_then(|rows| {
-                    rows.iter()
-                        .find(|row| {
-                            row.provider_id == reference.provider_id && row.id == reference.model_id
-                        })
-                        .map(|row| row.name.clone())
-                })
-                .unwrap_or_else(|| format!("{} (unavailable)", reference.model_id));
-            let provider = lists
-                .providers
-                .iter()
-                .find(|row| row.id == reference.provider_id)
-                .map_or_else(|| reference.provider_id.clone(), |row| row.name.clone());
-            (model, provider)
+    let (model, provider) = if let Some(reference) = &model_ref {
+        let model = lists
+            .models
+            .rows()
+            .and_then(|rows| {
+                rows.iter()
+                    .find(|row| {
+                        row.provider_id == reference.provider_id && row.id == reference.model_id
+                    })
+                    .map(|row| row.name.clone())
+            })
+            .unwrap_or_else(|| format!("{} (unavailable)", reference.model_id));
+        let provider = lists
+            .providers
+            .iter()
+            .find(|row| row.id == reference.provider_id)
+            .map_or_else(|| reference.provider_id.clone(), |row| row.name.clone());
+        (model, provider)
+    } else {
+        // `local.model.parsed()`'s NO-SELECTION arm (local.tsx:394-401):
+        // `{model: "No provider selected", provider: "Connect a
+        // provider"}` — live once the boot model fetch RESOLVED
+        // (Loaded or Failed alike; the 503 corpus case proves ref
+        // renders the fallback with `models() === undefined` on error
+        // too). The pre-fetch frame stays blank (the pinned loading
+        // goldens' shape).
+        let resolved = !matches!(store.server_lists().models, ListState::Loading);
+        if resolved {
+            ("No provider selected".to_owned(), "Connect a provider".to_owned())
+        } else {
+            (String::new(), String::new())
         }
-        None => (String::new(), String::new()),
     };
     crate::components::composer::render::MetadataLine {
         agent,
