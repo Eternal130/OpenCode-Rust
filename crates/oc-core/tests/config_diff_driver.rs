@@ -1,12 +1,12 @@
 //! Config-parse differential driver (rust side).
 //!
 //! Env-gated (zero cost when unset; nextest sees a passing no-op):
-//!   CONFIG_DIFF_CORPUS=<dir> CONFIG_DIFF_OUT=<file> \
-//!     cargo nextest run -p oc-core --test config_diff_driver
+//!   `CONFIG_DIFF_CORPUS=<dir> CONFIG_DIFF_OUT=<file>` \
+//!     `cargo nextest run -p oc-core --test config_diff_driver`
 //!
 //! Mirrors `parse_info` (config.rs:576-613): jsonc-parse → normalize →
 //! final `serde_json::from_value::<Info>` decode. Output schema matches
-//! tools/diff/drivers/config_ref.ts exactly.
+//! `tools/diff/drivers/config_ref.ts` exactly.
 
 use std::path::PathBuf;
 
@@ -20,9 +20,12 @@ fn config_diff_driver() {
 
     let mut names: Vec<String> = std::fs::read_dir(&corpus)
         .expect("read corpus dir")
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| n.ends_with(".json") || n.ends_with(".jsonc"))
+        .filter(|n| {
+            let ext = std::path::Path::new(n).extension().and_then(|e| e.to_str());
+            ext.is_some_and(|e| e == "json" || e == "jsonc")
+        })
         .collect();
     names.sort();
 

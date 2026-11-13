@@ -72,18 +72,17 @@ impl EntryLook {
 
     fn for_kind(&self, kind: CommitKind) -> Style {
         match kind {
-            CommitKind::System => self.muted,
-            CommitKind::User => self.base,
+            CommitKind::System | CommitKind::Tool => self.muted,
             CommitKind::Error => self.error,
-            CommitKind::Tool => self.muted,
-            CommitKind::Assistant | CommitKind::Reasoning => self.base,
+            // user, assistant and reasoning rows all carry the base look
+            _ => self.base,
         }
     }
 }
 
 /// The markdown renderer + styles for assistant/reasoning/tool-code
-/// bodies — `MarkdownStyles::from_theme` over the same fallback_dark
-/// basis (theme.rs:114-192 quantizer corpus is the v2 default theme).
+/// bodies — `MarkdownStyles::from_theme` over the same `fallback_dark`
+/// basis (`theme.rs:114-192` quantizer corpus is the v2 default theme).
 #[must_use]
 pub fn markdown_styles() -> crate::components::message::markdown::MarkdownStyles {
     crate::components::message::markdown::MarkdownStyles::from_theme(
@@ -257,7 +256,8 @@ pub fn styled_rows_to_captured(
             let mut spans: Vec<opentui_core::buffer::CapturedSpan> = runs
                 .into_iter()
                 .map(|(style, text)| {
-                    let width = crate::wrap::display_width(&text) as u32;
+                    let width =
+                        u32::try_from(crate::wrap::display_width(&text)).unwrap_or(u32::MAX);
                     opentui_core::buffer::CapturedSpan {
                         text,
                         fg: captured_fg(style.fg),
@@ -285,7 +285,7 @@ fn captured_fg(color: Option<Color>) -> opentui_core::Rgba {
         Some(Color::Rgb(r, g, b)) => match scrollback_color(CellColor::Rgb(r, g, b)) {
             CellColor::Indexed(index) => opentui_core::Rgba::from_index(index),
             CellColor::Rgb(r, g, b) => opentui_core::Rgba::rgb(r, g, b),
-            _ => opentui_core::Rgba::default_color(255, 255, 255, 255),
+            CellColor::Default => opentui_core::Rgba::default_color(255, 255, 255, 255),
         },
         Some(Color::Indexed(index)) => opentui_core::Rgba::from_index(index),
         _ => opentui_core::Rgba::default_color(255, 255, 255, 255),
@@ -293,7 +293,7 @@ fn captured_fg(color: Option<Color>) -> opentui_core::Rgba {
 }
 
 /// ratatui `Modifier` word → opentui text-attribute bits (the bit
-/// positions differ: ratatui BOLD=bit0 … CROSSED_OUT=bit8; opentui
+/// positions differ — ratatui `BOLD=bit0` … `CROSSED_OUT=bit8`; opentui
 /// BOLD=1 … STRIKETHROUGH=128).
 fn captured_attributes(modifier: Modifier) -> u8 {
     use opentui_core::ansi::text_attributes as ot;
@@ -341,7 +341,7 @@ mod tests {
 
     /// Assistant markdown bodies render through the styled markdown
     /// pipeline: headings carry the heading color (quantized), and
-    /// the row set is the markdown render, not split_rows.
+    /// the row set is the markdown render, not `split_rows`.
     #[test]
     fn assistant_bodies_render_as_markdown() {
         let look = EntryLook::fallback_dark();
@@ -373,7 +373,7 @@ mod tests {
     }
 
     /// Rgb fgs quantize through the oklab nearest-neighbor before
-    /// landing in the CapturedSpan payload (the pinned corpus colors:
+    /// landing in the `CapturedSpan` payload (the pinned corpus colors:
     /// 238-gray → 255, muted 128-gray → 8).
     #[test]
     fn captured_payload_quantizes_fg() {
@@ -442,7 +442,7 @@ mod tests {
         let user = Commit::user("one");
         let next = Commit::user("two");
         let rows = format_commit_styled_with(Some(&user), &next, 40, true, &look);
-        assert!(rows.first().is_some_and(|r| r.is_empty()), "separator blank row");
+        assert!(rows.first().is_some_and(std::vec::Vec::is_empty), "separator blank row");
         let compaction = crate::mini::scrollback::compaction_note("done");
         let rows = format_commit_styled_with(None, &compaction, 40, true, &look);
         let text: String = rows[0].iter().map(|s| s.text.as_str()).collect();

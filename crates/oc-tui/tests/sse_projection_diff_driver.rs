@@ -184,7 +184,7 @@ fn sse_projection_diff_driver() {
         let store = Store::new(Runtime::new());
         let mut snapshots: Vec<Value> = Vec::new();
         let mut session = String::new();
-        for event in sequence["events"].as_array().expect("events array").iter() {
+        for event in sequence["events"].as_array().expect("events array") {
             let data = event.get("data").cloned().unwrap_or_else(|| json!({}));
             if let Some(id) = data.get("sessionID").and_then(Value::as_str) {
                 session = id.to_owned();

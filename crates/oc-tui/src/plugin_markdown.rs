@@ -22,7 +22,7 @@
 //!   caches permanently for that (code, fingerprint) pair — no
 //!   per-frame retry storms (logged once).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -52,7 +52,7 @@ struct State {
     /// (filetype, content hash, fingerprint, syntax hash) → rows.
     cache: HashMap<(String, u64, u64, u64), CachedRows>,
     /// Keys with an in-flight render (no duplicate spawns).
-    inflight: HashMap<(String, u64, u64, u64), ()>,
+    inflight: HashSet<(String, u64, u64, u64)>,
 }
 
 fn state() -> &'static Mutex<State> {
@@ -63,7 +63,7 @@ fn state() -> &'static Mutex<State> {
             fingerprint: 0,
             host: None,
             cache: HashMap::new(),
-            inflight: HashMap::new(),
+            inflight: HashSet::new(),
         })
     })
 }
@@ -157,11 +157,11 @@ pub fn spawn_render(
     let key = (filetype, content_hash, fingerprint, syntax_hash);
     let host = {
         let Ok(mut state) = state().lock() else { return };
-        if state.inflight.contains_key(&key) {
+        if state.inflight.contains(&key) {
             return;
         }
         let Some(host) = state.host.clone() else { return };
-        state.inflight.insert(key.clone(), ());
+        state.inflight.insert(key.clone());
         host
     };
     let failure_key = key.clone();
@@ -251,7 +251,7 @@ mod tests {
         {
             let Ok(mut state) = state().lock() else { panic!("state lock") };
             let fingerprint = state.fingerprint;
-            state.inflight.insert(("wormlang".to_owned(), 1, fingerprint, 2), ());
+            state.inflight.insert(("wormlang".to_owned(), 1, fingerprint, 2));
             assert_eq!(state.inflight.len(), 1, "the dedup entry landed");
         }
         install_table(None, &[]);

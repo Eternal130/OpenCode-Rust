@@ -66,8 +66,7 @@ async fn zen_public(engine: &oc_core::engine::Engine) -> bool {
         .store()
         .all()
         .await
-        .map(|rows| !rows.iter().any(|row| row.integration_id == "opencode"))
-        .unwrap_or(false)
+        .is_ok_and(|rows| !rows.iter().any(|row| row.integration_id == "opencode"))
 }
 
 /// `Provider.modelSettings` (core provider.ts:142-151): the provider
@@ -665,7 +664,7 @@ pub(crate) async fn location_provider_entries(
     let local = engine.local.providers();
 
     let available: std::collections::HashSet<&str> = catalog
-        .available_providers(&has_env)
+        .available_providers(has_env)
         .into_iter()
         .map(|snapshot| snapshot.info.id.as_str())
         .collect();

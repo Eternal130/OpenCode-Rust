@@ -1,8 +1,8 @@
 //! `/compact` compaction-pipeline differential driver (rust side).
 //!
 //! Env-gated (zero cost when unset; nextest sees a passing no-op):
-//!   RESPONSES_COMPACTION_DIFF_CORPUS=<dir> RESPONSES_COMPACTION_DIFF_OUT=<file> \
-//!     cargo nextest run -p oc-ai --test responses_compaction_diff
+//!   `RESPONSES_COMPACTION_DIFF_CORPUS=<dir> RESPONSES_COMPACTION_DIFF_OUT=<file>` \
+//!     `cargo nextest run -p oc-ai --test responses_compaction_diff`
 //!
 //! Drives the production [`parse_compaction_response`] (the item → `Message`
 //! pure-function family of `protocols/utils/responses_compaction.rs`) over the
@@ -20,7 +20,7 @@ use oc_ai::schema::{ContentPart, Message, MessageRole};
 use oc_ai::test_support::{request_for_tests, static_route_for_tests};
 use serde_json::{json, Value};
 
-fn role_str(role: &MessageRole) -> &'static str {
+fn role_str(role: MessageRole) -> &'static str {
     match role {
         MessageRole::System => "system",
         MessageRole::User => "user",
@@ -86,7 +86,7 @@ fn norm_part(part: &ContentPart) -> Value {
 
 fn norm_message(message: &Message) -> Value {
     json!({
-        "role": role_str(&message.role),
+        "role": role_str(message.role),
         "parts": message.content.iter().map(norm_part).collect::<Vec<_>>(),
         "providerMetadata": message.provider_metadata.as_ref().map(norm_meta),
     })
@@ -131,9 +131,9 @@ fn responses_compaction_diff() {
 
     let mut names: Vec<String> = std::fs::read_dir(&corpus)
         .expect("read corpus dir")
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| n.ends_with(".json"))
+        .filter(|n| std::path::Path::new(n).extension().is_some_and(|e| e == "json"))
         .collect();
     names.sort();
 
@@ -147,14 +147,14 @@ fn responses_compaction_diff() {
         match parse_compaction_response(&text, &route, &request) {
             Err(error) => {
                 rec["accept"] = json!(false);
-                rec["reject"] = json!(reject_bucket(&error.message()));
+                rec["reject"] = json!(reject_bucket(error.message()));
             }
             Ok(parsed) => {
                 rec["accept"] = json!(true);
                 rec["reject"] = Value::Null;
                 rec["messages"] =
                     Value::Array(parsed.replacement.iter().map(norm_message).collect());
-                rec["usage"] = parsed.usage.as_ref().map(norm_usage).unwrap_or(Value::Null);
+                rec["usage"] = parsed.usage.as_ref().map_or_else(|| Value::Null, norm_usage);
             }
         }
         results.push(rec);

@@ -370,7 +370,7 @@ pub struct ElicitationInput<'a> {
 }
 
 /// The reply outcome (`Form.Answer | "cancel"`).
-pub type Outcome = Result<Map<String, Value>, ()>;
+pub type Outcome = Option<Map<String, Value>>;
 
 /// `ask` (elicitation.ts:86-97).
 pub async fn ask(
@@ -405,18 +405,16 @@ pub async fn ask(
         () = &mut *cancelled => None,
         response = sent.block_task() => response.ok(),
     };
-    let Some(response) = response else { return Err(()) };
+    let response = response?;
     answer(input.form, response)
 }
 
 /// `answer` (elicitation.ts:74-84).
 fn answer(form: &Value, response: CreateElicitationResponse) -> Outcome {
     let ElicitationAction::Accept(accept) = response.action else {
-        return Err(());
+        return None;
     };
-    let Some(content) = accept.content else {
-        return Err(());
-    };
+    let content = accept.content?;
     let mut result = Map::new();
     let empty: Vec<Value> = Vec::new();
     for raw in form.get("fields").and_then(Value::as_array).unwrap_or(&empty) {
@@ -426,7 +424,7 @@ fn answer(form: &Value, response: CreateElicitationResponse) -> Outcome {
             result.insert(field.key.to_owned(), value);
         }
     }
-    Ok(result)
+    Some(result)
 }
 
 /// The elicitation response content (`ElicitationContentValue` map).
@@ -524,8 +522,8 @@ pub async fn cancel(client: &oc_client::Client, form: &Value, message: Option<&s
 /// `respond` (elicitation.ts:99-109).
 pub async fn respond(input: &ElicitationInput<'_>, outcome: Outcome) {
     match outcome {
-        Err(()) => cancel(input.client, input.form, None).await,
-        Ok(answer) => {
+        None => cancel(input.client, input.form, None).await,
+        Some(answer) => {
             let mapped: Option<std::collections::BTreeMap<String, oc_client::types::FormValue>> =
                 answer
                     .into_iter()

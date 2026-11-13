@@ -248,6 +248,7 @@ fn patch_previews(input: &Map<String, Value>, cwd: &str) -> Vec<Preview> {
 /// A minimal unified-diff applier (the `diff` package's `applyPatch`
 /// role, permission.ts:96): applies `@@ -a,b +c,d @@` hunks with
 /// context lines. Returns `None` on any mismatch.
+#[must_use]
 pub fn apply_unified(old_text: &str, patch: &str) -> Option<String> {
     let old_lines: Vec<&str> = old_text.split('\n').collect();
     let mut result: Vec<String> = Vec::new();

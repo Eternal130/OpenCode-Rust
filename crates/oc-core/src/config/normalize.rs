@@ -2462,7 +2462,7 @@ mod tests {
     /// G-413 — v1 permission migration preserves the source file's
     /// textual key order (ref `normalize.ts:515-519` `Object.entries`);
     /// `parse_jsonc_ordered` keeps the insertion order that a
-    /// materialized `serde_json::Value` (BTreeMap) would destroy, so
+    /// materialized `serde_json::Value` (`BTreeMap`) would destroy, so
     /// without it the migration would emit `"*"` before `"*.md"`.
     #[test]
     fn permission_migration_preserves_source_order() {
@@ -2503,7 +2503,7 @@ mod tests {
     }
 
     /// G-413 fallback — callers without the raw text keep the previous
-    /// BTreeMap (sorted) iteration.
+    /// `BTreeMap` (sorted) iteration.
     #[test]
     fn permission_migration_without_order_still_normalizes() {
         let (encoded, diagnostics) =

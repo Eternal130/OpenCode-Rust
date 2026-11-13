@@ -269,7 +269,7 @@ const BEDROCK_CHAIN_ENV: [&str; 5] = [
 /// [`Catalog::available_models`] and [`Catalog::available_providers`] —
 /// the ref fold's catalog tier (`provider.ts:393-406`): the keyless zen
 /// tier, an env credential connection, or (G-262②) the bedrock
-/// activation chain (the raw models.dev names feed the SigV4 chain but
+/// activation chain (the raw models.dev names feed the `SigV4` chain but
 /// are not keys and never gate visibility on their own,
 /// `plugin/provider/amazon-bedrock.ts:31-53`).
 fn snapshot_available(snapshot: &Snapshot, has_env: &impl Fn(&str) -> bool) -> bool {

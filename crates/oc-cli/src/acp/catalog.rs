@@ -79,6 +79,7 @@ pub struct Catalogs {
 }
 
 impl Catalogs {
+    #[must_use]
     pub fn new(client: oc_client::Client) -> Self {
         Self { client, entries: Mutex::new(HashMap::new()) }
     }
@@ -250,6 +251,7 @@ async fn load_with_retry(client: &oc_client::Client, cwd: &str) -> Result<Catalo
 
 /// `reloadOn` (catalog.ts:39): the event types that invalidate a
 /// catalog.
+#[must_use]
 pub fn reload_on(event_type: &str) -> bool {
     matches!(event_type, "model.updated" | "agent.updated" | "command.updated")
 }

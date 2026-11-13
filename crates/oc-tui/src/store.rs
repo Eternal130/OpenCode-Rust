@@ -11855,7 +11855,7 @@ impl Store {
     /// The panel pane's rect (the last render's absolute cells).
     #[must_use]
     pub fn panel_rect(&self) -> Option<HitRect> {
-        self.panel_rect.borrow().clone()
+        *self.panel_rect.borrow()
     }
 
     /// Record the panel pane's rect (the render pass; `None` clears

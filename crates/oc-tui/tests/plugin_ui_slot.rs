@@ -346,7 +346,7 @@ fn slot_renders_and_clicks() {
 
 /// G-239/G-331 — the session.panel activation: the deferred open
 /// resolves the route-check boolean, the mounted claim materializes
-/// with its PanelInput props, the pane renders as the right leg, the
+/// with its `PanelInput` props, the pane renders as the right leg, the
 /// fullscreen takeover covers a narrow frame, and the owner-scoped
 /// close tears it down.
 #[test]
@@ -375,7 +375,7 @@ fn panel_open_materializes_and_closes() {
         snapshot.keymap_commands.iter().any(|command| command.id == "panel.open"),
         "the panel layer landed"
     );
-    assert!(!owned.is_empty());
+    assert!(!owned.is_empty(), "owned keymap entries landed");
 
     let runner = std::thread::spawn(move || {
         host.run_keymap_command("panelclaim", "panel.open", Duration::from_secs(10))

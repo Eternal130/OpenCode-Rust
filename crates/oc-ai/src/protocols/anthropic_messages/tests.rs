@@ -2827,6 +2827,8 @@ fn breakpoint_drop_warning_matches_the_ref_shape() {
 fn breakpoint_warning_is_gated_by_log_level_and_print_logs() {
     use crate::protocols::anthropic_messages::{log_prints_stderr, parse_log_level, LogLevel};
 
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     // minimumLogLevel parse matrix (logging.ts:164-173).
     assert_eq!(parse_log_level(Some("debug")), LogLevel::Debug);
     assert_eq!(parse_log_level(Some("DEBUG")), LogLevel::Debug);
@@ -2845,7 +2847,6 @@ fn breakpoint_warning_is_gated_by_log_level_and_print_logs() {
 
     // The stderr gate is off by default in this process (no env in
     // test runners) and exactly `"1"` turns it on.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let saved = std::env::var_os("OPENCODE_PRINT_LOGS");
     std::env::remove_var("OPENCODE_PRINT_LOGS");

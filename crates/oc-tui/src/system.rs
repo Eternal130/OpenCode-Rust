@@ -42,8 +42,7 @@ pub fn describe_terminal() -> String {
     let program = std::env::var_os("TERM_PROGRAM")
         .filter(|value| !value.is_empty())
         .or_else(|| std::env::var_os("TERM").filter(|value| !value.is_empty()))
-        .map(|value| value.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "unknown".to_owned());
+        .map_or_else(|| "unknown".to_owned(), |value| value.to_string_lossy().into_owned());
     let version = std::env::var_os("TERM_PROGRAM_VERSION")
         .filter(|value| !value.is_empty())
         .map(|value| format!(" {}", value.to_string_lossy()))

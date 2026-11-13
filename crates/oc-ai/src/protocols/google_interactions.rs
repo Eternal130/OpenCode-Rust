@@ -456,14 +456,14 @@ impl ParserState {
     /// attaches the namespace — `{[key]: {interactionSignature:
     /// step.signature}}` with the signature key dropped when absent, so the
     /// (possibly empty) `{google: {}}` object rides the event regardless.
-    fn signature_metadata(&self, step: &Value) -> Option<ProviderMetadata> {
+    fn signature_metadata(&self, step: &Value) -> ProviderMetadata {
         let mut namespace = BTreeMap::new();
         if let Some(sig) = step.get("signature").and_then(Value::as_str) {
             namespace.insert("interactionSignature".to_string(), json!(sig));
         }
         let mut metadata = ProviderMetadata::new();
         metadata.insert(self.metadata_key.clone(), namespace);
-        Some(metadata)
+        metadata
     }
 }
 
@@ -506,7 +506,7 @@ fn on_start(
         "thought" => {
             let metadata = state.signature_metadata(step);
             next.lifecycle =
-                lifecycle::reasoning_start(&next.lifecycle, &mut events, &id, metadata);
+                lifecycle::reasoning_start(&next.lifecycle, &mut events, &id, Some(metadata));
             for part in step.get("summary").and_then(Value::as_array).cloned().unwrap_or_default() {
                 let text = part.get("text").and_then(Value::as_str).unwrap_or_default();
                 next.lifecycle =
@@ -557,7 +557,7 @@ fn on_start(
                     namespace: None,
                     input,
                     provider_executed: None,
-                    provider_metadata: metadata.clone(),
+                    provider_metadata: Some(metadata.clone()),
                 },
             );
             events.push(LLMEvent::ToolInputStart {
@@ -565,7 +565,7 @@ fn on_start(
                 name: name.to_string(),
                 namespace: None,
                 provider_executed: None,
-                provider_metadata: metadata,
+                provider_metadata: Some(metadata),
             });
         }
         other => {
@@ -620,7 +620,7 @@ fn on_delta(
             let key = index.to_string();
             if let Some(tool) = state.tools.get(&key).cloned() {
                 let mut updated_tool = tool;
-                updated_tool.provider_metadata = next.signature_metadata(&updated);
+                updated_tool.provider_metadata = Some(next.signature_metadata(&updated));
                 next.tools = tool_stream::start(&next.tools, &key, updated_tool);
             }
             Ok((next, events))
@@ -656,7 +656,7 @@ fn on_stop(state: &ParserState, index: f64) -> Result<(ParserState, Vec<LLMEvent
                 &next.lifecycle,
                 &mut events,
                 &id,
-                next.signature_metadata(&step),
+                Some(next.signature_metadata(&step)),
                 None,
             );
             Ok((next, events))

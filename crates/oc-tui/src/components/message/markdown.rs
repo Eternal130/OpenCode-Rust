@@ -244,6 +244,9 @@ pub fn render_markdown(source: &str, width: usize, styles: &MarkdownStyles) -> V
 }
 
 /// Render one block spec at `indent` content columns.
+// One exhaustive `BlockSpec` dispatch (the G-332 plugin-renderer arm
+// added the CodeBlock leg); each arm is a self-contained painter.
+#[allow(clippy::too_many_lines)]
 fn render_spec(
     spec: &BlockSpec,
     width: usize,
