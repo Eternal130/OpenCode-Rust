@@ -15,7 +15,20 @@
             "canonical": "/tmp/opencode"
           }
         },
-        "data": []
+        "data": [
+          {
+            "id": "build",
+            "name": "build",
+            "mode": "primary",
+            "hidden": false,
+            "request": {
+              "settings": {},
+              "headers": {},
+              "body": {}
+            },
+            "permissions": []
+          }
+        ]
       }
     },
     "/api/command": {
@@ -266,5 +279,5 @@
   "events": [],
   "keys": [],
   "settle_ms": 200,
-  "note": "The /api/model stub EXPLICITLY returns 503 (an entry in the fetch map, so the driver stub table is hit \u2014 not a stub_gap): both sides must surface the same boot-time error/retry state for the models list while the rest of the home screen boots from the healthy stubs; error-panel equivalence under one dead endpoint is the target. (503 semantics: a stubbed non-200 response is a served response, never a gap.)"
+  "note": "The /api/model stub EXPLICITLY returns 503 (an entry in the fetch map, so the driver stub table is hit — not a stub_gap): both sides must surface the same boot-time error/retry state for the models list while the rest of the home screen boots from the healthy stubs; error-panel equivalence under one dead endpoint is the target. (503 semantics: a stubbed non-200 response is a served response, never a gap.)"
 }

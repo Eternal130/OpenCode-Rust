@@ -15,7 +15,20 @@
             "canonical": "/tmp/opencode"
           }
         },
-        "data": []
+        "data": [
+          {
+            "id": "build",
+            "name": "build",
+            "mode": "primary",
+            "hidden": false,
+            "request": {
+              "settings": {},
+              "headers": {},
+              "body": {}
+            },
+            "permissions": []
+          }
+        ]
       }
     },
     "/api/command": {
