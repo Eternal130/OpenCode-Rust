@@ -1,13 +1,13 @@
 //! JSON-Schema validator differential driver (rust side, channel 4).
 //!
 //! Env-gated (zero cost when unset; nextest sees a passing no-op):
-//!   JSON_SCHEMA_DIFF_CORPUS=<dir> JSON_SCHEMA_DIFF_OUT=<file> \
-//!     cargo nextest run -p oc-ai --test json_schema_diff_driver
+//!   `JSON_SCHEMA_DIFF_CORPUS=<dir> JSON_SCHEMA_DIFF_OUT=<file>` \
+//!     `cargo nextest run -p oc-ai --test json_schema_diff_driver`
 //!
 //! Feeds every (schema, instance) pair from the committed corpus to
 //! `oc_ai::json_schema::validate_input` (the shared G-59/G-100/G-230
 //! engine) and records the accept/reject verdict. Output schema matches
-//! tools/diff/drivers/json_schema_ref.ts exactly.
+//! `tools/diff/drivers/json_schema_ref.ts` exactly.
 
 use std::path::PathBuf;
 
@@ -25,9 +25,9 @@ fn json_schema_diff_driver() {
 
     let mut names: Vec<String> = std::fs::read_dir(&corpus)
         .expect("read corpus dir")
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| n.ends_with(".json"))
+        .filter(|n| std::path::Path::new(n).extension().is_some_and(|e| e == "json"))
         .collect();
     names.sort();
 

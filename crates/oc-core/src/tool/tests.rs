@@ -2882,10 +2882,10 @@ mod g230 {
         struct Fixed;
         #[async_trait::async_trait]
         impl crate::tool::websearch_providers::SearchProvider for Fixed {
-            fn id(&self) -> &str {
+            fn id(&self) -> &'static str {
                 "exa"
             }
-            fn name(&self) -> &str {
+            fn name(&self) -> &'static str {
                 "Exa"
             }
             async fn execute(

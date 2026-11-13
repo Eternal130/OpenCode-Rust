@@ -2660,7 +2660,7 @@ mod executor_tests {
         let output = result.output.expect("execute returns declared output");
         let issues = crate::tool::registry::validate_input(&execute_output_schema(), &output);
         assert!(issues.is_empty(), "execute output {output} failed schema: {issues:?}");
-        assert!(output["toolCalls"].as_array().expect("toolCalls").len() >= 1);
+        assert!(!output["toolCalls"].as_array().expect("toolCalls").is_empty());
         assert_eq!(output["files"], serde_json::json!([]));
         // The failing program carries `error: true` and still validates.
         let state = Arc::new(ToolRegistryState::new());

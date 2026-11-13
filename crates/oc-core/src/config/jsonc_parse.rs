@@ -30,7 +30,7 @@ pub fn parse_jsonc(text: &str) -> Result<Value, JsoncError> {
 /// G-413 — parse straight into the insertion-ordered [`Json`] shape
 /// via serde's streaming deserializer (map keys are visited in
 /// input-text order). Routing through `serde_json::Value` first would
-/// materialize each object as a BTreeMap (decision R-03:
+/// materialize each object as a `BTreeMap` (decision R-03:
 /// `preserve_order` stays off) and destroy the source key order the v1
 /// permission migration needs (`normalize.ts:515-519` iterates
 /// `Object.entries`). Same strictness as [`parse_jsonc`].

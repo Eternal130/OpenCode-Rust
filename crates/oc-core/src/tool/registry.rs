@@ -169,7 +169,7 @@ pub fn register(
     // definition (`outputSchema`). A `Null` schema means undeclared
     // (test/inline leaves that never return an output).
     let output_schema = if tool.output.is_null() { None } else { Some(tool.output.clone()) };
-    registration.output = output_schema.clone();
+    registration.output.clone_from(&output_schema);
     // `options.namespace` survives registration (v2 editor.add keys the
     // table by effectiveName and keeps options.namespace — opencode.ts's
     // three tools advertise `opencode_*` and the Code Mode catalog lists

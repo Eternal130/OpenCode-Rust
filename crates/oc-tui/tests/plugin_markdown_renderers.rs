@@ -93,7 +93,7 @@ fn identity_gate_empty_table_and_miss_render_default() {
 /// The full chain: the mdrenderer fixture boots through the plugin
 /// runtime, the attach-built table picks up its renderer, the first
 /// render falls back (cache miss), the bounded off-loop render lands
-/// (rendered_version bumps), and the next render emits the plugin's
+/// (`rendered_version` bumps), and the next render emits the plugin's
 /// rows as base-styled clipped spans.
 #[test]
 fn boot_chain_caches_plugin_rows() {
@@ -139,7 +139,8 @@ fn boot_chain_caches_plugin_rows() {
         "the bounded render landed"
     );
     let hit = render_markdown(source, 40, &styles);
-    let texts: Vec<String> = hit.iter().map(|line| line.text()).collect();
+    let texts: Vec<String> =
+        hit.iter().map(oc_tui::components::message::MarkdownLine::text).collect();
     assert_eq!(texts, vec!["worm: wormlang", "len: 3", "up: ABC"]);
 
     runtime.shutdown();

@@ -1,16 +1,17 @@
 //! Provider protocol-decode differential driver (rust side, channel 7).
 //!
 //! Env-gated (no-op when unset; nextest sees a passing no-op):
-//!   PROVIDER_DIFF_MANIFEST=<file> PROVIDER_DIFF_OUT=<file> \
-//!     cargo nextest run -p oc-ai --test provider_recordings_diff_driver
+//!   `PROVIDER_DIFF_MANIFEST=<file> PROVIDER_DIFF_OUT=<file>` \
+//!     `cargo nextest run -p oc-ai --test provider_recordings_diff_driver`
 //!
 //! For every manifest case ((cassette, response-body) pair staged by
-//! tools/diff/provider_recordings.py) the recorded body is replayed through
+//! `tools/diff/provider_recordings.py`) the recorded body is replayed through
 //! the production oc-ai route stack (the same `MockTransport` + `route.stream`
-//! entry the cassette parity tests use) and the emitted LLMEvent sequence —
+//! entry the cassette parity tests use) and the emitted `LLMEvent` sequence —
 //! or the failing error — is recorded. Output schema matches
-//! tools/diff/drivers/provider_recordings_ref.ts exactly.
+//! `tools/diff/drivers/provider_recordings_ref.ts` exactly.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -41,7 +42,6 @@ use oc_ai::schema::{LLMRequest, LanguageModelCompatibility, Message};
 use oc_ai::test_support::{MockTransport, RecordedInteraction};
 
 struct Case {
-    name: String,
     family: String,
     group: String,
     provider: String,
@@ -76,7 +76,7 @@ fn azure_config() -> AzureConfig {
         base_url: None,
         api_key: Some(Secret::Value("fixture".into())),
         api_version: None,
-        query_params: Default::default(),
+        query_params: BTreeMap::default(),
         use_deployment_based_urls: false,
         auth: None,
         defaults: RouteDefaults::default(),
@@ -185,13 +185,12 @@ async fn provider_recordings_diff_driver() {
         let body = std::fs::read_to_string(case["body_file"].as_str().expect("body_file"))
             .unwrap_or_else(|error| panic!("{name}: read body: {error}"));
         let entry = Case {
-            name: name.clone(),
             family,
             group,
             provider: case["provider"].as_str().unwrap_or("").to_string(),
             meta_key: case["meta_key"].as_str().unwrap_or("").to_string(),
             model: case["model"].as_str().unwrap_or("test-model").to_string(),
-            status: case["status"].as_u64().unwrap_or(200) as u16,
+            status: u16::try_from(case["status"].as_u64().unwrap_or(200)).unwrap_or(200),
             url: case["url"].as_str().unwrap_or("https://replay.test/v1").to_string(),
             body_file: PathBuf::from(case["body_file"].as_str().unwrap()),
         };

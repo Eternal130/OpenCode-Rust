@@ -90,6 +90,7 @@ impl TokenUsage {
     /// Turn token total (input+output+reasoning+cache). Token counts
     /// are whole numbers on the wire; the truncation mirrors JS's
     /// `Number → BigInt` cut at the usage update (turn.ts:323).
+    #[must_use]
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn total(&self) -> u64 {
         (self.input + self.output + self.reasoning + self.cache_read + self.cache_write) as u64
@@ -110,8 +111,32 @@ pub struct ToolTable {
 }
 
 impl ToolTable {
+    #[must_use]
     pub fn get(&self, key: &str) -> Option<&Tool> {
         self.entries.iter().find(|(k, _)| k == key).map(|(_, tool)| tool)
+    }
+
+    // Test-surface helpers (the fold tests assert membership/size);
+    // the runtime path only ever reads through `get`.
+    #[cfg(test)]
+    #[must_use]
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.entries.iter().any(|(k, _)| k == key)
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    // Paired with `len` for the clippy `len_without_is_empty`
+    // convention; no test asserts emptiness through it yet.
+    #[cfg(test)]
+    #[must_use]
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 
     /// Insert (or update in place, keeping the original position).
@@ -129,18 +154,6 @@ impl ToolTable {
     /// Tools in insertion (registration) order — ref `Map` semantics.
     pub fn values(&self) -> impl Iterator<Item = &Tool> {
         self.entries.iter().map(|(_, tool)| tool)
-    }
-
-    pub fn contains_key(&self, key: &str) -> bool {
-        self.entries.iter().any(|(k, _)| k == key)
-    }
-
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
     }
 
     pub fn clear(&mut self) {
@@ -328,6 +341,7 @@ pub fn fold(state: &TurnState, event: &Event, ctx: &TurnContext) -> Folded {
 impl Folded {
     /// Attach the next state (fold plumbing, also used by the turn
     /// consumer's background mode).
+    #[must_use]
     pub fn with_state(mut self, state: TurnState) -> Self {
         self.state = Some(state);
         self
@@ -1238,7 +1252,7 @@ mod tests {
         assert_eq!(call.title, "Helper: read");
     }
 
-    /// G-392 — same guarantee through the child_update extension seam.
+    /// G-392 — same guarantee through the `child_update` extension seam.
     #[test]
     fn child_pending_tool_call_prefixes_exactly_once_via_extension() {
         let ctx = TurnContext { child_updates: true, ..ctx() };
@@ -1379,7 +1393,7 @@ mod tests {
         );
     }
 
-    /// G-412 — abandon emits tool_call updates in registration
+    /// G-412 — abandon emits `tool_call` updates in registration
     /// (insertion) order — the root session's tools first — mirroring
     /// the ref `Map` iteration order (translate.ts:163-187). A plain
     /// `HashMap` iterates in randomized order run-to-run.

@@ -1,5 +1,5 @@
 //! PTY live check for the session panel (G-239/G-331 — the
-//! session.panel slot + the PanelInput face, panel-host.tsx /
+//! session.panel slot + the `PanelInput` face, panel-host.tsx /
 //! context/panel.tsx): the REAL [`oc_tui::app::run_with_size`] loop
 //! runs over a pty against the `FakeLlm` server with the
 //! `panelclaim.ts` fixture staged through `OPENCODE_CONFIG`:

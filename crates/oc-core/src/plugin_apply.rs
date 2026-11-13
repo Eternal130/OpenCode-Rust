@@ -3015,7 +3015,7 @@ mod g384_tests {
             host.remove_integration(&info.id);
         }
         assert!(host.list().await.expect("list").is_empty());
-        host.reload_catalog(&catalog);
+        host.reload_catalog(catalog);
         assert!(
             !host.list().await.expect("list").is_empty(),
             "catalog methods re-installed after reload"

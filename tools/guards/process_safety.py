@@ -44,8 +44,9 @@ WHAT IT CHECKS
 SCAN SCOPE
   Text files by extension (see EXTS) across the repo, skipping `.git/`,
   `.worktrees/`, `target/`, `node_modules/`, `docs/` (spec text quotes
-  the forbidden list verbatim), `.slim/` (untracked, git-ignored session
-  work-logs; prose may name TUI commands like the killall palette), and
+  the forbidden list verbatim), `.slim/` and `.superpowers/` (untracked, git-ignored session
+  work-logs; prose may name TUI commands or quote lane reports like the
+  killall palette / CI sudo lines verbatim), and
   `tools/guards/**` (this guard's own baseline/allowlist/README mention
   the pattern words). Binary files (NUL byte) and files >8 MiB are
   skipped.
@@ -74,7 +75,7 @@ import guardlib  # noqa: E402
 ROOT = guardlib.ROOT
 SANCTIONED_PRIVILEGE_PATH = "tools/dev-gate.sh"  # §2.1: the sanctioned sudo/systemd-run user
 SKIP_DIR_NAMES = {".git", ".worktrees", "target", "node_modules"}
-SKIP_REL_PREFIXES = ("docs/", "tools/guards/", ".slim/")
+SKIP_REL_PREFIXES = ("docs/", "tools/guards/", ".slim/", ".superpowers/")
 EXTS = {
     ".py", ".sh", ".bash", ".zsh",
     ".rs", ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts",

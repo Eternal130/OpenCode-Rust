@@ -1,13 +1,13 @@
 //! ACP-translate differential driver (rust side).
 //!
 //! Env-gated (zero cost when unset; nextest sees a passing no-op):
-//!   ACP_DIFF_CORPUS=<dir> ACP_DIFF_OUT=<file> \
-//!     cargo nextest run -p oc-cli --test acp_translate_diff_driver
+//!   `ACP_DIFF_CORPUS=<dir> ACP_DIFF_OUT=<file>` \
+//!     `cargo nextest run -p oc-cli --test acp_translate_diff_driver`
 //!
 //! Mirrors `oc_cli::acp::translate::fold` over the same corpus the ref
-//! bun driver runs (tools/diff/drivers/acp_translate_ref.ts). Output
+//! bun driver runs (`tools/diff/drivers/acp_translate_ref.ts`). Output
 //! records are normalized to the same shape; the python orchestrator
-//! (tools/diff/acp_translate.py) canonicalizes and diffs.
+//! (`tools/diff/acp_translate.py`) canonicalizes and diffs.
 
 use agent_client_protocol::schema::v1::SessionUpdate;
 use serde_json::{json, Value};
@@ -17,8 +17,8 @@ use oc_cli::acp::translate::{
     self as x, Event as XEvent, Output as XOutput, Terminal, TurnContext, TurnStart, TurnStartKind,
 };
 
-fn norm_update(update: &SessionUpdate, meta: &Option<Value>) -> Value {
-    let mut value = serde_json::to_value(update).unwrap_or_else(|_| json!(null));
+fn norm_update(update: &SessionUpdate, meta: Option<&Value>) -> Value {
+    let mut value = serde_json::to_value(update).unwrap_or(json!(null));
     if let Some(extra) = meta {
         // The service layer merges the child tag onto the serialized
         // update's `_meta` (`child.ts:39-47` `{..._meta, ...meta}`).
@@ -36,7 +36,7 @@ fn norm_update(update: &SessionUpdate, meta: &Option<Value>) -> Value {
     value
 }
 
-fn norm_tool(tool: &Option<x::Tool>) -> Value {
+fn norm_tool(tool: Option<&x::Tool>) -> Value {
     match tool {
         None => Value::Null,
         Some(tool) => json!({
@@ -49,7 +49,7 @@ fn norm_tool(tool: &Option<x::Tool>) -> Value {
     }
 }
 
-fn norm_child(child: &Option<ChildSession>) -> Value {
+fn norm_child(child: Option<&ChildSession>) -> Value {
     match child {
         None => Value::Null,
         Some(child) => {
@@ -69,19 +69,19 @@ fn norm_child(child: &Option<ChildSession>) -> Value {
 fn norm_output(output: &XOutput) -> Value {
     match output {
         XOutput::SessionUpdate { update, meta } => {
-            json!({ "tag": "session_update", "update": norm_update(update, meta) })
+            json!({ "tag": "session_update", "update": norm_update(update, meta.as_ref()) })
         }
         XOutput::ChildUpdate(update) => json!({ "tag": "child_update", "update": update }),
         XOutput::PermissionAsk { data, tool, child } => json!({
             "tag": "permission_ask",
             "data": data,
-            "tool": norm_tool(tool),
-            "child": norm_child(child),
+            "tool": norm_tool(tool.as_ref()),
+            "child": norm_child(child.as_ref()),
         }),
         XOutput::FormAsk { data, child } => json!({
             "tag": "form_ask",
             "form": data.get("form").cloned().unwrap_or(Value::Null),
-            "child": norm_child(child),
+            "child": norm_child(child.as_ref()),
         }),
         XOutput::AskSettled { id } => json!({ "tag": "ask_settled", "id": id }),
     }
@@ -105,9 +105,9 @@ fn acp_translate_diff_driver() {
 
     let mut names: Vec<String> = std::fs::read_dir(&corpus)
         .expect("read corpus dir")
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| n.ends_with(".json"))
+        .filter(|n| std::path::Path::new(n).extension().is_some_and(|e| e == "json"))
         .collect();
     names.sort();
 

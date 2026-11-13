@@ -508,7 +508,7 @@ fn tool_definition(registration: &crate::location::ToolRegistration) -> ToolDefi
     );
     // runtime.ts:24-25 — a declared output rides the definition as
     // `outputSchema` (provider wire, ai/tool.ts:229).
-    definition.output_schema = registration.output.clone();
+    definition.output_schema.clone_from(&registration.output);
     definition
 }
 

@@ -94,6 +94,18 @@ type McpSyncOutcome = (Vec<McpServerRow>, BTreeSet<String>);
 type RouteContentRx =
     Rc<RefCell<Option<std::sync::mpsc::Receiver<Result<PluginSectionSpec, String>>>>>;
 
+/// The live panel claim fingerprint (plugin, name, session, focused,
+/// fullscreen, width) — re-pushed to `tui.panel` on change.
+#[derive(Clone, PartialEq)]
+struct PanelFingerprint {
+    plugin: String,
+    name: String,
+    session: String,
+    focused: bool,
+    cancelled: bool,
+    width: usize,
+}
+
 /// The booted TUI plugin runtime.
 pub struct TuiPluginRuntime {
     pub booted: BootedPluginHost,
@@ -125,7 +137,8 @@ pub struct TuiPluginRuntime {
     /// a change re-renders the session.panel claims (the props are
     /// reactive in the ref's Slot input) AND re-pushes the `tui.panel`
     /// view (`ctx.ui.panel.current()`'s source). `None` = closed.
-    pushed_panel: Rc<RefCell<Option<((String, String, String), bool, bool, usize)>>>,
+    pushed_panel: Rc<RefCell<Option<PanelFingerprint>>>,
+
     /// The MCP server names already pushed into the server's real
     /// registry (PLUG-D33: `registrations.mcps` → `experimental.
     /// mcp.add` — the ref's `ctx.mcp.transform` → real-registry
@@ -733,6 +746,7 @@ impl TuiPluginRuntime {
     /// pump pushes the live route + theme view to the guest (the v2
     /// TUI-plugin surface — the flagship sidebar reads both at every
     /// materialize; change-gated, fire-and-forget notifications).
+    #[allow(clippy::too_many_lines)] // one sequential drain over the slot/notification sources
     pub fn drain_ui_requests(&self, store: &Store) {
         if self.booted.host.enabled() {
             let route_session = match store.route() {
@@ -752,18 +766,20 @@ impl TuiPluginRuntime {
             // AND re-materializes the session.panel claims (the
             // PanelInput props are reactive in the ref's Slot).
             {
-                let fingerprint = store.session_panel().map(|panel| {
-                    (
-                        (panel.plugin_id.clone(), panel.name.clone(), panel.session_id.clone()),
-                        store.panel_focused(),
-                        store.session_panel_fullscreen(usize::from(store.terminal_size().0)),
-                        store.panel_width(),
-                    )
+                let fingerprint = store.session_panel().map(|panel| PanelFingerprint {
+                    plugin: panel.plugin_id.clone(),
+                    name: panel.name.clone(),
+                    session: panel.session_id.clone(),
+                    focused: store.panel_focused(),
+                    cancelled: store.session_panel_fullscreen(usize::from(store.terminal_size().0)),
+                    width: store.panel_width(),
                 });
                 if *self.pushed_panel.borrow() != fingerprint {
-                    *self.pushed_panel.borrow_mut() = fingerprint.clone();
-                    let params = fingerprint
-                        .map(|((plugin, name, session), _, _, _)| (plugin, name, session));
+                    (*self.pushed_panel.borrow_mut()).clone_from(&fingerprint);
+                    let params =
+                        fingerprint.map(|PanelFingerprint { plugin, name, session, .. }| {
+                            (plugin, name, session)
+                        });
                     match params {
                         Some((plugin, name, session)) => {
                             self.booted.host.notify_tui_panel(
@@ -1377,7 +1393,15 @@ fn dynamic_fingerprint(owned: &[OwnedCommandDef], snapshot: &RegistrationSnapsho
     let markdown = snapshot
         .markdown_renderers
         .iter()
-        .map(|renderer| format!("{}:{};", renderer.plugin_id, renderer.language))
+        .map(|renderer| {
+            let mut piece =
+                String::with_capacity(renderer.plugin_id.len() + renderer.language.len() + 2);
+            piece.push_str(&renderer.plugin_id);
+            piece.push(':');
+            piece.push_str(&renderer.language);
+            piece.push(';');
+            piece
+        })
         .collect::<String>();
     format!("{}#{}#{}", owned_fingerprint(owned), palette, markdown)
 }

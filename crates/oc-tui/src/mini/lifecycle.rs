@@ -1729,8 +1729,8 @@ pub struct Lifecycle {
     drawn_footer_rows: usize,
     splash_enabled: bool,
     mono: bool,
-    /// G-272⑩ — the styled entry look (per-kind scrollback colors,
-    /// fallback_dark basis; see `mini/entry_styled.rs`).
+    /// G-272(10) — the styled entry look (per-kind scrollback colors,
+    /// `fallback_dark` basis; see `mini/entry_styled.rs`).
     entry_look: crate::mini::entry_styled::EntryLook,
     /// CONFIG-T4 `mini.shell_output`: shell-family tools stream their
     /// live rows while set (`entryBody(commit, { shellOutput })`,
@@ -2412,7 +2412,7 @@ mod tests {
         // mono: the plain writer's unstyled rows.
         match append_rows(true, None, &commit, 40, true, &look) {
             PendingRows::Plain(rows) => {
-                assert!(rows.iter().any(|row| row.contains("bold")), "{rows:?}")
+                assert!(rows.iter().any(|row| row.contains("bold")), "{rows:?}");
             }
             other => panic!("mono append must be plain rows: {other:?}"),
         }

@@ -110,6 +110,7 @@ pub struct Sessions {
 }
 
 impl Sessions {
+    #[must_use]
     pub fn new(client: oc_client::Client) -> Self {
         Self {
             client,

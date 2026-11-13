@@ -1964,11 +1964,11 @@ impl App {
                 if self.store.session_panel_mounted(&session_id).is_some())
     }
 
-    /// The focused panel's key walk (InteractivityProvider(focused)
-    /// + the focusable `#session-panel` box, panel-host.tsx:32/60-62):
-    /// reachable keymap commands dispatch (a plugin's `<plugin>::cmd`
-    /// layer binds ride the owned surface); escape closes (focus
-    /// falls back to the session pane); every other unbound stroke is
+    /// The focused panel's key walk (`InteractivityProvider(focused)`
+    /// plus the focusable `#session-panel` box (panel-host.tsx 32/60-62).
+    /// Reachable keymap commands dispatch — a plugin's `<plugin>::cmd`
+    /// layer binds ride the owned surface. Escape closes (focus falls
+    /// back to the session pane). Every other unbound stroke is
     /// consumed — the panel never types into the composer under it.
     fn stroke_in_panel(&mut self, stroke: &KeyStroke) {
         match self.keymap.lookup(stroke.clone(), &self.clock) {

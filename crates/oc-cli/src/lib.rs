@@ -85,6 +85,7 @@ pub mod acp {
 
     impl App {
         /// Build the shared state (before the connection exists).
+        #[must_use]
         pub fn new(client: oc_client::Client) -> Arc<Self> {
             Arc::new(Self {
                 catalogs: Arc::new(Catalogs::new(client.clone())),

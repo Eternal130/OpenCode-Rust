@@ -39,9 +39,10 @@ pub fn parse_level(value: Option<&str>) -> Level {
     };
     match value.to_uppercase().as_str() {
         "DEBUG" => Level::Debug,
-        "INFO" => Level::Info,
         "WARN" => Level::Warn,
         "ERROR" => Level::Error,
+        // "INFO" and any invalid/missing value both fall through to Info
+        // (ref logging.ts:164-173 default), so no explicit INFO arm.
         _ => Level::Info,
     }
 }
@@ -301,7 +302,7 @@ mod tests {
         }
     }
 
-    /// Re-parse the floor from the CURRENT env (the OnceLock caches the
+    /// Re-parse the floor from the `CURRENT` env (the `OnceLock` caches the
     /// boot value; tests exercise the parse directly).
     fn minimum_log_level_for_test() -> Level {
         parse_level(std::env::var("OPENCODE_LOG_LEVEL").ok().as_deref())

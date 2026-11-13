@@ -30,12 +30,12 @@ pub fn uses_standard_updates(compaction: bool, child_updates: bool, child: bool)
 /// `apply` (compaction.ts:46-75) — a lifecycle event updates the tracked
 /// set and yields the updates to send.
 #[must_use]
-pub fn apply(
+pub fn apply<S: std::hash::BuildHasher>(
     event_type: &str,
     session_id: &str,
     data: &Value,
     event_id: &str,
-    tracked: &mut HashMap<String, Started>,
+    tracked: &mut HashMap<String, Started, S>,
     standard_updates: bool,
 ) -> Vec<SessionUpdate> {
     if event_type == "session.compaction.started" {
@@ -295,7 +295,9 @@ mod tests {
     #[test]
     fn marker_keys_are_status_message_id_reason_only() {
         let mut tracked = HashMap::new();
-        apply(
+        // The started update is exercised by its own test; only the
+        // tracked-set side effect matters here.
+        let _started = apply(
             "session.compaction.started",
             "ses_1",
             &json!({ "reason": "auto", "inputID": "msg_1" }),
