@@ -1,0 +1,725 @@
+{
+  "schema": "tui-diff-scenario/1",
+  "id": "session-multi-turn",
+  "width": 80,
+  "height": 24,
+  "fetch": {
+    "/api/agent": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/command": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/config": {
+      "status": 200,
+      "body": []
+    },
+    "/api/event": {
+      "status": 200,
+      "body": {
+        "sse": true,
+        "initial": {
+          "id": "evt_connected",
+          "type": "server.connected",
+          "data": {}
+        }
+      }
+    },
+    "/api/experimental/migration/v1": {
+      "status": 200,
+      "body": {
+        "status": "completed"
+      }
+    },
+    "/api/form": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/fs/list": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/info": {
+      "status": 200,
+      "body": {
+        "version": "test",
+        "pid": 0,
+        "urls": [],
+        "paths": {
+          "tmp": "/tmp"
+        },
+        "capabilities": {
+          "persistentPty": true
+        }
+      }
+    },
+    "/api/integration": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/location": {
+      "status": 200,
+      "body": {
+        "directory": "/tmp/opencode/packages/tui",
+        "project": {
+          "id": "proj_test",
+          "directory": "/tmp/opencode",
+          "canonical": "/tmp/opencode"
+        }
+      }
+    },
+    "/api/mcp": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/mcp/resource": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": {
+          "resources": [],
+          "templates": []
+        }
+      }
+    },
+    "/api/model": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/plugin": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/project": {
+      "status": 200,
+      "body": []
+    },
+    "/api/provider": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/reference": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/session": {
+      "status": 200,
+      "body": {
+        "data": [
+          {
+            "id": "ses_multi",
+            "title": "Multi turn",
+            "projectID": "proj_test",
+            "location": {
+              "directory": "/tmp/opencode/packages/tui"
+            },
+            "agent": "build",
+            "model": {
+              "providerID": "fixture",
+              "id": "model"
+            },
+            "cost": 0,
+            "tokens": {
+              "input": 0,
+              "output": 0,
+              "reasoning": 0,
+              "cache": {
+                "read": 0,
+                "write": 0
+              }
+            },
+            "time": {
+              "created": 1,
+              "updated": 2
+            }
+          }
+        ],
+        "cursor": {}
+      }
+    },
+    "/api/session/active": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "ses_multi"
+        }
+      }
+    },
+    "/api/shell": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/skill": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": []
+      }
+    },
+    "/api/vcs": {
+      "status": 200,
+      "body": {
+        "location": {
+          "directory": "/tmp/opencode/packages/tui",
+          "project": {
+            "id": "proj_test",
+            "directory": "/tmp/opencode",
+            "canonical": "/tmp/opencode"
+          }
+        },
+        "data": {
+          "branch": {
+            "current": "main",
+            "default": "main"
+          }
+        }
+      }
+    },
+    "/api/experimental/session/ses_multi/terminal": {
+      "status": 200,
+      "body": {
+        "data": []
+      }
+    },
+    "/api/session/ses_multi": {
+      "status": 200,
+      "body": {
+        "data": {
+          "id": "ses_multi",
+          "title": "Multi turn",
+          "projectID": "proj_test",
+          "location": {
+            "directory": "/tmp/opencode/packages/tui"
+          },
+          "agent": "build",
+          "model": {
+            "providerID": "fixture",
+            "id": "model"
+          },
+          "cost": 0,
+          "tokens": {
+            "input": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cache": {
+              "read": 0,
+              "write": 0
+            }
+          },
+          "time": {
+            "created": 1,
+            "updated": 2
+          }
+        }
+      }
+    },
+    "/api/session/ses_multi/form": {
+      "status": 200,
+      "body": {
+        "data": []
+      }
+    },
+    "/api/session/ses_multi/inbox": {
+      "status": 200,
+      "body": {
+        "data": []
+      }
+    },
+    "/api/session/ses_multi/message": {
+      "status": 200,
+      "body": {
+        "data": [
+          {
+            "id": "msg_user_1",
+            "sessionID": "ses_multi",
+            "type": "user",
+            "time": {
+              "created": 1
+            },
+            "text": "Question number 1: what next?"
+          },
+          {
+            "id": "msg_asst_1",
+            "sessionID": "ses_multi",
+            "type": "assistant",
+            "agent": "build",
+            "model": {
+              "providerID": "fixture",
+              "id": "model"
+            },
+            "time": {
+              "created": 2
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "Answer number 1: do the thing, then verify it."
+              }
+            ]
+          },
+          {
+            "id": "msg_user_2",
+            "sessionID": "ses_multi",
+            "type": "user",
+            "time": {
+              "created": 1
+            },
+            "text": "Question number 2: what next?"
+          },
+          {
+            "id": "msg_asst_2",
+            "sessionID": "ses_multi",
+            "type": "assistant",
+            "agent": "build",
+            "model": {
+              "providerID": "fixture",
+              "id": "model"
+            },
+            "time": {
+              "created": 2
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "Answer number 2: do the thing, then verify it."
+              }
+            ]
+          },
+          {
+            "id": "msg_user_3",
+            "sessionID": "ses_multi",
+            "type": "user",
+            "time": {
+              "created": 1
+            },
+            "text": "Question number 3: what next?"
+          },
+          {
+            "id": "msg_asst_3",
+            "sessionID": "ses_multi",
+            "type": "assistant",
+            "agent": "build",
+            "model": {
+              "providerID": "fixture",
+              "id": "model"
+            },
+            "time": {
+              "created": 2
+            },
+            "content": [
+              {
+                "type": "text",
+                "text": "Answer number 3: do the thing, then verify it."
+              }
+            ]
+          }
+        ],
+        "cursor": {}
+      }
+    },
+    "/api/session/ses_multi/permission": {
+      "status": 200,
+      "body": {
+        "data": []
+      }
+    }
+  },
+  "events": [
+    {
+      "id": "evt_session_updated",
+      "created": 1,
+      "type": "session.updated",
+      "durable": {
+        "aggregateID": "ses_multi",
+        "seq": 1,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_multi",
+        "info": {
+          "id": "ses_multi",
+          "title": "Multi turn",
+          "projectID": "proj_test",
+          "location": {
+            "directory": "/tmp/opencode/packages/tui"
+          },
+          "agent": "build",
+          "model": {
+            "providerID": "fixture",
+            "id": "model"
+          },
+          "cost": 0,
+          "tokens": {
+            "input": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cache": {
+              "read": 0,
+              "write": 0
+            }
+          },
+          "time": {
+            "created": 1,
+            "updated": 2
+          }
+        }
+      }
+    },
+    {
+      "id": "evt_step_started",
+      "created": 2,
+      "type": "session.step.started",
+      "durable": {
+        "aggregateID": "ses_multi",
+        "seq": 2,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_multi",
+        "assistantMessageID": "msg_asst_1",
+        "agent": "build",
+        "model": {
+          "providerID": "fixture",
+          "id": "model"
+        },
+        "started": 0
+      }
+    },
+    {
+      "id": "evt_text_started",
+      "created": 3,
+      "type": "session.text.started",
+      "durable": {
+        "aggregateID": "ses_multi",
+        "seq": 3,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_multi",
+        "assistantMessageID": "msg_asst_1",
+        "ordinal": 0
+      }
+    },
+    {
+      "id": "evt_text_ended",
+      "created": 4,
+      "type": "session.text.ended",
+      "durable": {
+        "aggregateID": "ses_multi",
+        "seq": 4,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_multi",
+        "assistantMessageID": "msg_asst_1",
+        "ordinal": 0,
+        "text": "Answer number 1: do the thing, then verify it."
+      }
+    },
+    {
+      "id": "evt_step_ended",
+      "created": 5,
+      "type": "session.step.ended",
+      "durable": {
+        "aggregateID": "ses_multi",
+        "seq": 5,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_multi",
+        "assistantMessageID": "msg_asst_1",
+        "finish": "stop",
+        "cost": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "evt_step_started",
+      "created": 6,
+      "type": "session.step.started",
+      "durable": {
+        "aggregateID": "ses_multi",
+        "seq": 6,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_multi",
+        "assistantMessageID": "msg_asst_2",
+        "agent": "build",
+        "model": {
+          "providerID": "fixture",
+          "id": "model"
+        },
+        "started": 0
+      }
+    },
+    {
+      "id": "evt_text_started",
+      "created": 7,
+      "type": "session.text.started",
+      "durable": {
+        "aggregateID": "ses_multi",
+        "seq": 7,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_multi",
+        "assistantMessageID": "msg_asst_2",
+        "ordinal": 0
+      }
+    },
+    {
+      "id": "evt_text_ended",
+      "created": 8,
+      "type": "session.text.ended",
+      "durable": {
+        "aggregateID": "ses_multi",
+        "seq": 8,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_multi",
+        "assistantMessageID": "msg_asst_2",
+        "ordinal": 0,
+        "text": "Answer number 2: do the thing, then verify it."
+      }
+    },
+    {
+      "id": "evt_step_ended",
+      "created": 9,
+      "type": "session.step.ended",
+      "durable": {
+        "aggregateID": "ses_multi",
+        "seq": 9,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_multi",
+        "assistantMessageID": "msg_asst_2",
+        "finish": "stop",
+        "cost": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      }
+    },
+    {
+      "id": "evt_step_started",
+      "created": 10,
+      "type": "session.step.started",
+      "durable": {
+        "aggregateID": "ses_multi",
+        "seq": 10,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_multi",
+        "assistantMessageID": "msg_asst_3",
+        "agent": "build",
+        "model": {
+          "providerID": "fixture",
+          "id": "model"
+        },
+        "started": 0
+      }
+    },
+    {
+      "id": "evt_text_started",
+      "created": 11,
+      "type": "session.text.started",
+      "durable": {
+        "aggregateID": "ses_multi",
+        "seq": 11,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_multi",
+        "assistantMessageID": "msg_asst_3",
+        "ordinal": 0
+      }
+    },
+    {
+      "id": "evt_text_ended",
+      "created": 12,
+      "type": "session.text.ended",
+      "durable": {
+        "aggregateID": "ses_multi",
+        "seq": 12,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_multi",
+        "assistantMessageID": "msg_asst_3",
+        "ordinal": 0,
+        "text": "Answer number 3: do the thing, then verify it."
+      }
+    },
+    {
+      "id": "evt_step_ended",
+      "created": 13,
+      "type": "session.step.ended",
+      "durable": {
+        "aggregateID": "ses_multi",
+        "seq": 13,
+        "version": 1
+      },
+      "data": {
+        "sessionID": "ses_multi",
+        "assistantMessageID": "msg_asst_3",
+        "finish": "stop",
+        "cost": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        }
+      }
+    }
+  ],
+  "keys": [],
+  "settle_ms": 200,
+  "note": "Three user/assistant turns persisted and replayed: both sides must lay out the same alternating transcript rows with correct spacing between turns; multi-message layout/scroll anchoring at the bottom is the equivalence target."
+}

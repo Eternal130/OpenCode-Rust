@@ -490,6 +490,8 @@ def write_report(path: Path, cases: list[dict], ref: dict[str, dict], rust: dict
     lines.append("structural（G-368 RGB ≤8 容差，仍是分歧）/ diverge；CAUSES 已知因定性（本表），")
     lines.append("adjudication 属 T9——未命中 CAUSES 的一切非 exact 均未裁决 → exit 2。")
     lines.append("")
+    lines.append("> 复现：python3 tools/diff/tui_fullscreen.py --write docs/audit/diff/TUI-FULLSCREEN.md")
+    lines.append("")
     lines.append("- rust 侧: `cargo nextest -p oc-tui --test tui_fullscreen_diff_driver`（env 门控")
     lines.append("  TUI_DIFF_MANIFEST/TUI_DIFF_OUT，dev-gate 身份）。驱动面:")
     lines.append("  crates/oc-tui/tests/tui_fullscreen_diff_driver.rs:1")
