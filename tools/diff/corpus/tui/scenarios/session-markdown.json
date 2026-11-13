@@ -311,13 +311,10 @@
             "id": "msg_user_1",
             "sessionID": "ses_smoke_md",
             "type": "user",
-            "payload": {
-              "text": "Show me some markdown."
-            },
-            "delivery": "steer",
             "time": {
               "created": 1
-            }
+            },
+            "text": "Show me some markdown."
           },
           {
             "id": "msg_asst_1",
@@ -334,7 +331,7 @@
             "content": [
               {
                 "type": "text",
-                "text": ""
+                "text": "# Smoke heading\n\n- first list item\n- second list item\n\n```text\nfenced code block\n```\n"
               }
             ]
           }
