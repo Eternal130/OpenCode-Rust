@@ -537,6 +537,12 @@ fn handle(mut socket: std::net::TcpStream, shared: &Shared) {
             "message.updated",
             r#"{"sessionID":"ses_live","id":"m_assistant","type":"assistant","agent":"build","model":{"providerID":"pfix","id":"m-alpha"},"content":[{"type":"text","text":"streaming"}],"time":{"created":2}}"#,
         );
+        // F2 — the RUNNING gate is the execution lifecycle event (ref
+        // `data.session.status`, client/solid/data.ts:1010): the real
+        // server emits `session.execution.started` when the turn
+        // starts, so the stub does too (a message-shape-only stream
+        // rests idle now).
+        broadcast("session.execution.started", r#"{"sessionID":"ses_live"}"#);
         let _ = count;
         // The wire's `Session.Inbox.User` echo.
         // The wire's `Session.Inbox.User` echo — one inbox id per

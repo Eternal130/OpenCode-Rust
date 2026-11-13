@@ -286,7 +286,10 @@ impl Pump {
                                 .ingest_all([Ingest::MessagesSnapshot { session_id, messages }]);
                         }
                         Err(error) => {
-                            self.fetched_transcripts.remove(&session_id);
+                            // F7 — one-shot on failure (app.rs's live-loop
+                            // arm; ref's route-mount `message.sync` never
+                            // re-arms a rejected fetch — removing the id
+                            // here re-armed the loading label every pump).
                             let _ = error;
                         }
                     }

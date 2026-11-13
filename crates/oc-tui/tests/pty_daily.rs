@@ -630,7 +630,10 @@ fn td07_wait_absent(h: &HarnessHandle, needle: &str, timeout: Duration) -> Resul
 #[test]
 fn queue_undo_refills() {
     // A trailing user message with no assistant reply and no idle
-    // marker: the session reads RUNNING (the queue path's gate).
+    // marker feeds the TRANSCRIPT; the RUNNING gate is the execution
+    // lifecycle event (F2: ref `data.session.status` is event-driven,
+    // client/solid/data.ts:1010/1378-1380 — armed here as the SSE
+    // stream's first replayed event).
     let rows = vec![user_row("msg_run", &td07_route_server::json_string("running turn"))];
     let state = Td07Server {
         requests: std::sync::Mutex::new(Vec::new()),
@@ -642,6 +645,10 @@ fn queue_undo_refills() {
             cursor: None,
             body: message_page_body(&rows, None),
         }],
+        initial_events: vec![(
+            "session.execution.started".to_owned(),
+            serde_json::json!({ "sessionID": "ses_route" }),
+        )],
     };
     let ((), server) = run_td07_test("td07", state, |h| {
         // Boot probe: the composer paints + takes keys.
