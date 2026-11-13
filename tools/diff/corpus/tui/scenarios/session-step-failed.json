@@ -386,14 +386,21 @@
               "id": "model"
             },
             "time": {
-              "created": 2
+              "created": 2,
+              "completed": 5
             },
             "content": [
               {
                 "type": "text",
                 "text": "Partial answer before the provider failed."
               }
-            ]
+            ],
+            "finish": "error",
+            "error": {
+              "type": "api",
+              "message": "rate limit exceeded",
+              "status": 429
+            }
           }
         ],
         "cursor": {}
@@ -444,76 +451,6 @@
             "created": 1,
             "updated": 2
           }
-        }
-      }
-    },
-    {
-      "id": "evt_step_started",
-      "created": 2,
-      "type": "session.step.started",
-      "durable": {
-        "aggregateID": "ses_stepfail",
-        "seq": 2,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_stepfail",
-        "assistantMessageID": "msg_asst_1",
-        "agent": "build",
-        "model": {
-          "providerID": "fixture",
-          "id": "model"
-        },
-        "started": 0
-      }
-    },
-    {
-      "id": "evt_text_started",
-      "created": 3,
-      "type": "session.text.started",
-      "durable": {
-        "aggregateID": "ses_stepfail",
-        "seq": 3,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_stepfail",
-        "assistantMessageID": "msg_asst_1",
-        "ordinal": 0
-      }
-    },
-    {
-      "id": "evt_text_ended",
-      "created": 4,
-      "type": "session.text.ended",
-      "durable": {
-        "aggregateID": "ses_stepfail",
-        "seq": 4,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_stepfail",
-        "assistantMessageID": "msg_asst_1",
-        "ordinal": 0,
-        "text": "Partial answer before the provider failed."
-      }
-    },
-    {
-      "id": "evt_sf",
-      "created": 5,
-      "type": "session.step.failed",
-      "durable": {
-        "aggregateID": "ses_stepfail",
-        "seq": 5,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_stepfail",
-        "assistantMessageID": "msg_asst_1",
-        "error": {
-          "type": "api",
-          "message": "rate limit exceeded",
-          "status": 429
         }
       }
     }
