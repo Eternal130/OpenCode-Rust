@@ -45,6 +45,12 @@ pub struct ServerState {
     pub sessions: Vec<String>,
     /// The `message.list` pages (first match on the cursor param).
     pub pages: Vec<MessagePage>,
+    /// Bus events replayed once right after the SSE stream's
+    /// `server.connected` (F2: a RUNNING turn is event-driven in ref —
+    /// `data.session.status`, client/solid/data.ts:1010 — so tests
+    /// that need a live turn arm it with `session.execution.started`
+    /// here instead of a trailing-user-message shape).
+    pub initial_events: Vec<(String, serde_json::Value)>,
 }
 
 impl ServerState {
@@ -159,6 +165,9 @@ fn handle(mut socket: std::net::TcpStream, state: &Arc<ServerState>) {
         let shared = Arc::new(Mutex::new(socket));
         state.sse.lock().expect("sse").push(Arc::clone(&shared));
         state.push_event("server.connected", serde_json::json!({}));
+        for (type_, data) in &state.initial_events {
+            state.push_event(type_, data.clone());
+        }
         {
             let stream = shared.lock().expect("stream");
             let _ = stream.set_read_timeout(Some(Duration::from_millis(25)));

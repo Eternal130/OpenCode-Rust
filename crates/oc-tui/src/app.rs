@@ -9722,7 +9722,13 @@ pub async fn run_with_size(
                         }
                         Err(error) => {
                             crate::keymap::log_skip(&format!("transcript fetch {error}"));
-                            fetched_transcripts.remove(&session_id);
+                            // F7 — the fetch stays ONE-SHOT on failure
+                            // (ref's route-mount `data.session.message.sync`
+                            // runs once per open; a rejected promise never
+                            // re-arms, app.rs:9687-9693's cited semantics).
+                            // Removing the id here re-armed the loading
+                            // label every pump — the session-tabs
+                            // oscillation (T7's 64-pump no-rest).
                         }
                     }
                 }
@@ -12968,9 +12974,16 @@ mod core_interaction_tests {
     use crate::components::message::model::{Message, PartTime};
     use crate::store::{InterruptStep, RecordingInterruptSink};
 
-    /// A streaming assistant message (no finish, no idle marker) —
-    /// the `session_running` derivation's running case.
+    /// A streaming assistant message (no finish, no idle marker) plus
+    /// the RUNNING marker — `session_running` follows the execution
+    /// lifecycle events (ref `data.session.status`,
+    /// client/solid/data.ts:1010/1378-1380), so the event is what
+    /// arms the turn; the messages feed the transcript.
     fn streaming_session(store: &crate::store::Store, session_id: &str) {
+        store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+            "session.execution.started",
+            serde_json::json!({ "sessionID": session_id }),
+        ))]);
         store.set_messages(
             session_id,
             vec![
