@@ -13990,6 +13990,12 @@ impl Store {
                     })
                     .unwrap_or_default();
                 let created = event.created;
+                // W3 (T-ord/duration) — ref's step.started resets
+                // `time.created` to `event.data.started` (data.ts:843);
+                // the footer's turnDuration falls back to the message's
+                // own created time when no input precedes it, so a stale
+                // hydrated `created` skews the `· Xms` span.
+                let started = event.data.get("started").and_then(Value::as_u64);
                 // G-399 — a new step reopens the message: the G11-F1
                 // snapshot-authoritative mark clears with the
                 // completion (its deltas are a fresh generation).
@@ -14001,6 +14007,10 @@ impl Store {
                         Some(Message::Assistant { finish, time, .. }) => {
                             *finish = None;
                             time.completed = None;
+                            // W3 — ref data.ts:843: `time.created = started`
+                            if let Some(started) = started {
+                                time.created = Some(started);
+                            }
                         }
                         Some(_) => {}
                         None => {
@@ -14011,7 +14021,7 @@ impl Store {
                                 parts: Vec::new(),
                                 finish: None,
                                 error: None,
-                                time: PartTime { created, completed: None },
+                                time: PartTime { created: started.or(created), completed: None },
                                 tokens: None,
                                 usage_total: None,
                                 retry: None,
