@@ -311,13 +311,10 @@
             "id": "msg_user_1",
             "sessionID": "ses_smoke_text",
             "type": "user",
-            "payload": {
-              "text": "Say hello in one short sentence."
-            },
-            "delivery": "steer",
             "time": {
               "created": 1
-            }
+            },
+            "text": "Say hello in one short sentence."
           },
           {
             "id": "msg_asst_1",
@@ -334,7 +331,7 @@
             "content": [
               {
                 "type": "text",
-                "text": ""
+                "text": "Hello from the plain-text smoke scenario."
               }
             ]
           }
