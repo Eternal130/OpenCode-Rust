@@ -3742,8 +3742,12 @@ mod g223_classification {
 // executions through the pipeline validate against the schemas.
 // ---------------------------------------------------------------------------
 
-async fn g230_resources_fixture()
--> (McpRegistry, Arc<crate::location::ToolRegistryState>, Arc<crate::hooks::HookRegistry>, crate::permission::Permission) {
+async fn g230_resources_fixture() -> (
+    McpRegistry,
+    Arc<crate::location::ToolRegistryState>,
+    Arc<crate::hooks::HookRegistry>,
+    crate::permission::Permission,
+) {
     let (_db, bus) = test_bus().await;
     let mut servers = BTreeMap::new();
     servers.insert("alpha".to_string(), local_config());

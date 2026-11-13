@@ -1859,9 +1859,8 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
             // The per-call index for the collected `files` ordering
             // (codemode/tool.ts:122-124 sorts by call index).
             let call_index = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-            let collected_files: std::sync::Arc<
-                std::sync::Mutex<Vec<(u64, Vec<Value>)>>,
-            > = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let collected_files: std::sync::Arc<std::sync::Mutex<Vec<(u64, Vec<Value>)>>> =
+                std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
             let collected_files_out = Arc::clone(&collected_files);
             let call: ToolCallFn = Arc::new(move |name: &str, input: Value| {
                 let registry = Arc::clone(&registry);
@@ -1909,10 +1908,7 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
                             // call (codemode/tool.ts:107-111).
                             let files = Self::output_files(&result.content);
                             if !files.is_empty() {
-                                collected_files
-                                    .lock()
-                                    .expect("files lock")
-                                    .push((index, files));
+                                collected_files.lock().expect("files lock").push((index, files));
                             }
                             Self::nested_value(&result)
                         })
@@ -2010,10 +2006,7 @@ impl super::ToolExecuteWithContext for CodeModeLeaf {
             // `files` are the nested calls' file content parts sorted by
             // call index (:122-124).
             let files = {
-                let mut collected = collected_files_out
-                    .lock()
-                    .expect("files lock")
-                    .clone();
+                let mut collected = collected_files_out.lock().expect("files lock").clone();
                 collected.sort_by_key(|(index, _)| *index);
                 collected.into_iter().flat_map(|(_, files)| files).collect::<Vec<_>>()
             };

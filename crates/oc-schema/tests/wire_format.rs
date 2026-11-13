@@ -405,10 +405,7 @@ fn provider_model_cost_omitted_when_unset() {
     let model: config::provider::Model =
         serde_json::from_value(serde_json::json!({ "name": "M1" })).unwrap();
     let encoded = serde_json::to_value(&model).unwrap();
-    assert!(
-        encoded.get("cost").is_none(),
-        "unset cost must stay absent from the wire: {encoded}"
-    );
+    assert!(encoded.get("cost").is_none(), "unset cost must stay absent from the wire: {encoded}");
 
     // A present cost still round-trips (single-entry form preserved).
     let with_cost: config::provider::Model = serde_json::from_value(serde_json::json!({
@@ -417,10 +414,7 @@ fn provider_model_cost_omitted_when_unset() {
     }))
     .unwrap();
     let encoded_cost = serde_json::to_value(&with_cost).unwrap();
-    assert_eq!(
-        encoded_cost.get("cost"),
-        Some(&serde_json::json!({ "input": 1.5, "output": 2.5 }))
-    );
+    assert_eq!(encoded_cost.get("cost"), Some(&serde_json::json!({ "input": 1.5, "output": 2.5 })));
 }
 
 #[test]

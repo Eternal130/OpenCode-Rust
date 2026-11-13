@@ -979,8 +979,13 @@ async fn g230_subagent_declared_output_validates() {
     let parent = create_session(&sub, None, "g230parent", Some(model_ref("parent")), None).await;
     let reg = crate::tool::tests::harness().await;
     let hooks = std::sync::Arc::new(crate::hooks::HookRegistry::new());
-    crate::tool::subagent::register(&reg.tools, &hooks, &reg.services, std::sync::Arc::new(sub.tool))
-        .expect("register subagent");
+    crate::tool::subagent::register(
+        &reg.tools,
+        &hooks,
+        &reg.services,
+        std::sync::Arc::new(sub.tool),
+    )
+    .expect("register subagent");
     let executor = reg.tools.executor("subagent").expect("executor");
     let result = executor
         .execute_with_context(

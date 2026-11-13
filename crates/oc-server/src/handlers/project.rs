@@ -1085,7 +1085,11 @@ async fn vcs_get(
                 })
             }
         }
-        None => Value::Null,
+        // G-418 — uninitialized/not-a-repo: ref (core/vcs.ts:67,
+        // `current: { info: Info } = { info: { branch: {} } }`) returns
+        // an Info object with an empty `branch` object (`provider` is
+        // optional and omitted), not JSON `null`.
+        None => json!({ "branch": {} }),
     };
     Ok(super::common::json_location_data(&location.as_path().to_string_lossy(), data))
 }
