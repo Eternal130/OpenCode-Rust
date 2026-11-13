@@ -1,0 +1,33 @@
+{
+  "schema": "tui-diff-scenario/1",
+  "id": "home-empty",
+  "width": 80,
+  "height": 24,
+  "fetch": {
+    "/api/agent": { "status": 200, "body": { "location": { "directory": "/tmp/opencode/packages/tui", "project": { "id": "proj_test", "directory": "/tmp/opencode", "canonical": "/tmp/opencode" } }, "data": [] } },
+    "/api/command": { "status": 200, "body": { "location": { "directory": "/tmp/opencode/packages/tui", "project": { "id": "proj_test", "directory": "/tmp/opencode", "canonical": "/tmp/opencode" } }, "data": [] } },
+    "/api/config": { "status": 200, "body": { "location": { "directory": "/tmp/opencode/packages/tui", "project": { "id": "proj_test", "directory": "/tmp/opencode", "canonical": "/tmp/opencode" } }, "data": [] } },
+    "/api/event": { "status": 200, "body": { "sse": true, "initial": { "id": "evt_connected", "type": "server.connected", "data": {} } } },
+    "/api/experimental/migration/v1": { "status": 200, "body": { "status": "completed" } },
+    "/api/form": { "status": 200, "body": { "location": { "directory": "/tmp/opencode/packages/tui", "project": { "id": "proj_test", "directory": "/tmp/opencode" } }, "data": [] } },
+    "/api/fs/list": { "status": 200, "body": { "location": { "directory": "/tmp/opencode/packages/tui", "project": { "id": "proj_test", "directory": "/tmp/opencode", "canonical": "/tmp/opencode" } }, "data": [] } },
+    "/api/info": { "status": 200, "body": { "version": "test", "pid": 0, "urls": [], "paths": { "tmp": "/tmp" }, "capabilities": { "persistentPty": true } } },
+    "/api/integration": { "status": 200, "body": { "location": { "directory": "/tmp/opencode/packages/tui", "project": { "id": "proj_test", "directory": "/tmp/opencode", "canonical": "/tmp/opencode" } }, "data": [] } },
+    "/api/location": { "status": 200, "body": { "directory": "/tmp/opencode/packages/tui", "project": { "id": "proj_test", "directory": "/tmp/opencode", "canonical": "/tmp/opencode" } } },
+    "/api/mcp": { "status": 200, "body": { "location": { "directory": "/tmp/opencode/packages/tui", "project": { "id": "proj_test", "directory": "/tmp/opencode", "canonical": "/tmp/opencode" } }, "data": [] } },
+    "/api/mcp/resource": { "status": 200, "body": { "location": { "directory": "/tmp/opencode/packages/tui", "project": { "id": "proj_test", "directory": "/tmp/opencode", "canonical": "/tmp/opencode" } }, "data": { "resources": [], "templates": [] } } },
+    "/api/model": { "status": 200, "body": { "location": { "directory": "/tmp/opencode/packages/tui", "project": { "id": "proj_test", "directory": "/tmp/opencode", "canonical": "/tmp/opencode" } }, "data": [] } },
+    "/api/plugin": { "status": 200, "body": { "location": { "directory": "/tmp/opencode/packages/tui", "project": { "id": "proj_test", "directory": "/tmp/opencode", "canonical": "/tmp/opencode" } }, "data": [] } },
+    "/api/project": { "status": 200, "body": [] },
+    "/api/provider": { "status": 200, "body": { "location": { "directory": "/tmp/opencode/packages/tui", "project": { "id": "proj_test", "directory": "/tmp/opencode", "canonical": "/tmp/opencode" } }, "data": [] } },
+    "/api/reference": { "status": 200, "body": { "location": { "directory": "/tmp/opencode/packages/tui", "project": { "id": "proj_test", "directory": "/tmp/opencode", "canonical": "/tmp/opencode" } }, "data": [] } },
+    "/api/session/active": { "status": 200, "body": { "data": {} } },
+    "/api/shell": { "status": 200, "body": { "location": { "directory": "/tmp/opencode/packages/tui", "project": { "id": "proj_test", "directory": "/tmp/opencode", "canonical": "/tmp/opencode" } }, "data": [] } },
+    "/api/skill": { "status": 200, "body": { "location": { "directory": "/tmp/opencode/packages/tui", "project": { "id": "proj_test", "directory": "/tmp/opencode", "canonical": "/tmp/opencode" } }, "data": [] } },
+    "/api/vcs": { "status": 200, "body": { "location": { "directory": "/tmp/opencode/packages/tui", "project": { "id": "proj_test", "directory": "/tmp/opencode", "canonical": "/tmp/opencode" } }, "data": { "branch": { "current": "main", "default": "main" } } } }
+  },
+  "events": [],
+  "keys": [],
+  "settle_ms": 200,
+  "note": "Fresh boot on the home route with an empty session list and no follow-up events; both sides must render the idle home screen (empty session column + composer placeholder) identically after settle."
+}
