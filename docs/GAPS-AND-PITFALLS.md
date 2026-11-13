@@ -34,6 +34,8 @@
 
 > **2026-11-13 第二十九轮（语料升级：ref 夹具挖掘 + 差分通道 7）**：①`mine_ref_fixtures.py` 把 ref 测试夹具机械转为 6 通道 corpus（123 语料+13 HTTP 请求——ref 畸形样本/translate 表/repair 对/内联事件/路由测试）；②新通道 7 provider 录制解码差分——HttpRecorder cassette 全量 264 可驱动交互（259 真实 SSE 流）双侧解码对拍。**7 通道 790 单元：MATCH 687 · DIVERGE 101 · 100% 归属**；挖掘新增 23 分歧归并 **G-412..G-422（11 条：🟡×1/🟢×10）**——最重为 abandon 输出顺序非确定（HashMap 迭代序，G-412）与 venice/google namespace 空 attaching 镜像族（G-419/420）；4 对归 G-407 catch→accept-all 族、unanchored 归 G-409。语料来源三级跳：自造→ref 验证输入→真实 provider 流量。扫描口径=census 14+diff 7 命令。明细见文末「第二十九轮」节。
 
+> **2026-11-13 第三十轮 burndown 收口（gap-burndown-15）**：第二十九轮立项的 G-412..G-422 全部 11 项经 3 个串行 lane（oc-cli ACP / oc-ai 协议 / oc-schema·core·server wire）落地合并 main——9 项实修 ✅、**G-419/G-421 经双侧源码取证为差分驱动器协议选择不对称所致、按勘误撤销**（rust 语义本就对齐，驱动器修复入库）、G-422 根因订正为 serde_json 快速浮点解析 1-ULP 误差（workspace `float_roundtrip` 特性收口）。差分 7 通道终态 **790 单元：MATCH 717 · DIVERGE 71 · ADJUDICATED 2——残余分歧 100% 登记归属，可行动缺口清零**；census 14 通道零分类变化。无上游阻挡项（G-247 残余维持既有搁置）。明细见文末「第三十轮 burndown 收口」节。
+
 > **2026-11-12 第二十七轮（差分层通道 2-6 全量铺开）**：5 条并行 lane 复制通道 1 模式（ACP 转译/SSE store 投影/JSON Schema 校验器对拍//compact 管线/HTTP 全量——双侧真实驱动：bun staging、rust env 门控测试、通道 6 双进程真实 boot 47 请求）。**6 通道合计 384 对拍单元：MATCH 323 · DIVERGE 74 · ADJUDICATED 2 · 覆盖率 100%**；74 项分歧归并 **G-392..G-411（20 条：🟡×6 / 🟢×9 / ℹ️×5）** 入册。核心新事实：ACP child toolCallId 双重前缀 wire bug（G-392）、SSE reasoning 空白 delta 丢弃=G-351 姊妹缺口（G-393）、HTTP provider.list wire 形状整差（G-394）、校验器 7 关键字缺口（G-395）、agent 内容漂移（G-396）、**ref 生产校验器把编译错洗成 accept-all**（G-407：pattern/additionalProperties:false/结构化 const 在 ref 生产不校验——rust 更严属规范正确）。已知锚：G-357 四修复位全对齐、G-351 text 半边对齐、G-339/G-340/G-230c 对齐。工具 `tools/diff/`（6 编排器），报告与 INDEX `docs/audit/diff/`；扫描循环现口径=census 14 命令 + diff 6 命令。明细见文末「第二十七轮」节。
 
 > **2026-11-13 第二十八轮 burndown 收口（gap-burndown-14）**：第二十七轮 G-392..G-411 中 13 项可行动缺口经 5 个串行 lane（oc-cli ACP/oc-tui SSE store/oc-ai 校验/oc-server wire/oc-core agent 种子）落地合并 main，逐条 ✅；G-403 按登记倾向裁决为有意纠偏（ℹ️）；G-404 整条+G-395 两子项经差分复跑**证伪撤销**。差分稳态 **399 单元：MATCH 341 · DIVERGE 56 · ADJUDICATED 2——残余分歧 100% 登记归属，可行动缺口清零**；census 零新 REF_ONLY；终局 workspace 门 6038/6038。无 opentui-rust 依赖的上游阻挡项（唯一上游阻挡维持=G-247 残余 Bun 全局面）。明细见文末「第二十八轮 burndown 收口」节。
@@ -298,7 +300,7 @@
 1. canonical harness=**nextest**（.config/nextest.toml：test-threads=4、全局 retry=1、be1/pty 家族 retry=2）：全 workspace 用 `cargo nextest run --workspace --locked --no-fail-fast`；PTY 家族另跑 `--profile pty`；**禁 plain `cargo test`** 的红作回归证据（`--exact` 单测复现除外）。
 2. 首轮**不过滤** + `--no-fail-fast` 拿全量结果；报告**原样引用 `test result:` 行**（禁只写 green/通过）；红测试**同轮** `--exact <name> -- --nocapture` 取回输出。
 3. 终报**从磁盘核实**：`ls -t .test-logs/` 定位真实文件 + `grep -cE 'FAIL'` 核对失败计数；只引 `ls` 出的路径；终报贴 `git log -1 <branch>` 落地证明，缺证明=未完成。
-4. flake 白名单（重试即过、勿误判回归、不作合并门单独阻塞）：`composer_tabs_walk` / `location_ttl_sweeper` / `mini_subagent_footer` / `scenario_permission_saved` / `e1_cells_paste_8k` / `e1_canary` / `catalog_refresh_propagates`。`e1_cells_paste_8k` 勘注（2026-11-07）：并发满套件常双败、序列化过、跨构建非单调（盘上二分证据见第十四轮）——放行依据=落盘的序列化单跑通过。勘注（2026-11-08 第十六轮受控复现）：**该 canary 逐构建翻转与代码语义无关**——a7d0caa4 原构建序列化 PASS×2（含 load 8.9 下）、同树+仅 2 行零语义注释重编即翻红；d1bb497a 全部内容回退组合（±project.rs/±repository_cache.rs）均红；失败形状恒为 typing-idle 单格恰 1 burst（bursts=1≠0），系二进制布局偏移使一次性唤醒落入 2.5s 采样窗。**序列化单跑通过不再是普适可得状态**，放行依据=白名单+受控证据链（日志 `.test-logs/e1-bisect-*`，判别实验见第十六轮节）。勘注（2026-11-10 第二十一轮）：CI 无白名单机制，run 42809491371 在 CI 构建上 3/3 触发同形状（typing-idle bursts=1、六格全 0、cadence 健康）——噪声地板已**内联进测试断言**（spec_ef2_e1_cells.rs：总 burst ≤1 放行、≥2 仍硬失败，注释引本条），本地与 CI 统一适用；该阈值即本白名单裁决的可执行化，非放松回归信号。
+4. flake 白名单（重试即过、勿误判回归、不作合并门单独阻塞）：`composer_tabs_walk` / `location_ttl_sweeper` / `mini_subagent_footer` / `scenario_permission_saved` / `e1_cells_paste_8k` / `e1_canary` / `catalog_refresh_propagates` / oc-pty `second_subscribe` 族 / `provider_refresh_engine_boot_loop_updates_and_publishes`（2026-11-13 第三十轮入册：R18/R23/gb15-lane3 三见，均重试即过）。`e1_cells_paste_8k` 勘注（2026-11-07）：并发满套件常双败、序列化过、跨构建非单调（盘上二分证据见第十四轮）——放行依据=落盘的序列化单跑通过。勘注（2026-11-08 第十六轮受控复现）：**该 canary 逐构建翻转与代码语义无关**——a7d0caa4 原构建序列化 PASS×2（含 load 8.9 下）、同树+仅 2 行零语义注释重编即翻红；d1bb497a 全部内容回退组合（±project.rs/±repository_cache.rs）均红；失败形状恒为 typing-idle 单格恰 1 burst（bursts=1≠0），系二进制布局偏移使一次性唤醒落入 2.5s 采样窗。**序列化单跑通过不再是普适可得状态**，放行依据=白名单+受控证据链（日志 `.test-logs/e1-bisect-*`，判别实验见第十六轮节）。勘注（2026-11-10 第二十一轮）：CI 无白名单机制，run 42809491371 在 CI 构建上 3/3 触发同形状（typing-idle bursts=1、六格全 0、cadence 健康）——噪声地板已**内联进测试断言**（spec_ef2_e1_cells.rs：总 burst ≤1 放行、≥2 仍硬失败，注释引本条），本地与 CI 统一适用；该阈值即本白名单裁决的可执行化，非放松回归信号。
 5. 基线日志必须绑定采集时 `git rev-parse HEAD` 树 hash（无 hash=无效基线）；测试争议先读落盘日志，禁凭记忆重跑。
 6. oracle 三可证：版本硬断言 + 采集指纹（FNV-1a 双语镜像）+ always-refresh；金帧只证渲染保真，组合/路由模型必须参照源码级对比（file:line），不许 golden 自证。
 7. **测试分层**（按改动范围选层，先轻后重；门命令**逐字内联** lane 提示词，禁「模板同前 lane」引用）：
@@ -3051,53 +3053,64 @@ G-392 ✅ · G-393 ✅ · G-394 ✅ · G-395 ✅（四族落地+两子项证伪�
 
 ## 🟡 中
 
-### G-412 ❌ ACP abandon 输出顺序不定（HashMap 迭代序，wire 跨 run 不稳定）
+### G-412 ✅ ACP abandon 输出顺序不定（HashMap 迭代序，wire 跨 run 不稳定）
 - rust：`oc-cli/src/acp/translate.rs:103` 工具表为 `HashMap<String,Tool>`，`:385-402` abandon 时按迭代序输出 tool_call updates——顺序跨 run 不稳定且实测 child 先于 root。
 - ref：`translate.ts:163-187` Map 插入序（root 先）。wire 顺序非确定性对 ACP 客户端是协议级缺陷（同 turn 重放顺序可变）。
 - 修法：表改 BTreeMap/IndexMap 或输出前按插入序排序。
 - 出处：diff ACP mined（cancelled turn fails open tools incl child）。
+- **2026-11-13 第三十轮收口 ✅（gb15-lane1 `c81798e8`）**：`TurnState.tools` 改 Vec 背书的插入序 `ToolTable`（Map.set 语义：重插保位、零新依赖），abandon 按注册序发射（root 先）；测试 `abandon_emits_tools_in_registration_order_root_first` 钉定；ACP 差分 109→111/137 MATCH。
 
 ## 🟢 低
 
-### G-413 ❌ v1 permission 迁移条目顺序重排（serde 无 preserve_order 可观察面）
+### G-413 ✅ v1 permission 迁移条目顺序重排（serde 无 preserve_order 可观察面）
 - rust：`oc-core/src/config/normalize.rs:1470` 迁移条目按 serde_json 对象迭代序输出；ref `normalize.ts:515-519` 按 `Object.entries` 插入序（`"*.md"` 先、`"*"` 后）→ v1 迁移后的 encoded 条目顺序恒不同。Cargo.toml:30 注释早已声明 preserve_order 弃用——本条为其首个 wire 可观察面。
 - 出处：diff CONFIG mined-011。
+- **2026-11-13 第三十轮收口 ✅（gb15-lane3 `ab6664ad`）**：`jsonc_parse` 新增 `parse_jsonc_ordered`——serde_json **流式**反序列化直入插入序 `config::Json`（map 键按输入文本序访问；不经 `Value` 物化即不丢源键序，R-03 的 preserve_order 关闭裁决维持不动），config 装载路径与差分驱动器改走之；v1 权限迁移按源文件键序输出，mined-011 翻 MATCH。顺带根因修复：重复键语义改 JSON.parse last-wins（visit_map 原地覆写；36-dup-keys 残余随之翻 MATCH）。无 raw text 的 Value 输入方回退 BTreeMap 序（语义不变，`permission_migration_without_order_still_normalizes` 钉定）。
 
-### G-414 ❌ worktree directory 缺 Trim/非空校验
+### G-414 ✅ worktree directory 缺 Trim/非空校验
 - rust `oc-schema/src/config/worktree.rs:7-12` 裸 String 接受 `" "`；ref `schema/src/config/worktree.ts` Trim+isNonEmpty → invalid 剥除。
 - 出处：diff CONFIG mined-031。
+- **2026-11-13 第三十轮收口 ✅（gb15-lane3 `ab6664ad`）**：oc-schema `Worktree` 手写 Deserialize=Trim+isNonEmpty（全空白/空串解码失败→normalize `decode_encoded` 以 invalid 诊断剥除条目、有效值 trim 透传——ref decodeEncoded→invalid(path)→skip 逐语义对齐）；测试 `worktree_directory_trim_nonempty` + oc-schema `trims_surrounding_whitespace`/`rejects_whitespace_only_and_empty`；mined-031 翻 MATCH。
 
-### G-415 ❌ ACP shell to_locations 双 location
+### G-415 ✅ ACP shell to_locations 双 location
 - rust `oc-cli/src/acp/tool.rs:89-95` 把 `workdir??cwd` 与 `cwd` 都传入 locations；ref `acp/tool.ts:38` 只传前者——rust 每个 shell update 多带 `{path: cwd}`。
 - 出处：diff ACP mined tool 族。
+- **2026-11-13 第三十轮收口 ✅（gb15-lane1 `c81798e8`）**：to_locations shell 臂只传单一有效位置（`workdir ?? cwd ?? turnCwd`），`cwd` 不再追加第二条；测试 `shell_locations_are_a_single_effective_location`。注：对应 mined 用例仍计 G-411 B1 残余（该用例兼含 pending tool_call 形状差，位置字段本身已对齐）。
 
-### G-416 ❌ ACP compaction marker 多带 summary
+### G-416 ✅ ACP compaction marker 多带 summary
 - rust `acp/compaction.rs:165-170` 在 `_meta["opencode/compaction"]` 写入 `summary`；ref `acp/compaction.ts:112-118` marker 仅 status/messageId/reason(+error)。
 - 出处：diff ACP mined compaction 族。
+- **2026-11-13 第三十轮收口 ✅（gb15-lane1 `c81798e8`）**：Completed marker 键集收敛为 status/messageId/reason（Failed 分支另带 error），summary 不再入 marker；测试 `marker_keys_are_status_message_id_reason_only` 钉定键集。
 
-### G-417 ❌ compaction input_image/file `detail` 非字符串静默吞掉
+### G-417 ✅ compaction input_image/file `detail` 非字符串静默吞掉
 - rust `responses_compaction.rs:426-427` `as_str` 把 `detail:42` 哞掉并接受整文档；ref `open-responses.ts:42,47` optional(String) 拒绝。
 - 出处：diff COMPACTION mined-r02/r06。
+- **2026-11-13 第三十轮收口 ✅（gb15-lane2 `522a567e`）**：`detail` 在场非字符串→整文档拒绝（"Invalid compaction response: media part detail must be a string"，同文件 G-400 同型门与文案风格）；测试 `media_part_detail_must_be_a_string_when_present`（input_image/input_file × 拒绝/缺省/字符串接受）；mined-r02/r06 翻 MATCH。
 
-### G-418 ❌ HTTP GET /api/vcs 未初始化 wire 形状
+### G-418 ✅ HTTP GET /api/vcs 未初始化 wire 形状
 - rust `handlers/project.rs:1085` 未初始化返回 `null`；ref `core/src/vcs.ts:67` 返回 `Info{branch:{}}`。
 - 出处：diff HTTP mined vcs_uninit_get。
+- **2026-11-13 第三十轮收口 ✅（gb15-lane3 `ab6664ad`）**：未初始化分支返回 ref 形状 Info `{"branch":{}}`（不再 null）；http_full `vcs_uninit_get` 翻 MATCH（通道 46→47/60）。
 
-### G-419 ❌ venice providerMetadata 空命名空间恒附着（13 交互）
+### G-419 ✅→撤销 venice providerMetadata 空命名空间恒附着（13 交互）——~~rust 无条件附着~~（登记前提经双侧源码取证证伪）
 - rust `openai_chat.rs:72,1477` 无条件附着空 `providerMetadata.venice={}`；ref `venice-chat.ts:325-345` 条件附着——真实流量回放证实 13 个交互 wire 多空对象。
 - 出处：diff PROVIDER-RECORDINGS 聚类①。
+- **2026-11-13 第三十轮勘误撤销（gb15-lane2 `522a567e`；差分驱动器修复，非 rust 改动）**：登记前提不实——ref `venice-chat.ts:335-346` onHalt 的 `venice:` 键为**无条件**展开（可能为空的对象恒在），rust `venice_finish` 本就逐语义对齐；分歧源于差分驱动器按 family 选协议、venice-chat 组被 ref 侧走了裸 openai-chat（rust 侧正确走 VeniceChat 包装）。驱动器已修（`tools/diff/drivers/provider_recordings_ref.ts`：venice-chat 组改走 `VeniceChat.protocol`，与 `providers/venice.ts` 生产路由一致），聚类①13 交互翻 MATCH。勿再立项。
 
-### G-420 ❌ google-interactions 空 {google:{}} 附着方向反（6 交互）
+### G-420 ✅ google-interactions 空 {google:{}} 附着方向反（6 交互）
 - ref `google-interactions.ts:291,377` 恒附着空命名空间；rust 条件附着——与 G-419 镜像的反向差。
 - 出处：diff PROVIDER-RECORDINGS 聚类②。
+- **2026-11-13 第三十轮收口 ✅（gb15-lane2 `522a567e`）**：`signature_metadata` 无条件附命名空间对象（signature 缺席仅省 `interactionSignature` 键，空命名空间仍随事件上 wire），覆盖 reasoning-start/function_call/tool-input-start/thought_signature 全调用点（ref :377/:396/:399/:431/:456 对位）；测试 `signatureless_step_still_carries_the_metadata_namespace`；聚类②6 交互翻 MATCH。
 
-### G-421 ❌ venice `__ENCRYPTED_REASONING__` marker 剥除差（3 交互）
+### G-421 ✅→撤销 venice `__ENCRYPTED_REASONING__` marker 剥除差（3 交互）——~~rust 剥除 ref 保留~~（登记前提经双侧源码取证证伪）
 - ref 保留 marker 文本；rust 剥除——reasoning 占位语义差。
 - 出处：diff PROVIDER-RECORDINGS 聚类③。
+- **2026-11-13 第三十轮勘误撤销（gb15-lane2 `522a567e`；差分驱动器修复，非 rust 改动）**：登记前提不实——ref `venice-chat.ts:180/:262-271` 本就将 `__ENCRYPTED_REASONING__` 从可见 reasoning 剥离（切片至 marker 前，经 `encryptedReasoningContent` 于 onHalt 回放），rust `venice_step` 本就镜像；分歧与 G-419 同系驱动器不对称。驱动器修复后聚类③3 交互翻 MATCH。勿再立项。
 
-### G-422 ❌ deepinfra estimated_cost 浮点精度（1 交互）
+### G-422 ✅ deepinfra estimated_cost 浮点精度（1 交互）——根因订正：非 f32 截断
 - rust `openai_chat.rs:432-457` map_usage 疑似 f32 截断（estimated_cost 末位偏差）；真实流量单交互证实。
 - 出处：diff PROVIDER-RECORDINGS 聚类④。
+- **2026-11-13 第三十轮收口 ✅（根因订正）（gb15-lane2 `522a567e`）**：链路全程 f64、无任何 f32——漂移源为 serde_json 默认快速浮点解析器的 1-ULP 误差（`0.000028780000000000002`→`2.878e-05`，探针日志 `probe-123200-gb15-lane2`）。修法=workspace `serde_json` 启用 `float_roundtrip` 特性（正确舍入解析，与 JS JSON.parse 数值语义一致），wire 数值 decode→map_usage→emit 位级保真；聚类④翻 MATCH。有界注记：特性为 workspace 级（全部经 workspace 依赖的 serde_json 受益），浮点密集载荷解析成本轻微上升。
 
 ## 归类与复认（不另立项）
 
@@ -3109,3 +3122,38 @@ G-392 ✅ · G-393 ✅ · G-394 ✅ · G-395 ✅（四族落地+两子项证伪�
 ## 第二十九轮判定汇总
 
 语料来源三级跳完成：自造边界 → ref 验证过的输入集 → **真实 provider 流量**。790 单元 100% 归属，挖掘新增 23 分歧归并 11 条（🟡×1 + 🟢×10），其余入 G-407/409/410 既有族。修复优先序：G-412（非确定 wire）> G-417/G-415（类型吞/双 location）> G-419/G-420（namespace 附着族，同型可一并修）> G-413/G-414/G-416/G-418/G-421 > G-422（先核 f32 源）。工具：`tools/diff/mine_ref_fixtures.py` + `provider_recordings.py`；报告与 INDEX `docs/audit/diff/`。扫描循环口径=census 14 + diff 7 命令。
+
+---
+
+# 第三十轮 burndown 收口（2026-11-13，gap-burndown-15）
+
+> 第二十九轮立项的 G-412..G-422 全部 11 项经 3 个串行 lane（lane1 oc-cli ACP / lane2 oc-ai 协议 / lane3 oc-schema·core·server wire）落地并 ff 合并 main（`c81798e8`+`5f248de1` / `522a567e` / `a74de6d6`+`ab6664ad`），其中 **G-419/G-421 经双侧源码取证为差分驱动器协议选择不对称所致、按勘误撤销**（rust venice 机器本就镜像 ref `venice-chat.ts`；驱动器修复已入库），G-422 根因订正为 serde_json 快速浮点解析 1-ULP 误差。每 lane 独立 worktree（`.worktrees/gb15-lane*`，合并后回收、分支已清）、dev-gate 单入口、nextest 未过滤证据、每 lane workspace 合并门复跑；一切门命令全量 tee 落盘 `.test-logs/*gb15*`。**无上游阻挡项（无 opentui-rust 依赖；G-247 残余维持既有搁置）。**
+
+## 逐 lane 落地清单
+
+- **lane1 `c81798e8`+`5f248de1`（oc-cli ACP）**：G-412（`ToolTable` 插入序表——Vec 背书、Map.set 重插保位语义，abandon 确定性 root 先）、G-415（shell to_locations 单一有效位置 `workdir ?? cwd ?? turnCwd`）、G-416（compaction marker 键集 parity，summary 剔除）。门：oc-cli 434/434；workspace 合并门 6045/6045（唯一 TRY-1 失败=白名单 canary `e1_cells_paste_8k`，重试过）；ACP 差分 109→111/137 MATCH（26 残余全归 G-411 B1–B3 有据形状族）。TDD 红→绿证据 `oc-cli-red*-gb15-lane1.log`。
+- **lane2 `522a567e`（oc-ai 协议）**：G-417（compaction `detail` 在场非字符串→整文档拒绝）、G-420（google-interactions 命名空间无条件附着——signature 缺席仅省键）、G-422（workspace serde_json `float_roundtrip`——正确舍入解析，wire 数值位级保真）；**G-419/G-421 勘误**：ref 驱动器按 family 选协议、venice-chat 组被走了裸 openai-chat——修复为该组走 `VeniceChat.protocol`（`providers/venice.ts` 生产路由同款，`tools/diff/drivers/provider_recordings_ref.ts`），聚类①③随之翻 MATCH（rust 侧零改动）。门：oc-ai 989/989；workspace 6047/6047（白名单 `scenario_permission_saved` 重试过）；recordings 差分 241→**264/264 全绿**；compaction 差分 58→60/61（余 1=b21 记录性）。
+- **lane3 `a74de6d6`+`ab6664ad`（config/schema/server wire）**：G-413（`parse_jsonc_ordered` 流式有序解析直入 `config::Json`——不经 `Value` 物化即不丢源键序（R-03 preserve_order 关闭维持）；顺带修重复键 JSON.parse last-wins，36-dup-keys 翻 MATCH）、G-414（Worktree directory Trim+isNonEmpty→invalid 剥除+诊断）、G-418（`GET /api/vcs` 未初始化返回 `Info{"branch":{}}`）。门：filtered 2318/2318（oc-schema/oc-core/oc-server）；workspace 6051/6052（唯一失败=白名单 oc-pty subscribe 族，`--exact` 隔离复跑 32/32）；CONFIG 差分 75→77/78（余 1=16-experimental/G-390 裁定超集旋钮）；HTTP 差分 46→47/60。
+
+## 终验（合并后全量复扫，eternal130 身份直跑）
+
+- **diff 7 通道终态**：config **77/78**（余 1=G-390）· ACP **111/137**（26=G-411 B1–B3）· SSE **2/15**（13=G-409 架构族）· JSON **156/175**（4=G-408 数字域 + 15=G-407 ref 洗错族，unclassified 0——R29 mined 4 对裁定已回填驱动器 CLASSIFICATIONS）· compaction **60/61**（1=b21 拒绝次序）· HTTP **47/60**（10 DIVERGE+2 ADJUDICATED=G-403 对+级联与 G-410 记录性族）· recordings **264/264 全绿**——**合计 790 单元：MATCH 717 · DIVERGE 71 · ADJUDICATED 2，残余分歧 100% 登记归属，可行动缺口清零**（对比第二十九轮基线 687/101/2：30 项分歧翻转，全部有因）。
+- **census 14 通道全量复跑**：零分类变化。报告漂移均为良性——行号锚点随本轮代码位移刷新、登记册提及行号随文册增长、lane worktree 路径→主检出规范路径（上轮 census 仅抽查 2 通道，本轮全量追平累积漂移）；报告刷新随轮入库。
+- **工具有界修订（随轮入库）**：`json_schema_validate.py` CLASSIFICATIONS 回填 R29 4 对裁定；`acp_translate.py` A 节改「已闭缺口」（A1–A3 对应 G-392/401/402 已于 gb14 修复，消除 lane1 发现的过时裁定行）；ACP 报告随驱动器重生成（计数不变 111/137）。
+- **环境注记（并入 lane 模板）**：lane 期差分驱动器曾以 root 运行，污染 `/tmp/opencode/diff-http|diff-provrec` 属主致终验首次运行失败——终验以 eternal130（systemd-run 直跑、不占 dev-gate 锁）清理重跑后全绿。此后 lane 提示词应明确：**差分/census 驱动器不得以 root 跑**（其内部直调 cargo nextest），root 会话用 `systemd-run --uid=eternal130 …` 直跑模式。
+
+## flake 记录（2.2#4 白名单已同步）
+
+- `provider_refresh_engine_boot_loop_updates_and_publishes` 第三见（R18/R23/gb15-lane3，均重试即过）——满足「复发三次以上再议」条件，**入白名单**。
+- oc-pty `second_subscribe` 族（gb15-lane3 门内三连败、`--exact` 隔离 32/32 过）维持白名单。
+
+## 有界偏离（本轮新增，均已代码注释或条目登记）
+
+- G-413：无 raw text 的 Value 输入方维持 BTreeMap 序（仅 config 文件装载路径获得有序解析）；重复键语义从「首见保留」改为 JSON.parse last-wins（对齐 ref）。
+- G-415：对应 mined 用例仍计 G-411 B1 残余（兼含 pending tool_call 形状差，位置字段本身已对齐）。
+- G-422：`float_roundtrip` 为 workspace 级特性（经 workspace 依赖的 serde_json 全体受益），浮点密集载荷解析成本轻微上升；正确性=JS JSON.parse 语义。
+- G-419/G-421 勘误：驱动器 venice-chat 组改走真实包装协议——此后 recordings 通道的 ref 侧与其生产路由一致（对拍保真度提升，非放水：两侧现都跑完整 venice 机器）。
+
+## 第三十轮判定
+
+G-412/413/414/415/416/417/418/420/422 ✅；**G-419/G-421 勘误撤销**（登记前提证伪：分别为 ref 无条件附着与 ref 侧剥离，rust 本就对齐；驱动器修复入库）；G-422 根因订正（非 f32，为 serde_json 解析 ULP）。现存未关闭项=文档化决策/登记族（G-12/G-16/G-17/G-28（收窄面）/G-32/G-38/G-39/G-40/G-49/G-148②/G-161①/G-163/G-164/G-200②/G-211(OBSOLETE)/G-212/G-238/G-240/G-247 残余(上游阻挡)/G-289/G-290/G-313..G-318/G-326/G-328/G-329/G-386/G-389/G-390/G-403/G-407..G-411）——均可行动面为零。**无 opentui-rust 依赖的上游阻挡项。** 证据：lane 报告 `.superpowers/sdd/gb15/lane{1,2,3}-report.md`、门与差分日志 `.test-logs/*gb15*`、差分报告 `docs/audit/diff/`（已随轮刷新）。

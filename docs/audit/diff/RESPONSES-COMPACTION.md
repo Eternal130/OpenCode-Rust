@@ -6,7 +6,7 @@
 > `crates/oc-ai/src/protocols/utils/responses_compaction.rs::parse_compaction_response`
 > （env 门控集成测试）。归一化：Message wire 形状（role/parts/providerMetadata）、
 > 可选字段 null/undefined 键统一剥除、usage 原文透传剥除、错误归一为粗桶
-> 复现：`python3 tools/diff/responses_compaction.py`（corpus：/opt/opencode-rust/.worktrees/gb15-lane2/tools/diff/corpus/compaction）
+> 复现：`python3 tools/diff/responses_compaction.py`（corpus：/opt/opencode-rust/tools/diff/corpus/compaction）
 
 - **MATCH：60/61** · DIVERGE：**1** · MISSING：**0**（覆盖率 61/61）
 

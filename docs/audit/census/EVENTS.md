@@ -17,9 +17,9 @@
 ## 轴 2：rust TUI 消费面（oc-tui/src/store.rs `"session.*"` 字面量，测试区已剥除）
 
 - 提取 `"session.*"` 字面量 38 个：命中 wire 事件 35，TUI 本地事件 3
-  - ⚪ TUI_LOCAL `session.grouping` — crates/oc-tui/src/store.rs:3071（TUI 本地状态名，非 wire 面，不计入对拍）
-  - ⚪ TUI_LOCAL `session.sidebar` — crates/oc-tui/src/store.rs:3066（TUI 本地状态名，非 wire 面，不计入对拍）
-  - ⚪ TUI_LOCAL `session.updated` — crates/oc-tui/src/store.rs:13098（TUI 本地状态名，非 wire 面，不计入对拍）
+  - ⚪ TUI_LOCAL `session.grouping` — crates/oc-tui/src/store.rs:3082（TUI 本地状态名，非 wire 面，不计入对拍）
+  - ⚪ TUI_LOCAL `session.sidebar` — crates/oc-tui/src/store.rs:3077（TUI 本地状态名，非 wire 面，不计入对拍）
+  - ⚪ TUI_LOCAL `session.updated` — crates/oc-tui/src/store.rs:13154（TUI 本地状态名，非 wire 面，不计入对拍）
 - 交叉验证：wire 命中集合 ⊆ 轴 3 BOTH 集合，无消费面独立发现的新事件名 → 提取未见漏
 
 ## 轴 3：全 schema 跨检（所有 `session.*` wire 名，含 status/compaction 族）

@@ -60,10 +60,10 @@
 | `integer-big-int/big` | rust-accept-ref-reject | effect integer AST 以 JS 安全整数域为界，2^53 起拒绝（probe 直证）；rust u64/i64 覆盖全 64 位。另注：JS J |
 | `integer-big-int/big-ok` | rust-accept-ref-reject | 2^53 恰可精确表示但 effect 仍拒绝——安全整数边界取 < 2^53。 |
 | `integer-big-int/neg-big` | rust-accept-ref-reject | 同上，负方向对称。 |
-| `mined-repair-extras-closed-objects/in2` | rust-reject-ref-accept | 未定性（人工裁定） |
-| `mined-repair-optional-nulls-placeholders/in1` | rust-reject-ref-accept | 未定性（人工裁定） |
-| `mined-repair-pattern-ownership/in1` | rust-reject-ref-accept | 未定性（人工裁定） |
-| `mined-repair-refs-dictionary/in1` | rust-reject-ref-accept | 未定性（人工裁定） |
+| `mined-repair-extras-closed-objects/in2` | rust-reject-ref-accept | effect Draft2020-12 对空 properties+additionalProperties:false 不产生封闭对象校验（R29 裁定补注） |
+| `mined-repair-optional-nulls-placeholders/in1` | rust-reject-ref-accept | 源夹具为悬空 $ref 的 repair 语境，非生产对拍面。 |
+| `mined-repair-pattern-ownership/in1` | rust-reject-ref-accept | pattern 编译错经 Cache catch 洗成 accept-all（R29 裁定补注）。 |
+| `mined-repair-refs-dictionary/in1` | rust-reject-ref-accept | draft-07 选择+$defs/$ref 失效→accept-all（R29 裁定补注）。 |
 | `pattern/space` | rust-reject-ref-accept | 同上（pattern 编译抛错→catch→accept-all）。 |
 | `pattern/upper` | rust-reject-ref-accept | effect Draft2020-12 编译器对 pattern 默认抛错（"Pattern encountered while patterns is set |
 | `type-integer/float-int` | rust-reject-ref-accept | serde_json 保留 `5.0` 为 f64（is_i64=false→非 integer），JS 中 5.0===5 为整数。数字表示差，非能力缺口。 |
@@ -140,28 +140,28 @@
 - rust 锚点：`type`→json_schema.rs:146-170 (union parse) / :31-43 (matches_type); `properties`→json_schema.rs:289-302; `additionalProperties`→json_schema.rs:289-317; `items`→json_schema.rs:349-360
 - ref 锚点：`packages/core/src/tool/runtime.ts:101-107 (jsonSchema) / :78 (decodeUnknownEffect) / :9-18 (Cache catch->undefined->accept)`
 - rust accept = `False` · ref accept = `True`
-- 定性：未定性（人工裁定）
+- 定性：G-407 族：effect Draft2020-12 对空 properties+additionalProperties:false 不产生封闭对象校验（R29 裁定补注）。
 
 ### `mined-repair-optional-nulls-placeholders/in1` — rust-reject-ref-accept
 - 关键字：`type`, `required`, `properties`, `anyOf`, `const`, `$ref`, `items`
 - rust 锚点：`type`→json_schema.rs:146-170 (union parse) / :31-43 (matches_type); `required`→json_schema.rs:269-284; `properties`→json_schema.rs:289-302; `anyOf`→json_schema.rs:127-134; `const`→json_schema.rs:244-254 (G-230); `$ref`→json_schema.rs:116-121 / :70-86; `items`→json_schema.rs:349-360
 - ref 锚点：`packages/core/src/tool/runtime.ts:101-107 (jsonSchema) / :78 (decodeUnknownEffect) / :9-18 (Cache catch->undefined->accept)`
 - rust accept = `False` · ref accept = `True`
-- 定性：未定性（人工裁定）
+- 定性：提取噪声（R29 裁定）：源夹具为悬空 $ref 的 repair 语境，非生产对拍面。
 
 ### `mined-repair-pattern-ownership/in1` — rust-reject-ref-accept
 - 关键字：`type`, `properties`, `additionalProperties`, `patternProperties`
 - rust 锚点：`type`→json_schema.rs:146-170 (union parse) / :31-43 (matches_type); `properties`→json_schema.rs:289-302; `additionalProperties`→json_schema.rs:289-317
 - ref 锚点：`packages/core/src/tool/runtime.ts:101-107 (jsonSchema) / :78 (decodeUnknownEffect) / :9-18 (Cache catch->undefined->accept)`
 - rust accept = `False` · ref accept = `True`
-- 定性：未定性（人工裁定）
+- 定性：G-407 族：pattern 编译错经 Cache catch 洗成 accept-all（R29 裁定补注）。
 
 ### `mined-repair-refs-dictionary/in1` — rust-reject-ref-accept
 - 关键字：`$ref`, `$defs`, `additionalProperties`, `type`
 - rust 锚点：`$ref`→json_schema.rs:116-121 / :70-86; `$defs`→json_schema.rs:70-86 (resolve_ref); `additionalProperties`→json_schema.rs:289-317; `type`→json_schema.rs:146-170 (union parse) / :31-43 (matches_type)
 - ref 锚点：`packages/core/src/tool/runtime.ts:101-107 (jsonSchema) / :78 (decodeUnknownEffect) / :9-18 (Cache catch->undefined->accept)`
 - rust accept = `False` · ref accept = `True`
-- 定性：未定性（人工裁定）
+- 定性：G-407 族：draft-07 选择+$defs/$ref 失效→accept-all（R29 裁定补注）。
 
 ### `pattern/space` — rust-reject-ref-accept
 - 关键字：`pattern`
@@ -226,11 +226,7 @@
 
 ## 判定
 
-- 已裁定：175/175（每对 MATCH 或分歧方向+定性明确；未定性 4 对待人工）
-  - 未定性：`mined-repair-extras-closed-objects/in2`
-  - 未定性：`mined-repair-optional-nulls-placeholders/in1`
-  - 未定性：`mined-repair-pattern-ownership/in1`
-  - 未定性：`mined-repair-refs-dictionary/in1`
+- 已裁定：175/175（每对 MATCH 或分歧方向+定性明确；未定性 0 对待人工）
 - G-395 已修：prefixItems（含 items 尾部语义）、exclusiveMinimum/Maximum、multipleOf、minProperties 全部 MATCH。schema:false 实测 ref 生产同样放行（codec_ok=true）——非缺口，预登记撤销。
 - 记录性宽松差（ref 侧，probe 直证）：pattern、结构化 const、additionalProperties、|n|≥2^53 integer——effect 编译器限制经 Cache catch launder，rust 侧为能力超集。
 - 记录性数字/相等语义差（5.0、1.0、[{},{}]、[1,1.0]）：JS 数值模型 vs serde_json 表示差，双侧各自自洽。

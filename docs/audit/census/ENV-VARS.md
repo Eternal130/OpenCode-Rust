@@ -40,12 +40,12 @@
 - 🔴 `OPENCODE_DISABLE_FILEWATCHER` — ref[cli]: read /opt/opencode-ref/packages/cli/src/server-process.ts:124
   - 裁定【已文档化缺口】：同上（同名旧拼写，ref server-process.ts:124 双名兼容）。
 - 🔴 `OPENCODE_DRIVE` — ref[tui]: read /opt/opencode-ref/packages/tui/src/app.tsx:253
-  - GAPS-AND-PITFALLS.md 提及行：[1309]
+  - GAPS-AND-PITFALLS.md 提及行：[1319]
   - 裁定【有据分歧】：ref tui/src/app.tsx:253 drive 集成；GAPS:1300 段提及。
 - 🔴 `OPENCODE_FILEWATCHER_DISABLE` — ref[cli]: read /opt/opencode-ref/packages/cli/src/server-process.ts:124
   - 裁定【已文档化缺口】：rust `crates/oc-server/src/server_process_env.rs:22-24` 注释明示 "Not claimable in this port … flagged, not faked"（v2 `Watcher.configured`）；ref `packages/cli/src/server-process.ts:124`。
 - 🔴 `OPENCODE_NODE_ASSETS_DIR` — ref[tui]: read /opt/opencode-ref/packages/tui/src/attention-sounds.node.ts:7; read /opt/opencode-ref/packages/tui/src/attention-sounds.node.ts:8
-  - GAPS-AND-PITFALLS.md 提及行：[1309, 2732]
+  - GAPS-AND-PITFALLS.md 提及行：[1319, 2742]
   - 裁定【生态资产类·不适用】：node 资产目录（tui/attention-sounds.node.ts:7-8）；rust 资产经 OPENCODE_APP_ASSETS（rust-only）。
 - 🔴 `OPENCODE_NODE_PTY_PATH` — ref[core]: read /opt/opencode-ref/packages/core/src/pty/pty.node.ts:8
   - 裁定【生态资产类·不适用】：node 侧 pty 原生模块路径覆盖（core/src/pty/pty.node.ts:8）；rust 自带 oc-pty 进程，无 node 模块加载。
@@ -54,12 +54,12 @@
 - 🔴 `OPENCODE_PHOTON_WASM_PATH` — ref[core]: read /opt/opencode-ref/packages/core/src/image/photon-wasm.node.ts:3
   - 裁定【生态资产类·不适用】：WASM 图像处理模块路径（image/photon-wasm.node.ts:3）；rust 原生图像路径。
 - 🔴 `OPENCODE_ROUTE` — ref[tui]: read /opt/opencode-ref/packages/tui/src/app.tsx:348; read /opt/opencode-ref/packages/tui/src/app.tsx:349
-  - GAPS-AND-PITFALLS.md 提及行：[1309]
+  - GAPS-AND-PITFALLS.md 提及行：[1319]
   - 裁定【有据分歧】：ref tui/src/app.tsx:348-349 演示路由；GAPS-AND-PITFALLS.md:1300 段已提及同族。
 - 🔴 `OPENCODE_SHOW_TTFD` — ref[cli]: read /opt/opencode-ref/packages/cli/src/mini-host.ts:164
   - 裁定【演示/诊断类·低优先】：ref cli/src/mini-host.ts:164 TTFD 显示；同上。
 - 🔴 `OPENCODE_STORY` — ref[tui]: read /opt/opencode-ref/packages/tui/src/app.tsx:337; read /opt/opencode-ref/packages/tui/src/app.tsx:344
-  - GAPS-AND-PITFALLS.md 提及行：[1309]
+  - GAPS-AND-PITFALLS.md 提及行：[1319]
   - 裁定【有据分歧】：ref tui/src/app.tsx:337/344 storybook 演示模式；GAPS:1300 段提及。
 - 🔴 `OPENCODE_TREE_SITTER_BASH_WASM_PATH` — ref[core]: read /opt/opencode-ref/packages/core/src/shell/parser-wasm.node.ts:7
   - 裁定【生态资产类·不适用】：同上（:7）。
@@ -68,7 +68,7 @@
 - 🔴 `OPENCODE_TREE_SITTER_WASM_PATH` — ref[core]: read /opt/opencode-ref/packages/core/src/shell/parser-wasm.node.ts:6
   - 裁定【生态资产类·不适用】：WASM 语法分析模块（shell/parser-wasm.node.ts:6）；rust 内置 tree-sitter。
 - 🔴 `PATHEXT` — ref[core]: read /opt/opencode-ref/packages/core/src/util/which.ts:10
-  - GAPS-AND-PITFALLS.md 提及行：[632]
+  - GAPS-AND-PITFALLS.md 提及行：[642]
   - 裁定【半缺口候选】：ref `packages/core/src/util/which.ts:10` Windows 可执行扩展解析；rust `oc-core/src/environment/local.rs:23` 注释提及 PATHEXT 解析但 census 未见生产读取（GAPS:623 提及）——windows which 通道复核。
 - 🔴 `SNOWFLAKE_ACCOUNT` — ref[core]: read /opt/opencode-ref/packages/core/src/plugin/provider/snowflake-cortex.ts:176
   - 裁定【注册表族·待集成通道】：ref core/src/plugin/provider/snowflake-cortex.ts:176；rust providers_enterprise.rs 只列 SNOWFLAKE_CORTEX_TOKEN/PAT。
@@ -118,26 +118,26 @@
 - 🔗 `AWS_SECRET_ACCESS_KEY` — rust: indirect crates/oc-ai/src/protocols/bedrock/sigv4.rs:104
 - 🔗 `AWS_SESSION_TOKEN` — rust: indirect crates/oc-ai/src/protocols/bedrock/sigv4.rs:109
 - 🔗 `CARGO_MANIFEST_DIR` — rust: compile crates/oc-ai/src/test_support.rs:29; compile crates/oc-cli/build.rs:26
-- 🔗 `CARGO_PKG_VERSION` — rust: compile crates/oc-cli/src/cli.rs:22; compile crates/oc-cli/src/util.rs:8
+- 🔗 `CARGO_PKG_VERSION` — rust: compile crates/oc-cli/src/cli.rs:22; compile crates/oc-cli/src/lib.rs:119
 - 🔗 `CLOUDFLARE_API_KEY` — rust: table crates/oc-core/src/integration/providers.rs:73
 - 🔗 `CLOUDFLARE_API_TOKEN` — rust: table crates/oc-core/src/integration/providers.rs:73
-  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [2389]
+  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [2399]
 - 🔗 `CLOUDFLARE_WORKERS_AI_TOKEN` — rust: table crates/oc-core/src/integration/providers.rs:73
 - 🔗 `GOOGLE_APPLICATION_CREDENTIALS` — rust: read crates/oc-core/src/integration/vertex.rs:34
 - 🔗 `HERDR_ENV` — rust: read crates/oc-tui/src/config.rs:128; read crates/oc-tui/src/config.rs:331
 - 🔗 `NODE_EXTRA_CA_CERTS` — rust: indirect crates/oc-http/src/lib.rs:0
-  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [1929, 1930, 1933, 2083, 2253]
+  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [1939, 1940, 1943, 2093, 2263]
 - 🔗 `OC_BUILD_GIT_HASH` — rust: compile crates/oc-cli/src/main.rs:53
 - 🔗 `OC_BUILD_PROFILE` — rust: compile crates/oc-cli/src/main.rs:54
 - 🔗 `OC_BUILD_STAMP` — rust: compile crates/oc-server/src/lifecycle.rs:35
 - 🔗 `OC_FRAME_BUDGET_SCALE` — rust: read crates/oc-tui/src/frame_budget_tests.rs:52
 - 🔗 `OC_PLUGIN_BUN` — rust: indirect crates/oc-plugin-host/src/bun.rs:0; indirect crates/oc-util/src/bunman.rs:0
-  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [2233, 2799, 2811]
+  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [2243, 2809, 2821]
 - 🔗 `OC_PLUGIN_NODE` — rust: indirect crates/oc-plugin-host/src/bun.rs:0
-  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [2233, 2799, 2804]
+  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [2243, 2809, 2814, 2832]
 - 🔗 `OC_PTY_DAEMON` — rust: read crates/oc-core/src/persistent_pty/frontend.rs:54
 - 🔗 `OC_RELEASE_TAG` — rust: read crates/oc-cli/build.rs:18; read crates/oc-server/build.rs:67; compile crates/oc-cli/src/services/updater.rs:46
-  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [2279]
+  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [2289]
 - 🔗 `OC_TUI_DEBUG` — rust: read crates/oc-tui/src/app.rs:1347; read crates/oc-tui/src/app.rs:1442
 - 🔗 `OC_TUI_TEST_RENDER_PANIC` — rust: read crates/oc-tui/src/app.rs:3424
 - 🔗 `OPENCODE_ACP_DEBUG` — rust: read crates/oc-cli/src/acp/service.rs:335; read crates/oc-cli/src/acp/transport.rs:65
@@ -147,10 +147,10 @@
 - 🔗 `OPENCODE_DEBUG_ERRORS` — rust: read crates/oc-server/src/errors.rs:706
 - 🔗 `OPENCODE_DISABLE_PLUGINS` — rust: read crates/oc-server/src/plugins.rs:340
 - 🔗 `OPENCODE_INSTALLER_URL` — rust: indirect crates/oc-cli/src/services/updater.rs:0
-  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [767]
+  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [777]
 - 🔗 `OPENCODE_LOCAL_DISCOVERY` — rust: read crates/oc-server/src/boot.rs:642
 - 🔗 `OPENCODE_LOG_FILE` — rust: read crates/oc-server/src/boot.rs:1093; read crates/oc-util/src/logging.rs:120; write crates/oc-server/src/boot.rs:1094
-  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [2703]
+  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [2713]
 - 🔗 `OPENCODE_MODELS_DEV_URL` — rust: indirect crates/oc-server/src/server_process_env.rs:76
 - 🔗 `OPENCODE_NO_TTY_PROMPT` — rust: read crates/oc-cli/src/run/noninteractive.rs:400
 - 🔗 `OPENCODE_PACKAGE` — rust: indirect crates/oc-cli/src/services/updater.rs:0
@@ -163,7 +163,7 @@
 - 🔗 `PARITY_UPDATE` — rust: read crates/oc-tui/src/components/chrome_golden_tests.rs:65; read crates/oc-tui/src/components/footer/golden_tests.rs:59
 - 🔗 `PROFILE` — rust: read crates/oc-cli/build.rs:38
 - 🔗 `TZ` — rust: read crates/oc-cli/src/handlers/session.rs:123; read crates/oc-cli/src/handlers/stats.rs:137
-  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [999]
+  - 有据分歧：GAPS-AND-PITFALLS.md 提及行 [1009]
 - 🔗 `USERPROFILE` — rust: read crates/oc-core/src/filesystem/protected.rs:65
 - 🔗 `WT_SESSION` — rust: read crates/oc-tui/src/render/color_mode.rs:97
 
@@ -191,20 +191,20 @@
 - ✅ `HOME` — rust: read crates/oc-core/src/config/variable.rs:142; read crates/oc-core/src/filesystem/protected.rs:67 | ref: read /opt/opencode-ref/packages/desktop/src/main/files/apps.ts:25
 - ✅ `MODAL_PROXY_TOKEN` — rust: indirect crates/oc-core/src/engine/mod.rs:0 | ref: read /opt/opencode-ref/packages/core/src/plugin/provider/modal.ts:30
 - ✅ `NO_COLOR` — rust: read crates/oc-cli/src/handlers/stats.rs:109 | ref: read /opt/opencode-ref/packages/cli/src/commands/handlers/stats.ts:55
-- ✅ `OPENCODE_API_KEY` — rust: read crates/oc-core/src/engine/resolver.rs:591 | ref: read /opt/opencode-ref/packages/core/src/plugin/provider/opencode.ts:319; read /opt/opencode-ref/packages/core/src/plugin/provider/opencode.ts:331
+- ✅ `OPENCODE_API_KEY` — rust: read crates/oc-core/src/engine/resolver.rs:591; read crates/oc-server/src/handlers/model.rs:61 | ref: read /opt/opencode-ref/packages/core/src/plugin/provider/opencode.ts:319; read /opt/opencode-ref/packages/core/src/plugin/provider/opencode.ts:331
 - ✅ `OPENCODE_CHANNEL` — rust: read crates/oc-server/src/observability.rs:139; read crates/oc-tui/src/storage.rs:74; compile crates/oc-core/src/engine/skills.rs:105 | ref: read /opt/opencode-ref/packages/app/vite.js:46; read /opt/opencode-ref/packages/app/vite.js:50
 - ✅ `OPENCODE_CLIENT` — rust: read crates/oc-core/src/session/runner/model_request.rs:75; write crates/oc-cli/src/acp/mod.rs:114 | ref: read /opt/opencode-ref/packages/cli/src/commands/handlers/default.ts:98; read /opt/opencode-ref/packages/cli/src/index.ts:129; write /opt/opencode-ref/packages/cli/src/commands/handlers/acp.ts:16
 - ✅ `OPENCODE_CLI_CONFIG_CONTENT` — rust: read crates/oc-core/src/cli_config/mod.rs:472 | ref: read /opt/opencode-ref/packages/cli/src/config/config.ts:32; read /opt/opencode-ref/packages/cli/src/config/config.ts:33
-- ✅ `OPENCODE_CONFIG` — rust: read crates/oc-core/src/config.rs:438; read crates/oc-tui/src/plugin_boot.rs:162 | ref: read /opt/opencode-ref/packages/cli/src/server-process.ts:117
-- ✅ `OPENCODE_CONFIG_CONTENT` — rust: read crates/oc-core/src/config.rs:442 | ref: read /opt/opencode-ref/packages/cli/src/server-process.ts:118
+- ✅ `OPENCODE_CONFIG` — rust: read crates/oc-core/src/config.rs:445; read crates/oc-tui/src/plugin_boot.rs:162 | ref: read /opt/opencode-ref/packages/cli/src/server-process.ts:117
+- ✅ `OPENCODE_CONFIG_CONTENT` — rust: read crates/oc-core/src/config.rs:449 | ref: read /opt/opencode-ref/packages/cli/src/server-process.ts:118
 - ✅ `OPENCODE_CONFIG_DIR` — rust: indirect crates/oc-util/src/global_roots.rs:98 | ref: read /opt/opencode-ref/packages/cli/src/index.ts:120; read /opt/opencode-ref/packages/cli/src/index.ts:120
-- ✅ `OPENCODE_CONFIG_PROJECT_DISABLE` — rust: read crates/oc-core/src/config.rs:398; indirect crates/oc-server/src/server_process_env.rs:87 | ref: read /opt/opencode-ref/packages/cli/src/server-process.ts:115
+- ✅ `OPENCODE_CONFIG_PROJECT_DISABLE` — rust: read crates/oc-core/src/config.rs:405; indirect crates/oc-server/src/server_process_env.rs:87 | ref: read /opt/opencode-ref/packages/cli/src/server-process.ts:115
 - ✅ `OPENCODE_DB` — rust: read crates/oc-core/src/database/path.rs:67; read crates/oc-server/src/boot.rs:596; indirect crates/oc-util/src/global_roots.rs:146 | ref: read /opt/opencode-ref/packages/cli/src/database-path.ts:6; read /opt/opencode-ref/packages/core/src/database/v1-migration.bun.ts:704; write /opt/opencode-ref/packages/desktop/src/main/lifecycle/configure.ts:66
 - ✅ `OPENCODE_DISABLE_AUTOUPDATE` — rust: indirect crates/oc-cli/src/services/autoupdate.rs:121 | ref: read /opt/opencode-ref/packages/cli/src/services/updater.ts:456
 - ✅ `OPENCODE_DISABLE_CHANNEL_DB` — rust: read crates/oc-core/src/database/path.rs:70 | ref: read /opt/opencode-ref/packages/cli/src/database-path.ts:8; read /opt/opencode-ref/packages/cli/src/database-path.ts:9
 - ✅ `OPENCODE_DISABLE_FFF` — rust: read crates/oc-server/src/server_process_env.rs:159 | ref: read /opt/opencode-ref/packages/cli/src/server-process.ts:126; read /opt/opencode-ref/packages/cli/src/server-process.ts:128
 - ✅ `OPENCODE_DISABLE_MODELS_FETCH` — rust: indirect crates/oc-server/src/server_process_env.rs:78 | ref: read /opt/opencode-ref/packages/cli/src/server-process.ts:110
-- ✅ `OPENCODE_DISABLE_PROJECT_CONFIG` — rust: read crates/oc-core/src/config.rs:399; indirect crates/oc-server/src/server_process_env.rs:87 | ref: read /opt/opencode-ref/packages/cli/src/server-process.ts:115
+- ✅ `OPENCODE_DISABLE_PROJECT_CONFIG` — rust: read crates/oc-core/src/config.rs:406; indirect crates/oc-server/src/server_process_env.rs:87 | ref: read /opt/opencode-ref/packages/cli/src/server-process.ts:115
 - ✅ `OPENCODE_EDITOR_SSE_PORT` — rust: read crates/oc-tui/src/editor_ide.rs:161 | ref: read /opt/opencode-ref/packages/tui/src/context/editor.ts:117
 - ✅ `OPENCODE_FAST_BOOT` — rust: read crates/oc-tui/src/app.rs:8270 | ref: read /opt/opencode-ref/packages/tui/src/app.tsx:351
 - ✅ `OPENCODE_GIT_BASH_PATH` — rust: read crates/oc-core/src/shell/select.rs:172 | ref: read /opt/opencode-ref/packages/cli/src/server-process.ts:121; read /opt/opencode-ref/packages/cli/src/services/updater.ts:186

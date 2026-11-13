@@ -18,9 +18,9 @@
   - ✅ `agent_thought_chunk` — rust crates/oc-cli/src/acp/replay.rs:144 · ref /opt/opencode-ref/packages/cli/src/acp/replay.ts:67
   - ✅ `available_commands_update` — rust crates/oc-cli/src/acp/sessions.rs:425 · ref /opt/opencode-ref/packages/cli/src/acp/sessions.ts:78
   - ✅ `compaction_summary_chunk` — rust crates/oc-cli/src/acp/compaction.rs:90 · ref /opt/opencode-ref/packages/cli/src/acp/compaction.ts:79
-  - ✅ `compaction_update` — rust crates/oc-cli/src/acp/compaction.rs:190 · ref /opt/opencode-ref/packages/cli/src/acp/compaction.ts:122
+  - ✅ `compaction_update` — rust crates/oc-cli/src/acp/compaction.rs:192 · ref /opt/opencode-ref/packages/cli/src/acp/compaction.ts:122
   - ✅ `config_option_update` — rust crates/oc-cli/src/acp/sessions.rs:456 · ref /opt/opencode-ref/packages/cli/src/acp/sessions.ts:87
-  - ✅ `session_info_update` — rust crates/oc-cli/src/acp/compaction.rs:180 · ref /opt/opencode-ref/packages/cli/src/acp/compaction.ts:118
+  - ✅ `session_info_update` — rust crates/oc-cli/src/acp/compaction.rs:182 · ref /opt/opencode-ref/packages/cli/src/acp/compaction.ts:118
   - ✅ `tool_call` — rust crates/oc-cli/src/acp/child.rs:115 · ref /opt/opencode-ref/packages/cli/src/acp/replay.ts:73
   - ✅ `tool_call_update` — rust crates/oc-cli/src/acp/child.rs:121 · ref /opt/opencode-ref/packages/cli/src/acp/replay.ts:86
   - ✅ `usage_update` — rust crates/oc-cli/src/acp/turn.rs:655 · ref /opt/opencode-ref/packages/cli/src/acp/turn.ts:333

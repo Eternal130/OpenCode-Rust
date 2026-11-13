@@ -7,7 +7,7 @@
 > 无生成源不同的 id/时间戳字段需剥除）后对 ACP SessionUpdate wire 形状逐例对拍。
 > 驱动：ref=bun（staging+`packages/cli/node_modules` 链接）/ rust=env 门控集成测试
 > （`ACP_DIFF_CORPUS`/`ACP_DIFF_OUT`，未设 env 零成本）。
-> 复现：`python3 tools/diff/acp_translate.py`（corpus：/opt/opencode-rust/.worktrees/gb15-lane1/tools/diff/corpus/acp，
+> 复现：`python3 tools/diff/acp_translate.py`（corpus：/opt/opencode-rust/tools/diff/corpus/acp，
 > 由 `tools/diff/gen_acp_corpus.py` 幂等生成）。
 
 - **MATCH：111/137** · DIVERGE：**26** · MISSING：**0**
@@ -207,13 +207,13 @@
 
 ## 分歧定性（人工亲读双侧当前代码）
 
-### A. 缺口候选（rust 侧 wire 行为与 ref 不一致，待入册）
+### A. 已闭缺口（曾为缺口候选，均已修复翻 MATCH）
 
-| # | 语义 | ref 侧 | rust 侧 | 涉及用例 |
-|---|---|---|---|---|
-| A1 | child toolCallId 双重前缀 | `translate.ts:309-320` 发出裸 id，`child.ts:39-47` `project` 前缀一次 | `translate.rs:749-757` `pending_update` 已调 `child::tool_call_id` 前缀，`route`→`child.rs:113` `project` 再前缀一次（`ses_child1:ses_child1:call_c`） | `child-projection-meta`、`abandon-child-tool` |
-| A2 | shell `rawInput` 的 `cwd:null` 不回填 | `tool.ts:165-168` 真值判断（`input.cwd \|\| input.workdir`），null 视为缺省并回填 ctx.cwd | `tool.rs:179-187` 按键存在性（`contains_key`），`cwd:null` 保留原值 | `tool-called` |
-| A3 | compaction 起始消息 id 回退源 | `compaction.ts:102-108` `inputID ?? SessionMessage.ID.fromEvent(envelope event.id)`（`evt_7`→`msg_7`） | `translate.rs:588-594` 以 `data.id` 为事件 id，缺 `data.inputID` 时得 `""`（`Event` 结构不携带 envelope id） | `compaction-id-from-envelope` |
+| # | 语义 | 处置 | 涉及用例 |
+|---|---|---|---|
+| A1 | child toolCallId 双重前缀 | ✅ G-392（gb14 lane1 `55a44d61`）：`pending_update` 不再前缀，`project` 独占单次前缀；用例现 MATCH | `child-projection-meta`、`abandon-child-tool` |
+| A2 | shell `rawInput` 的 `cwd:null` 不回填 | ✅ G-401（gb14 lane1 `55a44d61`）：改真值判定，null/`""` 回填 ctx-cwd；用例现 MATCH | `tool-called` |
+| A3 | compaction 起始消息 id 回退源 | ✅ G-402（gb14 lane1 `55a44d61`）：`Event` 携带 envelope id，回退 `evt_`→`msg_`；用例现 MATCH | `compaction-id-from-envelope` |
 
 ### B. 有据分歧（SDK 序列化形状 / 超 schema 输入容错，双侧代码如实呈现）
 

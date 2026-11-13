@@ -1,8 +1,8 @@
 # HTTP-FULL Differential（差分层 · 通道 6 · 全量 HTTP 对拍）
 
 > 同一 corpus（4 族）以相同顺序打双侧**真实 server 进程**：
-> rust = `oc-server serve --port 0`（boot 输出 `http://127.0.0.1:40285`，AuthConfig password=None 语义，roots → /tmp）
-> ref = bun 驱动 `tools/diff/drivers/http_ref_server.ts`（ServerFetch.make + Bun.serve，`http://127.0.0.1:40145`，roots → /tmp，ref git 树零写入）
+> rust = `oc-server serve --port 0`（boot 输出 `http://127.0.0.1:34599`，AuthConfig password=None 语义，roots → /tmp）
+> ref = bun 驱动 `tools/diff/drivers/http_ref_server.ts`（ServerFetch.make + Bun.serve，`http://127.0.0.1:33859`，roots → /tmp，ref git 树零写入）
 > 归一化：键序排序、id/uuid/时间戳/pid/version/端口/绝对路径（→ `<TMP>`/`<WS>`）剥换、列表按多重集比较、SSE 只比首帧+事件名。
 > 复现：`python3 tools/diff/http_full.py`（corpus 内嵌，60 请求）
 

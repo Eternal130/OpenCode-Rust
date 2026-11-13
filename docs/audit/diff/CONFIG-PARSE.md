@@ -3,7 +3,7 @@
 > 同一 corpus 喂双侧纯函数管线（jsonc-parse → normalize → Info decode），
 > 归一化（kind 小写、诊断排序、encoded 键序排序）后逐字段对拍。
 > 驱动：ref=bun（staging+node_modules 链接）/ rust=env 门控集成测试。
-> 复现：`python3 tools/diff/config_parse.py`（corpus：/opt/opencode-rust/.worktrees/gb15-lane3/tools/diff/corpus/config）
+> 复现：`python3 tools/diff/config_parse.py`（corpus：/opt/opencode-rust/tools/diff/corpus/config）
 
 - **MATCH：77/78** · DIVERGE：**1** · MISSING：**0**（覆盖率 78/78）
 
