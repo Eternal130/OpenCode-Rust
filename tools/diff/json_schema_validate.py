@@ -101,6 +101,11 @@ CLASSIFICATIONS = {
     "integer-big-int/big-ok": ("rust-accept-ref-reject", "记录性严格差（ref 侧）：2^53 恰可精确表示但 effect 仍拒绝——安全整数边界取 < 2^53。"),
     "integer-big-int/neg-big": ("rust-accept-ref-reject", "记录性严格差（ref 侧）：同上，负方向对称。"),
     "prefix-items-plus-items/ok": ("rust-reject-ref-accept", "缺口候选（rust prefixItems 未实现的直接后果）：items 被应用到全部元素，前缀位置的 \"a\" 也按 {type:\"integer\"} 校验→误拒合法输入。"),
+    # --- R29 mined 裁定回填（登记册第二十九轮「归类与复认」节） ---
+    "mined-repair-extras-closed-objects/in2": ("rust-reject-ref-accept", "G-407 族：effect Draft2020-12 对空 properties+additionalProperties:false 不产生封闭对象校验（R29 裁定补注）。"),
+    "mined-repair-pattern-ownership/in1": ("rust-reject-ref-accept", "G-407 族：pattern 编译错经 Cache catch 洗成 accept-all（R29 裁定补注）。"),
+    "mined-repair-refs-dictionary/in1": ("rust-reject-ref-accept", "G-407 族：draft-07 选择+$defs/$ref 失效→accept-all（R29 裁定补注）。"),
+    "mined-repair-optional-nulls-placeholders/in1": ("rust-reject-ref-accept", "提取噪声（R29 裁定）：源夹具为悬空 $ref 的 repair 语境，非生产对拍面。"),
 }
 
 
