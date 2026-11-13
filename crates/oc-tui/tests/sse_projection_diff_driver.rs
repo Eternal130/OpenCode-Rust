@@ -24,7 +24,7 @@ use oc_tui::components::message::model::{Message, Part};
 use oc_tui::data::{BusEvent, Ingest};
 use oc_tui::reactive::Runtime;
 use oc_tui::store::Store;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 fn norm_tool_state_input(
     status: &str,
@@ -116,7 +116,17 @@ fn norm_row(message: &Message) -> Value {
             "exit": exit,
             "output": output,
         }),
-        Message::Compaction { id, running, failed, cancelled, summary, tokens_in, tokens_out, provider_compaction, .. } => {
+        Message::Compaction {
+            id,
+            running,
+            failed,
+            cancelled,
+            summary,
+            tokens_in,
+            tokens_out,
+            provider_compaction,
+            ..
+        } => {
             // M1 rescan fix: the fallback arm dropped every compaction
             // field (extraction noise, not a product divergence).
             json!({
