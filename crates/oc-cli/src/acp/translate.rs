@@ -96,11 +96,63 @@ impl TokenUsage {
     }
 }
 
+/// Insertion-ordered tool table (G-412). The ref keeps tools in a JS
+/// `Map` (translate.ts:40-52) whose iteration order is insertion order —
+/// `abandon` (translate.ts:163-187) relies on it so the root session's
+/// tool updates are emitted before child sessions'. A `HashMap` iterates
+/// in randomized order run-to-run, so this Vec-backed table preserves
+/// registration order while keeping O(1)-amortized-friendly linear
+/// lookups (tool tables stay tiny). Re-inserting an existing key keeps
+/// its original position, like `Map.set`.
+#[derive(Debug, Clone, Default)]
+pub struct ToolTable {
+    entries: Vec<(String, Tool)>,
+}
+
+impl ToolTable {
+    pub fn get(&self, key: &str) -> Option<&Tool> {
+        self.entries.iter().find(|(k, _)| k == key).map(|(_, tool)| tool)
+    }
+
+    /// Insert (or update in place, keeping the original position).
+    pub fn insert(&mut self, key: String, tool: Tool) {
+        match self.entries.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, existing)) => *existing = tool,
+            None => self.entries.push((key, tool)),
+        }
+    }
+
+    pub fn remove(&mut self, key: &str) {
+        self.entries.retain(|(k, _)| k != key);
+    }
+
+    /// Tools in insertion (registration) order — ref `Map` semantics.
+    pub fn values(&self) -> impl Iterator<Item = &Tool> {
+        self.entries.iter().map(|(_, tool)| tool)
+    }
+
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.entries.iter().any(|(k, _)| k == key)
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
+
 /// `TurnState` (translate.ts:40-52).
 #[derive(Debug, Clone, Default)]
 pub struct TurnState {
     pub started: bool,
-    pub tools: HashMap<String, Tool>,
+    pub tools: ToolTable,
     pub retries: HashMap<String, RetryStatus>,
     pub compactions: HashMap<String, Started>,
     pub children: HashMap<String, ChildSession>,
@@ -1325,6 +1377,51 @@ mod tests {
             info.meta.as_ref().expect("meta")[RETRY_META]["nextRetryAt"],
             serde_json::json!("2025-08-12T12:00:00.000Z")
         );
+    }
+
+    /// G-412 — abandon emits tool_call updates in registration
+    /// (insertion) order — the root session's tools first — mirroring
+    /// the ref `Map` iteration order (translate.ts:163-187). A plain
+    /// `HashMap` iterates in randomized order run-to-run.
+    #[test]
+    fn abandon_emits_tools_in_registration_order_root_first() {
+        let mut state = started(&TurnState::default());
+        let root = Tool {
+            session_id: "ses_root".to_owned(),
+            id: "call_root".to_owned(),
+            name: "shell".to_owned(),
+            input: json!({ "command": "sleep 60" }).as_object().cloned().unwrap(),
+            metadata: Map::new(),
+        };
+        state.tools.insert(tool_key(&root.session_id, &root.id), root);
+        let child = Tool {
+            session_id: "ses_child".to_owned(),
+            id: "call_child".to_owned(),
+            name: "read".to_owned(),
+            input: json!({ "path": "a" }).as_object().cloned().unwrap(),
+            metadata: Map::new(),
+        };
+        state.children.insert(
+            "ses_child".to_owned(),
+            ChildSession {
+                id: "ses_child".to_owned(),
+                parent_id: "ses_root".to_owned(),
+                depth: 1,
+                title: Some("Explore".to_owned()),
+            },
+        );
+        state.tools.insert(tool_key(&child.session_id, &child.id), child);
+        let (_next, outputs) = abandon(&state, &ctx());
+        let ids: Vec<String> = outputs
+            .iter()
+            .filter_map(|output| match output {
+                Output::SessionUpdate { update: SessionUpdate::ToolCallUpdate(update), .. } => {
+                    Some(update.tool_call_id.0.as_ref().to_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ids, vec!["call_root".to_owned(), "ses_child:call_child".to_owned()]);
     }
 
     #[test]

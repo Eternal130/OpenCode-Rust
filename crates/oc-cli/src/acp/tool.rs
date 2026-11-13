@@ -88,10 +88,11 @@ pub fn to_locations(
     match canonical_name(tool_name).as_str() {
         "shell" => location_from(
             cwd,
-            vec![
-                string_value(input.get("workdir")).or_else(|| string_value(input.get("cwd"))),
-                Some(cwd.to_owned()),
-            ],
+            // Exactly ONE effective location — `workdir ?? cwd`
+            // (tool.ts:38); `cwd` never adds a second entry (G-415).
+            vec![string_value(input.get("workdir"))
+                .or_else(|| string_value(input.get("cwd")))
+                .or_else(|| Some(cwd.to_owned()))],
         ),
         "read" | "edit" | "write" => location_from(cwd, vec![file_path(input)]),
         "patch" => location_from(
@@ -530,6 +531,34 @@ mod tests {
         let locations =
             to_locations("shell", &input(&json!({"command": "ls", "workdir": "sub"})), "/w");
         assert_eq!(locations[0].path, PathBuf::from("/w/sub"));
+    }
+
+    /// G-415 — the shell location list carries exactly ONE effective
+    /// location (`workdir ?? cwd`, tool.ts:38); `cwd` never adds a
+    /// second entry when both are present.
+    #[test]
+    fn shell_locations_are_a_single_effective_location() {
+        // Both set — workdir wins, exactly one location.
+        let locations = to_locations(
+            "shell",
+            &input(&json!({ "command": "ls", "workdir": "/opt", "cwd": "/w" })),
+            "/w",
+        );
+        assert_eq!(locations.len(), 1, "both set must yield one location");
+        assert_eq!(locations[0].path, PathBuf::from("/opt"));
+        // Relative workdir still resolves against the turn cwd.
+        let locations = to_locations(
+            "shell",
+            &input(&json!({ "command": "ls", "workdir": "sub", "cwd": "/w" })),
+            "/w",
+        );
+        assert_eq!(locations.len(), 1);
+        assert_eq!(locations[0].path, PathBuf::from("/w/sub"));
+        // Only cwd — exactly one location.
+        let locations =
+            to_locations("shell", &input(&json!({ "command": "ls", "cwd": "/w" })), "/w");
+        assert_eq!(locations.len(), 1, "cwd only must yield one location");
+        assert_eq!(locations[0].path, PathBuf::from("/w"));
     }
 
     #[test]
