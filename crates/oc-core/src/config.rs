@@ -312,7 +312,14 @@ impl<'de> serde::Deserialize<'de> for Json {
             fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Json, A::Error> {
                 let mut entries = Vec::new();
                 while let Some((key, value)) = map.next_entry()? {
-                    entries.push((key, value));
+                    // Duplicate keys: JSON.parse semantics — last wins
+                    // (a plain push would keep both and `get` would then
+                    // return the FIRST, diverging from ref).
+                    if let Some(slot) = entries.iter_mut().find(|(name, _)| *name == key) {
+                        *slot = (key, value);
+                    } else {
+                        entries.push((key, value));
+                    }
                 }
                 Ok(Json::Object(entries))
             }
