@@ -453,7 +453,12 @@ pub fn render_session(
             store,
             session_id,
             &theme,
-            column - inset,
+            // F3 — the route column pads BOTH sides (ref
+            // routes/session/index.tsx:1369-1373 paddingLeft/Right=2):
+            // the mount spans `column − 2·inset` (pasted at x=inset),
+            // so the ╹▀ transition and the prompt bg stop 2 cols
+            // short of the right edge like the ref grid.
+            column.saturating_sub(inset * 2),
             content_width,
             height,
             mount_x + shift,
@@ -488,7 +493,12 @@ pub fn render_session(
     // Without the strip the chrome is one row shorter (no title row
     // exists in v2 either way).
     let chrome = usize::from(show_strip);
-    let transcript_height = height.saturating_sub(mount_height + dock_height + spacing + chrome);
+    // F3 — the column's bottom pad (ref routes/session/index.tsx:1369
+    // `paddingBottom={1}`) also shrinks the transcript's budget: the
+    // scrollbox sits inside the padded column, one row above the
+    // prompt mount's trailing blank.
+    let transcript_height =
+        height.saturating_sub(mount_height + dock_height + spacing + chrome + 1);
     // The transcript's rows start under the strip (row 0) — no title
     // row shifts them.
     let content_top = chrome;
@@ -1630,7 +1640,13 @@ fn composer_mount_frame(
     } else {
         0
     };
-    let prompt_height = (mount_height + popup_rows).min(height);
+    // F3 — the session column's bottom pad (ref routes/session/index.tsx:1369
+    // `paddingBottom={1}` on the column that stacks the transcript and the
+    // prompt): the prompt mount's budget carries ONE trailing blank row, so
+    // the footer row lands on `height - 2` and the frame's last row stays
+    // blank (the ref grid pins it: `╹` at h-3, footer at h-2).
+    let bottom_pad = 1;
+    let prompt_height = (mount_height + popup_rows + bottom_pad).min(height);
     // TUI-12 — the live segment's inputs (footer.tsx:20-33): the
     // family's running subagents + the session's in-flight shells.
     let (live_subagents, live_shells) = store.footer_live_counts(session_id);
@@ -1654,18 +1670,21 @@ fn composer_mount_frame(
         footer,
         metadata: composer_metadata(store, session_id),
         terminal_width,
-        top: prompt_height - mount_height,
+        // The popup rows floating above the composer inside the mount
+        // frame (F3's bottom pad rides AFTER the footer — the popup's
+        // offset is the popup rows alone).
+        top: popup_rows,
         rail,
         caret: None,
         selection: composer.edit.selection(),
     };
-    // #33 — the location label's hit rect (the footer row is the
-    // prompt mount's LAST row: pasted at `height - prompt_height`,
-    // its footer row lands on `height - 1` — the lane/if PTY proof
-    // clicked the painted label and caught the rect one row high).
-    // The label's painted extent comes from the same math the row
-    // paints with. Empty label ⇒ no hit.
-    let status_row = height.saturating_sub(1);
+    // #33 — the location label's hit rect (the footer row sits one
+    // row above the frame bottom now — F3's bottom pad keeps the last
+    // row blank, ref routes/session/index.tsx:1369); the lane/if PTY
+    // proof clicked the painted label and caught the rect one row
+    // high. The label's painted extent comes from the same math the
+    // row paints with. Empty label ⇒ no hit.
+    let status_row = height.saturating_sub(1 + bottom_pad);
     let location_hit = crate::components::composer::render::footer_location_extent(&view, width)
         .map(|(x, label_width)| crate::store::FooterLocationHit {
             directory: view
@@ -1709,7 +1728,7 @@ fn composer_mount_frame(
     let caret_screen = crate::components::composer::render::prompt_caret_screen_cell(
         &composer.draft,
         width,
-        prompt_height - mount_height,
+        popup_rows,
         height,
         composer.caret(),
     )
@@ -1729,7 +1748,7 @@ fn composer_mount_frame(
         crate::store::PromptTextHit {
             session_id: session_id.to_owned(),
             x: 1 + pad,
-            y: height - prompt_height + (prompt_height - mount_height) + 1,
+            y: height - prompt_height + popup_rows + 1,
             rows,
             inner,
         }

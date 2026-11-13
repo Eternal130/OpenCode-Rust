@@ -102,6 +102,7 @@ fn new_state(sessions: Vec<String>, pages: Vec<MessagePage>) -> ServerState {
         events: std::sync::atomic::AtomicU64::new(1),
         sessions,
         pages,
+        initial_events: Vec::new(),
     }
 }
 

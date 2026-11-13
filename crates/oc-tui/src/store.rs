@@ -8301,34 +8301,20 @@ impl Store {
     }
 
     /// Whether the session's turn is RUNNING (the interrupt gate, v2's
-    /// `enabled: status() === "running"`): the trailing message is
-    /// either a submitted user prompt (no assistant yet) or an
-    /// assistant message whose finish is absent / tool-calls /
-    /// unknown with no `session.idle` marker after it.
+    /// `enabled: status() === "running"`). Ref production semantics:
+    /// `data.session.status` is the reactive `active` map's verdict —
+    /// `store.session.active[sessionID] ?? "idle"`
+    /// (client/solid/data.ts:1378-1380) — populated ONLY by the
+    /// execution lifecycle events (`session.execution.started` inserts,
+    /// data.ts:1010; `.succeeded`/`.failed`/`.interrupted` remove,
+    /// data.ts:1027-1030) plus the `/api/session/active` boot snapshot
+    /// (data.ts:592-609). It is NEVER derived from the message list's
+    /// trailing shape (channel-8 F2: a replayed transcript ending in a
+    /// user message / unfinished assistant must rest idle — no spinner,
+    /// no interrupt hint).
     #[must_use]
     pub fn session_running(&self, session_id: &str) -> bool {
-        use crate::components::message::model::Message;
-        let messages = self.messages(session_id);
-        // A trailing `session.idle` marker CLOSES the turn (the
-        // marker is the boundary; earlier messages stay earlier).
-        if matches!(messages.last(), Some(Message::Idle { .. })) {
-            return false;
-        }
-        let Some(last) =
-            messages.iter().rev().find(|message| !matches!(message, Message::Idle { .. }))
-        else {
-            return false;
-        };
-        match last {
-            Message::User { .. } => true,
-            Message::Assistant { finish, error, .. } => {
-                error.is_none()
-                    && finish
-                        .as_deref()
-                        .is_none_or(|finish| ["tool-calls", "unknown"].contains(&finish))
-            }
-            _ => false,
-        }
+        self.session_index.borrow().is_running(session_id)
     }
 
     /// The armed hint (v2 prompt/index.tsx:141: armed shows "again to
