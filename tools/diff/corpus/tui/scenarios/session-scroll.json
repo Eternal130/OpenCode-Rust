@@ -386,14 +386,16 @@
               "id": "model"
             },
             "time": {
-              "created": 2
+              "created": 2,
+              "completed": 5
             },
             "content": [
               {
                 "type": "text",
                 "text": "Assistant answer 1: detail detail detail detail detail detail detail detail detail detail detail detail."
               }
-            ]
+            ],
+            "finish": "stop"
           },
           {
             "id": "msg_user_2",
@@ -414,14 +416,16 @@
               "id": "model"
             },
             "time": {
-              "created": 2
+              "created": 2,
+              "completed": 9
             },
             "content": [
               {
                 "type": "text",
                 "text": "Assistant answer 2: detail detail detail detail detail detail detail detail detail detail detail detail."
               }
-            ]
+            ],
+            "finish": "stop"
           },
           {
             "id": "msg_user_3",
@@ -442,14 +446,16 @@
               "id": "model"
             },
             "time": {
-              "created": 2
+              "created": 2,
+              "completed": 13
             },
             "content": [
               {
                 "type": "text",
                 "text": "Assistant answer 3: detail detail detail detail detail detail detail detail detail detail detail detail."
               }
-            ]
+            ],
+            "finish": "stop"
           },
           {
             "id": "msg_user_4",
@@ -470,14 +476,16 @@
               "id": "model"
             },
             "time": {
-              "created": 2
+              "created": 2,
+              "completed": 17
             },
             "content": [
               {
                 "type": "text",
                 "text": "Assistant answer 4: detail detail detail detail detail detail detail detail detail detail detail detail."
               }
-            ]
+            ],
+            "finish": "stop"
           },
           {
             "id": "msg_user_5",
@@ -498,14 +506,16 @@
               "id": "model"
             },
             "time": {
-              "created": 2
+              "created": 2,
+              "completed": 21
             },
             "content": [
               {
                 "type": "text",
                 "text": "Assistant answer 5: detail detail detail detail detail detail detail detail detail detail detail detail."
               }
-            ]
+            ],
+            "finish": "stop"
           },
           {
             "id": "msg_user_6",
@@ -526,14 +536,16 @@
               "id": "model"
             },
             "time": {
-              "created": 2
+              "created": 2,
+              "completed": 25
             },
             "content": [
               {
                 "type": "text",
                 "text": "Assistant answer 6: detail detail detail detail detail detail detail detail detail detail detail detail."
               }
-            ]
+            ],
+            "finish": "stop"
           },
           {
             "id": "msg_user_7",
@@ -554,14 +566,16 @@
               "id": "model"
             },
             "time": {
-              "created": 2
+              "created": 2,
+              "completed": 29
             },
             "content": [
               {
                 "type": "text",
                 "text": "Assistant answer 7: detail detail detail detail detail detail detail detail detail detail detail detail."
               }
-            ]
+            ],
+            "finish": "stop"
           },
           {
             "id": "msg_user_8",
@@ -582,14 +596,16 @@
               "id": "model"
             },
             "time": {
-              "created": 2
+              "created": 2,
+              "completed": 33
             },
             "content": [
               {
                 "type": "text",
                 "text": "Assistant answer 8: detail detail detail detail detail detail detail detail detail detail detail detail."
               }
-            ]
+            ],
+            "finish": "stop"
           }
         ],
         "cursor": {}
@@ -639,614 +655,6 @@
           "time": {
             "created": 1,
             "updated": 2
-          }
-        }
-      }
-    },
-    {
-      "id": "evt_step_started",
-      "created": 2,
-      "type": "session.step.started",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 2,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_1",
-        "agent": "build",
-        "model": {
-          "providerID": "fixture",
-          "id": "model"
-        },
-        "started": 0
-      }
-    },
-    {
-      "id": "evt_text_started",
-      "created": 3,
-      "type": "session.text.started",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 3,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_1",
-        "ordinal": 0
-      }
-    },
-    {
-      "id": "evt_text_ended",
-      "created": 4,
-      "type": "session.text.ended",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 4,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_1",
-        "ordinal": 0,
-        "text": "Assistant answer 1: detail detail detail detail detail detail detail detail detail detail detail detail."
-      }
-    },
-    {
-      "id": "evt_step_ended",
-      "created": 5,
-      "type": "session.step.ended",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 5,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_1",
-        "finish": "stop",
-        "cost": 0,
-        "tokens": {
-          "input": 0,
-          "output": 0,
-          "reasoning": 0,
-          "cache": {
-            "read": 0,
-            "write": 0
-          }
-        }
-      }
-    },
-    {
-      "id": "evt_step_started",
-      "created": 6,
-      "type": "session.step.started",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 6,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_2",
-        "agent": "build",
-        "model": {
-          "providerID": "fixture",
-          "id": "model"
-        },
-        "started": 0
-      }
-    },
-    {
-      "id": "evt_text_started",
-      "created": 7,
-      "type": "session.text.started",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 7,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_2",
-        "ordinal": 0
-      }
-    },
-    {
-      "id": "evt_text_ended",
-      "created": 8,
-      "type": "session.text.ended",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 8,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_2",
-        "ordinal": 0,
-        "text": "Assistant answer 2: detail detail detail detail detail detail detail detail detail detail detail detail."
-      }
-    },
-    {
-      "id": "evt_step_ended",
-      "created": 9,
-      "type": "session.step.ended",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 9,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_2",
-        "finish": "stop",
-        "cost": 0,
-        "tokens": {
-          "input": 0,
-          "output": 0,
-          "reasoning": 0,
-          "cache": {
-            "read": 0,
-            "write": 0
-          }
-        }
-      }
-    },
-    {
-      "id": "evt_step_started",
-      "created": 10,
-      "type": "session.step.started",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 10,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_3",
-        "agent": "build",
-        "model": {
-          "providerID": "fixture",
-          "id": "model"
-        },
-        "started": 0
-      }
-    },
-    {
-      "id": "evt_text_started",
-      "created": 11,
-      "type": "session.text.started",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 11,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_3",
-        "ordinal": 0
-      }
-    },
-    {
-      "id": "evt_text_ended",
-      "created": 12,
-      "type": "session.text.ended",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 12,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_3",
-        "ordinal": 0,
-        "text": "Assistant answer 3: detail detail detail detail detail detail detail detail detail detail detail detail."
-      }
-    },
-    {
-      "id": "evt_step_ended",
-      "created": 13,
-      "type": "session.step.ended",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 13,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_3",
-        "finish": "stop",
-        "cost": 0,
-        "tokens": {
-          "input": 0,
-          "output": 0,
-          "reasoning": 0,
-          "cache": {
-            "read": 0,
-            "write": 0
-          }
-        }
-      }
-    },
-    {
-      "id": "evt_step_started",
-      "created": 14,
-      "type": "session.step.started",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 14,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_4",
-        "agent": "build",
-        "model": {
-          "providerID": "fixture",
-          "id": "model"
-        },
-        "started": 0
-      }
-    },
-    {
-      "id": "evt_text_started",
-      "created": 15,
-      "type": "session.text.started",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 15,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_4",
-        "ordinal": 0
-      }
-    },
-    {
-      "id": "evt_text_ended",
-      "created": 16,
-      "type": "session.text.ended",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 16,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_4",
-        "ordinal": 0,
-        "text": "Assistant answer 4: detail detail detail detail detail detail detail detail detail detail detail detail."
-      }
-    },
-    {
-      "id": "evt_step_ended",
-      "created": 17,
-      "type": "session.step.ended",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 17,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_4",
-        "finish": "stop",
-        "cost": 0,
-        "tokens": {
-          "input": 0,
-          "output": 0,
-          "reasoning": 0,
-          "cache": {
-            "read": 0,
-            "write": 0
-          }
-        }
-      }
-    },
-    {
-      "id": "evt_step_started",
-      "created": 18,
-      "type": "session.step.started",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 18,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_5",
-        "agent": "build",
-        "model": {
-          "providerID": "fixture",
-          "id": "model"
-        },
-        "started": 0
-      }
-    },
-    {
-      "id": "evt_text_started",
-      "created": 19,
-      "type": "session.text.started",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 19,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_5",
-        "ordinal": 0
-      }
-    },
-    {
-      "id": "evt_text_ended",
-      "created": 20,
-      "type": "session.text.ended",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 20,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_5",
-        "ordinal": 0,
-        "text": "Assistant answer 5: detail detail detail detail detail detail detail detail detail detail detail detail."
-      }
-    },
-    {
-      "id": "evt_step_ended",
-      "created": 21,
-      "type": "session.step.ended",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 21,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_5",
-        "finish": "stop",
-        "cost": 0,
-        "tokens": {
-          "input": 0,
-          "output": 0,
-          "reasoning": 0,
-          "cache": {
-            "read": 0,
-            "write": 0
-          }
-        }
-      }
-    },
-    {
-      "id": "evt_step_started",
-      "created": 22,
-      "type": "session.step.started",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 22,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_6",
-        "agent": "build",
-        "model": {
-          "providerID": "fixture",
-          "id": "model"
-        },
-        "started": 0
-      }
-    },
-    {
-      "id": "evt_text_started",
-      "created": 23,
-      "type": "session.text.started",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 23,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_6",
-        "ordinal": 0
-      }
-    },
-    {
-      "id": "evt_text_ended",
-      "created": 24,
-      "type": "session.text.ended",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 24,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_6",
-        "ordinal": 0,
-        "text": "Assistant answer 6: detail detail detail detail detail detail detail detail detail detail detail detail."
-      }
-    },
-    {
-      "id": "evt_step_ended",
-      "created": 25,
-      "type": "session.step.ended",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 25,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_6",
-        "finish": "stop",
-        "cost": 0,
-        "tokens": {
-          "input": 0,
-          "output": 0,
-          "reasoning": 0,
-          "cache": {
-            "read": 0,
-            "write": 0
-          }
-        }
-      }
-    },
-    {
-      "id": "evt_step_started",
-      "created": 26,
-      "type": "session.step.started",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 26,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_7",
-        "agent": "build",
-        "model": {
-          "providerID": "fixture",
-          "id": "model"
-        },
-        "started": 0
-      }
-    },
-    {
-      "id": "evt_text_started",
-      "created": 27,
-      "type": "session.text.started",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 27,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_7",
-        "ordinal": 0
-      }
-    },
-    {
-      "id": "evt_text_ended",
-      "created": 28,
-      "type": "session.text.ended",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 28,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_7",
-        "ordinal": 0,
-        "text": "Assistant answer 7: detail detail detail detail detail detail detail detail detail detail detail detail."
-      }
-    },
-    {
-      "id": "evt_step_ended",
-      "created": 29,
-      "type": "session.step.ended",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 29,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_7",
-        "finish": "stop",
-        "cost": 0,
-        "tokens": {
-          "input": 0,
-          "output": 0,
-          "reasoning": 0,
-          "cache": {
-            "read": 0,
-            "write": 0
-          }
-        }
-      }
-    },
-    {
-      "id": "evt_step_started",
-      "created": 30,
-      "type": "session.step.started",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 30,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_8",
-        "agent": "build",
-        "model": {
-          "providerID": "fixture",
-          "id": "model"
-        },
-        "started": 0
-      }
-    },
-    {
-      "id": "evt_text_started",
-      "created": 31,
-      "type": "session.text.started",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 31,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_8",
-        "ordinal": 0
-      }
-    },
-    {
-      "id": "evt_text_ended",
-      "created": 32,
-      "type": "session.text.ended",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 32,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_8",
-        "ordinal": 0,
-        "text": "Assistant answer 8: detail detail detail detail detail detail detail detail detail detail detail detail."
-      }
-    },
-    {
-      "id": "evt_step_ended",
-      "created": 33,
-      "type": "session.step.ended",
-      "durable": {
-        "aggregateID": "ses_scroll",
-        "seq": 33,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_scroll",
-        "assistantMessageID": "msg_asst_8",
-        "finish": "stop",
-        "cost": 0,
-        "tokens": {
-          "input": 0,
-          "output": 0,
-          "reasoning": 0,
-          "cache": {
-            "read": 0,
-            "write": 0
           }
         }
       }

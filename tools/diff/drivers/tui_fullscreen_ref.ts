@@ -94,7 +94,6 @@ const NAMED_KEYS: Record<string, string> = {
   pageup: "\x1b[5~",
   pagedown: "\x1b[6~",
   space: " ",
-  leader: "\x18",
 }
 
 function pressToken(mockInput: any, token: string) {
@@ -108,6 +107,16 @@ function pressToken(mockInput: any, token: string) {
     // which the reference keybinds match; the raw control byte would be
     // reported as a bare codepoint under the kitty protocol.
     mockInput.pressKey(ctrl[1]!, { ctrl: true })
+    return
+  }
+  // W3 chord adjudication: `leader` is v2's default `ctrl+x` keybind
+  // (config/keybind.ts:41 LeaderDefault), matched through the kitty key
+  // matcher (keymap.tsx:190 createKeyMatcher — key + modifier). A bare
+  // \x18 byte parses as codepoint 24 WITHOUT the ctrl modifier under the
+  // kitty protocol, so it must not arm the chord; encode it exactly like
+  // the ctrl tokens above.
+  if (token === "leader") {
+    mockInput.pressKey("x", { ctrl: true })
     return
   }
   const alt = /^alt\+(up|down|right|left)$/.exec(token)

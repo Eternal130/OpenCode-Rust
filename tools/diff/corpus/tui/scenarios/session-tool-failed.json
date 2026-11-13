@@ -386,7 +386,8 @@
               "id": "model"
             },
             "time": {
-              "created": 2
+              "created": 2,
+              "completed": 5
             },
             "content": [
               {
@@ -412,7 +413,8 @@
                   "completed": 3
                 }
               }
-            ]
+            ],
+            "finish": "stop"
           }
         ],
         "cursor": {}
@@ -462,91 +464,6 @@
           "time": {
             "created": 1,
             "updated": 2
-          }
-        }
-      }
-    },
-    {
-      "id": "evt_step_started",
-      "created": 2,
-      "type": "session.step.started",
-      "durable": {
-        "aggregateID": "ses_tool_err",
-        "seq": 2,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_tool_err",
-        "assistantMessageID": "msg_asst_1",
-        "agent": "build",
-        "model": {
-          "providerID": "fixture",
-          "id": "model"
-        },
-        "started": 0
-      }
-    },
-    {
-      "id": "evt_tc",
-      "created": 3,
-      "type": "session.tool.called",
-      "durable": {
-        "aggregateID": "ses_tool_err",
-        "seq": 3,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_tool_err",
-        "assistantMessageID": "msg_asst_1",
-        "id": "tool_1",
-        "input": {
-          "command": "make check"
-        },
-        "executed": true
-      }
-    },
-    {
-      "id": "evt_tf",
-      "created": 4,
-      "type": "session.tool.failed",
-      "durable": {
-        "aggregateID": "ses_tool_err",
-        "seq": 4,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_tool_err",
-        "assistantMessageID": "msg_asst_1",
-        "id": "tool_1",
-        "error": {
-          "type": "exit",
-          "message": "exit status 2",
-          "status": 500
-        },
-        "executed": true
-      }
-    },
-    {
-      "id": "evt_step_ended",
-      "created": 5,
-      "type": "session.step.ended",
-      "durable": {
-        "aggregateID": "ses_tool_err",
-        "seq": 5,
-        "version": 1
-      },
-      "data": {
-        "sessionID": "ses_tool_err",
-        "assistantMessageID": "msg_asst_1",
-        "finish": "stop",
-        "cost": 0,
-        "tokens": {
-          "input": 0,
-          "output": 0,
-          "reasoning": 0,
-          "cache": {
-            "read": 0,
-            "write": 0
           }
         }
       }
