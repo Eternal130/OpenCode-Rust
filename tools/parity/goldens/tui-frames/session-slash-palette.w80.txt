@@ -5,20 +5,20 @@
                                                                                 
                                                                                 
                                                                                 
-                                                                                
-  ┃ /agents      Switch agent                                                  ┃
-  ┃ /btw         Ask a side question                                           ┃
-  ┃ /cd          Change working directory                                      ┃
-  ┃ /clear       Clear session                                                 ┃
-  ┃ /compact     Compact session                                               ┃
-  ┃ /connect     Connect an integration                                        ┃
-  ┃ /continue    Switch session                                                ┃
-  ┃ /copy        Copy session transcript                                       ┃
-  ┃ /debug       View debug info                                               ┃
-  ┃ /diff        Open diff viewer                                              ┃
+  ┃ /agents      Switch agent                                                ┃  
+  ┃ /btw         Ask a side question                                         ┃  
+  ┃ /cd          Change working directory                                    ┃  
+  ┃ /clear       Clear session                                               ┃  
+  ┃ /compact     Compact session                                             ┃  
+  ┃ /connect     Connect an integration                                      ┃  
+  ┃ /continue    Switch session                                              ┃  
+  ┃ /copy        Copy session transcript                                     ┃  
+  ┃ /debug       View debug info                                             ┃  
+  ┃ /diff        Open diff viewer                                            ┃  
   ┃                                                                             
   ┃  /                                                                          
   ┃                                                                             
   ┃  Build                                                                      
-  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-                                               shift+tab agents  ctrl+p commands
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
+                                             shift+tab agents  ctrl+p commands  
+                                                                                
