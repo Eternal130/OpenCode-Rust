@@ -521,7 +521,7 @@ struct ThemeDefaults {
     back: [u8; 3],
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Clone)]
 struct GridCell {
     ch: String,
     attrs: Vec<String>,
@@ -536,6 +536,11 @@ struct GridFile {
     width: u64,
     height: u64,
     cells: Vec<Vec<GridCell>>,
+    /// A2 frame-sequence mode: K+1 full grids (tick k = clock
+    /// `k`·`ANIM_TICK_MS`; frame 0 == the resting `cells`). Absent for
+    /// pure resting scenarios.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frames: Option<Vec<Vec<Vec<GridCell>>>>,
     stub_gaps: Vec<String>,
     request_census: BTreeMap<String, u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -587,6 +592,13 @@ struct Manifest {
 }
 
 #[derive(serde::Deserialize)]
+struct AnimSpec {
+    ticks: u32,
+    #[serde(default)]
+    tick_events: Option<Vec<Vec<Value>>>,
+}
+
+#[derive(serde::Deserialize)]
 struct Scenario {
     schema: String,
     #[allow(dead_code)] // identity is asserted by the manifest path
@@ -599,7 +611,15 @@ struct Scenario {
     events: Vec<Value>,
     keys: Vec<String>,
     settle_ms: Option<u64>,
+    /// A2 frame-sequence mode (SCHEMA `anim`): after the resting
+    /// capture the virtual clock steps k·`ANIM_TICK_MS` (k=0..K) with
+    /// one full grid per step, emitted as `frames`.
+    anim: Option<AnimSpec>,
 }
+
+/// A2 (SCHEMA): the frame-sequence tick step — 100 ms per tick, the
+/// same granularity as the live loop's plain pump tick (app.rs:10154).
+const ANIM_TICK_MS: u64 = 100;
 
 #[derive(serde::Deserialize)]
 struct FetchStub {
@@ -760,6 +780,14 @@ async fn tui_fullscreen_diff_driver() {
         // right-aligned label reads it (`context.app.version`,
         // home/footer.tsx:99).
         pump.app.store.set_app_version("test".to_owned());
+        // A2 — mirror the ref fixture's `packages.prepare: async () =>
+        // ({ directory: "" })` (test/fixture/app.ts:44): plugins
+        // resolve immediately at boot, so `plugins.ready()` is true
+        // and the StartupLoading pill never arms. The rust driver has
+        // no plugin boot future, so the ready flag is set directly —
+        // otherwise the pill's 500 ms virtual-clock threshold fires
+        // during anim ticks (a harness artifact, not a port diff).
+        pump.app.store.set_plugins_ready();
         if let Some(directory) = &location_directory {
             if !directory.is_empty() {
                 let _ = pump.fetch_tx.send(LoopRequest::LocationVcs(directory.clone()));
@@ -789,6 +817,39 @@ async fn tui_fullscreen_diff_driver() {
         }
         pump.drain();
         let frame = pump.app.frame();
+        let resting_cells = rasterize(&frame, &theme);
+
+        // A2 frame-sequence mode (SCHEMA `anim`): step the virtual
+        // clock one `ANIM_TICK_MS` per tick, injecting the scenario's
+        // per-tick events just before each advance (entry 0 ignored —
+        // the resting settle owns tick 0). The clock advance mirrors
+        // the live pump's ticked arm (app.rs:10159-10167: clock +
+        // toast_advance on every advance); frame 0 IS the resting
+        // frame (same store state, frozen clock).
+        let mut frames = None;
+        if let Some(anim) = &scenario.anim {
+            let ticks = anim.ticks;
+            let tick_events = anim.tick_events.as_deref().unwrap_or(&[]);
+            let mut seq: Vec<Vec<Vec<GridCell>>> = vec![resting_cells.clone()];
+            for k in 1..=ticks {
+                if let Some(events) = tick_events.get(k as usize) {
+                    for event in events {
+                        server.push_event(event).await;
+                    }
+                    // let the loopback SSE write land before draining
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    pump.drain();
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                let now = u64::from(k) * ANIM_TICK_MS;
+                pump.app.store.advance_clock(now);
+                pump.app.store.toast_advance(now);
+                pump.drain();
+                let frame = pump.app.frame();
+                seq.push(rasterize(&frame, &theme));
+            }
+            frames = Some(seq);
+        }
 
         let stub_gaps: Vec<String> = server.gaps.lock().expect("gaps").iter().cloned().collect();
         let request_census = server.census.lock().expect("census").clone();
@@ -797,7 +858,8 @@ async fn tui_fullscreen_diff_driver() {
             id: case.id.clone(),
             width: u64::from(case.width),
             height: u64::from(case.height),
-            cells: rasterize(&frame, &theme),
+            cells: resting_cells,
+            frames,
             stub_gaps: stub_gaps.clone(),
             request_census,
             error,

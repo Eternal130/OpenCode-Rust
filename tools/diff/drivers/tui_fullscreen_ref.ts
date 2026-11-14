@@ -234,6 +234,11 @@ interface ScenarioFixture {
   events: unknown[]
   keys: string[]
   settle_ms: number
+  anim?: {
+    ticks: number
+    animations?: boolean
+    tick_events?: unknown[][]
+  }
 }
 
 interface ManifestCase {
@@ -285,7 +290,6 @@ async function main() {
   const THEME_BG = resolved.background.base.toInts().slice(0, 3)
 
   const { createAppFixture }: any = await import(REF_APP_FIXTURE)
-
   mkdirSync(outDir, { recursive: true })
   const summary: Record<string, unknown>[] = []
   let anyGap = false
@@ -331,6 +335,19 @@ async function main() {
     // determinism: home placeholder Math.random seed (see file header)
     const randomBefore = Math.random
     Math.random = () => 0
+    // A2: anim scenarios boot through the stock fixture too — the
+    // probed ManualClock path (createTestRenderer clock injection) is
+    // NATIVELY UNSTABLE against the full app: boot deadlocks on a
+    // frozen clock (boot timers ride the renderer clock); driving the
+    // clock by real time boots fine but post-event captures crash in
+    // native buffer reads (segfault in bufferGetCharPtr/getRealCharBytes
+    // — see .superpowers/sdd/diff-ext/a2-report.md §ref-clock). The
+    // deterministic comparable surface is therefore the stock
+    // animations:false fixture: ref frames are event-driven per tick
+    // (tick_events), while the rust side steps its virtual clock
+    // (advance_clock k·ANIM_TICK_MS) — clock-driven rust animation vs
+    // the ref's animation-gated static shapes is a REGISTERED harness
+    // artifact family (CAUSES), not silent.
     let app: any
     try {
       app = await createAppFixture({
@@ -340,6 +357,15 @@ async function main() {
         args: args2,
         fetch: fetchHandler,
       })
+      // A2 frame-sequence mode (SCHEMA `anim`): the ref side's frames
+      // are EVENT-driven — tick_events[k] injected, settle, capture
+      // (no virtual clock; see the fixture note above). The rust side
+      // additionally steps its store clock k·100ms per tick
+      // (ANIM_TICK_MS, SCHEMA constant); clock-driven shape
+      // differences are the registered harness artifact family.
+      const isAnim = scenario.anim !== undefined
+      const ticks = scenario.anim?.ticks ?? 8
+      const tickEvents = scenario.anim?.tick_events ?? []
       await app.ready
       await app.waitForVisualIdle({ quietFrames: 3, maxFrames: 600 })
       for (const event of scenario.events) app.events.emit(event)
@@ -347,25 +373,41 @@ async function main() {
       await app.waitForVisualIdle({ quietFrames: 3, maxFrames: 600 })
       await Bun.sleep(scenario.settle_ms ?? 200)
       await app.renderOnce()
-      const frame = app.captureSpans()
-      const grid = rasterize(frame, c.width, c.height, THEME_FG, THEME_BG)
+      const cells = rasterize(app.captureSpans(), c.width, c.height, THEME_FG, THEME_BG)
+      const frames: GridCell[][][] = [cells]
+      for (let k = 1; isAnim && k <= ticks; k++) {
+        for (const event of tickEvents[k] ?? []) app.events.emit(event)
+        // two idle+render passes per tick: propagation after a long
+        // quiet stretch needs one extra pass (observed one-tick
+        // content lag without it); NO settle sleep — real time spent
+        // per tick must stay well under the toast's real-timer 5000ms
+        // dismissal deadline (the ref toast timer is NOT
+        // clock-injectable — SCHEMA comparability note)
+        await app.waitForVisualIdle({ quietFrames: 3, maxFrames: 200 })
+        await app.renderOnce()
+        await app.waitForVisualIdle({ quietFrames: 3, maxFrames: 200 })
+        await app.renderOnce()
+        frames.push(rasterize(app.captureSpans(), c.width, c.height, THEME_FG, THEME_BG))
+      }
 
       const gapsSorted = [...gaps].sort()
       const censusObj: Record<string, number> = {}
       for (const key of [...census.keys()].sort()) censusObj[key] = census.get(key)!
-      const out = {
+      const out: Record<string, unknown> = {
         schema: "tui-diff-grid/1",
         id: c.id,
         width: c.width,
         height: c.height,
-        cells: grid,
+        cells,
         stub_gaps: gapsSorted,
         request_census: censusObj,
       }
+      if (isAnim) out.frames = frames
       writeFileSync(path.join(outDir, `${c.id}.json`), `${JSON.stringify(out)}\n`)
       if (gapsSorted.length > 0) anyGap = true
       summary.push({ id: c.id, gaps: gapsSorted.length, requests: census.size })
-      console.log(`[tui-fullscreen-ref] ✓ ${c.id} gaps=${gapsSorted.length} paths=${census.size}`)
+      console.log(`[tui-fullscreen-ref] ✓ ${c.id} gaps=${gapsSorted.length} paths=${census.size}`
+        + (frames.length > 1 ? ` frames=${frames.length}` : ""))
     } finally {
       Math.random = randomBefore
       if (app) await app[Symbol.asyncDispose]()

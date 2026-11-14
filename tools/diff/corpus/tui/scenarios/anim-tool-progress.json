@@ -1,0 +1,732 @@
+{
+ "schema": "tui-diff-scenario/1",
+ "id": "anim-tool-progress",
+ "width": 80,
+ "height": 24,
+ "fetch": {
+  "/api/agent": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": [
+     {
+      "id": "build",
+      "name": "build",
+      "mode": "primary",
+      "hidden": false,
+      "request": {
+       "settings": {},
+       "headers": {},
+       "body": {}
+      },
+      "permissions": []
+     }
+    ]
+   }
+  },
+  "/api/command": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/config": {
+   "status": 200,
+   "body": []
+  },
+  "/api/event": {
+   "status": 200,
+   "body": {
+    "sse": true,
+    "initial": {
+     "id": "evt_connected",
+     "type": "server.connected",
+     "data": {}
+    }
+   }
+  },
+  "/api/experimental/migration/v1": {
+   "status": 200,
+   "body": {
+    "status": "completed"
+   }
+  },
+  "/api/form": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/fs/list": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/info": {
+   "status": 200,
+   "body": {
+    "version": "test",
+    "pid": 0,
+    "urls": [],
+    "paths": {
+     "tmp": "/tmp"
+    },
+    "capabilities": {
+     "persistentPty": true
+    }
+   }
+  },
+  "/api/integration": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/location": {
+   "status": 200,
+   "body": {
+    "directory": "/tmp/opencode/packages/tui",
+    "project": {
+     "id": "proj_test",
+     "directory": "/tmp/opencode",
+     "canonical": "/tmp/opencode"
+    }
+   }
+  },
+  "/api/mcp": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/mcp/resource": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": {
+     "resources": [],
+     "templates": []
+    }
+   }
+  },
+  "/api/model": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/plugin": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/project": {
+   "status": 200,
+   "body": []
+  },
+  "/api/provider": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/reference": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/session": {
+   "status": 200,
+   "body": {
+    "data": [
+     {
+      "id": "anim-tool-progress",
+      "title": "Animation: tool progress",
+      "projectID": "proj_test",
+      "location": {
+       "directory": "/tmp/opencode/packages/tui"
+      },
+      "agent": "build",
+      "model": {
+       "providerID": "fixture",
+       "id": "model"
+      },
+      "cost": 0,
+      "tokens": {
+       "input": 0,
+       "output": 0,
+       "reasoning": 0,
+       "cache": {
+        "read": 0,
+        "write": 0
+       }
+      },
+      "time": {
+       "created": 1,
+       "updated": 2
+      }
+     }
+    ],
+    "cursor": {}
+   }
+  },
+  "/api/session/active": {
+   "status": 200,
+   "body": {
+    "data": {
+     "id": "anim-tool-progress"
+    }
+   }
+  },
+  "/api/shell": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/skill": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/vcs": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": {
+     "branch": {
+      "current": "main",
+      "default": "main"
+     }
+    }
+   }
+  },
+  "/api/experimental/session/anim-tool-progress/terminal": {
+   "status": 200,
+   "body": {
+    "data": []
+   }
+  },
+  "/api/session/anim-tool-progress": {
+   "status": 200,
+   "body": {
+    "data": {
+     "id": "anim-tool-progress",
+     "title": "Animation: tool progress",
+     "projectID": "proj_test",
+     "location": {
+      "directory": "/tmp/opencode/packages/tui"
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "fixture",
+      "id": "model"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "time": {
+      "created": 1,
+      "updated": 2
+     }
+    }
+   }
+  },
+  "/api/session/anim-tool-progress/form": {
+   "status": 200,
+   "body": {
+    "data": []
+   }
+  },
+  "/api/session/anim-tool-progress/inbox": {
+   "status": 200,
+   "body": {
+    "data": []
+   }
+  },
+  "/api/session/anim-tool-progress/message": {
+   "status": 200,
+   "body": {
+    "data": [
+     {
+      "id": "msg_user_1",
+      "sessionID": "anim-tool-progress",
+      "type": "user",
+      "time": {
+       "created": 1
+      },
+      "text": "Keep going."
+     }
+    ],
+    "cursor": {}
+   }
+  },
+  "/api/session/anim-tool-progress/permission": {
+   "status": 200,
+   "body": {
+    "data": []
+   }
+  }
+ },
+ "events": [
+  {
+   "id": "evt_anim-tool-progress_upd",
+   "created": 1,
+   "type": "session.updated",
+   "durable": {
+    "aggregateID": "anim-tool-progress",
+    "seq": 1,
+    "version": 1
+   },
+   "data": {
+    "sessionID": "anim-tool-progress",
+    "info": {
+     "id": "anim-tool-progress",
+     "title": "Animation: tool progress",
+     "projectID": "proj_test",
+     "location": {
+      "directory": "/tmp/opencode/packages/tui"
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "fixture",
+      "id": "model"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "time": {
+      "created": 1,
+      "updated": 2
+     }
+    }
+   }
+  },
+  {
+   "id": "evt_anim-tool-progress_2",
+   "created": 102,
+   "type": "session.step.started",
+   "durable": {
+    "aggregateID": "anim-tool-progress",
+    "seq": 2,
+    "version": 1
+   },
+   "data": {
+    "sessionID": "anim-tool-progress",
+    "assistantMessageID": "msg_asst_1",
+    "agent": "build",
+    "model": {
+     "providerID": "fixture",
+     "id": "model"
+    },
+    "started": 0
+   }
+  },
+  {
+   "id": "evt_anim-tool-progress_3",
+   "created": 103,
+   "type": "session.tool.input.started",
+   "durable": {
+    "aggregateID": "anim-tool-progress",
+    "seq": 3,
+    "version": 1
+   },
+   "data": {
+    "sessionID": "anim-tool-progress",
+    "assistantMessageID": "msg_asst_1",
+    "id": "tool_run",
+    "name": "bash"
+   }
+  },
+  {
+   "id": "evt_anim-tool-progress_4",
+   "created": 104,
+   "type": "session.tool.called",
+   "durable": {
+    "aggregateID": "anim-tool-progress",
+    "seq": 4,
+    "version": 1
+   },
+   "data": {
+    "sessionID": "anim-tool-progress",
+    "assistantMessageID": "msg_asst_1",
+    "id": "tool_run",
+    "input": {
+     "command": "sleep 1"
+    },
+    "executed": true
+   }
+  }
+ ],
+ "keys": [],
+ "settle_ms": 300,
+ "note": "Anim family (A2, loading-bar semantics): a running bash tool whose progress metadata (loading counter k/7 + streamed output lines) advances one step per virtual tick and settles with tool.success + a closing text part at the final tick -- the last frame converges.",
+ "anim": {
+  "ticks": 10,
+  "tick_events": [
+   [],
+   [
+    {
+     "id": "evt_anim-tool-progress_11",
+     "created": 111,
+     "type": "session.tool.progress",
+     "durable": {
+      "aggregateID": "anim-tool-progress",
+      "seq": 11,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-tool-progress",
+      "assistantMessageID": "msg_asst_1",
+      "id": "tool_run",
+      "metadata": {
+       "progress": "1/7",
+       "output": "line 1\n"
+      }
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-tool-progress_12",
+     "created": 112,
+     "type": "session.tool.progress",
+     "durable": {
+      "aggregateID": "anim-tool-progress",
+      "seq": 12,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-tool-progress",
+      "assistantMessageID": "msg_asst_1",
+      "id": "tool_run",
+      "metadata": {
+       "progress": "2/7",
+       "output": "line 2\n"
+      }
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-tool-progress_13",
+     "created": 113,
+     "type": "session.tool.progress",
+     "durable": {
+      "aggregateID": "anim-tool-progress",
+      "seq": 13,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-tool-progress",
+      "assistantMessageID": "msg_asst_1",
+      "id": "tool_run",
+      "metadata": {
+       "progress": "3/7",
+       "output": "line 3\n"
+      }
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-tool-progress_14",
+     "created": 114,
+     "type": "session.tool.progress",
+     "durable": {
+      "aggregateID": "anim-tool-progress",
+      "seq": 14,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-tool-progress",
+      "assistantMessageID": "msg_asst_1",
+      "id": "tool_run",
+      "metadata": {
+       "progress": "4/7",
+       "output": "line 4\n"
+      }
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-tool-progress_15",
+     "created": 115,
+     "type": "session.tool.progress",
+     "durable": {
+      "aggregateID": "anim-tool-progress",
+      "seq": 15,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-tool-progress",
+      "assistantMessageID": "msg_asst_1",
+      "id": "tool_run",
+      "metadata": {
+       "progress": "5/7",
+       "output": "line 5\n"
+      }
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-tool-progress_16",
+     "created": 116,
+     "type": "session.tool.progress",
+     "durable": {
+      "aggregateID": "anim-tool-progress",
+      "seq": 16,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-tool-progress",
+      "assistantMessageID": "msg_asst_1",
+      "id": "tool_run",
+      "metadata": {
+       "progress": "6/7",
+       "output": "line 6\n"
+      }
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-tool-progress_17",
+     "created": 117,
+     "type": "session.tool.progress",
+     "durable": {
+      "aggregateID": "anim-tool-progress",
+      "seq": 17,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-tool-progress",
+      "assistantMessageID": "msg_asst_1",
+      "id": "tool_run",
+      "metadata": {
+       "progress": "7/7",
+       "output": "line 7\n"
+      }
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-tool-progress_18",
+     "created": 118,
+     "type": "session.tool.progress",
+     "durable": {
+      "aggregateID": "anim-tool-progress",
+      "seq": 18,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-tool-progress",
+      "assistantMessageID": "msg_asst_1",
+      "id": "tool_run",
+      "metadata": {
+       "progress": "7/7",
+       "output": "line 7\n"
+      }
+     }
+    },
+    {
+     "id": "evt_anim-tool-progress_19",
+     "created": 119,
+     "type": "session.tool.success",
+     "durable": {
+      "aggregateID": "anim-tool-progress",
+      "seq": 19,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-tool-progress",
+      "assistantMessageID": "msg_asst_1",
+      "id": "tool_run",
+      "content": [
+       {
+        "type": "text",
+        "text": "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\n"
+       }
+      ],
+      "executed": true
+     }
+    },
+    {
+     "id": "evt_anim-tool-progress_20",
+     "created": 120,
+     "type": "session.text.started",
+     "durable": {
+      "aggregateID": "anim-tool-progress",
+      "seq": 20,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-tool-progress",
+      "assistantMessageID": "msg_asst_1",
+      "ordinal": 0
+     }
+    },
+    {
+     "id": "evt_anim-tool-progress_21",
+     "created": 121,
+     "type": "session.text.ended",
+     "durable": {
+      "aggregateID": "anim-tool-progress",
+      "seq": 21,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-tool-progress",
+      "assistantMessageID": "msg_asst_1",
+      "ordinal": 0,
+      "text": "Done sleeping."
+     }
+    },
+    {
+     "id": "evt_anim-tool-progress_22",
+     "created": 122,
+     "type": "session.step.ended",
+     "durable": {
+      "aggregateID": "anim-tool-progress",
+      "seq": 22,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-tool-progress",
+      "assistantMessageID": "msg_asst_1",
+      "finish": "stop"
+     }
+    }
+   ]
+  ]
+ }
+}

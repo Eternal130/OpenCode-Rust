@@ -15,7 +15,7 @@
 | 5 | /compact 管线 | responses_compaction.py | RESPONSES-COMPACTION.md | 61 文档（13 mined） | 60 | 1 | — |
 | 6 | HTTP 全量 | http_full.py | HTTP-FULL.md | 60 请求（13 mined） | 47 | 11 | 2 |
 | 7 | **provider 录制解码** | provider_recordings.py | PROVIDER-RECORDINGS.md | **264 交互（259 真实 SSE）** | 264 | 0 | — |
-| 8 | TUI 整屏差分（无头静息帧） | tui_fullscreen.py | TUI-FULLSCREEN.md | 60 case（20 场景×3 档） | **EXACT 60** | 未裁决 0 | — |
+| 8 | TUI 整屏差分（静息帧 + A2 帧序列） | tui_fullscreen.py | TUI-FULLSCREEN.md | 静息 75 case（25 场景×3 档）+ frames 15 序列（5 anim×3 档） | 静息 **EXACT 69**；frames **EXACT 6** | 静息 6（G-424×3 + 工具行伪影×3）；frames 9（G-423×3 + G-424×3 + 工具行伪影×3） | 15（全部 CAUSES 命中，未裁决 0） |
 
 ## 总计
 
@@ -42,4 +42,4 @@ G-357/G-392/G-393/G-394/G-396/G-397 修复面在 mined 语料下保持对齐 ✅
 
 ## 范围外声明（各报告详述）
 
-通道 8 覆盖渲染层**无头静息整屏**（20 场景×3 档，320×80 档自动覆盖 sidebar auto-dock 布局 regime：session-frame.tsx wide()）；渲染层范围外余量：动画中间帧（G-128/G-49/G-368 文档化豁免）、活体交互序列（v2 扩展，parity::tui_diff 双 PTY rig 存在未收编）、mini 模式 footer（ref 独立入口 fixture 不可装配）、插件 TSX panel/plugin-*（两侧驱动无插件 boot，G-28 登记面由 G-332 markdown 有界场景部分承担）· ref message.updated 全量投影 · session.moved 纯事件流门控 · HTTP 鉴权态/workerd/网络出口 · bedrock 二进制 event-stream/websocket/gateway 包裹族（通道 7）· minted-id（G-287⑦）
+通道 8 覆盖渲染层**无头静息整屏**（25 场景×3 档，320×80 档自动覆盖 sidebar auto-dock 布局 regime：session-frame.tsx wide()）+ **A2 帧序列对拍**（anim 场景 rust 虚拟时钟逐拍 advance_clock(k·100ms)，frames 维度逐拍 EXACT + 首异拍定位；动画中间帧自 A2 起部分可断言——G-128 midframe 豁免收窄为「首末拍一致、仅中间拍差」精确形状）；渲染层范围外余量：ref 侧虚拟时钟不可注入面（ManualClock 整 app 注入原生不稳：toast 真实 setTimeout / caret 原生光标 / animations:true 捕获段错误——夹具伪影族登记）、活体交互序列（v2 扩展，parity::tui_diff 双 PTY rig 存在未收编）、mini 模式 footer（ref 独立入口 fixture 不可装配）、插件 TSX panel/plugin-*（两侧驱动无插件 boot，G-28 登记面由 G-332 markdown 有界场景部分承担）· ref message.updated 全量投影 · session.moved 纯事件流门控 · HTTP 鉴权态/workerd/网络出口 · bedrock 二进制 event-stream/websocket/gateway 包裹族（通道 7）· minted-id（G-287⑦）

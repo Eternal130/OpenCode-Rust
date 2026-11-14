@@ -3204,3 +3204,22 @@ G-412/413/414/415/416/417/418/420/422 ✅；**G-419/G-421 勘误撤销**（登�
 - **oc-tui emission pin 重冻结**（`opentui_emit_diff_tests::replay_corpus_emission_is_pinned`）：palette 注册序重排使 palette-ctrl-p@100×30 帧组变化（sidebar 头行进入可见窗）——合法重钉（该 pin 按波重冻结惯例），新摘要 0x5084_fcfe_273a_09a2。
 - **文档化有界注记（不立 G-ID）**：① palette 注册表 **320×80 可见窗之外**的条目序（session.cd/stats.open 及之后）在语料中不可观测，保持旧序；② 新增 terminal.* palette 行的 dispatch 未接（选择后 Dispatch::Unknown——PTY/终端面板装配链未立项，语料无该路径）。
 
+
+# 第三十一轮（2026-11-15，差分扩展 A2：帧序列对拍，G-423）
+
+通道 8 A2 扩展（`tui-diff-scenario/1` 可选 `anim` 字段 + `frames` 维度）新发现的渲染语义差 1 项立项；另两条为通道基建登记（非移植缺口，见 TUI-FULLSCREEN.md CAUSES 表）：ref 命令面板分组序竞态（`groupBy` 首现序 × 多源异步注册，5 次复跑 1 次翻转——ref 树只读不可修）、ref 动画门控夹具伪影（rust 时钟驱动动画 vs ref fixture 钉 `animations:false` 静态形状；ManualClock 整 app 注入原生不稳——boot 冻钟死锁 / 捕获段错误 `bufferGetCharPtr`，探针记录 `.superpowers/sdd/diff-ext/a2-report.md`）。
+
+### G-423 🟡 多 text part 内联拼接渲染差（tui，anim-stream-multi-part）
+- 现象（A2 帧序列对拍，逐拍取证）：同一 assistant 消息两个 text part（ordinal 0/1）交错 `session.text.delta`——ref 把两 part 文本**内联拼接到同一行**（中间拍 "Alpha Beta part"），且双 `text.ended` 后仅显示 **part 1** 终文（part 0 终文丢失）；rust 按分段段落渲染（两个独立块，终态两段完整）。
+- Ref：packages/tui/src/routes/session/message-parts.tsx:198-275（InlineToolRow/多 part 段落装配——part 归并进同一 text run，ended 全量替换语义下后 part 覆盖前 part）。
+- Rust：crates/oc-tui/src/components/message/rows.rs:120-135（每 part 独立块装配，终态两段并存）。
+- 处置：登记不拦（CAUSES 精确 matcher：`anim-stream-multi-part*`）；静息帧（tick 0，空内容）两侧 exact，纯流式中间拍可观测。修复方向：rust 侧确认 ref 的"拼接+覆盖"是否为有意语义（终文丢 part 0 疑似 ref 侧缺陷）后对齐或钉定。
+
+### G-424 🟡 rust toast 动作 affordance 恒 'x'（ref '› {label}' + 宽面板）
+- 现象（A2 静息/帧序列对拍，anim-toast-window 三档）：带 action 的 toast（MCP 失败 → "Open MCP servers"）——ref 标题行右对齐渲染 `› Open MCP servers` 且面板宽度计入该 run（rails 27/77，panel 51）；rust 恒渲染 dismiss `x`、面板按 title+3 计宽（rails 44/77，panel 34）。
+- Ref：packages/tui/src/ui/toast.tsx:75-103（`affordance()` = action ? `› ${label}` : "x"，flexShrink=0 右对齐、计入 intrinsic 宽度）。
+- Rust：crates/oc-tui/src/components/toast_solid.rs:75-89（恒两 pad + 'x'）；toast.rs:180-186（content = max(message, title+3)+4）。
+- 处置：登记不拦（CAUSES 精确 matcher：`anim-toast-*`）。A2 期间已实现四点联动修复（toast_affordance/toast_geometry 加 affordance_width 参数/toast_tree_units/right_rail_cell/app.rs hit-rect）并经通道 8 验证 anim-toast-window 三档静息+帧序列 exact 化，但该修复连带要求重冻结 tree-scenario oracle（tree-toast-overlay/tree-chrome-full 捕获漂移）且 pty_lane_km `pty_km_toast_action_and_home_chip` 出现 120s 不退出（活体退出链与宽面板/hit-rect 交互待查）——超出 A2 harness 范围，rust 侧改动已回退，留专用 lane 连同 oracle 重冻结一并落地。
+
+### G-128 勘注（A2）：过渡动画中间帧自本起可断言
+通道 8 frames 维度（rust 虚拟时钟逐拍 `advance_clock(k·100ms)`）把"动画语义"从文档化豁免变为可断言面；G-128/G-49/G-368 的 midframe 豁免收窄为精确形状（首拍与末拍一致、仅中间拍差；末拍也差=拦）。当前语料无命中该形状的 case（spinner/流式/计时窗 15 case 逐拍 exact 或落 G-423/夹具伪影族）；A2 期间 toast 动作 affordance 差独立立项为 G-424（修复尝试因 oracle 重冻结/活体用例联动超范围而回退，留专用 lane）。

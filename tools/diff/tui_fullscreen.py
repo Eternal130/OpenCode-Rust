@@ -115,6 +115,9 @@ def build_manifest(stage: Path) -> list[dict]:
         staged = scenarios_dir / fname
         shutil.copyfile(CORPUS / fname, staged)
         primary = (doc["width"], doc["height"])
+        # A2: the frame-sequence tick count (present on anim scenarios
+        # only; load_side validates frames length against it)
+        anim_ticks = (doc.get("anim") or {}).get("ticks")
         if "tiers" in doc:
             # SCHEMA `tiers` override: run exactly the declared subset;
             # the un-suffixed id is reserved for the primary-size entry
@@ -125,7 +128,8 @@ def build_manifest(stage: Path) -> list[dict]:
                 w, h = int(t[0]), int(t[1])
                 tid = doc["id"] if (w, h) == primary else f"{doc['id']}@{w}x{h}"
                 cases.append({"id": tid, "scenario": str(staged),
-                              "width": w, "height": h})
+                              "width": w, "height": h,
+                              **({"anim_ticks": anim_ticks} if anim_ticks is not None else {})})
             continue
         # primary tier: the fixture's own size, un-suffixed id
         cases.append({
@@ -133,6 +137,7 @@ def build_manifest(stage: Path) -> list[dict]:
             "scenario": str(staged),
             "width": primary[0],
             "height": primary[1],
+            **({"anim_ticks": anim_ticks} if anim_ticks is not None else {}),
         })
         # mirrored tiers (SCHEMA 尺寸档位): same fixture, size only
         for w, h in MIRRORED_TIERS:
@@ -143,6 +148,7 @@ def build_manifest(stage: Path) -> list[dict]:
                 "scenario": str(staged),
                 "width": w,
                 "height": h,
+                **({"anim_ticks": anim_ticks} if anim_ticks is not None else {}),
             })
     if not cases:
         raise SystemExit("empty corpus: no tui-diff-scenario/1 fixtures found "
@@ -217,7 +223,7 @@ def run_rust(manifest: Path, out: Path) -> None:
 
 def load_side(out: Path, cases: list[dict], side: str) -> dict[str, dict]:
     """Load one side's grids; enforce the infra rules (stub_gaps,
-    missing grid) with SystemExit(1)."""
+    missing grid, cells/frames shape) with SystemExit(1)."""
     grids: dict[str, dict] = {}
     infra: list[str] = []
     for case in cases:
@@ -240,19 +246,39 @@ def load_side(out: Path, cases: list[dict], side: str) -> dict[str, dict]:
         # T5-review follow-up: the cells array must actually be a dense
         # width x height grid — declared size == real size, else infra
         cells = grid.get("cells")
-        if not isinstance(cells, list) or len(cells) != grid.get("height") or any(
-                not isinstance(row, list) or len(row) != grid.get("width")
-                for row in cells):
+        if _bad_dense_grid(cells, grid.get("width"), grid.get("height")):
             real = (f"{len(cells)}x?" if isinstance(cells, list) else "non-list")
             infra.append(
                 f"{case['id']}: {side} cells shape {real} "
                 f"!= declared {grid.get('width')}x{grid.get('height')}")
+        # A2: frames (when present) must be K+1 dense grids of the same
+        # size (K = the scenario's declared ticks)
+        frames = grid.get("frames")
+        if frames is not None:
+            ticks = case.get("anim_ticks")
+            if ticks is None:
+                infra.append(f"{case['id']}: {side} emitted frames but scenario has no anim")
+            elif not isinstance(frames, list) or len(frames) != ticks + 1:
+                infra.append(f"{case['id']}: {side} frames length "
+                             f"{len(frames) if isinstance(frames, list) else 'non-list'} "
+                             f"!= ticks+1 ({ticks + 1})")
+            else:
+                for tick, fgrid in enumerate(frames):
+                    if _bad_dense_grid(fgrid, grid.get("width"), grid.get("height")):
+                        infra.append(f"{case['id']}: {side} frame {tick} not a dense "
+                                     f"{grid.get('width')}x{grid.get('height')} grid")
+                        break
         grids[case["id"]] = grid
     if infra:
         for line in infra:
             print(f"infra failure: {line}", file=sys.stderr)
         raise SystemExit(1)
     return grids
+
+
+def _bad_dense_grid(cells, width, height) -> bool:
+    return (not isinstance(cells, list) or len(cells) != height or any(
+        not isinstance(row, list) or len(row) != width for row in cells))
 
 
 def run(stage: Path, ref: Path, cases: list[dict]) -> tuple[dict[str, dict], dict[str, dict]]:
@@ -403,19 +429,57 @@ def compare(ref_grid: dict, rust_grid: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# A2 frame-sequence comparison (anim dimension)
+# ---------------------------------------------------------------------------
+
+def compare_frames(ref_grid: dict, rust_grid: dict) -> dict:
+    """Sequence-compare the `frames` arrays (both validated by
+    load_side: K+1 dense grids) -> per-tick verdicts + first divergent
+    tick localization {tick,row,col,field,ref,rust}.
+
+    verdict (overall): exact — every tick exact; otherwise the worst
+    per-tick form (diverge > structural), mirroring compare()'s
+    semantics applied per tick.
+    """
+    ref_frames = ref_grid.get("frames") or []
+    rust_frames = rust_grid.get("frames") or []
+    per_tick = []
+    first: dict | None = None
+    for tick, (rf, uf) in enumerate(zip(ref_frames, rust_frames)):
+        wrapped_r = {"width": ref_grid.get("width"), "height": ref_grid.get("height"), "cells": rf}
+        wrapped_u = {"width": rust_grid.get("width"), "height": rust_grid.get("height"), "cells": uf}
+        res = compare(normalize(wrapped_r), normalize(wrapped_u))
+        per_tick.append(res["verdict"])
+        if res["verdict"] != "exact" and first is None:
+            fd = res["first_diff"] or {}
+            first = {"tick": tick, **fd}
+    verdict_all = "exact" if all(v == "exact" for v in per_tick) else (
+        "diverge" if "diverge" in per_tick else "structural")
+    return {
+        "dimension": "frames",
+        "verdict": verdict_all,
+        "per_tick": per_tick,
+        "first_tick_diff": first,
+        "cells_diff_count": sum(1 for v in per_tick if v != "exact"),
+    }
+
+
+# ---------------------------------------------------------------------------
 # CAUSES adjudication table (T6) + gate
 # ---------------------------------------------------------------------------
 
 # Known-cause annotations (dual file:line), channel-7 lambda style:
 # (label, matcher(divergence_record)->bool, (定性文, ref file:line, rust file:line)).
-# A divergence_record is {"id", "verdict", "first_diff", "cells_diff_count"}.
-# Matchers are written against EXACT shapes (scenario-id prefix + precise
-# divergence form); anything broader would swallow unknown divergences and
-# fake a green gate.  Unknown divergences stay unadjudicated (T9's job).
+# A divergence_record is {"id","dimension","verdict","first_diff"/
+# "first_tick_diff","cells_diff_count","per_tick"?}. Matchers are written
+# against EXACT shapes (scenario-id prefix + precise divergence form);
+# anything broader would swallow unknown divergences and fake a green
+# gate.  Unknown divergences stay unadjudicated (T9's job).
 CAUSES = [
     (
         "G-368 量化色（oklab 最近邻量化差）",
-        lambda d: d.get("verdict") == "structural",
+        lambda d: d.get("dimension", "resting") == "resting"
+        and d.get("verdict") == "structural",
         (
             "仅 RGB 差且每通道 ≤RGB_TOLERANCE(8)、char/attrs 全等：双侧滚动区主题"
             "各经一次 oklab 感知最近邻量化（同一算法、不同浮点环境），量化格点"
@@ -427,8 +491,110 @@ CAUSES = [
         ),
     ),
     (
+        "G-128 midframe 簇（spring/tween 未移植——中间拍属性位置差，末拍收敛）",
+        lambda d: d.get("dimension") == "frames"
+        and _midframe_shape(d) == "converging",
+        (
+            "anim 场景的帧序列差：首拍（静息帧）与末拍逐格一致、仅中间拍出现"
+            "ch/attrs 属性差——ref 弹簧/补间（ui/animation.ts advanceSpring）"
+            "过渡的中间帧位置 vs rust 已到位（无过渡引擎，终态直渲染）的"
+            "已立项过渡差；末拍收敛 ⇒ 登记不拦；末拍也差的不是 midframe 族，"
+            "不命中本簇（拦，T9）",
+            "ref packages/tui/src/ui/animation.ts:1-60（advanceSpring，未移植）",
+            "rust crates/oc-tui/src/ 全树无 spring/tween（G-128 登记面）；"
+            "rust 渲染为 (store, clock) 纯函数（A1，store.rs epoch/clock 接线）",
+        ),
+    ),
+    (
+        "G-49/G-368 节奏族（中间拍量化色差，末拍收敛）",
+        lambda d: d.get("dimension") == "frames"
+        and _midframe_shape(d) == "rhythm",
+        (
+            "anim 场景的帧序列差：首拍与末拍一致、仅中间拍 structural（RGB ≤8、"
+            "char/attrs 全等）——过渡帧的 oklab 量化格点相邻差（G-368 同因）"
+            "或已登记的 repaint 节奏差（G-49，帧率文档化决策）在中间拍的"
+            "采样差；末拍收敛 ⇒ 登记不拦",
+            "ref packages/tui/src/mini/theme.ts:81-105（量化）+ 组件 rAF 帧节奏",
+            "rust crates/oc-tui/src/app.rs:10138-10166（100ms 泵粒度，SCHEMA "
+            "ANIM_TICK_MS 对齐）",
+        ),
+    ),
+    (
+        "G-423 多 text part 内联拼接渲染差（anim-stream-multi-part）",
+        lambda d: str(d.get("id", "")).startswith("anim-stream-multi-part")
+        and d.get("dimension") in ("frames", "resting", None),
+        (
+            "anim-stream-multi-part 场景：同一 assistant 消息的两个 text part "
+            "（ordinal 0/1）交错流式 delta——ref 将两 part 的文本内联拼接到同一行"
+            "（'Alpha Beta part'），且双 text.ended 后仅显示 part 1 终文；"
+            "rust 按分段段落渲染（两个独立块，终态两段完整）。A2 帧序列维度"
+            "新发现的渲染语义差，登记（G-423），不拦",
+            "ref packages/tui/src/routes/session/message-parts.tsx:198-275"
+            "（InlineToolRow/多 part 段落装配）",
+            "rust crates/oc-tui/src/components/message/rows.rs:120-135"
+            "（subagent/多 part 行装配，分段段落）",
+        ),
+    ),
+    (
+        "ref 命令面板分组序竞态（groupBy 先到先得，跨运行可翻转）",
+        lambda d: str(d.get("id", "")).startswith("command-palette")
+        and d.get("dimension", "resting") == "resting"
+        and (d.get("first_diff") or {}).get("field") == "ch",
+        (
+            "command-palette 场景的 ch 字段差（面板分组顺序差）：ref 的分组序"
+            "由 `groupBy(category).entries()` 的首现顺序决定（dialog-select."
+            "tsx:214-226），而命令选项来自多个异步注册源（app 内建/会话命令/"
+            "/api/command/skills）——注册完成序跨运行可翻转（A2 复跑取证："
+            "5 次单跑 1 次 Prompt↔Session 翻转；rust 侧确定性注册序恒 "
+            "Session 组在前）。ref 树只读不可修，登记为通道 8 已知 ref 侧"
+            "竞态，非移植语义差",
+            "ref packages/tui/src/ui/dialog-select.tsx:214-226（groupBy/"
+            "entries 首现序）+ 多源异步注册（routes/session/index.tsx "
+            "commands 装配）",
+            "rust crates/oc-tui/src/components/command_palette.rs（确定性"
+            "分组装配，无竞态）",
+        ),
+    ),
+    (
+        "G-424 rust toast 动作 affordance 恒 'x'（ref '› {label}' + 宽面板）",
+        lambda d: str(d.get("id", "")).startswith("anim-toast-")
+        and d.get("dimension") in ("frames", "resting", None),
+        (
+            "anim-toast-* 场景：带 action 的 toast（MCP 失败 → 'Open MCP "
+            "servers'）——ref 标题行右对齐渲染动作 affordance '› {label}' 且"
+            "面板宽度计入该 run（title+marginLeft2+affordance）；rust 恒渲染"
+            "dismiss 'x'、面板按 title+3 计宽（窄 17 列）。A2 静息/帧序列维度"
+            "新发现的渲染语义差，登记（G-424）不拦。修复面：toast_geometry/"
+            "toast_tree_units/right_rail_cell/app 指针 hit-rect 四处联动，且"
+            "钉住 tree-scenario 冻结 oracle（tools/parity/tree-scenarios）与"
+            "pty_lane_km 活体用例——超出 A2 harness 范围，留专用 lane 落地",
+            "ref packages/tui/src/ui/toast.tsx:75-103（affordance() = action ? "
+            "`› ${label}` : \"x\"，flexShrink=0 右对齐进面板宽度）",
+            "rust crates/oc-tui/src/components/toast_solid.rs:75-89（恒 "
+            "\"  x\" 两 pad + 'x'）、toast.rs:180-186（title+3 计宽）",
+        ),
+    ),
+    (
+        "A2 ref 动画门控夹具伪影（rust 时钟驱动动画 vs ref animations:false 静态形状）",
+        lambda d: str(d.get("id", "")).startswith("anim-")
+        and d.get("dimension") in ("frames", "resting", None),
+        (
+            "anim-* 场景：rust 帧是 (store, clock) 纯函数（A1）——虚拟时钟逐拍推进使"
+            "spinner 轮转/caret blink（500ms 周期）/knight 渐变在中间拍真实变化；"
+            "ref 侧夹具钉 animations:false（动画门控关闭，静态形状）且渲染器时钟"
+            "注入在整 app 下原生不稳（boot 死锁/捕获段错误，探针记录于 a2-report）"
+            "——这是夹具伪影而非移植语义差：生产 ref 默认 animations:true 渲染"
+            "同类动画。登记不拦；事件驱动的逐拍内容变化仍被本维度精确断言",
+            "ref packages/tui/test/fixture/app.ts:32（config animations:false 钉定）+ "
+            "component/spinner.tsx:27-31（animations 门控回退静态 ⋯）",
+            "rust crates/oc-tui/tests/tui_fullscreen_diff_driver.rs（ANIM_TICK_MS=100 "
+            "逐拍 advance_clock）；oc-tui 渲染无动画门控，时钟驱动（A1 接线）",
+        ),
+    ),
+    (
         "G-28 插件 TSX 有界（bounded shim）",
-        lambda d: str(d.get("id", "")).startswith("plugin-")
+        lambda d: d.get("dimension", "resting") == "resting"
+        and str(d.get("id", "")).startswith("plugin-")
         and d.get("verdict") == "diverge",
         (
             "plugin-* 场景的形状类分歧：ref 侧插件以 TSX 活树渲染进 Slot，"
@@ -441,7 +607,8 @@ CAUSES = [
     ),
     (
         "G-332 markdown 有界行形状",
-        lambda d: str(d.get("id", "")).startswith("session-markdown-")
+        lambda d: d.get("dimension", "resting") == "resting"
+        and str(d.get("id", "")).startswith("session-markdown-")
         and (d.get("first_diff") or {}).get("field") == "ch",
         (
             "session-markdown-* 场景且 ch 字段差（行形状分歧）：ref 经 markdown "
@@ -455,7 +622,8 @@ CAUSES = [
     ),
     (
         "G-239/G-331 panel 有界（PanelFingerprint）",
-        lambda d: str(d.get("id", "")).startswith("panel-"),
+        lambda d: d.get("dimension", "resting") == "resting"
+        and str(d.get("id", "")).startswith("panel-"),
         (
             "panel-* 场景：PanelInput 的 focus()/close()/toggleFullscreen() "
             "闭包无法过线，rust 以 PanelFingerprint 快照近似 reactive props——"
@@ -467,6 +635,25 @@ CAUSES = [
         ),
     ),
 ]
+
+
+def _midframe_shape(d: dict) -> str | None:
+    """Classify a frames-dimension record: 'converging' (tick 0 exact,
+    last tick exact, ≥1 non-exact middle tick with a ch/attrs diff),
+    'rhythm' (same but every non-exact middle tick is structural), else
+    None (NOT a midframe family — e.g. the last tick also diverges:
+    those block, per the A2 brief)."""
+    per_tick = d.get("per_tick") or []
+    if len(per_tick) < 3:
+        return None
+    if per_tick[0] != "exact" or per_tick[-1] != "exact":
+        return None
+    mid = per_tick[1:-1]
+    if all(v == "exact" for v in mid):
+        return None
+    if any(v == "diverge" for v in mid):
+        return "converging"
+    return "rhythm"
 
 
 def adjudicate(divergence_record: dict) -> str | None:
@@ -499,7 +686,7 @@ def verdict(results: list[dict], causes: list = ()) -> int:
 # ---------------------------------------------------------------------------
 
 def write_report(path: Path, cases: list[dict], ref: dict[str, dict], rust: dict[str, dict],
-                 results: dict[str, dict]) -> None:
+                 results: dict[str, dict], frame_results: dict[str, dict]) -> None:
     lines = []
     # --- ① header: replay line + both driver surfaces (file:line) ---
     lines.append("# TUI-FULLSCREEN — TUI 整屏差分（通道 8）")
@@ -605,12 +792,71 @@ def write_report(path: Path, cases: list[dict], ref: dict[str, dict], rust: dict
     lines.append("")
     lines.append("未命中任何簇的分歧保持未裁决进入 T9；CAUSES 不为绿灯放宽 matcher。")
     lines.append("")
-    # --- ⑥ out-of-scope declaration ---
+    # --- ⑥ frames 维度（A2 帧序列对拍独立小节） ---
+    anim_cases = [c for c in cases if c["id"] in frame_results]
+    lines.append("## frames 维度（A2 帧序列对拍）")
+    lines.append("")
+    lines.append("anim 场景（`anim.ticks` 声明，SCHEMA A2 扩展）在静息排空后逐拍对拍（"
+                 "ANIM_TICK_MS=100ms，k=0..K 共 K+1 帧）：逐拍 EXACT + 首异拍定位。"
+                 "rust 侧 store.advance_clock 纯函数帧（A1）；ref 侧事件驱动逐拍"
+                 "（tick_events 注入 + 双 idle/render 泵，无虚拟时钟——ManualClock 整 app "
+                 "注入原生不稳，SCHEMA comparability 声明）。"
+                 "G-128 midframe / G-49·G-368 节奏簇仅在「首拍与末拍一致、仅中间拍差」时"
+                 "豁免（登记不拦）；末拍也差的不是 midframe 族——未命中即未裁决。")
+    lines.append("")
+    n_f_total = len(anim_cases)
+    n_f_exact = sum(1 for r in frame_results.values() if r["verdict"] == "exact")
+    f_causes_hit: dict[str, list[str]] = {}
+    n_f_unadj = 0
+    for cid, res in frame_results.items():
+        if res["verdict"] == "exact":
+            continue
+        label = adjudicate({"id": cid, **res})
+        if label is None:
+            n_f_unadj += 1
+        else:
+            f_causes_hit.setdefault(label, []).append(cid)
+    n_f_caused = sum(len(v) for v in f_causes_hit.values())
+    lines.append("| anim 总量 | EXACT | CAUSES 命中 | 未裁决 |")
+    lines.append("|---|---|---|---|")
+    lines.append(f"| {n_f_total} | {n_f_exact} | {n_f_caused} | {n_f_unadj} |")
+    lines.append("")
+    if n_f_total != len(frame_results) or any(
+            r["verdict"] != "exact" for r in frame_results.values()):
+        lines.append("| case | verdict | 非exact拍 | per-tick | first 异拍 |")
+        lines.append("|---|---|---|---|---|")
+        for case in anim_cases:
+            cid = case["id"]
+            res = frame_results[cid]
+            ticks = case.get("anim_ticks")
+            fd = res["first_tick_diff"]
+            fd_s = "—" if fd is None else (
+                f"tick={fd.get('tick')} r{fd.get('row')}c{fd.get('col')} "
+                f"{fd.get('field')} ref={fd.get('ref')!r} rust={fd.get('rust')!r}")
+            per = "".join("." if v == "exact" else ("R" if v == "structural" else "X")
+                          for v in res["per_tick"])
+            lines.append(
+                f"| {cid} | {res['verdict']} | {res['cells_diff_count']}/{len(res['per_tick'])} "
+                f"| `{per}` (K={ticks}) | {fd_s} |")
+        lines.append("")
+        for cid, res in frame_results.items():
+            if res["verdict"] == "exact":
+                continue
+            cause = adjudicate({"id": cid, **res})
+            cause_s = f" — CAUSES: {cause}" if cause else " — 未裁决（T9 候选）"
+            lines.append(f"- `{cid}` {cause_s}")
+        lines.append("")
+    # --- ⑦ out-of-scope declaration ---
     lines.append("## 范围外声明")
     lines.append("")
     lines.append("- /opt/opentui-rust 127 场景 = 框架层（OpenTUI 渲染器）边界，本通道只测 oc-tui 应用层，")
     lines.append("  不在其上做差分裁决")
-    lines.append("- 动画中间帧 G-128/G-49/G-368 豁免：本通道只比对静止帧（resting frame）")
+    lines.append("- 动画中间帧 G-128/G-49/G-368：A2 起有了 frames 维度的可断言面（anim 场景"
+                 "逐拍对拍，上节）；纯静息场景仍只比静止帧，frames 簇豁免收窄为"
+                 "「首末拍一致、仅中间拍差」的 midframe 形状")
+    lines.append("- ref 侧不可虚拟时钟化的动画面：toast 解散（真实全局 setTimeout，"
+                 "ui/toast.tsx:142）与 caret blink（原生 cursor 样式，captureSpans 不可见）"
+                 "——帧序列不覆盖（SCHEMA comparability 声明）")
     lines.append("- 活体交互序列（键位/焦点/resize 时序）= v2 扩展，静止帧差分不覆盖")
     lines.append("- 双侧 request_census 不对称 = 信息性（boot 请求模式已知不同），不参与判门")
     lines.append("")
@@ -637,18 +883,32 @@ def main() -> int:
     results = {c["id"]: compare(normalize(ref_grids[c["id"]]),
                                 normalize(rust_grids[c["id"]]))
                for c in cases}
-    write_report(Path(args.write), cases, ref_grids, rust_grids, results)
-    recs = [{"id": cid, **res} for cid, res in results.items()]
+    # A2 frames dimension: sequence-compare every anim case's frames
+    # (both sides validated K+1 dense grids by load_side)
+    frame_results = {c["id"]: compare_frames(ref_grids[c["id"]], rust_grids[c["id"]])
+                     for c in cases if "frames" in (ref_grids[c["id"]] or {})}
+    write_report(Path(args.write), cases, ref_grids, rust_grids, results, frame_results)
+    recs = [{"id": cid, "dimension": "resting", **res} for cid, res in results.items()]
+    recs += [{"id": cid, **res} for cid, res in frame_results.items()]
     code = verdict(recs, CAUSES)
     n_caused = sum(1 for r in recs if r["verdict"] != "exact"
                    and adjudicate(r) is not None)
     for cid, res in results.items():
         fd = res["first_diff"]
         fd_s = "" if fd is None else f" first_diff={fd}"
-        cause = adjudicate({"id": cid, **res})
+        cause = adjudicate({"id": cid, "dimension": "resting", **res}) if res["verdict"] != "exact" else None
         cause_s = f" cause={cause}" if cause else ""
         print(f"{cid}: {res['verdict']} cells_diff={res['cells_diff_count']}"
               f"{fd_s}{cause_s}")
+    for cid, res in frame_results.items():
+        fd = res["first_tick_diff"]
+        fd_s = "" if fd is None else f" first_tick_diff={fd}"
+        cause = adjudicate({"id": cid, **res}) if res["verdict"] != "exact" else None
+        cause_s = f" cause={cause}" if cause else ""
+        per = "".join("." if v == "exact" else ("R" if v == "structural" else "X")
+                      for v in res["per_tick"])
+        print(f"[frames] {cid}: {res['verdict']} nonexact={res['cells_diff_count']} "
+              f"per_tick={per}{fd_s}{cause_s}")
     print(f"gate exit {code} "
           f"(0=all adjudicated exact or CAUSES-covered; 2=unadjudicated "
           f"divergence; infra failures exit 1 before this point); "

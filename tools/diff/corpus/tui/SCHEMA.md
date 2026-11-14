@@ -41,6 +41,41 @@ files; every field semantic below is normative for both.
   array means the scenario is purely fetch/event-driven.
 - `settle_ms` — settle budget after the last event/keypress before the
   frame capture; both sides use the same budget.
+- `anim` — OPTIONAL frame-sequence mode (`tui-diff-scenario/1` A2
+  extension). Shape `{"ticks": K, "tick_events": [[<event>...], ...]?}`.
+  Absent (every pre-A2 scenario) = pure resting mode; the resting
+  60-case semantics are unchanged. When present, the drivers — after
+  the ordinary resting settle/capture — additionally capture K+1 full
+  grids (`frames`, SCHEMA A2): frame 0 is the resting frame.
+  - `ticks` K: frames are captured at sequence positions k = 0..K.
+  - **`ANIM_TICK_MS` = 100** (constant, normative for the rust side;
+    aligned with the rust live pump's 100 ms tick). The rust driver
+    steps its virtual clock to k·ANIM_TICK_MS before each capture
+    (`store.advance_clock` + `toast_advance`; the render is a pure
+    function of (store state, clock) — A1).
+  - `tick_events` — optional per-tick event injection: entry k (an
+    array of `/api/event` payloads, default `[]`) is emitted on the
+    SSE stream right before tick k's capture (k = 1..K; entry 0 is
+    ignored — the resting settle owns tick 0). This is how streaming
+    delta scenarios feed one delta per tick.
+  - **Ref-side comparability boundary (probed, A2)**: injecting the
+    renderer `ManualClock` (`@opentui/core/testing`) into the FULL app
+    is natively unstable — boot deadlocks on a frozen clock (boot
+    timers ride the renderer clock), and with a real-time-driven
+    ManualClock every post-event capture crashes in native buffer
+    reads (segfault `bufferGetCharPtr`/`getRealCharBytes`; probe log
+    in the a2 report). The ref driver therefore boots the STOCK
+    fixture (`animations: false`, system clock) and its frames are
+    EVENT-driven (tick_events + settle + capture, no clock steps).
+    Clock-driven rust animation (spinner glyph rotation, caret blink,
+    knight spinner) vs the ref's animation-gated static shapes is a
+    REGISTERED harness artifact family (CAUSES
+    "A2 ref 动画门控夹具伪影"), not a silent pass: the frames
+    dimension still asserts every event-driven content change
+    exactly, and a future stable ref clock slots into the same
+    schema. Ref-side non-clock-injectable animation surfaces (toast
+    dismissal on a REAL global setTimeout — ui/toast.tsx:142; caret
+    blink via native cursor style) remain out of frame-sequence scope.
 - `note` — one-sentence scenario semantics; the place where
   equivalence between the two implementations is argued.
 
