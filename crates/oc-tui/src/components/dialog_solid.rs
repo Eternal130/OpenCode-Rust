@@ -538,7 +538,7 @@ fn row_paint(inputs: &DialogInputs, index: usize) -> Option<RowPaint> {
 /// footer (`Option.footer`).
 fn footer_text(inputs: &DialogInputs, index: usize) -> Option<String> {
     let option = inputs.options.get(index)?;
-    if inputs.flatten {
+    let footer = if inputs.flatten {
         option
             .search_footer
             .clone()
@@ -546,7 +546,11 @@ fn footer_text(inputs: &DialogInputs, index: usize) -> Option<String> {
             .or_else(|| option.footer.clone())
     } else {
         option.footer.clone()
-    }
+    };
+    // An EMPTY footer renders nothing on the ref (`<Show
+    // when={props.footer}>` — "" is falsy, dialog-select.tsx:904), so
+    // it reserves no columns and no gap either.
+    footer.filter(|footer| !footer.is_empty())
 }
 
 /// The option row's title chunks: `[title][ " description"]` — one

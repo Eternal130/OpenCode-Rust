@@ -15,11 +15,11 @@
 | 5 | /compact 管线 | responses_compaction.py | RESPONSES-COMPACTION.md | 61 文档（13 mined） | 60 | 1 | — |
 | 6 | HTTP 全量 | http_full.py | HTTP-FULL.md | 60 请求（13 mined） | 47 | 11 | 2 |
 | 7 | **provider 录制解码** | provider_recordings.py | PROVIDER-RECORDINGS.md | **264 交互（259 真实 SSE）** | 264 | 0 | — |
-| 8 | TUI 整屏差分（无头静息帧） | tui_fullscreen.py | TUI-FULLSCREEN.md | 40 case（20 场景×2 档） | **EXACT 40** | 未裁决 0 | — |
+| 8 | TUI 整屏差分（无头静息帧） | tui_fullscreen.py | TUI-FULLSCREEN.md | 60 case（20 场景×3 档） | **EXACT 60** | 未裁决 0 | — |
 
 ## 总计
 
-**通道 1-7：790 对拍单元：MATCH 717 · DIVERGE 71 · ADJUDICATED 2 · MISSING 0**（100% 三态归属；第三十轮 burndown 收口口径）。**通道 8（T9 裁决循环四波收口，2026-11-14）：40 case：EXACT 40 · STRUCTURAL 0 · CAUSES 0 · 未裁决 0——门绿 exit 0，无新 G-ID**（详见 TUI-FULLSCREEN.md 与 GAPS-AND-PITFALLS 第三十一轮）——合计 830 对拍单元。
+**通道 1-7：790 对拍单元：MATCH 717 · DIVERGE 71 · ADJUDICATED 2 · MISSING 0**（100% 三态归属；第三十轮 burndown 收口口径）。**通道 8（T9 裁决循环四波收口 2026-11-14 + T8-320 档扩容同日）：60 case（20 场景×3 档 80×24/120×30/320×80）：EXACT 60 · STRUCTURAL 0 · CAUSES 0 · 未裁决 0——门绿 exit 0，无新 G-ID**（详见 TUI-FULLSCREEN.md 与 GAPS-AND-PITFALLS 第三十一轮）——合计 850 对拍单元。
 <!-- 历史脚注（第二十九轮基线口径，已被上方第三十轮收口数字取代，保留备查）：
      101 项分歧：既有 78（R27/R28 裁定族）+ 挖掘新增 23 → 归并 G-412..G-422（11 条：🟡×1 / 🟢×10），其余归 G-407/409/410 既有族。 -->
 
@@ -38,8 +38,8 @@ G-357/G-392/G-393/G-394/G-396/G-397 修复面在 mined 语料下保持对齐 ✅
 ## 语料来源构成
 
 通道 1-6：手造边界 + schema 推导 + 登记册锚 + **mined（ref 测试夹具：config 测试写盘样本/translate 表/tool-input-repair 对/open-responses 内联事件/server 路由测试）**；通道 7：**HttpRecorder cassette 全量**（ref 真实 provider 流量录制，220 SSE + 错误体；bedrock event-stream/websocket/vercel-native/cf-gateway/媒体族=范围外 32 组已声明）。
-挖掘器：`tools/diff/mine_ref_fixtures.py`（幂等；注意 gen_acp_corpus.py 再生成会清空 mined，重跑挖掘器即恢复）；通道 8：自造场景脚本 20×2（80x24/120x30 两档），双侧真实渲染（rust nextest 驱动 × ref bun staging 驱动）。
+挖掘器：`tools/diff/mine_ref_fixtures.py`（幂等；注意 gen_acp_corpus.py 再生成会清空 mined，重跑挖掘器即恢复）；通道 8：自造场景脚本 20×3（80x24/120x30/320x80 三档，T8-320 扩容=用户裁决的 4K 全屏压力档、自动覆盖 sidebar auto-dock regime），双侧真实渲染（rust nextest 驱动 × ref bun staging 驱动）。
 
 ## 范围外声明（各报告详述）
 
-通道 8 覆盖渲染层**无头静息整屏**（20 场景×2 档）；渲染层范围外余量：动画中间帧（G-128/G-49/G-368 文档化豁免）、活体交互序列（v2 扩展，parity::tui_diff 双 PTY rig 存在未收编）、mini 模式 footer（ref 独立入口 fixture 不可装配）、插件 TSX panel/plugin-*（两侧驱动无插件 boot，G-28 登记面由 G-332 markdown 有界场景部分承担）· ref message.updated 全量投影 · session.moved 纯事件流门控 · HTTP 鉴权态/workerd/网络出口 · bedrock 二进制 event-stream/websocket/gateway 包裹族（通道 7）· minted-id（G-287⑦）
+通道 8 覆盖渲染层**无头静息整屏**（20 场景×3 档，320×80 档自动覆盖 sidebar auto-dock 布局 regime：session-frame.tsx wide()）；渲染层范围外余量：动画中间帧（G-128/G-49/G-368 文档化豁免）、活体交互序列（v2 扩展，parity::tui_diff 双 PTY rig 存在未收编）、mini 模式 footer（ref 独立入口 fixture 不可装配）、插件 TSX panel/plugin-*（两侧驱动无插件 boot，G-28 登记面由 G-332 markdown 有界场景部分承担）· ref message.updated 全量投影 · session.moved 纯事件流门控 · HTTP 鉴权态/workerd/网络出口 · bedrock 二进制 event-stream/websocket/gateway 包裹族（通道 7）· minted-id（G-287⑦）

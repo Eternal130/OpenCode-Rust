@@ -128,104 +128,98 @@ impl PaletteCommand {
                 });
             }
             "prompt.editor_context.clear" => return store.editor_context().is_some(),
+            // T8-320 — the session-frame terminal rows ride
+            // `sessions.available()` (session-frame.tsx:196
+            // `...(sessions.available() ? [...] : [])`; the capability
+            // lands through [`Store::set_terminal_available`]).
+            "terminal.toggle" | "terminal.select" | "session.terminal" => {
+                return store.terminal_available();
+            }
+            // `terminal.close` is additionally `enabled: rightPane()
+            // === "terminal"` (session-frame.tsx:240).
+            "terminal.close" => {
+                let selected = match store.route() {
+                    Route::Session { session_id, .. } => store.selected_terminal(&session_id),
+                    Route::Home => None,
+                };
+                return store.terminal_available() && selected.is_some();
+            }
             _ => {}
         }
         true
     }
 }
 
-/// The production palette registry in registration order (app
-/// commands, then the session-route commands). Server-backed commands
-/// dispatch to [`Dispatch::ServerPending`] stubs until the wave-3
-/// oc-client wiring lands.
+/// The production palette registry in registration order. T8-320
+/// (2026-11-14): the 320×80 tier grew the palette's visible window
+/// past the Suggested section, pinning the REAL keymap layer order —
+/// session-frame layer first (session-frame.tsx:184-258: sidebar +
+/// terminal pane rows), then the prompt slash layer (prompt/index.
+/// tsx:549-640), then the session-route table (index.tsx), then the
+/// app table (app.tsx), then the aside plugin (btw.tsx:51-56). Server
+/// -backed commands dispatch to [`Dispatch::ServerPending`] stubs
+/// until the wave-3 oc-client wiring lands.
 pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
-    // The session ROUTE's commands PREPEND the keymap (the route
-    // mounts via `prependCommandResolver`, keymap catalog; ref grid
-    // evidence — the unfiltered palette's suggested block leads
-    // "Share session" ahead of the app-level "Switch session").
+    // `session.sidebar.toggle` (session-frame.tsx:186-195): title is
+    // DYNAMIC — `rightPane() === "sidebar" ? "Hide sidebar" :
+    // "Show sidebar"` (palette_title reads the live sidebar state).
+    PaletteCommand {
+        command: "session.sidebar.toggle",
+        title: "Show sidebar",
+        group: "Session",
+        bindings: &["ctrl+x b"],
+    },
+    // `terminal.toggle` (:198-218): shown while `sessions.available()`
+    // (the enabled gate); title flips with the right pane
+    // ("Hide terminal pane" while a terminal is selected).
+    PaletteCommand {
+        command: "terminal.toggle",
+        title: "Show terminal pane",
+        group: "Session",
+        bindings: &["ctrl+x t"],
+    },
+    // `terminal.select` (:220-233): the picker (footer resolves
+    // `<leader>down` → "ctrl+x ↓").
+    PaletteCommand {
+        command: "terminal.select",
+        title: "Select terminal",
+        group: "Session",
+        bindings: &["ctrl+x ↓"],
+    },
+    // `terminal.close` (:235-247): `enabled: rightPane() ===
+    // "terminal"` — the enabled gate filters the dead row.
+    PaletteCommand {
+        command: "terminal.close",
+        title: "Close terminal pane",
+        group: "Session",
+        bindings: &[],
+    },
+    // `session.terminal` (:249-258): `slash: terminal`.
+    PaletteCommand {
+        command: "session.terminal",
+        title: "New terminal",
+        group: "Session",
+        bindings: &[],
+    },
+    // TUI-34 — `prompt.editor` (prompt/index.tsx:549-580, `<leader>e`,
+    // slash /editor; the footer resolves the leader to "ctrl+x e").
+    PaletteCommand {
+        command: "prompt.editor",
+        title: "Open editor",
+        group: "Session",
+        bindings: &["ctrl+x e"],
+    },
+    PaletteCommand {
+        command: "session.move",
+        title: "Manage workspaces",
+        group: "Session",
+        bindings: &[],
+    },
+    // -- session-route table (routes/session/index.tsx) -----------------
     PaletteCommand {
         command: "session.share",
         title: "Share session",
         group: "Session",
-        bindings: &[],
-    },
-    PaletteCommand {
-        command: "session.list",
-        title: "Switch session",
-        group: "Session",
-        bindings: &["ctrl+x l"],
-    },
-    PaletteCommand {
-        command: "session.new",
-        title: "New session",
-        group: "Session",
-        bindings: &["ctrl+x n"],
-    },
-    PaletteCommand {
-        command: "session.clear",
-        title: "Clear session",
-        group: "Session",
-        bindings: &[],
-    },
-    PaletteCommand {
-        command: "open.menu",
-        title: "Open session or project",
-        group: "Session",
-        bindings: &["ctrl+o"],
-    },
-    PaletteCommand {
-        command: "session.tab.close",
-        title: "Close tab",
-        group: "Session",
-        bindings: &["ctrl+x w"],
-    },
-    PaletteCommand {
-        command: "session.tab.reopen",
-        title: "Reopen closed tab",
-        group: "Session",
-        bindings: &["ctrl+shift+t"],
-    },
-    PaletteCommand {
-        command: "session.copy.id",
-        title: "Copy session ID",
-        group: "Session",
-        bindings: &[],
-    },
-    // TUI-34 — `messages.copy` (index.tsx:1128-1167, <leader>y).
-    PaletteCommand {
-        command: "messages.copy",
-        title: "Copy last assistant message",
-        group: "Session",
-        bindings: &["<leader>y"],
-    },
-    // TUI-TD13 — `session.copy` (index.tsx:1180-1200, slash `/copy`).
-    PaletteCommand {
-        command: "session.copy",
-        title: "Copy session transcript",
-        group: "Session",
-        bindings: &[],
-    },
-    PaletteCommand {
-        command: "session.cd",
-        title: "Change working directory",
-        group: "Session",
-        bindings: &[],
-    },
-    // RE-13 — `session.aside` (`/btw`, feature-plugins/prompt/btw.
-    // tsx:51-56): one-shot side answer, palette-listed in Session.
-    PaletteCommand {
-        command: "session.aside",
-        title: "Ask a side question",
-        group: "Session",
-        bindings: &[],
-    },
-    // RE-14 — `stats.open` (`/stats`, feature-plugins/system/
-    // stats.tsx:196-209): the usage poster page, palette-listed in
-    // System.
-    PaletteCommand {
-        command: "stats.open",
-        title: "Usage statistics",
-        group: "System",
         bindings: &[],
     },
     PaletteCommand {
@@ -274,18 +268,105 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         group: "Session",
         bindings: &[],
     },
+    // TUI-34 — `messages.copy` (index.tsx:1128-1167): bound `<leader>y`
+    // (keybind.ts:190) — the footer resolves the leader to "ctrl+x y".
+    PaletteCommand {
+        command: "messages.copy",
+        title: "Copy last assistant message",
+        group: "Session",
+        bindings: &["ctrl+x y"],
+    },
+    PaletteCommand {
+        command: "session.copy.id",
+        title: "Copy session ID",
+        group: "Session",
+        bindings: &[],
+    },
+    // TUI-TD13 — `session.copy` (index.tsx:1180-1200, slash `/copy`).
+    PaletteCommand {
+        command: "session.copy",
+        title: "Copy session transcript",
+        group: "Session",
+        bindings: &[],
+    },
     // Lane FINAL: `session.export` (index.tsx:1201-1244 — palette-
-    // listed with slash `/export`, bound `<leader>x`).
+    // listed with slash `/export`, bound `<leader>x` → "ctrl+x x").
     PaletteCommand {
         command: "session.export",
         title: "Export session transcript",
         group: "Session",
         bindings: &["ctrl+x x"],
     },
+    // TUI-34 — `session.child.first` (index.tsx:1255-1263, bind
+    // `down`): the subagent picker's toggle (footer "↓").
     PaletteCommand {
-        command: "session.move",
-        title: "Manage workspaces",
+        command: "session.child.first",
+        title: "Toggle subagent picker",
         group: "Session",
+        bindings: &["↓"],
+    },
+    // -- app table (app.tsx) --------------------------------------------
+    PaletteCommand {
+        command: "session.list",
+        title: "Switch session",
+        group: "Session",
+        bindings: &["ctrl+x l"],
+    },
+    PaletteCommand {
+        command: "session.new",
+        title: "New session",
+        group: "Session",
+        bindings: &["ctrl+x n"],
+    },
+    PaletteCommand {
+        command: "session.clear",
+        title: "Clear session",
+        group: "Session",
+        bindings: &[],
+    },
+    PaletteCommand {
+        command: "open.menu",
+        title: "Open session or project",
+        group: "Session",
+        bindings: &["ctrl+o"],
+    },
+    PaletteCommand {
+        command: "session.tab.close",
+        title: "Close tab",
+        group: "Session",
+        bindings: &["ctrl+x w"],
+    },
+    PaletteCommand {
+        command: "session.tab.reopen",
+        title: "Reopen closed tab",
+        group: "Session",
+        bindings: &["ctrl+shift+t"],
+    },
+    // -- the aside plugin (feature-plugins/prompt/btw.tsx:51-56) -------
+    // RE-13 — `session.aside` (`/btw`): one-shot side answer,
+    // palette-listed in Session with its description on the row
+    // (palette_desc).
+    PaletteCommand {
+        command: "session.aside",
+        title: "Ask a side question",
+        group: "Session",
+        bindings: &[],
+    },
+    // -- beyond the 320×80 palette window (order unobservable in the
+    // corpus; kept from the previous registry ordering) ---------------
+    PaletteCommand {
+        command: "session.cd",
+        title: "Change working directory",
+        group: "Session",
+        bindings: &[],
+    },
+    // RE-14 — `stats.open` (`/stats`, feature-plugins/system/
+    // stats.tsx:196-209): the usage poster page, palette-listed in
+    // System.
+    PaletteCommand {
+        command: "stats.open",
+        title: "Usage statistics",
+        group: "System",
         bindings: &[],
     },
     PaletteCommand {
@@ -302,14 +383,6 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
     },
     PaletteCommand { command: "mcp.list", title: "MCP servers", group: "Agent", bindings: &[] },
     PaletteCommand { command: "plugins.list", title: "Plugins", group: "System", bindings: &[] },
-    // TUI-34 — `session.child.first` (index.tsx:1255-1263, bind
-    // `down`): the subagent picker's toggle.
-    PaletteCommand {
-        command: "session.child.first",
-        title: "Toggle subagent picker",
-        group: "Session",
-        bindings: &["down"],
-    },
     // TUI-34 — `session.queued_prompts` (index.tsx:1265-1271, group
     // "Prompt"): `enabled: queuedPrompts().length > 0` — the enabled
     // gate below filters the dead row.
@@ -334,14 +407,6 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         title: "Queue prompt",
         group: "Prompt",
         bindings: &["<leader>return"],
-    },
-    // TUI-34 — `prompt.editor` (prompt/index.tsx:567-605, <leader>e,
-    // slash /editor).
-    PaletteCommand {
-        command: "prompt.editor",
-        title: "Open editor",
-        group: "Session",
-        bindings: &["<leader>e"],
     },
     // TUI-34 — `prompt.skills` (prompt/index.tsx:607-640, slash
     // /skills).
@@ -431,14 +496,6 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         group: "System",
         bindings: &[],
     },
-    // v2 registers it `palette: true` in the session frame's layer
-    // (session-frame.tsx:187-195, group "Session" — our View group).
-    PaletteCommand {
-        command: "session.sidebar.toggle",
-        title: "Toggle sidebar",
-        group: "View",
-        bindings: &["ctrl+x b"],
-    },
     PaletteCommand { command: "help.show", title: "Help", group: "System", bindings: &[] },
     PaletteCommand { command: "docs.open", title: "Open docs", group: "System", bindings: &[] },
     // The diff viewer's plugin command (`diff.open`, group "VCS",
@@ -495,6 +552,29 @@ pub fn palette_command(command: &str) -> Option<&'static PaletteCommand> {
 /// settings value (app.tsx:1149/1163/1177).
 #[must_use]
 pub fn palette_title(entry: &PaletteCommand, store: &Store) -> String {
+    // T8-320 — the session-frame layer's DYNAMIC titles
+    // (session-frame.tsx:186-204): both flip with the right pane.
+    // "Hide sidebar" iff `rightPane() === "sidebar"` (the sidebar is
+    // showing); the width input mirrors [`Store::toggle_sidebar`].
+    if entry.command == "session.sidebar.toggle" {
+        if let crate::store::Route::Session { session_id, .. } = store.route() {
+            let width = usize::from(store.terminal_size().0);
+            if store.sidebar_shown(&session_id, width) {
+                return "Hide sidebar".to_owned();
+            }
+        }
+        return "Show sidebar".to_owned();
+    }
+    // "Hide terminal pane" iff `rightPane() === "terminal"` (a
+    // terminal is selected for this session).
+    if entry.command == "terminal.toggle" {
+        if let crate::store::Route::Session { session_id, .. } = store.route() {
+            if store.selected_terminal(&session_id).is_some() {
+                return "Hide terminal pane".to_owned();
+            }
+        }
+        return "Show terminal pane".to_owned();
+    }
     if entry.command == "session.verbosity.cycle" {
         let level = store.session_verbosity();
         let mut chars = level.chars();
@@ -563,17 +643,38 @@ pub fn palette_options(commands: &[PaletteCommand]) -> Vec<SelectOption> {
         .collect()
 }
 
+/// A row's run-time description (`description` on the option — the
+/// ref renders it inline after the title). The dynamic cases in the
+/// registry: `session.aside` carries btw.tsx:55's description
+/// ("One-shot answer from the session's context without adding to
+/// the conversation").
+#[must_use]
+pub fn palette_desc(entry: &PaletteCommand) -> Option<&'static str> {
+    match entry.command {
+        "session.aside" => {
+            Some("One-shot answer from the session's context without adding to the conversation")
+        }
+        _ => None,
+    }
+}
+
 /// [`palette_options`] over borrowed entries (the conditional slice).
 #[must_use]
 fn palette_options_slice(commands: &[&PaletteCommand], store: &Store) -> Vec<SelectOption> {
     commands
         .iter()
         .map(|entry| {
-            SelectOption::titled(palette_title(entry, store), entry.command)
+            let titled = SelectOption::titled(palette_title(entry, store), entry.command);
+            let mut option = match palette_desc(entry) {
+                Some(desc) => titled.described(desc),
+                None => titled,
+            };
+            option = option
                 .categorized(entry.group)
                 .with_search(entry.command)
                 .with_footer(entry.footer())
-                .with_search_footer(entry.search_footer())
+                .with_search_footer(entry.search_footer());
+            option
         })
         .collect()
 }
@@ -5435,7 +5536,9 @@ mod tests {
         impl ConfigSink for PasteSink {
             fn update_theme_name(&self, _: &str) {}
             fn update_theme_mode(&self, _: &str) {}
-            fn update_session_sidebar(&self, _: bool) {}
+            fn update_session_sidebar(&self, _: bool) -> bool {
+                false
+            }
             fn update_session_grouping(&self, _: bool) {}
             fn update_setting(&self, path: &str, value: &str) {
                 assert_eq!(path, "prompt.paste");
@@ -5475,7 +5578,9 @@ mod tests {
         impl ConfigSink for RecordingSink {
             fn update_theme_name(&self, _: &str) {}
             fn update_theme_mode(&self, _: &str) {}
-            fn update_session_sidebar(&self, _: bool) {}
+            fn update_session_sidebar(&self, _: bool) -> bool {
+                false
+            }
             fn update_session_grouping(&self, _: bool) {}
             fn update_setting(&self, path: &str, value: &str) {
                 self.0.borrow_mut().push((path.to_owned(), value.to_owned()));

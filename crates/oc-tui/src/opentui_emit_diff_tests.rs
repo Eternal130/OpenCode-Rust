@@ -146,7 +146,12 @@ fn replay_corpus_emission_is_pinned() {
     // bytes; every affected channel-8 case is EXACT against the ref
     // grids (40/40), and the dialog/sidebar goldens of the same wave
     // pin the same bytes.
-    assert_eq!(digest, 0x7840_9566_ff23_10e8, "the corpus emission bytes drifted");
+    // Re-pinned at channel-8 T8-320 — the palette registry reorder
+    // (ref keymap layer order: session-frame rows first) changes the
+    // palette-ctrl-p frames at 100×30 (the "Show sidebar" head row
+    // enters the visible window); the 320×80 channel grid is EXACT
+    // against the ref palette (command-palette@320x80).
+    assert_eq!(digest, 0x5084_fcfe_273a_09a2, "the corpus emission bytes drifted");
 }
 
 // -- the emitter vocabulary -------------------------------------------------

@@ -141,10 +141,11 @@ pub fn truncated_title(option: &SelectOption) -> std::borrow::Cow<'_, str> {
 /// (dialog-select.tsx:885-907): the title text is `flexGrow={1}`
 /// between the marker and the `flexShrink={0}` footer inside the row
 /// box (`paddingLeft 1|3, paddingRight 3, gap 1`, :781-793), so the
-/// run ends at the row content edge `width - 4`, less the footer's
-/// reservation and its leading `gap=1` column when a footer exists.
-/// The footer itself is never truncated by the title (the ref's own
-/// complete-footer test, dialog-select.test.tsx:291-308).
+/// The stage-2 clip: the title run ends at the row content edge
+/// `width - 4`, less the footer's reservation and its leading
+/// `gap=1` column when a footer exists. The footer itself is never
+/// truncated by the title (the ref's own complete-footer test,
+/// dialog-select.test.tsx:291-308).
 #[must_use]
 pub fn title_clip_end(width: usize, footer: Option<&str>) -> usize {
     let end = width.saturating_sub(4);
@@ -1156,7 +1157,10 @@ fn paint_option_row(
     // The footer (right-aligned, `flexShrink=0`) resolves FIRST —
     // its reservation bounds the title run's stage-2 clip.
     // While flattened (filtering on a flat select) the search footer
-    // (group · binding), else the plain footer.
+    // (group · binding), else the plain footer. An EMPTY footer
+    // renders nothing on the ref (`<Show when={props.footer}>` —
+    // "" is falsy, dialog-select.tsx:904), so it reserves no columns
+    // either; normalized to None.
     let footer = if flatten_mode {
         option
             .search_footer
@@ -1165,7 +1169,8 @@ fn paint_option_row(
             .or_else(|| option.footer.clone())
     } else {
         option.footer.clone()
-    };
+    }
+    .filter(|footer| !footer.is_empty());
     let clip = title_clip_end(width, footer.as_deref());
 
     // RE-04 — the shimmer row (`<Spinner shimmer={theme.text.base}>`,

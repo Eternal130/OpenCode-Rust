@@ -25,55 +25,75 @@ cells 稠密化，None/缺省子字段补规范默认（ch=' '、attrs 排序去
 
 | 总量 | EXACT | STRUCTURAL | CAUSES 命中 | 未裁决 |
 |---|---|---|---|---|
-| 40 | 40 | 0 | 0 | 0 |
+| 60 | 60 | 0 | 0 | 0 |
 
-（verdict 分布：exact 40 / structural 0 / diverge 0；
+（verdict 分布：exact 60 / structural 0 / diverge 0；
 gate 见编排器输出，未裁决>0 ⇒ exit 2）
 
 ## 分歧明细
 
 | case | verdict | diff cells | first_diff | ref size | rust size | ref gaps | rust gaps | ref paths | rust paths |
 |---|---|---|---|---|---|---|---|---|---|
-| command-palette | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
-| command-palette@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
-| dialog-open-recent | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
-| dialog-open-recent@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
-| dialog-status | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
-| dialog-status@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
-| fetch-503-model | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 20 | 13 |
-| fetch-503-model@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 20 | 13 |
-| home-empty | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 20 | 13 |
-| home-empty@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 20 | 13 |
-| home-multi-session | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
-| home-multi-session@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
-| models-dialog | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
-| models-dialog@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
-| session-empty | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
-| session-empty@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
-| session-markdown | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
-| session-markdown@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
-| session-multi-turn | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
-| session-multi-turn@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
-| session-reasoning | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
-| session-reasoning@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
-| session-scroll | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
-| session-scroll@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
-| session-step-failed | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
-| session-step-failed@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
-| session-stream-idle | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
-| session-stream-idle@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
-| session-tabs | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
-| session-tabs@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
-| session-text | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
-| session-text@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
-| session-tool-failed | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
-| session-tool-failed@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
-| session-tool-success | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
-| session-tool-success@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
-| session-wrap | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
-| session-wrap@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
-| sidebar-toggle | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
-| sidebar-toggle@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
+| command-palette | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
+| command-palette@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
+| command-palette@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
+| dialog-open-recent | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
+| dialog-open-recent@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
+| dialog-open-recent@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
+| dialog-status | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
+| dialog-status@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
+| dialog-status@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
+| fetch-503-model | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 20 | 14 |
+| fetch-503-model@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 20 | 14 |
+| fetch-503-model@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 20 | 14 |
+| home-empty | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 20 | 14 |
+| home-empty@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 20 | 14 |
+| home-empty@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 20 | 14 |
+| home-multi-session | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
+| home-multi-session@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
+| home-multi-session@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
+| models-dialog | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
+| models-dialog@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
+| models-dialog@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
+| session-empty | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
+| session-empty@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
+| session-empty@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
+| session-markdown | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
+| session-markdown@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
+| session-markdown@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
+| session-multi-turn | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
+| session-multi-turn@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
+| session-multi-turn@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
+| session-reasoning | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
+| session-reasoning@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
+| session-reasoning@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
+| session-scroll | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
+| session-scroll@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
+| session-scroll@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
+| session-step-failed | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
+| session-step-failed@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
+| session-step-failed@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
+| session-stream-idle | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
+| session-stream-idle@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
+| session-stream-idle@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
+| session-tabs | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
+| session-tabs@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
+| session-tabs@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
+| session-text | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
+| session-text@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
+| session-text@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
+| session-tool-failed | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
+| session-tool-failed@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
+| session-tool-failed@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
+| session-tool-success | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
+| session-tool-success@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
+| session-tool-success@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
+| session-wrap | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
+| session-wrap@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
+| session-wrap@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
+| sidebar-toggle | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
+| sidebar-toggle@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
+| sidebar-toggle@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
 
 ## CAUSES 定性
 

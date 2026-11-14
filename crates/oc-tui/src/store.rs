@@ -3038,7 +3038,13 @@ impl PluginToggleSink for RecordingPluginToggleSink {
 pub trait ConfigSink {
     fn update_theme_name(&self, name: &str);
     fn update_theme_mode(&self, mode: &str);
-    fn update_session_sidebar(&self, hide: bool);
+    /// `session.sidebar` (session-frame.tsx:126-129). Returns whether
+    /// the write LANDED: ref's `config.update` applies the returned
+    /// Info through `reconcile` (config/index.tsx:348-353) — the
+    /// resolved mode changes only when the write round-trips, never
+    /// eagerly (T8-320: a dropped write keeps `auto`, so a wide
+    /// session keeps its auto-docked sidebar).
+    fn update_session_sidebar(&self, hide: bool) -> bool;
     /// Lane FINAL (should-fix #5's grouping half): the
     /// exploration-grouping toggle's write-through
     /// (`session.grouping` = "auto"/"none", config/index.tsx's
@@ -3061,7 +3067,9 @@ pub struct NoConfigSink;
 impl ConfigSink for NoConfigSink {
     fn update_theme_name(&self, _name: &str) {}
     fn update_theme_mode(&self, _mode: &str) {}
-    fn update_session_sidebar(&self, _hide: bool) {}
+    fn update_session_sidebar(&self, _hide: bool) -> bool {
+        false
+    }
     fn update_session_grouping(&self, _grouped: bool) {}
 }
 
@@ -3078,10 +3086,13 @@ impl ConfigSink for RecordingConfigSink {
     fn update_theme_mode(&self, mode: &str) {
         self.calls.borrow_mut().push(("theme.mode", mode.to_owned()));
     }
-    fn update_session_sidebar(&self, hide: bool) {
+    fn update_session_sidebar(&self, hide: bool) -> bool {
         self.calls
             .borrow_mut()
             .push(("session.sidebar", if hide { "hide" } else { "auto" }.to_owned()));
+        // The recording sink models a LANDED write (the store mirrors
+        // ref's reconcile-then-apply).
+        true
     }
     fn update_session_grouping(&self, grouped: bool) {
         self.calls
@@ -11926,30 +11937,32 @@ impl Store {
         crate::components::sidebar::sidebar_visible(self.sidebar_mode.get(), width)
     }
 
-    /// `session.sidebar.toggle` (session-frame.tsx:118-130): when the
-    /// sidebar is showing, `hide` persists and the manual flag clears;
-    /// when hidden, `auto` persists and the manual flag forces it on
-    /// (v2 writes `draft.session.sidebar` through `config.update` and
-    /// flips the `sidebarOpen` signal in one batch). No-op off the
-    /// session route (the command lives in the session frame's layer).
+    /// `session.sidebar.toggle` (session-frame.tsx:118-130): the
+    /// batch flips ONLY the ephemeral `sidebarOpen` signal eagerly;
+    /// the mode half round-trips through `config.update` and lands
+    /// via the reconcile (T8-320 — a dropped write keeps the resolved
+    /// mode, so an auto-docked wide sidebar STAYS visible, exactly
+    /// like ref's resting frame under the harness fixture's no-op
+    /// `update`). No-op off the session route (the command lives in
+    /// the session frame's layer).
     pub fn toggle_sidebar(&self) {
         if !matches!(self.route.get(), Route::Session { .. }) {
             return;
         }
         let visible = matches!(self.route.get(), Route::Session { session_id, .. } if self.sidebar_shown(&session_id, usize::from(self.terminal_size.get().0)));
-        let mode = if visible {
-            crate::components::sidebar::SidebarMode::Hide
-        } else {
-            crate::components::sidebar::SidebarMode::Auto
-        };
-        self.sidebar_mode.set(mode);
         self.sidebar_open.set(!visible);
         // v2's toggle writes `session.sidebar` through config.update
         // (the SURF-2 seam — replaces the channel-storage diversion
-        // F-1 registered).
-        self.config_sink
-            .borrow()
-            .update_session_sidebar(matches!(mode, crate::components::sidebar::SidebarMode::Hide));
+        // F-1 registered); the resolved mode flips only when the
+        // write lands (ref applies the returned Info).
+        let landed = self.config_sink.borrow().update_session_sidebar(visible);
+        if landed {
+            self.sidebar_mode.set(if visible {
+                crate::components::sidebar::SidebarMode::Hide
+            } else {
+                crate::components::sidebar::SidebarMode::Auto
+            });
+        }
     }
 
     /// The configured theme-mode pin (`theme.mode`: dark/light/system
@@ -16898,26 +16911,51 @@ mod tests {
     }
 
     /// The toggle's write pair (session-frame.tsx:118-130): showing →
-    /// mode `hide` + open false; hidden → mode `auto` + open true —
+    /// write `hide` + open false; hidden → write `auto` + open true —
     /// and the mode is what persists (sidebarOpen is per-mount).
+    /// T8-320: the mode flips only when the write LANDS (ref applies
+    /// the returned Info through reconcile, config/index.tsx:348-353)
+    /// — a dropped write keeps the resolved mode (the harness
+    /// fixture's no-op update), so a wide auto-docked sidebar STAYS
+    /// visible after a hide-toggle whose write never lands.
     #[test]
     fn toggle_writes_the_mode_and_manual_flag() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", None);
         store.set_terminal_size((160, 24));
-        // Showing (auto + wide) → hide.
+        // Default sink (no config service): the write never lands —
+        // the open flag still flips, the resolved mode does not, so
+        // the auto-docked wide sidebar STAYS visible (ref fixture's
+        // dropped-write resting frame).
+        store.toggle_sidebar();
+        assert_eq!(store.sidebar_mode(), crate::components::sidebar::SidebarMode::Auto);
+        assert!(store.sidebar_shown("s1", 160), "auto+wide keeps docking it");
+        store.set_terminal_size((80, 24));
+        store.toggle_sidebar();
+        assert!(store.sidebar_shown("s1", 80), "the manual open forces it on");
+        // With a landing sink (production: the cli.json write
+        // round-trips) the mode flips with the write. The manual open
+        // from the step above is still set, so the toggle sees the
+        // sidebar SHOWING → writes `hide` (the open flag clears).
+        store.set_config_sink(std::rc::Rc::new(RecordingConfigSink::default()));
+        store.set_sidebar_mode(crate::components::sidebar::SidebarMode::Hide);
+        store.toggle_sidebar();
+        assert_eq!(store.sidebar_mode(), crate::components::sidebar::SidebarMode::Hide);
+        assert!(!store.sidebar_shown("s1", 80), "open cleared, hide never shows");
+        store.set_terminal_size((160, 24));
+        // Hidden → write `auto` + the manual open (shows even narrow).
+        store.toggle_sidebar();
+        assert_eq!(store.sidebar_mode(), crate::components::sidebar::SidebarMode::Auto);
+        assert!(store.sidebar_shown("s1", 80), "the manual open forces it on");
+        // Showing again (auto + wide) → the hide write lands.
         store.toggle_sidebar();
         assert_eq!(store.sidebar_mode(), crate::components::sidebar::SidebarMode::Hide);
         assert!(!store.sidebar_shown("s1", 160));
-        // Hidden → auto + the manual open (shows even narrow).
-        store.toggle_sidebar();
-        assert_eq!(store.sidebar_mode(), crate::components::sidebar::SidebarMode::Auto);
-        assert!(store.sidebar_shown("s1", 80));
         // Off the session route the command is a no-op (the layer
         // lives in the session frame).
         store.navigate(Route::Home);
         store.toggle_sidebar();
-        assert_eq!(store.sidebar_mode(), crate::components::sidebar::SidebarMode::Auto);
+        assert_eq!(store.sidebar_mode(), crate::components::sidebar::SidebarMode::Hide);
     }
 
     // -- fix-wave E2: the subagent surfaces (#40/#44/#45/#46) -------------
@@ -17361,7 +17399,12 @@ mod tests {
             dispatcher.dispatch(&store, "session.sidebar.toggle", None),
             crate::components::command_palette::Dispatch::Handled
         );
-        assert_eq!(store.sidebar_mode(), crate::components::sidebar::SidebarMode::Hide);
+        // T8-320: the default no-op sink means the write never lands —
+        // the resolved mode stays `auto` (the open flag flipped; a
+        // wide auto-docked sidebar stays visible, the ref fixture's
+        // dropped-write resting frame).
+        assert_eq!(store.sidebar_mode(), crate::components::sidebar::SidebarMode::Auto);
+        assert!(store.sidebar_shown("s1", 160));
     }
 }
 

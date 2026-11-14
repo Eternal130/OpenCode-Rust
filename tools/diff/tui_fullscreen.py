@@ -19,10 +19,12 @@ normalized dense cell grid (`tui-diff-grid/1`):
           tools/dev-gate.sh; replays the scenario through the
           production ingest + render chain, no PTY).
 
-Size tiers (SCHEMA 尺寸档位): every scenario renders at two tiers —
+Size tiers (SCHEMA 尺寸档位): every scenario renders at three tiers —
 the primary tier (the file's own width/height, un-suffixed case id)
-plus the mirrored 120x30 tier (case id `<scenario-id>@120x30`), same
-fixture, only the grid size changes.
+plus the mirrored 120x30 and 320x80 tiers (case id `<scenario-id>@WxH`)
+— same fixture, only the grid size changes.  A scenario `tiers` array
+overrides the mirrored set (declared subset only, justification
+required in `note` per SCHEMA).
 
 Manifest ("tui-diff-manifest/1", consumed by BOTH drivers, cases
 sorted by id): {"schema","cases":[{id,scenario,width,height}]}.
@@ -75,7 +77,7 @@ LOG_DIR = Path("/tmp/opencode/logs")
 
 CORPUS = REPO / "tools/diff/corpus/tui/scenarios"
 REF_DRIVER = REPO / "tools/diff/drivers/tui_fullscreen_ref.ts"
-MIRRORED_TIER = (120, 30)
+MIRRORED_TIERS = [(120, 30), (320, 80)]
 
 REF_PRELOAD = "packages/tui/node_modules/@opentui/solid/scripts/preload.js"
 
@@ -91,7 +93,8 @@ RUST_TIMEOUT = 2400
 
 def build_manifest(stage: Path) -> list[dict]:
     """Stage every scenario fixture into STAGE and emit the sorted
-    `tui-diff-manifest/1` case list (primary tier + mirrored 120x30)."""
+    `tui-diff-manifest/1` case list (primary tier + mirrored tiers, or
+    the scenario's declared `tiers` subset when present)."""
     if stage.exists():
         shutil.rmtree(stage)
     scenarios_dir = stage / "scenarios"
@@ -111,20 +114,36 @@ def build_manifest(stage: Path) -> list[dict]:
             raise SystemExit(f"bad scenario schema: {fname}")
         staged = scenarios_dir / fname
         shutil.copyfile(CORPUS / fname, staged)
+        primary = (doc["width"], doc["height"])
+        if "tiers" in doc:
+            # SCHEMA `tiers` override: run exactly the declared subset;
+            # the un-suffixed id is reserved for the primary-size entry
+            tiers = [tuple(t) for t in doc["tiers"]]
+            if not tiers:
+                raise SystemExit(f"{fname}: empty tiers override")
+            for t in tiers:
+                w, h = int(t[0]), int(t[1])
+                tid = doc["id"] if (w, h) == primary else f"{doc['id']}@{w}x{h}"
+                cases.append({"id": tid, "scenario": str(staged),
+                              "width": w, "height": h})
+            continue
         # primary tier: the fixture's own size, un-suffixed id
         cases.append({
             "id": doc["id"],
             "scenario": str(staged),
-            "width": doc["width"],
-            "height": doc["height"],
+            "width": primary[0],
+            "height": primary[1],
         })
-        # mirrored tier (SCHEMA 尺寸档位): same fixture, 120x30 only
-        cases.append({
-            "id": f"{doc['id']}@{MIRRORED_TIER[0]}x{MIRRORED_TIER[1]}",
-            "scenario": str(staged),
-            "width": MIRRORED_TIER[0],
-            "height": MIRRORED_TIER[1],
-        })
+        # mirrored tiers (SCHEMA 尺寸档位): same fixture, size only
+        for w, h in MIRRORED_TIERS:
+            if (w, h) == primary:
+                continue
+            cases.append({
+                "id": f"{doc['id']}@{w}x{h}",
+                "scenario": str(staged),
+                "width": w,
+                "height": h,
+            })
     if not cases:
         raise SystemExit("empty corpus: no tui-diff-scenario/1 fixtures found "
                          f"under {CORPUS}")
