@@ -41,6 +41,49 @@ files; every field semantic below is normative for both.
   array means the scenario is purely fetch/event-driven.
 - `settle_ms` — settle budget after the last event/keypress before the
   frame capture; both sides use the same budget.
+- `plugins` — OPTIONAL real-plugin payload list (B2 extension, user
+  ruling 2026-11-14: the diff pin stays ref 2.0.24 and the payload is
+  the user's REAL plugins; boot success/failure is decided by the
+  fixture run, never by static analysis of the minified bundles).
+  Shape: `[<payload-id>, ...]` with the symbolic ids of the pinned
+  payload registry:
+    - `"omo-slim"` — oh-my-opencode-slim 3.0.3 (npm entity under
+      `/root/.cache/opencode/npm/oh-my-opencode-slim@latest/<stamp>/
+      node_modules/oh-my-opencode-slim`; server entry
+      `dist/server/index.js`, TUI companion export `dist/tui2.js`).
+    - `"superpowers"` — superpowers 7.0.0 (git entity under
+      `/root/.cache/opencode/npm/git-superpowers-*/<stamp>/node_modules/
+      superpowers`; main `.opencode/plugins/superpowers.js`, pure skill
+      system, no external deps).
+  The orchestrator resolves the ids to the newest cache stamp (env
+  overrides `OC_DIFF_PLUGIN_OMO_SLIM` / `OC_DIFF_PLUGIN_SUPERPOWERS`),
+  stages READ-ONLY COPIES into `STAGE/plugins/node_modules/<package>`
+  (a real node_modules layout — the rust guest's @opentui shims land in
+  the parent dir, bare imports resolve through the node walk; deps are
+  copied alongside, @opentui is symlinked to the ref tree's
+  host-provided stack), and the manifest case then carries
+  `plugins: [<staged absolute package dirs>]`. The cache entities are
+  never loaded or modified in place.
+  Driver semantics: the ref driver passes the dirs as the fixture's
+  `config.plugins` (the plugin-keymap.test.tsx precedent); the rust
+  driver boots the real `PluginHost` + `TuiPluginRuntime` over the
+  resolved entries (the plugin_ui_slot.rs assembly). **Probed boot
+  verdict (ref 2.0.24, bun 1.3.10)**: BOTH payloads land in the
+  deterministic `Plugin failed` state on the ref side —
+  `Host.resolve` (packages/plugin/src/host.ts:17-43) probes
+  `<dir>/server` and bun's `ResolveMessage` is not `instanceof Error`,
+  so the swallow-guard rethrows; the plugins never reach their
+  setup/tui() API surface. This is the evidenced mechanism of the
+  CAUSES **version-skew family** (degenerate-loading pseudo-diffs:
+  registered, not blocking, with the plugin call site + the missing
+  2.0.24 API face cited in the adjudication text).
+  **plugins_unavailable skip semantics**: a driver that cannot attempt
+  the boot for ENVIRONMENT reasons (no bun/node guest runtime, staged
+  payload missing) emits `plugins_unavailable: true` on its grid. The
+  orchestrator rules consistency: both sides marked ⇒ the case is
+  skipped (dropped from the gate, listed in the report); exactly one
+  side ⇒ infra failure (exit 1). A plugin that boots and FAILS is NOT
+  unavailable — the failure state is ordinary diff surface.
 - `anim` — OPTIONAL frame-sequence mode (`tui-diff-scenario/1` A2
   extension). Shape `{"ticks": K, "tick_events": [[<event>...], ...]?}`.
   Absent (every pre-A2 scenario) = pure resting mode; the resting

@@ -3223,3 +3223,16 @@ G-412/413/414/415/416/417/418/420/422 ✅；**G-419/G-421 勘误撤销**（登�
 
 ### G-128 勘注（A2）：过渡动画中间帧自本起可断言
 通道 8 frames 维度（rust 虚拟时钟逐拍 `advance_clock(k·100ms)`）把"动画语义"从文档化豁免变为可断言面；G-128/G-49/G-368 的 midframe 豁免收窄为精确形状（首拍与末拍一致、仅中间拍差；末拍也差=拦）。当前语料无命中该形状的 case（spinner/流式/计时窗 15 case 逐拍 exact 或落 G-423/夹具伪影族）；A2 期间 toast 动作 affordance 差独立立项为 G-424（修复尝试因 oracle 重冻结/活体用例联动超范围而回退，留专用 lane）。
+
+# 第三十二轮（2026-11-15，差分扩展 B2：真插件差分 + version-skew 甄别族）
+
+用户裁决（2026-11-14）：差分钉 ref 2.0.24 不动；B2 载荷=用户真实插件（omo-slim 3.0.3 + superpowers 7.0.0，npm/git cache 实体只读引用、staging 拷贝进 STAGE）；boot 成败以 fixture 实测为准；分歧甄别新增**退版本加载伪差族**（CAUSES `version-skew` 簇——命中=登记不拦，判定文须引插件调用点 + 2.0.24 API 面缺失符号）。无新 G-ID（该轮全部新分歧归 version-skew 簇；G-28 簇保留接「双侧均 boot」的插件渲染形状分歧——本轮语料无一命中，ref 侧从未 boot 成功）。
+
+### 插件差分面（通道 8 plugin-* 场景族，15 case=5 场景×3 档）
+
+- **双侧 harness 插件 boot**：scenario schema 可选 `plugins: [<payload-id>]`（SCHEMA B2）；ref 经 fixture `config.plugins` 目录条目（plugin-keymap.test.tsx 先例）；rust 经 PluginHost 真装配（plugin_ui_slot.rs 先例：resolve→start_detached_with→TuiPluginRuntime::new→attach + live loop 泵臂 drain_ui_requests/take_mcp_rows/take_owned_updates）。`plugins_unavailable` 双侧一致 skip 语义（一侧缺 bun/载荷=infra 红）。
+- **实测 boot 矩阵（钉定环境 ref 2.0.24 × bun 1.3.10）**：两插件在 ref 侧**均无法 boot**——`Host.resolve`（ref packages/plugin/src/host.ts:17-43）对目录形插件探测 `<dir>/server`，bun ≥1.3 的 `ResolveMessage` **非 Error 子类**，吞错守卫 `error instanceof Error` 判假原样重抛 → reconcile 记 failure（确定性 "Plugin failed" 公告 + "N plugins failed" footer）。实证：ref 树自带 plugin-keymap.test.tsx 本环境 0-pass（同机制）。插件从未到达 setup/tui() 调用点（omo-slim dist/tui2.js 的 2.2.x ctx API 面因此未被触及）。rust 侧两插件均正常 boot（oc-plugin-host resolve.rs 包感知 ./server/./tui exports 探测 + load.tui 伴生装载 + @opentui shims）。
+- **B1 探测预判修正**：预判 omo-slim 在 2.0.24 抛于 ctx.client/directory/hostFlavor 缺失、superpowers 可 boot——实测两者抛点均在更早的**入口解析**（Host.resolve），superpowers 在 ref 侧同样落失败态（纯 skill 系统无 TUI 面的预判对 ref 无效：入口解析先于任何 API 面）。
+- **场景族**：plugin-boot-idle（omo-slim 静息屏）、plugin-boot-superpowers、plugin-boot-combo（组合）、plugin-panel-open（palette 搜索 "reflect" 面：rust 出 "Plugin · oh-my-opencode-slim" 组命令行，ref "No results"）、plugin-fallback（/plugins 管理屏：rust 活性行 vs ref "failed, local" 行+view-error affordance）。15 case 全部 CAUSES version-skew 命中（cells_diff 445-25600/档）。
+- **G-28 勘注（B2）**：有界 shim 簇 matcher 保留 `plugin-*` 前缀，但 version-skew 簇优先匹配「ref 侧带 'Plugin failed' 屏证据」的 case——未来 ref 宿主升级（或 bun 修复 ResolveMessage 类层）使双侧均 boot 后，plugin 形状分歧自动落回 G-28 簇裁决。
+- **载荷登记**：payload registry 钉 omo-slim=oh-my-opencode-slim@3.0.3（@latest 最新 stamp；dist+src+manifest + hoisted deps 拷贝）、superpowers=7.0.0（git 实体整树拷贝）；@opentui 符号链接 ref 树 host-provided 栈（0.5.14，载荷 optionalDeps 钉 0.5.11——版本差未被触及，ref 未到达加载步）。env 覆盖 OC_DIFF_PLUGIN_OMO_SLIM/OC_DIFF_PLUGIN_SUPERPOWERS。

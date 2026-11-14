@@ -15,11 +15,11 @@
 | 5 | /compact 管线 | responses_compaction.py | RESPONSES-COMPACTION.md | 61 文档（13 mined） | 60 | 1 | — |
 | 6 | HTTP 全量 | http_full.py | HTTP-FULL.md | 60 请求（13 mined） | 47 | 11 | 2 |
 | 7 | **provider 录制解码** | provider_recordings.py | PROVIDER-RECORDINGS.md | **264 交互（259 真实 SSE）** | 264 | 0 | — |
-| 8 | TUI 整屏差分（静息帧 + A2 帧序列） | tui_fullscreen.py | TUI-FULLSCREEN.md | 静息 75 case（25 场景×3 档）+ frames 15 序列（5 anim×3 档） | 静息 **EXACT 69**；frames **EXACT 6** | 静息 6（G-424×3 + 工具行伪影×3）；frames 9（G-423×3 + G-424×3 + 工具行伪影×3） | 15（全部 CAUSES 命中，未裁决 0） |
+| 8 | TUI 整屏差分（静息帧 + A2 帧序列 + B2 真插件） | tui_fullscreen.py | TUI-FULLSCREEN.md | 静息 90 case（30 场景×3 档，含 plugin-* 15）+ frames 15 序列（5 anim×3 档） | 静息 **EXACT 69**；frames **EXACT 6** | 静息 21（G-424×3 + 工具行伪影×3 + version-skew×15）；frames 9（G-423×3 + G-424×3 + 工具行伪影×3） | 30（全部 CAUSES 命中，未裁决 0） |
 
 ## 总计
 
-**通道 1-7：790 对拍单元：MATCH 717 · DIVERGE 71 · ADJUDICATED 2 · MISSING 0**（100% 三态归属；第三十轮 burndown 收口口径）。**通道 8（T9 裁决循环四波收口 2026-11-14 + T8-320 档扩容同日）：60 case（20 场景×3 档 80×24/120×30/320×80）：EXACT 60 · STRUCTURAL 0 · CAUSES 0 · 未裁决 0——门绿 exit 0，无新 G-ID**（详见 TUI-FULLSCREEN.md 与 GAPS-AND-PITFALLS 第三十一轮）——合计 850 对拍单元。
+**通道 1-7：790 对拍单元：MATCH 717 · DIVERGE 71 · ADJUDICATED 2 · MISSING 0**（100% 三态归属；第三十轮 burndown 收口口径）。**通道 8（T9 裁决循环 2026-11-14 + T8-320 档 + A2 帧序列 + B2 真插件差分 2026-11-15）：静息 90 case（30 场景×3 档）：EXACT 69 · STRUCTURAL 0 · CAUSES 21（version-skew 簇 15=G-424/伪影 6）· 未裁决 0；frames 15 序列：EXACT 6 · CAUSES 9——门绿 exit 0，无新 G-ID（B2 实证：两真插件 ref 2.0.24 均不可 boot，Host.resolve × bun ResolveMessage 类层伪差，见 GAPS 第三十二轮）**——合计 880 对拍单元。
 <!-- 历史脚注（第二十九轮基线口径，已被上方第三十轮收口数字取代，保留备查）：
      101 项分歧：既有 78（R27/R28 裁定族）+ 挖掘新增 23 → 归并 G-412..G-422（11 条：🟡×1 / 🟢×10），其余归 G-407/409/410 既有族。 -->
 

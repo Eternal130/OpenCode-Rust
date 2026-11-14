@@ -160,9 +160,10 @@ class NormalizeTest(unittest.TestCase):
                 {"schema": "tui-diff-grid/1", "id": "c1", "width": 8, "height": 4,
                  "cells": [[None] * 8 for _ in range(4)]}))
             cases = [{"id": "c1", "scenario": "s", "width": 8, "height": 4}]
-            grids = tf.load_side(out, cases, "test")
+            grids, unavailable = tf.load_side(out, cases, "test")
             self.assertEqual(grids["c1"].get("stub_gaps", []), [])
             self.assertIsNone(grids["c1"].get("error"))
+            self.assertEqual(unavailable, [])
 
 
 class CausesTest(unittest.TestCase):
@@ -399,3 +400,84 @@ class ArtifactFamilyTest(unittest.TestCase):
         # a NEW glyph shape needs a NEW evidenced entry, not a silent
         # widening of this cluster
         self.assertIsNone(self._label(self._rec("anim-tool-progress", "ch", "⠙", "⋯")))
+
+
+class VersionSkewFamilyTest(unittest.TestCase):
+    """The B2 version-skew cluster is evidence-gated: a plugin-* case
+    matches ONLY when the record carries the ref-side 'Plugin failed'
+    screen flag (the ref 2.0.24 harness could not boot the payload at
+    all). Without the flag, G-28 owns the shape divergences."""
+
+    def _rec(self, cid: str, failed: bool | None) -> dict:
+        rec = {"id": cid, "dimension": "resting", "verdict": "diverge",
+               "first_diff": {"row": 1, "col": 18, "field": "ch",
+                              "ref": "┃", "rust": " "},
+               "cells_diff_count": 445}
+        if failed is not None:
+            rec["ref_plugin_failed"] = failed
+        return rec
+
+    def test_plugin_case_with_ref_failure_hits_version_skew(self):
+        label = adjudicate(self._rec("plugin-boot-idle", True))
+        self.assertIsNotNone(label)
+        self.assertIn("version-skew", label)
+
+    def test_plugin_case_without_evidence_falls_to_g28(self):
+        # no flag (a future corpus where ref boots the plugin): the
+        # version-skew cluster must NOT match; G-28's bounded-shim
+        # family takes the shape divergence instead
+        label = adjudicate(self._rec("plugin-boot-idle", None))
+        self.assertIsNotNone(label)
+        self.assertIn("G-28", label)
+        self.assertIsNotNone(adjudicate(self._rec("plugin-boot-idle", False)))
+
+    def test_non_plugin_case_with_flag_never_hits(self):
+        # the flag alone is not enough: a non-plugin-* id stays
+        # unadjudicated (or hits its own family) — never this cluster
+        rec = self._rec("session-text", True)
+        self.assertTrue(all(not m(rec) for _, m, _ in CAUSES)
+                        or adjudicate(rec) is None
+                        or "version-skew" not in (adjudicate(rec) or ""))
+
+
+class PluginSkipReconciliationTest(unittest.TestCase):
+    """B2 plugins_unavailable consistency: both sides marked ⇒ skip;
+    one side ⇒ infra (SystemExit); neither ⇒ survives."""
+
+    def _grids(self, marked: bool) -> dict:
+        grid = {"schema": "tui-diff-grid/1", "plugins_unavailable": marked}
+        return {"case": grid}
+
+    def test_both_sides_marked_skips_the_case(self):
+        from tools.diff.tui_fullscreen import reconcile_plugin_skips
+        cases = [{"id": "case"}]
+        surviving, skipped = reconcile_plugin_skips(
+            self._grids(True), self._grids(True), cases)
+        self.assertEqual(surviving, [])
+        self.assertEqual(skipped, ["case"])
+
+    def test_one_side_marked_is_infra_red(self):
+        from tools.diff.tui_fullscreen import reconcile_plugin_skips
+        with self.assertRaises(SystemExit):
+            reconcile_plugin_skips(self._grids(True), self._grids(False),
+                                   [{"id": "case"}])
+        with self.assertRaises(SystemExit):
+            reconcile_plugin_skips(self._grids(False), self._grids(True),
+                                   [{"id": "case"}])
+
+    def test_unmarked_case_survives(self):
+        from tools.diff.tui_fullscreen import reconcile_plugin_skips
+        surviving, skipped = reconcile_plugin_skips(
+            self._grids(False), self._grids(False), [{"id": "case"}])
+        self.assertEqual([c["id"] for c in surviving], ["case"])
+        self.assertEqual(skipped, [])
+
+    def test_plugin_failed_predicate_reads_the_screen(self):
+        from tools.diff.tui_fullscreen import _plugin_failed_on_ref
+        blank = {"cells": [[{"ch": " "} for _ in range(4)] for _ in range(2)]}
+        failed = {"cells": [[{"ch": c} for c in "Plug"]
+                            for _ in range(1)]}
+        failed = {"cells": [[{"ch": c} for c in "Plugin failed: /x"]
+                            for _ in range(1)]}
+        self.assertFalse(_plugin_failed_on_ref(blank))
+        self.assertTrue(_plugin_failed_on_ref(failed))

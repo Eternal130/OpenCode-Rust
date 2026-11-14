@@ -81,6 +81,43 @@ MIRRORED_TIERS = [(120, 30), (320, 80)]
 
 REF_PRELOAD = "packages/tui/node_modules/@opentui/solid/scripts/preload.js"
 
+# B2 — the real-plugin payload registry (user ruling 2026-11-14: the
+# diff pin is ref 2.0.24 and the payload is the user's REAL plugins;
+# boot success/failure is decided by the fixture run, not static
+# analysis of the minified bundles). Scenario `plugins` fields carry
+# the symbolic ids; the orchestrator stages each payload ONCE per run
+# into STAGE/plugins/node_modules/<package> (a real node_modules
+# layout: the rust guest's @opentui shims land in the parent dir and
+# bare imports resolve through the node walk) and the manifest carries
+# the staged ABSOLUTE package dirs (both drivers read them from there
+# — the read-only cache entities are never loaded in place).
+PLUGIN_PAYLOADS = {
+    "omo-slim": {
+        # newest timestamped stamp under the @latest install key
+        "source": "npm/oh-my-opencode-slim@latest",
+        "package": "oh-my-opencode-slim",
+        # dist+src+manifest (the flagship-test recipe); deps copied
+        # from the install's hoisted node_modules
+        "copy_dirs": ["dist", "src"],
+        "copy_files": ["package.json", "oh-my-opencode-slim.schema.json"],
+        "deps": ["jsonc-parser", "zod", "solid-js", "lru-cache", "semver",
+                 "@opencode-ai/plugin", "@opencode-ai/sdk"],
+    },
+    "superpowers": {
+        "source": "npm/git-superpowers-*",
+        "package": "superpowers",
+        # the whole tree (main = .opencode/plugins/superpowers.js walks
+        # up to ../skills); no external deps
+        "copy_dirs": [],
+        "copy_files": [],
+        "deps": [],
+    },
+}
+# env overrides (payload roots), e.g. OC_DIFF_PLUGIN_OMO_SLIM=/path/to/pkg
+PLUGIN_ENV = {"omo-slim": "OC_DIFF_PLUGIN_OMO_SLIM",
+              "superpowers": "OC_DIFF_PLUGIN_SUPERPOWERS"}
+NPM_CACHE = Path("/root/.cache/opencode/npm")
+
 # driver timeouts (seconds): ref boots bun quickly; rust includes a
 # cold `cargo nextest` compile of the oc-tui tree
 REF_TIMEOUT = 600
@@ -91,10 +128,84 @@ RUST_TIMEOUT = 2400
 # manifest + staging
 # ---------------------------------------------------------------------------
 
-def build_manifest(stage: Path) -> list[dict]:
+def _copytree(source: Path, destination: Path) -> None:
+    shutil.copytree(source, destination, dirs_exist_ok=True)
+
+
+def _payload_source(payload: dict) -> Path | None:
+    """Resolve one payload's read-only cache entity (newest stamp
+    wins; env override first)."""
+    override = os.environ.get(PLUGIN_ENV.get(str(payload), "") or "", "")
+    if override:
+        path = Path(override)
+        return path if path.is_dir() else None
+    kind, _, key = payload["source"].partition("/")
+    if kind != "npm" or not NPM_CACHE.is_dir():
+        return None
+    # glob keys (git-superpowers-*) resolve to their install bases first
+    import glob as _glob
+    bases = sorted(Path(p) for p in _glob.glob(str(NPM_CACHE / key)) if Path(p).is_dir())
+    stamps: list[Path] = []
+    for base in reversed(bases):  # newest base, then newest stamp
+        stamps.extend(p for p in base.iterdir() if p.is_dir())
+    for stamp in reversed(stamps):
+        candidate = stamp / "node_modules" / payload["package"]
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def stage_plugins(stage: Path, ids: list[str]) -> tuple[dict[str, str], list[str]]:
+    """Stage every referenced payload into STAGE/plugins/node_modules
+    (world-writable: the rust guest writes its @opentui shims into the
+    parent node_modules; the gate user must be able to read everything).
+    Returns ({id: staged package dir}, [unavailable ids])."""
+    staged: dict[str, str] = {}
+    unavailable: list[str] = []
+    root = stage / "plugins" / "node_modules"
+    for pid in sorted(set(ids)):
+        payload = PLUGIN_PAYLOADS[pid]
+        source = _payload_source(payload)
+        if source is None:
+            unavailable.append(pid)
+            continue
+        package = root / payload["package"]
+        for name in payload["copy_dirs"]:
+            _copytree(source / name, package / name)
+        for name in payload["copy_files"]:
+            shutil.copyfile(source / name, package / name)
+        if not payload["copy_dirs"] and not payload["copy_files"]:
+            _copytree(source, package)  # whole-tree payload
+        for dep in payload["deps"]:
+            dep_source = source.parent / dep
+            if dep_source.is_dir():
+                _copytree(dep_source, root / dep)
+        # the ref side's host-provided @opentui renderer stack (the
+        # plugin's optionalDependencies pin 0.5.11; the ref harness's
+        # own resolved stack is the closest "host-provided" instance)
+        # — a symlink into the read-only ref tree, never loaded in place.
+        if pid == "omo-slim":
+            ref_opentui = Path(os.environ.get("DIFF_REF_ROOT", str(REF_DEFAULT))) \
+                / "packages/tui/node_modules/@opentui"
+            if ref_opentui.is_dir() and not (root / "@opentui").exists():
+                os.symlink(ref_opentui, root / "@opentui")
+        # world-writable (gate user + guest shim writes)
+        for dirpath, _dirnames, filenames in os.walk(root):
+            os.chmod(dirpath, 0o1777)
+            for name in filenames:
+                os.chmod(os.path.join(dirpath, name), 0o666)
+        staged[pid] = str(package)
+    return staged, unavailable
+
+
+def build_manifest(stage: Path) -> tuple[list[dict], list[str]]:
     """Stage every scenario fixture into STAGE and emit the sorted
     `tui-diff-manifest/1` case list (primary tier + mirrored tiers, or
-    the scenario's declared `tiers` subset when present)."""
+    the scenario's declared `tiers` subset when present). Plugin
+    scenarios (`plugins` field) additionally stage their payloads; a
+    payload whose cache entity is absent marks the case
+    plugins_unavailable on BOTH sides (a consistent skip, SCHEMA B2 —
+    the gate drops it, the report lists it)."""
     if stage.exists():
         shutil.rmtree(stage)
     scenarios_dir = stage / "scenarios"
@@ -105,7 +216,8 @@ def build_manifest(stage: Path) -> list[dict]:
     os.chmod(stage, 0o1777)
     os.chmod(scenarios_dir, 0o1777)
 
-    cases: list[dict] = []
+    plugin_ids: list[str] = []
+    raw_cases: list[dict] = []
     for fname in sorted(os.listdir(CORPUS)):
         if not fname.endswith(".json"):
             continue
@@ -118,45 +230,43 @@ def build_manifest(stage: Path) -> list[dict]:
         # A2: the frame-sequence tick count (present on anim scenarios
         # only; load_side validates frames length against it)
         anim_ticks = (doc.get("anim") or {}).get("ticks")
+        # B2: the plugin payload ids (resolved to staged dirs after the
+        # corpus sweep — staging happens once per referenced payload)
+        plugins = doc.get("plugins") or []
+        plugin_ids.extend(plugins)
+        common = {**({"anim_ticks": anim_ticks} if anim_ticks is not None else {})}
+        tiers: list[tuple[int, int]]
         if "tiers" in doc:
-            # SCHEMA `tiers` override: run exactly the declared subset;
-            # the un-suffixed id is reserved for the primary-size entry
-            tiers = [tuple(t) for t in doc["tiers"]]
+            tiers = [tuple(t) for t in doc["tiers"]]  # type: ignore[misc]
             if not tiers:
                 raise SystemExit(f"{fname}: empty tiers override")
-            for t in tiers:
-                w, h = int(t[0]), int(t[1])
-                tid = doc["id"] if (w, h) == primary else f"{doc['id']}@{w}x{h}"
-                cases.append({"id": tid, "scenario": str(staged),
+        else:
+            tiers = [primary, *(t for t in MIRRORED_TIERS if t != primary)]
+        for w, h in tiers:
+            tid = doc["id"] if (w, h) == primary else f"{doc['id']}@{w}x{h}"
+            raw_cases.append({"id": tid, "scenario": str(staged),
                               "width": w, "height": h,
-                              **({"anim_ticks": anim_ticks} if anim_ticks is not None else {})})
-            continue
-        # primary tier: the fixture's own size, un-suffixed id
-        cases.append({
-            "id": doc["id"],
-            "scenario": str(staged),
-            "width": primary[0],
-            "height": primary[1],
-            **({"anim_ticks": anim_ticks} if anim_ticks is not None else {}),
-        })
-        # mirrored tiers (SCHEMA 尺寸档位): same fixture, size only
-        for w, h in MIRRORED_TIERS:
-            if (w, h) == primary:
-                continue
-            cases.append({
-                "id": f"{doc['id']}@{w}x{h}",
-                "scenario": str(staged),
-                "width": w,
-                "height": h,
-                **({"anim_ticks": anim_ticks} if anim_ticks is not None else {}),
-            })
-    if not cases:
+                              **({"plugins": plugins} if plugins else {}), **common})
+    if not raw_cases:
         raise SystemExit("empty corpus: no tui-diff-scenario/1 fixtures found "
                          f"under {CORPUS}")
+
+    # B2 plugin staging: resolve payloads -> staged dirs / unavailable
+    staged_plugins, unavailable_plugins = stage_plugins(stage, plugin_ids)
+    skipped: list[str] = []
+    cases: list[dict] = []
+    for case in raw_cases:
+        pids = case.get("plugins") or []
+        if pids:
+            if any(pid in unavailable_plugins for pid in pids):
+                skipped.append(case["id"])
+                continue
+            case["plugins"] = [staged_plugins[pid] for pid in pids]
+        cases.append(case)
     cases.sort(key=lambda c: c["id"])
     manifest = {"schema": "tui-diff-manifest/1", "cases": cases}
     (stage / "manifest.json").write_text(json.dumps(manifest, indent=1))
-    return cases
+    return cases, skipped
 
 
 # ---------------------------------------------------------------------------
@@ -221,11 +331,14 @@ def run_rust(manifest: Path, out: Path) -> None:
 # result loading + infra semantics
 # ---------------------------------------------------------------------------
 
-def load_side(out: Path, cases: list[dict], side: str) -> dict[str, dict]:
+def load_side(out: Path, cases: list[dict], side: str) -> tuple[dict[str, dict], list[str]]:
     """Load one side's grids; enforce the infra rules (stub_gaps,
-    missing grid, cells/frames shape) with SystemExit(1)."""
+    missing grid, cells/frames shape) with SystemExit(1). B2: grids
+    carrying plugins_unavailable are collected (consistency ruled
+    later) -> (grids, plugins_unavailable case ids)."""
     grids: dict[str, dict] = {}
     infra: list[str] = []
+    plugins_unavailable: list[str] = []
     for case in cases:
         path = out / f"{case['id']}.json"
         if not path.exists():
@@ -274,12 +387,46 @@ def load_side(out: Path, cases: list[dict], side: str) -> dict[str, dict]:
                         break
         elif frames is not None:
             infra.append(f"{case['id']}: {side} emitted frames but scenario has no anim")
+        # B2 plugin-skip semantics (SCHEMA): a plugins_unavailable grid
+        # (bun/guest runtime or staged payload missing on that side) is
+        # NOT an infra failure by itself — the consistency ruling is
+        # the orchestrator's (both sides marked ⇒ consistent skip; one
+        # side ⇒ infra). The grid still carries a valid dense blank so
+        # shape checks hold.
+        if grid.get("plugins_unavailable"):
+            plugins_unavailable.append(case["id"])
         grids[case["id"]] = grid
     if infra:
         for line in infra:
             print(f"infra failure: {line}", file=sys.stderr)
         raise SystemExit(1)
-    return grids
+    if plugins_unavailable:
+        return grids, plugins_unavailable
+    return grids, []
+
+
+def reconcile_plugin_skips(ref_grids: dict[str, dict], rust_grids: dict[str, dict],
+                           cases: list[dict]) -> tuple[list[dict], list[str]]:
+    """B2 skip consistency: a plugins_unavailable marker must appear on
+    BOTH sides — both ⇒ the case is skipped (dropped from the gate,
+    listed in the report); exactly one side ⇒ infra failure (exit 1).
+    Returns the surviving case list + the skipped case ids."""
+    skipped: list[str] = []
+    surviving: list[dict] = []
+    for case in cases:
+        cid = case["id"]
+        ref_mark = bool(ref_grids.get(cid, {}).get("plugins_unavailable"))
+        rust_mark = bool(rust_grids.get(cid, {}).get("plugins_unavailable"))
+        if ref_mark and rust_mark:
+            skipped.append(cid)
+        elif ref_mark or rust_mark:
+            side = "ref" if ref_mark else "rust"
+            raise SystemExit(
+                f"infra failure: {cid}: plugins_unavailable on the {side} side only "
+                f"(SCHEMA B2: bun/payload availability must be consistent)")
+        else:
+            surviving.append(case)
+    return surviving, skipped
 
 
 def _bad_dense_grid(cells, width, height) -> bool:
@@ -298,7 +445,10 @@ def run(stage: Path, ref: Path, cases: list[dict]) -> tuple[dict[str, dict], dic
         os.chmod(out, 0o1777)
     run_ref(stage, ref, manifest, ref_out)
     run_rust(manifest, rust_out)
-    return load_side(ref_out, cases, "ref"), load_side(rust_out, cases, "rust")
+    ref_grids, ref_unavail = load_side(ref_out, cases, "ref")
+    rust_grids, rust_unavail = load_side(rust_out, cases, "rust")
+    del ref_unavail, rust_unavail  # consistency ruled in reconcile_plugin_skips
+    return ref_grids, rust_grids
 
 
 # ---------------------------------------------------------------------------
@@ -628,6 +778,41 @@ CAUSES = [
         ),
     ),
     (
+        # B2 CAUSES version-skew 簇 (user ruling 2026-11-14): the plugin
+        # targets a NEWER host API face than the diff pin (2.0.24), and
+        # the ref harness consequently cannot boot it at all — every
+        # downstream cell difference is a degenerate-loading pseudo
+        # diff, NOT a port bug. Evidence predicate (narrow): the
+        # scenario is a plugin-* case AND the REF grid literally shows
+        # the deterministic failure notice ('Plugin failed'). Both
+        # sides booted ⇒ this cluster does NOT match (G-28 takes it).
+        "B2 version-skew 簇（退版本加载伪差：ref 2.0.24 无法 boot 新版插件）",
+        lambda d: d.get("ref_plugin_failed") is True
+        and str(d.get("id", "")).startswith("plugin-"),
+        (
+            "plugin-* 场景且 ref 侧网格呈现确定性失败态（'Plugin failed: <path>' "
+            "公告 + 'N plugins failed' footer pill）：ref 2.0.24 的 Host.resolve "
+            "（host.ts:17-43）对目录形插件探测 `<dir>/server` 子路径，bun 1.3.10 "
+            "的 ResolveSync 抛 ResolveMessage（非 Error 子类——bun ≥1.3 行为变更），"
+            "host.ts:26-40 的吞错守卫 `error instanceof Error` 判假 → 原样重抛 → "
+            "reconcile 记 failure。即插件需要的宿主解析面（package.json exports "
+            "子路径解析，2.2.x 宿主）在 2.0.24 钉定环境缺失——插件从未到达其 "
+            "setup/tui() 调用点（omo-slim dist/tui2.js 的 ctx.client/… 2.2.x API "
+            "面因此根本未被触及），rust 侧经 oc-plugin-host（Rust 侧 resolve.rs "
+            "包感知探测 ./server→./tui exports）正常 boot 出的任何渲染（侧栏 "
+            "section/palette 命令/失败公告缺席）整体是退版本加载伪差。命中=登记"
+            "不拦（用户裁定）；判定文引 ref packages/plugin/src/host.ts:17-43（吞错"
+            "守卫）+ payload package.json exports（无根级 ./server 文件，仅 exports "
+            "映射）——实证：ref 树自带 plugin-keymap.test.tsx 在本环境同样 0-pass",
+            "ref packages/plugin/src/host.ts:17-43（Host.resolve 吞错守卫漏 "
+            "ResolveMessage）+ packages/tui/src/plugin/context.tsx:670（resolve→"
+            "failure 态）",
+            "rust crates/oc-plugin-host/src/resolve.rs:249-289（包感知 resolve_entry:"
+            "./server exports 探测）+ supervisor.rs:2359（load.tui 伴生装载）——"
+            "rust 侧正常 boot，差分为宿主版本伪差非移植 bug",
+        ),
+    ),
+    (
         "G-28 插件 TSX 有界（bounded shim）",
         lambda d: d.get("dimension", "resting") == "resting"
         and str(d.get("id", "")).startswith("plugin-")
@@ -671,6 +856,24 @@ CAUSES = [
         ),
     ),
 ]
+
+
+def _ref_cells_text(grid: dict) -> str:
+    """Row-joined plain text of a grid's cells (evidence extraction —
+    the ref 'Plugin failed' failure notice is screen text)."""
+    chunks = []
+    for row in grid.get("cells") or []:
+        chunks.append("".join(str(c.get("ch") or " ") if isinstance(c, dict) else " "
+                              for c in row))
+    return "\n".join(chunks)
+
+
+def _plugin_failed_on_ref(ref_grid: dict) -> bool:
+    """B2 version-skew evidence predicate: the ref 2.0.24 harness
+    could not boot the plugin AT ALL (the deterministic failure state:
+    the 'Plugin failed: <path>' notice + the 'N plugins failed' footer
+    pill + the Plugins screen's failed rows)."""
+    return "Plugin failed" in _ref_cells_text(ref_grid)
 
 
 def _first_glyph_diff(d: dict) -> tuple[str, str] | None:
@@ -734,8 +937,22 @@ def verdict(results: list[dict], causes: list = ()) -> int:
 # report
 # ---------------------------------------------------------------------------
 
+def _rec_with_flag(cid: str, res: dict, ref: dict[str, dict]) -> dict:
+    """A divergence record with the B2 version-skew evidence flag
+    attached for plugin-* cases (ref-side 'Plugin failed' screen)."""
+    rec = {"id": cid, **res}
+    if cid.startswith("plugin-"):
+        rec["ref_plugin_failed"] = _plugin_failed_on_ref(ref[cid])
+    return rec
+
+
+def _adj_report(cid: str, res: dict, ref: dict[str, dict]) -> str | None:
+    return adjudicate(_rec_with_flag(cid, res, ref))
+
+
 def write_report(path: Path, cases: list[dict], ref: dict[str, dict], rust: dict[str, dict],
-                 results: dict[str, dict], frame_results: dict[str, dict]) -> None:
+                 results: dict[str, dict], frame_results: dict[str, dict],
+                 skipped: list[str] | None = None) -> None:
     lines = []
     # --- ① header: replay line + both driver surfaces (file:line) ---
     lines.append("# TUI-FULLSCREEN — TUI 整屏差分（通道 8）")
@@ -771,7 +988,7 @@ def write_report(path: Path, cases: list[dict], ref: dict[str, dict], rust: dict
     for cid, res in results.items():
         if res["verdict"] == "exact":
             continue
-        label = adjudicate({"id": cid, **res})
+        label = _adj_report(cid, res, ref)
         if label is None:
             n_unadj += 1
         else:
@@ -783,6 +1000,10 @@ def write_report(path: Path, cases: list[dict], ref: dict[str, dict], rust: dict
     lines.append("|---|---|---|---|---|")
     lines.append(f"| {len(cases)} | {n_exact} | {n_struct} | {n_caused} | {n_unadj} |")
     lines.append("")
+    if skipped:
+        lines.append(f"B2 plugins_unavailable 一致跳过 {len(skipped)} case（双侧标记一致，"
+                     "SCHEMA B2 skip 语义；payload/bun 环境缺失，非差分结论）："
+                     + ", ".join(f"`{c}`" for c in sorted(skipped)) + "")
     lines.append(f"（verdict 分布：exact {n_exact} / structural {n_struct} / diverge {n_div}；")
     lines.append("gate 见编排器输出，未裁决>0 ⇒ exit 2）")
     lines.append("")
@@ -816,7 +1037,7 @@ def write_report(path: Path, cases: list[dict], ref: dict[str, dict], rust: dict
             fd = res["first_diff"]
             if fd is None:
                 continue
-            cause = adjudicate({"id": cid, **res})
+            cause = _adj_report(cid, res, ref)
             cause_s = f" — CAUSES: {cause}" if cause else " — 未裁决（T9 候选）"
             if fd.get("row") is None:
                 lines.append(f"- `{cid}` [{res['verdict']}] {fd['field']}: "
@@ -860,7 +1081,7 @@ def write_report(path: Path, cases: list[dict], ref: dict[str, dict], rust: dict
     for cid, res in frame_results.items():
         if res["verdict"] == "exact":
             continue
-        label = adjudicate({"id": cid, **res})
+        label = _adj_report(cid, res, ref)
         if label is None:
             n_f_unadj += 1
         else:
@@ -891,7 +1112,7 @@ def write_report(path: Path, cases: list[dict], ref: dict[str, dict], rust: dict
         for cid, res in frame_results.items():
             if res["verdict"] == "exact":
                 continue
-            cause = adjudicate({"id": cid, **res})
+            cause = _adj_report(cid, res, ref)
             cause_s = f" — CAUSES: {cause}" if cause else " — 未裁决（T9 候选）"
             lines.append(f"- `{cid}` {cause_s}")
         lines.append("")
@@ -922,13 +1143,19 @@ def main() -> int:
     args = ap.parse_args()
     ref = Path(args.ref)
 
-    cases = build_manifest(STAGE)
+    cases, staged_out = build_manifest(STAGE)
+    skipped = list(staged_out)
     manifest = STAGE / "manifest.json"
-    print(f"manifest: {len(cases)} cases -> {manifest}")
+    print(f"manifest: {len(cases)} cases -> {manifest}"
+          + (f" ({len(skipped)} plugins_unavailable)" if skipped else ""))
     if args.manifest_only:
         return 0
 
     ref_grids, rust_grids = run(STAGE, ref, cases)
+    # B2 plugin-skip reconciliation (mutates nothing: surviving cases
+    # drive the compare/gate; skipped ids are reported)
+    cases, skipped_runtime = reconcile_plugin_skips(ref_grids, rust_grids, cases)
+    skipped = sorted(set(skipped) | set(skipped_runtime))
     results = {c["id"]: compare(normalize(ref_grids[c["id"]]),
                                 normalize(rust_grids[c["id"]]))
                for c in cases}
@@ -936,23 +1163,30 @@ def main() -> int:
     # (both sides validated K+1 dense grids by load_side)
     frame_results = {c["id"]: compare_frames(ref_grids[c["id"]], rust_grids[c["id"]])
                      for c in cases if "frames" in (ref_grids[c["id"]] or {})}
-    write_report(Path(args.write), cases, ref_grids, rust_grids, results, frame_results)
-    recs = [{"id": cid, "dimension": "resting", **res} for cid, res in results.items()]
-    recs += [{"id": cid, **res} for cid, res in frame_results.items()]
+    write_report(Path(args.write), cases, ref_grids, rust_grids, results, frame_results,
+                 skipped)
+    recs = [{"id": cid, "dimension": "resting",
+             **({"ref_plugin_failed": _plugin_failed_on_ref(ref_grids[cid])}
+                if cid.startswith("plugin-") else {}),
+             **res} for cid, res in results.items()]
+    recs += [{"id": cid,
+              **({"ref_plugin_failed": _plugin_failed_on_ref(ref_grids[cid])}
+                 if cid.startswith("plugin-") else {}),
+              **res} for cid, res in frame_results.items()]
     code = verdict(recs, CAUSES)
     n_caused = sum(1 for r in recs if r["verdict"] != "exact"
                    and adjudicate(r) is not None)
     for cid, res in results.items():
         fd = res["first_diff"]
         fd_s = "" if fd is None else f" first_diff={fd}"
-        cause = adjudicate({"id": cid, "dimension": "resting", **res}) if res["verdict"] != "exact" else None
+        cause = adjudicate(_rec_with_flag(cid, {"dimension": "resting", **res}, ref_grids)) if res["verdict"] != "exact" else None
         cause_s = f" cause={cause}" if cause else ""
         print(f"{cid}: {res['verdict']} cells_diff={res['cells_diff_count']}"
               f"{fd_s}{cause_s}")
     for cid, res in frame_results.items():
         fd = res["first_tick_diff"]
         fd_s = "" if fd is None else f" first_tick_diff={fd}"
-        cause = adjudicate({"id": cid, **res}) if res["verdict"] != "exact" else None
+        cause = adjudicate(_rec_with_flag(cid, {**res}, ref_grids)) if res["verdict"] != "exact" else None
         cause_s = f" cause={cause}" if cause else ""
         per = "".join("." if v == "exact" else ("R" if v == "structural" else "X")
                       for v in res["per_tick"])

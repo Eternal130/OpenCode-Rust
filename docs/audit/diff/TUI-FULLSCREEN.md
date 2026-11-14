@@ -25,9 +25,9 @@ cells 稠密化，None/缺省子字段补规范默认（ch=' '、attrs 排序去
 
 | 总量 | EXACT | STRUCTURAL | CAUSES 命中 | 未裁决 |
 |---|---|---|---|---|
-| 75 | 69 | 0 | 6 | 0 |
+| 90 | 69 | 0 | 21 | 0 |
 
-（verdict 分布：exact 69 / structural 0 / diverge 6；
+（verdict 分布：exact 69 / structural 0 / diverge 21；
 gate 见编排器输出，未裁决>0 ⇒ exit 2）
 
 ## 分歧明细
@@ -70,6 +70,21 @@ gate 见编排器输出，未裁决>0 ⇒ exit 2）
 | models-dialog | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
 | models-dialog@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
 | models-dialog@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
+| plugin-boot-combo | diverge | 446 | r1c18 ch ref='┃' rust=' ' | 80x24 | 80x24 | 0 | 0 | 20 | 16 |
+| plugin-boot-combo@120x30 | diverge | 446 | r1c58 ch ref='┃' rust=' ' | 120x30 | 120x30 | 0 | 0 | 20 | 16 |
+| plugin-boot-combo@320x80 | diverge | 446 | r1c258 ch ref='┃' rust=' ' | 320x80 | 320x80 | 0 | 0 | 20 | 16 |
+| plugin-boot-idle | diverge | 445 | r1c18 ch ref='┃' rust=' ' | 80x24 | 80x24 | 0 | 0 | 20 | 16 |
+| plugin-boot-idle@120x30 | diverge | 445 | r1c58 ch ref='┃' rust=' ' | 120x30 | 120x30 | 0 | 0 | 20 | 16 |
+| plugin-boot-idle@320x80 | diverge | 445 | r1c258 ch ref='┃' rust=' ' | 320x80 | 320x80 | 0 | 0 | 20 | 16 |
+| plugin-boot-superpowers | diverge | 445 | r1c18 ch ref='┃' rust=' ' | 80x24 | 80x24 | 0 | 0 | 20 | 14 |
+| plugin-boot-superpowers@120x30 | diverge | 445 | r1c58 ch ref='┃' rust=' ' | 120x30 | 120x30 | 0 | 0 | 20 | 14 |
+| plugin-boot-superpowers@320x80 | diverge | 445 | r1c258 ch ref='┃' rust=' ' | 320x80 | 320x80 | 0 | 0 | 20 | 14 |
+| plugin-fallback | diverge | 1884 | r0c0 bg ref=[10, 10, 10] rust=[4, 4, 4] | 80x24 | 80x24 | 0 | 0 | 20 | 16 |
+| plugin-fallback@120x30 | diverge | 1002 | r1c58 ch ref='┃' rust=' ' | 120x30 | 120x30 | 0 | 0 | 20 | 16 |
+| plugin-fallback@320x80 | diverge | 25600 | r0c0 bg ref=[10, 10, 10] rust=[4, 4, 4] | 320x80 | 320x80 | 0 | 0 | 20 | 16 |
+| plugin-panel-open | diverge | 761 | r1c18 ch ref='┃' rust=' ' | 80x24 | 80x24 | 0 | 0 | 27 | 19 |
+| plugin-panel-open@120x30 | diverge | 1045 | r1c58 ch ref='┃' rust=' ' | 120x30 | 120x30 | 0 | 0 | 27 | 19 |
+| plugin-panel-open@320x80 | diverge | 2545 | r1c258 ch ref='┃' rust=' ' | 320x80 | 320x80 | 0 | 0 | 27 | 19 |
 | session-empty | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
 | session-empty@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
 | session-empty@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
@@ -118,6 +133,21 @@ gate 见编排器输出，未裁决>0 ⇒ exit 2）
 - `anim-tool-progress` [diverge] row=7 col=5 field=ch ref='⋯' rust='⠋' cells_diff_count=60 — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
 - `anim-tool-progress@120x30` [diverge] row=7 col=5 field=ch ref='⋯' rust='⠋' cells_diff_count=60 — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
 - `anim-tool-progress@320x80` [diverge] row=7 col=5 field=ch ref='⋯' rust='⠋' cells_diff_count=60 — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
+- `plugin-boot-combo` [diverge] row=1 col=18 field=ch ref='┃' rust=' ' cells_diff_count=446 — CAUSES: B2 version-skew 簇（退版本加载伪差：ref 2.0.24 无法 boot 新版插件）
+- `plugin-boot-combo@120x30` [diverge] row=1 col=58 field=ch ref='┃' rust=' ' cells_diff_count=446 — CAUSES: B2 version-skew 簇（退版本加载伪差：ref 2.0.24 无法 boot 新版插件）
+- `plugin-boot-combo@320x80` [diverge] row=1 col=258 field=ch ref='┃' rust=' ' cells_diff_count=446 — CAUSES: B2 version-skew 簇（退版本加载伪差：ref 2.0.24 无法 boot 新版插件）
+- `plugin-boot-idle` [diverge] row=1 col=18 field=ch ref='┃' rust=' ' cells_diff_count=445 — CAUSES: B2 version-skew 簇（退版本加载伪差：ref 2.0.24 无法 boot 新版插件）
+- `plugin-boot-idle@120x30` [diverge] row=1 col=58 field=ch ref='┃' rust=' ' cells_diff_count=445 — CAUSES: B2 version-skew 簇（退版本加载伪差：ref 2.0.24 无法 boot 新版插件）
+- `plugin-boot-idle@320x80` [diverge] row=1 col=258 field=ch ref='┃' rust=' ' cells_diff_count=445 — CAUSES: B2 version-skew 簇（退版本加载伪差：ref 2.0.24 无法 boot 新版插件）
+- `plugin-boot-superpowers` [diverge] row=1 col=18 field=ch ref='┃' rust=' ' cells_diff_count=445 — CAUSES: B2 version-skew 簇（退版本加载伪差：ref 2.0.24 无法 boot 新版插件）
+- `plugin-boot-superpowers@120x30` [diverge] row=1 col=58 field=ch ref='┃' rust=' ' cells_diff_count=445 — CAUSES: B2 version-skew 簇（退版本加载伪差：ref 2.0.24 无法 boot 新版插件）
+- `plugin-boot-superpowers@320x80` [diverge] row=1 col=258 field=ch ref='┃' rust=' ' cells_diff_count=445 — CAUSES: B2 version-skew 簇（退版本加载伪差：ref 2.0.24 无法 boot 新版插件）
+- `plugin-fallback` [diverge] row=0 col=0 field=bg ref=[10, 10, 10] rust=[4, 4, 4] cells_diff_count=1884 — CAUSES: B2 version-skew 簇（退版本加载伪差：ref 2.0.24 无法 boot 新版插件）
+- `plugin-fallback@120x30` [diverge] row=1 col=58 field=ch ref='┃' rust=' ' cells_diff_count=1002 — CAUSES: B2 version-skew 簇（退版本加载伪差：ref 2.0.24 无法 boot 新版插件）
+- `plugin-fallback@320x80` [diverge] row=0 col=0 field=bg ref=[10, 10, 10] rust=[4, 4, 4] cells_diff_count=25600 — CAUSES: B2 version-skew 簇（退版本加载伪差：ref 2.0.24 无法 boot 新版插件）
+- `plugin-panel-open` [diverge] row=1 col=18 field=ch ref='┃' rust=' ' cells_diff_count=761 — CAUSES: B2 version-skew 簇（退版本加载伪差：ref 2.0.24 无法 boot 新版插件）
+- `plugin-panel-open@120x30` [diverge] row=1 col=58 field=ch ref='┃' rust=' ' cells_diff_count=1045 — CAUSES: B2 version-skew 簇（退版本加载伪差：ref 2.0.24 无法 boot 新版插件）
+- `plugin-panel-open@320x80` [diverge] row=1 col=258 field=ch ref='┃' rust=' ' cells_diff_count=2545 — CAUSES: B2 version-skew 簇（退版本加载伪差：ref 2.0.24 无法 boot 新版插件）
 
 ## CAUSES 定性
 
@@ -149,6 +179,10 @@ gate 见编排器输出，未裁决>0 ⇒ exit 2）
   - anim-* 场景：rust 帧是 (store, clock) 纯函数（A1）——虚拟时钟逐拍推进使spinner 轮转/caret blink（500ms 周期）/knight 渐变在中间拍真实变化；ref 侧夹具钉 animations:false（动画门控关闭，静态形状）且渲染器时钟注入在整 app 下原生不稳（boot 死锁/捕获段错误，探针记录于 a2-report）——这是夹具伪影而非移植语义差：生产 ref 默认 animations:true 渲染同类动画。登记不拦；事件驱动的逐拍内容变化仍被本维度精确断言
   - ref packages/tui/test/fixture/app.ts:32（config animations:false 钉定）+ component/spinner.tsx:27-31（animations 门控回退静态 ⋯）
   - rust crates/oc-tui/tests/tui_fullscreen_diff_driver.rs（ANIM_TICK_MS=100 逐拍 advance_clock）；oc-tui 渲染无动画门控，时钟驱动（A1 接线）
+- **B2 version-skew 簇（退版本加载伪差：ref 2.0.24 无法 boot 新版插件）** — 命中 15 case（`plugin-boot-combo`, `plugin-boot-combo@120x30`, `plugin-boot-combo@320x80`, `plugin-boot-idle`, `plugin-boot-idle@120x30`, `plugin-boot-idle@320x80`, `plugin-boot-superpowers`, `plugin-boot-superpowers@120x30`, `plugin-boot-superpowers@320x80`, `plugin-fallback`, `plugin-fallback@120x30`, `plugin-fallback@320x80`, `plugin-panel-open`, `plugin-panel-open@120x30`, `plugin-panel-open@320x80`）
+  - plugin-* 场景且 ref 侧网格呈现确定性失败态（'Plugin failed: <path>' 公告 + 'N plugins failed' footer pill）：ref 2.0.24 的 Host.resolve （host.ts:17-43）对目录形插件探测 `<dir>/server` 子路径，bun 1.3.10 的 ResolveSync 抛 ResolveMessage（非 Error 子类——bun ≥1.3 行为变更），host.ts:26-40 的吞错守卫 `error instanceof Error` 判假 → 原样重抛 → reconcile 记 failure。即插件需要的宿主解析面（package.json exports 子路径解析，2.2.x 宿主）在 2.0.24 钉定环境缺失——插件从未到达其 setup/tui() 调用点（omo-slim dist/tui2.js 的 ctx.client/… 2.2.x API 面因此根本未被触及），rust 侧经 oc-plugin-host（Rust 侧 resolve.rs 包感知探测 ./server→./tui exports）正常 boot 出的任何渲染（侧栏 section/palette 命令/失败公告缺席）整体是退版本加载伪差。命中=登记不拦（用户裁定）；判定文引 ref packages/plugin/src/host.ts:17-43（吞错守卫）+ payload package.json exports（无根级 ./server 文件，仅 exports 映射）——实证：ref 树自带 plugin-keymap.test.tsx 在本环境同样 0-pass
+  - ref packages/plugin/src/host.ts:17-43（Host.resolve 吞错守卫漏 ResolveMessage）+ packages/tui/src/plugin/context.tsx:670（resolve→failure 态）
+  - rust crates/oc-plugin-host/src/resolve.rs:249-289（包感知 resolve_entry:./server exports 探测）+ supervisor.rs:2359（load.tui 伴生装载）——rust 侧正常 boot，差分为宿主版本伪差非移植 bug
 - **G-28 插件 TSX 有界（bounded shim）** — 命中 0 case
   - plugin-* 场景的形状类分歧：ref 侧插件以 TSX 活树渲染进 Slot，rust 侧以有界 shim（固定 UI 请求形状）近似——已立项的有界偏差
   - ref packages/tui/src/component/panel-host.tsx:35-55（Slot path="session.panel"，TSX 活树 + reactive props）
