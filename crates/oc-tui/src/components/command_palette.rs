@@ -70,6 +70,15 @@ impl PaletteCommand {
         match self.command {
             "model.list" | "opencode.settings" => true,
             "session.new" => matches!(store.route(), Route::Session { .. }),
+            // `suggested: route.type === "session"` (index.tsx:893 —
+            // the session route's `session.share` baseCommand; the
+            // unfiltered palette leads with "Share session", ref
+            // command-palette grid r12).
+            "session.share" => matches!(store.route(), Route::Session { .. }),
+            // `suggested: data.session.list().length > 0`
+            // (app.tsx:703 — "Switch session" suggests once a session
+            // exists).
+            "session.list" => !store.session_history().is_empty(),
             // `suggested: !connected()` (app.tsx:948) — v2's
             // `connected` is INTEGRATION-backed (`hasConnectedProvider`
             // over `integration.list`, use-connected.tsx), not the
@@ -126,6 +135,16 @@ impl PaletteCommand {
 /// dispatch to [`Dispatch::ServerPending`] stubs until the wave-3
 /// oc-client wiring lands.
 pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
+    // The session ROUTE's commands PREPEND the keymap (the route
+    // mounts via `prependCommandResolver`, keymap catalog; ref grid
+    // evidence — the unfiltered palette's suggested block leads
+    // "Share session" ahead of the app-level "Switch session").
+    PaletteCommand {
+        command: "session.share",
+        title: "Share session",
+        group: "Session",
+        bindings: &[],
+    },
     PaletteCommand {
         command: "session.list",
         title: "Switch session",
@@ -161,12 +180,6 @@ pub static PALETTE_COMMANDS: &[PaletteCommand] = &[
         title: "Reopen closed tab",
         group: "Session",
         bindings: &["ctrl+shift+t"],
-    },
-    PaletteCommand {
-        command: "session.share",
-        title: "Share session",
-        group: "Session",
-        bindings: &[],
     },
     PaletteCommand {
         command: "session.copy.id",
@@ -906,17 +919,39 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             if let crate::store::Route::Session { session_id, .. } = store.route() {
                 props = props.with_current(Some(session_id));
             }
-            props = props
-                .with_action(crate::components::dialog_select::SelectAction::new(
+            // The footer actions (dialog-session-list.tsx:246-287):
+            // `pin/unpin` carries `hidden: sessionTabs.enabled()` —
+            // multi-tab mode hides it (:250-251, `session.pin.toggle`
+            // only meaningful for the quick-switch slots); `delete`
+            // (ctrl+d) and `rename` (ctrl+r) always show.
+            if !store.tabs_enabled() {
+                props = props.with_action(crate::components::dialog_select::SelectAction::new(
                     "session.pin.toggle",
                     "pin/unpin",
                     "ctrl+f",
-                ))
+                ));
+            }
+            props = props
                 .with_action(crate::components::dialog_select::SelectAction::new(
                     "session.delete",
                     "delete",
                     "ctrl+d",
+                ))
+                .with_action(crate::components::dialog_select::SelectAction::new(
+                    "session.rename",
+                    "rename",
+                    "ctrl+r",
                 ));
+            // The right-side footer hint (:288-291 +
+            // quickSwitchFooterHints): `{allProjects() ? "current
+            // directory" : "all projects"} ctrl+a`. The pref defaults
+            // to `config.tabs?.scope !== "cwd"` with scope defaulting
+            // "cwd" (config/index.tsx:328) → allProjects=false →
+            // "all projects".
+            props = props.with_footer_hint(
+                if store.session_list_all_projects() { "current directory" } else { "all projects" },
+                "ctrl+a",
+            );
             props
         }
         // TUI-5 (lane-tui2): `DialogOpen` — the Sessions recents +
@@ -1621,19 +1656,19 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         // SURF-2 `DialogStatus` (`/status`, dialog-status.tsx:29-56):
         // the count line + per-server bullet rows, or the empty
         // fallback.
+        // W4: `DialogStatus` renders the CUSTOM tree (dialog_solid
+        // `Family::Status`); the rows ride the props' hints (the
+        // select options are unused by that tree).
         DialogKind::Status => {
             let servers = store.mcp_servers();
-            let mut options = Vec::new();
+            let mut rows = Vec::new();
             if servers.is_empty() {
-                options.push(SelectOption::titled("No MCP servers", "status").muted_placeholder());
+                rows.push("No MCP servers".to_owned());
             } else {
-                options.push(SelectOption::titled(
-                    format!(
-                        "{} MCP server{}",
-                        servers.len(),
-                        if servers.len() == 1 { "" } else { "s" }
-                    ),
-                    "count",
+                rows.push(format!(
+                    "{} MCP server{}",
+                    servers.len(),
+                    if servers.len() == 1 { "" } else { "s" }
                 ));
                 for server in &servers {
                     let status_text = match server.status {
@@ -1646,13 +1681,10 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                         ),
                         _ => server.status.to_owned(),
                     };
-                    options.push(SelectOption::titled(
-                        format!("• {} {}", server.name, status_text),
-                        server.name.clone(),
-                    ));
+                    rows.push(format!("• {} {}", server.name, status_text));
                 }
             }
-            SelectProps::new("Status", options).flat(true)
+            SelectProps::new("Status", Vec::new()).with_hints(rows)
         }
         // SURF-2 `DialogVariant` (`/variants`, dialog-variant.tsx:
         // 10-29): "Default" + the current model's variants.
@@ -3020,8 +3052,16 @@ impl CommandDispatcher for StoreDispatcher {
                     "session.list" => "Sessions",
                     _ => palette_command(command).map_or("", |entry| entry.title),
                 };
-                let size =
-                    if command == "open.menu" { DialogSize::Large } else { DialogSize::Medium };
+                let size = if command == "open.menu" || command == "session.list" {
+                    // `open.menu` mounts at "large" (dialog-open.tsx
+                    // :341) and the session list's onMount sets
+                    // `setSize("large")` too (dialog-session-list.
+                    // tsx:190) — the 88-col box (clamped to
+                    // `width - 2`).
+                    DialogSize::Large
+                } else {
+                    DialogSize::Medium
+                };
                 // F13: the session list refetches on open (the boot
                 // resync snapshot goes stale — v2's DialogSessionList
                 // syncs `session.list` on mount).
