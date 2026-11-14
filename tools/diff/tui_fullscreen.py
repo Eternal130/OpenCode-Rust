@@ -102,6 +102,21 @@ PLUGIN_PAYLOADS = {
         "copy_files": ["package.json", "oh-my-opencode-slim.schema.json"],
         "deps": ["jsonc-parser", "zod", "solid-js", "lru-cache", "semver",
                  "@opencode-ai/plugin", "@opencode-ai/sdk"],
+        # B2-fix: 2.0.24's local-dir loader resolves ONLY the
+        # `<dir>/tui.*` extension-probe convention (host.ts entry
+        # (["tui"]) — package.json exports subpaths are never
+        # consulted for absolute specifiers, probed under bun 1.4.2:
+        # `Bun.resolveSync("<pkg>/tui")` throws ERR_MODULE_NOT_FOUND
+        # even though exports["./tui"] exists). The production path
+        # (packages.prepare -> package-name resolution through
+        # node_modules) is pinned away by the fixture's
+        # `prepare: async () => ({ directory: "" })` (ref tree
+        # read-only). The staging therefore adds a 2-line re-export
+        # shim at the staged copy's root expressing the package's OWN
+        # declared TUI entry in the one shape 2.0.24 understands —
+        # the payload itself and the read-only cache entity are
+        # untouched, and the rust side (exports-aware) is unaffected.
+        "tui_shim": True,
     },
     "superpowers": {
         "source": "npm/git-superpowers-*",
@@ -112,11 +127,31 @@ PLUGIN_PAYLOADS = {
         "copy_files": [],
         "deps": [],
     },
+    # B2-fix: the deliberate-failure payload for plugin-fallback — the
+    # failure-state rendering path on BOTH sides (committed fixture,
+    # no cache entity). ref: `<dir>/tui` probes tui.js -> import
+    # throws -> reconcile failure state. rust: package.json main ->
+    # tui.js -> guest load throws -> PluginState::Failed (contained).
+    "broken": {
+        "source": "repo/tools/diff/corpus/tui/payloads/broken-plugin",
+        "package": "broken-plugin",
+        "copy_dirs": [],
+        "copy_files": [],
+        "deps": [],
+    },
 }
 # env overrides (payload roots), e.g. OC_DIFF_PLUGIN_OMO_SLIM=/path/to/pkg
 PLUGIN_ENV = {"omo-slim": "OC_DIFF_PLUGIN_OMO_SLIM",
               "superpowers": "OC_DIFF_PLUGIN_SUPERPOWERS"}
 NPM_CACHE = Path("/root/.cache/opencode/npm")
+
+# B2-fix (controller-confirmed root cause): the ref plugin-boot failure
+# pinned in the first B2 round was bun 1.3.10's ResolveMessage NOT
+# being an `instanceof Error` (it IS one under bun >= 1.4.2) — ref
+# host.ts:17-43's swallow guard depends on it. Plugin scenarios'
+# ref leg therefore runs under TUI_DIFF_BUN with version >= this floor;
+# non-plugin scenarios keep the environment bun (baseline no-drift).
+BUN_FLOOR = (1, 4, 2)
 
 # driver timeouts (seconds): ref boots bun quickly; rust includes a
 # cold `cargo nextest` compile of the oc-tui tree
@@ -133,13 +168,18 @@ def _copytree(source: Path, destination: Path) -> None:
 
 
 def _payload_source(payload: dict) -> Path | None:
-    """Resolve one payload's read-only cache entity (newest stamp
-    wins; env override first)."""
+    """Resolve one payload's read-only source entity (env override
+    first; repo:// fixtures for committed payloads; newest npm stamp
+    otherwise)."""
     override = os.environ.get(PLUGIN_ENV.get(str(payload), "") or "", "")
     if override:
         path = Path(override)
         return path if path.is_dir() else None
-    kind, _, key = payload["source"].partition("/")
+    source = payload["source"]
+    if source.startswith("repo/"):
+        path = REPO / source[len("repo/"):]
+        return path if path.is_dir() else None
+    kind, _, key = source.partition("/")
     if kind != "npm" or not NPM_CACHE.is_dir():
         return None
     # glob keys (git-superpowers-*) resolve to their install bases first
@@ -155,47 +195,70 @@ def _payload_source(payload: dict) -> Path | None:
     return None
 
 
-def stage_plugins(stage: Path, ids: list[str]) -> tuple[dict[str, str], list[str]]:
-    """Stage every referenced payload into STAGE/plugins/node_modules
-    (world-writable: the rust guest writes its @opentui shims into the
-    parent node_modules; the gate user must be able to read everything).
-    Returns ({id: staged package dir}, [unavailable ids])."""
-    staged: dict[str, str] = {}
+def stage_plugins(stage: Path, ids: list[str]) -> tuple[dict[str, str], dict[str, str], list[str]]:
+    """Stage every referenced payload into TWO STAGE roots (B2-fix):
+    `plugins-ref/node_modules` — the REF leg's tree: identical payload
+    copies + deps PLUS an @opentui symlink into the ref tree's own
+    host-provided renderer stack (the ref process really runs the
+    plugin's Solid sidebar under its own @opentui 0.5.14).
+    `plugins-rust/node_modules` — the RUST leg's tree: same payload
+    copies + deps, NO @opentui — the rust guest's ensureOpentuiShims
+    writes its bounded bridge shims there (the vt_plugin_sidebar
+    recipe; a real @opentui in the guest breaks at render() with "No
+    renderer found" — there is no renderer context in the guest).
+    Both world-writable (gate user + guest shim writes).
+    Returns ({id: ref dir}, {id: rust dir}, [unavailable ids])."""
+    staged_ref: dict[str, str] = {}
+    staged_rust: dict[str, str] = {}
     unavailable: list[str] = []
-    root = stage / "plugins" / "node_modules"
     for pid in sorted(set(ids)):
         payload = PLUGIN_PAYLOADS[pid]
         source = _payload_source(payload)
         if source is None:
             unavailable.append(pid)
             continue
-        package = root / payload["package"]
-        for name in payload["copy_dirs"]:
-            _copytree(source / name, package / name)
-        for name in payload["copy_files"]:
-            shutil.copyfile(source / name, package / name)
-        if not payload["copy_dirs"] and not payload["copy_files"]:
-            _copytree(source, package)  # whole-tree payload
-        for dep in payload["deps"]:
-            dep_source = source.parent / dep
-            if dep_source.is_dir():
-                _copytree(dep_source, root / dep)
-        # the ref side's host-provided @opentui renderer stack (the
-        # plugin's optionalDependencies pin 0.5.11; the ref harness's
-        # own resolved stack is the closest "host-provided" instance)
-        # — a symlink into the read-only ref tree, never loaded in place.
-        if pid == "omo-slim":
-            ref_opentui = Path(os.environ.get("DIFF_REF_ROOT", str(REF_DEFAULT))) \
-                / "packages/tui/node_modules/@opentui"
-            if ref_opentui.is_dir() and not (root / "@opentui").exists():
-                os.symlink(ref_opentui, root / "@opentui")
-        # world-writable (gate user + guest shim writes)
-        for dirpath, _dirnames, filenames in os.walk(root):
-            os.chmod(dirpath, 0o1777)
-            for name in filenames:
-                os.chmod(os.path.join(dirpath, name), 0o666)
-        staged[pid] = str(package)
-    return staged, unavailable
+        for root_name in ("plugins-ref", "plugins-rust"):
+            root = stage / root_name / "node_modules"
+            package = root / payload["package"]
+            for name in payload["copy_dirs"]:
+                _copytree(source / name, package / name)
+            for name in payload["copy_files"]:
+                shutil.copyfile(source / name, package / name)
+            if not payload["copy_dirs"] and not payload["copy_files"]:
+                _copytree(source, package)  # whole-tree payload
+            if payload.get("tui_shim"):
+                (package / "tui.js").write_text(
+                    "// harness staging shim (diff-ext B2-fix): re-export the "
+                    "package's declared TUI entry (exports[\"./tui\"] -> "
+                    "dist/tui2.js) in the one shape the 2.0.24 local-dir "
+                    "loader resolves (<dir>/tui.* extension probe). Not part "
+                    "of the payload; the read-only cache entity is "
+                    "untouched.\nexport { default } from \"./dist/tui2.js\";\n"
+                    "export * from \"./dist/tui2.js\";\n")
+            for dep in payload["deps"]:
+                dep_source = source.parent / dep
+                if dep_source.is_dir():
+                    _copytree(dep_source, root / dep)
+            # the ref tree's host-provided @opentui renderer stack (the
+            # plugin's optionalDependencies pin 0.5.11; the ref harness's
+            # own resolved stack is the closest "host-provided"
+            # instance) — REF ROOT ONLY (see docstring), a symlink into
+            # the read-only ref tree, never loaded in place.
+            if root_name == "plugins-ref" and pid == "omo-slim":
+                ref_opentui = Path(os.environ.get("DIFF_REF_ROOT", str(REF_DEFAULT))) \
+                    / "packages/tui/node_modules/@opentui"
+                if ref_opentui.is_dir() and not (root / "@opentui").exists():
+                    os.symlink(ref_opentui, root / "@opentui")
+            # world-writable (gate user + guest shim writes)
+            for dirpath, _dirnames, filenames in os.walk(root):
+                os.chmod(dirpath, 0o1777)
+                for name in filenames:
+                    os.chmod(os.path.join(dirpath, name), 0o666)
+            if root_name == "plugins-ref":
+                staged_ref[pid] = str(package)
+            else:
+                staged_rust[pid] = str(package)
+    return staged_ref, staged_rust, unavailable
 
 
 def build_manifest(stage: Path) -> tuple[list[dict], list[str]]:
@@ -251,8 +314,11 @@ def build_manifest(stage: Path) -> tuple[list[dict], list[str]]:
         raise SystemExit("empty corpus: no tui-diff-scenario/1 fixtures found "
                          f"under {CORPUS}")
 
-    # B2 plugin staging: resolve payloads -> staged dirs / unavailable
-    staged_plugins, unavailable_plugins = stage_plugins(stage, plugin_ids)
+    # B2 plugin staging: resolve payloads -> staged dirs / unavailable.
+    # `plugins` (the manifest's ref-leg field) carries the REF-root
+    # staged dirs (real @opentui); `plugins_rust` carries the RUST-root
+    # twins (host-shim tree) — the drivers each read their own field.
+    staged_ref, staged_rust, unavailable_plugins = stage_plugins(stage, plugin_ids)
     skipped: list[str] = []
     cases: list[dict] = []
     for case in raw_cases:
@@ -261,7 +327,8 @@ def build_manifest(stage: Path) -> tuple[list[dict], list[str]]:
             if any(pid in unavailable_plugins for pid in pids):
                 skipped.append(case["id"])
                 continue
-            case["plugins"] = [staged_plugins[pid] for pid in pids]
+            case["plugins"] = [staged_ref[pid] for pid in pids]
+            case["plugins_rust"] = [staged_rust[pid] for pid in pids]
         cases.append(case)
     cases.sort(key=lambda c: c["id"])
     manifest = {"schema": "tui-diff-manifest/1", "cases": cases}
@@ -295,18 +362,39 @@ def _logged_run(cmd: list[str], log_name: str, timeout: int | None = None,
     return res
 
 
-def run_ref(stage: Path, ref: Path, manifest: Path, out: Path) -> None:
+def _bun_version(bun: str) -> tuple[int, ...] | None:
+    """Parse `<bun> --version` (e.g. '1.4.2'); None when unrunnable."""
+    try:
+        res = subprocess.run([bun, "--version"], capture_output=True, text=True,
+                             timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if res.returncode != 0:
+        return None
+    parts = res.stdout.strip().split(".")
+    try:
+        return tuple(int(p.split("-")[0]) for p in parts[:3])
+    except ValueError:
+        return None
+
+
+def run_ref(stage: Path, ref: Path, manifest: Path, out: Path,
+            bun: str = "bun") -> None:
     """Bun-side reference driver: staged copy under STAGE, DIFF_REF_ROOT
-    env, absolute-path solid preload (no node_modules symlink needed)."""
+    env, absolute-path solid preload (no node_modules symlink needed).
+    B2-fix: plugin-case legs run under `bun` = TUI_DIFF_BUN (>= 1.4.2,
+    the ResolveMessage-extends-Error fix the ref host.ts swallow guard
+    depends on); non-plugin legs keep the environment bun."""
     staged = stage / "tui_fullscreen_ref_driver.ts"
-    shutil.copyfile(REF_DRIVER, staged)
+    if not staged.exists():
+        shutil.copyfile(REF_DRIVER, staged)
     preload = ref / REF_PRELOAD
     env = {**os.environ, "DIFF_REF_ROOT": str(ref)}
     res = _logged_run(
-        ["bun", "--preload", str(preload), str(staged),
+        [bun, "--preload", str(preload), str(staged),
          "--manifest", str(manifest), "--out", str(out)],
         "t4-ref-driver.log", cwd=stage, env=env,
-        timeout=REF_TIMEOUT, side="ref driver",
+        timeout=REF_TIMEOUT, side=f"ref driver ({bun})",
     )
     if res.returncode != 0:
         print(res.stdout[-4000:], res.stderr[-4000:], sep="\n", file=sys.stderr)
@@ -436,14 +524,45 @@ def _bad_dense_grid(cells, width, height) -> bool:
 
 def run(stage: Path, ref: Path, cases: list[dict]) -> tuple[dict[str, dict], dict[str, dict]]:
     """Drive both sides over the staged manifest (cases from the
-    already-run build_manifest) -> (ref grids, rust grids)."""
+    already-run build_manifest) -> (ref grids, rust grids). B2-fix:
+    the ref leg splits — non-plugin cases run under the environment
+    bun (baseline no-drift), plugin cases under TUI_DIFF_BUN (version
+    gate: >= 1.4.2, else a pointed infra error)."""
     manifest = stage / "manifest.json"
     ref_out = stage / "ref-out"
     rust_out = stage / "rust-out"
     for out in (ref_out, rust_out):
         out.mkdir(exist_ok=True)
         os.chmod(out, 0o1777)
-    run_ref(stage, ref, manifest, ref_out)
+
+    plugin_cases = [c for c in cases if c.get("plugins")]
+    plain_cases = [c for c in cases if not c.get("plugins")]
+    if plugin_cases:
+        bun = os.environ.get("TUI_DIFF_BUN", "").strip()
+        if not bun:
+            raise SystemExit(
+                "infra failure: plugin scenarios present but TUI_DIFF_BUN is unset — "
+                "the ref plugin boot requires bun >= 1.4.2 (ResolveMessage extends "
+                "Error; the 2.0.24 host.ts swallow guard depends on it). Point "
+                "TUI_DIFF_BUN at a bun >= 1.4.2 executable "
+                "(e.g. /tmp/opencode/bun142/x/bun-linux-x64/bun).")
+        version = _bun_version(bun)
+        if version is None or version < BUN_FLOOR:
+            raise SystemExit(
+                f"infra failure: TUI_DIFF_BUN={bun} is {_bun_version(bun) or 'unrunnable'}; "
+                f"plugin scenarios need bun >= {'.'.join(map(str, BUN_FLOOR))} "
+                "(ResolveMessage instanceof Error — the ref host.ts:17-43 swallow "
+                "guard's dependency, controller-confirmed root cause of the B2 "
+                "first-round whole-screen pseudo-diffs).")
+        plugin_manifest = stage / "manifest-plugins.json"
+        plugin_manifest.write_text(json.dumps(
+            {"schema": "tui-diff-manifest/1", "cases": plugin_cases}, indent=1))
+        run_ref(stage, ref, plugin_manifest, ref_out, bun=bun)
+    if plain_cases:
+        plain_manifest = stage / "manifest-plain.json"
+        plain_manifest.write_text(json.dumps(
+            {"schema": "tui-diff-manifest/1", "cases": plain_cases}, indent=1))
+        run_ref(stage, ref, plain_manifest, ref_out)
     run_rust(manifest, rust_out)
     ref_grids, ref_unavail = load_side(ref_out, cases, "ref")
     rust_grids, rust_unavail = load_side(rust_out, cases, "rust")
@@ -778,38 +897,91 @@ CAUSES = [
         ),
     ),
     (
-        # B2 CAUSES version-skew 簇 (user ruling 2026-11-14): the plugin
-        # targets a NEWER host API face than the diff pin (2.0.24), and
-        # the ref harness consequently cannot boot it at all — every
-        # downstream cell difference is a degenerate-loading pseudo
-        # diff, NOT a port bug. Evidence predicate (narrow): the
-        # scenario is a plugin-* case AND the REF grid literally shows
-        # the deterministic failure notice ('Plugin failed'). Both
-        # sides booted ⇒ this cluster does NOT match (G-28 takes it).
-        "B2 version-skew 簇（退版本加载伪差：ref 2.0.24 无法 boot 新版插件）",
+        # B2 CAUSES version-skew 簇 (user ruling 2026-11-14): residual
+        # 2.0.24-vs-2.2.x PLUGIN BEHAVIOR diffs — local shapes where the
+        # payload's newer-host API assumptions degrade on the 2.0.24
+        # face (evidenced shape: omo-slim's tui entry, once loaded,
+        # degrades the ref's "/" slash-palette path — probed 2026-11-15;
+        # the plugin never reaches its ctx.client/… API face otherwise).
+        # The FIRST-round whole-screen mechanism (bun 1.3.10's
+        # ResolveMessage not being an Error subclass → host.ts rethrow
+        # → deterministic "Plugin failed" state) was controller-
+        # confirmed and is now GATED AWAY (TUI_DIFF_BUN >= 1.4.2);
+        # under the gate both payloads boot on the ref side, so this
+        # cluster only matches plugin-* cases whose REF grid still
+        # shows the failure notice — i.e. a REAL un-bootable payload,
+        # never the deliberate plugin-fallback fixture.
+        "B2 version-skew 簇（退版本加载伪差：插件 2.2.x API 面在 ref 2.0.24 降级/不可 boot）",
         lambda d: d.get("ref_plugin_failed") is True
-        and str(d.get("id", "")).startswith("plugin-"),
+        and str(d.get("id", "")).startswith("plugin-")
+        and not str(d.get("id", "")).startswith("plugin-fallback"),
         (
-            "plugin-* 场景且 ref 侧网格呈现确定性失败态（'Plugin failed: <path>' "
-            "公告 + 'N plugins failed' footer pill）：ref 2.0.24 的 Host.resolve "
-            "（host.ts:17-43）对目录形插件探测 `<dir>/server` 子路径，bun 1.3.10 "
-            "的 ResolveSync 抛 ResolveMessage（非 Error 子类——bun ≥1.3 行为变更），"
-            "host.ts:26-40 的吞错守卫 `error instanceof Error` 判假 → 原样重抛 → "
-            "reconcile 记 failure。即插件需要的宿主解析面（package.json exports "
-            "子路径解析，2.2.x 宿主）在 2.0.24 钉定环境缺失——插件从未到达其 "
-            "setup/tui() 调用点（omo-slim dist/tui2.js 的 ctx.client/… 2.2.x API "
-            "面因此根本未被触及），rust 侧经 oc-plugin-host（Rust 侧 resolve.rs "
-            "包感知探测 ./server→./tui exports）正常 boot 出的任何渲染（侧栏 "
-            "section/palette 命令/失败公告缺席）整体是退版本加载伪差。命中=登记"
-            "不拦（用户裁定）；判定文引 ref packages/plugin/src/host.ts:17-43（吞错"
-            "守卫）+ payload package.json exports（无根级 ./server 文件，仅 exports "
-            "映射）——实证：ref 树自带 plugin-keymap.test.tsx 在本环境同样 0-pass",
-            "ref packages/plugin/src/host.ts:17-43（Host.resolve 吞错守卫漏 "
-            "ResolveMessage）+ packages/tui/src/plugin/context.tsx:670（resolve→"
-            "failure 态）",
-            "rust crates/oc-plugin-host/src/resolve.rs:249-289（包感知 resolve_entry:"
-            "./server exports 探测）+ supervisor.rs:2359（load.tui 伴生装载）——"
-            "rust 侧正常 boot，差分为宿主版本伪差非移植 bug",
+            "plugin-* 场景且 ref 侧网格呈现失败态（'Plugin failed: <path>' 公告）：在 "
+            "TUI_DIFF_BUN≥1.4.2 门控下（首轮整屏伪差根因= bun 1.3.10 ResolveMessage "
+            "非 Error 子类、host.ts:17-43 吞错守卫重抛——控制者实验实锤，已门控隔离）"
+            "仍失败的载荷=其 2.2.x 宿主 API 假设在 2.0.24 面上不可满足——退版本加载"
+            "伪差而非移植 bug，rust 侧 boot 出的渲染整体登记不拦；判定文须引插件"
+            "调用点与 2.0.24 API 面缺失符号（首轮实证附加形状：omo-slim tui 入口"
+            "加载后 ref 的 '/' 斜杠面板路径被插件降级破坏）。当前语料 0 命中"
+            "（双插件在门控下均可 boot）——簇保留接未来真不可 boot 载荷",
+            "ref packages/plugin/src/host.ts:17-43（吞错守卫；bun≥1.4.2 依赖）+ "
+            "packages/tui/src/plugin/context.tsx:478-484（失败态公告）",
+            "rust crates/oc-plugin-host/src/resolve.rs:249-289（包感知 resolve_entry）"
+            "+ supervisor.rs:2359（load.tui 伴生装载）——rust 侧正常 boot",
+        ),
+    ),
+    (
+        # B2-fix: the plugin-panel-open family — the LOADING-MODEL
+        # asymmetry the first round's whole-screen exemption hid. The
+        # ref TUI harness loads ONLY the tui entry (config.plugins
+        # local-dir convention); its palette therefore has NO omo-slim
+        # commands (the reflect/deepwork/… registrations live in the
+        # package's SERVER entry, which in production ref runs in the
+        # SERVER process and reaches the TUI via the command API — the
+        # fixture has no server). The rust port is a unified process:
+        # its TUI boots server+tui entries in one PluginHost, so the
+        # palette carries the plugin rows. At 320x80 the ref's REAL
+        # Solid sidebar section ("▼ OMO-Slim v3.0.3" + preset/agent
+        # rows) vs the rust bounded-shim sidebar is the G-28 shape
+        # face co-present in the same grid.
+        "B2 插件注册投影（rust 统一进程 server-entry 装载 vs ref TUI 仅 tui 入口面）",
+        lambda d: str(d.get("id", "")).startswith("plugin-panel-open"),
+        (
+            "plugin-panel-open 场景（palette 搜索 'reflect'）：ref 2.0.24 TUI 夹具"
+            "只装载 tui 入口（config.plugins 本地目录约定），palette 无 omo-slim "
+            "命令（reflect/deepwork 注册在包的 server 入口——生产 ref 由 SERVER "
+            "进程装载、经命令 API 到达 TUI，夹具无 server 面）→ 'No results "
+            "found'；rust 移植为统一进程，TUI 的 PluginHost 同时 boot server+tui "
+            "入口，palette 携带 'Plugin · oh-my-opencode-slim' 组命令行。这是加载"
+            "模型/夹具边界差而非渲染 bug；320×80 档同一网格内 ref 真 Solid 侧栏 "
+            "section（'▼ OMO-Slim v3.0.3' + Preset/agent 行）vs rust 有界 shim "
+            "侧栏为 G-28 形状面共现",
+            "ref packages/tui/src/plugin/context.tsx:296-307（config.plugins 本地"
+            "目录条目）+ host.ts:17-43（tui 入口探测；server 入口不经 TUI 装载）",
+            "rust crates/oc-plugin-host/src/supervisor.rs:2330-2390（entry 装载后"
+            "伴生 load.tui——统一进程同时装载 server+tui）+ oc-tui/src/plugin_"
+            "boot.rs project_registrations（palette 行投影）",
+        ),
+    ),
+    (
+        "G-425 插件失败态管理屏不列失败入口（/plugins 对话框源表缺失）",
+        lambda d: str(d.get("id", "")).startswith("plugin-fallback"),
+        (
+            "plugin-fallback 场景（故意坏载荷双侧落失败态）：ref 的失败面三件套="
+            "错误 toast（'Plugin failed: <target>' + 'Run /plugins to view "
+            "details.' + '› Open plugins' affordance）+ footer chip（'⊙ 1 plugin "
+            "failed /plugins'）+ /plugins 管理屏**列出失败入口行**（'x <path> "
+            "failed, local' + 'enter view error' 提示）。rust 已对齐 toast+chip"
+            "（B2-fix surface_boot_failures：解析失败与 guest 装载失败双源）；"
+            "**管理屏的失败行列表未移植**（command_palette.rs 的 DialogKind::"
+            "Plugins 仅从命令/首页动作注册投影派生 id 集，装载失败入口不入表 → "
+            "'No items available'）——立项 G-425 登记不拦（含 toast affordance "
+            "格差=G-424 族共现形状，其修复 lane 连同 oracle 重冻结一并落地）",
+            "ref packages/tui/src/plugin/context.tsx:460-484（失败态列表+toast）+ "
+            "feature-plugins/system/plugins.tsx:54-76（源表 TUI/server 双段+状态行）",
+            "rust crates/oc-tui/src/plugin_boot.rs surface_boot_failures（B2-fix："
+            "chip+toast 已对齐）+ components/command_palette.rs:1537-1560"
+            "（DialogKind::Plugins 有界 id 集投影——失败入口缺失=修 G-425 的面）",
         ),
     ),
     (

@@ -609,12 +609,17 @@ struct ManifestCase {
     scenario: String,
     width: u16,
     height: u16,
-    /// B2 real-plugin scenarios: staged plugin package dirs (the
-    /// orchestrator's payload registry staged copies into the STAGE
-    /// `plugins/node_modules` tree — the read-only cache entities are
-    /// never loaded in place; the rust guest copies nothing further,
-    /// its `@opentui` shims land in the staged parent `node_modules`).
+    /// B2 real-plugin scenarios: staged plugin package dirs for the
+    /// REF leg (the plugins-ref root: payload copies + deps + the ref
+    /// tree's real @opentui) — informational on this side; the rust
+    /// leg boots the `plugins_rust` twins.
     plugins: Option<Vec<String>>,
+    /// B2: the RUST leg's staged dirs (the plugins-rust root: same
+    /// payload copies, NO `@opentui` — the guest's bounded bridge
+    /// shims land in the staged parent `node_modules`; a real
+    /// `@opentui` in the guest breaks at `render()` with no renderer
+    /// context).
+    plugins_rust: Option<Vec<String>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -833,7 +838,7 @@ async fn tui_fullscreen_diff_driver() {
         // seam; whichever side cannot boot (bun/payload absent) emits
         // plugins_unavailable and the ORCHESTRATOR rules consistency.
         let mut plugins_unavailable = false;
-        if let Some(dirs) = case.plugins.clone() {
+        if let Some(dirs) = case.plugins_rust.clone().or_else(|| case.plugins.clone()) {
             if dirs.is_empty() {
                 pump.app.store.set_plugins_ready();
             } else {
@@ -876,9 +881,10 @@ async fn tui_fullscreen_diff_driver() {
                     let runtime = oc_tui::plugin_boot::TuiPluginRuntime::new(
                         oc_tui::plugin_boot::BootedPluginHost { host, resolution, ready },
                     );
-                    // Lane KM parity (app.rs:9106): the plugins-failed
-                    // chip reads the boot resolution's failures.
-                    pump.app.store.set_plugins_failed(runtime.booted.resolution.failures.len());
+                    // Lane KM + B2-fix parity (app.rs adopt block): the
+                    // plugins-failed chip + the per-failure error toast
+                    // (resolution failures AND guest load failures).
+                    runtime.surface_boot_failures(&pump.app.store);
                     let projection = runtime.attach(&pump.app.store);
                     pump.app.set_plugin_commands(projection.owned);
                     runtime.start_mcp_sync(&client);

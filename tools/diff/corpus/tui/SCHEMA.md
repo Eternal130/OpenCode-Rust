@@ -55,35 +55,59 @@ files; every field semantic below is normative for both.
       `/root/.cache/opencode/npm/git-superpowers-*/<stamp>/node_modules/
       superpowers`; main `.opencode/plugins/superpowers.js`, pure skill
       system, no external deps).
-  The orchestrator resolves the ids to the newest cache stamp (env
-  overrides `OC_DIFF_PLUGIN_OMO_SLIM` / `OC_DIFF_PLUGIN_SUPERPOWERS`),
-  stages READ-ONLY COPIES into `STAGE/plugins/node_modules/<package>`
-  (a real node_modules layout — the rust guest's @opentui shims land in
-  the parent dir, bare imports resolve through the node walk; deps are
-  copied alongside, @opentui is symlinked to the ref tree's
-  host-provided stack), and the manifest case then carries
-  `plugins: [<staged absolute package dirs>]`. The cache entities are
-  never loaded or modified in place.
-  Driver semantics: the ref driver passes the dirs as the fixture's
-  `config.plugins` (the plugin-keymap.test.tsx precedent); the rust
+    - `"broken"` — the DELIBERATELY-broken committed fixture
+      (`tools/diff/corpus/tui/payloads/broken-plugin`, module top-level
+      throw) for the plugin-fallback scenario: both sides boot it
+      through the real seams and land in the failure state — the
+      failure-STATE rendering is the diff face.
+  **B2-fix ruling (2026-11-15, controller experiment)**: the first
+  round's whole-screen ref boot failure was bun **1.3.10's
+  `ResolveMessage` not being an `instanceof Error`** (it IS one under
+  bun ≥ 1.4.2); ref `host.ts:17-43`'s swallow guard depends on it.
+  Therefore the ref leg of every plugin case runs under
+  **`TUI_DIFF_BUN`** (env, path to a bun executable) with version
+  **≥ 1.4.2** — unset or older is a pointed infra error; non-plugin
+  cases keep the environment bun (baseline no-drift). Under the gate
+  BOTH real payloads boot on the ref side (probed: clean resting
+  screens, omo-slim's real Solid sidebar renders at 320×80, and one
+  RESIDUAL version-skew shape: loading omo-slim's tui entry degrades
+  the ref's "/" slash-palette path — the CAUSES version-skew cluster
+  owns such local degradation shapes).
+  **Two staging roots**: the orchestrator stages each payload into
+  `STAGE/plugins-ref/node_modules` (payload copies + hoisted deps +
+  an `@opentui` symlink into the ref tree's host-provided renderer
+  stack — the ref process runs the plugin's real Solid sidebar) and
+  `STAGE/plugins-rust/node_modules` (same payload copies + deps, NO
+  `@opentui` — the rust guest's `ensureOpentuiShims` writes its
+  bounded bridge shims there; a real `@opentui` inside the guest
+  breaks at `render()` with no renderer context, probed: "No renderer
+  found"). For `omo-slim` the staged copy additionally carries a
+  2-line root `tui.js` re-export shim: 2.0.24's local-dir loader
+  resolves ONLY the `<dir>/tui.*` extension-probe convention
+  (`Bun.resolveSync` never consults package.json exports for absolute
+  specifiers), while the production package-name path
+  (`packages.prepare`) is pinned away by the fixture's
+  `prepare: async () => ({ directory: "" })` — the shim expresses the
+  package's OWN declared `exports["./tui"]` entry in the one shape
+  2.0.24 understands; the payload and the read-only cache entities
+  are untouched. The manifest case carries BOTH lists: `plugins`
+  (the ref-leg dirs, read by the ref driver) and `plugins_rust` (the
+  rust-leg dirs, read by the rust driver).
+  Driver semantics: the ref driver passes its dirs as the fixture's
+  `config.plugins` (the plugin-keymap.test.tsx precedent; plugin
+  scenarios insert a per-key-token idle — the palette search input
+  mounts asynchronously and same-burst chars are dropped); the rust
   driver boots the real `PluginHost` + `TuiPluginRuntime` over the
-  resolved entries (the plugin_ui_slot.rs assembly). **Probed boot
-  verdict (ref 2.0.24, bun 1.3.10)**: BOTH payloads land in the
-  deterministic `Plugin failed` state on the ref side —
-  `Host.resolve` (packages/plugin/src/host.ts:17-43) probes
-  `<dir>/server` and bun's `ResolveMessage` is not `instanceof Error`,
-  so the swallow-guard rethrows; the plugins never reach their
-  setup/tui() API surface. This is the evidenced mechanism of the
-  CAUSES **version-skew family** (degenerate-loading pseudo-diffs:
-  registered, not blocking, with the plugin call site + the missing
-  2.0.24 API face cited in the adjudication text).
+  resolved entries (the plugin_ui_slot.rs assembly) and surfaces boot
+  failures (chip + toast) via `surface_boot_failures`.
   **plugins_unavailable skip semantics**: a driver that cannot attempt
   the boot for ENVIRONMENT reasons (no bun/node guest runtime, staged
   payload missing) emits `plugins_unavailable: true` on its grid. The
   orchestrator rules consistency: both sides marked ⇒ the case is
   skipped (dropped from the gate, listed in the report); exactly one
   side ⇒ infra failure (exit 1). A plugin that boots and FAILS is NOT
-  unavailable — the failure state is ordinary diff surface.
+  unavailable — the failure state is ordinary diff surface (see
+  `plugin-fallback` + the G-425 registration).
 - `anim` — OPTIONAL frame-sequence mode (`tui-diff-scenario/1` A2
   extension). Shape `{"ticks": K, "tick_events": [[<event>...], ...]?}`.
   Absent (every pre-A2 scenario) = pure resting mode; the resting

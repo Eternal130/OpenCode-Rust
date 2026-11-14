@@ -9100,10 +9100,12 @@ pub async fn run_with_size(
                 plugin_runtime = booted;
                 plugins_boot_done = true;
                 if let Some(runtime) = &plugin_runtime {
-                    // Lane KM (auditA #10): the plugins-failed chip's
-                    // source — the boot resolution's failures
-                    // (footer.tsx:48-72).
-                    app.store.set_plugins_failed(runtime.booted.resolution.failures.len());
+                    // Lane KM (auditA #10) + B2-fix: the plugins-failed
+                    // chip's source — the boot resolution's failures
+                    // AND the guest load failures, each also raising
+                    // the ref's error toast (footer.tsx:48-72,
+                    // plugin/context.tsx:478-484).
+                    runtime.surface_boot_failures(&app.store);
                     let projection = runtime.attach(&app.store);
                     app.set_plugin_commands(projection.owned);
                     app.set_plugin_themes(projection.themes);

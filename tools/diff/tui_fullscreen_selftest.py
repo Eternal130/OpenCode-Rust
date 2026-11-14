@@ -481,3 +481,46 @@ class PluginSkipReconciliationTest(unittest.TestCase):
                             for _ in range(1)]}
         self.assertFalse(_plugin_failed_on_ref(blank))
         self.assertTrue(_plugin_failed_on_ref(failed))
+
+
+class B2FixFamilyTest(unittest.TestCase):
+    """The B2-fix adjudication split: plugin-fallback-* (deliberate
+    broken payload) belongs to the G-425 failure-surface registration
+    — NEVER the version-skew cluster, even with the ref failure flag;
+    plugin-panel-open-* belongs to the loading-model cluster
+    (unified-process server-entry projection) regardless of the
+    flag; version-skew stays reserved for genuinely un-bootable
+    payloads on other plugin-* ids."""
+
+    def _rec(self, cid: str, failed: bool | None) -> dict:
+        rec = {"id": cid, "dimension": "resting", "verdict": "diverge",
+               "first_diff": {"row": 1, "col": 18, "field": "ch",
+                              "ref": "┃", "rust": " "},
+               "cells_diff_count": 500}
+        if failed is not None:
+            rec["ref_plugin_failed"] = failed
+        return rec
+
+    def test_fallback_with_ref_failure_flag_hits_g425_not_version_skew(self):
+        label = adjudicate(self._rec("plugin-fallback", True))
+        self.assertIsNotNone(label)
+        self.assertIn("G-425", label)
+        self.assertNotIn("version-skew", label)
+
+    def test_panel_open_hits_loading_model_cluster(self):
+        # without the ref-failure flag the loading-model cluster owns
+        # it; WITH a hypothetical ref failure the earlier version-skew
+        # entry takes precedence (whole-screen un-bootability)
+        for failed in (False, None):
+            label = adjudicate(self._rec("plugin-panel-open", failed))
+            self.assertIsNotNone(label)
+            self.assertIn("注册投影", label)
+        self.assertIn("version-skew", adjudicate(self._rec("plugin-panel-open", True)))
+
+    def test_version_skew_still_guards_other_plugin_ids(self):
+        label = adjudicate(self._rec("plugin-boot-idle", True))
+        self.assertIsNotNone(label)
+        self.assertIn("version-skew", label)
+        # without the ref-failure evidence it falls to G-28
+        g28 = adjudicate(self._rec("plugin-boot-idle", None))
+        self.assertIn("G-28", g28)
