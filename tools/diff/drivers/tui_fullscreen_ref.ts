@@ -61,6 +61,7 @@
  *     stubs; no wall-clock fields are expected to leak (verified by the
  *     double-run byte-compare gate).
  */
+import { existsSync } from "node:fs"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
 
@@ -246,6 +247,10 @@ interface ManifestCase {
   scenario: string
   width: number
   height: number
+  /** B2: staged plugin package dirs (absolute; the orchestrator's
+   * payload registry staged them into STAGE/plugins/node_modules —
+   * the read-only cache entities are never loaded in place). */
+  plugins?: string[]
 }
 
 interface Manifest {
@@ -350,10 +355,19 @@ async function main() {
     // artifact family (CAUSES), not silent.
     let app: any
     try {
+      // B2 real-plugin scenarios: boot through the SAME seam the ref
+      // plugin-keymap.test.tsx precedent uses — createAppFixture's
+      // config.plugins directory entries. Boot success/failure is the
+      // fixture's own decision (probed: 2.0.24's Host.resolve throws
+      // on directory entries lacking a root ./server file — the
+      // deterministic "Plugin failed" state is itself diff surface).
+      const plugins = c.plugins ?? []
+      const pluginsUnavailable =
+        plugins.length > 0 && plugins.some((dir) => !existsSync(dir))
       app = await createAppFixture({
         width: c.width,
         height: c.height,
-        config: { animations: false },
+        config: { animations: false, ...(plugins.length > 0 ? { plugins } : {}) },
         args: args2,
         fetch: fetchHandler,
       })
@@ -403,6 +417,7 @@ async function main() {
         request_census: censusObj,
       }
       if (isAnim) out.frames = frames
+      if (pluginsUnavailable) out.plugins_unavailable = true
       writeFileSync(path.join(outDir, `${c.id}.json`), `${JSON.stringify(out)}\n`)
       if (gapsSorted.length > 0) anyGap = true
       summary.push({ id: c.id, gaps: gapsSorted.length, requests: census.size })

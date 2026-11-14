@@ -1,0 +1,294 @@
+{
+ "schema": "tui-diff-scenario/1",
+ "id": "plugin-boot-superpowers",
+ "width": 80,
+ "height": 24,
+ "fetch": {
+  "/api/agent": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": [
+     {
+      "id": "build",
+      "name": "build",
+      "mode": "primary",
+      "hidden": false,
+      "request": {
+       "settings": {},
+       "headers": {},
+       "body": {}
+      },
+      "permissions": []
+     }
+    ]
+   }
+  },
+  "/api/command": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/config": {
+   "status": 200,
+   "body": []
+  },
+  "/api/event": {
+   "status": 200,
+   "body": {
+    "sse": true,
+    "initial": {
+     "id": "evt_connected",
+     "type": "server.connected",
+     "data": {}
+    }
+   }
+  },
+  "/api/experimental/migration/v1": {
+   "status": 200,
+   "body": {
+    "status": "completed"
+   }
+  },
+  "/api/form": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/fs/list": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/info": {
+   "status": 200,
+   "body": {
+    "version": "test",
+    "pid": 0,
+    "urls": [],
+    "paths": {
+     "tmp": "/tmp"
+    },
+    "capabilities": {
+     "persistentPty": true
+    }
+   }
+  },
+  "/api/integration": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/location": {
+   "status": 200,
+   "body": {
+    "directory": "/tmp/opencode/packages/tui",
+    "project": {
+     "id": "proj_test",
+     "directory": "/tmp/opencode",
+     "canonical": "/tmp/opencode"
+    }
+   }
+  },
+  "/api/mcp": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/mcp/resource": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": {
+     "resources": [],
+     "templates": []
+    }
+   }
+  },
+  "/api/model": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/plugin": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/project": {
+   "status": 200,
+   "body": []
+  },
+  "/api/provider": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/reference": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/session": {
+   "status": 200,
+   "body": {
+    "data": [],
+    "cursor": {}
+   }
+  },
+  "/api/session/active": {
+   "status": 200,
+   "body": {
+    "data": {}
+   }
+  },
+  "/api/shell": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/skill": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/vcs": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": {
+     "branch": {
+      "current": "main",
+      "default": "main"
+     }
+    }
+   }
+  }
+ },
+ "events": [],
+ "keys": [],
+ "settle_ms": 200,
+ "note": "B2 real-plugin payload (superpowers 7.0.0, staged copy): same home-route resting boot with the skill-system plugin. Probed: on the ref 2.0.24 fixture it lands in the same Plugin-failed state (the B1 prediction of a successful ref boot is disproven by the fixture run — the throw happens at entry resolution, before any API surface); rust boots the v2 setup. version-skew CAUSES family.",
+ "plugins": [
+  "superpowers"
+ ]
+}

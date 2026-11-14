@@ -245,6 +245,11 @@ struct Pump {
     fetched_transcripts: BTreeSet<String>,
     saw_connected: bool,
     saw_models: bool,
+    /// B2: the real plugin runtime (plugin-* scenarios) — the live
+    /// loop's between-frames pump (app.rs:9124-9146) replayed: the
+    /// active-session refresh, the UI-request drain, the MCP-row
+    /// adoption and the dynamic owned-keymap updates.
+    runtime: Option<oc_tui::plugin_boot::TuiPluginRuntime>,
 }
 
 impl Pump {
@@ -252,6 +257,23 @@ impl Pump {
     /// → bus commands → server lists → loop fetcher).
     #[allow(clippy::too_many_lines)] // W4: the ProjectList arm mirrors app.rs's fetch arms
     fn drain(&mut self) {
+        // B2 — the live loop's plugin pump (app.rs:9124-9146, minus
+        // the async boot poll which the driver resolves eagerly).
+        if let Some(runtime) = &self.runtime {
+            let active = match self.app.store.route() {
+                oc_tui::store::Route::Session { session_id, .. } => Some(session_id),
+                oc_tui::store::Route::Home => None,
+            };
+            runtime.set_current_session(active);
+            runtime.drain_ui_requests(&self.app.store);
+            if let Some((rows, pushed)) = runtime.take_mcp_rows() {
+                self.app.store.set_mcp_servers(rows);
+                runtime.adopt_pushed_mcps(pushed);
+            }
+            if let Some(owned) = runtime.take_owned_updates() {
+                self.app.set_plugin_commands(owned);
+            }
+        }
         while let Ok(message) = self.ingest_rx.try_recv() {
             if matches!(message, Ingest::Connected) {
                 self.saw_connected = true;
@@ -543,6 +565,10 @@ struct GridFile {
     frames: Option<Vec<Vec<Vec<GridCell>>>>,
     stub_gaps: Vec<String>,
     request_census: BTreeMap<String, u64>,
+    /// B2: bun/guest runtime or staged payload missing on this side
+    /// (the orchestrator rules cross-side consistency — SCHEMA B2).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plugins_unavailable: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
@@ -583,6 +609,12 @@ struct ManifestCase {
     scenario: String,
     width: u16,
     height: u16,
+    /// B2 real-plugin scenarios: staged plugin package dirs (the
+    /// orchestrator's payload registry staged copies into the STAGE
+    /// `plugins/node_modules` tree — the read-only cache entities are
+    /// never loaded in place; the rust guest copies nothing further,
+    /// its `@opentui` shims land in the staged parent `node_modules`).
+    plugins: Option<Vec<String>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -721,6 +753,16 @@ async fn tui_fullscreen_diff_driver() {
                 })
             });
 
+        // B2 — the host-state agent seed (the live loop's
+        // fetch_agent_seed, app.rs:9056): the scenario's /api/agent
+        // stub `data` array, deterministic.
+        let agents: Vec<Value> = scenario
+            .fetch
+            .get("/api/agent")
+            .and_then(|stub| stub.body.get("data").and_then(Value::as_array))
+            .cloned()
+            .unwrap_or_default();
+
         let fetch: BTreeMap<String, (u16, Value)> = scenario
             .fetch
             .into_iter()
@@ -766,6 +808,7 @@ async fn tui_fullscreen_diff_driver() {
                     fetched_transcripts: BTreeSet::new(),
                     saw_connected: false,
                     saw_models: false,
+                    runtime: None,
                 },
                 connection_task,
             )
@@ -780,14 +823,82 @@ async fn tui_fullscreen_diff_driver() {
         // right-aligned label reads it (`context.app.version`,
         // home/footer.tsx:99).
         pump.app.store.set_app_version("test".to_owned());
-        // A2 — mirror the ref fixture's `packages.prepare: async () =>
-        // ({ directory: "" })` (test/fixture/app.ts:44): plugins
-        // resolve immediately at boot, so `plugins.ready()` is true
-        // and the StartupLoading pill never arms. The rust driver has
-        // no plugin boot future, so the ready flag is set directly —
-        // otherwise the pill's 500 ms virtual-clock threshold fires
-        // during anim ticks (a harness artifact, not a port diff).
-        pump.app.store.set_plugins_ready();
+
+        // B2 real-plugin scenarios: boot the REAL PluginHost over the
+        // staged package dirs (the B1 precedent's assembly —
+        // plugin_ui_slot.rs's TuiPluginRuntime::new(BootedPluginHost)
+        // + attach, plus the live loop's post-boot seams: the failed
+        // count, the owned keymap chords, the MCP sync). The ref side
+        // boots the same dirs through its fixture's config.plugins
+        // seam; whichever side cannot boot (bun/payload absent) emits
+        // plugins_unavailable and the ORCHESTRATOR rules consistency.
+        let mut plugins_unavailable = false;
+        if let Some(dirs) = case.plugins.clone() {
+            if dirs.is_empty() {
+                pump.app.store.set_plugins_ready();
+            } else {
+                let ops: Vec<oc_plugin_host::PluginOp> = dirs
+                    .into_iter()
+                    .map(|target| oc_plugin_host::PluginOp::Add {
+                        target,
+                        options: serde_json::Value::Null,
+                    })
+                    .collect();
+                let resolution = oc_plugin_host::resolve(&ops, None);
+                let entries = resolution.entries();
+                let host_state = oc_plugin_host::HostState {
+                    app_version: "test".to_owned(),
+                    project_id: String::new(),
+                    directory: location_directory.clone().unwrap_or_default(),
+                    agents,
+                    mcps: BTreeMap::default(),
+                };
+                let config = oc_plugin_host::PluginHostConfig {
+                    registration_timeout: Duration::from_secs(30),
+                    dispatch_timeout: Duration::from_secs(15),
+                    host_state,
+                    // no session port: the driver never dispatches
+                    // plugin commands (palette rows only); the port's
+                    // prompt/get surface is out of scenario scope.
+                    session_port: None,
+                    ..oc_plugin_host::PluginHostConfig::default()
+                };
+                let host = Arc::new(
+                    oc_plugin_host::PluginHost::detect().start_detached_with(config, &entries),
+                );
+                if !host.enabled() || entries.is_empty() {
+                    // bun/guest runtime missing: the skip marker (the
+                    // orchestrator demands the ref side agree).
+                    plugins_unavailable = true;
+                    pump.app.store.set_plugins_ready();
+                } else {
+                    let ready = host.wait_ready(Duration::from_secs(60));
+                    let runtime = oc_tui::plugin_boot::TuiPluginRuntime::new(
+                        oc_tui::plugin_boot::BootedPluginHost { host, resolution, ready },
+                    );
+                    // Lane KM parity (app.rs:9106): the plugins-failed
+                    // chip reads the boot resolution's failures.
+                    pump.app.store.set_plugins_failed(runtime.booted.resolution.failures.len());
+                    let projection = runtime.attach(&pump.app.store);
+                    pump.app.set_plugin_commands(projection.owned);
+                    runtime.start_mcp_sync(&client);
+                    pump.runtime = Some(runtime);
+                    // The pill fires when the boot is done (app.rs:9217)
+                    // — ready or not, the reconcile completed.
+                    pump.app.store.set_plugins_ready();
+                }
+            }
+        } else {
+            // A2 — mirror the ref fixture's `packages.prepare: async
+            // () => ({ directory: "" })` (test/fixture/app.ts:44):
+            // plugins resolve immediately at boot, so `plugins.ready()`
+            // is true and the StartupLoading pill never arms. The rust
+            // driver has no plugin boot future, so the ready flag is
+            // set directly — otherwise the pill's 500 ms virtual-clock
+            // threshold fires during anim ticks (a harness artifact,
+            // not a port diff).
+            pump.app.store.set_plugins_ready();
+        }
         if let Some(directory) = &location_directory {
             if !directory.is_empty() {
                 let _ = pump.fetch_tx.send(LoopRequest::LocationVcs(directory.clone()));
@@ -862,6 +973,7 @@ async fn tui_fullscreen_diff_driver() {
             frames,
             stub_gaps: stub_gaps.clone(),
             request_census,
+            plugins_unavailable: plugins_unavailable.then_some(true),
             error,
         };
         let file = out_dir.join(format!("{}.json", case.id));
@@ -883,6 +995,12 @@ async fn tui_fullscreen_diff_driver() {
             grid.request_census.len()
         );
 
+        // B2: tear the plugin runtime down before the next case's
+        // host boots (the guest subprocess is per-case, like the live
+        // loop's shutdown).
+        if let Some(runtime) = pump.runtime.take() {
+            runtime.shutdown();
+        }
         connection_task.abort();
         server_task.abort();
     }
