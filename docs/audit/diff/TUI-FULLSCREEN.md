@@ -25,9 +25,9 @@ cells 稠密化，None/缺省子字段补规范默认（ch=' '、attrs 排序去
 
 | 总量 | EXACT | STRUCTURAL | CAUSES 命中 | 未裁决 |
 |---|---|---|---|---|
-| 90 | 78 | 0 | 12 | 0 |
+| 93 | 81 | 0 | 12 | 0 |
 
-（verdict 分布：exact 78 / structural 0 / diverge 12；
+（verdict 分布：exact 81 / structural 0 / diverge 12；
 gate 见编排器输出，未裁决>0 ⇒ exit 2）
 
 ## 分歧明细
@@ -232,6 +232,15 @@ anim 场景（`anim.ticks` 声明，SCHEMA A2 扩展）在静息排空后逐拍�
 - `anim-tool-progress`  — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
 - `anim-tool-progress@120x30`  — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
 - `anim-tool-progress@320x80`  — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
+
+## recorded-local（真实语料，聚合计数）
+
+本地真实会话语料（`tools/diff/corpus/tui/recorded-local/`，git-ignored；
+隐私铁律：报告只列聚合计数，不引用录制内容原文，分歧明细表亦不展开）。
+
+| 维度 | 总量 | EXACT | STRUCTURAL | DIVERGE | 未裁决 |
+|---|---|---|---|---|---|
+| resting | 3 | 3 | 0 | 0 | 0 |
 
 ## 范围外声明
 

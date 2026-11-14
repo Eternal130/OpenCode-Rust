@@ -76,6 +76,10 @@ STAGE = Path("/tmp/opencode/diff-tuifull")
 LOG_DIR = Path("/tmp/opencode/logs")
 
 CORPUS = REPO / "tools/diff/corpus/tui/scenarios"
+# diff-ext C2 — the LOCAL real-session corpus (git-ignored, privacy
+# iron law: recorded data never enters a commit; reports aggregate
+# counts only). Directory absent = zero effect on the channel.
+RECORDED = REPO / "tools/diff/corpus/tui/recorded-local"
 REF_DRIVER = REPO / "tools/diff/drivers/tui_fullscreen_ref.ts"
 MIRRORED_TIERS = [(120, 30), (320, 80)]
 
@@ -281,35 +285,53 @@ def build_manifest(stage: Path) -> tuple[list[dict], list[str]]:
 
     plugin_ids: list[str] = []
     raw_cases: list[dict] = []
-    for fname in sorted(os.listdir(CORPUS)):
-        if not fname.endswith(".json"):
-            continue
-        doc = json.loads((CORPUS / fname).read_text())
-        if doc.get("schema") != "tui-diff-scenario/1":
-            raise SystemExit(f"bad scenario schema: {fname}")
-        staged = scenarios_dir / fname
-        shutil.copyfile(CORPUS / fname, staged)
-        primary = (doc["width"], doc["height"])
-        # A2: the frame-sequence tick count (present on anim scenarios
-        # only; load_side validates frames length against it)
-        anim_ticks = (doc.get("anim") or {}).get("ticks")
-        # B2: the plugin payload ids (resolved to staged dirs after the
-        # corpus sweep — staging happens once per referenced payload)
-        plugins = doc.get("plugins") or []
-        plugin_ids.extend(plugins)
-        common = {**({"anim_ticks": anim_ticks} if anim_ticks is not None else {})}
-        tiers: list[tuple[int, int]]
-        if "tiers" in doc:
-            tiers = [tuple(t) for t in doc["tiers"]]  # type: ignore[misc]
-            if not tiers:
-                raise SystemExit(f"{fname}: empty tiers override")
-        else:
-            tiers = [primary, *(t for t in MIRRORED_TIERS if t != primary)]
-        for w, h in tiers:
-            tid = doc["id"] if (w, h) == primary else f"{doc['id']}@{w}x{h}"
-            raw_cases.append({"id": tid, "scenario": str(staged),
-                              "width": w, "height": h,
-                              **({"plugins": plugins} if plugins else {}), **common})
+
+    # diff-ext C2 — CI/infra defense FIRST: nothing under recorded-local
+    # may be tracked or staged (a `git add -f` would leak real session
+    # data; the guard tools/guards/recorded_local.py is the static twin).
+    tracked = subprocess.run(
+        ["git", "-c", "core.quotepath=false", "ls-files", str(RECORDED.relative_to(REPO))],
+        cwd=REPO, capture_output=True, text=True, check=False)
+    leaked = [p for p in tracked.stdout.split()
+              if p != "tools/diff/corpus/tui/recorded-local/README.md"]
+    if leaked:
+        raise SystemExit(
+            f"infra failure: recorded-local content is git-tracked: {leaked} "
+            "(privacy iron law: recorded data never enters a commit)")
+
+    corpus_dirs = [CORPUS]
+    if RECORDED.is_dir():
+        corpus_dirs.append(RECORDED)
+    for corpus_dir in corpus_dirs:
+        for fname in sorted(os.listdir(corpus_dir)):
+            if not fname.endswith(".json"):
+                continue
+            doc = json.loads((corpus_dir / fname).read_text())
+            if doc.get("schema") != "tui-diff-scenario/1":
+                raise SystemExit(f"bad scenario schema: {fname}")
+            staged = scenarios_dir / fname
+            shutil.copyfile(corpus_dir / fname, staged)
+            primary = (doc["width"], doc["height"])
+            # A2: the frame-sequence tick count (present on anim scenarios
+            # only; load_side validates frames length against it)
+            anim_ticks = (doc.get("anim") or {}).get("ticks")
+            # B2: the plugin payload ids (resolved to staged dirs after the
+            # corpus sweep — staging happens once per referenced payload)
+            plugins = doc.get("plugins") or []
+            plugin_ids.extend(plugins)
+            common = {**({"anim_ticks": anim_ticks} if anim_ticks is not None else {})}
+            tiers: list[tuple[int, int]]
+            if "tiers" in doc:
+                tiers = [tuple(t) for t in doc["tiers"]]  # type: ignore[misc]
+                if not tiers:
+                    raise SystemExit(f"{fname}: empty tiers override")
+            else:
+                tiers = [primary, *(t for t in MIRRORED_TIERS if t != primary)]
+            for w, h in tiers:
+                tid = doc["id"] if (w, h) == primary else f"{doc['id']}@{w}x{h}"
+                raw_cases.append({"id": tid, "scenario": str(staged),
+                                  "width": w, "height": h,
+                                  **({"plugins": plugins} if plugins else {}), **common})
     if not raw_cases:
         raise SystemExit("empty corpus: no tui-diff-scenario/1 fixtures found "
                          f"under {CORPUS}")
@@ -1182,9 +1204,15 @@ def write_report(path: Path, cases: list[dict], ref: dict[str, dict], rust: dict
     # --- ④ per-case divergence detail ---
     lines.append("## 分歧明细")
     lines.append("")
+    # diff-ext C2 — recorded-local cases are reported as AGGREGATES ONLY
+    # (privacy iron law: no recorded content — not even diff cell values
+    # — is quoted in reports); their per-case rows live in the
+    # recorded-local section below.
+    table_cases = [c for c in cases if not c["id"].split("@")[0].startswith("rec-")]
+    rec_cases = [c for c in cases if c["id"].split("@")[0].startswith("rec-")]
     lines.append("| case | verdict | diff cells | first_diff | ref size | rust size | ref gaps | rust gaps | ref paths | rust paths |")
     lines.append("|---|---|---|---|---|---|---|---|---|---|")
-    for case in cases:
+    for case in table_cases:
         cid = case["id"]
         r, u, res = ref[cid], rust[cid], results[cid]
         fd = res["first_diff"]
@@ -1201,7 +1229,7 @@ def write_report(path: Path, cases: list[dict], ref: dict[str, dict], rust: dict
     if n_struct or n_div:
         lines.append("### first_diff 明细")
         lines.append("")
-        for case in cases:
+        for case in table_cases:
             cid = case["id"]
             res = results[cid]
             if res["verdict"] == "exact":
@@ -1287,6 +1315,36 @@ def write_report(path: Path, cases: list[dict], ref: dict[str, dict], rust: dict
             cause = _adj_report(cid, res, ref)
             cause_s = f" — CAUSES: {cause}" if cause else " — 未裁决（T9 候选）"
             lines.append(f"- `{cid}` {cause_s}")
+        lines.append("")
+    # --- ⑥b recorded-local（真实语料，聚合计数 only — diff-ext C2） ---
+    if rec_cases or skipped and any(str(c).split("@")[0].startswith("rec-") for c in skipped):
+        lines.append("## recorded-local（真实语料，聚合计数）")
+        lines.append("")
+        lines.append("本地真实会话语料（`tools/diff/corpus/tui/recorded-local/`，git-ignored；")
+        lines.append("隐私铁律：报告只列聚合计数，不引用录制内容原文，分歧明细表亦不展开）。")
+        lines.append("")
+        rec_ids = {c["id"] for c in rec_cases}
+        rec_frame_ids = {c for c in frame_results if c.split("@")[0].startswith("rec-")}
+        def _agg(ids: set[str], res_map: dict[str, dict]) -> tuple[int, int, int, int, int]:
+            total = len(ids)
+            exact = sum(1 for i in ids if (res_map.get(i) or {}).get("verdict") == "exact")
+            struct = sum(1 for i in ids if (res_map.get(i) or {}).get("verdict") == "structural")
+            div = sum(1 for i in ids if (res_map.get(i) or {}).get("verdict") == "diverge")
+            unadj = sum(1 for i in ids
+                        if (res_map.get(i) or {}).get("verdict") not in (None, "exact")
+                        and _adj_report(i, res_map[i], ref) is None)
+            return total, exact, struct, div, unadj
+        rt, re_, rs, rd, ru = _agg(rec_ids, results)
+        lines.append("| 维度 | 总量 | EXACT | STRUCTURAL | DIVERGE | 未裁决 |")
+        lines.append("|---|---|---|---|---|---|")
+        lines.append(f"| resting | {rt} | {re_} | {rs} | {rd} | {ru} |")
+        if rec_frame_ids:
+            ft, fe, fs, fd, fu = _agg(rec_frame_ids, frame_results)
+            lines.append(f"| frames | {ft} | {fe} | {fs} | {fd} | {fu} |")
+        rec_skipped = [c for c in (skipped or []) if str(c).split("@")[0].startswith("rec-")]
+        if rec_skipped:
+            lines.append("")
+            lines.append(f"plugins_unavailable 一致跳过：{len(rec_skipped)} case（聚合计数）。")
         lines.append("")
     # --- ⑦ out-of-scope declaration ---
     lines.append("## 范围外声明")

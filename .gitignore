@@ -5,6 +5,11 @@
 # Deepwork runtime state (see .ignore negations for tooling visibility)
 .slim/deepwork/
 
+# recorded-local real-session corpus (diff-ext C1/C2 privacy iron law:
+# recorded data NEVER enters a commit — only aggregates in reports)
+tools/diff/corpus/tui/recorded-local/*
+!tools/diff/corpus/tui/recorded-local/README.md
+
 # OS
 .DS_Store
 
