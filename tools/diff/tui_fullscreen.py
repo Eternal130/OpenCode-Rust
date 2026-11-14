@@ -52,11 +52,16 @@ matchers are exact-shape (scenario-id prefix + divergence form); an
 unknown divergence never matches and stays unadjudicated => exit 2.
 
 Output: markdown report (default docs/audit/diff/TUI-FULLSCREEN.md).
-Exit codes (gate): 0 — report produced and every case adjudicated
-(exact, or non-exact covered by a CAUSES matcher); 1 — infra failure
-(driver crash/timeout, stub gap, missing/malformed grid, size or
-cells-shape mismatch vs manifest); 2 — at least one case diverges and
-is not covered by a known CAUSES annotation (T6 table; unadjudicated
+Exit codes (gate): 0 — report produced and every COMMITTED case
+adjudicated (exact, or non-exact covered by a CAUSES matcher);
+recorded-local (`rec-*`) unadjudicated divergences are ADVISORY (the
+2026-11-15 controller ruling: daily recordings routinely carry open
+adjudications — committed green is gate green; their infra failures
+still exit 1 — a broken replay mechanism is never advisory); 1 —
+infra failure (driver crash/timeout, stub gap, missing/malformed
+grid, size or cells-shape mismatch vs manifest — for every case,
+rec- included); 2 — at least one COMMITTED case diverges and is not
+covered by a known CAUSES annotation (T6 table; unadjudicated
 divergences are T9's input).
 Deterministic: sorted cases, canonical JSON staging.
 """
@@ -1117,12 +1122,23 @@ def verdict(results: list[dict], causes: list = ()) -> int:
     known cause.  `results` records carry the case id (the CAUSES
     matchers key on scenario-id prefixes).  Infra failures never reach
     here (they exit 1 earlier).
+
+    Controller ruling (2026-11-15, C3): gate scope is the COMMITTED
+    corpus only — recorded-local cases (id prefix `rec-`) are ADVISORY:
+    their unadjudicated divergences stay in the report's recorded-local
+    section (C-line root-cause input) but never redden the release
+    gate (daily recordings routinely carry open adjudications;
+    committed green is gate green).  A rec- INFRA failure still exits
+    1 — that is the replay mechanism itself being broken, and it is
+    enforced earlier by load_side/driver plumbing regardless of id.
     """
     for r in results:
         if r.get("verdict") == "exact":
             continue
         if any(match(r) for _, match, _ in causes):
             continue
+        if str(r.get("id", "")).split("@")[0].startswith("rec-"):
+            continue  # advisory (controller ruling above)
         return 2
     return 0
 
@@ -1154,7 +1170,8 @@ def write_report(path: Path, cases: list[dict], ref: dict[str, dict], rust: dict
     lines.append("同一 `tui-diff-scenario/1` 场景（tools/diff/corpus/tui/SCHEMA.md）喂双侧 TUI 实现，")
     lines.append("静止帧导出为 `tui-diff-grid/1` 稠密网格后归一化比对。判门：exact /")
     lines.append("structural（G-368 RGB ≤8 容差，仍是分歧）/ diverge；CAUSES 已知因定性（本表），")
-    lines.append("adjudication 属 T9——未命中 CAUSES 的一切非 exact 均未裁决 → exit 2。")
+    lines.append("adjudication 属 T9——committed 语料未命中 CAUSES 的一切非 exact 均未裁决 → exit 2")
+    lines.append("（recorded-local `rec-*` 未裁决=advisory，见其小节；控制者裁定 2026-11-15）。")
     lines.append("")
     lines.append("> 复现：python3 tools/diff/tui_fullscreen.py --write docs/audit/diff/TUI-FULLSCREEN.md")
     lines.append("")
@@ -1173,13 +1190,16 @@ def write_report(path: Path, cases: list[dict], ref: dict[str, dict], rust: dict
     lines.append("哨兵负值 vs 具体 RGB 一律 diverge；request_census 不参与比对（双侧 boot 请求模式")
     lines.append("已知不对称，信息性记录）；stub_gap 检测到即 infra 红（SCHEMA 规则）。")
     lines.append("")
-    # --- ③ counts table ---
-    n_exact = sum(1 for r in results.values() if r["verdict"] == "exact")
-    n_struct = sum(1 for r in results.values() if r["verdict"] == "structural")
-    n_div = sum(1 for r in results.values() if r["verdict"] == "diverge")
+    # --- ③ counts table (COMMITTED corpus scope — the gate's scope;
+    # recorded-local rec-* cases are counted in their own section) ---
+    committed = {cid: res for cid, res in results.items()
+                 if not cid.split("@")[0].startswith("rec-")}
+    n_exact = sum(1 for r in committed.values() if r["verdict"] == "exact")
+    n_struct = sum(1 for r in committed.values() if r["verdict"] == "structural")
+    n_div = sum(1 for r in committed.values() if r["verdict"] == "diverge")
     causes_hit: dict[str, list[str]] = {}
     n_unadj = 0
-    for cid, res in results.items():
+    for cid, res in committed.items():
         if res["verdict"] == "exact":
             continue
         label = _adj_report(cid, res, ref)
@@ -1188,18 +1208,18 @@ def write_report(path: Path, cases: list[dict], ref: dict[str, dict], rust: dict
         else:
             causes_hit.setdefault(label, []).append(cid)
     n_caused = sum(len(v) for v in causes_hit.values())
-    lines.append("## 计数")
+    lines.append("## 计数（gate 口径：committed 语料）")
     lines.append("")
     lines.append("| 总量 | EXACT | STRUCTURAL | CAUSES 命中 | 未裁决 |")
     lines.append("|---|---|---|---|---|")
-    lines.append(f"| {len(cases)} | {n_exact} | {n_struct} | {n_caused} | {n_unadj} |")
+    lines.append(f"| {len(committed)} | {n_exact} | {n_struct} | {n_caused} | {n_unadj} |")
     lines.append("")
     if skipped:
         lines.append(f"B2 plugins_unavailable 一致跳过 {len(skipped)} case（双侧标记一致，"
                      "SCHEMA B2 skip 语义；payload/bun 环境缺失，非差分结论）："
                      + ", ".join(f"`{c}`" for c in sorted(skipped)) + "")
     lines.append(f"（verdict 分布：exact {n_exact} / structural {n_struct} / diverge {n_div}；")
-    lines.append("gate 见编排器输出，未裁决>0 ⇒ exit 2）")
+    lines.append("committed 未裁决>0 ⇒ exit 2；rec-* recorded-local 见其小节（advisory，不入门））")
     lines.append("")
     # --- ④ per-case divergence detail ---
     lines.append("## 分歧明细")
@@ -1318,10 +1338,13 @@ def write_report(path: Path, cases: list[dict], ref: dict[str, dict], rust: dict
         lines.append("")
     # --- ⑥b recorded-local（真实语料，聚合计数 only — diff-ext C2） ---
     if rec_cases or skipped and any(str(c).split("@")[0].startswith("rec-") for c in skipped):
-        lines.append("## recorded-local（真实语料，聚合计数）")
+        lines.append("## recorded-local（真实语料，聚合计数 — advisory）")
         lines.append("")
         lines.append("本地真实会话语料（`tools/diff/corpus/tui/recorded-local/`，git-ignored；")
         lines.append("隐私铁律：报告只列聚合计数，不引用录制内容原文，分歧明细表亦不展开）。")
+        lines.append("**门语义（控制者裁定 2026-11-15）：本节未裁决=advisory——不参与 gate exit")
+        lines.append("（日常录制常驻未裁决项，committed 绿才是门绿）；rec-* 的 infra 失败仍=exit 1")
+        lines.append("（重放机制坏了）；未裁决项为 C 线后续 root-cause 输入（G-426/G-427 等）。**")
         lines.append("")
         rec_ids = {c["id"] for c in rec_cases}
         rec_frame_ids = {c for c in frame_results if c.split("@")[0].startswith("rec-")}
@@ -1423,8 +1446,10 @@ def main() -> int:
         print(f"[frames] {cid}: {res['verdict']} nonexact={res['cells_diff_count']} "
               f"per_tick={per}{fd_s}{cause_s}")
     print(f"gate exit {code} "
-          f"(0=all adjudicated exact or CAUSES-covered; 2=unadjudicated "
-          f"divergence; infra failures exit 1 before this point); "
+          f"(0=committed corpus all adjudicated exact or CAUSES-covered; "
+          f"2=unadjudicated committed divergence; rec-* recorded-local "
+          f"unadjudicated=advisory per the 2026-11-15 controller ruling; "
+          f"infra failures exit 1 before this point); "
           f"CAUSES hits: {n_caused}")
     return code
 

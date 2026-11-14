@@ -191,6 +191,15 @@ concrete ids (e.g. `/api/session/ses_smoke_text`). The harness boots
 the app into that session: the session id is the one appearing in the
 `/api/session` list stub plus `/api/session/active`.
 
+### recorded-local（`rec-*` 前缀）门语义（控制者裁定 2026-11-15）
+
+本地真实语料（git-ignored `tools/diff/corpus/tui/recorded-local/`，
+由 `tui_record_compile.py` 编译）在目录存在时自动纳入清单与重放；
+其裁决 = **advisory**：未裁决分歧不参与 gate exit（日常录制常驻
+未裁决项，committed 语料绿才是门绿；报告 recorded-local 小节单列
+聚合计数）。`rec-*` 的 **infra 失败仍 = exit 1**——stub_gap/网格
+缺损说明重放机制本身坏了，与裁定无关。
+
 ## 端点普查 (Step 1 probe)
 
 Probed by booting the reference v2.0.24 TUI through its own fixture

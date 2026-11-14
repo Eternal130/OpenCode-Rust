@@ -3,7 +3,8 @@
 同一 `tui-diff-scenario/1` 场景（tools/diff/corpus/tui/SCHEMA.md）喂双侧 TUI 实现，
 静止帧导出为 `tui-diff-grid/1` 稠密网格后归一化比对。判门：exact /
 structural（G-368 RGB ≤8 容差，仍是分歧）/ diverge；CAUSES 已知因定性（本表），
-adjudication 属 T9——未命中 CAUSES 的一切非 exact 均未裁决 → exit 2。
+adjudication 属 T9——committed 语料未命中 CAUSES 的一切非 exact 均未裁决 → exit 2
+（recorded-local `rec-*` 未裁决=advisory，见其小节；控制者裁定 2026-11-15）。
 
 > 复现：python3 tools/diff/tui_fullscreen.py --write docs/audit/diff/TUI-FULLSCREEN.md
 
@@ -21,14 +22,14 @@ cells 稠密化，None/缺省子字段补规范默认（ch=' '、attrs 排序去
 哨兵负值 vs 具体 RGB 一律 diverge；request_census 不参与比对（双侧 boot 请求模式
 已知不对称，信息性记录）；stub_gap 检测到即 infra 红（SCHEMA 规则）。
 
-## 计数
+## 计数（gate 口径：committed 语料）
 
 | 总量 | EXACT | STRUCTURAL | CAUSES 命中 | 未裁决 |
 |---|---|---|---|---|
-| 99 | 81 | 0 | 12 | 6 |
+| 90 | 78 | 0 | 12 | 0 |
 
-（verdict 分布：exact 81 / structural 0 / diverge 18；
-gate 见编排器输出，未裁决>0 ⇒ exit 2）
+（verdict 分布：exact 78 / structural 0 / diverge 12；
+committed 未裁决>0 ⇒ exit 2；rec-* recorded-local 见其小节（advisory，不入门））
 
 ## 分歧明细
 
@@ -233,10 +234,13 @@ anim 场景（`anim.ticks` 声明，SCHEMA A2 扩展）在静息排空后逐拍�
 - `anim-tool-progress@120x30`  — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
 - `anim-tool-progress@320x80`  — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
 
-## recorded-local（真实语料，聚合计数）
+## recorded-local（真实语料，聚合计数 — advisory）
 
 本地真实会话语料（`tools/diff/corpus/tui/recorded-local/`，git-ignored；
 隐私铁律：报告只列聚合计数，不引用录制内容原文，分歧明细表亦不展开）。
+**门语义（控制者裁定 2026-11-15）：本节未裁决=advisory——不参与 gate exit
+（日常录制常驻未裁决项，committed 绿才是门绿）；rec-* 的 infra 失败仍=exit 1
+（重放机制坏了）；未裁决项为 C 线后续 root-cause 输入（G-426/G-427 等）。**
 
 | 维度 | 总量 | EXACT | STRUCTURAL | DIVERGE | 未裁决 |
 |---|---|---|---|---|---|
