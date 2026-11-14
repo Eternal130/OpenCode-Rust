@@ -115,9 +115,9 @@ gate 见编排器输出，未裁决>0 ⇒ exit 2）
 - `anim-toast-window` [diverge] row=1 col=27 field=ch ref='┃' rust=' ' cells_diff_count=148 — CAUSES: G-424 rust toast 动作 affordance 恒 'x'（ref '› {label}' + 宽面板）
 - `anim-toast-window@120x30` [diverge] row=1 col=67 field=ch ref='┃' rust=' ' cells_diff_count=148 — CAUSES: G-424 rust toast 动作 affordance 恒 'x'（ref '› {label}' + 宽面板）
 - `anim-toast-window@320x80` [diverge] row=1 col=267 field=ch ref='┃' rust=' ' cells_diff_count=148 — CAUSES: G-424 rust toast 动作 affordance 恒 'x'（ref '› {label}' + 宽面板）
-- `anim-tool-progress` [diverge] row=7 col=5 field=ch ref='⋯' rust='⠋' cells_diff_count=60 — CAUSES: A2 ref 动画门控夹具伪影（rust 时钟驱动动画 vs ref animations:false 静态形状）
-- `anim-tool-progress@120x30` [diverge] row=7 col=5 field=ch ref='⋯' rust='⠋' cells_diff_count=60 — CAUSES: A2 ref 动画门控夹具伪影（rust 时钟驱动动画 vs ref animations:false 静态形状）
-- `anim-tool-progress@320x80` [diverge] row=7 col=5 field=ch ref='⋯' rust='⠋' cells_diff_count=60 — CAUSES: A2 ref 动画门控夹具伪影（rust 时钟驱动动画 vs ref animations:false 静态形状）
+- `anim-tool-progress` [diverge] row=7 col=5 field=ch ref='⋯' rust='⠋' cells_diff_count=60 — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
+- `anim-tool-progress@120x30` [diverge] row=7 col=5 field=ch ref='⋯' rust='⠋' cells_diff_count=60 — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
+- `anim-tool-progress@320x80` [diverge] row=7 col=5 field=ch ref='⋯' rust='⠋' cells_diff_count=60 — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
 
 ## CAUSES 定性
 
@@ -145,7 +145,7 @@ gate 见编排器输出，未裁决>0 ⇒ exit 2）
   - anim-toast-* 场景：带 action 的 toast（MCP 失败 → 'Open MCP servers'）——ref 标题行右对齐渲染动作 affordance '› {label}' 且面板宽度计入该 run（title+marginLeft2+affordance）；rust 恒渲染dismiss 'x'、面板按 title+3 计宽（窄 17 列）。A2 静息/帧序列维度新发现的渲染语义差，登记（G-424）不拦。修复面：toast_geometry/toast_tree_units/right_rail_cell/app 指针 hit-rect 四处联动，且钉住 tree-scenario 冻结 oracle（tools/parity/tree-scenarios）与pty_lane_km 活体用例——超出 A2 harness 范围，留专用 lane 落地
   - ref packages/tui/src/ui/toast.tsx:75-103（affordance() = action ? `› ${label}` : "x"，flexShrink=0 右对齐进面板宽度）
   - rust crates/oc-tui/src/components/toast_solid.rs:75-89（恒 "  x" 两 pad + 'x'）、toast.rs:180-186（title+3 计宽）
-- **A2 ref 动画门控夹具伪影（rust 时钟驱动动画 vs ref animations:false 静态形状）** — 命中 3 case（`anim-tool-progress`, `anim-tool-progress@120x30`, `anim-tool-progress@320x80`）
+- **A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）** — 命中 3 case（`anim-tool-progress`, `anim-tool-progress@120x30`, `anim-tool-progress@320x80`）
   - anim-* 场景：rust 帧是 (store, clock) 纯函数（A1）——虚拟时钟逐拍推进使spinner 轮转/caret blink（500ms 周期）/knight 渐变在中间拍真实变化；ref 侧夹具钉 animations:false（动画门控关闭，静态形状）且渲染器时钟注入在整 app 下原生不稳（boot 死锁/捕获段错误，探针记录于 a2-report）——这是夹具伪影而非移植语义差：生产 ref 默认 animations:true 渲染同类动画。登记不拦；事件驱动的逐拍内容变化仍被本维度精确断言
   - ref packages/tui/test/fixture/app.ts:32（config animations:false 钉定）+ component/spinner.tsx:27-31（animations 门控回退静态 ⋯）
   - rust crates/oc-tui/tests/tui_fullscreen_diff_driver.rs（ANIM_TICK_MS=100 逐拍 advance_clock）；oc-tui 渲染无动画门控，时钟驱动（A1 接线）
@@ -196,9 +196,9 @@ anim 场景（`anim.ticks` 声明，SCHEMA A2 扩展）在静息排空后逐拍�
 - `anim-toast-window`  — CAUSES: G-424 rust toast 动作 affordance 恒 'x'（ref '› {label}' + 宽面板）
 - `anim-toast-window@120x30`  — CAUSES: G-424 rust toast 动作 affordance 恒 'x'（ref '› {label}' + 宽面板）
 - `anim-toast-window@320x80`  — CAUSES: G-424 rust toast 动作 affordance 恒 'x'（ref '› {label}' + 宽面板）
-- `anim-tool-progress`  — CAUSES: A2 ref 动画门控夹具伪影（rust 时钟驱动动画 vs ref animations:false 静态形状）
-- `anim-tool-progress@120x30`  — CAUSES: A2 ref 动画门控夹具伪影（rust 时钟驱动动画 vs ref animations:false 静态形状）
-- `anim-tool-progress@320x80`  — CAUSES: A2 ref 动画门控夹具伪影（rust 时钟驱动动画 vs ref animations:false 静态形状）
+- `anim-tool-progress`  — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
+- `anim-tool-progress@120x30`  — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
+- `anim-tool-progress@320x80`  — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
 
 ## 范围外声明
 
