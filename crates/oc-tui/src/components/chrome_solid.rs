@@ -548,10 +548,6 @@ fn apply_stamp(frame: &mut Frame, base_left: usize, base_top: usize, stamp: &Chr
             keep_width,
             keep_height,
         } => {
-            let dim = |value: u8| -> u8 {
-                let factor = 1.0 - f64::from(alpha) / 255.0;
-                (f64::from(value) * factor).round() as u8
-            };
             for row in base_top + top..base_top + top + height {
                 for col in base_left + left..base_left + left + width {
                     let in_keep = row >= base_top + keep_top
@@ -563,9 +559,21 @@ fn apply_stamp(frame: &mut Frame, base_left: usize, base_top: usize, stamp: &Chr
                     }
                     if let Some(cell) = frame.cells.get_mut(row).and_then(|line| line.get_mut(col))
                     {
-                        if let CellColor::Rgb(r, g, b) = cell.bg {
-                            cell.bg = CellColor::Rgb(dim(r), dim(g), dim(b));
-                        }
+                        // The ref engine's scrim composite (shared with
+                        // the dialog backdrop's `blend_scrim`): the bg
+                        // and GLYPH fg both dim toward black; whitespace
+                        // keeps no fg paint (terminal-default white,
+                        // attrs stripped). Pinned by the channel-8 ref
+                        // grids (sidebar-toggle: transcript glyphs under
+                        // the 70/255 overlay dim ×0.7255, e.g. 238→173).
+                        let mut staged = crate::render::Cell {
+                            ch: cell.ch,
+                            attrs: cell.attrs,
+                            fg: cell.fg,
+                            bg: cell.bg,
+                        };
+                        crate::components::dialog::blend_scrim(&mut staged, alpha);
+                        *cell = staged;
                     }
                 }
             }

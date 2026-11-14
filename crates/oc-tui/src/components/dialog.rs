@@ -1163,26 +1163,58 @@ pub fn render_overlay_with(
 /// (the NEW-S2a semantics: the scrim is a bridge-side compositing
 /// step because the raster cannot see the route frame beneath).
 pub(crate) fn blend_backdrop(cell: &mut crate::render::Cell) {
-    let dim = |value: u8| -> u8 { (f64::from(value) * (1.0 - BACKDROP_ALPHA)).round() as u8 };
+    blend_scrim(cell, (BACKDROP_ALPHA * 255.0) as u8);
+}
+
+/// One translucent-black scrim composite over a covered cell (the
+/// dialog backdrop and the sidebar overlay share the semantics; the
+/// alphas differ — 150/255 vs 70/255). Empirical ref-engine rules,
+/// pinned by the channel-8 ref grids (models-dialog/session-tabs/
+/// sidebar-toggle, both size tiers):
+///
+/// * the bg always dims — an indexed bg composites over its RESOLVED
+///   rgb (`palette_rgb`), never a pass-through (the ref engine's
+///   alpha blend has no indexed concept);
+/// * a GLYPH cell's fg dims the same way (indexed resolved, the
+///   default white materialized dimmed);
+/// * a WHITESPACE cell keeps no fg paint under the scrim — the
+///   composite materializes it back to the terminal-default white
+///   (idx 15) and strips its attrs (the bold header title's inner
+///   spaces read `attrs=[]` fg=white under an open dialog, bold
+///   glyphs either side of them).
+pub(crate) fn blend_scrim(cell: &mut crate::render::Cell, alpha: u8) {
+    let dim = |value: u8| -> u8 {
+        (f64::from(value) * (1.0 - f64::from(alpha) / 255.0)).round() as u8
+    };
+    let dimmed = |color: &crate::render::CellColor, default: [u8; 3]| -> crate::render::CellColor {
+        let [r, g, b] = match color {
+            crate::render::CellColor::Rgb(r, g, b) => [*r, *g, *b],
+            // `ansi256IndexToRgb` — the composite resolves the index.
+            crate::render::CellColor::Indexed(index) => {
+                crate::render::color_mode::palette_rgb(*index)
+            }
+            crate::render::CellColor::Default => default,
+        };
+        crate::render::CellColor::Rgb(dim(r), dim(g), dim(b))
+    };
+    // The raster's default bg is black: black over black stays black.
     cell.bg = match cell.bg {
-        crate::render::CellColor::Rgb(r, g, b) => {
-            crate::render::CellColor::Rgb(dim(r), dim(g), dim(b))
-        }
-        // The raster's default bg is black: black over black stays black.
         crate::render::CellColor::Default => crate::render::CellColor::Rgb(0, 0, 0),
-        crate::render::CellColor::Indexed(index) => crate::render::CellColor::Indexed(index),
+        other => dimmed(&other, [0, 0, 0]),
     };
     if cell.ch != ' ' {
-        cell.fg = match cell.fg {
-            crate::render::CellColor::Rgb(r, g, b) => {
-                crate::render::CellColor::Rgb(dim(r), dim(g), dim(b))
-            }
-            // defaultForeground() is white; the composite materializes it.
-            crate::render::CellColor::Default => {
-                crate::render::CellColor::Rgb(dim(255), dim(255), dim(255))
-            }
-            crate::render::CellColor::Indexed(index) => crate::render::CellColor::Indexed(index),
-        };
+        // defaultForeground() is white; the composite materializes it.
+        cell.fg = dimmed(&cell.fg, [255, 255, 255]);
+    } else {
+        // Whitespace keeps no fg paint under the scrim: back to the
+        // terminal-default white, attrs stripped (the empirical ref
+        // shape above). An already-unpainted blank (Default fg) is
+        // left verbatim so canonical emission bytes are untouched on
+        // paths the scrim never repaints.
+        if !matches!(cell.fg, crate::render::CellColor::Default) {
+            cell.fg = crate::render::CellColor::Indexed(15);
+            cell.attrs = 0;
+        }
     }
 }
 
