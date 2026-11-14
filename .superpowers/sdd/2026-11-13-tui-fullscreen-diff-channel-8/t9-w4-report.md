@@ -129,3 +129,24 @@ props.hints 递送。
   网格 + 金帧两代形态旁证，如后续引擎升级出现新形态，以网格为准重验。
 - diff driver 新增 ProjectList 臂与 app.rs live-loop 逐行镜像的纪律保持
   （注释标 app.rs:9834-9837）。
+
+## 7. 评审落地（5 项发现，2026-11-14）
+
+评审通过 + 5 项登记/注释级发现全部处置：
+
+1. **connect-mid-turn footer 瞬态差登记**（Important）：GAPS 第三十一轮终态条目内
+   新增「T9 文档化登记」节——ref live-append（rows.ts:219-227 appendFooter 尾部 +
+   :306-308 removeFooter 迁移）vs rust reduce-inline 不可达产物；被
+   w3_normalize.py §2→§4 耦合屏蔽（通道 40/40 不覆盖该瞬态形状 = 差分面已知
+   收窄，非生产缺陷）；触发条件=连接落到进行中会话。不立新 G-ID。
+2. **session_list_all_projects() 恒 false**：同节点名（storage 字段无消费者，
+   ref 持久化切换为有界缺口）。
+3. **INDEX.md 旧行矛盾**：「101 项分歧…G-412..G-422」行改 HTML 注释脚注
+   （保留历史备查，不再与 717/71/2 总计并排呈现）。
+4. **session.list suggested 静态近似**：command_palette.rs 对应臂补引证注释
+   （session_history 静态快照 vs ref reactive data.session.list()，滞后一次
+   resync，无 corpus case 可区分）。
+5. scrim whitespace 经验规则：已登记，无动作。
+
+验证：tui_fullscreen_selftest 25/25 OK；guards all green；git diff 仅涉
+command_palette.rs / GAPS-AND-PITFALLS.md / INDEX.md / progress.md / 本报告。
