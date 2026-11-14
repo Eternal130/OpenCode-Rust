@@ -1183,9 +1183,8 @@ pub(crate) fn blend_backdrop(cell: &mut crate::render::Cell) {
 ///   spaces read `attrs=[]` fg=white under an open dialog, bold
 ///   glyphs either side of them).
 pub(crate) fn blend_scrim(cell: &mut crate::render::Cell, alpha: u8) {
-    let dim = |value: u8| -> u8 {
-        (f64::from(value) * (1.0 - f64::from(alpha) / 255.0)).round() as u8
-    };
+    let dim =
+        |value: u8| -> u8 { (f64::from(value) * (1.0 - f64::from(alpha) / 255.0)).round() as u8 };
     let dimmed = |color: &crate::render::CellColor, default: [u8; 3]| -> crate::render::CellColor {
         let [r, g, b] = match color {
             crate::render::CellColor::Rgb(r, g, b) => [*r, *g, *b],
@@ -1202,19 +1201,23 @@ pub(crate) fn blend_scrim(cell: &mut crate::render::Cell, alpha: u8) {
         crate::render::CellColor::Default => crate::render::CellColor::Rgb(0, 0, 0),
         other => dimmed(&other, [0, 0, 0]),
     };
-    if cell.ch != ' ' {
-        // defaultForeground() is white; the composite materializes it.
-        cell.fg = dimmed(&cell.fg, [255, 255, 255]);
-    } else {
+    if cell.ch == ' ' {
         // Whitespace keeps no fg paint under the scrim: back to the
         // terminal-default white, attrs stripped (the empirical ref
-        // shape above). An already-unpainted blank (Default fg) is
-        // left verbatim so canonical emission bytes are untouched on
-        // paths the scrim never repaints.
-        if !matches!(cell.fg, crate::render::CellColor::Default) {
-            cell.fg = crate::render::CellColor::Indexed(15);
+        // shape above). Both default forms (`Default` unpainted and
+        // the raster's idx-15 white) are left verbatim — the repaint
+        // only strips a real styled space (238/bold/etc); an
+        // already-white blank keeps its existing canonical bytes.
+        if !matches!(
+            cell.fg,
+            crate::render::CellColor::Default | crate::render::CellColor::Indexed(15)
+        ) {
+            cell.fg = crate::render::CellColor::Rgb(255, 255, 255);
             cell.attrs = 0;
         }
+    } else {
+        // defaultForeground() is white; the composite materializes it.
+        cell.fg = dimmed(&cell.fg, [255, 255, 255]);
     }
 }
 
@@ -2099,11 +2102,23 @@ mod tests {
         let mut frame = blank_base(80, 24);
         render_overlay(&mut frame, &store, &theme, (80, 24));
         // Backdrop over the base 10 → (4,4,4) everywhere outside the box;
-        // the blank cell's fg (white) stays UNdimmed (whitespace fg keeps
-        // the terminal default under the overlay — rig-pinned idx15).
+        // an UNPAINTED blank keeps its default fg verbatim (the terminal
+        // default renders white); a PAINTED blank loses its paint under
+        // the scrim — back to idx 15 (white) with attrs stripped (W4:
+        // ref bold-title word gaps read attrs=[] fg=white under dialogs).
         assert_eq!(rgb(frame.cell(0, 0).bg), (4, 4, 4));
         assert_eq!(rgb(frame.cell(23, 79).bg), (4, 4, 4));
         assert_eq!(rgb(frame.cell(0, 0).fg), (255, 255, 255));
+        frame.cells[0][0] = crate::render::Cell {
+            ch: ' ',
+            attrs: crate::render::ansi::text_attributes::BOLD,
+            fg: CellColor::Rgb(238, 238, 238),
+            bg: CellColor::Rgb(10, 10, 10),
+        };
+        blend_backdrop(&mut frame.cells[0][0]);
+        assert!(matches!(frame.cell(0, 0).fg, CellColor::Rgb(255, 255, 255)));
+        assert_eq!(frame.cell(0, 0).attrs, 0);
+        assert_eq!(rgb(frame.cell(0, 0).bg), (4, 4, 4));
         // A GLYPH cell's fg dims by the same 150/255 black (the base's
         // 'X' at (1,1): 255 → 105 — rig-pinned 'A' idx8 → idx236).
         frame.cells[1][1].ch = 'X';

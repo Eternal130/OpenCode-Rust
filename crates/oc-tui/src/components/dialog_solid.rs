@@ -422,7 +422,8 @@ fn content_height(inputs: &DialogInputs) -> usize {
         // title block (title + paddingTop gap + input = 3) + root
         // gap + window + root gap + [footer] + paddingBottom 1.
         Family::Select => {
-            4 + inputs.window.len() + 1
+            4 + inputs.window.len()
+                + 1
                 + usize::from(!(inputs.actions.is_empty() && inputs.footer_hint.is_none()))
                 + 1
         }
@@ -857,6 +858,9 @@ fn actions_for(inputs: &Signal<DialogInputs>) -> Rc<dyn opentui_solid::DynChildr
 ///   [footer bar: paddingLeft 4 paddingRight 2, space-between]
 /// </box>
 /// ```
+// W4: the right-side footer hint grows the tree past the lint budget
+// (the F1 footer + hint carrier pair).
+#[allow(clippy::too_many_lines)] // the DialogSelect root, ui/dialog-select.tsx:672-847
 fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder {
     // The title row: bold title left, `esc` right (ends at the
     // paddingRight-4 edge).
@@ -932,9 +936,8 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
                 let hint_gate = {
                     let inputs = inputs.clone();
                     show(
-                        Rc::new(map(inputs.clone(), |i: &DialogInputs| {
-                            i.footer_hint.is_some()
-                        })) as Rc<dyn Reactive<bool>>,
+                        Rc::new(map(inputs.clone(), |i: &DialogInputs| i.footer_hint.is_some()))
+                            as Rc<dyn Reactive<bool>>,
                         {
                             let inputs = inputs.clone();
                             move || {
@@ -946,19 +949,32 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
                                             .flex_shrink(0.0)
                                             .dyn_prop(
                                                 "content",
-                                                dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
-                                                    match i.footer_hint.as_ref() {
-                                                        Some((title, _)) => styled(vec![
-                                                            chunk(title.clone(), i.colors.text, None, 1),
-                                                            // The separator space rides the
-                                                            // base span (`</b>{" "}`,
-                                                            // dialog-select.tsx:631 — text.base,
-                                                            // not muted).
-                                                            chunk(" ".to_owned(), i.colors.text, None, 0),
-                                                        ]),
-                                                        None => styled(Vec::new()),
-                                                    }
-                                                })),
+                                                dyn_styled(map(
+                                                    inputs.clone(),
+                                                    |i: &DialogInputs| {
+                                                        match i.footer_hint.as_ref() {
+                                                            Some((title, _)) => styled(vec![
+                                                                chunk(
+                                                                    title.clone(),
+                                                                    i.colors.text,
+                                                                    None,
+                                                                    1,
+                                                                ),
+                                                                // The separator space rides the
+                                                                // base span (`</b>{" "}`,
+                                                                // dialog-select.tsx:631 — text.base,
+                                                                // not muted).
+                                                                chunk(
+                                                                    " ".to_owned(),
+                                                                    i.colors.text,
+                                                                    None,
+                                                                    0,
+                                                                ),
+                                                            ]),
+                                                            None => styled(Vec::new()),
+                                                        }
+                                                    },
+                                                )),
                                             )
                                             .into_element(),
                                         text()
@@ -966,8 +982,10 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
                                             .flex_shrink(0.0)
                                             .dyn_prop(
                                                 "content",
-                                                dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
-                                                    match i.footer_hint.as_ref() {
+                                                dyn_styled(map(
+                                                    inputs.clone(),
+                                                    |i: &DialogInputs| match i.footer_hint.as_ref()
+                                                    {
                                                         Some((_, label)) => styled(vec![chunk(
                                                             label.clone(),
                                                             i.colors.muted,
@@ -975,8 +993,8 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
                                                             0,
                                                         )]),
                                                         None => styled(Vec::new()),
-                                                    }
-                                                })),
+                                                    },
+                                                )),
                                             )
                                             .into_element(),
                                     ]))
@@ -994,7 +1012,10 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
                     .flex_shrink(0.0)
                     .margin_top(1.0)
                     .children(Children::Static(vec![
-                        box_().flex_direction("row").children_dyn(actions_for(&inputs)).into_element(),
+                        box_()
+                            .flex_direction("row")
+                            .children_dyn(actions_for(&inputs))
+                            .into_element(),
                         right_carrier.into_element(),
                     ]))
                     .into_element()]
@@ -2130,7 +2151,10 @@ fn status_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
             i.hint_lines
                 .iter()
                 .enumerate()
-                .map(|(n, line)| ForItem { key: format!("S{n}"), value: PropValue::Str(line.clone()) })
+                .map(|(n, line)| ForItem {
+                    key: format!("S{n}"),
+                    value: PropValue::Str(line.clone()),
+                })
                 .collect::<Vec<ForItem>>()
         }),
     };
@@ -2140,17 +2164,18 @@ fn status_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
         text()
             .dyn_prop(
                 "content",
-                dyn_styled(map(inputs, move |i: &DialogInputs| {
-                    match i.hint_lines.get(index) {
-                        Some(line) => styled(vec![chunk(line.clone(), i.colors.text, None, 0)]),
-                        None => styled(Vec::new()),
-                    }
+                dyn_styled(map(inputs, move |i: &DialogInputs| match i.hint_lines.get(index) {
+                    Some(line) => styled(vec![chunk(line.clone(), i.colors.text, None, 0)]),
+                    None => styled(Vec::new()),
                 })),
             )
             .into_element()
     });
     box_().padding_left(2.0).padding_right(2.0).padding_bottom(1.0).children(Children::Static(
-        vec![title_row.into_element(), box_().children_dyn(Rc::new(content_for)).margin_top(1.0).into_element()],
+        vec![
+            title_row.into_element(),
+            box_().children_dyn(Rc::new(content_for)).margin_top(1.0).into_element(),
+        ],
     ))
 }
 
@@ -2624,7 +2649,7 @@ fn build_inputs(
                 destructive: false,
                 window: Vec::new(),
                 actions: Vec::new(),
-            footer_hint: None,
+                footer_hint: None,
                 prompt_value: entry.value.clone(),
                 hint_lines: if description.is_empty() {
                     Vec::new()
@@ -2685,7 +2710,7 @@ fn build_inputs(
                 destructive: false,
                 window: Vec::new(),
                 actions: Vec::new(),
-            footer_hint: None,
+                footer_hint: None,
                 prompt_value: String::new(),
                 hint_lines: Vec::new(),
                 plugin_title: "/btw".to_owned(),
@@ -2774,7 +2799,7 @@ fn build_inputs(
                 destructive: false,
                 window: Vec::new(),
                 actions: Vec::new(),
-            footer_hint: None,
+                footer_hint: None,
                 prompt_value: String::new(),
                 hint_lines: crate::wrap::wrap_label(&hint, content_width.max(1)),
                 plugin_title: String::new(),
@@ -2811,7 +2836,7 @@ fn build_inputs(
                 destructive: false,
                 window: Vec::new(),
                 actions: Vec::new(),
-            footer_hint: None,
+                footer_hint: None,
                 prompt_value: String::new(),
                 hint_lines: Vec::new(),
                 plugin_title: content.title,
@@ -2870,7 +2895,7 @@ fn build_inputs(
                 destructive: false,
                 window: Vec::new(),
                 actions: Vec::new(),
-            footer_hint: None,
+                footer_hint: None,
                 prompt_value: String::new(),
                 hint_lines: Vec::new(),
                 plugin_title,
@@ -2916,7 +2941,7 @@ fn build_inputs(
                 destructive: false,
                 window: Vec::new(),
                 actions: Vec::new(),
-            footer_hint: None,
+                footer_hint: None,
                 prompt_value: String::new(),
                 hint_lines: Vec::new(),
                 plugin_title: title.clone(),
@@ -2966,7 +2991,7 @@ fn build_inputs(
                 destructive: false,
                 window: Vec::new(),
                 actions: Vec::new(),
-            footer_hint: None,
+                footer_hint: None,
                 prompt_value: String::new(),
                 hint_lines: Vec::new(),
                 plugin_title: String::new(),
@@ -3027,7 +3052,7 @@ fn build_inputs(
                 destructive: false,
                 window: Vec::new(),
                 actions: Vec::new(),
-            footer_hint: None,
+                footer_hint: None,
                 prompt_value: String::new(),
                 hint_lines: Vec::new(),
                 plugin_title: String::new(),
@@ -3083,7 +3108,7 @@ fn build_inputs(
             pair_qr: Vec::new(),
             btw_window: Vec::new(),
             btw_styled: Vec::new(),
-        }
+        },
     }
 }
 

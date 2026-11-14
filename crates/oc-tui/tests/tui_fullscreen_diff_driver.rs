@@ -231,6 +231,7 @@ struct Pump {
 impl Pump {
     /// One live-loop drain iteration (app.rs:9128-9353's order: ingest
     /// → bus commands → server lists → loop fetcher).
+    #[allow(clippy::too_many_lines)] // W4: the ProjectList arm mirrors app.rs's fetch arms
     fn drain(&mut self) {
         while let Ok(message) = self.ingest_rx.try_recv() {
             if matches!(message, Ingest::Connected) {

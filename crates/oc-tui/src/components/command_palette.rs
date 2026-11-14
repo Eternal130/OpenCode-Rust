@@ -4052,11 +4052,12 @@ mod tests {
         let text = props.options.iter().map(|o| o.title.clone()).collect::<Vec<_>>().join("\n");
         assert!(text.contains("spawn failed") && text.contains("Status: failed"));
 
-        // /status — the count + bullet rows (dialog-status.tsx).
+        // /status — the count + bullet rows (dialog-status.tsx; W4:
+        // the rows ride the CUSTOM tree's hints, not select options).
         assert_eq!(dispatcher.dispatch(&store, "opencode.status", None), Dispatch::Handled);
         assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::Status));
         let props = select_props_for(&store.top_dialog().unwrap().kind, &store);
-        let rows: Vec<&str> = props.options.iter().map(|o| o.title.as_str()).collect();
+        let rows: Vec<&str> = props.hints.iter().map(String::as_str).collect();
         assert_eq!(rows[0], "2 MCP servers");
         assert!(rows[1].contains("• beta Connected"), "list order: {rows:?}");
         assert!(rows[2].contains("• alpha spawn failed"), "the failed error text: {rows:?}");
