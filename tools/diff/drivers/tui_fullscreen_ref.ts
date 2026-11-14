@@ -383,7 +383,20 @@ async function main() {
       await app.ready
       await app.waitForVisualIdle({ quietFrames: 3, maxFrames: 600 })
       for (const event of scenario.events) app.events.emit(event)
-      for (const token of scenario.keys) pressToken(app.mockInput, token)
+      // B2-fix: plugin scenarios insert a per-token idle between key
+      // tokens — the palette's search input mounts asynchronously after
+      // ctrl+p and chars pressed in the same synchronous burst are
+      // dropped (observed: an empty search box where the rust side's
+      // sequential press() state machine had already filtered). The
+      // rust driver needs no equivalent (its press() path is a
+      // synchronous state machine, no mount race). Non-plugin scenarios
+      // keep the original single-pump flow — the 75-case baseline does
+      // not drift.
+      const perTokenIdle = plugins.length > 0
+      for (const token of scenario.keys) {
+        pressToken(app.mockInput, token)
+        if (perTokenIdle) await app.waitForVisualIdle({ quietFrames: 2, maxFrames: 200 })
+      }
       await app.waitForVisualIdle({ quietFrames: 3, maxFrames: 600 })
       await Bun.sleep(scenario.settle_ms ?? 200)
       await app.renderOnce()

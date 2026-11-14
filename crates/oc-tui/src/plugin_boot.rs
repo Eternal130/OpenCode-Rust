@@ -323,6 +323,51 @@ impl TuiPluginRuntime {
         Some(BootedPluginHost { host, resolution, ready })
     }
 
+    /// B2-fix — the boot-failure surfaces (ref plugin/context.tsx:
+    /// 478-484): every boot failure — a resolution failure
+    /// (`Resolution::failures`) OR a guest load failure
+    /// (`PluginState::Failed` — the entry resolves but the module
+    /// throws) — counts into the footer's plugins-failed chip AND
+    /// raises the error toast ("Plugin failed: {target}" + "Run
+    /// /plugins to view details.", action `plugins.list`; the toast
+    /// affordance cells ride the G-424 family's known bounded shape).
+    /// The target string is the CONFIG spec (the resolution plugin's
+    /// `target`), matching the ref toast title's target.
+    pub fn surface_boot_failures(&self, store: &Store) {
+        let host = &self.booted.host;
+        let mut failures: Vec<String> =
+            self.booted.resolution.failures.iter().map(|(target, _)| target.clone()).collect();
+        if host.enabled() {
+            let snapshot = host.registrations();
+            for status in &snapshot.plugins {
+                if let oc_plugin_host::PluginState::Failed(_) = &status.state {
+                    let target = match self
+                        .booted
+                        .resolution
+                        .plugins
+                        .iter()
+                        .find(|plugin| plugin.entry == status.entry)
+                    {
+                        Some(plugin) => plugin.target.clone(),
+                        None => status.entry.display().to_string(),
+                    };
+                    failures.push(target);
+                }
+            }
+        }
+        store.set_plugins_failed(failures.len());
+        for target in &failures {
+            store.toast_show(crate::components::toast::ToastOptions {
+                title: Some(format!("Plugin failed: {target}")),
+                message: "Run /plugins to view details.".to_owned(),
+                variant: "error",
+                action_label: Some("Open plugins".to_owned()),
+                action_command: Some("plugins.list".to_owned()),
+                ..crate::components::toast::ToastOptions::info("")
+            });
+        }
+    }
+
     /// Attach every TUI seam (the `plugin_slots.rs` recipe): event tap,
     /// palette sink, dialog source, and the store-side registration
     /// projection. The owned keymap chords + plugin themes return for

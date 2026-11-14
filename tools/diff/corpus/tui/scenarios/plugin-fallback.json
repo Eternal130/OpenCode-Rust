@@ -298,8 +298,8 @@
   "enter"
  ],
  "settle_ms": 200,
- "note": "B2 plugin failure-state screen: type /plugins into the prompt and submit — the Plugins management screen opens listing the payload. ref renders the failed row (\"failed, local\" + view-error affordance, the ref plugin-keymap.test.tsx openPlugin path); rust renders the booted plugin row. Failure-screen consistency is itself a diff face (version-skew family on the row state; G-28 on any booted-shape residual).",
+ "note": "B2-fix plugin failure-state screen: the DELIBERATELY broken committed payload (payloads/broken-plugin — module top-level throws) boots on both sides through the same real plugin seams; both land in the failure state and the failure-STATE rendering is the diff face: ref \"Plugin failed: <path>\" notice + \"1 plugins failed\" footer pill + /plugins screen failed row vs the rust failure surface. Replaces the first-round design whose failure was the bun 1.3.10 ResolveMessage artifact (controller-confirmed; now gated to bun >= 1.4.2 via TUI_DIFF_BUN).",
  "plugins": [
-  "omo-slim"
+  "broken"
  ]
 }
