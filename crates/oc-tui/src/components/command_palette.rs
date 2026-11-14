@@ -1455,7 +1455,7 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                         first.chars().take(50).collect::<String>()
                     };
                     let mut option = SelectOption::titled(title, index.to_string());
-                    option = option.described(relative_time(entry.timestamp));
+                    option = option.described(relative_time(store.epoch_now_ms(), entry.timestamp));
                     let lines = entry.prompt.text.matches('\n').count() + 1;
                     if lines > 1 {
                         option = option.with_footer(format!("~{lines} lines"));
@@ -1828,7 +1828,7 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             let terminal = std::env::var("TERM").unwrap_or_default();
             let entries = [
                 ("Version", format!("{} (local)", env!("CARGO_PKG_VERSION"))),
-                ("Date", chrono_like_now()),
+                ("Date", chrono_like_now(store.epoch_now_ms() / 1000)),
                 ("OS", std::env::consts::OS.to_owned()),
                 ("Terminal", terminal),
                 ("Session ID", session),
@@ -2275,13 +2275,12 @@ fn locale_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 }
 
 /// TUI-9: `getRelativeTime` (dialog-stash.ts:11-24) — "just now" /
-/// "Nm ago" / "Nh ago" / "Nd ago" against the wall clock
-/// (`Date.now()`; the stash's timestamps are epoch ms).
-fn relative_time(timestamp_ms: u64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX));
-    let seconds = now.saturating_sub(timestamp_ms) / 1000;
+/// "Nm ago" / "Nh ago" / "Nd ago" against `now_ms` (the caller passes
+/// the STORE's epoch anchor + injected clock — A1 clock wiring: no
+/// live `SystemTime::now` sample inside the render chain; the stash's
+/// timestamps are epoch ms).
+fn relative_time(now_ms: u64, timestamp_ms: u64) -> String {
+    let seconds = now_ms.saturating_sub(timestamp_ms) / 1000;
     let minutes = seconds / 60;
     let hours = minutes / 60;
     let days = hours / 24;
@@ -2421,13 +2420,12 @@ fn short_time(epoch_seconds: u64) -> String {
     format!("{:02}:{:02}", seconds_of_day / 3_600, (seconds_of_day % 3_600) / 60)
 }
 
-/// `new Date().toISOString()` (dialog-debug.tsx:29): the UTC stamp.
-fn chrono_like_now() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs());
-    let date = now / 86_400;
-    let seconds_of_day = now % 86_400;
+/// `new Date().toISOString()` (dialog-debug.tsx:29): the UTC stamp,
+/// derived from the STORE's epoch anchor + injected clock (A1 clock
+/// wiring — no live wall-clock sample inside the render chain).
+fn chrono_like_now(now_secs: u64) -> String {
+    let date = now_secs / 86_400;
+    let seconds_of_day = now_secs % 86_400;
     // Days since epoch → y/m/d (civil-from-days, Howard Hinnant).
     let z = i64::try_from(date).unwrap_or(0) + 719_468;
     let era = z.div_euclid(146_097);

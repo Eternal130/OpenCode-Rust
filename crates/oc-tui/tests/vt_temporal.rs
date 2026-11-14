@@ -1,21 +1,18 @@
 //! TEMPORAL BEHAVIOR over the cell-grid stream: what animates, at
 //! what period, and what must NOT animate. Four observations:
 //!
-//! * SPINNER (`vt_temporal_spinner_animates_100ms_frames`):
-//!   `#[ignore]`d — REGISTERED FINDING (frozen). With a streaming
-//!   turn held open by the `FakeLlm` script (one reasoning delta, no
-//!   `step.ended`), the transcript's running "Thinking" row DOES
-//!   render the braille loading indicator — but it is FROZEN at
-//!   frame 0 (`⠋`): `render_session` builds `TranscriptOptions` via
-//!   `..TranscriptOptions::default()` (`components/session.rs`) and
-//!   that default is `clock_ms: 0` (`components/message/list.rs`) —
-//!   the store clock is never wired into the transcript render, so
-//!   the 80 ms/frame spinner never advances even though the run loop
-//!   re-renders every 100 ms tick (the caret blink, which reads
-//!   `store.clock()` directly, animates fine — proving the clock
-//!   itself advances). The test asserts the spinner EXISTS and
-//!   cycles within 100–600 ms (median): un-ignore when
-//!   `TranscriptOptions.clock_ms` gets `store.clock()`.
+//! * SPINNER (`vt_temporal_spinner_animates_100ms_frames`): FIXED —
+//!   the transcript's running "Thinking" row cycles its braille
+//!   loading indicator at 80 ms/frame. The registered frozen-frame
+//!   finding (clock stuck at 0 because
+//!   `TranscriptOptions::default()` supplied `clock_ms: 0`) was
+//!   closed by wiring `store.clock()` into `TranscriptOptions`
+//!   (`components/session.rs`) — the store's injected clock is the
+//!   spinner's only time source, and the run loop's 100 ms render
+//!   tick advances it (A1: frame output is a pure function of
+//!   (store state, clock value); no render path samples
+//!   `SystemTime::now` — see `Store::epoch_now_ms` for the
+//!   epoch-facing labels).
 //! * CURSOR BLINK (`vt_temporal_cursor_blinks_500ms`): the composer
 //!   caret is a reverse-video block whose phase flips every 500 ms
 //!   (`CURSOR_BLINK_INTERVAL_MS`); idle, exactly one cell toggles its
