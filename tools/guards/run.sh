@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# §9.1 static anti-regression guards — run all eight (docs/PARITY-LOOP.md §9).
+# §9.1 static anti-regression guards — run all of them (docs/PARITY-LOOP.md §9).
 #
 #   tools/guards/run.sh                    — CI mode: fail on NEW violations
 #   tools/guards/run.sh --update-baseline  — record current sets (see README)
@@ -24,6 +24,7 @@ GUARDS=(
   ledger_integrity
   process_safety
   error_envelope
+  recorded_local
 )
 
 extra=""
