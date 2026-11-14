@@ -141,7 +141,12 @@ fn replay_corpus_emission_is_pinned() {
     // the session column's bottom pad + both-side inset) move composer
     // frames in the corpus; the tree oracle re-freeze of the same wave
     // proved the new frames render IDENTICAL through real @opentui).
-    assert_eq!(digest, 0x5827_fddc_9f5a_ad50, "the corpus emission bytes drifted");
+    // Re-pinned at channel-8 W4 — the scrim composite semantics (bg AND
+    // glyph fg dim, whitespace fg paint stripped) change the backdrop
+    // bytes; every affected channel-8 case is EXACT against the ref
+    // grids (40/40), and the dialog/sidebar goldens of the same wave
+    // pin the same bytes.
+    assert_eq!(digest, 0x7840_9566_ff23_10e8, "the corpus emission bytes drifted");
 }
 
 // -- the emitter vocabulary -------------------------------------------------
