@@ -152,7 +152,9 @@ pub struct SessionListPrefs {
 }
 
 fn default_all_projects() -> bool {
-    true
+    // v2's initial: `config.tabs?.scope !== "cwd"` with the resolved
+    // scope defaulting to "cwd" (config/index.tsx:328) → false.
+    false
 }
 
 impl Default for SessionListPrefs {
@@ -715,10 +717,10 @@ mod tests {
         // Absent/unparseable keys fall back to default (v2 `initial`).
         assert_eq!(storage.read("never-written"), None);
         let prefs: SessionListPrefs = storage.read_or_default(KEY_SESSION_LIST);
-        assert!(prefs.all_projects);
+        assert!(!prefs.all_projects, "scope defaults to cwd → allProjects false");
         std::fs::write(storage.path_for(KEY_SESSION_LIST), "not json").unwrap();
         let prefs: SessionListPrefs = storage.read_or_default(KEY_SESSION_LIST);
-        assert!(prefs.all_projects, "corrupt file falls back to initial");
+        assert!(!prefs.all_projects, "corrupt file falls back to initial");
 
         // Invalid segments are rejected (v2 throws TypeError).
         assert!(ChannelStorage::open(&root, "../escape").is_err());

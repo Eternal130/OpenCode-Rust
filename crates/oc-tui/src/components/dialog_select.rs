@@ -304,6 +304,11 @@ pub struct SelectProps {
     /// footer-action focus cycle, [`SelectState::move_action`]) no-op
     /// (:362,368,422,435).
     pub locked: bool,
+    /// A RIGHT-side `footerHints` entry (dialog-select.tsx:37-41,
+    /// `side: "right"`): the bold title + muted ` {label}` riding the
+    /// footer bar's right box (the session list's `all projects
+    /// ctrl+a`, dialog-session-list.tsx:288-291).
+    pub footer_hint: Option<(String, String)>,
 }
 
 impl SelectProps {
@@ -324,6 +329,7 @@ impl SelectProps {
             destructive: false,
             hints: Vec::new(),
             locked: false,
+            footer_hint: None,
         }
     }
 
@@ -392,6 +398,21 @@ impl SelectProps {
     #[must_use]
     pub fn with_hints(mut self, hints: Vec<String>) -> Self {
         self.hints = hints;
+        self
+    }
+
+    /// The filter input's placeholder override (the Open menu's
+    /// "Search sessions and projects…", dialog-open.tsx:339).
+    #[must_use]
+    pub fn with_placeholder(mut self, placeholder: &str) -> Self {
+        self.placeholder = placeholder.to_owned();
+        self
+    }
+
+    /// A right-side footer hint (see the field docs).
+    #[must_use]
+    pub fn with_footer_hint(mut self, title: &str, label: &str) -> Self {
+        self.footer_hint = Some((title.to_owned(), label.to_owned()));
         self
     }
 }

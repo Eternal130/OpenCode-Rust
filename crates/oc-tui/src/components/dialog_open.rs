@@ -435,6 +435,7 @@ pub fn open_menu_props(store: &Store) -> SelectProps {
     let _ = (has_sessions, has_projects);
 
     SelectProps::new("Open", options)
+        .with_placeholder("Search sessions and projects…")
         .with_empty_texts("No recent sessions or projects", "No matches")
 }
 

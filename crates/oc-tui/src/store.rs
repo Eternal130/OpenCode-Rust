@@ -4768,6 +4768,17 @@ impl Store {
         self.session_tokens.get().get(session_id).copied().unwrap_or(0)
     }
 
+    /// The session-list dialog's `allProjects` scope pref
+    /// (dialog-session-list.tsx:42-45): v2 seeds it from
+    /// `config.tabs?.scope !== "cwd"` with the resolved scope
+    /// defaulting "cwd" (config/index.tsx:328) → false until the user
+    /// toggles it. The persisted toggle (`useStorage().store`) rides
+    /// the storage seam — a known bounded gap until the pref lands.
+    #[must_use]
+    pub fn session_list_all_projects(&self) -> bool {
+        false
+    }
+
     /// The session history from the last resync — the session-list
     /// dialog's rows (v2's `data.session.list()`; the tab strip never
     /// reads this).

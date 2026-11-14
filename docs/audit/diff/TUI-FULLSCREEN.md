@@ -25,70 +25,55 @@ cells 稠密化，None/缺省子字段补规范默认（ch=' '、attrs 排序去
 
 | 总量 | EXACT | STRUCTURAL | CAUSES 命中 | 未裁决 |
 |---|---|---|---|---|
-| 40 | 28 | 0 | 0 | 12 |
+| 40 | 40 | 0 | 0 | 0 |
 
-（verdict 分布：exact 28 / structural 0 / diverge 12；
+（verdict 分布：exact 40 / structural 0 / diverge 0；
 gate 见编排器输出，未裁决>0 ⇒ exit 2）
 
 ## 分歧明细
 
 | case | verdict | diff cells | first_diff | ref size | rust size | ref gaps | rust gaps | ref paths | rust paths |
 |---|---|---|---|---|---|---|---|---|---|
-| command-palette | diverge | 112 | r0c10 attrs ref=[] rust=['bold'] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| command-palette@120x30 | diverge | 166 | r0c10 attrs ref=[] rust=['bold'] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| dialog-open-recent | diverge | 275 | r0c7 attrs ref=[] rust=['bold'] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| dialog-open-recent@120x30 | diverge | 305 | r0c7 attrs ref=[] rust=['bold'] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| dialog-status | diverge | 218 | r0c9 attrs ref=[] rust=['bold'] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| dialog-status@120x30 | diverge | 218 | r0c9 attrs ref=[] rust=['bold'] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| fetch-503-model | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 20 | 12 |
-| fetch-503-model@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 20 | 12 |
-| home-empty | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 20 | 12 |
-| home-empty@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 20 | 12 |
-| home-multi-session | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| home-multi-session@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| models-dialog | diverge | 8 | r0c9 attrs ref=[] rust=['bold'] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| models-dialog@120x30 | diverge | 8 | r0c9 attrs ref=[] rust=['bold'] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-empty | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-empty@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-markdown | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-markdown@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-multi-turn | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-multi-turn@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-reasoning | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-reasoning@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-scroll | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-scroll@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-step-failed | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-step-failed@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-stream-idle | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-stream-idle@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-tabs | diverge | 326 | r0c6 attrs ref=[] rust=['bold'] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-tabs@120x30 | diverge | 422 | r0c6 attrs ref=[] rust=['bold'] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-text | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-text@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-tool-failed | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-tool-failed@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-tool-success | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-tool-success@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| session-wrap | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| session-wrap@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-| sidebar-toggle | diverge | 141 | r2c5 fg ref=[173, 173, 173] rust=[238, 238, 238] | 80x24 | 80x24 | 0 | 0 | 27 | 15 |
-| sidebar-toggle@120x30 | diverge | 195 | r2c5 fg ref=[173, 173, 173] rust=[238, 238, 238] | 120x30 | 120x30 | 0 | 0 | 27 | 15 |
-
-### first_diff 明细
-
-- `command-palette` [diverge] row=0 col=10 field=attrs ref=[] rust=['bold'] cells_diff_count=112 — 未裁决（T9 候选）
-- `command-palette@120x30` [diverge] row=0 col=10 field=attrs ref=[] rust=['bold'] cells_diff_count=166 — 未裁决（T9 候选）
-- `dialog-open-recent` [diverge] row=0 col=7 field=attrs ref=[] rust=['bold'] cells_diff_count=275 — 未裁决（T9 候选）
-- `dialog-open-recent@120x30` [diverge] row=0 col=7 field=attrs ref=[] rust=['bold'] cells_diff_count=305 — 未裁决（T9 候选）
-- `dialog-status` [diverge] row=0 col=9 field=attrs ref=[] rust=['bold'] cells_diff_count=218 — 未裁决（T9 候选）
-- `dialog-status@120x30` [diverge] row=0 col=9 field=attrs ref=[] rust=['bold'] cells_diff_count=218 — 未裁决（T9 候选）
-- `models-dialog` [diverge] row=0 col=9 field=attrs ref=[] rust=['bold'] cells_diff_count=8 — 未裁决（T9 候选）
-- `models-dialog@120x30` [diverge] row=0 col=9 field=attrs ref=[] rust=['bold'] cells_diff_count=8 — 未裁决（T9 候选）
-- `session-tabs` [diverge] row=0 col=6 field=attrs ref=[] rust=['bold'] cells_diff_count=326 — 未裁决（T9 候选）
-- `session-tabs@120x30` [diverge] row=0 col=6 field=attrs ref=[] rust=['bold'] cells_diff_count=422 — 未裁决（T9 候选）
-- `sidebar-toggle` [diverge] row=2 col=5 field=fg ref=[173, 173, 173] rust=[238, 238, 238] cells_diff_count=141 — 未裁决（T9 候选）
-- `sidebar-toggle@120x30` [diverge] row=2 col=5 field=fg ref=[173, 173, 173] rust=[238, 238, 238] cells_diff_count=195 — 未裁决（T9 候选）
+| command-palette | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
+| command-palette@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
+| dialog-open-recent | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
+| dialog-open-recent@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
+| dialog-status | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
+| dialog-status@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
+| fetch-503-model | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 20 | 13 |
+| fetch-503-model@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 20 | 13 |
+| home-empty | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 20 | 13 |
+| home-empty@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 20 | 13 |
+| home-multi-session | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
+| home-multi-session@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
+| models-dialog | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
+| models-dialog@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
+| session-empty | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
+| session-empty@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
+| session-markdown | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
+| session-markdown@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
+| session-multi-turn | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
+| session-multi-turn@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
+| session-reasoning | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
+| session-reasoning@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
+| session-scroll | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
+| session-scroll@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
+| session-step-failed | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
+| session-step-failed@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
+| session-stream-idle | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
+| session-stream-idle@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
+| session-tabs | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
+| session-tabs@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
+| session-text | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
+| session-text@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
+| session-tool-failed | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
+| session-tool-failed@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
+| session-tool-success | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
+| session-tool-success@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
+| session-wrap | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
+| session-wrap@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
+| sidebar-toggle | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 16 |
+| sidebar-toggle@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 16 |
 
 ## CAUSES 定性
 

@@ -227,6 +227,12 @@ enum Family {
     /// header + question, the markdown answer window, the `c copy /
     /// j/k ↑/↓ scroll` footer.
     BtwAnswer,
+    /// W4 (dialog-status.tsx:22-61): a CUSTOM dialog, never a
+    /// `DialogSelect` — the bold `Status` header + `esc` chrome at
+    /// paddingLeft 2, then the count line + per-server bullet rows
+    /// (or the muted-branch "No MCP servers" fallback), `gap 1`,
+    /// `paddingBottom 1`. No filter input.
+    Status,
 }
 
 /// One rendered row of the scroll window — the same walk the old
@@ -287,6 +293,9 @@ struct DialogInputs {
     window: Vec<WindowRow>,
     /// (title, label) footer actions.
     actions: Vec<(String, String)>,
+    /// A right-side footer hint (`footerHints side:"right"`): bold
+    /// title + muted ` {label}` in the footer bar's right box.
+    footer_hint: Option<(String, String)>,
     // -- the prompt family -------------------------------------------------
     prompt_value: String,
     // -- help ---------------------------------------------------------------
@@ -412,7 +421,11 @@ fn content_height(inputs: &DialogInputs) -> usize {
     match inputs.family {
         // title block (title + paddingTop gap + input = 3) + root
         // gap + window + root gap + [footer] + paddingBottom 1.
-        Family::Select => 4 + inputs.window.len() + 1 + usize::from(!inputs.actions.is_empty()) + 1,
+        Family::Select => {
+            4 + inputs.window.len() + 1
+                + usize::from(!(inputs.actions.is_empty() && inputs.footer_hint.is_none()))
+                + 1
+        }
         // title, gap, input, gap, footer, the footer's paddingBottom.
         // RE-13: the /btw question prompt and the G-29 plugin install
         // prompt share the same prompt tree (title, gap, input, gap,
@@ -469,6 +482,9 @@ fn content_height(inputs: &DialogInputs) -> usize {
         // root's gap 1, the markdown window, gap, the action footer,
         // the root paddingBottom 1.
         Family::BtwAnswer => inputs.btw_window.len() + 5,
+        // W4 (dialog-status.tsx:22-61): the `Status` title row, the
+        // root's gap 1, the status rows, the root paddingBottom 1.
+        Family::Status => inputs.hint_lines.len() + 3,
     }
 }
 
@@ -903,11 +919,73 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
     // title block and the area.
     let inputs_for_footer = inputs.clone();
     let footer = show(
-        Rc::new(map(inputs.clone(), |i: &DialogInputs| !i.actions.is_empty()))
-            as Rc<dyn Reactive<bool>>,
+        Rc::new(map(inputs.clone(), |i: &DialogInputs| {
+            !i.actions.is_empty() || i.footer_hint.is_some()
+        })) as Rc<dyn Reactive<bool>>,
         {
             let inputs = inputs_for_footer;
             move || {
+                // The right-side footer hint (`footerHints
+                // side:"right"`, dialog-select.tsx:842-845 + the
+                // non-action `FooterAction` :626-633): bold title +
+                // muted ` {label}`.
+                let hint_gate = {
+                    let inputs = inputs.clone();
+                    show(
+                        Rc::new(map(inputs.clone(), |i: &DialogInputs| {
+                            i.footer_hint.is_some()
+                        })) as Rc<dyn Reactive<bool>>,
+                        {
+                            let inputs = inputs.clone();
+                            move || {
+                                vec![box_()
+                                    .flex_direction("row")
+                                    .children(Children::Static(vec![
+                                        text()
+                                            .wrap_mode("none")
+                                            .flex_shrink(0.0)
+                                            .dyn_prop(
+                                                "content",
+                                                dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                                                    match i.footer_hint.as_ref() {
+                                                        Some((title, _)) => styled(vec![
+                                                            chunk(title.clone(), i.colors.text, None, 1),
+                                                            // The separator space rides the
+                                                            // base span (`</b>{" "}`,
+                                                            // dialog-select.tsx:631 — text.base,
+                                                            // not muted).
+                                                            chunk(" ".to_owned(), i.colors.text, None, 0),
+                                                        ]),
+                                                        None => styled(Vec::new()),
+                                                    }
+                                                })),
+                                            )
+                                            .into_element(),
+                                        text()
+                                            .wrap_mode("none")
+                                            .flex_shrink(0.0)
+                                            .dyn_prop(
+                                                "content",
+                                                dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                                                    match i.footer_hint.as_ref() {
+                                                        Some((_, label)) => styled(vec![chunk(
+                                                            label.clone(),
+                                                            i.colors.muted,
+                                                            None,
+                                                            0,
+                                                        )]),
+                                                        None => styled(Vec::new()),
+                                                    }
+                                                })),
+                                            )
+                                            .into_element(),
+                                    ]))
+                                    .into_element()]
+                            }
+                        },
+                    )
+                };
+                let right_carrier = box_().children_dyn(Rc::new(hint_gate));
                 vec![box_()
                     .flex_direction("row")
                     .justify_content("space-between")
@@ -915,7 +993,10 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
                     .padding_right(2.0)
                     .flex_shrink(0.0)
                     .margin_top(1.0)
-                    .child(box_().flex_direction("row").children_dyn(actions_for(&inputs)))
+                    .children(Children::Static(vec![
+                        box_().flex_direction("row").children_dyn(actions_for(&inputs)).into_element(),
+                        right_carrier.into_element(),
+                    ]))
                     .into_element()]
             }
         },
@@ -2018,6 +2099,61 @@ fn pair_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder 
     ))
 }
 
+/// W4 — `DialogStatus` (dialog-status.tsx:22-61): the custom (non-
+/// select) tree — the bold `Status` title + `esc` chrome row at
+/// paddingLeft 2, `gap 1`, then the status rows (the count line /
+/// per-server bullets / the "No MCP servers" fallback — all
+/// `theme.text.base`), `paddingBottom 1`. The rows ride `hint_lines`.
+fn status_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder {
+    let title_row = box_().flex_direction("row").justify_content("space-between").children(
+        Children::Static(vec![
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk("Status".to_owned(), i.colors.text, None, 1)])
+                    })),
+                )
+                .into_element(),
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk("esc".to_owned(), i.colors.muted, None, 0)])
+                    })),
+                )
+                .into_element(),
+        ]),
+    );
+    let rows = ForItemSource {
+        source: map(inputs.clone(), |i: &DialogInputs| {
+            i.hint_lines
+                .iter()
+                .enumerate()
+                .map(|(n, line)| ForItem { key: format!("S{n}"), value: PropValue::Str(line.clone()) })
+                .collect::<Vec<ForItem>>()
+        }),
+    };
+    let row_inputs = inputs.clone();
+    let content_for = for_list(Rc::new(rows), move |_item: &ForItem, index: usize| {
+        let inputs = row_inputs.clone();
+        text()
+            .dyn_prop(
+                "content",
+                dyn_styled(map(inputs, move |i: &DialogInputs| {
+                    match i.hint_lines.get(index) {
+                        Some(line) => styled(vec![chunk(line.clone(), i.colors.text, None, 0)]),
+                        None => styled(Vec::new()),
+                    }
+                })),
+            )
+            .into_element()
+    });
+    box_().padding_left(2.0).padding_right(2.0).padding_bottom(1.0).children(Children::Static(
+        vec![title_row.into_element(), box_().children_dyn(Rc::new(content_for)).margin_top(1.0).into_element()],
+    ))
+}
+
 // ---------------------------------------------------------------------------
 // the mount
 // ---------------------------------------------------------------------------
@@ -2058,6 +2194,7 @@ fn chrome_element(
         ),
         Family::GenericPrompt => generic_prompt_builder(&family_inputs),
         Family::BtwAnswer => btw_answer_builder(&family_inputs),
+        Family::Status => status_builder(&family_inputs),
     };
     box_()
         .width(width as f32)
@@ -2299,7 +2436,8 @@ fn dialog_chrome_button_hits(
         | Family::BtwPrompt
         | Family::PluginInstallPrompt
         | Family::GenericPrompt
-        | Family::BtwAnswer => ("esc", 2),
+        | Family::BtwAnswer
+        | Family::Status => ("esc", 2),
         Family::Help => ("esc/enter", 2),
     };
     let label_width = label.chars().count();
@@ -2378,6 +2516,9 @@ fn build_inputs(
         // F15 fix round: the pair dialog's CUSTOM tree (ref
         // dialog-pair.tsx is not a DialogSelect).
         DialogKind::Pair => Family::Pair,
+        // W4: the status dialog's CUSTOM tree (ref dialog-status.tsx
+        // is not a DialogSelect).
+        DialogKind::Status => Family::Status,
         _ => Family::Select,
     };
     match family {
@@ -2402,6 +2543,7 @@ fn build_inputs(
                     .iter()
                     .map(|action| (action.title.clone(), action.label.clone()))
                     .collect(),
+                footer_hint: props.footer_hint.clone(),
                 prompt_value: String::new(),
                 hint_lines: Vec::new(),
                 plugin_title: String::new(),
@@ -2441,6 +2583,7 @@ fn build_inputs(
             destructive: false,
             window: Vec::new(),
             actions: Vec::new(),
+            footer_hint: None,
             prompt_value: entry.value.clone(),
             hint_lines: Vec::new(),
             plugin_title: String::new(),
@@ -2481,6 +2624,7 @@ fn build_inputs(
                 destructive: false,
                 window: Vec::new(),
                 actions: Vec::new(),
+            footer_hint: None,
                 prompt_value: entry.value.clone(),
                 hint_lines: if description.is_empty() {
                     Vec::new()
@@ -2541,6 +2685,7 @@ fn build_inputs(
                 destructive: false,
                 window: Vec::new(),
                 actions: Vec::new(),
+            footer_hint: None,
                 prompt_value: String::new(),
                 hint_lines: Vec::new(),
                 plugin_title: "/btw".to_owned(),
@@ -2579,6 +2724,7 @@ fn build_inputs(
             destructive: false,
             window: Vec::new(),
             actions: Vec::new(),
+            footer_hint: None,
             prompt_value: entry.value.clone(),
             hint_lines: props.hints.clone(),
             plugin_title: String::new(),
@@ -2628,6 +2774,7 @@ fn build_inputs(
                 destructive: false,
                 window: Vec::new(),
                 actions: Vec::new(),
+            footer_hint: None,
                 prompt_value: String::new(),
                 hint_lines: crate::wrap::wrap_label(&hint, content_width.max(1)),
                 plugin_title: String::new(),
@@ -2664,6 +2811,7 @@ fn build_inputs(
                 destructive: false,
                 window: Vec::new(),
                 actions: Vec::new(),
+            footer_hint: None,
                 prompt_value: String::new(),
                 hint_lines: Vec::new(),
                 plugin_title: content.title,
@@ -2722,6 +2870,7 @@ fn build_inputs(
                 destructive: false,
                 window: Vec::new(),
                 actions: Vec::new(),
+            footer_hint: None,
                 prompt_value: String::new(),
                 hint_lines: Vec::new(),
                 plugin_title,
@@ -2767,6 +2916,7 @@ fn build_inputs(
                 destructive: false,
                 window: Vec::new(),
                 actions: Vec::new(),
+            footer_hint: None,
                 prompt_value: String::new(),
                 hint_lines: Vec::new(),
                 plugin_title: title.clone(),
@@ -2816,6 +2966,7 @@ fn build_inputs(
                 destructive: false,
                 window: Vec::new(),
                 actions: Vec::new(),
+            footer_hint: None,
                 prompt_value: String::new(),
                 hint_lines: Vec::new(),
                 plugin_title: String::new(),
@@ -2876,6 +3027,7 @@ fn build_inputs(
                 destructive: false,
                 window: Vec::new(),
                 actions: Vec::new(),
+            footer_hint: None,
                 prompt_value: String::new(),
                 hint_lines: Vec::new(),
                 plugin_title: String::new(),
@@ -2894,6 +3046,43 @@ fn build_inputs(
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
             }
+        }
+        // -- W4: DialogStatus — the custom (non-select) tree ------
+        Family::Status => DialogInputs {
+            family,
+            box_width,
+            colors,
+            title: String::new(),
+            placeholder: String::new(),
+            filter: String::new(),
+            options: Vec::new(),
+            flat: Vec::new(),
+            selected: 0,
+            current: None,
+            flatten: false,
+            destructive: false,
+            window: Vec::new(),
+            actions: Vec::new(),
+            footer_hint: None,
+            prompt_value: String::new(),
+            // The status rows ride the hints (the props layer derives
+            // them — see the `DialogKind::Status` props arm).
+            hint_lines: props.hints.clone(),
+            plugin_title: String::new(),
+            plugin_rows: Vec::new(),
+            message: String::new(),
+            confirm_labels: (String::new(), String::new(), true),
+            error_source: String::new(),
+            error_window: Vec::new(),
+            diagnostic: String::new(),
+            preview_title: String::new(),
+            preview_footer: (String::new(), String::new(), String::new()),
+            preview_rows: 0,
+            pair_rows: Vec::new(),
+            pair_split: false,
+            pair_qr: Vec::new(),
+            btw_window: Vec::new(),
+            btw_styled: Vec::new(),
         }
     }
 }

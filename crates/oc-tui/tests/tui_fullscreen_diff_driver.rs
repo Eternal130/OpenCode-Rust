@@ -202,6 +202,20 @@ fn footer_location_label(directory: &str, branch: Option<String>) -> String {
     label
 }
 
+/// The project-list sink (the live loop's `HttpProjectSink`,
+/// app.rs:7053-7063): `open.menu`'s refetch round-trips the loop
+/// fetcher, so the refetch resolves against the scenario's
+/// `/api/project` fixture like production.
+struct DriverProjectSink {
+    tx: tokio::sync::mpsc::UnboundedSender<LoopRequest>,
+}
+
+impl oc_tui::store::ProjectSink for DriverProjectSink {
+    fn list(&self) {
+        let _ = self.tx.send(LoopRequest::ProjectList);
+    }
+}
+
 struct Pump {
     app: App,
     ingest_rx: tokio::sync::mpsc::Receiver<Ingest>,
@@ -324,6 +338,13 @@ impl Pump {
                         forms: Vec::new(),
                     }]);
                 }
+                // TUI-6 (app.rs:9834-9837's live-loop arm): the boot
+                // project-registry sync lands in the Open menu's
+                // project list.
+                LoopFetch::ProjectList(result) => match result {
+                    Ok(rows) => self.app.store.project_list_loaded(rows),
+                    Err(error) => self.app.store.project_list_failed(error),
+                },
                 // The interactive fetch results (dialog search,
                 // autocomplete, terminals — app.rs:9745+) cannot fire
                 // in the replay corpus (their requests are key-driven);
@@ -701,6 +722,9 @@ async fn tui_fullscreen_diff_driver() {
                 connection_task,
             )
         };
+        pump.app
+            .store
+            .set_project_sink(std::rc::Rc::new(DriverProjectSink { tx: pump.fetch_tx.clone() }));
 
         // F1 — the ref harness's pinned `TuiApp { version: "test" }`
         // injection (test/fixture/app.ts:35): the home footer's
@@ -712,6 +736,11 @@ async fn tui_fullscreen_diff_driver() {
                 let _ = pump.fetch_tx.send(LoopRequest::LocationVcs(directory.clone()));
             }
         }
+        // TUI-6 (lane-tui2): the boot project-registry sync
+        // (`data.project.sync()`, app.rs:8678's live-loop boot block —
+        // the Open menu's Projects rows + the session footers' labels
+        // read the warm registry).
+        let _ = pump.fetch_tx.send(LoopRequest::ProjectList);
 
         // Boot settle → scenario events → keys → settle.
         let mut error = pump.settle(&case.id).await.err();
