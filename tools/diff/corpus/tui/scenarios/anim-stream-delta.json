@@ -1,0 +1,651 @@
+{
+ "schema": "tui-diff-scenario/1",
+ "id": "anim-stream-delta",
+ "width": 80,
+ "height": 24,
+ "fetch": {
+  "/api/agent": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": [
+     {
+      "id": "build",
+      "name": "build",
+      "mode": "primary",
+      "hidden": false,
+      "request": {
+       "settings": {},
+       "headers": {},
+       "body": {}
+      },
+      "permissions": []
+     }
+    ]
+   }
+  },
+  "/api/command": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/config": {
+   "status": 200,
+   "body": []
+  },
+  "/api/event": {
+   "status": 200,
+   "body": {
+    "sse": true,
+    "initial": {
+     "id": "evt_connected",
+     "type": "server.connected",
+     "data": {}
+    }
+   }
+  },
+  "/api/experimental/migration/v1": {
+   "status": 200,
+   "body": {
+    "status": "completed"
+   }
+  },
+  "/api/form": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/fs/list": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/info": {
+   "status": 200,
+   "body": {
+    "version": "test",
+    "pid": 0,
+    "urls": [],
+    "paths": {
+     "tmp": "/tmp"
+    },
+    "capabilities": {
+     "persistentPty": true
+    }
+   }
+  },
+  "/api/integration": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/location": {
+   "status": 200,
+   "body": {
+    "directory": "/tmp/opencode/packages/tui",
+    "project": {
+     "id": "proj_test",
+     "directory": "/tmp/opencode",
+     "canonical": "/tmp/opencode"
+    }
+   }
+  },
+  "/api/mcp": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/mcp/resource": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": {
+     "resources": [],
+     "templates": []
+    }
+   }
+  },
+  "/api/model": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/plugin": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/project": {
+   "status": 200,
+   "body": []
+  },
+  "/api/provider": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/reference": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/session": {
+   "status": 200,
+   "body": {
+    "data": [
+     {
+      "id": "anim-stream-delta",
+      "title": "Animation: streaming deltas",
+      "projectID": "proj_test",
+      "location": {
+       "directory": "/tmp/opencode/packages/tui"
+      },
+      "agent": "build",
+      "model": {
+       "providerID": "fixture",
+       "id": "model"
+      },
+      "cost": 0,
+      "tokens": {
+       "input": 0,
+       "output": 0,
+       "reasoning": 0,
+       "cache": {
+        "read": 0,
+        "write": 0
+       }
+      },
+      "time": {
+       "created": 1,
+       "updated": 2
+      }
+     }
+    ],
+    "cursor": {}
+   }
+  },
+  "/api/session/active": {
+   "status": 200,
+   "body": {
+    "data": {
+     "id": "anim-stream-delta"
+    }
+   }
+  },
+  "/api/shell": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/skill": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/vcs": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": {
+     "branch": {
+      "current": "main",
+      "default": "main"
+     }
+    }
+   }
+  },
+  "/api/experimental/session/anim-stream-delta/terminal": {
+   "status": 200,
+   "body": {
+    "data": []
+   }
+  },
+  "/api/session/anim-stream-delta": {
+   "status": 200,
+   "body": {
+    "data": {
+     "id": "anim-stream-delta",
+     "title": "Animation: streaming deltas",
+     "projectID": "proj_test",
+     "location": {
+      "directory": "/tmp/opencode/packages/tui"
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "fixture",
+      "id": "model"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "time": {
+      "created": 1,
+      "updated": 2
+     }
+    }
+   }
+  },
+  "/api/session/anim-stream-delta/form": {
+   "status": 200,
+   "body": {
+    "data": []
+   }
+  },
+  "/api/session/anim-stream-delta/inbox": {
+   "status": 200,
+   "body": {
+    "data": []
+   }
+  },
+  "/api/session/anim-stream-delta/message": {
+   "status": 200,
+   "body": {
+    "data": [
+     {
+      "id": "msg_user_1",
+      "sessionID": "anim-stream-delta",
+      "type": "user",
+      "time": {
+       "created": 1
+      },
+      "text": "Keep going."
+     }
+    ],
+    "cursor": {}
+   }
+  },
+  "/api/session/anim-stream-delta/permission": {
+   "status": 200,
+   "body": {
+    "data": []
+   }
+  }
+ },
+ "events": [
+  {
+   "id": "evt_anim-stream-delta_upd",
+   "created": 1,
+   "type": "session.updated",
+   "durable": {
+    "aggregateID": "anim-stream-delta",
+    "seq": 1,
+    "version": 1
+   },
+   "data": {
+    "sessionID": "anim-stream-delta",
+    "info": {
+     "id": "anim-stream-delta",
+     "title": "Animation: streaming deltas",
+     "projectID": "proj_test",
+     "location": {
+      "directory": "/tmp/opencode/packages/tui"
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "fixture",
+      "id": "model"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "time": {
+      "created": 1,
+      "updated": 2
+     }
+    }
+   }
+  },
+  {
+   "id": "evt_anim-stream-delta_2",
+   "created": 102,
+   "type": "session.step.started",
+   "durable": {
+    "aggregateID": "anim-stream-delta",
+    "seq": 2,
+    "version": 1
+   },
+   "data": {
+    "sessionID": "anim-stream-delta",
+    "assistantMessageID": "msg_asst_1",
+    "agent": "build",
+    "model": {
+     "providerID": "fixture",
+     "id": "model"
+    },
+    "started": 0
+   }
+  },
+  {
+   "id": "evt_anim-stream-delta_3",
+   "created": 103,
+   "type": "session.text.started",
+   "durable": {
+    "aggregateID": "anim-stream-delta",
+    "seq": 3,
+    "version": 1
+   },
+   "data": {
+    "sessionID": "anim-stream-delta",
+    "assistantMessageID": "msg_asst_1",
+    "ordinal": 0
+   }
+  }
+ ],
+ "keys": [],
+ "settle_ms": 300,
+ "note": "Anim family (A2): one text.delta injected per virtual tick via anim.tick_events, text.ended+step.ended at the final tick -- mid frames assert live streaming accumulation, the last frame converges to the identical settled message (spinner gone).",
+ "anim": {
+  "ticks": 10,
+  "tick_events": [
+   [],
+   [
+    {
+     "id": "evt_anim-stream-delta_11",
+     "created": 111,
+     "type": "session.text.delta",
+     "durable": {
+      "aggregateID": "anim-stream-delta",
+      "seq": 11,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-stream-delta",
+      "assistantMessageID": "msg_asst_1",
+      "ordinal": 0,
+      "delta": "Counting "
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-stream-delta_12",
+     "created": 112,
+     "type": "session.text.delta",
+     "durable": {
+      "aggregateID": "anim-stream-delta",
+      "seq": 12,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-stream-delta",
+      "assistantMessageID": "msg_asst_1",
+      "ordinal": 0,
+      "delta": "words "
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-stream-delta_13",
+     "created": 113,
+     "type": "session.text.delta",
+     "durable": {
+      "aggregateID": "anim-stream-delta",
+      "seq": 13,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-stream-delta",
+      "assistantMessageID": "msg_asst_1",
+      "ordinal": 0,
+      "delta": "as "
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-stream-delta_14",
+     "created": 114,
+     "type": "session.text.delta",
+     "durable": {
+      "aggregateID": "anim-stream-delta",
+      "seq": 14,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-stream-delta",
+      "assistantMessageID": "msg_asst_1",
+      "ordinal": 0,
+      "delta": "they "
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-stream-delta_15",
+     "created": 115,
+     "type": "session.text.delta",
+     "durable": {
+      "aggregateID": "anim-stream-delta",
+      "seq": 15,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-stream-delta",
+      "assistantMessageID": "msg_asst_1",
+      "ordinal": 0,
+      "delta": "stream "
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-stream-delta_16",
+     "created": 116,
+     "type": "session.text.delta",
+     "durable": {
+      "aggregateID": "anim-stream-delta",
+      "seq": 16,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-stream-delta",
+      "assistantMessageID": "msg_asst_1",
+      "ordinal": 0,
+      "delta": "in "
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-stream-delta_17",
+     "created": 117,
+     "type": "session.text.delta",
+     "durable": {
+      "aggregateID": "anim-stream-delta",
+      "seq": 17,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-stream-delta",
+      "assistantMessageID": "msg_asst_1",
+      "ordinal": 0,
+      "delta": "one "
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-stream-delta_18",
+     "created": 118,
+     "type": "session.text.delta",
+     "durable": {
+      "aggregateID": "anim-stream-delta",
+      "seq": 18,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-stream-delta",
+      "assistantMessageID": "msg_asst_1",
+      "ordinal": 0,
+      "delta": "per "
+     }
+    },
+    {
+     "id": "evt_anim-stream-delta_30",
+     "created": 130,
+     "type": "session.text.ended",
+     "durable": {
+      "aggregateID": "anim-stream-delta",
+      "seq": 30,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-stream-delta",
+      "assistantMessageID": "msg_asst_1",
+      "ordinal": 0,
+      "text": "Counting words as they stream in one per tick."
+     }
+    },
+    {
+     "id": "evt_anim-stream-delta_31",
+     "created": 131,
+     "type": "session.step.ended",
+     "durable": {
+      "aggregateID": "anim-stream-delta",
+      "seq": 31,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-stream-delta",
+      "assistantMessageID": "msg_asst_1",
+      "finish": "stop"
+     }
+    }
+   ]
+  ]
+ }
+}

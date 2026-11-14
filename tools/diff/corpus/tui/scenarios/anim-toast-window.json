@@ -1,0 +1,446 @@
+{
+ "schema": "tui-diff-scenario/1",
+ "id": "anim-toast-window",
+ "width": 80,
+ "height": 24,
+ "fetch": {
+  "/api/agent": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": [
+     {
+      "id": "build",
+      "name": "build",
+      "mode": "primary",
+      "hidden": false,
+      "request": {
+       "settings": {},
+       "headers": {},
+       "body": {}
+      },
+      "permissions": []
+     }
+    ]
+   }
+  },
+  "/api/command": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/config": {
+   "status": 200,
+   "body": []
+  },
+  "/api/event": {
+   "status": 200,
+   "body": {
+    "sse": true,
+    "initial": {
+     "id": "evt_connected",
+     "type": "server.connected",
+     "data": {}
+    }
+   }
+  },
+  "/api/experimental/migration/v1": {
+   "status": 200,
+   "body": {
+    "status": "completed"
+   }
+  },
+  "/api/form": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/fs/list": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/info": {
+   "status": 200,
+   "body": {
+    "version": "test",
+    "pid": 0,
+    "urls": [],
+    "paths": {
+     "tmp": "/tmp"
+    },
+    "capabilities": {
+     "persistentPty": true
+    }
+   }
+  },
+  "/api/integration": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/location": {
+   "status": 200,
+   "body": {
+    "directory": "/tmp/opencode/packages/tui",
+    "project": {
+     "id": "proj_test",
+     "directory": "/tmp/opencode",
+     "canonical": "/tmp/opencode"
+    }
+   }
+  },
+  "/api/mcp": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": [
+     {
+      "name": "broken",
+      "status": {
+       "status": "failed",
+       "error": "boom"
+      }
+     }
+    ]
+   }
+  },
+  "/api/mcp/resource": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": {
+     "resources": [],
+     "templates": []
+    }
+   }
+  },
+  "/api/model": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/plugin": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/project": {
+   "status": 200,
+   "body": []
+  },
+  "/api/provider": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/reference": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/session": {
+   "status": 200,
+   "body": {
+    "data": [
+     {
+      "id": "anim-toast-window",
+      "title": "Animation: toast timing window",
+      "projectID": "proj_test",
+      "location": {
+       "directory": "/tmp/opencode/packages/tui"
+      },
+      "agent": "build",
+      "model": {
+       "providerID": "fixture",
+       "id": "model"
+      },
+      "cost": 0,
+      "tokens": {
+       "input": 0,
+       "output": 0,
+       "reasoning": 0,
+       "cache": {
+        "read": 0,
+        "write": 0
+       }
+      },
+      "time": {
+       "created": 1,
+       "updated": 2
+      }
+     }
+    ],
+    "cursor": {}
+   }
+  },
+  "/api/session/active": {
+   "status": 200,
+   "body": {
+    "data": {
+     "id": "anim-toast-window"
+    }
+   }
+  },
+  "/api/shell": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/skill": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/vcs": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": {
+     "branch": {
+      "current": "main",
+      "default": "main"
+     }
+    }
+   }
+  },
+  "/api/experimental/session/anim-toast-window/terminal": {
+   "status": 200,
+   "body": {
+    "data": []
+   }
+  },
+  "/api/session/anim-toast-window": {
+   "status": 200,
+   "body": {
+    "data": {
+     "id": "anim-toast-window",
+     "title": "Animation: toast timing window",
+     "projectID": "proj_test",
+     "location": {
+      "directory": "/tmp/opencode/packages/tui"
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "fixture",
+      "id": "model"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "time": {
+      "created": 1,
+      "updated": 2
+     }
+    }
+   }
+  },
+  "/api/session/anim-toast-window/form": {
+   "status": 200,
+   "body": {
+    "data": []
+   }
+  },
+  "/api/session/anim-toast-window/inbox": {
+   "status": 200,
+   "body": {
+    "data": []
+   }
+  },
+  "/api/session/anim-toast-window/message": {
+   "status": 200,
+   "body": {
+    "data": [
+     {
+      "id": "msg_user_1",
+      "sessionID": "anim-toast-window",
+      "type": "user",
+      "time": {
+       "created": 1
+      },
+      "text": "Keep going."
+     }
+    ],
+    "cursor": {}
+   }
+  },
+  "/api/session/anim-toast-window/permission": {
+   "status": 200,
+   "body": {
+    "data": []
+   }
+  }
+ },
+ "events": [
+  {
+   "id": "evt_anim-toast-window_upd",
+   "created": 1,
+   "type": "session.updated",
+   "durable": {
+    "aggregateID": "anim-toast-window",
+    "seq": 1,
+    "version": 1
+   },
+   "data": {
+    "sessionID": "anim-toast-window",
+    "info": {
+     "id": "anim-toast-window",
+     "title": "Animation: toast timing window",
+     "projectID": "proj_test",
+     "location": {
+      "directory": "/tmp/opencode/packages/tui"
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "fixture",
+      "id": "model"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "time": {
+      "created": 1,
+      "updated": 2
+     }
+    }
+   }
+  }
+ ],
+ "keys": [],
+ "settle_ms": 300,
+ "note": "Anim family (A2): a failed MCP server raises the error toast (app.tsx:531-541) whose surface must stay byte-identical across the whole visible window (12 ticks = 1200ms < the 5000ms dismiss deadline); the dismiss boundary itself is out of frame-sequence scope -- ref dismisses on a REAL global setTimeout (ui/toast.tsx:142), not the injectable clock (SCHEMA comparability note).",
+ "anim": {
+  "ticks": 12
+ }
+}

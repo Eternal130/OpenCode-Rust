@@ -1,0 +1,702 @@
+{
+ "schema": "tui-diff-scenario/1",
+ "id": "anim-stream-multi-part",
+ "width": 80,
+ "height": 24,
+ "fetch": {
+  "/api/agent": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": [
+     {
+      "id": "build",
+      "name": "build",
+      "mode": "primary",
+      "hidden": false,
+      "request": {
+       "settings": {},
+       "headers": {},
+       "body": {}
+      },
+      "permissions": []
+     }
+    ]
+   }
+  },
+  "/api/command": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/config": {
+   "status": 200,
+   "body": []
+  },
+  "/api/event": {
+   "status": 200,
+   "body": {
+    "sse": true,
+    "initial": {
+     "id": "evt_connected",
+     "type": "server.connected",
+     "data": {}
+    }
+   }
+  },
+  "/api/experimental/migration/v1": {
+   "status": 200,
+   "body": {
+    "status": "completed"
+   }
+  },
+  "/api/form": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/fs/list": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/info": {
+   "status": 200,
+   "body": {
+    "version": "test",
+    "pid": 0,
+    "urls": [],
+    "paths": {
+     "tmp": "/tmp"
+    },
+    "capabilities": {
+     "persistentPty": true
+    }
+   }
+  },
+  "/api/integration": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/location": {
+   "status": 200,
+   "body": {
+    "directory": "/tmp/opencode/packages/tui",
+    "project": {
+     "id": "proj_test",
+     "directory": "/tmp/opencode",
+     "canonical": "/tmp/opencode"
+    }
+   }
+  },
+  "/api/mcp": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/mcp/resource": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": {
+     "resources": [],
+     "templates": []
+    }
+   }
+  },
+  "/api/model": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/plugin": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/project": {
+   "status": 200,
+   "body": []
+  },
+  "/api/provider": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/reference": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/session": {
+   "status": 200,
+   "body": {
+    "data": [
+     {
+      "id": "anim-stream-multi-part",
+      "title": "Animation: interleaved parts",
+      "projectID": "proj_test",
+      "location": {
+       "directory": "/tmp/opencode/packages/tui"
+      },
+      "agent": "build",
+      "model": {
+       "providerID": "fixture",
+       "id": "model"
+      },
+      "cost": 0,
+      "tokens": {
+       "input": 0,
+       "output": 0,
+       "reasoning": 0,
+       "cache": {
+        "read": 0,
+        "write": 0
+       }
+      },
+      "time": {
+       "created": 1,
+       "updated": 2
+      }
+     }
+    ],
+    "cursor": {}
+   }
+  },
+  "/api/session/active": {
+   "status": 200,
+   "body": {
+    "data": {
+     "id": "anim-stream-multi-part"
+    }
+   }
+  },
+  "/api/shell": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/skill": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": []
+   }
+  },
+  "/api/vcs": {
+   "status": 200,
+   "body": {
+    "location": {
+     "directory": "/tmp/opencode/packages/tui",
+     "project": {
+      "id": "proj_test",
+      "directory": "/tmp/opencode",
+      "canonical": "/tmp/opencode"
+     }
+    },
+    "data": {
+     "branch": {
+      "current": "main",
+      "default": "main"
+     }
+    }
+   }
+  },
+  "/api/experimental/session/anim-stream-multi-part/terminal": {
+   "status": 200,
+   "body": {
+    "data": []
+   }
+  },
+  "/api/session/anim-stream-multi-part": {
+   "status": 200,
+   "body": {
+    "data": {
+     "id": "anim-stream-multi-part",
+     "title": "Animation: interleaved parts",
+     "projectID": "proj_test",
+     "location": {
+      "directory": "/tmp/opencode/packages/tui"
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "fixture",
+      "id": "model"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "time": {
+      "created": 1,
+      "updated": 2
+     }
+    }
+   }
+  },
+  "/api/session/anim-stream-multi-part/form": {
+   "status": 200,
+   "body": {
+    "data": []
+   }
+  },
+  "/api/session/anim-stream-multi-part/inbox": {
+   "status": 200,
+   "body": {
+    "data": []
+   }
+  },
+  "/api/session/anim-stream-multi-part/message": {
+   "status": 200,
+   "body": {
+    "data": [
+     {
+      "id": "msg_user_1",
+      "sessionID": "anim-stream-multi-part",
+      "type": "user",
+      "time": {
+       "created": 1
+      },
+      "text": "Keep going."
+     }
+    ],
+    "cursor": {}
+   }
+  },
+  "/api/session/anim-stream-multi-part/permission": {
+   "status": 200,
+   "body": {
+    "data": []
+   }
+  }
+ },
+ "events": [
+  {
+   "id": "evt_anim-stream-multi-part_upd",
+   "created": 1,
+   "type": "session.updated",
+   "durable": {
+    "aggregateID": "anim-stream-multi-part",
+    "seq": 1,
+    "version": 1
+   },
+   "data": {
+    "sessionID": "anim-stream-multi-part",
+    "info": {
+     "id": "anim-stream-multi-part",
+     "title": "Animation: interleaved parts",
+     "projectID": "proj_test",
+     "location": {
+      "directory": "/tmp/opencode/packages/tui"
+     },
+     "agent": "build",
+     "model": {
+      "providerID": "fixture",
+      "id": "model"
+     },
+     "cost": 0,
+     "tokens": {
+      "input": 0,
+      "output": 0,
+      "reasoning": 0,
+      "cache": {
+       "read": 0,
+       "write": 0
+      }
+     },
+     "time": {
+      "created": 1,
+      "updated": 2
+     }
+    }
+   }
+  },
+  {
+   "id": "evt_anim-stream-multi-part_2",
+   "created": 102,
+   "type": "session.step.started",
+   "durable": {
+    "aggregateID": "anim-stream-multi-part",
+    "seq": 2,
+    "version": 1
+   },
+   "data": {
+    "sessionID": "anim-stream-multi-part",
+    "assistantMessageID": "msg_asst_1",
+    "agent": "build",
+    "model": {
+     "providerID": "fixture",
+     "id": "model"
+    },
+    "started": 0
+   }
+  },
+  {
+   "id": "evt_anim-stream-multi-part_3",
+   "created": 103,
+   "type": "session.text.started",
+   "durable": {
+    "aggregateID": "anim-stream-multi-part",
+    "seq": 3,
+    "version": 1
+   },
+   "data": {
+    "sessionID": "anim-stream-multi-part",
+    "assistantMessageID": "msg_asst_1",
+    "ordinal": 0
+   }
+  },
+  {
+   "id": "evt_anim-stream-multi-part_4",
+   "created": 104,
+   "type": "session.text.started",
+   "durable": {
+    "aggregateID": "anim-stream-multi-part",
+    "seq": 4,
+    "version": 1
+   },
+   "data": {
+    "sessionID": "anim-stream-multi-part",
+    "assistantMessageID": "msg_asst_1",
+    "ordinal": 1
+   }
+  }
+ ],
+ "keys": [],
+ "settle_ms": 300,
+ "note": "Anim family (A2): two text parts with interleaved per-tick deltas (odd ticks -> part 0, even ticks -> part 1), both ended plus step.ended at the final tick -- mid frames assert interleaved live accumulation, the last frame converges to the settled two-part message.",
+ "anim": {
+  "ticks": 10,
+  "tick_events": [
+   [],
+   [
+    {
+     "id": "evt_anim-stream-multi-part_11",
+     "created": 111,
+     "type": "session.text.delta",
+     "durable": {
+      "aggregateID": "anim-stream-multi-part",
+      "seq": 11,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-stream-multi-part",
+      "assistantMessageID": "msg_asst_1",
+      "ordinal": 0,
+      "delta": "Alpha "
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-stream-multi-part_12",
+     "created": 112,
+     "type": "session.text.delta",
+     "durable": {
+      "aggregateID": "anim-stream-multi-part",
+      "seq": 12,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-stream-multi-part",
+      "assistantMessageID": "msg_asst_1",
+      "ordinal": 1,
+      "delta": "Beta "
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-stream-multi-part_13",
+     "created": 113,
+     "type": "session.text.delta",
+     "durable": {
+      "aggregateID": "anim-stream-multi-part",
+      "seq": 13,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-stream-multi-part",
+      "assistantMessageID": "msg_asst_1",
+      "ordinal": 0,
+      "delta": "part "
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-stream-multi-part_14",
+     "created": 114,
+     "type": "session.text.delta",
+     "durable": {
+      "aggregateID": "anim-stream-multi-part",
+      "seq": 14,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-stream-multi-part",
+      "assistantMessageID": "msg_asst_1",
+      "ordinal": 1,
+      "delta": "part "
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-stream-multi-part_15",
+     "created": 115,
+     "type": "session.text.delta",
+     "durable": {
+      "aggregateID": "anim-stream-multi-part",
+      "seq": 15,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-stream-multi-part",
+      "assistantMessageID": "msg_asst_1",
+      "ordinal": 0,
+      "delta": "streams "
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-stream-multi-part_16",
+     "created": 116,
+     "type": "session.text.delta",
+     "durable": {
+      "aggregateID": "anim-stream-multi-part",
+      "seq": 16,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-stream-multi-part",
+      "assistantMessageID": "msg_asst_1",
+      "ordinal": 1,
+      "delta": "streams "
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-stream-multi-part_17",
+     "created": 117,
+     "type": "session.text.delta",
+     "durable": {
+      "aggregateID": "anim-stream-multi-part",
+      "seq": 17,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-stream-multi-part",
+      "assistantMessageID": "msg_asst_1",
+      "ordinal": 0,
+      "delta": "even "
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-stream-multi-part_18",
+     "created": 118,
+     "type": "session.text.delta",
+     "durable": {
+      "aggregateID": "anim-stream-multi-part",
+      "seq": 18,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-stream-multi-part",
+      "assistantMessageID": "msg_asst_1",
+      "ordinal": 1,
+      "delta": "odd "
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-stream-multi-part_19",
+     "created": 119,
+     "type": "session.text.delta",
+     "durable": {
+      "aggregateID": "anim-stream-multi-part",
+      "seq": 19,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-stream-multi-part",
+      "assistantMessageID": "msg_asst_1",
+      "ordinal": 0,
+      "delta": "ticks."
+     }
+    }
+   ],
+   [
+    {
+     "id": "evt_anim-stream-multi-part_30",
+     "created": 130,
+     "type": "session.text.ended",
+     "durable": {
+      "aggregateID": "anim-stream-multi-part",
+      "seq": 30,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-stream-multi-part",
+      "assistantMessageID": "msg_asst_1",
+      "ordinal": 0,
+      "text": "Alpha part streams even ticks."
+     }
+    },
+    {
+     "id": "evt_anim-stream-multi-part_31",
+     "created": 131,
+     "type": "session.text.ended",
+     "durable": {
+      "aggregateID": "anim-stream-multi-part",
+      "seq": 31,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-stream-multi-part",
+      "assistantMessageID": "msg_asst_1",
+      "ordinal": 1,
+      "text": "Beta part streams odd ticks."
+     }
+    },
+    {
+     "id": "evt_anim-stream-multi-part_32",
+     "created": 132,
+     "type": "session.step.ended",
+     "durable": {
+      "aggregateID": "anim-stream-multi-part",
+      "seq": 32,
+      "version": 1
+     },
+     "data": {
+      "sessionID": "anim-stream-multi-part",
+      "assistantMessageID": "msg_asst_1",
+      "finish": "stop"
+     }
+    }
+   ]
+  ]
+ }
+}
