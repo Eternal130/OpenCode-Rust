@@ -296,3 +296,106 @@ class DefensiveCompareTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class FramesInfraTest(unittest.TestCase):
+    """A2 review fixes: missing frames on either side is infra-red,
+    never a silent exact."""
+
+    def _tmp_out(self, grid_extra: dict | None) -> "Path":
+        import json
+        import tempfile
+        from pathlib import Path
+        import tools.diff.tui_fullscreen as tf
+        td = tempfile.TemporaryDirectory()
+        out = Path(td.name)
+        payload = {"schema": "tui-diff-grid/1", "id": "anim-x", "width": 8,
+                   "height": 4, "cells": [[None] * 8 for _ in range(4)]}
+        if grid_extra is not None:
+            payload.update(grid_extra)
+        (out / "anim-x.json").write_text(json.dumps(payload))
+        self.addCleanup(td.cleanup)
+        return out
+
+    def test_anim_case_missing_frames_on_one_side_is_infra_red(self):
+        import tools.diff.tui_fullscreen as tf
+        # the side WITHOUT frames (rust) must be flagged: an anim
+        # scenario (anim_ticks declared) that emits no frames is an
+        # infra failure, not a comparable result
+        out = self._tmp_out(None)  # no frames key at all
+        cases = [{"id": "anim-x", "scenario": "s", "width": 8, "height": 4,
+                  "anim_ticks": 8}]
+        with self.assertRaises(SystemExit) as cm:
+            tf.load_side(out, cases, "rust")
+        self.assertEqual(cm.exception.code, 1)
+
+    def test_anim_case_short_frames_is_infra_red(self):
+        import tools.diff.tui_fullscreen as tf
+        frames = [[[None] * 8 for _ in range(4)] for _ in range(3)]  # != K+1
+        out = self._tmp_out({"frames": frames})
+        cases = [{"id": "anim-x", "scenario": "s", "width": 8, "height": 4,
+                  "anim_ticks": 8}]
+        with self.assertRaises(SystemExit):
+            tf.load_side(out, cases, "ref")
+
+    def test_resting_case_with_frames_is_infra_red(self):
+        import tools.diff.tui_fullscreen as tf
+        frames = [[[None] * 8 for _ in range(4)] for _ in range(9)]
+        out = self._tmp_out({"frames": frames})
+        cases = [{"id": "anim-x", "scenario": "s", "width": 8, "height": 4}]
+        with self.assertRaises(SystemExit):
+            tf.load_side(out, cases, "ref")
+
+    def test_compare_frames_empty_side_never_exact(self):
+        import tools.diff.tui_fullscreen as tf
+        g = mkgrid(uniform())
+        res = tf.compare_frames({}, dict(g))  # ref side: no frames
+        self.assertEqual(res["verdict"], "diverge")
+        self.assertEqual(res["per_tick"], [])
+        self.assertEqual(res["first_tick_diff"]["field"], "frames_length")
+        # length asymmetry (zip truncation) is diverge too
+        g2 = dict(g, frames=[uniform(), uniform()])
+        g3 = dict(g, frames=[uniform()])
+        res2 = tf.compare_frames(g3, g2)
+        self.assertEqual(res2["verdict"], "diverge")
+        self.assertEqual(res2["first_tick_diff"]["field"], "frames_length")
+
+
+class ArtifactFamilyTest(unittest.TestCase):
+    """The A2 animation-gate artifact family is shape-narrow: only the
+    running-tool glyph pair (⠋ vs ⋯) of anim-tool-progress matches."""
+
+    def _rec(self, cid: str, field: str, ref, rust) -> dict:
+        fd = {"row": 7, "col": 5, "field": field, "ref": ref, "rust": rust}
+        return {"id": cid, "dimension": "frames", "verdict": "diverge",
+                "first_tick_diff": {"tick": 0, **fd}, "per_tick": ["diverge"]}
+
+    def _label(self, rec: dict) -> str | None:
+        return adjudicate(rec)
+
+    def test_tool_progress_glyph_pair_hits(self):
+        label = self._label(self._rec("anim-tool-progress", "ch", "⋯", "⠋"))
+        self.assertIsNotNone(label)
+        self.assertIn("动画门控", label)
+
+    def test_non_tool_progress_anim_diverge_does_not_hit(self):
+        # review finding: the old anim-* prefix swallowed ANY anim
+        # divergence — e.g. a caret-blink diff must stay unadjudicated
+        # (anim-toast-* is covered by the separate G-424 family; the
+        # generic artifact cluster itself must not match it either)
+        self.assertIsNone(self._label(self._rec("anim-spinner-running", "ch", "a", " ")))
+        self.assertIsNone(self._label(self._rec("anim-stream-delta", "fg",
+                                                [255, 255, 255], [128, 128, 128])))
+        g424 = self._label(self._rec("anim-toast-window", "ch", "┃", " "))
+        self.assertIsNotNone(g424)  # G-424's OWN family, not the artifact one
+        self.assertIn("G-424", g424)
+
+    def test_tool_progress_fg_diff_does_not_hit(self):
+        # same scenario but a non-ch divergence: no match
+        self.assertIsNone(self._label(
+            self._rec("anim-tool-progress", "fg", [1, 2, 3], [4, 5, 6])))
+
+    def test_tool_progress_other_glyph_pair_does_not_hit(self):
+        # a NEW glyph shape needs a NEW evidenced entry, not a silent
+        # widening of this cluster
+        self.assertIsNone(self._label(self._rec("anim-tool-progress", "ch", "⠙", "⋯")))

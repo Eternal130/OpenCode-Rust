@@ -251,13 +251,17 @@ def load_side(out: Path, cases: list[dict], side: str) -> dict[str, dict]:
             infra.append(
                 f"{case['id']}: {side} cells shape {real} "
                 f"!= declared {grid.get('width')}x{grid.get('height')}")
-        # A2: frames (when present) must be K+1 dense grids of the same
-        # size (K = the scenario's declared ticks)
+        # A2: an anim scenario (manifest anim_ticks present) MUST emit
+        # frames on BOTH sides — a missing/short frames array on either
+        # side is an infra failure (never a silent exact: the review
+        # found compare_frames' zip() over a missing rust side would
+        # produce an empty per_tick list that all()-folded to "exact").
         frames = grid.get("frames")
-        if frames is not None:
-            ticks = case.get("anim_ticks")
-            if ticks is None:
-                infra.append(f"{case['id']}: {side} emitted frames but scenario has no anim")
+        ticks = case.get("anim_ticks")
+        if ticks is not None:
+            if frames is None:
+                infra.append(f"{case['id']}: {side} anim scenario (ticks={ticks}) "
+                             f"emitted no frames")
             elif not isinstance(frames, list) or len(frames) != ticks + 1:
                 infra.append(f"{case['id']}: {side} frames length "
                              f"{len(frames) if isinstance(frames, list) else 'non-list'} "
@@ -268,6 +272,8 @@ def load_side(out: Path, cases: list[dict], side: str) -> dict[str, dict]:
                         infra.append(f"{case['id']}: {side} frame {tick} not a dense "
                                      f"{grid.get('width')}x{grid.get('height')} grid")
                         break
+        elif frames is not None:
+            infra.append(f"{case['id']}: {side} emitted frames but scenario has no anim")
         grids[case["id"]] = grid
     if infra:
         for line in infra:
@@ -443,6 +449,24 @@ def compare_frames(ref_grid: dict, rust_grid: dict) -> dict:
     """
     ref_frames = ref_grid.get("frames") or []
     rust_frames = rust_grid.get("frames") or []
+    # Empty-sequence defense (review #1): an empty frames array on
+    # either side must NEVER fold to "exact" (all() over [] is True).
+    # load_side already red-flags this as infra, but compare_frames
+    # stays defensive on its own — empty ≠ exact, it is a length
+    # divergence.
+    if not ref_frames or not rust_frames or len(ref_frames) != len(rust_frames):
+        # (load_side already enforces K+1 on both sides — this is the
+        # same defensive branch for length asymmetry: zip() must never
+        # silently truncate a longer side into an "exact" prefix)
+        return {
+            "dimension": "frames",
+            "verdict": "diverge",
+            "per_tick": [],
+            "first_tick_diff": {"tick": None, "row": None, "col": None,
+                                "field": "frames_length",
+                                "ref": len(ref_frames), "rust": len(rust_frames)},
+            "cells_diff_count": max(len(ref_frames), len(rust_frames), 1),
+        }
     per_tick = []
     first: dict | None = None
     for tick, (rf, uf) in enumerate(zip(ref_frames, rust_frames)):
@@ -575,9 +599,21 @@ CAUSES = [
         ),
     ),
     (
-        "A2 ref 动画门控夹具伪影（rust 时钟驱动动画 vs ref animations:false 静态形状）",
-        lambda d: str(d.get("id", "")).startswith("anim-")
-        and d.get("dimension") in ("frames", "resting", None),
+        "A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）",
+        # NARROWED per review: the original anim-* prefix swallowed ANY
+        # divergence in ANY anim scenario. The actually-evidenced shape
+        # is the running-tool row's first cell at tick 0 (and every
+        # tick after): rust SPINNER_FRAMES[0] '⠋' (clock-driven, no
+        # animations gate) vs the ref fixture's animations:false
+        # fallback '⋯' (spinner.tsx:27-31). Match exactly that: the
+        # anim-tool-progress scenario family, a ch-field first diff,
+        # and the glyph pair ∈ {('⠋','⋯'), ('⋯','⠋')}. A NEW artifact
+        # shape (e.g. caret blink, knight gradient, spinner rotation
+        # once a ref clock exists) requires a NEW CAUSES entry with its
+        # own probe evidence — it must not silently widen this one.
+        lambda d: str(d.get("id", "")).startswith("anim-tool-progress")
+        and d.get("dimension") in ("frames", "resting", None)
+        and _first_glyph_diff(d) in (("⠋", "⋯"), ("⋯", "⠋")),
         (
             "anim-* 场景：rust 帧是 (store, clock) 纯函数（A1）——虚拟时钟逐拍推进使"
             "spinner 轮转/caret blink（500ms 周期）/knight 渐变在中间拍真实变化；"
@@ -635,6 +671,19 @@ CAUSES = [
         ),
     ),
 ]
+
+
+def _first_glyph_diff(d: dict) -> tuple[str, str] | None:
+    """The (ref, rust) char pair of the record's first divergent cell
+    when that divergence is a ch-field one (resting records carry
+    first_diff; frames records carry first_tick_diff)."""
+    fd = d.get("first_diff") or d.get("first_tick_diff") or {}
+    if fd.get("field") != "ch":
+        return None
+    ref, rust = fd.get("ref"), fd.get("rust")
+    if isinstance(ref, str) and isinstance(rust, str):
+        return (ref, rust)
+    return None
 
 
 def _midframe_shape(d: dict) -> str | None:
