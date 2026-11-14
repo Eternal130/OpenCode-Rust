@@ -216,6 +216,25 @@ impl oc_tui::store::ProjectSink for DriverProjectSink {
     }
 }
 
+/// The config sink mirroring the ref harness fixture's config service
+/// (ref test/fixture/app.ts:37: `update: async () => ({})`): config
+/// writes are DROPPED (reconciled to the fixture's resolved defaults),
+/// never landing in a local cli.json — so the store's
+/// `update_session_sidebar` contract sees "write did not land" and the
+/// resolved sidebar mode never changes post-boot, exactly the ref
+/// fixture's observable (T8-320: the sidebar-toggle scenario's
+/// `<leader>b` at 320 cols).
+struct DriverConfigSink;
+
+impl oc_tui::store::ConfigSink for DriverConfigSink {
+    fn update_theme_name(&self, _name: &str) {}
+    fn update_theme_mode(&self, _mode: &str) {}
+    fn update_session_sidebar(&self, _hide: bool) -> bool {
+        false
+    }
+    fn update_session_grouping(&self, _grouped: bool) {}
+}
+
 struct Pump {
     app: App,
     ingest_rx: tokio::sync::mpsc::Receiver<Ingest>,
@@ -346,6 +365,14 @@ impl Pump {
                     Ok(rows) => self.app.store.project_list_loaded(rows),
                     Err(error) => self.app.store.project_list_failed(error),
                 },
+                // T8-320 — the terminal capability probe
+                // (session-terminals.tsx:59-76: the event stream opens
+                // → refresh `info` → `capabilities?.persistentPty !==
+                // false`): the boot send mirrors the live loop's
+                // probe, gating the palette's terminal rows.
+                LoopFetch::TerminalCapability(available) => {
+                    self.app.store.set_terminal_available(available);
+                }
                 // The interactive fetch results (dialog search,
                 // autocomplete, terminals — app.rs:9745+) cannot fire
                 // in the replay corpus (their requests are key-driven);
@@ -726,6 +753,7 @@ async fn tui_fullscreen_diff_driver() {
         pump.app
             .store
             .set_project_sink(std::rc::Rc::new(DriverProjectSink { tx: pump.fetch_tx.clone() }));
+        pump.app.store.set_config_sink(std::rc::Rc::new(DriverConfigSink));
 
         // F1 — the ref harness's pinned `TuiApp { version: "test" }`
         // injection (test/fixture/app.ts:35): the home footer's
@@ -742,6 +770,8 @@ async fn tui_fullscreen_diff_driver() {
         // the Open menu's Projects rows + the session footers' labels
         // read the warm registry).
         let _ = pump.fetch_tx.send(LoopRequest::ProjectList);
+        // T8-320 — the terminal capability probe (see the drain arm).
+        let _ = pump.fetch_tx.send(LoopRequest::TerminalCapability);
 
         // Boot settle → scenario events → keys → settle.
         let mut error = pump.settle(&case.id).await.err();
