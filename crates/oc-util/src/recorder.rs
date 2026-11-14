@@ -451,4 +451,100 @@ mod tests {
     fn redacted_value_again(value: &Value) -> Value {
         redact_value(value)
     }
+
+    /// C3 edge-hammer - Concern(1): the full-rewrite flush on a LONG
+    /// event stream. Two thousand events must leave a single valid
+    /// JSON document (tmp+rename atomicity: no torn write) carrying every
+    /// event in order. (Cost note: the rewrite is O(n) per event —
+    /// O(n²) total bytes; bounded registration in GAPS round 32, the
+    /// atomic format kept because a crash mid-recording still leaves
+    /// everything captured so far.)
+    #[test]
+    fn long_stream_full_rewrite_stays_valid_and_complete() {
+        let _env = crate::test_support::lock_env();
+        let dir = tempfile::tempdir().expect("tempdir");
+        init_for_tests(dir.path(), true);
+        let payload = "x".repeat(64);
+        for index in 0..2_000 {
+            event(&json!({
+                "id": format!("evt_{index}"), "created": index,
+                "type": "session.text.delta",
+                "data": { "sessionID": "ses_long", "delta": &payload }
+            }));
+        }
+        let id = {
+            let cell = state_cell().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            cell.as_ref().and_then(|state| state.doc["id"].as_str()).expect("id").to_owned()
+        };
+        let file = dir.path().join(format!("{id}.raw.json"));
+        let parsed: Value =
+            serde_json::from_str(&std::fs::read_to_string(&file).expect("flushed")).expect("valid");
+        let events = parsed["events"].as_array().expect("events");
+        assert_eq!(events.len(), 2_000);
+        assert_eq!(events[0]["id"], "evt_0");
+        assert_eq!(events[1_999]["id"], "evt_1999");
+        // no torn temp files left behind
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("dir")
+            .filter(|entry| {
+                entry.as_ref().is_ok_and(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            })
+            .collect();
+        assert!(leftovers.is_empty(), "no .tmp leftovers: {leftovers:?}");
+    }
+
+    /// C3 edge-hammer — session-switch file boundary: re-arming mints
+    /// a NEW recording id (a new `<id>.raw.json`); the earlier file is
+    /// never touched again (per-session isolation, append-only across
+    /// re-arm — the boundary is the process/arm cycle).
+    #[test]
+    fn rearm_writes_a_new_file_and_never_touches_the_old() {
+        let _env = crate::test_support::lock_env();
+        let dir = tempfile::tempdir().expect("tempdir");
+        init_for_tests(dir.path(), true);
+        boot(80, 24);
+        event(&json!({"id": "evt_a", "type": "session.updated", "data": {}}));
+        let first = {
+            let state = state_cell().lock().unwrap_or_else(|e| e.into_inner());
+            state.as_ref().expect("state").doc["id"].as_str().expect("id").to_owned()
+        };
+        // the "session switch": re-arm (a fresh process-equivalent)
+        init_for_tests(dir.path(), true);
+        boot(100, 30);
+        event(&json!({"id": "evt_b", "type": "session.updated", "data": {}}));
+        let second = {
+            let state = state_cell().lock().unwrap_or_else(|e| e.into_inner());
+            state.as_ref().expect("state").doc["id"].as_str().expect("id").to_owned()
+        };
+        assert_ne!(first, second, "each session mints its own id");
+        let old: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join(format!("{first}.raw.json"))).expect("old"),
+        )
+        .expect("old valid");
+        assert_eq!(old["events"].as_array().map(Vec::len), Some(1), "old file frozen at 1 event");
+        assert_eq!(old["boot"]["width"], 80);
+        let new: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join(format!("{second}.raw.json"))).expect("new"),
+        )
+        .expect("new valid");
+        assert_eq!(new["events"].as_array().map(Vec::len), Some(1));
+        assert_eq!(new["boot"]["width"], 100, "the re-arm's boot wins only in ITS file");
+    }
+
+    /// C3 edge-hammer — duplicate resize suppression across a long
+    /// size history (the `sizes` ledger stays deduplicated tail-first).
+    #[test]
+    fn resize_history_deduplicates_and_preserves_order() {
+        let _env = crate::test_support::lock_env();
+        let dir = tempfile::tempdir().expect("tempdir");
+        init_for_tests(dir.path(), true);
+        boot(80, 24);
+        resize(120, 30);
+        resize(120, 30); // dup — dropped
+        resize(237, 54);
+        resize(120, 30); // back — kept (real history, only tail dups drop)
+        let state = state_cell().lock().unwrap_or_else(|e| e.into_inner());
+        let state = state.as_ref().expect("state");
+        assert_eq!(state.doc["sizes"], json!([[80, 24], [120, 30], [237, 54], [120, 30]]));
+    }
 }

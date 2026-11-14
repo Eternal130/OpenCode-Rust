@@ -324,7 +324,12 @@ async function main() {
         // scenario's initial); the scenario `events` are then emitted via
         // events.emit below (task brief Step 2).
         if (url.pathname === "/api/event" && (entry.body as any)?.sse) return undefined
-        return new Response(JSON.stringify(entry.body), {
+        // C3: a 204 No Content must carry NO body — a real 204 never
+        // has one, and bun's fetch rejects a bodied 204 (the interrupt
+        // stub then rejects unhandled and the renderer console panel
+        // flips open — a mock artifact, not a diff).
+        const body = entry.status === 204 ? null : JSON.stringify(entry.body)
+        return new Response(body, {
           status: entry.status,
           headers: { "content-type": "application/json" },
         })
@@ -392,10 +397,21 @@ async function main() {
       // synchronous state machine, no mount race). Non-plugin scenarios
       // keep the original single-pump flow — the 75-case baseline does
       // not drift.
-      const perTokenIdle = plugins.length > 0
+      // C3: recorded sessions (rec-*) get the same per-token idle for
+      // the WHOLE sequence — real recordings carry human pacing (the
+      // recorder captures keys between real waits), while replay
+      // compresses them to a zero-gap burst. The async-loaded dialogs
+      // (session list's debounced resource) drop an `enter` that
+      // arrives before their options mount; same fixture-artifact
+      // family as B2, same ref-only remedy.
+      const perTokenIdle = plugins.length > 0 || c.id.startsWith("rec-")
       for (const token of scenario.keys) {
         pressToken(app.mockInput, token)
-        if (perTokenIdle) await app.waitForVisualIdle({ quietFrames: 2, maxFrames: 200 })
+        // C3: never idle right AFTER a leader stroke — the which-key
+        // arm is same-burst; a gap drops the chord and the
+        // continuation letter types into the composer instead.
+        const leaderStroke = token === "ctrl+x" || token === "leader"
+        if (perTokenIdle && !leaderStroke) await app.waitForVisualIdle({ quietFrames: 2, maxFrames: 200 })
       }
       await app.waitForVisualIdle({ quietFrames: 3, maxFrames: 600 })
       await Bun.sleep(scenario.settle_ms ?? 200)

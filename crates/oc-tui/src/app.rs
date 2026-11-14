@@ -8269,6 +8269,10 @@ pub async fn run_with_size(
 
     // App + config boot.
     let store = Store::new(crate::reactive::Runtime::new());
+    // diff-ext C3 — the live loop bypasses `App::new` (C1's boot hook
+    // site), so recordings of REAL sessions lost the boot terminal
+    // size; record it here (env-gated no-op without TUI_RECORD_DIR).
+    oc_util::recorder::boot(size.0, size.1);
     let mut app = App::with_store(store, size);
     // G-210 — the `system` slot's palette source: the boot snapshot.
     // `apply_config` installs `generate_system(colors, mode)` into the

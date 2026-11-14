@@ -25,9 +25,9 @@ cells 稠密化，None/缺省子字段补规范默认（ch=' '、attrs 排序去
 
 | 总量 | EXACT | STRUCTURAL | CAUSES 命中 | 未裁决 |
 |---|---|---|---|---|
-| 93 | 81 | 0 | 12 | 0 |
+| 99 | 81 | 0 | 12 | 6 |
 
-（verdict 分布：exact 81 / structural 0 / diverge 12；
+（verdict 分布：exact 81 / structural 0 / diverge 18；
 gate 见编排器输出，未裁决>0 ⇒ exit 2）
 
 ## 分歧明细
@@ -240,7 +240,7 @@ anim 场景（`anim.ticks` 声明，SCHEMA A2 扩展）在静息排空后逐拍�
 
 | 维度 | 总量 | EXACT | STRUCTURAL | DIVERGE | 未裁决 |
 |---|---|---|---|---|---|
-| resting | 3 | 3 | 0 | 0 | 0 |
+| resting | 9 | 3 | 0 | 6 | 6 |
 
 ## 范围外声明
 

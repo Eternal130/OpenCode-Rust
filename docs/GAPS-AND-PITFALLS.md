@@ -3244,3 +3244,29 @@ G-412/413/414/415/416/417/418/420/422 ✅；**G-419/G-421 勘误撤销**（登�
 - Ref：packages/tui/src/plugin/context.tsx:460-484（失败态列表 + toast）+ feature-plugins/system/plugins.tsx:54-76（TUI/server 双段源表 + 状态行 + view-error affordance）。
 - Rust：crates/oc-tui/src/plugin_boot.rs `surface_boot_failures`（chip+toast 已对齐）；crates/oc-tui/src/components/command_palette.rs:1537-1560（Plugins 对话框有界投影——修复面：失败入口（target+错误态）入选项表 + "enter view error" 提示行 + 错误详情屏）。
 - 处置：登记不拦（CAUSES 精确 matcher：`plugin-fallback*`）。共现形状：toast affordance 格差（rust 恒 'x' 窄面板 vs ref '› Open plugins' 宽面板+长标题三行折行）= G-424 toast 几何族，随 G-424 修复 lane 连同 oracle 重冻结一并落地。
+
+# 第三十二轮（2026-11-15，差分扩展 C3：真实语料首采与回放验证 —— C 线收尾轻量版）
+
+三条更长真链会话录制（真 rust 生产链 `run_with_size` over PTY × FakeLlm 真实形状 SSE 桩，`TUI_RECORD_DIR` 开；录制驱动 `crates/oc-tui/tests/tui_record_sessions.rs`，release profile 手工跑 `--ignored --exact`，每测试进程=一会话一文件）：a) 多轮深转录（49 事件：双轮 user/step/reasoning/markdown 代码块/tool called+progress+success + execution 生命周期 + 尺寸史 80×24→120×30→237×54）；b) 对话框/侧栏/palette 键序密布（72 键：palette 检索+应用、session 对话框往返、model 对话框、导航键族、`<leader>n` 新会话路由）；c) 流式中断（双击 ESC interrupt 语义）+ 新会话切换。编译（--redact 默认，双层幂等）→ recorded-local → 通道重放（99 case）。裁决：**b) 三档 EXACT**；a)、c) 各三档 diverge → 登记如下（未裁决 6，无 infra 红）。顺带自举录制件（C2 的 1 事件引导录）被本轮语料替换（本地件，非提交物）。
+
+### C3 harness 归一化修补（编译器/驱动器，裁定记录）
+- **录制覆盖缺口**：live loop 走 `App::with_store` 绕过 C1 的 `App::new` boot 钩子 → 真会话录制丢 boot 尺寸（`boot:null`）。修补：`run_with_size` 装配点补 `recorder::boot`（app.rs:8270 一带）。`execute_empty` 无录制钩子 → interrupt/inbox-cancel 等 204 族 POST 不入 fetch 映射，回放必 stub_gap。修补：transport.rs `execute_empty` 记 `{status, body:null}`。
+- **编译器（tui_record_compile.py）**：① 非 GET fetch 条目保留（prompt POST 应答是回放面；两侧回放服务器按 path 索引不分方法）；② 尾部 exit chord 剥离（录制 runner 的确定性关机和弦=管道件非会话内容，回放 ctrl+c×2 会在静息捕获前退出被测 app；和弦常被 app 提前退出截断——按和弦前缀最长后缀匹配剥离）；③ census 路径体型卫哨（FakeLlm 兜底 `{}` 使 ref `project.list` 崩（data.ts:1814 projects.map）与 location 信封资源解引用 `response.location` 抛错——空对象体或与 census 默认体型不符者让位 census 夹具默认）；④ 世界重定基（FakeLlm 桩世界 `/tmp`+project `p` vs 通道 census 世界 `/tmp/opencode/packages/tui`+`proj_test`：session list 行 location/projectID 重写到 census 世界，否则 ref session 对话框 location sync 失败 "Could not load sessions"）；⑤ 会话路由补桩集新增 `<sid>/agent`（ref 会话打开 prepare 探测，**204 空 body 契约**——200 体能触发其 UnexpectedStatus 守卫）与 `<sid>/interrupt`（击穿性预桩：两侧谁实际触发 interrupt 是回放期行为差，不该升级为 stub_gap）。
+- **ref 驱动器（tui_fullscreen_ref.ts）**：① rec-* case 键序逐 token idle（B2 插件先例同族扩产：真实录制携带人类节奏，回放压缩为零间隔 burst——ref 异步装载的对话框（session 列表 debounced resource）丢弃早到 enter、或选错行；**leader 和弦两击间不得插 idle**（which-key 臂是同 burst 的，插入后续 letter 落进 composer）；② mock 的 204 必须无 body（真 204 从不带 body）。rust 腿不需要 idle（press() 同步状态机，B2 裁定沿用）——该不对称为夹具伪差族，非移植差。
+- **录制驱动脚本形状教训（FakeLlm 桩真形状）**：inbox 事件 item 需完整 SessionInboxInfo 形状（`id`/`time.created` 缺失使 ref `materializeInboxMessage` 抛错并**吞掉整条后续事件流**）；`session.execution.started/succeeded` 是 running 态（=2 击 ESC interrupt 的 enabled 门）的唯一来源，step.started 不算；FakeLlm `ScriptEvent.delay_ms` 是**相对增量**（anchor 逐帧前移），传绝对时刻表会产生 O(n²) 累积延迟（表面酷似"debug 渲染饿死 ingest"）。
+
+### G-426 🟡 深转录静息渲染族（recorded-deep-transcript，C3 首采 a 三档 diverge，未裁决 6 中占 3）
+- 现象（rec-…-bb7f1e74 ×3 档，cells_diff 848/1591/5319）：同事件流双轮转录，rust 静息帧 = user 行 + `+ Thought · 120ms` 折叠行 + 代码块围栏行（```rust/```diff 逐行）+ 列表 + 分隔线 + 末尾工具区；ref = 无 Thought 行、代码块折叠为整宽 `──────` 分隔（单行）、行数显著更少、**composer 保留已提交草稿**（已提交的键序文本仍留在输入框，rust 清空）、且 tab 条 spinner `⠋` 仍在转（ref 认为会话 running——execution.succeeded 后未静止；rust idle 无 spinner）。
+- 候选根因束（需专用 root-cause 轮拆解）：① reasoning 折叠行静息可见性（rust 显 `+ Thought · 120ms`，ref 折叠为 0 行或并入）；② 围栏代码块静息折叠语义（ref 折成单分隔行 vs rust 全展开）；③ 提交后 composer 草稿保留语义（与 prompt POST 桩应答 `delivery:"queue"` 的交互待查——ref 疑按 queue 语义保留）；④ execution 生命周期静止化不对称（ref spinner 不灭）。
+- 处置：登记不拦（等待 root-cause 轮；本族是 C3 真语料的核心产出——首个"事件流形状全真"的静息面差异集）。不新增 CAUSES matcher（形状未定型，先留 6 未裁决）。
+
+### G-427 🟡 流式中断静息族（recorded-interrupt-switch，C3 首采 c 三档 diverge，未裁决 6 中占 3）
+- 现象（rec-…-db261f5f ×3 档，cells_diff 587/1107/7707）：击 ESC×3 中断 held 流后静息：ref 打开/聚焦 renderer **Console 面板**（"Console (Focused) [Copy (ctrl+shift+c)]" 占据 transcript 下缘，7-80 行差）；rust 无面板。另有一处纯色差簇：tab 条 spinner 字形色 ref `[250,178,131]`（橙）vs rust `[157,124,216]`（紫）与 tab 标题前景 255 vs 238（27 格，行 0）。
+- 已排除：interrupt 桩 204 体（mock 204 无 body 修补后仍在）；错误 toast（prepare 探测 204 修补后无 toast）。单 ESC 不开面板；双 ESC（interrupt 实际触发帧）即开。
+- 候选根因束：① ref interrupt 异步链（prompt/index.tsx 双击机 `void client.api.session.interrupt`）某环节经 fixture console 面 surfaced（openConsoleOnError=false 但 fixture/renderer 层或未遵循）；② tab spinner/标题色=主题角色映射差（真移植差候选，27 格恒定）。
+- 处置：登记不拦（root-cause 轮；纯色差子簇可先行独立裁定）。
+
+### C3 录制器边缘锤（Concern① 会商）
+- 文件边界：每（进程）会话一 `rec-*.raw.json`；重 arm 铸新 id、旧文件冻结不再触碰（`rearm_writes_a_new_file_and_never_touches_the_old` 钉定）。
+- 长流完整性：全量重写 flush（tmp+rename 原子）在 2000 事件下产物恒为单一合法 JSON、全量在场、无 .tmp 残留（`long_stream_full_rewrite_stays_valid_and_complete`，release/debug 均绿）。**Concern① 裁定：不损坏，保原子全量重写**；成本注记=O(n²) 总写字节（2000 事件 ≈300MB 累计写，测试 14s debug）——真实长会话（>万事件）再议 JSONL 追加式，本轮不改（正确性优先，录制失败永不带走会话）。
+- 尺寸史：尾部去重保序（`resize_history_deduplicates_and_preserves_order`）。
