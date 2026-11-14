@@ -14,6 +14,7 @@ pub mod mime;
 pub mod npm_config;
 pub mod pathx;
 pub mod procutil;
+pub mod recorder;
 pub mod retry;
 pub mod wildcard;
 
