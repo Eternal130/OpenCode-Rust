@@ -27,8 +27,8 @@ vt_temporal 记录的 spinner/时钟未接线缺口——所有渲染路径的�
 ### A2: 帧序列对拍模式
 driver 增加 `frames` 输出（虚拟时钟 k=0..K 每拍整屏网格，K 场景声明默认 8）；编排器序列比对（逐拍 EXACT + 首异拍定位）；CAUSES 预填 G-128/G-49/G-368 族（节奏类=登记不拦，形状类=拦）；动画场景族入语料（spinner/流式 delta/加载条）。首轮裁决循环至门绿或有据登记。
 
-### B2: 插件 panel 差分场景（依赖 B1 结论）
-fixture 插件双侧 boot 的 panel 场景 2-4 个；G-28 偏差从文字变逐 cell 清单（预期=CAUSES 命中 G-28 簇=登记不拦，matcher 已就位）；INDEX/GAPS 更新。
+### B2: 真插件差分场景（用户裁决 2026-11-14）
+载荷=用户真实插件集：omo-slim 3.0.3（npm 实体在 /root/.cache/opencode/npm/oh-my-opencode-slim@latest/...，server+TUI 双入口）+ superpowers 7.0.0（git 实体，纯 skill 系统）。差分钉 ref 2.0.24；插件 boot 成败以 fixture 实测为准（静态分析对 minified bundle 不可靠）。**分歧甄别新增"退版本加载伪差"族**：插件落 2.0.24 旧 API 的降级伪影（如 ctx.client/directory/hostFlavor 缺失路径、TUI 2.2.x API 降级）须与移植 bug 区分——CAUSES 加 version-skew 簇（判定文引插件调用点+2.0.24 API 面），命中=登记不拦但须写明伪差机理。场景：插件加载静息屏（palette 含插件命令/keymap 层/omo-slim 侧栏 slot）+ panel 打开屏。G-28 量化清单随裁决产出；INDEX/GAPS 更新。
 
 ### A3: 双 PTY rig 收编（可选收官）
 tools/parity/src/tui_diff.rs + p10_cross_tui 并入通道体系为"活体模式"（opt-in 子命令，报告独立小节）；登记收编记录。
