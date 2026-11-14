@@ -405,7 +405,7 @@ impl SelectProps {
     /// "Search sessions and projects…", dialog-open.tsx:339).
     #[must_use]
     pub fn with_placeholder(mut self, placeholder: &str) -> Self {
-        self.placeholder = placeholder.to_owned();
+        placeholder.clone_into(&mut self.placeholder);
         self
     }
 

@@ -3166,10 +3166,23 @@ G-412/413/414/415/416/417/418/420/422 ✅；**G-419/G-421 勘误撤销**（登�
 
 ---
 
-# 第三十一轮（2026-11-14）：差分通道 8 立项建成（TUI 整屏差分·发版回归门）
+# 第三十一轮（2026-11-14）：差分通道 8 立项建成（TUI 整屏差分·发版回归门）——T9 终态 40/40 EXACT
 
-> spec：docs/superpowers/specs/2026-11-13-tui-fullscreen-diff-channel-8-design.md。首基线 40 case：**EXACT 0 / STRUCTURAL 0 / CAUSES 0 / 未裁决 40**（门红，裁决循环 T9 进行中）。已知候选：屏级 fg 255vs238 系统差、session-tabs 加载态振荡（移植缺陷候选）。范围外收窄见 INDEX.md。
+> spec：docs/superpowers/specs/2026-11-13-tui-fullscreen-diff-channel-8-design.md。首基线 40 case：EXACT 0 / 未裁决 40（门红）。**T9 裁决循环四波（W1-W4，2026-11-14）终态：40 case：EXACT 40 / STRUCTURAL 0 / CAUSES 0 / 未裁决 0——门绿（exit 0），无新 G-ID 立项**（全部分歧经双侧源码取证为 rust 修复面或场景/harness 违反生产不变量，见 .superpowers/sdd/2026-11-13-tui-fullscreen-diff-channel-8/t9-w{1,2,3,4}-report.md）。通道连跑幂等（3 次报告字节相同）；oc-tui 套件全绿。范围外收窄见 INDEX.md。
 
 ## 第三十一轮判定
 
-差分通道 8（TUI 整屏差分·发版回归门）立项建成：同一 `tui-diff-scenario/1` 场景喂双侧 TUI 实现（rust nextest env 门控驱动 × ref bun staging 驱动），静息帧导出稠密网格归一化比对（RGB ≤8 容差=structural/仍是分歧；未命中 CAUSES 的一切非 exact 均未裁决 → exit 2）。首基线 40 case（20 场景×2 档）全未裁决——已知候选聚类：屏级 fg 255vs238 系统差（大面积 first_diff）、session-tabs 加载态振荡（移植缺陷候选）、home/session 族边框字符差。**登记册新增 G-ID 不在本轮范围**（T9 裁决时立项）。工具 `tools/diff/tui_fullscreen.py`；报告 `docs/audit/diff/TUI-FULLSCREEN.md`；扫描口径=census 14 + diff 8 命令。
+差分通道 8（TUI 整屏差分·发版回归门）立项建成：同一 `tui-diff-scenario/1` 场景喂双侧 TUI 实现（rust nextest env 门控驱动 × ref bun staging 驱动），静息帧导出稠密网格归一化比对（RGB ≤8 容差=structural/仍是分歧；未命中 CAUSES 的一切非 exact 均未裁决 → exit 2）。首基线 40 case（20 场景×2 档）全未裁决。**T9 四波收口摘要**：
+
+- **W1（F1 footer 组件集）**：Build pill 多渲染、cwd 面包屑/git 分支角标缺——home 族 4 case 翻绿。
+- **W2（F2 流式 idle 收口 + F3 输入区几何 + F7 hydration 幂等）**：`session_running` 改事件驱动（execution 生命周期，data.ts:1378-1380 语义）、composer 列底 pad+双侧 inset、Err 不重臂；6 case 翻绿；tree-oracle 重冻结 7/7 IDENTICAL vs real @opentui。
+- **W3（T-ord 转录行序族 + leader 和弦 + turn 时长）**：场景归一化（事件 id 去重、wire finish 回填、对已持久化 turn 重放的生命周期事件剪除——fixture 违反生产总线不变量）；rust 侧真 bug 三处（step.started created 重置 data.ts:843、shell_block error 行+rail 色 index.tsx:2700+、滚动 viewport 差一）；ref driver 的 leader 编码缺陷（裸 `\x18` → kitty ctrl+x）修正。16 case 翻绿，40→28/12。
+- **W4（dialog/palette 风格族，终波）**：12 diverge 全清，全部为修复面，**无一放宽、无新 G-ID**：
+  1. **scrim 复合语义**（`blend_scrim`，dialog backdrop 与 sidebar DimBg 共享）：ref 引擎的半透明黑 scrim 同时压暗字形 fg（Indexed 需经 `palette_rgb` 解析）与 bg；whitespace 格在 scrim 下失去 fg 绘制（回终端默认白、attrs 剥离——bold 标题的词间空格 `attrs=[]`）。双侧网格实证（models-dialog/sidebar-toggle 全档）。
+  2. **command palette suggested 集**：`session.share`（route 门控，index.tsx:893）与 `session.list`（会话史非空，app.tsx:703）入 suggested 块，session.share 按 route resolver 前置顺序排首。
+  3. **DialogStatus 自定义树**（dialog-status.tsx 非 DialogSelect——无过滤输入、无 server-backed 标记行、paddingLeft 2 标题）。
+  4. **DialogOpen**：placeholder「Search sessions and projects…」（:339）；diff driver 补 project sink + boot ProjectList（清单静态挂 Loading 的根因）。
+  5. **Sessions 对话框 chrome**：size large（onMount `setSize("large")`）、pin/unpin 在多 tab 模式隐藏（`hidden: sessionTabs.enabled()`）、rename ctrl+r 动作、右侧「all projects ctrl+a」footerHint；storage `all_projects` 默认改 false（ref `scope ?? "cwd"`，config/index.tsx:328）。
+- **golden 事项收口**（用户 2026-11-14 批准 `PARITY_UPDATE=1`）：3 个 screen golden（session-error-part/session-sidebar-live/session-slash-palette）按 W2 F3 padded 几何重导（抽验：rails 17-20、╹ 21、footer h-2、末行留白 = ref fixture 网格逐点一致）；surf1-detail-states 本地 pin 按 ref oracle 重钉（shell 块 rail fg=background.base/bg=raised，ref session-tool-failed 捕获 + BlockTool 源码背书——本地 pin 陈旧，对齐 ref 属常规维护）。
+
+工具 `tools/diff/tui_fullscreen.py`；报告 `docs/audit/diff/TUI-FULLSCREEN.md`；扫描口径=census 14 + diff 8 命令。

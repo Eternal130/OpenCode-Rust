@@ -37,9 +37,9 @@
 //! mounts the same shape — the `surface-sidebar` wrapper takes the
 //! scrim rect (full frame below the strip) with the pane as its
 //! right-aligned child, and a [`ChromeStamp::DimBg`] pass dims every
-//! covered RGB background at 70/255 exactly like the retired
-//! `apply_scrim` walk (glyphs survive; the pane's own rect is the
-//! stamp's keep-rect — the old paste-over-dim net bytes).
+//! covered cell — bg AND glyph fg toward black at 70/255 (W4: the ref
+//! engine's alpha composite; whitespace keeps no fg paint), the pane's
+//! own rect the stamp's keep-rect (the old paste-over-dim net bytes).
 //!
 //! **The scratch renderer is retired (D3.2).** The pane used to own
 //! a private `SolidRenderer` + `frame_from_buffer` copy; it now
@@ -775,10 +775,26 @@ mod tests {
         sidebar_mount(&view, &theme, height, 0, left, top, Some(width));
         crate::components::chrome_solid::composite_chrome_tree(&mut frame);
 
-        // The retired apply_scrim formula, verbatim.
+        // The scrim formula (W4 ref-backed semantics, shared with the
+        // dialog backdrop's `blend_scrim`): bg AND glyph fg both dim at
+        // 70/255 (the ref session-frame.tsx:385-397 rgba(0,0,0,70) box
+        // alpha-composites over everything beneath — channel-8 ref
+        // grids pin fg 238→173/128→93 under the sidebar overlay).
         let dim = |channel: u8| -> u8 {
             let alpha = 70.0 / 255.0;
             (f64::from(channel) * (1.0 - alpha)).round() as u8
+        };
+        let dimmed_fg = |color: CellColor| -> CellColor {
+            match color {
+                CellColor::Rgb(r, g, b) => CellColor::Rgb(dim(r), dim(g), dim(b)),
+                // defaultForeground() is white; the composite
+                // materializes it (dialog.rs `blend_scrim`).
+                CellColor::Default => CellColor::Rgb(dim(255), dim(255), dim(255)),
+                CellColor::Indexed(index) => {
+                    let [r, g, b] = crate::render::color_mode::palette_rgb(index);
+                    CellColor::Rgb(dim(r), dim(g), dim(b))
+                }
+            }
         };
         for row in top..top + height {
             for col in 0..width {
@@ -789,12 +805,25 @@ mod tests {
                 }
                 let original = before.cells[row][col];
                 let CellColor::Rgb(r, g, b) = original.bg else { unreachable!() };
+                let expected_fg = if original.ch == ' '
+                    && !matches!(original.fg, CellColor::Default | CellColor::Indexed(15))
+                {
+                    // Whitespace keeps no fg paint under the scrim
+                    // (terminal-default white).
+                    CellColor::Rgb(255, 255, 255)
+                } else if original.ch == ' '
+                    && matches!(original.fg, CellColor::Default | CellColor::Indexed(15))
+                {
+                    original.fg
+                } else {
+                    dimmed_fg(original.fg)
+                };
                 assert_eq!(
                     frame.cells[row][col],
                     Cell {
                         ch: '.',
                         attrs: 0,
-                        fg: original.fg,
+                        fg: expected_fg,
                         bg: CellColor::Rgb(dim(r), dim(g), dim(b)),
                     },
                     "scrim byte ({col},{row})"

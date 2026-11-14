@@ -8,18 +8,18 @@
 
 | # | 通道 | 脚本 | 报告 | 规模 | MATCH | DIVERGE | ADJUDICATED |
 |---|---|---|---|---|---|---|---|
-| 1 | 配置解析 | config_parse.py | CONFIG-PARSE.md | 78 例（35 mined） | 75 | 3 | — |
-| 2 | ACP 转译 | acp_translate.py | ACP-TRANSLATE.md | 137 例（40 mined） | 109 | 28 | — |
+| 1 | 配置解析 | config_parse.py | CONFIG-PARSE.md | 78 例（35 mined） | 77 | 1 | — |
+| 2 | ACP 转译 | acp_translate.py | ACP-TRANSLATE.md | 137 例（40 mined） | 111 | 26 | — |
 | 3 | SSE store 投影 | sse_projection.py | SSE-PROJECTION.md | 15 序列/107 事件 | 2 | 13 | — |
 | 4 | JSON Schema 校验器 | json_schema_validate.py | JSON-SCHEMA.md | 175 对（23 mined） | 156 | 19 | — |
-| 5 | /compact 管线 | responses_compaction.py | RESPONSES-COMPACTION.md | 61 文档（13 mined） | 58 | 3 | — |
-| 6 | HTTP 全量 | http_full.py | HTTP-FULL.md | 60 请求（13 mined） | 46 | 12 | 2 |
-| 7 | **provider 录制解码** | provider_recordings.py | PROVIDER-RECORDINGS.md | **264 交互（259 真实 SSE）** | 241 | 23 | — |
-| 8 | TUI 整屏差分（无头静息帧） | tui_fullscreen.py | TUI-FULLSCREEN.md | 40 case（20 场景×2 档） | EXACT 0 | 未裁决 40 | — |
+| 5 | /compact 管线 | responses_compaction.py | RESPONSES-COMPACTION.md | 61 文档（13 mined） | 60 | 1 | — |
+| 6 | HTTP 全量 | http_full.py | HTTP-FULL.md | 60 请求（13 mined） | 47 | 11 | 2 |
+| 7 | **provider 录制解码** | provider_recordings.py | PROVIDER-RECORDINGS.md | **264 交互（259 真实 SSE）** | 264 | 0 | — |
+| 8 | TUI 整屏差分（无头静息帧） | tui_fullscreen.py | TUI-FULLSCREEN.md | 40 case（20 场景×2 档） | **EXACT 40** | 未裁决 0 | — |
 
 ## 总计
 
-**通道 1-7：790 对拍单元：MATCH 687 · DIVERGE 101 · ADJUDICATED 2 · MISSING 0**（100% 三态归属）。**通道 8 首基线：40 case：EXACT 0 · STRUCTURAL 0 · CAUSES 0 · 未裁决 40**（门红，T9 裁决循环进行中；详见 TUI-FULLSCREEN.md）——合计 830 对拍单元。
+**通道 1-7：790 对拍单元：MATCH 717 · DIVERGE 71 · ADJUDICATED 2 · MISSING 0**（100% 三态归属；第三十轮 burndown 收口口径）。**通道 8（T9 裁决循环四波收口，2026-11-14）：40 case：EXACT 40 · STRUCTURAL 0 · CAUSES 0 · 未裁决 0——门绿 exit 0，无新 G-ID**（详见 TUI-FULLSCREEN.md 与 GAPS-AND-PITFALLS 第三十一轮）——合计 830 对拍单元。
 101 项分歧：既有 78（R27/R28 裁定族）+ 挖掘新增 23 → 归并 **G-412..G-422（11 条：🟡×1 / 🟢×10）**，其余归 G-407/409/410 既有族。
 
 ## 挖掘新增发现（关键项）

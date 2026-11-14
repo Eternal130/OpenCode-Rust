@@ -2301,13 +2301,13 @@ fn f15_arm(fake: &FakeLlm) {
     );
 }
 
-/// F15 at 80 columns (the session dialog's box is 60 wide → the
-/// title budget is 52 cells): the long row renders its clipped form
-/// on ONE row (head + exactly 29 m's — the stage-1 `…` at cell 61
-/// sits past this box's clip), the past-61 tail never paints, and
-/// movement selects by OPTION — `ArrowDown` reaches the long row and
-/// Enter opens THAT session (the ref's `move`/`moveTo` walk,
-/// dialog-select.tsx:361-386).
+/// F15 at 80 columns (W4: the session dialog mounts LARGE — the box
+/// is 88 clamped to `width-2` = 78 wide): the long row renders its
+/// clipped form on ONE row (head + 37 m's + the stage-1 `…` at cell
+/// 61), the past-61 tail never paints, and movement selects by
+/// OPTION — `ArrowDown` reaches the long row and Enter opens THAT
+/// session (the ref's `move`/`moveTo` walk, dialog-select.tsx
+/// :361-386).
 #[test]
 fn f15_long_title_clips_and_moves_by_option_at_80() {
     run_daily_test(
@@ -2328,15 +2328,16 @@ fn f15_long_title_clips_and_moves_by_option_at_80() {
                 .find(|row| grid.row_text(*row).contains("Truncation Matrix Head"))
                 .expect("located");
             let text = grid.row_text(long_row);
-            // The clip: budget 52 = the head (23) + exactly 29 m's,
-            // hard cut (stage-2 never adds an ellipsis).
+            // The clip (W4 large box): the stage-1 run hard-cuts with
+            // the `…` at cell 61 — head (23) + exactly 37 m's + the
+            // ellipsis.
             assert!(
-                text.contains(&format!("Truncation Matrix Head {}", "m".repeat(29))),
-                "the 52-cell clip (head + 29 m's) at 80 cols: {text:?}"
+                text.contains(&format!("Truncation Matrix Head {}", "m".repeat(37)))
+                    && text.ends_with('…'),
+                "the stage-1 clip (head + 37 m's + ellipsis) at 80 cols: {text:?}"
             );
-            assert!(!text.contains(&"m".repeat(30)), "the run hard-cuts at the 29th m");
-            assert!(!text.contains('…'), "stage-2 never adds an ellipsis");
-            // The past-61 tail never paints anywhere.
+            assert!(!text.contains(&"m".repeat(38)), "the run hard-cuts at the 37th m");
+            assert!(!text.contains("…m"), "no ellipsis mids run (stage-1 ends it)");
             assert!(
                 (0..grid.rows).all(|row| !grid.row_text(row).contains("TailMarkerZZQ")),
                 "the past-61 tail never renders"
