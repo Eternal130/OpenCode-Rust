@@ -1763,6 +1763,20 @@ pub struct Store {
     /// animations may read (`ManualClock` semantics: a frozen clock pins
     /// spinner frame 0; render happens on tick, only when it advances).
     clock: Signal<u64>,
+    /// The wall-clock epoch anchor (ms since the UNIX epoch) captured
+    /// ONCE at construction, plus the clock value observed at the
+    /// FIRST tick (`clock_base_ms`) — together they give
+    /// [`Store::epoch_now_ms`]: `anchor + (clock − base)`. The ref has
+    /// TWO time sources (frozen animation clock + live `Date.now()`),
+    /// and epoch-facing render surfaces (relative-time labels, date
+    /// rows) belong to the second family: they must never sample
+    /// `SystemTime::now` per frame (A1 clock wiring — a frame is a
+    /// pure function of (store state, clock value)), yet stay live in
+    /// the running app. A frozen test clock never sets the base, so
+    /// those labels pin to the anchor (the diff driver's resting
+    /// frames keep their `56y`-style buckets deterministically).
+    epoch_anchor_ms: u64,
+    clock_base_ms: std::cell::Cell<Option<u64>>,
     /// Coalesced redraw request counter (bumped by the redraw effect;
     /// the render loop compares between ticks — never redraw inline).
     redraw_requests: Rc<Cell<u64>>,
@@ -4212,6 +4226,10 @@ impl Store {
             ),
             seen_events: std::cell::RefCell::new((VecDeque::new(), HashSet::new())),
             clock,
+            epoch_anchor_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)),
+            clock_base_ms: std::cell::Cell::new(None),
             redraw_requests,
             _redraw_effect: redraw_effect,
             image_preview: Cell::new(false),
@@ -6816,6 +6834,21 @@ impl Store {
         self.clock.get()
     }
 
+    /// The epoch "now" for epoch-facing render surfaces (relative-time
+    /// labels, date rows): the construction-time wall-clock anchor plus
+    /// the clock's elapsed time since its FIRST tick — never a live
+    /// `SystemTime::now` sample, so a frame is a pure function of
+    /// (store state, clock value). Live runs stay wall-accurate (the
+    /// anchor is real, the elapsed rides the pump's ticks); a frozen
+    /// test clock never sets the base and pins the labels to the
+    /// anchor (A1 clock wiring).
+    #[must_use]
+    pub fn epoch_now_ms(&self) -> u64 {
+        self.epoch_anchor_ms.saturating_add(
+            self.clock.get().saturating_sub(self.clock_base_ms.get().unwrap_or(self.clock.get())),
+        )
+    }
+
     #[allow(clippy::cast_precision_loss)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
     /// Advance the clock to `now_ms`. Monotonic: a smaller/equal value
     /// is a no-op (no signal write ⇒ no redraw — render-on-tick only
@@ -6826,6 +6859,12 @@ impl Store {
     /// 100 ms cadence — G-49a).
     pub fn advance_clock(&self, now_ms: u64) {
         if now_ms > self.clock.get() {
+            // A1: the first real tick anchors the epoch-elapsed base
+            // (see `epoch_now_ms`) — later ticks measure elapsed time
+            // from it, keeping epoch labels live but render-pure.
+            if self.clock_base_ms.get().is_none() {
+                self.clock_base_ms.set(Some(now_ms));
+            }
             self.clock.set(now_ms);
         }
         let mut moving = false;

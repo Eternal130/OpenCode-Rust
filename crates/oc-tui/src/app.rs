@@ -13070,6 +13070,62 @@ mod core_interaction_tests {
         assert!(armed.contains("esc again to interrupt"), "armed hint: {armed}");
     }
 
+    /// A1 clock wiring: `advance_clock(k)` must drive the transcript
+    /// spinner's FRAME PHASE — the glyph is `(clock / 80) % 10`, so a
+    /// frozen clock pins frame 0 (`⠋`) and each 80 ms step advances it
+    /// one slot. This is the ground rule for virtual-clock frame
+    /// sequencing: the spinner's only time source is the store's
+    /// injected clock, never a wall-clock sample.
+    #[test]
+    fn advance_clock_drives_the_spinner_frame_phase() {
+        use crate::components::message::rows::SPINNER_FRAMES;
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        streaming_session(&app.store, "s1");
+        // Frozen at 0: frame 0 everywhere, and no other phase leaks in.
+        let frozen = app.frame_text();
+        assert!(frozen.contains(SPINNER_FRAMES[0]), "clock 0 pins frame 0: {frozen}");
+        assert!(!frozen.contains(SPINNER_FRAMES[1]), "clock 0 must not show frame 1: {frozen}");
+        // Each 80 ms step advances the phase exactly one slot.
+        for step in 1..=3 {
+            app.advance_clock(80);
+            let text = app.frame_text();
+            assert!(
+                text.contains(SPINNER_FRAMES[step % SPINNER_FRAMES.len()]),
+                "clock {} ms shows spinner frame {step}: {text}",
+                step * 80
+            );
+        }
+        // A full cycle (10 frames) wraps back to frame 0.
+        app.advance_clock(80 * 7);
+        let wrapped = app.frame_text();
+        assert!(wrapped.contains(SPINNER_FRAMES[0]), "1000 ms wraps to frame 0: {wrapped}");
+        assert!(
+            !wrapped.contains(SPINNER_FRAMES[9]),
+            "1000 ms must not still show frame 9: {wrapped}"
+        );
+    }
+
+    /// A1 clock wiring — purity: two renders of the SAME (store state,
+    /// clock value) must be byte-identical. The frame output is a pure
+    /// function of the store snapshot plus the injected clock — the
+    /// mathematical precondition for virtual-clock frame-sequence
+    /// diffing. The debug dialog rides along because its Date row is
+    /// the historical wall-clock offender (it now reads
+    /// `store.epoch_now_ms()` — the injected clock, not `SystemTime::now`).
+    #[test]
+    fn same_store_and_clock_render_byte_identical_frames() {
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        streaming_session(&app.store, "s1");
+        app.store.push_dialog(crate::store::DialogKind::Debug);
+        app.advance_clock(240);
+        let first = app.frame_text();
+        let second = app.frame_text();
+        assert_eq!(first, second, "same (store, clock) must render byte-identical");
+        assert!(first.contains("Date"), "the debug dialog's date row is in frame: {first}");
+    }
+
     /// The scroll commands move the transcript (v2's six + first/last,
     /// routes/session/index.tsx:763-887): sticky starts at the bottom;
     /// page-up frees (older rows surface); page-down re-sticks.

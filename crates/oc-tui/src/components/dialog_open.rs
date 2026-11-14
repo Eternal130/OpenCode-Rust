@@ -64,12 +64,15 @@ pub fn basename(path: &str) -> String {
 
 // -- wall-clock helpers ------------------------------------------------------
 
-/// `Date.now()` — epoch milliseconds.
+/// `Date.now()` — epoch milliseconds, read from the STORE's injected
+/// clock (A1 clock wiring: the render chain must not sample
+/// `SystemTime::now` — the live pump drives the clock with epoch ms
+/// and tests freeze it, so a frame is a pure function of
+/// (store state, clock value)).
 #[must_use]
-pub fn wall_now_ms() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0.0, |duration| duration.as_millis() as f64)
+#[allow(clippy::cast_precision_loss)] // JS `Date.now()` number space, like the ref
+pub fn wall_now_ms(store: &crate::store::Store) -> f64 {
+    store.epoch_now_ms() as f64
 }
 
 /// Civil date parts (year, month 1-12, day 1-31) from epoch days
@@ -283,7 +286,7 @@ const RECENT_LIMIT: usize = 8;
 #[must_use]
 #[allow(clippy::too_many_lines)] // one options memo, v2's dialog-open.tsx:197-274 shape
 pub fn open_menu_props(store: &Store) -> SelectProps {
-    let now = wall_now_ms();
+    let now = wall_now_ms(store);
     let open_tabs: std::collections::HashSet<String> =
         store.tabs().tabs.iter().map(|tab| tab.session_id.clone()).collect();
     let current_session = match store.route() {
@@ -553,7 +556,7 @@ pub fn execute_open_selection(
 #[must_use]
 #[allow(clippy::too_many_lines)] // one row builder, v2's memo shape
 pub fn session_list_options(store: &Store, filter: &str) -> Vec<SelectOption> {
-    let now = wall_now_ms();
+    let now = wall_now_ms(store);
     let armed = store.session_delete_armed();
     let query = filter.trim().to_lowercase();
     let mut sessions: Vec<crate::data::SessionSnapshot> = if let Some(rows) =
