@@ -46,14 +46,31 @@ files; every field semantic below is normative for both.
 
 ### 尺寸档位 (size tiers)
 
-The v1 corpus always renders at **two tiers**: `80×24` and `120×30`. A
-scenario file carries a single `width`/`height` pair (the primary tier,
-`80×24` for every current scenario); the orchestrator/harness derives the
-second tier (`120×30`) by mirroring — same schema, id, fetch stubs, events,
-keys and settle budget, only the grid size changes. Scenario ids stay
-un-suffixed for the primary tier; harnesses report the mirrored tier as
-`<id>@120x30`. If a future scenario needs a non-default tier pair, it must
-state both explicitly via the reserved `tiers` array (none do in v1).
+The corpus renders every scenario at **three tiers by default**:
+`80×24`, `120×30`, and `320×80`. A scenario file carries a single
+`width`/`height` pair (the **primary tier** — the file's own declared
+size, `80×24` for every current scenario); the orchestrator/harness
+derives the other two tiers (`120×30`, `320×80` — the **mirrored
+tiers**) by mirroring — same schema, id, fetch stubs, events, keys and
+settle budget, only the grid size changes. Scenario ids stay
+un-suffixed for the primary tier; harnesses report mirrored tiers as
+`<id>@120x30` / `<id>@320x80`. The 320×80 tier is the 4K full-screen
+stress tier (the operator's real terminal is 237×54; 320×80 exceeds it)
+and is what pushes the session frame into the sidebar auto-dock regime
+(ref `session-frame.tsx` `wide()`): `width − verticalTabsWidth > 120`
+auto-shows the sidebar under the default `session.sidebar = "auto"`
+config (child sessions excepted).
+
+**`tiers` override array** (reserved; no v1 scenario uses it): a
+scenario MAY declare `"tiers": [[w,h], ...]` to run **exactly that
+subset of tiers instead of the default three** (each entry `[w,h]`;
+the un-suffixed case id is reserved for the entry matching the file's
+own `width`/`height`, every other entry gets the `@WxH` suffix). This
+exists for scenarios where an extra tier is meaningless (e.g. a modal
+that cannot reflow) or genuinely broken-by-design at some size — and
+**must be justified in the scenario's `note`**. Adjudication review
+(GAPS rounds) treats an unjustified `tiers` override as green-gaming
+the gate: it is not a license to drop a size that merely diverges.
 
 ### 主题 (theme pinning)
 

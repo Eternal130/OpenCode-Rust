@@ -19,7 +19,9 @@ struct RecordingSink(std::cell::RefCell<Vec<(String, String)>>);
 impl oc_tui::store::ConfigSink for RecordingSink {
     fn update_theme_name(&self, _: &str) {}
     fn update_theme_mode(&self, _: &str) {}
-    fn update_session_sidebar(&self, _: bool) {}
+    fn update_session_sidebar(&self, _: bool) -> bool {
+        false
+    }
     fn update_session_grouping(&self, _: bool) {}
     fn update_setting(&self, path: &str, value: &str) {
         self.0.borrow_mut().push((path.to_owned(), value.to_owned()));
@@ -898,13 +900,17 @@ fn palette_messages_copy_session() {
 
     assert_eq!(row("messages.copy").title, "Copy last assistant message");
     assert_eq!(row("messages.copy").category.as_deref(), Some("Session"));
-    assert_eq!(row("messages.copy").footer.as_deref(), Some("<leader>y"));
+    assert_eq!(
+        row("messages.copy").footer.as_deref(),
+        Some("ctrl+x y"),
+        "the footer resolves <leader>y"
+    );
     assert_eq!(row("session.copy").title, "Copy session transcript");
     assert_eq!(row("prompt.queue").title, "Queue prompt");
     assert_eq!(row("prompt.queue").category.as_deref(), Some("Prompt"));
     assert_eq!(row("prompt.queue").footer.as_deref(), Some("<leader>return"));
     assert_eq!(row("session.child.first").title, "Toggle subagent picker");
-    assert_eq!(row("session.child.first").footer.as_deref(), Some("down"));
+    assert_eq!(row("session.child.first").footer.as_deref(), Some("↓"));
     assert_eq!(row("prompt.editor").title, "Open editor");
     assert_eq!(row("prompt.skills").title, "Skills");
     // The gated rows register with their v2 chrome (checked through

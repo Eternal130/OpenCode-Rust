@@ -7809,9 +7809,9 @@ impl crate::store::ConfigSink for HttpConfigSink {
         }
     }
 
-    fn update_session_sidebar(&self, hide: bool) {
+    fn update_session_sidebar(&self, hide: bool) -> bool {
         let value = if hide { "hide" } else { "auto" };
-        if let Err(error) = self.service.update(move |draft| {
+        let landed = self.service.update(move |draft| {
             let object = draft.as_object_mut().expect("config drafts are objects");
             let mut session = object
                 .get("session")
@@ -7819,9 +7819,14 @@ impl crate::store::ConfigSink for HttpConfigSink {
                 .unwrap_or_default();
             session.insert("sidebar".to_owned(), serde_json::json!(value));
             object.insert("session".to_owned(), serde_json::Value::Object(session));
-        }) {
+        });
+        if let Err(error) = &landed {
             eprintln!("opencode tui: session.sidebar persist failed: {error}");
         }
+        // T8-320 — the write landing mirrors ref's reconcile-apply
+        // (config/index.tsx:348-353): only a landed write flips the
+        // resolved mode in the store.
+        landed.is_ok()
     }
 
     fn update_session_grouping(&self, grouped: bool) {
