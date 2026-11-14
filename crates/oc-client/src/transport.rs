@@ -330,10 +330,29 @@ impl Client {
 
     /// 204-style request: success consumes the (empty) body.
     pub async fn execute_empty(&self, call: &Call<'_>) -> Result<(), ClientError> {
+        // diff-ext C3 — record the empty-body request too (endpoint +
+        /// status; body null): the interrupt/inbox-cancel family rides
+        /// this path, and a recording that omits them stub-gaps on
+        /// replay (env-gated no-op without TUI_RECORD_DIR).
+        let record_path =
+            oc_util::recorder::enabled().then(|| render_path(call.path, call.path_params).ok());
         match self.classify(call).await? {
             Ok(response) => {
-                // Drain so the connection can be reused.
-                let _ = response.bytes().await?;
+                if let Some(Some(path)) = &record_path {
+                    let status = response.status().as_u16();
+                    // Drain so the connection can be reused.
+                    let drained = response.bytes().await;
+                    oc_util::recorder::fetch(
+                        call.method.as_str(),
+                        path,
+                        status,
+                        &serde_json::Value::Null,
+                    );
+                    drained?;
+                } else {
+                    // Drain so the connection can be reused.
+                    let _ = response.bytes().await?;
+                }
                 Ok(())
             }
             Err(response) => Err(Self::decode_error(response).await),

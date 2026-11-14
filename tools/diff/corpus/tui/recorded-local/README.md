@@ -1,5 +1,12 @@
 # recorded-local — 本地真实语料（git-ignored）
 
+> **日常录制启用法（三行）**
+> 1. `export TUI_RECORD_DIR=~/.local/share/opencode/tui-recordings`（想录时才设；不设=完全旁路，零开销）
+> 2. 用 opencode-rust（TUI）正常工作——会话事件流/键序/fetch/尺寸史自动落 `<dir>/rec-*.raw.json`（默认脱敏）
+> 3. `python3 tools/diff/tui_record_compile.py <dir>` 编译进本目录；之后跑通道（`tools/diff/tui_fullscreen.py`）即自动纳入重放
+>
+> 铁律不变：录制内容是真实用户数据，**永不入库、永不上传**（下方第 1-4 条）。
+
 **隐私铁律（用户裁定 2026-11-15，最高优先级）**：
 
 1. 本目录存放从真实 TUI 会话编译而来的差分场景

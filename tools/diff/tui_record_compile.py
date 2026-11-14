@@ -104,6 +104,23 @@ def key_token(spec: str) -> str:
     return spec  # named / ctrl+<a-z> / alt+<dir>: SCHEMA vocabulary verbatim
 
 
+# C3 — the recorder runner's deterministic shutdown chord (vt_harness
+# `exit_chord`: esc esc ctrl+u ctrl+c ctrl+c leader q, mapped through
+# `key_token`). It is harness plumbing, not session content: on replay
+# ctrl+c×2 would EXIT the app under test before the resting capture.
+# The app stops reading input the moment it exits, so the RECORDED tail
+# may be a truncated chord — trim the longest trailing run that is a
+# prefix of the chord (esc esc ctrl+u ctrl+c [ctrl+c ctrl+x q]).
+EXIT_CHORD = ["esc", "esc", "ctrl+u", "ctrl+c", "ctrl+c", "ctrl+x", "q"]
+
+
+def trim_exit_chord(keys: list) -> list:
+    for length in range(len(EXIT_CHORD), 3, -1):
+        if keys[-length:] == EXIT_CHORD[:length]:
+            return keys[:-length]
+    return keys
+
+
 def compile_recording(doc: dict, redact_on: bool) -> dict:
     if doc.get("schema") != "tui-diff-recording/1":
         raise SystemExit(f"bad recording schema: {doc.get('schema')!r}")
@@ -118,16 +135,34 @@ def compile_recording(doc: dict, redact_on: bool) -> dict:
     width = boot.get("width") or (sizes[0][0] if sizes else 80)
     height = boot.get("height") or (sizes[0][1] if sizes else 24)
 
-    # fetch map: recorded GET endpoints verbatim; census backfill
+    # fetch map: recorded endpoints verbatim (C3: EVERY method — the
+    # prompt POST response and the interrupt/inbox 204s are replay
+    # surface too; both replay servers key by path, ignoring method)
     fetch: dict = {}
     for path, entry in (doc.get("fetch") or {}).items():
-        if (entry or {}).get("method", "GET") != "GET":
-            continue
         fetch[path] = {"status": entry.get("status", 200),
                        "body": entry.get("body")}
     if redact_on:
         fetch = redact(fetch)
     census = json.loads(CENSUS_REF.read_text())["fetch"]
+    # C3 recording hygiene: the FakeLlm catch-all answers untouched
+    # endpoints with `{}`, which is NOT a valid body for the census
+    # boot endpoints (ref data.ts `project.list` crashes on a
+    # non-array; the location-envelope resources — vcs/shell/... —
+    # dereference `response.location` and throw on `{}`). Rule: a
+    # census-path body that is an EMPTY object (the catch-all
+    # signature) or whose JSON TYPE disagrees with the census
+    # default's type yields to the fixture default; recorded bodies
+    # with real content of the right type always win.
+    for path, default in census.items():
+        if path == "/api/event":
+            continue
+        entry = fetch.get(path)
+        if entry is None:
+            continue
+        body, ref_body = entry.get("body"), default.get("body")
+        if body == {} or type(body) is not type(ref_body):
+            del fetch[path]
     for path, entry in census.items():
         if path == "/api/event":
             continue
@@ -136,7 +171,19 @@ def compile_recording(doc: dict, redact_on: bool) -> dict:
     # session id the recorded /api/session list names gets the route
     # endpoint set the ref boot probes (the rust census is known
     # asymmetric — an unstubbed ref probe is a stub_gap, never a diff).
+    # C3 world-rebase: the FakeLlm stub world (/tmp, project "p") is a
+    # recording artifact; both replay legs anchor on the census world
+    # (the /api/location fixture: directory + project). Un-rebased rows
+    # make the ref session dialog's location sync fail ("Location
+    # unavailable" → "Could not load sessions") — rebase the list rows
+    # before the route stubs derive from them.
+    census_loc = census["/api/location"]["body"]
     listed = ((fetch.get("/api/session") or {}).get("body") or {}).get("data") or []
+    for row in listed:
+        if isinstance(row, dict):
+            if isinstance(row.get("location"), dict):
+                row["location"]["directory"] = census_loc["directory"]
+            row["projectID"] = census_loc["project"]["id"]
     for row in listed:
         sid = row.get("id") if isinstance(row, dict) else None
         if not sid:
@@ -145,8 +192,19 @@ def compile_recording(doc: dict, redact_on: bool) -> dict:
         fetch.setdefault(base, {"status": 200, "body": {"data": row}})
         for tail in ("message", "inbox", "permission", "form"):
             fetch.setdefault(f"{base}/{tail}", {"status": 200, "body": {"data": []}})
+        # the session-open "prepare" probe (ref agent-list call is an
+        # execute_empty contract: 204 No Content — a 200 fails its
+        # UnexpectedStatus guard)
+        fetch.setdefault(f"{base}/agent", {"status": 204, "body": None})
         fetch.setdefault(f"/api/experimental/session/{sid}/terminal",
                          {"status": 200, "body": {"data": []}})
+        # C3 — the transient POST surface around a live turn: the
+        # 2-press escape interrupt (`session.interrupt {resume:true}`,
+        # execute_empty). The recording only captures fetches THIS
+        # client made; the OTHER replay leg may fire the interrupt the
+        # recorded one did not (or vice versa) — pre-stub it so the
+        # difference stays a render diff, never a stub_gap.
+        fetch.setdefault(f"{base}/interrupt", {"status": 204, "body": None})
     # /api/event: the SSE stub — body carries {"sse":true,"initial"}
     # (SCHEMA file-format field semantics).
     fetch["/api/event"] = {"status": 200,
@@ -159,7 +217,7 @@ def compile_recording(doc: dict, redact_on: bool) -> dict:
         "height": height,
         "fetch": fetch,
         "events": redact(events) if redact_on else events,
-        "keys": [key_token(k) for k in doc.get("keys") or []],
+        "keys": trim_exit_chord([key_token(k) for k in doc.get("keys") or []]),
         "settle_ms": 200,
         "recorded_sizes": sizes,  # superset field: the real size history
         "note": (f"compiled from real-session recording {doc['id']} "
