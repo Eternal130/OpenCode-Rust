@@ -307,8 +307,23 @@ impl Client {
         &self,
         call: &Call<'_>,
     ) -> Result<T, ClientError> {
+        let record_path =
+            oc_util::recorder::enabled().then(|| render_path(call.path, call.path_params).ok());
         match self.classify(call).await? {
-            Ok(response) => Self::json_body(response).await,
+            Ok(response) => {
+                let status = response.status().as_u16();
+                let body = Self::json_body::<serde_json::Value>(response).await;
+                // diff-ext C1 — record the fetch response (endpoint +
+                // status + body, message-content-redacted by default;
+                // env-gated no-op without TUI_RECORD_DIR).
+                if let (Some(Some(path)), Ok(value)) = (&record_path, &body) {
+                    oc_util::recorder::fetch(call.method.as_str(), path, status, value);
+                }
+                body.and_then(|value| {
+                    serde_json::from_value(value)
+                        .map_err(|e| ClientError::MalformedResponse(e.to_string()))
+                })
+            }
             Err(response) => Err(Self::decode_error(response).await),
         }
     }
@@ -342,6 +357,12 @@ impl Client {
         call: &Call<'_>,
         double_decode: bool,
     ) -> Result<crate::sse::SseStream, ClientError> {
+        // diff-ext C1 — the SSE subscribe (env-gated no-op).
+        if oc_util::recorder::enabled() {
+            if let Ok(path) = render_path(call.path, call.path_params) {
+                oc_util::recorder::sse_open(&path, 200);
+            }
+        }
         let response = match self.classify(call).await? {
             Ok(response) => response,
             Err(response) => return Err(Self::decode_error(response).await),

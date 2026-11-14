@@ -187,6 +187,9 @@ pub struct App {
 impl App {
     #[must_use]
     pub fn new(size: (u16, u16)) -> Self {
+        // diff-ext C1 — the session recorder (env-gated by
+        // TUI_RECORD_DIR; a single relaxed atomic load when unset).
+        oc_util::recorder::boot(size.0, size.1);
         Self::with_store(Store::new(crate::reactive::Runtime::new()), size)
     }
 
@@ -440,6 +443,7 @@ impl App {
     /// Resize the terminal (SIGWINCH): the next frame lays out at the
     /// new size.
     pub fn resize(&mut self, size: (u16, u16)) {
+        oc_util::recorder::resize(size.0, size.1); // diff-ext C1 (env-gated no-op)
         self.size = size;
         self.store.set_terminal_size(size);
         self.store.set_prompt_viewport_width(prompt_text_width(usize::from(size.0)));
@@ -1790,6 +1794,7 @@ impl App {
 
     /// One keypress (the replay/PTY entry).
     pub fn press(&mut self, spec: &str) {
+        oc_util::recorder::key(spec); // diff-ext C1 (env-gated no-op)
         self.press_inner(spec);
     }
 

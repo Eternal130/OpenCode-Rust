@@ -1209,6 +1209,9 @@ impl Connection {
                 Some(event) if event.is_server_connected() => event,
                 _ => continue, // protocol failure → drop the stream, reconnect
             };
+            // diff-ext C1 — the raw SSE payloads, in arrival order
+            // (env-gated recorder; no-op without TUI_RECORD_DIR).
+            oc_util::recorder::event(&value);
             // Resync after every successful subscribe (see
             // `resync_after_subscribe` for the semantics); a closed
             // ingest channel ends the loop.
@@ -1237,6 +1240,7 @@ impl Connection {
                 let Ok(Ok(Some(value))) = next else {
                     break; // stall, decode error, or stream end → reconnect
                 };
+                oc_util::recorder::event(&value); // diff-ext C1 (env-gated no-op)
                 if let Some(event) = BusEvent::from_json(&value) {
                     if event.is_server_connected() && tx.send(Ingest::Connected).await.is_err() {
                         return;
