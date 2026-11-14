@@ -3185,4 +3185,9 @@ G-412/413/414/415/416/417/418/420/422 ✅；**G-419/G-421 勘误撤销**（登�
   5. **Sessions 对话框 chrome**：size large（onMount `setSize("large")`）、pin/unpin 在多 tab 模式隐藏（`hidden: sessionTabs.enabled()`）、rename ctrl+r 动作、右侧「all projects ctrl+a」footerHint；storage `all_projects` 默认改 false（ref `scope ?? "cwd"`，config/index.tsx:328）。
 - **golden 事项收口**（用户 2026-11-14 批准 `PARITY_UPDATE=1`）：3 个 screen golden（session-error-part/session-sidebar-live/session-slash-palette）按 W2 F3 padded 几何重导（抽验：rails 17-20、╹ 21、footer h-2、末行留白 = ref fixture 网格逐点一致）；surf1-detail-states 本地 pin 按 ref oracle 重钉（shell 块 rail fg=background.base/bg=raised，ref session-tool-failed 捕获 + BlockTool 源码背书——本地 pin 陈旧，对齐 ref 属常规维护）。
 
+### T9 文档化登记（不立 G-ID 编号的已知行为差/有界缺口）
+
+- **水合时在途、随后由事件收尾的 turn：footer 位置瞬态差（ref live-append vs rust reduce-inline）**——现象：连接落到一个**进行中**会话时，ref 先以 wire 水合（无 inline footer——`message.finish` 未到的 turn 不发 footer 行，rows.ts:403-406），随后重放的 `session.step.ended` 走 LIVE 路把 footer **追加到转录尾部**（rows.ts:219-227 `appendFooter`），且 `session.step.started` 先 `removeFooter` 迁移已水合的 footer（rows.ts:306-308）——60 行 dump 证据见 t9-w3-report §1。rust 是 reduce 架构，footer 永远 inline，该「迁移到尾部」产物**不可达也无需移植**（生产不会对已持久化 turn 重放 step 生命周期；重水合后瞬态差消失）。**通道侧被 `tools/diff/tui/w3_normalize.py` §2→§4 耦合归一化屏蔽**（wire 已带 finish 的 assistant 视为持久化 turn，剪除对其重放的 step/text 生命周期事件）——即本通道 40/40 EXACT 不覆盖该瞬态形状，属差分面的已知收窄，非生产缺陷。触发条件=连接落到进行中会话（connect-mid-turn）。
+- **`Store::session_list_all_projects()` 恒 false 硬编码占位**（store.rs，W4 引入）：ref 读 `useStorage().store("session-list")` 的持久化 `allProjects`（dialog-session-list.tsx:42-45，用户 ctrl+a 切换后跨启动保持）；rust 的 `storage.rs SessionListPrefs.all_projects` 字段**无消费者**，切换态未接持久化——有界缺口（UI 提示文案与搜索 scope 的 all-projects 分支以默认值渲染）。
+
 工具 `tools/diff/tui_fullscreen.py`；报告 `docs/audit/diff/TUI-FULLSCREEN.md`；扫描口径=census 14 + diff 8 命令。

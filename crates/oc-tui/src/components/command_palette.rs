@@ -77,7 +77,11 @@ impl PaletteCommand {
             "session.share" => matches!(store.route(), Route::Session { .. }),
             // `suggested: data.session.list().length > 0`
             // (app.tsx:703 — "Switch session" suggests once a session
-            // exists).
+            // exists). BOUNDED approximation: `session_history()` is
+            // the last resync snapshot (a static read), while ref's
+            // `data.session.list()` is reactive over the live store —
+            // a session appearing between resyncs lags one resync
+            // behind here (no corpus case distinguishes the two).
             "session.list" => !store.session_history().is_empty(),
             // `suggested: !connected()` (app.tsx:948) — v2's
             // `connected` is INTEGRATION-backed (`hasConnectedProvider`

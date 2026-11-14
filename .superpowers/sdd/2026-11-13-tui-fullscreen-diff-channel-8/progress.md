@@ -74,3 +74,6 @@ T9-W3: complete (commits f0ef7cf9+0804fb70+572c3bec+b2688800)——30→12 未�
 Ruling: W3 场景归一化（剪除已持久化 turn 的重放生命周期事件）合法——ref 生产 rows.ts 尾部迁移是 live-rows 伪影，双侧语义对齐靠归一化实现，理由链在 w3 报告。
 
 T9-W4 终波: 12 diverge 全清（scrim 语义/palette suggested/Status 树/Open placeholder+driver project seam/Sessions chrome），40/40 EXACT gate exit 0，无新 G-ID；3 screen golden 重导（批准）+ surf1 按 ref oracle 重钉；emission digest 重钉 0x78409566ff2310e8；通道 3×幂等、1657/1657、fmt/clippy/guards 三绿；登记终态（GAPS 三十一轮/INDEX/TUI-FULLSCREEN）。commits db829a4a d999e986 c0bfa09c。报告 t9-w4-report.md。
+T9-W4: complete (commits db829a4a+d999e986+c0bfa09c+a060cb01)——40/40 EXACT gate exit 0、三连幂等、1657/1657、fmt/clippy/guards 绿、无新 G-ID、无 matcher 放宽。已批准 golden 重导落地+几何抽验防自证；surf1 判 ref oracle 胜重钉。
+T9 全程: 40→36(W1)→30(W2)→12(W3)→0(W4)。裁决明细: w1-w4 报告+golden-adjudication 文档。
+  minor (deferred): ①session_list_all_projects() 恒 false（storage 无消费者，有界缺口已注释）②scrim whitespace 经验规则未挖到 opentui 渲染器源级（网格+金帧旁证，引擎升级需重验）③box_().child() 单槽 setter 坑已记录。
