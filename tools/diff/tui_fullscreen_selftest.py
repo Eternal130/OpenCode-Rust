@@ -13,7 +13,9 @@ Five synthetic `tui-diff-grid/1` cases pinning the compare contract:
   5. one side fg=[-1,-1,-1] sentinel vs real RGB  -> diverge
 
 plus verdict() gate semantics: exit 0 (all adjudicated), exit 2 (any
-unadjudicated divergence).
+unadjudicated divergence) — gate scope = committed corpus only;
+rec-* recorded-local unadjudicated divergences are advisory (exit 0),
+while rec-* infra failures still hard-exit 1 in load_side.
 """
 from __future__ import annotations
 
@@ -135,6 +137,39 @@ class VerdictGateTest(unittest.TestCase):
         r = compare(normalize(mkgrid(ref_cells)), normalize(mkgrid(rust_cells)))
         self.assertEqual(r["verdict"], "structural")
         self.assertEqual(verdict([r]), 2)
+
+    def test_recorded_unadjudicated_is_advisory_exit_0(self):
+        # Controller ruling 2026-11-15 (C3): gate scope is the COMMITTED
+        # corpus — a rec-* (recorded-local) unadjudicated divergence is
+        # advisory and must not redden the release gate.
+        cells_a, cells_b = uniform(), uniform()
+        cells_b[0][0] = mkcell("z")
+        committed = compare(normalize(mkgrid(cells_a)), normalize(mkgrid(uniform())))
+        recorded = compare(normalize(mkgrid(cells_a)), normalize(mkgrid(cells_b)))
+        self.assertEqual(
+            verdict([{"id": "home-empty", **committed},
+                     {"id": "rec-20261114-205531-bb7f1e74@120x30", **recorded}]),
+            0, "rec-* unadjudicated divergence is advisory")
+
+    def test_recorded_infra_failure_is_never_advisory_exit_1(self):
+        # The advisory ruling covers ADJUDICATION only: a rec-* infra
+        # failure (stub gap / malformed grid) means the replay mechanism
+        # itself is broken and stays a hard exit 1 — enforced by
+        # load_side before verdict() ever runs, regardless of the id.
+        import json
+        import tempfile
+        from pathlib import Path
+        import tools.diff.tui_fullscreen as tf
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            # a rec- grid declaring 8x4 but carrying 3 rows -> infra red
+            (out / "rec-x1.json").write_text(json.dumps(
+                {"schema": "tui-diff-grid/1", "id": "rec-x1", "width": 8, "height": 4,
+                 "cells": [[mkcell() for _ in range(8)] for _ in range(3)]}))
+            cases = [{"id": "rec-x1", "scenario": "s", "width": 8, "height": 4}]
+            with self.assertRaises(SystemExit) as cm:
+                tf.load_side(out, cases, "test")
+            self.assertEqual(cm.exception.code, 1)
 
 
 class NormalizeTest(unittest.TestCase):
