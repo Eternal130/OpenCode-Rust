@@ -15,11 +15,11 @@
 | 5 | /compact 管线 | responses_compaction.py | RESPONSES-COMPACTION.md | 61 文档（13 mined） | 60 | 1 | — |
 | 6 | HTTP 全量 | http_full.py | HTTP-FULL.md | 60 请求（13 mined） | 47 | 11 | 2 |
 | 7 | **provider 录制解码** | provider_recordings.py | PROVIDER-RECORDINGS.md | **264 交互（259 真实 SSE）** | 264 | 0 | — |
-| 8 | TUI 整屏差分（静息帧 + A2 帧序列 + B2 真插件） | tui_fullscreen.py | TUI-FULLSCREEN.md | 静息 90 case（30 场景×3 档，含 plugin-* 15）+ frames 15 序列（5 anim×3 档）；插件腿 TUI_DIFF_BUN≥1.4.2 门控 | 静息 **EXACT 78**；frames **EXACT 6** | 静息 12（G-424×3 + 工具行伪影×3 + 加载模型投影×3 + G-425×3；version-skew 0——修复轮双侧真 boot 后消失）；frames 9（G-423×3 + G-424×3 + 工具行伪影×3） | 21（全部 CAUSES 命中，未裁决 0） |
+| 8 | TUI 整屏差分（静息帧 + A2 帧序列 + B2 真插件） | tui_fullscreen.py | TUI-FULLSCREEN.md | 静息 90 case（30 场景×3 档，含 plugin-* 15）+ frames 15 序列（5 anim×3 档）；插件腿 TUI_DIFF_BUN≥1.4.2 门控 | 静息 **EXACT 81**；frames **EXACT 12** | 静息 9（工具行伪影×3 + 加载模型投影×3 + G-424b 折行×3——G-424/G-425 已于 gb16 修复关簇）；frames 3（工具行伪影×3——G-423/G-424 已修复关簇） | 12 committed（全部 CAUSES 命中，未裁决 0）+ rec-* advisory 命中 2 |
 
 ## 总计
 
-**通道 1-7：790 对拍单元：MATCH 717 · DIVERGE 71 · ADJUDICATED 2 · MISSING 0**（100% 三态归属；第三十轮 burndown 收口口径）。**通道 8（T9 裁决循环 2026-11-14 + T8-320 档 + A2 帧序列 + B2 真插件 2026-11-15 修复轮）：静息 90 case（30 场景×3 档）：EXACT 78 · STRUCTURAL 0 · CAUSES 12 · 未裁决 0（plugin-boot 9 屏双侧真 boot 后逐屏 EXACT；version-skew 整屏豁免清零，残余分歧=加载模型投影×3 + G-425×3）；frames 15 序列：EXACT 6 · CAUSES 9——门绿 exit 0，三连幂等（TUI_DIFF_BUN 设定下），新立项 G-425（见 GAPS 第三十二轮）**——合计 880 对拍单元。
+**通道 1-7：790 对拍单元：MATCH 717 · DIVERGE 71 · ADJUDICATED 2 · MISSING 0**（100% 三态归属；第三十轮 burndown 收口口径）。**通道 8（T9 裁决循环 2026-11-14 + T8-320 档 + A2 帧序列 + B2 真插件 2026-11-15 修复轮 + gap-burndown-16 2026-11-15 缺口清偿）：静息 90 case（30 场景×3 档）：EXACT 81 · STRUCTURAL 0 · CAUSES 9 · 未裁决 0（G-423 多 part 拼接、G-424 toast affordance、G-425 插件失败行均修复关簇；残余=工具行伪影×3 + 加载模型投影×3 + G-424b 折行×3）；frames 15 序列：EXACT 12 · CAUSES 3（工具行伪影）——门绿 exit 0，幂等（TUI_DIFF_BUN 设定下）。recorded-local（rec-* advisory 不拦门）：bb7f1e74 主档 EXACT + 镜像 2 档 CAUSES（opentui marked@17 上游词法）、c0c8ecf4/db261f5f 三档全 EXACT（G-426/G-427 关簇）**——合计 880 对拍单元（+ frames 15 + rec-* advisory 9）。
 <!-- 历史脚注（第二十九轮基线口径，已被上方第三十轮收口数字取代，保留备查）：
      101 项分歧：既有 78（R27/R28 裁定族）+ 挖掘新增 23 → 归并 G-412..G-422（11 条：🟡×1 / 🟢×10），其余归 G-407/409/410 既有族。 -->
 
