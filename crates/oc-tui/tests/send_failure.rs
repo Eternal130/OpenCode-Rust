@@ -80,15 +80,22 @@ async fn send_failure_renders_the_error_toast_and_restores_the_draft() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<PromptSinkEvent>();
     let sink = HttpPromptSink::new(client, "/tmp/opencode".to_owned(), tx);
 
-    sink.send("ses_500", &submitted("please answer"));
+    // The production chain's shape: `submit_prompt` minted the
+    // client id and the POST body carries it (the rollback target).
+    let mut admitted = submitted("please answer");
+    admitted.inbox_id = Some("msg_client_1".to_owned());
+    sink.send("ses_500", &admitted);
 
     let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
         .await
         .expect("event within 5s")
         .expect("channel open");
-    let PromptSinkEvent::SendFailed { session_key, title, message, draft } = event else {
+    let PromptSinkEvent::SendFailed { session_key, title, message, draft, inbox_id } = event else {
         panic!("expected SendFailed, got {event:?}");
     };
+    // G-426③ — the failure carries the optimistic admission's id (the
+    // rollback target, data.ts:1600-1607).
+    assert_eq!(inbox_id.as_deref(), Some("msg_client_1"), "the client-minted id rides the failure");
     assert_eq!(session_key, "ses_500");
     assert_eq!(title, "Failed to send prompt", "v2's fail() title");
     assert_eq!(draft, "please answer");
@@ -108,6 +115,7 @@ async fn send_failure_renders_the_error_toast_and_restores_the_draft() {
             title,
             message: message.clone(),
             draft,
+            inbox_id,
         },
     );
     assert_eq!(store.prompt_draft("ses_500").text, "please answer", "restoreEntry()");
@@ -137,10 +145,77 @@ async fn send_failure_renders_the_error_toast_and_restores_the_draft() {
             title: "Failed to send prompt".into(),
             message: "x".into(),
             draft: "please answer".into(),
+            inbox_id: None,
         },
     );
     assert_eq!(store.prompt_draft("ses_500").text, "new thought");
     drop(server);
+}
+
+/// G-426③ (review fix) — the failed POST's optimistic ROLLBACK
+/// (data.ts:1600-1607: `.catch` → `retractLocal`, "Roll back only
+/// rows this call admitted"): the client-minted id's pending registry
+/// row, its projected user row AND the busy state it armed all clear;
+/// a server-acknowledged row under ANOTHER id must survive.
+#[tokio::test(flavor = "current_thread")]
+async fn send_failure_retracts_only_the_admitted_row() {
+    let store = Store::new(Runtime::new());
+    store.open_tab("ses_500", None);
+
+    // The optimistic admission (forward_submission's shape): a
+    // client-minted id under the composer key, plus a server-echoed
+    // row under a different id (must NOT retract).
+    store.ingest_all([oc_tui::data::Ingest::Event(oc_tui::data::BusEvent::new(
+        "session.inbox.enqueued",
+        serde_json::json!({
+            "sessionID": "ses_500",
+            "inboxID": "msg_server_1",
+            "item": { "type": "user", "payload": { "text": "server row" } },
+        }),
+    ))]);
+    let mut composer = store.composer("ses_500");
+    composer.set(oc_tui::components::composer::PromptDraft {
+        text: "please answer".into(),
+        ..Default::default()
+    });
+    store.set_composer("ses_500", &composer);
+    let admitted =
+        store.submit_prompt("ses_500").expect("submit").inbox_id.expect("client-minted id");
+    assert_eq!(store.pending_inbox("ses_500").len(), 2);
+    assert!(store.session_busy("ses_500"), "an undelivered pending item arms the tab spinner");
+
+    apply_send_failure(
+        &store,
+        PromptSinkEvent::SendFailed {
+            session_key: "ses_500".into(),
+            title: "Failed to send prompt".into(),
+            message: "500".into(),
+            draft: "please answer".into(),
+            inbox_id: Some(admitted.clone()),
+        },
+    );
+
+    // Face 1 — the pending registry: only the admitted id retracts.
+    let pending: Vec<String> =
+        store.pending_inbox("ses_500").iter().map(|item| item.id.clone()).collect();
+    assert_eq!(pending, vec!["msg_server_1".to_owned()], "only this call's row rolled back");
+    // Face 2 — the projected user row is gone, the other survives.
+    let texts: Vec<String> = store
+        .messages("ses_500")
+        .iter()
+        .filter_map(|message| match message {
+            oc_tui::components::message::model::Message::User { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts, vec!["server row".to_owned()], "no ghost user row survives the failure");
+    // Face 3 — busy disarms once no pending item remains for it… the
+    // server row still pends, so busy stays armed BY that row only.
+    assert!(store.session_busy("ses_500"));
+    store.retract_submitted_prompt("ses_500", "msg_server_1");
+    assert!(!store.session_busy("ses_500"), "with the registry empty the spinner rests");
+    // The draft restore still ran alongside the rollback.
+    assert_eq!(store.prompt_draft("ses_500").text, "please answer");
 }
 
 /// The HOME route's failure title: creating the session failed (v2's

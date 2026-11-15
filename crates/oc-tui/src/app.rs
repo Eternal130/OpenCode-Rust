@@ -3821,6 +3821,14 @@ pub enum PromptSinkEvent {
         message: String,
         /// The submitted text (the restore candidate).
         draft: String,
+        /// G-426③（评审修复）— the client-minted inbox id of the
+        /// optimistic admission this send created (`data.session.
+        /// prompt`'s rollback target, data.ts:1600-1607 — retract
+        /// ONLY the row this call admitted). `None` when the failing
+        /// arm ran before any admission (never in the current sink —
+        /// every arm posts after `submit_prompt`/`forward_submission`
+        /// admitted).
+        inbox_id: Option<String>,
     },
 }
 
@@ -5004,6 +5012,7 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
             _ => Some(oc_client::types::SessionInboxDelivery::Steer),
         };
         let inbox_id = prompt.inbox_id.clone();
+        let rollback_id = inbox_id.clone();
         let editor_context = prompt.editor_context.clone();
         tokio::spawn(async move {
             let target = if session_key == HOME_PROMPT_KEY {
@@ -5029,6 +5038,7 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
                             title: "Creating a session failed".to_owned(),
                             message: client_error_message(&error),
                             draft: text,
+                            inbox_id: rollback_id.clone(),
                         });
                         return;
                     }
@@ -5049,6 +5059,7 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
                         title: "Failed to switch model".to_owned(),
                         message: client_error_message(&error),
                         draft: text,
+                        inbox_id: rollback_id,
                     });
                     return;
                 }
@@ -5064,6 +5075,7 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
                         title: "Failed to send editor context".to_owned(),
                         message: "the synthetic context POST failed".to_owned(),
                         draft: text,
+                        inbox_id: rollback_id,
                     });
                     return;
                 }
@@ -5085,6 +5097,7 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
                     title: "Failed to send prompt".to_owned(),
                     message: client_error_message(&error),
                     draft: body.text,
+                    inbox_id: body.id.clone(),
                 });
             }
         });
@@ -5289,9 +5302,18 @@ async fn commit_model_selection(
 /// plus `restoreEntry()` — the submitted text returns to the composer
 /// ONLY when the user has not started typing something new.
 pub fn apply_send_failure(store: &Store, event: PromptSinkEvent) {
-    let PromptSinkEvent::SendFailed { session_key, title, message, draft } = event else {
+    let PromptSinkEvent::SendFailed { session_key, title, message, draft, inbox_id } = event else {
         return;
     };
+    // G-426③（评审修复）— ref's optimistic rollback (data.ts:
+    // 1600-1607): a failed POST retracts ONLY the row this send
+    // admitted (the client-minted id) — pending registry + projected
+    // user row — before the toast/draft restore, so the ghost row,
+    // the forever-busy spinner and a doubled text (row + restored
+    // draft) cannot coexist.
+    if let Some(inbox_id) = inbox_id {
+        store.retract_submitted_prompt(&session_key, &inbox_id);
+    }
     // TUI-29 — the renderer console captures the failure (the
     // diagnostics class v2's console surfaces).
     store.console_log(&format!("[tui] {title}: {message}"));

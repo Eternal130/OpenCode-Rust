@@ -10331,6 +10331,15 @@ impl Store {
         });
     }
 
+    /// G-426③（评审修复）— `data.session.prompt` 的失败回滚
+    /// （client/solid/data.ts:1600-1607：`.catch` →
+    /// `retractLocal`，"Roll back only rows this call admitted"）：
+    /// 撤回本客户端铸 id 的 pending 注册表行与投影 User 行。
+    /// 仅按精确 id 撤——服务器已 echo/认可过的其它行不动。
+    pub fn retract_submitted_prompt(&self, session_id: &str, inbox_id: &str) {
+        self.retract_inbox_item(session_id, inbox_id);
+    }
+
     /// The drain step — RETIRED by TUI-TD07: the server owns the
     /// queue's delivery (`session.prompt {delivery: "queue"}` waits
     /// server-side; `session.inbox.delivered` clears the pending row
