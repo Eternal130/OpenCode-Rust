@@ -205,16 +205,20 @@ def compile_recording(doc: dict, redact_on: bool) -> dict:
         # recorded one did not (or vice versa) — pre-stub it so the
         # difference stays a render diff, never a stub_gap.
         # G-427①(W4): the stub shape is the REAL 2.0.24 server
-        # contract — session.ts:620-623 returns `{interrupted: …}` (a
-        # 200 with a data envelope), NOT 204. The generated client
-        # declares successStatus:200 (client.ts:975-984) and rejects
-        # ANY other status as UnexpectedStatus (client.ts:341-346);
-        # the TUI fires it `void`-style, so a 204 stub becomes an
+        # contract — session.ts:620-623 returns a bare `{interrupted:
+        # …}` top-level body (types.ts SessionInterruptResponse; the
+        # client's request() consumes it directly with NO data
+        # envelope unwrap), NOT 204. The generated client declares
+        # successStatus:200 (client.ts:975-984) and rejects ANY other
+        # status as UnexpectedStatus (client.ts:341-346); the TUI
+        # fires it `void`-style, so a 204 stub becomes an
         # unhandledRejection → renderer handleError → console.show()
         # when _openConsoleOnError (fixture default true; production
         # pins false at app.tsx:240-241). 204 = fixture-only panel.
+        # (W4 review M1: the body is top-level `{interrupted:true}` —
+        # `{"data":{…}}` was one envelope layer too many.)
         fetch.setdefault(f"{base}/interrupt",
-                         {"status": 200, "body": {"data": {"interrupted": True}}})
+                         {"status": 200, "body": {"interrupted": True}})
     # /api/event: the SSE stub — body carries {"sse":true,"initial"}
     # (SCHEMA file-format field semantics).
     fetch["/api/event"] = {"status": 200,
