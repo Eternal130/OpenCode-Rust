@@ -204,7 +204,7 @@ anim 场景（`anim.ticks` 声明，SCHEMA A2 扩展）在静息排空后逐拍�
 
 | anim 总量 | EXACT | CAUSES 命中 | 未裁决 |
 |---|---|---|---|
-| 15 | 6 | 9 | 0 |
+| 15 | 9 | 6 | 0 |
 
 | case | verdict | 非exact拍 | per-tick | first 异拍 |
 |---|---|---|---|---|
@@ -214,9 +214,9 @@ anim 场景（`anim.ticks` 声明，SCHEMA A2 扩展）在静息排空后逐拍�
 | anim-stream-delta | exact | 0/11 | `...........` (K=10) | — |
 | anim-stream-delta@120x30 | exact | 0/11 | `...........` (K=10) | — |
 | anim-stream-delta@320x80 | exact | 0/11 | `...........` (K=10) | — |
-| anim-stream-multi-part | diverge | 10/11 | `.XXXXXXXXXX` (K=10) | tick=1 r6c5 ch ref=' ' rust='A' |
-| anim-stream-multi-part@120x30 | diverge | 10/11 | `.XXXXXXXXXX` (K=10) | tick=1 r6c5 ch ref=' ' rust='A' |
-| anim-stream-multi-part@320x80 | diverge | 10/11 | `.XXXXXXXXXX` (K=10) | tick=1 r6c5 ch ref=' ' rust='A' |
+| anim-stream-multi-part | exact | 0/11 | `...........` (K=10) | — |
+| anim-stream-multi-part@120x30 | exact | 0/11 | `...........` (K=10) | — |
+| anim-stream-multi-part@320x80 | exact | 0/11 | `...........` (K=10) | — |
 | anim-toast-window | diverge | 13/13 | `XXXXXXXXXXXXX` (K=12) | tick=0 r1c27 ch ref='┃' rust=' ' |
 | anim-toast-window@120x30 | diverge | 13/13 | `XXXXXXXXXXXXX` (K=12) | tick=0 r1c67 ch ref='┃' rust=' ' |
 | anim-toast-window@320x80 | diverge | 13/13 | `XXXXXXXXXXXXX` (K=12) | tick=0 r1c267 ch ref='┃' rust=' ' |
@@ -224,9 +224,6 @@ anim 场景（`anim.ticks` 声明，SCHEMA A2 扩展）在静息排空后逐拍�
 | anim-tool-progress@120x30 | diverge | 11/11 | `XXXXXXXXXXX` (K=10) | tick=0 r7c5 ch ref='⋯' rust='⠋' |
 | anim-tool-progress@320x80 | diverge | 11/11 | `XXXXXXXXXXX` (K=10) | tick=0 r7c5 ch ref='⋯' rust='⠋' |
 
-- `anim-stream-multi-part`  — CAUSES: G-423 多 text part 内联拼接渲染差（anim-stream-multi-part）
-- `anim-stream-multi-part@120x30`  — CAUSES: G-423 多 text part 内联拼接渲染差（anim-stream-multi-part）
-- `anim-stream-multi-part@320x80`  — CAUSES: G-423 多 text part 内联拼接渲染差（anim-stream-multi-part）
 - `anim-toast-window`  — CAUSES: G-424 rust toast 动作 affordance 恒 'x'（ref '› {label}' + 宽面板）
 - `anim-toast-window@120x30`  — CAUSES: G-424 rust toast 动作 affordance 恒 'x'（ref '› {label}' + 宽面板）
 - `anim-toast-window@320x80`  — CAUSES: G-424 rust toast 动作 affordance 恒 'x'（ref '› {label}' + 宽面板）

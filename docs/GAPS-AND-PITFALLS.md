@@ -3209,11 +3209,11 @@ G-412/413/414/415/416/417/418/420/422 ✅；**G-419/G-421 勘误撤销**（登�
 
 通道 8 A2 扩展（`tui-diff-scenario/1` 可选 `anim` 字段 + `frames` 维度）新发现的渲染语义差 1 项立项；另两条为通道基建登记（非移植缺口，见 TUI-FULLSCREEN.md CAUSES 表）：ref 命令面板分组序竞态（`groupBy` 首现序 × 多源异步注册，5 次复跑 1 次翻转——ref 树只读不可修）、ref 动画门控夹具伪影（rust 时钟驱动动画 vs ref fixture 钉 `animations:false` 静态形状；ManualClock 整 app 注入原生不稳——boot 冻钟死锁 / 捕获段错误 `bufferGetCharPtr`，探针记录 `.superpowers/sdd/diff-ext/a2-report.md`）。
 
-### G-423 🟡 多 text part 内联拼接渲染差（tui，anim-stream-multi-part）
+### G-423 ✅ 多 text part 内联拼接渲染差（tui，anim-stream-multi-part）【2026-11-15 gap-burndown-16 w1 修复：commit 42a88ac9】
 - 现象（A2 帧序列对拍，逐拍取证）：同一 assistant 消息两个 text part（ordinal 0/1）交错 `session.text.delta`——ref 把两 part 文本**内联拼接到同一行**（中间拍 "Alpha Beta part"），且双 `text.ended` 后仅显示 **part 1** 终文（part 0 终文丢失）；rust 按分段段落渲染（两个独立块，终态两段完整）。
 - Ref：packages/tui/src/routes/session/message-parts.tsx:198-275（InlineToolRow/多 part 段落装配——part 归并进同一 text run，ended 全量替换语义下后 part 覆盖前 part）。
 - Rust：crates/oc-tui/src/components/message/rows.rs:120-135（每 part 独立块装配，终态两段并存）。
-- 处置：登记不拦（CAUSES 精确 matcher：`anim-stream-multi-part*`）；静息帧（tick 0，空内容）两侧 exact，纯流式中间拍可观测。修复方向：rust 侧确认 ref 的"拼接+覆盖"是否为有意语义（终文丢 part 0 疑似 ref 侧缺陷）后对齐或钉定。
+- 处置：**已修复（42a88ac9）**。root-cause 双层：① 数据层 ref `editText`（client/src/solid/data.ts:454-458）**忽略事件 ordinal**、恒改最后一个 text part（`content.findLast`），`session.text.started`（data.ts:906-908）push 新空 part——交错 ordinal 全部内联拼接进同一 run、后 `text.ended` 覆盖前；② 行层 ref 的 transcript 行是**事件创建**（rows.ts `appendPart` 按事件 ordinal、非空载荷才建行，`resolvePart` 按位置序解析；已宣告但空的行保留 marginTop 空白行；快照装载走 rebuild 路径 rows.ts:393-395 丢弃空 part）。rust 侧 `with_last_text_part`/`push_text_part`（store.rs）+ `text_announced` frontier（announce/clear 于事件与快照/消息投影）+ `TranscriptOptions.text_announced` 行投影门（model.rs/list.rs/session.rs）逐层对齐；`text.started` 补 G11-F1 快照守卫（重放不 append 幻影 part）。通道 8 anim-stream-multi-part ×3 档静息+帧序列全拍 exact（frames EXACT 6→9、CAUSES 9→6）；oc-tui 单测钉新语义（`multi_text_parts_concatenate_inline_last_ended_wins`/`out_of_order_ordinal_lands_on_last_part`/`g423_announced_text_frontier_gates_rows`）。
 
 ### G-424 🟡 rust toast 动作 affordance 恒 'x'（ref '› {label}' + 宽面板）
 - 现象（A2 静息/帧序列对拍，anim-toast-window 三档）：带 action 的 toast（MCP 失败 → "Open MCP servers"）——ref 标题行右对齐渲染 `› Open MCP servers` 且面板宽度计入该 run（rails 27/77，panel 51）；rust 恒渲染 dismiss `x`、面板按 title+3 计宽（rails 44/77，panel 34）。
