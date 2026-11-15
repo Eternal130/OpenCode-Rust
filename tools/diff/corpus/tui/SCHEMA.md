@@ -66,8 +66,11 @@ files; every field semantic below is normative for both.
   bun ≥ 1.4.2); ref `host.ts:17-43`'s swallow guard depends on it.
   Therefore the ref leg of every plugin case runs under
   **`TUI_DIFF_BUN`** (env, path to a bun executable) with version
-  **≥ 1.4.2** — unset or older is a pointed infra error; non-plugin
-  cases keep the environment bun (baseline no-drift). Under the gate
+  **≥ 1.4.2** — the pinned, persistent default is the repo-local
+  `tools/bin/bun-1.4.2` (git-ignored; fetch the bun v1.4.2 linux-x64
+  zip from `bun-sh/bun` tag `bun-v1.4.2` if absent); unset or older
+  is a pointed infra error; non-plugin cases keep the environment bun
+  (baseline no-drift). Under the gate
   BOTH real payloads boot on the ref side (probed: clean resting
   screens, omo-slim's real Solid sidebar renders at 320×80, and one
   RESIDUAL version-skew shape: loading omo-slim's tui entry degrades
