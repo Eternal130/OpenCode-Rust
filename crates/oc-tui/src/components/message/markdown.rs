@@ -400,9 +400,34 @@ fn render_spec(
             push_margins(*margin_bottom, lines);
         }
         BlockSpec::HorizontalRule { border_color, margin_bottom } => {
-            let rule = border_color
+            // G-426② — ref's hr ink is the HARDCODED `#888888`
+            // fallback, not the theme token: upstream
+            // `createHorizontalRuleRenderable` (core Markdown.ts:
+            // 1111-1121) resolves `getStyle("conceal")?.fg ??
+            // this._fg ?? "#888888"`, and in the v2.0.24 transcript
+            // mount the `content` prop applies BEFORE `fg` (the JSX
+            // prop order in message-parts.tsx:180-192) — the blocks
+            // (and their hr border colors) snapshot while `_fg` is
+            // still undefined, and the later `fg` patch never
+            // re-colors block-level borders. The registered syntax
+            // has no `conceal` scope, so the pinned ink is #888888.
+            // (ref-suspicion: an upstream prop-order quirk; the
+            // blockquote border is unaffected — its chain consults
+            // the registered `default` rule first.)
+            let _ = border_color;
+            let rule = styles
+                .syntax
+                .get_style("conceal")
+                .and_then(|def| def.fg)
                 .and_then(rgba_to_style_color)
-                .map_or(styles.rule, |color| styles.rule.fg(color));
+                .map_or_else(
+                    || {
+                        Style::new()
+                            .fg(Color::Rgb(0x88, 0x88, 0x88))
+                            .bg(styles.rule.bg.unwrap_or(Color::Reset))
+                    },
+                    |color| styles.rule.fg(color),
+                );
             lines.push(MarkdownLine(vec![StyledSpan {
                 link: None,
                 text: "─".repeat(content_width),
@@ -926,6 +951,44 @@ pub fn markdown_frame_fixture() -> String {
 mod tests {
     use super::*;
     use crate::theme::ThemeState;
+
+    /// G-426 residual — the framework lexer's empty-list interruption
+    /// gap, pinned as the CURRENT rust shape: marked@17 (the ref
+    /// chain's lexer, marked@17.0.1) lets an EMPTY list item (`-` on
+    /// its own line) INTERRUPT a paragraph — the paragraph raw ends
+    /// at the previous line and the `-` becomes a one-item List block
+    /// (own row + margins). The opentui-core lexer port keeps the `-`
+    /// inside the paragraph raw (lazy continuation), gluing it to the
+    /// paragraph's last line with no separating blank. Upstream
+    /// (framework-layer) fix required; this pin documents the
+    /// oc-tui-side rendering of the rust token stream so the eventual
+    /// core fix flips it visibly.
+    #[test]
+    fn gb16_empty_list_item_does_not_interrupt_the_paragraph() {
+        let src = "- first: the linker args drift\n\nxxx\n\n---xxxx\nxx xxxx-- -\n    yyy---\n-\n---\n\n- a\n- b\n";
+        let lines = render_with(src, 60, false);
+        let texts: Vec<String> = lines.iter().map(MarkdownLine::text).collect();
+        assert_eq!(
+            texts,
+            vec![
+                "- first: the linker args drift".to_owned(),
+                String::new(),
+                "xxx".to_owned(),
+                String::new(),
+                "---xxxx".to_owned(),
+                "xx xxxx-- -".to_owned(),
+                "    yyy---".to_owned(),
+                // the `-` rides the PARAGRAPH (ref: blank + own list row)
+                "-".to_owned(),
+                String::new(),
+                "─".repeat(60),
+                String::new(),
+                "- a".to_owned(),
+                "- b".to_owned(),
+                String::new(),
+            ]
+        );
+    }
 
     // G-287⑧ — render link-bearing sources in both hyperlinks states.
     fn render_with(source: &str, width: usize, hyperlinks: bool) -> Vec<MarkdownLine> {

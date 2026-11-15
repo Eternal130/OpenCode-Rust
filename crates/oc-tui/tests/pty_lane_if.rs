@@ -177,6 +177,17 @@ fn pty_wheel_scrolls_the_transcript_half_a_page() {
         // Sticky at the tail: the last markers are on screen.
         wait_row(&driver, "L59", Duration::from_secs(10))
             .ok_or_else(|| "the long reply never rendered its tail".to_owned())?;
+        // G-426③ — the transcript's tail is no longer the L59 block:
+        // the submitted prompt is OPTIMISTICALLY admitted as a
+        // pending input row (data.ts:1545-1581) and pending input
+        // rows relocate to the transcript TAIL (rows.ts:374-377) —
+        // here that is the client-minted "spin the wheel" row plus
+        // the script's `msg_user_1` echo ("list the lines"; the
+        // FakeLlm script models no `session.inbox.delivered`, so
+        // both stay pending — the ref-faithful resting shape).
+        let pending_text_on_screen = |driver: &HarnessHandle| {
+            (0..30).any(|row| driver.grid_now().row_text(row).contains("list the lines"))
+        };
         let sticky = visible_markers(&driver);
         let viewport = sticky.len();
         if viewport < 8 {
@@ -190,17 +201,21 @@ fn pty_wheel_scrolls_the_transcript_half_a_page() {
         // unit-pinned against the pageup key; the store's viewport
         // differs from the visible marker count by the pane's chrome
         // rows, so the PTY pins the class + the uniform cadence.
+        // G-426③ measures the step off the view's FIRST marker (the
+        // pending rows under L59 leave the view first, so the LAST
+        // marker stays visible for the first notch).
         driver.sgr_scroll_up(40, 15);
         std::thread::sleep(Duration::from_millis(300));
         let freed = visible_markers(&driver);
-        let step_one = freed.last().map_or(0, |last| sticky.last().map_or(0, |tail| tail - last));
+        let step_one =
+            freed.first().map_or(0, |first| sticky.first().map_or(0, |head| head - first));
         if step_one <= 3 || step_one > viewport {
             return Err(format!(
                 "one notch moved {step_one} marker rows (viewport {viewport}) — not the half-page class: sticky {sticky:?} → freed {freed:?}"
             ));
         }
-        if freed.contains(&59) {
-            return Err("the tail must leave the view on an up-notch".to_owned());
+        if pending_text_on_screen(&driver) {
+            return Err("the pending-tail rows must leave the view on an up-notch".to_owned());
         }
         // A second notch keeps moving (the fractional half-page steps
         // alternate around v/2 when the viewport is odd — the E1
@@ -210,7 +225,7 @@ fn pty_wheel_scrolls_the_transcript_half_a_page() {
         std::thread::sleep(Duration::from_millis(300));
         let freed_again = visible_markers(&driver);
         let step_two =
-            freed_again.last().map_or(0, |last| freed.last().map_or(0, |prior| prior - last));
+            freed_again.first().map_or(0, |first| freed.first().map_or(0, |prior| prior - first));
         if step_two == 0 || step_two > viewport {
             return Err(format!(
                 "the second notch moved {step_two} marker rows (viewport {viewport}) — the wheel stopped or overshot"

@@ -1077,6 +1077,35 @@ CAUSES = [
             ":425-440（session.panel props 有界化）、:767-780（fingerprint 快照）",
         ),
     ),
+    (
+        "G-426 残余：opentui-core marked@17 词法移植双缺陷（空列表打断 + setext 下划线，框架层）",
+        # G-426 wave-3 residual, EXACT shape only: the mirrored tiers of
+        # rec-20261114-205531-bb7f1e74 (the primary tier is exact after
+        # the W3 fixes). The two framework lexer defects are verified
+        # against the ref chain's own pinned marked@17.0.1 (bun lexer
+        # probe) — see the G-426 entry + the pinned unit test
+        # gb16_empty_list_item_does_not_interrupt_the_paragraph.
+        lambda d: str(d.get("id", "")).startswith("rec-20261114-205531-bb7f1e74@")
+        and d.get("dimension") in ("resting", "frames", None),
+        (
+            "rec-20261114-205531-bb7f1e74 的镜像档（@120x30/@320x80）残余：G-426 "
+            "四候选（spinner 静止化/Thought 行/代码块/composer 草稿）已 root-cause "
+            "并修复（主档 exact）；残余=框架层 opentui-core 的 marked@17 词法移植"
+            "双缺陷——①空列表项（`-` 独行）不打断段落（ref 的 marked@17.0.1 打断："
+            "段落 raw 止于上一行，`-` 成独立 List 块，多出一空行）；②`-` 独行被当 "
+            "setext h2 下划线（`…\\n-\\n` 整段渲染为 heading 紫粗；ref 词法=段落+"
+            "列表+hr）。两处均在 pinned git 依赖（opentui-rust rev 34a5ac4）内，"
+            "oc-tui 应用层不可修；bun+marked@17.0.1 直接词法探针已钉证据，登记"
+            "不拦（框架层缺陷转 /opt/opentui-rust 上游）",
+            "ref @opentui/core 0.5.14（marked@17.0.1，createAppFixture 全链）: "
+            "lexer 实测 `paragraph …\\n` + `list -\\n` + `hr ---`；"
+            "packages/tui/src/routes/session/message-parts.tsx:180-192",
+            "rust opentui-core/src/renderables/markdown_parser.rs（marked@17 移植，"
+            "rev 34a5ac4）: `-` 并入段落 raw（lazy continuation）+ setext 下划线"
+            "命中；钉形测试 crates/oc-tui/src/components/message/markdown.rs "
+            "gb16_empty_list_item_does_not_interrupt_the_paragraph",
+        ),
+    ),
 ]
 
 

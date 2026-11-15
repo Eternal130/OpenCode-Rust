@@ -3593,8 +3593,11 @@ pub struct InboxItem {
     /// The inbox id (the prompt POST's minted id; the SSE echo keys
     /// every later mutation).
     pub id: String,
-    /// `delivery` — "queue" | "steer".
-    pub delivery: String,
+    /// `delivery` — `Some("queue" | "steer")` or `None` when the
+    /// inbox item carries no delivery field (ref's `pendingDelivery`
+    /// is then `undefined` — the user row renders the AGENT rail
+    /// hue, not `theme.border.base`, index.tsx:2201-2203).
+    pub delivery: Option<String>,
     /// `payload.text`.
     pub text: String,
     /// `payload.files` (resolved attachments) — the undo refill's
@@ -5175,11 +5178,41 @@ impl Store {
             // G-185 — the full draft (text + chips) records.
             state.history = state.history.clone().push(&draft);
         });
+        // G-426③ — ref's optimistic admission (client/solid/
+        // data.ts:1545-1581 `data.session.prompt`): every submit
+        // mints a CLIENT inbox id, admits it into the pending
+        // registry (delivery "steer") and projects the user row
+        // synchronously — the transcript renders the prompt
+        // immediately (at the INPUT tail, rows.ts:374-377) and the
+        // POST body carries the id so the durable `inbox.enqueued`
+        // echo upserts under the SAME id. Files/skills stay off the
+        // optimistic row (data.ts:1566-1569).
+        let inbox_id = uuid::Uuid::new_v4().to_string();
+        let created = self.clock();
+        self.admit_inbox_item(
+            session_id,
+            InboxItem {
+                id: inbox_id.clone(),
+                delivery: Some("steer".to_owned()),
+                text: draft.text.clone(),
+                files: Vec::new(),
+            },
+        );
+        self.project_message(
+            session_id,
+            crate::components::message::model::Message::User {
+                id: inbox_id.clone(),
+                text: draft.text.clone(),
+                created,
+                files: Vec::new(),
+            },
+        );
         let prompt = SubmittedPrompt {
             text: draft.text,
             files: draft.files,
             agents: draft.agents,
             skills: draft.skills,
+            inbox_id: Some(inbox_id),
             ..SubmittedPrompt::default()
         };
         let model = self.resolve_model(session_id);
@@ -5191,9 +5224,41 @@ impl Store {
     /// composer path: `Composer::handle_key` took the prompt and
     /// recorded history itself — only the sink call remains). The
     /// resolved model rides along (the v2 submit's `commitModel`).
-    pub fn forward_submission(&self, session_id: &str, prompt: &SubmittedPrompt) {
+    /// G-426③ — the composer path gets the SAME optimistic
+    /// admission as [`Store::submit_prompt`] (every ref submit runs
+    /// through `data.session.prompt`, data.ts:1545-1581): mint the
+    /// client inbox id, admit the pending row + project the user
+    /// row, and carry the id on the POST body.
+    pub fn forward_submission(
+        &self,
+        session_id: &str,
+        prompt: &crate::components::composer::SubmittedPrompt,
+    ) {
+        let mut prompt = prompt.clone();
+        if prompt.inbox_id.is_none() {
+            let inbox_id = uuid::Uuid::new_v4().to_string();
+            self.admit_inbox_item(
+                session_id,
+                InboxItem {
+                    id: inbox_id.clone(),
+                    delivery: Some(prompt.delivery.clone().unwrap_or_else(|| "steer".to_owned())),
+                    text: prompt.text.clone(),
+                    files: Vec::new(),
+                },
+            );
+            self.project_message(
+                session_id,
+                crate::components::message::model::Message::User {
+                    id: inbox_id.clone(),
+                    text: prompt.text.clone(),
+                    created: self.clock(),
+                    files: Vec::new(),
+                },
+            );
+            prompt.inbox_id = Some(inbox_id);
+        }
         let model = self.resolve_model(session_id);
-        self.prompt_sink.send_with_model(session_id, prompt, model.as_ref());
+        self.prompt_sink.send_with_model(session_id, &prompt, model.as_ref());
     }
 
     /// TUI-14 — the shell-mode submit (`session.shell`,
@@ -8408,6 +8473,44 @@ impl Store {
         })
     }
 
+    /// `status().busy` (context/session-tabs.tsx:168-174): the
+    /// session's FAMILY is working — execution RUNNING (`active` map,
+    /// data.ts:1378-1380) **or any member carries a pending
+    /// non-synthetic inbox item** (`pending.list(id).some(item =>
+    /// item.type !== "synthetic")`). A pending prompt keeps the tab
+    /// busy even after `execution.succeeded` — the inbox row only
+    /// clears on `session.inbox.delivered`/`cancelled`
+    /// (client/solid/data.ts:749-771), and the queue/steer registry
+    /// here holds only user prompts (no synthetic items are
+    /// admitted), so a non-empty registry is exactly ref's
+    /// "some(item.type !== 'synthetic')".
+    #[must_use]
+    pub fn session_busy(&self, session_id: &str) -> bool {
+        if self.session_running(session_id) {
+            return true;
+        }
+        let index = self.session_index.borrow();
+        let mut children: std::collections::HashMap<&str, Vec<&str>> =
+            std::collections::HashMap::new();
+        for id in index.ids() {
+            if let Some(parent) = index.get(id).and_then(|info| info.parent_id.as_deref()) {
+                children.entry(parent).or_default().push(id);
+            }
+        }
+        // The family walk from the ROOT (sessionFamily), like
+        // `footer_live_counts`.
+        let mut stack = vec![index.root_of(session_id)];
+        while let Some(id) = stack.pop() {
+            if !self.pending_inbox(&id).is_empty() {
+                return true;
+            }
+            if let Some(group) = children.get(id.as_str()) {
+                stack.extend(group.iter().map(|id| (*id).to_owned()));
+            }
+        }
+        false
+    }
+
     /// Whether the session's turn is RUNNING (the interrupt gate, v2's
     /// `enabled: status() === "running"`). Ref production semantics:
     /// `data.session.status` is the reactive `active` map's verdict —
@@ -10044,7 +10147,7 @@ impl Store {
         self.pending_inbox.get().get(session_id).map_or_else(Vec::new, |items| {
             items
                 .iter()
-                .filter(|item| item.delivery == "queue")
+                .filter(|item| item.delivery.as_deref() == Some("queue"))
                 .map(|item| QueuedPrompt { id: item.id.clone(), text: item.text.clone() })
                 .collect()
         })
@@ -10065,7 +10168,7 @@ impl Store {
             .get()
             .get(session_id)
             .and_then(|items| items.iter().find(|item| item.id == message_id))
-            .map(|item| item.delivery.clone())
+            .and_then(|item| item.delivery.clone())
     }
 
     /// Swap the inbox mutation seam (tests observe the `PATCH`/`DELETE`
@@ -10108,7 +10211,7 @@ impl Store {
             session_id,
             InboxItem {
                 id: id.clone(),
-                delivery: "queue".to_owned(),
+                delivery: Some("queue".to_owned()),
                 text: text.to_owned(),
                 files: files.to_vec(),
             },
@@ -10209,7 +10312,7 @@ impl Store {
         self.pending_inbox.update(|state| {
             if let Some(items) = state.get_mut(session_id) {
                 if let Some(item) = items.iter_mut().find(|item| item.id == id) {
-                    item.delivery.clone_from(&delivery.to_owned());
+                    item.delivery = Some(delivery.to_owned());
                 }
             }
         });
@@ -13767,8 +13870,7 @@ impl Store {
                     // data.ts:370-383): the item's delivery + resolved
                     // file payloads mirror into the registry the queue
                     // dock + pending-steer markers read.
-                    let delivery =
-                        item.get("delivery").and_then(Value::as_str).unwrap_or("steer").to_owned();
+                    let delivery = item.get("delivery").and_then(Value::as_str).map(str::to_owned);
                     let files = item
                         .pointer("/payload/files")
                         .and_then(Value::as_array)

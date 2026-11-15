@@ -192,6 +192,10 @@ committed 未裁决>0 ⇒ exit 2；rec-* recorded-local 见其小节（advisory�
   - panel-* 场景：PanelInput 的 focus()/close()/toggleFullscreen() 闭包无法过线，rust 以 PanelFingerprint 快照近似 reactive props——已立项的有界偏差
   - ref packages/tui/src/component/panel-host.tsx:36-55（Slot input 的 reactive width/presentation/focused + 闭包 props）
   - rust crates/oc-tui/src/plugin_boot.rs:100（PanelFingerprint）、:425-440（session.panel props 有界化）、:767-780（fingerprint 快照）
+- **G-426 残余：opentui-core marked@17 词法移植双缺陷（空列表打断 + setext 下划线，框架层）** — 命中 0 case
+  - rec-20261114-205531-bb7f1e74 的镜像档（@120x30/@320x80）残余：G-426 四候选（spinner 静止化/Thought 行/代码块/composer 草稿）已 root-cause 并修复（主档 exact）；残余=框架层 opentui-core 的 marked@17 词法移植双缺陷——①空列表项（`-` 独行）不打断段落（ref 的 marked@17.0.1 打断：段落 raw 止于上一行，`-` 成独立 List 块，多出一空行）；②`-` 独行被当 setext h2 下划线（`…\n-\n` 整段渲染为 heading 紫粗；ref 词法=段落+列表+hr）。两处均在 pinned git 依赖（opentui-rust rev 34a5ac4）内，oc-tui 应用层不可修；bun+marked@17.0.1 直接词法探针已钉证据，登记不拦（框架层缺陷转 /opt/opentui-rust 上游）
+  - ref @opentui/core 0.5.14（marked@17.0.1，createAppFixture 全链）: lexer 实测 `paragraph …\n` + `list -\n` + `hr ---`；packages/tui/src/routes/session/message-parts.tsx:180-192
+  - rust opentui-core/src/renderables/markdown_parser.rs（marked@17 移植，rev 34a5ac4）: `-` 并入段落 raw（lazy continuation）+ setext 下划线命中；钉形测试 crates/oc-tui/src/components/message/markdown.rs gb16_empty_list_item_does_not_interrupt_the_paragraph
 
 未命中任何簇的分歧保持未裁决进入 T9；CAUSES 不为绿灯放宽 matcher。
 
@@ -224,6 +228,18 @@ anim 场景（`anim.ticks` 声明，SCHEMA A2 扩展）在静息排空后逐拍�
 - `anim-tool-progress`  — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
 - `anim-tool-progress@120x30`  — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
 - `anim-tool-progress@320x80`  — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
+
+## recorded-local（真实语料，聚合计数 — advisory）
+
+本地真实会话语料（`tools/diff/corpus/tui/recorded-local/`，git-ignored；
+隐私铁律：报告只列聚合计数，不引用录制内容原文，分歧明细表亦不展开）。
+**门语义（控制者裁定 2026-11-15）：本节未裁决=advisory——不参与 gate exit
+（日常录制常驻未裁决项，committed 绿才是门绿）；rec-* 的 infra 失败仍=exit 1
+（重放机制坏了）；未裁决项为 C 线后续 root-cause 输入（G-426/G-427 等）。**
+
+| 维度 | 总量 | EXACT | STRUCTURAL | DIVERGE | 未裁决 |
+|---|---|---|---|---|---|
+| resting | 9 | 4 | 0 | 5 | 3 |
 
 ## 范围外声明
 

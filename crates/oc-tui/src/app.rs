@@ -13015,6 +13015,7 @@ fn footer_location_hover_and_click() {
 
 #[cfg(test)]
 mod core_interaction_tests {
+
     use super::*;
     use crate::components::composer::{ComposerEditCommand, PromptDraft};
     use crate::components::message::model::{Message, PartTime};
@@ -13283,7 +13284,18 @@ mod core_interaction_tests {
         app.store.ingest_all([crate::data::Ingest::Event(event)]);
         assert_eq!(app.store.queued_prompts("s1").len(), 1, "idle alone does not drain");
         assert_eq!(sink.submissions.borrow().len(), 2, "no local re-send");
-        let inbox_id = app.store.pending_inbox("s1")[0].id.clone();
+        // G-426③ — the registry now also carries the IDLE submit's
+        // optimistic steer row (ref's `data.session.prompt` admits
+        // every submission, data.ts:1545-1581); the queued row is the
+        // delivery:"queue" one.
+        let inbox_id = app
+            .store
+            .pending_inbox("s1")
+            .iter()
+            .find(|item| item.delivery.as_deref() == Some("queue"))
+            .expect("the queued row")
+            .id
+            .clone();
         let delivered = crate::data::BusEvent::new(
             "session.inbox.delivered",
             serde_json::json!({ "sessionID": "s1", "inboxID": inbox_id }),
@@ -13316,8 +13328,8 @@ mod core_interaction_tests {
         assert!(app.store.queued_prompts("s1").is_empty(), "steered");
         assert_eq!(sink.submissions.borrow().len(), 1, "no local re-POST");
         assert_eq!(
-            app.store.pending_inbox("s1").first().map(|item| item.delivery.as_str()),
-            Some("steer"),
+            app.store.pending_inbox("s1").first().map(|item| item.delivery.as_deref()),
+            Some(Some("steer")),
             "the pending row still mirrors (as steer)"
         );
         assert!(

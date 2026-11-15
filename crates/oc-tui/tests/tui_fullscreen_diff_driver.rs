@@ -960,6 +960,19 @@ async fn tui_fullscreen_diff_driver() {
             for event in &scenario.events {
                 server.push_event(event).await;
             }
+            // G-426③ — the ref driver emits scenario events
+            // SYNCHRONOUSLY into the fixture's event bus
+            // (`app.events.emit`, one full data-layer projection per
+            // event) BEFORE the first key token. The rust driver's
+            // events ride the SSE loopback and are ingested by the
+            // pump loop asynchronously — without a drain here, a key
+            // submission projects BEFORE the earlier events (the
+            // optimistic pending row lands ahead of them in the
+            // message list, reordering the transcript's input tail).
+            // One drain aligns the replay order with ref's.
+            pump.drain();
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            pump.drain();
             for token in &scenario.keys {
                 press_token(&mut pump.app, token);
             }

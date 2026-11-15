@@ -446,27 +446,54 @@ struct ChromeSurface {
 pub(crate) enum ChromeStamp {
     /// A bg-colored region keeping each cell's ch/fg/attrs (the rail
     /// handle-hot column: `paint_rail_handle_hot`'s row walk).
-    Bg { left: usize, top: usize, width: usize, height: usize, color: CellColor },
+    Bg {
+        left: usize,
+        top: usize,
+        width: usize,
+        height: usize,
+        color: CellColor,
+    },
     /// A single-cell bg/fg recolor keeping the glyph (the composer
     /// family's golden software-caret block — the retired bridge's
     /// cell recolor, applied at the wrapper's origin).
-    Caret { left: usize, top: usize, fg: CellColor, bg: CellColor },
+    Caret {
+        left: usize,
+        top: usize,
+        fg: CellColor,
+        bg: CellColor,
+    },
     /// A single-cell fg⇄bg swap (the composer family's G-66 selection
     /// highlight — the ref's DEFAULT selection styling).
-    Swap { left: usize, top: usize },
+    Swap {
+        left: usize,
+        top: usize,
+    },
     /// A transparent canvas region (the footer family's `clear_bg` —
     /// canonical bg `49`): BLANK cells (space, no attrs) inside the
     /// one-row rect reset their background to Default, glyph cells
     /// keep their ink — verbatim the retired footer bridge's
     /// post-copy fixup.
-    Transparent { left: usize, top: usize, width: usize },
+    Transparent {
+        left: usize,
+        top: usize,
+        width: usize,
+    },
     /// The glow fills' `fg(Color::Reset)` restoration (the tabs-strip
     /// lane D4.1a): opentui's opaque fills hard-write fg=white, and
     /// the retired `frame_from_buffer` copy reset the fg on the glow
     /// ranges' non-glyph cells (a painted glyph always carries its
     /// own fg — the two never collide). Space cells (no attrs, the
     /// white fill signature) inside the one-row rect read fg Default.
-    FgDefault { left: usize, top: usize, width: usize },
+    FgDefault {
+        left: usize,
+        top: usize,
+        width: usize,
+    },
+    FgWhite {
+        left: usize,
+        top: usize,
+        width: usize,
+    },
     /// A scrim dim over the rect (the overlays lane's reconnecting
     /// backdrop, ref `reconnecting.tsx:9-17`): every RGB background
     /// dims toward black at `alpha/255`, non-RGB backgrounds and all
@@ -533,6 +560,23 @@ fn apply_stamp(frame: &mut Frame, base_left: usize, base_top: usize, stamp: &Chr
                         && matches!(cell.fg, CellColor::Rgb(255, 255, 255))
                     {
                         cell.fg = CellColor::Default;
+                    }
+                }
+            }
+        }
+        // G-426④ — the BUSY sweep band's blank cells pin to WHITE
+        // ink, not the theme default: ref's strip row carries painted
+        // fg=white on every non-glyph cell of a RUNNING tab (the
+        // corpus pin — `CellColor::Default` rasterizes as text.base
+        // 238 and diverges). Evidence-bounded: only the runs() range
+        // (rec-…-bb7f1e74's busy strip); the resting-GLOW ranges keep
+        // the retired copy's fg-Default restore (the session-tabs
+        // goldens pin that face).
+        ChromeStamp::FgWhite { left, top, width } => {
+            if let Some(row) = frame.cells.get_mut(base_top + top) {
+                for cell in row.iter_mut().skip(base_left + left).take(width) {
+                    if cell.ch == ' ' && cell.attrs == 0 {
+                        cell.fg = CellColor::Rgb(255, 255, 255);
                     }
                 }
             }

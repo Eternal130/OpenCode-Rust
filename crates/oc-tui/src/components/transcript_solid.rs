@@ -475,6 +475,17 @@ const TRANSCRIPT_SKELETON_INDEX: usize = 1;
 struct TranscriptEntry {
     signal: Signal<TranscriptInputs>,
     key: (usize, usize, Rgb),
+    /// G-426 — the last-mounted item key ORDER (the For list's
+    /// reconcile input). A pass whose keys are NOT an append-
+    /// extension of this sequence (rows prepended or reordered —
+    /// e.g. a pending input row relocating to the transcript tail,
+    /// rows.ts:374-377) rebuilds the content subtree instead of
+    /// patching: the keyed-For patch path mishandles insertions
+    /// before the first surviving key (the stale first element keeps
+    /// its old content at its old slot while the new head never
+    /// mounts — a framework-layer reconcile defect, worked around at
+    /// this mount seam; a rebuild paints exactly the item list).
+    keys: Vec<String>,
 }
 
 thread_local! {
@@ -530,22 +541,38 @@ pub fn transcript_mount(
         });
     }
     let inputs = TranscriptInputs { items, scroll_offset };
+    let keys = inputs.items.iter().map(|item| item.key.clone()).collect::<Vec<String>>();
     let bg = rgb_of(theme.background);
     let key = (width, height, bg);
     // Rebuild iff the geometry key changed OR the wrapper left the
-    // tree (a hub reset between harness frames, a seam prune).
+    // tree (a hub reset between harness frames, a seam prune) OR the
+    // key ORDER destabilized the prefix (G-426 — prepends/reorders
+    // rebuild; streaming appends and in-place patches keep the M2
+    // patch path).
     let rebuild = !family_wrapper_live("transcript")
-        || TRANSCRIPT_TREE.with_borrow(|slot| !matches!(slot, Some(entry) if entry.key == key));
+        || TRANSCRIPT_TREE.with_borrow(|slot| match slot {
+            Some(entry) if entry.key == key => {
+                let prefix = entry.keys.len().min(keys.len());
+                keys.len() < entry.keys.len() || keys[..prefix] != entry.keys[..prefix]
+            }
+            _ => true,
+        });
     let (content, content_key) = if rebuild {
         let signal = Signal::new(inputs.clone());
         let element = transcript_element(&signal, width, height, bg);
         TRANSCRIPT_TREE.with_borrow_mut(|slot| {
-            *slot = Some(TranscriptEntry { signal, key });
+            *slot = Some(TranscriptEntry { signal, key, keys });
         });
         (Some(element), Some(format!("transcript-content@{width}x{height}@{bg:?}")))
     } else {
         TRANSCRIPT_TREE.with_borrow(|slot| {
-            slot.as_ref().expect("checked above").signal.set(inputs);
+            let entry = slot.as_ref().expect("checked above");
+            entry.signal.set(inputs);
+        });
+        TRANSCRIPT_TREE.with_borrow_mut(|slot| {
+            if let Some(entry) = slot.as_mut() {
+                entry.keys = keys;
+            }
         });
         (None, None)
     };
