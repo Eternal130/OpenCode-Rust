@@ -576,11 +576,20 @@ fn indicator_chunks(inputs: &StripInputs, key: &str) -> StyledText {
     } else {
         inputs.colors.text
     };
+    // G-426④ — the indicator glyph's attributes: the corpus runs with
+    // the fixture's `animations:false`, so ref renders the
+    // TabIndicator's FALLBACK text (`label()` = spinner frames[0] /
+    // unread marker / `!`/`?`) with `attributes={selected ? BOLD :
+    // undefined}` (session-tabs.tsx:195-197 + :970/:1057) — the whole
+    // fallback label is bold on the SELECTED tab (rec-…-bb7f1e74's
+    // selected busy tab pins ⠋ bold; rec-…-db261f5f's unselected busy
+    // tab pins ⠋ plain).
+    let attributes = u32::from(inputs.active.as_deref() == Some(key));
     StyledText::new(vec![TextChunk {
         text: glyph.clone(),
         fg: Some(rgba(fg)),
         bg: None,
-        attributes: 0,
+        attributes,
         link: None,
     }])
 }
@@ -1048,7 +1057,13 @@ fn strip_mount(inputs: StripInputs, left: usize, top: usize) {
     let key = (width, inputs.colors);
     let stamps: Vec<ChromeStamp> = glow_ranges(&inputs)
         .into_iter()
-        .map(|(start, len)| ChromeStamp::FgDefault { left: start, top: 0, width: len })
+        .map(|(start, len, runs)| {
+            if runs {
+                ChromeStamp::FgWhite { left: start, top: 0, width: len }
+            } else {
+                ChromeStamp::FgDefault { left: start, top: 0, width: len }
+            }
+        })
         .collect();
     // Rebuild iff the geometry key changed OR the wrapper left the
     // tree (a hub reset between harness frames, a seam prune).
@@ -1122,7 +1137,7 @@ pub fn mount_solid_bar_clock(
 /// `fg(Color::Reset)`; opentui's opaque fills hard-write fg=white, so
 /// the frame copy resets the fg on their non-glyph cells (a painted
 /// glyph always carries its own fg — the two never collide).
-fn glow_ranges(inputs: &StripInputs) -> Vec<(usize, usize)> {
+fn glow_ranges(inputs: &StripInputs) -> Vec<(usize, usize, bool)> {
     let layout = inputs.layout();
     let mut ranges = Vec::new();
     let mut x = if layout.before > 0 { session_tab_overflow_width(layout.before) } else { 0 };
@@ -1130,11 +1145,14 @@ fn glow_ranges(inputs: &StripInputs) -> Vec<(usize, usize)> {
         let width = layout.widths[index];
         if let Some(view) = inputs.find(&tab.session_id) {
             let selected = inputs.active.as_deref() == Some(tab.session_id.as_str());
-            // The busy sweep's fill cells need the same fg-Reset
-            // restore as the resting glow's (space cells under a
-            // gradient band).
-            if view.status.glows(selected) || view.status.runs() {
-                ranges.push((x, width));
+            // The busy sweep's fill cells need the same fg restore as
+            // the resting glow's (space cells under a gradient band)
+            // — but pinned to WHITE ink (G-426④, the runs corpus
+            // face) while the glow keeps the retired fg-Default.
+            if view.status.runs() {
+                ranges.push((x, width, true));
+            } else if view.status.glows(selected) {
+                ranges.push((x, width, false));
             }
         }
         x += width;

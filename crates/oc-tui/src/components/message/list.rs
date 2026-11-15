@@ -162,6 +162,21 @@ pub struct TranscriptOptions {
     /// missing entry = every ordinal announced (snapshot-loaded and
     /// fixture messages — `project_message` clears the entry).
     pub text_announced: std::collections::HashMap<String, usize>,
+    /// G-426③ — the pending INPUT ids (`data.session.input.list`,
+    /// client/solid/data.ts:1387-1393: pending inbox items minus
+    /// compactions). Ref's projection RELOCATES input rows to the
+    /// transcript TAIL (`rows.ts:374-377`: non-pending messages, then
+    /// running compactions, then `messages.filter(isInput)`) — an
+    /// undelivered prompt renders after the whole history, not at its
+    /// append position. Empty in fixtures/goldens.
+    pub inputs: std::collections::HashSet<String>,
+    /// G-426③ — the pending inbox deliveries (`pendingDelivery`,
+    /// session/index.tsx:211): a user row with a live delivery renders
+    /// its `┃` rail in `theme.border.base` (not the session agent
+    /// hue, index.tsx:2201-2203), and a `delivery === "queue"` row is
+    /// REMOVED from the transcript entirely (rows.ts:59-63 — it lives
+    /// in the `QueuedPromptDock`).
+    pub pending_deliveries: std::collections::HashMap<String, String>,
 }
 
 impl Default for TranscriptOptions {
@@ -189,6 +204,8 @@ impl Default for TranscriptOptions {
             pending_permissions: std::collections::HashSet::new(),
             hyperlinks_supported: false,
             text_announced: std::collections::HashMap::new(),
+            inputs: std::collections::HashSet::new(),
+            pending_deliveries: std::collections::HashMap::new(),
         }
     }
 }
@@ -271,9 +288,42 @@ pub fn render_transcript(
         _ => (messages.to_vec(), 0),
     };
     let messages = bounded.as_slice();
+    // G-426③ — ref's reduce() source ordering (rows.ts:59-63 +
+    // 374-377): `delivery === "queue"` user rows leave the transcript
+    // (the QueuedPromptDock owns them); the remaining INPUT rows
+    // (pending inbox items) relocate to the TAIL, after non-pending
+    // messages and running compactions. No-op when the registry is
+    // empty (fixtures/goldens).
+    let ordered: Vec<Message> = if options.pending_deliveries.is_empty() {
+        messages.to_vec()
+    } else {
+        let queued = |message: &Message| {
+            options.pending_deliveries.get(message.id()).is_some_and(|delivery| delivery == "queue")
+        };
+        let is_input = |message: &Message| options.inputs.contains(message.id());
+        let mut rest = Vec::new();
+        let mut compactions = Vec::new();
+        let mut inputs = Vec::new();
+        for message in messages {
+            if queued(message) {
+                continue;
+            }
+            if is_input(message) {
+                inputs.push(message.clone());
+            } else if matches!(message, Message::Compaction { running: true, .. }) {
+                compactions.push(message.clone());
+            } else {
+                rest.push(message.clone());
+            }
+        }
+        rest.extend(compactions);
+        rest.extend(inputs);
+        rest
+    };
+    let messages = ordered.as_slice();
     let mut rows: Vec<Row> = reduce_rows_with_rules(
         messages,
-        &std::collections::HashSet::<String>::new(),
+        &options.inputs,
         &options.group_rules,
         options.group_exploration,
         options.verbosity == Verbosity::Low,
@@ -740,14 +790,18 @@ fn render_row(
                 return RowRender::default();
             };
             match message {
-                Message::User { text, files, .. } => user_message_row(
-                    text,
-                    files,
-                    options.user_rail.unwrap_or_else(|| theme.agent_color(0)),
-                    theme,
-                    width,
-                    &options.image_strip,
-                ),
+                Message::User { text, files, .. } => {
+                    // G-426③ — `borderColor={delivery() ?
+                    // theme.border.base : color()}` (index.tsx:2201):
+                    // a PENDING user row's ┃ rail is the neutral
+                    // border token, not the session agent hue.
+                    let rail = if options.pending_deliveries.contains_key(message.id()) {
+                        theme.border
+                    } else {
+                        options.user_rail.unwrap_or_else(|| theme.agent_color(0))
+                    };
+                    user_message_row(text, files, rail, theme, width, &options.image_strip)
+                }
                 // The compaction divider (`CompactionMessage`,
                 // index.tsx:2002-2068): running spinner / `✗` failed
                 // / `· cancelled` / `Provider compaction` / usage +

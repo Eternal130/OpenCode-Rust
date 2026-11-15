@@ -87,7 +87,17 @@ pub fn mount_live_tabs_bar(
         .strip_tabs_ordered()
         .iter()
         .map(|tab| {
-            let busy = store.session_running(&tab.session_id);
+            // G-426④ — `status().busy` (context/session-tabs.tsx:
+            // 168-174): running OR a pending non-synthetic inbox
+            // item (the queue/steer registry) — an undelivered
+            // prompt keeps the tab's spinner alive after
+            // `execution.succeeded`.
+            // G-426④ — `status().busy` (context/session-tabs.tsx:
+            // 168-174): running OR a pending non-synthetic inbox
+            // item (the queue/steer registry) — an undelivered
+            // prompt keeps the tab's spinner alive after
+            // `execution.succeeded`.
+            let busy = store.session_busy(&tab.session_id);
             let selected = Some(tab.session_id.as_str()) == active;
             let status = TabStatus {
                 unread: tabs.unread.get(&tab.session_id).copied(),
@@ -189,7 +199,11 @@ pub fn mount_live_rail(
     let views: Vec<TabView> = ordered
         .iter()
         .map(|tab| {
-            let busy = store.session_running(&tab.session_id);
+            // G-426④ — same `status().busy` as the strip (running OR
+            // pending non-synthetic inbox items, family-wide).
+            // G-426④ — same `status().busy` as the strip (running OR
+            // pending non-synthetic inbox items, family-wide).
+            let busy = store.session_busy(&tab.session_id);
             let status = TabStatus {
                 unread: tabs.unread.get(&tab.session_id).copied(),
                 busy,
@@ -571,6 +585,23 @@ pub fn render_session(
             shell_live: store.inline_shell_live_map(),
             // G-188 — the permission-blocked part ids.
             pending_permissions: store.pending_permission_part_ids(session_id),
+            // G-426③ — the pending inbox registry: input rows (steer)
+            // relocate to the transcript tail, queue rows leave for
+            // the dock, and pending rails take `theme.border.base`.
+            inputs: store
+                .pending_inbox(session_id)
+                .iter()
+                .filter(|item| item.delivery.as_deref() != Some("queue"))
+                .map(|item| item.id.clone())
+                .collect(),
+            // Only items that CARRY a delivery (ref's `pendingDelivery`
+            // is undefined for delivery-less inbox rows — those render
+            // the agent rail hue, index.tsx:2201-2203).
+            pending_deliveries: store
+                .pending_inbox(session_id)
+                .into_iter()
+                .filter_map(|item| item.delivery.map(|delivery| (item.id, delivery)))
+                .collect(),
         },
         styles,
         column,
