@@ -331,9 +331,9 @@ impl Client {
     /// 204-style request: success consumes the (empty) body.
     pub async fn execute_empty(&self, call: &Call<'_>) -> Result<(), ClientError> {
         // diff-ext C3 — record the empty-body request too (endpoint +
-        /// status; body null): the interrupt/inbox-cancel family rides
-        /// this path, and a recording that omits them stub-gaps on
-        /// replay (env-gated no-op without TUI_RECORD_DIR).
+        // status; body null): the interrupt/inbox-cancel family rides
+        // this path, and a recording that omits them stub-gaps on
+        // replay (env-gated no-op without TUI_RECORD_DIR).
         let record_path =
             oc_util::recorder::enabled().then(|| render_path(call.path, call.path_params).ok());
         match self.classify(call).await? {

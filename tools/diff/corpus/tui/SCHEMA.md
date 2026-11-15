@@ -272,6 +272,8 @@ to its terminal byte sequence. `ScriptStep.keys` (same file, ~line
 | `alt+up` / `alt+down` / `alt+right` / `alt+left` | `\x1b[1;3A` / `\x1b[1;3B` / `\x1b[1;3C` / `\x1b[1;3D` |
 | `ctrl+<a-z>` | `0x01..0x1a` (single ascii lowercase letter) |
 | `raw:<literal>` | the literal's UTF-8 bytes |
+| `paste:<literal>` | bracketed paste (C3 review Important#1): the literal (already message-content-redacted by the recorder — shape-preserving placeholder) is pasted through the app's paste seam (`App::paste_terminal_text` rust / `mockInput.pasteBracketedText` ref) |
+| `mouse:<kind>:<col>,<row>` | pointer event at 0-based cell `(col,row)` (C3 review Important#1): kind ∈ `down-{left,middle,right}` / `up-{left,middle,right}` / `moved` / `drag-{left,middle,right}` / `wheel-{up,down,left,right}` — the minimal serialization of `input_term::MouseEventKind`; ref side maps onto `mockMouse` (`pressDown`/`release`/`moveTo`/`emitMouseEvent("drag")`/`scroll`) |
 
 Unknown tokens are a hard error on the Rust side; the bun side must
 accept exactly the same set. The three smoke scenarios carry

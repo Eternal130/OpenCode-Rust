@@ -172,6 +172,30 @@ class VerdictGateTest(unittest.TestCase):
             self.assertEqual(cm.exception.code, 1)
 
 
+class RecordingTokenTest(unittest.TestCase):
+    """C3 review Important#1 — the paste/mouse recording token shapes:
+    the compiler passes them through 1:1 (the recorder already put the
+    shape-redacted paste literal in place), and the exit-chord trim
+    never eats them."""
+
+    def test_paste_and_mouse_tokens_pass_through_verbatim(self):
+        from tools.diff.tui_record_compile import key_token, trim_exit_chord
+        paste = "paste:xxxx xxxxx\nxxxxx xxxxx"
+        mouse = "mouse:down-left:12,0"
+        wheel = "mouse:wheel-up:4,9"
+        self.assertEqual(key_token(paste), paste)
+        self.assertEqual(key_token(mouse), mouse)
+        self.assertEqual(key_token(wheel), wheel)
+        # the exit-chord trim leaves recorded interaction intact (the
+        # trailing mouse token is not a chord prefix — a truncated
+        # [esc,esc,ctrl+u,ctrl+c] tail WOULD be trimmed, by design)
+        keys = [paste, "esc", mouse, wheel]
+        self.assertEqual(trim_exit_chord(keys), keys)
+        # key vocabulary still maps as before (regression guard)
+        self.assertEqual(key_token("return"), "enter")
+        self.assertEqual(key_token("q"), "raw:q")
+
+
 class NormalizeTest(unittest.TestCase):
     def test_normalize_preserves_payload_and_strips_time_hook_fields(self):
         g = mkgrid(uniform())

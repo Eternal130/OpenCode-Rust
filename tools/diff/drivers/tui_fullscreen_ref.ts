@@ -102,6 +102,12 @@ function pressToken(mockInput: any, token: string) {
     mockInput.pressKey(token.slice(4))
     return
   }
+  // C3 review Important#1 — `paste:` / `mouse:` tokens are fed by
+  // feedToken (they need the async mockMouse/paste surfaces); a stray
+  // one here is a wiring error, fail loudly.
+  if (token.startsWith("paste:") || token.startsWith("mouse:")) {
+    throw new Error(`paste/mouse token must go through feedToken: ${token}`)
+  }
   const ctrl = /^ctrl\+([a-z])$/.exec(token)
   if (ctrl) {
     // SCHEMA: 0x01..0x1a — the kitty path encodes the ctrl modifier natively,
@@ -128,6 +134,45 @@ function pressToken(mockInput: any, token: string) {
   const named = NAMED_KEYS[token]
   if (named === undefined) throw new Error(`unknown key token: ${token}`)
   mockInput.pressKey(named)
+}
+
+// C3 review Important#1 — the two non-key input surfaces, mapped onto
+// the fixture's own mocks (SCHEMA 键名表): `paste:<literal>` rides
+// mockInput.pasteBracketedText; `mouse:<kind>:<col>,<row>` rides
+// mockMouse (pressDown/release for down/up, moveTo for moved,
+// emitMouseEvent("drag") for drags, scroll for wheels — the minimal
+// set the recorder's kind vocabulary declares). 0-based cell coords,
+// same convention as the grid.
+const MOUSE_BUTTONS: Record<string, number> = { left: 0, middle: 1, right: 2 }
+
+async function feedToken(app: any, token: string) {
+  if (token.startsWith("paste:")) {
+    await app.mockInput.pasteBracketedText(token.slice(6))
+    return
+  }
+  if (token.startsWith("mouse:")) {
+    const rest = token.slice(6)
+    const at = rest.lastIndexOf(":")
+    if (at < 0) throw new Error(`unknown mouse token (want mouse:<kind>:<col>,<row>): ${token}`)
+    const kind = rest.slice(0, at)
+    const [xs, ys] = rest.slice(at + 1).split(",")
+    const x = Number(xs), y = Number(ys)
+    if (!Number.isInteger(x) || !Number.isInteger(y)) {
+      throw new Error(`unknown mouse coords (want <col>,<row>): ${token}`)
+    }
+    const mouse = app.mockMouse
+    if (kind === "moved") return void mouse.moveTo(x, y)
+    const wheel = kind.match(/^wheel-(up|down|left|right)$/)
+    if (wheel) return void mouse.scroll(x, y, wheel[1] as "up" | "down" | "left" | "right")
+    const down = kind.match(/^down-(left|middle|right)$/)
+    if (down) return void mouse.pressDown(x, y, MOUSE_BUTTONS[down[1]!]!)
+    const up = kind.match(/^up-(left|middle|right)$/)
+    if (up) return void mouse.release(x, y, MOUSE_BUTTONS[up[1]!]!)
+    const drag = kind.match(/^drag-(left|middle|right)$/)
+    if (drag) return void mouse.emitMouseEvent("drag", x, y, MOUSE_BUTTONS[drag[1]!]!)
+    throw new Error(`unknown mouse kind: ${kind}`)
+  }
+  pressToken(app.mockInput, token)
 }
 
 // ---------------------------------------------------------------------------
@@ -406,7 +451,7 @@ async function main() {
       // family as B2, same ref-only remedy.
       const perTokenIdle = plugins.length > 0 || c.id.startsWith("rec-")
       for (const token of scenario.keys) {
-        pressToken(app.mockInput, token)
+        await feedToken(app, token)
         // C3: never idle right AFTER a leader stroke — the which-key
         // arm is same-burst; a gap drops the chord and the
         // continuation letter types into the composer instead.

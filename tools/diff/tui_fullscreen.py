@@ -982,7 +982,10 @@ CAUSES = [
             "入口，palette 携带 'Plugin · oh-my-opencode-slim' 组命令行。这是加载"
             "模型/夹具边界差而非渲染 bug；320×80 档同一网格内 ref 真 Solid 侧栏 "
             "section（'▼ OMO-Slim v3.0.3' + Preset/agent 行）vs rust 有界 shim "
-            "侧栏为 G-28 形状面共现",
+            "侧栏为 G-28 形状面共现。节律注记（C3 review Important#2，2026-11-15）："
+            "ref driver 的 per-token idle 例外（leaderStroke 后不插 idle）自 C3 起"
+            "对 plugins>0 场景同样生效——plugin 场景的 token 间节律基线已随之改变，"
+            "未来新增 plugin 场景按现行节律捕获/基线，不回溯旧节律",
             "ref packages/tui/src/plugin/context.tsx:296-307（config.plugins 本地"
             "目录条目）+ host.ts:17-43（tui 入口探测；server 入口不经 TUI 装载）",
             "rust crates/oc-plugin-host/src/supervisor.rs:2330-2390（entry 装载后"

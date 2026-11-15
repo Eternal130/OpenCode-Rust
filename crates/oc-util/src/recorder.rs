@@ -10,9 +10,12 @@
 //!
 //! Gating: `TUI_RECORD_DIR=<dir>` arms the recorder; unset means the
 //! whole module is a no-op. Every hook begins with an
-//! [`AtomicBool::load`] (acquire) on [`ENABLED`] — a single relaxed
-//! load on the disabled fast path, no allocation, no lock, no I/O
-//! (zero overhead for non-recording sessions).
+//! [`AtomicBool::load`] on [`ENABLED`] — a single relaxed load on the
+//! disabled fast path (relaxed suffices: the flag only ever transitions
+//! false→true once, long before any recording-dependent read, and a
+//! stale-true glimpse costs at most one no-op state lookup), no
+//! allocation, no lock, no I/O (zero overhead for non-recording
+//! sessions).
 //!
 //! Capture surface (one file per session, `<id>.raw.json` where
 //! `id = rec-<timestamp>-<session8>`):
@@ -115,7 +118,7 @@ fn ensure_init() {
         doc.insert("fetch".into(), json!({}));
         doc.insert("events".into(), json!([]));
         doc.insert("keys".into(), json!([]));
-        let mut cell = state_cell().lock().unwrap_or_else(|e| e.into_inner());
+        let mut cell = state_cell().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Err(error) = std::fs::create_dir_all(&dir) {
             eprintln!("tui-record: cannot create {}: {error}", dir.display());
             return;
@@ -136,7 +139,7 @@ fn now_millis() -> u64 {
 /// pin the armed/disabled path deterministically.
 #[doc(hidden)]
 pub fn reset_for_tests() {
-    let mut cell = state_cell().lock().unwrap_or_else(|e| e.into_inner());
+    let mut cell = state_cell().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     *cell = None;
     ENABLED.store(false, Ordering::Relaxed);
     // re-arm the init OnceLock by replacing the cell the next init
@@ -160,7 +163,7 @@ pub fn init_for_tests(dir: &std::path::Path, redact: bool) {
     doc.insert("fetch".into(), json!({}));
     doc.insert("events".into(), json!([]));
     doc.insert("keys".into(), json!([]));
-    *state_cell().lock().unwrap_or_else(|e| e.into_inner()) =
+    *state_cell().lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
         Some(State { dir: dir.to_owned(), doc });
     ENABLED.store(true, Ordering::Relaxed);
 }
@@ -182,7 +185,7 @@ fn with_state(f: impl FnOnce(&mut State)) {
     if !enabled() {
         return;
     }
-    let mut cell = state_cell().lock().unwrap_or_else(|e| e.into_inner());
+    let mut cell = state_cell().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(state) = cell.as_mut() else { return };
     f(state);
     flush(state);
@@ -256,6 +259,45 @@ pub fn key(spec: &str) {
     });
 }
 
+/// Hook: one bracketed paste (`App::paste_terminal_text`) — recorded
+/// as a `paste:<shape-preserving placeholder>` token in the key
+/// sequence (diff-ext C3 review Important#1: paste is a production
+/// input surface; without this hook the first real paste produced an
+/// unreplayable recording, silently). The placeholder reuses the
+/// message-content redactor (same length/newlines/unicode class), so
+/// both replay legs see identical shapes without the pasted words
+/// ever leaving the machine.
+pub fn paste(text: &str) {
+    ensure_init();
+    if !enabled() {
+        return;
+    }
+    let recorded =
+        if redacted() { format!("paste:{}", redact_str(text)) } else { format!("paste:{text}") };
+    with_state(|state| {
+        if let Some(Value::Array(keys)) = state.doc.get_mut("keys") {
+            keys.push(json!(recorded));
+        }
+    });
+}
+
+/// Hook: one `App::mouse_event` — recorded as a
+/// `mouse:<kind>:<col>,<row>` token (C3 review Important#1: the mouse
+/// is a production input surface). The kind vocabulary mirrors the
+/// `input_term::MouseEventKind` enum (down/up/drag × left/middle/
+/// right, moved, wheel-up/down/left/right).
+pub fn mouse(kind: &str, column: u16, row: u16) {
+    ensure_init();
+    if !enabled() {
+        return;
+    }
+    with_state(|state| {
+        if let Some(Value::Array(keys)) = state.doc.get_mut("keys") {
+            keys.push(json!(format!("mouse:{kind}:{column},{row}")));
+        }
+    });
+}
+
 /// Hook: one client fetch response (endpoint, status, decoded body).
 /// The path is the RENDERED request path (query-less); the body is the
 /// JSON the server returned, message-content-redacted by default.
@@ -278,7 +320,11 @@ pub fn fetch(method: &str, path: &str, status: u16, body: &Value) {
     });
 }
 
-/// Hook: the SSE stream opened (`/api/event` subscribe).
+/// Hook: the SSE stream opened (`/api/event` subscribe). The 200 is
+/// a bookkeeping constant, not a read of the real response status (the
+/// SSE handshake's status line isn't surfaced here — the recorder only
+/// needs the endpoint's presence in the fetch map for replay stubbing;
+/// noted, behavior unchanged, C3 review Minor#3④).
 pub fn sse_open(path: &str, status: u16) {
     ensure_init();
     if !enabled() {
@@ -396,7 +442,7 @@ mod tests {
         fetch("GET", "/api/config", 200, &serde_json::json!([]));
         sse_open("/api/event", 200);
 
-        let state = state_cell().lock().unwrap_or_else(|e| e.into_inner());
+        let state = state_cell().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let state = state.as_ref().expect("state");
         let doc = &state.doc;
         assert_eq!(doc["schema"], "tui-diff-recording/1");
@@ -505,7 +551,7 @@ mod tests {
         boot(80, 24);
         event(&json!({"id": "evt_a", "type": "session.updated", "data": {}}));
         let first = {
-            let state = state_cell().lock().unwrap_or_else(|e| e.into_inner());
+            let state = state_cell().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             state.as_ref().expect("state").doc["id"].as_str().expect("id").to_owned()
         };
         // the "session switch": re-arm (a fresh process-equivalent)
@@ -513,7 +559,7 @@ mod tests {
         boot(100, 30);
         event(&json!({"id": "evt_b", "type": "session.updated", "data": {}}));
         let second = {
-            let state = state_cell().lock().unwrap_or_else(|e| e.into_inner());
+            let state = state_cell().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             state.as_ref().expect("state").doc["id"].as_str().expect("id").to_owned()
         };
         assert_ne!(first, second, "each session mints its own id");
@@ -543,8 +589,53 @@ mod tests {
         resize(120, 30); // dup — dropped
         resize(237, 54);
         resize(120, 30); // back — kept (real history, only tail dups drop)
-        let state = state_cell().lock().unwrap_or_else(|e| e.into_inner());
+        let state = state_cell().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let state = state.as_ref().expect("state");
         assert_eq!(state.doc["sizes"], json!([[80, 24], [120, 30], [237, 54], [120, 30]]));
+    }
+
+    /// C3 review Important#1 — paste + mouse recording shapes (the
+    /// production input surfaces beyond `App::press`): paste lands as
+    /// a shape-redacted `paste:` token, mouse as `mouse:<kind>:<c>,<r>`.
+    #[test]
+    fn paste_and_mouse_land_in_the_key_sequence() {
+        let _env = crate::test_support::lock_env();
+        let dir = tempfile::tempdir().expect("tempdir");
+        init_for_tests(dir.path(), true);
+        boot(80, 24);
+        key("return");
+        paste("secret pasted words\nand a second line");
+        mouse("down-left", 12, 0);
+        mouse("wheel-up", 4, 9);
+        // scoped: the guard MUST drop before the second init_for_tests
+        // re-locks the cell (shadowing keeps a guard alive to scope end
+        // — the first draft of this test deadlocked exactly there).
+        let keys = {
+            let cell = state_cell().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            cell.as_ref().map_or(Value::Null, |state| state.doc["keys"].clone())
+        };
+        let keys = keys.as_array().expect("keys");
+        assert_eq!(keys.len(), 4);
+        assert_eq!(keys[0], json!("return"));
+        // paste: shape-preserving placeholder (words gone, shape kept)
+        let pasted = keys[1].as_str().expect("paste token");
+        assert!(pasted.starts_with("paste:"), "{pasted}");
+        let body = pasted.strip_prefix("paste:").expect("body");
+        assert_ne!(body, "secret pasted words\nand a second line");
+        assert_eq!(body.chars().count(), "secret pasted words\nand a second line".chars().count());
+        assert_eq!(body.matches('\n').count(), 1);
+        // idempotent under the compiler's redactor (already redacted)
+        assert_eq!(redact_str(body), body);
+        assert_eq!(keys[2], json!("mouse:down-left:12,0"));
+        assert_eq!(keys[3], json!("mouse:wheel-up:4,9"));
+        // unredacted mode passes the text through verbatim
+        let plain = tempfile::tempdir().expect("tempdir");
+        init_for_tests(plain.path(), false);
+        paste("plain words");
+        let unredacted = {
+            let cell = state_cell().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            cell.as_ref().map_or(Value::Null, |state| state.doc["keys"][0].clone())
+        };
+        assert_eq!(unredacted, json!("paste:plain words"));
     }
 }
