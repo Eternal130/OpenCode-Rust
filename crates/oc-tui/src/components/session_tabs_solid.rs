@@ -1667,6 +1667,16 @@ mod tests {
 
     /// The frame-budget pair (the 40 ms gate): the strip's worst frame
     /// with a busy tab mid-sweep + a hovered scrolling title.
+    ///
+    /// Noise robustness (2026-11-15, gb16): the whole animated loop
+    /// runs three times and each step keeps its MINIMUM sample. A
+    /// shared-CI-runner steal spike inflates one sample of one loop
+    /// (CI run 43729737830: TRY1 worst 91.8 ms / TRY2 46.6 ms on the
+    /// SAME code that passes locally at ~0.6 ms/frame, and passed CI
+    /// at 677b96a0), while a real budget regression inflates every
+    /// sample of the step — the min-of-3 keeps the regression signal
+    /// and drops the steal. Same pattern as the `e1_canary` noise-floor
+    /// ruling (whitelist §2.2#4).
     #[test]
     fn animated_strip_stays_inside_the_frame_budget() {
         let styles = theme();
@@ -1685,26 +1695,29 @@ mod tests {
             track.sync(true, false, false, 0);
             tracks.insert(format!("s{index}"), track);
         }
-        let mut worst = std::time::Duration::ZERO;
-        for step in 0..60 {
-            let clock = step * 33; // ~30 fps of live-clock frames
-            let t = std::time::Instant::now();
-            let _ = paint_solid_bar_clock(
-                &tabs,
-                Some("s0"),
-                true,
-                200,
-                &styles,
-                Some("s1"),
-                Some("s1"),
-                false,
-                None,
-                clock,
-                tracks.clone(),
-                crate::components::session_tabs::IndicatorConfig::default(),
-            );
-            worst = worst.max(t.elapsed());
+        let mut per_step: Vec<std::time::Duration> = vec![std::time::Duration::MAX; 60];
+        for _loop in 0..3 {
+            for (step, slot) in per_step.iter_mut().enumerate() {
+                let clock = u64::try_from(step).unwrap_or_default() * 33; // ~30 fps of live-clock frames
+                let t = std::time::Instant::now();
+                let _ = paint_solid_bar_clock(
+                    &tabs,
+                    Some("s0"),
+                    true,
+                    200,
+                    &styles,
+                    Some("s1"),
+                    Some("s1"),
+                    false,
+                    None,
+                    clock,
+                    tracks.clone(),
+                    crate::components::session_tabs::IndicatorConfig::default(),
+                );
+                *slot = (*slot).min(t.elapsed());
+            }
         }
+        let worst = per_step.into_iter().max().unwrap_or_default();
         assert!(worst.as_millis() < 40, "worst animated frame {worst:?} < 40 ms");
     }
 }
