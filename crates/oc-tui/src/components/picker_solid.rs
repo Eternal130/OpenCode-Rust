@@ -452,7 +452,7 @@ pub(crate) const PICKER_SKELETON_INDEX: usize = 2;
 /// content subtree.
 struct PickerEntry2 {
     signal: Signal<PanelInputs>,
-    key: (usize, Rgb, Rgb, Rgb, Rgb, Rgb, Rgb, Rgb),
+    key: (usize, Rgb, Rgb, Rgb, Rgb, Rgb, Rgb, Rgb, u8),
 }
 
 thread_local! {
@@ -464,8 +464,21 @@ thread_local! {
 
 /// The mount key's color arm — every color the tree bakes at build
 /// time (the raised root + the row/focused action colors, so a theme
-/// swap rebuilds instead of drifting).
-fn colors_key(colors: &PickerColors, width: usize) -> (usize, Rgb, Rgb, Rgb, Rgb, Rgb, Rgb, Rgb) {
+/// swap rebuilds instead of drifting) — plus G-429's tab arm: the
+/// ACTIVE TAB discriminant. A tab switch is a wholesale content
+/// identity change (the body rows' tagged keys and the hints row's
+/// placed-index fallback keys all churn at once), and opentui-solid's
+/// keyed-For reconcile (git rev 34a5ac4) can leave a DUPLICATE
+/// same-key renderable behind on that churn shape — a zombie hints
+/// text painted after the fresh one (the `tabsut return` stale frame,
+/// pinned by `composer_tabs_walk`). Remounting the content subtree on
+/// tab switches sidesteps that reconcile path entirely; the upstream
+/// reconcile duplication itself is escalated separately (see G-429).
+fn colors_key(
+    colors: &PickerColors,
+    width: usize,
+    tab: u8,
+) -> (usize, Rgb, Rgb, Rgb, Rgb, Rgb, Rgb, Rgb, u8) {
     (
         width,
         rgb_of(colors.raised),
@@ -478,7 +491,18 @@ fn colors_key(colors: &PickerColors, width: usize) -> (usize, Rgb, Rgb, Rgb, Rgb
         // keeps seven color arms for the future without rebuilding
         // the key type.
         rgb_of(colors.raised),
+        tab,
     )
+}
+
+/// G-429 — the active tab as a rebuild-key discriminant (see
+/// [`colors_key`]).
+fn picker_tab_discriminant(tab: PickerTab) -> u8 {
+    match tab {
+        PickerTab::Subagents => 0,
+        PickerTab::Shell => 1,
+        PickerTab::Terminals => 2,
+    }
 }
 
 #[allow(clippy::too_many_arguments)] // the argument set mirrors the ref call shape
@@ -502,7 +526,7 @@ pub fn picker_panel_mount(
     let colors = PickerColors::resolve(theme);
     let width = usize::from(width);
     let items = shape(&paint, width);
-    let key = colors_key(&colors, width);
+    let key = colors_key(&colors, width, picker_tab_discriminant(state.tab));
     // Rebuild iff the geometry key changed OR the wrapper left the
     // tree (a hub reset between harness frames, a seam prune).
     let rebuild = !family_wrapper_live("picker")
