@@ -22,6 +22,7 @@ tools/diff/corpus/tui/recorded-local/*
 # Porting-process archives & runtime state (kept locally outside git)
 .superpowers/
 *.log
+tools/bin/
 tools/parity/tui-diff/cache/
 .test-logs/
 __pycache__/

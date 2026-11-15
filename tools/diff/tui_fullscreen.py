@@ -549,6 +549,30 @@ def _bad_dense_grid(cells, width, height) -> bool:
         not isinstance(row, list) or len(row) != width for row in cells))
 
 
+def check_bun_gate(bun: str | None, version_fn=_bun_version) -> None:
+    """The TUI_DIFF_BUN gate (B2-fix): plugin-case ref legs need bun
+    >= BUN_FLOOR. Raises SystemExit (the infra exit-1 path) when unset,
+    unrunnable, or too old. `version_fn` is injectable for the
+    selftest's negative cases (C3 final-review minor B2)."""
+    if not bun:
+        raise SystemExit(
+            "infra failure: plugin scenarios present but TUI_DIFF_BUN is unset — "
+            "the ref plugin boot requires bun >= 1.4.2 (ResolveMessage extends "
+            "Error; the 2.0.24 host.ts swallow guard depends on it). Point "
+            "TUI_DIFF_BUN at a bun >= 1.4.2 executable — the pinned repo-local "
+            f"default is {REPO / 'tools' / 'bin' / 'bun-1.4.2'} "
+            "(missing? fetch the bun v1.4.2 linux-x64 zip from bun-sh/bun "
+            "tag bun-v1.4.2 and extract `bun` there, chmod +x).")
+    version = version_fn(bun)
+    if version is None or version < BUN_FLOOR:
+        raise SystemExit(
+            f"infra failure: TUI_DIFF_BUN={bun} is {version or 'unrunnable'}; "
+            f"plugin scenarios need bun >= {'.'.join(map(str, BUN_FLOOR))} "
+            "(ResolveMessage instanceof Error — the ref host.ts:17-43 swallow "
+            "guard's dependency, controller-confirmed root cause of the B2 "
+            "first-round whole-screen pseudo-diffs).")
+
+
 def run(stage: Path, ref: Path, cases: list[dict]) -> tuple[dict[str, dict], dict[str, dict]]:
     """Drive both sides over the staged manifest (cases from the
     already-run build_manifest) -> (ref grids, rust grids). B2-fix:
@@ -565,22 +589,8 @@ def run(stage: Path, ref: Path, cases: list[dict]) -> tuple[dict[str, dict], dic
     plugin_cases = [c for c in cases if c.get("plugins")]
     plain_cases = [c for c in cases if not c.get("plugins")]
     if plugin_cases:
-        bun = os.environ.get("TUI_DIFF_BUN", "").strip()
-        if not bun:
-            raise SystemExit(
-                "infra failure: plugin scenarios present but TUI_DIFF_BUN is unset — "
-                "the ref plugin boot requires bun >= 1.4.2 (ResolveMessage extends "
-                "Error; the 2.0.24 host.ts swallow guard depends on it). Point "
-                "TUI_DIFF_BUN at a bun >= 1.4.2 executable "
-                "(e.g. /tmp/opencode/bun142/x/bun-linux-x64/bun).")
-        version = _bun_version(bun)
-        if version is None or version < BUN_FLOOR:
-            raise SystemExit(
-                f"infra failure: TUI_DIFF_BUN={bun} is {_bun_version(bun) or 'unrunnable'}; "
-                f"plugin scenarios need bun >= {'.'.join(map(str, BUN_FLOOR))} "
-                "(ResolveMessage instanceof Error — the ref host.ts:17-43 swallow "
-                "guard's dependency, controller-confirmed root cause of the B2 "
-                "first-round whole-screen pseudo-diffs).")
+        check_bun_gate(os.environ.get("TUI_DIFF_BUN", "").strip() or None)
+        bun = os.environ["TUI_DIFF_BUN"].strip()
         plugin_manifest = stage / "manifest-plugins.json"
         plugin_manifest.write_text(json.dumps(
             {"schema": "tui-diff-manifest/1", "cases": plugin_cases}, indent=1))

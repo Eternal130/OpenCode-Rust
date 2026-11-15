@@ -196,6 +196,45 @@ class RecordingTokenTest(unittest.TestCase):
         self.assertEqual(key_token("q"), "raw:q")
 
 
+class BunGateTest(unittest.TestCase):
+    """C3 final-review minor B2 — the TUI_DIFF_BUN gate's three
+    negative shapes (unset / too old / unrunnable), with the version
+    probe injected so no real bun process is spawned."""
+
+    def test_unset_points_at_the_repo_local_default(self):
+        import tools.diff.tui_fullscreen as tf
+        with self.assertRaises(SystemExit) as cm:
+            tf.check_bun_gate(None)
+        msg = cm.exception.code
+        self.assertIsInstance(msg, str)
+        self.assertIn("TUI_DIFF_BUN is unset", msg)
+        self.assertIn("tools/bin/bun-1.4.2", msg,
+                      "the unset error names the persistent repo-local default")
+
+    def test_older_than_floor_is_rejected(self):
+        import tools.diff.tui_fullscreen as tf
+        with self.assertRaises(SystemExit) as cm:
+            tf.check_bun_gate("/fake/bun", version_fn=lambda _p: (1, 3, 10))
+        msg = cm.exception.code
+        self.assertIsInstance(msg, str)
+        self.assertIn("(1, 3, 10)", msg)
+        self.assertIn(">= 1.4.2", msg)
+
+    def test_unrunnable_binary_is_rejected_as_none(self):
+        import tools.diff.tui_fullscreen as tf
+        # version_fn returns None exactly as _bun_version does for an
+        # unrunnable/unparseable executable (OSError / bad exit / junk)
+        with self.assertRaises(SystemExit) as cm:
+            tf.check_bun_gate("/nonexistent/bun", version_fn=lambda _p: None)
+        msg = cm.exception.code
+        self.assertIsInstance(msg, str)
+        self.assertIn("unrunnable", msg)
+
+    def test_floor_version_passes(self):
+        import tools.diff.tui_fullscreen as tf
+        tf.check_bun_gate("/fake/bun", version_fn=lambda _p: (1, 4, 2))
+
+
 class NormalizeTest(unittest.TestCase):
     def test_normalize_preserves_payload_and_strips_time_hook_fields(self):
         g = mkgrid(uniform())

@@ -278,6 +278,12 @@ binary; builds one if missing):
 4. The full FakeLlm e2e battery (`oc-cli` `run_e2e`, the standalone
    `run`/stdio-lease flows, incl. the upgrade/uninstall tests) runs
    against the RELEASE binary via `OPENCODE_SMOKE_BIN`.
+5. Channel 8 (TUI full-screen differential) plugin scenarios: the ref
+   plugin leg needs bun >= 1.4.2 — `export TUI_DIFF_BUN=<repo>/
+   tools/bin/bun-1.4.2` (the pinned, repo-local persistent copy;
+   git-ignored). If the binary is missing, fetch the bun v1.4.2
+   linux-x64 zip from GitHub releases (`bun-sh/bun` tag
+   `bun-v1.4.2`), extract `bun` to `tools/bin/bun-1.4.2`, `chmod +x`.
 
 Current status: ALL GREEN against `target/release/opencode-rust`
 (build `4c74e5f`, release profile).
