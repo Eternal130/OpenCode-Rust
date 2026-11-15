@@ -551,6 +551,10 @@ pub struct DialogsLaneState {
     /// TUI-24: the plugins dialog's fault table (plugin id → the
     /// load error string; fed from the plugin host's fault list).
     pub plugin_faults: std::collections::HashMap<String, String>,
+    /// G-425: the boot-failure rows (target → error) — resolution
+    /// failures + guest load failures (ref `plugins.list()`'s
+    /// failed entries, context.tsx:460-484 → the /plugins rows).
+    pub plugin_boot_failures: Vec<(String, String)>,
     /// RE-02: the per-plugin active map (v2's
     /// `registrations[id].active`, context.tsx:150-231): ABSENT =
     /// active (registration-time default); `plugins.toggle` flips a
@@ -11359,6 +11363,19 @@ impl Store {
     pub fn set_plugin_faults(&self, faults: std::collections::HashMap<String, String>) {
         self.lane_dialogs.borrow_mut().plugin_faults = faults;
         self.request_redraw();
+    }
+
+    /// G-425: the boot-failure rows (config target → error string)
+    /// — the /plugins dialog's failed-entry source.
+    pub fn set_plugin_boot_failures(&self, failures: Vec<(String, String)>) {
+        self.lane_dialogs.borrow_mut().plugin_boot_failures = failures;
+        self.request_redraw();
+    }
+
+    /// G-425: the boot-failure rows in dialog order.
+    #[must_use]
+    pub fn plugin_boot_failures(&self) -> Vec<(String, String)> {
+        self.lane_dialogs.borrow().plugin_boot_failures.clone()
     }
 
     /// A plugin's fault string (the error-details' error body).

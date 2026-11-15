@@ -328,9 +328,13 @@ pub fn handle_dialog_key(
             // G-29: server rows never toggle (the ref's toggle is
             // TUI-runtime only — a server row's enter is the update
             // submit, handled at the submit layer).
-            if let Some(id) =
-                selected.filter(|id| !id.starts_with("server:") && store.plugin_fault(id).is_none())
-            {
+            if let Some(id) = selected.filter(|id| {
+                !id.starts_with("server:")
+                    && store.plugin_fault(id).is_none()
+                    // G-425: a boot-failure row never toggles — its
+                    // enter is the `view error` submit.
+                    && !store.plugin_boot_failures().iter().any(|(target, _)| target == id)
+            }) {
                 store.plugin_toggle(&id);
                 return DialogKeyOutcome::Consumed;
             }
@@ -1673,6 +1677,19 @@ pub fn execute_submission(
                     return crate::components::command_palette::Dispatch::Handled;
                 }
                 store.clear_dialogs();
+                return crate::components::command_palette::Dispatch::Handled;
+            }
+            // G-425: a BOOT-FAILURE row's enter opens the error
+            // details on the resolution/load error (plugins.tsx:
+            // 250-270 — the value is the config target).
+            if let Some((target, error)) =
+                store.plugin_boot_failures().into_iter().find(|(target, _)| target == value)
+            {
+                let title = "TUI plugin error".to_owned();
+                let context =
+                    format!("Plugin: {target}\nStatus: failed\nRuntime: tui\nSource: {target}");
+                store.clear_dialogs();
+                store.open_error_details(&title, &target, &error, &context, "", true);
                 return crate::components::command_palette::Dispatch::Handled;
             }
             if let Some(error) = store.plugin_fault(value) {

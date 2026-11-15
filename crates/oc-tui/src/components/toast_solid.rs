@@ -21,7 +21,7 @@ use super::chrome_solid::{
 use super::footer::canvas::FILL_FG;
 use super::footer::theme::{feedback_color, FooterTheme};
 use super::overlays_solid::{mount_overlay_surface, OVERLAYS_TOAST};
-use super::toast::{toast_geometry, ToastOptions};
+use super::toast::{affordance_text_width, toast_geometry, ToastOptions};
 use crate::render::{Cell, CellColor, Frame};
 use crate::wrap::display_width;
 use oc_theme::types::ResolvedThemeTokens;
@@ -40,7 +40,8 @@ fn toast_tree_units(
     let _border = feedback_color(feedback, toast.variant);
     let message_width = display_width(&toast.message);
     let title_width = toast.title.as_deref().map_or(0, display_width);
-    let (_left, panel_width, _top) = toast_geometry(message_width, title_width, usize::MAX);
+    let (_left, panel_width, _top) =
+        toast_geometry(message_width, title_width, affordance_text_width(toast), usize::MAX);
     let rows = super::toast::panel_rows_public(toast);
     let bg = theme.pane;
     let right = panel_width.saturating_sub(1);
@@ -72,9 +73,16 @@ fn toast_tree_units(
             1, // bold
             FILL_FG,
         )));
-        // The dismiss affordance, right-aligned so the last cell
-        // lands at content_right: two fill-fg pads + the muted `x`.
-        let start = content_right.saturating_sub(2);
+        // The affordance, right-aligned so the last cell lands at
+        // content_right: two fill-fg pads + the muted run — `x` for a
+        // plain toast, `› {label}` for an action toast (G-424,
+        // ui/toast.tsx:75-81, fg muted save hover).
+        let aff_text = match &toast.action_label {
+            Some(label) => format!("› {label}"),
+            None => "x".to_owned(),
+        };
+        let aff_width = 2 + crate::wrap::display_width(&aff_text);
+        let start = content_right + 1 - aff_width;
         units.push(ChromeUnit {
             key: "toast.aff.pad".to_owned(),
             left: start,
@@ -85,7 +93,7 @@ fn toast_tree_units(
             key: "toast.aff.x".to_owned(),
             left: start + 2,
             top: 1,
-            body: ChromeBody::Text(vec![ChromeChunk::new("x", theme.muted, bg, 0)]),
+            body: ChromeBody::Text(vec![ChromeChunk::new(&aff_text, theme.muted, bg, 0)]),
         });
         units.extend(clip_rail(chrome_cluster_units(
             "toast.msg",
@@ -180,7 +188,8 @@ pub fn paint_toast_rails(
     let message_width = display_width(&toast.message);
     let title_width = toast.title.as_deref().map_or(0, display_width);
     let term_width = frame.width;
-    let (left, panel_width, top) = toast_geometry(message_width, title_width, term_width);
+    let (left, panel_width, top) =
+        toast_geometry(message_width, title_width, affordance_text_width(toast), term_width);
     let right = left + panel_width - 1;
     let rows = super::toast::panel_rows_public(toast);
     for row in top..top + rows {
@@ -212,7 +221,8 @@ pub fn mount_toast_tree(
 ) {
     let message_width = display_width(&toast.message);
     let title_width = toast.title.as_deref().map_or(0, display_width);
-    let (left, panel_width, top) = toast_geometry(message_width, title_width, term_width);
+    let (left, panel_width, top) =
+        toast_geometry(message_width, title_width, affordance_text_width(toast), term_width);
     let (_panel_width, _right, rows, units) = toast_tree_units(toast, pending, theme, feedback);
     mount_overlay_surface(
         "toast",

@@ -1535,6 +1535,23 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         // ref's ctrl+a TOGGLE of internal plugins has no ported
         // surface, so the pair carries a surfaceless command id).
         DialogKind::Plugins => {
+            // G-425 — the FAILED entries first (ref plugins.tsx:54-76:
+            // the failed `plugins.list()` entries ride the table with
+            // the `failed, local` footer — target title, error body
+            // behind `enter view error`). A failed plugin never
+            // registered commands/home actions, so it is absent from
+            // the id set below — the boot-failure table is its only
+            // row source. isLocal is a config-spec path (file:// |
+            // ./ | ../ | absolute), which every boot target is.
+            let options: Vec<SelectOption> = store
+                .plugin_boot_failures()
+                .into_iter()
+                .map(|(target, _)| {
+                    SelectOption::titled(target.clone(), target)
+                        .categorized("TUI")
+                        .with_footer("failed, local".to_owned())
+                })
+                .collect();
             let mut ids: Vec<String> = store
                 .plugin_commands()
                 .into_iter()
@@ -1544,21 +1561,21 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             ids.sort();
             ids.dedup();
             let options = if ids.is_empty() {
-                Vec::new()
+                options
             } else {
                 // RE-02 (ref parity, plugins.tsx:54/308-318): the
                 // footer carries the status only when NOT active
                 // ("inactive"); an active row shows no status footer.
-                ids.iter()
-                    .map(|id| {
-                        let option = SelectOption::titled(id.clone(), id.clone());
-                        if store.plugin_active(id) {
-                            option
-                        } else {
-                            option.with_footer("inactive".to_owned())
-                        }
-                    })
-                    .collect()
+                let mut rows = options;
+                rows.extend(ids.iter().map(|id| {
+                    let option = SelectOption::titled(id.clone(), id.clone());
+                    if store.plugin_active(id) {
+                        option
+                    } else {
+                        option.with_footer("inactive".to_owned())
+                    }
+                }));
+                rows
             };
             // G-29: the SERVER rows (plugins.tsx:74-81 — the
             // `plugin.list`/`plugin.check` entries) follow the
@@ -1584,7 +1601,7 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                 };
                 options.push(if footer.is_empty() { option } else { option.with_footer(footer) });
             }
-            SelectProps::new("Plugins", options)
+            let props = SelectProps::new("Plugins", options)
                 // G-29: the "check for updates" action
                 // (plugins.tsx:214-218 — ctrl+a here, the port's
                 // surfaceless-command slot before).
@@ -1610,8 +1627,19 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                 // RE-02: the `plugins.toggle` action (plugins.tsx:
                 // 231-237, side right) — enter flips the selected
                 // registered plugin's active state.
-                .with_action(SelectAction::new("plugins.toggle", "return", "toggle"))
+                .with_action(SelectAction::new("plugins.toggle", "return", "toggle"));
+            // G-425: the `enter view error` footer hint
+            // (plugins.tsx:246-255) — the ref shows it while the
+            // FOCUSED entry carries an error; the focus effect
+            // (:78-81) seats the first TUI entry, so with no
+            // registered ids the failure row is the focused one.
+            if !store.plugin_boot_failures().is_empty() && ids.is_empty() {
+                props.with_footer_hint("enter", "view error")
+            } else {
+                props
+            }
         }
+
         // The tab context menu (lane KM — `TabContextMenu`'s actions,
         // session-tabs.tsx:391-417): a tab-scoped menu carries New
         // session/Rename/Copy session ID/Close; the strip-scoped one
@@ -5706,6 +5734,59 @@ mod tests {
         assert!(text.contains("Search"), "the filter placeholder");
         assert!(text.contains("No items available"), "the shared empty state");
         assert!(text.contains("ctrl+a check for updates"), "the footer hint");
+    }
+
+    /// G-425: a boot failure (the config target's resolution/load
+    /// error) rides the option table — the failed-entry row with the
+    /// `failed, local` footer (plugins.tsx:54-76) + the `enter view
+    /// error` hint while it holds focus (:246-255) — never the
+    /// "No items available" empty state.
+    #[test]
+    fn plugins_dialog_lists_boot_failures() {
+        let store = final_session_store();
+        store.set_plugin_boot_failures(vec![(
+            "/etc/opencode/plugins/broken".to_owned(),
+            "module parse error".to_owned(),
+        )]);
+        store.replace_dialog(crate::store::DialogKind::Plugins, crate::store::DialogSize::Medium);
+        let props = select_props_for(&crate::store::DialogKind::Plugins, &store);
+        assert_eq!(props.options.len(), 1, "the failure row: {:?}", props.options);
+        let option = &props.options[0];
+        assert_eq!(option.title, "/etc/opencode/plugins/broken");
+        assert_eq!(option.footer.as_deref(), Some("failed, local"));
+        assert_eq!(option.category.as_deref(), Some("TUI"));
+        assert_eq!(
+            props.footer_hint,
+            Some(("enter".to_owned(), "view error".to_owned())),
+            "the focused failure row's hint: {:?}",
+            props.footer_hint
+        );
+        // Enter on the row opens the error details (the submit path
+        // through the dialog key layer, the TUI-24 recipe).
+        let mut keymap = crate::keymap::Keymap::new();
+        keymap.push_mode("dialog");
+        let clock = crate::keymap::ManualClock::default();
+        crate::components::dialog::handle_dialog_key(
+            &store,
+            &mut keymap,
+            &clock,
+            crate::keymap::KeyStroke::parse("return").unwrap(),
+            (80, 24),
+        );
+        let mut dispatcher = crate::components::dialog::store_dispatcher();
+        let dispatch = crate::components::dialog::execute_submission(
+            &store,
+            &mut dispatcher,
+            "/etc/opencode/plugins/broken",
+        );
+        assert_eq!(dispatch, crate::components::command_palette::Dispatch::Handled);
+        assert!(
+            matches!(
+                store.top_dialog().map(|entry| entry.kind.clone()),
+                Some(crate::store::DialogKind::ErrorDetails { back_to_plugins: true, .. })
+            ),
+            "enter view error opened the error details"
+        );
     }
 
     /// RE-02: the plugins dialog models per-plugin active state —

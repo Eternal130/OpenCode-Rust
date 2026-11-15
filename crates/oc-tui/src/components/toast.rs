@@ -168,6 +168,16 @@ impl ToastQueue {
     }
 }
 
+/// The affordance run's text width (`ui/toast.tsx:75-81`):
+/// `› {label}` for an action toast, `x` otherwise.
+#[must_use]
+pub fn affordance_text_width(toast: &ToastOptions) -> usize {
+    match &toast.action_label {
+        Some(label) => 2 + crate::wrap::display_width(label), // "› {label}"
+        None => 1,                                            // "x"
+    }
+}
+
 /// The toast surface geometry (`ToastSurface`): absolute at `top=1`,
 /// `right=2`, intrinsic width = content (capped at
 /// `min(60, width - 6)`).
@@ -175,10 +185,13 @@ impl ToastQueue {
 pub fn toast_geometry(
     message_width: usize,
     title_width: usize,
+    affordance_width: usize,
     term_width: usize,
 ) -> (usize, usize, usize) {
-    // Content = max(message, title + 3 affordance) + 4 padding.
-    let content = message_width.max(title_width + 3) + 4;
+    // Content = max(message, title row) + 4 padding; the title row is
+    // title + marginLeft 2 + the affordance run (flexShrink=0, it
+    // counts toward the intrinsic width).
+    let content = message_width.max(title_width + 2 + affordance_width) + 4;
     let max = 60.min(term_width.saturating_sub(6));
     let panel = content.min(max) + 2; // + the two rail columns
     let left = term_width.saturating_sub(2).saturating_sub(panel);
@@ -274,8 +287,27 @@ mod tests {
     #[test]
     fn geometry_pins_the_golden_region() {
         // Golden: panel x37..77 (41 wide), top row 1.
-        let (left, panel, top) = toast_geometry(35, 14, 80);
+        let (left, panel, top) = toast_geometry(35, 14, 1, 80);
         assert_eq!((left, panel, top), (37, 41, 1));
+    }
+
+    #[test]
+    fn action_affordance_widens_the_panel() {
+        // G-424: an action toast counts `› {label}` (marginLeft 2)
+        // toward the intrinsic width — the dismiss `x` is the 3-wide
+        // degenerate of the same run (title + 2 + 1).
+        let (left, panel, _top) = toast_geometry(
+            26,
+            25,
+            affordance_text_width(&ToastOptions {
+                action_label: Some("Open MCP servers".into()),
+                ..ToastOptions::info("")
+            }),
+            80,
+        );
+        // title 25 + 2 pads + "› Open MCP servers" (18) + 4 padding
+        // + 2 rails = 51 — the ref panel (rails 27/77).
+        assert_eq!((left, panel), (27, 51));
     }
 
     #[test]

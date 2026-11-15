@@ -26,9 +26,9 @@ cells 稠密化，None/缺省子字段补规范默认（ch=' '、attrs 排序去
 
 | 总量 | EXACT | STRUCTURAL | CAUSES 命中 | 未裁决 |
 |---|---|---|---|---|
-| 90 | 78 | 0 | 12 | 0 |
+| 90 | 81 | 0 | 9 | 0 |
 
-（verdict 分布：exact 78 / structural 0 / diverge 12；
+（verdict 分布：exact 81 / structural 0 / diverge 9；
 committed 未裁决>0 ⇒ exit 2；rec-* recorded-local 见其小节（advisory，不入门））
 
 ## 分歧明细
@@ -44,9 +44,9 @@ committed 未裁决>0 ⇒ exit 2；rec-* recorded-local 见其小节（advisory�
 | anim-stream-multi-part | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 28 | 17 |
 | anim-stream-multi-part@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 28 | 17 |
 | anim-stream-multi-part@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 28 | 17 |
-| anim-toast-window | diverge | 148 | r1c27 ch ref='┃' rust=' ' | 80x24 | 80x24 | 0 | 0 | 28 | 17 |
-| anim-toast-window@120x30 | diverge | 148 | r1c67 ch ref='┃' rust=' ' | 120x30 | 120x30 | 0 | 0 | 28 | 17 |
-| anim-toast-window@320x80 | diverge | 148 | r1c267 ch ref='┃' rust=' ' | 320x80 | 320x80 | 0 | 0 | 28 | 17 |
+| anim-toast-window | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 28 | 17 |
+| anim-toast-window@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 28 | 17 |
+| anim-toast-window@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 28 | 17 |
 | anim-tool-progress | diverge | 60 | r7c5 ch ref='⋯' rust='⠋' | 80x24 | 80x24 | 0 | 0 | 28 | 17 |
 | anim-tool-progress@120x30 | diverge | 60 | r7c5 ch ref='⋯' rust='⠋' | 120x30 | 120x30 | 0 | 0 | 28 | 17 |
 | anim-tool-progress@320x80 | diverge | 60 | r7c5 ch ref='⋯' rust='⠋' | 320x80 | 320x80 | 0 | 0 | 28 | 17 |
@@ -80,9 +80,9 @@ committed 未裁决>0 ⇒ exit 2；rec-* recorded-local 见其小节（advisory�
 | plugin-boot-superpowers | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 20 | 14 |
 | plugin-boot-superpowers@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 20 | 14 |
 | plugin-boot-superpowers@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 20 | 14 |
-| plugin-fallback | diverge | 560 | r1c16 ch ref=' ' rust='┃' | 80x24 | 80x24 | 0 | 0 | 20 | 14 |
-| plugin-fallback@120x30 | diverge | 780 | r1c56 ch ref=' ' rust='┃' | 120x30 | 120x30 | 0 | 0 | 20 | 14 |
-| plugin-fallback@320x80 | diverge | 780 | r1c256 ch ref=' ' rust='┃' | 320x80 | 320x80 | 0 | 0 | 20 | 14 |
+| plugin-fallback | diverge | 443 | r1c16 ch ref=' ' rust='┃' | 80x24 | 80x24 | 0 | 0 | 20 | 14 |
+| plugin-fallback@120x30 | diverge | 668 | r1c56 ch ref=' ' rust='┃' | 120x30 | 120x30 | 0 | 0 | 20 | 14 |
+| plugin-fallback@320x80 | diverge | 668 | r1c256 ch ref=' ' rust='┃' | 320x80 | 320x80 | 0 | 0 | 20 | 14 |
 | plugin-panel-open | diverge | 58 | r11c11 bg ref=[20, 20, 20] rust=[250, 178, 131] | 80x24 | 80x24 | 0 | 0 | 27 | 19 |
 | plugin-panel-open@120x30 | diverge | 58 | r13c31 bg ref=[20, 20, 20] rust=[250, 178, 131] | 120x30 | 120x30 | 0 | 0 | 27 | 19 |
 | plugin-panel-open@320x80 | diverge | 217 | r3c280 ch ref=' ' rust='▼' | 320x80 | 320x80 | 0 | 0 | 27 | 19 |
@@ -128,15 +128,12 @@ committed 未裁决>0 ⇒ exit 2；rec-* recorded-local 见其小节（advisory�
 
 ### first_diff 明细
 
-- `anim-toast-window` [diverge] row=1 col=27 field=ch ref='┃' rust=' ' cells_diff_count=148 — CAUSES: G-424 rust toast 动作 affordance 恒 'x'（ref '› {label}' + 宽面板）
-- `anim-toast-window@120x30` [diverge] row=1 col=67 field=ch ref='┃' rust=' ' cells_diff_count=148 — CAUSES: G-424 rust toast 动作 affordance 恒 'x'（ref '› {label}' + 宽面板）
-- `anim-toast-window@320x80` [diverge] row=1 col=267 field=ch ref='┃' rust=' ' cells_diff_count=148 — CAUSES: G-424 rust toast 动作 affordance 恒 'x'（ref '› {label}' + 宽面板）
 - `anim-tool-progress` [diverge] row=7 col=5 field=ch ref='⋯' rust='⠋' cells_diff_count=60 — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
 - `anim-tool-progress@120x30` [diverge] row=7 col=5 field=ch ref='⋯' rust='⠋' cells_diff_count=60 — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
 - `anim-tool-progress@320x80` [diverge] row=7 col=5 field=ch ref='⋯' rust='⠋' cells_diff_count=60 — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
-- `plugin-fallback` [diverge] row=1 col=16 field=ch ref=' ' rust='┃' cells_diff_count=560 — CAUSES: G-425 插件失败态管理屏不列失败入口（/plugins 对话框源表缺失）
-- `plugin-fallback@120x30` [diverge] row=1 col=56 field=ch ref=' ' rust='┃' cells_diff_count=780 — CAUSES: G-425 插件失败态管理屏不列失败入口（/plugins 对话框源表缺失）
-- `plugin-fallback@320x80` [diverge] row=1 col=256 field=ch ref=' ' rust='┃' cells_diff_count=780 — CAUSES: G-425 插件失败态管理屏不列失败入口（/plugins 对话框源表缺失）
+- `plugin-fallback` [diverge] row=1 col=16 field=ch ref=' ' rust='┃' cells_diff_count=443 — CAUSES: G-424b toast 长标题折行未移植（rust 单行截断 vs ref 标题 shrink+wrap）
+- `plugin-fallback@120x30` [diverge] row=1 col=56 field=ch ref=' ' rust='┃' cells_diff_count=668 — CAUSES: G-424b toast 长标题折行未移植（rust 单行截断 vs ref 标题 shrink+wrap）
+- `plugin-fallback@320x80` [diverge] row=1 col=256 field=ch ref=' ' rust='┃' cells_diff_count=668 — CAUSES: G-424b toast 长标题折行未移植（rust 单行截断 vs ref 标题 shrink+wrap）
 - `plugin-panel-open` [diverge] row=11 col=11 field=bg ref=[20, 20, 20] rust=[250, 178, 131] cells_diff_count=58 — CAUSES: B2 插件注册投影（rust 统一进程 server-entry 装载 vs ref TUI 仅 tui 入口面）
 - `plugin-panel-open@120x30` [diverge] row=13 col=31 field=bg ref=[20, 20, 20] rust=[250, 178, 131] cells_diff_count=58 — CAUSES: B2 插件注册投影（rust 统一进程 server-entry 装载 vs ref TUI 仅 tui 入口面）
 - `plugin-panel-open@320x80` [diverge] row=3 col=280 field=ch ref=' ' rust='▼' cells_diff_count=217 — CAUSES: B2 插件注册投影（rust 统一进程 server-entry 装载 vs ref TUI 仅 tui 入口面）
@@ -163,10 +160,10 @@ committed 未裁决>0 ⇒ exit 2；rec-* recorded-local 见其小节（advisory�
   - command-palette 场景的 ch 字段差（面板分组顺序差）：ref 的分组序由 `groupBy(category).entries()` 的首现顺序决定（dialog-select.tsx:214-226），而命令选项来自多个异步注册源（app 内建/会话命令//api/command/skills）——注册完成序跨运行可翻转（A2 复跑取证：5 次单跑 1 次 Prompt↔Session 翻转；rust 侧确定性注册序恒 Session 组在前）。ref 树只读不可修，登记为通道 8 已知 ref 侧竞态，非移植语义差
   - ref packages/tui/src/ui/dialog-select.tsx:214-226（groupBy/entries 首现序）+ 多源异步注册（routes/session/index.tsx commands 装配）
   - rust crates/oc-tui/src/components/command_palette.rs（确定性分组装配，无竞态）
-- **G-424 rust toast 动作 affordance 恒 'x'（ref '› {label}' + 宽面板）** — 命中 3 case（`anim-toast-window`, `anim-toast-window@120x30`, `anim-toast-window@320x80`）
-  - anim-toast-* 场景：带 action 的 toast（MCP 失败 → 'Open MCP servers'）——ref 标题行右对齐渲染动作 affordance '› {label}' 且面板宽度计入该 run（title+marginLeft2+affordance）；rust 恒渲染dismiss 'x'、面板按 title+3 计宽（窄 17 列）。A2 静息/帧序列维度新发现的渲染语义差，登记（G-424）不拦。修复面：toast_geometry/toast_tree_units/right_rail_cell/app 指针 hit-rect 四处联动，且钉住 tree-scenario 冻结 oracle（tools/parity/tree-scenarios）与pty_lane_km 活体用例——超出 A2 harness 范围，留专用 lane 落地
-  - ref packages/tui/src/ui/toast.tsx:75-103（affordance() = action ? `› ${label}` : "x"，flexShrink=0 右对齐进面板宽度）
-  - rust crates/oc-tui/src/components/toast_solid.rs:75-89（恒 "  x" 两 pad + 'x'）、toast.rs:180-186（title+3 计宽）
+- **G-424b toast 长标题折行未移植（rust 单行截断 vs ref 标题 shrink+wrap）** — 命中 3 case（`plugin-fallback`, `plugin-fallback@120x30`, `plugin-fallback@320x80`）
+  - plugin-fallback 场景（G-425 管理屏失败行修复后的实际残余形状，收窄自原 G-425 簇的 plugin-fallback* 前缀）：失败 toast 的长标题（'Plugin failed: <config target>'，>60 列）——ref 的标题 text 无 wrapMode=none（默认 wrap），在 maxWidth=min(60, w-6) 的盒子内shrink+折行（登记册记录的'长标题三行折行'），面板行数随折行增长；rust toast_tree_units 的标题 run 恒 wrapMode=none 单行、在右轨处截断、panel_rows 恒 5——首个分歧恒为 toast 带（row 1..6）内 ref ' ' vs rust '┃' 的面板几何差。G-424 的 affordance 宽度语义本轮已对齐（anim-toast-* 三档 exact）；本簇=G-424 家族的标题折行残余子项，登记不拦
+  - ref packages/tui/src/ui/toast.tsx:84-91（title text 默认 wrap，无 wrapMode=none——对比 affordance :77 显式 none）+ maxWidth 钳制 :52-53
+  - rust crates/oc-tui/src/components/toast_solid.rs toast_tree_units（标题 chrome_cluster_units wrapMode=none 单行）+ toast.rs panel_rows（恒 5）
 - **A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）** — 命中 3 case（`anim-tool-progress`, `anim-tool-progress@120x30`, `anim-tool-progress@320x80`）
   - anim-* 场景：rust 帧是 (store, clock) 纯函数（A1）——虚拟时钟逐拍推进使spinner 轮转/caret blink（500ms 周期）/knight 渐变在中间拍真实变化；ref 侧夹具钉 animations:false（动画门控关闭，静态形状）且渲染器时钟注入在整 app 下原生不稳（boot 死锁/捕获段错误，探针记录于 a2-report）——这是夹具伪影而非移植语义差：生产 ref 默认 animations:true 渲染同类动画。登记不拦；事件驱动的逐拍内容变化仍被本维度精确断言
   - ref packages/tui/test/fixture/app.ts:32（config animations:false 钉定）+ component/spinner.tsx:27-31（animations 门控回退静态 ⋯）
@@ -179,10 +176,10 @@ committed 未裁决>0 ⇒ exit 2；rec-* recorded-local 见其小节（advisory�
   - plugin-panel-open 场景（palette 搜索 'reflect'）：ref 2.0.24 TUI 夹具只装载 tui 入口（config.plugins 本地目录约定），palette 无 omo-slim 命令（reflect/deepwork 注册在包的 server 入口——生产 ref 由 SERVER 进程装载、经命令 API 到达 TUI，夹具无 server 面）→ 'No results found'；rust 移植为统一进程，TUI 的 PluginHost 同时 boot server+tui 入口，palette 携带 'Plugin · oh-my-opencode-slim' 组命令行。这是加载模型/夹具边界差而非渲染 bug；320×80 档同一网格内 ref 真 Solid 侧栏 section（'▼ OMO-Slim v3.0.3' + Preset/agent 行）vs rust 有界 shim 侧栏为 G-28 形状面共现。节律注记（C3 review Important#2，2026-11-15）：ref driver 的 per-token idle 例外（leaderStroke 后不插 idle）自 C3 起对 plugins>0 场景同样生效——plugin 场景的 token 间节律基线已随之改变，未来新增 plugin 场景按现行节律捕获/基线，不回溯旧节律
   - ref packages/tui/src/plugin/context.tsx:296-307（config.plugins 本地目录条目）+ host.ts:17-43（tui 入口探测；server 入口不经 TUI 装载）
   - rust crates/oc-plugin-host/src/supervisor.rs:2330-2390（entry 装载后伴生 load.tui——统一进程同时装载 server+tui）+ oc-tui/src/plugin_boot.rs project_registrations（palette 行投影）
-- **G-425 插件失败态管理屏不列失败入口（/plugins 对话框源表缺失）** — 命中 3 case（`plugin-fallback`, `plugin-fallback@120x30`, `plugin-fallback@320x80`）
-  - plugin-fallback 场景（故意坏载荷双侧落失败态）：ref 的失败面三件套=错误 toast（'Plugin failed: <target>' + 'Run /plugins to view details.' + '› Open plugins' affordance）+ footer chip（'⊙ 1 plugin failed /plugins'）+ /plugins 管理屏**列出失败入口行**（'x <path> failed, local' + 'enter view error' 提示）。rust 已对齐 toast+chip（B2-fix surface_boot_failures：解析失败与 guest 装载失败双源）；**管理屏的失败行列表未移植**（command_palette.rs 的 DialogKind::Plugins 仅从命令/首页动作注册投影派生 id 集，装载失败入口不入表 → 'No items available'）——立项 G-425 登记不拦（含 toast affordance 格差=G-424 族共现形状，其修复 lane 连同 oracle 重冻结一并落地）
-  - ref packages/tui/src/plugin/context.tsx:460-484（失败态列表+toast）+ feature-plugins/system/plugins.tsx:54-76（源表 TUI/server 双段+状态行）
-  - rust crates/oc-tui/src/plugin_boot.rs surface_boot_failures（B2-fix：chip+toast 已对齐）+ components/command_palette.rs:1537-1560（DialogKind::Plugins 有界 id 集投影——失败入口缺失=修 G-425 的面）
+- **G-425 插件失败态管理屏不列失败入口（已修复——零命中保留注释）** — 命中 0 case
+  - （已关闭）plugin-fallback 场景的残余归 G-424b toast 长标题折行簇
+  - ref packages/tui/src/plugin/context.tsx:460-484 + feature-plugins/system/plugins.tsx:54-76
+  - rust crates/oc-tui/src/plugin_boot.rs surface_boot_failures + components/command_palette.rs DialogKind::Plugins（本轮修复）
 - **G-28 插件 TSX 有界（bounded shim）** — 命中 0 case
   - plugin-* 场景的形状类分歧：ref 侧插件以 TSX 活树渲染进 Slot，rust 侧以有界 shim（固定 UI 请求形状）近似——已立项的有界偏差
   - ref packages/tui/src/component/panel-host.tsx:35-55（Slot path="session.panel"，TSX 活树 + reactive props）
@@ -204,7 +201,7 @@ anim 场景（`anim.ticks` 声明，SCHEMA A2 扩展）在静息排空后逐拍�
 
 | anim 总量 | EXACT | CAUSES 命中 | 未裁决 |
 |---|---|---|---|
-| 15 | 9 | 6 | 0 |
+| 15 | 12 | 3 | 0 |
 
 | case | verdict | 非exact拍 | per-tick | first 异拍 |
 |---|---|---|---|---|
@@ -217,16 +214,13 @@ anim 场景（`anim.ticks` 声明，SCHEMA A2 扩展）在静息排空后逐拍�
 | anim-stream-multi-part | exact | 0/11 | `...........` (K=10) | — |
 | anim-stream-multi-part@120x30 | exact | 0/11 | `...........` (K=10) | — |
 | anim-stream-multi-part@320x80 | exact | 0/11 | `...........` (K=10) | — |
-| anim-toast-window | diverge | 13/13 | `XXXXXXXXXXXXX` (K=12) | tick=0 r1c27 ch ref='┃' rust=' ' |
-| anim-toast-window@120x30 | diverge | 13/13 | `XXXXXXXXXXXXX` (K=12) | tick=0 r1c67 ch ref='┃' rust=' ' |
-| anim-toast-window@320x80 | diverge | 13/13 | `XXXXXXXXXXXXX` (K=12) | tick=0 r1c267 ch ref='┃' rust=' ' |
+| anim-toast-window | exact | 0/13 | `.............` (K=12) | — |
+| anim-toast-window@120x30 | exact | 0/13 | `.............` (K=12) | — |
+| anim-toast-window@320x80 | exact | 0/13 | `.............` (K=12) | — |
 | anim-tool-progress | diverge | 11/11 | `XXXXXXXXXXX` (K=10) | tick=0 r7c5 ch ref='⋯' rust='⠋' |
 | anim-tool-progress@120x30 | diverge | 11/11 | `XXXXXXXXXXX` (K=10) | tick=0 r7c5 ch ref='⋯' rust='⠋' |
 | anim-tool-progress@320x80 | diverge | 11/11 | `XXXXXXXXXXX` (K=10) | tick=0 r7c5 ch ref='⋯' rust='⠋' |
 
-- `anim-toast-window`  — CAUSES: G-424 rust toast 动作 affordance 恒 'x'（ref '› {label}' + 宽面板）
-- `anim-toast-window@120x30`  — CAUSES: G-424 rust toast 动作 affordance 恒 'x'（ref '› {label}' + 宽面板）
-- `anim-toast-window@320x80`  — CAUSES: G-424 rust toast 动作 affordance 恒 'x'（ref '› {label}' + 宽面板）
 - `anim-tool-progress`  — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
 - `anim-tool-progress@120x30`  — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
 - `anim-tool-progress@320x80`  — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
