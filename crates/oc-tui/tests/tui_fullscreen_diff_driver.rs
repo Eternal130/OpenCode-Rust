@@ -54,6 +54,7 @@ use oc_tui::app::{
     ServerListEvent,
 };
 use oc_tui::data::{ConnectionConfig, Ingest};
+use oc_tui::input_term::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use oc_tui::render::{serialize_canonical, CellColor, Frame, CONTINUATION};
 use oc_tui::store::ListState;
 use oc_tui::theme::ThemeState;
@@ -437,6 +438,41 @@ fn press_token(app: &mut App, token: &str) {
         for ch in literal.chars() {
             app.press(&ch.to_string());
         }
+        return;
+    }
+    // C3 review Important#1 — the two non-key input surfaces replayed
+    // through their production seams (SCHEMA 键名表).
+    if let Some(text) = token.strip_prefix("paste:") {
+        app.paste_terminal_text(text);
+        return;
+    }
+    if let Some(mouse) = token.strip_prefix("mouse:") {
+        let (kind, coords) = mouse.rsplit_once(':').unwrap_or_else(|| {
+            panic!("unknown mouse token (want mouse:<kind>:<col>,<row>): {token}")
+        });
+        let (column, row) = coords
+            .split_once(',')
+            .unwrap_or_else(|| panic!("unknown mouse coords (want <col>,<row>): {token}"));
+        let column: u16 = column.parse().unwrap_or_else(|_| panic!("bad col: {token}"));
+        let row: u16 = row.parse().unwrap_or_else(|_| panic!("bad row: {token}"));
+        let kind = match kind {
+            "down-left" => MouseEventKind::Down(MouseButton::Left),
+            "down-middle" => MouseEventKind::Down(MouseButton::Middle),
+            "down-right" => MouseEventKind::Down(MouseButton::Right),
+            "up-left" => MouseEventKind::Up(MouseButton::Left),
+            "up-middle" => MouseEventKind::Up(MouseButton::Middle),
+            "up-right" => MouseEventKind::Up(MouseButton::Right),
+            "moved" => MouseEventKind::Moved,
+            "drag-left" => MouseEventKind::Drag(MouseButton::Left),
+            "drag-middle" => MouseEventKind::Drag(MouseButton::Middle),
+            "drag-right" => MouseEventKind::Drag(MouseButton::Right),
+            "wheel-up" => MouseEventKind::ScrollUp,
+            "wheel-down" => MouseEventKind::ScrollDown,
+            "wheel-left" => MouseEventKind::ScrollLeft,
+            "wheel-right" => MouseEventKind::ScrollRight,
+            other => panic!("unknown mouse kind: {other}"),
+        };
+        app.mouse_event(&MouseEvent { kind, column, row, modifiers: KeyModifiers::default() });
         return;
     }
     if let Some(letter) = token.strip_prefix("ctrl+").filter(|rest| rest.len() == 1) {

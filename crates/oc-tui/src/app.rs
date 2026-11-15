@@ -462,6 +462,10 @@ impl App {
     /// enqueues it async — the sync pump here trades that for the
     /// single-read latency, pastes being user-rare).
     pub fn paste_terminal_text(&mut self, text: &str) {
+        // diff-ext C3 review Important#1 — paste is a production input
+        // surface: record it as a redacted `paste:` token or the first
+        // real paste silently produces an unreplayable recording.
+        oc_util::recorder::paste(text);
         let key = self.prompt_key();
         let mut composer = self.store.composer(&key);
         composer.paste_resolved(
@@ -516,6 +520,28 @@ impl App {
     pub fn mouse_event(&mut self, mouse: &crate::input_term::MouseEvent) {
         use crate::components::session_tabs::StripHit;
         use crate::input_term::{MouseButton, MouseEventKind};
+        // diff-ext C3 review Important#1 — the mouse is a production
+        // input surface: record the minimal `mouse:<kind>:<col>,<row>`
+        // token (the kind vocabulary below mirrors the enum).
+        {
+            let kind = match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => "down-left",
+                MouseEventKind::Down(MouseButton::Middle) => "down-middle",
+                MouseEventKind::Down(MouseButton::Right) => "down-right",
+                MouseEventKind::Up(MouseButton::Left) => "up-left",
+                MouseEventKind::Up(MouseButton::Middle) => "up-middle",
+                MouseEventKind::Up(MouseButton::Right) => "up-right",
+                MouseEventKind::Moved => "moved",
+                MouseEventKind::Drag(MouseButton::Left) => "drag-left",
+                MouseEventKind::Drag(MouseButton::Middle) => "drag-middle",
+                MouseEventKind::Drag(MouseButton::Right) => "drag-right",
+                MouseEventKind::ScrollUp => "wheel-up",
+                MouseEventKind::ScrollDown => "wheel-down",
+                MouseEventKind::ScrollLeft => "wheel-left",
+                MouseEventKind::ScrollRight => "wheel-right",
+            };
+            oc_util::recorder::mouse(kind, mouse.column, mouse.row);
+        }
         let width = usize::from(self.size.0);
         let col = usize::from(mouse.column);
         let row = usize::from(mouse.row);
