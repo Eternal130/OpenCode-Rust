@@ -3862,6 +3862,12 @@ pub enum ServerListEvent {
     /// the `@` completion's reference rows; a failed fetch is the
     /// ref's `?? []` empty list).
     References(Vec<crate::store::ServerReference>),
+    /// session-active boot snapshot (G-427 wave 4): the ids the
+    /// server reports RUNNING via `GET /api/session/active`
+    /// (`server.connected` → `session.active()`, data.ts:594-609) —
+    /// re-arms the spinner/interrupt gate for sessions already
+    /// executing when the TUI boots (server restart / reconnect).
+    ActiveSessions(Vec<String>),
 }
 
 /// One `worktree.list` call mapped into the dialog's row type.
@@ -4306,6 +4312,18 @@ pub fn spawn_server_lists(
     let (tx, rx) = tokio::sync::mpsc::channel(4);
     let task = tokio::spawn(async move {
         let to_string = |error: oc_client::ClientError| error.to_string();
+        // session-active boot snapshot — FIRST in the chain: the ref
+        // arms the running set the moment `server.connected` resolves
+        // (data.ts:594-609), before any picker list. Best-effort — an
+        // unreachable server simply never emits the event (the boot
+        // stays event-driven, the documented pre-snapshot behavior).
+        let active = client
+            .session()
+            .active()
+            .await
+            .map(|active| active.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        let _ = tx.send(ServerListEvent::ActiveSessions(active)).await;
         let config = client
             .config()
             .get(&oc_client::types::ConfigGetQuery { location: None })
@@ -9432,6 +9450,12 @@ pub async fn run_with_size(
                 ServerListEvent::References(references) => {
                     app.store.set_references(references);
                 }
+                ServerListEvent::ActiveSessions(ids) => {
+                    // The boot snapshot's running-set re-arm
+                    // (data.ts:594-609) — terminal-superseded ids are
+                    // filtered inside the index (hydration events won).
+                    app.store.hydrate_running_snapshot(ids);
+                }
             }
         }
         // G-06 — drain the migration watcher into the store.
@@ -13118,6 +13142,62 @@ mod core_interaction_tests {
             InterruptStep::Armed,
             "the expired arm restarts the cycle"
         );
+    }
+
+    /// The `/api/session/active` boot snapshot (data.ts:592-609): a
+    /// TUI booting into an ALREADY-RUNNING session (server restart /
+    /// reconnect — no `execution.started` ever arrives on this client)
+    /// re-arms the spinner + interrupt gate from the server's running
+    /// map. The session's frame must rest BUSY exactly as it does
+    /// under the event-driven arm; and a lifecycle event that landed
+    /// BEFORE the snapshot supersedes it (ref `activeUpdates`,
+    /// data.ts:600-609 — a terminal event deletes the id from the
+    /// snapshot, a `started` re-arm survives it).
+    #[test]
+    fn boot_snapshot_rearms_a_running_session() {
+        let app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+
+        // No snapshot, no event: idle (the documented pre-snapshot
+        // behavior — running is never derived from message shape).
+        assert!(!app.store.session_running("s1"));
+
+        // The boot fetch lands: the server says s1 is running.
+        app.store.hydrate_running_snapshot(vec!["s1".to_owned()]);
+        assert!(app.store.session_running("s1"), "the snapshot arms the gate");
+        // Field-level: the frame rests busy (spinner + interrupt hint).
+        let text = app.frame_text();
+        assert!(text.contains("esc interrupt"), "running hint: {text}");
+        // The interrupt binding accepts (the v2 `status() === "running"` gate).
+        assert_eq!(app.store.interrupt_pressed("s1", 0), InterruptStep::Armed);
+
+        // Supersede: a terminal event before the snapshot wins — the
+        // ended session rests idle even though the (stale) server map
+        // still lists it.
+        let app2 = App::new((80, 24));
+        app2.store.open_tab("s1", Some("S".to_owned()));
+        app2.store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+            "session.execution.started",
+            serde_json::json!({ "sessionID": "s1" }),
+        ))]);
+        app2.store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+            "session.execution.succeeded",
+            serde_json::json!({ "sessionID": "s1" }),
+        ))]);
+        app2.store.hydrate_running_snapshot(vec!["s1".to_owned()]);
+        assert!(
+            !app2.store.session_running("s1"),
+            "the terminal event supersedes the snapshot (data.ts:603-609)"
+        );
+
+        // And a `started` re-arm after the terminal mark survives a
+        // later snapshot (the updates map's LAST status wins).
+        app2.store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+            "session.execution.started",
+            serde_json::json!({ "sessionID": "s1" }),
+        ))]);
+        app2.store.hydrate_running_snapshot(Vec::<String>::new());
+        assert!(app2.store.session_running("s1"));
     }
 
     /// The interrupt hint renders in the composer's footer row while

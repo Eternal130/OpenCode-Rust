@@ -35,96 +35,96 @@ committed 未裁决>0 ⇒ exit 2；rec-* recorded-local 见其小节（advisory�
 
 | case | verdict | diff cells | first_diff | ref size | rust size | ref gaps | rust gaps | ref paths | rust paths |
 |---|---|---|---|---|---|---|---|---|---|
-| anim-spinner-running | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 28 | 17 |
-| anim-spinner-running@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 28 | 17 |
-| anim-spinner-running@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 28 | 17 |
-| anim-stream-delta | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 28 | 17 |
-| anim-stream-delta@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 28 | 17 |
-| anim-stream-delta@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 28 | 17 |
-| anim-stream-multi-part | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 28 | 17 |
-| anim-stream-multi-part@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 28 | 17 |
-| anim-stream-multi-part@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 28 | 17 |
-| anim-toast-window | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 28 | 17 |
-| anim-toast-window@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 28 | 17 |
-| anim-toast-window@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 28 | 17 |
-| anim-tool-progress | diverge | 60 | r7c5 ch ref='⋯' rust='⠋' | 80x24 | 80x24 | 0 | 0 | 28 | 17 |
-| anim-tool-progress@120x30 | diverge | 60 | r7c5 ch ref='⋯' rust='⠋' | 120x30 | 120x30 | 0 | 0 | 28 | 17 |
-| anim-tool-progress@320x80 | diverge | 60 | r7c5 ch ref='⋯' rust='⠋' | 320x80 | 320x80 | 0 | 0 | 28 | 17 |
-| command-palette | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
-| command-palette@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
-| command-palette@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
-| dialog-open-recent | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
-| dialog-open-recent@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
-| dialog-open-recent@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
-| dialog-status | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
-| dialog-status@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
-| dialog-status@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
-| fetch-503-model | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 20 | 14 |
-| fetch-503-model@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 20 | 14 |
-| fetch-503-model@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 20 | 14 |
-| home-empty | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 20 | 14 |
-| home-empty@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 20 | 14 |
-| home-empty@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 20 | 14 |
-| home-multi-session | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
-| home-multi-session@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
-| home-multi-session@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
-| models-dialog | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
-| models-dialog@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
-| models-dialog@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
-| plugin-boot-combo | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 20 | 16 |
-| plugin-boot-combo@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 20 | 16 |
-| plugin-boot-combo@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 20 | 16 |
-| plugin-boot-idle | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 20 | 16 |
-| plugin-boot-idle@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 20 | 16 |
-| plugin-boot-idle@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 20 | 16 |
-| plugin-boot-superpowers | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 20 | 14 |
-| plugin-boot-superpowers@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 20 | 14 |
-| plugin-boot-superpowers@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 20 | 14 |
-| plugin-fallback | diverge | 443 | r1c16 ch ref=' ' rust='┃' | 80x24 | 80x24 | 0 | 0 | 20 | 14 |
-| plugin-fallback@120x30 | diverge | 668 | r1c56 ch ref=' ' rust='┃' | 120x30 | 120x30 | 0 | 0 | 20 | 14 |
-| plugin-fallback@320x80 | diverge | 668 | r1c256 ch ref=' ' rust='┃' | 320x80 | 320x80 | 0 | 0 | 20 | 14 |
-| plugin-panel-open | diverge | 58 | r11c11 bg ref=[20, 20, 20] rust=[250, 178, 131] | 80x24 | 80x24 | 0 | 0 | 27 | 19 |
-| plugin-panel-open@120x30 | diverge | 58 | r13c31 bg ref=[20, 20, 20] rust=[250, 178, 131] | 120x30 | 120x30 | 0 | 0 | 27 | 19 |
-| plugin-panel-open@320x80 | diverge | 217 | r3c280 ch ref=' ' rust='▼' | 320x80 | 320x80 | 0 | 0 | 27 | 19 |
-| session-empty | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
-| session-empty@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
-| session-empty@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
-| session-markdown | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
-| session-markdown@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
-| session-markdown@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
-| session-multi-turn | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
-| session-multi-turn@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
-| session-multi-turn@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
-| session-reasoning | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
-| session-reasoning@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
-| session-reasoning@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
-| session-scroll | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
-| session-scroll@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
-| session-scroll@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
-| session-step-failed | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
-| session-step-failed@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
-| session-step-failed@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
-| session-stream-idle | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
-| session-stream-idle@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
-| session-stream-idle@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
-| session-tabs | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
-| session-tabs@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
-| session-tabs@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
-| session-text | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
-| session-text@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
-| session-text@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
-| session-tool-failed | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
-| session-tool-failed@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
-| session-tool-failed@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
-| session-tool-success | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
-| session-tool-success@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
-| session-tool-success@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
-| session-wrap | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
-| session-wrap@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
-| session-wrap@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
-| sidebar-toggle | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 17 |
-| sidebar-toggle@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 17 |
-| sidebar-toggle@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 17 |
+| anim-spinner-running | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 28 | 18 |
+| anim-spinner-running@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 28 | 18 |
+| anim-spinner-running@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 28 | 18 |
+| anim-stream-delta | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 28 | 18 |
+| anim-stream-delta@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 28 | 18 |
+| anim-stream-delta@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 28 | 18 |
+| anim-stream-multi-part | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 28 | 18 |
+| anim-stream-multi-part@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 28 | 18 |
+| anim-stream-multi-part@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 28 | 18 |
+| anim-toast-window | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 28 | 18 |
+| anim-toast-window@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 28 | 18 |
+| anim-toast-window@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 28 | 18 |
+| anim-tool-progress | diverge | 60 | r7c5 ch ref='⋯' rust='⠋' | 80x24 | 80x24 | 0 | 0 | 28 | 18 |
+| anim-tool-progress@120x30 | diverge | 60 | r7c5 ch ref='⋯' rust='⠋' | 120x30 | 120x30 | 0 | 0 | 28 | 18 |
+| anim-tool-progress@320x80 | diverge | 60 | r7c5 ch ref='⋯' rust='⠋' | 320x80 | 320x80 | 0 | 0 | 28 | 18 |
+| command-palette | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 18 |
+| command-palette@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 18 |
+| command-palette@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
+| dialog-open-recent | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 18 |
+| dialog-open-recent@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 18 |
+| dialog-open-recent@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
+| dialog-status | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 18 |
+| dialog-status@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 18 |
+| dialog-status@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
+| fetch-503-model | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 20 | 15 |
+| fetch-503-model@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 20 | 15 |
+| fetch-503-model@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 20 | 15 |
+| home-empty | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 20 | 15 |
+| home-empty@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 20 | 15 |
+| home-empty@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 20 | 15 |
+| home-multi-session | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 18 |
+| home-multi-session@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 18 |
+| home-multi-session@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
+| models-dialog | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 18 |
+| models-dialog@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 18 |
+| models-dialog@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
+| plugin-boot-combo | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 20 | 17 |
+| plugin-boot-combo@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 20 | 17 |
+| plugin-boot-combo@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 20 | 17 |
+| plugin-boot-idle | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 20 | 17 |
+| plugin-boot-idle@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 20 | 17 |
+| plugin-boot-idle@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 20 | 17 |
+| plugin-boot-superpowers | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 20 | 15 |
+| plugin-boot-superpowers@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 20 | 15 |
+| plugin-boot-superpowers@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 20 | 15 |
+| plugin-fallback | diverge | 443 | r1c16 ch ref=' ' rust='┃' | 80x24 | 80x24 | 0 | 0 | 20 | 15 |
+| plugin-fallback@120x30 | diverge | 668 | r1c56 ch ref=' ' rust='┃' | 120x30 | 120x30 | 0 | 0 | 20 | 15 |
+| plugin-fallback@320x80 | diverge | 668 | r1c256 ch ref=' ' rust='┃' | 320x80 | 320x80 | 0 | 0 | 20 | 15 |
+| plugin-panel-open | diverge | 58 | r11c11 bg ref=[20, 20, 20] rust=[250, 178, 131] | 80x24 | 80x24 | 0 | 0 | 27 | 20 |
+| plugin-panel-open@120x30 | diverge | 58 | r13c31 bg ref=[20, 20, 20] rust=[250, 178, 131] | 120x30 | 120x30 | 0 | 0 | 27 | 20 |
+| plugin-panel-open@320x80 | diverge | 217 | r3c280 ch ref=' ' rust='▼' | 320x80 | 320x80 | 0 | 0 | 27 | 20 |
+| session-empty | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 18 |
+| session-empty@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 18 |
+| session-empty@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
+| session-markdown | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 18 |
+| session-markdown@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 18 |
+| session-markdown@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
+| session-multi-turn | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 18 |
+| session-multi-turn@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 18 |
+| session-multi-turn@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
+| session-reasoning | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 18 |
+| session-reasoning@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 18 |
+| session-reasoning@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
+| session-scroll | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 18 |
+| session-scroll@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 18 |
+| session-scroll@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
+| session-step-failed | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 18 |
+| session-step-failed@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 18 |
+| session-step-failed@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
+| session-stream-idle | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 18 |
+| session-stream-idle@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 18 |
+| session-stream-idle@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
+| session-tabs | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 18 |
+| session-tabs@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 18 |
+| session-tabs@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
+| session-text | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 18 |
+| session-text@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 18 |
+| session-text@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
+| session-tool-failed | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 18 |
+| session-tool-failed@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 18 |
+| session-tool-failed@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
+| session-tool-success | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 18 |
+| session-tool-success@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 18 |
+| session-tool-success@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
+| session-wrap | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 18 |
+| session-wrap@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 18 |
+| session-wrap@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
+| sidebar-toggle | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 18 |
+| sidebar-toggle@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 18 |
+| sidebar-toggle@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
 
 ### first_diff 明细
 
@@ -239,7 +239,7 @@ anim 场景（`anim.ticks` 声明，SCHEMA A2 扩展）在静息排空后逐拍�
 
 | 维度 | 总量 | EXACT | STRUCTURAL | DIVERGE | 未裁决 |
 |---|---|---|---|---|---|
-| resting | 9 | 4 | 0 | 5 | 3 |
+| resting | 9 | 7 | 0 | 2 | 0 |
 
 ## 范围外声明
 
