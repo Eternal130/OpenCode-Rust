@@ -92,11 +92,6 @@ pub fn mount_live_tabs_bar(
             // item (the queue/steer registry) — an undelivered
             // prompt keeps the tab's spinner alive after
             // `execution.succeeded`.
-            // G-426④ — `status().busy` (context/session-tabs.tsx:
-            // 168-174): running OR a pending non-synthetic inbox
-            // item (the queue/steer registry) — an undelivered
-            // prompt keeps the tab's spinner alive after
-            // `execution.succeeded`.
             let busy = store.session_busy(&tab.session_id);
             let selected = Some(tab.session_id.as_str()) == active;
             let status = TabStatus {
@@ -199,10 +194,7 @@ pub fn mount_live_rail(
     let views: Vec<TabView> = ordered
         .iter()
         .map(|tab| {
-            // G-426④ — same `status().busy` as the strip (running OR
-            // pending non-synthetic inbox items, family-wide).
-            // G-426④ — same `status().busy` as the strip (running OR
-            // pending non-synthetic inbox items, family-wide).
+            // G-426④ — same `status().busy` as the strip.
             let busy = store.session_busy(&tab.session_id);
             let status = TabStatus {
                 unread: tabs.unread.get(&tab.session_id).copied(),

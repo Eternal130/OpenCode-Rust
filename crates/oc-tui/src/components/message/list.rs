@@ -291,10 +291,15 @@ pub fn render_transcript(
     // G-426③ — ref's reduce() source ordering (rows.ts:59-63 +
     // 374-377): `delivery === "queue"` user rows leave the transcript
     // (the QueuedPromptDock owns them); the remaining INPUT rows
-    // (pending inbox items) relocate to the TAIL, after non-pending
-    // messages and running compactions. No-op when the registry is
-    // empty (fixtures/goldens).
-    let ordered: Vec<Message> = if options.pending_deliveries.is_empty() {
+    // (pending inbox items — DELIVERY-INDEPENDENT, rows.ts:57-58's
+    // `input.list` is the registry minus compactions) relocate to the
+    // TAIL, after non-pending messages and running compactions. The
+    // gate is the pending registry itself (both faces), not the
+    // delivery map — a delivery-less pending set still reorders.
+    // No-op when the registry is empty (fixtures/goldens).
+    let ordered: Vec<Message> = if options.inputs.is_empty()
+        && options.pending_deliveries.is_empty()
+    {
         messages.to_vec()
     } else {
         let queued = |message: &Message| {
