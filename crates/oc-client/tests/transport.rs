@@ -566,3 +566,34 @@ async fn session_list_cursor_query_roundtrip() {
     assert!(request.contains("search=term+with+space"), "{request}");
     assert!(request.contains("parentID=null"), "{request}");
 }
+
+/// G-423 lane, final-review Important #1 — `execute_json` runs two
+/// code paths: recording armed (`TUI_RECORD_DIR` semantics — the body
+/// is parsed into a `serde_json::Value` for the recorder, then
+/// `from_value` into `T`) and recording off (a single `from_str::<T>`
+/// parse, no Value round trip). The SAME response must decode to the
+/// SAME result on both paths.
+#[tokio::test]
+async fn execute_json_recording_on_and_off_decode_identically() {
+    let body = r#"{"version":"2.0.24","pid":1,"urls":["http://x"],"paths":{"tmp":"/tmp"}}"#;
+
+    // Recording OFF: the disabled fast path (reset first — the recorder
+    // is process-global and nextest runs each test in its own process,
+    // so this pins the branch deterministically).
+    oc_util::recorder::reset_for_tests();
+    assert!(!oc_util::recorder::enabled());
+    let mock = spawn_mock(|_, _, stream| stream.write_all(&json_response(200, body)));
+    let plain = client(&mock.url()).server().info().await.expect("decode (recording off)");
+
+    // Recording ON: same response through the Value round trip.
+    let dir = std::env::temp_dir().join(format!("oc-client-rec-eq-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("recording dir");
+    oc_util::recorder::init_for_tests(&dir, false);
+    assert!(oc_util::recorder::enabled());
+    let mock = spawn_mock(|_, _, stream| stream.write_all(&json_response(200, body)));
+    let recorded = client(&mock.url()).server().info().await.expect("decode (recording on)");
+    // Restore the disabled fast path for any later use of this process.
+    oc_util::recorder::reset_for_tests();
+
+    assert_eq!(plain, recorded, "both paths decode the same response identically");
+}

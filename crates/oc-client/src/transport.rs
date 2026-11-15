@@ -312,17 +312,30 @@ impl Client {
         match self.classify(call).await? {
             Ok(response) => {
                 let status = response.status().as_u16();
-                let body = Self::json_body::<serde_json::Value>(response).await;
-                // diff-ext C1 — record the fetch response (endpoint +
-                // status + body, message-content-redacted by default;
-                // env-gated no-op without TUI_RECORD_DIR).
-                if let (Some(Some(path)), Ok(value)) = (&record_path, &body) {
-                    oc_util::recorder::fetch(call.method.as_str(), path, status, value);
+                if let Some(path) = record_path.flatten() {
+                    // Recording branch (TUI_RECORD_DIR): parse the body
+                    // once into a Value for the recorder (diff-ext C1 —
+                    // endpoint + status + body, message-content-redacted
+                    // by default), then `from_value` into T. The double
+                    // parse is only paid here.
+                    let body = Self::json_body::<serde_json::Value>(response).await;
+                    if let Ok(value) = &body {
+                        oc_util::recorder::fetch(call.method.as_str(), &path, status, value);
+                    }
+                    body.and_then(|value| {
+                        serde_json::from_value(value)
+                            .map_err(|e| ClientError::MalformedResponse(e.to_string()))
+                    })
+                } else {
+                    // Non-recording path (the default): parse the body
+                    // ONCE, directly into T — no serde_json::Value round
+                    // trip (final-review Important #1). `MalformedResponse`
+                    // keeps its shape; only its message text differs from
+                    // the recording branch (`from_str` carries line/column,
+                    // `from_value` does not) — no consumer matches on that
+                    // text, so the difference is acceptable.
+                    Self::json_body::<T>(response).await
                 }
-                body.and_then(|value| {
-                    serde_json::from_value(value)
-                        .map_err(|e| ClientError::MalformedResponse(e.to_string()))
-                })
             }
             Err(response) => Err(Self::decode_error(response).await),
         }
