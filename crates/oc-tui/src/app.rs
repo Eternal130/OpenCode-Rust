@@ -1650,8 +1650,12 @@ impl App {
         let width = usize::from(self.size.0);
         let message_width = crate::wrap::display_width(&toast.message);
         let title_width = toast.title.as_deref().map_or(0, crate::wrap::display_width);
-        let (left, panel_width, top) =
-            crate::components::toast::toast_geometry(message_width, title_width, width);
+        let (left, panel_width, top) = crate::components::toast::toast_geometry(
+            message_width,
+            title_width,
+            crate::components::toast::affordance_text_width(toast),
+            width,
+        );
         let rows = crate::components::toast::panel_rows_public(toast);
         Some((left, top, panel_width, rows))
     }

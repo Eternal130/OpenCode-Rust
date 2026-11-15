@@ -285,16 +285,26 @@ fn pty_km_toast_action_and_home_chip() {
         // above the footer; give it a beat before the chip check.
         wait_row(&driver, "MCP server failed: broken", Duration::from_secs(8))
             .ok_or_else(|| "the MCP failure toast never rendered".to_owned())?;
+        // G-424: the action toast's title row right-aligns the
+        // `› Open MCP servers` affordance (ui/toast.tsx:75-81) — the
+        // wide panel's live pin (the dismiss `x` is the degenerate).
+        wait_row(&driver, "› Open MCP servers", Duration::from_secs(3))
+            .ok_or_else(|| "the toast affordance never rendered".to_owned())?;
         driver.write(b"\x1b");
         // The home footer's failure cell: `1 MCP failed` + `/mcps`.
         let chip_row = wait_row(&driver, "1 MCP failed", Duration::from_secs(3))
             .ok_or_else(|| "the home MCP chip never rendered".to_owned())?;
         // Release on the cell (col 2, the `⊙ ` dot): mcp.list again.
         driver.sgr_release(3, u16::try_from(chip_row).unwrap_or(u16::MAX));
-        wait_row(&driver, "MCP servers", Duration::from_secs(3))
+        // The dialog's own rows — NOT the "MCP servers" title: the
+        // action toast's affordance keeps that substring on screen
+        // until it expires (G-424's `› Open MCP servers`), so the
+        // status footer of the connected server is the dialog-unique
+        // marker.
+        wait_row(&driver, "Connected ✓", Duration::from_secs(3))
             .ok_or_else(|| "the chip release never opened the MCP dialog".to_owned())?;
         driver.write(b"\x1b");
-        if !wait_row_gone(&driver, "MCP servers", Duration::from_secs(3)) {
+        if !wait_row_gone(&driver, "Connected ✓", Duration::from_secs(3)) {
             return Err("escape never closed the chip-opened MCP dialog".to_owned());
         }
         let from = driver.raw_len();

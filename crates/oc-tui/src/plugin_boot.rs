@@ -335,12 +335,11 @@ impl TuiPluginRuntime {
     /// `target`), matching the ref toast title's target.
     pub fn surface_boot_failures(&self, store: &Store) {
         let host = &self.booted.host;
-        let mut failures: Vec<String> =
-            self.booted.resolution.failures.iter().map(|(target, _)| target.clone()).collect();
+        let mut failures: Vec<(String, String)> = self.booted.resolution.failures.clone();
         if host.enabled() {
             let snapshot = host.registrations();
             for status in &snapshot.plugins {
-                if let oc_plugin_host::PluginState::Failed(_) = &status.state {
+                if let oc_plugin_host::PluginState::Failed(error) = &status.state {
                     let target = match self
                         .booted
                         .resolution
@@ -351,12 +350,16 @@ impl TuiPluginRuntime {
                         Some(plugin) => plugin.target.clone(),
                         None => status.entry.display().to_string(),
                     };
-                    failures.push(target);
+                    failures.push((target, error.clone()));
                 }
             }
         }
         store.set_plugins_failed(failures.len());
-        for target in &failures {
+        // G-425: the failure rows also feed the /plugins dialog's
+        // option table (the ref's failed `plugins.list()` entries,
+        // context.tsx:460-484 → plugins.tsx:54-76).
+        store.set_plugin_boot_failures(failures.clone());
+        for (target, _error) in &failures {
             store.toast_show(crate::components::toast::ToastOptions {
                 title: Some(format!("Plugin failed: {target}")),
                 message: "Run /plugins to view details.".to_owned(),

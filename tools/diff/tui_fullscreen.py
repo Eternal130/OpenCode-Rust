@@ -886,22 +886,33 @@ CAUSES = [
         ),
     ),
     (
-        "G-424 rust toast 动作 affordance 恒 'x'（ref '› {label}' + 宽面板）",
-        lambda d: str(d.get("id", "")).startswith("anim-toast-")
-        and d.get("dimension") in ("frames", "resting", None),
+        # RETIRED (gap-burndown-16 W2, 2026-11-15): the G-424 fix landed
+        # (toast_geometry affordance width + toast_tree_units/right_rail_
+        # cell/app hit-rect); anim-toast-* three tiers are exact in both
+        # resting and frames dimensions — 0 hits, cluster removed.
+        "G-424b toast 长标题折行未移植（rust 单行截断 vs ref 标题 shrink+wrap）",
+        lambda d: str(d.get("id", "")).startswith("plugin-fallback")
+        and d.get("dimension", "resting") == "resting"
+        and d.get("verdict") == "diverge"
+        and (d.get("first_diff") or {}).get("field") == "ch"
+        and 1 <= ((d.get("first_diff") or {}).get("row") or 0) <= 6,
         (
-            "anim-toast-* 场景：带 action 的 toast（MCP 失败 → 'Open MCP "
-            "servers'）——ref 标题行右对齐渲染动作 affordance '› {label}' 且"
-            "面板宽度计入该 run（title+marginLeft2+affordance）；rust 恒渲染"
-            "dismiss 'x'、面板按 title+3 计宽（窄 17 列）。A2 静息/帧序列维度"
-            "新发现的渲染语义差，登记（G-424）不拦。修复面：toast_geometry/"
-            "toast_tree_units/right_rail_cell/app 指针 hit-rect 四处联动，且"
-            "钉住 tree-scenario 冻结 oracle（tools/parity/tree-scenarios）与"
-            "pty_lane_km 活体用例——超出 A2 harness 范围，留专用 lane 落地",
-            "ref packages/tui/src/ui/toast.tsx:75-103（affordance() = action ? "
-            "`› ${label}` : \"x\"，flexShrink=0 右对齐进面板宽度）",
-            "rust crates/oc-tui/src/components/toast_solid.rs:75-89（恒 "
-            "\"  x\" 两 pad + 'x'）、toast.rs:180-186（title+3 计宽）",
+            "plugin-fallback 场景（G-425 管理屏失败行修复后的实际残余形状，"
+            "收窄自原 G-425 簇的 plugin-fallback* 前缀）：失败 toast 的长标题"
+            "（'Plugin failed: <config target>'，>60 列）——ref 的标题 text 无 "
+            "wrapMode=none（默认 wrap），在 maxWidth=min(60, w-6) 的盒子内"
+            "shrink+折行（登记册记录的'长标题三行折行'），面板行数随折行增长；"
+            "rust toast_tree_units 的标题 run 恒 wrapMode=none 单行、在右轨处"
+            "截断、panel_rows 恒 5——首个分歧恒为 toast 带（row 1..6）内 ref "
+            "' ' vs rust '┃' 的面板几何差。G-424 的 affordance 宽度语义本轮"
+            "已对齐（anim-toast-* 三档 exact）；本簇=G-424 家族的标题折行残"
+            "余子项，登记不拦",
+            "ref packages/tui/src/ui/toast.tsx:84-91（title text 默认 wrap，"
+            "无 wrapMode=none——对比 affordance :77 显式 none）+ maxWidth 钳制 "
+            ":52-53",
+            "rust crates/oc-tui/src/components/toast_solid.rs toast_tree_units"
+            "（标题 chrome_cluster_units wrapMode=none 单行）+ toast.rs "
+            "panel_rows（恒 5）",
         ),
     ),
     (
@@ -1004,24 +1015,23 @@ CAUSES = [
         ),
     ),
     (
-        "G-425 插件失败态管理屏不列失败入口（/plugins 对话框源表缺失）",
-        lambda d: str(d.get("id", "")).startswith("plugin-fallback"),
+        # RETIRED (gap-burndown-16 W2, 2026-11-15): G-425 fixed — the
+        # /plugins dialog now lists the boot-failure rows (store
+        # plugin_boot_failures ← surface_boot_failures, footer
+        # "failed, local" + "enter view error" hint + error-details
+        # submit). The plugin-fallback residual is NOT this cluster's
+        # shape anymore — it moved to the narrowed G-424b toast
+        # title-wrap cluster above. Original prefix matcher removed
+        # per B2 review Important (plugin-fallback* swallowed every
+        # divergence in the scenario).
+        "G-425 插件失败态管理屏不列失败入口（已修复——零命中保留注释）",
+        lambda d: False,
         (
-            "plugin-fallback 场景（故意坏载荷双侧落失败态）：ref 的失败面三件套="
-            "错误 toast（'Plugin failed: <target>' + 'Run /plugins to view "
-            "details.' + '› Open plugins' affordance）+ footer chip（'⊙ 1 plugin "
-            "failed /plugins'）+ /plugins 管理屏**列出失败入口行**（'x <path> "
-            "failed, local' + 'enter view error' 提示）。rust 已对齐 toast+chip"
-            "（B2-fix surface_boot_failures：解析失败与 guest 装载失败双源）；"
-            "**管理屏的失败行列表未移植**（command_palette.rs 的 DialogKind::"
-            "Plugins 仅从命令/首页动作注册投影派生 id 集，装载失败入口不入表 → "
-            "'No items available'）——立项 G-425 登记不拦（含 toast affordance "
-            "格差=G-424 族共现形状，其修复 lane 连同 oracle 重冻结一并落地）",
-            "ref packages/tui/src/plugin/context.tsx:460-484（失败态列表+toast）+ "
-            "feature-plugins/system/plugins.tsx:54-76（源表 TUI/server 双段+状态行）",
-            "rust crates/oc-tui/src/plugin_boot.rs surface_boot_failures（B2-fix："
-            "chip+toast 已对齐）+ components/command_palette.rs:1537-1560"
-            "（DialogKind::Plugins 有界 id 集投影——失败入口缺失=修 G-425 的面）",
+            "（已关闭）plugin-fallback 场景的残余归 G-424b toast 长标题折行簇",
+            "ref packages/tui/src/plugin/context.tsx:460-484 + "
+            "feature-plugins/system/plugins.tsx:54-76",
+            "rust crates/oc-tui/src/plugin_boot.rs surface_boot_failures + "
+            "components/command_palette.rs DialogKind::Plugins（本轮修复）",
         ),
     ),
     (
