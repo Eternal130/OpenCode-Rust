@@ -668,6 +668,15 @@ pub struct FakeLlm {
     pub interrupt_posts: Arc<Mutex<Vec<String>>>,
     /// SSE script played once, after the first prompt POST.
     script: Arc<Mutex<Option<Vec<ScriptEvent>>>>,
+    /// W5 — the real-contract inbox delivery feed: every prompt POST
+    /// handler pushes one `session.inbox.delivered` bus-event body
+    /// here (same inboxID as the response echo), and the SSE feed
+    /// broadcasts it alongside the script. The recorded server
+    /// contract (corpus): the response echoes the REQUEST body's id
+    /// and the feed fires `delivered` — without it the client-minted
+    /// pending row never clears, `session_busy` stays armed and the
+    /// tab spinner pegs the render pump (the CI 3/3 walk failure).
+    pub delivered_feed: Arc<Mutex<Vec<String>>>,
     /// Lane E2's boot stretch: every request handled before this
     /// deadline sleeps until it passes before its first response
     /// byte — a deterministic "slow server at boot" for the
@@ -699,9 +708,11 @@ impl FakeLlm {
         let projects: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let terminals = Arc::new(TerminalFixture::new());
         let script: Arc<Mutex<Option<Vec<ScriptEvent>>>> = Arc::new(Mutex::new(None));
+        let delivered_feed: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let boot_stretch_until: Arc<Mutex<Option<std::time::Instant>>> = Arc::new(Mutex::new(None));
         let flag = Arc::clone(&shutdown);
         let shared_script = Arc::clone(&script);
+        let shared_delivered = Arc::clone(&delivered_feed);
         let shared_boot_stretch = Arc::clone(&boot_stretch_until);
         let shared_posts = Arc::clone(&prompt_posts);
         let shared_vcs = Arc::clone(&vcs);
@@ -725,6 +736,7 @@ impl FakeLlm {
                     Ok((socket, _)) => {
                         let sessions = sessions.clone();
                         let script = Arc::clone(&shared_script);
+                        let delivered = Arc::clone(&shared_delivered);
                         let boot_stretch = Arc::clone(&shared_boot_stretch);
                         let posts = Arc::clone(&shared_posts);
                         let vcs = Arc::clone(&shared_vcs);
@@ -746,6 +758,7 @@ impl FakeLlm {
                                 socket,
                                 &sessions,
                                 &script,
+                                &delivered,
                                 &boot_stretch,
                                 &posts,
                                 &vcs,
@@ -791,6 +804,7 @@ impl FakeLlm {
             projects,
             terminals,
             script,
+            delivered_feed,
             boot_stretch_until,
         }
     }
@@ -881,6 +895,7 @@ fn handle(
     mut socket: std::net::TcpStream,
     sessions: &[FakeSession],
     script: &Arc<Mutex<Option<Vec<ScriptEvent>>>>,
+    delivered_feed: &Arc<Mutex<Vec<String>>>,
     boot_stretch_until: &Arc<Mutex<Option<std::time::Instant>>>,
     prompt_posts: &Arc<AtomicUsize>,
     vcs: &Arc<AtomicBool>,
@@ -1075,6 +1090,90 @@ fn handle(
         let _ = socket.write_all(response);
         return;
     }
+    // W5 — the real-contract prompt arm (the recorded server corpus,
+    // not a static echo): read the REQUEST body, answer an
+    // `Envelope<SessionInboxUser>` that echoes the request's CLIENT
+    // id + text + the path's sessionID (`payload.text` stays required
+    // — a decode failure would toast SendFailed), and push a
+    // `session.inbox.delivered` event onto the SSE feed with the SAME
+    // inboxID. Without the delivered frame the optimistic admit's
+    // pending row never clears (busy = pending ∨ running), the tab
+    // spinner pegs the 100 ms render pump, and on a ~2.2x-slower CI
+    // runner the composer walk's step windows saturate (run
+    // 43708446481: local 2.7 s vs CI ~6 s).
+    if method == "POST" && path.starts_with("/api/session/") && path.ends_with("/prompt") {
+        prompt_posts.fetch_add(1, Ordering::SeqCst);
+        let content_length = head
+            .split("\r\n")
+            .find_map(|line| {
+                line.strip_prefix("content-length:")
+                    .or_else(|| line.strip_prefix("Content-Length:"))
+            })
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        let mut body_bytes = Vec::new();
+        // The head read may have swallowed body bytes already (the
+        // first socket read can carry head + body together).
+        let split = head.find("\r\n\r\n").map_or(0, |at| at + 4);
+        body_bytes.extend_from_slice(&head.as_bytes()[split.min(head.len())..]);
+        while body_bytes.len() < content_length {
+            let mut chunk = [0u8; 1024];
+            match socket.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(count) => body_bytes.extend_from_slice(&chunk[..count]),
+            }
+        }
+        let parsed: Option<serde_json::Value> = serde_json::from_slice(&body_bytes).ok();
+        // The client mints the inbox id (optimistic admit) and sends
+        // it on the body — echo it verbatim; the fallbacks keep the
+        // old decodable shape for malformed bodies.
+        let inbox_id = parsed
+            .as_ref()
+            .and_then(|value| value.get("id"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("msg_user_1")
+            .to_owned();
+        let text = parsed
+            .as_ref()
+            .and_then(|value| value.get("text"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("count slowly")
+            .to_owned();
+        let session_id =
+            path.trim_end_matches("/prompt").rsplit('/').next().unwrap_or("ses_alpha").to_owned();
+        // The delivered frame rides the SSE feed at the same moment
+        // the response goes out (the real server's contract).
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(1_000_000, |since| u64::try_from(since.as_millis()).unwrap_or(1_000_000));
+        let evt = format!("evt_delivered_{}", prompt_posts.load(Ordering::SeqCst));
+        delivered_feed.lock().expect("delivered feed").push(
+            serde_json::json!({
+                "id": evt,
+                "created": now_ms,
+                "type": "session.inbox.delivered",
+                "data": { "sessionID": session_id, "inboxID": inbox_id },
+            })
+            .to_string(),
+        );
+        let body = serde_json::json!({
+            "data": {
+                "delivery": "queue",
+                "id": inbox_id,
+                "payload": { "text": text },
+                "sessionID": session_id,
+                "time": { "created": 0 },
+                "type": "user",
+            }
+        })
+        .to_string();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = socket.write_all(response.as_bytes());
+        return;
+    }
     if std::env::var("DBG_FAKE_LOG").is_ok() || std::env::var("DBG_FAKE_LOG2").is_ok() {
         eprintln!("DBG fake: {method} {path}");
     }
@@ -1144,6 +1243,26 @@ fn handle(
         }
         let script = script.lock().expect("script").clone().unwrap_or_default();
         let mut anchor = std::time::Instant::now();
+        // W5 — the prompt POST's `session.inbox.delivered` frame goes
+        // out BEFORE the script (the POST handler pushes it in the
+        // same breath as the response; the grace bounds a late or
+        // reconnecting feed whose queue was already drained).
+        let delivered_deadline = anchor + Duration::from_millis(500);
+        loop {
+            let frames: Vec<String> =
+                delivered_feed.lock().expect("delivered feed").drain(..).collect();
+            for body in &frames {
+                let encoded = serde_json_json_string(body);
+                let frame = format!("data: {encoded}\n\n");
+                if socket.write_all(frame.as_bytes()).is_err() {
+                    return;
+                }
+            }
+            if !frames.is_empty() || std::time::Instant::now() >= delivered_deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
         for event in &script {
             let target = anchor + Duration::from_millis(event.delay_ms);
             while std::time::Instant::now() < target {
@@ -1158,17 +1277,31 @@ fn handle(
                 return;
             }
         }
-        // Script done: park until the peer closes.
+        // Script done: park until the peer closes — waking every
+        // 200 ms to relay any LATER delivered frames (a second prompt
+        // POST pushes onto the same feed).
+        socket.set_read_timeout(Some(Duration::from_millis(200))).ok();
         let mut sink = [0u8; 256];
         loop {
             match socket.read(&mut sink) {
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        || error.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    let frames: Vec<String> =
+                        delivered_feed.lock().expect("delivered feed").drain(..).collect();
+                    for body in &frames {
+                        let encoded = serde_json_json_string(body);
+                        let frame = format!("data: {encoded}\n\n");
+                        if socket.write_all(frame.as_bytes()).is_err() {
+                            return;
+                        }
+                    }
+                }
                 Ok(0) | Err(_) => return,
                 Ok(_) => {}
             }
         }
-    }
-    if path.ends_with("/prompt") {
-        prompt_posts.fetch_add(1, Ordering::SeqCst);
     }
     // integration.connect.key (lane FINAL): a 204 No Content — the
     // client's execute_empty contract.
@@ -1271,11 +1404,6 @@ fn handle(
     {
         // integration.get (the connected toast's name lookup).
         r#"{"data":{"id":"anthropic","name":"Anthropic","methods":[{"type":"key","label":"API key"}],"connections":[]},"location":{"directory":"/tmp"}}"#.to_owned()
-    } else if path.starts_with("/api/session/") && path.ends_with("/prompt") {
-        // session.prompt response: decodable Envelope<SessionInboxUser>
-        // (a decode failure would toast SendFailed and pollute the
-        // temporal observations; `payload.text` is required).
-        r#"{"data":{"delivery":"queue","id":"msg_user_1","payload":{"text":"count slowly"},"sessionID":"ses_alpha","time":{"created":0},"type":"user"}}"#.to_owned()
     } else if path.starts_with("/api/session/") {
         // message.list for the opened tabs: empty transcript.
         r#"{"cursor":{},"data":[]}"#.to_owned()
@@ -1999,5 +2127,126 @@ mod ws_probe_tests {
             let _ = write!(out, "{byte:02x}");
         }
         out
+    }
+}
+
+/// W5 — the `FakeLlm` prompt contract (the recorded server corpus, NOT
+/// the old static `msg_user_1` echo): the /prompt response echoes the
+/// REQUEST body's client-minted id + text + the path's sessionID, and
+/// the SSE feed fires `session.inbox.delivered` with the SAME
+/// inboxID — which is exactly what clears the optimistic admit's
+/// pending row (`session_busy` → false; busy = pending ∨ running).
+#[cfg(test)]
+mod fake_llm_contract_tests {
+    use super::*;
+
+    /// Read from `stream` until `needle` arrives (deadline-bounded).
+    fn read_until(stream: &mut std::net::TcpStream, needle: &[u8], what: &str) -> Vec<u8> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut seen = Vec::new();
+        let mut chunk = [0u8; 4096];
+        while std::time::Instant::now() < deadline {
+            match stream.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(count) => {
+                    seen.extend_from_slice(&chunk[..count]);
+                    if seen.windows(needle.len()).any(|w| w == needle) {
+                        return seen;
+                    }
+                }
+            }
+        }
+        panic!("the fake server never sent {what}: {} bytes seen", seen.len());
+    }
+
+    #[test]
+    fn prompt_echoes_request_id_and_feed_delivers_clearing_pending() {
+        let fake = FakeLlm::spawn(Vec::new());
+        let addr = fake.url.trim_start_matches("http://").to_owned();
+
+        // 1. Open the SSE feed FIRST (the client's boot order) and
+        // consume the response head + the `server.connected` frame.
+        let sse = std::net::TcpStream::connect(&addr).expect("sse connect");
+        let mut sse_writer = sse.try_clone().expect("sse clone");
+        let mut sse_reader = sse;
+        sse_reader.set_read_timeout(Some(Duration::from_millis(200))).ok();
+        sse_writer.write_all(b"GET /api/event HTTP/1.1\r\nhost: t\r\n\r\n").expect("sse request");
+        let _handshake = read_until(&mut sse_reader, b"server.connected", "the SSE handshake");
+
+        // 2. POST the prompt with a CLIENT-minted id.
+        let post = std::net::TcpStream::connect(&addr).expect("post connect");
+        let mut post_writer = post.try_clone().expect("post clone");
+        let mut post_reader = post;
+        post_reader.set_read_timeout(Some(Duration::from_millis(200))).ok();
+        let body = r#"{"id":"cli_minted_9","text":"contract probe","delivery":"queue"}"#;
+        let request = format!(
+            "POST /api/session/ses_alpha/prompt HTTP/1.1\r\nhost: t\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        post_writer.write_all(request.as_bytes()).expect("post request");
+        let response = read_until(&mut post_reader, b"\"type\":\"user\"}}", "the prompt response");
+        let response = String::from_utf8_lossy(&response).to_string();
+        assert!(
+            response.contains(r#""id":"cli_minted_9""#),
+            "the response echoes the REQUEST id: {response}"
+        );
+        assert!(
+            response.contains("contract probe"),
+            "the response echoes the request text: {response}"
+        );
+        assert!(
+            response.contains(r#""sessionID":"ses_alpha""#),
+            "the response echoes the path's sessionID: {response}"
+        );
+
+        // 3. The feed fires `session.inbox.delivered` with the SAME
+        // inboxID (the SSE double-decode layer: `data:` carries a
+        // JSON-encoded string whose contents are the bus event).
+        let feed = read_until(&mut sse_reader, b"session.inbox.delivered", "the delivered frame");
+        let mut delivered = None;
+        for line in String::from_utf8_lossy(&feed).lines() {
+            let Some(payload) = line.trim().strip_prefix("data: ") else { continue };
+            let Ok(encoded) = serde_json::from_str::<String>(payload) else { continue };
+            let Ok(event) = serde_json::from_str::<serde_json::Value>(&encoded) else { continue };
+            if event.get("type").and_then(serde_json::Value::as_str)
+                == Some("session.inbox.delivered")
+            {
+                delivered = event.get("data").cloned();
+            }
+        }
+        let delivered = delivered.expect("a delivered event object");
+        assert_eq!(
+            delivered.get("inboxID").and_then(serde_json::Value::as_str),
+            Some("cli_minted_9"),
+            "the delivered inboxID matches the echoed request id: {delivered}"
+        );
+        assert_eq!(
+            delivered.get("sessionID").and_then(serde_json::Value::as_str),
+            Some("ses_alpha")
+        );
+
+        // 4. The delivered frame clears the pending row — busy flips
+        // false (busy = pending ∨ running; no pending, not running).
+        let store = oc_tui::store::Store::new(oc_tui::reactive::Runtime::new());
+        store.open_tab("ses_alpha", None);
+        store.ingest_all([oc_tui::data::Ingest::Event(oc_tui::data::BusEvent::new(
+            "session.inbox.enqueued",
+            serde_json::json!({
+                "sessionID": "ses_alpha",
+                "inboxID": "cli_minted_9",
+                "item": { "type": "user", "payload": { "text": "contract probe" } },
+            }),
+        ))]);
+        assert!(store.session_busy("ses_alpha"), "an undelivered pending row arms the spinner");
+        store.ingest_all([oc_tui::data::Ingest::Event(oc_tui::data::BusEvent::new(
+            "session.inbox.delivered",
+            delivered,
+        ))]);
+        assert!(
+            !store.session_busy("ses_alpha"),
+            "the delivered frame clears the pending row (busy rests)"
+        );
+
+        fake.stop();
     }
 }

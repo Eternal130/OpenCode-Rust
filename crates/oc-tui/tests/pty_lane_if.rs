@@ -183,8 +183,10 @@ fn pty_wheel_scrolls_the_transcript_half_a_page() {
         // rows relocate to the transcript TAIL (rows.ts:374-377) —
         // here that is the client-minted "spin the wheel" row plus
         // the script's `msg_user_1` echo ("list the lines"; the
-        // FakeLlm script models no `session.inbox.delivered`, so
-        // both stay pending — the ref-faithful resting shape).
+        // FakeLlm feed now delivers the CLIENT row — W5's real
+        // contract — but this script's `msg_user_1` row models no
+        // `session.inbox.delivered`, so it stays pending at the
+        // tail).
         let pending_text_on_screen = |driver: &HarnessHandle| {
             (0..30).any(|row| driver.grid_now().row_text(row).contains("list the lines"))
         };

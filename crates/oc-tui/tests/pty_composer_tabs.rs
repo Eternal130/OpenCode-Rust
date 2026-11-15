@@ -200,12 +200,17 @@ fn composer_tabs_walk() {
             wait_row(h, "No active subagents", Duration::from_secs(4))
                 .ok_or_else(|| "the ring never wrapped to Subagents".to_owned())?;
 
-            // ← Terminals, ← Shell: both directions cycle.
+            // ← Terminals, ← Shell: both directions cycle. The wait
+            // windows here are 6 s (not the 4 s of the newer steps):
+            // CI's runner is ~2.2x slower than local (run 43708446481:
+            // local 2.7 s vs CI ~6 s for this walk) and this leg — the
+            // ← back to Shell waiting on the "output return" hint — is
+            // the one that saturated there 3/3 while green locally.
             h.write(b"\x1b[D");
-            wait_row(h, "+ New terminal", Duration::from_secs(4))
+            wait_row(h, "+ New terminal", Duration::from_secs(6))
                 .ok_or_else(|| "← never returned to Terminals".to_owned())?;
             h.write(b"\x1b[D");
-            wait_row(h, "output return", Duration::from_secs(4))
+            wait_row(h, "output return", Duration::from_secs(6))
                 .ok_or_else(|| "← never returned to Shell".to_owned())?;
 
             // return — the shell output viewer (shell-tab.tsx:29-32):
