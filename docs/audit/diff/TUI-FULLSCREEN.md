@@ -234,18 +234,6 @@ anim 场景（`anim.ticks` 声明，SCHEMA A2 扩展）在静息排空后逐拍�
 - `anim-tool-progress@120x30`  — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
 - `anim-tool-progress@320x80`  — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
 
-## recorded-local（真实语料，聚合计数 — advisory）
-
-本地真实会话语料（`tools/diff/corpus/tui/recorded-local/`，git-ignored；
-隐私铁律：报告只列聚合计数，不引用录制内容原文，分歧明细表亦不展开）。
-**门语义（控制者裁定 2026-11-15）：本节未裁决=advisory——不参与 gate exit
-（日常录制常驻未裁决项，committed 绿才是门绿）；rec-* 的 infra 失败仍=exit 1
-（重放机制坏了）；未裁决项为 C 线后续 root-cause 输入（G-426/G-427 等）。**
-
-| 维度 | 总量 | EXACT | STRUCTURAL | DIVERGE | 未裁决 |
-|---|---|---|---|---|---|
-| resting | 9 | 3 | 0 | 6 | 6 |
-
 ## 范围外声明
 
 - /opt/opentui-rust 127 场景 = 框架层（OpenTUI 渲染器）边界，本通道只测 oc-tui 应用层，
