@@ -119,3 +119,16 @@ Installed binaries can update themselves: `opencode-rust upgrade` checks the [re
 应用本体是纯 Rust 单二进制（约 44 MB，空闲内存约 80 MB）；Bun 仅在配置了插件或 MCP 服务器时作为子进程拉起（有旗舰插件满载时约 210 MB，无插件则完全不启动）。
 
 协议：MIT（与上游一致）。详见上方英文部分。
+
+## Development
+
+### Commit identity (hard gate)
+
+All commits are authored and committed as `Eternal130 <Eternal130@outlook.com>`
+(repo discipline; agent/subagent shells sometimes attach ad-hoc identities).
+`.git/hooks/pre-commit` enforces it via `git var` — if it rejects you:
+
+    git -c user.name=Eternal130 -c user.email=Eternal130@outlook.com commit ...
+
+Re-install the hook on a fresh clone with the snippet in
+`tools/git-identity-hook.sh` (tracked copy).
