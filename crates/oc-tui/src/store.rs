@@ -1558,6 +1558,17 @@ pub struct Store {
     /// reopens either kind.
     snapshot_authoritative:
         std::cell::RefCell<std::collections::HashMap<String, std::collections::HashSet<String>>>,
+    /// G-423 — the announced text-ordinal frontier per assistant
+    /// message (`session` → `messageID` → ordinal count): ref's
+    /// transcript rows for text parts are EVENT-created (rows.ts
+    /// `appendPart` on `session.text.delta`/`ended`, keyed by the
+    /// event ordinal, non-blank payloads only) and resolve
+    /// positionally at render. Messages that arrive fully-formed
+    /// (fetch snapshot / `message.updated`) have every ordinal
+    /// announced (their entries are absent here).
+    text_announced: std::cell::RefCell<
+        std::collections::HashMap<String, std::collections::HashMap<String, usize>>,
+    >,
     /// G-271① — the staged `session-terminal-selection` writes
     /// (last-wins per session); the run loop's drain persists the
     /// batch once per pass (the model-ring dirty pattern — the pick
@@ -4141,6 +4152,7 @@ impl Store {
             terminal_sink: std::cell::RefCell::new(Rc::new(NoTerminals)),
             terminal_pending_attach: std::cell::RefCell::new(std::collections::HashSet::new()),
             snapshot_authoritative: std::cell::RefCell::new(std::collections::HashMap::new()),
+            text_announced: std::cell::RefCell::new(std::collections::HashMap::new()),
             terminal_selection_outbox: std::cell::RefCell::new(Vec::new()),
             route,
             dialogs,
@@ -6813,6 +6825,37 @@ impl Store {
     /// must not double-append onto authoritative snapshot text).
     fn snapshot_completed(&self, session: &str, assistant: &str) -> bool {
         self.snapshot_authoritative.borrow().get(session).is_some_and(|ids| ids.contains(assistant))
+    }
+
+    /// G-423 — widen the announced text-ordinal frontier (ref
+    /// rows.ts `appendPart`: the row `text:{ordinal}` springs into
+    /// existence on the first non-blank delta/ended carrying that
+    /// ordinal). Only raises — the frontier never regresses.
+    fn announce_text_ordinal(&self, session: &str, assistant: &str, ordinal: u64) {
+        let ordinal = usize::try_from(ordinal).unwrap_or(usize::MAX);
+        let mut all = self.text_announced.borrow_mut();
+        let per_session = all.entry(session.to_owned()).or_default();
+        let frontier = per_session.entry(assistant.to_owned()).or_insert(0);
+        if ordinal >= *frontier {
+            *frontier = ordinal.saturating_add(1);
+        }
+    }
+
+    /// G-423 — a fully-formed message (fetch snapshot /
+    /// `message.updated` projection) has every text ordinal
+    /// announced (rows are rebuilt from content, rows.ts:393-395).
+    fn clear_text_announced(&self, session: &str, assistant: &str) {
+        if let Some(per_session) = self.text_announced.borrow_mut().get_mut(session) {
+            per_session.remove(assistant);
+        }
+    }
+
+    /// G-423 — the announced text-ordinal frontier for render (the
+    /// `TranscriptOptions.text_announced` input; missing message =
+    /// every ordinal announced).
+    #[must_use]
+    pub fn text_announcements(&self, session: &str) -> std::collections::HashMap<String, usize> {
+        self.text_announced.borrow().get(session).cloned().unwrap_or_default()
     }
 
     /// Mutate one session's message tree through a closure (the SSE
@@ -13040,6 +13083,9 @@ impl Store {
                             .or_default()
                             .insert(message.id().to_owned());
                     }
+                    // G-423 — fetched pages are fully-formed: every
+                    // text ordinal announced.
+                    self.clear_text_announced(&session_id, message.id());
                 }
                 self.messages.update(|state| {
                     let local = state.by_session.remove(&session_id).unwrap_or_default();
@@ -13068,6 +13114,9 @@ impl Store {
                             .or_default()
                             .insert(message.id().to_owned());
                     }
+                    // G-423 — fetched pages are fully-formed: every
+                    // text ordinal announced.
+                    self.clear_text_announced(&session_id, message.id());
                 }
                 self.messages.update(|state| {
                     let known = state.by_session.remove(&session_id).unwrap_or_default();
@@ -13779,13 +13828,31 @@ impl Store {
                 });
             }
             // -- lane C: SSE message-part reducers (`rows.ts` subscriptions) --
+            // G-423 — ref `session.text.started` (solid/data.ts:906-908)
+            // pushes a NEW empty text part onto the assistant content.
+            // The part's identity is positional: subsequent deltas and
+            // `ended` target it through `editText`'s findLast (see the
+            // delta arm), NOT through the event ordinal.
+            "session.text.started" => {
+                let Some((session, assistant)) = session_and_assistant(event) else { return };
+                // G11-F1 — a replayed `text.started` overlapping a
+                // SNAPSHOT-built complete message must not append a
+                // phantom part (the snapshot's parts are authoritative;
+                // the guard mirrors the delta arm — `session.step.started`
+                // reopens the message before fresh parts arrive).
+                if self.snapshot_completed(&session, &assistant) {
+                    return;
+                }
+                self.update_messages(&session, |messages| {
+                    push_text_part(messages, &assistant);
+                });
+            }
             "session.text.delta" => {
                 let Some((session, assistant)) = session_and_assistant(event) else { return };
                 // G-351 — ref (client/src/solid/data.ts:909-913) appends
                 // deltas verbatim: whitespace-only deltas (blank lines,
                 // indentation) must accumulate, not be dropped.
                 let Some(delta) = event.string("delta") else { return };
-                let ordinal = event.ordinal();
                 // G11-F1 / G-399 — a delta overlapping a SNAPSHOT-built
                 // complete message (the first-connect snapshot/stream
                 // overlap window double-appends text) is dropped — the
@@ -13796,11 +13863,22 @@ impl Store {
                 // (`session.step.started` clears the mark) before its
                 // deltas arrive.
                 let snapshot_authoritative = self.snapshot_completed(&session, &assistant);
+                // G-423 — ref rows.ts `appendPart` creates the
+                // `text:{ordinal}` row on a non-blank delta.
+                if !delta.trim().is_empty() {
+                    self.announce_text_ordinal(&session, &assistant, event.ordinal());
+                }
                 self.update_messages(&session, |messages| {
                     if snapshot_authoritative {
                         return;
                     }
-                    with_part(messages, &assistant, "text", ordinal, |part| {
+                    // G-423 — ref `editText` (solid/data.ts:454-458)
+                    // IGNORES the event ordinal and mutates the LAST
+                    // text part (`content.findLast(type === "text")`):
+                    // interleaved ordinals append into ONE run (the
+                    // inline concatenation) and a later `text.ended`
+                    // overwrites the earlier one's final text.
+                    with_last_text_part(messages, &assistant, |part| {
                         if let Part::Text { text, .. } = part {
                             text.push_str(&delta);
                         }
@@ -13812,11 +13890,17 @@ impl Store {
                 // G-351 / G-398 — ref (solid/data.ts:914-917) assigns
                 // the final text verbatim: an empty string is a real
                 // present value and must settle (only a missing field
-                // skips).
+                // skips). G-423 — the target is the LAST text part
+                // (`editText` findLast), so with multiple parts the
+                // later `ended` overwrites the earlier one's text.
                 let Some(text) = event.string("text") else { return };
-                let ordinal = event.ordinal();
+                // G-423 — ref rows.ts `appendPart` creates the
+                // `text:{ordinal}` row on a non-blank final text.
+                if !text.trim().is_empty() {
+                    self.announce_text_ordinal(&session, &assistant, event.ordinal());
+                }
                 self.update_messages(&session, |messages| {
-                    with_part(messages, &assistant, "text", ordinal, |part| {
+                    with_last_text_part(messages, &assistant, |part| {
                         if let Part::Text { text: slot, .. } = part {
                             *slot = text;
                         }
@@ -14424,6 +14508,9 @@ impl Store {
     /// Upsert a fully-formed message from a `message.updated` payload
     /// (idempotent by id, order-preserving).
     fn project_message(&self, session_id: &str, message: Message) {
+        // G-423 — a fully-formed projection has every text ordinal
+        // announced (ref rebuilds rows from content, rows.ts:393-395).
+        self.clear_text_announced(session_id, message.id());
         self.update_messages(session_id, |messages| {
             match messages.iter().position(|existing| existing.id() == message.id()) {
                 Some(index) => messages[index] = message,
@@ -14440,6 +14527,65 @@ fn session_and_assistant(event: &BusEvent) -> Option<(String, String)> {
     Some((event.string("sessionID")?, event.string("assistantMessageID")?))
 }
 
+/// Find or create the assistant message (shared by the helpers below).
+fn assistant_or_open(messages: &mut Vec<Message>, assistant: &str) -> usize {
+    if let Some(index) = messages.iter().position(|message| message.id() == assistant) {
+        return index;
+    }
+    messages.push(Message::Assistant {
+        id: assistant.to_owned(),
+        agent: "build".to_owned(),
+        model: String::new(),
+        parts: Vec::new(),
+        finish: None,
+        error: None,
+        time: PartTime::default(),
+        tokens: None,
+        usage_total: None,
+        retry: None,
+        cache_read: None,
+    });
+    messages.len() - 1
+}
+
+/// G-423 — `session.text.started` (solid/data.ts:906-908) pushes a NEW
+/// empty text part onto the assistant content; the event ordinal is not
+/// consulted (part identity is positional, `editText`'s findLast).
+fn push_text_part(messages: &mut Vec<Message>, assistant: &str) {
+    let index = assistant_or_open(messages, assistant);
+    let Some(Message::Assistant { parts, .. }) = messages.get_mut(index) else {
+        return;
+    };
+    parts.push(Part::Text { text: String::new(), time: PartTime::default() });
+}
+
+/// G-423 — ref `editText` (client/src/solid/data.ts:454-458) ignores the
+/// event ordinal and mutates the LAST text part
+/// (`content.findLast(item => item.type === "text")`): interleaved
+/// ordinals append into ONE run (the inline concatenation) and a later
+/// `text.ended` overwrites the earlier one's final text. Production
+/// tolerance: a delta/ended with no text part yet APPENDS one (the
+/// server always emits `session.text.started` first, so ref's
+/// drop-on-missing-target branch is unreachable there; keeping the
+/// append preserves the pre-G-423 single-part streams that never saw a
+/// `text.started` event, e.g. replayed recordings).
+fn with_last_text_part(
+    messages: &mut Vec<Message>,
+    assistant: &str,
+    mutate: impl FnOnce(&mut Part),
+) {
+    let index = assistant_or_open(messages, assistant);
+    let Some(Message::Assistant { parts, .. }) = messages.get_mut(index) else {
+        return;
+    };
+    let target =
+        parts.iter().rposition(|part| matches!(part, Part::Text { .. })).unwrap_or_else(|| {
+            parts.push(Part::Text { text: String::new(), time: PartTime::default() });
+            parts.len() - 1
+        });
+    mutate(&mut parts[target]);
+}
+
 /// Find or create the `kind:ordinal` text/reasoning part on the
 /// assistant message and mutate it. Parts keep **arrival order** (a
 /// missing part is appended; an existing one merges in place — deltas
@@ -14451,24 +14597,7 @@ fn with_part(
     ordinal: u64,
     mutate: impl FnOnce(&mut Part),
 ) {
-    let index = if let Some(index) = messages.iter().position(|message| message.id() == assistant) {
-        index
-    } else {
-        messages.push(Message::Assistant {
-            id: assistant.to_owned(),
-            agent: "build".to_owned(),
-            model: String::new(),
-            parts: Vec::new(),
-            finish: None,
-            error: None,
-            time: PartTime::default(),
-            tokens: None,
-            usage_total: None,
-            retry: None,
-            cache_read: None,
-        });
-        messages.len() - 1
-    };
+    let index = assistant_or_open(messages, assistant);
     let Some(Message::Assistant { parts, .. }) = messages.get_mut(index) else {
         return;
     };
@@ -14486,12 +14615,15 @@ fn with_part(
         })
         .or_else(|| {
             // Not present yet: append when this is the next ordinal, or
-            // GAP-FILL a skip (G-288⑧ — ref keys parts by the explicit
-            // `kind:ordinal` id (rows.ts:276-292), so an out-of-order
-            // ordinal still lands its text; the positional port pads the
-            // missing ordinals with empty parts so the delta is not
-            // dropped — a later event for a padded ordinal fills it in
-            // place, and empty text parts render nothing).
+            // GAP-FILL a skip (G-288⑧, reasoning arm only — ref keys
+            // reasoning rows by the explicit `kind:ordinal` id
+            // (rows.ts:284-292), so an out-of-order ordinal still lands
+            // its text; the positional port pads the missing ordinals
+            // with empty parts so the delta is not dropped — a later
+            // event for a padded ordinal fills it in place, and empty
+            // parts render nothing). The text arm no longer routes
+            // through here (G-423: ref `editText` targets the last
+            // text part, ordinal ignored).
             (seen <= ordinal).then(|| {
                 for _ in seen..ordinal {
                     parts.push(match kind {
@@ -15777,7 +15909,10 @@ mod tests {
             }),
         ))]);
         assert_eq!(store.messages("s")[0].parts()[0].text(), "Final text.");
-        // A second text ordinal appends a NEW part (steered answers).
+        // G-423 — ref `editText` (solid/data.ts:454-458) ignores the
+        // ordinal and targets the LAST text part: a second ordinal's
+        // `ended` OVERWRITES the earlier part's final text instead of
+        // appending a new part.
         store.ingest_all([Ingest::Event(BusEvent::new(
             "session.text.ended",
             serde_json::json!({
@@ -15785,7 +15920,61 @@ mod tests {
                 "text": "Second answer."
             }),
         ))]);
-        assert_eq!(store.messages("s")[0].parts().len(), 2);
+        assert_eq!(store.messages("s")[0].parts().len(), 1);
+        assert_eq!(store.messages("s")[0].parts()[0].text(), "Second answer.");
+    }
+
+    /// G-423 — multi text part inline concatenation (ref production
+    /// semantics, anim-stream-multi-part): `session.text.started` pushes
+    /// each new empty part (data.ts:906-908) and `editText`'s findLast
+    /// (data.ts:454-458) routes EVERY delta — regardless of ordinal —
+    /// onto the last part, so interleaved ordinals concatenate inline;
+    /// the later `text.ended` overwrites the earlier one's final text
+    /// (part 0's final text is lost).
+    #[test]
+    fn multi_text_parts_concatenate_inline_last_ended_wins() {
+        let store = Store::new(Runtime::new());
+        for ordinal in [0, 1] {
+            store.ingest_all([Ingest::Event(BusEvent::new(
+                "session.text.started",
+                serde_json::json!({ "sessionID": "s", "assistantMessageID": "a", "ordinal": ordinal }),
+            ))]);
+        }
+        for (ordinal, delta) in [
+            (0, "Alpha "),
+            (1, "Beta "),
+            (0, "part "),
+            (1, "part "),
+            (0, "streams "),
+            (1, "streams "),
+        ] {
+            store.ingest_all([Ingest::Event(BusEvent::new(
+                "session.text.delta",
+                serde_json::json!({
+                    "sessionID": "s", "assistantMessageID": "a",
+                    "ordinal": ordinal, "delta": delta
+                }),
+            ))]);
+        }
+        let Message::Assistant { parts, .. } = &store.messages("s")[0] else { panic!() };
+        assert_eq!(parts.len(), 2, "both started parts exist (part 0 stays empty)");
+        assert_eq!(parts[0].text(), "");
+        assert_eq!(parts[1].text(), "Alpha Beta part part streams streams ");
+        // Both `ended` events target the last part; the later wins.
+        for (ordinal, text) in
+            [(0, "Alpha part streams even ticks."), (1, "Beta part streams odd ticks.")]
+        {
+            store.ingest_all([Ingest::Event(BusEvent::new(
+                "session.text.ended",
+                serde_json::json!({
+                    "sessionID": "s", "assistantMessageID": "a",
+                    "ordinal": ordinal, "text": text
+                }),
+            ))]);
+        }
+        let Message::Assistant { parts, .. } = &store.messages("s")[0] else { panic!() };
+        assert_eq!(parts[0].text(), "");
+        assert_eq!(parts[1].text(), "Beta part streams odd ticks.");
     }
 
     /// G-351 — whitespace-only deltas are present values (ref solid
@@ -15821,13 +16010,13 @@ mod tests {
         assert_eq!(store.messages("s2")[0].parts()[0].text(), " \n");
     }
 
-    /// G-288⑧ — an out-of-order ordinal (a skip, e.g. across a
-    /// reconnect) GAP-FILLS instead of dropping the delta: ref keys
-    /// parts by `kind:ordinal` so any arrival order lands; the
-    /// positional port pads the hole with an empty part that a later
-    /// ordinal-1 event fills in place.
+    /// G-423 — the ordinal on text events is NOT part identity in ref
+    /// (`editText` findLast, solid/data.ts:454-458): an out-of-order or
+    /// skipped ordinal lands on the last text part like any other
+    /// delta — no per-ordinal parts, no gap-fill padding (the previous
+    /// positional-gap model was corrected against ref's data layer).
     #[test]
-    fn out_of_order_ordinal_gap_fills() {
+    fn out_of_order_ordinal_lands_on_last_part() {
         let store = Store::new(Runtime::new());
         // ordinal 0 first, then a jump straight to ordinal 2.
         for (ordinal, delta) in [(0, "first "), (2, "third answer")] {
@@ -15840,11 +16029,9 @@ mod tests {
             ))]);
         }
         let Message::Assistant { parts, .. } = &store.messages("s")[0] else { panic!() };
-        assert_eq!(parts.len(), 3, "the skip padded ordinal 1: {parts:?}");
-        assert_eq!(parts[0].text(), "first ");
-        assert_eq!(parts[1].text(), "", "the padded hole renders nothing");
-        assert_eq!(parts[2].text(), "third answer");
-        // The late ordinal-1 event fills the hole in place.
+        assert_eq!(parts.len(), 1, "the ordinal never opens a new part: {parts:?}");
+        assert_eq!(parts[0].text(), "first third answer");
+        // The late ordinal-1 event appends to the same run.
         store.ingest_all([Ingest::Event(BusEvent::new(
             "session.text.delta",
             serde_json::json!({
@@ -15853,9 +16040,8 @@ mod tests {
             }),
         ))]);
         let Message::Assistant { parts, .. } = &store.messages("s")[0] else { panic!() };
-        assert_eq!(parts.len(), 3, "no new part for the filled ordinal");
-        assert_eq!(parts[1].text(), "second ");
-        assert_eq!(parts[2].text(), "third answer");
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].text(), "first third answersecond ");
     }
 
     #[test]

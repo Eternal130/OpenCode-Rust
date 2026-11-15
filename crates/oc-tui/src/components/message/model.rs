@@ -648,7 +648,14 @@ pub fn reduce_rows<S: std::hash::BuildHasher>(
     messages: &[Message],
     inputs: &std::collections::HashSet<String, S>,
 ) -> Vec<Row> {
-    reduce_rows_with_rules(messages, inputs, &GroupRules::empty(), true, false)
+    reduce_rows_with_rules(
+        messages,
+        inputs,
+        &GroupRules::empty(),
+        true,
+        false,
+        &std::collections::HashMap::new(),
+    )
 }
 
 /// [`reduce_rows`] with the plugin-provided grouping rules (wave 3's
@@ -656,12 +663,14 @@ pub fn reduce_rows<S: std::hash::BuildHasher>(
 /// low flag (`low` wraps runs of non-text parts in one activity
 /// summary — grouping/session.ts:89-96).
 #[must_use]
+#[allow(clippy::implicit_hasher)]
 pub fn reduce_rows_with_rules<S: std::hash::BuildHasher>(
     messages: &[Message],
     inputs: &std::collections::HashSet<String, S>,
     rules: &GroupRules,
     group_exploration: bool,
     low_verbosity: bool,
+    text_announced: &std::collections::HashMap<String, usize>,
 ) -> Vec<Row> {
     let mut pending: std::collections::HashSet<String> = inputs
         .iter()
@@ -686,12 +695,44 @@ pub fn reduce_rows_with_rules<S: std::hash::BuildHasher>(
             Message::Idle { .. } => {}
             Message::Assistant { id, parts, finish, error, .. } => {
                 let mut ordinals: HashMap<&str, usize> = HashMap::new();
+                // G-423 — the announced text-ordinal frontier (ref's
+                // rows are event-created: rows.ts `appendPart` fires
+                // per delta/ended with the EVENT ordinal, non-blank
+                // payloads only, and `resolvePart` indexes the content
+                // positionally). A missing entry = every ordinal
+                // announced (snapshot/fixture messages).
+                let text_frontier = text_announced.get(id.as_str()).copied().unwrap_or(usize::MAX);
+                // G-423 — a frontier entry means the message's rows are
+                // STREAM-CREATED (rows.ts `appendPart`), not rebuilt from
+                // a snapshot: the entry's presence (not just its value)
+                // changes the empty-part rule below.
+                let streamed_rows = text_frontier != usize::MAX;
                 for part in parts {
+                    // G-423 — a streamed (event-announced) text part
+                    // keeps its row even while empty; see the text arm.
+                    let mut announced_empty_ok = false;
                     let (kind, part_id) = match part {
                         Part::Text { .. } => {
                             let ordinal = ordinals.entry("text").or_default();
                             let id = format!("text:{ordinal}");
+                            let index = *ordinal;
                             *ordinal += 1;
+                            // G-423 — streamed rows are EVENT-created
+                            // (rows.ts `appendPart`) and never pruned
+                            // when empty: an announced ordinal keeps
+                            // its row (SessionRowView's marginTop=1
+                            // blank line) even while the part renders
+                            // nothing. Beyond the frontier the row does
+                            // not exist yet — render nothing. A MISSING
+                            // frontier entry (snapshot/fixture rebuild,
+                            // rows.ts:393-395) keeps the empty-skip
+                            // below (loaded rows drop empty parts).
+                            if streamed_rows {
+                                if index >= text_frontier {
+                                    continue;
+                                }
+                                announced_empty_ok = true;
+                            }
                             (PartKind::Text, id)
                         }
                         Part::Reasoning { .. } => {
@@ -703,7 +744,7 @@ pub fn reduce_rows_with_rules<S: std::hash::BuildHasher>(
                         Part::Tool { id, name, .. } => (PartKind::Tool(name.clone()), id.clone()),
                     };
                     if matches!(part, Part::Text { text, .. } | Part::Reasoning { text, .. }
-                        if text.trim().is_empty())
+                        if text.trim().is_empty() && !announced_empty_ok)
                     {
                         continue;
                     }
@@ -1723,5 +1764,84 @@ mod g370_input_index_tests {
         assert!(legacy_turns(&messages), "no idle markers");
         assert_eq!(input_index(&messages, 3, true), Some(2), "nearest input");
         assert_eq!(turn_duration("a2", &messages), 25);
+    }
+
+    /// G-423 — the announced text-ordinal frontier (ref's rows are
+    /// event-created: rows.ts `appendPart` fires per delta/ended with
+    /// the EVENT ordinal, non-blank payloads only; `resolvePart`
+    /// resolves positionally). A streamed message with frontier 1
+    /// projects only `text:0` — `text:1` may already hold the
+    /// concatenated run (the `editText`-findLast target) but has NO
+    /// row yet — and the announced-but-empty `text:0` KEEPS its row
+    /// (the blank marginTop line). A message with no frontier entry
+    /// (snapshot/fixture rebuild) keeps every part and drops empty
+    /// ones outright (rows.ts:393-395).
+    #[test]
+    fn g423_announced_text_frontier_gates_rows() {
+        use crate::components::message::model::reduce_rows_with_rules;
+        let assistant = |parts: Vec<Part>| Message::Assistant {
+            id: "m".into(),
+            agent: "build".into(),
+            model: "fixture/fixture".into(),
+            parts,
+            finish: Some("stop".into()),
+            error: None,
+            time: PartTime { created: Some(1), completed: Some(2) },
+            tokens: None,
+            usage_total: None,
+            cache_read: None,
+            retry: None,
+        };
+        let row_shape = |row: &Row| match row {
+            Row::Entry(Entry::Part { message_id, part_id }) => {
+                format!("part:{message_id}:{part_id}")
+            }
+            Row::Entry(Entry::AssistantFooter { message_id }) => format!("footer:{message_id}"),
+            _ => format!("{row:?}"),
+        };
+        let parts = vec![
+            Part::Text { text: String::new(), time: PartTime::default() },
+            Part::Text { text: "Alpha Beta ".into(), time: PartTime::default() },
+        ];
+        let messages = vec![assistant(parts)];
+
+        // Frontier 1 (only ordinal 0 announced): the unannounced
+        // `text:1` has no row; the announced-empty `text:0` keeps its
+        // blank row; the terminal footer follows.
+        let mut announced = std::collections::HashMap::new();
+        announced.insert("m".to_owned(), 1usize);
+        let rows = reduce_rows_with_rules(
+            &messages,
+            &std::collections::HashSet::<String>::new(),
+            &crate::components::message::model::GroupRules::empty(),
+            true,
+            false,
+            &announced,
+        );
+        let shape: Vec<String> = rows.iter().map(row_shape).collect();
+        assert_eq!(shape, vec!["part:m:text:0", "footer:m"]);
+
+        // Frontier 2 (both ordinals announced): both rows exist —
+        // `text:0` still blank, `text:1` the concatenated run.
+        announced.insert("m".to_owned(), 2usize);
+        let rows = reduce_rows_with_rules(
+            &messages,
+            &std::collections::HashSet::<String>::new(),
+            &crate::components::message::model::GroupRules::empty(),
+            true,
+            false,
+            &announced,
+        );
+        let shape: Vec<String> = rows.iter().map(row_shape).collect();
+        assert_eq!(shape, vec!["part:m:text:0", "part:m:text:1", "footer:m"]);
+
+        // No entry (snapshot/fixture): the empty part drops, the
+        // non-empty part projects (the pre-G-423 shape).
+        let rows = crate::components::message::model::reduce_rows(
+            &messages,
+            &std::collections::HashSet::<String>::new(),
+        );
+        let shape: Vec<String> = rows.iter().map(row_shape).collect();
+        assert_eq!(shape, vec!["part:m:text:1", "footer:m"]);
     }
 }
