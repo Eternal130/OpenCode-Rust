@@ -150,6 +150,18 @@ pub struct TranscriptOptions {
     /// `ctx.capabilities?.hyperlinks === true`). Default `false` —
     /// the headless/no-probe profile (all goldens).
     pub hyperlinks_supported: bool,
+    /// G-423 — the announced text-ordinal frontier per assistant
+    /// message id (`messageID` → ordinal count): ref's transcript rows
+    /// for text parts are created by the EVENT stream (rows.ts
+    /// `appendPart` on `session.text.delta`/`ended` with the event's
+    /// ordinal, guarded by a non-blank payload) and resolve
+    /// positionally at render (`resolvePart`'s `filter(type)[ordinal]`).
+    /// A text part whose positional ordinal has not been announced yet
+    /// renders nothing even when it already holds text (the
+    /// `editText`-findLast target of another ordinal's deltas). A
+    /// missing entry = every ordinal announced (snapshot-loaded and
+    /// fixture messages — `project_message` clears the entry).
+    pub text_announced: std::collections::HashMap<String, usize>,
 }
 
 impl Default for TranscriptOptions {
@@ -176,6 +188,7 @@ impl Default for TranscriptOptions {
             shell_live: std::collections::HashMap::new(),
             pending_permissions: std::collections::HashSet::new(),
             hyperlinks_supported: false,
+            text_announced: std::collections::HashMap::new(),
         }
     }
 }
@@ -264,6 +277,7 @@ pub fn render_transcript(
         &options.group_rules,
         options.group_exploration,
         options.verbosity == Verbosity::Low,
+        &options.text_announced,
     );
     // G-188 — `partitionPending` (rows.ts:71 + grouping/session.ts:
     // 163-176): permission-blocked tools leave the collapsed groups.

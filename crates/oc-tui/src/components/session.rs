@@ -519,6 +519,10 @@ pub fn render_session(
             // G-287⑧ — the probe's OSC-8 verdict drives the markdown
             // hyperlink seam for the live transcript.
             hyperlinks_supported: store.hyperlinks_supported(),
+            // G-423 — the announced text-ordinal frontier (event-
+            // created rows): streamed text parts render only after
+            // their ordinal was announced by a delta/ended.
+            text_announced: store.text_announcements(session_id),
             image_strip: crate::components::message::rows::ImageStripOptions {
                 enabled: store.image_preview(),
                 capabilities: store.graphics_capabilities(),
