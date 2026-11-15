@@ -317,6 +317,13 @@ impl Pump {
                 ServerListEvent::References(references) => {
                     self.app.store.set_references(references);
                 }
+                // G-427 W4: the session-active boot snapshot's drain arm
+                // (app.rs's live-loop drain) — replayed scenarios whose
+                // fetch map stubs /api/session/active feed it like any
+                // other list.
+                ServerListEvent::ActiveSessions(ids) => {
+                    self.app.store.hydrate_running_snapshot(ids);
+                }
             }
         }
         // The open-session registry sync + transcript hydration

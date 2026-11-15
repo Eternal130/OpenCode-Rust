@@ -8528,6 +8528,16 @@ impl Store {
         self.session_index.borrow().is_running(session_id)
     }
 
+    /// The `/api/session/active` boot snapshot (data.ts:592-609,
+    /// `server.connected`): the server's running map re-arms the
+    /// running set for sessions already executing when the TUI boots
+    /// (server restart / reconnect). Terminal-superseded ids (a
+    /// lifecycle event landed during hydration) are filtered inside
+    /// the index.
+    pub fn hydrate_running_snapshot<I: IntoIterator<Item = String>>(&self, ids: I) {
+        self.session_index.borrow_mut().apply_running_snapshot(ids);
+    }
+
     /// The armed hint (v2 prompt/index.tsx:141: armed shows "again to
     /// interrupt"): `Some(true)` armed, `Some(false)` = running but
     /// not armed, `None` = not running.

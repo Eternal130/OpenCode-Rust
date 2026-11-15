@@ -61,6 +61,12 @@ pub struct SessionIndex {
     /// inserts; the terminal execution events remove — subagents-tab.tsx's
     /// active/inactive filter reads it).
     running: std::collections::HashSet<String>,
+    /// Sessions observed reaching a TERMINAL execution state. The boot
+    /// snapshot's supersede ledger (ref `activeUpdates`, data.ts:600-609):
+    /// a lifecycle event that lands BEFORE the `/api/session/active`
+    /// snapshot is applied must win over the snapshot — `session.execution.
+    /// succeeded/failed/interrupted` deletes the id from the snapshot map.
+    terminal: std::collections::HashSet<String>,
 }
 
 impl SessionIndex {
@@ -95,6 +101,10 @@ impl SessionIndex {
             }
             "session.execution.started" => {
                 if let Some(id) = event.string("sessionID") {
+                    // A restart clears the terminal mark — a later
+                    // snapshot must not suppress it (the ref updates
+                    // map's LAST status wins, data.ts:603-607).
+                    self.terminal.remove(&id);
                     self.running.insert(id);
                 }
             }
@@ -103,6 +113,7 @@ impl SessionIndex {
             | "session.execution.interrupted" => {
                 if let Some(id) = event.string("sessionID") {
                     self.running.remove(&id);
+                    self.terminal.insert(id);
                 }
             }
             _ => {}
@@ -145,6 +156,22 @@ impl SessionIndex {
     #[must_use]
     pub fn running_ids(&self) -> Vec<String> {
         self.running.iter().cloned().collect()
+    }
+
+    /// The boot snapshot (`server.connected` → `session.active()`,
+    /// data.ts:594-609): the server's running-session map re-arms the
+    /// running set — the TUI booting into an ALREADY-RUNNING session
+    /// (server restart / reconnect) gets its spinner/interrupt gate
+    /// back. Ids observed terminal BEFORE the snapshot applies are
+    /// skipped (the ref's `updates.forEach(…, snapshot.delete(id))`
+    /// supersede — hydration events beat the snapshot, data.ts:603-609).
+    pub fn apply_running_snapshot<I: IntoIterator<Item = String>>(&mut self, ids: I) {
+        for id in ids {
+            if self.terminal.contains(&id) {
+                continue;
+            }
+            self.running.insert(id);
+        }
     }
 
     /// Every known session id (the picker's `session.list()` input).
