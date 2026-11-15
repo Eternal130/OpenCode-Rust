@@ -111,6 +111,17 @@ fn tabs_script() -> Vec<vt_harness::ScriptEvent> {
             "session.step.ended",
             r#"{"sessionID":"ses_alpha","assistantMessageID":"msg_a","finish":"stop"}"#,
         ),
+        // W6 — the turn's close-out: the server admits `msg_user_1`
+        // (removePending, data.ts:749-763). Without this the scripted
+        // row pends forever, `session_busy` stays armed, and the tab
+        // spinner's 100 ms repaints paper over the sparse-repaint
+        // staleness this walk now pins (G-429).
+        event(
+            200,
+            "evt_deliv",
+            "session.inbox.delivered",
+            r#"{"sessionID":"ses_alpha","inboxID":"msg_user_1"}"#,
+        ),
         // The Shell tab's row: one running shell owned by the session.
         event(
             220,
