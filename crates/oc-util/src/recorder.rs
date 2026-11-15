@@ -79,21 +79,22 @@ pub fn enabled() -> bool {
 /// nonce = first 8 chars of a uuid4 — the session id surrogate).
 fn recording_id(now_ms: u64) -> String {
     let secs = now_ms / 1000;
-    let (h, m, s) = (secs / 3600 % 24, secs / 60 % 60, secs % 60);
+    let (hour, min, sec) = (secs / 3600 % 24, secs / 60 % 60, secs % 60);
     let days = secs / 86400;
     // days since 1970-01-01 -> civil date (Howard Hinnant's algorithm)
-    let z = days as i64 + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = if month <= 2 { y + 1 } else { y };
+    let zdays = i64::try_from(days).unwrap_or(0) + 719_468;
+    let era = zdays.div_euclid(146_097);
+    let day_of_era = zdays.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = if month_prime < 10 { month_prime + 3 } else { month_prime - 9 };
+    let year = if month <= 2 { year + 1 } else { year };
     let nonce = uuid::Uuid::new_v4().simple().to_string()[..8].to_owned();
-    format!("rec-{year:04}{month:02}{d:02}-{h:02}{m:02}{s:02}-{nonce}")
+    format!("rec-{year:04}{month:02}{day:02}-{hour:02}{min:02}{sec:02}-{nonce}")
 }
 
 /// Arms the recorder from the environment (the first hook call does
@@ -131,8 +132,7 @@ fn ensure_init() {
 fn now_millis() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+        .map_or(0, |dur| u64::try_from(dur.as_millis()).unwrap_or(u64::MAX))
 }
 
 /// Test-only: clear the process-global recorder state so a test can
@@ -175,7 +175,7 @@ fn flush(state: &State) {
     let path = state.dir.join(format!("{id}.raw.json"));
     if let Ok(body) = serde_json::to_string_pretty(&Value::Object(state.doc.clone())) {
         let tmp = state.dir.join(format!("{id}.raw.json.tmp"));
-        if std::fs::write(&tmp, body).and_then(|_| std::fs::rename(&tmp, &path)).is_err() {
+        if std::fs::write(&tmp, body).and_then(|()| std::fs::rename(&tmp, &path)).is_err() {
             eprintln!("tui-record: write failed: {}", path.display());
         }
     }
@@ -194,7 +194,7 @@ fn with_state(f: impl FnOnce(&mut State)) {
 fn redacted() -> bool {
     state_cell()
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .as_ref()
         .is_some_and(|s| s.doc.get("redacted").and_then(Value::as_bool).unwrap_or(true))
 }
@@ -203,7 +203,7 @@ fn redacted() -> bool {
 pub fn boot(width: u16, height: u16) {
     ensure_init();
     with_state(|state| {
-        if state.doc.get("boot").map_or(true, Value::is_null) {
+        if state.doc.get("boot").is_none_or(Value::is_null) {
             state.doc.insert("boot".into(), json!({ "width": width, "height": height }));
             state.doc.insert("width".into(), json!(width));
             state.doc.insert("height".into(), json!(height));

@@ -70,18 +70,6 @@ fn type_keys(h: &mut HarnessHandle, bytes: &[u8]) {
     }
 }
 
-/// Envelope-shaped scripted event (the /api/event SSE payload).
-fn ev(id: &str, created: u64, kind: &str, data: String) -> ScriptEvent {
-    ScriptEvent {
-        delay_ms: created,
-        body: format!(r#"{{"id":"{id}","created":{created},"type":"{kind}","data":{data}}}"#),
-    }
-}
-
-fn session_and(sid: &str, asst: &str) -> String {
-    format!(r#""sessionID":"{sid}","assistantMessageID":"{asst}""#)
-}
-
 /// Every scripted body must be valid JSON (a malformed frame is a
 /// client-side decode error → the reconnect loop eats the script).
 fn check_script(script: &[ScriptEvent]) {
@@ -539,7 +527,7 @@ fn c3_record_interrupt_and_new_session() {
     let session = "ses_alpha";
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(1_000_000, |since| since.as_millis() as u64);
+        .map_or(1_000_000, |since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX));
     let script = vec![
         ScriptEvent {
             delay_ms: 30,
