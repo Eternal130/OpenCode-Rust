@@ -3266,6 +3266,12 @@ G-412/413/414/415/416/417/418/420/422 ✅；**G-419/G-421 勘误撤销**（登�
 - 候选根因束：① ref interrupt 异步链（prompt/index.tsx 双击机 `void client.api.session.interrupt`）某环节经 fixture console 面 surfaced（openConsoleOnError=false 但 fixture/renderer 层或未遵循）；② tab spinner/标题色=主题角色映射差（真移植差候选，27 格恒定）。
 - 处置：登记不拦（root-cause 轮；纯色差子簇可先行独立裁定）。
 
+### G-428 🟡 reasoning part 定位语义差：rust ordinal-keyed vs ref findLast（W1 评审立项）
+- 现象（潜在，语料暂无命中）：G-423 修复只对齐了 text part 臂（`editText` findLast）；ref 的 reasoning 编辑器 `editReasoning`（client/src/solid/data.ts:460-466）同样是 `findLast` 定位——且比 text 臂**多一个完成度过滤**（仅落 `!time?.completed` 的 reasoning part）；rust 侧 reasoning 臂仍 ordinal-keyed `with_part`（含 gap-fill 语义）。交错/多 reasoning part 序列下两侧数据层分叉。
+- Ref：packages/client/src/solid/data.ts:460-466（editReasoning = findLast 未完成 reasoning part）。
+- Rust：crates/oc-tui/src/store.rs reasoning delta/ended 臂（ordinal `with_part`，G-423 修复未触及）。
+- 处置：登记不拦。修复须独立 lane——reasoning 有 started push + completed 过滤 + rows 侧 `reasoning:{ordinal}` 建行三重交互，不与 text 臂混改（W1 评审裁定：不顺手对齐是对的）。语料命中（多 reasoning part 交错流）出现时优先级升。
+
 ### C3 录制器边缘锤（Concern① 会商）
 - 文件边界：每（进程）会话一 `rec-*.raw.json`；重 arm 铸新 id、旧文件冻结不再触碰（`rearm_writes_a_new_file_and_never_touches_the_old` 钉定）。
 - 长流完整性：全量重写 flush（tmp+rename 原子）在 2000 事件下产物恒为单一合法 JSON、全量在场、无 .tmp 残留（`long_stream_full_rewrite_stays_valid_and_complete`，release/debug 均绿）。**Concern① 裁定：不损坏，保原子全量重写**；成本注记=O(n²) 总写字节（2000 事件 ≈300MB 累计写，测试 14s debug）——真实长会话（>万事件）再议 JSONL 追加式，本轮不改（正确性优先，录制失败永不带走会话）。
