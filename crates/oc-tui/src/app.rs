@@ -330,6 +330,10 @@ impl App {
         // TUI-16 — `terminal.copy` (app.tsx:546-547): the selection's
         // copy-on-release gate.
         self.copy_behavior = config.terminal_copy;
+        // `config.animations ?? true` (spinner.tsx:29-31's gate): the
+        // running-row indicator gate — `false` pins the static `⋯`
+        // fallback (boot AND every reload, like every config key).
+        self.store.set_animations_enabled(config.animations);
         // Attention (R-06): the resolved sounds/notifications config
         // reaches the engine on boot AND every reload.
         self.store.set_attention_config(config.attention.clone());
@@ -11411,6 +11415,37 @@ mod tests {
         assert!(full_again.contains("Café notes"), "whitespace-only rows the café parent again");
         assert!(full_again.contains("Alpha"), "whitespace-only rows the full parent set");
         assert!(!full_again.contains("Login Child Secret"), "still no child row");
+    }
+
+    /// `config.animations ?? true` (spinner.tsx:29-31): the production
+    /// read side — a cli.json with `animations: false` clears the
+    /// store's gate (the running-row indicators pin the static `⋯`),
+    /// absent stays true; a reload re-applies the key.
+    #[test]
+    fn config_animations_key_reaches_the_store_gate() {
+        let mut app = App::new((100, 30));
+        app.store.open_tab("s1", Some("S".to_owned()));
+
+        // Boot default (no animations key): the gate stays true.
+        let boot = crate::config::TuiConfig::parse(r#"{ "mouse": true }"#, None);
+        assert!(boot.animations, "absent key defaults true (?? true)");
+        app.apply_config(&boot, Mode::Dark);
+        assert!(app.store.animations_enabled(), "default boot keeps animations on");
+
+        // animations:false lands on the store through apply_config.
+        let reloaded =
+            crate::config::TuiConfig::parse(r#"{ "animations": false, "mouse": true }"#, None);
+        assert!(!reloaded.animations);
+        app.apply_config(&reloaded, Mode::Dark);
+        assert!(
+            !app.store.animations_enabled(),
+            "the production chain (config JSON → TuiConfig → apply_config) clears the gate"
+        );
+
+        // Toggling back on a later reload restores it.
+        let back = crate::config::TuiConfig::parse(r#"{ "animations": true }"#, None);
+        app.apply_config(&back, Mode::Dark);
+        assert!(app.store.animations_enabled(), "reload re-applies the key");
     }
 
     /// `apply_config` resolves the theme through the registry and

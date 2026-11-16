@@ -3298,6 +3298,17 @@ G-412/413/414/415/416/417/418/420/422 ✅；**G-419/G-421 勘误撤销**（登�
 - 遗留（escalate）：opentui-solid reconcile 的同 key 重复挂载是**通用缺陷**（任意 keyed-For 消费面都可能踩），本仓不可修外部 crate，须上游（Eternal130/opentui-rust）修 `reconcile_children` 的 replace/insert 臂 live 工作表与 render 子树顺序脱同步问题后回滚本守卫。探针复现证据链见 w6-report。**与 W3 登记的 keyed-For 前插缺陷（G-426 (f) 项）同函数两症状**——上游工单须合并覆盖：前插调和（陈旧首元素留旧槽）+ 同 key replace/insert churn 双挂载（zombie 节点），修一侧须连同另一症状回归（两侧守卫：transcript_solid 前缀失稳重建 + picker colors_key tab 判别式）。
 - 白名单勘注（2026-11-15 W6）：`composer_tabs_walk` flake 即本条真身，**已修复除名**（evt_deliv 落地后 walk 确定性绿 3/3；全套件 1703/1703）。
 
+### G-430 🟡 config.animations 门控移植残余族（gb17 主门已移植；六个未覆盖面，下一 lane 清偿）
+- 背景：gb17（2026-11-16，commit 4db0d3f1）把 `config.animations ?? true` 的**主门**移植到生产链（store `animations_enabled` ← TuiConfig.animations ← cli.json 顶键，oc-core v1 迁移 `animations_enabled`→`animations` 已备）并贯通 running-row 指示器族（tool 行 / shell 块 running 行 / reasoning 头 / compaction 分隔线 / BackgroundToolHint）；A2 工具行伪影簇随之退役。**本条登记其余六个 ref 同门面**，rust 侧仍恒动画（时钟驱动 spinner / shimmer），animations:false 下与 ref 的静态 `⋯`/无 shimmer 形状分叉：
+  1. **prompt 运行态 caret spinner**——ref `component/prompt/index.tsx:1908-1911`（运行态 `<Spinner color=…>`，关时回退 `⋯ {label}`）；rust prompt 运行态指示器无门。
+  2. **/btw footer spinner**——ref `feature-plugins/prompt/btw.tsx:35`（`<Spinner>/btw</Spinner>`）；rust `components/session.rs` 的 btw_pending hints 恒 `spinner_frame(store.clock())`。
+  3. **update dialog "Checking…/Installing…"**——ref `component/dialog-update.tsx:107,115`（`<Spinner shimmer>`，ShimmerText 受 animations 门 + interval 驱动）；rust `command_palette.rs` 的 busy 行 `with_shimmer(store.clock())` 无门。
+  4. **reconnecting 覆盖层**——ref `component/reconnecting.tsx:31`（`<Spinner>Restarting service…/Connection lost…`）；rust `overlays_solid.rs` 标题恒 `spinner_frame(elapsed_ms)`。
+  5. **sidebar title shimmer**——ref `routes/session/sidebar.tsx:33-48`（`<title_shimmer>`，`enabled={config.animations ?? true}`）；rust sidebar shimmer 路径无门。
+  6. **RetryProvider shimmer**——ref `routes/session/index.tsx:3075-3079`（RetryProvider `enabled={ctx.config.animations ?? true}`）；rust 对应 shimmer 无门。
+- 风险面：**committed 语料不触及**（六面均不在现 90 场景静息/frames 形状内）；rec-* 或未来语料命中即落 **unadjudicated 拦门**（保守正确——不再新开豁免簇，A2 簇已退役，re-land/新形状须新条目+取证）。
+- 处置：登记不拦，下一 lane 清偿（统一走 `store.animations_enabled()` + 各面的 `⋯`/无-shimmer 回退形状，须逐面 ref 取证后落）。
+
 ### C3 录制器边缘锤（Concern① 会商）
 - 文件边界：每（进程）会话一 `rec-*.raw.json`；重 arm 铸新 id、旧文件冻结不再触碰（`rearm_writes_a_new_file_and_never_touches_the_old` 钉定）。
 - 长流完整性：全量重写 flush（tmp+rename 原子）在 2000 事件下产物恒为单一合法 JSON、全量在场、无 .tmp 残留（`long_stream_full_rewrite_stays_valid_and_complete`，release/debug 均绿）。**Concern① 裁定：不损坏，保原子全量重写**；成本注记=O(n²) 总写字节（2000 事件 ≈300MB 累计写，测试 14s debug）——真实长会话（>万事件）再议 JSONL 追加式，本轮不改（正确性优先，录制失败永不带走会话）。
