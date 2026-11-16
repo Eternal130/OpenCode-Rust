@@ -26,8 +26,8 @@ use crate::style::Style;
 use crate::components::diff_viewer::{parse_patch, PatchRow};
 use crate::components::message::model::{ToolState, ToolStatus};
 use crate::components::message::rows::{
-    completed_tool_row, locale_number, running_tool_row, spinner_frame, RowRender, ICON_WIDTH,
-    ROW_PADDING_LEFT,
+    completed_tool_row, locale_number, running_indicator_glyph, running_tool_row, RowRender,
+    ICON_WIDTH, RESTING_INDICATOR_GLYPH, ROW_PADDING_LEFT,
 };
 use crate::layout::{Placed, PlacedLine};
 use crate::render::Fill;
@@ -244,6 +244,7 @@ fn shell_block(
     state: &ToolState,
     expanded: bool,
     clock_ms: u64,
+    animations: bool,
     theme: &ThemeStyles,
     width: usize,
 ) -> RowRender {
@@ -275,18 +276,68 @@ fn shell_block(
         (input, out)
     };
     let mut rows: Vec<Vec<Placed>> = Vec::new();
+    // ShellDisplay's running color (index.tsx:2793
+    // `permission() ? warning : theme.text.base`) — the fixture has
+    // no pending permission, so the running command renders in
+    // `text.base` ON the block's raised fill (the ref's text carries
+    // no bg; the block's fill shows through).
+    let running_style = Style::new().fg(base).bg(raised);
     if command.is_empty() {
-        rows.push(vec![text_at(0, 0, "Writing command…", muted)]);
-    } else {
-        // The command wraps (`wrapMode char` collapsed / `word`
-        // expanded, maxHeight 2 collapsed).
-        for line in limited_input.split('\n') {
+        if running {
+            // `<Spinner color={color()}>Writing command…</Spinner>`'s
+            // animations-off fallback (spinner.tsx:29-31): one text
+            // run `⋯ Writing command…` in the running color.
             rows.push(vec![text_at(
                 0,
                 0,
-                crate::wrap::take_width(line, width.saturating_sub(3)),
-                if running { muted } else { Style::new().fg(base).bg(raised) },
+                format!("{RESTING_INDICATOR_GLYPH} Writing command…"),
+                running_style,
             )]);
+        } else {
+            rows.push(vec![text_at(0, 0, "Writing command…", muted)]);
+        }
+    } else {
+        // The command wraps (`wrapMode char` collapsed / `word`
+        // expanded, maxHeight 2 collapsed). While RUNNING the row is
+        // `<box row gap={1}><Spinner/><text fg={color()}/></box>`
+        // (index.tsx:2926-2938): the indicator glyph, one gap column,
+        // THEN the command (both in the running color) — the glyph
+        // never overlaps the command's first character.
+        let lines: Vec<&str> = limited_input.split('\n').collect();
+        // The glyph rides the text block's vertical middle (the row
+        // box's default center alignment — a 2-line wrap centers the
+        // 1-cell spinner).
+        let glyph_y = lines.len() / 2;
+        for (index, line) in lines.iter().enumerate() {
+            let mut row = Vec::new();
+            if running {
+                let command_x = 2; // glyph (1) + gap 1
+                if index == glyph_y {
+                    row.push(text_at(
+                        0,
+                        index,
+                        running_indicator_glyph(clock_ms, animations),
+                        running_style,
+                    ));
+                }
+                row.push(text_at(
+                    command_x,
+                    index,
+                    crate::wrap::take_width(
+                        line,
+                        width.saturating_sub(3).saturating_sub(command_x),
+                    ),
+                    running_style,
+                ));
+            } else {
+                row.push(text_at(
+                    0,
+                    0,
+                    crate::wrap::take_width(line, width.saturating_sub(3)),
+                    Style::new().fg(base).bg(raised),
+                ));
+            }
+            rows.push(row);
         }
     }
     if !limited_output.is_empty() {
@@ -296,7 +347,10 @@ fn shell_block(
                 0,
                 0,
                 crate::wrap::take_width(line, width.saturating_sub(3)),
-                muted,
+                // The ref's output `<text fg={muted}>` carries no bg —
+                // the block's RAISED fill shows through (the capture:
+                // muted glyphs on raised, not on the page base).
+                Style::new().fg(muted.fg.unwrap_or(theme.background)).bg(raised),
             )]);
         }
     }
@@ -332,11 +386,6 @@ fn shell_block(
         // W3 — the rail sits ON the raised fill (ref capture: the split
         // border char carries fg=background.base, bg=background.raised).
         placed.push(text_at(0, row, "┃", Style::new().fg(theme.background).bg(raised)));
-    }
-    if running && !command.is_empty() && !rows.is_empty() {
-        // The running command's spinner glyph leads the first row
-        // (Spinner + the colored text).
-        placed.push(text_at(3, 1, spinner_frame(clock_ms), muted));
     }
     let fills = vec![Fill {
         x: 0,
@@ -702,6 +751,7 @@ fn execute_call_summary(tool: &str, input: &serde_json::Value) -> String {
 /// command/status/exit/output, with the status error line appended
 /// ("Command cancelled" / "Command timed out" /
 /// "Command exited with code N" — `ShellMessage`'s `error` memo).
+#[allow(clippy::too_many_arguments)] // the ShellDisplay props set (index.tsx:2166-2186)
 #[must_use]
 pub fn shell_message_row(
     command: &str,
@@ -709,6 +759,7 @@ pub fn shell_message_row(
     exit: Option<i64>,
     output: Option<&str>,
     clock_ms: u64,
+    animations: bool,
     theme: &ThemeStyles,
     width: usize,
 ) -> RowRender {
@@ -726,7 +777,7 @@ pub fn shell_message_row(
         "timeout" => Some("Command timed out".to_owned()),
         _ => exit.filter(|exit| *exit != 0).map(|exit| format!("Command exited with code {exit}")),
     };
-    let mut render = shell_block(&state, false, clock_ms, theme, width);
+    let mut render = shell_block(&state, false, clock_ms, animations, theme, width);
     if let Some(error) = error {
         // `BlockTool`'s error row: the message in the error color
         // under the content (index.tsx:2694-2710).
@@ -792,6 +843,7 @@ fn parse_question_answers(metadata: Option<&serde_json::Value>) -> Option<Vec<Ve
 fn question_block(
     state: &ToolState,
     clock_ms: u64,
+    animations: bool,
     theme: &ThemeStyles,
     width: usize,
 ) -> RowRender {
@@ -822,7 +874,7 @@ fn question_block(
     } else {
         let label = format!("Asked {count} question{}", if count == 1 { "" } else { "s" });
         if matches!(state.status, ToolStatus::Running | ToolStatus::Streaming) {
-            running_tool_row("Asking questions…", clock_ms, theme, width)
+            running_tool_row("Asking questions…", clock_ms, animations, theme, width)
         } else {
             completed_tool_row('→', &label, theme, width)
         }
@@ -837,13 +889,14 @@ pub fn tool_detail_row(
     state: &ToolState,
     expanded: bool,
     clock_ms: u64,
+    animations: bool,
     theme: &ThemeStyles,
     width: usize,
 ) -> RowRender {
     let muted = theme.text_muted;
     let input = |key: &str| state.input.get(key).cloned().unwrap_or_default();
     match tool {
-        "shell" => shell_block(state, expanded, clock_ms, theme, width),
+        "shell" => shell_block(state, expanded, clock_ms, animations, theme, width),
         // G-182 — the `patch` tool renders ONE CARD PER FILE
         // (`ApplyPatch`, index.tsx:3333-3378); `edit` keeps the ref's
         // single first-file card (`Edit`, :3254 — `files[0]`).
@@ -868,7 +921,7 @@ pub fn tool_detail_row(
             }
             let running = matches!(state.status, ToolStatus::Running | ToolStatus::Streaming);
             let head = if running {
-                running_tool_row(&label, clock_ms, theme, width)
+                running_tool_row(&label, clock_ms, animations, theme, width)
             } else {
                 completed_tool_row('→', &label, theme, width)
             };
@@ -929,7 +982,7 @@ pub fn tool_detail_row(
             }
             let label = label.replace("glob", "Glob").replace("grep", "Grep");
             if matches!(state.status, ToolStatus::Running | ToolStatus::Streaming) {
-                running_tool_row(&label, clock_ms, theme, width)
+                running_tool_row(&label, clock_ms, animations, theme, width)
             } else {
                 error_reveal(
                     completed_tool_row('✱', label.trim(), theme, width),
@@ -947,6 +1000,7 @@ pub fn tool_detail_row(
                 "Fetching from the web…",
                 state,
                 clock_ms,
+                animations,
                 theme,
                 width,
                 expanded,
@@ -979,7 +1033,16 @@ pub fn tool_detail_row(
                 }
                 _ => format!("Web Search \"{}\"", input("query")),
             };
-            detail_inline_row(&label, "Searching web…", state, clock_ms, theme, width, expanded)
+            detail_inline_row(
+                &label,
+                "Searching web…",
+                state,
+                clock_ms,
+                animations,
+                theme,
+                width,
+                expanded,
+            )
         }
         "execute" => {
             // `Execute` (index.tsx:3197-3238): the `execute` InlineTool
@@ -988,7 +1051,7 @@ pub fn tool_detail_row(
             let has_error = state.error.is_some() || matches!(state.status, ToolStatus::Error);
             let loading = matches!(state.status, ToolStatus::Running | ToolStatus::Streaming);
             let head = if loading {
-                running_tool_row("execute", clock_ms, theme, width)
+                running_tool_row("execute", clock_ms, animations, theme, width)
             } else {
                 completed_tool_row(if has_error { '✗' } else { '✓' }, "execute", theme, width)
             };
@@ -1077,7 +1140,7 @@ pub fn tool_detail_row(
                 images: Vec::new(),
             }
         }
-        "question" => question_block(state, clock_ms, theme, width),
+        "question" => question_block(state, clock_ms, animations, theme, width),
         // The generic tool (`GenericTool`, index.tsx:2532-2584): the
         // tool label + `[k=v, …]`; a failed tool renders the error
         // row below.
@@ -1090,7 +1153,7 @@ pub fn tool_detail_row(
                 format!("{tool} [{}]", entries.join(", "))
             };
             let head = if matches!(state.status, ToolStatus::Running | ToolStatus::Streaming) {
-                running_tool_row(&summary, clock_ms, theme, width)
+                running_tool_row(&summary, clock_ms, animations, theme, width)
             } else {
                 completed_tool_row(
                     if matches!(state.status, ToolStatus::Error) { '✗' } else { '✓' },
@@ -1110,17 +1173,19 @@ pub fn tool_detail_row(
 }
 
 /// The completed/running inline row pair for webfetch/websearch.
+#[allow(clippy::too_many_arguments)] // the InlineTool props set
 fn detail_inline_row(
     label: &str,
     pending: &str,
     state: &ToolState,
     clock_ms: u64,
+    animations: bool,
     theme: &ThemeStyles,
     width: usize,
     expanded: bool,
 ) -> RowRender {
     let head = if matches!(state.status, ToolStatus::Running | ToolStatus::Streaming) {
-        running_tool_row(pending, clock_ms, theme, width)
+        running_tool_row(pending, clock_ms, animations, theme, width)
     } else {
         let icon = if matches!(state.status, ToolStatus::Error) { '✗' } else { '✱' };
         completed_tool_row(icon, label, theme, width)
@@ -1228,7 +1293,7 @@ mod tests {
             Some("hi\nsecond line"),
             None,
         );
-        let row = tool_detail_row("shell", &state, false, 0, &theme(), 60);
+        let row = tool_detail_row("shell", &state, false, 0, true, &theme(), 60);
         // padTop + command + gap + 2 output rows + padBottom.
         assert_eq!(row.height, 6);
         let grid = frame_of(&row).text_grid();
@@ -1251,7 +1316,7 @@ mod tests {
                 }]
             })),
         );
-        let row = tool_detail_row("edit", &state, false, 0, &theme(), 60);
+        let row = tool_detail_row("edit", &state, false, 0, true, &theme(), 60);
         let grid = frame_of(&row).text_grid();
         assert!(grid[1].trim_start().contains("← Edit src/a.rs"), "{}", grid[1]);
         assert!(grid[2].contains("@@ -1,2 +1,2 @@"), "hunk header: {}", grid[2]);
@@ -1274,7 +1339,7 @@ mod tests {
         );
         let mut state = state;
         state.error = Some("exit 1".to_owned());
-        let row = tool_detail_row("execute", &state, false, 0, &theme(), 60);
+        let row = tool_detail_row("execute", &state, false, 0, true, &theme(), 60);
         let grid = frame_of(&row).text_grid();
         assert!(grid[0].contains("✗ execute"), "{}", grid[0]);
         assert!(grid[1].contains("› read"), "the call row: {}", grid[1]);
@@ -1294,7 +1359,7 @@ mod tests {
             None,
             Some(serde_json::json!({"loaded": ["src/lib.rs", "src/util.rs"]})),
         );
-        let row = tool_detail_row("read", &state, false, 0, &theme(), 60);
+        let row = tool_detail_row("read", &state, false, 0, true, &theme(), 60);
         let grid = frame_of(&row).text_grid();
         assert!(grid[0].contains("Read src/main.rs"), "{}", grid[0]);
         assert!(grid[1].trim_start().starts_with("↳ Loaded src/lib.rs"), "{}", grid[1]);
@@ -1329,7 +1394,7 @@ mod tests {
                 ]
             })),
         );
-        let row = tool_detail_row("patch", &state, false, 0, &theme(), 60);
+        let row = tool_detail_row("patch", &state, false, 0, true, &theme(), 60);
         let text = frame_of(&row).text_grid().join("\n");
         // Per-file status + path headers (one per card).
         assert!(text.contains("← Patched src/a.rs"), "{text}");
@@ -1363,7 +1428,7 @@ mod tests {
             })),
             ..answered
         };
-        let row = tool_detail_row("question", &answered, false, 0, &theme(), 60);
+        let row = tool_detail_row("question", &answered, false, 0, true, &theme(), 60);
         let grid = frame_of(&row).text_grid();
         assert!(grid[1].contains("# Questions"), "{}", grid[1]);
         assert!(grid[2].contains("Run tests?"), "{}", grid[2]);
@@ -1378,7 +1443,7 @@ mod tests {
             })),
             ..pending
         };
-        let row = tool_detail_row("question", &pending, false, 0, &theme(), 60);
+        let row = tool_detail_row("question", &pending, false, 0, true, &theme(), 60);
         let grid = frame_of(&row).text_grid();
         assert!(grid[0].contains("Asking questions…"), "{}", grid[0]);
     }
@@ -1470,6 +1535,7 @@ mod g370_websearch_tests {
                 &websearch_state(Some(provider)),
                 false,
                 0,
+                true,
                 &theme,
                 80,
             );
@@ -1481,7 +1547,8 @@ mod g370_websearch_tests {
             assert!(text.join("\n").contains(expected), "{provider}: {text:?}");
         }
         // No provider metadata → the plain label.
-        let render = tool_detail_row("websearch", &websearch_state(None), false, 0, &theme, 80);
+        let render =
+            tool_detail_row("websearch", &websearch_state(None), false, 0, true, &theme, 80);
         let text: Vec<String> = render
             .placed
             .iter()

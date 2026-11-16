@@ -1774,6 +1774,13 @@ pub struct Store {
     /// The configured default model (`config.model` — the selection
     /// chain's step 3; boot + reload set it, see [`Store::resolve_model`]).
     config_model: std::cell::RefCell<Option<ModelSelection>>,
+    /// The animation gate (`config.animations ?? true` — ref
+    /// spinner.tsx:29-31 / session/index.tsx:2029-2032): `false` pins
+    /// every running-row indicator to the static `⋯` fallback instead
+    /// of the clock-driven spinner. The diff driver mirrors the ref
+    /// fixture's resolved config (test/fixture/app.ts:37,
+    /// `input.config ?? { animations: false }`) by clearing it.
+    animations_enabled: Cell<bool>,
     /// The injected clock (ms since boot) — the ONLY time source
     /// animations may read (`ManualClock` semantics: a frozen clock pins
     /// spinner frame 0; render happens on tick, only when it advances).
@@ -4223,6 +4230,7 @@ impl Store {
             session_moves: std::cell::RefCell::new(std::collections::HashMap::new()),
             session_list_sink: std::cell::RefCell::new(Rc::new(NoSessionListRefresh)),
             config_model: std::cell::RefCell::new(None),
+            animations_enabled: Cell::new(true),
             selection_sink: Rc::new(RecordingSelectionSink::default()),
             sinks_wired: Cell::new(0),
             session_view_sink: Rc::new(NoSessionView),
@@ -6939,6 +6947,20 @@ impl Store {
     }
 
     // -- clock (injected; ManualClock semantics) --------------------------------
+
+    /// The animation gate (`config.animations ?? true`). When `false`,
+    /// running-row indicators render the static `⋯` (spinner.tsx:29-31)
+    /// instead of sampling the clock.
+    #[must_use]
+    pub fn animations_enabled(&self) -> bool {
+        self.animations_enabled.get()
+    }
+
+    /// Set the animation gate (config load / the diff fixture's
+    /// `animations: false` pin).
+    pub fn set_animations_enabled(&self, enabled: bool) {
+        self.animations_enabled.set(enabled);
+    }
 
     /// The injected clock (ms) — the only time source the render reads.
     #[must_use]

@@ -461,8 +461,10 @@ class FramesInfraTest(unittest.TestCase):
 
 
 class ArtifactFamilyTest(unittest.TestCase):
-    """The A2 animation-gate artifact family is shape-narrow: only the
-    running-tool glyph pair (⠋ vs ⋯) of anim-tool-progress matches."""
+    """The A2 animation-gate artifact family is RETIRED (gb17,
+    2026-11-16): the animations gate is ported and anim-tool-progress
+    is exact in both dimensions — the former glyph-pair cluster no
+    longer matches ANY record (it was removed from CAUSES)."""
 
     def _rec(self, cid: str, field: str, ref, rust) -> dict:
         fd = {"row": 7, "col": 5, "field": field, "ref": ref, "rust": rust}
@@ -472,10 +474,13 @@ class ArtifactFamilyTest(unittest.TestCase):
     def _label(self, rec: dict) -> str | None:
         return adjudicate(rec)
 
-    def test_tool_progress_glyph_pair_hits(self):
-        label = self._label(self._rec("anim-tool-progress", "ch", "⋯", "⠋"))
-        self.assertIsNotNone(label)
-        self.assertIn("动画门控", label)
+    def test_retired_tool_progress_glyph_pair_no_longer_hits(self):
+        # retired (gb17): the running-tool glyph pair (⠋ vs ⋯) of
+        # anim-tool-progress used to hit the A2 artifact cluster; the
+        # gate is ported now, so the shape is unadjudicated if it ever
+        # reappears (a re-land regression must FAIL the lane, not be
+        # silently waived).
+        self.assertIsNone(self._label(self._rec("anim-tool-progress", "ch", "⋯", "⠋")))
 
     def test_non_tool_progress_anim_diverge_does_not_hit(self):
         # review finding: the old anim-* prefix swallowed ANY anim

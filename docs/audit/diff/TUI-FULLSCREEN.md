@@ -26,9 +26,9 @@ cells 稠密化，None/缺省子字段补规范默认（ch=' '、attrs 排序去
 
 | 总量 | EXACT | STRUCTURAL | CAUSES 命中 | 未裁决 |
 |---|---|---|---|---|
-| 90 | 81 | 0 | 9 | 0 |
+| 90 | 84 | 0 | 6 | 0 |
 
-（verdict 分布：exact 81 / structural 0 / diverge 9；
+（verdict 分布：exact 84 / structural 0 / diverge 6；
 committed 未裁决>0 ⇒ exit 2；rec-* recorded-local 见其小节（advisory，不入门））
 
 ## 分歧明细
@@ -47,9 +47,9 @@ committed 未裁决>0 ⇒ exit 2；rec-* recorded-local 见其小节（advisory�
 | anim-toast-window | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 28 | 18 |
 | anim-toast-window@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 28 | 18 |
 | anim-toast-window@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 28 | 18 |
-| anim-tool-progress | diverge | 60 | r7c5 ch ref='⋯' rust='⠋' | 80x24 | 80x24 | 0 | 0 | 28 | 18 |
-| anim-tool-progress@120x30 | diverge | 60 | r7c5 ch ref='⋯' rust='⠋' | 120x30 | 120x30 | 0 | 0 | 28 | 18 |
-| anim-tool-progress@320x80 | diverge | 60 | r7c5 ch ref='⋯' rust='⠋' | 320x80 | 320x80 | 0 | 0 | 28 | 18 |
+| anim-tool-progress | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 28 | 18 |
+| anim-tool-progress@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 28 | 18 |
+| anim-tool-progress@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 28 | 18 |
 | command-palette | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 18 |
 | command-palette@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 18 |
 | command-palette@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
@@ -128,9 +128,6 @@ committed 未裁决>0 ⇒ exit 2；rec-* recorded-local 见其小节（advisory�
 
 ### first_diff 明细
 
-- `anim-tool-progress` [diverge] row=7 col=5 field=ch ref='⋯' rust='⠋' cells_diff_count=60 — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
-- `anim-tool-progress@120x30` [diverge] row=7 col=5 field=ch ref='⋯' rust='⠋' cells_diff_count=60 — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
-- `anim-tool-progress@320x80` [diverge] row=7 col=5 field=ch ref='⋯' rust='⠋' cells_diff_count=60 — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
 - `plugin-fallback` [diverge] row=1 col=16 field=ch ref=' ' rust='┃' cells_diff_count=443 — CAUSES: G-424b toast 长标题折行未移植（rust 单行截断 vs ref 标题 shrink+wrap）
 - `plugin-fallback@120x30` [diverge] row=1 col=56 field=ch ref=' ' rust='┃' cells_diff_count=668 — CAUSES: G-424b toast 长标题折行未移植（rust 单行截断 vs ref 标题 shrink+wrap）
 - `plugin-fallback@320x80` [diverge] row=1 col=256 field=ch ref=' ' rust='┃' cells_diff_count=668 — CAUSES: G-424b toast 长标题折行未移植（rust 单行截断 vs ref 标题 shrink+wrap）
@@ -164,10 +161,6 @@ committed 未裁决>0 ⇒ exit 2；rec-* recorded-local 见其小节（advisory�
   - plugin-fallback 场景（G-425 管理屏失败行修复后的实际残余形状，收窄自原 G-425 簇的 plugin-fallback* 前缀）：失败 toast 的长标题（'Plugin failed: <config target>'，>60 列）——ref 的标题 text 无 wrapMode=none（默认 wrap），在 maxWidth=min(60, w-6) 的盒子内shrink+折行（登记册记录的'长标题三行折行'），面板行数随折行增长；rust toast_tree_units 的标题 run 恒 wrapMode=none 单行、在右轨处截断、panel_rows 恒 5——首个分歧恒为 toast 带（row 1..6）内 ref ' ' vs rust '┃' 的面板几何差。G-424 的 affordance 宽度语义本轮已对齐（anim-toast-* 三档 exact）；本簇=G-424 家族的标题折行残余子项，登记不拦
   - ref packages/tui/src/ui/toast.tsx:84-91（title text 默认 wrap，无 wrapMode=none——对比 affordance :77 显式 none）+ maxWidth 钳制 :52-53
   - rust crates/oc-tui/src/components/toast_solid.rs toast_tree_units（标题 chrome_cluster_units wrapMode=none 单行）+ toast.rs panel_rows（恒 5）
-- **A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）** — 命中 3 case（`anim-tool-progress`, `anim-tool-progress@120x30`, `anim-tool-progress@320x80`）
-  - anim-* 场景：rust 帧是 (store, clock) 纯函数（A1）——虚拟时钟逐拍推进使spinner 轮转/caret blink（500ms 周期）/knight 渐变在中间拍真实变化；ref 侧夹具钉 animations:false（动画门控关闭，静态形状）且渲染器时钟注入在整 app 下原生不稳（boot 死锁/捕获段错误，探针记录于 a2-report）——这是夹具伪影而非移植语义差：生产 ref 默认 animations:true 渲染同类动画。登记不拦；事件驱动的逐拍内容变化仍被本维度精确断言
-  - ref packages/tui/test/fixture/app.ts:32（config animations:false 钉定）+ component/spinner.tsx:27-31（animations 门控回退静态 ⋯）
-  - rust crates/oc-tui/tests/tui_fullscreen_diff_driver.rs（ANIM_TICK_MS=100 逐拍 advance_clock）；oc-tui 渲染无动画门控，时钟驱动（A1 接线）
 - **B2 version-skew 簇（退版本加载伪差：插件 2.2.x API 面在 ref 2.0.24 降级/不可 boot）** — 命中 0 case
   - plugin-* 场景且 ref 侧网格呈现失败态（'Plugin failed: <path>' 公告）：在 TUI_DIFF_BUN≥1.4.2 门控下（首轮整屏伪差根因= bun 1.3.10 ResolveMessage 非 Error 子类、host.ts:17-43 吞错守卫重抛——控制者实验实锤，已门控隔离）仍失败的载荷=其 2.2.x 宿主 API 假设在 2.0.24 面上不可满足——退版本加载伪差而非移植 bug，rust 侧 boot 出的渲染整体登记不拦；判定文须引插件调用点与 2.0.24 API 面缺失符号（首轮实证附加形状：omo-slim tui 入口加载后 ref 的 '/' 斜杠面板路径被插件降级破坏）。当前语料 0 命中（双插件在门控下均可 boot）——簇保留接未来真不可 boot 载荷
   - ref packages/plugin/src/host.ts:17-43（吞错守卫；bun≥1.4.2 依赖）+ packages/tui/src/plugin/context.tsx:478-484（失败态公告）
@@ -205,41 +198,7 @@ anim 场景（`anim.ticks` 声明，SCHEMA A2 扩展）在静息排空后逐拍�
 
 | anim 总量 | EXACT | CAUSES 命中 | 未裁决 |
 |---|---|---|---|
-| 15 | 12 | 3 | 0 |
-
-| case | verdict | 非exact拍 | per-tick | first 异拍 |
-|---|---|---|---|---|
-| anim-spinner-running | exact | 0/9 | `.........` (K=8) | — |
-| anim-spinner-running@120x30 | exact | 0/9 | `.........` (K=8) | — |
-| anim-spinner-running@320x80 | exact | 0/9 | `.........` (K=8) | — |
-| anim-stream-delta | exact | 0/11 | `...........` (K=10) | — |
-| anim-stream-delta@120x30 | exact | 0/11 | `...........` (K=10) | — |
-| anim-stream-delta@320x80 | exact | 0/11 | `...........` (K=10) | — |
-| anim-stream-multi-part | exact | 0/11 | `...........` (K=10) | — |
-| anim-stream-multi-part@120x30 | exact | 0/11 | `...........` (K=10) | — |
-| anim-stream-multi-part@320x80 | exact | 0/11 | `...........` (K=10) | — |
-| anim-toast-window | exact | 0/13 | `.............` (K=12) | — |
-| anim-toast-window@120x30 | exact | 0/13 | `.............` (K=12) | — |
-| anim-toast-window@320x80 | exact | 0/13 | `.............` (K=12) | — |
-| anim-tool-progress | diverge | 11/11 | `XXXXXXXXXXX` (K=10) | tick=0 r7c5 ch ref='⋯' rust='⠋' |
-| anim-tool-progress@120x30 | diverge | 11/11 | `XXXXXXXXXXX` (K=10) | tick=0 r7c5 ch ref='⋯' rust='⠋' |
-| anim-tool-progress@320x80 | diverge | 11/11 | `XXXXXXXXXXX` (K=10) | tick=0 r7c5 ch ref='⋯' rust='⠋' |
-
-- `anim-tool-progress`  — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
-- `anim-tool-progress@120x30`  — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
-- `anim-tool-progress@320x80`  — CAUSES: A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）
-
-## recorded-local（真实语料，聚合计数 — advisory）
-
-本地真实会话语料（`tools/diff/corpus/tui/recorded-local/`，git-ignored；
-隐私铁律：报告只列聚合计数，不引用录制内容原文，分歧明细表亦不展开）。
-**门语义（控制者裁定 2026-11-15）：本节未裁决=advisory——不参与 gate exit
-（日常录制常驻未裁决项，committed 绿才是门绿）；rec-* 的 infra 失败仍=exit 1
-（重放机制坏了）；未裁决项为 C 线后续 root-cause 输入（G-426/G-427 等）。**
-
-| 维度 | 总量 | EXACT | STRUCTURAL | DIVERGE | 未裁决 |
-|---|---|---|---|---|---|
-| resting | 9 | 7 | 0 | 2 | 0 |
+| 15 | 15 | 0 | 0 |
 
 ## 范围外声明
 
