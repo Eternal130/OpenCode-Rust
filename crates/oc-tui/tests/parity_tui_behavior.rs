@@ -1129,8 +1129,11 @@ fn backgroundtool() {
         cache_read: None,
         retry: None,
     };
+    // index.tsx:1766 — the delay reads `Date.now()` against the part's
+    // EPOCH timestamps, so the option under test is `epoch_now_ms`
+    // (the animation `clock_ms` no longer drives the hint).
     let options =
-        |clock: u64| TranscriptOptions { clock_ms: clock, ..TranscriptOptions::default() };
+        |epoch: u64| TranscriptOptions { epoch_now_ms: epoch, ..TranscriptOptions::default() };
 
     // A shell tool 4 s in on an open turn: the hint paints at the tail.
     let transcript = render_transcript(

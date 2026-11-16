@@ -224,6 +224,7 @@ struct TranscriptInputs {
 /// the viewport — the Wave-B visible-rows window).
 fn shape(
     transcript: &Transcript,
+    theme: &ThemeStyles,
     scroll_offset: usize,
     width: usize,
     height: usize,
@@ -279,6 +280,40 @@ fn shape(
         }
     }
     let _ = width; // the wrap pre-shaped the content; the raster clips
+                   // TUI-TD09 — `BackgroundToolHint` (index.tsx:1748-1780): the
+                   // scrollbox's tail row under the last content row while the
+                   // 3 s delay has elapsed — `Press ctrl+b to move running work to
+                   // the background` muted with the `ctrl+b` span in `text.base`
+                   // (the paint() twin's shape, on the solid path).
+    if transcript.background_hint {
+        // `<box marginTop={1} paddingLeft={3}>` (index.tsx:1771): one
+        // blank row under the last content row, the text at the
+        // column's content indent (region `inset + 3`, the same x the
+        // block bodies paint at).
+        let top = transcript.content_height + 1;
+        if top >= scroll_offset && top.saturating_sub(scroll_offset) < height {
+            let base = theme.text.fg.unwrap_or(theme.background);
+            let muted = theme.text_muted.fg.unwrap_or(theme.background);
+            let bg = theme.background;
+            let chunk = |text: &str, fg: crate::style::Color| TextChunk {
+                text: text.to_owned(),
+                fg: Some(rgba(rgb_of(fg))),
+                bg: Some(rgba(rgb_of(bg))),
+                attributes: 0,
+                link: None,
+            };
+            items.push(SolidItem {
+                key: "session-background-tool-hint".to_owned(),
+                left: transcript.inset + 3,
+                top,
+                body: ItemBody::Text(StyledText::new(vec![
+                    chunk("Press ", muted),
+                    chunk("ctrl+b", base),
+                    chunk(" to move running work to the background", muted),
+                ])),
+            });
+        }
+    }
     items
 }
 
@@ -524,7 +559,7 @@ pub fn transcript_mount(
         // the stale wrapper unmounts at the seam.
         return;
     }
-    let mut items = shape(transcript, scroll_offset, width, height);
+    let mut items = shape(transcript, theme, scroll_offset, width, height);
     if let Some((x, label)) = loading {
         let fg = rgb_of(theme.text_muted.fg.unwrap_or(theme.background));
         items.push(SolidItem {

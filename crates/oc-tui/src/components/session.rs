@@ -516,6 +516,12 @@ pub fn render_session(
             // (the vt-temporal harness caught this frozen at 0 when the
             // default leaked in here).
             clock_ms: store.clock(),
+            // The `config.animations ?? true` gate (spinner.tsx:29-31):
+            // `false` pins every running-row indicator to the static ⋯.
+            animations: store.animations_enabled(),
+            // The epoch-facing now (`Date.now()` in the ref's delay
+            // computations — index.tsx:1766's BackgroundToolHint).
+            epoch_now_ms: store.epoch_now_ms(),
             group_rules: store.plugin_group_rules(),
             expanded_groups: store
                 .expanded_group_keys(session_id)
