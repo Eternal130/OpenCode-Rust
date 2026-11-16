@@ -15,11 +15,11 @@
 | 5 | /compact 管线 | responses_compaction.py | RESPONSES-COMPACTION.md | 61 文档（13 mined） | 60 | 1 | — |
 | 6 | HTTP 全量 | http_full.py | HTTP-FULL.md | 60 请求（13 mined） | 47 | 11 | 2 |
 | 7 | **provider 录制解码** | provider_recordings.py | PROVIDER-RECORDINGS.md | **264 交互（259 真实 SSE）** | 264 | 0 | — |
-| 8 | TUI 整屏差分（静息帧 + A2 帧序列 + B2 真插件） | tui_fullscreen.py | TUI-FULLSCREEN.md | 静息 90 case（30 场景×3 档，含 plugin-* 15）+ frames 15 序列（5 anim×3 档）；插件腿 TUI_DIFF_BUN≥1.4.2 门控 | 静息 **EXACT 89**；frames **EXACT 15** | 静息 1（G-28 有界 shim ×1——plugin-panel-open@320x80 侧栏；G-424b 折行已于 gb17 W4 修复关簇、B2 加载模型投影族 W4 退役）；frames 0 | 1 committed（CAUSES 命中，未裁决 0）+ rec-* advisory 命中 0（9/9 exact） |
+| 8 | TUI 整屏差分（静息帧 + A2 帧序列 + B2 真插件） | tui_fullscreen.py | TUI-FULLSCREEN.md | 静息 90 case（30 场景×3 档，含 plugin-* 15）+ frames 15 序列（5 anim×3 档）；插件腿 TUI_DIFF_BUN≥1.4.2 门控 | 静息 **EXACT 90**；frames **EXACT 15** | 0（G-28 有界 shim 簇 gb17 W5 修复关簇——桥接 walk 盒垂向度量空行模型 + 双侧 XDG 密闭化；W4 已关 G-424b、退役 B2 投影族） | 0 committed + rec-* advisory 9/9 exact |
 
 ## 总计
 
-**通道 1-7：790 对拍单元：MATCH 717 · DIVERGE 71 · ADJUDICATED 2 · MISSING 0**（100% 三态归属；第三十轮 burndown 收口口径）。**通道 8（T9 裁决循环 2026-11-14 + T8-320 档 + A2 帧序列 + B2 真插件 2026-11-15 修复轮 + gap-burndown-16 + gb17 2026-11-16 四波清偿）：静息 90 case（30 场景×3 档）：EXACT 89 · STRUCTURAL 0 · CAUSES 1 · 未裁决 0（G-423/G-424/G-425/G-426/G-427 先后修复关簇，A2 工具行伪影族 + G-424b toast 折行簇（gb17 W4）修复关簇，B2 加载模型投影族（gb17 W4）按裁决文镜像退役；残余=G-28 有界 shim ×1——plugin-panel-open@320x80 侧栏 spacer/远端水合行）；frames 15 序列：EXACT 15 · CAUSES 0——门绿 exit 0，幂等（TUI_DIFF_BUN 设定下）。recorded-local（rec-* advisory 不拦门）：rec- 9/9 全 EXACT**——合计 880 对拍单元（+ frames 15 + rec-* advisory 9）。
+**通道 1-7：790 对拍单元：MATCH 717 · DIVERGE 71 · ADJUDICATED 2 · MISSING 0**（100% 三态归属；第三十轮 burndown 收口口径）。**通道 8（T9 裁决循环 2026-11-14 + T8-320 档 + A2 帧序列 + B2 真插件 2026-11-15 修复轮 + gap-burndown-16 + gb17 2026-11-16 四波清偿）：静息 90 case（30 场景×3 档）：EXACT 90 · STRUCTURAL 0 · CAUSES 0 · 未裁决 0——**通道史上首次全一致**（G-423/G-424/G-425/G-426/G-427/G-424b 先后修复关簇；B2 加载模型投影族（gb17 W4）按裁决文镜像退役；G-28 有界 shim 残余单例（gb17 W5）修复关簇——桥接 walk 盒垂向度量→空行模型 + 双腿 XDG_CONFIG_HOME 密闭化）；frames 15 序列：EXACT 15 · CAUSES 0——门绿 exit 0，幂等（TUI_DIFF_BUN 设定下）。recorded-local（rec-* advisory 不拦门）：rec- 9/9 全 EXACT**——合计 880 对拍单元（+ frames 15 + rec-* advisory 9）。
 <!-- 历史脚注（第二十九轮基线口径，已被上方第三十轮收口数字取代，保留备查）：
      101 项分歧：既有 78（R27/R28 裁定族）+ 挖掘新增 23 → 归并 G-412..G-422（11 条：🟡×1 / 🟢×10），其余归 G-407/409/410 既有族。 -->
 

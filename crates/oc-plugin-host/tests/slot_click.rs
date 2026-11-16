@@ -71,9 +71,19 @@ fn slot_click_runs_the_plugin_row_handler_and_navigates() {
         for request in host.drain_ui_requests() {
             if let UiRequest::SidebarSection { plugin_id, title, rows, clickable } = request {
                 if plugin_id == "clickprobe:tui" {
-                    assert_eq!(title, "Probe");
-                    assert_eq!(rows, vec!["Go to child".to_owned(), "plain row".to_owned()]);
-                    assert_eq!(clickable, vec![true, false], "only the onMouseUp row is clickable");
+                    // G-28 bridge-walk fix: the STRUCTURAL flatten —
+                    // every line is a row (empty title), so the
+                    // clickable indices ride the full line list.
+                    assert_eq!(title, "");
+                    assert_eq!(
+                        rows,
+                        vec!["Probe".to_owned(), "Go to child".to_owned(), "plain row".to_owned()]
+                    );
+                    assert_eq!(
+                        clickable,
+                        vec![false, true, false],
+                        "only the onMouseUp row is clickable"
+                    );
                     landed = true;
                 }
             }
@@ -85,11 +95,11 @@ fn slot_click_runs_the_plugin_row_handler_and_navigates() {
     // (b) The click runs the row's handler → the navigate ask lands
     // on the UI-request queue.
     let clicked = host
-        .click_sidebar_row("clickprobe:tui", 0, Duration::from_secs(5))
+        .click_sidebar_row("clickprobe:tui", 1, Duration::from_secs(5))
         .expect("the click call ran");
     assert!(clicked, "the row had a handler");
     // A non-clickable row answers false (contained).
-    assert!(!host.click_sidebar_row("clickprobe:tui", 1, Duration::from_secs(5)).unwrap());
+    assert!(!host.click_sidebar_row("clickprobe:tui", 2, Duration::from_secs(5)).unwrap());
 
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
