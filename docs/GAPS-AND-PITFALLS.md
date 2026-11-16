@@ -3349,3 +3349,13 @@ G-412/413/414/415/416/417/418/420/422 ✅；**G-419/G-421 勘误撤销**（登�
 ## 验证
 - 通道全量：committed 90/90 exact + frames 15/15 exact + rec- 9/9 exact，CAUSES hits 0，gate exit 0（幂等三跑）；selftest 31/31。
 - `cargo nextest run -p oc-tui -p oc-plugin-host --locked --no-fail-fast`：1842 全绿（e1_cells_paste_8k 首试 flake=登记册白名单，--exact 重跑绿）；clippy -D warnings 绿；fmt --check 绿；guards 全绿。
+
+# 第三十五轮（2026-11-17，通道 9 立项 W1：真实链路 harness + 六症状机器复现）
+
+> **教训登记（真实链路零覆盖）**：beta.15 真机人工测试曝出六症状（①连不上后端 ②发不出消息 ③TUI 逻辑不一样 ④~ 下主页面无会话标签栏 ⑤侧栏缺内容 ⑥模型加载不对），而当时全部自动化通道（差分 8 通道/PTY/e2e）的服务器侧都是 **FakeLlm 桩**——真实链路（真 oc-server + 真配置发现 + 真存储 + 真模型目录 + 真 provider wire 协议）零覆盖，六个症状里三个（②④⑤连坐）在桩链路上**结构性不可复现**。教训：**桩链路的绿灯不能外推到真链路；凡「客户端把请求体发到服务器」的合同面（id 形状、鉴权、wire 协议字段），必须有至少一条说真协议的链路级测试。** 立项通道 9（real-chain）：真 PTY 键序 → 真 `opencode-rust` 二进制（生产 boot 拓扑）→ 真托管 oc-server（沙箱 HOME/XDG）→ 唯一桩点=回放网关（说真 anthropic messages SSE/openai chat wire 协议，请求规范化哈希 → 语料命中 → 逐字节回放录制响应；未命中严格 404）。harness：`tools/diff/realchain/replay_gateway.py` + `crates/oc-tui/tests/realchain_{harness,t9}.rs`（nextest 集成，沙箱纪律同 PTY 族）。
+
+## G-431 🔴 TUI 发送消息被服务器 schema 拒绝：prompt body `id` 用裸 UUID，违反 `msg_` 前缀合同（症状②根因，④⑤上游）
+- **证据（通道 9 T9-3/T9-4/T9-5 机器复现，2026-11-17）**：真 TUI 键入 `hello` + Enter → 服务器日志 `[WARN] [schema-error] schema rejection kind=Payload reason=Expected a string starting with "msg_" at ["id"]`，`session.prompt` 400；用户消息**永不持久化**（DB 仅 `model-switched` 一条）、零 provider 请求、回复不渲染；重启后 `/api/session` 空列表（症状④连坐）；侧栏 Context 段因无回复不出现（症状⑤连坐）。
+- **根因（双侧 file:line）**：rust `crates/oc-tui/src/store.rs:5198,5247` `let inbox_id = uuid::Uuid::new_v4().to_string()` → `app.rs:5105` `id: inbox_id` 直接作为 `session.prompt` body id；ref `packages/tui/src/mini/runtime.queue.ts:151,266` `SessionMessage.ID.create()`（`msg_` 前缀）。服务器侧校验器（ref-pinned，`crates/oc-server/src/request_validation.rs`）按合同正确拒绝。
+- **链路侧反证（bug 不在服务器/引擎/网关）**：同 sandbox 经 `POST /api/session/{id}/prompt` 直发 `{"text":"hello","id":"msg_..."}` → 引擎 → 回放网关（anthropic SSE 逐字节回放）→ assistant 消息 `"REALCHAIN-REPLAY-OK"` 落库（tokens 32/6, end_turn）——engine/provider/网关全链绿。
+- **修复方向（W2）**：TUI 侧 prompt id 改 `msg_` 前缀生成（对齐 `SessionMessage.ID.create()` 语义）；修复后 T9-3/4/5 应转绿（语料已 committed：`tools/diff/realchain/corpus/seed-*.json`）。
