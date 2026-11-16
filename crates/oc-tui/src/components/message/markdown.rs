@@ -34,7 +34,7 @@ use crate::style::{Color, Modifier, Style};
 use opentui_core::buffer::OptimizedBuffer;
 use opentui_core::renderables::code::CodeOptions;
 use opentui_core::renderables::markdown::{
-    build_markdown_blocks, markdown_code_styled, BlockSpec, ListItemSpec, MarkdownOptions,
+    build_markdown_blocks_top_level, markdown_code_styled, BlockSpec, ListItemSpec, MarkdownOptions,
 };
 use opentui_core::renderables::text_table::TextTableState;
 use opentui_core::styled_text::StyledText;
@@ -230,15 +230,25 @@ impl MarkdownStyles {
 pub fn render_markdown(source: &str, width: usize, styles: &MarkdownStyles) -> Vec<MarkdownLine> {
     let mut options = styles.options();
     source.clone_into(&mut options.content);
-    let blocks = build_markdown_blocks(&options, &styles.syntax);
+    // G-426 re-root-cause (2026-11-16): the top-level block model
+    // (`internalBlockMode="top-level"`, upstream index.bun.js
+    // `buildTopLevelRenderBlocks`/`shouldAddTopLevelMargin`) renders
+    // every top-level lex token as its OWN block — no scrollback
+    // coalescing — with a one-row margin before a block whose neighbor
+    // is a separated block (heading/list/code/table/blockquote/hr) or a
+    // source-blank paragraph pair. The old scrollback-merge path glued
+    // e.g. an empty-list-item block onto the preceding paragraph (the
+    // mis-attributed marked@17 residual); this is the port gap.
+    let blocks = build_markdown_blocks_top_level(&options, &styles.syntax);
     let mut lines = Vec::new();
     // Fence ordinals are stable across streaming updates of the same
     // document (blocks parse identically while a trailing fence grows),
     // so they key the mermaid seam's `lastGood` map (ref keys on the
     // renderable id).
     let mut fence_counter = 0usize;
-    for spec in &blocks {
-        render_spec(spec, width, 0, styles, &mut lines, &mut fence_counter);
+    for block in &blocks {
+        push_margins(block.margin_top, &mut lines);
+        render_spec(&block.spec, width, 0, styles, &mut lines, &mut fence_counter);
     }
     lines
 }
@@ -546,6 +556,15 @@ fn render_list(
                 fence_counter,
             );
         }
+        // G-426 re-root-cause: an EMPTY list item (`-` alone, ref
+        // Markdown.ts createListItemRenderable) still renders its
+        // marker row — the marker text node exists with empty content
+        // beside it; the row is marker-only.
+        if body.is_empty() {
+            lines.push(MarkdownLine(vec![marker.clone()]));
+            push_margins(item.margin_bottom, lines);
+            continue;
+        }
         for (row, line) in body.into_iter().enumerate() {
             let mut runs = Vec::new();
             if row == 0 {
@@ -578,7 +597,16 @@ fn push_wrapped(
     theme: &MarkdownStyles,
     lines: &mut Vec<MarkdownLine>,
 ) {
-    for line_chunks in split_chunks_on_newlines(text) {
+    let mut groups = split_chunks_on_newlines(text);
+    // G-426 re-root-cause: top-level markdown-text contents keep their
+    // trailing newline (the reference's normalizeScrollbackMarkdownBlockRaw
+    // — the tree-sitter heading conceal needs it); the reference's
+    // renderable layout swallows the trailing blank row, and so do we
+    // (the block gap is the margin model's, never the content's).
+    if groups.last().is_some_and(Vec::is_empty) {
+        groups.pop();
+    }
+    for line_chunks in groups {
         let spans: Vec<StyledSpan> =
             line_chunks.iter().map(|chunk| chunk_span(chunk, theme)).collect();
         if spans.is_empty() {
@@ -952,19 +980,18 @@ mod tests {
     use super::*;
     use crate::theme::ThemeState;
 
-    /// G-426 residual — the framework lexer's empty-list interruption
-    /// gap, pinned as the CURRENT rust shape: marked@17 (the ref
-    /// chain's lexer, marked@17.0.1) lets an EMPTY list item (`-` on
-    /// its own line) INTERRUPT a paragraph — the paragraph raw ends
-    /// at the previous line and the `-` becomes a one-item List block
-    /// (own row + margins). The opentui-core lexer port keeps the `-`
-    /// inside the paragraph raw (lazy continuation), gluing it to the
-    /// paragraph's last line with no separating blank. Upstream
-    /// (framework-layer) fix required; this pin documents the
-    /// oc-tui-side rendering of the rust token stream so the eventual
-    /// core fix flips it visibly.
+    /// G-426 re-root-cause (2026-11-16) — the REFERENCE shape, now
+    /// rendered exactly: an EMPTY list item (`-` on its own line)
+    /// interrupts the paragraph (one-item List block: own marker row,
+    /// `shouldAddTopLevelMargin` blank before it), the `---` is an hr,
+    /// and the trailing list follows with its own margin. The old pin
+    /// (`-` glued to the paragraph, no separating blank) was the
+    /// scrollback-merge rendering, mis-attributed to a marked@17
+    /// lexical gap — the token stream was already correct; the port
+    /// gap was the top-level block/margin layer
+    /// (`build_markdown_blocks_top_level`, opentui-core 454cd24).
     #[test]
-    fn gb16_empty_list_item_does_not_interrupt_the_paragraph() {
+    fn gb16_empty_list_item_interrupts_the_paragraph() {
         let src = "- first: the linker args drift\n\nxxx\n\n---xxxx\nxx xxxx-- -\n    yyy---\n-\n---\n\n- a\n- b\n";
         let lines = render_with(src, 60, false);
         let texts: Vec<String> = lines.iter().map(MarkdownLine::text).collect();
@@ -978,14 +1005,14 @@ mod tests {
                 "---xxxx".to_owned(),
                 "xx xxxx-- -".to_owned(),
                 "    yyy---".to_owned(),
-                // the `-` rides the PARAGRAPH (ref: blank + own list row)
-                "-".to_owned(),
+                // the `-` is its own List block: margin blank + marker row
+                String::new(),
+                "- ".to_owned(),
                 String::new(),
                 "─".repeat(60),
                 String::new(),
                 "- a".to_owned(),
                 "- b".to_owned(),
-                String::new(),
             ]
         );
     }
