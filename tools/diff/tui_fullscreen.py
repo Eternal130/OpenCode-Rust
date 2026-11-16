@@ -354,8 +354,19 @@ def build_manifest(stage: Path) -> tuple[list[dict], list[str]]:
             if any(pid in unavailable_plugins for pid in pids):
                 skipped.append(case["id"])
                 continue
-            case["plugins"] = [staged_ref[pid] for pid in pids]
-            case["plugins_rust"] = [staged_rust[pid] for pid in pids]
+            # G-424b fixture-boundary mirror: both legs pass the SAME
+            # canonical path string (STAGE/plugins/…) — a symlink the
+            # orchestrator repoints per leg (ref -> plugins-ref
+            # before run_ref, rust -> plugins-rust before run_rust).
+            # The staged trees must stay separate (the ref root
+            # carries the host @opentui symlink; the rust root gets
+            # the guest's bridge shims), but the toast/dialog
+            # surfaces embed the config target STRING — unequal roots
+            # ("plugins-ref" vs "plugins-rust") leak a one-char
+            # harness asymmetry into the compared grids that no port
+            # can close.
+            case["plugins"] = [staged_ref[pid].replace("plugins-ref", "plugins") for pid in pids]
+            case["plugins_rust"] = [staged_rust[pid].replace("plugins-rust", "plugins") for pid in pids]
         cases.append(case)
     cases.sort(key=lambda c: c["id"])
     manifest = {"schema": "tui-diff-manifest/1", "cases": cases}
@@ -573,6 +584,19 @@ def check_bun_gate(bun: str | None, version_fn=_bun_version) -> None:
             "first-round whole-screen pseudo-diffs).")
 
 
+def _point_plugins_link(stage: Path, root_name: str) -> None:
+    """Repoint STAGE/plugins at one staged root (the G-424b canonical
+    path: both legs' config targets read the same string while each
+    resolves into its own tree)."""
+    link = stage / "plugins"
+    if link.is_symlink() or link.exists():
+        if link.is_symlink() or not link.is_dir():
+            link.unlink()
+        else:
+            raise SystemExit(f"{link}: exists and is not a symlink")
+    os.symlink(root_name, link)
+
+
 def run(stage: Path, ref: Path, cases: list[dict]) -> tuple[dict[str, dict], dict[str, dict]]:
     """Drive both sides over the staged manifest (cases from the
     already-run build_manifest) -> (ref grids, rust grids). B2-fix:
@@ -594,12 +618,14 @@ def run(stage: Path, ref: Path, cases: list[dict]) -> tuple[dict[str, dict], dic
         plugin_manifest = stage / "manifest-plugins.json"
         plugin_manifest.write_text(json.dumps(
             {"schema": "tui-diff-manifest/1", "cases": plugin_cases}, indent=1))
+        _point_plugins_link(stage, "plugins-ref")
         run_ref(stage, ref, plugin_manifest, ref_out, bun=bun)
     if plain_cases:
         plain_manifest = stage / "manifest-plain.json"
         plain_manifest.write_text(json.dumps(
             {"schema": "tui-diff-manifest/1", "cases": plain_cases}, indent=1))
         run_ref(stage, ref, plain_manifest, ref_out)
+    _point_plugins_link(stage, "plugins-rust")
     run_rust(manifest, rust_out)
     ref_grids, ref_unavail = load_side(ref_out, cases, "ref")
     rust_grids, rust_unavail = load_side(rust_out, cases, "rust")
@@ -886,33 +912,27 @@ CAUSES = [
         ),
     ),
     (
-        # RETIRED (gap-burndown-16 W2, 2026-11-15): the G-424 fix landed
-        # (toast_geometry affordance width + toast_tree_units/right_rail_
-        # cell/app hit-rect); anim-toast-* three tiers are exact in both
-        # resting and frames dimensions — 0 hits, cluster removed.
-        "G-424b toast 长标题折行未移植（rust 单行截断 vs ref 标题 shrink+wrap）",
-        lambda d: str(d.get("id", "")).startswith("plugin-fallback")
-        and d.get("dimension", "resting") == "resting"
-        and d.get("verdict") == "diverge"
-        and (d.get("first_diff") or {}).get("field") == "ch"
-        and 1 <= ((d.get("first_diff") or {}).get("row") or 0) <= 6,
+        # RETIRED (gb17 wave 4, 2026-11-16): the G-424b title-wrap
+        # residual is FIXED — the toast title now shrinks and
+        # word-wraps inside the maxWidth-60 panel (toast_wrap: the
+        # global break set PLUS '/', evidenced by the ref grids'
+        # "…/node_modules/" line ending), the geometry clamp includes
+        # the rails, panel rows grow with the wrapped lines, the
+        # dialog (z-3000 in the ref) covers the toast's overlapped
+        # rows and its scrim dims the rail glyphs (ToastRailCover),
+        # and the /plugins dialog row carries the failed gutter `x`
+        # with the ref's footer-prop/hint pairs. plugin-fallback all
+        # three tiers exact in resting — 0 hits, cluster removed
+        # (the G-424 retirement precedent). A NEW toast-shape
+        # divergence requires a NEW CAUSES entry with its own probe
+        # evidence.
+        "G-424b toast 长标题折行未移植（rust 单行截断 vs ref 标题 shrink+wrap）— RETIRED",
+        lambda d: False,
         (
-            "plugin-fallback 场景（G-425 管理屏失败行修复后的实际残余形状，"
-            "收窄自原 G-425 簇的 plugin-fallback* 前缀）：失败 toast 的长标题"
-            "（'Plugin failed: <config target>'，>60 列）——ref 的标题 text 无 "
-            "wrapMode=none（默认 wrap），在 maxWidth=min(60, w-6) 的盒子内"
-            "shrink+折行（登记册记录的'长标题三行折行'），面板行数随折行增长；"
-            "rust toast_tree_units 的标题 run 恒 wrapMode=none 单行、在右轨处"
-            "截断、panel_rows 恒 5——首个分歧恒为 toast 带（row 1..6）内 ref "
-            "' ' vs rust '┃' 的面板几何差。G-424 的 affordance 宽度语义本轮"
-            "已对齐（anim-toast-* 三档 exact）；本簇=G-424 家族的标题折行残"
-            "余子项，登记不拦",
-            "ref packages/tui/src/ui/toast.tsx:84-91（title text 默认 wrap，"
-            "无 wrapMode=none——对比 affordance :77 显式 none）+ maxWidth 钳制 "
-            ":52-53",
-            "rust crates/oc-tui/src/components/toast_solid.rs toast_tree_units"
-            "（标题 chrome_cluster_units wrapMode=none 单行）+ toast.rs "
-            "panel_rows（恒 5）",
+            "（已关闭）plugin-fallback 三档 exact（gb17 W4，2026-11-16）",
+            "ref packages/tui/src/ui/toast.tsx:46-99（maxWidth 整盒钳制 + 标题默认 wrap）",
+            "rust crates/oc-tui/src/components/toast.rs toast_layout/toast_wrap"
+            " + toast_solid.rs ToastRailCover",
         ),
     ),
     # RETIRED (gb17 tool-glyph, 2026-11-16): the A2 animation-gate
@@ -965,39 +985,32 @@ CAUSES = [
         ),
     ),
     (
-        # B2-fix: the plugin-panel-open family — the LOADING-MODEL
-        # asymmetry the first round's whole-screen exemption hid. The
-        # ref TUI harness loads ONLY the tui entry (config.plugins
-        # local-dir convention); its palette therefore has NO omo-slim
-        # commands (the reflect/deepwork/… registrations live in the
-        # package's SERVER entry, which in production ref runs in the
-        # SERVER process and reaches the TUI via the command API — the
-        # fixture has no server). The rust port is a unified process:
-        # its TUI boots server+tui entries in one PluginHost, so the
-        # palette carries the plugin rows. At 320x80 the ref's REAL
-        # Solid sidebar section ("▼ OMO-Slim v3.0.3" + preset/agent
-        # rows) vs the rust bounded-shim sidebar is the G-28 shape
-        # face co-present in the same grid.
-        "B2 插件注册投影（rust 统一进程 server-entry 装载 vs ref TUI 仅 tui 入口面）",
-        lambda d: str(d.get("id", "")).startswith("plugin-panel-open"),
+        # RETIRED (gb17 wave 4, 2026-11-16): the loading-model
+        # asymmetry is closed at the HARNESS boundary (the controller
+        # ruling's retirement condition — driver-side mirror of the
+        # ref fixture's loading face): the rust diff driver boots the
+        # host with `tui_only: true` (oc-plugin-host's
+        # PluginHostConfig), so each staged package loads ONLY its
+        # tui entry through the TUI-companion op — exactly the ref
+        # TUI fixture's face (context.tsx:670 `Host.resolve(target)
+        # .tui`; the server entry runs in the ref's SERVER process,
+        # which the fixture has none of). Both sides now boot the
+        # SAME entry set: plugin-boot-*/plugin-fallback/plugin-
+        # panel-open all exact at 80/120; the 320x80 tier's residual
+        # is the bounded sidebar shim (the payload's own render under
+        # the bridge walk drops the blank spacer + remote-hydrated
+        # `Preset zhipuai ▸` row) — the G-28 shape face the original
+        # entry predicted ("320×80 档 … G-28 形状面共现"), now
+        # CAUGHT by G-28. 0 hits on this cluster, removed. Production
+        # loading is UNCHANGED (default tui_only=false: the unified
+        # process still loads server+tui).
+        "B2 插件注册投影（rust 统一进程 server-entry 装载 vs ref TUI 仅 tui 入口面）— RETIRED",
+        lambda d: False,
         (
-            "plugin-panel-open 场景（palette 搜索 'reflect'）：ref 2.0.24 TUI 夹具"
-            "只装载 tui 入口（config.plugins 本地目录约定），palette 无 omo-slim "
-            "命令（reflect/deepwork 注册在包的 server 入口——生产 ref 由 SERVER "
-            "进程装载、经命令 API 到达 TUI，夹具无 server 面）→ 'No results "
-            "found'；rust 移植为统一进程，TUI 的 PluginHost 同时 boot server+tui "
-            "入口，palette 携带 'Plugin · oh-my-opencode-slim' 组命令行。这是加载"
-            "模型/夹具边界差而非渲染 bug；320×80 档同一网格内 ref 真 Solid 侧栏 "
-            "section（'▼ OMO-Slim v3.0.3' + Preset/agent 行）vs rust 有界 shim "
-            "侧栏为 G-28 形状面共现。节律注记（C3 review Important#2，2026-11-15）："
-            "ref driver 的 per-token idle 例外（leaderStroke 后不插 idle）自 C3 起"
-            "对 plugins>0 场景同样生效——plugin 场景的 token 间节律基线已随之改变，"
-            "未来新增 plugin 场景按现行节律捕获/基线，不回溯旧节律",
-            "ref packages/tui/src/plugin/context.tsx:296-307（config.plugins 本地"
-            "目录条目）+ host.ts:17-43（tui 入口探测；server 入口不经 TUI 装载）",
-            "rust crates/oc-plugin-host/src/supervisor.rs:2330-2390（entry 装载后"
-            "伴生 load.tui——统一进程同时装载 server+tui）+ oc-tui/src/plugin_"
-            "boot.rs project_registrations（palette 行投影）",
+            "（已关闭）driver 装配镜像 ref 夹具装载面（tui_only），残余 sidebar 形状归 G-28",
+            "ref packages/tui/src/plugin/context.tsx:670（仅 tui 入口装载）",
+            "rust crates/oc-plugin-host/src/lib.rs PluginHostConfig::tui_only"
+            " + supervisor.rs load_entry（tui_only 分支）+ oc-tui diff driver 装配",
         ),
     ),
     (

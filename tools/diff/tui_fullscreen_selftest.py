@@ -587,13 +587,18 @@ class PluginSkipReconciliationTest(unittest.TestCase):
 
 
 class B2FixFamilyTest(unittest.TestCase):
-    """The B2-fix adjudication split: plugin-fallback-* (deliberate
-    broken payload) belongs to the G-425 failure-surface registration
-    — NEVER the version-skew cluster, even with the ref failure flag;
-    plugin-panel-open-* belongs to the loading-model cluster
-    (unified-process server-entry projection) regardless of the
-    flag; version-skew stays reserved for genuinely un-bootable
-    payloads on other plugin-* ids."""
+    """The B2-fix adjudication split (wave-4 retirement state):
+    plugin-fallback-* (deliberate broken payload) belongs to the
+    G-425 failure-surface registration — NEVER the version-skew
+    cluster, even with the ref failure flag; the wave-4 retirement
+    removed the plugin-panel-open loading-model cluster (the harness
+    now mirrors the ref fixture's tui-only loading face, both sides
+    boot the same entry set — the residual 320x80 sidebar shape is
+    G-28's); version-skew stays reserved for genuinely un-bootable
+    payloads on other plugin-* ids; the retired G-424b toast-wrap
+    cluster never swallows a plugin-fallback divergence anymore
+    (plugin-fallback is exact, and any NEW divergence there must
+    adjudicate elsewhere — the reverse pin)."""
 
     def _rec(self, cid: str, failed: bool | None) -> dict:
         rec = {"id": cid, "dimension": "resting", "verdict": "diverge",
@@ -610,15 +615,23 @@ class B2FixFamilyTest(unittest.TestCase):
         self.assertIn("G-425", label)
         self.assertNotIn("version-skew", label)
 
-    def test_panel_open_hits_loading_model_cluster(self):
-        # without the ref-failure flag the loading-model cluster owns
-        # it; WITH a hypothetical ref failure the earlier version-skew
-        # entry takes precedence (whole-screen un-bootability)
+    def test_panel_open_no_longer_hits_a_loading_model_cluster(self):
+        # The B2 loading-model cluster is RETIRED (wave 4: the rust
+        # driver boots the tui entry only — the ref fixture's face).
+        # A hypothetical plugin-panel-open divergence falls through to
+        # G-28 (the bounded sidebar shim), and with a ref failure
+        # flag the earlier version-skew entry takes precedence.
         for failed in (False, None):
             label = adjudicate(self._rec("plugin-panel-open", failed))
-            self.assertIsNotNone(label)
-            self.assertIn("注册投影", label)
+            self.assertIn("G-28", label)
         self.assertIn("version-skew", adjudicate(self._rec("plugin-panel-open", True)))
+
+    def test_retired_g424b_never_matches_a_plugin_fallback_divergence(self):
+        # Reverse pin: the G-424b toast-wrap cluster is retired with
+        # plugin-fallback exact — a NEW divergence in the scenario
+        # must NOT be swallowed by the retired label.
+        label = adjudicate(self._rec("plugin-fallback", None))
+        self.assertNotIn("G-424b", label or "")
 
     def test_version_skew_still_guards_other_plugin_ids(self):
         label = adjudicate(self._rec("plugin-boot-idle", True))

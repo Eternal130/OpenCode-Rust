@@ -918,6 +918,18 @@ async fn tui_fullscreen_diff_driver() {
                     // plugin commands (palette rows only); the port's
                     // prompt/get surface is out of scenario scope.
                     session_port: None,
+                    // B2 retirement (the loading-face mirror): the ref
+                    // TUI fixture loads ONLY each package's tui entry
+                    // (config.plugins dirs → context.tsx:670
+                    // `Host.resolve(target).tui` — the server entry
+                    // runs in the ref's SERVER process, which the
+                    // fixture has none of, so its palette commands
+                    // never exist there). The production rust host is
+                    // a unified process (server entry + companion
+                    // load.tui); the harness assembly mirrors the
+                    // ref's TUI-only face so both sides boot the SAME
+                    // entry set — not a product change.
+                    tui_only: true,
                     ..oc_plugin_host::PluginHostConfig::default()
                 };
                 let host = Arc::new(

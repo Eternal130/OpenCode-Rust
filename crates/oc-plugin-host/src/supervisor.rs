@@ -196,6 +196,10 @@ pub struct SupervisorConfig {
     /// the embedder binds the engine-bus-backed port (location scoping
     /// is the binding's concern — the host is process-wide, G-28).
     pub rpc_event_port: Option<Arc<dyn RpcEventPort>>,
+    /// B2 — the TUI-process loading face (see [`crate::
+    /// PluginHostConfig::tui_only`]): load only each package's tui
+    /// entry; an entry without one is unsupported (inert).
+    pub tui_only: bool,
 }
 
 impl Default for SupervisorConfig {
@@ -227,6 +231,7 @@ impl Default for SupervisorConfig {
             terminal_port: None,
             integration_port: None,
             rpc_event_port: None,
+            tui_only: false,
         }
     }
 }
@@ -2293,6 +2298,7 @@ impl Supervisor {
     }
 }
 
+#[allow(clippy::too_many_lines)] // the B2 tui_only branch rides the monolithic loader (1:1 ref port)
 async fn load_entry(shared: &Arc<Shared>, entry: &std::path::Path) {
     let key = entry.to_string_lossy().into_owned();
     {
@@ -2312,11 +2318,66 @@ async fn load_entry(shared: &Arc<Shared>, entry: &std::path::Path) {
     }
     let generation = shared.generation.load(Ordering::Relaxed);
     let options = shared.config.entry_options.get(&key).cloned().unwrap_or(Value::Null);
+    // B2 — the TUI-process loading face (`tui_only`): load ONLY the
+    // package's tui entry through the TUI-companion op (the ref
+    // TUI's `Host.resolve(target).tui` — a tui2.js module is not a
+    // server-plugin and fails the main `load` shape check); an
+    // entry without one is `unsupported` there and boots NOTHING
+    // (no load, no failure state — the harness face mirrors the
+    // ref fixture, where such a package is inert at every captured
+    // state). The status stays keyed by the DIR (the config target
+    // — the failure surfaces' toast target shape).
+    if shared.config.tui_only {
+        match probe_tui_entry(entry) {
+            None => {
+                let mut registrations =
+                    shared.registrations.write().expect("registrations poisoned");
+                registrations.plugins.remove(&key);
+            }
+            Some(tui_entry) => {
+                let outcome = shared
+                    .request(
+                        "load.tui",
+                        json!({
+                            "entry": tui_entry.display().to_string(),
+                            "options": options,
+                        }),
+                        shared.config.registration_timeout,
+                    )
+                    .await;
+                match &outcome {
+                    Ok(result) => {
+                        let plugin_id = result
+                            .get("pluginId")
+                            .and_then(Value::as_str)
+                            .unwrap_or("?")
+                            .to_owned();
+                        let mut registrations =
+                            shared.registrations.write().expect("registrations poisoned");
+                        if let Some(status) = registrations.plugins.get_mut(&key) {
+                            status.plugin_id.clone_from(&plugin_id);
+                            status.state = PluginState::Active;
+                        }
+                    }
+                    Err(error) => {
+                        let mut registrations =
+                            shared.registrations.write().expect("registrations poisoned");
+                        if let Some(status) = registrations.plugins.get_mut(&key) {
+                            status.state = PluginState::Failed(error.to_string());
+                        }
+                        eprintln!("opencode plugin-host: tui-only load {key} failed: {error}");
+                    }
+                }
+            }
+        }
+        return;
+    }
+    let load_target: &Path = entry;
     let outcome = shared
         .request(
             "load",
             json!({
-                "entry": key,
+                "entry": load_target.display().to_string(),
                 "generation": generation,
                 "seed": shared.config.host_state.to_seed_json(),
                 "options": options,
@@ -2355,8 +2416,9 @@ async fn load_entry(shared: &Arc<Shared>, entry: &std::path::Path) {
     // {sidebar_content: render}})` — load it next so the real
     // plugin's sections reach the native sidebar bridge. A missing
     // entry or a failed load is contained (the server entry stays
-    // active).
-    if let Some(tui_entry) = probe_tui_entry(entry) {
+    // active). Under `tui_only` the tui entry IS the main load —
+    // no companion pass.
+    if let Some(tui_entry) = (!shared.config.tui_only).then(|| probe_tui_entry(entry)).flatten() {
         let tui_outcome = shared
             .request(
                 "load.tui",
