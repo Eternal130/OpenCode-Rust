@@ -194,8 +194,10 @@ pub struct PluginHostConfig {
     /// entry (the ref TUI's `Host.resolve(target).tui`, host.ts:24 —
     /// the server entry runs in the ref's separate SERVER process
     /// and never boots in a TUI-only embedder). An entry without a
-    /// tui companion is UNSUPPORTED there (`{status:
-    /// "unsupported"}`) and loads nothing. Default `false` — the
+    /// tui companion is UNSUPPORTED there — INERT: the supervisor
+    /// removes its registration (no status row, loads nothing;
+    /// supervisor.rs `unsupported` arm) rather than keeping a
+    /// `{status:"unsupported"}` marker row. Default `false` — the
     /// unified-process production host loads the server entry plus
     /// the tui companion (supervisor's `load_entry` + `load.tui`);
     /// only the diff harness's TUI-only assembly flips this to mirror

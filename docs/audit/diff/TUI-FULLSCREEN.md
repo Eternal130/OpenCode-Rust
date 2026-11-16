@@ -128,7 +128,7 @@ committed 未裁决>0 ⇒ exit 2；rec-* recorded-local 见其小节（advisory�
 
 ### first_diff 明细
 
-- `plugin-panel-open@320x80` [diverge] row=3 col=280 field=ch ref=' ' rust='▼' cells_diff_count=151 — CAUSES: G-28 插件 TSX 有界（bounded shim）
+- `plugin-panel-open@320x80` [diverge] row=3 col=280 field=ch ref=' ' rust='▼' cells_diff_count=151 — CAUSES: G-28 插件 TSX 有界（bounded shim）——残余单例：plugin-panel-open 宽档侧栏桥接 walk
 
 ## CAUSES 定性
 
@@ -168,8 +168,8 @@ committed 未裁决>0 ⇒ exit 2；rec-* recorded-local 见其小节（advisory�
   - （已关闭）plugin-fallback 场景的残余归 G-424b toast 长标题折行簇
   - ref packages/tui/src/plugin/context.tsx:460-484 + feature-plugins/system/plugins.tsx:54-76
   - rust crates/oc-tui/src/plugin_boot.rs surface_boot_failures + components/command_palette.rs DialogKind::Plugins（本轮修复）
-- **G-28 插件 TSX 有界（bounded shim）** — 命中 1 case（`plugin-panel-open@320x80`）
-  - plugin-* 场景的形状类分歧：ref 侧插件以 TSX 活树渲染进 Slot，rust 侧以有界 shim（固定 UI 请求形状）近似——已立项的有界偏差
+- **G-28 插件 TSX 有界（bounded shim）——残余单例：plugin-panel-open 宽档侧栏桥接 walk** — 命中 1 case（`plugin-panel-open@320x80`）
+  - 唯一残余：320x80 档 omo-slim 侧栏面板的桥接树行走丢空行/远端水合行（行偏移族，col≥280 侧栏区）。gb17-W4 评审收窄：原 plugin-* 前缀匹配在 G-424b/B2 退役后成为无限 catch-all，会静默吞同场景新分歧；现精确到单 case，修后整簇退役。其它 plugin-* 新分歧落 unadjudicated 拦门（保守正确）。
   - ref packages/tui/src/component/panel-host.tsx:35-55（Slot path="session.panel"，TSX 活树 + reactive props）
   - rust crates/oc-tui/src/plugin_ui.rs:15-108（apply_plugin_ui 有界 shim，UiRequest 中性事件形状）
 - **G-332 markdown 有界行形状** — 命中 0 case

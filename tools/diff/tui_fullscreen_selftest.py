@@ -294,9 +294,18 @@ class CausesTest(unittest.TestCase):
         self.assertEqual(r["verdict"], "diverge")
         self.assertIsNone(self._label({"id": "session-text", **r}))
 
-    def test_g28_plugin_prefix_diverge_hits(self):
-        rec = self._rec(id="plugin-boot-basic")
+    def test_g28_narrowed_single_case_hits(self):
+        # gb17-W4 review: narrowed from the plugin-* prefix (which had
+        # become an unbounded catch-all after G-424b/B2 retirement) to
+        # the single known residual — the wide-tier sidebar bridge walk.
+        rec = self._rec(id="plugin-panel-open@320x80")
         self.assertIn("G-28", self._label(rec))
+
+    def test_g28_other_plugin_cases_now_unadjudicated(self):
+        # Any OTHER plugin-* divergence must NOT be swallowed by G-28;
+        # it lands unadjudicated and fails the gate (conservative).
+        self.assertIsNone(self._label(self._rec(id="plugin-boot-basic")))
+        self.assertIsNone(self._label(self._rec(id="plugin-fallback-x")))
 
     def test_g28_wrong_prefix_or_exact_shape_misses(self):
         self.assertIsNone(self._label(self._rec(id="home-empty")))
@@ -525,14 +534,14 @@ class VersionSkewFamilyTest(unittest.TestCase):
         self.assertIsNotNone(label)
         self.assertIn("version-skew", label)
 
-    def test_plugin_case_without_evidence_falls_to_g28(self):
+    def test_plugin_case_without_evidence_is_unadjudicated(self):
         # no flag (a future corpus where ref boots the plugin): the
-        # version-skew cluster must NOT match; G-28's bounded-shim
-        # family takes the shape divergence instead
+        # version-skew cluster must NOT match. Since the gb17-W4 G-28
+        # narrowing, such a shape divergence is UNADJUDICATED (gate
+        # red) rather than silently owned by the bounded-shim family.
         label = adjudicate(self._rec("plugin-boot-idle", None))
-        self.assertIsNotNone(label)
-        self.assertIn("G-28", label)
-        self.assertIsNotNone(adjudicate(self._rec("plugin-boot-idle", False)))
+        self.assertIsNone(label)
+        self.assertIsNone(adjudicate(self._rec("plugin-boot-idle", False)))
 
     def test_non_plugin_case_with_flag_never_hits(self):
         # the flag alone is not enough: a non-plugin-* id stays
