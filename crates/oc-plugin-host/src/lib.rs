@@ -189,6 +189,18 @@ pub struct PluginHostConfig {
     /// Config-sourced plugin options keyed by entry path (`ctx.options`,
     /// v2 plugin `{package, options}` entries).
     pub entry_options: BTreeMap<String, Value>,
+    /// B2 — the TUI-process LOADING FACE: when `true`, each entry
+    /// loads ONLY the package's `exports["./tui"]` / `<root>/tui.*`
+    /// entry (the ref TUI's `Host.resolve(target).tui`, host.ts:24 —
+    /// the server entry runs in the ref's separate SERVER process
+    /// and never boots in a TUI-only embedder). An entry without a
+    /// tui companion is UNSUPPORTED there (`{status:
+    /// "unsupported"}`) and loads nothing. Default `false` — the
+    /// unified-process production host loads the server entry plus
+    /// the tui companion (supervisor's `load_entry` + `load.tui`);
+    /// only the diff harness's TUI-only assembly flips this to mirror
+    /// the ref fixture's loading face.
+    pub tui_only: bool,
 }
 
 impl Default for PluginHostConfig {
@@ -216,6 +228,7 @@ impl Default for PluginHostConfig {
             integration_port: None,
             rpc_event_port: None,
             entry_options: BTreeMap::new(),
+            tui_only: false,
         }
     }
 }
@@ -1234,6 +1247,7 @@ fn supervisor_config(
         integration_port: config.integration_port.take(),
         rpc_event_port: config.rpc_event_port.take(),
         entry_options: std::mem::take(&mut config.entry_options),
+        tui_only: config.tui_only,
     }
 }
 
