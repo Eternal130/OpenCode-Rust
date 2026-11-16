@@ -2509,6 +2509,7 @@ dependencies = [
  "oc-client",
  "oc-core",
  "oc-plugin-host",
+ "oc-schema",
  "oc-syntax",
  "oc-theme",
  "oc-tui-core",

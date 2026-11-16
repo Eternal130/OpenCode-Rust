@@ -45,13 +45,22 @@ struct Rig {
 }
 
 fn rig(tag: &str, record: bool) -> Rig {
+    rig_cols(tag, record, COLS)
+}
+
+/// Width-parameterized rig — T9-5 spawns WIDE: the sidebar auto-docks
+/// only above the 120-col breakpoint (ref session-frame.tsx:106-110,
+/// `width - verticalTabsWidth > 120`), so at COLS=120 the sidebar is
+/// legitimately absent and the ref-anchored Context/tokens/spent
+/// expectations are untestable.
+fn rig_cols(tag: &str, record: bool, cols: u16) -> Rig {
     let lane = lane_lock();
     // Gateway first: its port goes into the config.
     let gateway = Gateway::spawn(tag, record);
     let box_ = sandbox(tag, gateway.port);
     box_.write_config(&[], "replay/claude-opus-4-7");
     let server = service_start(&box_);
-    let tui = TuiProcess::spawn(&box_, COLS, ROWS);
+    let tui = TuiProcess::spawn(&box_, cols, ROWS);
     Rig {
         _lane: lane,
         sandbox: box_,
@@ -202,7 +211,14 @@ fn t9_4_sessions_survive_tui_restart() {
         .unwrap_or((0, String::new()));
     let sessions = serde_json::from_str::<serde_json::Value>(&body)
         .ok()
-        .and_then(|value| value.as_array().map(Vec::len))
+        // v2's list envelope (probed: `{"data":[...],"cursor":{...}}`)
+        // — the rows ride under `data`.
+        .and_then(|value| {
+            value
+                .as_array()
+                .map(Vec::len)
+                .or_else(|| value.get("data").and_then(|data| data.as_array()).map(Vec::len))
+        })
         .unwrap_or(0);
     service_stop(&rig.sandbox);
     assert!(
@@ -218,7 +234,9 @@ fn t9_4_sessions_survive_tui_restart() {
 
 #[test]
 fn t9_5_sidebar_assembles_ref_content() {
-    let mut rig = rig("t9-5", false);
+    // WIDE spawn — the sidebar only auto-docks above 120 cols (ref
+    // session-frame.tsx:106-110); at COLS=120 its absence is correct.
+    let mut rig = rig_cols("t9-5", false, 160);
     assert!(
         rig.tui.wait_for(WORDMARK, 0, Duration::from_secs(30)),
         "T9-5 precondition RED: the TUI never settled"
@@ -229,13 +247,15 @@ fn t9_5_sidebar_assembles_ref_content() {
     let screen = rig.tui.screen_text();
     drop(rig);
     // (a) session title row exists (timestamped fallback), (b) the
-    // Context section with its token/spent rows.
+    // Context section with its token rows. The `$X.XX spent` row is
+    // gated by `cost() > 0` (ref context.tsx:33-35) — the replay
+    // provider is unpriced (cost 0), so ref renders NO spent row
+    // here; asserting it would over-pin beyond the ref source.
     let context = screen.contains("Context");
     let tokens = screen.contains("tokens");
-    let spent = screen.contains("spent");
     assert!(
-        replied && context && tokens && spent,
-        "T9-5 RED: reply={replied} context-section={context} tokens={tokens} spent={spent}; \
+        replied && context && tokens,
+        "T9-5 RED: reply={replied} context-section={context} tokens={tokens}; \
          screen:\n{screen}"
     );
 }

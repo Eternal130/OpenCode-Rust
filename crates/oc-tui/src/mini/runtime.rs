@@ -1216,7 +1216,7 @@ impl Runtime {
                 // stream-v2.transport.ts:1795-1807), then the
                 // durable-queue POST with the parts-aware body.
                 self.apply_turn_switches().await;
-                let message_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
+                let message_id = oc_schema::id::MessageId::new().to_string();
                 let _ = transport::send_prompt_parts(
                     &self.client,
                     &self.session_id,
@@ -1263,7 +1263,7 @@ impl Runtime {
         // `session.shell` and the settle loop waits for the shell to
         // end through the same idle fence.
         if prompt.shell {
-            let message_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
+            let message_id = oc_schema::id::MessageId::new().to_string();
             if let Err(error) =
                 transport::send_shell(&self.client, &self.session_id, &message_id, &prompt.text)
                     .await
@@ -1283,7 +1283,7 @@ impl Runtime {
         // (`switchAgent`/`switchModel`, stream-v2.transport.ts:
         // 1832-1840).
         self.apply_turn_switches().await;
-        let message_id = format!("msg_{}", uuid::Uuid::new_v4().simple());
+        let message_id = oc_schema::id::MessageId::new().to_string();
         if let Err(error) =
             transport::send_prompt_parts(&self.client, &self.session_id, &message_id, prompt).await
         {
