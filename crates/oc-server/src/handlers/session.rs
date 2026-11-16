@@ -617,7 +617,7 @@ async fn switch_model(
     uri: Uri,
     body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
-    let (services, _) = session_services(&state, &session_id).await?;
+    let (services, row) = session_services(&state, &session_id).await?;
     // RA-01: post-location payload decode (404 first, then schema 400).
     let body = crate::request_validation::validate_at_handler(
         "session.switchModel",
@@ -625,6 +625,30 @@ async fn switch_model(
         &uri,
         &body,
     )?;
+    // G-432: ref `Session.switchModel` NO-OPS an unchanged selection
+    // (core session.ts:101-106 — providerID/id equal, variant
+    // default-normalized) — the first prompt's `prepare: commitModel`
+    // then never mints a phantom `model-switched` timeline row. The
+    // port published unconditionally, so every first turn carried a
+    // "Switched model to …" row the reference never renders.
+    if let Some(previous) =
+        row.model.as_deref().and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+    {
+        fn variant_of(value: Option<&str>) -> Option<&str> {
+            match value {
+                Some("default") | None => None,
+                Some(other) => Some(other),
+            }
+        }
+        let unchanged = previous.get("providerID").and_then(|v| v.as_str())
+            == body["model"]["providerID"].as_str()
+            && previous.get("id").and_then(|v| v.as_str()) == body["model"]["id"].as_str()
+            && variant_of(previous.get("variant").and_then(|v| v.as_str()))
+                == variant_of(body["model"]["variant"].as_str());
+        if unchanged {
+            return Ok(no_content());
+        }
+    }
     publish_session_event(
         &services,
         "session.model.selected",

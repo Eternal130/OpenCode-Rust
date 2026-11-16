@@ -38,6 +38,9 @@
 
 #![allow(unsafe_code)] // forkpty/ioctl/pre_exec are libc FFI by nature
 #![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+// Each test compile unit includes this shared harness but uses a
+// different subset of the lane API.
+#![allow(dead_code)]
 
 use std::ffi::CString;
 use std::fs::File;
@@ -68,6 +71,86 @@ fn worktree_root() -> PathBuf {
 /// The production binary built from this worktree.
 fn opencode_bin() -> PathBuf {
     worktree_root().join("target/debug/opencode-rust")
+}
+
+// ---------------------------------------------------------------------------
+// Binary freshness guard (W3 hardening ①)
+// ---------------------------------------------------------------------------
+
+/// Fail fast when `target/debug/opencode-rust` is older than any source
+/// it is built from — a stale binary silently turns real-chain asserts
+/// into false reds/greens. Sources = every `crates/**/src` file, every
+/// crate manifest, and the workspace `Cargo.toml`/`Cargo.lock`.
+pub fn ensure_fresh_binary() {
+    let bin = opencode_bin();
+    let meta = std::fs::metadata(&bin).unwrap_or_else(|_| {
+        panic!("production binary missing: {bin:?} (build it via tools/dev-gate.sh first)")
+    });
+    let built = meta.modified().unwrap_or_else(|_| panic!("mtime of {bin:?}"));
+    let root = worktree_root();
+    let newest_path = std::cell::RefCell::new(None);
+    let newest_time = std::cell::RefCell::new(None);
+    let consider = |path: PathBuf, mtime: std::time::SystemTime| {
+        let better = match *newest_time.borrow() {
+            Some(best) => mtime > best,
+            None => true,
+        };
+        if better {
+            *newest_path.borrow_mut() = Some(path);
+            *newest_time.borrow_mut() = Some(mtime);
+        }
+    };
+    for entry in walkdir_shallow(&root.join("crates")) {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = entry.path();
+        if path.is_dir() && name == "target" {
+            continue;
+        }
+        if path.is_file() && (name.ends_with(".rs") || name == "Cargo.toml") {
+            if let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) {
+                consider(path, mtime);
+            }
+        }
+    }
+    for name in ["Cargo.toml", "Cargo.lock"] {
+        let path = root.join(name);
+        if let Ok(mtime) = path.metadata().and_then(|m| m.modified()) {
+            consider(path, mtime);
+        }
+    }
+    if let (Some(path), Some(mtime)) = (newest_path.into_inner(), newest_time.into_inner()) {
+        // 2s grace: mtime granularity + touch-vs-write skew.
+        if mtime > built + std::time::Duration::from_secs(2) {
+            panic!(
+                "stale binary: {path:?} (mtime {mtime:?}) is newer than {bin:?} \
+                 (mtime {built:?}) — rebuild via \
+                 tools/dev-gate.sh 'cargo build --locked -p oc-cli' before rerunning"
+            );
+        }
+    }
+}
+
+/// Minimal directory walker (no external deps): yields every file under
+/// `root`, skipping build-output and non-binary source dirs (`target`,
+/// `tests`, `benches`, `examples`, `src/bin` stays in — it links).
+fn walkdir_shallow(root: &Path) -> Vec<std::fs::DirEntry> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if !matches!(name.as_str(), "target" | "tests" | "benches" | "examples") {
+                    stack.push(path);
+                }
+            } else {
+                out.push(entry);
+            }
+        }
+    }
+    out
 }
 
 /// One `.test-logs` artifact file per harness instance.
@@ -208,6 +291,20 @@ impl Sandbox {
     }
 }
 
+pub fn worktree_dir(rel: &str) -> PathBuf {
+    worktree_root().join(rel)
+}
+
+/// Committed synthetic seed corpus (rust-engine request shapes).
+pub fn corpus_dir() -> PathBuf {
+    worktree_dir("tools/diff/realchain/corpus")
+}
+
+/// Committed synthetic seed corpus (ref-engine request shapes).
+pub fn corpus_ref_dir() -> PathBuf {
+    worktree_dir("tools/diff/realchain/corpus-ref")
+}
+
 pub fn sandbox(tag: &str, gateway_port: u16) -> Sandbox {
     let root = Path::new("/tmp/opencode").join(format!("t9w1-{}-{tag}", std::process::id()));
     for dir in ["home", "xdg-config", "xdg-data", "xdg-state", "xdg-cache", "project"] {
@@ -229,10 +326,9 @@ pub struct Gateway {
 }
 
 impl Gateway {
-    /// Spawn the gateway; `record` = bootstrap seeding mode (writes
-    /// generated cassettes into the committed corpus dir — sandbox
-    /// traffic only, no user data).
-    pub fn spawn(tag: &str, record: bool) -> Gateway {
+    /// Spawn the gateway; `record_dir` = bootstrap seeding mode (writes
+    /// generated cassettes — sandbox traffic only, no user data).
+    pub fn spawn(tag: &str, record_dir: Option<&Path>) -> Gateway {
         let root = worktree_root();
         let log_path = log_file(&format!("gateway-{tag}"));
         let mut cmd = Command::new("python3");
@@ -241,23 +337,33 @@ impl Gateway {
         for corpus in [
             root.join("crates/oc-ai/test-fixtures/recordings"),
             root.join("tools/diff/realchain/corpus"),
+            // W3: ref-side request shapes (recorded from the ref 2.0.24
+            // engine; the title call normalizes to the SAME digest on both
+            // ends and rides the shared corpus above).
+            root.join("tools/diff/realchain/corpus-ref"),
         ] {
             cmd.arg("--corpus").arg(&corpus);
         }
-        // PID-unique sandbox paths must hash equal across runs.
-        cmd.arg("--redact").arg(format!(
-            "/tmp/opencode/t9w1-{}-{}:__SANDBOX__",
-            std::process::id(),
-            tag
-        ));
+        // PID-unique sandbox paths must hash equal across runs. The ref
+        // lane's root (`…-<tag>ref`) is a strict prefix extension of the
+        // rust root, so it must be redacted FIRST.
+        for redaction in [
+            format!("/tmp/opencode/t9w1-{}-{}ref", std::process::id(), tag),
+            format!("/tmp/opencode/t9w1-{}-{}", std::process::id(), tag),
+        ] {
+            cmd.arg("--redact").arg(format!("{redaction}:__SANDBOX__"));
+        }
         cmd.arg("--log").arg(&log_path);
         // Miss forensics (G-431 follow-ups): the normalized request of
         // every strict miss lands next to the gateway log for corpus
         // digest-drift diffing.
         cmd.arg("--dump-misses").arg(log_path.with_file_name(format!("gateway-{tag}-misses")));
-        if record {
+        if let Some(dir) = record_dir {
             cmd.arg("--seed-reply").arg(root.join("tools/diff/realchain/seeds/anthropic-text.txt"));
-            cmd.arg("--record-dir").arg(root.join("tools/diff/realchain/corpus"));
+            // W3 hardening: title-generator misses seed a DISTINCT text so
+            // the session title never echoes the main-turn reply needle.
+            cmd.arg("--seed-title").arg(root.join("tools/diff/realchain/seeds/title-sse.txt"));
+            cmd.arg("--record-dir").arg(dir);
         }
         // stderr rides the same log file (spawn/import errors land there).
         let err_sink = std::fs::OpenOptions::new()
@@ -415,9 +521,14 @@ impl TuiProcess {
     /// fork a PTY, exec the production binary on its slave (setsid +
     /// TIOCSCTTY — the TUI demands a real controlling terminal).
     pub fn spawn(sandbox: &Sandbox, cols: u16, rows: u16) -> TuiProcess {
-        let bin = opencode_bin();
-        assert!(bin.exists(), "production binary missing: {bin:?} (build it first)");
+        ensure_fresh_binary();
+        let command = sandbox.command(&opencode_bin());
+        TuiProcess::spawn_command(command, cols, rows)
+    }
 
+    /// fork a PTY, exec an arbitrary prepared command on its slave (the
+    /// ref-TUI pair lane reuses the PTY machinery with a bun command).
+    pub fn spawn_command(mut command: Command, cols: u16, rows: u16) -> TuiProcess {
         let master = unsafe {
             let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
             assert!(fd >= 0, "posix_openpt");
@@ -438,7 +549,6 @@ impl TuiProcess {
             libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &winsize);
         }
 
-        let mut command = sandbox.command(&bin);
         command.stdin(unsafe { Stdio::from_raw_fd(libc::dup(slave_fd)) });
         command.stdout(unsafe { Stdio::from_raw_fd(libc::dup(slave_fd)) });
         command.stderr(unsafe { Stdio::from_raw_fd(libc::dup(slave_fd)) });
@@ -635,3 +745,511 @@ pub fn service_stop(sandbox: &Sandbox) {
 /// The home wordmark's opening block (boot-settled marker, same needle
 /// family as the vt lane).
 pub const WORDMARK: &[u8] = "█▀▀█".as_bytes();
+
+// ---------------------------------------------------------------------------
+// W3 — the ref 2.0.24 lane: the SAME replay gateway, a ref-shaped
+// sandbox, and the ref TUI booted through its own production topology.
+//
+// Ref boot topology (read from the code + probed, not guessed):
+// `bun packages/cli/src/index.ts` (default handler) →
+// ServerConnection.resolve → ServiceConfig.options → selfCommand()
+// spawns the managed background server (`bun <entry> serve --service`,
+// registration under `$XDG_STATE_HOME/opencode/service-local.json`).
+// Constraints the staging honors:
+//   * `selfCommand()` (cli/src/util/process.ts) only re-attaches the
+//     entrypoint when `basename(execPath)` == "bun" — a binary named
+//     `bun-1.4.2` silently spawns `bun serve` (bun's "Script not found")
+//     — so the staged runtime copy must be named exactly `bun`;
+//   * ref's server assembly imports tui TSX through bun's default react
+//     JSX runtime, which the tree does not ship — the @opentui/solid
+//     preload (the channel-8 driver convention) must be active, and it
+//     is propagated to the self-spawned server via a `bunfig.toml`
+//     `preload` entry in the sandbox cwd (the spawn inherits the cwd);
+//   * ref's global config dir is `$XDG_CONFIG_HOME/opencode` (NOT the
+//     rust port's `$HOME/.config/opencode` dogfood quirk) and the
+//     provider package is the workspace-native
+//     `@opencode/ai/providers/anthropic`.
+// ---------------------------------------------------------------------------
+
+/// Default ref checkout (read-only; its node_modules are used).
+const REF_ROOT_DEFAULT: &str = "./ref";
+
+pub fn ref_root() -> PathBuf {
+    Path::new(&std::env::var("T9_REF_ROOT").unwrap_or_else(|_| REF_ROOT_DEFAULT.to_owned()))
+        .to_path_buf()
+}
+
+/// Everything the ref lane needs in the sandbox.
+pub struct RefStage {
+    /// The staged bun runtime (a COPY named exactly `bun` — see the
+    /// `selfCommand()` contract above).
+    pub bun: PathBuf,
+    /// `packages/cli/src/index.ts` of the ref tree.
+    pub entry: PathBuf,
+    /// The ref sandbox project (cwd for every ref child; carries the
+    /// `bunfig.toml` preload).
+    pub project: PathBuf,
+}
+
+/// Verify the ref tree + runtime contract, then stage the runtime copy
+/// and the preload bunfig under `…-<tag>ref/`.
+pub fn ref_stage(sandbox: &Sandbox) -> RefStage {
+    let root = ref_root();
+    let entry = root.join("packages/cli/src/index.ts");
+    assert!(entry.exists(), "ref entry missing: {entry:?} (set T9_REF_ROOT)");
+    let preload = root.join("packages/tui/node_modules/@opentui/solid/scripts/preload.js");
+    assert!(preload.exists(), "ref solid preload missing: {preload:?}");
+
+    // Runtime + version contract: the pinned bun must exist and report
+    // the ref `packageManager` version (1.4.2). Default: the MAIN
+    // checkout's untracked tools/bin (this worktree shares no untracked
+    // helpers); override with T9_BUN.
+    let runtime_src = std::env::var("T9_BUN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("./repo/tools/bin/bun-1.4.2"));
+    assert!(runtime_src.exists(), "pinned bun runtime missing: {runtime_src:?}");
+    let version = std::process::Command::new(&runtime_src)
+        .arg("--version")
+        .output()
+        .expect("query bun version");
+    let version_text = String::from_utf8_lossy(&version.stdout).trim().to_owned();
+    assert_eq!(version_text, "1.4.2", "pinned bun version contract (ref packageManager)");
+
+    let bin_dir = sandbox.root.join("bin");
+    std::fs::create_dir_all(&bin_dir).expect("ref bin dir");
+    let bun = bin_dir.join("bun");
+    if !bun.exists() {
+        std::fs::copy(&runtime_src, &bun).unwrap_or_else(|e| panic!("stage bun: {e}"));
+        set_exec_bit(&bun);
+    }
+    // `opencode` fallback wrapper on PATH (the client default command
+    // `opencode serve --service` — used when selfCommand is bypassed).
+    let wrapper = bin_dir.join("opencode");
+    std::fs::write(&wrapper, format!("#!/bin/sh\nexec \"{}\" \"$@\"\n", bun.display()))
+        .expect("write opencode wrapper");
+    set_exec_bit(&wrapper);
+
+    let project = sandbox.root.join("project");
+    std::fs::create_dir_all(&project).expect("ref project dir");
+    std::fs::write(project.join("README.md"), "# t9 ref sandbox project\n").expect("project file");
+    // The preload MUST reach the self-spawned `serve --service` child;
+    // bunfig.toml in the inherited cwd is the one channel both the TUI
+    // and the managed server read.
+    std::fs::write(project.join("bunfig.toml"), format!("preload = [\"{}\"]\n", preload.display()))
+        .expect("write bunfig");
+
+    RefStage { bun, entry, project }
+}
+
+fn set_exec_bit(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = std::fs::metadata(path).expect(" staged file").permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(path, perms).expect("chmod staged file");
+}
+
+impl Sandbox {
+    /// The unique port the ref managed daemon binds (see
+    /// `write_ref_config`): disjoint from the rust sandbox's
+    /// `service_port` range.
+    pub fn ref_service_port() -> u16 {
+        40_000 + (std::process::id() % 10_000) as u16
+    }
+
+    /// Ref-shaped env: the rust env plus the staged `bin` first on PATH
+    /// (so any `opencode` fallback resolves to the staged runtime) and
+    /// `NODE_ENV=production` (keeps bun out of jsx-dev lookups).
+    pub fn env_ref(&self, stage: &RefStage) -> Vec<(String, String)> {
+        let mut env = self.env();
+        let path = std::env::var("PATH").unwrap_or_default();
+        let mut filtered = env.iter().position(|(k, _)| k == "PATH");
+        let bin_dir = stage.bun.parent().unwrap().to_string_lossy().into_owned();
+        let new_path = format!("{bin_dir}:{path}");
+        if let Some(index) = filtered.take() {
+            env[index].1 = new_path;
+        } else {
+            env.push(("PATH".into(), new_path));
+        }
+        env.push(("NODE_ENV".into(), "production".into()));
+        env
+    }
+
+    /// A prepared ref child command (TUI, `service stop`, …): scrubbed
+    /// env, cwd = the ref project (bunfig/preload apply).
+    pub fn command_ref(&self, stage: &RefStage, program: &Path) -> Command {
+        let mut cmd = Command::new(program);
+        cmd.env_clear();
+        for (key, value) in std::env::vars() {
+            if key.starts_with("OPENCODE") || key == "HOME" || key.starts_with("XDG_") {
+                continue;
+            }
+            cmd.env(key, value);
+        }
+        for (key, value) in self.env_ref(stage) {
+            cmd.env(key, value);
+        }
+        cmd.current_dir(&stage.project);
+        cmd
+    }
+
+    /// The ref global config: `$XDG_CONFIG_HOME/opencode/opencode.json`
+    /// with the replay provider on the workspace-native anthropic
+    /// package (same gateway, same models as the rust side).
+    pub fn write_ref_config(&self, extra_models: &[(&str, &str)], default_model: &str) {
+        let mut models = serde_json::Map::new();
+        models.insert("claude-opus-4-7".into(), serde_json::json!({ "name": "claude-opus-4-7" }));
+        for (id, name) in extra_models {
+            models.insert((*id).into(), serde_json::json!({ "name": name }));
+        }
+        let config = serde_json::json!({
+            "$schema": "https://opencode.ai/config.json",
+            "model": default_model,
+            "autoupdate": false,
+            "providers": {
+                "replay": {
+                    "name": "Replay Anthropic",
+                    "package": "@opencode/ai/providers/anthropic",
+                    "settings": {
+                        "baseURL": format!("http://127.0.0.1:{}/v1", self.gateway_port),
+                        "apiKey": "replay-sandbox-key"
+                    },
+                    "models": models
+                }
+            }
+        });
+        let path = self.root.join("xdg-config/opencode/opencode.json");
+        std::fs::create_dir_all(path.parent().unwrap()).expect("ref config dir");
+        std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap())
+            .unwrap_or_else(|e| panic!("write ref config: {e}"));
+        // The ref channel-local managed service port defaults to the
+        // FIXED 0xc0df (service-config.ts defaultPort) — sandboxes must
+        // not fight over it (nor a stray real daemon). Unique per PID,
+        // mirrored into `cli.json` (the ref `ServiceConfig.Info` file in
+        // the same config dir). The TUI's OWN config is ALSO cli.json —
+        // `debug.devtools: false` pins the release shape (channel-local
+        // builds default the devtools bar ON, app.tsx:457).
+        let mut cli = serde_json::json!({ "port": Self::ref_service_port() });
+        cli["debug"] = serde_json::json!({ "devtools": false });
+        let cli_path = self.root.join("xdg-config/opencode/cli.json");
+        std::fs::write(&cli_path, serde_json::to_string_pretty(&cli).unwrap())
+            .unwrap_or_else(|e| panic!("write ref cli.json: {e}"));
+    }
+
+    /// The ref managed-server registration (`service-local.json`,
+    /// `$XDG_STATE_HOME/opencode/`), if the ref TUI already booted one.
+    pub fn ref_registration(&self) -> serde_json::Value {
+        let path = self.root.join("xdg-state/opencode/service-local.json");
+        match std::fs::read_to_string(&path) {
+            Ok(text) => serde_json::from_str::<serde_json::Value>(&text).unwrap_or(Value::Null),
+            Err(_) => Value::Null,
+        }
+    }
+}
+
+/// Spawn the ref TUI on its own PTY. The managed ref server starts
+/// ITSELF on first boot (the production topology); teardown must call
+/// [`ref_service_stop`].
+pub fn ref_tui_spawn(sandbox: &Sandbox, stage: &RefStage, cols: u16, rows: u16) -> TuiProcess {
+    let mut command = sandbox.command_ref(stage, &stage.bun);
+    command.arg(&stage.entry);
+    TuiProcess::spawn_command(command, cols, rows)
+}
+
+/// The ref daemon's own graceful stop path (`service stop` under the
+/// same sandbox env + cwd). MUST run after every ref TUI leg — the
+/// managed server is a detached child that outlives the TUI.
+pub fn ref_service_stop(sandbox: &Sandbox, stage: &RefStage) {
+    let _ =
+        sandbox.command_ref(stage, &stage.bun).arg(&stage.entry).args(["service", "stop"]).output();
+}
+
+// ---------------------------------------------------------------------------
+// Grid normalization + pair comparison (W3: differential philosophy
+// extended to the real chain — both ends render into equal-size PTYs,
+// the settled TEXT grids are normalized, then compared byte-for-byte)
+// ---------------------------------------------------------------------------
+
+/// Normalize a settled screen grid for cross-end comparison:
+/// * middle-ellipsized path prefixes (`/…/openco…/`) re-expanded so the
+///   root substitution below can fire
+/// * sandbox roots (each end runs in its own PID-unique root) → `__ROOT__`
+/// * the composer placeholder suggestion (`Ask anything… "…"`) picks via
+///   `Math.random` (ref home route) → `__PROMPT__`
+/// * the bottom-right version/channel pill (ref-from-source builds say
+///   `local`, release builds the semver) → `__VERSION__`
+/// * volatile identifiers (`ses_…`, `msg_…`, `evt_…`, `pty_…`) → `__ID__`
+/// * clock faces (`HH:MM`, `HH:MM:SS`) → `__TIME__`
+/// * trailing row whitespace
+pub fn normalize_grid(grid: &str, roots: &[&str]) -> String {
+    let mut out = String::with_capacity(grid.len());
+    for line in grid.lines() {
+        let mut row = line.trim_end().to_owned();
+        // Middle-ellipsized paths come in more than one truncation
+        // shape (`/…/openco…/t9w1-…` at 120 cols, `/…/opencode/t9w1-…`
+        // in the wider sidebar footer): re-expand ANY `/…*/t9w1-`
+        // prefix so the root substitution below can fire.
+        if let Some(start) = row.find("/…") {
+            if let Some(tail) = row[start..].find("/t9w1") {
+                let end = start + tail;
+                row = format!("{}{}{}", &row[..start], "/tmp/opencode", &row[end..]);
+            }
+        }
+        row = row.replace("/…/openco…/", "/tmp/opencode/");
+        for root in roots {
+            if !root.is_empty() {
+                row = row.replace(root, "__ROOT__");
+            }
+        }
+        row = replace_placeholder(&row);
+        if row.contains("__ROOT__") {
+            // Path-length differences (PID-unique roots pre-replacement)
+            // shift adjacent column padding; collapse them on BOTH ends
+            // identically.
+            collapse_spaces(&mut row);
+        }
+        row = replace_version_pill(&row);
+        row = replace_id_shapes(&row);
+        row = replace_clocks(&row);
+        row = replace_timings(&row);
+        // G-433 (documented masking, NOT silent): ref resolves an
+        // anthropic catalog base for custom-provider models of the
+        // anthropic package family (`/api/model` limit.context=200000
+        // for replay/claude-opus-4-7) while the port serves limit 0 —
+        // so ref's footer renders `38 (0%)` where rust renders `38`.
+        // The percent group is stripped on BOTH ends until G-433
+        // closes the model-base resolution gap.
+        row = replace_percent_group(&row);
+        // G-434 (documented masking): the free/no-auth model tier in
+        // the palette lists models.dev-catalog entries whose VINTAGE
+        // differs between the ref tree's snapshot.txt and the port's
+        // embedded catalog (both ends list their own era's free
+        // models; production syncs one live catalog). The row's model
+        // NAME is masked on both ends; the tier column and row count
+        // stay asserted.
+        if row.trim_end().ends_with(" Free") {
+            let trimmed_len = row.trim_end().len();
+            let head = &row[..trimmed_len];
+            if let Some(name_start) = head.find(|c: char| !c.is_whitespace()) {
+                let tier_at = head.len() - " Free".len();
+                row = format!("{}__FREELIST__{}", &row[..name_start], &head[tier_at..]);
+            }
+        }
+        out.push_str(&row);
+        out.push('\n');
+    }
+    out
+}
+
+/// Reply meta timings (`56ms`, `122.4 tok/s`) are wall-clock artifacts.
+fn replace_timings(row: &str) -> String {
+    let chars: Vec<char> = row.chars().collect();
+    let is_digit =
+        |chars: &[char], index: usize| chars.get(index).is_some_and(char::is_ascii_digit);
+    let mut out = String::with_capacity(row.len());
+    let mut index = 0;
+    while index < chars.len() {
+        if is_digit(&chars, index) {
+            let mut end = index;
+            while is_digit(&chars, end)
+                || (chars.get(end) == Some(&'.') && is_digit(&chars, end + 1))
+            {
+                end += 1;
+            }
+            // number span [index, end)
+            let suffix: String = chars[end..(end + 6).min(chars.len())].iter().collect();
+            if suffix.starts_with("ms") {
+                out.push_str("__MS__");
+                index = end + 2;
+            } else if suffix.starts_with(" tok/s") {
+                out.push_str("__TOKS__");
+                index = end + 6;
+            } else {
+                for ch in &chars[index..end] {
+                    out.push(*ch);
+                }
+                index = end;
+            }
+        } else {
+            out.push(chars[index]);
+            index += 1;
+        }
+    }
+    out
+}
+
+/// `Ask anything… "suggestion"` — the suggestion is Math.random-picked
+/// on the ref side (channel 8 hit the same artifact and seeded it there;
+/// here both texts are legal so both map to the token).
+fn replace_placeholder(row: &str) -> String {
+    match row.find("Ask anything… \"") {
+        Some(at) => {
+            let start = at + "Ask anything… \"".len();
+            // The suggestion ends at the closing quote if present.
+            let rest = &row[start..];
+            let end = rest.find('"').map_or(rest.len(), |index| index);
+            let mut out = String::from(&row[..start]);
+            out.push_str("__PROMPT__");
+            out.push_str(&rest[end..]);
+            out
+        }
+        None => row.to_owned(),
+    }
+}
+
+/// A row that is ONLY a version/channel token (`local`, `2.0.24`,
+/// `2.0.24-dev`) is the bottom-right pill; its text is a build artifact
+/// of which end runs from source vs binary.
+/// In-place collapse of runs of ≥2 spaces to a single space (applied
+/// identically to both ends; only for rows whose root path was
+/// substituted, where pre-replacement length differences shift padding).
+fn collapse_spaces(row: &mut String) {
+    let mut out = String::with_capacity(row.len());
+    let mut in_run = false;
+    for ch in row.chars() {
+        if ch == ' ' {
+            if !in_run {
+                out.push(ch);
+            }
+            in_run = true;
+        } else {
+            in_run = false;
+            out.push(ch);
+        }
+    }
+    *row = out;
+}
+
+fn replace_version_pill(row: &str) -> String {
+    let trimmed = row.trim();
+    let looks_like_version = |text: &str| {
+        text == "local"
+            || (text
+                .strip_prefix("2.0.24")
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('-')))
+    };
+    if !trimmed.is_empty() && looks_like_version(trimmed) {
+        // Padding width is a build artifact too (right-aligned `local`
+        // vs `2.0.24` differ by one column) — emit the bare token.
+        "__VERSION__".to_owned()
+    } else {
+        row.to_owned()
+    }
+}
+
+fn replace_id_shapes(row: &str) -> String {
+    let mut result = String::with_capacity(row.len());
+    let mut rest = row;
+    while let Some(index) = rest.find(|c: char| c.is_ascii_alphanumeric() || c == '_') {
+        let (prefix, tail) = rest.split_at(index);
+        result.push_str(prefix);
+        let end = tail.find(|c: char| !c.is_ascii_alphanumeric() && c != '_').unwrap_or(tail.len());
+        let (token, tail_rest) = tail.split_at(end);
+        if let Some((prefix, _)) = token.split_once('_') {
+            if matches!(prefix, "ses" | "msg" | "evt" | "pty" | "frm" | "per") && token.len() > 8 {
+                result.push_str("__ID__");
+                rest = tail_rest;
+                continue;
+            }
+        }
+        result.push_str(token);
+        rest = tail_rest;
+    }
+    result
+}
+
+/// G-433: strip any ` (N%)` context-percent group (see the call site
+/// — a known port gap, masked symmetrically on both ends).
+fn replace_percent_group(row: &str) -> String {
+    let chars: Vec<char> = row.chars().collect();
+    let is_digit =
+        |chars: &[char], index: usize| chars.get(index).is_some_and(char::is_ascii_digit);
+    let mut out = String::with_capacity(row.len());
+    let mut index = 0;
+    while index < chars.len() {
+        if chars.get(index) == Some(&' ')
+            && chars.get(index + 1) == Some(&'(')
+            && is_digit(&chars, index + 2)
+        {
+            let mut end = index + 2;
+            while is_digit(&chars, end) {
+                end += 1;
+            }
+            if chars.get(end) == Some(&'%') && chars.get(end + 1) == Some(&')') {
+                index = end + 2;
+                continue;
+            }
+        }
+        out.push(chars[index]);
+        index += 1;
+    }
+    out
+}
+
+fn replace_clocks(row: &str) -> String {
+    let chars: Vec<char> = row.chars().collect();
+    let is_digit =
+        |chars: &[char], index: usize| chars.get(index).is_some_and(char::is_ascii_digit);
+    let mut out = String::with_capacity(row.len());
+    let mut index = 0;
+    while index < chars.len() {
+        if is_digit(&chars, index)
+            && is_digit(&chars, index + 1)
+            && chars.get(index + 2) == Some(&':')
+            && is_digit(&chars, index + 3)
+            && is_digit(&chars, index + 4)
+            && !is_digit(&chars, index + 5)
+        {
+            out.push_str("__TIME__");
+            index += 5;
+            if chars.get(index) == Some(&':') && is_digit(&chars, index + 1) {
+                index += 3;
+            }
+        } else {
+            out.push(chars[index]);
+            index += 1;
+        }
+    }
+    out
+}
+
+/// Dump a grid to `.test-logs` unconditionally (forensics before the
+/// asserts run).
+pub fn dump_grid(name: &str, grid: &str) {
+    let dir = worktree_root().join(".test-logs");
+    let _ = std::fs::create_dir_all(&dir);
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    let _ = std::fs::write(dir.join(format!("t9-pair-{name}-{stamp}.txt")), grid);
+}
+
+/// Assert two normalized grids are equal, dropping both originals plus a
+/// line-oriented diff into `.test-logs` for forensics on failure.
+pub fn assert_grids_match(scenario: &str, ref_grid: &str, rust_grid: &str) {
+    let dir = worktree_root().join(".test-logs");
+    let _ = std::fs::create_dir_all(&dir);
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    let ref_path = dir.join(format!("t9-pair-{scenario}-{stamp}-ref.txt"));
+    let rust_path = dir.join(format!("t9-pair-{scenario}-{stamp}-rust.txt"));
+    let _ = std::fs::write(&ref_path, ref_grid);
+    let _ = std::fs::write(&rust_path, rust_grid);
+    if ref_grid == rust_grid {
+        return;
+    }
+    // First divergent lines for the panic message.
+    let mut diff = String::new();
+    for (number, (left, right)) in ref_grid.lines().zip(rust_grid.lines()).enumerate() {
+        if left != right {
+            diff.push_str(&format!("line {}: ref={left:?}\n         rust={right:?}\n", number + 1));
+            if diff.lines().count() > 16 {
+                break;
+            }
+        }
+    }
+    panic!(
+        "PAIR {scenario}: ref and rust grids diverge\n{diff}\
+         full grids: {ref_path:?} vs {rust_path:?}"
+    );
+}

@@ -106,7 +106,7 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use oc_schema::id::SessionId;
-use oc_util::determinism::{Clock, IdGen, RngSource, SystemClock, SystemRng, UuidV4IdGen};
+use oc_util::determinism::{Clock, IdGen, RngSource, SchemaIdGen, SystemClock, SystemRng};
 
 use crate::bus::{Bus, BusOptions, Subscription};
 use crate::config::{self, managed_policy, GlobalDirs, Loader};
@@ -245,7 +245,7 @@ impl EngineOptions {
             catalog_fetch: false,
             catalog_url: None,
             clock: Arc::new(SystemClock),
-            ids: Arc::new(UuidV4IdGen),
+            ids: Arc::new(SchemaIdGen::production()),
             rng: Arc::new(SystemRng),
             llm: None,
             model_resolver: None,

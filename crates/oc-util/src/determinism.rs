@@ -74,6 +74,40 @@ impl IdGen for UuidV4IdGen {
     }
 }
 
+/// Production ID generator matching the ref 2.0.24 server assembly
+/// (G-431b): identifiers whose ref schema types mint through
+/// `<Type>.ID.create()` — currently `msg` (`SessionMessage.ID`,
+/// `packages/schema/src/session-message.ts:23-29`) — use the ref
+/// ascending shape `msg_` + 26 chars. Prefixes without a ported ref
+/// generator keep the uuid v4 shape.
+pub struct SchemaIdGen {
+    ascending: AscendingIdGen,
+}
+
+impl SchemaIdGen {
+    /// Creates a generator from the given seams.
+    #[must_use]
+    pub fn new(clock: Arc<dyn Clock>, rng: Arc<dyn RngSource>) -> Self {
+        Self { ascending: AscendingIdGen::new(clock, rng) }
+    }
+
+    /// Creates the production generator (system clock + system rng).
+    #[must_use]
+    pub fn production() -> Self {
+        Self::new(Arc::new(SystemClock), Arc::new(SystemRng))
+    }
+}
+
+impl IdGen for SchemaIdGen {
+    fn new_id(&self, prefix: &str) -> String {
+        if prefix == "msg" {
+            format!("msg_{}", self.ascending.generate(false))
+        } else {
+            UuidV4IdGen.new_id(prefix)
+        }
+    }
+}
+
 /// The 62-character alphabet from `packages/schema/src/identifier.ts`.
 const BASE62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
@@ -291,6 +325,27 @@ mod tests {
         assert_eq!(&first[9..12], "001");
         assert_eq!(&second[9..12], "001");
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn schema_id_gen_msg_uses_ref_ascending_shape() {
+        // G-431b: server-minted wire msg ids follow ref
+        // SessionMessage.ID.create() — msg_ + 26-char body — while
+        // other prefixes keep the uuid v4 fallback shape.
+        let gen = SchemaIdGen::production();
+        for _ in 0..32 {
+            let id = gen.new_id("msg");
+            let body = id.strip_prefix("msg_").unwrap_or_else(|| panic!("{id}"));
+            assert_eq!(body.len(), 26, "{id}");
+            assert!(
+                body[..12].chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+                "{id}"
+            );
+            assert!(body[12..].chars().all(|c| c.is_ascii_alphanumeric()), "{id}");
+        }
+        let other = gen.new_id("evt");
+        assert!(other.starts_with("evt_"), "{other}");
+        assert_eq!(other.len(), "evt_".len() + 32);
     }
 
     #[test]
