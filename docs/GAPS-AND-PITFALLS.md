@@ -3316,3 +3316,19 @@ G-412/413/414/415/416/417/418/420/422 ✅；**G-419/G-421 勘误撤销**（登�
 - 文件边界：每（进程）会话一 `rec-*.raw.json`；重 arm 铸新 id、旧文件冻结不再触碰（`rearm_writes_a_new_file_and_never_touches_the_old` 钉定）。
 - 长流完整性：全量重写 flush（tmp+rename 原子）在 2000 事件下产物恒为单一合法 JSON、全量在场、无 .tmp 残留（`long_stream_full_rewrite_stays_valid_and_complete`，release/debug 均绿）。**Concern① 裁定：不损坏，保原子全量重写**；成本注记=O(n²) 总写字节（2000 事件 ≈300MB 累计写，测试 14s debug）——真实长会话（>万事件）再议 JSONL 追加式，本轮不改（正确性优先，录制失败永不带走会话）。
 - 尺寸史：尾部去重保序（`resize_history_deduplicates_and_preserves_order`）。
+
+# 第三十三轮（2026-11-16，gb17 第 4 波：committed CAUSES 清零——G-424b 关簇 + B2 加载投影族退役）
+
+> **终态：committed 90 = EXACT 89 + CAUSES 1（G-28 有界 shim 单命中）；frames 15/15 EXACT；rec- 9/9 exact；gate exit 0；CAUSES hits 6→1。** 两族处置（均为退役先例格式：matcher `lambda d: False` + RETIRED 判定文 + selftest 反钉）：
+
+## G-424b 关簇（产品修：toast 标题折行引擎移植）
+- 根因（ref 源码级）：`ui/toast.tsx` 外盒 `maxWidth=min(60, w-6)` 钳制**含双边框**（整盒 ≤60，rust 旧公式 content+2 可到 62）；标题 text 无 wrapMode=none（默认 word wrap）在「文本区(54) − marginLeft2 − affordance run」内 shrink+折行——**'/' 是折行机会**（ref 网格 "…/node_modules/" 行尾实证，全局 is_break_after 集无 '/'，toast 局部集并入）；面板行=1+标题行数+1+消息行+1（+pending 再 +2），消息 width=100% 全区折行。
+- 修复（crates/oc-tui/src/components/toast.rs + toast_solid.rs）：`toast_wrap`（token 贪心装填，break-after=全局集 ∪ {'/'}）+ `toast_layout`（整盒钳制几何、逐行 title/message runs、pending_row=消息后 marginTop 1）+ `panel_rows_public(toast,pending,term)`；**无标题面保持旧钉形状**（单行消息+2 行面板——语料无溢出证据，注释登记为未移植面）；G-424 的 affordance 宽度几何不回归（anim-toast-* 6 屏仍 exact）。
+- 连带三处（同为 plugin-fallback 残余、原被 G-424b 簇吞没）：① **z 序**——ref 对话框是 DialogProvider 内 `{children}` 之后的 zIndex-3000 absolute 兄弟（dialog.tsx:228-247），盖过一切 App 内覆盖层；rust 骨架序把 dialogs 从 5 挪到 12（console/which-key/toast/pill/migration/reconnecting 全在其下；DIALOG_SKELETON_INDEX，旧「覆盖层盖对话框」登记为倒置勘误）。② **rail 后缝合**——`ToastRailCover{rect,dim}`：rail 格在对话框 rect 内不绘（被盒盖）、scrim 态下 fg 过 `blend_backdrop_fg`（α=150/255 单 fg 混合，bg 保持已 scrim 的底色——全格 blend 会双重减光）。③ **/plugins 管理屏对齐**——`setSize("large")`（88/width−2 钳制，palette 开口 Medium 勘误）；失败行 gutter 'x'（`SelectOption::gutter`，error 色，paddingLeft 1+gutter+gap=3 同列）；footer 条按 ref 2.0.24 动作可见性（plugins.tsx:198-246 hidden 族：无 server 包→check 隐、焦点非注册行→toggle 隐、无 outdated→update 隐、**无 install 动作**——shift+i 只是全局键；`ctrl+a show internal` footerHint 恒在最后）+ footer-prop/hint 双样式（`SelectAction::hint/footer_prop`：bold 标题；分隔空格分别骑 muted/base span——plugins.tsx:248-255 vs dialog-select.tsx:631）。
+- 夹具边界勘误（tools/diff/tui_fullscreen.py）：双侧 staging 根路径差（plugins-ref vs plugins-rust）会以一字之差漏进 toast/对话框内嵌的 config target 字符串——双侧 manifest 统一传 `STAGE/plugins/…` 规范路径，编排器按腿重指 symlink（ref→plugins-ref / rust→plugins-rust），各腿仍解析各自树。
+- plugin-fallback 三档 exact（443-668→0）；plugin-boot 9 屏零回归；单测 `long_title_shrinks_and_wraps_inside_the_clamped_panel`/`pending_more_rides_one_margin_row_past_the_message` 钉形状。
+
+## B2 加载模型投影族退役（裁决文退役条件=driver 侧镜像 ref 夹具装载面）
+- 判定依据：裁决文（tui_fullscreen.py B2 簇）定性「两侧装载模型的差异是夹具边界」——ref TUI 夹具只装 `<dir>/tui` 入口（context.tsx:670 `Host.resolve(target).tui`；server 入口归 ref 的 SERVER 进程、夹具无此面），rust 生产=统一进程（server 入口+load.tui 伴生）。退役条件取**镜像**分支：不是只修一侧的假绿，而是让 rust driver 的装配面=ref 夹具装载面。
+- 修复：(1) oc-plugin-host `PluginHostConfig::tui_only`（默认 false——生产统一进程不变）；supervisor `load_entry` tui_only 分支经 **load.tui op** 装载 tui 入口（tui2.js 非 server-plugin 形状，走主 load 会形状校验失败误报失败态——B2 首版实现踩过：plugin-boot 全线冒出假失败 toast）、状态仍按目录键控（失败面 toast 的 target=dir 对齐 ref 标题）、无 tui 入口=unsupported 惰性（无装载无失败——superpowers 在 ref 亦然，语料各捕获态皆 inert）。(2) oc-tui diff driver 装配置 `tui_only: true`。
+- 终态：plugin-boot-* ×9、plugin-fallback ×3、plugin-panel-open 80/120 全 exact；**plugin-panel-open@320x80 残余 151 cells = G-28 有界 shim 形状**（载荷自身 render 在桥接 walk 下丢弃空行 spacer+远端水合 `Preset zhipuai ▸` 行 → 侧栏段上移 2 行）——正是原 B2 判定文预告的「320×80 档 G-28 形状面共现」，现被 G-28 簇（plugin-* resting diverge）接住。B2 投影簇 matcher 退役（0 命中）；selftest 反钉（假想 plugin-panel-open 分歧须落 G-28/version-skew，退役 G-424b 不得吞 plugin-fallback 新分歧）。
