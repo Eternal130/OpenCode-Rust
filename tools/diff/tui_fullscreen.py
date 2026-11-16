@@ -422,12 +422,21 @@ def run_ref(stage: Path, ref: Path, manifest: Path, out: Path,
     env, absolute-path solid preload (no node_modules symlink needed).
     B2-fix: plugin-case legs run under `bun` = TUI_DIFF_BUN (>= 1.4.2,
     the ResolveMessage-extends-Error fix the ref host.ts swallow guard
-    depends on); non-plugin legs keep the environment bun."""
+    depends on); non-plugin legs keep the environment bun.
+    W5 hermeticity: XDG_CONFIG_HOME pins BOTH legs to one EMPTY config
+    dir — the flagship payload reads the runner's personal user config
+    (`~/.config/opencode/oh-my-opencode-slim.json`, tui2.js
+    getDefaultOpenCodeConfigDir) for its preset row, so an unpinned
+    environment leaks the DRIVER USER's private config into one leg
+    only (the ref bun runs as the invoking user; the rust guest under
+    the gate user) — an environment accident, not scenario data."""
     staged = stage / "tui_fullscreen_ref_driver.ts"
     if not staged.exists():
         shutil.copyfile(REF_DRIVER, staged)
     preload = ref / REF_PRELOAD
-    env = {**os.environ, "DIFF_REF_ROOT": str(ref)}
+    env = {**os.environ,
+           "DIFF_REF_ROOT": str(ref),
+           "XDG_CONFIG_HOME": str(hermetic_config_home(stage))}
     res = _logged_run(
         [bun, "--preload", str(preload), str(staged),
          "--manifest", str(manifest), "--out", str(out)],
@@ -439,11 +448,23 @@ def run_ref(stage: Path, ref: Path, manifest: Path, out: Path,
         raise SystemExit(f"ref driver failed: rc={res.returncode}")
 
 
+def hermetic_config_home(stage: Path) -> Path:
+    """The shared EMPTY XDG config dir (both legs' hermetic pin)."""
+    xdg = stage / "hermetic-xdg"
+    xdg.mkdir(parents=True, exist_ok=True)
+    os.chmod(xdg, 0o1777)
+    return xdg
+
+
 def run_rust(manifest: Path, out: Path) -> None:
     """Rust-side driver via the dev gate (single command string, env
-    prefixes folded into the same string per dev-gate convention)."""
+    prefixes folded into the same string per dev-gate convention).
+    W5: TUI_DIFF_XDG pins the guest's XDG_CONFIG_HOME to the same
+    EMPTY dir the ref leg runs under (the payload reads the runner's
+    personal user config for its preset row — see run_ref)."""
     cmd = (
         f"TUI_DIFF_MANIFEST={manifest} TUI_DIFF_OUT={out} "
+        f"TUI_DIFF_XDG={hermetic_config_home(manifest.parent)} "
         f"cargo nextest run -p oc-tui --test tui_fullscreen_diff_driver"
     )
     res = _logged_run(["tools/dev-gate.sh", cmd], "t4-rust-driver.log", cwd=REPO,
@@ -1034,20 +1055,38 @@ CAUSES = [
         ),
     ),
     (
-        "G-28 插件 TSX 有界（bounded shim）——残余单例：plugin-panel-open 宽档侧栏桥接 walk",
-        lambda d: d.get("dimension", "resting") == "resting"
-        and str(d.get("id", "")) == "plugin-panel-open@320x80"
-        and d.get("verdict") == "diverge",
+        # RETIRED (gb17 wave 5, 2026-11-16): the wide-tier sidebar
+        # bridge-walk residual is FIXED and the channel is ALL-EXACT
+        # for the first time — committed 90/90 + frames 15/15 + rec-
+        # 9/9, CAUSES hits 0. Two-part fix:
+        # (1) the bridge walk models the ref box's VERTICAL metrics
+        #     (host/host.js treeLines: a column box's border +
+        #     paddingTop/Bottom rows and per-child marginTop model as
+        #     blank lines; flattenRenderTree keeps every line as a
+        #     row — the old blank-dropping filter shifted the whole
+        #     section up, [blank,blank,header,agents…] collapsed to
+        #     [header,agents…]);
+        # (2) harness hermeticity: both legs pin XDG_CONFIG_HOME to
+        #     one EMPTY stage dir — the flagship payload reads the
+        #     DRIVER USER's personal ~/.config/opencode/
+        #     oh-my-opencode-slim.json (tui2.js getDefaultOpenCode-
+        #     ConfigDir) for its preset row, an environment accident
+        #     that leaked into whichever leg ran as that user.
+        # The cluster's full history: the original plugin-* prefix
+        # matcher (the bounded TSX-slot face) was narrowed to this
+        # single case at gb17-W4 review; with the case exact the
+        # family is CLOSED — a NEW plugin-shape divergence is
+        # unadjudicated and GATES RED (the conservative-correct
+        # policy the W4 narrowing set).
+        "G-28 插件 TSX 有界（bounded shim）——已修复关簇（gb17 W5 桥接 walk 空行模型 + 夹具密闭化）",
+        lambda d: False,
         (
-            "唯一残余：320x80 档 omo-slim 侧栏面板的桥接树行走丢空行/"
-            "远端水合行（行偏移族，col≥280 侧栏区）。gb17-W4 评审收窄："
-            "原 plugin-* 前缀匹配在 G-424b/B2 退役后成为无限 catch-all，"
-            "会静默吞同场景新分歧；现精确到单 case，修后整簇退役。"
-            "其它 plugin-* 新分歧落 unadjudicated 拦门（保守正确）。",
+            "（已关闭）plugin-panel-open@320x80 exact；通道首次全一致（90/90+15/15+rec- 9/9，CAUSES 0）",
             "ref packages/tui/src/component/panel-host.tsx:35-55（Slot path="
             "\"session.panel\"，TSX 活树 + reactive props）",
-            "rust crates/oc-tui/src/plugin_ui.rs:15-108（apply_plugin_ui 有界 "
-            "shim，UiRequest 中性事件形状）",
+            "rust crates/oc-plugin-host/src/host/host.js treeLines/"
+            "flattenRenderTree（盒垂向度量→空行模型）+ tools/diff/"
+            "tui_fullscreen.py hermetic_config_home（双侧 XDG 密闭）",
         ),
     ),
     (
