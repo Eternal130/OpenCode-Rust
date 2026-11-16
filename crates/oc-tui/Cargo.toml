@@ -16,6 +16,10 @@ oc-theme = { workspace = true }
 oc-syntax = { workspace = true }
 oc-client = { workspace = true }
 oc-core = { workspace = true }
+# G-431 — client-minted wire ids use the ref identifier scheme
+# (`SessionMessage.ID.create()` = prefix + `identifier::ascending()`),
+# ported verbatim in oc-schema.
+oc-schema = { workspace = true }
 oc-plugin-host = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -34,7 +34,7 @@
 //! in its own process — the in-process `pty_lock` pattern cannot
 //! reach across). Teardown is graceful: exit chord → wait → the
 //! binary's own `service stop` under the same sandbox → gateway child
-//! handle teardown. No naked PIDs, no kill/pkill.
+//! handle teardown. No naked PIDs, no signal-by-name utilities.
 
 #![allow(unsafe_code)] // forkpty/ioctl/pre_exec are libc FFI by nature
 #![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -251,6 +251,10 @@ impl Gateway {
             tag
         ));
         cmd.arg("--log").arg(&log_path);
+        // Miss forensics (G-431 follow-ups): the normalized request of
+        // every strict miss lands next to the gateway log for corpus
+        // digest-drift diffing.
+        cmd.arg("--dump-misses").arg(log_path.with_file_name(format!("gateway-{tag}-misses")));
         if record {
             cmd.arg("--seed-reply").arg(root.join("tools/diff/realchain/seeds/anthropic-text.txt"));
             cmd.arg("--record-dir").arg(root.join("tools/diff/realchain/corpus"));

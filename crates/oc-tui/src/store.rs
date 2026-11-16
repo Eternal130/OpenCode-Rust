@@ -5195,7 +5195,7 @@ impl Store {
         // POST body carries the id so the durable `inbox.enqueued`
         // echo upserts under the SAME id. Files/skills stay off the
         // optimistic row (data.ts:1566-1569).
-        let inbox_id = uuid::Uuid::new_v4().to_string();
+        let inbox_id = oc_schema::id::MessageId::new().to_string();
         let created = self.clock();
         self.admit_inbox_item(
             session_id,
@@ -5244,7 +5244,7 @@ impl Store {
     ) {
         let mut prompt = prompt.clone();
         if prompt.inbox_id.is_none() {
-            let inbox_id = uuid::Uuid::new_v4().to_string();
+            let inbox_id = oc_schema::id::MessageId::new().to_string();
             self.admit_inbox_item(
                 session_id,
                 InboxItem {
@@ -10238,7 +10238,7 @@ impl Store {
     /// optimistic local admit renders the dock immediately; the send
     /// goes out through the prompt sink carrying the delivery.
     pub fn queue_prompt(&self, session_id: &str, text: &str, files: &[String]) {
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = oc_schema::id::MessageId::new().to_string();
         self.admit_inbox_item(
             session_id,
             InboxItem {
@@ -19355,6 +19355,47 @@ mod g273_mention_tests {
 }
 
 // -- G-368①: the window-title fallback pattern + the plugin route arm ----------
+
+#[cfg(test)]
+mod g431_wire_id_tests {
+    // G-431 — every client-minted id that rides the wire must match the
+    // ref `SessionMessage.ID.create()` scheme exactly (schema checks
+    // `startsWith("msg_")`; the generator is `identifier.ts ascending()`):
+    // `msg_` + 12 lowercase hex chars (48-bit `timestamp * 0x1000 +
+    // counter`, ascending) + 14 chars from the 62-symbol alphabet
+    // `0123456789A-Za-z` (crypto-random bytes % 62) = 30 chars total.
+    const ALPHABET: &str = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+    fn assert_ref_message_id_shape(id: &str) {
+        let rest = id.strip_prefix("msg_").expect("msg_ prefix");
+        assert_eq!(rest.len(), 26, "26-char identifier body, got {id}");
+        let hex = &rest[..12];
+        assert!(
+            hex.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
+            "12 lowercase hex counter/timestamp chars, got {id}"
+        );
+        assert!(
+            rest[12..].bytes().all(|b| ALPHABET.as_bytes().contains(&b)),
+            "14 alphabet chars, got {id}"
+        );
+        assert!(!rest.contains('-'), "no uuid dashes on the wire, got {id}");
+    }
+
+    #[test]
+    fn generated_message_ids_match_ref_scheme() {
+        for _ in 0..32 {
+            assert_ref_message_id_shape(oc_schema::id::MessageId::new().as_ref());
+        }
+    }
+
+    #[test]
+    fn generated_message_ids_are_unique_and_sorted_ascending() {
+        let a = oc_schema::id::MessageId::new().to_string();
+        let b = oc_schema::id::MessageId::new().to_string();
+        assert_ne!(a, b);
+        assert!(a <= b, "ascending ids sort lexicographically later");
+    }
+}
 
 #[cfg(test)]
 mod g368_title_tests {

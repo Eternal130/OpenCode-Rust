@@ -5127,7 +5127,11 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
         let client = self.client.clone();
         let target = session_id.to_owned();
         let command = command.to_owned();
-        let inbox_id = uuid::Uuid::new_v4().to_string();
+        // G-431 — the shell body's client-minted id rides the wire, so it
+        // must satisfy the server schema (`msg_` prefix, ref identifier
+        // scheme), matching ref `SessionMessage.ID.create()` at the shell
+        // submit (mini stream-v2.transport.ts sendShell).
+        let inbox_id = oc_schema::id::MessageId::new().to_string();
         tokio::spawn(async move {
             let body = oc_client::types::SessionShellBody { command, id: Some(inbox_id) };
             if let Err(error) = client.session().shell(&target, &body).await {
