@@ -125,13 +125,20 @@ fn claim_renders_and_clicks() {
         .expect("the sidebar claim");
     let spec =
         host.render_slot_claim("slotclaims", &claim.key, Duration::from_secs(5)).expect("render");
-    assert_eq!(spec.title, "Claims");
-    assert_eq!(spec.rows, ["target: board".to_owned(), "plain row".to_owned()]);
-    assert_eq!(spec.clickable, [true, false], "row 0 carries the plugin's onMouseUp");
+    // G-28 bridge-walk fix: the SIDEBAR-family flatten is STRUCTURAL
+    // — every line lands as a row (blank box-metric rows included)
+    // and the title is empty; the clickable row indices shift with
+    // the full line list ("Claims" is now row 0, unclickable).
+    assert_eq!(spec.title, "");
+    assert_eq!(
+        spec.rows,
+        ["Claims".to_owned(), "target: board".to_owned(), "plain row".to_owned()]
+    );
+    assert_eq!(spec.clickable, [false, true, false], "row 1 carries the plugin's onMouseUp");
 
     // The click runs the plugin's handler (the marker file).
     assert!(
-        host.click_slot_claim("slotclaims", &claim.key, 0, Duration::from_secs(5)).expect("click"),
+        host.click_slot_claim("slotclaims", &claim.key, 1, Duration::from_secs(5)).expect("click"),
         "the click dispatches"
     );
     assert!(
@@ -140,7 +147,7 @@ fn claim_renders_and_clicks() {
     );
     assert!(
         !host
-            .click_slot_claim("slotclaims", &claim.key, 1, Duration::from_secs(5))
+            .click_slot_claim("slotclaims", &claim.key, 2, Duration::from_secs(5))
             .unwrap_or(false),
         "the plain row has no handler"
     );

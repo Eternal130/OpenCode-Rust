@@ -3857,7 +3857,33 @@ function treeLines(node, width = tuiSidebarContentWidth) {
     }
     return row;
   }
-  return children.flatMap((child) => treeLines(child, contentWidthOf(node, width)));
+  // Column (the default direction): the ref's box vertical model —
+  // each child's `marginTop` prefixes that many BLANK lines (the
+  // flagship's preset row, buildPresetRow marginTop 1), and the box's
+  // own `border` + `paddingTop`/`paddingBottom` add their rows around
+  // the content (the sidebar section box: border single + padding 1 —
+  // the wide-tier grids pin [blank, blank, header, …, blank, blank];
+  // the border itself paints no visible glyph at the sidebar's plain
+  // pane, so it models as blank rows). G-28 bridge-walk fix.
+  const blank = (count) => Array.from({ length: count }, () => "");
+  const metric = (value) =>
+    typeof value === "number" && Number.isFinite(value) && value > 0
+      ? Math.floor(value)
+      : 0;
+  const inner = contentWidthOf(node, width);
+  const body = [];
+  for (const child of children) {
+    const marginTop = metric(child?.props?.marginTop);
+    if (marginTop) body.push(...blank(marginTop));
+    body.push(...treeLines(child, inner));
+  }
+  let lines = body;
+  const padTop = metric(node.props.paddingTop);
+  const padBottom = metric(node.props.paddingBottom);
+  if (padTop) lines = [...blank(padTop), ...lines];
+  if (padBottom) lines = [...lines, ...blank(padBottom)];
+  if (node.props.border) lines = ["", ...lines, ""];
+  return lines;
 }
 
 /** A box's content width: numeric `width` wins; a border consumes its
@@ -4158,32 +4184,94 @@ async function handleSlotMaterialize({ pluginId }) {
 /** Flatten one rendered tree (the claim/route renders use the same
  *  native section shape as the sidebar bridge — PLUG-TUI-SLOT):
  *  `{title, rows:[{text,click}]}` plus the per-row activate handler
- *  table (index-aligned with the body rows). */
-function flattenRenderTree(tree, width = tuiSidebarContentWidth) {
-  const lines = treeLines(tree, width)
-    .map((line) => line.replace(/\s+$/, ""))
-    .filter((line) => line.trim() !== "");
-  const handlers = new Map();
-  const flatChildren = [];
-  for (const child of tree?.children ?? []) {
-    const handler = rowActivateHandler(child);
-    const childLines = treeLines(child)
-      .map((line) => line.replace(/\s+$/, ""))
+ *  table (index-aligned with the rows). Two policies:
+ *  * `structural` (the SIDEBAR-family flattens — slot.materialize +
+ *    the slot claims): G-28 bridge-walk fix — the box vertical model
+ *    (border/paddingTop/Bottom + per-child marginTop) models as BLANK
+ *    lines and EVERY line lands as a row with an empty title; the
+ *    old blank-dropping filter shifted whole sections up (the
+ *    wide-tier grids pin [blank, blank, header, …]). Rows that carry
+ *    the plugin's own `onMouseUp` (v2 `decorateInteractiveRow` —
+ *    tui2.js:30462-30467) are marked clickable, handlers stashed per
+ *    row index for `slot.click`.
+ *  * `!structural` (route.render — the full-screen page keeps its
+ *    first-line title + blank-dropping shape, painted by
+ *    plugin_page's title+rows contract). */
+function flattenRenderTree(tree, width = tuiSidebarContentWidth, structural = true) {
+  const blank = (count) => Array.from({ length: count }, () => "");
+  const metric = (value) =>
+    typeof value === "number" && Number.isFinite(value) && value > 0
+      ? Math.floor(value)
+      : 0;
+  const rstrip = (line) => line.replace(/\s+$/, "");
+  const children = (tree?.children ?? []).filter(Boolean);
+  if (!structural) {
+    const lines = treeLines(tree, width)
+      .map(rstrip)
       .filter((line) => line.trim() !== "");
-    for (const _line of childLines) {
-      flatChildren.push(handler);
+    const handlers = new Map();
+    const flatChildren = [];
+    for (const child of children) {
+      const handler = rowActivateHandler(child);
+      const childLines = treeLines(child)
+        .map(rstrip)
+        .filter((line) => line.trim() !== "");
+      for (const _line of childLines) {
+        flatChildren.push(handler);
+      }
     }
+    const bodyRows = lines.slice(1);
+    bodyRows.forEach((_text, index) => {
+      const handler = flatChildren[index + 1];
+      if (handler) handlers.set(index, handler);
+    });
+    return {
+      section: {
+        title: lines.length > 0 ? lines[0] : "",
+        rows: bodyRows.map((text, index) => ({ text, click: handlers.has(index) })),
+      },
+      handlers,
+    };
   }
-  const bodyRows = lines.slice(1);
-  bodyRows.forEach((_text, index) => {
-    const handler = flatChildren[index + 1];
-    if (handler) handlers.set(index, handler);
+  const isRow = tree?.props?.flexDirection === "row" && children.length > 0;
+  // (line, activate-handler) pairs — the handler table index-aligns
+  // with the emitted rows.
+  let assembled;
+  if (isRow || !tree || typeof tree !== "object" || tree.tag === "#text") {
+    assembled = treeLines(tree, width)
+      .map(rstrip)
+      .map((line) => ({ line, handler: undefined }));
+  } else {
+    // Mirror treeLines' column assembly at the ROOT so the handler
+    // table stays index-aligned with the emitted lines (per-child
+    // marginTop blanks + the box's own padding/border rows).
+    const inner = contentWidthOf(tree, width);
+    const body = [];
+    for (const child of children) {
+      const marginTop = metric(child?.props?.marginTop);
+      const handler = rowActivateHandler(child);
+      if (marginTop) {
+        body.push(...blank(marginTop).map((line) => ({ line, handler: undefined })));
+      }
+      for (const line of treeLines(child, inner).map(rstrip)) {
+        body.push({ line, handler });
+      }
+    }
+    const noHandler = (count) => blank(count).map((line) => ({ line, handler: undefined }));
+    assembled = body;
+    const padTop = metric(tree.props?.paddingTop);
+    const padBottom = metric(tree.props?.paddingBottom);
+    if (padTop) assembled = [...noHandler(padTop), ...assembled];
+    if (padBottom) assembled = [...assembled, ...noHandler(padBottom)];
+    if (tree.props?.border) assembled = [...noHandler(1), ...assembled, ...noHandler(1)];
+  }
+  const handlers = new Map();
+  assembled.forEach(({ handler }, index) => {
+    if (typeof handler === "function") handlers.set(index, handler);
   });
+  const rows = assembled.map(({ line }, index) => ({ text: line, click: handlers.has(index) }));
   return {
-    section: {
-      title: lines.length > 0 ? lines[0] : "",
-      rows: bodyRows.map((text, index) => ({ text, click: handlers.has(index) })),
-    },
+    section: { title: "", rows },
     handlers,
   };
 }
@@ -4220,7 +4308,14 @@ async function handleRouteRender({ pluginId, name, data }) {
   if (typeof render !== "function") {
     throw new Error(`${pluginId}: no route ${name}`);
   }
-  const { section, handlers } = flattenRenderTree(render({ data: data ?? undefined }));
+  // G-28 note: routes keep the NON-structural flatten — the
+  // full-screen page paints its own title+rows contract
+  // (plugin_page) and no corpus evidences blank rows there.
+  const { section } = flattenRenderTree(
+    render({ data: data ?? undefined }),
+    tuiSidebarContentWidth,
+    false,
+  );
   return section;
 }
 

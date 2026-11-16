@@ -294,20 +294,17 @@ class CausesTest(unittest.TestCase):
         self.assertEqual(r["verdict"], "diverge")
         self.assertIsNone(self._label({"id": "session-text", **r}))
 
-    def test_g28_narrowed_single_case_hits(self):
-        # gb17-W4 review: narrowed from the plugin-* prefix (which had
-        # become an unbounded catch-all after G-424b/B2 retirement) to
-        # the single known residual — the wide-tier sidebar bridge walk.
-        rec = self._rec(id="plugin-panel-open@320x80")
-        self.assertIn("G-28", self._label(rec))
-
-    def test_g28_other_plugin_cases_now_unadjudicated(self):
-        # Any OTHER plugin-* divergence must NOT be swallowed by G-28;
-        # it lands unadjudicated and fails the gate (conservative).
+    def test_retired_g28_never_matches_any_divergence(self):
+        # gb17 W5: the G-28 bounded-shim cluster is RETIRED (the
+        # wide-tier sidebar bridge walk fixed — the box vertical
+        # metrics model as blank lines + both legs run under a pinned
+        # EMPTY XDG_CONFIG_HOME). Reverse pin: NO divergence — not
+        # even the retired single case — may be swallowed by the
+        # label; every plugin-* shape divergence is unadjudicated and
+        # gates red (the conservative-correct policy).
+        self.assertIsNone(self._label(self._rec(id="plugin-panel-open@320x80")))
         self.assertIsNone(self._label(self._rec(id="plugin-boot-basic")))
         self.assertIsNone(self._label(self._rec(id="plugin-fallback-x")))
-
-    def test_g28_wrong_prefix_or_exact_shape_misses(self):
         self.assertIsNone(self._label(self._rec(id="home-empty")))
         # plugin- prefix but exact verdict is not a divergence at all
         self.assertIsNone(self._label(self._rec(id="plugin-x", verdict="exact")))
@@ -536,9 +533,9 @@ class VersionSkewFamilyTest(unittest.TestCase):
 
     def test_plugin_case_without_evidence_is_unadjudicated(self):
         # no flag (a future corpus where ref boots the plugin): the
-        # version-skew cluster must NOT match. Since the gb17-W4 G-28
-        # narrowing, such a shape divergence is UNADJUDICATED (gate
-        # red) rather than silently owned by the bounded-shim family.
+        # version-skew cluster must NOT match. Since gb17 W4/W5 such a
+        # shape divergence is UNADJUDICATED (gate red) rather than
+        # silently owned by the bounded-shim family (closed at W5).
         label = adjudicate(self._rec("plugin-boot-idle", None))
         self.assertIsNone(label)
         self.assertIsNone(adjudicate(self._rec("plugin-boot-idle", False)))
@@ -625,14 +622,13 @@ class B2FixFamilyTest(unittest.TestCase):
         self.assertNotIn("version-skew", label)
 
     def test_panel_open_no_longer_hits_a_loading_model_cluster(self):
-        # The B2 loading-model cluster is RETIRED (wave 4: the rust
-        # driver boots the tui entry only — the ref fixture's face).
-        # A hypothetical plugin-panel-open divergence falls through to
-        # G-28 (the bounded sidebar shim), and with a ref failure
-        # flag the earlier version-skew entry takes precedence.
+        # The B2 loading-model cluster is RETIRED (wave 4) and G-28
+        # closed (wave 5) — a hypothetical plugin-panel-open
+        # divergence is UNADJUDICATED without evidence; with a ref
+        # failure flag the version-skew entry takes precedence.
         for failed in (False, None):
             label = adjudicate(self._rec("plugin-panel-open", failed))
-            self.assertIn("G-28", label)
+            self.assertIsNone(label)
         self.assertIn("version-skew", adjudicate(self._rec("plugin-panel-open", True)))
 
     def test_retired_g424b_never_matches_a_plugin_fallback_divergence(self):
@@ -646,6 +642,6 @@ class B2FixFamilyTest(unittest.TestCase):
         label = adjudicate(self._rec("plugin-boot-idle", True))
         self.assertIsNotNone(label)
         self.assertIn("version-skew", label)
-        # without the ref-failure evidence it falls to G-28
-        g28 = adjudicate(self._rec("plugin-boot-idle", None))
-        self.assertIn("G-28", g28)
+        # without the ref-failure evidence it is unadjudicated
+        # (G-28 closed at gb17 W5)
+        self.assertIsNone(adjudicate(self._rec("plugin-boot-idle", None)))

@@ -229,9 +229,15 @@ fn slot_renders_and_clicks() {
         .iter()
         .find(|section| section.plugin_id == "slotclaims")
         .expect("the claim's section landed");
-    assert_eq!(section.title, "Claims");
-    assert_eq!(section.rows, ["target: board".to_owned(), "plain row".to_owned()]);
-    assert_eq!(section.clickable, vec![true, false]);
+    // G-28 bridge-walk fix: the STRUCTURAL flatten — every line is a
+    // row (blank box-metric rows included, empty title); the
+    // clickable indices ride the full line list.
+    assert_eq!(section.title, "");
+    assert_eq!(
+        section.rows,
+        ["Claims".to_owned(), "target: board".to_owned(), "plain row".to_owned()]
+    );
+    assert_eq!(section.clickable, vec![false, true, false]);
 
     // -- G-04: the footer faces materialized onto their surfaces ------
     assert_eq!(
@@ -242,8 +248,8 @@ fn slot_renders_and_clicks() {
     assert_eq!(store.plugin_slot_rows("home.footer"), ["home footer row".to_owned()]);
     let sidebar_footer = store.plugin_slot_sections("sidebar.footer");
     assert_eq!(sidebar_footer.len(), 1);
-    assert_eq!(sidebar_footer[0].title, "Side footer");
-    assert_eq!(sidebar_footer[0].rows, ["sidebar footer row".to_owned()]);
+    assert_eq!(sidebar_footer[0].title, "");
+    assert_eq!(sidebar_footer[0].rows, ["Side footer".to_owned(), "sidebar footer row".to_owned()]);
 
     // The LIVE route renders it in the docked sidebar pane (the
     // plugin_slots.rs proof shape: docked at 160 cols, the section
@@ -264,9 +270,10 @@ fn slot_renders_and_clicks() {
     assert!(sidebar_pane[4].contains("target: board"), "the clickable row: {:?}", sidebar_pane[4]);
     assert!(sidebar_pane[5].contains("plain row"), "the plain row: {:?}", sidebar_pane[5]);
     // -- the click runs the plugin's onMouseUp --------------------------
-    // (the click sink's claim-keyed path — the section's row 0).
+    // (the click sink's claim-keyed path — the section's row 1,
+    // "target: board", under the structural row list).
     assert!(
-        host.click_slot_claim("slotclaims", "slot#0", 0, Duration::from_secs(5)).expect("click"),
+        host.click_slot_claim("slotclaims", "slot#0", 1, Duration::from_secs(5)).expect("click"),
         "the claim click dispatches"
     );
     assert!(
