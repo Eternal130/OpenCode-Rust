@@ -3332,3 +3332,20 @@ G-412/413/414/415/416/417/418/420/422 ✅；**G-419/G-421 勘误撤销**（登�
 - 判定依据：裁决文（tui_fullscreen.py B2 簇）定性「两侧装载模型的差异是夹具边界」——ref TUI 夹具只装 `<dir>/tui` 入口（context.tsx:670 `Host.resolve(target).tui`；server 入口归 ref 的 SERVER 进程、夹具无此面），rust 生产=统一进程（server 入口+load.tui 伴生）。退役条件取**镜像**分支：不是只修一侧的假绿，而是让 rust driver 的装配面=ref 夹具装载面。
 - 修复：(1) oc-plugin-host `PluginHostConfig::tui_only`（默认 false——生产统一进程不变）；supervisor `load_entry` tui_only 分支经 **load.tui op** 装载 tui 入口（tui2.js 非 server-plugin 形状，走主 load 会形状校验失败误报失败态——B2 首版实现踩过：plugin-boot 全线冒出假失败 toast）、状态仍按目录键控（失败面 toast 的 target=dir 对齐 ref 标题）、无 tui 入口=unsupported 惰性（无装载无失败——superpowers 在 ref 亦然，语料各捕获态皆 inert）。(2) oc-tui diff driver 装配置 `tui_only: true`。
 - 终态：plugin-boot-* ×9、plugin-fallback ×3、plugin-panel-open 80/120 全 exact；**plugin-panel-open@320x80 残余 151 cells = G-28 有界 shim 形状**（载荷自身 render 在桥接 walk 下丢弃空行 spacer+远端水合 `Preset zhipuai ▸` 行 → 侧栏段上移 2 行）——正是原 B2 判定文预告的「320×80 档 G-28 形状面共现」，现被 G-28 簇（plugin-* resting diverge）接住。B2 投影簇 matcher 退役（0 命中）；selftest 反钉（假想 plugin-panel-open 分歧须落 G-28/version-skew，退役 G-424b 不得吞 plugin-fallback 新分歧）。
+
+# 第三十四轮（2026-11-16，gb17 第 5 波：G-28 残余单例修复关簇——通道 8 史上首次全一致）
+
+> **终态：committed 90/90 + frames 15/15 全 EXACT、CAUSES hits 0、rec- 9/9 exact、gate exit 0。** G-28 有界 shim 簇全史关闭（原 plugin-* 前缀 → W4 收窄单例 → W5 修复关簇，matcher RETIRED + selftest 反钉：任何 plugin-* 形状分歧现在 unadjudicated 拦门）。
+
+## 根因（双因，file:line 取证）
+1. **桥接 walk 丢盒垂向度量**（crates/oc-plugin-host/src/host/host.js `treeLines`/`flattenRenderTree`）：omo-slim 侧栏节根盒 `renderSidebar`（载荷 dist/tui2.js:30686-30710）= `box(column, border single, paddingTop 1, paddingBottom 1)` + `buildPresetRow` 的 `marginTop 1`——ref 真布局渲染为 [border 行, padding 行, header, margin 行, …agents…, padding 行, border 行]（320x80 档实测 rows 3-4 空、5 头、6 空、8-12 agents；border 在侧栏纯色 pane 上不可见字形=空行）。rust 桥接 `treeLines` 列盒只递归 children、`flattenRenderTree` 再 `filter(line.trim() !== "")` 丢一切空行 → [header, agents…] 整体上移 2-4 行。只有宽档暴露：80/120 档 session sidebar 不 dock，plugin 节不可见。
+2. **夹具不密闭（驱动用户私有配置泄漏）**：载荷 `loadPluginConfig`（tui2.js:23412）经 `getDefaultOpenCodeConfigDir`（:2482-2484）读 `XDG_CONFIG_HOME ?? ~/.config` 下的 `opencode/oh-my-opencode-slim.json`——ref 腿 bun 以调用用户（root）运行读到 `preset:"zhipuai"` → 渲染 "Preset zhipuai ▸" 行；rust 腿 guest 经 dev-gate 以 eternal130 运行无该文件 → 无此行。单侧环境事故而非场景数据。
+
+## 修复
+- host.js：`treeLines` 列盒模型化 border（上下各 1 空行）+ paddingTop/Bottom + 每 child marginTop（→空行）；`flattenRenderTree` 结构化（structural）策略：所有行（含空行）逐一入 rows、title 恒 ""、click 处理器表与全行表索引对齐；route.render 保持旧非结构化策略（plugin_page 的 title+rows 契约不变）；markdown 路径本就滤空行不受影响。
+- 密闭化（tools/diff/tui_fullscreen.py `hermetic_config_home` + driver `TUI_DIFF_XDG`→`PluginHostConfig.env`）：双腿 XDG_CONFIG_HOME 钉到同一空 staging 目录，通道在任意机器/用户下可复现。
+- oc-tui 侧栏投影零改动（SidebarSection 空串行自然消耗 y 槽；空 title 跳过标题行）。
+
+## 验证
+- 通道全量：committed 90/90 exact + frames 15/15 exact + rec- 9/9 exact，CAUSES hits 0，gate exit 0（幂等三跑）；selftest 31/31。
+- `cargo nextest run -p oc-tui -p oc-plugin-host --locked --no-fail-fast`：1842 全绿（e1_cells_paste_8k 首试 flake=登记册白名单，--exact 重跑绿）；clippy -D warnings 绿；fmt --check 绿；guards 全绿。

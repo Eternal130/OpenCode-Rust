@@ -26,9 +26,9 @@ cells 稠密化，None/缺省子字段补规范默认（ch=' '、attrs 排序去
 
 | 总量 | EXACT | STRUCTURAL | CAUSES 命中 | 未裁决 |
 |---|---|---|---|---|
-| 90 | 89 | 0 | 1 | 0 |
+| 90 | 90 | 0 | 0 | 0 |
 
-（verdict 分布：exact 89 / structural 0 / diverge 1；
+（verdict 分布：exact 90 / structural 0 / diverge 0；
 committed 未裁决>0 ⇒ exit 2；rec-* recorded-local 见其小节（advisory，不入门））
 
 ## 分歧明细
@@ -85,7 +85,7 @@ committed 未裁决>0 ⇒ exit 2；rec-* recorded-local 见其小节（advisory�
 | plugin-fallback@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 20 | 15 |
 | plugin-panel-open | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 18 |
 | plugin-panel-open@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 18 |
-| plugin-panel-open@320x80 | diverge | 151 | r3c280 ch ref=' ' rust='▼' | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
+| plugin-panel-open@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
 | session-empty | exact | 0 | — | 80x24 | 80x24 | 0 | 0 | 27 | 18 |
 | session-empty@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 18 |
 | session-empty@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
@@ -126,10 +126,6 @@ committed 未裁决>0 ⇒ exit 2；rec-* recorded-local 见其小节（advisory�
 | sidebar-toggle@120x30 | exact | 0 | — | 120x30 | 120x30 | 0 | 0 | 27 | 18 |
 | sidebar-toggle@320x80 | exact | 0 | — | 320x80 | 320x80 | 0 | 0 | 27 | 18 |
 
-### first_diff 明细
-
-- `plugin-panel-open@320x80` [diverge] row=3 col=280 field=ch ref=' ' rust='▼' cells_diff_count=151 — CAUSES: G-28 插件 TSX 有界（bounded shim）——残余单例：plugin-panel-open 宽档侧栏桥接 walk
-
 ## CAUSES 定性
 
 - **G-368 量化色（oklab 最近邻量化差）** — 命中 0 case
@@ -168,10 +164,10 @@ committed 未裁决>0 ⇒ exit 2；rec-* recorded-local 见其小节（advisory�
   - （已关闭）plugin-fallback 场景的残余归 G-424b toast 长标题折行簇
   - ref packages/tui/src/plugin/context.tsx:460-484 + feature-plugins/system/plugins.tsx:54-76
   - rust crates/oc-tui/src/plugin_boot.rs surface_boot_failures + components/command_palette.rs DialogKind::Plugins（本轮修复）
-- **G-28 插件 TSX 有界（bounded shim）——残余单例：plugin-panel-open 宽档侧栏桥接 walk** — 命中 1 case（`plugin-panel-open@320x80`）
-  - 唯一残余：320x80 档 omo-slim 侧栏面板的桥接树行走丢空行/远端水合行（行偏移族，col≥280 侧栏区）。gb17-W4 评审收窄：原 plugin-* 前缀匹配在 G-424b/B2 退役后成为无限 catch-all，会静默吞同场景新分歧；现精确到单 case，修后整簇退役。其它 plugin-* 新分歧落 unadjudicated 拦门（保守正确）。
+- **G-28 插件 TSX 有界（bounded shim）——已修复关簇（gb17 W5 桥接 walk 空行模型 + 夹具密闭化）** — 命中 0 case
+  - （已关闭）plugin-panel-open@320x80 exact；通道首次全一致（90/90+15/15+rec- 9/9，CAUSES 0）
   - ref packages/tui/src/component/panel-host.tsx:35-55（Slot path="session.panel"，TSX 活树 + reactive props）
-  - rust crates/oc-tui/src/plugin_ui.rs:15-108（apply_plugin_ui 有界 shim，UiRequest 中性事件形状）
+  - rust crates/oc-plugin-host/src/host/host.js treeLines/flattenRenderTree（盒垂向度量→空行模型）+ tools/diff/tui_fullscreen.py hermetic_config_home（双侧 XDG 密闭）
 - **G-332 markdown 有界行形状** — 命中 0 case
   - session-markdown-* 场景且 ch 字段差（行形状分歧）：ref 经 markdown 渲染器 memo 重建整块，rust 经分派表逐行缓存渲染——折行/代码块边界行的有界形状差
   - ref packages/tui/src/plugin/markdown.ts:7-18（createMarkdownRenderer memo，renderNode 变更整块重建）
