@@ -138,9 +138,14 @@ files; every field semantic below is normative for both.
     fixture (`animations: false`, system clock) and its frames are
     EVENT-driven (tick_events + settle + capture, no clock steps).
     Clock-driven rust animation (spinner glyph rotation, caret blink,
-    knight spinner) vs the ref's animation-gated static shapes is a
-    REGISTERED harness artifact family (CAUSES
-    "A2 ref 动画门控夹具伪影"), not a silent pass: the frames
+    knight spinner) vs the ref's animation-gated static shapes WAS a
+    registered harness artifact family (CAUSES
+    "A2 ref 动画门控夹具伪影") — RETIRED 2026-11-16 (gb17): the
+    animations gate is now PORTED (the rust store carries
+    `config.animations ?? true` per spinner.tsx:29-31 and the driver
+    mirrors the fixture's resolved `animations:false`), so both sides
+    render the same `⋯` static indicators under the OFF gate and
+    anim-tool-progress is exact in both dimensions. The frames
     dimension still asserts every event-driven content change
     exactly, and a future stable ref clock slots into the same
     schema. Ref-side non-clock-injectable animation surfaces (toast

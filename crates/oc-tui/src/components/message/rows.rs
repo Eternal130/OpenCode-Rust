@@ -39,6 +39,24 @@ pub const ROW_PADDING_LEFT: usize = 3;
 /// `INLINE_TOOL_ICON_WIDTH`.
 pub const ICON_WIDTH: usize = 2;
 
+/// The animations-OFF running-row indicator (`Spinner`'s `Show` fallback,
+/// spinner.tsx:29-31: `<text>⋯ {children}</text>` / bare `"⋯"`): every
+/// running row renders this static glyph when `config.animations` is
+/// false — the diff fixture's resolved config pins exactly that.
+pub const RESTING_INDICATOR_GLYPH: char = '⋯';
+
+/// The running-row indicator glyph under the animation gate: the
+/// clock-driven spinner frame when `config.animations ?? true` is on,
+/// the static `⋯` fallback when off (spinner.tsx:29-31).
+#[must_use]
+pub fn running_indicator_glyph(clock_ms: u64, animations: bool) -> char {
+    if animations {
+        spinner_frame(clock_ms)
+    } else {
+        RESTING_INDICATOR_GLYPH
+    }
+}
+
 /// The spinner glyph for an elapsed clock (`ManualClock` semantics: the
 /// caller injects the clock; frame 0 at t=0 and the glyph only moves
 /// when the clock advances — a frozen clock pins `⠋` forever).
@@ -88,15 +106,18 @@ fn wrapped_label(x: usize, y: usize, text: &str, width: usize, style: Style) -> 
 /// (`color={theme.text.muted}` — the group passes the muted color).
 ///
 /// `clock_ms` is the injected store clock — frozen ⇒ `⠋` (golden).
+/// `animations` is the `config.animations ?? true` gate: `false` pins
+/// the static `⋯` fallback (spinner.tsx:29-31).
 #[must_use]
 pub fn running_tool_row(
     label: &str,
     clock_ms: u64,
+    animations: bool,
     theme: &ThemeStyles,
     width: usize,
 ) -> RowRender {
     let muted = theme.text_muted;
-    let glyph = spinner_frame(clock_ms);
+    let glyph = running_indicator_glyph(clock_ms, animations);
     let label_width = width.saturating_sub(ROW_PADDING_LEFT + 2);
     let placed = vec![
         text_at(ROW_PADDING_LEFT, 0, glyph, muted),
@@ -146,10 +167,19 @@ pub fn subagent_tool_row(
     state: &crate::components::message::model::ToolState,
     session_running: Option<bool>,
     clock_ms: u64,
+    animations: bool,
     theme: &ThemeStyles,
     width: usize,
 ) -> RowRender {
-    self::subagent_tool_row_with_models(state, session_running, clock_ms, theme, width, &[])
+    self::subagent_tool_row_with_models(
+        state,
+        session_running,
+        clock_ms,
+        animations,
+        theme,
+        width,
+        &[],
+    )
 }
 
 /// [`subagent_tool_row`] with the model-list name resolution
@@ -159,6 +189,7 @@ pub fn subagent_tool_row_with_models(
     state: &crate::components::message::model::ToolState,
     session_running: Option<bool>,
     clock_ms: u64,
+    animations: bool,
     theme: &ThemeStyles,
     width: usize,
     model_names: &[(String, String)],
@@ -230,7 +261,7 @@ pub fn subagent_tool_row_with_models(
     }
     let spinner = !continuation && running;
     if spinner {
-        running_tool_row(&label, clock_ms, theme, width)
+        running_tool_row(&label, clock_ms, animations, theme, width)
     } else if description.is_some() || state.status == ToolStatus::Error {
         // `complete || failed` (InlineToolRow's Show gate): either a
         // truthy description or the error state renders the icon row.
@@ -243,7 +274,7 @@ pub fn subagent_tool_row_with_models(
         };
         completed_tool_row(icon, &label, theme, width)
     } else {
-        running_tool_row("Delegating…", clock_ms, theme, width)
+        running_tool_row("Delegating…", clock_ms, animations, theme, width)
     }
 }
 
@@ -256,6 +287,7 @@ pub fn subagent_tool_row_with_models(
 /// `RGBA.fromValues(r, g, b, 0.6)`) unless EXPANDED (the full
 /// warning color, `hover() || expanded()`); running ones use
 /// `text.base`.
+#[allow(clippy::too_many_arguments)] // mirrors the ref InlineToolRow props set
 #[must_use]
 pub fn reasoning_header_row(
     title: Option<&str>,
@@ -263,6 +295,7 @@ pub fn reasoning_header_row(
     completed: bool,
     expanded: bool,
     clock_ms: u64,
+    animations: bool,
     theme: &ThemeStyles,
     width: usize,
 ) -> RowRender {
@@ -286,7 +319,7 @@ pub fn reasoning_header_row(
             None => "Thinking".to_owned(),
         };
         let style = theme.text;
-        let glyph = spinner_frame(clock_ms);
+        let glyph = running_indicator_glyph(clock_ms, animations);
         let label_width = width.saturating_sub(ROW_PADDING_LEFT + 2);
         let placed = vec![
             text_at(ROW_PADDING_LEFT, 0, glyph, style),
@@ -842,6 +875,7 @@ pub fn compaction_message_row(
     tokens_out: Option<u64>,
     summary_lines: &[crate::components::message::markdown::MarkdownLine],
     clock_ms: u64,
+    animations: bool,
     theme: &ThemeStyles,
     width: usize,
 ) -> RowRender {
@@ -855,7 +889,10 @@ pub fn compaction_message_row(
     // the labeled box's paddingLeft/Right and the row's gap).
     let mut segments: Vec<String> = Vec::new();
     if running {
-        segments.push(spinner_frame(clock_ms).to_string());
+        // The `Show` gate (index.tsx:2029-2032): the spinner only when
+        // `config.animations ?? true`; the animations-off fallback is
+        // the bare `⋯`.
+        segments.push(running_indicator_glyph(clock_ms, animations).to_string());
     } else if failed && !cancelled {
         segments.push("✗".to_owned());
     }
@@ -1279,7 +1316,7 @@ pub fn footer_duration(message: &Message, messages: &[Message]) -> u64 {
 #[must_use]
 pub fn spinner_frozen_frame(theme: &ThemeStyles, width: u16, height: u16) -> crate::render::Frame {
     let label = "Exploring: 2 searches, 1 read";
-    let row = running_tool_row(label, 0, theme, usize::from(width)).offset_y(1); // paddingTop 1
+    let row = running_tool_row(label, 0, true, theme, usize::from(width)).offset_y(1); // paddingTop 1
     crate::render::paint_placed(
         &row.placed,
         (width, height),
@@ -1306,6 +1343,31 @@ mod tests {
         // ManualClock: the same injected clock yields the same glyph —
         // no wall time participates.
         assert_eq!(spinner_frame(0), spinner_frame(0));
+    }
+
+    #[test]
+    fn running_row_indicator_honors_the_animations_gate() {
+        // spinner.tsx:29-31 — `config.animations ?? true` gates the
+        // running-row indicator: ON samples the clock-driven spinner
+        // frames, OFF pins the static `⋯` fallback at EVERY clock
+        // value (the diff fixture's resolved config is exactly this
+        // OFF state — test/fixture/app.ts:37).
+        assert_eq!(running_indicator_glyph(0, true), '⠋');
+        assert_eq!(running_indicator_glyph(80, true), '⠙');
+        assert_eq!(running_indicator_glyph(800, true), '⠋', "full cycle, gate on");
+        for clock in [0u64, 80, 160, 400, 800] {
+            assert_eq!(running_indicator_glyph(clock, false), '⋯', "clock {clock} gated off");
+        }
+        // The row itself: same geometry either way (glyph + one space +
+        // the label) — only the indicator cell flips.
+        let theme = theme();
+        let on = running_tool_row("Bash sleep 1", 400, true, &theme, 80);
+        let off = running_tool_row("Bash sleep 1", 400, false, &theme, 80);
+        let head_text = |row: &RowRender| -> String { row.placed[0].lines[0].text() };
+        // `⠴` at 400 ms (frame 5) vs the static `⋯`.
+        assert_eq!(head_text(&on), "⠴");
+        assert_eq!(head_text(&off), "⋯");
+        assert_eq!(off.placed[1].x, on.placed[1].x, "label x unchanged by the gate");
     }
 
     #[test]
@@ -1350,7 +1412,8 @@ mod tests {
     #[test]
     fn reasoning_header_tints_warning_at_sixty_percent() {
         let theme = theme();
-        let row = reasoning_header_row(Some("Failure modes"), Some(1), true, false, 0, &theme, 76);
+        let row =
+            reasoning_header_row(Some("Failure modes"), Some(1), true, false, 0, true, &theme, 76);
         let frame = crate::render::paint_placed(
             &row.placed,
             (76, 1),
@@ -1368,7 +1431,8 @@ mod tests {
     #[test]
     fn reasoning_header_expanded_flips_the_icon_and_lifts_the_tint() {
         let theme = theme();
-        let row = reasoning_header_row(Some("Failure modes"), Some(1), true, true, 0, &theme, 76);
+        let row =
+            reasoning_header_row(Some("Failure modes"), Some(1), true, true, 0, true, &theme, 76);
         let frame = crate::render::paint_placed(
             &row.placed,
             (76, 1),
@@ -1509,7 +1573,7 @@ mod tests {
         };
         // Running: the spinner glyph leads the label.
         let running =
-            compaction_message_row(true, false, false, false, None, None, &[], 0, &theme, 60);
+            compaction_message_row(true, false, false, false, None, None, &[], 0, true, &theme, 60);
         let grid = frame(running).text_grid();
         assert!(grid[0].contains("⠋ Compaction"), "running divider: {}", grid[0]);
         // Completed with usage: `· N in · M out` (locale-grouped).
@@ -1522,6 +1586,7 @@ mod tests {
             Some(200),
             &[],
             0,
+            true,
             &theme,
             60,
         );
@@ -1529,20 +1594,31 @@ mod tests {
         assert!(grid[0].contains("Compaction · 1,200 in · 200 out"), "{}", grid[0]);
         assert!(grid[0].starts_with('─') && grid[0].ends_with('─'), "the border fills");
         // Provider compaction label variant.
-        let provider =
-            compaction_message_row(false, false, false, true, Some(1), Some(1), &[], 0, &theme, 60);
+        let provider = compaction_message_row(
+            false,
+            false,
+            false,
+            true,
+            Some(1),
+            Some(1),
+            &[],
+            0,
+            true,
+            &theme,
+            60,
+        );
         assert!(frame(provider).text_grid()[0].contains("Provider compaction"));
         // Failed + cancelled: NO ✗ icon (the icon is the
         // non-cancelled failure's — index.tsx:2042-2046), just the
         // `· cancelled` suffix in the muted color.
         let cancelled =
-            compaction_message_row(false, true, true, false, None, None, &[], 0, &theme, 60);
+            compaction_message_row(false, true, true, false, None, None, &[], 0, true, &theme, 60);
         let text = frame(cancelled).text_grid()[0].clone();
         assert!(text.contains("Compaction · cancelled"), "{text}");
         assert!(!text.contains('✗'), "cancelled carries no icon: {text}");
         // Failed (not cancelled): the error color.
         let failed =
-            compaction_message_row(false, true, false, false, None, None, &[], 0, &theme, 60);
+            compaction_message_row(false, true, false, false, None, None, &[], 0, true, &theme, 60);
         let failed_frame = frame(failed);
         assert!(failed_frame.text_grid()[0].contains("✗ Compaction"));
         assert_eq!(
@@ -1874,15 +1950,15 @@ mod g370_subagent_tests {
         let names = vec![("anthropic/claude".to_owned(), "Claude Sonnet".to_owned())];
         // Resolved: the list's display name.
         let state = subagent_state(Some("anthropic/claude"), "completed");
-        let render = subagent_tool_row_with_models(&state, None, 0, &theme, 80, &names);
+        let render = subagent_tool_row_with_models(&state, None, 0, true, &theme, 80, &names);
         assert!(row_text(&render).contains("· Claude Sonnet"), "{}", row_text(&render));
         // Unknown reference stays raw; the #variant appends.
         let state = subagent_state(Some("other/model#thinking"), "completed");
-        let render = subagent_tool_row_with_models(&state, None, 0, &theme, 80, &names);
+        let render = subagent_tool_row_with_models(&state, None, 0, true, &theme, 80, &names);
         assert!(row_text(&render).contains("· other/model (thinking)"), "{}", row_text(&render));
         // No model → no suffix.
         let state = subagent_state(None, "completed");
-        let render = subagent_tool_row_with_models(&state, None, 0, &theme, 80, &names);
+        let render = subagent_tool_row_with_models(&state, None, 0, true, &theme, 80, &names);
         assert!(!row_text(&render).contains("·"), "{}", row_text(&render));
     }
 
@@ -1891,7 +1967,7 @@ mod g370_subagent_tests {
         let theme = crate::theme::ThemeState::v2_dark().styles();
         // isBackgroundSubagent: tool completed + metadata.status running.
         let state = subagent_state(None, "running");
-        let render = subagent_tool_row_with_models(&state, Some(true), 0, &theme, 80, &[]);
+        let render = subagent_tool_row_with_models(&state, Some(true), 0, true, &theme, 80, &[]);
         let text = row_text(&render);
         assert!(text.contains("Background"), "the badge lands: {text}");
         // The badge carries its own (prompt-bg) background style.
@@ -1905,7 +1981,7 @@ mod g370_subagent_tests {
         assert_eq!(badge.style.bg, Some(theme.background_prompt));
         // A fully completed child keeps the plain row.
         let state = subagent_state(None, "completed");
-        let render = subagent_tool_row_with_models(&state, Some(false), 0, &theme, 80, &[]);
+        let render = subagent_tool_row_with_models(&state, Some(false), 0, true, &theme, 80, &[]);
         assert!(!row_text(&render).contains("Background"));
     }
 }

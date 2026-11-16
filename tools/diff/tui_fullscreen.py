@@ -915,35 +915,21 @@ CAUSES = [
             "panel_rows（恒 5）",
         ),
     ),
-    (
-        "A2 ref 动画门控夹具伪影（运行中工具行 glyph：rust ⠋ 时钟驱动 vs ref ⋯ 静态）",
-        # NARROWED per review: the original anim-* prefix swallowed ANY
-        # divergence in ANY anim scenario. The actually-evidenced shape
-        # is the running-tool row's first cell at tick 0 (and every
-        # tick after): rust SPINNER_FRAMES[0] '⠋' (clock-driven, no
-        # animations gate) vs the ref fixture's animations:false
-        # fallback '⋯' (spinner.tsx:27-31). Match exactly that: the
-        # anim-tool-progress scenario family, a ch-field first diff,
-        # and the glyph pair ∈ {('⠋','⋯'), ('⋯','⠋')}. A NEW artifact
-        # shape (e.g. caret blink, knight gradient, spinner rotation
-        # once a ref clock exists) requires a NEW CAUSES entry with its
-        # own probe evidence — it must not silently widen this one.
-        lambda d: str(d.get("id", "")).startswith("anim-tool-progress")
-        and d.get("dimension") in ("frames", "resting", None)
-        and _first_glyph_diff(d) in (("⠋", "⋯"), ("⋯", "⠋")),
-        (
-            "anim-* 场景：rust 帧是 (store, clock) 纯函数（A1）——虚拟时钟逐拍推进使"
-            "spinner 轮转/caret blink（500ms 周期）/knight 渐变在中间拍真实变化；"
-            "ref 侧夹具钉 animations:false（动画门控关闭，静态形状）且渲染器时钟"
-            "注入在整 app 下原生不稳（boot 死锁/捕获段错误，探针记录于 a2-report）"
-            "——这是夹具伪影而非移植语义差：生产 ref 默认 animations:true 渲染"
-            "同类动画。登记不拦；事件驱动的逐拍内容变化仍被本维度精确断言",
-            "ref packages/tui/test/fixture/app.ts:32（config animations:false 钉定）+ "
-            "component/spinner.tsx:27-31（animations 门控回退静态 ⋯）",
-            "rust crates/oc-tui/tests/tui_fullscreen_diff_driver.rs（ANIM_TICK_MS=100 "
-            "逐拍 advance_clock）；oc-tui 渲染无动画门控，时钟驱动（A1 接线）",
-        ),
-    ),
+    # RETIRED (gb17 tool-glyph, 2026-11-16): the A2 animation-gate
+    # artifact cluster ("A2 ref 动画门控夹具伪影") is REMOVED — the
+    # animations gate is now PORTED: the store carries
+    # `config.animations ?? true` (spinner.tsx:29-31's gate; default
+    # true — the production face), the diff driver mirrors the ref
+    # fixture's resolved `animations:false` (test/fixture/app.ts:37),
+    # and every running-row indicator (tool rows, the shell block's
+    # running command, the reasoning "Thinking" header, the compaction
+    # divider) renders the static `⋯` fallback under the OFF gate.
+    # The evidenced shape (rust clock-driven ⠋ vs the fixture's ⋯ on
+    # anim-tool-progress's running-tool row) is exact in BOTH
+    # dimensions — resting 3/3 + frames 3/3, 0 hits (the G-424
+    # retirement precedent). A NEW artifact shape (caret blink, knight
+    # gradient, spinner rotation once a stable ref clock exists)
+    # requires a NEW CAUSES entry with its own probe evidence.
     (
         # B2 CAUSES version-skew 簇 (user ruling 2026-11-14): residual
         # 2.0.24-vs-2.2.x PLUGIN BEHAVIOR diffs — local shapes where the
@@ -1127,17 +1113,8 @@ def _plugin_failed_on_ref(ref_grid: dict) -> bool:
     return "Plugin failed" in _ref_cells_text(ref_grid)
 
 
-def _first_glyph_diff(d: dict) -> tuple[str, str] | None:
-    """The (ref, rust) char pair of the record's first divergent cell
-    when that divergence is a ch-field one (resting records carry
-    first_diff; frames records carry first_tick_diff)."""
-    fd = d.get("first_diff") or d.get("first_tick_diff") or {}
-    if fd.get("field") != "ch":
-        return None
-    ref, rust = fd.get("ref"), fd.get("rust")
-    if isinstance(ref, str) and isinstance(rust, str):
-        return (ref, rust)
-    return None
+# NOTE (gb17, 2026-11-16): `_first_glyph_diff` was removed together with
+# the retired A2 glyph cluster (no remaining callers).
 
 
 def _midframe_shape(d: dict) -> str | None:
