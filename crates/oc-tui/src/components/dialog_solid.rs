@@ -292,7 +292,7 @@ struct DialogInputs {
     /// The visible window (the For source).
     window: Vec<WindowRow>,
     /// (title, label) footer actions.
-    actions: Vec<(String, String)>,
+    actions: Vec<(String, String, bool, bool)>, // (title, label, bold-title hint, muted-gap)
     /// A right-side footer hint (`footerHints side:"right"`): bold
     /// title + muted ` {label}` in the footer bar's right box.
     footer_hint: Option<(String, String)>,
@@ -494,6 +494,9 @@ fn content_height(inputs: &DialogInputs) -> usize {
 struct RowPaint {
     selected: bool,
     current: bool,
+    /// The gutter glyph (the failed plugin row's `x`), `None` = the
+    /// plain paddingLeft-3 row.
+    gutter: Option<char>,
     /// The row background: selected → `selected_bg`; else the SURFACE
     /// (byte-identical to the old path's blank row — painting the
     /// surface over the chrome's surface leaves the same cells, and
@@ -525,6 +528,7 @@ fn row_paint(inputs: &DialogInputs, index: usize) -> Option<RowPaint> {
     Some(RowPaint {
         selected,
         current,
+        gutter: option.gutter,
         bg: if selected { focus_background } else { inputs.colors.surface },
         title_fg,
         bold: selected,
@@ -652,18 +656,52 @@ where
 fn option_element(inputs: &Signal<DialogInputs>, index: usize) -> Element {
     let paint_at = move |inputs: &DialogInputs| row_paint(inputs, index);
 
-    // ● — mounted always, width 0 without the marker.
-    let marker_text = text()
+    // G-425b — the gutter mark (the failed plugin row's red `x`):
+    // mounted like the marker with dyn width/content; the row's
+    // paddingLeft drops to 1 the same way (`current() || gutter`,
+    // dialog-select.tsx:783), so the title keeps its column (4).
+    let gutter_text = text()
         .dyn_prop(
             "width",
             dyn_num(map(inputs.clone(), move |i: &DialogInputs| {
-                usize::from(paint_at(i).is_some_and(|paint| paint.current))
+                usize::from(paint_at(i).is_some_and(|paint| paint.gutter.is_some()))
             })),
         )
         .dyn_prop(
             "marginRight",
             dyn_num(map(inputs.clone(), move |i: &DialogInputs| {
-                usize::from(paint_at(i).is_some_and(|paint| paint.current))
+                usize::from(paint_at(i).is_some_and(|paint| paint.gutter.is_some()))
+            })),
+        )
+        .dyn_prop(
+            "content",
+            dyn_styled(map(inputs.clone(), move |i: &DialogInputs| match paint_at(i) {
+                Some(paint) => match paint.gutter {
+                    Some(glyph) => {
+                        styled(vec![chunk(glyph.to_string(), i.colors.error_fg, Some(paint.bg), 0)])
+                    }
+                    None => styled(Vec::new()),
+                },
+                None => styled(Vec::new()),
+            })),
+        );
+
+    // ● — mounted always, width 0 without the marker.
+    let marker_text = text()
+        .dyn_prop(
+            "width",
+            dyn_num(map(inputs.clone(), move |i: &DialogInputs| {
+                usize::from(
+                    paint_at(i).is_some_and(|paint| paint.current && paint.gutter.is_none()),
+                )
+            })),
+        )
+        .dyn_prop(
+            "marginRight",
+            dyn_num(map(inputs.clone(), move |i: &DialogInputs| {
+                usize::from(
+                    paint_at(i).is_some_and(|paint| paint.current && paint.gutter.is_none()),
+                )
             })),
         )
         .dyn_prop(
@@ -716,7 +754,16 @@ fn option_element(inputs: &Signal<DialogInputs>, index: usize) -> Element {
         .dyn_prop(
             "paddingLeft",
             dyn_num(map(inputs.clone(), move |i: &DialogInputs| {
-                paint_at(i).map_or(3, |paint| if paint.current { 1 } else { 3 })
+                paint_at(i).map_or(
+                    3,
+                    |paint| {
+                        if paint.current || paint.gutter.is_some() {
+                            1
+                        } else {
+                            3
+                        }
+                    },
+                )
             })),
         )
         .dyn_prop(
@@ -726,6 +773,7 @@ fn option_element(inputs: &Signal<DialogInputs>, index: usize) -> Element {
             })),
         )
         .children(Children::Static(vec![
+            gutter_text.into_element(),
             marker_text.into_element(),
             title_text.into_element(),
             footer_text_el.into_element(),
@@ -797,7 +845,7 @@ fn actions_for(inputs: &Signal<DialogInputs>) -> Rc<dyn opentui_solid::DynChildr
         source: map(inputs.clone(), |i: &DialogInputs| {
             i.actions
                 .iter()
-                .map(|(title, _label)| ForItem {
+                .map(|(title, _label, _hint, _gap)| ForItem {
                     key: title.clone(),
                     value: PropValue::Str(title.clone()),
                 })
@@ -812,7 +860,10 @@ fn actions_for(inputs: &Signal<DialogInputs>) -> Rc<dyn opentui_solid::DynChildr
         let title = item.key.clone();
         let title_for_label = title.clone();
         let label_at = move |i: &DialogInputs| {
-            i.actions.iter().find(|pair| pair.0 == title_for_label).map(|pair| pair.1.clone())
+            i.actions
+                .iter()
+                .find(|pair| pair.0 == title_for_label)
+                .map(|pair| (pair.1.clone(), pair.2, pair.3))
         };
         box_()
             .flex_direction("row")
@@ -825,7 +876,17 @@ fn actions_for(inputs: &Signal<DialogInputs>) -> Rc<dyn opentui_solid::DynChildr
                     .dyn_prop(
                         "content",
                         dyn_styled(map(inputs.clone(), move |i: &DialogInputs| {
-                            styled(vec![chunk(title.clone(), i.colors.text, None, 0)])
+                            // G-425b — a footerHints pair renders its
+                            // title BOLD (the non-action
+                            // `FooterAction`, dialog-select.tsx:
+                            // 626-633); an action pair's only while
+                            // focused.
+                            let bold = i
+                                .actions
+                                .iter()
+                                .find(|pair| pair.0 == title)
+                                .is_some_and(|pair| pair.2);
+                            styled(vec![chunk(title.clone(), i.colors.text, None, u32::from(bold))])
                         })),
                     )
                     .into_element(),
@@ -835,10 +896,24 @@ fn actions_for(inputs: &Signal<DialogInputs>) -> Rc<dyn opentui_solid::DynChildr
                     .dyn_prop(
                         "content",
                         dyn_styled(map(inputs.clone(), move |i: &DialogInputs| {
-                            let Some(label) = label_at(i) else {
+                            let Some((label, hint, muted_gap)) = label_at(i) else {
                                 return styled(Vec::new());
                             };
-                            styled(vec![chunk(format!(" {label}"), i.colors.muted, None, 0)])
+                            if hint && !muted_gap {
+                                // G-425b — the non-action FooterAction
+                                // (dialog-select.tsx:626-633): the
+                                // separator space rides the BASE span
+                                // (`</b>{" "}`), only the label is
+                                // muted. A custom footer prop
+                                // (plugins.tsx:248-255) carries the
+                                // space inside the muted run.
+                                styled(vec![
+                                    chunk(" ".to_owned(), i.colors.text, None, 0),
+                                    chunk(label, i.colors.muted, None, 0),
+                                ])
+                            } else {
+                                styled(vec![chunk(format!(" {label}"), i.colors.muted, None, 0)])
+                            }
                         })),
                     )
                     .into_element(),
@@ -2261,13 +2336,18 @@ thread_local! {
 }
 
 /// The dialog family's seat under the shared tree's root (the
-/// skeleton table's index 5, above sidebar/footer): today's overlay
-/// pasted AFTER `render_app`'s composite seam, so the wrapper sits
-/// above every mounted family by construction. Registered deviation
-/// (the footer lane's note, honored here): the family-6 overlays
-/// (console/which-key/toast/reconnecting) still paste after the seam
-/// and so paint OVER the dialog — today's paste order had the same
-/// inversion; the overlays lane (D2.3) reseats them above.
+/// skeleton table's index 5, above sidebar/footer). The ref's
+/// dialog box is a `zIndex 3000` absolute sibling rendered AFTER the
+/// whole App subtree (ui/dialog.tsx:228-247), so it COVERS every
+/// App-mounted overlay — but reseating the family above the
+/// overlays (12) trips the opentui-solid keyed-For reconcile defect
+/// (G-429's zombie class: the live palette's filter repaint stops
+/// emitting, `pty_dialog_palette_cycle_solid_path` red). The
+/// inversion stays bounded instead: the ONE evidenced overlap (the
+/// toast under the /plugins box, plugin-fallback) is handled by the
+/// toast's [`ToastRailCover`] clip — the toast interior and rails
+/// never paint inside the dialog rect, and the scrim dims the rails
+/// — matching the ref's covered pixels for every corpus shape.
 const DIALOG_SKELETON_INDEX: usize = 5;
 
 // ---------------------------------------------------------------------------
@@ -2570,7 +2650,9 @@ fn build_inputs(
                 actions: props
                     .actions
                     .iter()
-                    .map(|action| (action.title.clone(), action.label.clone()))
+                    .map(|action| {
+                        (action.title.clone(), action.label.clone(), action.hint, action.muted_gap)
+                    })
                     .collect(),
                 footer_hint: props.footer_hint.clone(),
                 prompt_value: String::new(),
@@ -3178,6 +3260,7 @@ mod d22_tests {
                 truncate_title: crate::components::dialog_select::TitleTruncate::default(),
                 shimmer: None,
                 details: Vec::new(),
+                gutter: None,
             }],
         );
         let sidecar = DialogSidecar::default();

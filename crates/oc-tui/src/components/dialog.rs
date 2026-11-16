@@ -976,6 +976,10 @@ pub fn mount_dialog_layer(
     let (_box_x, box_y, _, _) = seat.rect;
     let option_rows =
         option_rows.into_iter().map(|row| row.map(|content_row| box_y + 1 + content_row)).collect();
+    // G-424b — publish the box rect AT MOUNT (the same frame's toast
+    // mount reads it for its cover clip; `paint` re-sets it for the
+    // dismissal surface — idempotent).
+    store.set_dialog_frame_rect(Some(seat.rect));
     Some(DialogLayerPaint { entry, seat, option_rows })
 }
 
@@ -1223,6 +1227,23 @@ pub(crate) fn blend_scrim(cell: &mut crate::render::Cell, alpha: u8) {
         // defaultForeground() is white; the composite materializes it.
         cell.fg = dimmed(&cell.fg, [255, 255, 255]);
     }
+}
+
+/// The backdrop's FG-only dim (the toast rails' post-scrim paint,
+/// G-424b): the rail glyph dims like every scrim-covered glyph while
+/// the cell's bg keeps its already-scrimmed underlying value (the
+/// rails are painted after `scrim_around`, so the full-cell blend
+/// would double-dim the bg).
+pub(crate) fn blend_backdrop_fg(fg: crate::render::CellColor) -> crate::render::CellColor {
+    let alpha = (BACKDROP_ALPHA * 255.0) as u8;
+    let dim =
+        |value: u8| -> u8 { (f64::from(value) * (1.0 - f64::from(alpha) / 255.0)).round() as u8 };
+    let [r, g, b] = match fg {
+        crate::render::CellColor::Rgb(r, g, b) => [r, g, b],
+        crate::render::CellColor::Indexed(index) => crate::render::color_mode::palette_rgb(index),
+        crate::render::CellColor::Default => [255, 255, 255],
+    };
+    crate::render::CellColor::Rgb(dim(r), dim(g), dim(b))
 }
 
 /// Display one binding spec alternative with `<leader>` expanded
@@ -1498,12 +1519,21 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
     // pasted).
     crate::components::devtools_solid::mount_devtools_bar_solid(store, &styles, (size.0, size.1));
     let dialog_layer = mount_dialog_layer(store, theme, size);
+    // The live dialog's rail cover (G-424b): the toast rails paint
+    // after the scrim, so they take the box rect (cells inside never
+    // paint — the ref's z-3000 dialog covers the toast) and the
+    // backdrop's fg dim from the seat.
+    let rail_cover = dialog_layer.as_ref().map(|layer| super::toast_solid::ToastRailCover {
+        rect: layer.seat.rect,
+        dim: layer.seat.dim_backdrop,
+    });
     // D2.2 overlays lane: the family's live surfaces (console /
     // which-key / toast / pill / migration / reconnecting) mount
     // AFTER the dialog family's own mount and BEFORE the seam —
     // skeleton indices 6..11, above the dialogs family's 5 (today's
-    // paste order frozen; the pill/migration moved up from the
-    // chrome family to their frame-tail z).
+    // paste order frozen; the ref's z-3000 dialog-above-overlays
+    // order is bounded onto the toast via its ToastRailCover clip —
+    // reseating the family itself trips G-429's reconcile defect).
     crate::components::overlays::mount_state_overlays(
         store,
         &styles,
@@ -1523,6 +1553,7 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
         store,
         &styles,
         usize::from(size.0),
+        rail_cover,
     );
     frame
 }

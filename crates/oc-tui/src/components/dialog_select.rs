@@ -67,6 +67,11 @@ pub struct SelectOption {
     /// muted rows under the title, one per string, middle-truncated
     /// to `max(1, min(76, width - 12))` (:816-824).
     pub details: Vec<String>,
+    /// G-425b — `DialogSelectOption.gutter` (dialog-select.tsx:84 +
+    /// the plugins table's failed rows, plugins.tsx:102-104): a
+    /// one-glyph leading mark at the row's content start (the failed
+    /// row's error-red `x`), `None` = the plain paddingLeft-3 row.
+    pub gutter: Option<char>,
 }
 
 /// `DialogSelectOption.truncateTitle` (dialog-select.tsx:78-79,:
@@ -156,6 +161,14 @@ pub fn title_clip_end(width: usize, footer: Option<&str>) -> usize {
 }
 
 impl SelectOption {
+    /// The plugins table's failed-row gutter (plugins.tsx:102-104 —
+    /// `x` in `text.feedback.error.base`).
+    #[must_use]
+    pub fn with_gutter(mut self, glyph: char) -> Self {
+        self.gutter = Some(glyph);
+        self
+    }
+
     #[must_use]
     pub fn titled(title: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
@@ -170,6 +183,7 @@ impl SelectOption {
             truncate_title: TitleTruncate::default(),
             shimmer: None,
             details: Vec::new(),
+            gutter: None,
         }
     }
 
@@ -254,12 +268,38 @@ pub struct SelectAction {
     /// Binding display ("ctrl+d") — the keymap command's default
     /// binding, the reference's `shortcuts.all(command)`.
     pub label: String,
+    /// G-425b — a `footerHints`-style pair (dialog-select.tsx:626-633:
+    /// the NON-action `FooterAction` renders its title BOLD in
+    /// `text.base`), vs an action pair (bold only while focused).
+    pub hint: bool,
+    /// G-425b — the pair's separator space rides the MUTED label run
+    /// (a custom `footer` prop's shape, plugins.tsx:248-255
+    /// `<span muted> view error</span>`) vs the non-action
+    /// `FooterAction`'s base-span space (`</b>{" "}`).
+    pub muted_gap: bool,
 }
 
 impl SelectAction {
     #[must_use]
     pub fn new(command: &'static str, title: impl Into<String>, label: impl Into<String>) -> Self {
-        Self { command, title: title.into(), label: label.into() }
+        Self { command, title: title.into(), label: label.into(), hint: false, muted_gap: false }
+    }
+
+    /// A footerHints-style pair (bold title, base-span space).
+    #[must_use]
+    pub fn hint(command: &'static str, title: impl Into<String>, label: impl Into<String>) -> Self {
+        Self { hint: true, muted_gap: false, ..Self::new(command, title, label) }
+    }
+
+    /// A custom footer prop (bold title, the space inside the muted
+    /// label span — plugins.tsx:248-255).
+    #[must_use]
+    pub fn footer_prop(
+        command: &'static str,
+        title: impl Into<String>,
+        label: impl Into<String>,
+    ) -> Self {
+        Self { hint: true, muted_gap: true, ..Self::new(command, title, label) }
     }
 }
 
@@ -1097,13 +1137,26 @@ pub fn render_select(
         for (action_i, action) in props.actions.iter().enumerate() {
             // G-189 — the focused action paints in the focused pair
             // (`actionFocused()`, dialog-select.tsx:600-621).
-            let (title_fg, label_fg) = if state.focused_action == Some(action_i) {
-                (styles.selected_fg, styles.selected_fg)
+            let (title_fg, label_fg, title_attrs) = if state.focused_action == Some(action_i) {
+                (styles.selected_fg, styles.selected_fg, BOLD)
             } else {
-                (styles.text, styles.muted)
+                // G-425b — a footerHints pair's title is always bold
+                // (the non-action `FooterAction`, dialog-select.tsx:
+                // 626-633); an action's only while focused.
+                (styles.text, styles.muted, if action.hint { BOLD } else { 0 })
             };
-            at = footer.text(at, &action.title, title_fg, surface_bg, 0);
-            at = footer.text(at, &format!(" {}", action.label), label_fg, surface_bg, 0);
+            at = footer.text(at, &action.title, title_fg, surface_bg, title_attrs);
+            // G-425b — the separator space's span: a custom footer
+            // prop carries it inside the muted label run
+            // (plugins.tsx:248-255); a footerHints pair rides the
+            // BASE span (`</b>{" "}`, dialog-select.tsx:631); an
+            // action's space is part of the muted label run.
+            if action.hint && !action.muted_gap && state.focused_action != Some(action_i) {
+                at = footer.text(at, " ", title_fg, surface_bg, 0);
+                at = footer.text(at, &action.label, label_fg, surface_bg, 0);
+            } else {
+                at = footer.text(at, &format!(" {}", action.label), label_fg, surface_bg, 0);
+            }
             at += 2; // gap
         }
         rows.push(footer.cells);
@@ -1190,6 +1243,12 @@ fn paint_option_row(
         // paddingLeft 1, marker, gap 1, title at 4.
         let marker_fg = if selected { styles.selected_fg } else { styles.current_fg };
         put(cells, 2, "●", marker_fg, row_bg, 0);
+        put_bounded(cells, 4, clip, &truncated_title(option), title_fg_color, row_bg, title_attrs)
+    } else if let Some(glyph) = option.gutter {
+        // G-425b — the gutter row (dialog-select.tsx:783/875-884):
+        // paddingLeft 1, the one-glyph mark, gap 1, title at 4 — the
+        // failed plugin row's error-red `x`.
+        put(cells, 2, &glyph.to_string(), styles.error_fg, row_bg, 0);
         put_bounded(cells, 4, clip, &truncated_title(option), title_fg_color, row_bg, title_attrs)
     } else {
         put_bounded(cells, 4, clip, &truncated_title(option), title_fg_color, row_bg, title_attrs)

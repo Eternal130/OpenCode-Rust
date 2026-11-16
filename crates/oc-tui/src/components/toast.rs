@@ -178,9 +178,77 @@ pub fn affordance_text_width(toast: &ToastOptions) -> usize {
     }
 }
 
+/// The toast surfaces' word wrap — the ref title/message texts'
+/// default (`wrapMode: "word"`, ui/toast.tsx:84-91): break after the
+/// global seam's opportunities (space/dot/hyphen, [`crate::wrap::
+/// is_break_after`]) PLUS the slash — evidenced by the ref
+/// plugin-fallback grids, where the long title's second line ends at
+/// "…/`node_modules`/" ahead of "broken-plugin" (a break after the
+/// trailing `/`, which the global set lacks).
+fn toast_break_after(ch: char) -> bool {
+    ch == '/' || crate::wrap::is_break_after(ch)
+}
+
+/// Word-wrap `text` to `width` display cells (greedy packing, the
+/// [`ToastLayout`] lane): tokens close after a break char (the break
+/// char stays with its token — a fitting space rides the line's end,
+/// exactly [`crate::wrap::wrap_atoms`]'s packing), a token wider than
+/// the line hard-splits by chars.
+#[must_use]
+pub fn toast_wrap(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_owned()];
+    }
+    let mut tokens: Vec<(String, usize)> = Vec::new();
+    let mut cur = String::new();
+    let mut cur_w = 0usize;
+    for ch in text.chars() {
+        cur.push(ch);
+        cur_w += crate::wrap::display_width(&ch.to_string());
+        if toast_break_after(ch) {
+            tokens.push((std::mem::take(&mut cur), cur_w));
+            cur_w = 0;
+        }
+    }
+    if !cur.is_empty() {
+        tokens.push((cur, cur_w));
+    }
+    let mut lines: Vec<String> = Vec::new();
+    let mut line = String::new();
+    let mut line_w = 0usize;
+    let push_token =
+        |token: &str, w: usize, line: &mut String, line_w: &mut usize, lines: &mut Vec<String>| {
+            if w > width {
+                for ch in token.chars() {
+                    let cw = crate::wrap::display_width(&ch.to_string());
+                    if *line_w > 0 && *line_w + cw > width {
+                        lines.push(std::mem::take(line));
+                        *line_w = 0;
+                    }
+                    line.push(ch);
+                    *line_w += cw;
+                }
+            } else {
+                line.push_str(token);
+                *line_w += w;
+            }
+        };
+    for (token, w) in &tokens {
+        if line_w > 0 && line_w + w > width {
+            lines.push(std::mem::take(&mut line));
+            line_w = 0;
+        }
+        push_token(token, *w, &mut line, &mut line_w, &mut lines);
+    }
+    lines.push(line);
+    lines
+}
+
 /// The toast surface geometry (`ToastSurface`): absolute at `top=1`,
-/// `right=2`, intrinsic width = content (capped at
-/// `min(60, width - 6)`).
+/// `right=2`, intrinsic width = content (rails included) capped at
+/// `min(60, width - 6)` — the maxWidth clamps the WHOLE box (borders
+/// included, ui/toast.tsx:51), so a long title shrinks inside a
+/// 60-wide panel instead of widening it past the clamp.
 #[must_use]
 pub fn toast_geometry(
     message_width: usize,
@@ -193,25 +261,73 @@ pub fn toast_geometry(
     // counts toward the intrinsic width).
     let content = message_width.max(title_width + 2 + affordance_width) + 4;
     let max = 60.min(term_width.saturating_sub(6));
-    let panel = content.min(max) + 2; // + the two rail columns
+    let panel = (content + 2).min(max); // + the two rail columns, clamped
     let left = term_width.saturating_sub(2).saturating_sub(panel);
     (left, panel, 1)
 }
 
-/// The toast's panel rows: 5 with a title (paddingTop · title · margin
-/// · message · paddingBottom), 2 without.
-fn panel_rows(toast: &ToastOptions) -> usize {
-    if toast.title.is_some() {
-        5
+/// The toast panel's full layout: the geometry plus the wrapped
+/// content rows (G-424b — the ref title text shrinks and word-wraps
+/// inside the clamped panel; the message wraps at the full text area
+/// in the title case, or beside the affordance without one).
+pub struct ToastLayout {
+    pub left: usize,
+    pub top: usize,
+    pub panel_width: usize,
+    pub rows: usize,
+    /// The wrapped title lines (empty without a title).
+    pub title_lines: Vec<String>,
+    /// The wrapped message lines.
+    pub message_lines: Vec<String>,
+    /// The panel-local row of the `+N more` line (title case only,
+    /// the current port's evidenced face).
+    pub pending_row: Option<usize>,
+}
+
+/// Lay the toast out at `term_width` (ui/toast.tsx:46-99): paddingTop
+/// 1, the title row (wrapped at the text area minus the affordance
+/// run) + marginBottom 1, the message (wrapped at the text area),
+/// `+N more` with marginTop 1, paddingBottom 1; without a title the
+/// message shares the affordance's row.
+#[must_use]
+pub fn toast_layout(toast: &ToastOptions, pending: usize, term_width: usize) -> ToastLayout {
+    let aff = affordance_text_width(toast);
+    let message_width = crate::wrap::display_width(&toast.message);
+    let title_width = toast.title.as_deref().map_or(0, crate::wrap::display_width);
+    let (left, panel_width, top) = toast_geometry(message_width, title_width, aff, term_width);
+    // The inner text area: panel minus the two rails and the 2+2 padding.
+    let text_area = panel_width.saturating_sub(6).max(1);
+    if let Some(title) = &toast.title {
+        let title_lines = toast_wrap(title, text_area.saturating_sub(2 + aff).max(1));
+        let message_lines = toast_wrap(&toast.message, text_area);
+        let message_top = 1 + title_lines.len() + 1; // padding + title + margin
+        let pending_row = (pending > 0).then_some(message_top + message_lines.len() + 1);
+        // pad · title… · margin · message… · [margin · more] · pad
+        let rows = message_top + message_lines.len() + 1 + 2 * usize::from(pending > 0);
+        ToastLayout { left, top, panel_width, rows, title_lines, message_lines, pending_row }
     } else {
-        2
+        // The untitled face keeps its long-pinned bounded shape (the
+        // pre-G-424b painter): the message rides ONE unwrapped row at
+        // the rail's clip — the corpus has no untitled toast whose
+        // message overflows the panel, so the ref's word-wrap face
+        // there is unported surface, not evidenced shape.
+        ToastLayout {
+            left,
+            top,
+            panel_width,
+            rows: 2,
+            title_lines: Vec::new(),
+            message_lines: vec![toast.message.clone()],
+            pending_row: None,
+        }
     }
 }
 
-/// [`panel_rows`] exposed for the app's pointer hit rect (lane KM).
+/// [`toast_layout`]'s row count exposed for the app's pointer hit
+/// rect (lane KM) and the solid painters.
 #[must_use]
-pub fn panel_rows_public(toast: &ToastOptions) -> usize {
-    panel_rows(toast)
+pub fn panel_rows_public(toast: &ToastOptions, pending: usize, term_width: usize) -> usize {
+    toast_layout(toast, pending, term_width).rows
 }
 
 #[cfg(test)]
@@ -308,6 +424,52 @@ mod tests {
         // title 25 + 2 pads + "› Open MCP servers" (18) + 4 padding
         // + 2 rails = 51 — the ref panel (rails 27/77).
         assert_eq!((left, panel), (27, 51));
+    }
+
+    /// G-424b — the ref plugin-fallback grids' long-title shape: the
+    /// panel clamps at 60 (rails included) and the title word-wraps
+    /// three lines (break after '-' and '/'), the message below the
+    /// marginBottom row, 7 rows total.
+    #[test]
+    fn long_title_shrinks_and_wraps_inside_the_clamped_panel() {
+        let toast = ToastOptions {
+            title: Some(
+                "Plugin failed: /tmp/opencode/diff-tuifull/plugins-ref/\
+                 node_modules/broken-plugin"
+                    .to_owned(),
+            ),
+            message: "Run /plugins to view details.".to_owned(),
+            variant: "error",
+            action_label: Some("Open plugins".to_owned()),
+            action_command: None,
+            ..ToastOptions::info("")
+        };
+        let layout = toast_layout(&toast, 0, 80);
+        assert_eq!(layout.panel_width, 60, "maxWidth clamps the whole box");
+        assert_eq!((layout.left, layout.top), (18, 1));
+        assert_eq!(
+            layout.title_lines,
+            vec![
+                "Plugin failed: /tmp/opencode/diff-",
+                "tuifull/plugins-ref/node_modules/",
+                "broken-plugin",
+            ],
+            "the title wraps after the hyphen and the trailing slash"
+        );
+        assert_eq!(layout.message_lines, vec!["Run /plugins to view details."]);
+        assert_eq!(layout.rows, 7, "pad + 3 title + margin + message + pad");
+        assert_eq!(layout.pending_row, None);
+        // The wrapped words themselves: '/' joins the break set.
+        assert_eq!(toast_wrap("aaa/bb/ccc", 7), vec!["aaa/bb/", "ccc"]);
+    }
+
+    /// A pending queue behind a titled toast: the `+N more` line sits
+    /// one marginTop row past the message.
+    #[test]
+    fn pending_more_rides_one_margin_row_past_the_message() {
+        let layout = toast_layout(&notice(), 2, 80);
+        assert_eq!(layout.rows, 7);
+        assert_eq!(layout.pending_row, Some(5));
     }
 
     #[test]
