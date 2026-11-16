@@ -1249,20 +1249,18 @@ fn group_row(
             // complete when it has tools and EVERY grouped tool part
             // carries `time.completed` (tool.success) — the ref reads
             // the live parts, not the projection heuristic.
-            let tools_all_complete = !tool_names.is_empty()
-                && refs.iter().all(|(message_id, part_id)| {
-                    let Some(message) = messages.iter().find(|m| m.id() == message_id.as_str())
-                    else {
-                        return false;
-                    };
-                    let Message::Assistant { parts, .. } = message else {
-                        return false;
-                    };
-                    let Some(Part::Tool { time, .. }) = resolve_part(parts, part_id) else {
-                        return false;
-                    };
-                    time.completed.is_some()
-                });
+            let tools_all_complete = refs.iter().all(|(message_id, part_id)| {
+                let Some(message) = messages.iter().find(|m| m.id() == message_id.as_str()) else {
+                    return false;
+                };
+                let Message::Assistant { parts, .. } = message else {
+                    return false;
+                };
+                let Some(Part::Tool { time, .. }) = resolve_part(parts, part_id) else {
+                    return false;
+                };
+                time.completed.is_some()
+            });
             let completed = completed || tools_all_complete;
             let label = exploration_label(&tool_names, completed);
             if completed {
