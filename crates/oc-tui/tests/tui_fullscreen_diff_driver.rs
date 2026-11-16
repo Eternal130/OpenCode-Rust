@@ -918,6 +918,16 @@ async fn tui_fullscreen_diff_driver() {
                     // plugin commands (palette rows only); the port's
                     // prompt/get surface is out of scenario scope.
                     session_port: None,
+                    // W5 hermeticity: pin the guest's XDG_CONFIG_HOME
+                    // to the same EMPTY dir the ref leg runs under —
+                    // the flagship payload reads the runner's personal
+                    // user config (~/.config/opencode/
+                    // oh-my-opencode-slim.json) for its preset row, so
+                    // an unpinned environment leaks the driver user's
+                    // private config into one leg only.
+                    env: std::env::var("TUI_DIFF_XDG")
+                        .map(|xdg| vec![("XDG_CONFIG_HOME".to_owned(), xdg)])
+                        .unwrap_or_default(),
                     // B2 retirement (the loading-face mirror): the ref
                     // TUI fixture loads ONLY each package's tui entry
                     // (config.plugins dirs → context.tsx:670

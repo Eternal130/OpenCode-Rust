@@ -653,6 +653,7 @@ where
 /// ✕ pattern); its marginRight replaces the tsx `gap={1}` so a
 /// marker-less row puts the title at the same column (4) as a current
 /// row: `1 + 1 + 1 + 1` or `1 + 3 + 0 + 0`.
+#[allow(clippy::too_many_lines)] // the marker+gutter+title+footer row (1:1 ref port)
 fn option_element(inputs: &Signal<DialogInputs>, index: usize) -> Element {
     let paint_at = move |inputs: &DialogInputs| row_paint(inputs, index);
 
