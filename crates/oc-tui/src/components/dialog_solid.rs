@@ -653,14 +653,16 @@ where
 /// ✕ pattern); its marginRight replaces the tsx `gap={1}` so a
 /// marker-less row puts the title at the same column (4) as a current
 /// row: `1 + 1 + 1 + 1` or `1 + 3 + 0 + 0`.
-fn option_element(inputs: &Signal<DialogInputs>, index: usize) -> Element {
+/// G-425b — the gutter mark (the failed plugin row's red `x`):
+/// mounted like the marker with dyn width/content; the row's
+/// paddingLeft drops to 1 the same way (`current() || gutter`,
+/// dialog-select.tsx:783), so the title keeps its column (4).
+fn gutter_text_element(
+    inputs: &Signal<DialogInputs>,
+    index: usize,
+) -> opentui_solid::ElementBuilder {
     let paint_at = move |inputs: &DialogInputs| row_paint(inputs, index);
-
-    // G-425b — the gutter mark (the failed plugin row's red `x`):
-    // mounted like the marker with dyn width/content; the row's
-    // paddingLeft drops to 1 the same way (`current() || gutter`,
-    // dialog-select.tsx:783), so the title keeps its column (4).
-    let gutter_text = text()
+    text()
         .dyn_prop(
             "width",
             dyn_num(map(inputs.clone(), move |i: &DialogInputs| {
@@ -684,7 +686,12 @@ fn option_element(inputs: &Signal<DialogInputs>, index: usize) -> Element {
                 },
                 None => styled(Vec::new()),
             })),
-        );
+        )
+}
+
+fn option_element(inputs: &Signal<DialogInputs>, index: usize) -> Element {
+    let paint_at = move |inputs: &DialogInputs| row_paint(inputs, index);
+    let gutter_text = gutter_text_element(inputs, index);
 
     // ● — mounted always, width 0 without the marker.
     let marker_text = text()
