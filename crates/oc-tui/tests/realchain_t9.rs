@@ -25,8 +25,8 @@
 mod realchain_harness;
 
 use realchain_harness::{
-    http_get, http_post, lane_lock, sandbox, service_start, service_stop, Gateway, LaneGuard,
-    Sandbox, TuiProcess, WORDMARK,
+    corpus_dir, dump_grid, http_get, http_post, lane_lock, sandbox, service_start, service_stop,
+    Gateway, LaneGuard, Sandbox, TuiProcess, WORDMARK,
 };
 use std::time::Duration;
 
@@ -56,7 +56,7 @@ fn rig(tag: &str, record: bool) -> Rig {
 fn rig_cols(tag: &str, record: bool, cols: u16) -> Rig {
     let lane = lane_lock();
     // Gateway first: its port goes into the config.
-    let gateway = Gateway::spawn(tag, record);
+    let gateway = Gateway::spawn(tag, record.then_some(corpus_dir().as_path()));
     let box_ = sandbox(tag, gateway.port);
     box_.write_config(&[], "replay/claude-opus-4-7");
     let server = service_start(&box_);
@@ -92,7 +92,7 @@ impl Drop for Rig {
 
 #[test]
 fn t9_1_boot_connects_and_settles() {
-    let mut rig = rig("t9-1", false);
+    let rig = rig("t9-1", false);
     let settled = rig.tui.wait_for(WORDMARK, 0, Duration::from_secs(30));
     let screen = rig.tui.screen_text();
     let mut evidence = String::new();
@@ -115,7 +115,7 @@ fn t9_1_boot_connects_and_settles() {
 
 #[test]
 fn t9_2_model_catalog_lists_replay_model() {
-    let mut rig = rig("t9-2", false);
+    let rig = rig("t9-2", false);
     let _ = rig.tui.wait_for(WORDMARK, 0, Duration::from_secs(30));
     let (status, body) =
         http_get(&format!("{}/api/model", rig.server_url), rig.password.as_deref())
@@ -245,6 +245,7 @@ fn t9_5_sidebar_assembles_ref_content() {
     rig.tui.write(b"hello\r");
     let replied = rig.tui.wait_for(b"REALCHAIN-REPLAY-OK", from, Duration::from_secs(30));
     let screen = rig.tui.screen_text();
+    dump_grid("t9-5-rust-160", &screen);
     drop(rig);
     // (a) session title row exists (timestamped fallback), (b) the
     // Context section with its token rows. The `$X.XX spent` row is
@@ -266,7 +267,7 @@ fn t9_5_sidebar_assembles_ref_content() {
 
 #[test]
 fn t9_6_config_hot_reload_updates_models() {
-    let mut rig = rig("t9-6", false);
+    let rig = rig("t9-6", false);
     assert!(
         rig.tui.wait_for(WORDMARK, 0, Duration::from_secs(30)),
         "T9-6 precondition RED: the TUI never settled"

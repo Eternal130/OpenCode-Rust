@@ -5032,10 +5032,22 @@ impl crate::components::composer::PromptSink for HttpPromptSink {
         let editor_context = prompt.editor_context.clone();
         tokio::spawn(async move {
             let target = if session_key == HOME_PROMPT_KEY {
-                // Home submission: create the session first.
+                // Home submission: create the session first. G-432 —
+                // the resolved selection rides the CREATE body (v2's
+                // data layer carries the composer's model into the new
+                // session), so the follow-up `commitModel` switch is an
+                // unchanged-selection no-op on the server (ref
+                // session.ts:101-106) — no phantom first-turn
+                // "Switched model" timeline row.
+                let create_model = model.as_ref().map(|model| oc_client::types::ModelRef {
+                    id: model.model_id.clone(),
+                    provider_id: model.provider_id.clone(),
+                    variant: model.variant.clone(),
+                });
                 let body = oc_client::types::SessionCreateBody {
                     location: Some(oc_client::types::LocationPublicRef { directory }),
                     id: requested_session_id,
+                    model: create_model,
                     ..oc_client::types::SessionCreateBody::default()
                 };
                 match client.session().create(&body).await {

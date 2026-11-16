@@ -471,7 +471,7 @@ impl Jobs {
         if job.recovery.is_some() {
             let mut info = job.info.lock();
             if info.notification_id.is_none() {
-                info.notification_id = Some(format!("msg_{}", self.inner.ids.new_id("msg")));
+                info.notification_id = Some(self.inner.ids.new_id("msg"));
             }
         }
         let snapshot = job.snapshot();

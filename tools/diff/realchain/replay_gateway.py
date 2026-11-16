@@ -131,6 +131,20 @@ def family_rank(path: str) -> int:
     return 9
 
 
+def _is_title_request(key) -> bool:
+    """Title-generator heuristic: the shared ref/port title system prompt
+    (`You are a title generator…`) identifies the session-title call."""
+    system = key.get("system")
+    if isinstance(system, str):
+        return "title generator" in system.lower()
+    if isinstance(system, list):
+        return any(
+            "title generator" in _canon(part).lower()
+            for part in system
+        )
+    return False
+
+
 class Corpus:
     def __init__(self, dirs, redactions):
         self.index = {}  # digest -> (rank, cassette_path, interaction)
@@ -304,7 +318,14 @@ class Handler(BaseHTTPRequestHandler):
         # Miss: optionally seed (sandbox-only bootstrap; see --seed-reply).
         STATS.note_miss(digest)
         if ARGS.seed_reply and ARGS.record_dir and key["model"]:
-            seed_body = open(ARGS.seed_reply, "rb").read()
+            # W3 hardening: title-generator requests (ref & port share the
+            # `You are a title generator…` system prompt) get their OWN seed
+            # text so the rendered session title never contains the main
+            # turn's reply needle.
+            seed_path = ARGS.seed_reply
+            if ARGS.seed_title and _is_title_request(key):
+                seed_path = ARGS.seed_title
+            seed_body = open(seed_path, "rb").read()
             cassette = {
                 "version": 1,
                 "metadata": {
@@ -365,6 +386,10 @@ def main():
                         help="FROM:TO text redaction in normalization")
     parser.add_argument("--seed-reply", help="SSE/JSON body served for misses "
                         "(bootstrap recording mode)")
+    parser.add_argument("--seed-title", help="distinct seed body for "
+                        "title-generator-shaped misses (W3 hardening: keeps "
+                        "the main-turn reply needle and the session title "
+                        "text distinguishable)")
     parser.add_argument("--record-dir", help="where seed cassettes are written")
     args = parser.parse_args()
     ARGS = args

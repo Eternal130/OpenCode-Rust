@@ -3364,3 +3364,39 @@ G-412/413/414/415/416/417/418/420/422 ✅；**G-419/G-421 勘误撤销**（登�
   - **本地（1 点，保留 uuid）**：`app.rs` persistent-pty attach 的 `attachment_id`——ref schema `persistent-pty.ts:37` 该字段为任意 `Schema.String`，无前缀合同。
   - 格式钉形单测：`store.rs g431_wire_id_tests`（前缀/26 位长度/12 位小写 hex/62 字符表/无 uuid 连字符/唯一+升序）。
   - **佐证**：T9 矩阵 7/7 绿（t9-3 发消息全链路经网关回放渲染回复；t9-4 会话持久——另修 harness 两个非 id 缺陷：① `/api/session` 列表按 ref 信封 `{"data":[...]}` 解析（原按裸数组解析恒 0）；② t9-5 以 160 列 spawn（侧栏 auto-dock 需 `width-verticalTabsWidth>120`，ref session-frame.tsx:106-110，120 列下缺侧栏是 ref 正确行为）；③ `spent` 行断言按 ref 门 `cost()>0` 收敛（context.tsx:33-35，replay provider 无定价 → ref 也不渲染）；④ 主回合语料 `seed-739e…` 重录（W1 的 8b19 语料 cwd=home 与 harness cwd=project 漂移恒 miss））。oc-tui+oc-cli 2151 全绿；通道 8 90/90+15/15+rec 9/9 不漂移；clippy/fmt/guards 绿（process_safety 一处 W1 遗留注释字面量修正）。
+- **评审（Oracle，2026-11-17）：Approved**——格式逐字性/普查/t9 修正/语料重录/重打均核验通过（见 .superpowers/sdd/r1/w2-report.md 评审节）。**遗留登记（Important，新 gap 候选 G-431b）**：服务端铸造上 wire 的 msg id 仍为 `msg_<uuid32>` 形状（oc-core engine/mod.rs:248 `UuidV4IdGen` → :2443 input_id、jobs.rs:474 notification_id、tool/opencode_tools.rs:238）；前缀过校验不触发拒绝，但与 ref 服务端 `SessionMessage.ID.create()` 形状分叉，建议 W3 改 `MessageId::new()`。Minor：plugins.rs 五处 `msg_plugin_{uuid}`、handlers/credential.rs:215 `cred_{uuid.simple}` 同类形状差。
+- **--no-verify 事故备注**：reflog 证实首次提交 16392c02 → reset → 重打 b2750339，两树 diff 为空（零内容风险）；worktree 经 common dir `/opt/opencode-rust/.git` 共享钩子、无 hooksPath 覆盖，本应生效，但重打时钩子是否真跑过无 commit 环境证据，不可考（如实标注）。
+
+# 第三十六轮（2026-11-17，通道 9 W3：ref 侧真实链路对拍 + G-431b + 断言加固）
+
+> **设计（用户裁定原话要义）**：同一回放网关、沙箱双端（ref 2.0.24 与 rust）、输入输出完全一致，观察行为差——差分哲学延伸到真实链路。落地：`crates/oc-tui/tests/realchain_pair.rs`（六场景 S1-S6 双端 PTY 对拍）+ harness ref lane（`realchain_harness.rs` §W3：ref 拓扑取证+staging）+ ref 形状语料 `tools/diff/realchain/corpus-ref/`（T9_RECORD=1 `t9x_ref_bootstrap_seed` 铸种；title 调用规范化哈希双端相同，骑共享语料）。
+
+## ref boot 拓扑（逐字取证 + 实跑验证）
+
+`bun packages/cli/src/index.ts`（default handler）→ `ServerConnection.resolve` → `ServiceConfig.options` → `selfCommand()` 自起托管后台服务 `bun <entry> serve --service`（注册 `$XDG_STATE_HOME/opencode/service-local.json`，密码在 `$XDG_CONFIG_HOME/opencode/cli.json`）。staging 三合同：① `selfCommand()`（cli/util/process.ts）只在 `basename(execPath)=="bun"` 时重挂 entrypoint——`bun-1.4.2` 命名会静默变成 `bun serve`（Script not found）→ 运行时拷贝必须名 `bun`；② 服务端装配 import tui TSX 走 bun 默认 react JSX runtime（树里没有 react）→ @opentui/solid preload 必须激活且经 cwd 的 `bunfig.toml` 传给自起子进程；③ ref 全局配置目录 `$XDG_CONFIG_HOME/opencode`（非 rust 的 `$HOME/.config` dogfood）、provider 包 `@opencode/ai/providers/anthropic`；channel-local 托管端口固定 0xc0df=49375（defaultPort）→ 沙箱 `cli.json` 钉唯一端口；devtools 条 `debug.devtools ?? channel==="local"` 默认开 → `cli.json`（TUI 自身配置同文件）钉 `{"devtools":false}` 取发布形状。
+
+## G-431b 🔴→🟢（服务端铸 msg id 形状）
+
+- **修复**：`oc_util::determinism::SchemaIdGen`（新）——`msg` 前缀走 `AscendingIdGen`（=ref `SessionMessage.ID.create()` 逐字：`msg_`+26 位），其余前缀 uuid v4 兜底；`EngineOptions::new` 生产装配换入（engine/mod.rs:248）；`jobs.rs:474` 双前缀 `msg_msg_…` 顺带修正为单次 `new_id("msg")`。单测 `schema_id_gen_msg_uses_ref_ascending_shape`。
+- **W2 评审 Minor 遗留**（plugins.rs `msg_plugin_{uuid}`×5、credential.rs `cred_{uuid}`）未动——非 msg 合同面，登记在案。
+
+## 双端对拍新登记（G-432~G-437，均有实跑证据）
+
+- **G-432 🔴→🟢（已修）**：rust `switchModel` 无条件 publish `session.model.selected` → 首回合幻影 "Switched model to …" 时间线行（ref `Session.switchModel` session.ts:101-106 对未变选择 no-op；且 ref 数据层把 composer 选择带进 create body）。修复双点：oc-server handlers/session.rs 未变选择 no-op + oc-tui app.rs home 提交把已解析 model 带进 `SessionCreateBody.model`。
+- **G-433 🟡**：自定义 provider 模型的 catalog 基座解析——ref 对 anthropic 包族自定义 provider 解析出基座（实测 `/api/model` replay/claude-opus-4-7 `limit.context=200000`）→ footer 渲染 `38 (0%)`；rust limit=0 → 只渲染 `38`。对拍以 G 标注双侧对称掩码 `(N%)` 组，待基座解析对齐后撤。
+- **G-434 🟡**：models.dev 目录快照 vintage 分叉——palette 免费层模型列表 ref 树 snapshot.txt 与 rust 内嵌目录不同代（生产是同一活目录）。S3 以过滤搜索行级钉配置模型 + 免费层仅存在性断言。
+- **G-435 🟡**：rust 侧栏 Context 块 rig 依赖——t9-5 单端 rig 渲染 Context+tokens，pair rig 确定性不渲染（ref 两 rig 都渲染）；S5 钉 ref 实跑形状（Context/38 tokens/0% used）+ 侧栏列区掩码，待 narrowing（疑似 port 侧插件槽位竞态）。
+- **G-436 🟡**：宽档（160 列）用户消息盒高度差 1 行（120 列 S2 逐行 EXACT 证明非内容差）；S5 空行/纯边框行双侧坍缩。
+- **G-437 🟡**：rust TUI palette 不反映热载后的模型列表（服务器 `/api/model` 已反映——t9-6 机器代理绿；ref 原生 watcher 双端都达）；S6 钉 ref palette 形状 + rust API 级 outcome + 该行 G 标注掩码。
+
+## 六场景对拍终态（同一网关、同键序、归一化 grid 比对）
+
+S1 boot **EXACT**；S2 发消息→回复+标题 **EXACT**（标题种子与回复 needle 分离——加固②）；S3 palette（过滤视图）**EXACT**（⑥升级为真 grid 断言，期望取 ref 实跑；免费层 G-434 存在性）；S4 会话持久重启 **EXACT**；S5 侧栏（160 列）**EXACT（侧栏列区 G-435/436 掩码）**；S6 热载 palette **EXACT（G-437 行掩码）**。归一化缺口逐项登记非静默：路径中省略号/`__ROOT__`、占位符 Math.random、版本 pill（local/semver 构建 artifact）、时钟、id 形状、耗时/tok-s、（G 标注）percent/免费层/热载行。
+
+## harness 加固（W1/W2 评审项）
+
+①二进制 freshness 守卫（`ensure_fresh_binary`：bin mtime vs crates 源最新 mtime，tests/benches 排除——本wave实测两度拦截陈旧二进制假红）；②主回合 needle/title 文本分离（网关 `--seed-title`，title 形状按 "You are a title generator" 系统提示识别，ref/port 同文同哈希；语料 45e2 重铸为 "Sandbox Replay Session"）；③T9 矩阵标注更新——①③⑥=沙箱绿/真机环境面待复测维持，⑥已升 grid 断言（S3 EXACT+G-434 存在性），⑤升双端对拍（S5，G-435 掩码面如实标注）。
+
+## 验证
+
+T9 全量 15/15（6 矩阵 + 8 pair/引导）；oc-server 411/411；oc-tui 1725（1 例 e1_cells_paste_8k 计时型 flaky 重跑绿，nextest 标 flaky）；oc-core+oc-util+oc-cli 2358/2358；通道 8 `tui_fullscreen.py` exit 0 零漂移（TUI_DIFF_BUN=…bun-1.4.2）；clippy/fmt 绿；guards 全绿（修复本 wave root 写文件导致的 worktree 属主漂移——.git/worktrees 与 Cargo.lock 等 chown 回 eternal130 后 recorded_local 恢复）。
