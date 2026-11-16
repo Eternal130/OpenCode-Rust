@@ -282,7 +282,7 @@ fn shape(
     let _ = width; // the wrap pre-shaped the content; the raster clips
                    // TUI-TD09 — `BackgroundToolHint` (index.tsx:1748-1780): the
                    // scrollbox's tail row under the last content row while the
-                   // 3 s delay has elapsed — `Press `/` to move running work to
+                   // 3 s delay has elapsed — `Press ctrl+b to move running work to
                    // the background` muted with the `ctrl+b` span in `text.base`
                    // (the paint() twin's shape, on the solid path).
     if transcript.background_hint {
