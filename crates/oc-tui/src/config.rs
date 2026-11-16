@@ -167,6 +167,12 @@ pub struct TuiConfig {
     /// the session Terminal's `SetupOptions` at boot, the live flip
     /// writes `crate::terminal_proto`'s mouse bytes).
     pub mouse: bool,
+    /// `animations` (config/index.tsx's top-level key; ref reads
+    /// `config.animations ?? true` — spinner.tsx:29-31's gate): the
+    /// running-row indicator gate; `false` pins the static `⋯`
+    /// fallback everywhere. Default true (the derived-default
+    /// exception, same as `mouse`).
+    pub animations: bool,
     /// `session.permissions` (config/index.tsx:176 — CONFIG-T1's read
     /// side): `autoaccept` arms the permission auto-answer at boot
     /// exactly like `--auto` (context/permission.tsx:14's
@@ -241,6 +247,7 @@ impl Default for TuiConfig {
             tabs: TabsConfig::default(),
             session_sidebar: crate::components::sidebar::SidebarMode::default(),
             mouse: true,
+            animations: true,
             cursor: crate::terminal_proto::CursorConfig::default(),
             terminal_copy: CopyBehavior::Select,
             prompt_paste_compact: true,
@@ -347,6 +354,8 @@ impl TuiConfig {
         // `mouse` (config/index.tsx:247, default `true` at :311 — v2's
         // `input.mouse ?? true`).
         let mouse = info.mouse.unwrap_or(true);
+        // `animations` (top-level, default true — the `?? true` gate).
+        let animations = info.animations.unwrap_or(true);
         // `cursor` (:263-266, :314): style defaults `block`, blinking
         // default true.
         let cursor = info.cursor.as_ref().map_or_else(
@@ -371,6 +380,7 @@ impl TuiConfig {
             tabs,
             session_sidebar,
             mouse,
+            animations,
             session_permissions: info
                 .session
                 .as_ref()
@@ -462,6 +472,8 @@ impl TuiConfig {
         // `mouse` (config/index.tsx:247 + :311): absent = true (v2's
         // `input.mouse ?? true`).
         let mouse = value.get("mouse").and_then(Value::as_bool).unwrap_or(true);
+        // `animations` (top-level, default true — the `?? true` gate).
+        let animations = value.get("animations").and_then(Value::as_bool).unwrap_or(true);
         // `cursor` (config/index.tsx:263-266 + :314): `style` defaults
         // `block`, `blinking` defaults true (v2 emits `CSI 1 SP q`).
         let cursor = value.get("cursor").and_then(Value::as_object).map_or_else(
@@ -482,6 +494,7 @@ impl TuiConfig {
             tabs,
             session_sidebar,
             mouse,
+            animations,
             session_permissions: value
                 .get("session")
                 .and_then(|session| session.get("permissions"))
@@ -558,6 +571,22 @@ mod tests {
             ..Default::default()
         };
         assert!(!TuiConfig::from_info(&info, None).session_tps);
+    }
+
+    /// `animations` (top-level, `?? true` — spinner.tsx:29-31's gate)
+    /// survives every decode path with the same default merge.
+    #[test]
+    fn animations_defaults_true_and_explicit_false_survives() {
+        assert!(TuiConfig::default().animations, "Default = true");
+        assert!(TuiConfig::parse("{}", None).animations, "absent key = true");
+        assert!(TuiConfig::parse(r#"{"animations": true}"#, None).animations);
+        assert!(!TuiConfig::parse(r#"{"animations": false}"#, None).animations);
+        // from_info (the CliConfig service chain): absent → true,
+        // explicit Some(false) → false.
+        let info = oc_core::cli_config::Info::default();
+        assert!(TuiConfig::from_info(&info, None).animations);
+        let info = oc_core::cli_config::Info { animations: Some(false), ..Default::default() };
+        assert!(!TuiConfig::from_info(&info, None).animations);
     }
 
     /// Test roots with an injected config dir (state/cache/tmp beside

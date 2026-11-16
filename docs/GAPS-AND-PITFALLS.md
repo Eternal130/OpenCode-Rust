@@ -3227,6 +3227,8 @@ G-412/413/414/415/416/417/418/420/422 ✅；**G-419/G-421 勘误撤销**（登�
 ### G-128 勘注（A2）：过渡动画中间帧自本起可断言
 通道 8 frames 维度（rust 虚拟时钟逐拍 `advance_clock(k·100ms)`）把"动画语义"从文档化豁免变为可断言面；G-128/G-49/G-368 的 midframe 豁免收窄为精确形状（首拍与末拍一致、仅中间拍差；末拍也差=拦）。当前语料无命中该形状的 case（spinner/流式/计时窗 15 case 逐拍 exact 或落 G-423/夹具伪影族）；A2 期间 toast 动作 affordance 差独立立项为 G-424（修复尝试因 oracle 重冻结/活体用例联动超范围而回退，留专用 lane）。
 
+> **2026-11-16 勘注（gb17 tool-glyph 轮）：A2 动画门控夹具伪影簇已退役。** 复核定性修正：该簇的真根因是 rust 侧**缺 `config.animations` 门控移植**（ref `component/spinner.tsx:29-31`——`config.animations ?? true` 为假时一切 running-row 指示器渲染静态 `⋯` 回退；`routes/session/index.tsx:2029-2032` 的 compaction 分隔线同门），并非纯夹具伪影。修复：rust store 增 `animations_enabled` 门（默认 true=生产面）+ `running_indicator_glyph(clock, animations)` 贯通 tool 行/shell 块 running 命令行/reasoning 头/compaction 分隔线；diff driver 镜像夹具解析配置 `animations:false`（`test/fixture/app.ts:37`）；连带对齐 shell 块 running 行布局（`⋯ {cmd}` base 色不叠绘）与 BackgroundToolHint（epoch 时钟域 + solid 路径落地，`marginTop 1/paddingLeft 3`）。anim-tool-progress 三档静息+frames 全 exact；CAUSES 命中 12→6；簇按 G-424 先例移除（re-land 回归将 FAIL 而非豁免）。
+
 # 第三十二轮（2026-11-15，差分扩展 B2：真插件差分 + version-skew 甄别族）
 
 > **同日修复轮（B2-fix）改写**：首轮记录的"两插件 ref 侧均不可 boot"整屏结论经控制者实验证伪为环境伪差——根因 = bun 1.3.10 的 `ResolveMessage` **非 Error 子类**（1.4.2 下为 true），ref `host.ts:17-43` 吞错守卫依赖该 instanceof。修复轮落地 `TUI_DIFF_BUN≥1.4.2` 门控（插件腿；非插件腿维持环境 bun 基线不漂移）+ 双 staging 根（ref 树带真 @opentui 跑插件真 Solid 侧栏；rust 树无 @opentui 走 host shim——真 @opentui 进 guest 会在 render() 抛 "No renderer found"）+ omo-slim 根级 tui.js 再导出垫片（2.0.24 本地目录加载器只认 `<dir>/tui.*` 扩展探测约定，exports 子路径对绝对 specifier 永不生效；生产包名路径被夹具 `prepare→{directory:""}` 钉死）。门控下**双侧真 boot**：plugin-boot 9 屏（idle/superpowers/combo ×3 档）逐屏 **EXACT**，version-skew 整屏豁免 15→**0**；残余 6 屏真裁决：plugin-panel-open ×3 = **加载模型投影簇**（rust 统一进程 TUI 的 PluginHost 同 boot server+tui 入口 → palette 携带 omo-slim 命令行；ref 夹具只装 tui 入口，server 入口归 SERVER 进程经命令 API 到达、夹具无 server 面 → "No results"；320×80 档同一网格 ref 真 Solid 侧栏 "▼ OMO-Slim v3.0.3" vs rust 有界 shim 侧栏=G-28 形状共现）；plugin-fallback ×3 = **G-425**（故意坏载荷双侧失败态对拍：rust 经 B2-fix `surface_boot_failures` 补齐失败 chip+错误 toast（解析失败与 guest 装载失败双源、target 用 config spec 对齐 ref 标题）；管理屏失败行列表未移植）。残留 version-skew 局部形状实证一条：omo-slim tui 入口加载后 ref 的 "/" 斜杠面板路径被插件降级破坏（簇保留 0 命中）。终态：静息 90（EXACT 78 / CAUSES 12 / 未裁决 0）+ frames 15 不变；三连幂等；套件 1659 绿/fmt/clippy/guards 绿。
@@ -3295,6 +3297,17 @@ G-412/413/414/415/416/417/418/420/422 ✅；**G-419/G-421 勘误撤销**（登�
 - 修复（oc-tui 侧合法守卫位）：`picker_solid::colors_key` 重建键并入 active tab 判别式（`picker_tab_discriminant`）——tab 切换整体重挂内容子树（content_key 机制本就为此设计），绕开该 reconcile 路径；selection/filter/entry churn 仍走原地 patch（长期稳定的路径）。失效语义注释已写入 `colors_key` doc。
 - 遗留（escalate）：opentui-solid reconcile 的同 key 重复挂载是**通用缺陷**（任意 keyed-For 消费面都可能踩），本仓不可修外部 crate，须上游（Eternal130/opentui-rust）修 `reconcile_children` 的 replace/insert 臂 live 工作表与 render 子树顺序脱同步问题后回滚本守卫。探针复现证据链见 w6-report。**与 W3 登记的 keyed-For 前插缺陷（G-426 (f) 项）同函数两症状**——上游工单须合并覆盖：前插调和（陈旧首元素留旧槽）+ 同 key replace/insert churn 双挂载（zombie 节点），修一侧须连同另一症状回归（两侧守卫：transcript_solid 前缀失稳重建 + picker colors_key tab 判别式）。
 - 白名单勘注（2026-11-15 W6）：`composer_tabs_walk` flake 即本条真身，**已修复除名**（evt_deliv 落地后 walk 确定性绿 3/3；全套件 1703/1703）。
+
+### G-430 🟡 config.animations 门控移植残余族（gb17 主门已移植；六个未覆盖面，下一 lane 清偿）
+- 背景：gb17（2026-11-16，commit 4db0d3f1）把 `config.animations ?? true` 的**主门**移植到生产链（store `animations_enabled` ← TuiConfig.animations ← cli.json 顶键，oc-core v1 迁移 `animations_enabled`→`animations` 已备）并贯通 running-row 指示器族（tool 行 / shell 块 running 行 / reasoning 头 / compaction 分隔线 / BackgroundToolHint）；A2 工具行伪影簇随之退役。**本条登记其余六个 ref 同门面**，rust 侧仍恒动画（时钟驱动 spinner / shimmer），animations:false 下与 ref 的静态 `⋯`/无 shimmer 形状分叉：
+  1. **prompt 运行态 caret spinner**——ref `component/prompt/index.tsx:1908-1911`（运行态 `<Spinner color=…>`，关时回退 `⋯ {label}`）；rust prompt 运行态指示器无门。
+  2. **/btw footer spinner**——ref `feature-plugins/prompt/btw.tsx:35`（`<Spinner>/btw</Spinner>`）；rust `components/session.rs` 的 btw_pending hints 恒 `spinner_frame(store.clock())`。
+  3. **update dialog "Checking…/Installing…"**——ref `component/dialog-update.tsx:107,115`（`<Spinner shimmer>`，ShimmerText 受 animations 门 + interval 驱动）；rust `command_palette.rs` 的 busy 行 `with_shimmer(store.clock())` 无门。
+  4. **reconnecting 覆盖层**——ref `component/reconnecting.tsx:31`（`<Spinner>Restarting service…/Connection lost…`）；rust `overlays_solid.rs` 标题恒 `spinner_frame(elapsed_ms)`。
+  5. **sidebar title shimmer**——ref `routes/session/sidebar.tsx:33-48`（`<title_shimmer>`，`enabled={config.animations ?? true}`）；rust sidebar shimmer 路径无门。
+  6. **RetryProvider shimmer**——ref `routes/session/index.tsx:3075-3079`（RetryProvider `enabled={ctx.config.animations ?? true}`）；rust 对应 shimmer 无门。
+- 风险面：**committed 语料不触及**（六面均不在现 90 场景静息/frames 形状内）；rec-* 或未来语料命中即落 **unadjudicated 拦门**（保守正确——不再新开豁免簇，A2 簇已退役，re-land/新形状须新条目+取证）。
+- 处置：登记不拦，下一 lane 清偿（统一走 `store.animations_enabled()` + 各面的 `⋯`/无-shimmer 回退形状，须逐面 ref 取证后落）。
 
 ### C3 录制器边缘锤（Concern① 会商）
 - 文件边界：每（进程）会话一 `rec-*.raw.json`；重 arm 铸新 id、旧文件冻结不再触碰（`rearm_writes_a_new_file_and_never_touches_the_old` 钉定）。

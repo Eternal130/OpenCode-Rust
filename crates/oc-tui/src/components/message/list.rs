@@ -91,6 +91,15 @@ pub struct TranscriptOptions {
     pub markdown_source: bool,
     /// The injected clock (spinner frames; frozen ⇒ `⠋`).
     pub clock_ms: u64,
+    /// The `config.animations ?? true` gate (spinner.tsx:29-31):
+    /// `false` pins every running-row indicator to the static `⋯`
+    /// fallback (the diff fixture's resolved config).
+    pub animations: bool,
+    /// The epoch-facing "now" ([`crate::store::Store::epoch_now_ms`]):
+    /// the wall-clock domain the ref's DELAY computations read
+    /// (`Date.now()`, index.tsx:1766) — distinct from the injected
+    /// animation clock.
+    pub epoch_now_ms: u64,
     /// Expanded group keys (disclosure state; collapsed by default).
     pub expanded_groups: Vec<String>,
     /// Collapsed thought keys (`"{mid}:{pid}"` — the minimal-mode
@@ -189,6 +198,8 @@ impl Default for TranscriptOptions {
             turn_tokens: false,
             markdown_source: false,
             clock_ms: 0,
+            animations: true,
+            epoch_now_ms: 0,
             expanded_groups: Vec::new(),
             collapsed_thoughts: std::collections::HashSet::new(),
             group_rules: crate::components::message::model::GroupRules::empty(),
@@ -435,6 +446,7 @@ pub fn render_transcript(
                             time.completed.is_some(),
                             false,
                             options.clock_ms,
+                            options.animations,
                             theme,
                             content_width,
                         )
@@ -568,8 +580,11 @@ pub fn render_transcript(
                     if !matches!(canonical, "shell" | "subagent") {
                         return false;
                     }
+                    // index.tsx:1766 — the delay reads `Date.now()`
+                    // against the part's EPOCH timestamps (`ran ??
+                    // created`), NOT the animation clock: epoch now.
                     let started = tool_time.created.or(time.created).unwrap_or(0);
-                    options.clock_ms.saturating_sub(started) >= DELAY_MS
+                    options.epoch_now_ms.saturating_sub(started) >= DELAY_MS
                 })
         })
     };
@@ -751,6 +766,7 @@ fn tool_cell(
         &state,
         options.expanded_tools.contains(&expanded_key),
         options.clock_ms,
+        options.animations,
         theme,
         width,
     );
@@ -838,6 +854,7 @@ fn render_row(
                         *tokens_out,
                         &body,
                         options.clock_ms,
+                        options.animations,
                         theme,
                         width,
                     )
@@ -887,6 +904,7 @@ fn render_row(
                         *exit,
                         output.as_deref(),
                         options.clock_ms,
+                        options.animations,
                         theme,
                         width,
                     )
@@ -963,6 +981,7 @@ fn render_row(
                         state,
                         session_running,
                         options.clock_ms,
+                        options.animations,
                         theme,
                         width,
                         &options.model_names,
@@ -1207,7 +1226,7 @@ fn group_row(
                 return if completed {
                     completed_tool_row('→', &label, theme, width)
                 } else {
-                    running_tool_row(&label, options.clock_ms, theme, width)
+                    running_tool_row(&label, options.clock_ms, options.animations, theme, width)
                 };
             }
             let tools: Vec<String> = refs
@@ -1229,7 +1248,7 @@ fn group_row(
             if completed {
                 completed_tool_row('→', &label, theme, width)
             } else {
-                running_tool_row(&label, options.clock_ms, theme, width)
+                running_tool_row(&label, options.clock_ms, options.animations, theme, width)
             }
         }
         GroupKind::Reasoning => {
@@ -1265,6 +1284,7 @@ fn group_row(
                 completed,
                 expanded,
                 options.clock_ms,
+                options.animations,
                 theme,
                 width,
             )
@@ -1416,11 +1436,14 @@ impl Transcript {
         // sticky bottom or a free window covering the end).
         if self.background_hint {
             let hint = "Press ctrl+b to move running work to the background";
-            let y = self.content_height.saturating_sub(offset);
-            if y < viewport {
+            // `marginTop={1} paddingLeft={3}` (index.tsx:1771): one
+            // blank row under the content, at the column's content
+            // indent (`inset + 3` — the block bodies' x).
+            let y = self.content_height + 1;
+            if y >= offset && y.saturating_sub(offset) < viewport {
                 placed.push(Placed {
-                    x: self.inset + 1,
-                    y,
+                    x: self.inset + 3,
+                    y: y - offset,
                     width: crate::wrap::display_width(hint),
                     lines: vec![PlacedLine::plain(
                         hint,

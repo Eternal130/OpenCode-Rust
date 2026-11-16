@@ -866,6 +866,15 @@ async fn tui_fullscreen_diff_driver() {
             .set_project_sink(std::rc::Rc::new(DriverProjectSink { tx: pump.fetch_tx.clone() }));
         pump.app.store.set_config_sink(std::rc::Rc::new(DriverConfigSink));
 
+        // The ref fixture's resolved config (test/fixture/app.ts:37:
+        // `config.get: input.config ?? { animations: false }` — the
+        // scenario schema carries no config override, so the gate is
+        // ALWAYS off ref-side): mirror `animations: false` so the
+        // running-row indicators render the static `⋯` fallback
+        // (spinner.tsx:29-31) exactly like the ref grids, instead of
+        // the clock-driven spinner the production default enables.
+        pump.app.store.set_animations_enabled(false);
+
         // F1 — the ref harness's pinned `TuiApp { version: "test" }`
         // injection (test/fixture/app.ts:35): the home footer's
         // right-aligned label reads it (`context.app.version`,
