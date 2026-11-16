@@ -1549,6 +1549,7 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                 .map(|(target, _)| {
                     SelectOption::titled(target.clone(), target)
                         .categorized("TUI")
+                        .with_gutter('x')
                         .with_footer("failed, local".to_owned())
                 })
                 .collect();
@@ -1584,7 +1585,8 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             // (the ref paints it info-colored), `updating` while an
             // update is in flight.
             let mut options = options;
-            for row in store.server_plugins() {
+            let server_rows = store.server_plugins();
+            for row in &server_rows {
                 let option = SelectOption::titled(
                     if row.id.is_empty() { row.target.clone() } else { row.id.clone() },
                     format!("server:{}", row.target),
@@ -1601,43 +1603,51 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                 };
                 options.push(if footer.is_empty() { option } else { option.with_footer(footer) });
             }
-            let props = SelectProps::new("Plugins", options)
-                // G-29: the "check for updates" action
-                // (plugins.tsx:214-218 — ctrl+a here, the port's
-                // surfaceless-command slot before).
-                .with_action(SelectAction::new(
-                    "dialog.plugins.check",
-                    "ctrl+a",
-                    if store.plugins_checking() {
-                        "checking for updates"
-                    } else {
-                        "check for updates"
-                    },
-                ))
-                // G-29: the install action (the ref's shift+i keybind,
-                // keybind.ts:281).
-                .with_action(SelectAction::new(
-                    "dialog.plugins.install",
-                    "shift+i",
-                    "install plugin",
-                ))
-                // G-29: the update action (plugins.tsx:240-246 —
-                // every outdated row, side right).
-                .with_action(SelectAction::new("dialog.plugins.update", "shift+u", "update"))
-                // RE-02: the `plugins.toggle` action (plugins.tsx:
-                // 231-237, side right) — enter flips the selected
-                // registered plugin's active state.
-                .with_action(SelectAction::new("plugins.toggle", "return", "toggle"));
-            // G-425: the `enter view error` footer hint
-            // (plugins.tsx:246-255) — the ref shows it while the
-            // FOCUSED entry carries an error; the focus effect
-            // (:78-81) seats the first TUI entry, so with no
-            // registered ids the failure row is the focused one.
-            if !store.plugin_boot_failures().is_empty() && ids.is_empty() {
-                props.with_footer_hint("enter", "view error")
+            // G-425b — the footer bar mirrors the ref 2.0.24 action
+            // VISIBILITY (plugins.tsx:198-246: every action carries a
+            // `hidden` flag; the `ctrl+a show internal` footerHint
+            // rides unconditionally, LAST — visibleActions appends
+            // the hints past the shown actions, dialog-select.tsx:
+            //168-173). In the corpus's boot-failure state the bar is
+            // exactly the ref row: the `enter view error` footer prop
+            // (:248-255) + `ctrl+a show internal` — check is hidden
+            // without server package entries, toggle without a
+            // focused REGISTERED tui entry, update without an
+            // outdated row (and 2.0.24 has NO install action here —
+            // the shift+i keybind, keybind.ts:281, is global only).
+            // Labels: the keymap table's default bindings
+            // (keybind.ts:278-283 — return/ctrl+r/ctrl+u).
+            let mut props = SelectProps::new("Plugins", options);
+            let failures_focused =
+                !store.plugin_boot_failures().is_empty() && ids.is_empty();
+            if failures_focused {
+                props = props.with_action(SelectAction::footer_prop(
+                    "dialog.plugins.error",
+                    "enter",
+                    "view error",
+                ));
             } else {
-                props
+                if !server_rows.is_empty() {
+                    props = props.with_action(SelectAction::new(
+                        "dialog.plugins.check",
+                        "ctrl+r",
+                        if store.plugins_checking() {
+                            "checking for updates"
+                        } else {
+                            "check for updates"
+                        },
+                    ));
+                }
+                if !ids.is_empty() {
+                    props = props
+                        .with_action(SelectAction::new("plugins.toggle", "return", "toggle"));
+                }
+                if server_rows.iter().any(|row| row.outdated) {
+                    props = props
+                        .with_action(SelectAction::new("dialog.plugins.update", "ctrl+u", "update"));
+                }
             }
+            props.with_action(SelectAction::hint("plugins.internal", "ctrl+a", "show internal"))
         }
 
         // The tab context menu (lane KM — `TabContextMenu`'s actions,
@@ -3454,7 +3464,10 @@ impl CommandDispatcher for StoreDispatcher {
             // `plugins.toggle` flips it, faulted rows open the
             // error details).
             "plugins.list" => {
-                store.replace_dialog(DialogKind::Plugins, DialogSize::Medium);
+                // plugins.tsx:38 onMount `dialog.setSize("large")` — the
+                // manager is ALWAYS the large (88) box, whatever the open
+                // path (the ref 2.0.24 /plugins grids pin width-2 clamp).
+                store.replace_dialog(DialogKind::Plugins, DialogSize::Large);
                 Dispatch::Handled
             }
             // `app.clear` (mini/footer.view.tsx:553): clears the MINI
@@ -5697,13 +5710,13 @@ mod tests {
             props
                 .actions
                 .iter()
-                .any(|action| action.title == "ctrl+a" && action.label == "check for updates"),
-            "the G-29 check action hint: {:?}",
+                .any(|action| action.title == "ctrl+a" && action.label == "show internal"),
+            "the footerHints pair rides unconditionally (plugins.tsx:203): {:?}",
             props.actions
         );
         assert!(
-            props.actions.iter().any(|action| action.command == "dialog.plugins.install"),
-            "the G-29 install action: {:?}",
+            !props.actions.iter().any(|action| action.command == "dialog.plugins.check"),
+            "the check action is hidden without server package entries (plugins.tsx:214-218): {:?}",
             props.actions
         );
         // The rendered overlay carries the rows (Search placeholder,
@@ -5733,7 +5746,7 @@ mod tests {
         assert!(text.contains("Plugins"), "the title");
         assert!(text.contains("Search"), "the filter placeholder");
         assert!(text.contains("No items available"), "the shared empty state");
-        assert!(text.contains("ctrl+a check for updates"), "the footer hint");
+        assert!(text.contains("ctrl+a show internal"), "the footer hint");
     }
 
     /// G-425: a boot failure (the config target's resolution/load
@@ -5755,11 +5768,21 @@ mod tests {
         assert_eq!(option.title, "/etc/opencode/plugins/broken");
         assert_eq!(option.footer.as_deref(), Some("failed, local"));
         assert_eq!(option.category.as_deref(), Some("TUI"));
-        assert_eq!(
-            props.footer_hint,
-            Some(("enter".to_owned(), "view error".to_owned())),
-            "the focused failure row's hint: {:?}",
-            props.footer_hint
+        assert_eq!(option.gutter, Some('x'), "the failed row's gutter mark");
+        assert!(
+            props.actions.iter().any(|action| action.command == "dialog.plugins.error"
+                && action.title == "enter"
+                && action.label == "view error"),
+            "the focused failure row's footer-prop pair: {:?}",
+            props.actions
+        );
+        assert!(
+            props
+                .actions
+                .iter()
+                .any(|action| action.title == "ctrl+a" && action.label == "show internal"),
+            "the footerHints pair rides last: {:?}",
+            props.actions
         );
         // Enter on the row opens the error details (the submit path
         // through the dialog key layer, the TUI-24 recipe).

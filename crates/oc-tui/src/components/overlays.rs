@@ -63,12 +63,21 @@ pub fn mount_overlays_family(store: &Store, styles: &ThemeStyles, width: usize, 
     if let Some(toast) = store.toasts().current().cloned() {
         let pending = store.toasts().pending();
         let footer_theme = FooterTheme::from_resolved(&store.theme().resolved.tokens);
+        // G-424b — the dialog cover clip: the ref's z-3000 dialog box
+        // is opaque over the toast, so interior units never paint
+        // inside the box's rect (mount_dialog_layer published it at
+        // mount). `dim` is irrelevant here (the fg dimming rides the
+        // post-seam rail cover, which knows the seat's flag).
+        let cover = store
+            .dialog_frame_rect()
+            .map(|rect| super::toast_solid::ToastRailCover { rect, dim: false });
         super::toast_solid::mount_toast_tree(
             &toast,
             pending,
             width,
             &footer_theme,
             &store.theme().resolved.tokens,
+            cover,
         );
     }
     // The reconnecting scrim + box (the family's last child).
@@ -95,6 +104,7 @@ pub fn paint_overlays_post_seam(
     store: &Store,
     styles: &ThemeStyles,
     width: usize,
+    cover: Option<super::toast_solid::ToastRailCover>,
 ) {
     if let Some(toast) = store.toasts().current().cloned() {
         let pending = store.toasts().pending();
@@ -106,6 +116,7 @@ pub fn paint_overlays_post_seam(
             &footer_theme,
             &store.theme().resolved.tokens,
             None,
+            cover,
         );
     }
     let now = store.clock();
@@ -338,13 +349,13 @@ mod tests {
             &crate::theme::ThemeState::v2_dark().resolved.tokens,
         );
         let tokens = crate::theme::ThemeState::v2_dark().resolved.tokens;
-        crate::components::toast_solid::mount_toast_tree(&toast, 0, 80, &footer, &tokens);
+        crate::components::toast_solid::mount_toast_tree(&toast, 0, 80, &footer, &tokens, None);
 
         let mut frame = frame_with(80, 24);
         crate::components::chrome_solid::composite_chrome_tree(&mut frame);
         // The post-seam half (render_app's tail): the rails.
         crate::components::toast_solid::paint_toast_rails(
-            &mut frame, &toast, 0, &footer, &tokens, None,
+            &mut frame, &toast, 0, &footer, &tokens, None, None,
         );
         let grid = frame.text_grid();
         // The console title rides the top border (row 0, the family's

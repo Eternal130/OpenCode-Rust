@@ -1024,8 +1024,20 @@ fn pty_transcript_cycle_thought_expand_solid_path() {
         // toggle) instead of the byte stream.
         std::thread::sleep(Duration::from_millis(400));
         let mut rows: u16 = 24;
-        let expanded =
-            strip_ansi(&screen_after_toggle(&writer, &probe(), len(&probe()), &mut rows));
+        // The boot's transient error toast ("Data migration failed"
+        // — the scripted server has no migration endpoint) rides the
+        // top-right panel until its 5 s expiry. Since G-424b the long
+        // message WORD-WRAPS (the ref-faithful shape), so the panel
+        // grows past the header's row — poll the forced repaint until
+        // the toast clears instead of racing it.
+        let toast_deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let expanded = loop {
+            let screen =
+                strip_ansi(&screen_after_toggle(&writer, &probe(), len(&probe()), &mut rows));
+            if screen.contains("Thought: Planning") || std::time::Instant::now() > toast_deadline {
+                break screen;
+            }
+        };
         assert!(
             expanded.contains("line one of the plan"),
             "the guttered thought body rendered: {expanded:?}"
