@@ -41,6 +41,25 @@
 // Each test compile unit includes this shared harness but uses a
 // different subset of the lane API.
 #![allow(dead_code)]
+// Test-harness infra lints (see realchain_pair.rs's list for the
+// rationale): `{:?}` forensics in panics, wire-shape names in docs,
+// explicit bridge steps.
+#![allow(
+    clippy::case_sensitive_file_extension_comparisons,
+    clippy::doc_markdown,
+    clippy::format_push_string,
+    clippy::items_after_statements,
+    clippy::manual_assert,
+    clippy::map_or_identity,
+    clippy::map_unwrap_or,
+    clippy::match_same_arms,
+    clippy::must_use_candidate,
+    clippy::needless_continue,
+    clippy::redundant_closure_for_method_calls,
+    clippy::semicolon_if_nothing_returned,
+    clippy::similar_names,
+    clippy::unnecessary_debug_formatting
+)]
 
 use std::ffi::CString;
 use std::fmt::Write as _;
@@ -249,14 +268,24 @@ impl Sandbox {
 
     /// Write the global config: the custom `replay` provider
     /// (anthropic wire family via `package: "@ai-sdk/anthropic"`)
-    /// pointing at the gateway, plus its model entries.
+    /// pointing at the gateway, plus its model entries. `plugins` =
+    /// config `plugins[]` specs (the W5 real-plugin rig).
     pub fn write_config(&self, extra_models: &[(&str, &str)], default_model: &str) {
+        self.write_config_ext(extra_models, default_model, &[])
+    }
+
+    pub fn write_config_ext(
+        &self,
+        extra_models: &[(&str, &str)],
+        default_model: &str,
+        plugins: &[&str],
+    ) {
         let mut models = serde_json::Map::new();
         models.insert("claude-opus-4-7".into(), serde_json::json!({ "name": "claude-opus-4-7" }));
         for (id, name) in extra_models {
             models.insert((*id).into(), serde_json::json!({ "name": name }));
         }
-        let config = serde_json::json!({
+        let mut config = serde_json::json!({
             "$schema": "https://opencode.ai/config.json",
             "model": default_model,
             "autoupdate": false,
@@ -272,6 +301,9 @@ impl Sandbox {
                 }
             }
         });
+        if !plugins.is_empty() {
+            config["plugins"] = serde_json::json!(plugins);
+        }
         let path = self.config_path();
         std::fs::create_dir_all(path.parent().unwrap()).expect("config dir");
         std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap())
@@ -347,6 +379,12 @@ impl Gateway {
     /// generated cassettes — sandbox traffic only, no user data).
     #[must_use]
     pub fn spawn(tag: &str, record_dir: Option<&Path>) -> Gateway {
+        Gateway::spawn_paced(tag, record_dir, "instant")
+    }
+
+    /// W5 timing fidelity: spawn with an explicit `--pace` mode
+    /// (`instant` keeps the historical single-write behavior).
+    pub fn spawn_paced(tag: &str, record_dir: Option<&Path>, pace: &str) -> Gateway {
         let root = worktree_root();
         let log_path = log_file(&format!("gateway-{tag}"));
         let mut cmd = Command::new("python3");
@@ -382,6 +420,9 @@ impl Gateway {
             // the session title never echoes the main-turn reply needle.
             cmd.arg("--seed-title").arg(root.join("tools/diff/realchain/seeds/title-sse.txt"));
             cmd.arg("--record-dir").arg(dir);
+        }
+        if pace != "instant" {
+            cmd.arg("--pace").arg(pace);
         }
         // stderr rides the same log file (spawn/import errors land there).
         let err_sink = std::fs::OpenOptions::new()
@@ -969,12 +1010,21 @@ impl Sandbox {
     /// with the replay provider on the workspace-native anthropic
     /// package (same gateway, same models as the rust side).
     pub fn write_ref_config(&self, extra_models: &[(&str, &str)], default_model: &str) {
+        self.write_ref_config_ext(extra_models, default_model, &[])
+    }
+
+    pub fn write_ref_config_ext(
+        &self,
+        extra_models: &[(&str, &str)],
+        default_model: &str,
+        plugins: &[&str],
+    ) {
         let mut models = serde_json::Map::new();
         models.insert("claude-opus-4-7".into(), serde_json::json!({ "name": "claude-opus-4-7" }));
         for (id, name) in extra_models {
             models.insert((*id).into(), serde_json::json!({ "name": name }));
         }
-        let config = serde_json::json!({
+        let mut config = serde_json::json!({
             "$schema": "https://opencode.ai/config.json",
             "model": default_model,
             "autoupdate": false,
@@ -990,6 +1040,9 @@ impl Sandbox {
                 }
             }
         });
+        if !plugins.is_empty() {
+            config["plugins"] = serde_json::json!(plugins);
+        }
         let path = self.root.join("xdg-config/opencode/opencode.json");
         std::fs::create_dir_all(path.parent().unwrap()).expect("ref config dir");
         std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap())
@@ -1036,6 +1089,151 @@ pub fn ref_tui_spawn(sandbox: &Sandbox, stage: &RefStage, cols: u16, rows: u16) 
 pub fn ref_service_stop(sandbox: &Sandbox, stage: &RefStage) {
     let _ =
         sandbox.command_ref(stage, &stage.bun).arg(&stage.entry).args(["service", "stop"]).output();
+}
+
+// ---------------------------------------------------------------------------
+// W5 — the real-plugin rig (symptom ⑦: plugin-added sidebar content).
+//
+// The user's real machine carries REAL installed plugins under
+// `~/.cache/opencode/npm/<pkg>@<key>/<stamp>/node_modules/<pkg>` (the
+// `opencode plugin add` layout both engines share). The rig stages
+// READ-ONLY COPIES of those trees into each sandbox's cache root and
+// names them in the config `plugins[]` array — the REAL config
+// discovery path on both ends (resolve.rs for the port,
+// plugin/module.ts + Npm for the ref), never driver injection.
+// ---------------------------------------------------------------------------
+
+/// One real plugin payload: (source install dir, config spec). The
+/// sources are the machine's plugin payload registry — a READ-ONLY
+/// COPY of the host's real `~/.cache/opencode` install trees staged
+/// at `/tmp/opencode/plugin-payload` (dev-gate runs the tests as a
+/// non-root uid; the payload must be readable by it). Privacy: these
+/// are published npm packages, not user data.
+pub const PLUGIN_SPECS: &[(&str, &str)] = &[
+    // (source dir, config spec)
+    ("/tmp/opencode/plugin-payload/oh-my-opencode-slim", "oh-my-opencode-slim@3.0.3"),
+    ("/tmp/opencode/plugin-payload/superpowers", "superpowers@7.0.0"),
+];
+
+/// Skip guard for the plugin rig: `Some(reason)` when the real plugin
+/// payload trees are absent on this machine (never a red).
+pub fn plugin_lane_skip_reason() -> Option<String> {
+    for (source, spec) in PLUGIN_SPECS {
+        if plugin_payload_stamp(Path::new(source)).is_none() {
+            return Some(format!(
+                "real plugin payload unavailable: no <stamp>/node_modules under {source} \
+                 (spec {spec}; stage the payload first)"
+            ));
+        }
+    }
+    None
+}
+
+/// The newest `<stamp>` generation under a payload registry entry that
+/// carries `node_modules` (the install layout both engines share).
+fn plugin_payload_stamp(source: &Path) -> Option<PathBuf> {
+    let mut stamps: Vec<PathBuf> = std::fs::read_dir(source)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.join("node_modules").is_dir())
+        .collect();
+    stamps.sort();
+    stamps.pop()
+}
+
+/// Copy one install tree into the sandbox read-only (files 0444, dirs
+/// 0555 — the payload is never mutated by either engine's resolve
+/// path, and a stray write must fail loudly).
+fn copy_tree_readonly(source: &Path, target: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if source.is_file() {
+        std::fs::copy(source, target)
+            .unwrap_or_else(|e| panic!("copy {} -> {}: {e}", source.display(), target.display()));
+        let mut perms = std::fs::metadata(target).expect("staged file").permissions();
+        perms.set_mode(0o444);
+        std::fs::set_permissions(target, perms).expect("chmod staged file");
+        return;
+    }
+    std::fs::create_dir_all(target).unwrap_or_else(|e| panic!("mkdir {}: {e}", target.display()));
+    let mut perms = std::fs::metadata(target).expect("staged dir").permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(target, perms).expect("chmod staged dir");
+    for entry in std::fs::read_dir(source).expect("read plugin payload dir").flatten() {
+        copy_tree_readonly(&entry.path(), &target.join(entry.file_name()));
+    }
+}
+
+/// The staged install generation stamp (any fixed value — the
+/// resolve paths sort by stamp and this is the only one).
+const PAYLOAD_STAMP: &str = "1791474452027";
+
+/// Stage every real plugin payload into the sandbox's install cache
+/// and return the config `plugins[]` specs. `ref_side` picks the cache
+/// root: the port's `$XDG_CACHE_HOME/opencode-rust/npm` vs the ref's
+/// `$XDG_CACHE_HOME/opencode/npm`.
+pub fn stage_plugins(sandbox: &Sandbox, ref_side: bool) -> Vec<String> {
+    let base = if ref_side { "opencode" } else { "opencode-rust" };
+    let npm_root = sandbox.root.join("xdg-cache").join(base).join("npm");
+    let mut specs = Vec::new();
+    for (source, spec) in PLUGIN_SPECS {
+        let (_, version) = spec.rsplit_once('@').expect("pinned plugin spec");
+        // `@org/pkg@ver` safety: the package name is everything before
+        // the LAST '@'.
+        let package = spec[..spec.len() - version.len() - 1].to_owned();
+        let stamp_dir = plugin_payload_stamp(Path::new(source))
+            .unwrap_or_else(|| panic!("plugin payload vanished after the skip check: {source}"));
+        let target = npm_root.join(format!("{package}@{version}")).join(PAYLOAD_STAMP);
+        if !target.join("node_modules").is_dir() {
+            copy_tree_readonly(&stamp_dir, &target);
+        }
+        specs.push((*spec).to_owned());
+    }
+    specs
+}
+
+// ---------------------------------------------------------------------------
+// W5 — teardown hardening: sweep this process's sandbox registry on
+// lane release (the inotify-leak lesson: a panic path can strand
+// sandbox trees; the sweep runs unconditionally, errors tolerated).
+// ---------------------------------------------------------------------------
+
+fn sandbox_registry_sweep() {
+    let prefix = format!("t9w1-{}-", std::process::id());
+    let Ok(entries) = std::fs::read_dir("/tmp/opencode") else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with(&prefix) {
+            let _ = remove_tree(&entry.path());
+        }
+    }
+}
+
+fn remove_tree(path: &Path) -> std::io::Result<()> {
+    if path.is_dir() {
+        // Clear the read-only bits the plugin staging set (a plain
+        // remove_dir_all fails on 0555 dirs).
+        for entry in std::fs::read_dir(path)?.flatten() {
+            let _ = remove_tree(&entry.path());
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms)?;
+        std::fs::remove_dir(path)
+    } else {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path)?.permissions();
+        perms.set_mode(0o644);
+        std::fs::set_permissions(path, perms)?;
+        std::fs::remove_file(path)
+    }
+}
+
+impl Drop for LaneGuard {
+    fn drop(&mut self) {
+        sandbox_registry_sweep();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1116,7 +1314,10 @@ pub fn normalize_grid(grid: &str, roots: &[&str]) -> String {
     out
 }
 
-/// Reply meta timings (`56ms`, `122.4 tok/s`) are wall-clock artifacts.
+/// Reply meta timings (`56ms`, `122.4 tok/s`, `3.6s` turn durations)
+/// are wall-clock artifacts (W5: the paced-stream duration differs by
+/// fractions of a second between ends — same schedule, jittered
+/// render clocks).
 fn replace_timings(row: &str) -> String {
     let chars: Vec<char> = row.chars().collect();
     let is_digit =
@@ -1139,6 +1340,13 @@ fn replace_timings(row: &str) -> String {
             } else if suffix.starts_with(" tok/s") {
                 out.push_str("__TOKS__");
                 index = end + 6;
+            } else if suffix.starts_with('s')
+                && !suffix[1..].chars().next().is_some_and(char::is_alphanumeric)
+            {
+                // A bare `Ns`/`N.Ns` duration token (`4.2s`), not part
+                // of a longer word (`tokens`, `msgs`).
+                out.push_str("__SECS__");
+                index = end + 1;
             } else {
                 for ch in &chars[index..end] {
                     out.push(*ch);
@@ -1373,6 +1581,18 @@ mod w4_normalizer_tests {
         assert_eq!(replace_percent_group("0% used"), "0% used");
         assert_eq!(replace_percent_group("say (50%) now"), "say (50%) now");
         assert_eq!(replace_percent_group("(100%)"), "(100%)");
+    }
+
+    #[test]
+    fn seconds_durations_mask_but_words_survive() {
+        assert_eq!(
+            replace_timings("Build · claude-opus-4-7 · 3.6s · 5.1 tok/s"),
+            "Build · claude-opus-4-7 · __SECS__ · __TOKS__"
+        );
+        assert_eq!(replace_timings("12ms later"), "__MS__ later");
+        // `s` inside a word is not a duration.
+        assert_eq!(replace_timings("38 tokens used"), "38 tokens used");
+        assert_eq!(replace_timings("4 steps"), "4 steps");
     }
 
     #[test]
