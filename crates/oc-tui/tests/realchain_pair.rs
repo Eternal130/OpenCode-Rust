@@ -557,17 +557,13 @@ fn s6_hot_reload_palette_grid_pair() {
     rig.write_both(b"\x18m");
     std::thread::sleep(Duration::from_millis(500));
     rig.write_both(b"claude-sonnet-4-6");
-    // G-437 tripwire (W4 Important ①): the mask below assumes the
-    // port's palette stays stale after the hot reload. If this assert
-    // goes red, G-437 has closed — retire mask_model and compare the
-    // palette rows exactly.
-    let rust_palette_stale =
-        !rig.rust_tui.wait_for(b"claude-sonnet-4-6", 0, Duration::from_secs(2));
-    assert!(
-        rust_palette_stale,
-        "G-437 tripwire: the port palette REFLECTED the hot-added model — \
-         retire mask_model and assert the row exactly"
-    );
+    // G-437 CLOSED (gwave-1): the TUI re-syncs the model/provider
+    // lists on the `model.updated`/`provider.updated`/
+    // `integration.updated`/`config.updated` inventory events (the
+    // ref's data.ts:1204-1210/1253-1257 invalidate+sync chain) — the
+    // palette reflects the hot-added model on BOTH ends; the rows
+    // compare exactly (mask_model retired).
+    let rust_open = rig.rust_tui.wait_for(b"claude-sonnet-4-6", 0, Duration::from_secs(10));
     let ref_open = rig.ref_tui.wait_for(b"claude-sonnet-4-6", 0, Duration::from_secs(30));
     settle(2);
     let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
@@ -580,36 +576,13 @@ fn s6_hot_reload_palette_grid_pair() {
         http_get(&format!("{}/api/model", rig.rust_server_url), rig.rust_password.as_deref())
             .unwrap_or((0, String::new()));
     drop(rig);
-    // G-437 (documented masking): the REF palette reflects the hot
-    // config edit through its native watcher; the PORT's palette does
-    // not re-list models after `/api/location/reload` (the server API
-    // does — see t9-6). Rows naming the hot-added model are masked on
-    // both ends until G-437 closes the TUI-side model-refresh gap.
-    let mask_model = |grid: &str| {
-        grid.lines()
-            .filter(|line| {
-                !line.contains("claude-sonnet-4-6") && !line.contains("No results found")
-            })
-            .map(<str>::to_owned)
-            .collect::<Vec<_>>()
-            .join("\n")
-            + "\n"
-    };
-    // G-437 masked-shape pin: the rust grid must still carry the stale
-    // palette's "No results found" row (the shape the mask exists for).
-    assert!(
-        rust_grid.contains("No results found"),
-        "G-437 tripwire: the stale-palette row shape is gone — the mask \
-         has nothing left to mask; retire it"
-    );
-    let ref_masked = mask_model(&ref_grid);
-    let rust_masked = mask_model(&rust_grid);
     assert!(
         (200..300).contains(&reload_status) && status == 200 && body.contains("claude-sonnet-4-6"),
         "S6 RED: reload={reload_status} model={status}; rust API body: {body}"
     );
     assert!(ref_open, "S6 RED: the ref palette never listed the hot-added model");
-    assert_grids_match("s6-hotreload", &ref_masked, &rust_masked);
+    assert!(rust_open, "S6 RED: the port palette never listed the hot-added model");
+    assert_grids_match("s6-hotreload", &ref_grid, &rust_grid);
 }
 
 // ---------------------------------------------------------------------------

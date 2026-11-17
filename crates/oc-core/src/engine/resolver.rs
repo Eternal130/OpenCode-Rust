@@ -1216,7 +1216,7 @@ pub fn custom_model_info(
             oc_schema::id::ModelId::parse(model.id.clone()),
         );
         if let Some(name) = &model.name {
-            info.name = name.clone();
+            name.clone_into(&mut info.name);
         }
         info
     });

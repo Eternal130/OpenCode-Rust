@@ -4318,12 +4318,64 @@ pub fn spawn_zed_poll() -> Option<std::sync::mpsc::Receiver<crate::editor_zed::Z
 // The boot fetch chain (one block per list — the SURF-1 mcp.list hop
 // pushed it past the budget).
 #[allow(clippy::too_many_lines)]
+/// G-437 — one `model.list` + `provider.list` fetch mapped into the
+/// picker row shapes (the shared body of the boot listing and the
+/// hot-reload refresh; `location.model.sync` / `location.provider.sync`
+/// on the ref, data.ts:1205-1210).
+async fn fetch_models_event(client: &oc_client::Client) -> ServerListEvent {
+    let to_string = |error: oc_client::ClientError| error.to_string();
+    let models = client
+        .model()
+        .list(&oc_client::types::ModelListQuery { location: None })
+        .await
+        .map_err(to_string);
+    let providers = client
+        .provider()
+        .list(&oc_client::types::ProviderListQuery { location: None })
+        .await
+        .map_err(|_| ());
+    let providers = providers.unwrap_or_default().data;
+    ServerListEvent::Models(models.map(|response| {
+        let models = response
+            .data
+            .iter()
+            .map(|model| crate::store::ServerModel {
+                provider_id: model.provider_id.clone(),
+                id: model.id.clone(),
+                name: model.name.clone(),
+                // `free` = a non-empty cost table whose inputs
+                // are all zero (dialog-model's `free()`).
+                cost_input: model.cost.first().map_or(0.0, |cost| cost.input),
+                free: !model.cost.is_empty() && model.cost.iter().all(|c| c.input == 0.0),
+                deprecated: model.status == oc_client::types::ModelInfoStatus::Deprecated,
+                variants: model.variants.iter().map(|variant| variant.id.clone()).collect(),
+                released: model.time.released,
+                context_limit: (model.limit.context > 0).then_some(model.limit.context),
+            })
+            .collect();
+        let providers = providers
+            .iter()
+            .map(|provider| crate::store::ServerProvider {
+                id: provider.id.clone(),
+                name: provider.name.clone(),
+            })
+            .collect::<Vec<_>>();
+        (models, providers)
+    }))
+}
+
+#[expect(clippy::must_use_candidate, reason = "task handle + channels, caller may drop")]
+#[allow(clippy::too_many_lines)] // the one-shot boot listing chain
 pub fn spawn_server_lists(
     client: oc_client::Client,
-) -> (tokio::sync::mpsc::Receiver<ServerListEvent>, tokio::task::JoinHandle<()>) {
+) -> (
+    tokio::sync::mpsc::Receiver<ServerListEvent>,
+    tokio::sync::mpsc::Sender<ServerListEvent>,
+    tokio::task::JoinHandle<()>,
+) {
     let (tx, rx) = tokio::sync::mpsc::channel(4);
+    let refresh_tx = tx.clone();
     let task = tokio::spawn(async move {
-        let to_string = |error: oc_client::ClientError| error.to_string();
         // session-active boot snapshot — FIRST in the chain: the ref
         // arms the running set the moment `server.connected` resolves
         // (data.ts:594-609), before any picker list. Best-effort — an
@@ -4360,22 +4412,7 @@ pub fn spawn_server_lists(
             })
             .unwrap_or_default();
         let _ = tx.send(ServerListEvent::Commands(commands)).await;
-        let models = client
-            .model()
-            .list(&oc_client::types::ModelListQuery { location: None })
-            .await
-            .map_err(to_string);
-        let providers = client
-            .provider()
-            .list(&oc_client::types::ProviderListQuery { location: None })
-            .await
-            .map_err(|_| ());
-        let agents = client
-            .agent()
-            .list(&oc_client::types::AgentListQuery { location: None })
-            .await
-            .map_err(|error| error.to_string());
-        let providers = providers.unwrap_or_default().data;
+        let _ = tx.send(fetch_models_event(&client).await).await;
         // `useConnected()` — `hasConnectedProvider(integration.list())`
         // (use-connected.tsx): any integration carrying a connection
         // flips the models dialog to its connected rendering and drops
@@ -4388,35 +4425,11 @@ pub fn spawn_server_lists(
                 response.data.iter().any(|integration| !integration.connections.is_empty())
             });
         let _ = tx.send(ServerListEvent::Connected(connected)).await;
-        let _ = tx
-            .send(ServerListEvent::Models(models.map(|response| {
-                let models = response
-                    .data
-                    .iter()
-                    .map(|model| crate::store::ServerModel {
-                        provider_id: model.provider_id.clone(),
-                        id: model.id.clone(),
-                        name: model.name.clone(),
-                        // `free` = a non-empty cost table whose inputs
-                        // are all zero (dialog-model's `free()`).
-                        cost_input: model.cost.first().map_or(0.0, |cost| cost.input),
-                        free: !model.cost.is_empty() && model.cost.iter().all(|c| c.input == 0.0),
-                        deprecated: model.status == oc_client::types::ModelInfoStatus::Deprecated,
-                        variants: model.variants.iter().map(|variant| variant.id.clone()).collect(),
-                        released: model.time.released,
-                        context_limit: (model.limit.context > 0).then_some(model.limit.context),
-                    })
-                    .collect();
-                let providers = providers
-                    .iter()
-                    .map(|provider| crate::store::ServerProvider {
-                        id: provider.id.clone(),
-                        name: provider.name.clone(),
-                    })
-                    .collect::<Vec<_>>();
-                (models, providers)
-            })))
-            .await;
+        let agents = client
+            .agent()
+            .list(&oc_client::types::AgentListQuery { location: None })
+            .await
+            .map_err(|error| error.to_string());
         let _ = tx
             .send(ServerListEvent::Agents(agents.map(|response| {
                 response
@@ -4515,7 +4528,7 @@ pub fn spawn_server_lists(
             .unwrap_or_default();
         let _ = tx.send(ServerListEvent::References(references)).await;
     });
-    (rx, task)
+    (rx, refresh_tx, task)
 }
 
 /// The production selection sink: model/agent picks POST
@@ -8527,7 +8540,7 @@ pub async fn run_with_size(
     app.store.set_session_view_sink(std::rc::Rc::new(HttpSessionViewSink::new(client.clone())));
 
     // Server-backed picker lists (model/provider/agent).
-    let (mut list_rx, lists_task) = spawn_server_lists(client.clone());
+    let (mut list_rx, list_refresh_tx, lists_task) = spawn_server_lists(client.clone());
 
     // G-06 — the V1→V2 migration watcher (migration-overlay.tsx): 1 s
     // initial sleep, then a 1 s status poll; running drives the
@@ -9254,11 +9267,33 @@ pub async fn run_with_size(
             }
         }
         // Drain ingest.
+        let mut models_stale = false;
         while let Ok(message) = rx.try_recv() {
             if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
                 eprintln!("[tui] ingest: {message:?}");
             }
+            // G-437 — the ref invalidates + re-syncs `location.model`
+            // and `location.provider` on the model/provider/config
+            // inventory events (data.ts:1204-1210, 1253-1257, the
+            // `model.updated` leg of the config cascade); the palette
+            // picks the refreshed list up on its next open.
+            if let crate::data::Ingest::Event(event) = &message {
+                if matches!(
+                    event.type_.as_str(),
+                    "model.updated" | "provider.updated" | "integration.updated" | "config.updated"
+                ) {
+                    models_stale = true;
+                }
+            }
             app.store.ingest_all([message]);
+        }
+        if models_stale {
+            let client = client.clone();
+            let list_refresh_tx = list_refresh_tx.clone();
+            tokio::spawn(async move {
+                let event = fetch_models_event(&client).await;
+                let _ = list_refresh_tx.send(event).await;
+            });
         }
         // G-21 — `tui.command.execute`: the store staged the command
         // during the drain above; dispatch each through the palette
