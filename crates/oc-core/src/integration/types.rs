@@ -14,6 +14,10 @@ use std::collections::BTreeMap;
 /// `Credential.OAuth`: `{type:"oauth", methodID, refresh, access, expires, metadata?}`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct OAuthValue {
+    /// v2 wire name is camelCase `methodID` (schema/credential.ts);
+    /// `alias` keeps rust-written rows using `method_id` readable —
+    /// zero data loss across the migration (G-445).
+    #[serde(rename = "methodID", alias = "method_id")]
     pub method_id: String,
     pub refresh: String,
     pub access: String,

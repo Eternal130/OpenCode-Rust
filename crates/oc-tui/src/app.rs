@@ -10702,7 +10702,7 @@ pub async fn run_with_size(
     };
 
     // Teardown.
-    // G-442 forensics (env-gated, test-only): dump every open
+    // G-446 forensics (env-gated, test-only): dump every open
     // session's message tree as Debug JSON on exit, so a wedged
     // tool row can be attributed store-side (part still Running =
     // ingest/clobber bug) vs paint-side (part Completed = render
