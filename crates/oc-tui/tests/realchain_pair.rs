@@ -104,41 +104,6 @@ impl PairRig {
     }
 }
 
-/// A footer context-usage percent group (`NN (M%)`, the
-/// `formatContextUsage` shape) anywhere in the screen.
-fn footer_percent_group(screen: &str) -> bool {
-    screen.lines().any(|line| {
-        let chars: Vec<char> = line.chars().collect();
-        let is_digit = |i: usize| matches!(chars.get(i), Some(c) if c.is_ascii_digit());
-        let mut index = 0;
-        while index < chars.len() {
-            if is_digit(index) {
-                let mut end = index;
-                while is_digit(end) {
-                    end += 1;
-                }
-                // number [index, end), then " (", digits, '%', ')'.
-                let mut cursor = end;
-                while chars.get(cursor) == Some(&' ') {
-                    cursor += 1;
-                }
-                if chars.get(cursor) == Some(&'(') && is_digit(cursor + 1) {
-                    let mut scan = cursor + 1;
-                    while is_digit(scan) {
-                        scan += 1;
-                    }
-                    if chars.get(scan) == Some(&'%') && chars.get(scan + 1) == Some(&')') {
-                        return true;
-                    }
-                }
-                index = end;
-            } else {
-                index += 1;
-            }
-        }
-        false
-    })
-}
 
 /// Settle both ends for `secs` (render/event quiescence).
 fn settle(secs: u64) {
@@ -258,18 +223,11 @@ fn s2_reply_grid_pair() {
     settle(3);
     let ref_raw = rig.ref_tui.screen_text();
     let rust_raw = rig.rust_tui.screen_text();
-    // G-433 tripwire (W4 Important ①): the `(N%)` footer-usage mask in
-    // normalize_grid exists because ref resolves a model context limit
-    // for custom-provider models and the port does not. If ref stops
-    // carrying the group (or the port gains it), this assert goes red —
-    // retire replace_percent_group and compare the footer exactly.
-    let ref_has_percent = footer_percent_group(&ref_raw);
-    let rust_has_percent = footer_percent_group(&rust_raw);
-    assert!(
-        ref_has_percent && !rust_has_percent,
-        "G-433 tripwire: footer usage group ref={ref_has_percent} rust={rust_has_percent} — \
-         if the sides now agree, retire the percent mask in normalize_grid"
-    );
+    // G-433 CLOSED (gwave-1): the port's model listing now seeds
+    // base-less custom-provider models from the ref's
+    // `Model.Info.default` (limit context 200_000 / output 32_000) —
+    // both ends resolve the limit, the footer's `(N%)` group compares
+    // exactly (replace_percent_group retired from normalize_grid).
     let ref_grid = rig.normalize(&ref_raw);
     let rust_grid = rig.normalize(&rust_raw);
     dump_grid("s2-reply-ref", &ref_grid);
@@ -467,16 +425,15 @@ fn s5_sidebar_grid_pair() {
          ref={ref_ctx}) tokens={rust_tokens}; the sidebar usage matcher must mirror \
          util/session.ts:45-56 (no cache_read/retry conditions)"
     );
-    // G-433 pin (closure signal for the region mask): the port lacks
-    // the model-catalog context limit, so the percent row renders on
-    // ref only. When G-433 closes this goes red — register the row as
-    // exact-compareable inside the (then-retired) region mask.
+    // G-433 CLOSED (gwave-1): the port resolves the model-catalog
+    // context limit (`Model.Info.default` seeding), so `0% used`
+    // renders on BOTH ends.
     let rust_used = rust_grid.contains("% used");
     assert!(
-        !rust_used && ref_used,
-        "G-433 pin: the region mask assumed the port lacks the limit row \
-         (rust={rust_used}) while ref has it — if this is red, G-433 has closed: retire the \
-         sidebar region mask's percent exemption and compare the row exactly"
+        rust_used && ref_used,
+        "S5 RED: G-433 regression — the sidebar percent row must render on both ends \
+         (rust={rust_used} ref={ref_used}); the base-less custom-model seeding must keep \
+         the ref's default limit (schema/model.ts:146-158)"
     );
     // G-435-residual pin (the retired mask's inheritor): the sidebar
     // Context block is vertically offset — rust's Context title shares
