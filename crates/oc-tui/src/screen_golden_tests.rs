@@ -363,14 +363,16 @@ fn sidebar_plugin_section_renders_in_the_session_screen_shape() {
     );
     let grid = frame.text_grid();
     // The sidebar pane occupies columns 118..160; the section lands
-    // under the title (row 2 + rows 3-4), 2 columns into the pane.
+    // under the title + its paddingBottom blank (row 3 + rows 4-5,
+    // G-435-residual), 2 columns into the pane.
     let pane: Vec<String> =
         grid.iter().map(|row| row.chars().skip(118 + 2).take(30).collect()).collect();
     assert!(pane[1].starts_with("Sidebar fixture"), "the title: {:?}", pane[1]);
-    assert!(pane[2].starts_with("Fixture"), "the section title: {:?}", pane[2]);
-    assert!(pane[3].starts_with("preset: zhipuai"), "row 1: {:?}", pane[3]);
-    assert!(pane[4].starts_with("sessions: 7"), "row 2: {:?}", pane[4]);
-    assert!(pane[5].trim().is_empty(), "the gap row: {:?}", pane[5]);
+    assert!(pane[2].trim().is_empty(), "the title's padding row: {:?}", pane[2]);
+    assert!(pane[3].starts_with("Fixture"), "the section title: {:?}", pane[3]);
+    assert!(pane[4].starts_with("preset: zhipuai"), "row 1: {:?}", pane[4]);
+    assert!(pane[5].starts_with("sessions: 7"), "row 2: {:?}", pane[5]);
+    assert!(pane[6].trim().is_empty(), "the gap row: {:?}", pane[6]);
     // The reference corpus shape is UNCHANGED with no sections (the
     // empty-seam golden above still passes byte-exact) — and the
     // transcript column keeps its bytes here too (the section only

@@ -837,7 +837,7 @@ async fn tui_fullscreen_diff_driver() {
                     idle_timeout: Duration::from_secs(600),
                 },
             );
-            let (list_rx, _list_task) = spawn_server_lists(client.clone());
+            let (list_rx, _list_refresh_tx, _list_task) = spawn_server_lists(client.clone());
             let (fetch_tx, fetch_rx) = spawn_loop_fetcher(client.clone());
             if let Some(session_id) = &session_id {
                 app.store.select_tab(session_id);

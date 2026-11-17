@@ -1466,14 +1466,16 @@ pub fn normalize_grid(grid: &str, roots: &[&str]) -> String {
         row = replace_id_shapes(&row);
         row = replace_clocks(&row);
         row = replace_timings(&row);
-        // G-433 (documented masking, NOT silent): ref resolves an
-        // anthropic catalog base for custom-provider models of the
-        // anthropic package family (`/api/model` limit.context=200000
-        // for replay/claude-opus-4-7) while the port serves limit 0 —
-        // so ref's footer renders `38 (0%)` where rust renders `38`.
-        // The percent group is stripped on BOTH ends until G-433
-        // closes the model-base resolution gap.
-        row = replace_percent_group(&row);
+        // The timing tokens replace variable-width runs (`96ms` →
+        // `__MS__`, `666.7 tok/s` → `__TOKS__`), so any content sharing
+        // the row on the OTHER side of the tokens (the p4-long tier:
+        // the sidebar onboarding card renders on the transcript's
+        // `Build · model · …` rows) shifts by the per-side delta —
+        // collapse the space runs on BOTH ends (the same shape as the
+        // __ROOT__ path-length rule above).
+        if row.contains("__MS__") || row.contains("__TOKS__") || row.contains("__SECS__") {
+            collapse_spaces(&mut row);
+        }
         // G-434 (documented masking): the free/no-auth model tier in
         // the palette lists models.dev-catalog entries whose VINTAGE
         // differs between the ref tree's snapshot.txt and the port's
@@ -1629,56 +1631,6 @@ fn replace_id_shapes(row: &str) -> String {
     result
 }
 
-/// G-433: strip a `<count> (N%)` context-percent group — the composer
-/// footer's `formatContextUsage` shape (`38 (0%)`, util/session.ts:
-/// 75-78). W4 Minor ①: narrowed from any `(N%)` to the case where the
-/// group directly follows a bare number token (the footer usage shape;
-/// the sidebar's `0% used` and other percent shapes are NOT masked).
-fn replace_percent_group(row: &str) -> String {
-    let chars: Vec<char> = row.chars().collect();
-    let is_digit =
-        |chars: &[char], index: usize| chars.get(index).is_some_and(char::is_ascii_digit);
-    let mut out = String::with_capacity(row.len());
-    let mut index = 0;
-    while index < chars.len() {
-        // A digit run (the token count) followed by " (" digits '%' ')'.
-        if is_digit(&chars, index) {
-            let number_end = {
-                let mut end = index;
-                while is_digit(&chars, end) {
-                    end += 1;
-                }
-                end
-            };
-            let mut cursor = number_end;
-            while chars.get(cursor) == Some(&' ') {
-                cursor += 1;
-            }
-            let group_end = {
-                let mut end = None;
-                if chars.get(cursor) == Some(&'(') && is_digit(&chars, cursor + 1) {
-                    let mut scan = cursor + 1;
-                    while is_digit(&chars, scan) {
-                        scan += 1;
-                    }
-                    if chars.get(scan) == Some(&'%') && chars.get(scan + 1) == Some(&')') {
-                        end = Some(scan + 2);
-                    }
-                }
-                end
-            };
-            for ch in &chars[index..number_end] {
-                out.push(*ch);
-            }
-            index = group_end.unwrap_or(number_end);
-        } else {
-            out.push(chars[index]);
-            index += 1;
-        }
-    }
-    out
-}
-
 fn replace_clocks(row: &str) -> String {
     let chars: Vec<char> = row.chars().collect();
     let is_digit =
@@ -1753,16 +1705,6 @@ pub fn assert_grids_match(scenario: &str, ref_grid: &str, rust_grid: &str) {
 #[cfg(test)]
 mod w4_normalizer_tests {
     use super::*;
-
-    #[test]
-    fn percent_group_strips_only_footer_usage_shape() {
-        assert_eq!(replace_percent_group("38 (0%)"), "38");
-        assert_eq!(replace_percent_group("x 12 (34%)"), "x 12");
-        // Non-footer percent shapes survive.
-        assert_eq!(replace_percent_group("0% used"), "0% used");
-        assert_eq!(replace_percent_group("say (50%) now"), "say (50%) now");
-        assert_eq!(replace_percent_group("(100%)"), "(100%)");
-    }
 
     #[test]
     fn seconds_durations_mask_but_words_survive() {

@@ -266,9 +266,9 @@ fn slot_renders_and_clicks() {
     let grid = frame.text_grid();
     let sidebar_pane: Vec<String> =
         grid.iter().map(|row| row.chars().skip(118).collect()).collect();
-    assert!(sidebar_pane[3].contains("Claims"), "the claim section title: {:?}", sidebar_pane[3]);
-    assert!(sidebar_pane[4].contains("target: board"), "the clickable row: {:?}", sidebar_pane[4]);
-    assert!(sidebar_pane[5].contains("plain row"), "the plain row: {:?}", sidebar_pane[5]);
+    assert!(sidebar_pane[4].contains("Claims"), "the claim section title: {:?}", sidebar_pane[4]);
+    assert!(sidebar_pane[5].contains("target: board"), "the clickable row: {:?}", sidebar_pane[5]);
+    assert!(sidebar_pane[6].contains("plain row"), "the plain row: {:?}", sidebar_pane[6]);
     // -- the click runs the plugin's onMouseUp --------------------------
     // (the click sink's claim-keyed path — the section's row 1,
     // "target: board", under the structural row list).

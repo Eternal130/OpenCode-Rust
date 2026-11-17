@@ -439,7 +439,7 @@ pub fn sidebar_content_viewport(view: &SidebarView, theme: &ThemeStyles, height:
     } else {
         height.saturating_sub(2)
     };
-    footer_top.saturating_sub(2)
+    footer_top.saturating_sub(3)
 }
 
 /// Render the sidebar pane over `height` rows: the title, the
@@ -604,9 +604,10 @@ pub fn render_sidebar_scrolled(
         });
     }
 
-    // The content slot's viewport: rows [2, footer_top) — the footer
-    // stack (location row at height−2, the onboarding card above it)
-    // owns everything below `footer_top`.
+    // The content slot's viewport: rows [3, footer_top) (the title on
+    // row 1 + its paddingBottom blank on row 2 — G-435-residual) —
+    // the footer stack (location row at height−2, the onboarding card
+    // above it) owns everything below `footer_top`.
     let footer_top = if view.onboarding {
         let card_h = card_height(theme);
         height.saturating_sub(4).saturating_sub(card_h).saturating_add(1)
@@ -620,7 +621,11 @@ pub fn render_sidebar_scrolled(
     // shape). The wheel offset shifts the slot; rows outside the
     // viewport drop.
     let mut y = 0usize;
-    let slot_row = |y: usize| y.checked_sub(scroll).map(|visible| visible + 2);
+    // G-435-residual — the title box carries `paddingBottom={1}`
+    // (sidebar.tsx:34), so the content slot starts one blank row lower
+    // than the title: the first section renders on row 3 (the ref's
+    // title / blank / section stack).
+    let slot_row = |y: usize| y.checked_sub(scroll).map(|visible| visible + 3);
 
     // The context widget (context.tsx:24-45): the bold `Context`
     // title, then the muted token/percent/cost rows.
@@ -872,7 +877,7 @@ pub fn render_sidebar_scrolled(
     // viewport; the thumb spans the viewport's share of the content
     // at the scroll offset).
     let content_height = view.sections.content_height();
-    let viewport = footer_top.saturating_sub(2);
+    let viewport = footer_top.saturating_sub(3);
     if content_height > viewport && viewport > 0 {
         let track_h = viewport;
         let thumb_h = ((viewport * viewport) / content_height).clamp(1, track_h);
@@ -1162,16 +1167,18 @@ mod tests {
             texts,
             vec![
                 (1, "Sidebar fixture".to_owned()),
-                (2, "Preset".to_owned()),
-                (3, "zhipuai · own/glm-5.3".to_owned()),
-                (4, "openai · gpt-5.6".to_owned()),
-                (6, "MCP".to_owned()), // gap row 5, next section at 6
-                (7, "context7".to_owned()),
+                // Row 2 = the title box's paddingBottom blank
+                // (G-435-residual).
+                (3, "Preset".to_owned()),
+                (4, "zhipuai · own/glm-5.3".to_owned()),
+                (5, "openai · gpt-5.6".to_owned()),
+                (7, "MCP".to_owned()), // gap row 6, next section at 7
+                (8, "context7".to_owned()),
             ],
-            "the plugin sections stack under the title"
+            "the plugin sections stack under the title + its padding row"
         );
-        // The empty section painted nothing at row 5.
-        assert!(paint.placed.iter().all(|p| p.y != 5), "the gap row stays blank");
+        // The empty section painted nothing at row 6.
+        assert!(paint.placed.iter().all(|p| p.y != 6), "the gap row stays blank");
     }
 
     /// SA-F5 (SCAN-AB): the plugin section's cells paint the PLUGIN's
@@ -1191,7 +1198,7 @@ mod tests {
             clickable: vec![],
         }];
         let paint = render_sidebar(&view, &theme, 30);
-        let section: Vec<&Placed> = paint.placed.iter().filter(|p| p.y == 2 || p.y == 3).collect();
+        let section: Vec<&Placed> = paint.placed.iter().filter(|p| p.y == 3 || p.y == 4).collect();
         assert_eq!(section.len(), 2, "header + one row: {section:?}");
         for placed in &section {
             for line in &placed.lines {
@@ -1233,19 +1240,19 @@ mod tests {
         let slot: Vec<(usize, String)> = paint
             .placed
             .iter()
-            .filter(|p| p.y >= 2 && p.y < 10)
+            .filter(|p| p.y >= 3 && p.y < 10)
             .map(|p| (p.y, p.lines.iter().map(PlacedLine::text).collect::<String>()))
             .collect();
         assert_eq!(
             slot,
             vec![
-                (2, "row 1".to_owned()),
-                (3, "row 2".to_owned()),
-                (4, "row 3".to_owned()),
-                (5, "row 4".to_owned()),
-                (6, "row 5".to_owned()),
-                (7, "row 6".to_owned()),
-                (8, "row 7".to_owned()),
+                (3, "row 1".to_owned()),
+                (4, "row 2".to_owned()),
+                (5, "row 3".to_owned()),
+                (6, "row 4".to_owned()),
+                (7, "row 5".to_owned()),
+                (8, "row 6".to_owned()),
+                (9, "row 7".to_owned()),
             ],
             "scroll 2 hides the section title + first body row; the rest shift up (the slot ends above the location row at 10)"
         );

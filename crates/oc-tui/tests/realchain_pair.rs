@@ -104,42 +104,6 @@ impl PairRig {
     }
 }
 
-/// A footer context-usage percent group (`NN (M%)`, the
-/// `formatContextUsage` shape) anywhere in the screen.
-fn footer_percent_group(screen: &str) -> bool {
-    screen.lines().any(|line| {
-        let chars: Vec<char> = line.chars().collect();
-        let is_digit = |i: usize| matches!(chars.get(i), Some(c) if c.is_ascii_digit());
-        let mut index = 0;
-        while index < chars.len() {
-            if is_digit(index) {
-                let mut end = index;
-                while is_digit(end) {
-                    end += 1;
-                }
-                // number [index, end), then " (", digits, '%', ')'.
-                let mut cursor = end;
-                while chars.get(cursor) == Some(&' ') {
-                    cursor += 1;
-                }
-                if chars.get(cursor) == Some(&'(') && is_digit(cursor + 1) {
-                    let mut scan = cursor + 1;
-                    while is_digit(scan) {
-                        scan += 1;
-                    }
-                    if chars.get(scan) == Some(&'%') && chars.get(scan + 1) == Some(&')') {
-                        return true;
-                    }
-                }
-                index = end;
-            } else {
-                index += 1;
-            }
-        }
-        false
-    })
-}
-
 /// Settle both ends for `secs` (render/event quiescence).
 fn settle(secs: u64) {
     std::thread::sleep(Duration::from_secs(secs));
@@ -258,18 +222,11 @@ fn s2_reply_grid_pair() {
     settle(3);
     let ref_raw = rig.ref_tui.screen_text();
     let rust_raw = rig.rust_tui.screen_text();
-    // G-433 tripwire (W4 Important ①): the `(N%)` footer-usage mask in
-    // normalize_grid exists because ref resolves a model context limit
-    // for custom-provider models and the port does not. If ref stops
-    // carrying the group (or the port gains it), this assert goes red —
-    // retire replace_percent_group and compare the footer exactly.
-    let ref_has_percent = footer_percent_group(&ref_raw);
-    let rust_has_percent = footer_percent_group(&rust_raw);
-    assert!(
-        ref_has_percent && !rust_has_percent,
-        "G-433 tripwire: footer usage group ref={ref_has_percent} rust={rust_has_percent} — \
-         if the sides now agree, retire the percent mask in normalize_grid"
-    );
+    // G-433 CLOSED (gwave-1): the port's model listing now seeds
+    // base-less custom-provider models from the ref's
+    // `Model.Info.default` (limit context 200_000 / output 32_000) —
+    // both ends resolve the limit, the footer's `(N%)` group compares
+    // exactly (replace_percent_group retired from normalize_grid).
     let ref_grid = rig.normalize(&ref_raw);
     let rust_grid = rig.normalize(&rust_raw);
     dump_grid("s2-reply-ref", &ref_grid);
@@ -467,107 +424,34 @@ fn s5_sidebar_grid_pair() {
          ref={ref_ctx}) tokens={rust_tokens}; the sidebar usage matcher must mirror \
          util/session.ts:45-56 (no cache_read/retry conditions)"
     );
-    // G-433 pin (closure signal for the region mask): the port lacks
-    // the model-catalog context limit, so the percent row renders on
-    // ref only. When G-433 closes this goes red — register the row as
-    // exact-compareable inside the (then-retired) region mask.
+    // G-433 CLOSED (gwave-1): the port resolves the model-catalog
+    // context limit (`Model.Info.default` seeding), so `0% used`
+    // renders on BOTH ends.
     let rust_used = rust_grid.contains("% used");
     assert!(
-        !rust_used && ref_used,
-        "G-433 pin: the region mask assumed the port lacks the limit row \
-         (rust={rust_used}) while ref has it — if this is red, G-433 has closed: retire the \
-         sidebar region mask's percent exemption and compare the row exactly"
+        rust_used && ref_used,
+        "S5 RED: G-433 regression — the sidebar percent row must render on both ends \
+         (rust={rust_used} ref={ref_used}); the base-less custom-model seeding must keep \
+         the ref's default limit (schema/model.ts:146-158)"
     );
-    // G-435-residual pin (the retired mask's inheritor): the sidebar
-    // Context block is vertically offset — rust's Context title shares
-    // the hello row, ref's starts one row lower (pinned from the
-    // 2026-11-17 full-width dumps). While the region mask stays, this
-    // pin keeps its justification honest; when the alignment closes
-    // (both start on the same row) this goes red: retire the region
-    // mask + drop_blank_rows normalization and compare the full
-    // sidebar rows exactly.
+    // G-435-residual CLOSED (gwave-1): the sidebar's title box carries
+    // `paddingBottom={1}` (sidebar.tsx:34) — the content slot starts
+    // one blank row below the title on BOTH ends (the port painted the
+    // first section directly under the title). The section rows now
+    // align, so the sidebar-region column mask, the G-436
+    // border-count pin and the drop_blank_rows normalization all
+    // RETIRE — the full grid compares row-exact.
     let rust_context_on_hello =
         rust_grid.lines().any(|l| l.contains("Context") && l.contains("hello"));
     let ref_context_on_hello =
         ref_grid.lines().any(|l| l.contains("Context") && l.contains("hello"));
     assert!(
-        rust_context_on_hello && !ref_context_on_hello,
-        "G-435-residual pin: the sidebar region mask assumed rust's Context block \
-         starts one row higher (rust_on_hello={rust_context_on_hello} \
-         ref_on_hello={ref_context_on_hello}) — if this is red, the vertical alignment \
-         has closed: retire mask_right_columns + drop_blank_rows here and compare the \
-         full sidebar exactly"
+        !rust_context_on_hello && !ref_context_on_hello,
+        "G-435-residual regression: the Context title must sit one row below \
+         the title's padding row, never on the hello row (rust={rust_context_on_hello} \
+         ref={ref_context_on_hello}) — the sidebar title box's paddingBottom must stay"
     );
-    // G-436 CLOSED as an artifact (2026-11-17): the old `ref > rust`
-    // border-count signal was the sidebar Context row leaking through
-    // the column truncation as a bare-┃ row (it only existed while
-    // rust lacked the Context block). The left region's border-only
-    // row counts are now EQUAL on both ends; drop_blank_rows stays as
-    // a normalization for the truncation-induced border/blank rows
-    // (present on BOTH ends, count pinned > 0) and retires together
-    // with the region mask above.
-    let ref_border_rows = border_only_row_count(&mask_right_columns(&ref_grid, SIDEBAR_MASK_COL));
-    let rust_border_rows = border_only_row_count(&mask_right_columns(&rust_grid, SIDEBAR_MASK_COL));
-    assert!(
-        ref_border_rows == rust_border_rows && ref_border_rows > 0,
-        "G-436 pin: truncation-normalized border rows must be equal and present — \
-         ref={ref_border_rows} rust={rust_border_rows}; a change here means the \
-         sidebar block layout moved: re-pin from the dumps before retiring the mask"
-    );
-    let ref_left = drop_blank_rows(&mask_right_columns(&ref_grid, SIDEBAR_MASK_COL));
-    let rust_left = drop_blank_rows(&mask_right_columns(&rust_grid, SIDEBAR_MASK_COL));
-    assert_grids_match("s5-sidebar", &ref_left, &rust_left);
-}
-
-/// The S5 sidebar-region mask boundary (W4 Minor ②): at 160 cols the
-/// auto-docked right sidebar's left edge is ≈ col 109 (ref
-/// session-frame.tsx:106-110's `width - verticalTabsWidth > 120` dock
-/// rule; measured: the sidebar title renders from col 119 with its
-/// box padding from ≈109). Columns ≥ this value are masked on BOTH
-/// ends under G-435.
-const SIDEBAR_MASK_COL: usize = 108;
-
-/// Count border-only rows (the G-436 masked shape).
-fn border_only_row_count(grid: &str) -> usize {
-    grid.lines()
-        .filter(|line| {
-            let trimmed = line.trim();
-            !trimmed.is_empty() && trimmed.chars().all(|c| c == '┃')
-        })
-        .count()
-}
-
-/// Drop blank and border-only rows (G-436 wide-tier spacing mask).
-fn drop_blank_rows(grid: &str) -> String {
-    let mut out = String::new();
-    for line in grid.lines() {
-        let trimmed = line.trim();
-        let border_only = !trimmed.is_empty() && trimmed.chars().all(|c| c == '┃');
-        if trimmed.is_empty() || border_only {
-            continue;
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    out
-}
-
-/// Blank every column from `from` rightward (the S5 sidebar-region
-/// mask — held by the G-435-residual vertical-offset pin above).
-fn mask_right_columns(grid: &str, from: usize) -> String {
-    let mut out: Vec<String> = Vec::new();
-    for line in grid.lines() {
-        let count = line.chars().count();
-        let row: String = if count <= from {
-            line.to_owned()
-        } else {
-            line.chars().take(from).collect::<String>().trim_end().to_owned()
-        };
-        out.push(row);
-    }
-    let mut text = out.join("\n");
-    text.push('\n');
-    text
+    assert_grids_match("s5-sidebar", &ref_grid, &rust_grid);
 }
 
 // ---------------------------------------------------------------------------
@@ -600,17 +484,13 @@ fn s6_hot_reload_palette_grid_pair() {
     rig.write_both(b"\x18m");
     std::thread::sleep(Duration::from_millis(500));
     rig.write_both(b"claude-sonnet-4-6");
-    // G-437 tripwire (W4 Important ①): the mask below assumes the
-    // port's palette stays stale after the hot reload. If this assert
-    // goes red, G-437 has closed — retire mask_model and compare the
-    // palette rows exactly.
-    let rust_palette_stale =
-        !rig.rust_tui.wait_for(b"claude-sonnet-4-6", 0, Duration::from_secs(2));
-    assert!(
-        rust_palette_stale,
-        "G-437 tripwire: the port palette REFLECTED the hot-added model — \
-         retire mask_model and assert the row exactly"
-    );
+    // G-437 CLOSED (gwave-1): the TUI re-syncs the model/provider
+    // lists on the `model.updated`/`provider.updated`/
+    // `integration.updated`/`config.updated` inventory events (the
+    // ref's data.ts:1204-1210/1253-1257 invalidate+sync chain) — the
+    // palette reflects the hot-added model on BOTH ends; the rows
+    // compare exactly (mask_model retired).
+    let rust_open = rig.rust_tui.wait_for(b"claude-sonnet-4-6", 0, Duration::from_secs(10));
     let ref_open = rig.ref_tui.wait_for(b"claude-sonnet-4-6", 0, Duration::from_secs(30));
     settle(2);
     let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
@@ -623,36 +503,13 @@ fn s6_hot_reload_palette_grid_pair() {
         http_get(&format!("{}/api/model", rig.rust_server_url), rig.rust_password.as_deref())
             .unwrap_or((0, String::new()));
     drop(rig);
-    // G-437 (documented masking): the REF palette reflects the hot
-    // config edit through its native watcher; the PORT's palette does
-    // not re-list models after `/api/location/reload` (the server API
-    // does — see t9-6). Rows naming the hot-added model are masked on
-    // both ends until G-437 closes the TUI-side model-refresh gap.
-    let mask_model = |grid: &str| {
-        grid.lines()
-            .filter(|line| {
-                !line.contains("claude-sonnet-4-6") && !line.contains("No results found")
-            })
-            .map(<str>::to_owned)
-            .collect::<Vec<_>>()
-            .join("\n")
-            + "\n"
-    };
-    // G-437 masked-shape pin: the rust grid must still carry the stale
-    // palette's "No results found" row (the shape the mask exists for).
-    assert!(
-        rust_grid.contains("No results found"),
-        "G-437 tripwire: the stale-palette row shape is gone — the mask \
-         has nothing left to mask; retire it"
-    );
-    let ref_masked = mask_model(&ref_grid);
-    let rust_masked = mask_model(&rust_grid);
     assert!(
         (200..300).contains(&reload_status) && status == 200 && body.contains("claude-sonnet-4-6"),
         "S6 RED: reload={reload_status} model={status}; rust API body: {body}"
     );
     assert!(ref_open, "S6 RED: the ref palette never listed the hot-added model");
-    assert_grids_match("s6-hotreload", &ref_masked, &rust_masked);
+    assert!(rust_open, "S6 RED: the port palette never listed the hot-added model");
+    assert_grids_match("s6-hotreload", &ref_grid, &rust_grid);
 }
 
 // ---------------------------------------------------------------------------
@@ -965,14 +822,9 @@ fn t9_7_plugin_sidebar_pair() {
          ref={ref_n:?} (see /api/plugin and /api/mcp above)"
     );
     // The settled count is a grid assertion: both ends run the SAME
-    // plugins, so `⊙ N MCP` must agree row-exactly.
-    // Forensics first: what did each end load? The bodies are dumped
-    // above; the pair compare runs on the sidebar-visible 160-col grid
-    // with the documented S5 masks (the region mask is now held by the
-    // G-435-residual vertical-offset pin; see s5_sidebar_grid_pair).
-    let ref_left = drop_blank_rows(&mask_right_columns(&ref_grid, SIDEBAR_MASK_COL));
-    let rust_left = drop_blank_rows(&mask_right_columns(&rust_grid, SIDEBAR_MASK_COL));
-    assert_grids_match("t9-7-plugin", &ref_left, &rust_left);
+    // plugins, so `⊙ N MCP` must agree row-exactly. G-435-residual
+    // closed (gwave-1): the sidebar region compares unmasked.
+    assert_grids_match("t9-7-plugin", &ref_grid, &rust_grid);
 }
 
 // ===========================================================================
@@ -1038,15 +890,12 @@ fn p4_sidebar_deep_compare_pair() {
          (S5's mask assumed rust=false ref=true)"
     );
 
-    // Strict compare per state with the documented S5 masks (region mask
-    // held by the G-435-residual alignment pin — full-grid dumps above
-    // remain unmasked for the gap ledger).
+    // Strict compare per state — G-435-residual closed (gwave-1): the
+    // full grids (sidebar region included) compare row-exact.
     for (name, ref_grid, rust_grid) in
         [("p4-empty", &a_ref, &a_rust), ("p4-reply", &b_ref, &b_rust), ("p4-long", &c_ref, &c_rust)]
     {
-        let ref_left = drop_blank_rows(&mask_right_columns(ref_grid, SIDEBAR_MASK_COL));
-        let rust_left = drop_blank_rows(&mask_right_columns(rust_grid, SIDEBAR_MASK_COL));
-        assert_grids_match(name, &ref_left, &rust_left);
+        assert_grids_match(name, ref_grid, rust_grid);
     }
 }
 

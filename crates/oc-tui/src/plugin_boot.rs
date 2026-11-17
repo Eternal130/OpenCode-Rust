@@ -513,11 +513,27 @@ impl TuiPluginRuntime {
                             self.sidebar_claim_keys
                                 .borrow_mut()
                                 .insert(claim.plugin.clone(), claim.key.clone());
+                            // G-435-residual followup: the claim walk
+                            // flattens the slot column's OWN title-pad
+                            // row into the section's leading empties
+                            // (omo-slim's claim renders rows
+                            // ["","",content…]). The native slot origin
+                            // now paints that pad row (the sidebar
+                            // title's paddingBottom), so strip ONE
+                            // leading empty row or the pad renders
+                            // twice — the ref's Solid slot column shows
+                            // exactly one spacer above the payload's
+                            // first content row (channel-8
+                            // plugin-panel-open@320x80 oracle).
+                            let mut rows = spec.rows;
+                            if rows.first().is_some_and(String::is_empty) {
+                                rows.remove(0);
+                            }
                             store.set_plugin_sidebar_section(
                                 &crate::components::sidebar::SidebarSection {
                                     plugin_id: claim.plugin.clone(),
                                     title: spec.title,
-                                    rows: spec.rows,
+                                    rows,
                                     clickable: spec.clickable,
                                 },
                             );

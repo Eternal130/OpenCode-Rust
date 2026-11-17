@@ -159,27 +159,9 @@ fn text_at(x: usize, y: usize, text: impl Into<String>, style: Style) -> Placed 
     Placed { x, y, width, lines: vec![PlacedLine::plain(text, style)], tag: None }
 }
 
-/// The `metadata.files` array of an edit/patch tool
-/// (`parseApplyPatchFiles`) — `{relativePath, patch}` entries.
-fn metadata_files(metadata: Option<&serde_json::Value>) -> Vec<(String, String)> {
-    metadata
-        .as_ref()
-        .and_then(|value| value.get("files"))
-        .and_then(|files| files.as_array())
-        .map(|files| {
-            files
-                .iter()
-                .filter_map(|file| {
-                    Some((
-                        file.get("relativePath").or_else(|| file.get("path"))?.as_str()?.to_owned(),
-                        file.get("patch")?.as_str()?.to_owned(),
-                    ))
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
+/// The `metadata.files` array of an edit/patch tool is parsed by
+/// [`parse_apply_patch_files`] (the ref's `parseApplyPatchFiles`).
+///
 /// G-182 — one `parseApplyPatchFiles` entry (session/index.tsx:3535-
 /// 3559): `type` (or the `status` mapping added/deleted/modified →
 /// add/delete/update), the path, the patch and the line counts.
@@ -397,9 +379,17 @@ fn shell_block(
     RowRender { placed, fills, height, images: Vec::new() }
 }
 
-/// G-182 — the per-file patch rows shared by the edit card and the
-/// apply-patch cards: the hunk headers + gutter-numbered `+`/`−`
-/// rows (the edit block's body, `PatchDiff`).
+/// G-441/G-182 — the per-file patch rows shared by the edit card and
+/// the apply-patch cards: the unified `PatchDiff` body. The layout
+/// mirrors the ref's `LineNumberRenderable` gutter (verified against
+/// the pinned opentui `Diff.test.ts` snapshots + a live 120-col probe
+/// of the ref edit card): `[1 pad][num right-aligned d][2-wide sign
+/// column][1 pad][content]` — the sign column carries ` -` / ` +` and
+/// stays blank for context rows, whose number is the NEW line number
+/// (`Diff.ts` `buildUnifiedView`: context sets `newLineNum`). The
+/// hunk `@@` header renders ONLY BETWEEN hunks (`PatchDiff`'s
+/// `<Show when={index() > 0}>` header box — a single-hunk patch has
+/// no header row at all).
 fn patch_hunk_rows(
     hunks: &[crate::components::diff_viewer::Hunk],
     theme: &ThemeStyles,
@@ -410,46 +400,40 @@ fn patch_hunk_rows(
         .iter()
         .flat_map(|hunk| hunk.rows.iter())
         .map(|row| match row {
-            PatchRow::Context { old, .. } | PatchRow::Deleted { old, .. } => *old,
-            PatchRow::Added { new, .. } => *new,
+            PatchRow::Context { new, .. } | PatchRow::Added { new, .. } => *new,
+            PatchRow::Deleted { old, .. } => *old,
         })
         .max()
         .unwrap_or(0)
+        .max(1)
         .to_string()
-        .len()
-        .max(1);
+        .len();
     let mut rows: Vec<Vec<Placed>> = Vec::new();
-    for hunk in hunks {
-        rows.push(vec![text_at(
-            0,
-            0,
-            hunk.header.clone(),
-            Style::new().fg(theme.diff.hunk_header).bg(raised),
-        )]);
+    for (index, hunk) in hunks.iter().enumerate() {
+        if index > 0 {
+            rows.push(vec![text_at(
+                1,
+                0,
+                hunk.header.clone(),
+                Style::new().fg(theme.diff.hunk_header).bg(raised),
+            )]);
+        }
         for row in &hunk.rows {
             match row {
-                PatchRow::Context { old, new, text } => {
+                PatchRow::Context { new, text, .. } => {
                     rows.push(vec![
                         text_at(
+                            2,
                             0,
-                            0,
-                            format!("{old:>digits$}"),
+                            format!("{new:>digits$}"),
                             Style::new()
                                 .fg(theme.diff.line_number)
                                 .bg(theme.diff.background_context),
                         ),
                         text_at(
-                            digits,
+                            digits + 5,
                             0,
-                            format!(" {new:>digits$}"),
-                            Style::new()
-                                .fg(theme.diff.line_number)
-                                .bg(theme.diff.background_context),
-                        ),
-                        text_at(
-                            digits * 2 + 1,
-                            0,
-                            format!(" {text}"),
+                            text.clone(),
                             Style::new().fg(base).bg(theme.diff.background_context),
                         ),
                     ]);
@@ -457,7 +441,7 @@ fn patch_hunk_rows(
                 PatchRow::Deleted { old, text } => {
                     rows.push(vec![
                         text_at(
-                            0,
+                            2,
                             0,
                             format!("{old:>digits$}"),
                             Style::new()
@@ -465,9 +449,15 @@ fn patch_hunk_rows(
                                 .bg(theme.diff.background_removed),
                         ),
                         text_at(
-                            digits * 2 + 1,
+                            digits + 3,
                             0,
-                            format!("-{text}"),
+                            "-",
+                            Style::new().fg(base).bg(theme.diff.background_removed),
+                        ),
+                        text_at(
+                            digits + 5,
+                            0,
+                            text.clone(),
                             Style::new().fg(base).bg(theme.diff.background_removed),
                         ),
                     ]);
@@ -475,15 +465,21 @@ fn patch_hunk_rows(
                 PatchRow::Added { new, text } => {
                     rows.push(vec![
                         text_at(
-                            digits,
+                            2,
                             0,
-                            format!(" {new:>digits$}"),
+                            format!("{new:>digits$}"),
                             Style::new().fg(theme.diff.line_number).bg(theme.diff.background_added),
                         ),
                         text_at(
-                            digits * 2 + 1,
+                            digits + 3,
                             0,
-                            format!("+{text}"),
+                            "+",
+                            Style::new().fg(base).bg(theme.diff.background_added),
+                        ),
+                        text_at(
+                            digits + 5,
+                            0,
+                            text.clone(),
                             Style::new().fg(base).bg(theme.diff.background_added),
                         ),
                     ]);
@@ -527,6 +523,9 @@ fn apply_patch_block(state: &ToolState, theme: &ThemeStyles, width: usize) -> Ro
             0,
             vec![text_at(0, 0, format!("{label} {}", file.relative_path), theme.text_muted)],
         );
+        // `BlockTool`'s gap-1 children: one blank row between the
+        // label and the body (same stack as the edit card).
+        rows.insert(1, vec![]);
         let card_render = block_from_rows(&rows, theme, width);
         card = Some(match card {
             Some(stack) => crate::components::message::rows::stack_rows(stack, card_render),
@@ -543,8 +542,14 @@ fn edit_block(state: &ToolState, theme: &ThemeStyles, width: usize) -> RowRender
     let raised = theme.background_raised;
     let muted = theme.text_muted;
     let base = theme.text.fg.unwrap_or(theme.background);
-    let files = metadata_files(state.metadata_json.as_ref());
-    let Some((file_path, patch)) = files.first().cloned() else {
+    // G-441 — the ref's `Edit` parses the file entry through
+    // `parseApplyPatchFiles(metadata.files)` (index.tsx:3254): the
+    // engine's `FileDiff.Info` carries `file`/`patch`/`additions`/
+    // `deletions`/`status`, and an entry missing any of them drops —
+    // the old `relativePath`-only reader never matched the engine
+    // shape, so the card always fell back to the preparing title.
+    let files = parse_apply_patch_files(state.metadata_json.as_ref());
+    let Some(file) = files.first() else {
         // Preparing edit — the title-only BlockTool.
         let pending = state.input.get("path").cloned().unwrap_or_default();
         let height = 3;
@@ -579,9 +584,12 @@ fn edit_block(state: &ToolState, theme: &ThemeStyles, width: usize) -> RowRender
             images: Vec::new(),
         };
     };
-    let hunks = parse_patch(&patch);
+    let hunks = parse_patch(&file.patch);
+    // `BlockTool`'s gap-1 children: the path row, one blank row, then
+    // the `PatchDiff` body (the ref probe's `← Edit …` / blank /
+    // `    1 - …` stack).
     let mut rows: Vec<Vec<Placed>> =
-        vec![vec![text_at(0, 0, format!("← Edit {file_path}"), muted)]];
+        vec![vec![text_at(0, 0, format!("← Edit {}", file.relative_path), muted)], vec![]];
     rows.extend(patch_hunk_rows(&hunks, theme, raised, base));
     block_from_rows(&rows, theme, width)
 }
@@ -1305,24 +1313,60 @@ mod tests {
 
     #[test]
     fn edit_block_renders_the_patch_hunks() {
+        // G-441: the ENGINE FileDiff shape (`file` key + counts +
+        // status) — the shape `parseApplyPatchFiles` accepts.
         let state = state_with(
             ToolStatus::Completed,
             &[("path", "src/a.rs")],
             None,
             Some(serde_json::json!({
                 "files": [{
-                    "relativePath": "src/a.rs",
-                    "patch": "@@ -1,2 +1,2 @@\n context\n-old\n+new"
+                    "file": "src/a.rs",
+                    "patch": "@@ -1,2 +1,2 @@\n context\n-old\n+new",
+                    "additions": 1,
+                    "deletions": 1,
+                    "status": "modified"
                 }]
             })),
         );
         let row = tool_detail_row("edit", &state, false, 0, true, &theme(), 60);
         let grid = frame_of(&row).text_grid();
         assert!(grid[1].trim_start().contains("← Edit src/a.rs"), "{}", grid[1]);
-        assert!(grid[2].contains("@@ -1,2 +1,2 @@"), "hunk header: {}", grid[2]);
-        assert!(grid[3].contains("context"), "{}", grid[3]);
-        assert!(grid[4].contains("-old"), "{}", grid[4]);
-        assert!(grid[5].contains("+new"), "{}", grid[5]);
+        // The gap-1 child row under the label (the rail only).
+        assert_eq!(grid[2].trim(), "┃", "the blank child gap: {}", grid[2]);
+        // Single-hunk patch: NO `@@` header row (the ref renders
+        // headers only BETWEEN hunks).
+        let body = grid[3..6].join("\n");
+        assert!(!body.contains("@@"), "no first-hunk header: {body}");
+        // The unified gutter: `[pad][num][sign-col][pad]content`.
+        assert!(grid[3].contains("1   context"), "{}", grid[3]);
+        assert!(grid[4].contains("2 - old"), "{}", grid[4]);
+        assert!(grid[5].contains("2 + new"), "{}", grid[5]);
+    }
+
+    #[test]
+    fn edit_block_renders_between_hunk_headers() {
+        let state = state_with(
+            ToolStatus::Completed,
+            &[("path", "src/a.rs")],
+            None,
+            Some(serde_json::json!({
+                "files": [{
+                    "file": "src/a.rs",
+                    "patch": "@@ -1,2 +1,2 @@\n ctx\n-old\n+new\n@@ -6,2 +6,2 @@\n ctx2\n-old2\n+new2\n",
+                    "additions": 1,
+                    "deletions": 1,
+                    "status": "modified"
+                }]
+            })),
+        );
+        let row = tool_detail_row("edit", &state, false, 0, true, &theme(), 60);
+        let text = frame_of(&row).text_grid().join("\n");
+        // Only ONE header row (between the hunks), carrying the second
+        // hunk's raw `@@` line.
+        let header_rows = text.lines().filter(|l| l.contains("@@ -") || l.contains("@@+")).count();
+        assert_eq!(header_rows, 1, "between-hunk header only: {text}");
+        assert!(text.contains("@@ -6,2 +6,2 @@"), "{text}");
     }
 
     #[test]
@@ -1401,8 +1445,8 @@ mod tests {
         assert!(text.contains("# Created src/b.rs"), "{text}");
         assert!(text.contains("# Deleted src/c.rs"), "{text}");
         // Each card keeps its own hunks/counts.
-        assert!(text.contains("+new"), "card 1 hunks: {text}");
-        assert!(text.contains("+fresh"), "card 2 hunks: {text}");
+        assert!(text.contains("- old"), "card 1 hunks: {text}");
+        assert!(text.contains("+ fresh"), "card 2 hunks: {text}");
         assert!(text.contains("-3 lines"), "the delete count row: {text}");
         // Three separate BlockTool cards stack (one raised fill each).
         assert_eq!(row.fills.len(), 3, "three cards");
