@@ -3486,10 +3486,13 @@ realchain pair+t9 **28/28**（含新 t9_8；修复前 t9_8 RED 实证）；oc-tu
 - **Port**：edit.rs:380/449 产出的 FileDiff 元数据在位（引擎侧文件终态 byte-exact、tool_result 正常），但 TUI 工具行只渲染 "← Edit README.md" 折叠行，无 diff 预览行（连带 3 行高差把 ref 视口多滚一行）。
 - **处置**：tl_tool_loop_pair 以带退役绊线的掩码登记（绊线钉死 ref 有/port 无；port 补齐投影即红→撤掩码全 grid 对拍）。
 
-## G-442 🟡 shell 工具行快速完成时偶发不投影输出行（tui）
+## G-442 ✅ 已修关（W9 定根）：shell 工具行快完成偶发不投影输出行（tui）——真身=会话开页 message.sync 快照以旧压新
 
-- **现象**：tl 对拍中 port 的 shell 工具行 ~50% run 保持运行 spinner、输出行不上屏——而引擎侧结果**正确**（turn-1 请求 digest 与录制（含 shim 输出的 tool_result）一致证毕），命令 ~100ms 内完成时 TUI 行投影竞态。对称 repaint nudge（空 composer 右方向键）后输出行出现。
-- **待查方向**：shell part 完成/输出事件的行订阅与首帧渲染间的 dirty 失效缺失；复现器=tl_tool_loop_pair（nudge 前的 fail dump）。
+- **现象（原登记）**：tl 对拍中 port 的 shell 工具行 ~50% run 保持运行 spinner、输出行不上屏——而引擎侧结果**正确**（turn-1 请求 digest 与录制一致证毕）；本地 nudge 可救 ~全部，CI（慢 runner，run 44061563484）nudge 后仍红（45s 等待全超时，fail dump=spinner 行 + 缺折叠输出，footer 有 turn 统计）。
+- **W9 取证（env 门控 ingest trace，`OC_TUI_TRACE`）**：本地 instant 档 ×10 复现 2 红，两红 trace 均含 `downgrade source=snapshot … Completed -> Running/Streaming`——**会话开页的 `message.list` HTTP 快照（Ingest::MessagesSnapshot）在 turn 进行中发出、服务端在工具 running 时刻序列化、客户端在 `session.tool.success` 落地之后回放**，整体替换掉同 id assistant 消息 → 工具 part 永久回退 running（该 turn 再无事件纠正）。快 runner 上快照几乎总在 settle 前落地（后续事件覆盖掉），慢 runner 上延迟拉长越过全部 settle → nudge（纯 repaint）无救。~100ms 快完成相关性=完成越快、settle 越早、被越过概率越大。
+- **修复（产品面，store.rs）**：`local_is_fresher`/`prefer_fresher_local` —— 快照/resync 合并的单调规则：同 id assistant 本地副本携带**严格更晚的完成时间戳**（envelope+全部 part 的 max completion）时不被快照替换；平手/未知仍取快照（水合与 G11-F1 重叠守卫语义不变）。MessagesSnapshot 与 set_messages（Resync 整体替换）两路同守。回归测试 `snapshot_merge_never_regresses_a_settled_tool_part`。
+- **验证**：修复后 instant 档 ×12 全绿（其中 5/12 trace 仍见原始快照竞态、全部被单调合并吸收）+ tl --exact 终轮 ×10 绿 + realchain 35/35 ×2 + 合并门 2303/2303 + 通道 8 exit 0 全 exact。nudge 机制保留（对其它渲染面仍是无害兜底）。
+- **勘注**：tl 慢档（T9_PACE synthetic）不适用本 lane 对拍——工具环内容正确（折叠输出在屏），仅 spinner 帧相位与 footer 用量行两处瞬态漂移；保真档归 P1-P3。`spawn_turn` 显式钉 instant（W9）。CI 首绿佐证留控制者。
 
 W6 评审 4 Minor 清偿：①t9_8 整测试体持 armed 守护（ServiceClean 至显式 service_stop 后 disarm）②圈选透明 bg 边缘色差对齐 ref 不透明黑（paint_highlight 交换前置 Default→Rgb(0,0,0)）③G-128 补 0-anchor 首观锚测试退役勘注④INDEX 通道 9 行加 t9_8 单端性质脚注。
 
@@ -3506,3 +3509,11 @@ W6 评审 4 Minor 清偿：①t9_8 整测试体持 armed 守护（ServiceClean �
 - **语料管线**：`tools/diff/realchain/corpus_age.sh`（encrypt/decrypt，公钥模式：CI 只持公钥可加密不可解密）+ `corpus/README-CI.md` 摄取规范（过滤 truncated/失败交互+去敏感人工抽检）+ `recorded_local` 守卫扩展：`corpus/encrypted/` 下只许 `*.tar.age` 入库（明文 cassette=红）。加密包入 git（目录不 ignore）。
 - **插件供给持久化**（W5 concern①/t9_7 flake 面）：payload 从 `/tmp/opencode/plugin-payload` 挪至仓内 git-ignored `tools/diff/realchain/plugin-payload/`（`T9_PLUGIN_PAYLOAD_ROOT` 可覆写；供给脚本 `fetch_plugin_payload.sh` 从宿主 `~/.cache/opencode` npm/git 安装键铸）。CI 插件来源=加密 bundle 可选携带 `plugin-payload/`（实现面最小的方案；缺省=T9-7 在 CI 维持 skip）。
 - **登记性说明**：①`T9_PACE` env 钩子（`Gateway::spawn`/pair_rig 默认档=env 覆写，保真档场景 P1-P3 显式传参不受影响）；②`opencode_bin()` 尊重 `CARGO_TARGET_DIR`（lane 复用兄弟 worktree 构建缓存时的二进制定位）；③workflow 首触发待控制者审后手动执行（本轮未实跑 CI）。
+
+# 第二十六轮（W9：tl CI 红定根修复，2026-11-17）
+
+- **G-442 修关**（根因/修复/验证详见 G-442 条目）：会话开页 `message.sync` 快照以旧压新（服务端 mid-turn 序列化 + 客户端 settle 后落地）→ 工具 part 永久回退 running（wedged spinner/缺折叠输出）；修复=快照/resync 合并的单调规则（`local_is_fresher`，store.rs）；本地 instant 档 2/10 复现、修复后 ×12+终轮 ×10 全绿。
+- **s3 选中点等待硬化（harness 面）**：e95ef235 加的 raw 字节等待（`● <model>` 连续字节）在点与文本分写（光标跳+SGR 分段）时不命中——本地 4/4 红而 settled dump 恒有点；改为轮询 VT 解析后 grid（`screen_text`），双端同改。
+- **取证钩子（env 门控、缺省零开销）**：`OC_TUI_TRACE`（store ingest trace：tool-settle 落地+快照/resync 降级事件）与 `OC_TUI_DEBUG_MESSAGES`（退出时 dump 全会话消息树）。
+- **通道 8 直跑勘注**：`tui_fullscreen.py` 的 npm cache 路径原硬编码 `/root/.cache/opencode/npm`（eternal130 直跑不可达）→ `OC_DIFF_NPM_CACHE` env 覆写；nested dev-gate 以外层 `OPENCODE_DEV_GATE=1` + CPU/Mem 配额 scope 直跑（2.2#9 模式补全）。
+- **已知瞬态**：s5 TRY1 G-435 绊线红（侧栏 Context 块 rig 依赖面，重试绿，非回归）；corpus-w5 seeds 每次回放重写 recordedAt（生成性 dirt，禁提交）。

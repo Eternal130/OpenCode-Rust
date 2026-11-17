@@ -452,6 +452,12 @@ impl Gateway {
             tool_corpus,
             record_dir.as_deref(),
             seed_turns.as_deref(),
+            // The lane's pinned grids are INSTANT-pace only (W9: a
+            // T9_PACE slow tier streams the same content correctly
+            // but shifts the spinner-frame phase and the footer
+            // usage row — paced-grid fidelity is the P1-P3 lane's
+            // surface, not this one), so the pace is pinned here and
+            // deliberately ignores the T9_PACE override.
             "instant",
             "turn",
         )
