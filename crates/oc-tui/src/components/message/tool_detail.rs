@@ -448,7 +448,12 @@ fn patch_hunk_rows(
                                 .fg(theme.diff.line_number)
                                 .bg(theme.diff.background_removed),
                         ),
-                        text_at(digits + 3, 0, "-", Style::new().fg(base).bg(theme.diff.background_removed)),
+                        text_at(
+                            digits + 3,
+                            0,
+                            "-",
+                            Style::new().fg(base).bg(theme.diff.background_removed),
+                        ),
                         text_at(
                             digits + 5,
                             0,
@@ -465,7 +470,12 @@ fn patch_hunk_rows(
                             format!("{new:>digits$}"),
                             Style::new().fg(theme.diff.line_number).bg(theme.diff.background_added),
                         ),
-                        text_at(digits + 3, 0, "+", Style::new().fg(base).bg(theme.diff.background_added)),
+                        text_at(
+                            digits + 3,
+                            0,
+                            "+",
+                            Style::new().fg(base).bg(theme.diff.background_added),
+                        ),
                         text_at(
                             digits + 5,
                             0,
@@ -1354,8 +1364,7 @@ mod tests {
         let text = frame_of(&row).text_grid().join("\n");
         // Only ONE header row (between the hunks), carrying the second
         // hunk's raw `@@` line.
-        let header_rows =
-            text.lines().filter(|l| l.contains("@@ -") || l.contains("@@+")).count();
+        let header_rows = text.lines().filter(|l| l.contains("@@ -") || l.contains("@@+")).count();
         assert_eq!(header_rows, 1, "between-hunk header only: {text}");
         assert!(text.contains("@@ -6,2 +6,2 @@"), "{text}");
     }

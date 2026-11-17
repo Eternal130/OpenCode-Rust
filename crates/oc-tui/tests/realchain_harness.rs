@@ -1631,7 +1631,6 @@ fn replace_id_shapes(row: &str) -> String {
     result
 }
 
-
 fn replace_clocks(row: &str) -> String {
     let chars: Vec<char> = row.chars().collect();
     let is_digit =
