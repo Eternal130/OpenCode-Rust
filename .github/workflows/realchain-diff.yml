@@ -182,6 +182,12 @@ jobs:
             echo "CORPUS_AGE_PUBKEY secret absent: skipping encrypted artifacts (raw dumps stay on the ephemeral runner)"
             exit 0
           fi
+          # Runners ship no age — install the pinned binary (the corpus_age.sh hint line, verbatim).
+          if ! command -v age >/dev/null 2>&1; then
+            curl -sL https://github.com/FiloSottile/age/releases/download/v1.2.1/age-v1.2.1-linux-amd64.tar.gz | tar xz -C /tmp/opencode --strip-components=1 age/age age/age-keygen
+            install -m755 /tmp/opencode/age /tmp/opencode/age-keygen /usr/local/bin/
+            age --version
+          fi
           OUT=/tmp/opencode/realchain-results
           mkdir -p "$OUT"
           cp -a /tmp/opencode/t9w1-* "$OUT"/ 2>/dev/null || true
