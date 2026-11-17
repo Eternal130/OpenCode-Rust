@@ -4213,3 +4213,142 @@ async fn g284_wellknown_registers_login_command_and_prefers_nested_config() {
     assert!(text.contains("acme-nested"), "{text}");
     assert!(!text.contains("\"config\""), "the wrapper is not the document: {text}");
 }
+
+// ---------------------------------------------------------------------------
+// G-445 — credential serde shape parity with v2 (schema/credential.ts).
+// v2 writes camelCase `methodID`; rust used to require `method_id`, so
+// every migrated v2 OAuth row failed decode → fail-the-read (G-225) →
+// `/api/integration` 500. Structural shape from the beta.18 forensics
+// row; all secret values are placeholders (real ciphertext never enters
+// the tree).
+// ---------------------------------------------------------------------------
+
+mod g445_credential_serde {
+    use super::super::types::{CredentialValue, KeyValue, OAuthValue};
+    use serde_json::json;
+
+    /// v2 shape (forensics-anthropic-row.json structure, scrubbed).
+    const V2_OAUTH_ROW: &str = r#"{
+        "type": "oauth",
+        "methodID": "oauth",
+        "refresh": "PLACEHOLDER_REFRESH",
+        "access": "PLACEHOLDER_ACCESS",
+        "expires": 1774028650442
+    }"#;
+
+    #[test]
+    fn v2_oauth_shape_with_method_id_camelcase_decodes() {
+        let value: CredentialValue =
+            serde_json::from_str(V2_OAUTH_ROW).expect("v2 oauth row decodes");
+        let CredentialValue::OAuth(oauth) = &value else { panic!("oauth variant") };
+        assert_eq!(oauth.method_id, "oauth");
+        assert_eq!(oauth.refresh, "PLACEHOLDER_REFRESH");
+        assert_eq!(oauth.expires, 1_774_028_650_442);
+    }
+
+    #[test]
+    fn rust_written_snake_case_row_decodes_via_alias() {
+        let row = json!({
+            "type": "oauth",
+            "method_id": "legacy-method",
+            "refresh": "r",
+            "access": "a",
+            "expires": 0
+        });
+        let value: CredentialValue =
+            serde_json::from_value(row).expect("legacy snake_case row decodes via alias");
+        let CredentialValue::OAuth(oauth) = &value else { panic!("oauth variant") };
+        assert_eq!(oauth.method_id, "legacy-method");
+    }
+
+    #[test]
+    fn round_trip_serializes_camelcase_method_id() {
+        let value = CredentialValue::OAuth(OAuthValue {
+            method_id: "oauth".into(),
+            refresh: "r".into(),
+            access: "a".into(),
+            expires: 42,
+            metadata: None,
+        });
+        let wire = serde_json::to_value(&value).expect("serialize");
+        assert_eq!(wire["methodID"], "oauth");
+        assert!(wire.get("method_id").is_none(), "wire is camelCase only: {wire}");
+        // …and reads straight back.
+        let back: CredentialValue = serde_json::from_value(wire).expect("round trip");
+        assert_eq!(back, value);
+    }
+
+    #[test]
+    fn key_rows_are_unaffected() {
+        let row = json!({
+            "type": "key",
+            "key": "sk-placeholder",
+            "metadata": {"origin": "manual"}
+        });
+        let value: CredentialValue = serde_json::from_value(row).expect("key row decodes");
+        let CredentialValue::Key(key) = &value else { panic!("key variant") };
+        assert_eq!(key.key, "sk-placeholder");
+        assert_eq!(key.metadata.as_ref().unwrap()["origin"], "manual");
+    }
+
+    /// Full-row matrix: the four credential row shapes the store reads
+    /// (key / oauth-methodID / oauth-method_id / oauth+metadata).
+    #[test]
+    fn row_shape_matrix_decodes() {
+        let cases: Vec<(&str, serde_json::Value)> = vec![
+            ("key", json!({"type": "key", "key": "k"})),
+            (
+                "oauth-methodID",
+                json!({
+                    "type": "oauth", "methodID": "m", "refresh": "r", "access": "a", "expires": 1
+                }),
+            ),
+            (
+                "oauth-method_id",
+                json!({
+                    "type": "oauth", "method_id": "m", "refresh": "r", "access": "a", "expires": 1
+                }),
+            ),
+            (
+                "oauth-with-metadata",
+                json!({
+                    "type": "oauth", "methodID": "m", "refresh": "r", "access": "a",
+                    "expires": 1, "metadata": {"k": "v"}
+                }),
+            ),
+        ];
+        for (name, row) in cases {
+            let value: CredentialValue =
+                serde_json::from_value(row).unwrap_or_else(|e| panic!("{name}: {e}"));
+            match &value {
+                CredentialValue::OAuth(o) => {
+                    assert_eq!(o.method_id, "m");
+                    assert_eq!(o.expires, 1);
+                }
+                CredentialValue::Key(k) => assert_eq!(k.key, "k"),
+            }
+        }
+    }
+
+    /// `oc-schema`'s `CredentialValue` (the canonical wire crate) and
+    /// oc-core's must agree on the camelCase field — dual-definition
+    /// drift guard (G-445 audit).
+    #[test]
+    fn oc_schema_counterpart_accepts_same_oauth_row() {
+        let schema_value: oc_schema::integration::CredentialValue =
+            serde_json::from_str(V2_OAUTH_ROW).expect("oc-schema decodes the same v2 row");
+        let oc_schema::integration::CredentialValue::Oauth { method_id, .. } = &schema_value else {
+            panic!("oauth variant")
+        };
+        assert_eq!(method_id.as_str(), "oauth");
+    }
+
+    /// A `KeyValue` round-trips with optional fields skipped when `None`.
+    #[test]
+    fn key_round_trip_skips_optionals() {
+        let value =
+            CredentialValue::Key(KeyValue { key: "k".into(), metadata: None, configuration: None });
+        let wire = serde_json::to_value(&value).expect("serialize");
+        assert_eq!(wire, json!({"type": "key", "key": "k"}));
+    }
+}
