@@ -51,8 +51,9 @@
 //!   load is legitimate; a stuck one is not), and the never-connect
 //!   test (`…_pill_never_connect_resolves_locally`) pins the ref's
 //!   divergence case — the pill resolves (flip + shown+3 s unmount)
-//!   while the server NEVER connects and only the Reconnecting
-//!   overlay persists above it.
+//!   while the server NEVER connects and the screen stays clean of
+//!   the lost overlay (W6 症状①: it arms only after the first
+//!   successful connect).
 
 // Terminal coordinates are u16 by VT definition; harness instants are
 // bounded magnitudes — the truncation lints add nothing here.
@@ -981,11 +982,11 @@ fn hold_forever(
 /// 500 ms display threshold), flip to "Finishing startup…" when the
 /// boot future resolves (the failure arm: the bogus plugin target
 /// fails resolve, no runtime), unmount by shown+3 s — while the
-/// Reconnecting overlay appears over the never-connecting boot at the
-/// end of the initial state's 5 s design grace (store.rs:9299 — the
-/// 0-init anchor latches at the first observation) and PERSISTS
-/// above the pill-free screen, layered exactly like the ref
-/// (`StartupLoading` zIndex 5000 under Reconnecting 10000).
+/// screen stays CLEAN of the Reconnecting overlay for the whole
+/// never-connected window (W6 症状①: the lost overlay arms only after
+/// the FIRST successful connect — the ref health-gates the daemon
+/// pre-mount and its managed copy reads "Restarting service…", never
+/// the boot-window "Connection lost…" flash).
 /// The never-connect sampler's payload: the pill phase timeline
 /// (ms since boot, phase) and the Reconnecting overlay presence
 /// timeline (ms since boot, seen).
@@ -1087,37 +1088,23 @@ fn vt_temporal_startup_loading_pill_never_connect_resolves_locally() {
         "the pill held past shown+3 s ({last_pill} ms > {show_at} + 3400) under a never-connecting \
          server"
     );
-    // (c) the Reconnecting overlay: it APPEARS over the never-
-    // connecting boot once the G-300 connect window (2 s, ref
-    // `connectTimeout`) aborts the hung subscribe — the state flips to
-    // Reconnecting{2} at ~2.5 s (window + backoff) and the overlay's
-    // 1 s reconnecting threshold (store.rs:9299 — the 0-init
-    // `connection_since` anchor latches at the first transition)
-    // surfaces it. Before G-300 the subscribe hung forever, so the
-    // overlay could only ride the initial state's 5 s grace; the
-    // watchdog now transitions first (ref parity: the ref aborts the
-    // connect at 2 s and reports reconnecting) — and it PERSISTS (the
-    // handshake never lands).
+    // (c) the Reconnecting overlay: W6 症状① — a NEVER-connected boot
+    // stays clean, no matter how long the handshake stalls or how
+    // many G-300 connect-window retries trip. The pre-W6 port flashed
+    // "Connection lost…" here (the beta.15/16 user-visible symptom);
+    // the ref never shows that copy in this window: its CLI
+    // health-gates the daemon before the TUI mounts
+    // (server-connection.ts:46-50, ensure polls up to 120 s) and its
+    // managed-mode overlay reads "Restarting service…"
+    // (reconnecting.tsx:9-20) — so the port suppresses the lost
+    // overlay until the FIRST successful connect (store.rs
+    // `connection_ever_connected`).
     let overlay_at = overlay.iter().find(|(_, seen)| *seen).map_or(u64::MAX, |(t, _)| *t);
     assert!(
-        overlay_at != u64::MAX,
-        "the Reconnecting overlay never appeared — the never-connecting server must surface it"
-    );
-    assert!(
-        overlay_at >= 2_000,
-        "the Reconnecting overlay appeared at {overlay_at} ms, before the 2 s G-300 connect \
-         window elapsed — the anchor must latch at the first transition, not read as \
-         already-expired"
-    );
-    let late_gaps: Vec<u64> = overlay
-        .iter()
-        .filter(|(t, seen)| *t > overlay_at + 400 && !seen)
-        .map(|(t, _)| *t)
-        .collect();
-    assert!(
-        late_gaps.is_empty(),
-        "the Reconnecting overlay did not persist once shown (missing at {late_gaps:?})"
+        overlay_at == u64::MAX,
+        "the Reconnecting overlay appeared at {overlay_at} ms over a NEVER-connected boot — \
+         W6 症状①: the boot window must stay clean until the first successful connect"
     );
     let (_, last_seen) = *overlay.last().expect("overlay samples");
-    assert!(last_seen, "the Reconnecting overlay was absent at the window's end");
+    assert!(!last_seen, "the Reconnecting overlay was present at the window's end");
 }

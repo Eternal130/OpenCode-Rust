@@ -61,7 +61,17 @@ fn rig_cols(tag: &str, record: bool, cols: u16) -> Rig {
     let box_ = sandbox(tag, gateway.port);
     box_.write_config(&[], "replay/claude-opus-4-7");
     let server = service_start(&box_);
-    let tui = TuiProcess::spawn(&box_, cols, ROWS);
+    // W6 harness hardening: a panic between the daemon start and the
+    // Rig taking ownership must still stop the daemon (the pair lane
+    // covered its own window; the T9 rig builds the TUI after the
+    // daemon — this guard owns the gap, scoped so the Rig's own Drop
+    // takes over before the borrow ends).
+    let tui = {
+        let mut daemon_clean = realchain_harness::ServiceClean::new(&box_);
+        let tui = TuiProcess::spawn(&box_, cols, ROWS);
+        daemon_clean.disarm();
+        tui
+    };
     Rig {
         _lane: lane,
         sandbox: box_,
@@ -290,4 +300,67 @@ fn t9_6_config_hot_reload_updates_models() {
         (200..300).contains(&reload_status) && status == 200 && body.contains("claude-sonnet-4-6"),
         "T9-6 RED: reload={reload_status} model={status}; body: {body}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// W6 症状① — T9-8: the slow-boot window. A daemon that is HEALTHY on
+// /api/info (the CLI's ensure gate passes, the TUI mounts) but holds
+// the event stream's first frame (`OPENCODE_TEST_SSE_FIRST_FRAME_DELAY_MS`,
+// the deterministic stand-in for the real machine's slow config/plugin/
+// model load): the TUI's SSE connect window trips at 2 s (ref
+// connection.ts:32) and the machine churns Connecting→Reconnecting —
+// the boot window must stay CLEAN of the lost overlay the whole way
+// (ref anchors: the managed copy is "Restarting service…"
+// reconnecting.tsx:9-20 and the ref CLI health-gates pre-mount,
+// server-connection.ts:46-50 — the beta.15/16 port flashed
+// "Connection lost…" here). RED pre-fix (the overlay surfaced ~3 s
+// in), GREEN post-fix (store.rs `connection_ever_connected`).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn t9_8_slow_boot_window_stays_clean_of_connection_lost() {
+    use realchain_harness::service_start_with_env;
+    let lane = lane_lock();
+    let gateway = Gateway::spawn("t9-8", None);
+    let box_ = sandbox("t9-8", gateway.port);
+    box_.write_config(&[], "replay/claude-opus-4-7");
+    let server = service_start_with_env(
+        &box_,
+        &[("OPENCODE_TEST_SSE_FIRST_FRAME_DELAY_MS".to_owned(), "6000".to_owned())],
+    );
+    let mut daemon_clean = realchain_harness::ServiceClean::new(&box_);
+    let mut tui = TuiProcess::spawn(&box_, COLS, ROWS);
+    daemon_clean.disarm();
+    drop(daemon_clean);
+    // The boot window: poll the rendered screen for 12 s (the 6 s
+    // first-frame hold + margins) — the raw stream check catches even
+    // a one-frame flash of the overlay.
+    let boot_start = std::time::Instant::now();
+    let mut flash: Option<String> = None;
+    while boot_start.elapsed() < std::time::Duration::from_secs(12) {
+        let screen = tui.screen_text();
+        if screen.contains("Connection lost") {
+            flash = Some(screen);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    // The delay elapses, the handshake lands, the wordmark settles.
+    let settled = tui.wait_for(WORDMARK, 0, Duration::from_secs(30));
+    let raw_flash = {
+        let raw = tui.raw.lock().expect("raw").clone();
+        raw.windows(b"Connection lost".len()).any(|w| w == b"Connection lost")
+    };
+    tui.shutdown(Duration::from_secs(10));
+    service_stop(&box_);
+    drop(tui);
+    drop(gateway);
+    drop(lane);
+    assert!(
+        flash.is_none() && !raw_flash,
+        "T9-8 RED: the boot window flashed the lost overlay; screen:\n{}",
+        flash.unwrap_or_default()
+    );
+    assert!(settled, "T9-8 RED: the TUI never settled on the wordmark after the slow boot");
+    let _ = &server.url;
 }
