@@ -412,7 +412,10 @@ pub struct Gateway {
 /// [`Gateway::spawn_paced`] explicitly and are NOT affected.
 #[must_use]
 pub fn default_pace() -> String {
-    std::env::var("T9_PACE").unwrap_or_else(|_| "instant".to_owned())
+    std::env::var("T9_PACE")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "instant".to_owned())
 }
 
 impl Gateway {
