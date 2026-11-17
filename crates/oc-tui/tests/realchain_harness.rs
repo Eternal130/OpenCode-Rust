@@ -218,6 +218,10 @@ pub struct Sandbox {
     /// The `--redact` sandbox-root substitution handed to the gateway
     /// (PID-unique paths hash equal across runs).
     pub service_port: u16,
+    /// W7 fast execution: when set, this dir's `shims/` is prepended
+    /// to the sandbox PATH (the recorded-command PATH shims; see
+    /// `tools/diff/realchain/shim_extract.py`).
+    pub shim_dir: Option<PathBuf>,
 }
 
 impl Sandbox {
@@ -261,6 +265,9 @@ impl Sandbox {
         }
         for (key, value) in self.env() {
             cmd.env(key, value);
+        }
+        if let Some(shims) = &self.shim_dir {
+            prepend_path(&mut cmd, &shims.join("shims"));
         }
         cmd.current_dir(&self.project);
         cmd
@@ -361,7 +368,26 @@ pub fn sandbox(tag: &str, gateway_port: u16) -> Sandbox {
     }
     std::fs::write(root.join("project/README.md"), "# t9 sandbox project\n").expect("project file");
     let service_port = 20_000 + (std::process::id() % 20_000) as u16;
-    Sandbox { root: root.clone(), project: root.join("project"), gateway_port, service_port }
+    Sandbox {
+        root: root.clone(),
+        project: root.join("project"),
+        gateway_port,
+        service_port,
+        shim_dir: None,
+    }
+}
+
+/// Prepend `dir` to a prepared command's PATH (the W7 shim lane: the
+/// recorded-command shims must shadow the real tools inside the
+/// sandbox, and the daemon's own bash-tool spawns inherit this PATH).
+fn prepend_path(cmd: &mut Command, dir: &Path) {
+    let inherited = std::env::var("PATH").unwrap_or_default();
+    let current = cmd
+        .get_envs()
+        .find(|(key, _)| *key == "PATH")
+        .and_then(|(_, value)| value.map(|v| v.to_string_lossy().into_owned()));
+    let base = current.unwrap_or(inherited);
+    cmd.env("PATH", format!("{}:{}", dir.display(), base));
 }
 
 // ---------------------------------------------------------------------------
@@ -385,6 +411,42 @@ impl Gateway {
     /// W5 timing fidelity: spawn with an explicit `--pace` mode
     /// (`instant` keeps the historical single-write behavior).
     pub fn spawn_paced(tag: &str, record_dir: Option<&Path>, pace: &str) -> Gateway {
+        Gateway::spawn_ext(tag, &[], record_dir, None, pace, "digest")
+    }
+
+    /// W7 turn-anchored mode: `--match turn` with the tool-loop corpus
+    /// dirs; `bootstrap` = (record_dir, seed_turns_dir) enables the
+    /// one-shot scripted-seed recording of the committed corpus.
+    pub fn spawn_turn(
+        tag: &str,
+        tool_corpus: &[PathBuf],
+        bootstrap: Option<(&Path, &Path)>,
+    ) -> Gateway {
+        let seed = bootstrap.map(|(record, turns)| (record.to_path_buf(), turns.to_path_buf()));
+        let (record_dir, seed_turns) = match seed {
+            Some((record, turns)) => (Some(record), Some(turns)),
+            None => (None, None),
+        };
+        Gateway::spawn_ext(
+            tag,
+            tool_corpus,
+            record_dir.as_deref(),
+            seed_turns.as_deref(),
+            "instant",
+            "turn",
+        )
+    }
+
+    fn spawn_ext(
+        tag: &str,
+        extra_corpus: &[PathBuf],
+        record_dir: Option<&Path>,
+        // W7: turn-script bootstrap dir (--seed-turns; digest mode
+        // ignores it).
+        seed_turns: Option<&Path>,
+        pace: &str,
+        match_mode: &str,
+    ) -> Gateway {
         let root = worktree_root();
         let log_path = log_file(&format!("gateway-{tag}"));
         let mut cmd = Command::new("python3");
@@ -399,6 +461,12 @@ impl Gateway {
             root.join("tools/diff/realchain/corpus-ref"),
         ] {
             cmd.arg("--corpus").arg(&corpus);
+        }
+        // W7: the tool-loop corpora ride AFTER the shared ones (later
+        // dirs override earlier on digest clashes; the turn table
+        // unions every tagged interaction).
+        for corpus in extra_corpus {
+            cmd.arg("--corpus").arg(corpus);
         }
         // PID-unique sandbox paths must hash equal across runs. The ref
         // lane's root (`…-<tag>ref`) is a strict prefix extension of the
@@ -420,6 +488,12 @@ impl Gateway {
             // the session title never echoes the main-turn reply needle.
             cmd.arg("--seed-title").arg(root.join("tools/diff/realchain/seeds/title-sse.txt"));
             cmd.arg("--record-dir").arg(dir);
+        }
+        if let Some(dir) = seed_turns {
+            cmd.arg("--seed-turns").arg(dir);
+        }
+        if match_mode != "digest" {
+            cmd.arg("--match").arg(match_mode);
         }
         if pace != "instant" {
             cmd.arg("--pace").arg(pace);
@@ -1042,6 +1116,9 @@ impl Sandbox {
         for (key, value) in self.env_ref(stage) {
             cmd.env(key, value);
         }
+        if let Some(shims) = &self.shim_dir {
+            prepend_path(&mut cmd, &shims.join("shims"));
+        }
         cmd.current_dir(&stage.project);
         cmd
     }
@@ -1110,6 +1187,31 @@ impl Sandbox {
             Ok(text) => serde_json::from_str::<serde_json::Value>(&text).unwrap_or(Value::Null),
             Err(_) => Value::Null,
         }
+    }
+
+    /// W7 权限自动化 — pre-authorize the tool loop through the REAL
+    /// config `permission` block (the same v2 semantic both engines
+    /// parse): bash/edit/write/read allowed, so the scenario's tool
+    /// calls run straight through with no permission dialog on either
+    /// end. Mutates the already-written config in place.
+    pub fn preauthorize_tools(&self, ref_side: bool) {
+        let path = if ref_side {
+            self.root.join("xdg-config/opencode/opencode.json")
+        } else {
+            self.config_path()
+        };
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read config for preauth {}: {e}", path.display()));
+        let mut config: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse config: {e}"));
+        config["permission"] = serde_json::json!({
+            "bash": "allow",
+            "edit": "allow",
+            "write": "allow",
+            "read": "allow",
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap())
+            .unwrap_or_else(|e| panic!("write preauth config: {e}"));
     }
 }
 

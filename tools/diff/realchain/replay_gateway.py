@@ -54,7 +54,29 @@ Usage:
       [--log FILE] [--dump-misses DIR] [--redact FROM:TO] ... \
       [--seed-reply FILE] [--record-dir DIR] [--strict/--no-strict] \
       [--pace instant|frames|synthetic:...]
+      [--match digest|turn] [--seed-turns DIR]
 """
+
+# W7 -- turn-anchored matching (--match turn, the gateway v4). The
+# digest key cannot replay a TOOL-LOOP session: turn k+1's request
+# embeds the sandbox-executed tool_result of turn k, whose content
+# (file paths, timings, output noise) can never equal the recorded
+# one. Turn mode keys the MAIN-loop calls by their session turn
+# ordinal instead:
+#   * classification — title/summarization calls (the aux track) are
+#     shape-detected and keep DIGEST matching (they are deterministic);
+#     every other provider call is a main-loop turn,
+#   * cross-environment key — the turn ordinal plus the request's
+#     LARGE SHAPE (model + system + the message/tool sequence with
+#     every tool_result CONTENT blanked to __TOOLRESULT__: sandbox
+#     execution never participates in matching),
+#   * conflict fallback — a shape mismatch on the turn's cassette
+#     first re-scans the other turns for an exact shape hit
+#     (counter drift), then replays the turn's own cassette with a
+#     logged turn-shape-conflict event; strict 404 only when the
+#     ordinal itself is unknown.
+# Cassettes carry the tags on the interaction object: {"turn": <int>,
+# "track": "main"|"aux"} (the --seed-turns bootstrap writes them).
 
 from __future__ import annotations
 
@@ -132,6 +154,136 @@ def normalize_request(body: dict, redactions):
 
 
 # ---------------------------------------------------------------------------
+# Turn-anchored matching (W7 gateway v4)
+# ---------------------------------------------------------------------------
+
+def _blank_tool_results(value):
+    """Deep-copy `value` with every tool_result CONTENT replaced by a
+    placeholder — sandbox-executed output never participates in the
+    cross-environment shape key (anthropic blocks and openai `role:
+    "tool"` messages alike)."""
+    if isinstance(value, dict):
+        if value.get("type") == "tool_result":
+            out = dict(value)
+            out["content"] = "__TOOLRESULT__"
+            return out
+        return {k: _blank_tool_results(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_blank_tool_results(v) for v in value]
+    return value
+
+
+def shape_digest(key):
+    """The request's LARGE SHAPE digest: the normalized key with tool
+    result contents blanked (see `_blank_tool_results`). The key is
+    already redacted/date-normalized, so the shape needs no extra
+    redaction context."""
+    shaped = {
+        "model": key.get("model"),
+        "system": key.get("system"),
+        "messages": _blank_tool_results(key.get("messages")),
+        "tools": key.get("tools"),
+    }
+    # The shape is content-exact for non-tool text; DATE already
+    # normalized inside `key`.
+    return hashlib.sha256(_canon(shaped).encode()).hexdigest()
+
+
+def _is_aux_request(key) -> bool:
+    """Aux-track classification: the side calls (title generation,
+    summarization/compaction) carry NO tools array — the main loop's
+    requests always do (bash/edit/... ride `tools`). That structural
+    discriminator is robust against phrase collisions inside the very
+    large main system prompt (a "summarize the conversation" marker
+    false-positived on it in the first W7 cut)."""
+    if isinstance(key.get("tools"), list) and key["tools"]:
+        return False
+    # Belt-and-braces on the no-tools population: the known side-call
+    # system markers (title generator, summarizer, keep-alive).
+    system = key.get("system")
+    texts = []
+    if isinstance(system, str):
+        texts.append(system)
+    elif isinstance(system, list):
+        texts.extend(p if isinstance(p, str) else _canon(p) for p in system)
+    blob = " ".join(texts).lower()
+    markers = ("title generator", "generate a title", "summarize the conversation",
+               "conversation summary", "compaction", "keep-alive request")
+    return any(marker in blob for marker in markers)
+
+
+class TurnState:
+    """Per-gateway-process main-loop turn counter. One gateway serves
+    ONE engine's session in turn mode (the harness spawns a dedicated
+    gateway per pair end — a shared process would interleave the two
+    engines' counters)."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.seen = 0  # main turns served (the next request is turn `seen`)
+
+    def current_and_advance(self):
+        with self.lock:
+            turn = self.seen
+            self.seen += 1
+            return turn
+
+
+TURN_STATE = TurnState()
+
+
+class TurnCorpus:
+    """Turn-tagged index over the SAME corpus dirs: `turns` maps the
+    ordinal to its candidate interactions (both engines' shapes may
+    coexist), `aux` keeps the digest index for the aux track."""
+
+    def __init__(self, corpus):
+        self.turns = {}   # int -> [(shape_digest, path, interaction)]
+        self.aux = corpus.index  # digest index for the aux track
+        for turn, digest, key, path, inter in corpus.tagged:
+            shape = shape_digest(key)
+            self.turns.setdefault(turn, []).append((shape, path, inter))
+
+    def lookup_main(self, turn, shape):
+        """(interaction, path, event) — event names the match path for
+        the log (hit | turn-rematch | turn-shape-conflict); None on a
+        strict miss."""
+        candidates = self.turns.get(turn)
+        if candidates:
+            for digest, path, inter in candidates:
+                if digest == shape:
+                    return inter, path, "hit"
+            # Fallback 1: counter drift — an exact shape hit under a
+            # DIFFERENT ordinal (a missed/extra aux classification).
+            for other, candidates2 in self.turns.items():
+                if other == turn:
+                    continue
+                for digest, path, inter in candidates2:
+                    if digest == shape:
+                        return inter, path, "turn-rematch"
+            # Fallback 2: replay the turn's own cassette, logged.
+            for digest, path, inter in candidates:
+                return inter, path, "turn-shape-conflict"
+        else:
+            # No such ordinal at all — the shape scan still gets a
+            # chance (recorded corpus may start at a later ordinal).
+            for candidates2 in self.turns.values():
+                for digest, path, inter in candidates2:
+                    if digest == shape:
+                        return inter, path, "turn-rematch"
+        return None, None, "miss"
+
+
+def _seed_turn_file(seed_dir, turn):
+    """`--seed-turns DIR` script body for turn `turn` (zero-based):
+    `turn-000.sse`, `turn-001.sse`, ... (missing file → None)."""
+    path = os.path.join(seed_dir, f"turn-{turn:03d}.sse")
+    if os.path.isfile(path):
+        return path
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Corpus index
 # ---------------------------------------------------------------------------
 
@@ -170,6 +322,13 @@ def _is_title_request(key) -> bool:
 class Corpus:
     def __init__(self, dirs, redactions):
         self.index = {}  # digest -> (rank, cassette_path, interaction)
+        self.keys = {}   # digest -> normalized key (for shape re-keying)
+        # W7: turn-tagged interactions collected INDEPENDENTLY of the
+        # digest dedup — a turn cassette whose request digest collides
+        # with an older untagged recording (the plain hello turn and
+        # the tool-loop turn 0 normalize identically) must not lose
+        # its turn tag to the rank contest.
+        self.tagged = []  # (turn, digest, key, path, interaction)
         self.count = 0
         for corpus_dir in dirs:
             for root, _dirs, files in os.walk(corpus_dir):
@@ -200,6 +359,10 @@ class Corpus:
                         prev = self.index.get(digest)
                         if prev is None or rank < prev[0]:
                             self.index[digest] = (rank, path, inter)
+                            self.keys[digest] = key
+                        turn = (inter or {}).get("turn")
+                        if isinstance(turn, int):
+                            self.tagged.append((turn, digest, key, path, inter))
                         self.count += 1
 
     def lookup(self, digest):
@@ -239,6 +402,7 @@ class Stats:
 
 STATS = Stats()
 CORPUS = None          # type: Corpus | None
+TURNCORPUS = None      # type: TurnCorpus | None
 ARGS = None
 LOG = None
 LOG_LOCK = threading.Lock()
@@ -429,6 +593,122 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send(404, b'{"error":"replay-gateway: unknown GET route"}')
 
+    # -- shared serve --------------------------------------------------------
+    def _serve_schedule(self, status, ctype, schedule):
+        self.send_response(status)
+        self.send_header("content-type", ctype)
+        self.send_header("content-length", str(sum(len(b) for b, _ in schedule)))
+        self.send_header("cache-control", "no-store")
+        self.end_headers()
+        for blob, delay in schedule:
+            if delay:
+                time.sleep(delay / 1000.0)
+            self.wfile.write(blob)
+            self.wfile.flush()
+
+    def _serve_interaction(self, digest, cassette, inter, extra=None):
+        resp = inter.get("response") or {}
+        resp_body = (resp.get("body") or "")
+        if isinstance(resp_body, bytes):
+            resp_body = resp_body.decode("utf-8", "replace")
+        ctype = (resp.get("headers") or {}).get("content-type", "application/json")
+        schedule = None
+        if ARGS.pace["mode"] == "frames":
+            raw_frames = resp.get("frames")
+            if isinstance(raw_frames, list) and raw_frames:
+                candidate = []
+                for frame in raw_frames:
+                    blob = (frame or {}).get("blob", "")
+                    delay = (frame or {}).get("delay_ms", 0) or 0
+                    if isinstance(blob, str):
+                        candidate.append((blob.encode(), int(delay)))
+                joined = "".join(f.decode("utf-8", "replace") for f, _ in candidate)
+                if candidate and joined == resp_body:
+                    schedule = candidate
+        if schedule is None:
+            schedule = build_schedule(digest, resp_body, ARGS.pace)
+        self._serve_schedule(resp.get("status", 200), ctype, schedule)
+        STATS.note_hit()
+        log("hit", sha256=digest, cassette=cassette, status=resp.get("status"),
+            pace=ARGS.pace["mode"], frames=len(schedule), **(extra or {}))
+
+    # -- W7 turn-anchored main-loop POST --------------------------------------
+    def _do_turn_post(self, path, body, key, digest):
+        turn = TURN_STATE.current_and_advance()
+        shape = shape_digest(key)
+        inter, cassette, event = TURNCORPUS.lookup_main(turn, shape)
+        if inter is not None:
+            self._serve_interaction(digest, cassette, inter,
+                                    {"turn": turn, "match": event})
+            return
+        # Strict miss on the ordinal: the --seed-turns bootstrap serves
+        # the scripted body for this turn and records the cassette WITH
+        # the turn tag (the committed corpus replays strictly).
+        if ARGS.seed_turns and ARGS.record_dir and key["model"]:
+            seed_path = _seed_turn_file(ARGS.seed_turns, turn)
+            if seed_path:
+                seed_text = open(seed_path, encoding="utf-8").read()
+                schedule = build_schedule(digest, seed_text, ARGS.pace)
+                cassette_doc = {
+                    "version": 2,
+                    "metadata": {
+                        "name": f"seeded/turn-{turn:03d}-{digest[:16]}",
+                        "recordedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "provider": "replay-seed",
+                        "route": "anthropic-messages",
+                        "transport": "http",
+                        "model": key["model"],
+                        "tags": ["channel9", "seed", "toolloop", "sandbox"],
+                        "note": "synthetic tool-loop seed generated by the "
+                                "real-chain gateway from sandbox traffic; "
+                                "contains no user data",
+                    },
+                    "interactions": [{
+                        "transport": "http",
+                        "turn": turn,
+                        "track": "main",
+                        "request": {"method": "POST", "url": path,
+                                    "body": json.dumps({
+                                        "model": key["model"],
+                                        "system": key["system"],
+                                        "messages": key["messages"],
+                                        "tools": key["tools"],
+                                        "stream": body.get("stream", True),
+                                    })},
+                        "response": {"status": 200,
+                                     "headers": {"content-type": "text/event-stream"},
+                                     "body": seed_text,
+                                     "frames": frames_from_schedule(schedule)},
+                    }],
+                }
+                os.makedirs(ARGS.record_dir, exist_ok=True)
+                out = os.path.join(ARGS.record_dir,
+                                   f"seed-turn-{turn:03d}-{digest[:16]}.json")
+                try:
+                    with open(out, "w", encoding="utf-8") as fh:
+                        json.dump(cassette_doc, fh, indent=1)
+                    with STATS.lock:
+                        STATS.seeded += 1
+                except OSError as err:
+                    # A record-side failure must not kill the replay
+                    # connection (the engine retries would burn turn
+                    # ordinals); serve the scripted body regardless.
+                    log("seed-record-error", error=str(err), cassette=out, turn=turn)
+                ctype = "text/event-stream" if body.get("stream") else "application/json"
+                self._serve_schedule(200, ctype, schedule)
+                log("seeded", sha256=digest, cassette=out, pace=ARGS.pace["mode"],
+                    frames=len(schedule), turn=turn)
+                return
+        STATS.note_miss(digest)
+        if ARGS.dump_misses:
+            os.makedirs(ARGS.dump_misses, exist_ok=True)
+            with open(os.path.join(ARGS.dump_misses, f"miss-{digest[:16]}.json"), "w",
+                      encoding="utf-8") as fh:
+                json.dump({"sha256": digest, "path": path, "turn": turn,
+                           "shape": shape, "normalized": key, "raw": body}, fh, indent=1)
+        log("miss", sha256=digest, path=path, model=body.get("model"), turn=turn)
+        self._diagnostic(digest, key, path)
+
     # -- POST ----------------------------------------------------------------
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -443,57 +723,24 @@ class Handler(BaseHTTPRequestHandler):
         redactions = [(a, b) for a, b in ARGS.redact]
         key, digest = normalize_request(body, redactions)
         log("request", path=path, model=body.get("model"), sha256=digest,
-            stream=bool(body.get("stream")), bytes=len(raw))
+            stream=bool(body.get("stream")), bytes=len(raw),
+            match=ARGS.match)
 
         # count_tokens side probe (anthropic SDK): answer a cheap estimate.
         if path.endswith("/count_tokens"):
             self._send(200, json.dumps({"input_tokens": max(1, len(raw) // 4)}).encode())
             return
 
+        # W7 turn-anchored mode: aux calls keep digest matching; main
+        # loop calls ride the turn ordinal + shape key.
+        if ARGS.match == "turn" and not _is_aux_request(key):
+            self._do_turn_post(path, body, key, digest)
+            return
+
         hit = CORPUS.lookup(digest)
         if hit:
             _rank, cassette, inter = hit
-            resp = inter.get("response") or {}
-            resp_body = (resp.get("body") or "")
-            if isinstance(resp_body, bytes):
-                resp_body = resp_body.decode("utf-8", "replace")
-            ctype = (resp.get("headers") or {}).get("content-type", "application/json")
-            # W5 pacing: v2 cassette frames (recorded timing) when the
-            # pace mode wants them, else a computed schedule; instant
-            # stays the single whole-body write (the fast T9 battery).
-            schedule = None
-            if ARGS.pace["mode"] == "frames":
-                raw_frames = resp.get("frames")
-                if isinstance(raw_frames, list) and raw_frames:
-                    candidate = []
-                    for frame in raw_frames:
-                        blob = (frame or {}).get("blob", "")
-                        delay = (frame or {}).get("delay_ms", 0) or 0
-                        if isinstance(blob, str):
-                            candidate.append((blob.encode(), int(delay)))
-                    joined = "".join(f.decode("utf-8", "replace") for f, _ in candidate)
-                    if candidate and joined == resp_body:
-                        schedule = candidate
-            if schedule is None:
-                schedule = build_schedule(digest, resp_body, ARGS.pace)
-            self.send_response(resp.get("status", 200))
-            self.send_header("content-type", ctype)
-            self.send_header("content-length", str(sum(len(b) for b, _ in schedule)))
-            # Only a streaming body may be paced (non-stream JSON has
-            # one logical frame anyway; the delay is still honored —
-            # the TTFT window applies to it identically).
-            self.send_header("cache-control", "no-store")
-            self.end_headers()
-            started = time.monotonic()
-            for blob, delay in schedule:
-                if delay:
-                    time.sleep(delay / 1000.0)
-                self.wfile.write(blob)
-                self.wfile.flush()
-            STATS.note_hit()
-            log("hit", sha256=digest, cassette=cassette, status=resp.get("status"),
-                pace=ARGS.pace["mode"], frames=len(schedule),
-                elapsed_ms=round((time.monotonic() - started) * 1000))
+            self._serve_interaction(digest, cassette, inter)
             return
 
         # Miss: optionally seed (sandbox-only bootstrap; see --seed-reply).
@@ -549,16 +796,7 @@ class Handler(BaseHTTPRequestHandler):
             with STATS.lock:
                 STATS.seeded += 1
             ctype = "text/event-stream" if body.get("stream") else "application/json"
-            self.send_response(200)
-            self.send_header("content-type", ctype)
-            self.send_header("content-length", str(sum(len(b) for b, _ in schedule)))
-            self.send_header("cache-control", "no-store")
-            self.end_headers()
-            for blob, delay in schedule:
-                if delay:
-                    time.sleep(delay / 1000.0)
-                self.wfile.write(blob)
-                self.wfile.flush()
+            self._serve_schedule(200, ctype, schedule)
             log("seeded", sha256=digest, cassette=out, pace=ARGS.pace["mode"],
                 frames=len(schedule))
             return
@@ -592,6 +830,15 @@ def main():
     parser.add_argument("--pace", default="instant",
                         help="instant | frames | synthetic[:seed=N][:ttft=MS][:tps=T] "
                              "(W5 timing fidelity; default instant)")
+    parser.add_argument("--match", default="digest", choices=["digest", "turn"],
+                        help="digest = normalized-content hash (default); turn = "
+                             "W7 turn-anchored matching for tool-loop sessions "
+                             "(aux calls keep digest matching; main loop keyed by "
+                             "turn ordinal + tool-result-blanked shape)")
+    parser.add_argument("--seed-turns", dest="seed_turns",
+                        help="turn-script dir for --match turn bootstrap: "
+                             "turn-000.sse, turn-001.sse, ... served for unknown "
+                             "ordinals and recorded into --record-dir with turn tags")
     args = parser.parse_args()
     ARGS = args
     ARGS.pace = parse_pace(args.pace)
@@ -606,8 +853,11 @@ def main():
         LOG = open(args.log, "a", encoding="utf-8", buffering=1)
 
     CORPUS = Corpus(args.corpus or [], redactions)
+    global TURNCORPUS
+    TURNCORPUS = TurnCorpus(CORPUS)
     log("corpus-loaded", dirs=args.corpus, interactions=CORPUS.count,
-        unique=len(CORPUS.index))
+        unique=len(CORPUS.index), match=args.match,
+        turns=len(TURNCORPUS.turns))
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     port = server.server_address[1]
