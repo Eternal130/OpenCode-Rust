@@ -104,7 +104,6 @@ impl PairRig {
     }
 }
 
-
 /// Settle both ends for `secs` (render/event quiescence).
 fn settle(secs: u64) {
     std::thread::sleep(Duration::from_secs(secs));

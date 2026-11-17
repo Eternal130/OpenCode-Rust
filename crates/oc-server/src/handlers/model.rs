@@ -177,8 +177,8 @@ fn custom_effort_variants(provider_id: &str, model_id: &str) -> Value {
 /// the payload into `ModelInfo`, whose `limit.context`/`limit.output`,
 /// `modelID`, `status`, and `time.released` are REQUIRED; v2 seeds a
 /// base-less config model from `Model.Info.default`
-/// (schema/model.ts:146-158 — limit {context: 200_000, output:
-/// 32_000}, capabilities {tools, input [text, image], output [text]};
+/// (schema/model.ts:146-158 — limit `{context: 200_000, output:
+/// 32_000}`, capabilities `{tools, input [text, image], output [text]}`;
 /// G-433: the old zero-limit placeholder broke the footer/sidebar
 /// usage percent for package-family custom providers). A model without
 /// an explicit

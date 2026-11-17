@@ -526,7 +526,7 @@ impl TuiPluginRuntime {
                             // first content row (channel-8
                             // plugin-panel-open@320x80 oracle).
                             let mut rows = spec.rows;
-                            if rows.first().is_some_and(|row| row.is_empty()) {
+                            if rows.first().is_some_and(String::is_empty) {
                                 rows.remove(0);
                             }
                             store.set_plugin_sidebar_section(
