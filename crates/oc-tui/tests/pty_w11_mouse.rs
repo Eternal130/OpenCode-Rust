@@ -38,6 +38,7 @@ fn now_ms() -> u64 {
         .map_or(1_000_000, |since| u64::try_from(since.as_millis()).unwrap_or(1_000_000))
 }
 
+#[allow(clippy::needless_pass_by_value)] // the json! literal reads best by value
 fn bus_event(id: &str, kind: &str, data: serde_json::Value) -> ScriptEvent {
     ScriptEvent {
         delay_ms: 30,
@@ -51,7 +52,7 @@ fn bus_event(id: &str, kind: &str, data: serde_json::Value) -> ScriptEvent {
     }
 }
 
-/// The long-transcript feed (the same shape as pty_lane_if's): 60
+/// The long-transcript feed (the same shape as `pty_lane_if`'s): 60
 /// hard-wrapped `Lnn` marker lines — both the wheel's and the drag's
 /// observable.
 fn long_transcript_script(session: &str) -> Vec<ScriptEvent> {
@@ -205,8 +206,7 @@ fn mouse_scenario(driver: &mut HarnessHandle) -> Result<(), String> {
         driver.sgr_scroll_up(40, 15);
         std::thread::sleep(Duration::from_millis(300));
         let freed = visible_markers(driver);
-        let step =
-            freed.first().zip(sticky.first()).map(|(f, s)| s - f).unwrap_or(0);
+        let step = freed.first().zip(sticky.first()).map_or(0, |(f, s)| s - f);
         if step == 0 || step > sticky.len() {
             return Err(format!(
                 "one wheel notch moved {step} marker rows (viewport {}) — the wheel is dead: {sticky:?} → {freed:?}",
@@ -241,9 +241,8 @@ fn mouse_scenario(driver: &mut HarnessHandle) -> Result<(), String> {
         let baseline = driver.grid_now();
         let control = (70usize, 0usize);
         let style_at = |g: &vt_harness::Grid, x: usize, y: usize| g.cell(x, y).style;
-        let inside_cells: Vec<(usize, usize)> = (y0..=y1)
-            .flat_map(|y| (x0..=x1).map(move |x| (x, y)))
-            .collect();
+        let inside_cells: Vec<(usize, usize)> =
+            (y0..=y1).flat_map(|y| (x0..=x1).map(move |x| (x, y))).collect();
         let control_before = style_at(&baseline, control.0, control.1);
 
         // Real SGR strokes: press, drag across cells, hold — the LIVE

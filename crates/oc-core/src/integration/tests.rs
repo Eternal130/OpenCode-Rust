@@ -4238,7 +4238,8 @@ mod g441_credential_serde {
 
     #[test]
     fn v2_oauth_shape_with_method_id_camelcase_decodes() {
-        let value: CredentialValue = serde_json::from_str(V2_OAUTH_ROW).expect("v2 oauth row decodes");
+        let value: CredentialValue =
+            serde_json::from_str(V2_OAUTH_ROW).expect("v2 oauth row decodes");
         let CredentialValue::OAuth(oauth) = &value else { panic!("oauth variant") };
         assert_eq!(oauth.method_id, "oauth");
         assert_eq!(oauth.refresh, "PLACEHOLDER_REFRESH");
@@ -4296,16 +4297,25 @@ mod g441_credential_serde {
     fn row_shape_matrix_decodes() {
         let cases: Vec<(&str, serde_json::Value)> = vec![
             ("key", json!({"type": "key", "key": "k"})),
-            ("oauth-methodID", json!({
-                "type": "oauth", "methodID": "m", "refresh": "r", "access": "a", "expires": 1
-            })),
-            ("oauth-method_id", json!({
-                "type": "oauth", "method_id": "m", "refresh": "r", "access": "a", "expires": 1
-            })),
-            ("oauth-with-metadata", json!({
-                "type": "oauth", "methodID": "m", "refresh": "r", "access": "a",
-                "expires": 1, "metadata": {"k": "v"}
-            })),
+            (
+                "oauth-methodID",
+                json!({
+                    "type": "oauth", "methodID": "m", "refresh": "r", "access": "a", "expires": 1
+                }),
+            ),
+            (
+                "oauth-method_id",
+                json!({
+                    "type": "oauth", "method_id": "m", "refresh": "r", "access": "a", "expires": 1
+                }),
+            ),
+            (
+                "oauth-with-metadata",
+                json!({
+                    "type": "oauth", "methodID": "m", "refresh": "r", "access": "a",
+                    "expires": 1, "metadata": {"k": "v"}
+                }),
+            ),
         ];
         for (name, row) in cases {
             let value: CredentialValue =
@@ -4320,28 +4330,24 @@ mod g441_credential_serde {
         }
     }
 
-    /// oc-schema's `CredentialValue` (the canonical wire crate) and
+    /// `oc-schema`'s `CredentialValue` (the canonical wire crate) and
     /// oc-core's must agree on the camelCase field — dual-definition
     /// drift guard (G-445 audit).
     #[test]
     fn oc_schema_counterpart_accepts_same_oauth_row() {
         let schema_value: oc_schema::integration::CredentialValue =
             serde_json::from_str(V2_OAUTH_ROW).expect("oc-schema decodes the same v2 row");
-        let oc_schema::integration::CredentialValue::Oauth { method_id, .. } = &schema_value
-        else {
+        let oc_schema::integration::CredentialValue::Oauth { method_id, .. } = &schema_value else {
             panic!("oauth variant")
         };
         assert_eq!(method_id.as_str(), "oauth");
     }
 
-    /// A KeyValue round-trips with optional fields skipped when `None`.
+    /// A `KeyValue` round-trips with optional fields skipped when `None`.
     #[test]
     fn key_round_trip_skips_optionals() {
-        let value = CredentialValue::Key(KeyValue {
-            key: "k".into(),
-            metadata: None,
-            configuration: None,
-        });
+        let value =
+            CredentialValue::Key(KeyValue { key: "k".into(), metadata: None, configuration: None });
         let wire = serde_json::to_value(&value).expect("serialize");
         assert_eq!(wire, json!({"type": "key", "key": "k"}));
     }
