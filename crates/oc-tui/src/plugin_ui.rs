@@ -124,10 +124,23 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
             ))]);
         }
         PluginUiEvent::SidebarSection { title, rows, clickable } => {
+            // G-435-residual followup: the payload's flattened section
+            // rows carry the slot column's OWN title-pad row as a
+            // leading empty (the omo-slim section arrives as
+            // ["","",content…] while the ref's Solid slot column
+            // renders exactly ONE spacer above the first content row —
+            // channel-8 plugin-panel-open@320x80 oracle). The native
+            // slot origin paints that pad (the sidebar title's
+            // paddingBottom), so strip ONE leading empty row or the
+            // pad renders twice.
+            let mut rows = rows.clone();
+            if rows.first().is_some_and(String::is_empty) {
+                rows.remove(0);
+            }
             let section = crate::components::sidebar::SidebarSection {
                 plugin_id: plugin_id.to_owned(),
                 title: title.clone(),
-                rows: rows.clone(),
+                rows,
                 clickable: clickable.clone(),
             };
             store.set_plugin_sidebar_section(&section);
