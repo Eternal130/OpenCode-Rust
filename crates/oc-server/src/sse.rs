@@ -461,9 +461,26 @@ pub fn event_response(
     heartbeat: Duration,
 ) -> axum::response::Response {
     let initial = connected_frame(state);
-    let stream =
-        futures::stream::once(async move { Ok(bytes::Bytes::from(initial.as_bytes().to_vec())) })
-            .chain(feed.subscribe().into_body_stream(heartbeat, state.shutdown.subscribe()));
+    // OPENCODE_TEST_SSE_FIRST_FRAME_DELAY_MS — test rigs only (the
+    // channel-9 W6 slow-boot scenario): hold the initial
+    // `server.connected` frame for this many ms AFTER the subscribe
+    // response opens, deterministically reproducing a daemon that is
+    // healthy on /api/info but slow to first-frame the event stream
+    // (the beta.15/16 boot-window "Connection lost…" trigger face).
+    // Unset/zero keeps the production shape byte-identical.
+    let first_frame_delay = std::env::var("OPENCODE_TEST_SSE_FIRST_FRAME_DELAY_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+        .map(Duration::from_millis)
+        .unwrap_or_default();
+    let stream = futures::stream::once(async move {
+        if !first_frame_delay.is_zero() {
+            tokio::time::sleep(first_frame_delay).await;
+        }
+        Ok(bytes::Bytes::from(initial.as_bytes().to_vec()))
+    })
+    .chain(feed.subscribe().into_body_stream(heartbeat, state.shutdown.subscribe()));
     sse_response(axum::body::Body::from_stream(stream))
 }
 

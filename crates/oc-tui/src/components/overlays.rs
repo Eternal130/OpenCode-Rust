@@ -160,9 +160,15 @@ mod tests {
 
     /// The thresholds (app.tsx:1308-1314): retry shows after 1 s, the
     /// initial connect waits 5 s; recovery hides immediately.
+    /// W6 症状①: the overlay arms only AFTER a first successful
+    /// connect — these paths run with the ever-connected latch set.
     #[test]
     fn reconnecting_thresholds() {
         let store = Store::new(Runtime::new());
+        store.advance_clock(9_000);
+        // The boot's first successful connect latches `ever_connected`
+        // (the overlay's arm condition from here on).
+        store.set_connection(crate::data::ConnectionState::Connected);
         store.advance_clock(10_000);
         store.set_connection(crate::data::ConnectionState::Reconnecting { attempt: 1 });
         assert!(!store.reconnecting_overlay_visible(10_500), "under 1 s");
@@ -177,29 +183,35 @@ mod tests {
         assert!(!store.reconnecting_overlay_visible(15_001));
     }
 
-    /// The first-boot grace (app.tsx:1300-1314): a NEVER-transitioned
-    /// `Connecting` state (first boot / hung handshake — the only
-    /// anchor writer is the `set_connection` transition arm) must not
-    /// surface the scrim from frame 0 off the 0-init anchor.
-    /// Construction can't seed it (the clock signal starts at 0 and
-    /// only becomes wall time in the run loop), so the read site
-    /// treats 0 as "first observation": the anchor latches at the
-    /// first look and the 5 s grace runs from there.
+    /// W6 症状① — the never-connected boot (any duration, any state
+    /// family the SSE machine passes through: the constructed
+    /// `Connecting`, or `Reconnecting{n}` after the connect window
+    /// trips on a slow daemon) NEVER surfaces the lost overlay:
+    /// ref gates the daemon's health before the TUI mounts
+    /// (server-connection.ts:46-50) and its managed-mode copy reads
+    /// "Restarting service…" (reconnecting.tsx:9-20) — the boot-window
+    /// "Connection lost…" flash the beta.15/16 users saw is off-ref.
     #[test]
-    fn reconnecting_initial_grace_from_first_observation() {
+    fn reconnecting_never_connected_boot_stays_clean() {
         let store = Store::new(Runtime::new());
-        // No `set_connection` call: the state stays the constructed
-        // `Connecting` and `connection_since` stays 0.
         assert_eq!(store.connection(), crate::data::ConnectionState::Connecting);
-        assert_eq!(store.connection_since(), 0);
+        // 20 s of never-connected Connecting: no overlay, ever.
+        assert!(!store.reconnecting_overlay_visible(20_000));
+        assert!(!store.reconnecting_overlay_visible(120_000));
+        // The connect window trips → the SSE machine's retry family —
+        // still never-connected, still no overlay.
+        store.set_connection(crate::data::ConnectionState::Reconnecting { attempt: 2 });
+        assert!(!store.reconnecting_overlay_visible(30_000));
+        assert!(!store.reconnecting_overlay_visible(300_000));
+        // The first successful connect arms the overlay for FUTURE
+        // genuine losses only.
+        store.set_connection(crate::data::ConnectionState::Connected);
+        store.set_connection(crate::data::ConnectionState::Reconnecting { attempt: 3 });
+        assert!(!store.reconnecting_overlay_visible(300_500), "the 1 s retry grace still runs");
         assert!(
-            !store.reconnecting_overlay_visible(20_000),
-            "frame 0 stays clean — the wall-derived `now` against the 0 anchor must not read as \
-             20 s elapsed"
+            store.reconnecting_overlay_visible(301_500),
+            "a genuine post-connect loss surfaces"
         );
-        assert_eq!(store.connection_since(), 20_000, "the first observation latches the anchor");
-        assert!(!store.reconnecting_overlay_visible(24_999), "still inside the 5 s grace");
-        assert!(store.reconnecting_overlay_visible(25_000), "5 s after the first observation");
     }
 
     /// G-300: retry-attempt churn (Reconnecting{n}→Reconnecting{n+1})
@@ -210,6 +222,8 @@ mod tests {
     #[test]
     fn reconnecting_anchor_holds_across_retry_attempts() {
         let store = Store::new(Runtime::new());
+        store.advance_clock(9_000);
+        store.set_connection(crate::data::ConnectionState::Connected);
         store.advance_clock(10_000);
         store.set_connection(crate::data::ConnectionState::Reconnecting { attempt: 2 });
         let anchor = store.connection_since();

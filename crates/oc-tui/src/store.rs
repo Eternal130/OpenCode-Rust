@@ -2019,6 +2019,12 @@ pub struct Store {
     /// SURF-2: when the connection state last changed (the
     /// Reconnecting overlay's threshold anchor).
     connection_since: Cell<u64>,
+    /// W6 症状① — whether the SSE connection EVER reached `Connected`
+    /// since construction. The ref's boot chain never shows the lost
+    /// overlay before the first successful connect (see
+    /// [`Store::reconnecting_overlay_visible`]); a never-connected
+    /// boot must not either.
+    connection_ever_connected: Cell<bool>,
     /// SURF-2: the `StartupLoading` pill's state machine.
     startup_state: RefCell<StartupLoadingState>,
     /// CONFIG-E3 — `skipInitialLoading`
@@ -4372,6 +4378,7 @@ impl Store {
             console_ring: std::cell::RefCell::new(std::collections::VecDeque::new()),
             caret_cell: Cell::new(None),
             connection_since: Cell::new(0),
+            connection_ever_connected: Cell::new(false),
             startup_state: RefCell::new(StartupLoadingState::default()),
             skip_initial_loading: std::cell::Cell::new(false),
             migration_progress: RefCell::new(None),
@@ -12887,6 +12894,9 @@ impl Store {
         if family(&self.connection.get()) != family(&state) {
             self.connection_since.set(self.clock.get());
         }
+        if state == ConnectionState::Connected {
+            self.connection_ever_connected.set(true);
+        }
         self.connection.set(state);
     }
 
@@ -12920,10 +12930,30 @@ impl Store {
     /// `reconnecting` surfaces after 1 s, the initial/failed states
     /// after 5 s ("Initial connection gets a longer grace period;
     /// retries surface more quickly").
+    ///
+    /// W6 症状① — the never-connected boot NEVER surfaces the lost
+    /// overlay. Ref anchors: (a) the ref CLI health-gates the managed
+    /// daemon BEFORE the TUI mounts (`Service.ensure` polls up to
+    /// 120 s — server-connection.ts:46-50 + service-timing.ts's
+    /// `promiseTimeout`), so the ref TUI's initial `connecting` state
+    /// coexists only with an already-healthy server; (b) any post-mount
+    /// hang trips the ref connect window first (connection.ts:32
+    /// `connectTimeout = 2_000` bounds the subscribe AND its first
+    /// frame, :81) and flips the status to `reconnecting`, where the
+    /// ref overlay in MANAGED mode reads "Restarting service…" /
+    /// "Your session will resume automatically." (reconnecting.tsx:9-20
+    /// — `managed={client.restart !== undefined}`), never the
+    /// "Connection lost…" copy the beta.15/16 port flashed at boot.
+    /// A never-connected rust boot showing "Connection lost…" is
+    /// therefore off-ref on both faces; the overlay below arms only
+    /// after the first successful connect (genuine mid-session loss).
     #[must_use]
     pub fn reconnecting_overlay_visible(&self, now_ms: u64) -> bool {
         let state = self.connection.get();
         if state == ConnectionState::Connected {
+            return false;
+        }
+        if !self.connection_ever_connected.get() {
             return false;
         }
         let threshold =

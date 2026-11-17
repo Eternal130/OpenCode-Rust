@@ -730,16 +730,24 @@ pub struct ManagedServer {
 /// production managed-daemon path (`lifecycle::ensure`); the TUI then
 /// attaches to the same registration.
 pub fn service_start(sandbox: &Sandbox) -> ManagedServer {
+    service_start_with_env(sandbox, &[])
+}
+
+/// W6 症状① — `service start` with EXTRA daemon env (the slow-boot
+/// scenario's `OPENCODE_TEST_SSE_FIRST_FRAME_DELAY_MS` injection:
+/// a daemon that is healthy on `/api/info` but holds the event
+/// stream's first frame).
+pub fn service_start_with_env(sandbox: &Sandbox, extra_env: &[(String, String)]) -> ManagedServer {
     // Defensive pre-clean: a previous run's daemon on this sandbox's
     // fixed port would wedge `ensure` (its own graceful stop path).
     service_stop(sandbox);
-    let mut child = sandbox
-        .command(&opencode_bin())
-        .args(["service", "start"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn service start");
+    let mut command = sandbox.command(&opencode_bin());
+    command.args(["service", "start"]);
+    for (key, value) in extra_env {
+        command.env(key, value);
+    }
+    let mut child =
+        command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().expect("spawn service start");
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut url = None;
     let mut early_exit: Option<String> = None;
@@ -803,6 +811,38 @@ pub fn service_start(sandbox: &Sandbox) -> ManagedServer {
 /// own graceful stop path.
 pub fn service_stop(sandbox: &Sandbox) {
     let _ = sandbox.command(&opencode_bin()).args(["service", "stop"]).output();
+}
+
+/// W6 harness hardening — the T9 lane's panic-safe daemon cleaner:
+/// between `service_start` and the `Rig` taking ownership, a panic
+/// (or an early assert) would strand the daemon on the sandbox's
+/// fixed port and wedge every later lane run. The pair lane's Rig
+/// Drop covered its own construction window; the T9 lane's rig
+/// builds the TUI AFTER the daemon starts, so this guard owns the
+/// gap — `forget` it once the owning struct's Drop takes over.
+pub struct ServiceClean<'a> {
+    sandbox: &'a Sandbox,
+    armed: bool,
+}
+
+impl<'a> ServiceClean<'a> {
+    #[must_use]
+    pub fn new(sandbox: &'a Sandbox) -> Self {
+        Self { sandbox, armed: true }
+    }
+
+    /// Hand ownership to a struct whose own Drop stops the service.
+    pub fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ServiceClean<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            service_stop(self.sandbox);
+        }
+    }
 }
 
 /// The home wordmark's opening block (boot-settled marker, same needle

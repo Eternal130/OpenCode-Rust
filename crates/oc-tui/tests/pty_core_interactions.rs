@@ -250,6 +250,11 @@ struct Shared {
     /// closed right after the headers (a scripted server loss — the
     /// Reconnecting overlay's trigger).
     sse_drops: Arc<AtomicUsize>,
+    /// W6 症状①: when > 0, that-many ALREADY-OPEN event streams (past
+    /// the handshake, idling in the broadcast loop) close — a genuine
+    /// mid-run LOSS after a first successful connect (the overlay's
+    /// new arm condition).
+    sse_close_open: Arc<AtomicUsize>,
     /// The SSE broadcast channel: whatever lands here is written on
     /// EVERY open /api/event stream (the scripted turn).
     broadcast: Arc<Mutex<std::collections::VecDeque<String>>>,
@@ -381,6 +386,7 @@ fn spawn_scripted_server(long_transcript: bool) -> (String, Arc<Shared>) {
         interrupt_posts: Arc::new(AtomicUsize::new(0)),
         model_posts: Arc::new(AtomicUsize::new(0)),
         sse_drops: Arc::new(AtomicUsize::new(0)),
+        sse_close_open: Arc::new(AtomicUsize::new(0)),
         broadcast,
         long_transcript,
     });
@@ -478,6 +484,12 @@ fn handle(mut socket: std::net::TcpStream, shared: &Shared) {
                         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                     ) =>
                 {
+                    // W6 症状①: a scripted mid-run stream loss (see
+                    // `sse_close_open`) — one stream per increment.
+                    if shared.sse_close_open.load(Ordering::SeqCst) > 0 {
+                        shared.sse_close_open.fetch_sub(1, Ordering::SeqCst);
+                        return;
+                    }
                     std::thread::sleep(Duration::from_millis(20));
                 }
                 Err(_) => return,
@@ -1133,16 +1145,27 @@ fn pty_reconnecting_overlay_on_loss_and_recovery() {
     let sandbox = sandbox_env("reconnect");
     let _ = sandbox;
     let (url, shared) = spawn_scripted_server(false);
-    // Drop the first THREE event streams: attempts at +0.5 s, +1.5 s,
-    // +3.5 s fail; the 4th (≈ +7.5 s) recovers — the overlay anchors
-    // at the last transition (+3.5 s) and shows at +4.5 s.
-    shared.sse_drops.store(3, Ordering::SeqCst);
+    // W6 症状①: the overlay arms only AFTER a first successful connect
+    // (the never-connected boot stays clean — ref gates the daemon's
+    // health before the TUI mounts and its managed copy never reads
+    // "Connection lost…"). So the FIRST stream completes (the boot
+    // connects, handshake + open), then the open stream is killed and
+    // the next two reconnect attempts die at the headers — a genuine
+    // LOSS: the overlay anchors at the last transition and shows after
+    // the 1 s retry threshold; the 4th stream recovers.
+    shared.sse_drops.store(2, Ordering::SeqCst);
+    shared.sse_close_open.store(1, Ordering::SeqCst);
     drive(&url, move |boot, mut writer| {
         let probe = || Boot { output: Arc::clone(&boot.output) };
         assert!(
             wait_for_after(&probe(), "█▀▀█".as_bytes(), 0, Duration::from_secs(5)),
             "the home wordmark rendered"
         );
+        // Boot connected cleanly (no overlay during the never-connected
+        // window — the W6 症状① face): the armed losses fire now (the
+        // open stream closes on its next idle tick, the next two
+        // attempts die at the headers).
+        std::thread::sleep(Duration::from_millis(500));
         assert!(
             wait_for_after(&probe(), b"Connection lost", 0, Duration::from_secs(20),),
             "the Reconnecting overlay appeared after the retry threshold"
