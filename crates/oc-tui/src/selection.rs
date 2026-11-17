@@ -133,6 +133,26 @@ pub fn selected_text(frame: &Frame, rect: SelectionRect) -> String {
     lines.join("\n")
 }
 
+/// W6 症状⑧ — paint the live selection's highlight over the final
+/// frame: opentui's renderer draws the mouse selection on the
+/// composited grid (the `renderer.getSelection()` cell model this
+/// module mirrors) as REVERSE VIDEO — each selected cell's fg and bg
+/// swap (a `Default` side resolves against the terminal's own
+/// default pair, exactly like the renderer's unresolved cells).
+/// Called from [`crate::app::App::frame`] AFTER every tree layer
+/// composited, so the highlight rides above the whole screen (the
+/// renderer's own post-grid pass z).
+pub fn paint_highlight(frame: &mut Frame, rect: SelectionRect) {
+    for y in rect.y..rect.y.saturating_add(rect.height).min(frame.cells.len()) {
+        let Some(row) = frame.cells.get_mut(y) else { continue };
+        for x in rect.x..rect.x.saturating_add(rect.width) {
+            if let Some(cell) = row.get_mut(x) {
+                std::mem::swap(&mut cell.fg, &mut cell.bg);
+            }
+        }
+    }
+}
+
 /// `handleSelectionKey` (selection.ts:62-98) — the priority-101
 /// intercept's verdict for one stroke over a live selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,6 +241,55 @@ mod tests {
         // A column slice takes the run's cells (row 1's col 4 is 't').
         let rect = SelectionRect { x: 4, y: 0, width: 1, height: 2 };
         assert_eq!(selected_text(&frame, rect), "a\nt");
+    }
+
+    /// W6 症状⑧ — the highlight paints reverse video over exactly the
+    /// selected rect (opentui's post-grid selection pass).
+    #[test]
+    fn highlight_swaps_fg_bg_inside_the_rect_only() {
+        #![allow(clippy::cast_possible_truncation, clippy::similar_names, clippy::redundant_clone)]
+        let mut frame = frame_of(&["abcdef", "ghijkl"]);
+        for (row_y, row) in frame.cells.iter_mut().enumerate() {
+            for (col_x, cell) in row.iter_mut().enumerate() {
+                cell.fg = crate::render::CellColor::Rgb(
+                    (200 + col_x).min(255) as u8,
+                    10,
+                    (10 + row_y).min(255) as u8,
+                );
+                cell.bg = crate::render::CellColor::Rgb(1, 2, 3);
+            }
+        }
+        let expected_fg_at = |col_x: usize, row_y: usize, inside: bool| {
+            if inside {
+                crate::render::CellColor::Rgb(1, 2, 3)
+            } else {
+                crate::render::CellColor::Rgb(
+                    (200 + col_x).min(255) as u8,
+                    10,
+                    (10 + row_y).min(255) as u8,
+                )
+            }
+        };
+        paint_highlight(&mut frame, SelectionRect { x: 2, y: 0, width: 2, height: 2 });
+        for (row_y, row) in frame.cells.iter().enumerate().take(2) {
+            for (col_x, cell) in row.iter().enumerate().take(6) {
+                let inside = (2..4).contains(&col_x);
+                assert_eq!(
+                    cell.fg,
+                    expected_fg_at(col_x, row_y, inside),
+                    "fg at ({col_x},{row_y})"
+                );
+                assert_eq!(
+                    cell.bg,
+                    crate::render::CellColor::Rgb(
+                        if inside { (200 + col_x).min(255) as u8 } else { 1 },
+                        if inside { 10 } else { 2 },
+                        if inside { (10 + row_y).min(255) as u8 } else { 3 },
+                    ),
+                    "bg at ({col_x},{row_y})"
+                );
+            }
+        }
     }
 
     #[test]
