@@ -81,11 +81,12 @@ use opentui_solid::{box_, for_list, map, text, Element, Signal};
 use crate::components::chrome_solid::{family_wrapper_live, mount_family_wrapper, ChromeStamp};
 use crate::components::composer::autocomplete::popup_height;
 use crate::components::composer::render::{
-    caret_cell, footer_plan, layout_draft_lines, palette, truncate_width, PromptView,
+    caret_cell, footer_plan, layout_draft_lines, palette, truncate_middle, truncate_width,
+    PromptView,
 };
 use crate::render::{CellColor, Frame};
 use crate::theme::ThemeState;
-use crate::wrap::display_width;
+use crate::wrap::{display_width, take_width};
 
 /// The composer frame's ONLY renderer (D2.2: the composer family
 /// rides the shared tree — every live mount [session route, home
@@ -510,6 +511,17 @@ fn shape(view: &PromptView, width: usize, height: usize, theme: &ThemeState) -> 
     };
 
     // The popup above the box (rows y = top − popup_h + i).
+    // G-448 — ref truncation (autocomplete.tsx): the title clips to
+    // `contentWidth = max(1, position().width − 4)` via
+    // `Locale.truncateMiddle` (the `@`-file/`/`-command candidates are
+    // pre-truncated at FETCH with the same rule, :334/:377/:509-514;
+    // the render pass truncates again, :889-922) and the description
+    // is a flex-shrunk trailing text — clipped to what remains. The
+    // rust padded-title column (registry.display_width) survives for
+    // SHORT rows (the pinned goldens) but CLAMPS to the interior so a
+    // long `@`-filename can never push the row past the popup box (the
+    // beta.18 overflow symptom).
+    let popup_content_width = width.saturating_sub(4).max(1);
     let popup_rows: Vec<PopupRowView> = match &view.autocomplete {
         Some(popup) if view.top > 0 => {
             let popup_h = popup_height(popup.options.len(), view.top).min(view.top);
@@ -518,10 +530,26 @@ fn shape(view: &PromptView, width: usize, height: usize, theme: &ThemeState) -> 
                 .iter()
                 .take(popup_h)
                 .enumerate()
-                .map(|(index, option)| PopupRowView {
-                    title: format!("{:width$}", option.display, width = popup.title_width),
-                    description: option.description.as_ref().map(|d| format!(" {d}")),
-                    selected: index == popup.selected,
+                .map(|(index, option)| {
+                    let column = popup.title_width.min(popup_content_width);
+                    let title = if display_width(&option.display) > column {
+                        // Wider than the column: clamp to the FULL
+                        // interior (ref's contentWidth), middle-clip.
+                        truncate_middle(&option.display, popup_content_width)
+                    } else {
+                        format!("{:width$}", option.display, width = column)
+                    };
+                    let used = display_width(&title).max(column);
+                    let description = option.description.as_ref().map(|d| {
+                        let remaining = popup_content_width.saturating_sub(used + 1);
+                        let text = format!(" {d}");
+                        if display_width(&text) > remaining {
+                            take_width(&text, remaining)
+                        } else {
+                            text
+                        }
+                    });
+                    PopupRowView { title, description, selected: index == popup.selected }
                 })
                 .collect()
         }
@@ -1149,5 +1177,72 @@ mod tests {
             "a second flush with no intervening sync is a no-op (no double raster)"
         );
         crate::components::chrome_solid::reset_hub();
+    }
+
+
+    /// G-448 — the autocomplete popup's rows NEVER exceed the popup
+    /// box (ref `Locale.truncateMiddle` at autocomplete.tsx:889-922 +
+    /// the fetch-time truncation at :334/:377/:509-514): a long `@`
+    /// filename clamps to `width − 4` with a middle ellipsis, and the
+    /// description clips to what remains — the beta.18 overflow symptom
+    /// (candidate rows spilling past the box) is pinned dead.
+    #[test]
+    fn popup_rows_truncate_to_the_box_interior() {
+        let theme = ThemeState::v2_dark();
+        let long_name =
+            "@a-very-long-file-name-that-overflows-the-popup-box-with-room-to-spare.rs";
+        let options = vec![
+            crate::components::composer::autocomplete::AutocompleteOption {
+                display: long_name.to_string(),
+                description: Some("a description that is also far too long".to_owned()),
+                ..Default::default()
+            },
+            crate::components::composer::autocomplete::AutocompleteOption {
+                display: "/short".to_owned(),
+                description: Some("fits".to_owned()),
+                ..Default::default()
+            },
+        ];
+        let owned = draft("@a-ve");
+        let view = PromptView {
+            draft: &owned,
+            placeholder: String::new(),
+            autocomplete: Some(crate::components::composer::render::AutocompleteView {
+                options: &options,
+                selected: 0,
+                // A registry column wider than typical exercises the
+                // clamp, but the short row's description must survive:
+                // use the realistic registry width.
+                title_width: 12,
+            }),
+            footer: FooterHints::default(),
+            metadata: MetadataLine::default(),
+            terminal_width: 40,
+            top: 4,
+            rail: None,
+            caret: None,
+            selection: None,
+        };
+        let frame = render_prompt_frame_dispatch(&view, 40, 10, &theme);
+        // The popup rows sit above the box (top = 4): rows 2 and 3.
+        let grid = frame.text_grid();
+        let first = grid[2].clone();
+        assert!(
+            first.contains('…'),
+            "the long title middle-truncates: {first:?}"
+        );
+        // The row never exceeds the 40-col box.
+        assert!(
+            !first.chars().skip(40).any(|ch| ch != ' '),
+            "row stays inside the 40-col box: {first:?}"
+        );
+        assert!(
+            !first.contains("far too long"),
+            "the description clips to the remaining width: {first:?}"
+        );
+        // The short row keeps the padded-column golden shape.
+        let second = grid[3].clone();
+        assert!(second.contains("/short"), "short row intact: {second:?}");
+        assert!(second.contains("fits"), "short description intact: {second:?}");
     }
 }
