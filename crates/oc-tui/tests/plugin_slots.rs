@@ -335,9 +335,9 @@ fn tui_slots_end_to_end() {
     let grid = frame.text_grid();
     let pane: Vec<String> = grid.iter().map(|row| row.chars().skip(118).collect()).collect();
     assert!(pane[2].starts_with("  Slots session"), "the live title: {:?}", pane[2]);
-    assert!(pane[3].starts_with("  Fixture"), "the plugin section title: {:?}", pane[3]);
-    assert!(pane[4].starts_with("  preset: zhipuai"), "the plugin row 1: {:?}", pane[4]);
-    assert!(pane[5].starts_with("  sessions: 7"), "the plugin row 2: {:?}", pane[5]);
+    assert!(pane[4].starts_with("  Fixture"), "the plugin section title: {:?}", pane[4]);
+    assert!(pane[5].starts_with("  preset: zhipuai"), "the plugin row 1: {:?}", pane[5]);
+    assert!(pane[6].starts_with("  sessions: 7"), "the plugin row 2: {:?}", pane[6]);
 
     // The fully-built dialog opened and renders its rows natively.
     let top = store.top_dialog().expect("the poked dialog opened");
