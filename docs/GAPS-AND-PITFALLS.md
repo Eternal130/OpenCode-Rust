@@ -3492,3 +3492,10 @@ realchain pair+t9 **28/28**（含新 t9_8；修复前 t9_8 RED 实证）；oc-tu
 - **待查方向**：shell part 完成/输出事件的行订阅与首帧渲染间的 dirty 失效缺失；复现器=tl_tool_loop_pair（nudge 前的 fail dump）。
 
 W6 评审 4 Minor 清偿：①t9_8 整测试体持 armed 守护（ServiceClean 至显式 service_stop 后 disarm）②圈选透明 bg 边缘色差对齐 ref 不透明黑（paint_highlight 交换前置 Default→Rgb(0,0,0)）③G-128 补 0-anchor 首观锚测试退役勘注④INDEX 通道 9 行加 t9_8 单端性质脚注。
+
+## 磁盘台账：W7 盘满事故与 138 二进制原地 strip 规程（2026-11-17，W7 评审 Important② 补登记）
+
+- **事故**：oc-tui 全套件链接期盘满（937G 盘 0 可用；worktree target 51G 全为当日新鲜产物，main target 319G 在控制者清理清单禁碰）。
+- **处置**：worktree `target/debug/deps` 下 138 个 >50M 测试二进制原地 `strip --strip-debug`（51G→~17G，免重编免重链）+/tmp/opencode 死 PID 沙箱与可再生 staging（diff-tuifull）清扫。未动 main checkout、未 cargo clean。
+- **等价性论证**：测试二进制只被执行、不被重链/复哈希（cargo 指纹文件不受目标文件内容影响，mtime 变更不触发重建）→ 行为面零差异。已知降级：panic backtrace 符号丢失（forensics 降级——红测试的栈帧只剩地址）；不影响 nextest 计数/过滤。事后 oc-tui 1751/1751 与 realchain 35/35 全绿即实证。
+- **后续规程（盘满时优先）**：①`df -B1G` 确认；②dev-gate 锁空闲（防并发构建期 strip 正在写的文件）；③`find target/debug/deps -maxdepth 1 -type f -size +50M` + ELF 魔数过滤后逐个 `strip --strip-debug`；④不足再清 /tmp 死 PID 沙箱（`t9w1-<pid>-*` 对 /proc/<pid> 探活）与可再生 staging；⑤禁整清 main target（控制者清单）；需要符号 forensics 的红测试轮可 `cargo clean -p <crate>` 定向重建。

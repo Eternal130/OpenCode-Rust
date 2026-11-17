@@ -248,10 +248,20 @@ fn tl_tool_loop_pair() {
     // tool_result — a TUI-side row-projection race). A symmetric
     // no-op repaint nudge (right-arrow in the empty composer) re-sinks
     // the event on the affected runs; BOTH ends get the SAME nudge so
-    // the grids stay comparable.
+    // the grids stay comparable. Drift signal (W7 review minor②): a
+    // process-wide nudge counter — more than 2 uses means the race is
+    // growing beyond the known flake and gets a loud warning.
+    static NUDGE_USES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let mut rust_out = rig.rust_tui.wait_for_screen(TOOL_OUTPUT_NEEDLE, Duration::from_secs(15));
     let mut ref_out = rig.ref_tui.wait_for_screen(TOOL_OUTPUT_NEEDLE, Duration::from_secs(20));
     if !rust_out || !ref_out {
+        let uses = NUDGE_USES.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        if uses > 2 {
+            eprintln!(
+                "G-442 DRIFT WARNING: repaint nudge used {uses} times in this process — \
+                 the shell-row projection race is growing beyond the known ~50% flake"
+            );
+        }
         rig.rust_tui.write(b"\x1b[C");
         rig.ref_tui.write(b"\x1b[C");
         if !rust_out {
@@ -304,12 +314,27 @@ fn tl_tool_loop_pair() {
     );
     // Corpus completeness: the strict run must have zero gateway
     // misses (turn-anchored main turns + digest aux calls all hit).
+    // W7 review Important①: misses==0 alone let a全程 turn-shape-
+    // conflict replay (wrong-shape cassette served every turn) stay
+    // green — the gateway's /__stats now carries `turn_matches` by
+    // event, and a strict run must be PURE hits: any turn-rematch or
+    // turn-shape-conflict is a shape drift (corpus stale or engine
+    // request shape changed) and goes RED here.
     for (side, stats) in [("rust", &rust_stats), ("ref", &ref_stats)] {
         let misses = stats.get("misses").and_then(serde_json::Value::as_u64).unwrap_or(u64::MAX);
         assert!(
             misses == 0,
             "TL RED: the {side} gateway strict-missed {misses} request(s) — the committed \
              tool-loop corpus is incomplete (re-run the bootstrap seeds); stats {stats}"
+        );
+        let matches = stats.get("turn_matches");
+        let conflict_free = matches.is_some_and(|value| {
+            value.as_object().is_some_and(|table| table.keys().all(|event| event == "hit"))
+        });
+        assert!(
+            conflict_free,
+            "TL RED: the {side} gateway replayed a turn through a FALLBACK match — \
+             every main turn must strict-hit its own recorded shape; stats {stats}"
         );
     }
     // G-441 tripwire (documented masking, NOT silent): the port's edit
@@ -336,6 +361,12 @@ fn tl_tool_loop_pair() {
 /// viewport is 3 rows further up: its `hello` user row scrolls out
 /// while the port's stays — the hello row and blank rows collapse on
 /// BOTH ends for this comparison; every other row stays exact).
+/// KNOWN WEAKENING (registered, W7 review minor): dropping ALL blank
+/// rows (not just the offset artifacts) also collapses genuine
+/// blank-row spacing differences inside the transcript — accepted
+/// here because the 120-col pair grids carry no other blank-row
+/// signal (S2/P4b compare them row-exact elsewhere); retire this
+/// whole mask with G-441.
 fn mask_edit_diff(grid: &str) -> String {
     let mut out = String::new();
     for line in grid.lines() {
