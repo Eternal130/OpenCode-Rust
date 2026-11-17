@@ -88,9 +88,15 @@ fn worktree_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// The production binary built from this worktree.
+/// The production binary built from this worktree. Honors an explicit
+/// `CARGO_TARGET_DIR` (W8: lane verification on a disk-tight box reuses
+/// a sibling lane's build cache; cargo's own `CARGO_BIN_EXE_*` paths
+/// follow the same env, so the harness must agree with it).
 fn opencode_bin() -> PathBuf {
-    worktree_root().join("target/debug/opencode-rust")
+    match std::env::var_os("CARGO_TARGET_DIR") {
+        Some(dir) => Path::new(&dir).join("debug/opencode-rust"),
+        None => worktree_root().join("target/debug/opencode-rust"),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -400,12 +406,23 @@ pub struct Gateway {
     log_path: PathBuf,
 }
 
+/// The default gateway pace tier (W8 CI hook): the `T9_PACE` env
+/// override, default `instant` (the historical single-write shape).
+/// Scenarios that pin a fidelity mode (P1-P3) pass their mode to
+/// [`Gateway::spawn_paced`] explicitly and are NOT affected.
+#[must_use]
+pub fn default_pace() -> String {
+    std::env::var("T9_PACE").unwrap_or_else(|_| "instant".to_owned())
+}
+
 impl Gateway {
     /// Spawn the gateway; `record_dir` = bootstrap seeding mode (writes
-    /// generated cassettes — sandbox traffic only, no user data).
+    /// generated cassettes — sandbox traffic only, no user data). The
+    /// pace tier is [`default_pace`] (the `T9_PACE` env override,
+    /// default `instant` — the historical shape).
     #[must_use]
     pub fn spawn(tag: &str, record_dir: Option<&Path>) -> Gateway {
-        Gateway::spawn_paced(tag, record_dir, "instant")
+        Gateway::spawn_paced(tag, record_dir, &default_pace())
     }
 
     /// W5 timing fidelity: spawn with an explicit `--pace` mode
@@ -1245,26 +1262,39 @@ pub fn ref_service_stop(sandbox: &Sandbox, stage: &RefStage) {
 // plugin/module.ts + Npm for the ref), never driver injection.
 // ---------------------------------------------------------------------------
 
-/// One real plugin payload: (source install dir, config spec). The
-/// sources are the machine's plugin payload registry — a READ-ONLY
-/// COPY of the host's real `~/.cache/opencode` install trees staged
-/// at `/tmp/opencode/plugin-payload` (dev-gate runs the tests as a
-/// non-root uid; the payload must be readable by it). Privacy: these
-/// are published npm packages, not user data.
+/// One real plugin payload: (source dir NAME under the payload registry
+/// root, config spec). The registry root is the repo-local, git-ignored
+/// `tools/diff/realchain/plugin-payload/` (W8: payload persistence —
+/// /tmp staging died with reboots and was invisible to the worktree's
+/// lane isolation), override with `T9_PLUGIN_PAYLOAD_ROOT`. Provision
+/// it with `tools/diff/realchain/fetch_plugin_payload.sh` (casts the
+/// host's real `~/.cache/opencode` install trees). Privacy: these are
+/// published npm packages, not user data.
 pub const PLUGIN_SPECS: &[(&str, &str)] = &[
-    // (source dir, config spec)
-    ("/tmp/opencode/plugin-payload/oh-my-opencode-slim", "oh-my-opencode-slim@3.0.3"),
-    ("/tmp/opencode/plugin-payload/superpowers", "superpowers@7.0.0"),
+    // (registry dir name, config spec)
+    ("oh-my-opencode-slim", "oh-my-opencode-slim@3.0.3"),
+    ("superpowers", "superpowers@7.0.0"),
 ];
+
+/// The plugin payload registry root (see [`PLUGIN_SPECS`]).
+#[must_use]
+pub fn plugin_payload_root() -> PathBuf {
+    std::env::var_os("T9_PLUGIN_PAYLOAD_ROOT").map_or_else(
+        || worktree_dir("tools/diff/realchain/plugin-payload"),
+        |dir| Path::new(&dir).to_path_buf(),
+    )
+}
 
 /// Skip guard for the plugin rig: `Some(reason)` when the real plugin
 /// payload trees are absent on this machine (never a red).
 pub fn plugin_lane_skip_reason() -> Option<String> {
-    for (source, spec) in PLUGIN_SPECS {
-        if plugin_payload_stamp(Path::new(source)).is_none() {
+    for (name, spec) in PLUGIN_SPECS {
+        let source = plugin_payload_root().join(name);
+        if plugin_payload_stamp(&source).is_none() {
             return Some(format!(
-                "real plugin payload unavailable: no <stamp>/node_modules under {source} \
-                 (spec {spec}; stage the payload first)"
+                "real plugin payload unavailable: no <stamp>/node_modules under {} \
+                 (spec {spec}; run tools/diff/realchain/fetch_plugin_payload.sh first)",
+                source.display()
             ));
         }
     }
@@ -1318,13 +1348,13 @@ pub fn stage_plugins(sandbox: &Sandbox, ref_side: bool) -> Vec<String> {
     let base = if ref_side { "opencode" } else { "opencode-rust" };
     let npm_root = sandbox.root.join("xdg-cache").join(base).join("npm");
     let mut specs = Vec::new();
-    for (source, spec) in PLUGIN_SPECS {
+    for (name, spec) in PLUGIN_SPECS {
         let (_, version) = spec.rsplit_once('@').expect("pinned plugin spec");
         // `@org/pkg@ver` safety: the package name is everything before
         // the LAST '@'.
         let package = spec[..spec.len() - version.len() - 1].to_owned();
-        let stamp_dir = plugin_payload_stamp(Path::new(source))
-            .unwrap_or_else(|| panic!("plugin payload vanished after the skip check: {source}"));
+        let stamp_dir = plugin_payload_stamp(&plugin_payload_root().join(name))
+            .unwrap_or_else(|| panic!("plugin payload vanished after the skip check: {name}"));
         let target = npm_root.join(format!("{package}@{version}")).join(PAYLOAD_STAMP);
         if !target.join("node_modules").is_dir() {
             copy_tree_readonly(&stamp_dir, &target);

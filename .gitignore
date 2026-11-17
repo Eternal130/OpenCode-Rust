@@ -10,6 +10,11 @@
 tools/diff/corpus/tui/recorded-local/*
 !tools/diff/corpus/tui/recorded-local/README.md
 
+# Channel 9 real-plugin payload registry (W8: repo-local persistence,
+# provisioned by tools/diff/realchain/fetch_plugin_payload.sh; the
+# encrypted-corpus CI bundle may optionally carry a copy).
+tools/diff/realchain/plugin-payload/
+
 # OS
 .DS_Store
 

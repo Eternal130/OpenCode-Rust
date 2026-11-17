@@ -374,11 +374,27 @@ tests — never from real user traffic).
   `/opt/opencode-ref`, override `T9_REF_ROOT`) and the pinned bun
   1.4.2 (default the main checkout's untracked
   `tools/bin/bun-1.4.2`, override `T9_BUN`). When either is absent —
-  CI, for one — every pair test **skips** with the reason
+  the per-push CI, for one — every pair test **skips** with the reason
   (`ref_lane_skip_reason`), never reds. Mask retirement tripwires:
   each G-433..G-437 mask asserts its masked shape is still present —
   a closed gap turns its own test red, prompting mask retirement
   (never a silent green).
+- **W8 CI lane (manual dispatch = optional pre-release deep run)** —
+  the workflow `.github/workflows/realchain-diff.yml`
+  (`workflow_dispatch`) runs the FULL battery (T9 + pair + toolloop)
+  on a real GitHub runner: it builds the opencode-rust bin (strip,
+  same as the ci.yml build job), installs ref 2.0.24 from the pinned
+  tag tarball into a temp `T9_REF_ROOT` (deps via
+  `bun install --frozen-lockfile`), downloads the pinned bun 1.4.2
+  release, and — with ref+bun in place — the pair/toolloop lanes run
+  instead of skipping. Inputs: `suite` (lane filter), `pace`
+  (`T9_PACE` default-tier override), `corpus_bundle` (name under
+  `tools/diff/realchain/corpus/encrypted/`; empty = the committed
+  SYNTHETIC corpus with zero secrets). A named bundle REQUIRES the
+  `CORPUS_AGE_KEY` secret (missing secret = red); result dumps
+  (grids, gateway logs, misses) are age-encrypted to
+  `CORPUS_AGE_PUBKEY` before artifact upload. Corpus pipeline:
+  `tools/diff/realchain/corpus_age.sh` + `corpus/README-CI.md`.
 - **W5 timing fidelity (pace modes)** — the gateway takes
   `--pace instant|frames|synthetic[:seed=N][:ttft=MS][:tps=T]`:
 
@@ -402,7 +418,11 @@ tests — never from real user traffic).
   duration tokens (`3.6s`) normalize to `__SECS__` on both ends.
 - **W5 real-plugin rig (T9-7)** — read-only copies of the REAL plugin
   payloads (`oh-my-opencode-slim@3.0.3`, `superpowers@7.0.0`) staged
-  from `/tmp/opencode/plugin-payload` into each sandbox's install
+  from the repo-local registry `tools/diff/realchain/plugin-payload/`
+  (W8 persistence; provision with
+  `tools/diff/realchain/fetch_plugin_payload.sh`, override
+  `T9_PLUGIN_PAYLOAD_ROOT`; the CI lane stages a copy carried inside
+  the encrypted corpus bundle) into each sandbox's install
   cache (the `opencode plugin add` layout) and named in the config
   `plugins[]` array — the real config discovery path on both engines,
   never driver injection. Absent payload ⇒ skip. The port's real

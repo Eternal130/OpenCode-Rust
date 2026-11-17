@@ -64,6 +64,24 @@ def main() -> int:
     for path in everywhere.stdout.split():
         problems.append(f"tracked raw recording (repo-wide backstop): {path}")
 
+    # 5. (W8, channel-9 CI corpus) the ONLY tracked recorded-corpus
+    # entry point is tools/diff/realchain/corpus/encrypted/, and there
+    # ONLY as age-encrypted bundles (*.tar.age) plus the pipeline
+    # README — a plaintext cassette parked in that directory is a leak
+    # exactly like a tracked recording.
+    ENCRYPTED_DIR = "tools/diff/realchain/corpus/encrypted"
+    encrypted = subprocess.run(
+        ["git", "-c", "core.quotepath=false", "ls-files", ENCRYPTED_DIR],
+        cwd=REPO, capture_output=True, text=True, check=False)
+    if encrypted.returncode != 0:
+        print(f"guard error: git ls-files (encrypted dir) failed: {encrypted.stderr.strip()}")
+        return 2
+    for path in encrypted.stdout.split():
+        if not (path.endswith(".tar.age")
+                or path == f"{ENCRYPTED_DIR}/README.md"):
+            problems.append(
+                f"non-encrypted file tracked under {ENCRYPTED_DIR} (only *.tar.age allowed): {path}")
+
     if problems:
         for line in problems:
             print(f"recorded_local: VIOLATION: {line}")

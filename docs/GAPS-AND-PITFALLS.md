@@ -3499,3 +3499,10 @@ W6 评审 4 Minor 清偿：①t9_8 整测试体持 armed 守护（ServiceClean �
 - **处置**：worktree `target/debug/deps` 下 138 个 >50M 测试二进制原地 `strip --strip-debug`（51G→~17G，免重编免重链）+/tmp/opencode 死 PID 沙箱与可再生 staging（diff-tuifull）清扫。未动 main checkout、未 cargo clean。
 - **等价性论证**：测试二进制只被执行、不被重链/复哈希（cargo 指纹文件不受目标文件内容影响，mtime 变更不触发重建）→ 行为面零差异。已知降级：panic backtrace 符号丢失（forensics 降级——红测试的栈帧只剩地址）；不影响 nextest 计数/过滤。事后 oc-tui 1751/1751 与 realchain 35/35 全绿即实证。
 - **后续规程（盘满时优先）**：①`df -B1G` 确认；②dev-gate 锁空闲（防并发构建期 strip 正在写的文件）；③`find target/debug/deps -maxdepth 1 -type f -size +50M` + ELF 魔数过滤后逐个 `strip --strip-debug`；④不足再清 /tmp 死 PID 沙箱（`t9w1-<pid>-*` 对 /proc/<pid> 探活）与可再生 staging；⑤禁整清 main target（控制者清单）；需要符号 forensics 的红测试轮可 `cargo clean -p <crate>` 定向重建。
+
+# 第二十五轮（W8：通道 9 CI 化收官，2026-11-17）
+
+- **无新缺口**。W8 落地手动 workflow `realchain-diff.yml`（workflow_dispatch：全 lane 真链路对拍上 CI——ref 2.0.24 tag tarball 装入临时 `T9_REF_ROOT`+pinned bun 1.4.2+nextest；默认派发=纯合成语料零 secret；`corpus_bundle` 输入+`CORPUS_AGE_KEY` secret=age 解密注入真语料（缺 secret 且指定 bundle=红）；结果 dumps age 加密回传（`CORPUS_AGE_PUBKEY`））。
+- **语料管线**：`tools/diff/realchain/corpus_age.sh`（encrypt/decrypt，公钥模式：CI 只持公钥可加密不可解密）+ `corpus/README-CI.md` 摄取规范（过滤 truncated/失败交互+去敏感人工抽检）+ `recorded_local` 守卫扩展：`corpus/encrypted/` 下只许 `*.tar.age` 入库（明文 cassette=红）。加密包入 git（目录不 ignore）。
+- **插件供给持久化**（W5 concern①/t9_7 flake 面）：payload 从 `/tmp/opencode/plugin-payload` 挪至仓内 git-ignored `tools/diff/realchain/plugin-payload/`（`T9_PLUGIN_PAYLOAD_ROOT` 可覆写；供给脚本 `fetch_plugin_payload.sh` 从宿主 `~/.cache/opencode` npm/git 安装键铸）。CI 插件来源=加密 bundle 可选携带 `plugin-payload/`（实现面最小的方案；缺省=T9-7 在 CI 维持 skip）。
+- **登记性说明**：①`T9_PACE` env 钩子（`Gateway::spawn`/pair_rig 默认档=env 覆写，保真档场景 P1-P3 显式传参不受影响）；②`opencode_bin()` 尊重 `CARGO_TARGET_DIR`（lane 复用兄弟 worktree 构建缓存时的二进制定位）；③workflow 首触发待控制者审后手动执行（本轮未实跑 CI）。
