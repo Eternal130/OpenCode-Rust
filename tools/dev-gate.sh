@@ -35,6 +35,15 @@ if [[ $# -ne 1 ]]; then
   exit 2
 fi
 
+# --- disk backstop (2026-11-17 incident: a lane's load repro filled the
+# disk to 0 B; postgres crashlooped, new-api/gateway chain died) ------------
+free_kb=$(df -Pk / | awk 'NR==2 {print $4}')
+if [ "$free_kb" -lt 52428800 ]; then
+  echo "dev-gate: disk free $((free_kb/1024/1024))G < 50G — refusing to start." >&2
+  echo "free space first: du -sh .worktrees/*/target target; git worktree remove merged lanes; cargo clean per stale worktree (register 2.1#6)." >&2
+  exit 5
+fi
+
 # --- harness discipline (register 2.2#1) ------------------------------------
 # Canonical harness = nextest. Plain `cargo test` is forbidden as evidence or
 # iteration harness; the ONLY sanctioned libtest form is `cargo test --exact

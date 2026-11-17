@@ -3389,8 +3389,8 @@ G-412/413/414/415/416/417/418/420/422 ✅；**G-419/G-421 勘误撤销**（登�
 - **G-432 🔴→🟢（已修）**：rust `switchModel` 无条件 publish `session.model.selected` → 首回合幻影 "Switched model to …" 时间线行（ref `Session.switchModel` session.ts:101-106 对未变选择 no-op；且 ref 数据层把 composer 选择带进 create body）。修复双点：oc-server handlers/session.rs 未变选择 no-op + oc-tui app.rs home 提交把已解析 model 带进 `SessionCreateBody.model`。
 - **G-433 🟡**：自定义 provider 模型的 catalog 基座解析——ref 对 anthropic 包族自定义 provider 解析出基座（实测 `/api/model` replay/claude-opus-4-7 `limit.context=200000`）→ footer 渲染 `38 (0%)`；rust limit=0 → 只渲染 `38`。对拍以 G 标注双侧对称掩码 `(N%)` 组，待基座解析对齐后撤。
 - **G-434 🟡**：models.dev 目录快照 vintage 分叉——palette 免费层模型列表 ref 树 snapshot.txt 与 rust 内嵌目录不同代（生产是同一活目录）。S3 以过滤搜索行级钉配置模型 + 免费层仅存在性断言。
-- **G-435 🟡**：rust 侧栏 Context 块 rig 依赖——t9-5 单端 rig 渲染 Context+tokens，pair rig 确定性不渲染（ref 两 rig 都渲染）；S5 钉 ref 实跑形状（Context/38 tokens/0% used）+ 侧栏列区掩码，待 narrowing（疑似 port 侧插件槽位竞态）。
-- **G-436 🟡**：宽档（160 列）用户消息盒高度差 1 行（120 列 S2 逐行 EXACT 证明非内容差）；S5 空行/纯边框行双侧坍缩。
+- **G-435 ✅（2026-11-17 闭合，控制者轮）**：侧栏 Context 块"滞后一回合"根因定案——sidebar usage 匹配器（session.rs）误植 `cache_read: None`+`retry: None` 条件（ref util/session.ts:45-56 `lastAssistantWithUsage` 无此条件，只要求 tokens 载荷在场）；而快照页转换（data.rs）把 `cache_read` 无条件物化 `Some(0)`。会话开页 `message.list` 快照 post-settle 落地（W9 单调守卫平手→取快照）→ `Some(0)` → 匹配失败 → Context 块不渲染；快照 mid-turn（本地更鲜保本地）→ 渲染——时序二值化即"滞后一回合/flaky"。修复=匹配器对齐 ref（删两条件）；s5 ×10 稳定绿。**残留**（掩码由 G-435-residual 垂直偏移钉持有）：sidebar Context 块 rust 比 ref 高一行（rust Context 标题与 hello 同行、ref 低一行）——对齐闭合时绊线红→撤区掩码全栏比对。
+- **G-436 ✅（2026-11-17 作为伪影闭合）**：原登记"宽档用户消息盒高 1 行"不成立——旧 `ref > rust` 边框行数信号是 sidebar Context 行被列截断成裸 `┃` 的伪影（只在 rust 缺 Context 块时代在）；G-435 闭合后双侧 4=4。全宽 dump 证实左区逐行一致。`drop_blank_rows` 转为截断伪影归一化（双侧在场、计数钉 >0 且相等），随区掩码一并退役。
 - **G-437 🟡**：rust TUI palette 不反映热载后的模型列表（服务器 `/api/model` 已反映——t9-6 机器代理绿；ref 原生 watcher 双端都达）；S6 钉 ref palette 形状 + rust API 级 outcome + 该行 G 标注掩码。
 
 ## 六场景对拍终态（同一网关、同键序、归一化 grid 比对）
@@ -3519,3 +3519,12 @@ W6 评审 4 Minor 清偿：①t9_8 整测试体持 armed 守护（ServiceClean �
 - **取证钩子（env 门控、缺省零开销）**：`OC_TUI_TRACE`（store ingest trace：tool-settle 落地+快照/resync 降级事件）与 `OC_TUI_DEBUG_MESSAGES`（退出时 dump 全会话消息树）。
 - **通道 8 直跑勘注**：`tui_fullscreen.py` 的 npm cache 路径原硬编码 `/root/.cache/opencode/npm`（eternal130 直跑不可达）→ `OC_DIFF_NPM_CACHE` env 覆写；nested dev-gate 以外层 `OPENCODE_DEV_GATE=1` + CPU/Mem 配额 scope 直跑（2.2#9 模式补全）。
 - **已知瞬态**：s5 TRY1 G-435 绊线红（侧栏 Context 块 rig 依赖面，重试绿，非回归）；corpus-w5 seeds 每次回放重写 recordedAt（生成性 dirt，禁提交）。
+
+# 第二十七轮（控制者轮：G-435/G-436 闭合 + W9 合并收口，2026-11-17）
+
+- **W9 合并后 s5 绊线三态定性**：合并树首跑红（rust=有 Context）→ 连跑 flaky→hard red——W9 单调守卫把 G-435 从"必滞后"变"时序二值"。取证链：P4 未掩码 dump（turn 2+ rust 恒有 Context、turn 1 flaky）→ `OC_TUI_DEBUG_MESSAGES` 绿轮终态（`usage_total: Some(38)` 在场但 `cache_read: Some(0)`）→ 匹配器要求 `cache_read: None` → ref 源码锚（util/session.ts:45-56 无此条件）。根因/闭合详见 G-435/G-436 条目。
+- **修复面**：session.rs sidebar usage 匹配器删 `cache_read: None`/`retry: None`（对齐 ref）；s5 重铸为三钉一组（G-435 闭合钉=双侧 Context/38 tokens 在场；G-433 钉=percent 行 ref 独有；G-435-residual 垂直偏移钉=rust Context 与 hello 同行/ref 低一行）+ G-436 边框计数改相等钉（4=4）；区掩码保留但依据移交垂直偏移钉。s5 ×10 稳定绿（13s 恒定，flake 消失）。
+- **验证**：realchain 35/35 + oc-tui 1752/1752（1 flaky 白名单族）+ 通道 8 gate exit 0 CAUSES 0（**零漂移——matcher 改动未翻任何冻结帧，无重钉事件**）+ clippy/fmt/guards 绿。
+- **W9 评审 3 Minor 收账**：①`prefer_fresher_local` O(fetched×local) 线性扫描+clone（200 条/长会话 resync O(n²)，当前规模无碍——登记在案，优化轮再动）；②磁盘 incident 行（W9 lane 违 2.1#6 字面在 worktree 默认 target 灌 120G、事后已清——与满盘事故同源类别，lane 派发词已含 CARGO_TARGET_DIR 隔离要求，gen2 纪律硬化后未再犯）；③CI 首绿佐证=控制者触发 realchain-diff（本轮执行）。
+- **控制者操作事故（第五次 freshness 拦截）**：改 session.rs 后未重编 bin 直接跑 s5——守卫拦（stale binary），重编后 ×10 全绿。**合并/改产品码后先 `cargo build -p oc-cli --bin opencode-rust` 再跑 T9/pair** 已是硬规程，本轮再实证。
+- **通道 8 eternal130 直跑配方（沉淀）**：`systemd-run --uid=eternal130 --scope --property=CPUQuota=400% --property=MemoryMax=10G /usr/bin/bash -c "export HOME=/home/eternal130 OC_DIFF_NPM_CACHE=<空缓存> OC_DIFF_PLUGIN_OMO_SLIM=<registry 包目录> OC_DIFF_PLUGIN_SUPERPOWERS=<同> TUI_DIFF_BUN=tools/bin/bun-1.4.2 OPENCODE_DEV_GATE=1; python3 tools/diff/tui_fullscreen.py"`——`OPENCODE_DEV_GATE=1` 必须（内层 dev-gate 的嵌套 systemd-run 被 polkit 拒=rc1 假红）；插件供给从仓内 registry 经 PLUGIN_ENV 指包目录。

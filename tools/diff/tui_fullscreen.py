@@ -176,11 +176,14 @@ def _copytree(source: Path, destination: Path) -> None:
     shutil.copytree(source, destination, dirs_exist_ok=True)
 
 
-def _payload_source(payload: dict) -> Path | None:
+def _payload_source(payload_id: str, payload: dict) -> Path | None:
     """Resolve one payload's read-only source entity (env override
     first; repo:// fixtures for committed payloads; newest npm stamp
     otherwise)."""
-    override = os.environ.get(PLUGIN_ENV.get(str(payload), "") or "", "")
+    # W-fix 2026-11-17: the env override was dead code — the lookup
+    # keyed on str(payload_dict), which never matches PLUGIN_ENV's id
+    # keys; callers now pass the id alongside the dict.
+    override = os.environ.get(PLUGIN_ENV.get(payload_id, "") or "", "")
     if override:
         path = Path(override)
         return path if path.is_dir() else None
@@ -222,7 +225,7 @@ def stage_plugins(stage: Path, ids: list[str]) -> tuple[dict[str, str], dict[str
     unavailable: list[str] = []
     for pid in sorted(set(ids)):
         payload = PLUGIN_PAYLOADS[pid]
-        source = _payload_source(payload)
+        source = _payload_source(pid, payload)
         if source is None:
             unavailable.append(pid)
             continue
