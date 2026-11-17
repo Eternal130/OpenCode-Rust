@@ -328,10 +328,14 @@ fn t9_8_slow_boot_window_stays_clean_of_connection_lost() {
         &box_,
         &[("OPENCODE_TEST_SSE_FIRST_FRAME_DELAY_MS".to_owned(), "6000".to_owned())],
     );
+    // W7 Minor ① (W6 review): the guard previously disarmed right
+    // after the spawn, leaving the WHOLE polling/assert body without a
+    // panic-safe daemon cleaner (a mid-loop panic stranded the daemon
+    // on the sandbox's fixed port and wedged later lane runs). The
+    // armed guard now lives for the entire test body; `service_stop`
+    // below is idempotent with its Drop.
     let mut daemon_clean = realchain_harness::ServiceClean::new(&box_);
     let mut tui = TuiProcess::spawn(&box_, COLS, ROWS);
-    daemon_clean.disarm();
-    drop(daemon_clean);
     // The boot window: poll the rendered screen for 12 s (the 6 s
     // first-frame hold + margins) — the raw stream check catches even
     // a one-frame flash of the overlay.
@@ -353,6 +357,7 @@ fn t9_8_slow_boot_window_stays_clean_of_connection_lost() {
     };
     tui.shutdown(Duration::from_secs(10));
     service_stop(&box_);
+    daemon_clean.disarm(); // the explicit stop above covered the Drop's duty
     drop(tui);
     drop(gateway);
     drop(lane);
