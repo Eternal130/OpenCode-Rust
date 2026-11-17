@@ -943,6 +943,7 @@ G-93..G-104 全部 ✅。现存未关闭项维持既有文档化决策：G-28（
 ### G-128 ✅ 通用 spring/tween 动画引擎未移植（tui）
 - Rust：全 crates 无 createAnimatable/advanceSpring；session_tabs.rs:14 注释 "motion springs stay C2"；tool_detail.rs websearch 静态渲染。
 - Ref：ui/animation.ts（advanceSpring）+ retry-provider.tsx:19-20（FADE=80/RESIZE=60）。连带丢失：RetryProvider fade/resize、tab 宽度 spring、pane-resize 平滑过渡、title-shimmer/DIM 回退（session_tabs_solid.rs:773-795 静态渲染，无动画分支）。
+- **W6 勘注升级（症状⑨ 真机报告核实，2026-11-17）**：beta.15/16 用户报"busy 标签页无呼吸灯"。W6 帧序列核查（`tests/busy_pulse_frames.rs`）证实 W5 lane TAIL 已把 busy tab 的两个动效面全部落地为时钟驱动——spinner 逐帧循环 + 2.8s 扫光带（fronts/coast 包络，tab-pulse.tsx:404-417 对齐，振幅 0.14 有界）；帧预算测试在场。真机"无呼吸灯"与树不符，疑因（a）用户 config `animations:false`，或（b）非 busy 态观察（unread 静息 glow 本就无时钟——ref 同款）。本条维持 ✅ 并以帧序列测试钉死回归面。
 
 ### G-129 ✅ display_width 缺文本呈现型 emoji 收窄规则（tui）
 - Rust：wrap.rs:89-91 `text.width().saturating_sub(merged_cells(text))`（unicode-width；merged_cells 只处理 Brahmic）。
@@ -3444,3 +3445,32 @@ LaneGuard drop 时清扫本进程沙箱注册表（`/tmp/opencode/t9w1-<pid>-*` 
 ## 验证
 
 pair 全量 17/17（S1-S6+P1-P3+T9-7+P4/P4b+绊线；`test result:` 尾行见 w5-report）；realchain_t9 10/10；oc-tui+oc-server 2152/2152；通道 8 `tui_fullscreen.py` exit 0 零漂移；clippy `--workspace --all-targets -D warnings` 0 错；fmt --check 绿；guards 全绿。
+
+# 第二十三轮（W6：三真机症状根因修复 + harness 加固，2026-11-17）
+
+beta.15/16 用户真机三症状（①启动 "Connection lost…" 覆盖层闪现、⑧鼠标圈选无高亮、⑨busy 标签页呼吸灯）落地。
+
+## 症状① — G-439 🔴→🟢（已修）：never-connected 启动窗口渲染 "Connection lost…" 覆盖层
+
+- **Ref 精读**（app.tsx:1294-1315 + connection.ts + reconnecting.tsx + server-connection.ts）：ref 的初态 5s 计时器在**真机不可达**——CLI 在 TUI 挂载**前**健康门禁守护（`Service.ensure` 轮询至 120s，server-connection.ts:46-50 + service-timing promiseTimeout）；挂载后任何挂死先撞 2s connect 窗口（connection.ts:32/81）转 `reconnecting`，而托管模式覆盖层文案是 "Restarting service…" / "Your session will resume automatically."（reconnecting.tsx:9-20，`managed={client.restart !== undefined}`）——**启动窗口的 "Connection lost…" 文案在 ref 托管链路不存在**。
+- **Port 缺口**：`store.rs::reconnecting_overlay_visible` 对从未连上的初态（含 SSE 首帧慢→重试族）也起表并渲染非托管文案——真机慢冷启（真配置/插件/模型加载）>阈值即闪现。
+- **修复**：`connection_ever_connected` 闩（store.rs）——首次成功连接前不显示 lost 覆盖层；真断连（曾连上）仍按 1s/5s 阈值显示。`vt_temporal` never-connect、`pty_core_interactions` 断连恢复两测试改钉新语义（后者补 `sse_close_open` 中途断流注入：先连上再断，测"loss and recovery"本义）。
+- **复现场景**：oc-server 测试注入 `OPENCODE_TEST_SSE_FIRST_FRAME_DELAY_MS`（sse.rs——健康但首帧迟的守护，真机慢冷启的确定性替身）；`t9_8_slow_boot_window_stays_clean_of_connection_lost`（realchain_t9）断言 boot 窗口（12s 采样 + raw 流全文）零 "Connection lost"，修复前 RED 实证、修复后绿。
+- **残差（C 线）**：托管/非托管文案分叉本身未移植（port 恒渲染非托管文案；真断连时 ref 托管用户看到 "Restarting service…"）——低危、随 G-439 记账后续。
+
+## 症状⑧ — G-440 🔴→🟢（已修）：鼠标圈选无高亮
+
+- **根因**：TUI-16 只移植了 selection 的**复制**半边（release→剪贴板/toast）；opentui 渲染器在合成后的网格上以反显（fg↔bg 交换）绘制活动选区这一**渲染**半边缺失——拖选中与 manual 模式保留矩形全程不可见。
+- **修复**：`selection.rs::paint_highlight`（矩形内逐 cell fg/bg 交换），`App::frame` 在全部树层合成后调用（渲染器后网格通道的 z 语义）。测试：selection 单元（矩形内交换/矩形外不动）+ app 级拖选反显断言（`mouse_drag_selection_paints_reverse_video_highlight`）。
+
+## 症状⑨ — G-128 勘注升级（见上）：呼吸灯已在树，帧序列钉死
+
+W5 lane TAIL 已把 busy tab 双动效面（spinner 循环 + 2.8s 扫光带）落成时钟驱动；新增 `tests/busy_pulse_frames.rs` 帧序列测试（扫光逐帧推进/振幅 0.14 有界/静息态对照），回归即红。真机报告与树不符的两种解释（animations:false / 非 busy 态观察）已记 G-128 勘注。
+
+## harness 加固
+
+T9 rig 构造窗守护清防：`ServiceClean`（realchain_harness.rs）覆盖 `service_start`→Rig 接管之间的 panic 窗口（pair 的 Rig Drop 只覆盖自身构造窗）；t9 rig/t9_8 接线。
+
+## 验证
+
+realchain pair+t9 **28/28**（含新 t9_8；修复前 t9_8 RED 实证）；oc-tui 全套件 **1744/1744**（含 frame budget 全绿）；通道 8 `tui_fullscreen.py` exit 0 零漂移；clippy `--workspace --all-targets -D warnings` 0 错；fmt 绿；guards 全绿（`test result:`/Summary 尾行见 .test-logs/w6-*.log 与 w6-report.md）。
