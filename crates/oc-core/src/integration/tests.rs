@@ -4223,7 +4223,7 @@ async fn g284_wellknown_registers_login_command_and_prefers_nested_config() {
 // the tree).
 // ---------------------------------------------------------------------------
 
-mod g441_credential_serde {
+mod g445_credential_serde {
     use super::super::types::{CredentialValue, KeyValue, OAuthValue};
     use serde_json::json;
 
