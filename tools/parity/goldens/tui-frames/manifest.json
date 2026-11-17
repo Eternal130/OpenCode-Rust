@@ -1450,11 +1450,11 @@
           "cols": 160,
           "txt": {
             "bytes": 5087,
-            "sha256": "361b526a0309330ff2d89110f9c18d861a24b08a7697dde88b9506b4d5ff91ec"
+            "sha256": "78c9f6ffdd11ca41f2f4faf9a91e165b8fcbacd884612563f07d6eb1f11539eb"
           },
           "ansi": {
             "bytes": 10015,
-            "sha256": "174b5780604f2c87d81cd041adec1e3546ec10dde6b4400371d24b7fb4537742"
+            "sha256": "085d3e8d151f4f06533e285ac71ba189c065bce37c1120d0ee4ff5683ac4adae"
           }
         }
       ]
