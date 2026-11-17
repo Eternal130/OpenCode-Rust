@@ -45,10 +45,10 @@
 mod realchain_harness;
 
 use realchain_harness::{
-    assert_grids_match, corpus_dir, corpus_ref_dir, dump_grid, http_get, http_post, lane_lock,
-    normalize_grid, plugin_lane_skip_reason, ref_lane_skip_reason, ref_root, ref_service_stop,
-    ref_stage, ref_tui_spawn, sandbox, service_start, service_stop, stage_plugins, worktree_dir,
-    Gateway, LaneGuard, RefStage, Sandbox, TuiProcess, WORDMARK,
+    assert_grids_match, corpus_dir, corpus_ref_dir, default_pace, dump_grid, http_get, http_post,
+    lane_lock, normalize_grid, plugin_lane_skip_reason, ref_lane_skip_reason, ref_root,
+    ref_service_stop, ref_stage, ref_tui_spawn, sandbox, service_start, service_stop,
+    stage_plugins, worktree_dir, Gateway, LaneGuard, RefStage, Sandbox, TuiProcess, WORDMARK,
 };
 use std::time::{Duration, Instant};
 
@@ -146,7 +146,7 @@ fn settle(secs: u64) {
 }
 
 fn pair_rig(tag: &str, cols: u16) -> PairRig {
-    pair_rig_ext(tag, cols, "instant", false, false)
+    pair_rig_ext(tag, cols, &default_pace(), false, false)
 }
 
 /// W5: the rig with a pace mode (`instant` = the historical shape) and

@@ -1,0 +1,192 @@
+name: realchain-diff
+
+# Channel 9 real-chain differential battery on REAL CI hardware (W8):
+# the full T9 + ref-pair + tool-loop lanes against ref 2.0.24 and the
+# pinned bun, optionally fed an age-encrypted REAL recorded corpus
+# bundle. Manual dispatch only (workflow_dispatch) — the ~25 min job is
+# a pre-release deep-run, not a per-push gate. The default dispatch
+# (no corpus_bundle) runs the committed SYNTHETIC battery with ZERO
+# secrets.
+#
+# Cross-platform extension = matrix rows (macos-latest: replace the
+# linux-x64 bun URL with bun-darwin-x64.zip, ref tarball URL is
+# platform-neutral; windows needs the PTY/loopback story verified
+# first — do not add blindly).
+
+on:
+  workflow_dispatch:
+    inputs:
+      corpus_bundle:
+        description: "encrypted corpus bundle name under tools/diff/realchain/corpus/encrypted/ (empty = synthetic-only run)"
+        required: false
+        default: ""
+        type: string
+      suite:
+        description: "which lanes to run"
+        required: false
+        default: all
+        type: choice
+        options: [realchain, pair+toolloop, all]
+      pace:
+        description: "default gateway pace tier (T9_PACE; fidelity-pinned scenarios are unaffected)"
+        required: false
+        default: instant
+        type: string
+
+concurrency:
+  group: realchain-diff
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  OPENCODE_DISABLE_BUN_DOWNLOAD: "1"
+
+jobs:
+  realchain-diff:
+    name: real-chain differential (T9 + pair + toolloop)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-latest extension: add `os: macos-latest` and swap the
+        # bun archive to bun-darwin-x64.zip in the install step.
+        os: [ubuntu-latest]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Cache + sccache, same shared-key convention as ci.yml — the
+      # dependency chain then compiles once ever across runs.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: opencode-ci
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: taiki-e/install-action@v2
+        with:
+          # dev-gate pin (see ci.yml note on 0.9.148).
+          tool: cargo-nextest@0.9.148
+
+      - name: Reclaim runner disk + scratch dir
+        run: |
+          set -eu
+          df -h / | tee "$RUNNER_TEMP/df-before.txt"
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghcup /usr/local/.ghcup || true
+          df -h / | tee "$RUNNER_TEMP/df-after.txt"
+          mkdir -p /tmp/opencode
+
+      # The pinned bun 1.4.2 (the ref packageManager contract checked
+      # by ref_stage): the harness default T9_BUN path is the MAIN
+      # checkout's tools/bin — on the runner we download the exact
+      # release binary into THIS checkout's tools/bin (git-ignored).
+      - name: Install pinned bun 1.4.2
+        run: |
+          set -eu
+          curl -sSfL -o /tmp/opencode/bun.zip https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-x64.zip
+          unzip -o -q /tmp/opencode/bun.zip -d /tmp/opencode/bunx
+          mkdir -p tools/bin
+          cp /tmp/opencode/bunx/bun-linux-x64/bun tools/bin/bun-1.4.2
+          chmod +x tools/bin/bun-1.4.2
+          tools/bin/bun-1.4.2 --version
+
+      # ref 2.0.24, same source+pin the local lane uses: the v2.0.24
+      # tag tarball from the ref upstream (the ./ref
+      # checkout's upstream remote), installed into a TEMP root (never
+      # a repo path) with the workspace deps via the pinned bun.
+      - name: Install ref 2.0.24 tarball into T9_REF_ROOT
+        run: |
+          set -eu
+          REF_ROOT="$RUNNER_TEMP/opencode-ref"
+          curl -sSfL -o /tmp/opencode/ref.tar.gz https://github.com/anomalyco/opencode/archive/refs/tags/v2.0.24.tar.gz
+          mkdir -p "$REF_ROOT"
+          tar -xzf /tmp/opencode/ref.tar.gz -C "$REF_ROOT" --strip-components=1
+          tools/bin/bun-1.4.2 install --frozen-lockfile --cwd "$REF_ROOT"
+          test -f "$REF_ROOT/packages/cli/src/index.ts"
+          test -f "$REF_ROOT/packages/tui/node_modules/@opentui/solid/scripts/preload.js"
+          echo "T9_REF_ROOT=$REF_ROOT" >> "$GITHUB_ENV"
+
+      - name: Build the opencode-rust binary
+        run: |
+          set -eu
+          cargo build --locked -p oc-cli --bin opencode-rust
+          strip target/debug/opencode-rust
+
+      # Corpus: a named bundle REQUIRES the decryption secret (missing
+      # secret + named bundle = red, never a silent synthetic run); no
+      # bundle = the committed synthetic corpus only. Decrypted
+      # plaintext goes to /tmp/opencode (outside the repo), then corpus
+      # dirs overlay the committed ones as untracked adds and an
+      # optional plugin-payload/ registry feeds the T9-7 scenario.
+      - name: Decrypt corpus bundle (if requested)
+        env:
+          CORPUS_AGE_KEY: ${{ secrets.CORPUS_AGE_KEY }}
+        run: |
+          set -eu
+          if [ -z "${{ inputs.corpus_bundle }}" ]; then
+            echo "no corpus_bundle input: synthetic corpus only (zero secrets)"
+            exit 0
+          fi
+          if [ -z "${CORPUS_AGE_KEY:-}" ]; then
+            echo "corpus_bundle '${{ inputs.corpus_bundle }}' requested but CORPUS_AGE_KEY secret is absent" >&2
+            exit 1
+          fi
+          BUNDLE="tools/diff/realchain/corpus/encrypted/${{ inputs.corpus_bundle }}"
+          test -f "$BUNDLE"
+          PLAIN=/tmp/opencode/realchain-corpus
+          tools/diff/realchain/corpus_age.sh decrypt "$BUNDLE" "$PLAIN"
+          for d in corpus corpus-ref corpus-w5 corpus-tools corpus-tools-ref; do
+            if [ -d "$PLAIN/$d" ]; then
+              mkdir -p "tools/diff/realchain/$d"
+              cp -a "$PLAIN/$d/." "tools/diff/realchain/$d/"
+            fi
+          done
+          if [ -d "$PLAIN/plugin-payload" ]; then
+            mkdir -p tools/diff/realchain/plugin-payload
+            cp -a "$PLAIN/plugin-payload/." tools/diff/realchain/plugin-payload/
+          fi
+
+      # The battery. Suite filter per the dispatch input; pace rides
+      # T9_PACE (default tier only). With ref + bun in place the pair
+      # lane's ref_lane_skip_reason returns None and the toolloop /
+      # plugin skip guards clear on the staged payload.
+      - name: Run the real-chain battery
+        run: |
+          set -eu
+          TESTS="--test realchain_t9 --test realchain_pair --test realchain_toolloop"
+          case "${{ inputs.suite }}" in
+            realchain)       TESTS="--test realchain_t9" ;;
+            pair+toolloop)   TESTS="--test realchain_pair --test realchain_toolloop" ;;
+          esac
+          cargo nextest run -p oc-tui $TESTS --locked --no-fail-fast
+        env:
+          T9_REF_ROOT: ${{ env.T9_REF_ROOT }}
+          T9_BUN: ${{ github.workspace }}/tools/bin/bun-1.4.2
+          T9_PACE: ${{ inputs.pace }}
+
+      # Result artifacts leave the runner ONLY age-encrypted to the
+      # corpus public key (CI can encrypt, never decrypt): grid dumps,
+      # gateway logs and strict misses from /tmp/opencode.
+      - name: Encrypt + upload result dumps (always)
+        if: always()
+        env:
+          CORPUS_AGE_PUBKEY: ${{ secrets.CORPUS_AGE_PUBKEY }}
+        run: |
+          set -eu
+          if [ -z "${CORPUS_AGE_PUBKEY:-}" ]; then
+            echo "CORPUS_AGE_PUBKEY secret absent: skipping encrypted artifacts (raw dumps stay on the ephemeral runner)"
+            exit 0
+          fi
+          OUT=/tmp/opencode/realchain-results
+          mkdir -p "$OUT"
+          cp -a /tmp/opencode/t9w1-* "$OUT"/ 2>/dev/null || true
+          cp -a .test-logs "$OUT"/ 2>/dev/null || true
+          tools/diff/realchain/corpus_age.sh encrypt "$OUT" "/tmp/opencode/realchain-results.tar.age"
+      - name: Upload encrypted result bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: realchain-results-${{ matrix.os }}-${{ github.run_id }}
+          path: /tmp/opencode/realchain-results.tar.age
+          retention-days: 7
+          if-no-files-found: ignore
