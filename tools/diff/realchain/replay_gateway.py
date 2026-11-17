@@ -24,14 +24,36 @@ Cassette format (v1, same shape as the ref HttpRecorder cassettes):
       { "request": { "method": "POST", "url": ..., "body": "<json>" },
         "response": { "status": 200, "headers": {...}, "body": "<sse>" } } ] }
 
+Cassette format (v2, W5 timing fidelity): the response may additionally
+carry `frames: [{blob, delay_ms}]` — the body split per SSE event with
+the inter-frame delay captured at record time (a v1 whole-body
+cassette still replays: it is read compatibly with NO timing). The
+concatenated frame blobs equal the v1 body byte-for-byte.
+
 Seed cassettes written by --seed-reply/--record-dir store the
 NORMALIZED request object (post-redaction) plus the seed response, so
-strict replays of equivalent (redacted-equal) requests hit.
+strict replays of equivalent (redacted-equal) requests hit. W5: when a
+pace schedule is active the generated seed cassette records the
+schedule as v2 `frames`, so timing survives cassette round-trips.
+
+Pacing (--pace MODE, W5):
+  * instant   — no pacing (default; the fast T9 battery shape)
+  * frames    — replay cassette v2 `frames` delays where present
+                (a body without frames falls back to instant)
+  * synthetic:seed=N[:ttft=MS][:tps=T] — a DETERMINISTIC synthetic
+                schedule (seed-corpus determinism; the same schedule is
+                served to BOTH pair ends, so differential fairness is
+                preserved: same schedule = I/O identical INCLUDING
+                timing). Tiers: TTFT one of 300/1500/4000 ms and TPS
+                one of 20/60/120 tok/s, chosen per request digest from
+                sha256(digest + seed) — or pinned with the explicit
+                ttft=/tps= params (the P1/P2 scenario pins).
 
 Usage:
   replay_gateway.py --port 0 --corpus DIR [--corpus DIR ...] \
       [--log FILE] [--dump-misses DIR] [--redact FROM:TO] ... \
-      [--seed-reply FILE] [--record-dir DIR] [--strict/--no-strict]
+      [--seed-reply FILE] [--record-dir DIR] [--strict/--no-strict] \
+      [--pace instant|frames|synthetic:...]
 """
 
 from __future__ import annotations
@@ -230,6 +252,138 @@ def log(event: str, **fields):
         print(line, file=stream, flush=True)
 
 
+# ---------------------------------------------------------------------------
+# Pacing (W5 timing fidelity)
+# ---------------------------------------------------------------------------
+
+TTFT_TIERS_MS = (300, 1500, 4000)
+TPS_TIERS = (20, 60, 120)
+
+
+def parse_pace(spec):
+    """--pace spec → dict(mode, seed, ttft_ms, tps)."""
+    if spec == "instant":
+        return {"mode": "instant"}
+    if spec == "frames":
+        return {"mode": "frames"}
+    if spec.startswith("synthetic"):
+        rest = spec.split(":", 1)[1] if ":" in spec else ""
+        out = {"mode": "synthetic", "seed": 0, "ttft_ms": None, "tps": None}
+        for part in rest.split(":"):
+            if not part:
+                continue
+            if part.startswith("seed="):
+                out["seed"] = int(part[5:])
+            elif part.startswith("ttft="):
+                out["ttft_ms"] = int(part[5:])
+            elif part.startswith("tps="):
+                out["tps"] = int(part[4:])
+            else:
+                raise SystemExit(f"--pace: unknown synthetic param {part!r}")
+        return out
+    raise SystemExit(f"--pace: unknown mode {spec!r}")
+
+
+def synthetic_schedule(digest, seed):
+    """Deterministic (ttft_ms, tps) tier pair for a request digest."""
+    mix = int(hashlib.sha256(f"{digest}:{seed}".encode()).hexdigest()[:8], 16)
+    return TTFT_TIERS_MS[mix % len(TTFT_TIERS_MS)], TPS_TIERS[(mix >> 8) % len(TPS_TIERS)]
+
+
+def split_sse_frames(body):
+    """Split an SSE body into event frames (each blob keeps its \n\n)."""
+    frames = []
+    start = 0
+    while True:
+        at = body.find("\n\n", start)
+        if at == -1:
+            break
+        frames.append(body[start:at + 2])
+        start = at + 2
+    if start < len(body):
+        frames.append(body[start:])
+    return frames
+
+
+def _frame_text_bytes(blob):
+    """Payload text size of one SSE frame (0 for non-delta frames)."""
+    for line in blob.splitlines():
+        if line.startswith("data:"):
+            payload = line[5:].strip()
+            if not payload:
+                continue
+            try:
+                doc = json.loads(payload)
+            except ValueError:
+                continue
+            delta = doc.get("delta") if isinstance(doc, dict) else None
+            if isinstance(delta, dict) and delta.get("type") == "text_delta":
+                return len(delta.get("text") or "")
+    return 0
+
+
+def build_schedule(digest, resp_body_text, pace):
+    """[(blob_bytes, delay_ms_before)] for the body under the pace mode."""
+    if pace["mode"] == "instant":
+        return [(resp_body_text.encode(), 0)]
+    if pace["mode"] == "frames":
+        # v1 cassettes carry no frames — degrade to instant (documented
+        # fallback; W5 review Important-1: the caller previously
+        # crashed summing None).
+        return [(resp_body_text.encode(), 0)]
+    ttft, tps = synthetic_schedule(digest, pace["seed"])
+    if pace["ttft_ms"] is not None:
+        ttft = pace["ttft_ms"]
+    if pace["tps"] is not None:
+        tps = pace["tps"]
+    frames = split_sse_frames(resp_body_text)
+    schedule = []
+    seen_delta = False
+
+    def emit_delta_frame(payload_line_template, text, delay):
+        # Re-frame one text_delta into per-token sub-events (transport
+        # re-chunking: SSE consumers must accept arbitrary event
+        # chunking; BOTH pair ends receive identical bytes).
+        step = 3
+        for i in range(0, len(text), step):
+            chunk = text[i:i + step]
+            blob = payload_line_template.replace("__TEXT__", chunk) + "\n\n"
+            d = delay if i == 0 else max(1, round(len(chunk) / tps * 1000))
+            schedule.append((blob.encode(), d))
+
+    for blob in frames:
+        template = None
+        text = None
+        for line in blob.splitlines():
+            if line.startswith("data:"):
+                payload = line[5:].strip()
+                try:
+                    doc = json.loads(payload)
+                except ValueError:
+                    continue
+                delta = doc.get("delta") if isinstance(doc, dict) else None
+                if isinstance(delta, dict) and delta.get("type") == "text_delta":
+                    text = delta.get("text") or ""
+                    # Rebuild the wire line with the text swapped out.
+                    doc["delta"]["text"] = "__TEXT__"
+                    template = "data: " + json.dumps(doc, separators=(",", ":"))
+        if template is None:
+            schedule.append((blob.encode(), 0))
+            continue
+        delay = ttft if not seen_delta else 0
+        seen_delta = True
+        emit_delta_frame(template, text, delay)
+    if not schedule:
+        schedule = [(resp_body_text.encode(), 0)]
+    return schedule
+
+
+def frames_from_schedule(schedule):
+    """v2 cassette `frames` for a computed schedule (recorded timing)."""
+    return [{"blob": blob.decode("utf-8", "replace"), "delay_ms": delay}
+            for blob, delay in schedule]
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -300,19 +454,46 @@ class Handler(BaseHTTPRequestHandler):
         if hit:
             _rank, cassette, inter = hit
             resp = inter.get("response") or {}
-            resp_body = (resp.get("body") or "").encode()
+            resp_body = (resp.get("body") or "")
+            if isinstance(resp_body, bytes):
+                resp_body = resp_body.decode("utf-8", "replace")
             ctype = (resp.get("headers") or {}).get("content-type", "application/json")
-            if isinstance(resp_body, str):
-                resp_body = resp_body.encode()
-            # normalize the transport framing headers; keep the body exact.
+            # W5 pacing: v2 cassette frames (recorded timing) when the
+            # pace mode wants them, else a computed schedule; instant
+            # stays the single whole-body write (the fast T9 battery).
+            schedule = None
+            if ARGS.pace["mode"] == "frames":
+                raw_frames = resp.get("frames")
+                if isinstance(raw_frames, list) and raw_frames:
+                    candidate = []
+                    for frame in raw_frames:
+                        blob = (frame or {}).get("blob", "")
+                        delay = (frame or {}).get("delay_ms", 0) or 0
+                        if isinstance(blob, str):
+                            candidate.append((blob.encode(), int(delay)))
+                    joined = "".join(f.decode("utf-8", "replace") for f, _ in candidate)
+                    if candidate and joined == resp_body:
+                        schedule = candidate
+            if schedule is None:
+                schedule = build_schedule(digest, resp_body, ARGS.pace)
             self.send_response(resp.get("status", 200))
             self.send_header("content-type", ctype)
-            self.send_header("content-length", str(len(resp_body)))
+            self.send_header("content-length", str(sum(len(b) for b, _ in schedule)))
+            # Only a streaming body may be paced (non-stream JSON has
+            # one logical frame anyway; the delay is still honored —
+            # the TTFT window applies to it identically).
+            self.send_header("cache-control", "no-store")
             self.end_headers()
-            self.wfile.write(resp_body)
-            self.wfile.flush()
+            started = time.monotonic()
+            for blob, delay in schedule:
+                if delay:
+                    time.sleep(delay / 1000.0)
+                self.wfile.write(blob)
+                self.wfile.flush()
             STATS.note_hit()
-            log("hit", sha256=digest, cassette=cassette, status=resp.get("status"))
+            log("hit", sha256=digest, cassette=cassette, status=resp.get("status"),
+                pace=ARGS.pace["mode"], frames=len(schedule),
+                elapsed_ms=round((time.monotonic() - started) * 1000))
             return
 
         # Miss: optionally seed (sandbox-only bootstrap; see --seed-reply).
@@ -326,8 +507,14 @@ class Handler(BaseHTTPRequestHandler):
             if ARGS.seed_title and _is_title_request(key):
                 seed_path = ARGS.seed_title
             seed_body = open(seed_path, "rb").read()
+            seed_text = seed_body.decode("utf-8", "replace")
+            # W5: the seed cassette records the ACTIVE schedule as v2
+            # frames (instant pace → one zero-delay frame = the v1
+            # whole-body shape semantically; synthetic pace → the
+            # deterministic tier timing).
+            schedule = build_schedule(digest, seed_text, ARGS.pace)
             cassette = {
-                "version": 1,
+                "version": 2,
                 "metadata": {
                     "name": "seeded/" + digest[:16],
                     "recordedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -351,7 +538,8 @@ class Handler(BaseHTTPRequestHandler):
                                 })},
                     "response": {"status": 200,
                                  "headers": {"content-type": "text/event-stream"},
-                                 "body": seed_body.decode("utf-8", "replace")},
+                                 "body": seed_text,
+                                 "frames": frames_from_schedule(schedule)},
                 }],
             }
             os.makedirs(ARGS.record_dir, exist_ok=True)
@@ -361,8 +549,18 @@ class Handler(BaseHTTPRequestHandler):
             with STATS.lock:
                 STATS.seeded += 1
             ctype = "text/event-stream" if body.get("stream") else "application/json"
-            self._send(200, seed_body, ctype)
-            log("seeded", sha256=digest, cassette=out)
+            self.send_response(200)
+            self.send_header("content-type", ctype)
+            self.send_header("content-length", str(sum(len(b) for b, _ in schedule)))
+            self.send_header("cache-control", "no-store")
+            self.end_headers()
+            for blob, delay in schedule:
+                if delay:
+                    time.sleep(delay / 1000.0)
+                self.wfile.write(blob)
+                self.wfile.flush()
+            log("seeded", sha256=digest, cassette=out, pace=ARGS.pace["mode"],
+                frames=len(schedule))
             return
         if ARGS.dump_misses:
             os.makedirs(ARGS.dump_misses, exist_ok=True)
@@ -391,8 +589,12 @@ def main():
                         "the main-turn reply needle and the session title "
                         "text distinguishable)")
     parser.add_argument("--record-dir", help="where seed cassettes are written")
+    parser.add_argument("--pace", default="instant",
+                        help="instant | frames | synthetic[:seed=N][:ttft=MS][:tps=T] "
+                             "(W5 timing fidelity; default instant)")
     args = parser.parse_args()
     ARGS = args
+    ARGS.pace = parse_pace(args.pace)
 
     redactions = []
     for spec in args.redact:

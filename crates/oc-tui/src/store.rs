@@ -14386,7 +14386,8 @@ impl Store {
                         time,
                         tokens: token_slot,
                         usage_total: usage_slot,
-                        retry: None,
+                        retry,
+                        error,
                         cache_read: None,
                         ..
                     }) = messages.iter_mut().find(|m| m.id() == assistant.as_str())
@@ -14399,6 +14400,21 @@ impl Store {
                         if let Some(total) = usage_total {
                             *usage_slot = Some(total);
                         }
+                        // W5 P3 (real-chain root cause, message-updater.ts
+                        // :273-285): `session.step.failed` projects the
+                        // error onto the assistant message — `draft.error =
+                        // event.data.error` — which the footer's
+                        // `error.message === "Step interrupted"` badge (and
+                        // the `Error: …` row for every other failure) reads.
+                        // The live-wire path never carried it: a failed step
+                        // settled with finish=error but NO error, so the
+                        // ` · interrupted` badge never rendered.
+                        *error = event
+                            .data
+                            .pointer("/error/message")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned);
+                        *retry = None;
                     }
                 });
             }

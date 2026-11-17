@@ -379,6 +379,43 @@ tests — never from real user traffic).
   each G-433..G-437 mask asserts its masked shape is still present —
   a closed gap turns its own test red, prompting mask retirement
   (never a silent green).
+- **W5 timing fidelity (pace modes)** — the gateway takes
+  `--pace instant|frames|synthetic[:seed=N][:ttft=MS][:tps=T]`:
+
+  * `instant` (default) keeps the historical single-write replay (the
+    fast T9 battery shape);
+  * `frames` replays cassette v2 `frames: [{blob, delay_ms}]` timing
+    (recorded inter-event delays; a v1 whole-body cassette reads
+    compatibly with no timing);
+  * `synthetic` derives a DETERMINISTIC schedule per request digest
+    (TTFT tier 300/1500/4000 ms, TPS tier 20/60/120 tok/s from
+    `sha256(digest:seed)`, pinnable via `ttft=`/`tps=`) and re-frames
+    `text_delta` events into per-token SSE sub-events — the SAME
+    schedule and bytes go to BOTH pair ends (differential fairness:
+    identical I/O including timing). Seed cassettes recorded under a
+    pace mode store the schedule as v2 frames.
+
+  Scenarios: **P1** slow-TTFT busy-window states, **P2** slow-TPS
+  progressive token rendering, **P3** mid-stream ESC interrupt (real
+  clock; found + fixed the missing `session.step.failed` → message
+  error projection — the ` · interrupted` footer badge). Wall-clock
+  duration tokens (`3.6s`) normalize to `__SECS__` on both ends.
+- **W5 real-plugin rig (T9-7)** — read-only copies of the REAL plugin
+  payloads (`oh-my-opencode-slim@3.0.3`, `superpowers@7.0.0`) staged
+  from `/tmp/opencode/plugin-payload` into each sandbox's install
+  cache (the `opencode plugin add` layout) and named in the config
+  `plugins[]` array — the real config discovery path on both engines,
+  never driver injection. Absent payload ⇒ skip. The port's real
+  chain loads both plugins (`/api/plugin` active) and renders the
+  plugin-contributed faces (agent label, `⊙ N MCP` footer row)
+  row-exact vs ref — symptom ⑦ does NOT reproduce on the port.
+- **W5 sidebar deep compare (P4/P4b)** — no-mask sidebar dumps across
+  the state matrix (empty / reply-settled / long transcript) at 160
+  and 120 cols; 120-col tier compares row-exact with NO masks. G-435
+  narrowed: the port renders the sidebar Context block one reply
+  LATER than ref (ref: immediately after the first reply; the port:
+  from the second turn on) — the S5 mask stays until the block agrees
+  in the first-reply state.
 
 ---
 
