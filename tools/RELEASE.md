@@ -416,6 +416,47 @@ tests — never from real user traffic).
   LATER than ref (ref: immediately after the first reply; the port:
   from the second turn on) — the S5 mask stays until the block agrees
   in the first-reply state.
+- **W7 tool-loop lane (fast execution)** — three layers, all
+  committed-synthetic corpus (never real user traffic):
+
+  * *gateway v4 turn anchoring* (`--match turn`): the main loop's
+    provider call replays by its session turn ORDINAL (turn k → the
+    turn-tagged cassette k) keyed with the request's large shape
+    (model + system + message/tool sequence with every `tool_result`
+    CONTENT blanked — sandbox-executed output never participates in
+    matching). Aux calls (title/summarization — structurally: no
+    `tools` array) keep digest matching. Conflict fallbacks: an exact
+    shape hit under another ordinal (counter drift), then the turn's
+    own cassette with a logged `turn-shape-conflict`. Bootstrap:
+    `--seed-turns DIR` (`turn-000.sse`…) serves scripted bodies for
+    unknown ordinals and records turn-tagged cassettes.
+  * *PATH shims* (`shim_extract.py --spec|--cassette --out DIR`):
+    recorded (command, output, exit code) cases become `shims/<cmd>`
+    stubs (full command-line prefix match, longest wins) the harness
+    puts FIRST on the sandbox PATH — tool-loop bash runs are instant
+    and deterministic on both ends; unmatched commands fail fast
+    (127, extend the corpus) or fall through to the real binary
+    (`--fallthrough real`). File-edit tools ride the REAL sandbox
+    filesystem.
+  * *permission pre-authorization*: the sandbox config's real
+    `permission` block (`bash/edit/write/read: allow`) on both ends —
+    no permission dialog inside the scenario.
+
+  Canonical commands:
+
+  `tools/dev-gate.sh 'cargo nextest run -p oc-tui --test realchain_toolloop --locked --no-fail-fast'`
+
+  (pair semantics + skip rules identical to the pair lane; re-seed
+  with `T9_RECORD=1` + `tlx_rust_bootstrap_seed` /
+  `tlx_ref_bootstrap_seed`). Scenario `tl_tool_loop_pair`: hello →
+  `shell "cargo test"` (shimmed recorded output) → `edit README.md`
+  (real fs) → confirmation text; asserts the tool call row, the
+  folded output, byte-exact file state, and the settled grid (EXACT
+  under the G-441 mask: the port's edit row lacks ref's file-diff
+  preview rows — tripwired, see GAPS). Known flake G-442 (shell row
+  output projection race on ~100 ms completions) is nudged
+  symmetrically and registered.
+
 
 ---
 

@@ -7,6 +7,11 @@ was derived from the provenance `//!` headers in each Rust module
 (anchors of the form `` `file.ts` ``) and cross-checked by symbol search;
 `?` marks an uncertain or partial mapping.
 
+Channel-9 note (W7): the replay-cassette `interaction.turn`/`track`
+tags (turn-anchored tool-loop replay) are HARNESS-side conventions in
+`tools/diff/realchain/*` — they extend the committed synthetic
+cassette format, not `@opencode/schema` (no ref counterpart to map).
+
 ## Top-level modules
 
 | Ref TS file | Rust module | Notes |

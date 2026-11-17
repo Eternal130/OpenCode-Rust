@@ -16,7 +16,10 @@
 | 6 | HTTP 全量 | http_full.py | HTTP-FULL.md | 60 请求（13 mined） | 47 | 11 | 2 |
 | 7 | **provider 录制解码** | provider_recordings.py | PROVIDER-RECORDINGS.md | **264 交互（259 真实 SSE）** | 264 | 0 | — |
 | 8 | TUI 整屏差分（静息帧 + A2 帧序列 + B2 真插件） | tui_fullscreen.py | TUI-FULLSCREEN.md | 静息 90 case（30 场景×3 档，含 plugin-* 15）+ frames 15 序列（5 anim×3 档）；插件腿 TUI_DIFF_BUN≥1.4.2 门控 | 静息 **EXACT 90**；frames **EXACT 15** | 0（G-28 有界 shim 簇 gb17 W5 修复关簇——桥接 walk 盒垂向度量空行模型 + 双侧 XDG 密闭化；W4 已关 G-424b、退役 B2 投影族） | 0 committed + rec-* advisory 9/9 exact |
-| 9 | **真实链路对拍（W3 起）** | replay_gateway.py + `crates/oc-tui/tests/realchain_{t9,pair}.rs` | .superpowers/sdd/r1/w{1..6}-report.md + GAPS 第三十五/三十六轮 | T9 矩阵 7 测（W6 +t9_8 慢启动窗口；真 PTY→真二进制→真托管 oc-server→回放网关唯一桩）+ pair 六场景 S1-S6（双端：ref 2.0.24 bun 与 rust 同网关同键序，归一化 grid 对拍） | **S1-S4 EXACT；S5/S6 EXACT（G 标注掩码）** | 掩码登记 G-433（自定义 provider 目录基座）/G-434（models.dev 快照 vintage）/G-435（侧栏 Context 块 rig 依赖）/G-436（宽档盒高 1 行）/G-437（TUI palette 热载滞后）——全部带退役绊线（掩码形状不在场=红） | G-431/G-431b/G-432/G-439/G-440 已修关 |
+| 9 | **真实链路对拍（W3 起）** | replay_gateway.py + `crates/oc-tui/tests/realchain_{t9,pair,toolloop}.rs` | .superpowers/sdd/r1/w{1..7}-report.md + GAPS 第三十五/三十六轮 | T9 矩阵 7 测（W6 +t9_8 慢启动窗口；真 PTY→真二进制→真托管 oc-server→回放网关唯一桩）+ pair 六场景 S1-S6（双端：ref 2.0.24 bun 与 rust 同网关同键序，归一化 grid 对拍）† + **W7 工具环 `tl_tool_loop_pair`（网关 v4 回合锚定 + PATH shim 快执行 + 权限预授权：hello→shell cargo test→edit→确认，双端全链路）** | **S1-S4 EXACT；S5/S6 EXACT（G 标注掩码）；tl EXACT（G-441 掩码+绊线）** | 掩码登记 G-433（自定义 provider 目录基座）/G-434（models.dev 快照 vintage）/G-435（侧栏 Context 块 rig 依赖）/G-436（宽档盒高 1 行）/G-437（TUI palette 热载滞后）/**G-441（edit 行文件 diff 预览缺失）**——全部带退役绊线（掩码形状不在场=红）；**G-442 🟡（shell 行快完成输出投影竞态，已登记）** | G-431/G-431b/G-432/G-439/G-440 已修关 |
+
+<!-- † 通道 9 脚注（W7，2026-11-17）：T9 矩阵中 t9_8（慢启动 boot 窗口）是**单端（rust-only）**测试——其 ref 侧锚定于源码级证据（ref 托管链路的启动窗口本就无 "Connection lost" 文案：CLI 先健康门禁再挂载 server-connection.ts:46-50），只读 ref 树无法注入同款 SSE 首帧延迟（OPENCODE_TEST_SSE_FIRST_FRAME_DELAY_MS 是 rust oc-server 的测试钩子）；pair 双端对拍由 S1-S6/P1-P4b 承担。 -->
+
 
 ## 总计
 

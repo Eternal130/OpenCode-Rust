@@ -944,6 +944,7 @@ G-93..G-104 全部 ✅。现存未关闭项维持既有文档化决策：G-28（
 - Rust：全 crates 无 createAnimatable/advanceSpring；session_tabs.rs:14 注释 "motion springs stay C2"；tool_detail.rs websearch 静态渲染。
 - Ref：ui/animation.ts（advanceSpring）+ retry-provider.tsx:19-20（FADE=80/RESIZE=60）。连带丢失：RetryProvider fade/resize、tab 宽度 spring、pane-resize 平滑过渡、title-shimmer/DIM 回退（session_tabs_solid.rs:773-795 静态渲染，无动画分支）。
 - **W6 勘注升级（症状⑨ 真机报告核实，2026-11-17）**：beta.15/16 用户报"busy 标签页无呼吸灯"。W6 帧序列核查（`tests/busy_pulse_frames.rs`）证实 W5 lane TAIL 已把 busy tab 的两个动效面全部落地为时钟驱动——spinner 逐帧循环 + 2.8s 扫光带（fronts/coast 包络，tab-pulse.tsx:404-417 对齐，振幅 0.14 有界）；帧预算测试在场。真机"无呼吸灯"与树不符，疑因（a）用户 config `animations:false`，或（b）非 busy 态观察（unread 静息 glow 本就无时钟——ref 同款）。本条维持 ✅ 并以帧序列测试钉死回归面。
+- **W7 勘注（0-anchor 首观锚测试退役，2026-11-17）**：W6 评审曾议的"0-anchor 首观锚"单帧测试（t=0 首观快照钉静息前提）正式退役——busy 扫光自时钟 0 起就在运动，任何首观锚都会把瞬时相位误当静态基线；回归面由 `busy_pulse_frames.rs` 的帧序列（350ms 步进 10 采样 + 静息对照）承担，树中不再存在 0-anchor 形状的测试。
 
 ### G-129 ✅ display_width 缺文本呈现型 emoji 收窄规则（tui）
 - Rust：wrap.rs:89-91 `text.width().saturating_sub(merged_cells(text))`（unicode-width；merged_cells 只处理 Brahmic）。
@@ -3474,3 +3475,20 @@ T9 rig 构造窗守护清防：`ServiceClean`（realchain_harness.rs）覆盖 `s
 ## 验证
 
 realchain pair+t9 **28/28**（含新 t9_8；修复前 t9_8 RED 实证）；oc-tui 全套件 **1744/1744**（含 frame budget 全绿）；通道 8 `tui_fullscreen.py` exit 0 零漂移；clippy `--workspace --all-targets -D warnings` 0 错；fmt 绿；guards 全绿（`test result:`/Summary 尾行见 .test-logs/w6-*.log 与 w6-report.md）。
+
+# 第二十四轮（W7：工具环回放引擎，2026-11-17）
+
+三层落地：网关 v4 回合锚定（`--match turn`：主循环按会话内第 k 次回放 turn-k 盒带，跨环境键=turn 序号+tool_result 内容置空的大形状摘要；title/摘要辅助调用按形状分类走 digest 轨；冲突回退=异序号形状重扫→本序号带 shape-conflict 日志回放）+ PATH shim 快执行（`shim_extract.py`：盒带/规格→shim 目录，全命令行前缀最长匹配瞬时吐录制输出含退出码，fail-fast|real 可配）+ 权限预授权（沙箱 config 真 `permission` 块双端同语义）。首个工具环端到端场景 `tl_tool_loop_pair`（hello→shell "cargo test"（shim 秒回）→edit README.md（真沙箱 fs）→确认文本）：双端全链路对拍——工具调用行/折叠输出/文件终态 byte-exact/终态 grid。语料=合成 turn 脚本（seeds/toolloop）+bootstrap 录制的双端引擎请求形状（corpus-tools{,-ref}，turn 标注）。新发现两缺口：
+
+## G-441 🟡 edit 工具行不渲染文件 diff 预览行（tui）
+
+- **Ref**：edit 工具行下渲染 file-diff 预览行（`    1 - <old>` / `    1 + <new>`，plugin/edit.ts 的 FileDiff 元数据→TUI 行投影）。
+- **Port**：edit.rs:380/449 产出的 FileDiff 元数据在位（引擎侧文件终态 byte-exact、tool_result 正常），但 TUI 工具行只渲染 "← Edit README.md" 折叠行，无 diff 预览行（连带 3 行高差把 ref 视口多滚一行）。
+- **处置**：tl_tool_loop_pair 以带退役绊线的掩码登记（绊线钉死 ref 有/port 无；port 补齐投影即红→撤掩码全 grid 对拍）。
+
+## G-442 🟡 shell 工具行快速完成时偶发不投影输出行（tui）
+
+- **现象**：tl 对拍中 port 的 shell 工具行 ~50% run 保持运行 spinner、输出行不上屏——而引擎侧结果**正确**（turn-1 请求 digest 与录制（含 shim 输出的 tool_result）一致证毕），命令 ~100ms 内完成时 TUI 行投影竞态。对称 repaint nudge（空 composer 右方向键）后输出行出现。
+- **待查方向**：shell part 完成/输出事件的行订阅与首帧渲染间的 dirty 失效缺失；复现器=tl_tool_loop_pair（nudge 前的 fail dump）。
+
+W6 评审 4 Minor 清偿：①t9_8 整测试体持 armed 守护（ServiceClean 至显式 service_stop 后 disarm）②圈选透明 bg 边缘色差对齐 ref 不透明黑（paint_highlight 交换前置 Default→Rgb(0,0,0)）③G-128 补 0-anchor 首观锚测试退役勘注④INDEX 通道 9 行加 t9_8 单端性质脚注。
