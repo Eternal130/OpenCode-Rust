@@ -3494,7 +3494,7 @@ impl App {
         // it (the old else arms).
         let footer_theme = FooterTheme::from_resolved(&theme.resolved.tokens);
         self.sync_footer_family(&footer_theme);
-        let frame = render_app(&self.store, &theme, self.size);
+        let mut frame = render_app(&self.store, &theme, self.size);
         // PLUG-TUI-SLOT / D2.2: the open plugin route page now rides
         // the shared chrome tree — it mounts inside render_app (the
         // route-replacement arm) and its pixels land at the composite
@@ -3537,6 +3537,20 @@ impl App {
         // (index.tsx:1470-1477); the body rides the tree
         // (`sync_footer_family` above) and the keys live in
         // `stroke_in_form`.
+        //
+        // W6 症状⑧ — the live selection's highlight: opentui's
+        // renderer paints the mouse selection over the FINAL grid
+        // (the `renderer.getSelection()` cell model the drag state
+        // machine mirrors, selection.rs) as reverse video — each
+        // selected cell's fg/bg swap. The port's drag machine fed
+        // only the copy path (the release's clipboard write), so the
+        // in-flight drag and the manual-mode retained rect rendered
+        // NOTHING; paint the highlight here, over every layer the
+        // frame composited below (the scrim-equivalent z of the
+        // renderer's own post-grid pass).
+        if let Some(rect) = self.screen_selection.rect() {
+            crate::selection::paint_highlight(&mut frame, rect);
+        }
         frame
     }
 
@@ -15548,4 +15562,47 @@ mod render_scheduler_equiv_tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+/// W6 症状⑧ — the mouse-drag selection paints a visible highlight:
+/// opentui's renderer draws the live selection over the composited
+/// grid as reverse video; the port's drag machine fed only the copy
+/// path, so a drag (and manual mode's retained rect) rendered
+/// nothing. The frame must carry swapped fg/bg over exactly the
+/// drag rect.
+#[cfg(test)]
+#[test]
+fn mouse_drag_selection_paints_reverse_video_highlight() {
+    use crate::input_term::{MouseButton, MouseEventKind};
+    let mut app = App::new((60, 20));
+    app.store.open_tab("s1", Some("Alpha".to_owned()));
+    app.store.navigate(Route::session("s1".to_owned()));
+    // A baseline frame to compare cell attrs against.
+    let before = app.frame();
+    // Drag rows 3..6, cols 10..30 (the transcript region — the drag
+    // machine arms on any left press outside owned surfaces).
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 10, 3));
+    app.mouse_event(&mouse(MouseEventKind::Drag(MouseButton::Left), 29, 5));
+    let after = app.frame();
+    let rect = app.screen_selection.rect().expect("the drag armed a rect");
+    assert_eq!((rect.x, rect.y, rect.width, rect.height), (10, 3, 20, 3));
+    let mut swapped_inside = 0;
+    for y in 3..6 {
+        for x in 10..30 {
+            let old = &before.cells[y][x];
+            let new = &after.cells[y][x];
+            if new.fg == old.bg && new.bg == old.fg && old.fg != old.bg {
+                swapped_inside += 1;
+            }
+        }
+    }
+    assert!(
+        swapped_inside >= 20 * 3 / 2,
+        "the drag rect must render reverse video (swapped {swapped_inside} of {} cells)",
+        20 * 3
+    );
+    // Outside the rect the cells are untouched.
+    let old = &before.cells[10][50];
+    let new = &after.cells[10][50];
+    assert_eq!((new.fg, new.bg), (old.fg, old.bg), "outside the rect nothing changes");
 }
