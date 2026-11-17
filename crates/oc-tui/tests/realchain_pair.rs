@@ -320,8 +320,25 @@ fn s3_palette_grid_pair() {
     // first CI triggers asserted a pre-settle capture (forensics dumps
     // taken seconds later HAD the dot on both ends). Wait for the
     // needle BEFORE capturing, not just before asserting.
-    let rust_dot = rig.rust_tui.wait_for(b"\xe2\x97\x8f claude-opus-4-7", 0, Duration::from_secs(15));
-    let ref_dot = rig.ref_tui.wait_for(b"\xe2\x97\x8f claude-opus-4-7", 0, Duration::from_secs(25));
+    // W9 hardening: the wait polls the PARSED GRID, not the raw byte
+    // stream — the dot cell and the label cells are painted as
+    // separate writes (cursor jumps + SGR runs between them), so the
+    // contiguous `● <model>` byte run never appears in the raw stream
+    // even though the settled grid carries it (the W8 raw waits flaked
+    // 4/4 locally while the settled dumps always had the dot).
+    let dot_grid = |tui: &TuiProcess| tui.screen_text().contains("● claude-opus-4-7");
+    let wait_grid = |tui: &TuiProcess, secs: u64| -> bool {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        while Instant::now() < deadline {
+            if dot_grid(tui) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        false
+    };
+    let rust_dot = wait_grid(&rig.rust_tui, 15);
+    let ref_dot = wait_grid(&rig.ref_tui, 25);
     settle(2);
     let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
     let rust_grid = rig.normalize(&rig.rust_tui.screen_text());

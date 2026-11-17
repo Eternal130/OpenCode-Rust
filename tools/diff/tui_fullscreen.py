@@ -152,7 +152,7 @@ PLUGIN_PAYLOADS = {
 # env overrides (payload roots), e.g. OC_DIFF_PLUGIN_OMO_SLIM=/path/to/pkg
 PLUGIN_ENV = {"omo-slim": "OC_DIFF_PLUGIN_OMO_SLIM",
               "superpowers": "OC_DIFF_PLUGIN_SUPERPOWERS"}
-NPM_CACHE = Path("/root/.cache/opencode/npm")
+NPM_CACHE = Path(os.environ.get("OC_DIFF_NPM_CACHE", "/root/.cache/opencode/npm"))
 
 # B2-fix (controller-confirmed root cause): the ref plugin-boot failure
 # pinned in the first B2 round was bun 1.3.10's ResolveMessage NOT
