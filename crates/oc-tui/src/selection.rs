@@ -7,7 +7,7 @@
 //! `copy-selection` binding, app.tsx:243) or ctrl+c
 //! (selection.ts:82-91), and any other stroke clears it.
 
-use crate::render::Frame;
+use crate::render::{CellColor, Frame};
 
 /// A normalized cell rect (inclusive corners).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,6 +147,14 @@ pub fn paint_highlight(frame: &mut Frame, rect: SelectionRect) {
         let Some(row) = frame.cells.get_mut(y) else { continue };
         for x in rect.x..rect.x.saturating_add(rect.width) {
             if let Some(cell) = row.get_mut(x) {
+                // W7 Minor ② (W6 review): a Default bg is the emitter's
+                // TRANSPARENT black; swapped into the fg slot it renders
+                // with an edge color diff vs ref's opaque resolution —
+                // materialize it as opaque black first (one line, the
+                // ref drawText swap's own default-pair resolution).
+                if cell.bg == CellColor::Default {
+                    cell.bg = CellColor::Rgb(0, 0, 0);
+                }
                 std::mem::swap(&mut cell.fg, &mut cell.bg);
             }
         }
