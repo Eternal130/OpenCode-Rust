@@ -1,0 +1,8 @@
+[
+ {
+  "command": "cargo test",
+  "stdout": "   Compiling sandbox-demo v0.1.0\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s\n     Running unittests src/lib.rs\n\nrunning 3 tests\ntest tests::greets ... ok\ntest tests::adds ... ok\ntest tests::reads_config ... ok\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s\n",
+  "stderr": "",
+  "exit_code": 0
+ }
+]
