@@ -493,6 +493,104 @@ async fn handlers_messages_cursor_order_rules() {
 // commit rolled back).
 // ---------------------------------------------------------------------------
 
+/// G-432 regression pin: an UNCHANGED selection is a server-side no-op
+/// (ref `Session.switchModel`, core session.ts:101-106 — providerID/id
+/// equal, variant default-normalized). The first prompt's
+/// `prepare: commitModel` then never mints a phantom `model-switched`
+/// timeline row; the port published unconditionally before the fix.
+#[tokio::test]
+async fn handlers_session_switch_model_unchanged_is_noop() {
+    let server = boot().await;
+    let client = &server.client;
+    let model = ModelRef {
+        id: "fake-model-a".to_owned(),
+        provider_id: "parityfake".to_owned(),
+        variant: None,
+    };
+    // Create WITH the model (the TUI home-submit path since G-432).
+    let session_id = client
+        .session()
+        .create(&SessionCreateBody {
+            title: Some("switch-noop".to_owned()),
+            model: Some(model.clone()),
+            ..Default::default()
+        })
+        .await
+        .expect("create")
+        .id;
+
+    // Same selection: 204, no event, no transcript row.
+    client
+        .session()
+        .switch_model(&session_id, &SessionSwitchModelBody { model: model.clone() })
+        .await
+        .expect("no-op switch");
+    let messages = client
+        .message()
+        .list(&session_id, &SessionMessageListQuery::default())
+        .await
+        .expect("messages");
+    assert!(
+        !messages
+            .data
+            .iter()
+            .any(|message| matches!(message, SessionMessageInfo::ModelSelected(_))),
+        "G-432: unchanged switch must not mint a model-switched row: {:?}",
+        messages.data
+    );
+    // Variant default-normalization: an explicit `variant: "default"`
+    // against an absent variant is STILL unchanged.
+    client
+        .session()
+        .switch_model(
+            &session_id,
+            &SessionSwitchModelBody {
+                model: ModelRef { variant: Some("default".to_owned()), ..model.clone() },
+            },
+        )
+        .await
+        .expect("variant-default no-op switch");
+    let messages = client
+        .message()
+        .list(&session_id, &SessionMessageListQuery::default())
+        .await
+        .expect("messages again");
+    assert!(
+        !messages
+            .data
+            .iter()
+            .any(|message| matches!(message, SessionMessageInfo::ModelSelected(_))),
+        "G-432: variant-default normalization must stay a no-op: {:?}",
+        messages.data
+    );
+
+    // A genuinely different selection still publishes (the changed path
+    // is NOT narrowed away).
+    client
+        .session()
+        .switch_model(
+            &session_id,
+            &SessionSwitchModelBody {
+                model: ModelRef {
+                    id: "fake-model-b".to_owned(),
+                    provider_id: "parityfake".to_owned(),
+                    variant: None,
+                },
+            },
+        )
+        .await
+        .expect("changed switch");
+    let messages = client
+        .message()
+        .list(&session_id, &SessionMessageListQuery::default())
+        .await
+        .expect("messages after change");
+    assert!(
+        messages.data.iter().any(|message| matches!(message, SessionMessageInfo::ModelSelected(_))),
+        "G-432: a changed switch must still publish"
+    );
+}
+
 #[tokio::test]
 async fn handlers_session_switch_model_persists() {
     let server = boot().await;

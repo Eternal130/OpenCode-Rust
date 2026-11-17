@@ -3400,3 +3400,13 @@ S1 boot **EXACT**；S2 发消息→回复+标题 **EXACT**（标题种子与回�
 ## 验证
 
 T9 全量 15/15（6 矩阵 + 8 pair/引导）；oc-server 411/411；oc-tui 1725（1 例 e1_cells_paste_8k 计时型 flaky 重跑绿，nextest 标 flaky）；oc-core+oc-util+oc-cli 2358/2358；通道 8 `tui_fullscreen.py` exit 0 零漂移（TUI_DIFF_BUN=…bun-1.4.2）；clippy/fmt 绿；guards 全绿（修复本 wave root 写文件导致的 worktree 属主漂移——.git/worktrees 与 Cargo.lock 等 chown 回 eternal130 后 recorded_local 恢复）。
+
++- **W3 评审（Oracle，2026-11-17）：Approved**——G-431b（线程安全+形状钉）/G-432（ref session.ts:96-107 no-op 依据逐字核实、create 持久化 model 链路自洽）/freshness 守卫/属主修复均过。**Important 两条**：①G-436/G-437 掩码无退役绊线（`_rust_palette_stale` 计算后未断言、drop_blank_rows 无存在性钉——修后掩码静默留存=假绿面，建议 W4 加"掩码仍必要"断言）；②pair lane 对 `/opt/opencode-ref`+未跟踪 `tools/bin/bun-1.4.2` 直接 panic 无 skip 守卫（违 bun 测试 skip 惯例，CI 不可达）。Minor：G-433 `(N%)` 掩码全局过宽、G-432 无 API 级回归钉、S5 列界硬编码、id 前缀集偏宽。详见 .superpowers/sdd/r1/w3-report.md 评审节。
+
+## 第三十六轮 W4（2026-11-17，评审落地 + 发版门/CI 接线）终态
+
+- **Important ①（掩码退役绊线）**：G-433~437 五个归一化掩码全部补齐"被掩形状在场"钉——S2 钉 footer `NN (M%)` 组 ref 有/rust 无（G-433）、S5 钉 rust 无 Context 块（G-435）+ ref 边框行数 > rust（G-436，取掩码后网格计数）、S6 钉 rust palette 滞后（G-437：`rust_palette_stale` 断言 + "No results found" 行在场）。gap 关闭→形状消失→测试红→提示撤掩码——无掩码能静默越过修复留存。G-434 为存在性断言（免费层 Free 行 >0）本即绊线形状。
+- **Important ②（pair lane skip 守卫）**：`ref_lane_skip_reason()`（T9_REF_ROOT 缺 / solid preload 缺 / T9_BUN 缺 → skip 带说明）接入全部 7 个 pair 测试（宏 `skip_without_ref_lane!`）；在场但版本错仍是硬红（契约≠可用性）。CI 语义：**realchain_t9 进常规 `nextest` job**（其测试名不命中任何 pty 排除模式；lane lock 自串行；依赖=python3+合成语料+debug 二进制——build job 新增 `cargo build -p oc-cli --bin opencode-rust` + strip（1.2GiB→数百 MiB）入共享 artifact，freshness 守卫对 artifact 恢复的 mtime 全等场景安全）；pair 测试同 job 跑、CI 无 ref 树/bun → skip。
+- **Minor**：①G-432 API 级回归钉 `handlers_session_switch_model_unchanged_is_noop`（同值 no-op / variant default 归一 / 变更仍发布三段）；②S5 列界 `SIDEBAR_MASK_COL=108` 常量+出处（160 列侧栏左缘 ≈109 实测）；③`replace_id_shapes` 前缀收窄为 oc-schema id.rs `check "<p>"` 注册表逐字清单（ses/msg/evt/wrk/per/sh/frm/psv/cred/con——`pty` 非 schema wire 前缀剔除；单测钉两条边界）。
+- **门接线**：RELEASE.md Gates 增"Channel 9 real-chain battery"节（T9 逐字命令+供给说明+pair 本地跑+skip 语义+绊线说明）；ci.yml build job 增 bin 构建、test job 注释标注 T9/pair 归属；INDEX.md 总表增通道 9 行+总计段更新。
+- **验证**：pair 全量 10/10（绊线在场全绿）；realchain_t9 7/7；oc-server 412/412（+G-432 钉）；通道 8 零漂移（exit 0）；clippy/fmt/guards 绿。

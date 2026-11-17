@@ -779,7 +779,53 @@ pub fn ref_root() -> PathBuf {
         .to_path_buf()
 }
 
+/// The pinned bun runtime path (T9_BUN override; default the MAIN
+/// checkout's untracked `tools/bin/bun-1.4.2` — this worktree shares no
+/// untracked helpers).
+pub fn bun_runtime() -> PathBuf {
+    std::env::var("T9_BUN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/opt/opencode-rust/tools/bin/bun-1.4.2"))
+}
+
+/// Skip guard for the pair lane (W4 Important ②): `Some(reason)` when
+/// the ref checkout or the pinned bun runtime are absent — the calling
+/// test returns early (skip), matching the repo's bun-test skip
+/// convention. `None` = the lane is available; `ref_stage` then enforces
+/// the remaining contracts (version, preload) as hard fails.
+pub fn ref_lane_skip_reason() -> Option<String> {
+    let root = ref_root();
+    let entry = root.join("packages/cli/src/index.ts");
+    if !entry.exists() {
+        return Some(format!(
+            "ref checkout unavailable: {} missing (set T9_REF_ROOT)",
+            entry.display()
+        ));
+    }
+    let preload = root.join("packages/tui/node_modules/@opentui/solid/scripts/preload.js");
+    if !preload.exists() {
+        return Some(format!("ref solid preload unavailable: {} missing", preload.display()));
+    }
+    let bun = bun_runtime();
+    if !bun.exists() {
+        return Some(format!(
+            "pinned bun runtime unavailable: {} missing (set T9_BUN)",
+            bun.display()
+        ));
+    }
+    None
+}
+
 /// Everything the ref lane needs in the sandbox.
+///
+/// CI semantics (W4): when the ref checkout or the pinned bun runtime
+/// are absent — the pair lane's environment dependencies, which CI does
+/// not provision — every pair test SKIPs through [`ref_lane_skip_reason`]
+/// (a skip with the reason, never a red). On machines that DO carry the
+/// lane (T9_REF_ROOT default `/opt/opencode-ref`, T9_BUN default the
+/// main checkout's `tools/bin/bun-1.4.2`), the tests run directly; a
+/// present-but-wrong bun version still fails (a contract, not an
+/// availability gap).
 pub struct RefStage {
     /// The staged bun runtime (a COPY named exactly `bun` — see the
     /// `selfCommand()` contract above).
@@ -803,10 +849,9 @@ pub fn ref_stage(sandbox: &Sandbox) -> RefStage {
     // Runtime + version contract: the pinned bun must exist and report
     // the ref `packageManager` version (1.4.2). Default: the MAIN
     // checkout's untracked tools/bin (this worktree shares no untracked
-    // helpers); override with T9_BUN.
-    let runtime_src = std::env::var("T9_BUN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/opt/opencode-rust/tools/bin/bun-1.4.2"));
+    // helpers); override with T9_BUN. Availability was pre-checked by
+    // [`ref_lane_skip_reason`]; a wrong version is a CONTRACT failure.
+    let runtime_src = bun_runtime();
     assert!(runtime_src.exists(), "pinned bun runtime missing: {runtime_src:?}");
     let version = std::process::Command::new(&runtime_src)
         .arg("--version")
@@ -1137,6 +1182,13 @@ fn replace_version_pill(row: &str) -> String {
 }
 
 fn replace_id_shapes(row: &str) -> String {
+    // The WIRE id prefixes of the v2 schema (oc-schema id.rs — the
+    // `check "<prefix>"` registry): ses/msg/evt/wrk/per/sh/frm/psv/
+    // cred/con. W4 Minor ③: narrowed to exactly this list — the old
+    // set also carried `pty` (a local attachment id shape with no
+    // schema prefix contract).
+    const WIRE_PREFIXES: &[&str] =
+        &["ses", "msg", "evt", "wrk", "per", "sh", "frm", "psv", "cred", "con"];
     let mut result = String::with_capacity(row.len());
     let mut rest = row;
     while let Some(index) = rest.find(|c: char| c.is_ascii_alphanumeric() || c == '_') {
@@ -1144,8 +1196,8 @@ fn replace_id_shapes(row: &str) -> String {
         result.push_str(prefix);
         let end = tail.find(|c: char| !c.is_ascii_alphanumeric() && c != '_').unwrap_or(tail.len());
         let (token, tail_rest) = tail.split_at(end);
-        if let Some((prefix, _)) = token.split_once('_') {
-            if matches!(prefix, "ses" | "msg" | "evt" | "pty" | "frm" | "per") && token.len() > 8 {
+        if let Some((head, _)) = token.split_once('_') {
+            if WIRE_PREFIXES.contains(&head) && token.len() > 8 {
                 result.push_str("__ID__");
                 rest = tail_rest;
                 continue;
@@ -1157,8 +1209,11 @@ fn replace_id_shapes(row: &str) -> String {
     result
 }
 
-/// G-433: strip any ` (N%)` context-percent group (see the call site
-/// — a known port gap, masked symmetrically on both ends).
+/// G-433: strip a `<count> (N%)` context-percent group — the composer
+/// footer's `formatContextUsage` shape (`38 (0%)`, util/session.ts:
+/// 75-78). W4 Minor ①: narrowed from any `(N%)` to the case where the
+/// group directly follows a bare number token (the footer usage shape;
+/// the sidebar's `0% used` and other percent shapes are NOT masked).
 fn replace_percent_group(row: &str) -> String {
     let chars: Vec<char> = row.chars().collect();
     let is_digit =
@@ -1166,21 +1221,40 @@ fn replace_percent_group(row: &str) -> String {
     let mut out = String::with_capacity(row.len());
     let mut index = 0;
     while index < chars.len() {
-        if chars.get(index) == Some(&' ')
-            && chars.get(index + 1) == Some(&'(')
-            && is_digit(&chars, index + 2)
-        {
-            let mut end = index + 2;
-            while is_digit(&chars, end) {
-                end += 1;
+        // A digit run (the token count) followed by " (" digits '%' ')'.
+        if is_digit(&chars, index) {
+            let number_end = {
+                let mut end = index;
+                while is_digit(&chars, end) {
+                    end += 1;
+                }
+                end
+            };
+            let mut cursor = number_end;
+            while chars.get(cursor) == Some(&' ') {
+                cursor += 1;
             }
-            if chars.get(end) == Some(&'%') && chars.get(end + 1) == Some(&')') {
-                index = end + 2;
-                continue;
+            let group_end = {
+                let mut end = None;
+                if chars.get(cursor) == Some(&'(') && is_digit(&chars, cursor + 1) {
+                    let mut scan = cursor + 1;
+                    while is_digit(&chars, scan) {
+                        scan += 1;
+                    }
+                    if chars.get(scan) == Some(&'%') && chars.get(scan + 1) == Some(&')') {
+                        end = Some(scan + 2);
+                    }
+                }
+                end
+            };
+            for ch in &chars[index..number_end] {
+                out.push(*ch);
             }
+            index = group_end.unwrap_or(number_end);
+        } else {
+            out.push(chars[index]);
+            index += 1;
         }
-        out.push(chars[index]);
-        index += 1;
     }
     out
 }
@@ -1252,4 +1326,29 @@ pub fn assert_grids_match(scenario: &str, ref_grid: &str, rust_grid: &str) {
         "PAIR {scenario}: ref and rust grids diverge\n{diff}\
          full grids: {ref_path:?} vs {rust_path:?}"
     );
+}
+
+#[cfg(test)]
+mod w4_normalizer_tests {
+    use super::*;
+
+    #[test]
+    fn percent_group_strips_only_footer_usage_shape() {
+        assert_eq!(replace_percent_group("38 (0%)"), "38");
+        assert_eq!(replace_percent_group("x 12 (34%)"), "x 12");
+        // Non-footer percent shapes survive.
+        assert_eq!(replace_percent_group("0% used"), "0% used");
+        assert_eq!(replace_percent_group("say (50%) now"), "say (50%) now");
+        assert_eq!(replace_percent_group("(100%)"), "(100%)");
+    }
+
+    #[test]
+    fn id_shapes_use_the_schema_wire_prefix_list() {
+        assert_eq!(replace_id_shapes("tab ses_0001abcdEFGhij"), "tab __ID__");
+        assert_eq!(replace_id_shapes("row msg_1e64066090019u8zd"), "row __ID__");
+        // `pty` is NOT a schema wire prefix (local attachment shape).
+        assert_eq!(replace_id_shapes("attach pty_0001abcdEFGhij"), "attach pty_0001abcdEFGhij");
+        // Short words that share a prefix stay intact.
+        assert_eq!(replace_id_shapes("session message"), "session message");
+    }
 }

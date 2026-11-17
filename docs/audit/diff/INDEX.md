@@ -1,4 +1,4 @@
-# Differential INDEX —— 差分层总索引（8 通道 · 语料升级版）
+# Differential INDEX —— 差分层总索引（9 通道 · 语料升级版）
 
 > 语义等价性差分：同一 corpus 喂双侧真实实现（纯函数管线或真实进程），归一化后逐字段对拍。
 > 与 census 的分工：census 证"面存在且键集对齐"，差分证"行为等价"。
@@ -16,10 +16,11 @@
 | 6 | HTTP 全量 | http_full.py | HTTP-FULL.md | 60 请求（13 mined） | 47 | 11 | 2 |
 | 7 | **provider 录制解码** | provider_recordings.py | PROVIDER-RECORDINGS.md | **264 交互（259 真实 SSE）** | 264 | 0 | — |
 | 8 | TUI 整屏差分（静息帧 + A2 帧序列 + B2 真插件） | tui_fullscreen.py | TUI-FULLSCREEN.md | 静息 90 case（30 场景×3 档，含 plugin-* 15）+ frames 15 序列（5 anim×3 档）；插件腿 TUI_DIFF_BUN≥1.4.2 门控 | 静息 **EXACT 90**；frames **EXACT 15** | 0（G-28 有界 shim 簇 gb17 W5 修复关簇——桥接 walk 盒垂向度量空行模型 + 双侧 XDG 密闭化；W4 已关 G-424b、退役 B2 投影族） | 0 committed + rec-* advisory 9/9 exact |
+| 9 | **真实链路对拍（W3 起）** | replay_gateway.py + `crates/oc-tui/tests/realchain_{t9,pair}.rs` | .superpowers/sdd/r1/w{1..4}-report.md + GAPS 第三十五/三十六轮 | T9 矩阵 6 测（真 PTY→真二进制→真托管 oc-server→回放网关唯一桩）+ pair 六场景 S1-S6（双端：ref 2.0.24 bun 与 rust 同网关同键序，归一化 grid 对拍） | **S1-S4 EXACT；S5/S6 EXACT（G 标注掩码）** | 掩码登记 G-433（自定义 provider 目录基座）/G-434（models.dev 快照 vintage）/G-435（侧栏 Context 块 rig 依赖）/G-436（宽档盒高 1 行）/G-437（TUI palette 热载滞后）——全部带退役绊线（掩码形状不在场=红） | G-431/G-431b/G-432 已修关 |
 
 ## 总计
 
-**通道 1-7：790 对拍单元：MATCH 717 · DIVERGE 71 · ADJUDICATED 2 · MISSING 0**（100% 三态归属；第三十轮 burndown 收口口径）。**通道 8（T9 裁决循环 2026-11-14 + T8-320 档 + A2 帧序列 + B2 真插件 2026-11-15 修复轮 + gap-burndown-16 + gb17 2026-11-16 四波清偿）：静息 90 case（30 场景×3 档）：EXACT 90 · STRUCTURAL 0 · CAUSES 0 · 未裁决 0——**通道史上首次全一致**（G-423/G-424/G-425/G-426/G-427/G-424b 先后修复关簇；B2 加载模型投影族（gb17 W4）按裁决文镜像退役；G-28 有界 shim 残余单例（gb17 W5）修复关簇——桥接 walk 盒垂向度量→空行模型 + 双腿 XDG_CONFIG_HOME 密闭化）；frames 15 序列：EXACT 15 · CAUSES 0——门绿 exit 0，幂等（TUI_DIFF_BUN 设定下）。recorded-local（rec-* advisory 不拦门）：rec- 9/9 全 EXACT**——合计 880 对拍单元（+ frames 15 + rec-* advisory 9）。
+**通道 1-7：790 对拍单元：MATCH 717 · DIVERGE 71 · ADJUDICATED 2 · MISSING 0**（100% 三态归属；第三十轮 burndown 收口口径）。**通道 8（T9 裁决循环 2026-11-14 + T8-320 档 + A2 帧序列 + B2 真插件 2026-11-15 修复轮 + gap-burndown-16 + gb17 2026-11-16 四波清偿）：静息 90 case（30 场景×3 档）：EXACT 90 · STRUCTURAL 0 · CAUSES 0 · 未裁决 0——**通道史上首次全一致**（G-423/G-424/G-425/G-426/G-427/G-424b 先后修复关簇；B2 加载模型投影族（gb17 W4）按裁决文镜像退役；G-28 有界 shim 残余单例（gb17 W5）修复关簇——桥接 walk 盒垂向度量→空行模型 + 双腿 XDG_CONFIG_HOME 密闭化）；frames 15 序列：EXACT 15 · CAUSES 0——门绿 exit 0，幂等（TUI_DIFF_BUN 设定下）。recorded-local（rec-* advisory 不拦门）：rec- 9/9 全 EXACT**——合计 880 对拍单元（+ frames 15 + rec-* advisory 9）。**通道 9（2026-11-17 立项 W1-W4）：真实链路差分——同网关双端（ref 2.0.24 bun / rust 生产二进制）同键序，settled grid 归一化对拍：T9 矩阵 6 测沙箱绿 + pair 六场景 S1-S6 EXACT（S5/S6 携 G-433~437 掩码登记，全带退役绊线）；CI 语义：T9 进常规 nextest job（bin 由 build job 构建+strip 进共享 artifact），pair 依赖 ref 树/bun=缺席 skip（ref_lane_skip_reason）。
 <!-- 历史脚注（第二十九轮基线口径，已被上方第三十轮收口数字取代，保留备查）：
      101 项分歧：既有 78（R27/R28 裁定族）+ 挖掘新增 23 → 归并 G-412..G-422（11 条：🟡×1 / 🟢×10），其余归 G-407/409/410 既有族。 -->
 
