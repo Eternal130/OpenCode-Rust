@@ -277,9 +277,9 @@ fn tl_tool_loop_pair() {
     if !ref_out {
         dump_grid("tl-fail-ref-out", &rig.ref_tui.screen_text());
     }
-    // File edit landed: the tool ROW on both ends; the diff PREVIEW
-    // rows are ref-only (G-441, registered + masked below) — the file
-    // state itself is asserted byte-exactly after the teardown.
+    // File edit landed: the tool ROW plus the diff PREVIEW rows on
+    // both ends (G-441 closed); the file state itself is asserted
+    // byte-exactly after the teardown.
     let rust_edited = tl_wait!(rig.rust_tui, "Edit README.md", 30, "tl-fail-rust-edit");
     let ref_edited = tl_wait!(rig.ref_tui, "(tests green)", 60, "tl-fail-ref-edit");
     // Final confirmation text.
@@ -337,59 +337,12 @@ fn tl_tool_loop_pair() {
              every main turn must strict-hit its own recorded shape; stats {stats}"
         );
     }
-    // G-441 tripwire (documented masking, NOT silent): the port's edit
-    // tool row does not render the file-diff preview rows (`    1 -
-    // …` / `    1 + …`) the ref renders under "← Edit README.md" —
-    // ref-only rows masked on BOTH ends below. When the port gains
-    // the rows, the pinned shapes flip and this assert goes RED:
-    // retire the mask and compare the full grid.
-    let ref_diff_rows = ref_grid.lines().any(|l| l.contains("1 - # t9 sandbox project"));
-    let rust_diff_rows = rust_grid.lines().any(|l| l.contains("1 - # t9 sandbox project"));
-    assert!(
-        ref_diff_rows && !rust_diff_rows,
-        "G-441 tripwire: the edit-diff-row mask assumed ref renders the preview rows \
-         (ref={ref_diff_rows}) and the port does not (rust={rust_diff_rows}) — if this \
-         is red, G-441 has closed: retire mask_edit_diff and compare the full grid"
-    );
-    let ref_masked = mask_edit_diff(&ref_grid);
-    let rust_masked = mask_edit_diff(&rust_grid);
-    assert_grids_match("tl-toolloop", &ref_masked, &rust_masked);
-}
-
-/// G-441 mask: drop the ref-only file-diff preview rows AND the
-/// scroll-offset artifacts their extra height causes (the ref's
-/// viewport is 3 rows further up: its `hello` user row scrolls out
-/// while the port's stays — the hello row and blank rows collapse on
-/// BOTH ends for this comparison; every other row stays exact).
-/// KNOWN WEAKENING (registered, W7 review minor): dropping ALL blank
-/// rows (not just the offset artifacts) also collapses genuine
-/// blank-row spacing differences inside the transcript — accepted
-/// here because the 120-col pair grids carry no other blank-row
-/// signal (S2/P4b compare them row-exact elsewhere); retire this
-/// whole mask with G-441.
-fn mask_edit_diff(grid: &str) -> String {
-    let mut out = String::new();
-    for line in grid.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        // The ref-only diff preview rows (normalized shapes: `┃    1 -
-        // …` / `┃    1 + …` directly under the edit tool row).
-        if trimmed.ends_with("- # t9 sandbox project")
-            || trimmed.ends_with("+ # t9 sandbox project (tests green")
-        {
-            continue;
-        }
-        // The scroll-offset casualty: the `hello` user row (visible on
-        // the port's grid; scrolled off the ref's).
-        if trimmed.starts_with('┃') && trimmed.ends_with("hello") {
-            continue;
-        }
-        out.push_str(line.trim_end());
-        out.push('\n');
-    }
-    out
+    // G-441 CLOSED (gwave-1): the edit tool row renders the file-diff
+    // preview rows on both ends (`← Edit README.md` / blank / the
+    // unified `1 - …` / `1 + …` gutter rows) — the mask_edit_diff
+    // masking AND its scroll-offset blank-row collapse retired with
+    // it; the grids compare row-exact.
+    assert_grids_match("tl-toolloop", &ref_grid, &rust_grid);
 }
 
 fn rig_snapshot(grid: &str) -> String {
