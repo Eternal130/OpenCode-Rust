@@ -89,6 +89,11 @@ jobs:
           cp /tmp/opencode/bunx/bun-linux-x64/bun tools/bin/bun-1.4.2
           chmod +x tools/bin/bun-1.4.2
           tools/bin/bun-1.4.2 --version
+          # The ref package's POSTINSTALL scripts invoke bare `bun` —
+          # the pinned binary must resolve on PATH for the whole job
+          # (runners ship no bun; the first trigger failed exactly here).
+          ln -s "$PWD/tools/bin/bun-1.4.2" /usr/local/bin/bun
+          bun --version
 
       # ref 2.0.24, same source+pin the local lane uses: the v2.0.24
       # tag tarball from the ref upstream (the /opt/opencode-ref
