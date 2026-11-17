@@ -2563,9 +2563,11 @@ mod tests {
         let frame = session_frame(&store, "s1", &theme.styles(), (160, 30));
         let grid = frame.text_grid();
         let pane: Vec<String> = grid.iter().map(|row| row.chars().skip(118).collect()).collect();
-        assert!(pane[3].starts_with("  Fixture"), "the section title: {:?}", pane[3]);
-        assert!(pane[4].starts_with("  preset: zhipuai"), "row 1: {:?}", pane[4]);
-        assert!(pane[5].starts_with("  sessions: 7"), "row 2: {:?}", pane[5]);
+        // Row 3 = the title box's paddingBottom blank (G-435-residual):
+        // the first section paints one row lower.
+        assert!(pane[4].starts_with("  Fixture"), "the section title: {:?}", pane[4]);
+        assert!(pane[5].starts_with("  preset: zhipuai"), "row 1: {:?}", pane[5]);
+        assert!(pane[6].starts_with("  sessions: 7"), "row 2: {:?}", pane[6]);
     }
 
     /// beta.13 bug 2's plugin-world path: the section rows that carry

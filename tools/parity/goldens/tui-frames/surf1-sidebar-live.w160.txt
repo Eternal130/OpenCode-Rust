@@ -1,12 +1,12 @@
                                                                                                                                                                 
   ┃                                                                                                                     Surf fixture                            
-  ┃  What does the parser do?                                                                                           Context                                 
-  ┃                                                                                                                     60,400 tokens                           
-                                                                                                                        12% used                                
-     → Explored: 1 read                                                                                                 $0.42 spent                             
-                                                                                                                                                                
-     It reads the configuration and produces a build plan.                                                              ▶ MCP (2 active, 1 error)               
-                                                                                                                                                                
+  ┃  What does the parser do?                                                                                                                                   
+  ┃                                                                                                                     Context                                 
+                                                                                                                        60,400 tokens                           
+     → Explored: 1 read                                                                                                 12% used                                
+                                                                                                                        $0.42 spent                             
+     It reads the configuration and produces a build plan.                                                                                                      
+                                                                                                                        ▶ MCP (2 active, 1 error)               
      Build · fixture/fixture · 2ms                                                                                                                              
                                                                                                                                                                 
   ┃                                                                                                                                                             
