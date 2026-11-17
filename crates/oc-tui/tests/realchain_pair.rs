@@ -26,10 +26,24 @@ mod realchain_harness;
 
 use realchain_harness::{
     assert_grids_match, corpus_dir, corpus_ref_dir, dump_grid, http_get, http_post, lane_lock,
-    normalize_grid, ref_root, ref_service_stop, ref_stage, ref_tui_spawn, sandbox, service_start,
-    service_stop, Gateway, LaneGuard, RefStage, Sandbox, TuiProcess, WORDMARK,
+    normalize_grid, ref_lane_skip_reason, ref_root, ref_service_stop, ref_stage, ref_tui_spawn,
+    sandbox, service_start, service_stop, Gateway, LaneGuard, RefStage, Sandbox, TuiProcess,
+    WORDMARK,
 };
 use std::time::Duration;
+
+/// The pair lane's CI semantics (W4 Important ②): the ref checkout and
+/// the pinned bun runtime are ENVIRONMENT dependencies this lane does
+/// not assume — absent means SKIP with the reason (never a red); on a
+/// lane-carrying machine the tests run directly.
+macro_rules! skip_without_ref_lane {
+    () => {
+        if let Some(reason) = ref_lane_skip_reason() {
+            eprintln!("PAIR SKIP: {reason}");
+            return;
+        }
+    };
+}
 
 const COLS: u16 = 120;
 const ROWS: u16 = 36;
@@ -69,6 +83,42 @@ impl PairRig {
         self.rust_tui.write(bytes);
         self.ref_tui.write(bytes);
     }
+}
+
+/// A footer context-usage percent group (`NN (M%)`, the
+/// `formatContextUsage` shape) anywhere in the screen.
+fn footer_percent_group(screen: &str) -> bool {
+    screen.lines().any(|line| {
+        let chars: Vec<char> = line.chars().collect();
+        let is_digit = |i: usize| chars.get(i).is_some_and(|c| c.is_ascii_digit());
+        let mut index = 0;
+        while index < chars.len() {
+            if is_digit(index) {
+                let mut end = index;
+                while is_digit(end) {
+                    end += 1;
+                }
+                // number [index, end), then " (", digits, '%', ')'.
+                let mut cursor = end;
+                while chars.get(cursor) == Some(&' ') {
+                    cursor += 1;
+                }
+                if chars.get(cursor) == Some(&'(') && is_digit(cursor + 1) {
+                    let mut scan = cursor + 1;
+                    while is_digit(scan) {
+                        scan += 1;
+                    }
+                    if chars.get(scan) == Some(&'%') && chars.get(scan + 1) == Some(&')') {
+                        return true;
+                    }
+                }
+                index = end;
+            } else {
+                index += 1;
+            }
+        }
+        false
+    })
 }
 
 /// Settle both ends for `secs` (render/event quiescence).
@@ -134,6 +184,7 @@ fn boot_both(rig: &mut PairRig) {
 
 #[test]
 fn s1_boot_grid_pair() {
+    skip_without_ref_lane!();
     let mut rig = pair_rig("s1", COLS);
     boot_both(&mut rig);
     let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
@@ -149,6 +200,7 @@ fn s1_boot_grid_pair() {
 
 #[test]
 fn s2_reply_grid_pair() {
+    skip_without_ref_lane!();
     let mut rig = pair_rig("s2", COLS);
     boot_both(&mut rig);
     let rust_from = rig.rust_tui.raw_len();
@@ -161,8 +213,22 @@ fn s2_reply_grid_pair() {
         rig.rust_tui.wait_for(TITLE_TEXT.as_bytes(), rust_from, Duration::from_secs(20));
     let ref_title = rig.ref_tui.wait_for(TITLE_TEXT.as_bytes(), ref_from, Duration::from_secs(30));
     settle(3);
-    let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
-    let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
+    let ref_raw = rig.ref_tui.screen_text();
+    let rust_raw = rig.rust_tui.screen_text();
+    // G-433 tripwire (W4 Important ①): the `(N%)` footer-usage mask in
+    // normalize_grid exists because ref resolves a model context limit
+    // for custom-provider models and the port does not. If ref stops
+    // carrying the group (or the port gains it), this assert goes red —
+    // retire replace_percent_group and compare the footer exactly.
+    let ref_has_percent = footer_percent_group(&ref_raw);
+    let rust_has_percent = footer_percent_group(&rust_raw);
+    assert!(
+        ref_has_percent && !rust_has_percent,
+        "G-433 tripwire: footer usage group ref={ref_has_percent} rust={rust_has_percent} — \
+         if the sides now agree, retire the percent mask in normalize_grid"
+    );
+    let ref_grid = rig.normalize(&ref_raw);
+    let rust_grid = rig.normalize(&rust_raw);
     dump_grid("s2-reply-ref", &ref_grid);
     dump_grid("s2-reply-rust", &rust_grid);
     let stats = rig.gateway.stats();
@@ -196,6 +262,7 @@ fn s2_reply_grid_pair() {
 
 #[test]
 fn s3_palette_grid_pair() {
+    skip_without_ref_lane!();
     let mut rig = pair_rig("s3", COLS);
     boot_both(&mut rig);
     // `<leader>m` opens the palette; typing the configured model id
@@ -237,6 +304,7 @@ fn s3_palette_grid_pair() {
 
 #[test]
 fn s4_restart_session_grid_pair() {
+    skip_without_ref_lane!();
     let mut rig = pair_rig("s4", COLS);
     boot_both(&mut rig);
     let rust_from = rig.rust_tui.raw_len();
@@ -280,6 +348,7 @@ fn s4_restart_session_grid_pair() {
 
 #[test]
 fn s5_sidebar_grid_pair() {
+    skip_without_ref_lane!();
     let mut rig = pair_rig("s5", 160);
     boot_both(&mut rig);
     let rust_from = rig.rust_tui.raw_len();
@@ -316,9 +385,48 @@ fn s5_sidebar_grid_pair() {
     // and border-only rows are collapsed on BOTH ends until G-436
     // narrows the wide-tier box metrics; the CONTENT row sequence and
     // the sidebar region stay asserted.
-    let ref_left = drop_blank_rows(&mask_right_columns(&ref_grid, 108));
-    let rust_left = drop_blank_rows(&mask_right_columns(&rust_grid, 108));
+    // Mask tripwires (W4 Important ①): each mask below must be masking
+    // a divergence that is STILL PRESENT — when its gap closes, the
+    // pinned shape disappears, this assert goes red, and the mask (plus
+    // the assert) must be retired. No mask can outlive its gap silently.
+    let rust_no_context = !rust_grid.contains("Context");
+    assert!(
+        rust_no_context && ref_context,
+        "G-435 tripwire: the sidebar-region mask assumed the port lacks the \
+         Context block (rust={rust_no_context}) while ref has it — if this \
+         is red, G-435 has closed: retire the mask_right_columns mask and \
+         compare the full sidebar"
+    );
+    let ref_border_rows = border_only_row_count(&mask_right_columns(&ref_grid, SIDEBAR_MASK_COL));
+    let rust_border_rows = border_only_row_count(&mask_right_columns(&rust_grid, SIDEBAR_MASK_COL));
+    assert!(
+        ref_border_rows > rust_border_rows,
+        "G-436 tripwire: the blank/border-row collapse assumed ref's \
+         user-message pane is one row taller (ref={ref_border_rows} vs \
+         rust={rust_border_rows} border-only rows) — if this is red, G-436 \
+         has closed: retire drop_blank_rows and compare rows exactly"
+    );
+    let ref_left = drop_blank_rows(&mask_right_columns(&ref_grid, SIDEBAR_MASK_COL));
+    let rust_left = drop_blank_rows(&mask_right_columns(&rust_grid, SIDEBAR_MASK_COL));
     assert_grids_match("s5-sidebar", &ref_left, &rust_left);
+}
+
+/// The S5 sidebar-region mask boundary (W4 Minor ②): at 160 cols the
+/// auto-docked right sidebar's left edge is ≈ col 109 (ref
+/// session-frame.tsx:106-110's `width - verticalTabsWidth > 120` dock
+/// rule; measured: the sidebar title renders from col 119 with its
+/// box padding from ≈109). Columns ≥ this value are masked on BOTH
+/// ends under G-435.
+const SIDEBAR_MASK_COL: usize = 108;
+
+/// Count border-only rows (the G-436 masked shape).
+fn border_only_row_count(grid: &str) -> usize {
+    grid.lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            !trimmed.is_empty() && trimmed.chars().all(|c| c == '┃')
+        })
+        .count()
 }
 
 /// Drop blank and border-only rows (G-436 wide-tier spacing mask).
@@ -361,6 +469,7 @@ fn mask_right_columns(grid: &str, from: usize) -> String {
 
 #[test]
 fn s6_hot_reload_palette_grid_pair() {
+    skip_without_ref_lane!();
     let mut rig = pair_rig("s6", COLS);
     boot_both(&mut rig);
     // The same hot edit on both ends.
@@ -382,10 +491,17 @@ fn s6_hot_reload_palette_grid_pair() {
     rig.write_both(b"\x18m");
     std::thread::sleep(Duration::from_millis(500));
     rig.write_both(b"claude-sonnet-4-6");
-    // G-437: the port's palette stays stale (the wait below documents
-    // it — expected false until the gap closes).
-    let _rust_palette_stale =
+    // G-437 tripwire (W4 Important ①): the mask below assumes the
+    // port's palette stays stale after the hot reload. If this assert
+    // goes red, G-437 has closed — retire mask_model and compare the
+    // palette rows exactly.
+    let rust_palette_stale =
         !rig.rust_tui.wait_for(b"claude-sonnet-4-6", 0, Duration::from_secs(2));
+    assert!(
+        rust_palette_stale,
+        "G-437 tripwire: the port palette REFLECTED the hot-added model — \
+         retire mask_model and assert the row exactly"
+    );
     let ref_open = rig.ref_tui.wait_for(b"claude-sonnet-4-6", 0, Duration::from_secs(30));
     settle(2);
     let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
@@ -413,6 +529,13 @@ fn s6_hot_reload_palette_grid_pair() {
             .join("\n")
             + "\n"
     };
+    // G-437 masked-shape pin: the rust grid must still carry the stale
+    // palette's "No results found" row (the shape the mask exists for).
+    assert!(
+        rust_grid.contains("No results found"),
+        "G-437 tripwire: the stale-palette row shape is gone — the mask \
+         has nothing left to mask; retire it"
+    );
     let ref_masked = mask_model(&ref_grid);
     let rust_masked = mask_model(&rust_grid);
     assert!(
@@ -432,6 +555,7 @@ fn s6_hot_reload_palette_grid_pair() {
 
 #[test]
 fn t9x_ref_bootstrap_seed() {
+    skip_without_ref_lane!();
     if std::env::var("T9_RECORD").is_err() {
         eprintln!("t9x_ref_bootstrap_seed: skipped (T9_RECORD unset)");
         return;

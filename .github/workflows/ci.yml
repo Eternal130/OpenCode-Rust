@@ -124,6 +124,21 @@ jobs:
       - name: Build workspace test binaries (debug)
         run: cargo nextest run --workspace --locked --no-run
 
+      # Channel 9 real-chain T9 lane (realchain_t9): the harness drives
+      # the PRODUCTION binary on a PTY — nextest --no-run builds test
+      # binaries only, so build the bin into the shared target/ artifact
+      # too. The unstripped debug binary is ~1.2 GiB; the harness runs
+      # it as a black-box subprocess (no symbol needs), so strip keeps
+      # the shared artifact growth bounded. CI dependencies otherwise:
+      # python3 (runner stock), the committed synthetic corpora
+      # (in-repo), loopback + PTY (harness allocates its own). The
+      # ref-side PAIR lane skips in CI (ref_lane_skip_reason: no
+      # ./ref, no pinned bun).
+      - name: Build the opencode-rust binary (realchain T9 lane)
+        run: |
+          cargo build --locked -p oc-cli --bin opencode-rust
+          strip target/debug/opencode-rust
+
       # (release build REMOVED 2026-10-19: a 20-min opt-level-3 chain that
       # cache eviction kept re-cold-starting. frame_budget now runs in
       # debug with a calibrated ceiling — regressions show in both.)
@@ -242,6 +257,11 @@ jobs:
         # (.config/nextest.toml) — the profile env table does not apply
         # on runners, so enforce it here.
         run: cargo nextest run --workspace --locked --no-fail-fast --retries 2 -E 'not (test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions) or test(pty_fuzz) or test(vt_hover) or test(vt_temporal) or test(pty_d3) or binary(pty_daily) or binary(pty_form) or binary(pty_permission) or binary(pty_session_panel))'
+        # Channel 9 realchain_t9 rides THIS job (its tests match no pty
+        # exclusion pattern; the harness self-serializes via its
+        # cross-process lane lock and drives its own PTYs). The ref-side
+        # realchain_pair tests also ride here and SKIP (ref checkout +
+        # pinned bun absent — ref_lane_skip_reason, W4).
         env:
           OPENCODE_DISABLE_BUN_DOWNLOAD: "1"
 

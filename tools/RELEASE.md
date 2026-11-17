@@ -344,6 +344,42 @@ exact reproducer to `/tmp/opencode/pty-fuzz-fail-s<seed>.txt`.
   `OC_PTY_FUZZ_SEEDS=41,42,43 OC_PTY_FUZZ_KEYS=400`. Reproduce any
   dump by replaying its hex key list (each line = one key write).
 
+### Channel 9 real-chain battery (T9 + the ref-side pair lane)
+
+The ONLY stub point on this chain is the replay gateway
+(`tools/diff/realchain/replay_gateway.py`, stdlib-only python3); every
+cassette is committed synthetic sandbox traffic
+(`tools/diff/realchain/corpus/` = rust-engine shapes,
+`corpus-ref/` = ref-engine shapes; re-seed explicitly with
+`T9_RECORD=1` + the `t9x_bootstrap_seed` / `t9x_ref_bootstrap_seed`
+tests — never from real user traffic).
+
+- **T9 rust lane (CI-runnable)** — canonical command:
+
+  `tools/dev-gate.sh 'cargo nextest run -p oc-tui --test realchain_t9 --locked --no-fail-fast'`
+
+  Requirements: the production debug binary
+  (`target/debug/opencode-rust` — CI builds+strips it into the shared
+  target artifact; the harness's freshness guard red-fails on a stale
+  binary), python3, loopback + PTY. CI: rides the general `nextest`
+  job (no pty exclusion pattern matches; the lane lock
+  `/tmp/opencode/t9w1-realchain.lock` self-serializes).
+- **Ref-side pair lane (local / lane-carrying machines only)** — same
+  gateway, sandboxed ref 2.0.24 end via bun, identical keystrokes,
+  normalized settled-grid comparison:
+
+  `tools/dev-gate.sh 'cargo nextest run -p oc-tui --test realchain_pair --locked --no-fail-fast'`
+
+  Requirements beyond the above: the ref checkout (default
+  `./ref`, override `T9_REF_ROOT`) and the pinned bun
+  1.4.2 (default the main checkout's untracked
+  `tools/bin/bun-1.4.2`, override `T9_BUN`). When either is absent —
+  CI, for one — every pair test **skips** with the reason
+  (`ref_lane_skip_reason`), never reds. Mask retirement tripwires:
+  each G-433..G-437 mask asserts its masked shape is still present —
+  a closed gap turns its own test red, prompting mask retirement
+  (never a silent green).
+
 ---
 
 ## GitHub Actions release pipeline (added for the beta program)
