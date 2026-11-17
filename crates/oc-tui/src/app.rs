@@ -10702,6 +10702,20 @@ pub async fn run_with_size(
     };
 
     // Teardown.
+    // G-442 forensics (env-gated, test-only): dump every open
+    // session's message tree as Debug JSON on exit, so a wedged
+    // tool row can be attributed store-side (part still Running =
+    // ingest/clobber bug) vs paint-side (part Completed = render
+    // bug). Consumed by the realchain tool-loop lane.
+    if let Ok(dir) = std::env::var("OC_TUI_DEBUG_MESSAGES") {
+        let _ = std::fs::create_dir_all(&dir);
+        for session_id in app.store.open_session_ids() {
+            let _ = std::fs::write(
+                std::path::Path::new(&dir).join(format!("{session_id}.txt")),
+                format!("{:#?}\n", app.store.messages(&session_id)),
+            );
+        }
+    }
     connection_task.abort();
     lists_task.abort();
     if let Some(runtime) = &plugin_runtime {
