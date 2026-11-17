@@ -1562,7 +1562,7 @@ pub struct Store {
     /// reopens either kind.
     snapshot_authoritative:
         std::cell::RefCell<std::collections::HashMap<String, std::collections::HashSet<String>>>,
-    /// G-442 forensics (env-gated via `OC_TUI_TRACE`, test-only):
+    /// G-446 forensics (env-gated via `OC_TUI_TRACE`, test-only):
     /// when set, ingest-side tool-part state transitions and any
     /// snapshot/resync replacement of a message that DOWNGRADES a
     /// settled tool part append one line to the file — the trace
@@ -6881,7 +6881,7 @@ impl Store {
 
     // -- messages (lane C) -----------------------------------------------------
 
-    /// G-442 forensics — append one line to the `OC_TUI_TRACE` file
+    /// G-446 forensics — append one line to the `OC_TUI_TRACE` file
     /// (no-op when the env is unset).
     fn trace_ingest(&self, line: &str) {
         let path = self.ingest_trace.borrow().clone();
@@ -6894,7 +6894,7 @@ impl Store {
         }
     }
 
-    /// G-442 forensics — a snapshot/resync replacing one session's
+    /// G-446 forensics — a snapshot/resync replacing one session's
     /// messages DOWNGRADES a settled tool part when the incoming copy
     /// of the same assistant message carries that part unset/running.
     /// That clobber is the standing suspect for the wedged spinner;
@@ -6967,7 +6967,7 @@ impl Store {
         let incoming = {
             let old = self.messages.get().by_session.get(session_id).cloned().unwrap_or_default();
             self.trace_snapshot_downgrade("set_messages", session_id, &old, &messages);
-            // G-442 — the freshest-copy rule (see `local_is_fresher`):
+            // G-446 — the freshest-copy rule (see `local_is_fresher`):
             // a resync page serialized mid-stream must not regress a
             // local assistant the live stream has already settled.
             prefer_fresher_local(messages, &old)
@@ -14827,7 +14827,7 @@ fn session_and_assistant(event: &BusEvent) -> Option<(String, String)> {
     Some((event.string("sessionID")?, event.string("assistantMessageID")?))
 }
 
-/// G-442 (root cause, W9) — the freshest-copy rule for snapshot /
+/// G-446 (root cause, W9) — the freshest-copy rule for snapshot /
 /// resync merges: the live event stream is strictly more current
 /// than any HTTP `message.list` snapshot of the SAME assistant
 /// message, so a fetched copy may not replace a local copy that
@@ -14862,7 +14862,7 @@ fn local_is_fresher(local: &Message, fetched: &Message) -> bool {
     stamp(local) > stamp(fetched)
 }
 
-/// G-442 — apply the freshest-copy rule over a fetched page: every
+/// G-446 — apply the freshest-copy rule over a fetched page: every
 /// fetched id whose local copy is fresher keeps the LOCAL message;
 /// the result replaces the session's rows (local-only rows appended
 /// by the caller).
@@ -15467,7 +15467,7 @@ mod tests {
     use crate::components::message::model::{Part, PartTime, ToolState, ToolStatus};
     use crate::data::SessionSnapshot;
 
-    /// G-442 (W9 root cause) — the session-open `message.sync` fetch
+    /// G-446 (W9 root cause) — the session-open `message.sync` fetch
     /// races a fast tool turn: the page is serialized server-side
     /// while the tool runs, and lands client-side AFTER the live
     /// `session.tool.success` settle. The snapshot merge must keep

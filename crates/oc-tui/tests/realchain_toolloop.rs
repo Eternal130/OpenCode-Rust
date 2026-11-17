@@ -241,7 +241,7 @@ fn tl_tool_loop_pair() {
     let rust_cmd = tl_wait!(rig.rust_tui, "cargo test", 30, "tl-fail-rust-cmd");
     let ref_cmd = tl_wait!(rig.ref_tui, "cargo test", 60, "tl-fail-ref-cmd");
     // Folded tool output: the shim's recorded cargo output renders.
-    // G-442 (registered): the port's shell tool row occasionally keeps
+    // G-446 (registered): the port's shell tool row occasionally keeps
     // its running spinner and never projects the output rows when the
     // command completes within ~100 ms (engine-side result is CORRECT
     // — the turn-1 request digest proves the shim output rode the
@@ -258,7 +258,7 @@ fn tl_tool_loop_pair() {
         let uses = NUDGE_USES.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
         if uses > 2 {
             eprintln!(
-                "G-442 DRIFT WARNING: repaint nudge used {uses} times in this process — \
+                "G-446 DRIFT WARNING: repaint nudge used {uses} times in this process — \
                  the shell-row projection race is growing beyond the known ~50% flake"
             );
         }
@@ -278,7 +278,7 @@ fn tl_tool_loop_pair() {
         dump_grid("tl-fail-ref-out", &rig.ref_tui.screen_text());
     }
     // File edit landed: the tool ROW on both ends; the diff PREVIEW
-    // rows are ref-only (G-441, registered + masked below) — the file
+    // rows are ref-only (G-445, registered + masked below) — the file
     // state itself is asserted byte-exactly after the teardown.
     let rust_edited = tl_wait!(rig.rust_tui, "Edit README.md", 30, "tl-fail-rust-edit");
     let ref_edited = tl_wait!(rig.ref_tui, "(tests green)", 60, "tl-fail-ref-edit");
@@ -337,7 +337,7 @@ fn tl_tool_loop_pair() {
              every main turn must strict-hit its own recorded shape; stats {stats}"
         );
     }
-    // G-441 tripwire (documented masking, NOT silent): the port's edit
+    // G-445 tripwire (documented masking, NOT silent): the port's edit
     // tool row does not render the file-diff preview rows (`    1 -
     // …` / `    1 + …`) the ref renders under "← Edit README.md" —
     // ref-only rows masked on BOTH ends below. When the port gains
@@ -347,16 +347,16 @@ fn tl_tool_loop_pair() {
     let rust_diff_rows = rust_grid.lines().any(|l| l.contains("1 - # t9 sandbox project"));
     assert!(
         ref_diff_rows && !rust_diff_rows,
-        "G-441 tripwire: the edit-diff-row mask assumed ref renders the preview rows \
+        "G-445 tripwire: the edit-diff-row mask assumed ref renders the preview rows \
          (ref={ref_diff_rows}) and the port does not (rust={rust_diff_rows}) — if this \
-         is red, G-441 has closed: retire mask_edit_diff and compare the full grid"
+         is red, G-445 has closed: retire mask_edit_diff and compare the full grid"
     );
     let ref_masked = mask_edit_diff(&ref_grid);
     let rust_masked = mask_edit_diff(&rust_grid);
     assert_grids_match("tl-toolloop", &ref_masked, &rust_masked);
 }
 
-/// G-441 mask: drop the ref-only file-diff preview rows AND the
+/// G-445 mask: drop the ref-only file-diff preview rows AND the
 /// scroll-offset artifacts their extra height causes (the ref's
 /// viewport is 3 rows further up: its `hello` user row scrolls out
 /// while the port's stays — the hello row and blank rows collapse on
@@ -366,7 +366,7 @@ fn tl_tool_loop_pair() {
 /// blank-row spacing differences inside the transcript — accepted
 /// here because the 120-col pair grids carry no other blank-row
 /// signal (S2/P4b compare them row-exact elsewhere); retire this
-/// whole mask with G-441.
+/// whole mask with G-445.
 fn mask_edit_diff(grid: &str) -> String {
     let mut out = String::new();
     for line in grid.lines() {
