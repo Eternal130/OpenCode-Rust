@@ -316,6 +316,12 @@ fn s3_palette_grid_pair() {
     let rust_open = rig.rust_tui.wait_for(b"claude-opus-4-7", 0, Duration::from_secs(20));
     let ref_open = rig.ref_tui.wait_for(b"claude-opus-4-7", 0, Duration::from_secs(30));
     rig.write_both(b"claude-opus-4-7");
+    // CI-slower runners paint the selection dot asynchronously — the
+    // first CI triggers asserted a pre-settle capture (forensics dumps
+    // taken seconds later HAD the dot on both ends). Wait for the
+    // needle BEFORE capturing, not just before asserting.
+    let rust_dot = rig.rust_tui.wait_for(b"\xe2\x97\x8f claude-opus-4-7", 0, Duration::from_secs(15));
+    let ref_dot = rig.ref_tui.wait_for(b"\xe2\x97\x8f claude-opus-4-7", 0, Duration::from_secs(25));
     settle(2);
     let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
     let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
@@ -325,6 +331,10 @@ fn s3_palette_grid_pair() {
     assert!(
         rust_open && ref_open,
         "S3 RED: palette lists the replay model rust={rust_open} ref={ref_open}"
+    );
+    assert!(
+        rust_dot && ref_dot,
+        "S3 RED: selection dot never settled rust={rust_dot} ref={ref_dot}"
     );
     // Presence asserts on the vintage-dependent tail (G-434): the
     // filtered view must still be a palette (footer) and both grids
