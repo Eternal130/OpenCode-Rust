@@ -175,8 +175,13 @@ fn custom_effort_variants(provider_id: &str, model_id: &str) -> Value {
 /// A config-defined custom provider's model entry (the FULL catalog
 /// `Model.Info` shape — clients like `run`'s model.default fallback parse
 /// the payload into `ModelInfo`, whose `limit.context`/`limit.output`,
-/// `modelID`, `status`, and `time.released` are REQUIRED; v2 defaults
-/// unspecified config-model limits to 0). A model without an explicit
+/// `modelID`, `status`, and `time.released` are REQUIRED; v2 seeds a
+/// base-less config model from `Model.Info.default`
+/// (schema/model.ts:146-158 — limit {context: 200_000, output:
+/// 32_000}, capabilities {tools, input [text, image], output [text]};
+/// G-433: the old zero-limit placeholder broke the footer/sidebar
+/// usage percent for package-family custom providers). A model without
+/// an explicit
 /// config `variants` list inherits the provider package's protocol
 /// variants (`packages/core/src/config/plugin/provider.ts:151-159` —
 /// `Variant.resolve(model.package ?? provider.package)` with the default
@@ -195,8 +200,9 @@ fn custom_model_json(
         "enabled": true,
         "status": "active",
         "time": { "released": 0 },
-        "capabilities": { "input": ["text"], "output": ["text"], "tools": true },
-        "limit": { "context": 0, "output": 0 },
+        "capabilities": serde_json::to_value(oc_schema::model::Capabilities::default())
+            .unwrap_or_else(|_| json!({})),
+        "limit": { "context": 200_000, "output": 32_000 },
         "cost": [],
         "variants": custom_effort_variants(&provider.id, &model.id),
     })

@@ -1191,54 +1191,34 @@ pub fn custom_model_info(
     catalog: &Catalog,
 ) -> oc_schema::model::Info {
     let Some(model) = custom.models.iter().find(|model| model.id == model_key) else {
-        // Unreachable via bind() (the model key comes from the same list);
-        // keep the zero shape for safety.
-        return oc_schema::model::Info {
-            id: oc_schema::id::ModelId::parse(String::new()),
-            model_id: oc_schema::id::ModelId::parse(String::new()),
-            provider_id: oc_schema::id::ProviderId::parse(custom.id.clone()),
-            canonical: None,
-            family: None,
-            name: String::new(),
-            compatibility: None,
-            package: None,
-            settings: None,
-            headers: None,
-            body: None,
-            capabilities: oc_schema::model::Capabilities::default(),
-            variants: Vec::new(),
-            time: oc_schema::model::ModelTime { released: oc_schema::common::Num(0.0) },
-            cost: Vec::new(),
-            status: oc_schema::model::Status::Active,
-            enabled: true,
-            limit: oc_schema::model::ModelLimit { context: 0, input: None, output: 0 },
-        };
+        // Unreachable via bind() (the model key comes from the same
+        // list); keep the ref's `Model.Info.default` placeholder for
+        // safety (schema/model.ts:146-158 — limit {context: 200_000,
+        // output: 32_000}, G-433).
+        return oc_schema::model::Info::default_for(
+            oc_schema::id::ProviderId::parse(custom.id.clone()),
+            oc_schema::id::ModelId::parse(String::new()),
+        );
     };
     // `Object.assign(model, structuredClone(base ?? model))`
     // (opencode.ts:266): the base clone is the starting point; without
     // one, the config-plugin zero shape (limits 0 — handlers/model.rs
     // `custom_model_json` documents the same default).
     let mut info = custom_base_model(catalog, custom, model).cloned().unwrap_or_else(|| {
-        oc_schema::model::Info {
-            id: oc_schema::id::ModelId::parse(model.id.clone()),
-            model_id: oc_schema::id::ModelId::parse(model.id.clone()),
-            provider_id: oc_schema::id::ProviderId::parse(custom.id.clone()),
-            canonical: None,
-            family: None,
-            name: model.name.clone().unwrap_or_else(|| model.id.clone()),
-            compatibility: None,
-            package: None,
-            settings: None,
-            headers: None,
-            body: None,
-            capabilities: oc_schema::model::Capabilities::default(),
-            variants: Vec::new(),
-            time: oc_schema::model::ModelTime { released: oc_schema::common::Num(0.0) },
-            cost: Vec::new(),
-            status: oc_schema::model::Status::Active,
-            enabled: true,
-            limit: oc_schema::model::ModelLimit { context: 0, input: None, output: 0 },
+        // G-433: without a catalog base the ref seeds
+        // `Model.Info.default(providerID, id)` (schema/model.ts:146-158)
+        // — limit {context: 200_000, output: 32_000}, capabilities
+        // {tools, input [text, image], output [text]} — the old
+        // zero-limit placeholder broke the footer/sidebar usage
+        // percent for package-family custom providers.
+        let mut info = oc_schema::model::Info::default_for(
+            oc_schema::id::ProviderId::parse(custom.id.clone()),
+            oc_schema::id::ModelId::parse(model.id.clone()),
+        );
+        if let Some(name) = &model.name {
+            info.name = name.clone();
         }
+        info
     });
     // The console entry's identity rides the result (opencode.ts:265,
     // 267-269): the console key stays the id; modelID redirects the
