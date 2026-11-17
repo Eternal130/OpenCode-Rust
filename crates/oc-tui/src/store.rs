@@ -1562,6 +1562,13 @@ pub struct Store {
     /// reopens either kind.
     snapshot_authoritative:
         std::cell::RefCell<std::collections::HashMap<String, std::collections::HashSet<String>>>,
+    /// G-442 forensics (env-gated via `OC_TUI_TRACE`, test-only):
+    /// when set, ingest-side tool-part state transitions and any
+    /// snapshot/resync replacement of a message that DOWNGRADES a
+    /// settled tool part append one line to the file — the trace
+    /// that separates "the success event never landed" from "a
+    /// stale fetch clobbered it afterwards".
+    ingest_trace: std::cell::RefCell<Option<String>>,
     /// G-423 — the announced text-ordinal frontier per assistant
     /// message (`session` → `messageID` → ordinal count): ref's
     /// transcript rows for text parts are EVENT-created (rows.ts
@@ -4172,6 +4179,7 @@ impl Store {
             terminal_sink: std::cell::RefCell::new(Rc::new(NoTerminals)),
             terminal_pending_attach: std::cell::RefCell::new(std::collections::HashSet::new()),
             snapshot_authoritative: std::cell::RefCell::new(std::collections::HashMap::new()),
+            ingest_trace: std::cell::RefCell::new(std::env::var("OC_TUI_TRACE").ok()),
             text_announced: std::cell::RefCell::new(std::collections::HashMap::new()),
             terminal_selection_outbox: std::cell::RefCell::new(Vec::new()),
             route,
@@ -6873,6 +6881,63 @@ impl Store {
 
     // -- messages (lane C) -----------------------------------------------------
 
+    /// G-442 forensics — append one line to the `OC_TUI_TRACE` file
+    /// (no-op when the env is unset).
+    fn trace_ingest(&self, line: &str) {
+        let path = self.ingest_trace.borrow().clone();
+        if let Some(path) = path {
+            use std::io::Write as _;
+            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&path)
+            {
+                let _ = writeln!(file, "{line}");
+            }
+        }
+    }
+
+    /// G-442 forensics — a snapshot/resync replacing one session's
+    /// messages DOWNGRADES a settled tool part when the incoming copy
+    /// of the same assistant message carries that part unset/running.
+    /// That clobber is the standing suspect for the wedged spinner;
+    /// trace every occurrence with before/after statuses.
+    fn trace_snapshot_downgrade(
+        &self,
+        source: &str,
+        session_id: &str,
+        old: &[Message],
+        new: &[Message],
+    ) {
+        for old_message in old {
+            let Message::Assistant { id, parts: old_parts, .. } = old_message else { continue };
+            let Some(new_message) = new.iter().find(|message| message.id() == *id) else {
+                continue;
+            };
+            let Message::Assistant { parts: new_parts, .. } = new_message else { continue };
+            for part in old_parts {
+                let Part::Tool { id: part_id, state, .. } = part else { continue };
+                let before = state.status;
+                let after = new_parts.iter().find_map(|candidate| match candidate {
+                    Part::Tool { id: candidate_id, state, .. } if candidate_id == part_id => {
+                        Some(state.status)
+                    }
+                    _ => None,
+                });
+                match after {
+                    Some(after) if after != before => {
+                        self.trace_ingest(&format!(
+                            "downgrade source={source} session={session_id} msg={id} part={part_id} {before:?} -> {after:?}"
+                        ));
+                    }
+                    None if before.settled() => {
+                        self.trace_ingest(&format!(
+                            "downgrade source={source} session={session_id} msg={id} part={part_id} {before:?} -> MISSING"
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     /// The ordered messages of one session (the transcript's input).
     #[must_use]
     pub fn messages(&self, session_id: &str) -> Vec<Message> {
@@ -6899,8 +6964,16 @@ impl Store {
             }
         }
         self.snapshot_authoritative.borrow_mut().insert(session_id.to_owned(), authoritative);
+        let incoming = {
+            let old = self.messages.get().by_session.get(session_id).cloned().unwrap_or_default();
+            self.trace_snapshot_downgrade("set_messages", session_id, &old, &messages);
+            // G-442 — the freshest-copy rule (see `local_is_fresher`):
+            // a resync page serialized mid-stream must not regress a
+            // local assistant the live stream has already settled.
+            prefer_fresher_local(messages, &old)
+        };
         self.messages.update(|state| {
-            state.by_session.insert(session_id.to_owned(), messages);
+            state.by_session.insert(session_id.to_owned(), incoming);
         });
     }
 
@@ -13278,13 +13351,23 @@ impl Store {
                     // text ordinal announced.
                     self.clear_text_announced(&session_id, message.id());
                 }
+                {
+                    let local = self
+                        .messages
+                        .get()
+                        .by_session
+                        .get(&session_id)
+                        .cloned()
+                        .unwrap_or_default();
+                    self.trace_snapshot_downgrade("snapshot", &session_id, &local, &messages);
+                }
                 self.messages.update(|state| {
                     let local = state.by_session.remove(&session_id).unwrap_or_default();
                     let mut ids = std::collections::HashSet::new();
-                    for message in &messages {
+                    let mut merged = prefer_fresher_local(messages, &local);
+                    for message in &merged {
                         ids.insert(message.id().to_owned());
                     }
-                    let mut merged = messages;
                     merged.extend(local.into_iter().filter(|message| !ids.contains(message.id())));
                     state.by_session.insert(session_id, merged);
                 });
@@ -14279,6 +14362,8 @@ impl Store {
                     })
                     .flatten();
                 let completed = event.created;
+                let trace = self.ingest_trace.borrow().is_some();
+                let settled = std::cell::Cell::new(false);
                 self.update_messages(&session, |messages| {
                     with_tool_part(messages, &assistant, &part_id, |part| {
                         if let Part::Tool { time, state, .. } = part {
@@ -14298,9 +14383,18 @@ impl Store {
                                 state.error.clone_from(&error);
                                 time.completed = time.completed.or(completed);
                             }
+                            settled.set(state.status.settled());
                         }
                     });
                 });
+                if trace {
+                    self.trace_ingest(&format!(
+                        "tool-settle session={session} msg={assistant} part={part_id} \
+                         settled={} output_len={}",
+                        settled.get(),
+                        output.as_deref().map_or(0, str::len)
+                    ));
+                }
             }
             "session.step.started" => {
                 // A new step reopens the assistant message (retry
@@ -14731,6 +14825,59 @@ impl Store {
 /// `(sessionID, assistantMessageID)` off a part event.
 fn session_and_assistant(event: &BusEvent) -> Option<(String, String)> {
     Some((event.string("sessionID")?, event.string("assistantMessageID")?))
+}
+
+/// G-442 (root cause, W9) — the freshest-copy rule for snapshot /
+/// resync merges: the live event stream is strictly more current
+/// than any HTTP `message.list` snapshot of the SAME assistant
+/// message, so a fetched copy may not replace a local copy that
+/// carries a strictly LATER completion timestamp. Completion times
+/// are immutable; a fetched message serialized mid-stream (the
+/// session-open `message.sync` fetch racing an instant-paced tool
+/// turn) carries `None`/earlier completions than the local settled
+/// copy — replacing it regresses settled tool parts to running (the
+/// eternal-spinner / missing folded-output flake: no later event
+/// re-delivers the part's settle) and can truncate finished text.
+/// Compare by the latest completion stamp each copy carries (the
+/// message envelope + every part); ties and unknowns keep the
+/// FETCHED copy (hydration and G11-F1's overlap-guard semantics
+/// stay untouched — only a fetched copy that is demonstrably older
+/// loses).
+fn local_is_fresher(local: &Message, fetched: &Message) -> bool {
+    let stamp = |message: &Message| -> u64 {
+        let Message::Assistant { parts, time, .. } = message else { return 0 };
+        let mut latest = time.completed.unwrap_or(0);
+        for part in parts {
+            let completed = match part {
+                Part::Tool { time, .. }
+                | Part::Reasoning { time, .. }
+                | Part::Text { time, .. } => time.completed,
+            };
+            if completed.unwrap_or(0) > latest {
+                latest = completed.unwrap_or(0);
+            }
+        }
+        latest
+    };
+    stamp(local) > stamp(fetched)
+}
+
+/// G-442 — apply the freshest-copy rule over a fetched page: every
+/// fetched id whose local copy is fresher keeps the LOCAL message;
+/// the result replaces the session's rows (local-only rows appended
+/// by the caller).
+fn prefer_fresher_local(fetched: Vec<Message>, local: &[Message]) -> Vec<Message> {
+    fetched
+        .into_iter()
+        .map(|message| {
+            local
+                .iter()
+                .find(|candidate| candidate.id() == message.id())
+                .filter(|candidate| local_is_fresher(candidate, &message))
+                .cloned()
+                .unwrap_or(message)
+        })
+        .collect()
 }
 
 /// Find or create the assistant message (shared by the helpers below).
@@ -15317,7 +15464,87 @@ fn message_from_event(event: &BusEvent) -> Option<Message> {
 mod tests {
     use super::*;
     use crate::components::command_palette::CommandDispatcher as _;
+    use crate::components::message::model::{Part, PartTime, ToolState, ToolStatus};
     use crate::data::SessionSnapshot;
+
+    /// G-442 (W9 root cause) — the session-open `message.sync` fetch
+    /// races a fast tool turn: the page is serialized server-side
+    /// while the tool runs, and lands client-side AFTER the live
+    /// `session.tool.success` settle. The snapshot merge must keep
+    /// the local settled copy (a strictly later completion stamp) —
+    /// the pre-fix replace regressed the part to running forever
+    /// (the wedged-spinner flake: no later event re-delivers the
+    /// settle). The Resync wholesale path (`set_messages`) carries the
+    /// same guard.
+    #[test]
+    fn snapshot_merge_never_regresses_a_settled_tool_part() {
+        let store = Store::new(Runtime::new());
+        let assistant = |completed: Option<u64>, status: ToolStatus| Message::Assistant {
+            id: "msg_1".to_owned(),
+            agent: "build".to_owned(),
+            model: "replay/m".to_owned(),
+            parts: vec![Part::Tool {
+                id: "toolu_1".to_owned(),
+                name: "bash".to_owned(),
+                time: PartTime { created: Some(10), completed },
+                state: ToolState { status, ..ToolState::default() },
+            }],
+            finish: None,
+            error: None,
+            time: PartTime { created: Some(10), completed },
+            tokens: None,
+            usage_total: None,
+            retry: None,
+            cache_read: None,
+        };
+        // Live stream settles the part.
+        store.set_messages(
+            "s1",
+            vec![
+                Message::User {
+                    id: "u1".to_owned(),
+                    text: "hello".to_owned(),
+                    created: 1,
+                    files: Vec::new(),
+                },
+                assistant(Some(99), ToolStatus::Completed),
+            ],
+        );
+        // The stale page: same ids, the tool still running, the
+        // message un-completed (serialized at t=50 < 99).
+        let stale = assistant(None, ToolStatus::Running);
+        store.ingest_all([Ingest::MessagesSnapshot {
+            session_id: "s1".to_owned(),
+            messages: vec![
+                Message::User {
+                    id: "u1".to_owned(),
+                    text: "hello".to_owned(),
+                    created: 1,
+                    files: Vec::new(),
+                },
+                stale,
+            ],
+        }]);
+        let settled = store.messages("s1");
+        let Message::Assistant { parts, .. } =
+            settled.iter().find(|message| message.id() == "msg_1").expect("kept")
+        else {
+            panic!("assistant kept");
+        };
+        let Part::Tool { state, .. } = &parts[0] else { panic!("tool part") };
+        assert_eq!(
+            state.status,
+            ToolStatus::Completed,
+            "the fresher local copy survives the snapshot merge"
+        );
+        // A page that is NOT older (same completion) still replaces —
+        // hydration authority is untouched.
+        store.ingest_all([Ingest::MessagesSnapshot {
+            session_id: "s1".to_owned(),
+            messages: vec![assistant(Some(99), ToolStatus::Completed)],
+        }]);
+        assert_eq!(store.messages("s1").len(), 2, "the equal-stamp page merged without locals");
+    }
 
     /// G-200① — the `session.viewed` ack (session-tabs.tsx:209-242):
     /// routing into an UNREAD session with a known idle watermark
