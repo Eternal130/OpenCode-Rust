@@ -287,12 +287,12 @@
 
 ### 2.1 构建门禁与资源
 
-1. **cargo 构建/测试一律经 `tools/dev-gate.sh` 单入口**：强制 eternal130 身份 + systemd scope（CPUQuota=400%、MemoryMax=10G、TasksMax=512），1 分钟 load≥6 拒启动；lane 提示词必须写明走 dev-gate。
+1. **cargo 构建/测试一律经 `tools/dev-gate.sh` 单入口**：强制 eternal130 身份 + systemd scope（CPUQuota=400%、MemoryMax=10G、TasksMax=512），1 分钟 load≥8 拒启动（2026-11-11 owner ruling，`47cd5ab1`——原 6 因稳态常驻 6.x 频繁卡门）；lane 提示词必须写明走 dev-gate。
 2. **dev-gate 只包单条 cargo/nextest 命令**：`tools/diff/run-all.sh`、`tools/parity/*.sh` 等验证脚本**直接跑、禁包 dev-gate**（锁套锁）；一次一个门，禁双发。
 3. **一切测试/构建命令全量 tee 落盘**——不止收尾门，**含过滤词单测、`--exact` 复现、fix 迭代**——到 `.test-logs/<crate>-<时间>-<lane>.log`（git-ignored），禁内嵌 tail/head/grep 截断 Summary；显示用 grep 在 tee 之后单独执行。落盘日志是唯一测试证据：**日志丢失=证据丢失，直接导致重复测试与归因事故**（第十四轮教训，2026-11-07）；争议先读盘上日志，禁凭记忆重跑（见 2.2#5）。
 4. 门排队/卡住先 `fuser /tmp/opencode/dev-gate.lock` + `ps` 查残留（含 PPID1 孤儿）再归因。
 5. **禁 root 直跑 cargo**；root 编辑过的文件立即 chown；worktree 动工前 `find . -user root -exec chown eternal130:eternal130 {} +`（含 target/out/oracle）。
-6. 磁盘：仓库级 incremental=false 已强制；lane 合并后立即删该 worktree 的 target（过清理门：fuser 无打开文件 + mtime≥30 分钟）；主 target/debug ≥两周或 >100G 时 `cargo clean -p` 粗清或整清。
+6. **磁盘**：仓库级 incremental=false 已强制；**dev-gate 内建 <50G 拒启动 backstop（exit 5，2026-11-17 事故：W9 复现测试重编译把盘写满→postgres 崩循环→new-api 链路死）**——被拒先清再跑，严禁绕过；lane 合并后立即删该 worktree 的 target（过清理门：fuser 无打开文件 + mtime≥30 分钟）；**lane 重编译型任务（复现/压测）必须 `CARGO_TARGET_DIR` 指向隔离小目标或复用主 target，禁在 worktree 默认 target 灌大构建**；主 target/debug ≥两周或 >100G 时 `cargo clean -p` 粗清或整清；**root 执行 `git merge` 后立即全仓 chown**（root 属主致网关/构建 PermissionError——2026-11-17 两次事故）。
 7. 生产尊重：单 lane 串行；重型腿（E2 TTI/soak/电池）需用户明示或错峰，派发前看生产健康信号；配额敏感任务用定时唤醒 + 断点复活（WIP 落盘可 revive）。
 
 ### 2.2 测试执行与证据
@@ -316,6 +316,7 @@
    | core/其他 crate | `tools/dev-gate.sh 'cargo nextest run --workspace --locked --no-fail-fast'` | 视范围 |
 
 8. 树场景：加 `StateSpec`（`crates/oc-tui/tests/tree_scenarios.rs`）→ `tools/parity/tree-scenario-capture.sh` 捕获 → `TREE_ORACLE_FREEZE=1 tools/parity/tree-oracle-freeze.sh` 冻结；**oracle 帧与冻结版不符=重钉事件，stop-and-escalate，禁擅自重冻结**。
+9. **差分/census 驱动器禁以 root 跑**（其内部直调 cargo nextest；root 会污染 `/tmp/opencode/diff-*` 属主致后续 eternal130 运行失败）——root 会话用 `systemd-run --uid=eternal130 --scope …` 直跑模式（不占 dev-gate 锁，2026-11-13 第三十轮教训）。
 
 ### 2.3 lane 纪律
 
@@ -324,6 +325,7 @@
 3. 子代理禁后台任务（全部前台块）；禁向已完成会话投递；小时级后台睡眠改级联短看守（50 分钟自续）+ 用户消息兜底。
 4. lane 收尾自查自派生后台进程（watchdog/sleep 等）；rig 换代码必须重建（收尾强制项）。
 5. /tmp 顶层只用 PID 唯一名，未提交工作禁放 /tmp；`/tmp/opencode/dns-probe.*` 不是构建产物勿清。
+6. **lane 报告禁口头绿**：一切「clippy/fmt/套件绿」的声称必须附命令输出尾行（2026-11-15~17 四起 lane 声称不实——全仓 clippy 是硬要求，crate-scoped 不算）；**跨仓改动（opentui-rust 等）的合并/推送由控制者合并门执行**（2026-11-16 lane 直推上游仓越门事故）；**lane 提示词内嵌开发规范全文必须由 `tools/lane-brief.sh` 逐字抽取**（禁用压缩/改写版——2026-11-17 用户裁定）。
 
 ### 2.4 进程与终端安全
 
