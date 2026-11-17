@@ -3410,3 +3410,37 @@ T9 全量 15/15（6 矩阵 + 8 pair/引导）；oc-server 411/411；oc-tui 1725�
 - **Minor**：①G-432 API 级回归钉 `handlers_session_switch_model_unchanged_is_noop`（同值 no-op / variant default 归一 / 变更仍发布三段）；②S5 列界 `SIDEBAR_MASK_COL=108` 常量+出处（160 列侧栏左缘 ≈109 实测）；③`replace_id_shapes` 前缀收窄为 oc-schema id.rs `check "<p>"` 注册表逐字清单（ses/msg/evt/wrk/per/sh/frm/psv/cred/con——`pty` 非 schema wire 前缀剔除；单测钉两条边界）。
 - **门接线**：RELEASE.md Gates 增"Channel 9 real-chain battery"节（T9 逐字命令+供给说明+pair 本地跑+skip 语义+绊线说明）；ci.yml build job 增 bin 构建、test job 注释标注 T9/pair 归属；INDEX.md 总表增通道 9 行+总计段更新。
 - **验证**：pair 全量 10/10（绊线在场全绿）；realchain_t9 7/7；oc-server 412/412（+G-432 钉）；通道 8 零漂移（exit 0）；clippy/fmt/guards 绿。
+
+# 第三十七轮（2026-11-17，通道 9 W5：时序保真回放 + 真实链路插件 rig + 侧栏深比对）
+
+用户审计三缺口（时序平 / rig 无插件 / 无插件侧栏也未全量比对）逐项落地。
+
+## A. 时序保真回放引擎（网关 v2）
+
+- **cassette v2**：`response.frames: [{blob, delay_ms}]` 逐 SSE 事件+块间延迟；v1 整块体兼容读（无 timing）；铸种路径把当前 pace schedule 记为 frames（timing 自此随语料持久化）。
+- **合成 schedule**：`--pace synthetic[:seed=N][:ttft=MS][:tps=T]`——TTFT 档 300/1500/4000ms + TPS 档 20/60/120 tok/s，按 `sha256(digest:seed)` 确定性取档（可显式钉）；`text_delta` 重切为逐 token SSE 子事件（传输层重分帧合法，双端字节完全一致——差分公平性含时序在内）。`--pace instant` 默认保持原行为；`--pace frames` 用语料 timing。
+- **场景**：P1 慢 TTFT（4s）——busy 窗内双端 interrupt 供 affordance 在场、无回复文本，settle 后 grid EXACT；P2 慢 TPS（5 tok/s）——流中 partial 前缀双端在场 + settle 后 EXACT；P3 流中 ESC 中断（真实时钟，非通道 8 虚拟钟）——中断后状态机 grid 对拍。
+- **G-438 🔴→🟢（已修，P3 首个真实链路修复）**：port `session.step.failed` store 处理只落 `finish` 不落 `error`（ref message-updater.ts:273-285 `draft.error = event.data.error`）→ 被中断消息 footer 永不渲染 ` · interrupted` 徽章（引擎侧消息 error 正确——`/api/session/{id}/message` 实取证；缺的是 TUI store 投影）。修复：store.rs step.failed 臂补 `error`/`retry=None` 投影。
+- **归一化**：turn 时长 token（`3.6s`）→ `__SECS__`（壁钟 artifact，单测钉边界——词内 `s` 不掩）。
+- **harness**：`Gateway::spawn_paced`；P 系列对流式逐块渲染改用 SCREEN 断言（ref 分块写出夹转义序列，raw 流不可搜晚流文本——方法论钉）。
+
+## B. 真实链路插件 rig（T9-7，症状⑦）
+
+- 供给：真插件实体（oh-my-opencode-slim@3.0.3 + superpowers@7.0.0，宿主 `~/.cache/opencode` 安装树）只读拷贝至 `/tmp/opencode/plugin-payload`（dev-gate 以非 root uid 跑测试，/root 不可读——供给可复 staging），再拷入双沙箱各自安装缓存（port `xdg-cache/opencode-rust/npm`，ref `xdg-cache/opencode/npm`，`<pkg>@<ver>/<stamp>/node_modules/<pkg>` 共享布局），config `plugins[]` 真实发现路径——零 driver 注入。缺供给 → skip。
+- **症状⑦未复现（port 真实链路插件面绿）**：port `/api/plugin` 两插件 `active`（omo `features {server,tui}`）；侧栏/底部插件贡献面（agent 标签 "Orchestrator · …"、`⊙ 2 MCP /mcps` 行）与 ref 逐行一致（S5 文档掩码下 EXACT；MCP 计数为活连接面——测试轮询双端计数一致后比对）。
+- T9-7 进 pair 矩阵（第 17 测试）。
+
+## C. 侧栏深比对（P4/P4b，无插件）
+
+- 状态矩阵（空会话/回复后/长转录）× 宽度档（160/120）全量落盘（`.test-logs/t9-pair-p4*`）。
+- **G-435 narrowing（现役）**：侧栏 Context 块 port 首回合后不渲染、第 2 回合起渲染（ref 首回合即渲染；空会话双端均无）——非"永不渲染"而是**滞后一回合**（疑 usage/context 数据到达时序）。S5 掩码维持（绊线仍绿：rust 首回合确实无 Context），长转录态两侧栏已近逐行一致（残差：`0% used` 行 port 缺——G-433 limit 解析族；±1 列 padding）。
+- **120 列档 P4b 全状态零掩码 EXACT**（空会话+回复后）。
+- G-436 维持（宽档盒高差；绊线绿）。
+
+## harness 加固
+
+LaneGuard drop 时清扫本进程沙箱注册表（`/tmp/opencode/t9w1-<pid>-*` 全树递归，含只读位清除——panic 路径也不泄漏，上轮 inotify 教训的通用化）；clippy 全仓 `--all-targets` 归零（realchain 测试目标历史 59 处 lint 债清偿——harness/测试件加针对性 allow 清单 + realchain_t9 一处 format_push_string 实修）。
+
+## 验证
+
+pair 全量 17/17（S1-S6+P1-P3+T9-7+P4/P4b+绊线；`test result:` 尾行见 w5-report）；realchain_t9 10/10；oc-tui+oc-server 2152/2152；通道 8 `tui_fullscreen.py` exit 0 零漂移；clippy `--workspace --all-targets -D warnings` 0 错；fmt --check 绿；guards 全绿。

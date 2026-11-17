@@ -97,7 +97,8 @@ fn t9_1_boot_connects_and_settles() {
     let screen = rig.tui.screen_text();
     let mut evidence = String::new();
     if !settled {
-        evidence.push_str(&format!("screen:\n{screen}"));
+        evidence.push_str("screen:\n");
+        evidence.push_str(&screen);
     }
     // Reconnect/error indicators (the symptom-① surface).
     let bad = ["reconnect", "Reconnect", "failed to connect", "connection lost", "disconnected"];
