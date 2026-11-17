@@ -126,12 +126,15 @@ def _sse_tool_uses(body_text):
             }
         delta = doc.get("delta")
         if isinstance(delta, dict) and delta.get("type") == "input_json_delta":
+            # LATENT (registered, W7 review minor): the accumulation is
+            # NOT index-keyed — with PARALLEL tool_use blocks whose
+            # inputs stream as multi-chunk partial_json, every pending
+            # state appends every chunk (cross-pollution). The corpus
+            # shape (one tool_use per message, whole-JSON single-chunk
+            # input) is unaffected; keying on doc["index"] is the fix
+            # the day a parallel-blocks cassette shows up.
             for state in pending.values():
-                if state["id"] and not state.get("_done_input"):
-                    state["input_text"] += delta.get("partial_json") or ""
-        # (index-keyed accumulation is not needed for whole-JSON deltas,
-        # the common single-chunk shape; late partials still land on the
-        # matching state via the id guard above.)
+                state["input_text"] += delta.get("partial_json") or ""
     for state in pending.values():
         try:
             inputs = json.loads(state["input_text"] or "{}")

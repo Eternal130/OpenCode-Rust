@@ -158,12 +158,13 @@ def normalize_request(body: dict, redactions):
 # ---------------------------------------------------------------------------
 
 def _blank_tool_results(value):
-    """Deep-copy `value` with every tool_result CONTENT replaced by a
+    """Deep-copy `value` with every tool-result CONTENT replaced by a
     placeholder — sandbox-executed output never participates in the
-    cross-environment shape key (anthropic blocks and openai `role:
-    "tool"` messages alike)."""
+    cross-environment shape key. Covers BOTH wire families: anthropic
+    content blocks (`{"type": "tool_result", "content": ...}`) and the
+    openai chat shape (`{"role": "tool", "content": "..."}`)."""
     if isinstance(value, dict):
-        if value.get("type") == "tool_result":
+        if value.get("type") == "tool_result" or value.get("role") == "tool":
             out = dict(value)
             out["content"] = "__TOOLRESULT__"
             return out
@@ -255,6 +256,15 @@ class TurnCorpus:
                     return inter, path, "hit"
             # Fallback 1: counter drift — an exact shape hit under a
             # DIFFERENT ordinal (a missed/extra aux classification).
+            # LATENT (registered, W7 review minor): the scan is over
+            # EVERY turn-tagged cassette the gateway loaded, including
+            # OTHER sessions' recordings in the shared corpus dirs — a
+            # same-shaped request from a different session would rematch
+            # that cassette (body-equivalent by construction of the
+            # shape key, but the replay is cross-session). The per-end
+            # dedicated gateways + one-scenario corpora keep this
+            # theoretical today; scoping the table per session needs a
+            # client-supplied discriminator the wire does not carry.
             for other, candidates2 in self.turns.items():
                 if other == turn:
                     continue
@@ -382,10 +392,21 @@ class Stats:
         self.misses = 0
         self.seeded = 0
         self.miss_digests = []
+        # W7 review Important①: the turn lane's match-quality counters —
+        # `turn_matches` by event name (hit | turn-rematch |
+        # turn-shape-conflict). A strict replay run must show hits only;
+        # any conflict/rematch is a shape drift the caller can now
+        # assert on (the harness's misses==0 check alone let a
+        # wrong-shape conflict replay stay green).
+        self.turn_matches = {}
 
     def note_hit(self):
         with self.lock:
             self.hits += 1
+
+    def note_turn_match(self, event):
+        with self.lock:
+            self.turn_matches[event] = self.turn_matches.get(event, 0) + 1
 
     def note_miss(self, digest):
         with self.lock:
@@ -397,7 +418,8 @@ class Stats:
         with self.lock:
             return dict(requests=self.hits + self.misses, hits=self.hits,
                         misses=self.misses, seeded=self.seeded,
-                        corpus=self.corpus_size, miss_digests=list(self.miss_digests))
+                        corpus=self.corpus_size, miss_digests=list(self.miss_digests),
+                        turn_matches=dict(self.turn_matches))
 
 
 STATS = Stats()
@@ -629,6 +651,9 @@ class Handler(BaseHTTPRequestHandler):
             schedule = build_schedule(digest, resp_body, ARGS.pace)
         self._serve_schedule(resp.get("status", 200), ctype, schedule)
         STATS.note_hit()
+        match_event = (extra or {}).get("match")
+        if match_event:
+            STATS.note_turn_match(match_event)
         log("hit", sha256=digest, cassette=cassette, status=resp.get("status"),
             pace=ARGS.pace["mode"], frames=len(schedule), **(extra or {}))
 
