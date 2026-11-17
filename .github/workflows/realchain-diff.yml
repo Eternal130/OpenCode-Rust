@@ -52,7 +52,7 @@ jobs:
         # macos-latest extension: add `os: macos-latest` and swap the
         # bun archive to bun-darwin-x64.zip in the install step.
         os: [ubuntu-latest]
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
