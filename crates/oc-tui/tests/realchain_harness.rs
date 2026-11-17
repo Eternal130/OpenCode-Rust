@@ -1466,6 +1466,16 @@ pub fn normalize_grid(grid: &str, roots: &[&str]) -> String {
         row = replace_id_shapes(&row);
         row = replace_clocks(&row);
         row = replace_timings(&row);
+        // The timing tokens replace variable-width runs (`96ms` →
+        // `__MS__`, `666.7 tok/s` → `__TOKS__`), so any content sharing
+        // the row on the OTHER side of the tokens (the p4-long tier:
+        // the sidebar onboarding card renders on the transcript's
+        // `Build · model · …` rows) shifts by the per-side delta —
+        // collapse the space runs on BOTH ends (the same shape as the
+        // __ROOT__ path-length rule above).
+        if row.contains("__MS__") || row.contains("__TOKS__") || row.contains("__SECS__") {
+            collapse_spaces(&mut row);
+        }
         // G-434 (documented masking): the free/no-auth model tier in
         // the palette lists models.dev-catalog entries whose VINTAGE
         // differs between the ref tree's snapshot.txt and the port's
