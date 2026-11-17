@@ -327,7 +327,10 @@ def build_schedule(digest, resp_body_text, pace):
     if pace["mode"] == "instant":
         return [(resp_body_text.encode(), 0)]
     if pace["mode"] == "frames":
-        return None  # handled by the caller from cassette frames
+        # v1 cassettes carry no frames — degrade to instant (documented
+        # fallback; W5 review Important-1: the caller previously
+        # crashed summing None).
+        return [(resp_body_text.encode(), 0)]
     ttft, tps = synthetic_schedule(digest, pace["seed"])
     if pace["ttft_ms"] is not None:
         ttft = pace["ttft_ms"]
