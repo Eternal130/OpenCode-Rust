@@ -1179,7 +1179,6 @@ mod tests {
         crate::components::chrome_solid::reset_hub();
     }
 
-
     /// G-448 — the autocomplete popup's rows NEVER exceed the popup
     /// box (ref `Locale.truncateMiddle` at autocomplete.tsx:889-922 +
     /// the fetch-time truncation at :334/:377/:509-514): a long `@`
@@ -1189,8 +1188,7 @@ mod tests {
     #[test]
     fn popup_rows_truncate_to_the_box_interior() {
         let theme = ThemeState::v2_dark();
-        let long_name =
-            "@a-very-long-file-name-that-overflows-the-popup-box-with-room-to-spare.rs";
+        let long_name = "@a-very-long-file-name-that-overflows-the-popup-box-with-room-to-spare.rs";
         let options = vec![
             crate::components::composer::autocomplete::AutocompleteOption {
                 display: long_name.to_string(),
@@ -1227,10 +1225,7 @@ mod tests {
         // The popup rows sit above the box (top = 4): rows 2 and 3.
         let grid = frame.text_grid();
         let first = grid[2].clone();
-        assert!(
-            first.contains('…'),
-            "the long title middle-truncates: {first:?}"
-        );
+        assert!(first.contains('…'), "the long title middle-truncates: {first:?}");
         // The row never exceeds the 40-col box.
         assert!(
             !first.chars().skip(40).any(|ch| ch != ' '),

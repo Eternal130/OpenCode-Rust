@@ -1991,8 +1991,7 @@ mod tests {
         let mut observed = Vec::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
-            let recv =
-                tokio::time::timeout_at(deadline, rx.recv()).await.expect("deadline");
+            let recv = tokio::time::timeout_at(deadline, rx.recv()).await.expect("deadline");
             let Some(message) = recv else { break };
             let is_marker = matches!(&message, Ingest::Event(e) if e.id == "c1");
             observed.push(message);
