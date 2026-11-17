@@ -1599,6 +1599,21 @@ fn replace_version_pill(row: &str) -> String {
         // vs `2.0.24` differ by one column) — emit the bare token.
         "__VERSION__".to_owned()
     } else {
+        // The gwave-1 mask retirement moved T9-7 to the full-grid
+        // compare: the pill also rides INLINE as the sidebar's
+        // right-edge trailing cell (`... /mcps      local` on the ref
+        // source run vs `2.0.24` on the built binary) — normalize the
+        // trailing token the same way (the build-source artifact, per
+        // the registered normalization list; NOT a product gap).
+        let head = row.trim_end();
+        if let Some((before, token)) = head.rsplit_once(' ') {
+            if !before.is_empty() && looks_like_version(token) {
+                // Collapse the padding run too: the right-aligned pill
+                // sits one column further left for `2.0.24` than for
+                // `local` (same one-column artifact as above).
+                return format!("{} __VERSION__", before.trim_end());
+            }
+        }
         row.to_owned()
     }
 }
