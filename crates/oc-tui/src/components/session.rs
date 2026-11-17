@@ -1354,10 +1354,19 @@ fn live_sidebar_view(store: &Store, session_id: &str, height: usize) -> SidebarV
         })
         .map_or(0, |index| index + 1);
     let usage = messages[compaction_index..].iter().rev().find_map(|message| match message {
+        // G-435 root cause (closed with the W9 snapshot guard): the
+        // matcher previously required `cache_read: None` + `retry:
+        // None` — conditions ref does NOT have (util/session.ts:45-56
+        // `lastAssistantWithUsage` matches ANY assistant with a token
+        // payload). The None-conditions were the ingest-side update
+        // guard transplanted into the display matcher: fetched pages
+        // materialize `cache_read: Some(0)` (data.rs maps an absent
+        // cache.read to 0), so any turn whose message.list snapshot
+        // landed post-settle (tie -> fetched wins) lost the Context
+        // block while event-only turns rendered it — the one-turn-lag
+        // flake. Mirror ref: presence + positive total only.
         crate::components::message::model::Message::Assistant {
             usage_total: Some(total),
-            cache_read: None,
-            retry: None,
             model,
             ..
         } if *total > 0 => Some((*total, model.clone())),

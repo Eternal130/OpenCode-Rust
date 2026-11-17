@@ -426,6 +426,13 @@ fn s5_sidebar_grid_pair() {
     rig.write_both(b"hello\r");
     let rust_replied = rig.rust_tui.wait_for(REPLY_NEEDLE, rust_from, Duration::from_secs(30));
     let ref_replied = rig.ref_tui.wait_for(REPLY_NEEDLE, ref_from, Duration::from_secs(60));
+    // G-435 closure: the Context block now renders on BOTH ends
+    // (matcher aligned to ref's util/session.ts:45-56 — no
+    // cache_read/retry conditions). Condition-wait the needle BEFORE
+    // capturing: the block paints with the settle, not with the
+    // reply text (the CI-slower-runner lesson from S3).
+    let rust_ctx = rig.rust_tui.wait_for(b"Context", 0, Duration::from_secs(30));
+    let ref_ctx = rig.ref_tui.wait_for(b"Context", 0, Duration::from_secs(30));
     settle(3);
     let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
     let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
@@ -444,37 +451,68 @@ fn s5_sidebar_grid_pair() {
         ref_context && ref_tokens && ref_used,
         "S5 RED: ref sidebar shape — context={ref_context} tokens={ref_tokens} used={ref_used}"
     );
-    // G-435 (documented masking): the port's sidebar Context block is
-    // rig-dependent — t9-5's solo rig renders it, the pair rig
-    // deterministically does not (ref renders it in both). The sidebar
-    // column region is masked on BOTH ends until G-435 narrows the
-    // port-side race; everything left of it stays row-exact.
-    // G-436 (documented masking): at the wide tier ref's user-message
-    // pane is one row taller than the port's (an extra border-only row
-    // plus spacing — absent at 120 cols, where S2 is row-exact). Blank
-    // and border-only rows are collapsed on BOTH ends until G-436
-    // narrows the wide-tier box metrics; the CONTENT row sequence and
-    // the sidebar region stay asserted.
-    // Mask tripwires (W4 Important ①): each mask below must be masking
-    // a divergence that is STILL PRESENT — when its gap closes, the
-    // pinned shape disappears, this assert goes red, and the mask (plus
-    // the assert) must be retired. No mask can outlive its gap silently.
-    let rust_no_context = !rust_grid.contains("Context");
+    // G-435 CLOSED (root cause: the sidebar usage matcher required
+    // `cache_read: None`/`retry: None` — ref has neither condition —
+    // while fetched transcript pages materialize `cache_read: Some(0)`;
+    // a post-settle snapshot (tie -> fetched wins) then dropped the
+    // Context block on turns whose message.list landed late. The
+    // matcher now mirrors ref; the column mask is RETIRED and the
+    // full sidebar region is compared (G-433's percent row stays
+    // masked below until the limit parsing closes).
+    let rust_context = rust_grid.contains("Context");
+    let rust_tokens = rust_grid.contains("38 tokens");
     assert!(
-        rust_no_context && ref_context,
-        "G-435 tripwire: the sidebar-region mask assumed the port lacks the \
-         Context block (rust={rust_no_context}) while ref has it — if this \
-         is red, G-435 has closed: retire the mask_right_columns mask and \
-         compare the full sidebar"
+        rust_ctx && ref_ctx && rust_context && rust_tokens,
+        "S5 RED: G-435 regression — Context block rust={rust_context} (waited rust={rust_ctx} \
+         ref={ref_ctx}) tokens={rust_tokens}; the sidebar usage matcher must mirror \
+         util/session.ts:45-56 (no cache_read/retry conditions)"
     );
+    // G-433 pin (closure signal for the region mask): the port lacks
+    // the model-catalog context limit, so the percent row renders on
+    // ref only. When G-433 closes this goes red — register the row as
+    // exact-compareable inside the (then-retired) region mask.
+    let rust_used = rust_grid.contains("% used");
+    assert!(
+        !rust_used && ref_used,
+        "G-433 pin: the region mask assumed the port lacks the limit row \
+         (rust={rust_used}) while ref has it — if this is red, G-433 has closed: retire the \
+         sidebar region mask's percent exemption and compare the row exactly"
+    );
+    // G-435-residual pin (the retired mask's inheritor): the sidebar
+    // Context block is vertically offset — rust's Context title shares
+    // the hello row, ref's starts one row lower (pinned from the
+    // 2026-11-17 full-width dumps). While the region mask stays, this
+    // pin keeps its justification honest; when the alignment closes
+    // (both start on the same row) this goes red: retire the region
+    // mask + drop_blank_rows normalization and compare the full
+    // sidebar rows exactly.
+    let rust_context_on_hello =
+        rust_grid.lines().any(|l| l.contains("Context") && l.contains("hello"));
+    let ref_context_on_hello =
+        ref_grid.lines().any(|l| l.contains("Context") && l.contains("hello"));
+    assert!(
+        rust_context_on_hello && !ref_context_on_hello,
+        "G-435-residual pin: the sidebar region mask assumed rust's Context block \
+         starts one row higher (rust_on_hello={rust_context_on_hello} \
+         ref_on_hello={ref_context_on_hello}) — if this is red, the vertical alignment \
+         has closed: retire mask_right_columns + drop_blank_rows here and compare the \
+         full sidebar exactly"
+    );
+    // G-436 CLOSED as an artifact (2026-11-17): the old `ref > rust`
+    // border-count signal was the sidebar Context row leaking through
+    // the column truncation as a bare-┃ row (it only existed while
+    // rust lacked the Context block). The left region's border-only
+    // row counts are now EQUAL on both ends; drop_blank_rows stays as
+    // a normalization for the truncation-induced border/blank rows
+    // (present on BOTH ends, count pinned > 0) and retires together
+    // with the region mask above.
     let ref_border_rows = border_only_row_count(&mask_right_columns(&ref_grid, SIDEBAR_MASK_COL));
     let rust_border_rows = border_only_row_count(&mask_right_columns(&rust_grid, SIDEBAR_MASK_COL));
     assert!(
-        ref_border_rows > rust_border_rows,
-        "G-436 tripwire: the blank/border-row collapse assumed ref's \
-         user-message pane is one row taller (ref={ref_border_rows} vs \
-         rust={rust_border_rows} border-only rows) — if this is red, G-436 \
-         has closed: retire drop_blank_rows and compare rows exactly"
+        ref_border_rows == rust_border_rows && ref_border_rows > 0,
+        "G-436 pin: truncation-normalized border rows must be equal and present — \
+         ref={ref_border_rows} rust={rust_border_rows}; a change here means the \
+         sidebar block layout moved: re-pin from the dumps before retiring the mask"
     );
     let ref_left = drop_blank_rows(&mask_right_columns(&ref_grid, SIDEBAR_MASK_COL));
     let rust_left = drop_blank_rows(&mask_right_columns(&rust_grid, SIDEBAR_MASK_COL));
@@ -514,7 +552,8 @@ fn drop_blank_rows(grid: &str) -> String {
     out
 }
 
-/// Blank every column from `from` rightward (G-435 sidebar-region mask).
+/// Blank every column from `from` rightward (the S5 sidebar-region
+/// mask — held by the G-435-residual vertical-offset pin above).
 fn mask_right_columns(grid: &str, from: usize) -> String {
     let mut out: Vec<String> = Vec::new();
     for line in grid.lines() {
@@ -929,7 +968,8 @@ fn t9_7_plugin_sidebar_pair() {
     // plugins, so `⊙ N MCP` must agree row-exactly.
     // Forensics first: what did each end load? The bodies are dumped
     // above; the pair compare runs on the sidebar-visible 160-col grid
-    // with the documented S5 masks (G-435/436) still in force.
+    // with the documented S5 masks (the region mask is now held by the
+    // G-435-residual vertical-offset pin; see s5_sidebar_grid_pair).
     let ref_left = drop_blank_rows(&mask_right_columns(&ref_grid, SIDEBAR_MASK_COL));
     let rust_left = drop_blank_rows(&mask_right_columns(&rust_grid, SIDEBAR_MASK_COL));
     assert_grids_match("t9-7-plugin", &ref_left, &rust_left);
@@ -998,7 +1038,9 @@ fn p4_sidebar_deep_compare_pair() {
          (S5's mask assumed rust=false ref=true)"
     );
 
-    // Strict compare per state with the documented S5 masks.
+    // Strict compare per state with the documented S5 masks (region mask
+    // held by the G-435-residual alignment pin — full-grid dumps above
+    // remain unmasked for the gap ledger).
     for (name, ref_grid, rust_grid) in
         [("p4-empty", &a_ref, &a_rust), ("p4-reply", &b_ref, &b_rust), ("p4-long", &c_ref, &c_rust)]
     {
