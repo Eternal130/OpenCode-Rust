@@ -1907,6 +1907,124 @@ mod tests {
         );
     }
 
+    /// G-446 — API-level failures never flip the connection state.
+    /// The reconnecting overlay is a TRANSPORT artifact (reconnecting.
+    /// tsx mounts only when the SSE/HTTP transport drops, connection.
+    /// ts:81-107); a boot-time API 500 (the beta.18 `/api/integration`
+    /// credential-decode failure) must leave the connection machine
+    /// untouched — the stream stays live, `Connected` publishes, and no
+    /// `Reconnecting` is ever emitted. Here the transport is healthy
+    /// (handshake + live stream) while every other API path 500s.
+    #[tokio::test]
+    async fn api_500s_never_flip_the_connection_state() {
+        use std::sync::{Arc, Mutex};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let api_errors = Arc::new(Mutex::new(0u32));
+        let counter = Arc::clone(&api_errors);
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else { continue };
+                let counter = Arc::clone(&counter);
+                tokio::spawn(async move {
+                    let (mut reader, _) = socket.split();
+                    let mut request = vec![0u8; 8192];
+                    let _ = reader.read(&mut request).await;
+                    let path = String::from_utf8_lossy(&request)
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap_or_default()
+                        .split('?')
+                        .next()
+                        .unwrap_or_default()
+                        .to_owned();
+                    if path.starts_with("/api/event") {
+                        // Healthy transport: handshake marker, then the
+                        // stream stays open (idle watchdog quiet).
+                        let body = sse_frame("c1", "server.connected", "{}");
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{body}"
+                        );
+                        let _ = socket.write_all(response.as_bytes()).await;
+                        // Hold the stream open past the observation
+                        // window — no further frames.
+                        tokio::time::sleep(Duration::from_secs(3600)).await;
+                    } else {
+                        // EVERY API endpoint — /api/session, /api/
+                        // integration, … — is a hard 500 (the beta.18
+                        // boot shape).
+                        if let Ok(mut count) = counter.lock() {
+                            *count += 1;
+                        }
+                        let _ = socket
+                            .write_all(
+                                b"HTTP/1.1 500 Internal Server Error\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
+                            )
+                            .await;
+                    }
+                });
+            }
+        });
+
+        let client = Client::new(&format!("http://{addr}")).expect("client");
+        let connection = Connection::with_config(
+            client,
+            ConnectionConfig {
+                backoff_base: Duration::from_millis(10),
+                backoff_max: Duration::from_millis(10),
+                max_attempts: Some(2),
+                connect_timeout: Duration::from_secs(2),
+                idle_timeout: Duration::from_secs(45),
+            },
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let runner = tokio::spawn(
+            connection
+                .run(tx, HttpResync::new(Client::new(&format!("http://{addr}")).expect("client"))),
+        );
+
+        // Collect until the handshake marker publishes (Connected +
+        // the event), then hold the window open long enough that a
+        // misclassified reconnect cycle would surface.
+        let mut observed = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let recv = tokio::time::timeout_at(deadline, rx.recv()).await.expect("deadline");
+            let Some(message) = recv else { break };
+            let is_marker = matches!(&message, Ingest::Event(e) if e.id == "c1");
+            observed.push(message);
+            if is_marker {
+                break;
+            }
+        }
+        assert!(
+            observed.iter().any(|m| matches!(m, Ingest::Connected)),
+            "the healthy handshake still publishes Connected: {observed:?}"
+        );
+        // The quiet window: nothing else arrives (a reconnect loop would
+        // emit Reconnecting{2} within the 10 ms backoff).
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        while let Ok(message) = rx.try_recv() {
+            observed.push(message);
+        }
+        runner.abort();
+        server.abort();
+
+        assert!(
+            observed
+                .iter()
+                .all(|m| !matches!(m, Ingest::Connection(ConnectionState::Reconnecting { .. }))),
+            "API 500s never flip the connection state: {observed:?}"
+        );
+        assert!(
+            observed.iter().all(|m| !matches!(m, Ingest::Connection(ConnectionState::Failed))),
+            "no Failed either: {observed:?}"
+        );
+        assert!(*api_errors.lock().expect("count") >= 1, "the 500 endpoints were hit");
+    }
+
     /// G-300 (a) — the connect window: a server that ACCEPTS the
     /// subscribe but never sends the first frame is dropped within the
     /// connect deadline and the loop reconnects (ref `connectTimeout`,
