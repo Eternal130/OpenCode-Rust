@@ -90,7 +90,7 @@ impl PairRig {
 fn footer_percent_group(screen: &str) -> bool {
     screen.lines().any(|line| {
         let chars: Vec<char> = line.chars().collect();
-        let is_digit = |i: usize| chars.get(i).is_some_and(|c| c.is_ascii_digit());
+        let is_digit = |i: usize| matches!(chars.get(i), Some(c) if c.is_ascii_digit());
         let mut index = 0;
         while index < chars.len() {
             if is_digit(index) {
@@ -524,7 +524,7 @@ fn s6_hot_reload_palette_grid_pair() {
             .filter(|line| {
                 !line.contains("claude-sonnet-4-6") && !line.contains("No results found")
             })
-            .map(|line| line.to_owned())
+            .map(<str>::to_owned)
             .collect::<Vec<_>>()
             .join("\n")
             + "\n"

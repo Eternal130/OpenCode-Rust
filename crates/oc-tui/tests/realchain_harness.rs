@@ -28,8 +28,8 @@
 //! same registration.
 //!
 //! Sandbox discipline: every root lives under
-//! `/tmp/opencode/t9w1-<pid>-<tag>` (HOME, XDG_CONFIG/DATA/STATE/
-//! CACHE); the child env is scrubbed of real-user OPENCODE_* vars; a
+//! `/tmp/opencode/t9w1-<pid>-<tag>` (HOME,
+//! `XDG_CONFIG/DATA/STATE/CACHE`); the child env is scrubbed of real-user OPENCODE_* vars; a
 //! cross-process flock serializes the tests (nextest runs each test
 //! in its own process — the in-process `pty_lock` pattern cannot
 //! reach across). Teardown is graceful: exit chord → wait → the
@@ -43,6 +43,7 @@
 #![allow(dead_code)]
 
 use std::ffi::CString;
+use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -84,9 +85,12 @@ fn opencode_bin() -> PathBuf {
 pub fn ensure_fresh_binary() {
     let bin = opencode_bin();
     let meta = std::fs::metadata(&bin).unwrap_or_else(|_| {
-        panic!("production binary missing: {bin:?} (build it via tools/dev-gate.sh first)")
+        panic!(
+            "production binary missing: {} (build it via tools/dev-gate.sh first)",
+            bin.display()
+        )
     });
-    let built = meta.modified().unwrap_or_else(|_| panic!("mtime of {bin:?}"));
+    let built = meta.modified().unwrap_or_else(|_| panic!("mtime of {}", bin.display()));
     let root = worktree_root();
     let newest_path = std::cell::RefCell::new(None);
     let newest_time = std::cell::RefCell::new(None);
@@ -106,7 +110,10 @@ pub fn ensure_fresh_binary() {
         if path.is_dir() && name == "target" {
             continue;
         }
-        if path.is_file() && (name.ends_with(".rs") || name == "Cargo.toml") {
+        if path.is_file()
+            && (Path::new(&name).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
+                || name == "Cargo.toml")
+        {
             if let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) {
                 consider(path, mtime);
             }
@@ -120,13 +127,14 @@ pub fn ensure_fresh_binary() {
     }
     if let (Some(path), Some(mtime)) = (newest_path.into_inner(), newest_time.into_inner()) {
         // 2s grace: mtime granularity + touch-vs-write skew.
-        if mtime > built + std::time::Duration::from_secs(2) {
-            panic!(
-                "stale binary: {path:?} (mtime {mtime:?}) is newer than {bin:?} \
-                 (mtime {built:?}) — rebuild via \
-                 tools/dev-gate.sh 'cargo build --locked -p oc-cli' before rerunning"
-            );
-        }
+        assert!(
+            mtime <= built + std::time::Duration::from_secs(2),
+            "stale binary: {} (mtime {mtime:?}) is newer than {} \
+             (mtime {built:?}) — rebuild via \
+             tools/dev-gate.sh 'cargo build --locked -p oc-cli' before rerunning",
+            path.display(),
+            bin.display()
+        );
     }
 }
 
@@ -169,12 +177,13 @@ pub struct LaneGuard {
     _file: File,
 }
 
+#[must_use]
 pub fn lane_lock() -> LaneGuard {
     let path = Path::new("/tmp/opencode").join("t9w1-realchain.lock");
-    let file = File::create(&path).unwrap_or_else(|_| panic!("open {path:?}"));
+    let file = File::create(&path).unwrap_or_else(|_| panic!("open {}", path.display()));
     unsafe {
         let rc = libc::flock(file.as_raw_fd(), libc::LOCK_EX);
-        assert_eq!(rc, 0, "flock {path:?}");
+        assert_eq!(rc, 0, "flock {}", path.display());
     }
     LaneGuard { _file: file }
 }
@@ -193,6 +202,7 @@ pub struct Sandbox {
 }
 
 impl Sandbox {
+    #[must_use]
     pub fn config_path(&self) -> PathBuf {
         // The server's global config dir is the SHARED v2 one,
         // `$HOME/.config/opencode` (boot.rs dogfood2 bug 3 — it
@@ -200,6 +210,7 @@ impl Sandbox {
         self.root.join("home/.config/opencode/opencode.json")
     }
 
+    #[must_use]
     pub fn env(&self) -> Vec<(String, String)> {
         let s = &self.root;
         vec![
@@ -217,6 +228,7 @@ impl Sandbox {
     }
 
     /// Scrubbed child env: sandbox vars in, real-user OPENCODE_* out.
+    #[must_use]
     pub fn command(&self, program: &Path) -> Command {
         let mut cmd = Command::new(program);
         cmd.env_clear();
@@ -274,6 +286,7 @@ impl Sandbox {
 
     /// The daemon registration written by `lifecycle::register` —
     /// `service start` prints only the URL; the password lives here.
+    #[must_use]
     pub fn registration(&self) -> serde_json::Value {
         for base in ["opencode-rust", "opencode"] {
             for name in ["service.json", "service-dev.json", "service-beta.json"] {
@@ -291,20 +304,24 @@ impl Sandbox {
     }
 }
 
+#[must_use]
 pub fn worktree_dir(rel: &str) -> PathBuf {
     worktree_root().join(rel)
 }
 
 /// Committed synthetic seed corpus (rust-engine request shapes).
+#[must_use]
 pub fn corpus_dir() -> PathBuf {
     worktree_dir("tools/diff/realchain/corpus")
 }
 
 /// Committed synthetic seed corpus (ref-engine request shapes).
+#[must_use]
 pub fn corpus_ref_dir() -> PathBuf {
     worktree_dir("tools/diff/realchain/corpus-ref")
 }
 
+#[must_use]
 pub fn sandbox(tag: &str, gateway_port: u16) -> Sandbox {
     let root = Path::new("/tmp/opencode").join(format!("t9w1-{}-{tag}", std::process::id()));
     for dir in ["home", "xdg-config", "xdg-data", "xdg-state", "xdg-cache", "project"] {
@@ -328,6 +345,7 @@ pub struct Gateway {
 impl Gateway {
     /// Spawn the gateway; `record_dir` = bootstrap seeding mode (writes
     /// generated cassettes — sandbox traffic only, no user data).
+    #[must_use]
     pub fn spawn(tag: &str, record_dir: Option<&Path>) -> Gateway {
         let root = worktree_root();
         let log_path = log_file(&format!("gateway-{tag}"));
@@ -400,33 +418,32 @@ impl Gateway {
         });
         let mut port = None;
         while Instant::now() < deadline {
-            match rx.recv_timeout(Duration::from_millis(500)) {
-                Ok(line) => {
-                    eprintln!("[gateway] {line}");
-                    if let Some(rest) = line.strip_prefix("READY") {
-                        for part in rest.split_whitespace() {
-                            if let Some(value) = part.strip_prefix("port=") {
-                                port = value.parse::<u16>().ok();
-                            }
-                        }
-                        if port.is_some() {
-                            break;
+            if let Ok(line) = rx.recv_timeout(Duration::from_millis(500)) {
+                eprintln!("[gateway] {line}");
+                if let Some(rest) = line.strip_prefix("READY") {
+                    for part in rest.split_whitespace() {
+                        if let Some(value) = part.strip_prefix("port=") {
+                            port = value.parse::<u16>().ok();
                         }
                     }
+                    if port.is_some() {
+                        break;
+                    }
                 }
-                Err(_) => continue,
             }
         }
         let port = port.unwrap_or_else(|| panic!("the replay gateway never reported READY"));
         Gateway { port, child, log_path }
     }
 
+    #[must_use]
     pub fn stats(&self) -> Value {
         let (status, body) = http_get(&format!("http://127.0.0.1:{}/__stats", self.port), None)
             .unwrap_or((0, String::new()));
         serde_json::from_str(&body).unwrap_or(json_stats_fallback(status))
     }
 
+    #[must_use]
     pub fn log_path(&self) -> &Path {
         &self.log_path
     }
@@ -464,10 +481,12 @@ fn base64_encode(bytes: &[u8]) -> String {
     out
 }
 
+#[must_use]
 pub fn http_get(url: &str, password: Option<&str>) -> Option<(u16, String)> {
     http_request("GET", url, None, password)
 }
 
+#[must_use]
 pub fn http_post(url: &str, body: &str, password: Option<&str>) -> Option<(u16, String)> {
     http_request("POST", url, Some(body), password)
 }
@@ -486,13 +505,11 @@ fn http_request(
         format!("{method} /{path} HTTP/1.1\r\nhost: {host_port}\r\nconnection: close\r\n");
     if let Some(password) = password {
         let encoded = base64_encode(format!("opencode:{password}").as_bytes());
-        request.push_str(&format!("authorization: Basic {encoded}\r\n"));
+        let _ = write!(request, "authorization: Basic {encoded}\r\n");
     }
     if let Some(body) = body {
-        request.push_str(&format!(
-            "content-type: application/json\r\ncontent-length: {}\r\n",
-            body.len()
-        ));
+        let _ =
+            write!(request, "content-type: application/json\r\ncontent-length: {}\r\n", body.len());
     }
     request.push_str("\r\n");
     stream.write_all(request.as_bytes()).ok()?;
@@ -520,6 +537,7 @@ pub struct TuiProcess {
 impl TuiProcess {
     /// fork a PTY, exec the production binary on its slave (setsid +
     /// TIOCSCTTY — the TUI demands a real controlling terminal).
+    #[must_use]
     pub fn spawn(sandbox: &Sandbox, cols: u16, rows: u16) -> TuiProcess {
         ensure_fresh_binary();
         let command = sandbox.command(&opencode_bin());
@@ -528,6 +546,7 @@ impl TuiProcess {
 
     /// fork a PTY, exec an arbitrary prepared command on its slave (the
     /// ref-TUI pair lane reuses the PTY machinery with a bun command).
+    #[must_use]
     pub fn spawn_command(mut command: Command, cols: u16, rows: u16) -> TuiProcess {
         let master = unsafe {
             let fd = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
@@ -594,11 +613,13 @@ impl TuiProcess {
         self.master.flush().expect("flush keys");
     }
 
+    #[must_use]
     pub fn raw_len(&self) -> usize {
         self.raw.lock().expect("raw").len()
     }
 
     /// Wait for `needle` in the raw stream at/after byte `from`.
+    #[must_use]
     pub fn wait_for(&self, needle: &[u8], from: usize, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
@@ -613,6 +634,7 @@ impl TuiProcess {
     }
 
     /// The current screen text (rows joined by \n) from the VT parser.
+    #[must_use]
     pub fn screen_text(&self) -> String {
         let parser = self.vt.lock().expect("vt");
         let screen = parser.screen();
@@ -625,6 +647,7 @@ impl TuiProcess {
     }
 
     /// The app's exit footprint in the raw stream.
+    #[must_use]
     pub fn exited_alt_screen(&self, from: usize) -> bool {
         const LEAVE: &[u8] = b"\x1b[?1049l";
         self.wait_for(LEAVE, from, Duration::from_secs(1))
@@ -644,9 +667,8 @@ impl TuiProcess {
         let deadline = Instant::now() + grace;
         while Instant::now() < deadline {
             match self.child.try_wait() {
-                Ok(Some(_)) => return,
+                Ok(Some(_)) | Err(_) => return,
                 Ok(None) => std::thread::sleep(Duration::from_millis(100)),
-                Err(_) => return,
             }
         }
         let _ = self.child.kill();
@@ -771,21 +793,22 @@ pub const WORDMARK: &[u8] = "█▀▀█".as_bytes();
 //     `@opencode/ai/providers/anthropic`.
 // ---------------------------------------------------------------------------
 
-/// Default ref checkout (read-only; its node_modules are used).
+/// Default ref checkout (read-only; its `node_modules` are used).
 const REF_ROOT_DEFAULT: &str = "./ref";
 
+#[must_use]
 pub fn ref_root() -> PathBuf {
     Path::new(&std::env::var("T9_REF_ROOT").unwrap_or_else(|_| REF_ROOT_DEFAULT.to_owned()))
         .to_path_buf()
 }
 
-/// The pinned bun runtime path (T9_BUN override; default the MAIN
+/// The pinned bun runtime path (`T9_BUN` override; default the MAIN
 /// checkout's untracked `tools/bin/bun-1.4.2` — this worktree shares no
 /// untracked helpers).
+#[must_use]
 pub fn bun_runtime() -> PathBuf {
     std::env::var("T9_BUN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("./repo/tools/bin/bun-1.4.2"))
+        .map_or_else(|_| PathBuf::from("./repo/tools/bin/bun-1.4.2"), PathBuf::from)
 }
 
 /// Skip guard for the pair lane (W4 Important ②): `Some(reason)` when
@@ -793,6 +816,7 @@ pub fn bun_runtime() -> PathBuf {
 /// test returns early (skip), matching the repo's bun-test skip
 /// convention. `None` = the lane is available; `ref_stage` then enforces
 /// the remaining contracts (version, preload) as hard fails.
+#[must_use]
 pub fn ref_lane_skip_reason() -> Option<String> {
     let root = ref_root();
     let entry = root.join("packages/cli/src/index.ts");
@@ -822,7 +846,7 @@ pub fn ref_lane_skip_reason() -> Option<String> {
 /// are absent — the pair lane's environment dependencies, which CI does
 /// not provision — every pair test SKIPs through [`ref_lane_skip_reason`]
 /// (a skip with the reason, never a red). On machines that DO carry the
-/// lane (T9_REF_ROOT default `./ref`, T9_BUN default the
+/// lane (`T9_REF_ROOT` default `./ref`, `T9_BUN` default the
 /// main checkout's `tools/bin/bun-1.4.2`), the tests run directly; a
 /// present-but-wrong bun version still fails (a contract, not an
 /// availability gap).
@@ -839,12 +863,13 @@ pub struct RefStage {
 
 /// Verify the ref tree + runtime contract, then stage the runtime copy
 /// and the preload bunfig under `…-<tag>ref/`.
+#[must_use]
 pub fn ref_stage(sandbox: &Sandbox) -> RefStage {
     let root = ref_root();
     let entry = root.join("packages/cli/src/index.ts");
-    assert!(entry.exists(), "ref entry missing: {entry:?} (set T9_REF_ROOT)");
+    assert!(entry.exists(), "ref entry missing: {} (set T9_REF_ROOT)", entry.display());
     let preload = root.join("packages/tui/node_modules/@opentui/solid/scripts/preload.js");
-    assert!(preload.exists(), "ref solid preload missing: {preload:?}");
+    assert!(preload.exists(), "ref solid preload missing: {}", preload.display());
 
     // Runtime + version contract: the pinned bun must exist and report
     // the ref `packageManager` version (1.4.2). Default: the MAIN
@@ -852,7 +877,7 @@ pub fn ref_stage(sandbox: &Sandbox) -> RefStage {
     // helpers); override with T9_BUN. Availability was pre-checked by
     // [`ref_lane_skip_reason`]; a wrong version is a CONTRACT failure.
     let runtime_src = bun_runtime();
-    assert!(runtime_src.exists(), "pinned bun runtime missing: {runtime_src:?}");
+    assert!(runtime_src.exists(), "pinned bun runtime missing: {}", runtime_src.display());
     let version = std::process::Command::new(&runtime_src)
         .arg("--version")
         .output()
@@ -897,6 +922,7 @@ impl Sandbox {
     /// The unique port the ref managed daemon binds (see
     /// `write_ref_config`): disjoint from the rust sandbox's
     /// `service_port` range.
+    #[must_use]
     pub fn ref_service_port() -> u16 {
         40_000 + (std::process::id() % 10_000) as u16
     }
@@ -904,6 +930,7 @@ impl Sandbox {
     /// Ref-shaped env: the rust env plus the staged `bin` first on PATH
     /// (so any `opencode` fallback resolves to the staged runtime) and
     /// `NODE_ENV=production` (keeps bun out of jsx-dev lookups).
+    #[must_use]
     pub fn env_ref(&self, stage: &RefStage) -> Vec<(String, String)> {
         let mut env = self.env();
         let path = std::env::var("PATH").unwrap_or_default();
@@ -921,6 +948,7 @@ impl Sandbox {
 
     /// A prepared ref child command (TUI, `service stop`, …): scrubbed
     /// env, cwd = the ref project (bunfig/preload apply).
+    #[must_use]
     pub fn command_ref(&self, stage: &RefStage, program: &Path) -> Command {
         let mut cmd = Command::new(program);
         cmd.env_clear();
@@ -982,6 +1010,7 @@ impl Sandbox {
 
     /// The ref managed-server registration (`service-local.json`,
     /// `$XDG_STATE_HOME/opencode/`), if the ref TUI already booted one.
+    #[must_use]
     pub fn ref_registration(&self) -> serde_json::Value {
         let path = self.root.join("xdg-state/opencode/service-local.json");
         match std::fs::read_to_string(&path) {
@@ -994,6 +1023,7 @@ impl Sandbox {
 /// Spawn the ref TUI on its own PTY. The managed ref server starts
 /// ITSELF on first boot (the production topology); teardown must call
 /// [`ref_service_stop`].
+#[must_use]
 pub fn ref_tui_spawn(sandbox: &Sandbox, stage: &RefStage, cols: u16, rows: u16) -> TuiProcess {
     let mut command = sandbox.command_ref(stage, &stage.bun);
     command.arg(&stage.entry);
@@ -1025,6 +1055,7 @@ pub fn ref_service_stop(sandbox: &Sandbox, stage: &RefStage) {
 /// * volatile identifiers (`ses_…`, `msg_…`, `evt_…`, `pty_…`) → `__ID__`
 /// * clock faces (`HH:MM`, `HH:MM:SS`) → `__TIME__`
 /// * trailing row whitespace
+#[must_use]
 pub fn normalize_grid(grid: &str, roots: &[&str]) -> String {
     let mut out = String::with_capacity(grid.len());
     for line in grid.lines() {
@@ -1131,7 +1162,7 @@ fn replace_placeholder(row: &str) -> String {
             let start = at + "Ask anything… \"".len();
             // The suggestion ends at the closing quote if present.
             let rest = &row[start..];
-            let end = rest.find('"').map_or(rest.len(), |index| index);
+            let end = rest.find('"').unwrap_or(rest.len());
             let mut out = String::from(&row[..start]);
             out.push_str("__PROMPT__");
             out.push_str(&rest[end..]);
@@ -1316,7 +1347,7 @@ pub fn assert_grids_match(scenario: &str, ref_grid: &str, rust_grid: &str) {
     let mut diff = String::new();
     for (number, (left, right)) in ref_grid.lines().zip(rust_grid.lines()).enumerate() {
         if left != right {
-            diff.push_str(&format!("line {}: ref={left:?}\n         rust={right:?}\n", number + 1));
+            let _ = writeln!(diff, "line {}: ref={left:?}\n         rust={right:?}", number + 1);
             if diff.lines().count() > 16 {
                 break;
             }
@@ -1324,7 +1355,9 @@ pub fn assert_grids_match(scenario: &str, ref_grid: &str, rust_grid: &str) {
     }
     panic!(
         "PAIR {scenario}: ref and rust grids diverge\n{diff}\
-         full grids: {ref_path:?} vs {rust_path:?}"
+         full grids: {} vs {}",
+        ref_path.display(),
+        rust_path.display()
     );
 }
 

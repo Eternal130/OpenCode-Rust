@@ -28,6 +28,7 @@ use realchain_harness::{
     corpus_dir, dump_grid, http_get, http_post, lane_lock, sandbox, service_start, service_stop,
     Gateway, LaneGuard, Sandbox, TuiProcess, WORDMARK,
 };
+use std::fmt::Write as _;
 use std::time::Duration;
 
 const COLS: u16 = 120;
@@ -97,7 +98,7 @@ fn t9_1_boot_connects_and_settles() {
     let screen = rig.tui.screen_text();
     let mut evidence = String::new();
     if !settled {
-        evidence.push_str(&format!("screen:\n{screen}"));
+        let _ = write!(evidence, "screen:\n{screen}");
     }
     // Reconnect/error indicators (the symptom-① surface).
     let bad = ["reconnect", "Reconnect", "failed to connect", "connection lost", "disconnected"];
