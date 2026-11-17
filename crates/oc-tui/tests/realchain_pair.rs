@@ -435,96 +435,24 @@ fn s5_sidebar_grid_pair() {
          (rust={rust_used} ref={ref_used}); the base-less custom-model seeding must keep \
          the ref's default limit (schema/model.ts:146-158)"
     );
-    // G-435-residual pin (the retired mask's inheritor): the sidebar
-    // Context block is vertically offset — rust's Context title shares
-    // the hello row, ref's starts one row lower (pinned from the
-    // 2026-11-17 full-width dumps). While the region mask stays, this
-    // pin keeps its justification honest; when the alignment closes
-    // (both start on the same row) this goes red: retire the region
-    // mask + drop_blank_rows normalization and compare the full
-    // sidebar rows exactly.
+    // G-435-residual CLOSED (gwave-1): the sidebar's title box carries
+    // `paddingBottom={1}` (sidebar.tsx:34) — the content slot starts
+    // one blank row below the title on BOTH ends (the port painted the
+    // first section directly under the title). The section rows now
+    // align, so the sidebar-region column mask, the G-436
+    // border-count pin and the drop_blank_rows normalization all
+    // RETIRE — the full grid compares row-exact.
     let rust_context_on_hello =
         rust_grid.lines().any(|l| l.contains("Context") && l.contains("hello"));
     let ref_context_on_hello =
         ref_grid.lines().any(|l| l.contains("Context") && l.contains("hello"));
     assert!(
-        rust_context_on_hello && !ref_context_on_hello,
-        "G-435-residual pin: the sidebar region mask assumed rust's Context block \
-         starts one row higher (rust_on_hello={rust_context_on_hello} \
-         ref_on_hello={ref_context_on_hello}) — if this is red, the vertical alignment \
-         has closed: retire mask_right_columns + drop_blank_rows here and compare the \
-         full sidebar exactly"
+        !rust_context_on_hello && !ref_context_on_hello,
+        "G-435-residual regression: the Context title must sit one row below \
+         the title's padding row, never on the hello row (rust={rust_context_on_hello} \
+         ref={ref_context_on_hello}) — the sidebar title box's paddingBottom must stay"
     );
-    // G-436 CLOSED as an artifact (2026-11-17): the old `ref > rust`
-    // border-count signal was the sidebar Context row leaking through
-    // the column truncation as a bare-┃ row (it only existed while
-    // rust lacked the Context block). The left region's border-only
-    // row counts are now EQUAL on both ends; drop_blank_rows stays as
-    // a normalization for the truncation-induced border/blank rows
-    // (present on BOTH ends, count pinned > 0) and retires together
-    // with the region mask above.
-    let ref_border_rows = border_only_row_count(&mask_right_columns(&ref_grid, SIDEBAR_MASK_COL));
-    let rust_border_rows = border_only_row_count(&mask_right_columns(&rust_grid, SIDEBAR_MASK_COL));
-    assert!(
-        ref_border_rows == rust_border_rows && ref_border_rows > 0,
-        "G-436 pin: truncation-normalized border rows must be equal and present — \
-         ref={ref_border_rows} rust={rust_border_rows}; a change here means the \
-         sidebar block layout moved: re-pin from the dumps before retiring the mask"
-    );
-    let ref_left = drop_blank_rows(&mask_right_columns(&ref_grid, SIDEBAR_MASK_COL));
-    let rust_left = drop_blank_rows(&mask_right_columns(&rust_grid, SIDEBAR_MASK_COL));
-    assert_grids_match("s5-sidebar", &ref_left, &rust_left);
-}
-
-/// The S5 sidebar-region mask boundary (W4 Minor ②): at 160 cols the
-/// auto-docked right sidebar's left edge is ≈ col 109 (ref
-/// session-frame.tsx:106-110's `width - verticalTabsWidth > 120` dock
-/// rule; measured: the sidebar title renders from col 119 with its
-/// box padding from ≈109). Columns ≥ this value are masked on BOTH
-/// ends under G-435.
-const SIDEBAR_MASK_COL: usize = 108;
-
-/// Count border-only rows (the G-436 masked shape).
-fn border_only_row_count(grid: &str) -> usize {
-    grid.lines()
-        .filter(|line| {
-            let trimmed = line.trim();
-            !trimmed.is_empty() && trimmed.chars().all(|c| c == '┃')
-        })
-        .count()
-}
-
-/// Drop blank and border-only rows (G-436 wide-tier spacing mask).
-fn drop_blank_rows(grid: &str) -> String {
-    let mut out = String::new();
-    for line in grid.lines() {
-        let trimmed = line.trim();
-        let border_only = !trimmed.is_empty() && trimmed.chars().all(|c| c == '┃');
-        if trimmed.is_empty() || border_only {
-            continue;
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    out
-}
-
-/// Blank every column from `from` rightward (the S5 sidebar-region
-/// mask — held by the G-435-residual vertical-offset pin above).
-fn mask_right_columns(grid: &str, from: usize) -> String {
-    let mut out: Vec<String> = Vec::new();
-    for line in grid.lines() {
-        let count = line.chars().count();
-        let row: String = if count <= from {
-            line.to_owned()
-        } else {
-            line.chars().take(from).collect::<String>().trim_end().to_owned()
-        };
-        out.push(row);
-    }
-    let mut text = out.join("\n");
-    text.push('\n');
-    text
+    assert_grids_match("s5-sidebar", &ref_grid, &rust_grid);
 }
 
 // ---------------------------------------------------------------------------
@@ -895,14 +823,9 @@ fn t9_7_plugin_sidebar_pair() {
          ref={ref_n:?} (see /api/plugin and /api/mcp above)"
     );
     // The settled count is a grid assertion: both ends run the SAME
-    // plugins, so `⊙ N MCP` must agree row-exactly.
-    // Forensics first: what did each end load? The bodies are dumped
-    // above; the pair compare runs on the sidebar-visible 160-col grid
-    // with the documented S5 masks (the region mask is now held by the
-    // G-435-residual vertical-offset pin; see s5_sidebar_grid_pair).
-    let ref_left = drop_blank_rows(&mask_right_columns(&ref_grid, SIDEBAR_MASK_COL));
-    let rust_left = drop_blank_rows(&mask_right_columns(&rust_grid, SIDEBAR_MASK_COL));
-    assert_grids_match("t9-7-plugin", &ref_left, &rust_left);
+    // plugins, so `⊙ N MCP` must agree row-exactly. G-435-residual
+    // closed (gwave-1): the sidebar region compares unmasked.
+    assert_grids_match("t9-7-plugin", &ref_grid, &rust_grid);
 }
 
 // ===========================================================================
@@ -968,15 +891,12 @@ fn p4_sidebar_deep_compare_pair() {
          (S5's mask assumed rust=false ref=true)"
     );
 
-    // Strict compare per state with the documented S5 masks (region mask
-    // held by the G-435-residual alignment pin — full-grid dumps above
-    // remain unmasked for the gap ledger).
+    // Strict compare per state — G-435-residual closed (gwave-1): the
+    // full grids (sidebar region included) compare row-exact.
     for (name, ref_grid, rust_grid) in
         [("p4-empty", &a_ref, &a_rust), ("p4-reply", &b_ref, &b_rust), ("p4-long", &c_ref, &c_rust)]
     {
-        let ref_left = drop_blank_rows(&mask_right_columns(ref_grid, SIDEBAR_MASK_COL));
-        let rust_left = drop_blank_rows(&mask_right_columns(rust_grid, SIDEBAR_MASK_COL));
-        assert_grids_match(name, &ref_left, &rust_left);
+        assert_grids_match(name, ref_grid, rust_grid);
     }
 }
 
