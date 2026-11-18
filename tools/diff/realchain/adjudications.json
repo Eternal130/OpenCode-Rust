@@ -181,6 +181,26 @@
    "adjudicated_by": "W12 seed migration",
    "adjudicated_at": "2026-11-18",
    "last_observed": "2026-11-18"
+  },
+  {
+   "id": "t9-7-plugin-mcp-settle-race",
+   "scenario_pattern": "t9-7",
+   "state_pattern": "*",
+   "shape": {
+    "kind": "substring",
+    "ref_contains": [
+     "2 MCP"
+    ],
+    "rust_contains": [
+     "1 MCP"
+    ]
+   },
+   "classification": "framework-diff",
+   "justification": "Load-sensitive plugin MCP settle race (controller adjudication 2026-11-18): under concurrent battery load the rust side's second plugin MCP registers after the settle capture; rerun in isolation shows divergences:0. Historical family: multiple retry-green occurrences since W7 (registered observation in progress.md). Direction-specific — a flipped direction (rust=2/ref=1) would surface as unadjudicated for fresh adjudication.",
+   "g_ref": "t9_7 flake observation (2026-11-17)",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-18",
+   "last_observed": "2026-11-18"
   }
  ]
 }
