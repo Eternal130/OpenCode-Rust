@@ -3573,3 +3573,7 @@ W6 评审 4 Minor 清偿：①t9_8 整测试体持 armed 守护（ServiceClean �
 - **G-454 ✅ 修关**（判别 D1/D2/D3→真 bug；根因双缺陷）：oc-plugin-host supervisor.rs `eprintln!` 在 daemon stderr 管道无读者时 panic（std 语义：stderr 写失败即 panic，无 catch_unwind）杀 guest-stdout reader 任务→插件 RPC 桥整体冻结→hook.dispatch 120s 超时→主回合止于 HTTP 前；触发面=oc-server plugins.rs 显式 `"parentID": null` 致 superpowers 守卫（payload superpowers.js:197-204）每次 console.error 踩 panic 面。修复=非 panic `stderrln!` 宏+parentID 仅存在时 emit（对齐 ref 省略语义）。回归 4 场景（双插件/omo 单/superpowers 单/可写）requests≥2。评审微修补残余 panic 面。教训：**daemon/任务路径禁裸 eprintln!**（crate 级宏化）；判别实验设计（单变量分离）值得入方法论。
 - **G-455 🟡 立**：superpowers 在场时 rust 主回合请求与 ref 三处形状差（omo reminder part 多 cache_control/缺 additionalProperties:false/MCP catalog 文本差）+w13-omo reply-render survey 0/1（主回合已抵达、渲染未对齐）+corpus-w13-ref seed（digest 4cc63e0a）rust rig 未装载——归 W14（形状对齐+seed 装载面）。
 - dev-gate MemoryMax 勘正入 2.1#1（实配 6G；重构建 CARGO_BUILD_JOBS=2 提示）。
+
+# 第三十四轮（W15 评审尾修知情登记，2026-11-19，控制者批准）
+
+- **tree-scenario canonical 比较弱化（deliberate）**：W15 的 `serde_json preserve_order` 工作区级翻转（G-455 声明序 parity——JS 插入序）改变了 CAPTURE 序列化的键序。`crates/oc-tui/tests/tree_scenarios.rs:276-308` 的比较从字节相等改为 canonical 相等（递归键排序后比较）：**键序回归不再敏感**（内容/结构回归仍红）。冻结帧文件本身未重钉（字节未动）。知情登记：这是 preserve_order 决策的代价，控制者已批准；后续若需恢复键序敏感，需显式按声明序 canonical 化或恢复字节比较。

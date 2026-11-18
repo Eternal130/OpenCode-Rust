@@ -316,7 +316,7 @@
       "id": "w13-omo-home-mcp-footer-count",
       "first_seen": "2026-11-19",
       "last_seen": "2026-11-19",
-      "status": "OPEN — real diff, minor display face",
+      "status": "RESOLVED (W15 review round): the footer MCP list was never fetched (set_mcp_servers had no production caller) — the boot loop now fetches mcp.list (ref client/src/solid/data.ts:1914) and resyncs on mcp.status.changed (data.ts:1287); w13-omo-home 0 divergences.",
       "justification": "W15 new divergence (observed honestly, 如实): with context7 pinned OFF both ends via the omo plugin's own config file (oh-my-opencode-slim.json disabled_mcps — the G-455③ determinism pin), the home footer's MCP slot counts 1 on ref (gh_grep connected) and 0 on rust. The rust footer's MCP counter does not count gh_grep — likely counts only servers whose tool listing/codemode registration arrived through a different path than the ref's footer counter (ref counts connected servers). Minor display face; the omo session/reply/sections diffs converged to ZERO this wave.",
       "g_ref": null,
       "shape": {

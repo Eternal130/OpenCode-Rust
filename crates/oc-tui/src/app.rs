@@ -5575,6 +5575,11 @@ pub enum LoopRequest {
     },
     /// `session.list` (the dialog-open refetch).
     SessionList,
+    /// `mcp.list` (the footer MCP status cell + `DialogMcp`): the
+    /// location's MCP server rows (ref client/src/solid/data.ts:1914
+    /// `locationResource("mcpServer", api().mcp.list)` — boot fetch +
+    /// resync on `mcp.status.changed`, data.ts:1287).
+    McpList,
     /// G-271⑤ — the sessions dialog's debounced server search
     /// (`session.list {search}`, dialog-session-list.tsx:52-66).
     SessionSearch {
@@ -5783,6 +5788,9 @@ pub enum LoopFetch {
         result: Result<(Vec<crate::components::message::model::Message>, Option<String>), String>,
     },
     SessionList(Result<Vec<crate::data::SessionSnapshot>, String>),
+    /// `mcp.list` — the location's MCP server rows (footer cell +
+    /// `DialogMcp`).
+    McpList(Result<Vec<crate::store::McpServerRow>, String>),
     /// G-271⑤ — the sessions dialog's `session.list {search}` result
     /// (keyed by the query it answered).
     SessionSearch {
@@ -6057,6 +6065,57 @@ pub fn spawn_loop_fetcher(
                         let fetcher = HttpResync::new(client);
                         let result = crate::data::ResyncSource::fetch_sessions(&fetcher).await;
                         let _ = tx.send(LoopFetch::SessionList(result));
+                    });
+                }
+                // `mcp.list` (footer.tsx:18's `location.mcp.server.list`
+                // behind the solid resource): one GET, rows into the
+                // store's MCP server list.
+                LoopRequest::McpList => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = client
+                            .mcp()
+                            .list(&oc_client::types::McpListQuery::default())
+                            .await
+                            .map(|response| {
+                                response
+                                    .data
+                                    .into_iter()
+                                    .map(|server| crate::store::McpServerRow {
+                                        name: server.name,
+                                        status: match &server.status {
+                                            oc_client::types::McpServerStatus::Connected(_) => {
+                                                "connected"
+                                            }
+                                            oc_client::types::McpServerStatus::Pending(_) => {
+                                                "pending"
+                                            }
+                                            oc_client::types::McpServerStatus::Disabled(_) => {
+                                                "disabled"
+                                            }
+                                            oc_client::types::McpServerStatus::Failed(_) => {
+                                                "failed"
+                                            }
+                                            oc_client::types::McpServerStatus::NeedsAuth(_) => {
+                                                "needs_auth"
+                                            }
+                                        },
+                                        error: match &server.status {
+                                            oc_client::types::McpServerStatus::Failed(status) => {
+                                                Some(status.error.clone())
+                                            }
+                                            oc_client::types::McpServerStatus::NeedsAuth(
+                                                status,
+                                            ) => Some(status.error.clone()),
+                                            _ => None,
+                                        },
+                                        integration_id: server.integration_id,
+                                    })
+                                    .collect()
+                            })
+                            .map_err(|error| error.to_string());
+                        let _ = tx.send(LoopFetch::McpList(result));
                     });
                 }
                 // G-271⑤ — the sessions dialog's debounced search:
@@ -8829,6 +8888,10 @@ pub async fn run_with_size(
         attached: std::sync::Mutex::new(None),
     }));
     let _ = loop_fetch_tx.send(LoopRequest::TerminalCapability);
+    // The MCP server list (ref data.ts:1914's boot fetch of the
+    // `mcpServer` location resource): the footer's MCP status cell and
+    // `DialogMcp` read this list.
+    let _ = loop_fetch_tx.send(LoopRequest::McpList);
     // G-6 — the composer Shell tab's control seam (the output viewer's
     // fetch rides the loop; the kill DELETEs directly off the client).
     app.store.set_shell_sink(std::rc::Rc::new(HttpShellControlSink::new(
@@ -9299,6 +9362,13 @@ pub async fn run_with_size(
                     "model.updated" | "provider.updated" | "integration.updated" | "config.updated"
                 ) {
                     models_stale = true;
+                }
+                // `mcp.status.changed` (ref solid/data.ts:1287): the
+                // server emits one event per connection settle — the
+                // mcp list resource resyncs off it (the footer's MCP
+                // count tracks connect/disconnect).
+                if event.type_ == "mcp.status.changed" {
+                    let _ = loop_fetch_tx.send(LoopRequest::McpList);
                 }
             }
             app.store.ingest_all([message]);
@@ -9942,6 +10012,15 @@ pub async fn run_with_size(
                         permissions: Vec::new(),
                         forms: Vec::new(),
                     }]);
+                }
+                // `mcp.list` — the footer MCP status cell's rows
+                // (footer.tsx:18-20 counts connected/failed off this
+                // list).
+                LoopFetch::McpList(Ok(rows)) => {
+                    app.store.set_mcp_servers(rows);
+                }
+                LoopFetch::McpList(Err(error)) => {
+                    crate::keymap::log_skip(&format!("mcp list fetch {error}"));
                 }
                 LoopFetch::SessionList(Err(error)) => {
                     crate::keymap::log_skip(&format!("session list refresh: {error}"));
