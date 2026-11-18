@@ -151,7 +151,13 @@ fn replay_corpus_emission_is_pinned() {
     // palette-ctrl-p frames at 100×30 (the "Show sidebar" head row
     // enters the visible window); the 320×80 channel grid is EXACT
     // against the ref palette (command-palette@320x80).
-    assert_eq!(digest, 0x5084_fcfe_273a_09a2, "the corpus emission bytes drifted");
+    // Re-pinned at W14 G-450 — the permission ask's hint row set aligns
+    // with the ref (permission.tsx:598-612: `ctrl+f fullscreen  ⇆ select
+    // enter confirm`; the esc-reject hint leaves the row — escape stays
+    // bound). The w13-perm-once dialog export shows the same hint row on
+    // BOTH engines after the change; the footer/mini permission goldens
+    // of this wave re-bless the same bytes.
+    assert_eq!(digest, 0x8a8c_9d84_9fa8_c9ba, "the corpus emission bytes drifted");
 }
 
 // -- the emitter vocabulary -------------------------------------------------

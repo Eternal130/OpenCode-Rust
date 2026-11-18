@@ -35,7 +35,6 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 
-
 use crate::context::{
     Bridge, HostState, PermissionPort, SessionPort, ToolPort, CODEMODE_METHODS, GENERATE_METHODS,
     SESSION_METHODS,
