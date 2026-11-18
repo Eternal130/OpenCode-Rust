@@ -2202,6 +2202,42 @@ mod tests {
         assert!(!strip.contains("Untitled session"), "placeholder replaced: {strip}");
     }
 
+    /// G-449 — creation initial value: the tab opened by a home
+    /// submission carries the model constant "New session" as its
+    /// PERSISTED title (session-tabs-model.ts:8, the `fallback` at
+    /// session-tabs.tsx:192), NOT the render-layer placeholder — the
+    /// strip shows "New session" while the session is untitled.
+    #[test]
+    fn created_tab_holds_new_session_constant_until_titled() {
+        use crate::data::Ingest;
+        let store = Store::new(Runtime::new());
+        // The creation path's persisted initial title (app.rs's
+        // SessionCreated drain arms `open_tab` with this constant).
+        store.open_tab(
+            "s1",
+            Some(crate::components::session_tabs::NEW_SESSION_TAB_TITLE.to_owned()),
+        );
+        assert_eq!(
+            store.display_title(&store.tabs().tabs[0]),
+            Some("New session".to_owned()),
+            "persisted initial title is the model constant"
+        );
+        let theme = crate::theme::ThemeState::v2_dark();
+        let strip = session_frame(&store, "s1", &theme.styles(), (80, 24)).text_grid()[0].clone();
+        assert!(strip.contains("New session"), "creation placeholder in the strip: {strip}");
+        assert!(!strip.contains("Untitled session"), "render placeholder not reached: {strip}");
+        // Phase two: a generated title replaces the constant.
+        store.ingest_all([Ingest::Event(crate::data::BusEvent::new(
+            "session.renamed",
+            serde_json::json!({ "sessionID": "s1", "title": "Refactor the intake" }),
+        ))]);
+        let strip = session_frame(&store, "s1", &theme.styles(), (80, 24)).text_grid()[0].clone();
+        assert!(
+            strip.contains("Refactor the intake"),
+            "generated title replaces the constant: {strip}"
+        );
+    }
+
     /// #12 placeholder semantics: an untitled session holds
     /// `Untitled session` until a title lands, then the SAME open tab
     /// re-renders it (the renamed event on the live stream).
