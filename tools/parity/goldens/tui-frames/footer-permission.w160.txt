@@ -12,5 +12,5 @@
                                                                                                                                                             █   
                                                                                                                                                                 
                                                                                                                                                                 
-   Allow once   Reject                                                                                                    ⇆ select  enter confirm  esc reject   
+   Allow once   Reject                                                                                             ctrl+f fullscreen  ⇆ select  enter confirm   
                                                                                                                                                                 
