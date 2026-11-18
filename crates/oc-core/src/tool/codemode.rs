@@ -86,6 +86,7 @@ pub fn execute_input_schema() -> Value {
         "type": "object",
         "properties": { "code": { "type": "string" } },
         "required": ["code"],
+        "additionalProperties": false
     })
 }
 
@@ -231,7 +232,7 @@ pub fn code_mode_entries(tools: &ToolRegistryState) -> Vec<CatalogEntry> {
         .map(|tool| {
             let path = qualified_path(tool);
             let pinned = path == "opencode.session_move";
-            let signature = signature(&path, &tool.description, &tool.input);
+            let signature = signature(&path, &tool.description, &tool.input, tool.output.as_ref());
             let search_text = search_text(&path, &tool.description, &tool.input);
             let namespace_description =
                 tools.namespace_description(path.split('.').next().unwrap_or(&path));
@@ -277,16 +278,29 @@ pub fn tool_expression(path: &str) -> String {
     out
 }
 
-/// `describeTool.signature` (tool-runtime.ts:171-183). Outputs are
-/// always `void` — registrations carry no output schemas (a schema-less
-/// v2 tool renders identically).
+/// `describeTool.signature` (tool-runtime.ts:171-183 +
+/// tool-schema.ts:269-274 `outputTypeScript`): the output leg renders
+/// the DECLARED output schema as TypeScript (`Promise<{…}>`), `void`
+/// when the registration declares no output, and `unknown` for a
+/// degenerate output schema (an empty object — the shape MCP tools
+/// get from `output: tool.outputSchema ?? {}`, mcp.ts:48; observed as
+/// `Promise<unknown>` on gh_grep in the `w13-omo` ref cassette).
 #[must_use]
-pub fn signature(path: &str, _description: &str, input: &Value) -> String {
+pub fn signature(path: &str, _description: &str, input: &Value, output: Option<&Value>) -> String {
     let rendered = render_schema(input, 0, true);
+    let output_type = match output {
+        None => "void".to_string(),
+        Some(schema) => match schema.as_object() {
+            Some(object) if object.is_empty() => "unknown".to_string(),
+            Some(_) => render_schema(schema, 0, true),
+            None => "unknown".to_string(),
+        },
+    };
     format!(
-        "{}{}: Promise<void>",
+        "{}{}: Promise<{}>",
         tool_expression(path),
-        if rendered == "{}" { "()".to_string() } else { format!("({rendered})") }
+        if rendered == "{}" { "()".to_string() } else { format!("({rendered})") },
+        output_type
     )
 }
 
@@ -2105,7 +2119,7 @@ mod tests {
         CatalogEntry {
             path: path.to_string(),
             description: description.to_string(),
-            signature: signature(path, description, &input),
+            signature: signature(path, description, &input, None),
             search_text: search_text(path, description, &input),
             pinned: false,
             namespace_description: None,
@@ -2127,11 +2141,11 @@ mod tests {
             "required": ["text"],
         });
         assert_eq!(
-            signature("echo", "Echo text", &input),
+            signature("echo", "Echo text", &input, None),
             "tools.echo({\n  /** The text */\n  text: string,\n}): Promise<void>"
         );
         let empty = json!({ "type": "object", "properties": {} });
-        assert_eq!(signature("plain", "No args", &empty), "tools.plain(): Promise<void>");
+        assert_eq!(signature("plain", "No args", &empty, None), "tools.plain(): Promise<void>");
         let constrained = json!({
             "type": "object",
             "properties": {
@@ -2143,12 +2157,29 @@ mod tests {
                 "maybe": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
             },
         });
-        // serde_json maps sort alphabetically (no preserve_order): field
-        // order is sorted, a documented divergence from v2's insertion
-        // order (the search builtin below keeps v2's exact bytes).
+        // G-455③ — `preserve_order` keeps the json! literal's declaration
+        // order (v2's JS insertion order): fields render exactly as
+        // declared, closing the old sorted-order divergence.
         assert_eq!(
-            signature("search-ish", "", &constrained),
-            "tools[\"search-ish\"]({\n  /** @integer @exclusiveMinimum 0 */\n  limit?: number,\n  maybe?: string | null,\n  mode?: \"fast\" | \"slow\",\n  \"odd-key\"?: boolean,\n  /** @integer @minimum 0 */\n  offset?: number,\n  tags?: Array<string>,\n}): Promise<void>"
+            signature("search-ish", "", &constrained, None),
+            "tools[\"search-ish\"]({\n  /** @integer @exclusiveMinimum 0 */\n  limit?: number,\n  /** @integer @minimum 0 */\n  offset?: number,\n  mode?: \"fast\" | \"slow\",\n  tags?: Array<string>,\n  \"odd-key\"?: boolean,\n  maybe?: string | null,\n}): Promise<void>"
+        );
+        // The output leg (`outputTypeScript`): declared schema renders,
+        // no output = void, a degenerate `{}` output (the MCP face's
+        // `outputSchema ?? {}`) = unknown.
+        let declared = json!({
+            "type": "object",
+            "properties": { "sessionID": { "type": "string" }, "title": { "type": "string" } },
+            "required": ["sessionID", "title"],
+            "additionalProperties": false
+        });
+        assert_eq!(
+            signature("opencode.session_rename", "", &empty, Some(&declared)),
+            "tools.opencode.session_rename(): Promise<{\n  sessionID: string,\n  title: string,\n}>"
+        );
+        assert_eq!(
+            signature("gh_grep", "", &empty, Some(&json!({}))),
+            "tools.gh_grep(): Promise<unknown>"
         );
     }
 

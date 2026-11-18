@@ -27,9 +27,11 @@ license = "MIT"
 repository = "https://github.com/Eternal130/OpenCode-Rust"
 
 # Vendored ACP crates (R-03): identical to crates.io except
-# serde_json's `preserve_order` feature is dropped — upstream enables it
-# unconditionally and feature unification would flip the workspace's
-# serde_json map ordering (see third_party/*/Cargo.toml notes).
+# serde_json's `preserve_order` feature is dropped there — the WORKSPACE
+# now enables `preserve_order` itself (G-455: declaration-order parity
+# with the ref's JS insertion order — tool schemas, catalogs, configs),
+# so unification re-adds it here uniformly (see third_party/*/Cargo.toml
+# notes for the original vendoring rationale).
 [patch.crates-io]
 agent-client-protocol = { path = "third_party/agent-client-protocol" }
 agent-client-protocol-schema = { path = "third_party/agent-client-protocol-schema" }
@@ -125,7 +127,7 @@ serde = { version = "1", features = ["derive"] }
 # 0.000028780000000000002 parsed to 2.878e-05 instead of
 # 2.8780000000000002e-05). Enable correctly-rounded parsing so wire numbers
 # survive decode/emit bit-exact (diff channel PROVIDER-RECORDINGS parity).
-serde_json = { version = "1", features = ["float_roundtrip"] }
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
 schemars = "0.8"
 thiserror = "2"
 anyhow = "1"

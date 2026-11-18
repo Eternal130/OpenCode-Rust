@@ -22,7 +22,8 @@ pub fn schema() -> Value {
             "path": { "type": "string", "description": "Path to the file to write to" },
             "content": { "type": "string", "description": "Content to write to the file" }
         },
-        "required": ["path", "content"]
+        "required": ["path", "content"],
+        "additionalProperties": false
     })
 }
 

@@ -24,7 +24,8 @@ pub fn schema() -> Value {
             "hidden": { "type": "boolean", "description": "Include hidden files and directories (default: false)." },
             "limit": { "type": "integer", "minimum": 1, "description": "Maximum number of matching files to return (default: 100)" }
         },
-        "required": ["pattern"]
+        "required": ["pattern"],
+        "additionalProperties": false
     })
 }
 

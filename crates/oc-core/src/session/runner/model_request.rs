@@ -840,15 +840,32 @@ impl SessionModelRequest {
         let mut request = oc_ai::schema::messages::LLMRequest::new(language_model);
         request.system = shaped_system;
         request.messages = bound_images(unsupported_parts(shaped_messages, &model.capabilities));
-        request.tools = hooked
-            .iter()
-            .map(|(name, registration)| {
-                oc_ai::schema::messages::ToolEntry::Definition(ToolDefinition {
-                    name: name.clone(),
-                    ..tool_definition(registration)
+        request.tools = {
+            let mut entries: Vec<oc_ai::schema::messages::ToolEntry> = hooked
+                .iter()
+                .map(|(name, registration)| {
+                    oc_ai::schema::messages::ToolEntry::Definition(ToolDefinition {
+                        name: name.clone(),
+                        ..tool_definition(registration)
+                    })
                 })
-            })
-            .collect();
+                .collect();
+            // G-455 — the ref's tool table is name-sorted definitions with
+            // the CodeMode `execute` tool APPENDED last (tool.ts:225-241;
+            // observed in every ref cassette). The hooked map re-sorts by
+            // name, so re-append `execute` after the sort to restore the
+            // ref order.
+            if let Some(position) = entries.iter().position(|entry| match entry {
+                oc_ai::schema::messages::ToolEntry::Definition(tool) => tool.name == "execute",
+                oc_ai::schema::messages::ToolEntry::Namespace(_) => false,
+            }) {
+                if position + 1 != entries.len() {
+                    let tail = entries.remove(position);
+                    entries.push(tail);
+                }
+            }
+            entries
+        };
         request.tool_choice = input.tool_choice.clone();
         if !generation.is_empty() {
             request.generation = Some(generation);

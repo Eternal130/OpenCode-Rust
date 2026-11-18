@@ -1361,10 +1361,24 @@ pub async fn apply_location_plugins(
         if !is_active(&definition.plugin_id) {
             continue;
         }
+        // G-455② — the ref engine's plugin-tool wire shape carries NO
+        // top-level `additionalProperties` (the v1 adapter's zod
+        // `toJSONSchema` output passes through the ref registry with the
+        // flag dropped; observed on every zod-family tool in the
+        // `w13-omo` ref cassette — ast_grep_*/task_*/webfetch all keep
+        // `$schema` but never `additionalProperties`). Strip the flag
+        // the payload's own zod (4.6.5) emits so the request shape
+        // converges.
+        let mut input = definition.input.clone();
+        if input.get("additionalProperties").is_some() {
+            if let Some(object) = input.as_object_mut() {
+                object.remove("additionalProperties");
+            }
+        }
         let mut registration = crate::location::ToolRegistration::new(
             &definition.name,
             definition.description.clone(),
-            definition.input.clone(),
+            input,
         );
         registration.codemode = definition.codemode;
         registration.namespace.clone_from(&definition.namespace);
