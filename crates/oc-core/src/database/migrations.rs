@@ -625,7 +625,66 @@ pub fn apply_only(conn: &mut Connection, opts: &MigrationOptions) -> Result<Appl
         }
         report.applied.push(migration.id);
     }
+    backfill_legacy_credentials(conn, opts)?;
     Ok(report)
+}
+
+/// W14 backfill (lying-journal repair): databases bootstrapped BEFORE the
+/// W13 fix carry the complete journal — including
+/// `20260805200742_import_legacy_credentials` — without the import ever
+/// running (markers present, effect missing, credentials silently
+/// dropped). The import body is idempotent (`credential_for_integration_
+/// exists` skips rows that already landed), so re-running it whenever the
+/// journal CLAIMS the import completed but a legacy `auth.json` entry
+/// still lacks its row heals those databases exactly once. Fresh
+/// databases are unaffected (the bootstrap now runs the body), and a
+/// missing/undecodable `auth.json` is a no-op like the import itself.
+fn backfill_legacy_credentials(conn: &mut Connection, opts: &MigrationOptions) -> Result<()> {
+    const LEGACY_IMPORT_ID: &str = "20260805200742_import_legacy_credentials";
+    if opts.global_data.is_none() {
+        return Ok(());
+    }
+    let completed = journal_ids(conn)?;
+    if !completed.contains(LEGACY_IMPORT_ID) {
+        return Ok(());
+    }
+    // Cheap gate before opening a write transaction: is there at least one
+    // decodable legacy entry whose integration has no credential row?
+    let needs_import = 'needs: {
+        let Ok(content) = fs::read_to_string(opts.global_data.as_deref().expect("checked").join("auth.json"))
+        else {
+            break 'needs false;
+        };
+        let Ok(input) = serde_json::from_str::<serde_json::Value>(&content) else {
+            break 'needs false;
+        };
+        let Some(map) = input.as_object() else {
+            break 'needs false;
+        };
+        let mut statement = conn
+            .prepare("SELECT 1 FROM credential WHERE integration_id = ?1 LIMIT 1")
+            .expect("prepare credential probe");
+        for (id, raw) in map {
+            if decode_legacy_value(raw).is_none() {
+                continue;
+            }
+            let integration_id = id.trim_end_matches('/');
+            if integration_id.is_empty() {
+                continue;
+            }
+            let present = statement
+                .query_row(rusqlite::params![integration_id], |_| Ok(true))
+                .optional()?;
+            if present.is_none() {
+                break 'needs true;
+            }
+        }
+        false
+    };
+    if needs_import {
+        run_top_tx(conn, Begin::Immediate, |tx| import_legacy_credentials(tx, opts))?;
+    }
+    Ok(())
 }
 
 fn run_migration(
