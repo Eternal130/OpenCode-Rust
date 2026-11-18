@@ -1,0 +1,142 @@
+{
+  "_schema": "W12 diff-adjudication registry (user ruling 2026-11-18, GAPS 2.2#12): the sandbox realchain battery performs NO bug adjudication — every divergence is exported to .test-logs/diff-reports/ and matched here. Entry fields: id, scenario_pattern (exact scenario or '*'), state_pattern (optional, default '*'), shape ({kind: substring|regex, ref_contains/rust_contains: all must appear in the divergence line, rust_missing: none may appear}), classification (framework-diff|env-artifact|accepted-gap|expected-shape|needs-controller), justification, g_ref, adjudicated_by, adjudicated_at, last_observed. Matching is most-specific-first (longest scenario_pattern, then file order); a divergence matched by NO entry = unadjudicated (checker exit 2 = merge gate red).",
+  "entries": [
+    {
+      "id": "w12-g434-freelist-vintage",
+      "scenario_pattern": "s3",
+      "state_pattern": "*",
+      "shape": {
+        "kind": "substring",
+        "any_contains": [" Free", "__FREELIST__"]
+      },
+      "classification": "env-artifact",
+      "justification": "models.dev catalog snapshot vintage differs between the ref tree's snapshot.txt and the port's embedded catalog (both ends list their own era's free models; production syncs one live catalog).",
+      "g_ref": "G-434",
+      "adjudicated_by": "W12 seed migration",
+      "adjudicated_at": "2026-11-18",
+      "last_observed": "2026-11-18"
+    },
+    {
+      "id": "w12-g442-shell-row-projection",
+      "scenario_pattern": "tl",
+      "state_pattern": "*",
+      "shape": {
+        "kind": "substring",
+        "rust_missing": ["test result: ok"]
+      },
+      "classification": "accepted-gap",
+      "justification": "G-442 residual: the port's shell tool row occasionally keeps its spinner and never projects the folded output rows when the command completes within ~100 ms (engine-side result correct — turn-1 request digest proves the tool_result rode; TUI-side row-projection race). The W12 ruling retired the repaint nudge that masked it; known-registered, pending fix.",
+      "g_ref": "G-442",
+      "adjudicated_by": "W12 seed migration",
+      "adjudicated_at": "2026-11-18",
+      "last_observed": "2026-11-18"
+    },
+    {
+      "id": "w12-omo-slim-sections",
+      "scenario_pattern": "t9-7",
+      "state_pattern": "*",
+      "shape": {
+        "kind": "substring",
+        "ref_contains": ["OMO"]
+      },
+      "classification": "accepted-gap",
+      "justification": "oh-my-opencode-slim sidebar sections: the sandbox empty-session state renders them on neither end (both plugins mount but the sections need session state); on the REAL machine with a live session the rust port does not render them (in-register, pending fix — the previous masking borrowed S5's sidebar mask and hid this gap; the W12 ruling removed it).",
+      "g_ref": "omo-slim sections (T9-7 masking failure of the 2026-11-18 retrospective)",
+      "adjudicated_by": "W12 seed migration",
+      "adjudicated_at": "2026-11-18",
+      "last_observed": "2026-11-18"
+    },
+    {
+      "id": "w12-selection-range-semantics",
+      "scenario_pattern": "*",
+      "state_pattern": "*",
+      "shape": {
+        "kind": "substring",
+        "any_contains": ["selection"]
+      },
+      "classification": "accepted-gap",
+      "justification": "Selection range semantics divergence (mouse selection highlight family, G-440 adjacent): pending registration as accepted-gap per the W12 controller ruling — no realchain scenario currently drives it, so this entry expects no match today.",
+      "g_ref": "G-440 family (selection range semantics, pending)",
+      "adjudicated_by": "W12 seed migration",
+      "adjudicated_at": "2026-11-18",
+      "last_observed": "2026-11-18"
+    },
+    {
+      "id": "w12-t98-boot-window-connection-lost",
+      "scenario_pattern": "t9-8",
+      "state_pattern": "boot-window",
+      "shape": {
+        "kind": "substring",
+        "ref_contains": ["expected 0"],
+        "rust_contains": ["Connection lost"]
+      },
+      "classification": "expected-shape",
+      "justification": "t9_8 (single-end): the slow-boot window must stay clean of the 'Connection lost' overlay — expectation count 0; any observed count > 0 is an UNADJUDICATED red (G-439 regression surface).",
+      "g_ref": "G-439",
+      "adjudicated_by": "W12 seed migration",
+      "adjudicated_at": "2026-11-18",
+      "last_observed": "2026-11-18"
+    },
+    {
+      "id": "w12-t91-boot-indicators",
+      "scenario_pattern": "t9-1",
+      "state_pattern": "boot",
+      "shape": {
+        "kind": "substring",
+        "ref_contains": ["expected 0"]
+      },
+      "classification": "expected-shape",
+      "justification": "t9_1 (single-end): the settled boot screen carries no reconnect/error indicators — expectation count 0 per indicator; any observed count > 0 is an UNADJUDICATED red (symptom-① surface).",
+      "g_ref": "symptom-① (beta.15)",
+      "adjudicated_by": "W12 seed migration",
+      "adjudicated_at": "2026-11-18",
+      "last_observed": "2026-11-18"
+    },
+    {
+      "id": "w12-midstream-title-placeholder",
+      "scenario_pattern": "p*",
+      "state_pattern": "*",
+      "shape": {
+        "kind": "substring",
+        "ref_contains": ["New session"],
+        "rust_contains": ["Untitled session"]
+      },
+      "classification": "needs-controller",
+      "justification": "First-run W12 finding (p1-busy/p2-mid, line 1): BEFORE the session-title SSE lands, the tab placeholder differs — ref 'New session' vs rust 'Untitled session'. Settled grids are EXACT (the seeded title replaces it). Preliminary lean: a real (cosmetic) divergence in the untitled-tab fallback label — recommend aligning to ref's 'New session'. Needs controller confirmation.",
+      "g_ref": "none (W12 first-run)",
+      "adjudicated_by": "w12 lane (provisional)",
+      "adjudicated_at": "2026-11-18",
+      "last_observed": "2026-11-18"
+    },
+    {
+      "id": "w12-midstream-spinner-phase",
+      "scenario_pattern": "p*",
+      "state_pattern": "*",
+      "shape": {
+        "kind": "substring",
+        "any_contains": ["esc interrupt"]
+      },
+      "classification": "framework-diff",
+      "justification": "Mid-window footer spinner cells (⬝/■ fill phase) differ at the capture instant: both ends animate independently and the mid-stream captures are not frame-locked — a capture-time race, not content. Settled grids are EXACT.",
+      "g_ref": "none (W12 first-run, timing)",
+      "adjudicated_by": "w12 lane",
+      "adjudicated_at": "2026-11-18",
+      "last_observed": "2026-11-18"
+    },
+    {
+      "id": "w12-t95-sidebar-content",
+      "scenario_pattern": "t9-5",
+      "state_pattern": "sidebar",
+      "shape": {
+        "kind": "substring",
+        "ref_contains": ["expected 1"]
+      },
+      "classification": "expected-shape",
+      "justification": "t9_5 (single-end): the wide-dock sidebar carries the Context section and its tokens row after a settled reply — expectation present; absence is an UNADJUDICATED red (G-435 family surface).",
+      "g_ref": "G-435",
+      "adjudicated_by": "W12 seed migration",
+      "adjudicated_at": "2026-11-18",
+      "last_observed": "2026-11-18"
+    }
+  ]
+}
