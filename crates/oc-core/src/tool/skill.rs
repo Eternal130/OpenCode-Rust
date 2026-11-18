@@ -210,7 +210,8 @@ pub fn tool(table: Arc<dyn SkillTable>) -> BuiltinTool {
             "properties": {
                 "id": { "type": "string", "description": "The ID of an available skill or a skill explicitly referenced by the user" }
             },
-            "required": ["id"]
+            "required": ["id"],
+            "additionalProperties": false
         }),
         permission: Some("skill"),
         codemode: false,

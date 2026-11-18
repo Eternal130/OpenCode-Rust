@@ -667,7 +667,8 @@ pub fn tool(deps: Arc<ShellToolServices>) -> BuiltinTool {
                 "timeout": { "type": "integer", "minimum": 0, "description": "Timeout in milliseconds. Set to 0 to disable the timeout. Defaults to 120000 for foreground commands. Background commands have no timeout by default." },
                 "background": { "type": "boolean", "description": "Run the command in the background and return immediately (useful for dev servers and long-running builds). You do not need to use '&' at the end of the command when using this parameter. You will be notified when it completes. DO NOT poll for completion." }
             },
-            "required": ["command"]
+            "required": ["command"],
+            "additionalProperties": false
         }),
         permission: Some("shell"),
         codemode: false,

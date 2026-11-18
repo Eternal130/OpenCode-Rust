@@ -257,7 +257,8 @@ pub fn tool(forms: Forms) -> BuiltinTool {
                     }
                 }
             },
-            "required": ["questions"]
+            "required": ["questions"],
+            "additionalProperties": false
         }),
         permission: Some("question"),
         codemode: false,

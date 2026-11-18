@@ -71,7 +71,8 @@ pub fn input_schema() -> serde_json::Value {
                 "description": "Run the subagent in the background and return immediately. You will be notified when it completes. DO NOT sleep, poll, or proactively check on its progress."
             }
         },
-        "required": ["agent", "description", "prompt"]
+        "required": ["agent", "description", "prompt"],
+        "additionalProperties": false
     })
 }
 

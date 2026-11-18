@@ -914,7 +914,8 @@ pub fn tool(execute: Arc<WebSearchExecute>) -> BuiltinTool {
             "properties": {
                 "query": { "type": "string", "description": "Websearch query" }
             },
-            "required": ["query"]
+            "required": ["query"],
+            "additionalProperties": false
         }),
         permission: Some("websearch"),
         codemode: false,

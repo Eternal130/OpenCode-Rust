@@ -530,6 +530,22 @@ fn w13_omo_sections_at_trigger_width_pair() {
     let specs: Vec<&str> = rust_specs.iter().map(String::as_str).collect();
     rust.write_config_ext(&[], "replay/claude-opus-4-7", &specs);
     refbox.write_ref_config_ext(&[], "replay/claude-opus-4-7", &specs);
+    // G-455③ — pin the omo plugin's builtin REMOTE MCP set to the
+    // deterministic half: `context7` (mcp.context7.com, anonymous
+    // access flaps 401/ok between runs and engines) is disabled on
+    // BOTH ends through the plugin's own `omo.disabled_mcps` config;
+    // `gh_grep` stays (anonymous-stable). Without this the system
+    // prompt's Code Mode catalog section set is network-nondeterministic
+    // and the request digest can never converge.
+    for path in [rust.config_path(), refbox.root.join("xdg-config/opencode/opencode.json")] {
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read config {}: {e}", path.display()));
+        let mut config: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse config: {e}"));
+        config["omo"] = serde_json::json!({ "disabled_mcps": ["context7"] });
+        std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap())
+            .unwrap_or_else(|e| panic!("write config {}: {e}", path.display()));
+    }
     let stage = ref_stage(&refbox);
     ref_service_stop(&refbox, &stage);
     let server = service_start(&rust);

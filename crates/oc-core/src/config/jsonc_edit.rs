@@ -1179,7 +1179,7 @@ mod tests {
         .expect("changed");
         assert_eq!(
             mcp,
-            "{\n  // annotated\n  \"username\": \"u\",\n  \"mcp\": {\n    \"servers\": {\n      \"github\": {\n        \"type\": \"remote\",\n        \"url\": \"https://mcp.example.com/sse\"\n      }\n    }\n  }\n}\n"
+            "{\n  // annotated\n  \"username\": \"u\",\n  \"mcp\": {\n    \"servers\": {\n      \"github\": {\n        \"url\": \"https://mcp.example.com/sse\",\n        \"type\": \"remote\"\n      }\n    }\n  }\n}\n"
         );
 
         // plugin add: set ["plugins"] to the whole new array.

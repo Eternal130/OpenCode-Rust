@@ -514,7 +514,7 @@ pub fn rename_output_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "object",
         "properties": {
-            "sessionID": { "type": "string" },
+            "sessionID": { "type": "string", "pattern": "^ses" },
             "title": { "type": "string" }
         },
         "required": ["sessionID", "title"],
@@ -534,7 +534,7 @@ pub fn session_rename_tool(
         input: serde_json::json!({
             "type": "object",
             "properties": {
-                "sessionID": { "type": "string", "description": "Omit to rename the current session." },
+                "sessionID": { "type": "string", "pattern": "^ses", "description": "Omit to rename the current session." },
                 "title": { "type": "string", "minLength": 1, "description": "New session title." }
             },
             "required": ["title"]
@@ -552,7 +552,7 @@ pub fn move_output_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "object",
         "properties": {
-            "sessionID": { "type": "string" },
+            "sessionID": { "type": "string", "pattern": "^ses" },
             "directory": { "type": "string" }
         },
         "required": ["sessionID", "directory"],
@@ -569,7 +569,7 @@ pub fn session_move_tool(deps: SessionMoveServices) -> BuiltinTool {
         input: serde_json::json!({
             "type": "object",
             "properties": {
-                "sessionID": { "type": "string", "description": "Omit to move the current session." },
+                "sessionID": { "type": "string", "pattern": "^ses", "description": "Omit to move the current session." },
                 "directory": { "type": "string", "minLength": 1, "description": "Destination directory, relative to the target session's directory or absolute. Supports ~." }
             },
             "required": ["directory"]
@@ -591,6 +591,7 @@ pub fn models_output_schema() -> serde_json::Value {
         "properties": {
             "providers": {
                 "type": "array",
+                "description": "Matching models grouped by provider. Your own provider comes first.",
                 "items": {
                     "type": "object",
                     "properties": {
@@ -598,15 +599,17 @@ pub fn models_output_schema() -> serde_json::Value {
                         "name": { "type": "string" },
                         "models": {
                             "type": "array",
+                            "description": "Newest first.",
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "id": { "type": "string" },
+                                    "id": { "type": "string", "description": "providerID/modelID" },
                                     "name": { "type": "string" },
-                                    "released": { "type": "number" },
+                                    "released": { "type": "number", "description": "Release date as a Unix timestamp in milliseconds, or 0 when unknown." },
                                     "variants": { "type": "array", "items": { "type": "string" } },
                                     "cost": {
                                         "type": "array",
+                                        "description": "Pricing in USD per million tokens.",
                                         "items": {
                                             "type": "object",
                                             "properties": {
@@ -646,8 +649,8 @@ pub fn models_output_schema() -> serde_json::Value {
                     "additionalProperties": false
                 }
             },
-            "total": { "type": "integer" },
-            "next": { "type": ["integer", "null"] }
+            "total": { "type": "number", "description": "Number of matching models across all pages." },
+            "next": { "type": ["number", "null"], "description": "Offset of the next page, or null on the last page." }
         },
         "required": ["providers", "total", "next"],
         "additionalProperties": false

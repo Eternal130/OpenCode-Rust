@@ -172,7 +172,8 @@ pub fn schema() -> Value {
             "newString": { "type": "string", "description": "Text to replace oldString with (must differ from oldString)" },
             "replaceAll": { "type": "boolean", "description": "Whether to replace every occurrence of oldString. When false, oldString must match exactly once. Defaults to false." }
         },
-        "required": ["path", "oldString", "newString"]
+        "required": ["path", "oldString", "newString"],
+        "additionalProperties": false
     })
 }
 
