@@ -14862,6 +14862,35 @@ fn local_is_fresher(local: &Message, fetched: &Message) -> bool {
     stamp(local) > stamp(fetched)
 }
 
+/// G-442 (residual, W15) — whether replacing `local` with `fetched`
+/// would REGRESS a settled tool part back to running/unset: some part
+/// settled locally whose counterpart in the fetched copy is not
+/// settled. Settles are immutable, so the only way a fetched copy
+/// carries an unsettled counterpart is a torn mid-settle serialization
+/// — the observed residual race (trace: `downgrade source=snapshot …
+/// Completed -> Running` on a ~100 ms shell turn whose success event
+/// and the session-open transcript fetch carried EQUAL completion
+/// stamps, so the W9 strictly-later rule did not fire and the tie
+/// kept the fetched copy).
+fn fetch_regresses_settled_part(local: &Message, fetched: &Message) -> bool {
+    let (Message::Assistant { parts: local_parts, .. }, Message::Assistant { parts, .. }) =
+        (local, fetched)
+    else {
+        return false;
+    };
+    local_parts.iter().any(|part| match part {
+        Part::Tool { id, state, .. } if state.status.settled() => {
+            parts.iter().any(|fetched_part| match fetched_part {
+                Part::Tool { id: fetched_id, state: fetched_state, .. } if fetched_id == id => {
+                    !fetched_state.status.settled()
+                }
+                _ => false,
+            })
+        }
+        _ => false,
+    })
+}
+
 /// G-442 — apply the freshest-copy rule over a fetched page: every
 /// fetched id whose local copy is fresher keeps the LOCAL message;
 /// the result replaces the session's rows (local-only rows appended
@@ -14873,11 +14902,25 @@ fn prefer_fresher_local(fetched: Vec<Message>, local: &[Message]) -> Vec<Message
             local
                 .iter()
                 .find(|candidate| candidate.id() == message.id())
-                .filter(|candidate| local_is_fresher(candidate, &message))
+                .filter(|candidate| {
+                    // G-442 (W9 + W15 residual): keep the local copy when
+                    // it is strictly fresher OR when the stamps tie and the
+                    // fetched copy would regress a settled tool part (a
+                    // torn mid-settle serialization — settles are
+                    // immutable, so the tie-break must not reopen one).
+                    local_is_fresher(candidate, &message)
+                        || (stamps_tie(candidate, &message)
+                            && fetch_regresses_settled_part(candidate, &message))
+                })
                 .cloned()
                 .unwrap_or(message)
         })
         .collect()
+}
+
+/// G-442 (W15 residual) — stamp equality (neither copy strictly later).
+fn stamps_tie(local: &Message, fetched: &Message) -> bool {
+    !local_is_fresher(local, fetched) && !local_is_fresher(fetched, local)
 }
 
 /// Find or create the assistant message (shared by the helpers below).
@@ -15544,6 +15587,53 @@ mod tests {
             messages: vec![assistant(Some(99), ToolStatus::Completed)],
         }]);
         assert_eq!(store.messages("s1").len(), 2, "the equal-stamp page merged without locals");
+    }
+
+    /// G-442 (W15 residual) — the TORN-READ tie: a fetched page whose
+    /// completion stamps EQUAL the local copy's but whose tool part
+    /// serialized mid-settle (status running, timestamp already
+    /// written) must not reopen the locally-settled part. The W9
+    /// strictly-later rule kept the fetched copy on ties; the trace
+    /// (`downgrade source=snapshot … Completed -> Running`) pinned the
+    /// ~100 ms shell-turn flake to exactly this case.
+    #[test]
+    fn snapshot_tie_never_reopens_a_settled_tool_part() {
+        let store = Store::new(Runtime::new());
+        let assistant = |completed: Option<u64>, status: ToolStatus| Message::Assistant {
+            id: "msg_1".to_owned(),
+            agent: "build".to_owned(),
+            model: "replay/m".to_owned(),
+            parts: vec![Part::Tool {
+                id: "toolu_1".to_owned(),
+                name: "bash".to_owned(),
+                time: PartTime { created: Some(10), completed },
+                state: ToolState { status, ..ToolState::default() },
+            }],
+            finish: None,
+            error: None,
+            time: PartTime { created: Some(10), completed },
+            tokens: None,
+            usage_total: None,
+            retry: None,
+            cache_read: None,
+        };
+        // Prime a local assistant carrying the settled part.
+        store.set_messages("s1", vec![assistant(Some(100), ToolStatus::Completed)]);
+        // The torn page: SAME stamps (part completed=100, envelope 100)
+        // but the part serialized mid-settle — status running, no
+        // output. The tie must keep the local settled copy.
+        store.ingest_all([Ingest::MessagesSnapshot {
+            session_id: "s1".to_owned(),
+            messages: vec![assistant(Some(100), ToolStatus::Running)],
+        }]);
+        let kept = store.messages("s1");
+        let Message::Assistant { parts, .. } =
+            kept.iter().find(|message| message.id() == "msg_1").expect("kept")
+        else {
+            panic!("assistant kept");
+        };
+        let Part::Tool { state, .. } = &parts[0] else { panic!("tool part") };
+        assert_eq!(state.status, ToolStatus::Completed, "the tie keeps the settled local part");
     }
 
     /// G-200① — the `session.viewed` ack (session-tabs.tsx:209-242):
