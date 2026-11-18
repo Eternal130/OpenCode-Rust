@@ -316,7 +316,9 @@
    | core/其他 crate | `tools/dev-gate.sh 'cargo nextest run --workspace --locked --no-fail-fast'` | 视范围 |
 
 8. 树场景：加 `StateSpec`（`crates/oc-tui/tests/tree_scenarios.rs`）→ `tools/parity/tree-scenario-capture.sh` 捕获 → `TREE_ORACLE_FREEZE=1 tools/parity/tree-oracle-freeze.sh` 冻结；**oracle 帧与冻结版不符=重钉事件，stop-and-escalate，禁擅自重冻结**。
-9. **差分/census 驱动器禁以 root 跑**（其内部直调 cargo nextest；root 会污染 `/tmp/opencode/diff-*` 属主致后续 eternal130 运行失败）——root 会话用 `systemd-run --uid=eternal130 --scope …` 直跑模式（不占 dev-gate 锁，2026-11-13 第三十轮教训）。
+9. **差分/census 驱动器禁以 root 跑**
+10. **掩码是断言荒漠（2026-11-18 用户裁定三失效复盘）**：区域掩码遮住的是整片区域——绊线只守自己登记的形状，区域内**其它**分歧全部静默通过（T9-7 借用 S5 侧栏掩码致 omo-slim sections 缺失漏测）。故：①**禁跨场景借用区域掩码**——每个带掩码比对必须自己做一轮未掩码 ref↔rust diff 分诊并把结论记进该场景注释/报告（"dump for the gap ledger"不配 diff 审阅=证据没人看）；②掩码作用域必须收窄到被登记形状的最小区域（行级优先于列级/区域级）；③带掩码场景的**状态覆盖**必须覆盖被掩区域内容会变化的状态（插件 sections/长转录/热载等），空会话态不触发的内容必须补触发态场景。
+11. **在册 🟡 缺口的 SLA（同复盘）**：有可复现形状的在册分歧（绊线/掩码在场）**两波内不修必须在波计划里显式说明原因**；发 beta/release tag 前必须把在册 🟡 清单打印给用户过目（显式豁免，禁隐式带病发版）。（其内部直调 cargo nextest；root 会污染 `/tmp/opencode/diff-*` 属主致后续 eternal130 运行失败）——root 会话用 `systemd-run --uid=eternal130 --scope …` 直跑模式（不占 dev-gate 锁，2026-11-13 第三十轮教训）。
 
 ### 2.3 lane 纪律
 
@@ -339,6 +341,7 @@
 2. 合并裁决列表级核对每个 lane 的**删除清单**；证据优先方整文件恢复。
 3. 交互面修复必须带 PTY/field 级验证；审计状态只是起点，不证链路端到端。
 4. 发布门 scoreboard：每修配独立子代理门扫描，循环全绿才发。
+5. **发版缺口清单（2026-11-18）**：打 beta/release tag 前，控制者向用户输出在册 🟡 缺口全清单（G 号+一句话+影响面），用户点头或明示豁免才发——"用户没问就不说"不再是豁免。
 5. 提交：English commits；**一律仓库既有身份（Eternal130 <Eternal130@outlook.com>，四层 gitconfig 已配）——禁 `--author`、`-c user.name/user.email`、`GIT_AUTHOR_*/GIT_COMMITTER_*`**。
 
 ## 现行制度速查（防复发汇总）
