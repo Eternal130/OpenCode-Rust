@@ -2,6 +2,7 @@
 //!
 //! bun-dependent acceptance tests live in [`super::bun`].
 
+mod bootstrap_credentials;
 mod bun;
 mod null_tolerance;
 mod upgrade_battery;

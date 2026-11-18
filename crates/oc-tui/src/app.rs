@@ -9610,6 +9610,19 @@ pub async fn run_with_size(
         // submit flow).
         while let Ok(event) = sink_rx.try_recv() {
             if let PromptSinkEvent::SessionCreated { session_id, title } = event {
+                // G-449 — the ref's two-phase model: a session CREATED
+                // by this client opens its tab with the model constant
+                // `NEW_SESSION_TAB_TITLE` ("New session") as the
+                // persisted initial title (session-tabs.tsx:192's
+                // `fallback = newTab() ? NEW_SESSION_TAB_TITLE :
+                // undefined` — a home submission always opens a new
+                // tab); the RENDER layer's "Untitled session" fallback
+                // (session-tabs.tsx:754) only covers tabs with no
+                // persisted title (restored/foreign). A server-side
+                // create-time title, if one ever lands, still wins.
+                let title = title.or_else(|| {
+                    Some(crate::components::session_tabs::NEW_SESSION_TAB_TITLE.to_owned())
+                });
                 app.store.open_tab(&session_id, title);
                 let staged = app.store.selection_for(HOME_PROMPT_KEY);
                 if let Some(model) = &staged.model {

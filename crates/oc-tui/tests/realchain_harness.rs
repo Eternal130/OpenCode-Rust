@@ -239,6 +239,26 @@ impl Sandbox {
         self.root.join("home/.config/opencode/opencode.json")
     }
 
+    /// The port's global DATA root (`$XDG_DATA_HOME/opencode-rust`) —
+    /// where `opencode.db` and the legacy `auth.json` live (the W13
+    /// migration scenarios preset both).
+    #[must_use]
+    pub fn data_root(&self) -> PathBuf {
+        self.root.join("xdg-data/opencode-rust")
+    }
+
+    /// The legacy v2 auth.json path inside this sandbox.
+    #[must_use]
+    pub fn auth_json(&self) -> PathBuf {
+        self.data_root().join("auth.json")
+    }
+
+    /// The port's database file inside this sandbox.
+    #[must_use]
+    pub fn db_path(&self) -> PathBuf {
+        self.data_root().join("opencode.db")
+    }
+
     #[must_use]
     pub fn env(&self) -> Vec<(String, String)> {
         let s = &self.root;
@@ -434,6 +454,29 @@ impl Gateway {
         Gateway::spawn_ext(tag, &[], record_dir, None, pace, "digest")
     }
 
+    /// W13 content-boundary lane: digest-mode gateway with EXPLICIT
+    /// seed files (record mode) — each scenario's synthetic payload
+    /// (CJK wrap / emoji ZWJ / long-line / empty reply) is its own
+    /// `--seed-reply` body, recorded once into the committed
+    /// `corpus-w13{,-ref}` dirs by the `w13x_*` bootstrap tests.
+    #[must_use]
+    pub fn spawn_payload_seeded(
+        tag: &str,
+        record_dir: Option<&Path>,
+        seed_reply: &Path,
+        seed_title: &Path,
+    ) -> Gateway {
+        Gateway::spawn_ext_seeds(
+            tag,
+            &[],
+            record_dir,
+            None,
+            Some((seed_reply, seed_title)),
+            &default_pace(),
+            "digest",
+        )
+    }
+
     /// W7 turn-anchored mode: `--match turn` with the tool-loop corpus
     /// dirs; `bootstrap` = (record_dir, seed_turns_dir) enables the
     /// one-shot scripted-seed recording of the committed corpus.
@@ -467,9 +510,24 @@ impl Gateway {
         tag: &str,
         extra_corpus: &[PathBuf],
         record_dir: Option<&Path>,
+        seed_turns: Option<&Path>,
+        pace: &str,
+        match_mode: &str,
+    ) -> Gateway {
+        Gateway::spawn_ext_seeds(tag, extra_corpus, record_dir, seed_turns, None, pace, match_mode)
+    }
+
+    /// The general spawner: `seeds` overrides the default
+    /// `--seed-reply`/`--seed-title` bodies (the W13 payload lane);
+    /// `None` keeps the channel-9 defaults.
+    fn spawn_ext_seeds(
+        tag: &str,
+        extra_corpus: &[PathBuf],
+        record_dir: Option<&Path>,
         // W7: turn-script bootstrap dir (--seed-turns; digest mode
         // ignores it).
         seed_turns: Option<&Path>,
+        seeds: Option<(&Path, &Path)>,
         pace: &str,
         match_mode: &str,
     ) -> Gateway {
@@ -485,6 +543,10 @@ impl Gateway {
             // engine; the title call normalizes to the SAME digest on both
             // ends and rides the shared corpus above).
             root.join("tools/diff/realchain/corpus-ref"),
+            // W13: the content-boundary payloads (both engines' request
+            // shapes for the cjk/emoji/longline/empty prompts).
+            root.join("tools/diff/realchain/corpus-w13"),
+            root.join("tools/diff/realchain/corpus-w13-ref"),
         ] {
             cmd.arg("--corpus").arg(&corpus);
         }
@@ -509,10 +571,19 @@ impl Gateway {
         // digest-drift diffing.
         cmd.arg("--dump-misses").arg(log_path.with_file_name(format!("gateway-{tag}-misses")));
         if let Some(dir) = record_dir {
-            cmd.arg("--seed-reply").arg(root.join("tools/diff/realchain/seeds/anthropic-text.txt"));
+            // W13: `seeds` overrides the seeded reply/title bodies (the
+            // content-boundary payloads); `None` keeps the channel-9
+            // defaults.
+            cmd.arg("--seed-reply").arg(&seeds.map_or_else(
+                || root.join("tools/diff/realchain/seeds/anthropic-text.txt"),
+                |(reply, _)| reply.to_path_buf(),
+            ));
             // W3 hardening: title-generator misses seed a DISTINCT text so
             // the session title never echoes the main-turn reply needle.
-            cmd.arg("--seed-title").arg(root.join("tools/diff/realchain/seeds/title-sse.txt"));
+            cmd.arg("--seed-title").arg(&seeds.map_or_else(
+                || root.join("tools/diff/realchain/seeds/title-sse.txt"),
+                |(_, title)| title.to_path_buf(),
+            ));
             cmd.arg("--record-dir").arg(dir);
         }
         if let Some(dir) = seed_turns {
