@@ -8,6 +8,7 @@
     clippy::default_trait_access,
     clippy::implied_bounds_in_impls,
     clippy::items_after_statements,
+    clippy::result_large_err, // G-455: preserve_order grew HookError past the threshold
     clippy::wildcard_enum_match_arm
 )]
 

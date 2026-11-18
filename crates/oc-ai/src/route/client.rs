@@ -223,7 +223,7 @@ impl Route {
             &original.model,
         );
         // G-455 — the model-facing tool table is name-sorted definitions
-        // with the CodeMode `execute` tool APPENDED LAST (ref tool.ts
+        // with the `CodeMode` `execute` tool APPENDED LAST (ref tool.ts
         // :225-241; every ref cassette pins the wire order — arrays keep
         // element order in request digests). Any intermediate map (hook
         // drafts, registry snapshots) re-sorts by name, so the wire seam
@@ -1048,8 +1048,8 @@ mod tests {
     }
 }
 
-/// G-455 — move the CodeMode `execute` tool to the END of the tool
-/// table (ref tool.ts:225-241: definitions sort by name, the CodeMode
+/// G-455 — move the `CodeMode` `execute` tool to the END of the tool
+/// table (ref tool.ts:225-241: definitions sort by name, the `CodeMode`
 /// tool is appended). No-op when absent or already last; namespace
 /// entries are left in place (the ref appends at the top level).
 fn append_execute_last(tools: Vec<crate::schema::ToolEntry>) -> Vec<crate::schema::ToolEntry> {
@@ -1075,7 +1075,7 @@ mod g455_tests {
     use crate::schema::LanguageModel;
     use std::sync::Arc;
 
-    /// G-455 — `prepare_request` appends the CodeMode `execute` tool LAST
+    /// G-455 — `prepare_request` appends the `CodeMode` `execute` tool LAST
     /// on the model-facing table (the wire seam; ref tool.ts:225-241).
     #[test]
     fn prepare_request_appends_execute_last() {

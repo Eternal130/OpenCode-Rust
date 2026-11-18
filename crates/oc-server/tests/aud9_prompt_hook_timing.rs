@@ -13,6 +13,9 @@
 //!
 //! Hermetic: sandbox tempdirs, no network beyond 127.0.0.1:0, the
 //! prompt submits use `resume: false` so no model turn is needed.
+// G-455: serde_json preserve_order grew HookError past clippy's
+// result_large_err threshold; the test closures return it by value.
+#![allow(clippy::result_large_err)]
 
 use std::sync::Arc;
 

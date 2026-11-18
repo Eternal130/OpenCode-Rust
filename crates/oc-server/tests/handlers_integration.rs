@@ -7,6 +7,9 @@
 //! ask/reply + 404, form lifecycle (ownership 404 / invalid answer 400 /
 //! settled 409), export/import round-trip + duplicate 409, shell/fs/vcs
 //! surfaces, PTY REST + connect-token, catalog envelopes, server info/pair.
+// G-455: serde_json preserve_order grew HookError past clippy's
+// result_large_err threshold; the closure returns it by value.
+#![allow(clippy::result_large_err)]
 
 use std::sync::Arc;
 

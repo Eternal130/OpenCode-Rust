@@ -9,6 +9,7 @@
 //! observes/rewrites the answer. Hermetic: an oc-ai `MockTransport`
 //! (no network), an in-memory row, native hooks (the guest bridge rides
 //! the same registry dispatch).
+#![allow(clippy::result_large_err)] // G-455: preserve_order grew HookError past the threshold
 
 use std::sync::Arc;
 

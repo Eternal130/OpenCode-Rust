@@ -851,7 +851,7 @@ impl SessionModelRequest {
                 })
                 .collect();
             // G-455 — the ref's tool table is name-sorted definitions with
-            // the CodeMode `execute` tool APPENDED last (tool.ts:225-241;
+            // the `CodeMode` `execute` tool APPENDED last (tool.ts:225-241;
             // observed in every ref cassette). The hooked map re-sorts by
             // name, so re-append `execute` after the sort to restore the
             // ref order.

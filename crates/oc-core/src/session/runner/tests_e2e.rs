@@ -481,7 +481,7 @@ fn canonicalize_numbers(value: &mut Value) {
 }
 
 /// G-455 — the ENGINE path (select → generate → prepare): the streamed
-/// request's tool table is name-sorted with the CodeMode `execute` tool
+/// request's tool table is name-sorted with the `CodeMode` `execute` tool
 /// APPENDED LAST (ref tool.ts:225-241). Pins the ordering end-to-end
 /// through the real runner (the wire arrays keep element order in the
 /// digest, so this is a convergence prerequisite).
