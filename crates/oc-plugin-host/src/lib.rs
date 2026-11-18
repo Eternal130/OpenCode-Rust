@@ -81,6 +81,21 @@
 //! compares digests and reloads changed plugins, refreshing the
 //! registration snapshot.
 
+/// G-454 — non-panicking `eprintln!` for plugin-host tasks: the
+/// detached daemon's stderr pipe loses its reader once the spawning
+/// process exits, and `eprintln!` PANICS on the failed write, killing
+/// the task. On the guest-stdout reader task that froze the whole RPC
+/// bridge (a guest `console.error` mid-hook wedged every later
+/// dispatch — the superpowers send-block). Use everywhere in this
+/// crate's tasks.
+#[macro_export]
+macro_rules! stderrln {
+    ($($arg:tt)*) => {{
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr().lock(), $($arg)*);
+    }};
+}
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering as AtomicOrdering;
@@ -342,7 +357,7 @@ impl PluginHost {
         if let Some(runtime) = bun::resolve_runtime() {
             Self { facade: None, runtime: Some(runtime) }
         } else {
-            eprintln!(
+            stderrln!(
                 "opencode plugin-host: neither bun nor node found (bun: OC_PLUGIN_BUN, ~/.cache/opencode-rust/bin, /usr/local/bin/bun, PATH, ~/.bun/bin/bun; node: OC_PLUGIN_NODE, PATH); plugin subsystem disabled"
             );
             Self { facade: None, runtime: None }
@@ -385,7 +400,7 @@ impl PluginHost {
         let runtime = match self.runtime.clone() {
             Some(runtime) => runtime,
             None if entries.is_empty() => {
-                eprintln!(
+                stderrln!(
                     "opencode plugin-host: start requested but no guest runtime (bun/node) is present; staying disabled"
                 );
                 return self;
@@ -399,11 +414,11 @@ impl PluginHost {
         // boot is diagnosable from the log alone (path only; no probe
         // spawn for a version string).
         if let bun::GuestRuntime::Node(path) = &runtime {
-            eprintln!("opencode plugin-host: using the node runtime track ({})", path.display());
+            stderrln!("opencode plugin-host: using the node runtime track ({})", path.display());
         }
         let sandbox = sandbox_dir();
         if let Err(error) = host_js::materialize(&sandbox, HOST_JS) {
-            eprintln!(
+            stderrln!(
                 "opencode plugin-host: cannot materialize host.js into {}: {error}; plugin subsystem disabled",
                 sandbox.display()
             );
@@ -502,13 +517,13 @@ impl PluginHost {
         match oc_util::bunman::ensure() {
             Ok(bun) => {
                 self.runtime = Some(bun::GuestRuntime::Bun(bun.clone()));
-                eprintln!(
+                stderrln!(
                     "opencode plugin-host: plugins requested without a system bun or node; managed bun bootstrapped"
                 );
                 Some(bun)
             }
             Err(error) => {
-                eprintln!(
+                stderrln!(
                     "opencode plugin-host: bun bootstrap failed ({error}); plugin subsystem disabled. Install bun or node, or set {}=1 to silence this, then retry.",
                     oc_util::bunman::DISABLE_DOWNLOAD_ENV
                 );

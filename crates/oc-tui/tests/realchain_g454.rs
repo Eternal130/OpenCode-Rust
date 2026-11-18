@@ -53,6 +53,14 @@ fn run(tag: &str, only: Option<&str>, writable: bool) -> (bool, u64, Vec<String>
     let gateway = Gateway::spawn_paced(&format!("g454-{tag}"), None, &default_pace());
     let rust = sandbox(&format!("g454-{tag}"), gateway.port);
     let specs = stage_plugins_g454(&rust, false, only, writable);
+    // A PLUGIN_SPECS rename (or a filtered-out registry name) would
+    // stage NOTHING and still boot plugin-less — an empty-staging
+    // hollow green. The single-select cases must stage exactly one.
+    if only.is_some() {
+        assert_eq!(specs.len(), 1, "G454 {tag}: single-select staging staged {specs:?}");
+    } else {
+        assert!(!specs.is_empty(), "G454 {tag}: staging staged no plugins");
+    }
     let spec_refs: Vec<&str> = specs.iter().map(String::as_str).collect();
     rust.write_config_ext(&[], "replay/claude-opus-4-7", &spec_refs);
     let server = service_start(&rust);

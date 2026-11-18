@@ -35,19 +35,6 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 
-/// G-454 — non-panicking `eprintln!` for plugin-host tasks: the
-/// detached daemon's stderr pipe loses its reader once the spawning
-/// process exits, and `eprintln!` PANICS on the failed write, killing
-/// the task. On the guest-stdout reader task that froze the whole RPC
-/// bridge (a guest `console.error` mid-hook wedged every later
-/// dispatch — the superpowers send-block). Use everywhere in this
-/// crate's tasks.
-macro_rules! stderrln {
-    ($($arg:tt)*) => {{
-        use std::io::Write;
-        let _ = writeln!(std::io::stderr().lock(), $($arg)*);
-    }};
-}
 
 use crate::context::{
     Bridge, HostState, PermissionPort, SessionPort, ToolPort, CODEMODE_METHODS, GENERATE_METHODS,
