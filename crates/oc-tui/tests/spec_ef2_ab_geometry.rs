@@ -221,7 +221,11 @@ fn a3_wide_char_corpus_renders() {
             }
             let grid = driver.grid_now();
             let all: String = (0..grid.rows).map(|y| grid.row_text(y)).collect();
-            for needle in ["CJK支付宝接入", "Café", "👨‍👩‍👧‍👦", "🇺🇸"] {
+            // G-452: ZWJ families render as head + first ZWJ (the
+            // ref emission shape — full families never reach the ref
+            // terminal); flags/VS16/CJK/NFD unchanged.
+            for needle in ["CJK支付宝接入", "Café", "\u{1F468}\u{200D}", "\u{1F1FA}\u{1F1F8}"]
+            {
                 let norm: String = all.chars().filter(|c| *c != ' ').collect();
                 let target: String = needle.chars().filter(|c| *c != ' ').collect();
                 assert!(

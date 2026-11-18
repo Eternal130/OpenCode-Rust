@@ -455,3 +455,62 @@ fn transcript_openlink_rows_drive_osc8_under_the_probe_gate() {
         "probe on: the label wraps: {wrapped:?}"
     );
 }
+
+// -- G-452: the emoji emission shape through the full paint→emit chain --
+
+/// G-452 — the `w13-g-emoji` payload through the REAL pipeline
+/// (flatten → paint_placed → OpentuiEmitter → vt100) reproduces the
+/// observed ref grid byte shape: ZWJ families emit head + first ZWJ,
+/// skin-tone modifiers are dropped, VS16 stays (and its cluster pads
+/// to width 2 — the double space after `❤️` and `🏳️‍`), regional
+/// pairs round-trip. Anchors: vendored native shaper
+/// `utf8.zig:438-459` (ZWJ/VS16 zero-width, EAW wide = 2) and the
+/// `w13-g-emoji-settled` ref dump the adjudication registered.
+#[test]
+fn g452_emoji_emission_shape_matches_ref_grid() {
+    use crate::layout::{Placed, PlacedLine};
+    use crate::render::paint::paint_placed;
+    use crate::style::Style;
+
+    let payload = concat!(
+        "Family: \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466} ",
+        "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}\u{200D}\u{1F466} ",
+        "\u{1F469}\u{200D}\u{1F469}\u{200D}\u{1F467} ",
+        "handshake: \u{1F91D}\u{1F3FD} ",
+        "thumbs: \u{1F44D}\u{1F3FD}\u{1F44D}\u{1F3FF} ",
+        "heart: \u{2764}\u{FE0F} ",
+        "flags: \u{1F3F3}\u{FE0F}\u{200D}\u{1F308} \u{1F1FA}\u{1F1F3} end",
+    );
+    let placed = vec![Placed {
+        x: 0,
+        y: 0,
+        width: 80,
+        lines: vec![PlacedLine::plain(payload.to_owned(), Style::new())],
+        tag: None,
+    }];
+    let frame = paint_placed(&placed, (80, 3), Style::new());
+    let mut emitter = OpentuiEmitter::new(80, 3);
+    emitter.cursor().set_position(1, 1, false);
+    let mut sink = Vec::new();
+    emitter.emit(&mut sink, &frame).expect("emit");
+    let mut parser = vt100::Parser::new(3, 80, 0);
+    parser.process(&sink);
+    let screen = parser.screen();
+    let row: String = screen.rows(0, 80).next().unwrap_or_default().trim_end().to_owned();
+    // The observed ref row (w13-g-emoji-settled, G-452 registry entry):
+    // heads + ZWJ, modifiers gone, VS16 kept, VS16 clusters padded to
+    // their width-2 extent (the double spaces).
+    let expected = concat!(
+        "Family: \u{1F468}\u{200D} \u{1F468}\u{200D} \u{1F469}\u{200D} ",
+        "handshake: \u{1F91D} ",
+        "thumbs: \u{1F44D}\u{1F44D} ",
+        "heart: \u{2764}\u{FE0F}  ",
+        "flags: \u{1F3F3}\u{FE0F}\u{200D}  \u{1F1FA}\u{1F1F3} end",
+    );
+    assert_eq!(
+        row,
+        expected.trim_end(),
+        "G-452 emoji emission shape diverged; bytes={:?}",
+        String::from_utf8_lossy(&sink)
+    );
+}
