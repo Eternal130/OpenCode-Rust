@@ -2874,3 +2874,34 @@ async fn invalid_stream_event_carries_the_custom_provider_route_label() {
     let error = step(state, "not json").unwrap_err();
     assert_eq!(error.message(), "Invalid replay/anthropic-messages stream event");
 }
+
+/// G-455 — the body preserves the request's tool ORDER verbatim
+/// (name-sorted definitions + `execute` appended last, ref
+/// tool.ts:225-241): nothing between `request.tools` and the wire
+/// array may re-sort.
+#[test]
+fn body_preserves_request_tool_order() {
+    let route = crate::test_support::echo_route_named("anthropic-messages");
+    let model = crate::schema::LanguageModel::new("replay/m", "replay", route);
+    let mut request = crate::schema::messages::LLMRequest::new(model);
+    request.tools = ["edit", "execute", "glob", "write"]
+        .into_iter()
+        .map(|name| {
+            crate::schema::messages::ToolEntry::Definition(
+                crate::schema::messages::ToolDefinition::new(
+                    name.to_string(),
+                    "d".to_string(),
+                    serde_json::json!({ "type": "object", "properties": {} }),
+                ),
+            )
+        })
+        .collect();
+    let body = super::body_from_request(&request).expect("body");
+    let names: Vec<&str> = body["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("name"))
+        .collect();
+    assert_eq!(names, vec!["edit", "execute", "glob", "write"], "wire order verbatim");
+}

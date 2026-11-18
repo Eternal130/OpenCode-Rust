@@ -1852,7 +1852,11 @@ impl Engine {
                 let directory = location.as_path().to_path_buf();
                 let project_directory = worktree.clone();
                 let is_git = project.vcs.is_some();
-                let tmp = self.data_root.clone();
+                // G-455③ — ref `global.tmp` = `os.tmpdir() + "/" + app`
+                // (util/global-roots.ts:17 — the TMPDIR-rooted app dir,
+                // NOT the data root; the env instruction's "Prefer …"
+                // line pins it in every ref cassette).
+                let tmp = std::env::temp_dir().join("opencode");
                 Arc::new(move || {
                     crate::session::runner::context::environment_block(
                         &directory.to_string_lossy(),

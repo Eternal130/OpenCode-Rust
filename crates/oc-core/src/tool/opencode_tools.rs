@@ -649,7 +649,7 @@ pub fn models_output_schema() -> serde_json::Value {
                     "additionalProperties": false
                 }
             },
-            "total": { "type": "number", "description": "Number of matching models across all pages." },
+            "total": { "type": "integer", "description": "Number of matching models across all pages." },
             "next": { "type": ["number", "null"], "description": "Offset of the next page, or null on the last page." }
         },
         "required": ["providers", "total", "next"],

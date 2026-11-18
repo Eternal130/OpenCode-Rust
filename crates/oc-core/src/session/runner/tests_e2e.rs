@@ -479,3 +479,42 @@ fn canonicalize_numbers(value: &mut Value) {
         _ => {}
     }
 }
+
+/// G-455 — the ENGINE path (select → generate → prepare): the streamed
+/// request's tool table is name-sorted with the CodeMode `execute` tool
+/// APPENDED LAST (ref tool.ts:225-241). Pins the ordering end-to-end
+/// through the real runner (the wire arrays keep element order in the
+/// digest, so this is a convergence prerequisite).
+#[tokio::test]
+async fn runner_e2e_execute_tool_appends_last_on_the_streamed_request() {
+    let llm = oc_ai::testing::TestLlm::new();
+    llm.always(oc_ai::testing::text("ok"));
+    let harness = harness_with(llm).await;
+    for name in ["write", "edit", "glob"] {
+        harness.tools.register(crate::location::ToolRegistration::new(
+            name,
+            format!("{name} tool"),
+            serde_json::json!({ "type": "object", "properties": {} }),
+        ));
+    }
+    harness.tools.register(crate::tool::codemode::execute_registration());
+    harness.create_session().await;
+    harness.admit_prompt("msg_ord_1", "hi").await;
+    harness.execution.resume(harness.session_id().as_str()).await.unwrap();
+    let requests = harness.llm.as_ref().expect("scripted harness").0.requests();
+    let names: Vec<String> = requests
+        .first()
+        .expect("one request")
+        .tools
+        .iter()
+        .filter_map(|entry| match entry {
+            oc_ai::schema::messages::ToolEntry::Definition(tool) => Some(tool.name.clone()),
+            oc_ai::schema::messages::ToolEntry::Namespace(_) => None,
+        })
+        .collect();
+    assert!(
+        names.last().is_some_and(|last| last == "execute"),
+        "execute must append last, got {names:?}"
+    );
+    assert!(names.contains(&"edit".to_owned()) && names.contains(&"write".to_owned()));
+}

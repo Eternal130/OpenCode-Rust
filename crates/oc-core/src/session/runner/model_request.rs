@@ -864,6 +864,20 @@ impl SessionModelRequest {
                     entries.push(tail);
                 }
             }
+            if std::env::var("OC_TUI_DEBUG").is_ok() {
+                eprintln!(
+                    "[model_request] tool order: {:?}",
+                    entries
+                        .iter()
+                        .filter_map(|entry| match entry {
+                            oc_ai::schema::messages::ToolEntry::Definition(tool) => {
+                                Some(tool.name.as_str())
+                            }
+                            oc_ai::schema::messages::ToolEntry::Namespace(_) => None,
+                        })
+                        .collect::<Vec<_>>()
+                );
+            }
             entries
         };
         request.tool_choice = input.tool_choice.clone();
@@ -1462,6 +1476,43 @@ mod hook_dispatch_tests {
             web_socket: false,
             input_tokens: None,
         }
+    }
+
+    /// G-455 — the prepared request's tool table is name-sorted with the
+    /// CodeMode `execute` tool APPENDED LAST (ref tool.ts:225-241; every
+    /// ref cassette pins the order).
+    #[tokio::test]
+    async fn primary_request_appends_execute_last() {
+        let hooks = Arc::new(crate::hooks::HookRegistry::new());
+        let tools = Arc::new(crate::location::ToolRegistryState::new());
+        tools.register(crate::location::ToolRegistration::new(
+            "write",
+            "w",
+            serde_json::json!({ "type": "object", "properties": {} }),
+        ));
+        tools.register(crate::tool::codemode::execute_registration());
+        tools.register(crate::location::ToolRegistration::new(
+            "edit",
+            "e",
+            serde_json::json!({ "type": "object", "properties": {} }),
+        ));
+        let snapshot = tools.snapshot(None);
+        let service = SessionModelRequest::new(hooks, tools, AppMetadata::default());
+        let model = resolved();
+        let mut request_input = input(&model, vec![Message::user("hello")]);
+        request_input.tools = Some(snapshot);
+        let prepared =
+            service.prepare(RequestKind::Primary, request_input).await.expect("primary prepare");
+        let names: Vec<String> = prepared
+            .request
+            .tools
+            .iter()
+            .filter_map(|entry| match entry {
+                oc_ai::schema::messages::ToolEntry::Definition(tool) => Some(tool.name.clone()),
+                oc_ai::schema::messages::ToolEntry::Namespace(_) => None,
+            })
+            .collect();
+        assert_eq!(names, vec!["edit", "write", "execute"], "execute appends last");
     }
 
     #[tokio::test]
