@@ -2129,6 +2129,9 @@ fn merge_usage(
 #[derive(Debug, Clone)]
 pub struct ParserState {
     provider: ProviderId,
+    /// G-453: `{providerID}/{routeID}` label for invalid-stream-event
+    /// errors (ref `route/client.ts:424`).
+    route_label: String,
     compactions: BTreeMap<String, Option<String>>,
     provider_metadata_key: String,
     tools: tool_stream::State,
@@ -2146,12 +2149,18 @@ struct PendingFinish {
     provider_metadata: Option<ProviderMetadata>,
 }
 
-fn invalid_stream_event_message() -> String {
-    "Invalid anthropic/anthropic-messages stream event".to_string()
+/// G-453: the invalid-stream-event label is the ROUTE label
+/// (`{providerID}/{routeID}` — ref `route/client.ts:424,362-371`), so a
+/// custom provider id (e.g. the rig's `replay`) surfaces as
+/// `Invalid replay/anthropic-messages stream event` like the ref
+/// transport-level decode. Kept as a helper so the shape checks stay
+/// one-liners.
+fn invalid_stream_event_message(route_label: &str) -> String {
+    format!("Invalid {route_label} stream event")
 }
 
-fn invalid_stream_event(value: &Value) -> AiError {
-    let mut error = event_error(ADAPTER, invalid_stream_event_message());
+fn invalid_stream_event(value: &Value, route_label: &str) -> AiError {
+    let mut error = event_error(ADAPTER, invalid_stream_event_message(route_label));
     if let AiErrorReason::InvalidProviderOutput { fields, .. } = &mut error.reason {
         fields.body = Some(encode_json(value));
     }
@@ -2162,112 +2171,115 @@ fn invalid_stream_event(value: &Value) -> AiError {
 
 /// `Schema.optional(Schema.String)`: absent ok; `null` fails like any
 /// non-string.
-fn check_optional_string(value: Option<&Value>) -> Result<(), AiError> {
+fn check_optional_string(value: Option<&Value>, route_label: &str) -> Result<(), AiError> {
     match value {
         None => Ok(()),
         Some(Value::String(_)) => Ok(()),
-        Some(_) => Err(event_error(ADAPTER, invalid_stream_event_message())),
+        Some(_) => Err(event_error(ADAPTER, invalid_stream_event_message(route_label))),
     }
 }
 
 /// `optionalNull(String)`.
-fn check_optional_null_string(value: Option<&Value>) -> Result<(), AiError> {
+fn check_optional_null_string(value: Option<&Value>, route_label: &str) -> Result<(), AiError> {
     match value {
         None | Some(Value::Null) => Ok(()),
         Some(Value::String(_)) => Ok(()),
-        Some(_) => Err(event_error(ADAPTER, invalid_stream_event_message())),
+        Some(_) => Err(event_error(ADAPTER, invalid_stream_event_message(route_label))),
     }
 }
 
 /// `Schema.optional(Schema.Number)`.
-fn check_optional_number(value: Option<&Value>) -> Result<(), AiError> {
+fn check_optional_number(value: Option<&Value>, route_label: &str) -> Result<(), AiError> {
     match value {
         None => Ok(()),
         Some(v) if v.is_number() => Ok(()),
-        Some(_) => Err(event_error(ADAPTER, invalid_stream_event_message())),
+        Some(_) => Err(event_error(ADAPTER, invalid_stream_event_message(route_label))),
     }
 }
 
 /// One usage record (port of `AnthropicIterationUsage` + `AnthropicUsage`).
-fn check_usage(value: &Value) -> Result<(), AiError> {
+fn check_usage(value: &Value, route_label: &str) -> Result<(), AiError> {
     let Some(object) = value.as_object() else {
-        return Err(event_error(ADAPTER, invalid_stream_event_message()));
+        return Err(event_error(ADAPTER, invalid_stream_event_message(route_label)));
     };
     for field in ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"] {
-        check_optional_null_string_number(object.get(field))?;
+        check_optional_null_string_number(object.get(field), route_label)?;
     }
-    check_optional_number(object.get("output_tokens"))?;
+    check_optional_number(object.get("output_tokens"), route_label)?;
     if let Some(server_tool_use) = object.get("server_tool_use") {
         if !server_tool_use.is_null() {
             let Some(server_object) = server_tool_use.as_object() else {
-                return Err(event_error(ADAPTER, invalid_stream_event_message()));
+                return Err(event_error(ADAPTER, invalid_stream_event_message(route_label)));
             };
-            check_optional_number(server_object.get("web_search_requests"))?;
+            check_optional_number(server_object.get("web_search_requests"), route_label)?;
         }
     }
     if let Some(details) = object.get("output_tokens_details") {
         if !details.is_null() {
             let Some(details_object) = details.as_object() else {
-                return Err(event_error(ADAPTER, invalid_stream_event_message()));
+                return Err(event_error(ADAPTER, invalid_stream_event_message(route_label)));
             };
-            check_optional_number(details_object.get("thinking_tokens"))?;
+            check_optional_number(details_object.get("thinking_tokens"), route_label)?;
         }
     }
     if let Some(iterations) = object.get("iterations") {
         let Value::Array(items) = iterations else {
-            return Err(event_error(ADAPTER, invalid_stream_event_message()));
+            return Err(event_error(ADAPTER, invalid_stream_event_message(route_label)));
         };
         for item in items {
-            check_usage(item)?;
+            check_usage(item, route_label)?;
         }
     }
     Ok(())
 }
 
 /// `optionalNull(Number)`.
-fn check_optional_null_string_number(value: Option<&Value>) -> Result<(), AiError> {
+fn check_optional_null_string_number(
+    value: Option<&Value>,
+    route_label: &str,
+) -> Result<(), AiError> {
     match value {
         None | Some(Value::Null) => Ok(()),
         Some(v) if v.is_number() => Ok(()),
-        Some(_) => Err(event_error(ADAPTER, invalid_stream_event_message())),
+        Some(_) => Err(event_error(ADAPTER, invalid_stream_event_message(route_label))),
     }
 }
 
 /// `AnthropicStreamBlock` (`StructWithRest`: unknown fields allowed).
-fn check_stream_block(value: &Value) -> Result<(), AiError> {
+fn check_stream_block(value: &Value, route_label: &str) -> Result<(), AiError> {
     let Some(object) = value.as_object() else {
-        return Err(event_error(ADAPTER, invalid_stream_event_message()));
+        return Err(event_error(ADAPTER, invalid_stream_event_message(route_label)));
     };
     match object.get("type") {
         Some(Value::String(_)) => {}
-        _ => return Err(event_error(ADAPTER, invalid_stream_event_message())),
+        _ => return Err(event_error(ADAPTER, invalid_stream_event_message(route_label))),
     }
     for field in ["id", "name", "text", "thinking", "signature", "data", "tool_use_id"] {
-        check_optional_string(object.get(field))?;
+        check_optional_string(object.get(field), route_label)?;
     }
     Ok(())
 }
 
 /// `AnthropicStreamDelta`.
-fn check_stream_delta(value: &Value) -> Result<(), AiError> {
+fn check_stream_delta(value: &Value, route_label: &str) -> Result<(), AiError> {
     let Some(object) = value.as_object() else {
-        return Err(event_error(ADAPTER, invalid_stream_event_message()));
+        return Err(event_error(ADAPTER, invalid_stream_event_message(route_label)));
     };
-    check_optional_null_string(object.get("content"))?;
-    check_optional_string(object.get("type"))?;
+    check_optional_null_string(object.get("content"), route_label)?;
+    check_optional_string(object.get("type"), route_label)?;
     for field in ["text", "thinking", "partial_json", "signature"] {
-        check_optional_string(object.get(field))?;
+        check_optional_string(object.get(field), route_label)?;
     }
     for field in ["stop_reason", "stop_sequence"] {
-        check_optional_null_string(object.get(field))?;
+        check_optional_null_string(object.get(field), route_label)?;
     }
     if let Some(details) = object.get("stop_details") {
         if !details.is_null() {
             let Some(details_object) = details.as_object() else {
-                return Err(event_error(ADAPTER, invalid_stream_event_message()));
+                return Err(event_error(ADAPTER, invalid_stream_event_message(route_label)));
             };
             for field in ["category", "explanation"] {
-                check_optional_null_string(details_object.get(field))?;
+                check_optional_null_string(details_object.get(field), route_label)?;
             }
         }
     }
@@ -2275,37 +2287,38 @@ fn check_stream_delta(value: &Value) -> Result<(), AiError> {
 }
 
 /// Top-level `AnthropicEvent` decode + validation.
-fn decode_event(frame: &str) -> Result<Value, AiError> {
-    let value: Value =
-        decode_json(frame).map_err(|_| event_error(ADAPTER, invalid_stream_event_message()))?;
+fn decode_event(frame: &str, route_label: &str) -> Result<Value, AiError> {
+    let value: Value = decode_json(frame)
+        .map_err(|_| event_error(ADAPTER, invalid_stream_event_message(route_label)))?;
     if !value.is_object() {
-        return Err(invalid_stream_event(&value));
+        return Err(invalid_stream_event(&value, route_label));
     }
     let object = value.as_object().expect("checked record");
     match object.get("type") {
         Some(Value::String(_)) => {}
-        _ => return Err(invalid_stream_event(&value)),
+        _ => return Err(invalid_stream_event(&value, route_label)),
     }
-    check_optional_number(object.get("index")).map_err(|_| invalid_stream_event(&value))?;
+    check_optional_number(object.get("index"), route_label)
+        .map_err(|_| invalid_stream_event(&value, route_label))?;
     if let Some(message) = object.get("message") {
         let Some(message_object) = message.as_object() else {
-            return Err(invalid_stream_event(&value));
+            return Err(invalid_stream_event(&value, route_label));
         };
         if let Some(usage) = message_object.get("usage") {
-            check_usage(usage).map_err(|_| invalid_stream_event(&value))?;
+            check_usage(usage, route_label).map_err(|_| invalid_stream_event(&value, route_label))?;
         }
     }
     if let Some(usage) = object.get("usage") {
-        check_usage(usage).map_err(|_| invalid_stream_event(&value))?;
+        check_usage(usage, route_label).map_err(|_| invalid_stream_event(&value, route_label))?;
     }
     if let Some(error) = object.get("error") {
         let Some(error_object) = error.as_object() else {
-            return Err(invalid_stream_event(&value));
+            return Err(invalid_stream_event(&value, route_label));
         };
-        check_optional_string(error_object.get("type"))
-            .map_err(|_| invalid_stream_event(&value))?;
-        check_optional_string(error_object.get("message"))
-            .map_err(|_| invalid_stream_event(&value))?;
+        check_optional_string(error_object.get("type"), route_label)
+            .map_err(|_| invalid_stream_event(&value, route_label))?;
+        check_optional_string(error_object.get("message"), route_label)
+            .map_err(|_| invalid_stream_event(&value, route_label))?;
     }
     Ok(value)
 }
@@ -2784,22 +2797,23 @@ fn is_server_tool_result_type(block_type: &str) -> bool {
 /// One step of the parser state machine (port of `step`): translate one
 /// decoded frame into emitted events plus the next state.
 pub fn step(state: ParserState, frame: &str) -> Result<(ParserState, Vec<LLMEvent>), AiError> {
-    let event = decode_event(frame)?;
+    let route_label = state.route_label.clone();
+    let event = decode_event(frame, &route_label)?;
     let event_type = event.get("type").and_then(Value::as_str).unwrap_or_default().to_string();
     if !SSE_EVENT_NAMES.contains(&event_type.as_str()) {
         return Ok((state, Vec::new()));
     }
     if event_type != "content_block_start" {
         if let Some(content_block) = event.get("content_block") {
-            if check_stream_block(content_block).is_err() {
-                return Err(invalid_stream_event(&event));
+            if check_stream_block(content_block, &route_label).is_err() {
+                return Err(invalid_stream_event(&event, &route_label));
             }
         }
     }
     if event_type != "content_block_delta" {
         if let Some(delta) = event.get("delta") {
-            if check_stream_delta(delta).is_err() {
-                return Err(invalid_stream_event(&event));
+            if check_stream_delta(delta, &route_label).is_err() {
+                return Err(invalid_stream_event(&event, &route_label));
             }
         }
     }
@@ -2807,10 +2821,10 @@ pub fn step(state: ParserState, frame: &str) -> Result<(ParserState, Vec<LLMEven
         "message_start" => Ok(on_message_start(&state, &event)),
         "content_block_start" => {
             let Some(content_block) = event.get("content_block") else {
-                return Err(invalid_stream_event(&event));
+                return Err(invalid_stream_event(&event, &route_label));
             };
             if !content_block.is_object() {
-                return Err(invalid_stream_event(&event));
+                return Err(invalid_stream_event(&event, &route_label));
             }
             let block_type = content_block.get("type").and_then(Value::as_str).unwrap_or_default();
             if block_type == "compaction" {
@@ -2818,10 +2832,10 @@ pub fn step(state: ParserState, frame: &str) -> Result<(ParserState, Vec<LLMEven
                 // required.
                 match content_block.get("content") {
                     Some(Value::String(_) | Value::Null) => {}
-                    _ => return Err(invalid_stream_event(&event)),
+                    _ => return Err(invalid_stream_event(&event, &route_label)),
                 }
                 let Some(index) = stream_index(&event) else {
-                    return Err(invalid_stream_event(&event));
+                    return Err(invalid_stream_event(&event, &route_label));
                 };
                 let mut compactions = state.compactions.clone();
                 compactions.insert(
@@ -2834,8 +2848,8 @@ pub fn step(state: ParserState, frame: &str) -> Result<(ParserState, Vec<LLMEven
             {
                 return Ok((state, Vec::new()));
             }
-            if check_stream_block(content_block).is_err() {
-                return Err(invalid_stream_event(&event));
+            if check_stream_block(content_block, &route_label).is_err() {
+                return Err(invalid_stream_event(&event, &route_label));
             }
             if block_type == "tool_use" || block_type == "server_tool_use" {
                 let Some(index) = stream_index(&event) else {
@@ -2855,28 +2869,28 @@ pub fn step(state: ParserState, frame: &str) -> Result<(ParserState, Vec<LLMEven
         }
         "content_block_delta" => {
             let Some(delta) = event.get("delta") else {
-                return Err(invalid_stream_event(&event));
+                return Err(invalid_stream_event(&event, &route_label));
             };
             if !delta.is_object() {
-                return Err(invalid_stream_event(&event));
+                return Err(invalid_stream_event(&event, &route_label));
             }
             if let Some(delta_type) = delta.get("type").and_then(Value::as_str) {
                 if !STREAM_DELTA_TYPES.contains(&delta_type) {
                     return Ok((state, Vec::new()));
                 }
             }
-            if check_stream_delta(delta).is_err() {
-                return Err(invalid_stream_event(&event));
+            if check_stream_delta(delta, &route_label).is_err() {
+                return Err(invalid_stream_event(&event, &route_label));
             }
             on_content_block_delta(&state, &event)
         }
         "content_block_stop" => on_content_block_stop(&state, &event),
         "message_delta" => {
             let Some(delta) = event.get("delta") else {
-                return Err(invalid_stream_event(&event));
+                return Err(invalid_stream_event(&event, &route_label));
             };
-            if check_stream_delta(delta).is_err() {
-                return Err(invalid_stream_event(&event));
+            if check_stream_delta(delta, &route_label).is_err() {
+                return Err(invalid_stream_event(&event, &route_label));
             }
             Ok(on_message_delta(&state, &event))
         }
@@ -2905,6 +2919,7 @@ impl Protocol for AnthropicMessages {
     fn initial(&self, request: &LLMRequest) -> ProtocolState {
         Box::new(ParserState {
             provider: request.model.provider.clone(),
+            route_label: format!("{}/{}", request.model.provider.0, request.model.route.id),
             compactions: BTreeMap::new(),
             provider_metadata_key: request
                 .model
