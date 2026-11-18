@@ -419,7 +419,13 @@ fn parent_up_returns() {
         30,
         |_, _| {},
         |h| {
-            wait_for_composer(h)?;
+            // The child session REPLACES the composer with the subagents
+            // panel by design (picker_live: parentID ⇒ panel mounts,
+            // index.tsx:1451) — the shared boot-echo probe races that
+            // mount (the historical CI flake, bee77074). Wait for the
+            // panel's steady state instead; the up-arrow probe below
+            // needs no composer.
+            wait_text(h, "No active subagents", Duration::from_secs(15))?;
             wait_text(h, "child-only-marker", Duration::from_secs(10))?;
             // `up` in the child: the parent's transcript paints (the
             // parent tab opens; the route's content column re-renders).
