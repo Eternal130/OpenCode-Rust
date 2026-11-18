@@ -2860,3 +2860,17 @@ fn breakpoint_warning_is_gated_by_log_level_and_print_logs() {
         None => std::env::remove_var("OPENCODE_PRINT_LOGS"),
     }
 }
+
+/// G-453 — the invalid-stream-event label is the ROUTE label
+/// (`{providerID}/{routeID}`, ref `route/client.ts:424`), so a custom
+/// provider id surfaces as `Invalid replay/anthropic-messages …` on
+/// both engines (the W13 empty-stream parity surface).
+#[tokio::test]
+async fn invalid_stream_event_carries_the_custom_provider_route_label() {
+    let request = base_request(model_of("claude-sonnet-4-5"));
+    let state = AnthropicMessages.initial(&request);
+    let mut state = *state.downcast::<ParserState>().expect("parser state");
+    state.route_label = "replay/anthropic-messages".into();
+    let error = step(state, "not json").unwrap_err();
+    assert_eq!(error.message(), "Invalid replay/anthropic-messages stream event");
+}
