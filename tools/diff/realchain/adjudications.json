@@ -283,6 +283,26 @@
    "adjudicated_by": "W13 lane",
    "adjudicated_at": "2026-11-18",
    "last_observed": "2026-11-18"
+  },
+  {
+   "id": "s3-palette-paint-race-under-load",
+   "scenario_pattern": "s3",
+   "state_pattern": "*",
+   "shape": {
+    "kind": "substring",
+    "ref_contains": [
+     "claude-opus-4-7"
+    ],
+    "rust_missing": [
+     "claude-opus-4-7"
+    ]
+   },
+   "classification": "framework-diff",
+   "justification": "Load-sensitive palette paint race (controller adjudication 2026-11-18): under the full concurrent battery the rust palette rows (selection dot line / View-all footer) paint after the capture instant; isolated rerun shows divergences:0. Same family as t9-7-plugin-mcp-settle-race. Direction-specific (ref has rows, rust blank); a flipped shape would surface unadjudicated.",
+   "g_ref": "S3 CI-slower-runner lesson (W9 era) + this incident",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-18",
+   "last_observed": "2026-11-18"
   }
  ]
 }
