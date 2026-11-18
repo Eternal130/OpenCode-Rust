@@ -40,8 +40,8 @@
 | 发消息→回复+标题 | covered | S2/t9_3 |
 | 工具环（bash/edit/read） | covered | tl_tool_loop |
 | 工具族其余（write/glob/grep/task+genericToolSummary/InlineToolRow/patch-diff/dialog-execute 全形状） | GAP※ | A：工具形状族有全套 ref 锚 |
-| 权限对话框（full：once/always/reject+理由输入；**mini 三阶段**） | GAP※ | permission.tsx:224-244, mini/permission.shared.ts |
-| 权限配置分流（ruleset 预授权 vs 运行时询问） | GAP | config permissions（B） |
+| 权限对话框（full：once/always/reject+理由输入；**mini 三阶段**） | 部分 | full 三分支 covered（W13 `w13-perm-{once,always,reject}` 双端真链路：去预授权、键驱 once/always/reject，导出+裁决）；mini 三阶段仍 GAP※（permission.tsx:224-244, mini/permission.shared.ts）；reject 理由输入（子会话阶段）未开 |
+| 权限配置分流（ruleset 预授权 vs 运行时询问） | 部分 | tl（预授权侧）+ W13 perm 族（询问侧）双臂 covered；ruleset 粒度矩阵仍 GAP |
 | 中断（流中 ESC） | covered | P3 |
 | 慢 TTFT/慢 TPS | covered | P1/P2 |
 | 长会话多轮 | covered | P4-C |
@@ -88,7 +88,7 @@
 | palette 模型/命令 | covered | S3/S6 |
 | command-palette（ctrl+p 命令面板本体） | audit | A（与模型 palette 分列） |
 | 侧栏各宽度档 | 部分 | S5(160)/P4b(120)；80/320 缺 |
-| **插件 sections（omo-slim 等）** | GAP※ | **触发态存在**：home footer MCP/插件/版本 3 slot 宽度门控 64/80（A 订正）；会话态真机确认 |
+| **插件 sections（omo-slim 等）** | 部分 | **触发态 covered（W13 `w13-omo`）**：96 列（≥80 门控）+双端装载插件，home+session 双态导出；差异走裁决（在册 accepted-gap）；真机确认仍缺 |
 | tabs：拖排序/marquee/右键菜单/中键关/未读 | GAP※ | session-tabs.tsx:894-910,1652 |
 | tabs 竖排 rail+hover 控件 | GAP※ | session-tabs-rail.tsx |
 | TabContextMenu（重命名/复制ID/最近关闭） | GAP※ | session-tabs.tsx:372-420 |
@@ -141,7 +141,7 @@
 | 面 | 状态 | 锚/备注 |
 |---|---|---|
 | 会话存储/重启恢复 | covered | S4/t9_4 |
-| v2 数据迁移（凭据/会话/tabs/prefs；migration-overlay UI） | GAP※ | **G-445 根因族沙箱零覆盖**；A：有专用 UI 面可测 |
+| v2 数据迁移（凭据/会话/tabs/prefs；migration-overlay UI） | 部分 | **G-445 根因族沙箱 covered（W13 `w13-m1/m2/m3`）**：rig 预置 v2 形态 auth.json/db→rust 启动迁移→API 级断言+survey 导出（正常/幂等/坏行三变体）；migration-overlay UI 与 tabs/prefs 迁移面仍 GAP※ |
 | 首启 onboarding/无凭据认证引导流 | GAP※ | B+A |
 | 升级通知/安装生命周期 | GAP※ | update-notification/context（B+A） |
 | 多 channel 数据隔离 | audit | — |
@@ -165,9 +165,9 @@
 
 | 面 | 状态 | 锚/备注 |
 |---|---|---|
-| CJK/emoji 折行（ZWJ/VS16 宽=2） | GAP | composer 级有 golden（composer_cjk_input）；转录侧零 |
-| 超长单行折行/无折行 | GAP | — |
-| 空 assistant 消息 | GAP | — |
+| CJK/emoji 折行（ZWJ/VS16 宽=2） | covered | W13 `w13-g-cjk`/`w13-g-emoji` 转录侧双端（composer 级另有 golden composer_cjk_input） |
+| 超长单行折行/无折行 | covered | W13 `w13-g-longline`（800+ 字符无空格单行，双端） |
+| 空 assistant 消息 | covered | W13 `w13-g-empty`（SSE 空文本块，双端；两端引擎续跑形状差异走裁决） |
 | 超快 delta 批次（流节奏边界） | GAP | — |
 | 组合变音符/控制字符/内容中 ANSI 注入 | GAP | — |
 
@@ -228,6 +228,7 @@
 ## 维护规程
 
 - 每波收口：控制者核对台账——新 covered/新 GAP/关闭的 GAP；GAP 超两波未补=波计划显式说明。
+- **W13 执行波一（2026-11-18）**：按台账优先级补 covered 面——B 族权限对话框 full 三分支（w13-perm-*）、C 族插件 sections 触发态（w13-omo）、E 族 v2 迁移三变体（w13-m1/m2/m3）、G 族内容边界三行（w13-g-cjk/emoji/longline/empty）；两个登记修复——G-449（新建会话标题初值 "New session"）+ G-445 concern②（全新安装 bootstrap 跳过 legacy 凭据导入→auth.json 静默丢失）。新可测面随时入册。
 - 新可测面来源：用户真机报告（第一优先）、代码审读、上游 diff、复盘、审计轮。
 - 审计轮次记录：R1=A+B 双独立审计（2026-11-18，A 族级 20+面级 47、B ~28+G 整族、订正 7 处）；R2=控制者合并（本版）；R3=对抗性攻击（待执行）；此后每两波至少一轮对抗审计。
 - 优先级排序原则：用户真机已暴露>GAP※（有锚可建）>audit 定稿；族完整性优先（先补族的骨架场景再扩矩阵）。

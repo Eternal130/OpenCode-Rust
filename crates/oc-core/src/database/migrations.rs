@@ -567,6 +567,21 @@ pub fn apply(conn: &mut Connection, opts: &MigrationOptions) -> Result<ApplyRepo
         }
         tx.execute_batch(BOOTSTRAP_SQL)?;
         tx.execute_batch(MIGRATION_TABLE_SQL)?;
+        // The consolidated bootstrap schema already carries every SQL
+        // migration's effect, so the journal pre-write below is
+        // accurate for all of them — EXCEPT the one migration whose
+        // effect lives OUTSIDE the database: the legacy-credential
+        // import (`auth.json` → `credential` rows). W11 concern② /
+        // G-445 root-cause family: fresh install + an existing v2
+        // `auth.json` silently skipped the import, dropping the
+        // user's credentials. Run its body here so the journal
+        // markers only ever cover effects that actually happened. A
+        // `MigrationOptions` without `global_data` (in-memory/test
+        // opens) has no `auth.json` to read — skip, matching the
+        // ENOENT arm of the import itself.
+        if opts.global_data.is_some() {
+            import_legacy_credentials(tx, opts)?;
+        }
         for id in MIGRATION_IDS {
             tx.execute(
                 "INSERT INTO migration (id, time_completed) VALUES (?1, ?2)",

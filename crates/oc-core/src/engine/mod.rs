@@ -473,7 +473,13 @@ impl Engine {
         let db = Arc::new(
             Database::open_location(
                 crate::database::engine_location(&options.data_root),
-                crate::database::MigrationOptions::default(),
+                // G-445 concern②/W13: the engine's boot is the
+                // PRODUCTION migration path — it must carry the data
+                // root so the fresh-install bootstrap imports a
+                // pre-existing legacy `auth.json` (the default
+                // options' empty `global_data` silently skipped the
+                // import; the ref's `Global.data` rides the layer).
+                crate::database::MigrationOptions { global_data: Some(options.data_root.clone()) },
             )
             .await
             .expect("database"),
