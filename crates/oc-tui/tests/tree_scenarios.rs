@@ -258,6 +258,28 @@ fn capture_pretty(spec: &StateSpec) -> String {
     serde_json::to_string_pretty(&value).expect("scenario serialization")
 }
 
+/// G-455 — recursively key-sort a JSON value (the canonical form the
+/// capture comparison uses; serialization order alone is never a drift).
+fn sort_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut entries: Vec<(String, serde_json::Value)> =
+                map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            *map = entries.into_iter().collect();
+            for (_, v) in map.iter_mut() {
+                sort_value(v);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                sort_value(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// 1 — the committed captures pin the capturer's output per state.
 #[test]
 fn scenarios_match_committed_captures() {
@@ -280,25 +302,6 @@ fn scenarios_match_committed_captures() {
         let canonical = |text: &str| -> String {
             let mut value: serde_json::Value = serde_json::from_str(text)
                 .unwrap_or_else(|e| panic!("{}: parse {e}", path.display()));
-            fn sort_value(value: &mut serde_json::Value) {
-                match value {
-                    serde_json::Value::Object(map) => {
-                        let mut entries: Vec<(String, serde_json::Value)> =
-                            map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                        entries.sort_by(|a, b| a.0.cmp(&b.0));
-                        *map = entries.into_iter().collect();
-                        for (_, v) in map.iter_mut() {
-                            sort_value(v);
-                        }
-                    }
-                    serde_json::Value::Array(items) => {
-                        for item in items {
-                            sort_value(item);
-                        }
-                    }
-                    _ => {}
-                }
-            }
             sort_value(&mut value);
             serde_json::to_string(&value).expect("canonical serialization")
         };

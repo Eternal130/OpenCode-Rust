@@ -2876,7 +2876,7 @@ async fn invalid_stream_event_carries_the_custom_provider_route_label() {
 }
 
 /// G-455 — the body's tool table carries name-sorted definitions with
-/// the CodeMode `execute` tool APPENDED LAST (ref tool.ts:225-241;
+/// the `CodeMode` `execute` tool APPENDED LAST (ref tool.ts:225-241;
 /// enforced at the final body assembly so no upstream map leaks a
 /// sorted order through).
 #[test]

@@ -1852,7 +1852,7 @@ pub fn body_from_request(request: &LLMRequest) -> Result<Value, AiError> {
     // → messages.
     let mut breakpoints = Breakpoints::new(ANTHROPIC_BREAKPOINT_CAP);
     let (flattened_tools, flattened_request) = flatten_tool_request(&request);
-    // G-455 — the CodeMode `execute` tool APPENDS LAST on the wire (ref
+    // G-455 — the `CodeMode` `execute` tool APPENDS LAST on the wire (ref
     // tool.ts:225-241; every ref cassette pins the order). Enforced here,
     // at the final body assembly, so every upstream map (hook drafts,
     // registry snapshots, dedupe) cannot leak a sorted order through.

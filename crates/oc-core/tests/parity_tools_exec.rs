@@ -19,6 +19,7 @@
 //! normalize fallback, runner-visible result), not the client wire.
 //!
 //! Hermetic: sandboxed engine roots under /tmp/opencode, no network.
+#![allow(clippy::result_large_err)] // G-455: preserve_order grew HookError past the threshold
 
 use std::sync::Arc;
 

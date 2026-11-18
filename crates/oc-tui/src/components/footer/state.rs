@@ -50,6 +50,11 @@ impl PromptRoute {
 
 /// The active footer view (`FooterView`): the prompt (route stack) or
 /// one of the blockers that preempts it.
+// G-455: `serde_json preserve_order` swapped the Value map for an
+// IndexMap, growing `PermissionRequest` past clippy's variant-size
+// delta threshold; the two-variant enum is short-lived per footer
+// state and moved wholesale, so the boxing indirection buys nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum FooterView {
     #[default]

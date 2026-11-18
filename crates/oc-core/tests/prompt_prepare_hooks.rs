@@ -17,6 +17,7 @@
 //! Hermetic: sandbox under /tmp/opencode, no network (the LLM is
 //! `oc_ai::testing::TestLlm` over a failing transport), fixed clock +
 //! sequential ids.
+#![allow(clippy::result_large_err)] // G-455: preserve_order grew HookError past the threshold
 
 use std::sync::Arc;
 

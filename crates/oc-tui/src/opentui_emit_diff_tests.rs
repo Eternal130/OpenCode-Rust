@@ -459,7 +459,7 @@ fn transcript_openlink_rows_drive_osc8_under_the_probe_gate() {
 // -- G-452: the emoji emission shape through the full paint→emit chain --
 
 /// G-452 — the `w13-g-emoji` payload through the REAL pipeline
-/// (flatten → paint_placed → OpentuiEmitter → vt100) reproduces the
+/// (flatten → `paint_placed` → `OpentuiEmitter` → vt100) reproduces the
 /// observed ref grid byte shape: ZWJ families emit head + first ZWJ,
 /// skin-tone modifiers are dropped, VS16 stays (and its cluster pads
 /// to width 2 — the double space after `❤️` and `🏳️‍`), regional
