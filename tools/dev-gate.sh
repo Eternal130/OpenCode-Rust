@@ -100,6 +100,14 @@ else
   GATE_DIR="./repo"
 fi
 
+# FD-inheritance fix (2026-11-18 incident): the gate's lock fd 9 was
+# inherited by EVERY gated child (cargo/nextest/test binaries/TUI+ref
+# children) — a single leaked test child kept the flock held forever
+# after the gate exited, wedging all later gates ("another gate scope
+# is active" while nothing legitimate ran). `9>&-` closes the lock fd
+# at the gated bash boundary: the gate (this script, then systemd-run)
+# keeps owning the flock for the run's duration, and nothing below
+# inherits it.
 exec systemd-run --scope --quiet \
   --unit="opencode-gate-$(date +%s)-$$" \
   --uid=dev --gid=dev \
@@ -109,4 +117,4 @@ exec systemd-run --scope --quiet \
   --setenv=OPENCODE_DEV_GATE=1 \
   --setenv=HOME=/home/dev \
   --setenv=PATH="/home/dev/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-  bash -c "cd ${GATE_DIR} && $1"
+  bash 9>&- -c "cd ${GATE_DIR} && $1"
