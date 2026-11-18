@@ -463,8 +463,10 @@ fn transcript_openlink_rows_drive_osc8_under_the_probe_gate() {
 /// observed ref grid byte shape: ZWJ families emit head + first ZWJ,
 /// skin-tone modifiers are dropped, VS16 stays (and its cluster pads
 /// to width 2 — the double space after `❤️` and `🏳️‍`), regional
-/// pairs round-trip. Anchors: vendored native shaper
-/// `utf8.zig:438-459` (ZWJ/VS16 zero-width, EAW wide = 2) and the
+/// pairs round-trip. Anchors: the vendored native shaper in the
+/// SISTER REPO at
+/// `./opentui/third_party/opentui/packages/native/src/utf8.zig:438-459`
+/// (ZWJ/VS16 zero-width, EAW wide = 2) and the
 /// `w13-g-emoji-settled` ref dump the adjudication registered.
 #[test]
 fn g452_emoji_emission_shape_matches_ref_grid() {
