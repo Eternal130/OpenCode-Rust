@@ -449,8 +449,10 @@ fn w13_perm_always_pair() {
     rig.write_both(b"hello\r");
     let (rust_ask, ref_ask) = wait_dialog(&rig, 40);
     assert!(rust_ask && ref_ask, "PERM-always RED: no ask rust={rust_ask} ref={ref_ask}");
-    // Shift once (once → always) and run.
-    rig.write_both(b"\t\r");
+    // Shift once (once → always) and run. G-451: the ref dialog binds
+    // left/h + right/l (not tab), so drive the shift with right-arrow —
+    // both engines move once → always.
+    rig.write_both(b"\x1b[C\r");
     let (rust_out, ref_out) = (
         wait_screen(&rig.rust_tui, "test result: ok", 30),
         wait_screen(&rig.ref_tui, "test result: ok", 45),
@@ -459,7 +461,7 @@ fn w13_perm_always_pair() {
     // The edit ask is a DIFFERENT action — always again.
     let (rust_ask2, ref_ask2) = wait_dialog(&rig, 40);
     assert!(rust_ask2 && ref_ask2, "PERM-always RED: edit ask rust={rust_ask2} ref={ref_ask2}");
-    rig.write_both(b"\t\r");
+    rig.write_both(b"\x1b[C\r");
     let (rust_done, ref_done) = (
         wait_screen(&rig.rust_tui, CONFIRM_NEEDLE, 40),
         wait_screen(&rig.ref_tui, CONFIRM_NEEDLE, 60),
@@ -485,8 +487,14 @@ fn w13_perm_reject_pair() {
     rig.write_both(b"hello\r");
     let (rust_ask, ref_ask) = wait_dialog(&rig, 40);
     assert!(rust_ask && ref_ask, "PERM-reject RED: no ask rust={rust_ask} ref={ref_ask}");
-    // Shift twice (once → always → reject) and run.
-    rig.write_both(b"\t\t\r");
+    // G-451: reject via ESCAPE. The ref dialog (permission.tsx
+    // SessionQuestion) binds left/h + right/l — NOT tab — so the old
+    // `\t\t\r` chord silently selected "Allow once" on the ref end
+    // (the W13 export compared a rejected rust turn against a
+    // fully-allowed ref loop). Both engines reply reject immediately
+    // on escape for a top-level session (rust permission_key /
+    // ref escapeKey="reject" → dismiss → onSelect("reject")).
+    rig.write_both(b"\x1b");
     // The reply lands as a rejected tool state; give both engines time
     // to settle their post-rejection surfaces, then export.
     settle(8);

@@ -119,3 +119,62 @@ fn bootstrap_without_auth_json_imports_nothing() {
         .expect("count journal");
     assert_eq!(count, i64::try_from(MIGRATIONS.len()).unwrap());
 }
+
+/// W14 backfill — the lying-journal shape: a database bootstrapped by the
+/// PRE-fix code (complete journal, import marker present, but the
+/// credential rows never landed). `apply_only` must detect the lie and
+/// re-run the idempotent import; a second open must not duplicate rows.
+#[test]
+fn backfill_heals_lying_journal_exactly_once() {
+    let dir = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+    std::fs::write(
+        dir.path().join("auth.json"),
+        serde_json::json!({
+            "anthropic": { "type": "api", "key": "sk-ant-lying" }
+        })
+        .to_string(),
+    )
+    .expect("write auth.json");
+    let mut conn = fresh_file_db(&dir);
+    // Forge the pre-fix shape: full bootstrap + journal WITHOUT the import
+    // body (exactly what the old `apply` wrote).
+    conn.execute_batch(super::super::bootstrap::BOOTSTRAP_SQL).expect("bootstrap sql");
+    conn.execute_batch(super::super::bootstrap::MIGRATION_TABLE_SQL).expect("journal table");
+    for id in super::super::bootstrap::MIGRATION_IDS {
+        conn.execute(
+            "INSERT INTO migration (id, time_completed) VALUES (?1, 0)",
+            rusqlite::params![id],
+        )
+        .expect("insert marker");
+    }
+    assert!(credential_rows(&conn).is_empty(), "the lying journal dropped the credential");
+
+    // apply_only sees the complete journal and backfills the import.
+    migrations::apply_only(&mut conn, &options(&dir)).expect("apply_only");
+    let rows = credential_rows(&conn);
+    assert_eq!(rows, vec![("anthropic".to_owned(), "API key".to_owned())], "backfilled");
+
+    // Idempotent: a second open changes nothing.
+    migrations::apply_only(&mut conn, &options(&dir)).expect("apply_only again");
+    assert_eq!(credential_rows(&conn).len(), 1, "no duplicate import");
+}
+
+/// The backfill must be a no-op when there is no legacy `auth.json` to
+/// read (the import's own ENOENT arm) — a lying journal alone must not
+/// fail the boot.
+#[test]
+fn backfill_is_noop_without_auth_json() {
+    let dir = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+    let mut conn = fresh_file_db(&dir);
+    conn.execute_batch(super::super::bootstrap::BOOTSTRAP_SQL).expect("bootstrap sql");
+    conn.execute_batch(super::super::bootstrap::MIGRATION_TABLE_SQL).expect("journal table");
+    for id in super::super::bootstrap::MIGRATION_IDS {
+        conn.execute(
+            "INSERT INTO migration (id, time_completed) VALUES (?1, 0)",
+            rusqlite::params![id],
+        )
+        .expect("insert marker");
+    }
+    migrations::apply_only(&mut conn, &options(&dir)).expect("apply_only");
+    assert!(credential_rows(&conn).is_empty(), "nothing to import, nothing added");
+}
