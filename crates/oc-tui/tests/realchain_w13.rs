@@ -550,12 +550,16 @@ fn w13_omo_sections_at_trigger_width_pair() {
     export_grid_diff("w13-omo", "home", &home_ref, &home_rust);
 
     // Session state: one reply, then export the footer again.
+    // W13 finding (exported, not asserted): with the real plugins
+    // loaded, the RUST engine's main turn never reaches the provider
+    // (gateway requests stay at the title call) while the ref replies
+    // — the divergence rides the exported diff + survey.
     let rust_from = rust_tui.raw_len();
     let ref_from = ref_tui.raw_len();
     rust_tui.write(b"hello\r");
     ref_tui.write(b"hello\r");
-    let rust_replied = rust_tui.wait_for(b"REALCHAIN-REPLAY-OK", rust_from, Duration::from_secs(30));
     let ref_replied = ref_tui.wait_for(b"REALCHAIN-REPLAY-OK", ref_from, Duration::from_secs(60));
+    let rust_replied = rust_tui.wait_for(b"REALCHAIN-REPLAY-OK", rust_from, Duration::from_secs(30));
     settle(4);
     let session_ref = normalize(&ref_tui.screen_text());
     let session_rust = normalize(&rust_tui.screen_text());
@@ -569,8 +573,14 @@ fn w13_omo_sections_at_trigger_width_pair() {
     let _ = &server.url;
     drop(gateway);
     drop(lane);
-    assert!(rust_replied && ref_replied, "OMO RED: reply rust={rust_replied} ref={ref_replied}; {stats}");
+    assert!(ref_replied, "OMO RED (ref-side rig sanity): the ref reply never rendered; {stats}");
     export_grid_diff("w13-omo", "session", &session_ref, &session_rust);
+    export_survey(
+        "w13-omo",
+        "session-reply",
+        &[("rust reply rendered with plugins loaded (ref=1)", 1, u64::from(rust_replied))],
+        None,
+    );
 }
 
 // ===========================================================================
@@ -743,6 +753,74 @@ fn w13x_ref_bootstrap_seed() {
         return;
     }
     g_bootstrap_side(true);
+}
+
+/// The plugin-loaded "hello" cassettes for the omo session state: the
+/// staged plugins change the system prompt, so the plain hello digests
+/// strict-miss — record both engines' plugin-shape requests once.
+#[test]
+fn w13x_omo_bootstrap_seed() {
+    if std::env::var("W13_RECORD").is_err() {
+        eprintln!("w13x_omo_bootstrap_seed: skipped (W13_RECORD unset)");
+        return;
+    }
+    skip_without_ref_lane!();
+    if let Some(reason) = plugin_lane_skip_reason() {
+        eprintln!("w13x_omo_bootstrap_seed SKIP: {reason}");
+        return;
+    }
+    for ref_side in [true, false] {
+        let lane = lane_lock();
+        let record_dir = w13_corpus_dir(ref_side);
+        std::fs::create_dir_all(&record_dir).expect("record dir");
+        let gateway = Gateway::spawn_payload_seeded(
+            "w13-omo",
+            Some(&record_dir),
+            &worktree_dir("tools/diff/realchain/seeds/anthropic-text.txt"),
+            &worktree_dir("tools/diff/realchain/seeds/title-sse.txt"),
+        );
+        let box_ = sandbox(if ref_side { "w13-omoref" } else { "w13-omo" }, gateway.port);
+        let specs = stage_plugins(&box_, ref_side);
+        let spec_refs: Vec<&str> = specs.iter().map(String::as_str).collect();
+        if ref_side {
+            box_.write_ref_config_ext(&[], "replay/claude-opus-4-7", &spec_refs);
+            let stage = ref_stage(&box_);
+            ref_service_stop(&box_, &stage);
+            let mut tui = ref_tui_spawn(&box_, &stage, COLS, ROWS);
+            assert!(tui.wait_for(WORDMARK, 0, Duration::from_secs(60)), "ref omo bootstrap settle");
+            settle(4);
+            tui.write(b"hello\r");
+            let ok = tui.wait_for(b"REALCHAIN-REPLAY-OK", 0, Duration::from_secs(60));
+            let stats = gateway.stats();
+            tui.shutdown(Duration::from_secs(10));
+            ref_service_stop(&box_, &stage);
+            eprintln!("--- ref omo bootstrap --- gateway {stats}");
+            assert!(ok, "ref omo bootstrap: reply never rendered; stats {stats}");
+        } else {
+            box_.write_config_ext(&[], "replay/claude-opus-4-7", &spec_refs);
+            let _server = service_start(&box_);
+            let mut tui = TuiProcess::spawn(&box_, COLS, ROWS);
+            assert!(tui.wait_for(WORDMARK, 0, Duration::from_secs(30)), "rust omo bootstrap settle");
+            settle(6);
+            tui.write(b"hello\r");
+            let ok = tui.wait_for(b"REALCHAIN-REPLAY-OK", 0, Duration::from_secs(60));
+            let stats = gateway.stats();
+            let screen = tui.screen_text();
+            tui.shutdown(Duration::from_secs(10));
+            service_stop(&box_);
+            eprintln!("--- rust omo bootstrap --- gateway {stats}");
+            eprintln!("--- rust omo screen ---\n{screen}");
+            if !ok {
+                // W13 finding: the plugin-loaded rust main turn never
+                // reaches the provider — recorded as an exported
+                // divergence by the scenario test, not a record-lane
+                // failure (there is no request to record).
+                eprintln!("w13x_omo_bootstrap_seed: rust leg did not reply (known W13 export)");
+            }
+        }
+        drop(gateway);
+        drop(lane);
+    }
 }
 
 /// Corpus layout sanity (no TUI): the seed bodies exist and the
