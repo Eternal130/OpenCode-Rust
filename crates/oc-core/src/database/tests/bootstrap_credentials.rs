@@ -176,5 +176,47 @@ fn backfill_is_noop_without_auth_json() {
         .expect("insert marker");
     }
     migrations::apply_only(&mut conn, &options(&dir)).expect("apply_only");
-    assert!(credential_rows(&conn).is_empty(), "nothing to import, nothing added");
+    assert_eq!(credential_rows(&conn), Vec::<(String, String)>::new(), "nothing to import");
+}
+
+/// Review fix (one-shot marker): after the backfill heals a lying
+/// journal, a user DELETING the imported credential must NOT see it
+/// resurrect on the next open — the completion marker makes the
+/// backfill run at most once per database.
+#[test]
+fn backfill_does_not_resurrect_deleted_credentials() {
+    let dir = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
+    std::fs::write(
+        dir.path().join("auth.json"),
+        serde_json::json!({ "anthropic": { "type": "api", "key": "sk-ant-del" } }).to_string(),
+    )
+    .expect("write auth.json");
+    let mut conn = fresh_file_db(&dir);
+    conn.execute_batch(super::super::bootstrap::BOOTSTRAP_SQL).expect("bootstrap sql");
+    conn.execute_batch(super::super::bootstrap::MIGRATION_TABLE_SQL).expect("journal table");
+    for id in super::super::bootstrap::MIGRATION_IDS {
+        conn.execute(
+            "INSERT INTO migration (id, time_completed) VALUES (?1, 0)",
+            rusqlite::params![id],
+        )
+        .expect("insert marker");
+    }
+    // Heal once.
+    migrations::apply_only(&mut conn, &options(&dir)).expect("apply_only");
+    assert_eq!(credential_rows(&conn).len(), 1, "healed");
+    // The user deletes the credential through the UI.
+    conn.execute("DELETE FROM credential", []).expect("delete credentials");
+    assert_eq!(credential_rows(&conn), Vec::<(String, String)>::new());
+    // Reopen: the backfill must not resurrect the row.
+    migrations::apply_only(&mut conn, &options(&dir)).expect("apply_only again");
+    assert_eq!(credential_rows(&conn), Vec::<(String, String)>::new(), "deleted stay deleted");
+    // The marker exists.
+    let marked: Option<String> = conn
+        .query_row(
+            "SELECT value FROM kv WHERE key = 'legacy_credential_backfill_completed'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("marker query");
+    assert_eq!(marked.as_deref(), Some("1"));
 }

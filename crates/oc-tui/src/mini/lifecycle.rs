@@ -111,6 +111,9 @@ pub enum FooterKey {
     CtrlT,
     /// G-272 — `command.palette.show`'s ctrl+p (config/keybind.ts:57).
     CtrlP,
+    /// G-450 — `permission.prompt.fullscreen`'s ctrl+f
+    /// (config/keybind.ts:277).
+    CtrlF,
     /// G-272 — the leader key (`<leader>` = ctrl+x,
     /// config/keybind.ts:41): `<leader>q` opens the queued menu
     /// (`session.queued_prompts`, config/keybind.ts:131).
@@ -427,6 +430,7 @@ impl FooterPane {
             FooterKey::Down => "down".to_owned(),
             FooterKey::CtrlC => "ctrl+c".to_owned(),
             FooterKey::CtrlT => "ctrl+t".to_owned(),
+            FooterKey::CtrlF => "ctrl+f".to_owned(),
             FooterKey::CtrlP => "ctrl+p".to_owned(),
             FooterKey::CtrlX => "ctrl+x".to_owned(),
             FooterKey::CtrlB => "ctrl+b".to_owned(),
@@ -535,6 +539,7 @@ impl FooterPane {
             }
             FooterKey::CtrlC => {}
             FooterKey::CtrlT => {}
+            FooterKey::CtrlF => {}
             FooterKey::Tab | FooterKey::PageUp | FooterKey::PageDown => {}
         }
         // Only keep the per-request state while the blocker is live.
@@ -647,6 +652,9 @@ impl FooterPane {
             // (footer.view.tsx:569-575: enabled when
             // `route().type === "composer"`): fires `onCycleVariant`.
             FooterKey::CtrlT => effects.push(FooterEffect::CycleVariant),
+            // G-450 — ctrl+f is permission-layer only; the composer
+            // consumes it without effect.
+            FooterKey::CtrlF => {}
             // G-272 — `command.palette.show` (ctrl+p,
             // config/keybind.ts:57; footer.view.tsx:561-577's layer
             // is composer-route-only).
@@ -861,7 +869,8 @@ impl FooterPane {
             | FooterKey::PageDown
             | FooterKey::CtrlT
             | FooterKey::CtrlP
-            | FooterKey::CtrlB => {}
+            | FooterKey::CtrlB
+            | FooterKey::CtrlF => {}
             // G-272 — the leader chord arms from an open panel too
             // (the queued menu's undo/delete chords complete here).
             FooterKey::CtrlX => self.leader_armed = true,
@@ -1154,6 +1163,7 @@ impl FooterPane {
             // G-181① — `variant.cycle`'s layer is composer-route-only;
             // the inspector consumes the key without effect.
             FooterKey::CtrlT => {}
+            FooterKey::CtrlF => {}
             FooterKey::CtrlP
             | FooterKey::CtrlX
             | FooterKey::CtrlB
@@ -1186,7 +1196,17 @@ impl FooterPane {
         let startup = usize::from(self.startup.is_some());
         startup
             + match self.machine.view {
-                FooterView::Permission { .. } => footer_base(FOOTER_HEIGHT) + PERMISSION_ROWS,
+                // G-450 — the expanded ask overlays the transcript
+                // (every row but the composer's last).
+                FooterView::Permission { ref request } => {
+                    let expanded =
+                        self.permission_states.get(&request.id).is_some_and(|state| state.expanded);
+                    if expanded {
+                        term_height.saturating_sub(1)
+                    } else {
+                        footer_base(FOOTER_HEIGHT) + PERMISSION_ROWS
+                    }
+                }
                 FooterView::Form { .. } => footer_base(FOOTER_HEIGHT) + FORM_ROWS,
                 FooterView::Prompt => match self.machine.route {
                     crate::components::footer::PromptRoute::Subagent => {

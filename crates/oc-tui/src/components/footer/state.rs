@@ -501,6 +501,12 @@ pub struct PermissionBodyState {
     pub selected: PermissionOption,
     pub message: String,
     pub submitting: bool,
+    /// G-450 behavior face — `permission.prompt.fullscreen`
+    /// (permission.tsx:454-464, 498, 514-523): ctrl+f toggles the ask
+    /// between the docked body and the fullscreen overlay; escape
+    /// COLLAPSES the expanded state first (`dismiss`,
+    /// permission.tsx:432-438) before running the escape-key reject.
+    pub expanded: bool,
 }
 
 /// `createPermissionBodyState`.
@@ -513,6 +519,7 @@ pub fn create_permission_body_state(request: &PermissionRequest) -> PermissionBo
         selected: PermissionOption::Once,
         message: String::new(),
         submitting: false,
+        expanded: false,
     }
 }
 
@@ -688,7 +695,15 @@ pub fn permission_key(
     }
     match key {
         "left" | "h" => PermissionKey::State(permission_shift(state, -1, &offered)),
-        "right" | "l" | "tab" => PermissionKey::State(permission_shift(state, 1, &offered)),
+        // G-450 review fix: the ref dialog (SessionQuestion,
+        // permission.tsx:465-486) binds left/h + right/l — tab is NOT
+        // bound; the tab arm is removed.
+        "right" | "l" => PermissionKey::State(permission_shift(state, 1, &offered)),
+        // `permission.prompt.fullscreen` (config/keybind.ts:277,
+        // permission.tsx:454-464): ctrl+f toggles the overlay.
+        "ctrl+f" => {
+            PermissionKey::State(PermissionBodyState { expanded: !state.expanded, ..state.clone() })
+        }
         "enter" | "return" => {
             let step = permission_run(state, state.selected, child_session);
             match step.reply {
@@ -696,10 +711,17 @@ pub fn permission_key(
                 None => PermissionKey::State(step.state),
             }
         }
-        // `escapeKey="reject"` (permission.tsx:241, 437-438): the ask's
-        // escape runs the reject path — no expanded-fullscreen state
-        // to collapse first in the docked body.
+        // `escapeKey="reject"` + `dismiss` (permission.tsx:432-438,
+        // 493): an EXPANDED ask collapses first; only a collapsed ask
+        // runs the reject path — immediate on a top-level session,
+        // the free-text stage on a child.
         "escape" => {
+            if state.expanded {
+                return PermissionKey::State(PermissionBodyState {
+                    expanded: false,
+                    ..state.clone()
+                });
+            }
             let step = permission_run(state, PermissionOption::Reject, child_session);
             match step.reply {
                 Some(reply) => PermissionKey::Reply(reply, step.state),

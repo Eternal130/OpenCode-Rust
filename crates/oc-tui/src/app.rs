@@ -3399,7 +3399,15 @@ impl App {
                 .get(&request.id)
                 .cloned()
                 .unwrap_or_else(|| create_permission_body_state(&request));
-            let mount_height = PERMISSION_MOUNT_HEIGHT.min(screen_height);
+            // G-450 behavior face — the expanded ask overlays the
+            // transcript (ref permission.tsx:514-523: absolute,
+            // top -height+1, bottom 1): the mount grows to every row
+            // but the footer's last.
+            let mount_height = if state.expanded {
+                screen_height.saturating_sub(1).max(PERMISSION_MOUNT_HEIGHT.min(screen_height))
+            } else {
+                PERMISSION_MOUNT_HEIGHT.min(screen_height)
+            };
             Some((
                 crate::components::footer::permission::permission_body_canvas(
                     &request,
@@ -3511,7 +3519,15 @@ impl App {
                 .get(&request.id)
                 .cloned()
                 .unwrap_or_else(|| create_permission_body_state(&request));
-            let mount_height = PERMISSION_MOUNT_HEIGHT.min(usize::from(self.size.1));
+            // G-450 — the expanded overlay's pointer surface rides the
+            // same grown mount (see sync_footer_family).
+            let mount_height = if state.expanded {
+                usize::from(self.size.1)
+                    .saturating_sub(1)
+                    .max(PERMISSION_MOUNT_HEIGHT.min(usize::from(self.size.1)))
+            } else {
+                PERMISSION_MOUNT_HEIGHT.min(usize::from(self.size.1))
+            };
             let width = usize::from(self.size.0);
             // The pointer surface (auditA #4): the same layout math
             // the controls row paints with, translated by the mount
