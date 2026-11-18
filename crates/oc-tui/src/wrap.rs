@@ -255,11 +255,51 @@ fn is_skin_tone(ch: char) -> bool {
     matches!(ch as u32, 0x1F3FB..=0x1F3FF)
 }
 
-/// Regional indicators (U+1F1E6..=U+1F1FF): consecutive pairs form one
+/// Regional indicators (U+1F1E6..=0x1F1FF): consecutive pairs form one
 /// flag cluster (🇺🇸 = 2 cells), so the second indicator joins the
 /// first and a third starts a new cluster.
 fn is_regional_indicator(ch: char) -> bool {
     matches!(ch as u32, 0x1F1E6..=0x1F1FF)
+}
+
+/// G-452 — the reference's emoji emission shape (observed ref grid,
+/// `w13-g-emoji` pair dump; native shaper semantics vendored at
+/// `third_party/opentui/packages/native/src/utf8.zig:438-459` +
+/// grapheme packing): the ref terminal never receives the full ZWJ
+/// family or the skin-tone modifier bytes. Per cluster:
+///
+/// * a cluster containing ZWJ emits **up to and including the first
+///   ZWJ** — `👨‍👩‍👧‍👦` emits `👨‍`, `🏳️‍🌈` emits `🏳️‍` (the
+///   ZWJ itself is kept, zero-width, per `utf8.zig:438` `cp == 0x200D
+///   → 0`);
+/// * skin-tone modifiers (`1F3FB..=1F3FF`) are dropped — `👍🏽`
+///   emits `👍`;
+/// * VS16 (`FE0F`) is KEPT and zero-width (the `❤️` cluster stays
+///   `❤\u{fe0f}`);
+/// * the cluster WIDTH is unchanged (family/head = 2, `❤️` = 2 via
+///   the VS16 presentation upgrade), so when the emitted advance is
+///   narrower than the width (the `❤️` case: advance 1, width 2) the
+///   reference pads with the following blank cell — the observed
+///   double space after `❤️` in the ref grid.
+///
+/// Applied at the single seam ([`flatten_spans`]) so wrap decisions
+/// (width-driven) are untouched while paint/emit carry the ref byte
+/// shape.
+fn ref_emission_shape(cluster: &str) -> String {
+    if cluster.contains('\u{200D}') {
+        let mut out = String::with_capacity(cluster.len());
+        for ch in cluster.chars() {
+            out.push(ch);
+            if ch == '\u{200D}' {
+                break;
+            }
+        }
+        out
+    } else if cluster.chars().any(is_skin_tone) {
+        cluster.chars().filter(|ch| !is_skin_tone(*ch)).collect()
+    } else {
+        cluster.to_owned()
+    }
 }
 
 /// Flatten a plain string under one style (the plain-leaf case of
@@ -302,7 +342,7 @@ pub fn flatten_spans(spans: &[StyledSpan]) -> Vec<Atom> {
                 if !cluster.is_empty() {
                     let width = atom_width(&cluster);
                     atoms.push(Atom {
-                        text: std::mem::take(&mut cluster),
+                        text: ref_emission_shape(&std::mem::take(&mut cluster)),
                         width,
                         style,
                         link: link.clone(),
@@ -317,7 +357,12 @@ pub fn flatten_spans(spans: &[StyledSpan]) -> Vec<Atom> {
         }
         if !cluster.is_empty() {
             let width = atom_width(&cluster);
-            atoms.push(Atom { text: cluster, width, style, link: link.clone() });
+            atoms.push(Atom {
+                text: ref_emission_shape(&cluster),
+                width,
+                style,
+                link: link.clone(),
+            });
         }
     }
     atoms
@@ -661,12 +706,19 @@ mod tests {
         let atoms = flatten(family, STYLE);
         assert_eq!(atoms.len(), 1, "one ZWJ family = one atom");
         assert_eq!(atoms[0].width, 2);
-        assert_eq!(atoms[0].text, family);
+        // G-452: the atom carries the ref emission shape (head + first
+        // ZWJ), not the raw family bytes.
+        assert_eq!(atoms[0].text, "\u{1F468}\u{200D}");
         // Skin tones absorb into the preceding emoji.
         let atoms = flatten("👍🏽", STYLE);
         assert_eq!((atoms.len(), atoms[0].width), (1, 2));
+        // G-452: the modifier byte is dropped from the emission shape.
+        assert_eq!(atoms[0].text, "\u{1F44D}");
         // VS16 + ZWJ (rainbow flag) is one cluster.
         assert_eq!(flatten("🏳️‍🌈", STYLE).len(), 1);
+        assert_eq!(flatten("🏳️‍🌈", STYLE)[0].text, "\u{1F3F3}\u{FE0F}\u{200D}");
+        // G-452: plain VS16 clusters keep the selector (❤️ stays whole).
+        assert_eq!(flatten("❤️", STYLE)[0].text, "\u{2764}\u{FE0F}");
         // Keycap clusters are one atom of width 2.
         let atoms = flatten("1️⃣", STYLE);
         assert_eq!((atoms.len(), atoms[0].width), (1, 2));
@@ -694,6 +746,8 @@ mod tests {
     #[test]
     fn hard_breaks_never_split_clusters() {
         let family = "👨‍👩‍👧‍👦";
+        // G-452: wrap_label re-assembles from the emission-shaped atoms.
+        let shaped = "\u{1F468}\u{200D}";
         let doubled = format!("{family}{family}");
         for width in 1..=4 {
             for line in wrap_label(&doubled, width) {
@@ -701,13 +755,13 @@ mod tests {
                 // fit at width 4; one per line at 2-3; the width-1
                 // overwide-atom quirk mirrors the original seam).
                 assert!(
-                    line.is_empty() || line == family || line == doubled,
+                    line.is_empty() || line == shaped || line == format!("{shaped}{shaped}"),
                     "width {width}: cluster split across lines: {line:?}"
                 );
             }
         }
         // Two families at width 2: one per line.
-        assert_eq!(wrap_label(&doubled, 2), vec![family, family]);
+        assert_eq!(wrap_label(&doubled, 2), vec![shaped, shaped]);
     }
 
     /// A span boundary is NOT a break opportunity: styled spans flow as

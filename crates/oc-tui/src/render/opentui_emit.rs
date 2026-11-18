@@ -304,9 +304,16 @@ impl OpentuiEmitter {
 /// clear to the blank vocabulary first (every cell is rewritten; a
 /// stale pool from the swapped buffer must not leak grapheme ids),
 /// then write every cell through the buffer's own `set`. Cluster
-/// cells (start + their continuation span) poke as continuation
-/// words — NO inline bytes (the deferred cluster pass prints them
-/// after the opentui stream; see [`OpentuiEmitter::render_sgr`]).
+/// cells (start + their continuation span) poke as SPACES — G-452:
+/// the deferred cluster pass prints the real bytes after the opentui
+/// stream, and the base pass must RESERVE the span's columns (a
+/// continuation word emits no bytes, so sequential base text would
+/// drift left under the cluster and the cluster pass would overwrite
+/// it — the observed `w13-g-emoji` misalignment). Spaces reserve the
+/// frame columns; last-writer-wins cluster bytes then land exactly on
+/// them (a wide cluster's vt write blanks its covered cells, and a
+/// narrower-than-width emission shape like `❤️` keeps the reserved
+/// blank — the ref's padded extent, see wrap's `ref_emission_shape`).
 fn poke(
     renderer: &mut CliRenderer,
     frame: &Frame,
@@ -315,12 +322,40 @@ fn poke(
     let buffer = &mut renderer.next_render_buffer;
     buffer.clear(transparent_black());
     for (y, row) in frame.cells.iter().enumerate() {
-        for (x, cell) in row.iter().enumerate() {
-            let word = if cell.ch == CONTINUATION || frame.cluster_at(y, x).is_some() {
-                CHAR_FLAG_CONTINUATION
-            } else {
-                u32::from(cell.ch)
-            };
+        let mut x = 0usize;
+        while x < row.len() {
+            let cell = &row[x];
+            // G-452 — the vt-advance accounting of the base SGR pass
+            // (a sequential byte stream a real terminal advances by
+            // each glyph's own width):
+            // * a CLUSTER span reserves its full width in spaces (the
+            //   deferred cluster pass writes the real bytes at these
+            //   columns afterwards — without the reservation the base
+            //   text after the span drifts left and the cluster
+            //   bytes overwrite it, the observed `w13-g-emoji`
+            //   misalignment);
+            // * a PLAIN wide glyph emits the glyph (the terminal
+            //   advances its 2 columns itself) and its continuation
+            //   cell emits NO bytes — reserving there would
+            //   double-advance and drift the other way.
+            if let Some(symbol) = frame.cluster_at(y, x) {
+                let span = crate::wrap::display_width(symbol).max(1);
+                for dx in 0..span {
+                    if let Some(cell) = row.get(x + dx) {
+                        let attrs = match link_cells.get(&(x + dx, y)) {
+                            Some(id) => {
+                                opentui_core::ansi::set_link_id(u32::from(cell.attrs & 0xFF), *id)
+                            }
+                            None => u32::from(cell.attrs & 0xFF),
+                        };
+                        set_word(buffer, x + dx, y, u32::from(' '), cell, attrs);
+                    }
+                }
+                x += span;
+                continue;
+            }
+            let word =
+                if cell.ch == CONTINUATION { CHAR_FLAG_CONTINUATION } else { u32::from(cell.ch) };
             // G-287⑧ — a linked cell packs its link id into
             // attributes 8-31 (ansi.ts's packed order); the OSC 8
             // emission branch reads it back at emit time.
@@ -329,6 +364,7 @@ fn poke(
                 None => u32::from(cell.attrs & 0xFF),
             };
             set_word(buffer, x, y, word, cell, attrs);
+            x += 1;
         }
     }
 }
