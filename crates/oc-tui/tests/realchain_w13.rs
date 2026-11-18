@@ -78,7 +78,7 @@ fn wait_screen(tui: &TuiProcess, needle: &str, secs: u64) -> bool {
 /// The v2-shape auth.json preset (two credentials: one OAuth, one API
 /// key — the exact legacy shapes `20260805200742` decodes).
 fn preset_auth_json(box_: &Sandbox) {
-    std::fs::create_dir_all(box_.data_root()).expect("data root");
+    std::fs::create_dir_all(box_.legacy_data_root()).expect("legacy data root");
     std::fs::write(
         box_.auth_json(),
         serde_json::json!({
@@ -344,7 +344,10 @@ fn perm_rig(tag: &str) -> PermRig {
     refbox.shim_dir = Some(rust.root.join("shimstage"));
     rust.write_config(&[], "replay/claude-opus-4-7");
     refbox.write_ref_config(&[], "replay/claude-opus-4-7");
-    // NO preauthorize_tools: the ask dialog is the scenario's surface.
+    // NO preauthorize_tools: the ask dialog is the scenario's surface —
+    // the explicit "ask" policy raises it on every bash/edit call.
+    rust.ask_tools(false);
+    refbox.ask_tools(true);
     let stage = ref_stage(&refbox);
     ref_service_stop(&refbox, &stage);
     std::fs::write(rust.project.join("README.md"), README_BEFORE).expect("rust README");
@@ -746,6 +749,12 @@ fn w13x_ref_bootstrap_seed() {
 /// recorded corpora carry the four payload cassettes per engine.
 #[test]
 fn w13x_corpus_layout() {
+    if std::env::var("W13_RECORD").is_ok() {
+        // The record run itself populates the corpora — layout is a
+        // POST-record sanity.
+        eprintln!("w13x_corpus_layout: skipped during record");
+        return;
+    }
     for (suffix, _prompt) in G_PAYLOADS {
         let seed = std::fs::read_to_string(w13_seed(suffix))
             .unwrap_or_else(|e| panic!("read seed {suffix}: {e}"));

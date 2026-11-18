@@ -247,10 +247,17 @@ impl Sandbox {
         self.root.join("xdg-data/opencode-rust")
     }
 
+    /// The LEGACY v2 (upstream `opencode`) data root in this sandbox —
+    /// the one-way v2 migration's source (`oc_core::v2_migration`).
+    #[must_use]
+    pub fn legacy_data_root(&self) -> PathBuf {
+        self.root.join("xdg-data/opencode")
+    }
+
     /// The legacy v2 auth.json path inside this sandbox.
     #[must_use]
     pub fn auth_json(&self) -> PathBuf {
-        self.data_root().join("auth.json")
+        self.legacy_data_root().join("auth.json")
     }
 
     /// The port's database file inside this sandbox.
@@ -1309,6 +1316,27 @@ impl Sandbox {
         });
         std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap())
             .unwrap_or_else(|e| panic!("write preauth config: {e}"));
+    }
+
+    /// W13 permission-flow rig: the config `permission` block ASKS for
+    /// the tool-loop actions on both ends (the default policy allowed
+    /// them silently — the ask dialog needs the explicit "ask").
+    pub fn ask_tools(&self, ref_side: bool) {
+        let path = if ref_side {
+            self.root.join("xdg-config/opencode/opencode.json")
+        } else {
+            self.config_path()
+        };
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read config for ask {}: {e}", path.display()));
+        let mut config: serde_json::Value =
+            serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse config: {e}"));
+        config["permission"] = serde_json::json!({
+            "bash": "ask",
+            "edit": "ask",
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap())
+            .unwrap_or_else(|e| panic!("write ask config: {e}"));
     }
 }
 
