@@ -1375,6 +1375,13 @@ pub async fn apply_location_plugins(
                 object.remove("additionalProperties");
             }
         }
+        // G-455② (cont.) — zod's default `toJSONSchema` runs io:"output"
+        // (defaulted fields REQUIRED); the ref converts input schemas
+        // with io:"input" (runtime.ts:168 `toJSONSchema(schema, { target:
+        // "draft-2020-12", io: "input" })`), where a defaulted field is
+        // OPTIONAL. A property carrying a `default` never stays in
+        // `required` (observed: the plugin webfetch requires only `url`).
+        relax_defaulted_required(&mut input);
         let mut registration = crate::location::ToolRegistration::new(
             &definition.name,
             definition.description.clone(),
@@ -3041,5 +3048,33 @@ mod g384_tests {
             .expect("event present");
         assert_eq!(event.type_, crate::bus::registry::INTEGRATION_UPDATED, "published: {event:?}");
         assert_eq!(event.data, serde_json::json!({}), "ephemeral, data {{}}");
+    }
+}
+
+/// G-455② — zod io:"input" semantics over a plugin tool's JSON schema:
+/// recursively drop every `default`-carrying property from its object's
+/// `required` list (the ref converts input schemas with
+/// `toJSONSchema(schema, { io: "input" })`; the payload's own plain
+/// `toJSONSchema` call runs io:"output" and marks them required).
+fn relax_defaulted_required(schema: &mut Value) {
+    let Some(object) = schema.as_object_mut() else { return };
+    let defaulted: Vec<String> = object
+        .get("properties")
+        .and_then(Value::as_object)
+        .map(|properties| {
+            properties
+                .iter()
+                .filter(|(_, property)| property.get("default").is_some())
+                .map(|(name, _)| name.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    if !defaulted.is_empty() {
+        if let Some(required) = object.get_mut("required").and_then(Value::as_array_mut) {
+            required.retain(|name| !defaulted.iter().any(|d| name.as_str() == Some(d.as_str())));
+        }
+    }
+    for (_, value) in object.iter_mut() {
+        relax_defaulted_required(value);
     }
 }

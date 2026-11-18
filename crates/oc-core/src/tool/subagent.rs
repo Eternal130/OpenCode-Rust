@@ -64,6 +64,7 @@ pub fn input_schema() -> serde_json::Value {
             },
             "sessionID": {
                 "type": "string",
+                "pattern": "^ses",
                 "description": "Continue a specific previous subagent conversation by passing its sessionID. Calls without a sessionID start a new conversation."
             },
             "background": {

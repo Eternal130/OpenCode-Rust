@@ -1067,3 +1067,52 @@ fn append_execute_last(tools: Vec<crate::schema::ToolEntry>) -> Vec<crate::schem
     tools.push(tail);
     tools
 }
+
+#[cfg(test)]
+mod g455_tests {
+    use super::*;
+    use crate::schema::messages::{LLMRequest, ToolDefinition, ToolEntry};
+    use crate::schema::LanguageModel;
+    use std::sync::Arc;
+
+    /// G-455 — `prepare_request` appends the CodeMode `execute` tool LAST
+    /// on the model-facing table (the wire seam; ref tool.ts:225-241).
+    #[test]
+    fn prepare_request_appends_execute_last() {
+        let route = Route::new(RouteInput {
+            id: "anthropic-messages".into(),
+            provider: Some("replay".into()),
+            provider_metadata_key: None,
+            protocol: Arc::new(crate::protocols::anthropic_messages::AnthropicMessages),
+            endpoint: crate::route::Endpoint::path("/v1/messages")
+                .with_base_url("http://127.0.0.1:1"),
+            auth: None,
+            framing: crate::route::Framing::sse(),
+            headers: None,
+            transport: Arc::new(crate::test_support::MockTransport::from_interactions(vec![])),
+            defaults: Default::default(),
+        });
+        let mut request =
+            LLMRequest::new(LanguageModel::new("replay/m", "replay", Arc::new(route.clone())));
+        request.tools = ["edit", "execute", "glob", "write"]
+            .into_iter()
+            .map(|name| {
+                ToolEntry::Definition(ToolDefinition::new(
+                    name.to_string(),
+                    "d".to_string(),
+                    serde_json::json!({ "type": "object", "properties": {} }),
+                ))
+            })
+            .collect();
+        let prepared = route.prepare_request(&request);
+        let names: Vec<&str> = prepared
+            .tools
+            .iter()
+            .filter_map(|entry| match entry {
+                ToolEntry::Definition(tool) => Some(tool.name.as_str()),
+                ToolEntry::Namespace(_) => None,
+            })
+            .collect();
+        assert_eq!(names, vec!["edit", "glob", "write", "execute"]);
+    }
+}

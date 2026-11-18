@@ -229,31 +229,38 @@ pub fn tool(forms: Forms) -> BuiltinTool {
         name: "question",
         description: description(),
         output: output_schema(),
+        // G-455② — the ref schema shape (effect-schema face, observed in
+        // the w13-omo ref cassette): per-field descriptions, closed
+        // objects, `label`+`description` both required per option.
         input: serde_json::json!({
             "type": "object",
             "properties": {
                 "questions": {
                     "type": "array",
+                    "description": "Questions to ask",
                     "minItems": 1,
                     "items": {
                         "type": "object",
                         "properties": {
-                            "question": { "type": "string" },
-                            "header": { "type": "string" },
+                            "question": { "type": "string", "description": "Complete question" },
+                            "header": { "type": "string", "description": "Very short label (max 30 chars)" },
                             "options": {
                                 "type": "array",
+                                "description": "Available choices",
                                 "items": {
                                     "type": "object",
                                     "properties": {
-                                        "label": { "type": "string" },
-                                        "description": { "type": "string" }
+                                        "label": { "type": "string", "description": "Display text (1-5 words, concise)" },
+                                        "description": { "type": "string", "description": "Explanation of choice" }
                                     },
-                                    "required": ["label"]
+                                    "required": ["label", "description"],
+                                    "additionalProperties": false
                                 }
                             },
                             "multiple": { "type": "boolean" }
                         },
-                        "required": ["question", "header", "options"]
+                        "required": ["question", "header", "options"],
+                        "additionalProperties": false
                     }
                 }
             },

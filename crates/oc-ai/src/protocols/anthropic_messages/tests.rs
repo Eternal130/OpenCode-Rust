@@ -2875,10 +2875,10 @@ async fn invalid_stream_event_carries_the_custom_provider_route_label() {
     assert_eq!(error.message(), "Invalid replay/anthropic-messages stream event");
 }
 
-/// G-455 — the body preserves the request's tool ORDER verbatim
-/// (name-sorted definitions + `execute` appended last, ref
-/// tool.ts:225-241): nothing between `request.tools` and the wire
-/// array may re-sort.
+/// G-455 — the body's tool table carries name-sorted definitions with
+/// the CodeMode `execute` tool APPENDED LAST (ref tool.ts:225-241;
+/// enforced at the final body assembly so no upstream map leaks a
+/// sorted order through).
 #[test]
 fn body_preserves_request_tool_order() {
     let route = crate::test_support::echo_route_named("anthropic-messages");
@@ -2903,5 +2903,5 @@ fn body_preserves_request_tool_order() {
         .iter()
         .map(|tool| tool["name"].as_str().expect("name"))
         .collect();
-    assert_eq!(names, vec!["edit", "execute", "glob", "write"], "wire order verbatim");
+    assert_eq!(names, vec!["edit", "glob", "write", "execute"], "execute appends last");
 }
