@@ -265,6 +265,17 @@ jobs:
         env:
           OPENCODE_DISABLE_BUN_DOWNLOAD: "1"
 
+      # W12 (user ruling 2026-11-18, GAPS 2.2#12): the realchain tests
+      # no longer RED on content — every divergence is exported to
+      # .test-logs/diff-reports/ and this controller-side checker is
+      # the new gate (exit 2 = unadjudicated divergence = job red;
+      # exit 0 = EXACT reports or full registry coverage). Runs after
+      # the suite regardless of test failures only when reports exist;
+      # on CI the pair lane skips, so the t9 single-end surveys carry
+      # the expectations.
+      - name: Adjudicate realchain diff reports
+        run: python3 tools/diff/realchain/adjudicate.py .test-logs/diff-reports
+
   # Frame-budget runs RELEASE (the product profile; debug numbers are
   # informational only). Runs from the release archive — no compilation.
   frame-budget:

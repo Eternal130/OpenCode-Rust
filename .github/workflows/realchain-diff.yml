@@ -169,9 +169,21 @@ jobs:
           T9_BUN: ${{ github.workspace }}/tools/bin/bun-1.4.2
           T9_PACE: ${{ inputs.pace }}
 
+      # W12 adjudication gate (user ruling 2026-11-18, GAPS 2.2#12):
+      # the battery itself performs NO bug adjudication — every grid
+      # divergence lands in .test-logs/diff-reports/. This step is the
+      # NEW merge gate: exit 0 = every divergence covered by the
+      # committed registry; exit 2 = unadjudicated divergence = job red.
+      # Run directly (python3 stdlib; never wrapped in dev-gate — 2.1#2).
+      - name: Adjudicate the exported diff reports
+        run: |
+          set -eu
+          python3 tools/diff/realchain/adjudicate.py .test-logs/diff-reports
+
       # Result artifacts leave the runner ONLY age-encrypted to the
       # corpus public key (CI can encrypt, never decrypt): grid dumps,
-      # gateway logs and strict misses from /tmp/opencode.
+      # gateway logs and strict misses from /tmp/opencode. W12: the
+      # diff-reports ride .test-logs (copied explicitly for clarity).
       - name: Encrypt + upload result dumps (always)
         if: always()
         env:
@@ -192,6 +204,8 @@ jobs:
           mkdir -p "$OUT"
           cp -a /tmp/opencode/t9w1-* "$OUT"/ 2>/dev/null || true
           cp -a .test-logs "$OUT"/ 2>/dev/null || true
+          mkdir -p "$OUT/diff-reports"
+          cp -a .test-logs/diff-reports/. "$OUT/diff-reports"/ 2>/dev/null || true
           tools/diff/realchain/corpus_age.sh encrypt "$OUT" "/tmp/opencode/realchain-results.tar.age"
       - name: Upload encrypted result bundle
         if: always()

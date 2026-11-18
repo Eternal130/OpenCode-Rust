@@ -1423,6 +1423,28 @@ impl Drop for LaneGuard {
 // the settled TEXT grids are normalized, then compared byte-for-byte)
 // ---------------------------------------------------------------------------
 
+// Which environmental normalizations actually FIRED (W12: the export
+// must list everything the normalizer stripped, so the adjudication
+// side sees it). Accumulated per test process (nextest isolates each
+// test in its own process), read by the diff exporter.
+thread_local! {
+    static FIRED_NORMALIZATIONS: std::cell::RefCell<std::collections::BTreeSet<&'static str>> =
+        const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
+}
+
+fn mark_fired(name: &'static str) {
+    FIRED_NORMALIZATIONS.with(|set| {
+        set.borrow_mut().insert(name);
+    });
+}
+
+/// The names of every normalization that fired in this test process
+/// (empty list = raw grids, nothing stripped).
+#[must_use]
+pub fn normalization_names() -> Vec<String> {
+    FIRED_NORMALIZATIONS.with(|set| set.borrow().iter().map(|name| (*name).to_owned()).collect())
+}
+
 /// Normalize a settled screen grid for cross-end comparison:
 /// * middle-ellipsized path prefixes (`/…/openco…/`) re-expanded so the
 ///   root substitution below can fire
@@ -1431,14 +1453,21 @@ impl Drop for LaneGuard {
 ///   `Math.random` (ref home route) → `__PROMPT__`
 /// * the bottom-right version/channel pill (ref-from-source builds say
 ///   `local`, release builds the semver) → `__VERSION__`
-/// * volatile identifiers (`ses_…`, `msg_…`, `evt_…`, `pty_…`) → `__ID__`
+/// * volatile identifiers (`ses_…`, `msg_…`, `evt_…`) → `__ID__`
 /// * clock faces (`HH:MM`, `HH:MM:SS`) → `__TIME__`
 /// * trailing row whitespace
+///
+/// These remove ENVIRONMENT artifacts (not bug judgments — W12/2.2#12:
+/// every fired one is exported in the report's
+/// `normalizations_applied`).
 #[must_use]
 pub fn normalize_grid(grid: &str, roots: &[&str]) -> String {
     let mut out = String::with_capacity(grid.len());
     for line in grid.lines() {
         let mut row = line.trim_end().to_owned();
+        if row != line {
+            mark_fired("trailing-whitespace");
+        }
         // Middle-ellipsized paths come in more than one truncation
         // shape (`/…/openco…/t9w1-…` at 120 cols, `/…/opencode/t9w1-…`
         // in the wider sidebar footer): re-expand ANY `/…*/t9w1-`
@@ -1447,25 +1476,54 @@ pub fn normalize_grid(grid: &str, roots: &[&str]) -> String {
             if let Some(tail) = row[start..].find("/t9w1") {
                 let end = start + tail;
                 row = format!("{}{}{}", &row[..start], "/tmp/opencode", &row[end..]);
+                mark_fired("ellipsis-path-reexpand");
             }
         }
-        row = row.replace("/…/openco…/", "/tmp/opencode/");
+        if row.contains("/…/openco…/") {
+            row = row.replace("/…/openco…/", "/tmp/opencode/");
+            mark_fired("ellipsis-path-reexpand");
+        }
         for root in roots {
-            if !root.is_empty() {
+            if !root.is_empty() && row.contains(root) {
                 row = row.replace(root, "__ROOT__");
+                mark_fired("sandbox-roots");
             }
         }
+        let after_roots = row.clone();
         row = replace_placeholder(&row);
+        if row != after_roots {
+            mark_fired("composer-prompt-suggestion");
+        }
         if row.contains("__ROOT__") {
             // Path-length differences (PID-unique roots pre-replacement)
             // shift adjacent column padding; collapse them on BOTH ends
             // identically.
+            let before = row.clone();
             collapse_spaces(&mut row);
+            if row != before {
+                mark_fired("root-padding-collapse");
+            }
         }
+        let before_pill = row.clone();
         row = replace_version_pill(&row);
+        if row != before_pill {
+            mark_fired("version-pill");
+        }
+        let before_ids = row.clone();
         row = replace_id_shapes(&row);
+        if row != before_ids {
+            mark_fired("wire-id-shapes");
+        }
+        let before_clocks = row.clone();
         row = replace_clocks(&row);
+        if row != before_clocks {
+            mark_fired("clocks");
+        }
+        let before_timings = row.clone();
         row = replace_timings(&row);
+        if row != before_timings {
+            mark_fired("timings");
+        }
         // The timing tokens replace variable-width runs (`96ms` →
         // `__MS__`, `666.7 tok/s` → `__TOKS__`), so any content sharing
         // the row on the OTHER side of the tokens (the p4-long tier:
@@ -1474,7 +1532,11 @@ pub fn normalize_grid(grid: &str, roots: &[&str]) -> String {
         // collapse the space runs on BOTH ends (the same shape as the
         // __ROOT__ path-length rule above).
         if row.contains("__MS__") || row.contains("__TOKS__") || row.contains("__SECS__") {
+            let before = row.clone();
             collapse_spaces(&mut row);
+            if row != before {
+                mark_fired("timing-padding-collapse");
+            }
         }
         // G-434 (documented masking): the free/no-auth model tier in
         // the palette lists models.dev-catalog entries whose VINTAGE
@@ -1489,6 +1551,7 @@ pub fn normalize_grid(grid: &str, roots: &[&str]) -> String {
             if let Some(name_start) = head.find(|c: char| !c.is_whitespace()) {
                 let tier_at = head.len() - " Free".len();
                 row = format!("{}__FREELIST__{}", &row[..name_start], &head[tier_at..]);
+                mark_fired("freelist-mask");
             }
         }
         out.push_str(&row);
@@ -1684,37 +1747,149 @@ pub fn dump_grid(name: &str, grid: &str) {
     let _ = std::fs::write(dir.join(format!("t9-pair-{name}-{stamp}.txt")), grid);
 }
 
-/// Assert two normalized grids are equal, dropping both originals plus a
-/// line-oriented diff into `.test-logs` for forensics on failure.
-pub fn assert_grids_match(scenario: &str, ref_grid: &str, rust_grid: &str) {
-    let dir = worktree_root().join(".test-logs");
-    let _ = std::fs::create_dir_all(&dir);
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs());
-    let ref_path = dir.join(format!("t9-pair-{scenario}-{stamp}-ref.txt"));
-    let rust_path = dir.join(format!("t9-pair-{scenario}-{stamp}-rust.txt"));
-    let _ = std::fs::write(&ref_path, ref_grid);
-    let _ = std::fs::write(&rust_path, rust_grid);
-    if ref_grid == rust_grid {
-        return;
-    }
-    // First divergent lines for the panic message.
-    let mut diff = String::new();
-    for (number, (left, right)) in ref_grid.lines().zip(rust_grid.lines()).enumerate() {
-        if left != right {
-            let _ = writeln!(diff, "line {}: ref={left:?}\n         rust={right:?}", number + 1);
-            if diff.lines().count() > 16 {
-                break;
+// ---------------------------------------------------------------------------
+// W12 — the DIFF EXPORTER (user ruling 2026-11-18, register 2.2#12): the
+// sandbox lane performs NO bug adjudication of its own. Every grid
+// comparison (and every single-end content observation) becomes a
+// structured artifact under `.test-logs/diff-reports/`, and the
+// controller-side checker (`tools/diff/realchain/adjudicate.py` +
+// `adjudications.json`) decides framework-diff vs real bug. The old
+// assert_grids_match panic path and every mask/tripwire/closure pin
+// lived in git history from here on.
+// ---------------------------------------------------------------------------
+
+/// The diff-report directory (consumed by adjudicate.py).
+fn diff_report_dir() -> PathBuf {
+    worktree_root().join(".test-logs/diff-reports")
+}
+
+fn tree_hash() -> String {
+    // Absolute fallbacks: the test process may run under a scrubbed
+    // PATH (dev-gate's systemd scope).
+    for program in ["git", "/usr/bin/git", "/usr/local/bin/git"] {
+        if let Ok(output) = std::process::Command::new(program)
+            .arg("rev-parse")
+            .arg("HEAD")
+            .current_dir(worktree_root())
+            .output()
+        {
+            if output.status.success() {
+                return String::from_utf8_lossy(&output.stdout).trim().to_owned();
             }
         }
     }
-    panic!(
-        "PAIR {scenario}: ref and rust grids diverge\n{diff}\
-         full grids: {} vs {}",
-        ref_path.display(),
-        rust_path.display()
+    "unknown".to_owned()
+}
+
+fn now_ts() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
+
+/// The per-line divergences of two normalized grids (1-based line
+/// numbers; a length mismatch materializes the missing counterpart as
+/// an empty line).
+fn grid_divergences(ref_grid: &str, rust_grid: &str) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    let ref_lines: Vec<&str> = ref_grid.lines().collect();
+    let rust_lines: Vec<&str> = rust_grid.lines().collect();
+    let rows = ref_lines.len().max(rust_lines.len());
+    for index in 0..rows {
+        let left = ref_lines.get(index).copied().unwrap_or("");
+        let right = rust_lines.get(index).copied().unwrap_or("");
+        if left != right {
+            out.push(serde_json::json!({
+                "line_no": index + 1,
+                "ref": left,
+                "rust": right,
+            }));
+        }
+    }
+    out
+}
+
+/// Export one scenario-state grid pair as a structured diff report
+/// (JSON + human-readable .txt). Divergences empty = EXACT. The
+/// normalizations list makes every environmental artifact the
+/// normalizer stripped VISIBLE to the adjudication side.
+pub fn export_grid_diff(scenario: &str, state: &str, ref_grid: &str, rust_grid: &str) -> usize {
+    let divergences = grid_divergences(ref_grid, rust_grid);
+    let report = serde_json::json!({
+        "scenario": scenario,
+        "state": state,
+        "tree_hash": tree_hash(),
+        "ts": now_ts(),
+        "divergences": divergences,
+        "normalizations_applied": normalization_names(),
+    });
+    write_diff_report(scenario, state, &report);
+    divergences.len()
+}
+
+/// Export a single-end (rust-only) content observation for adjudication
+/// — `observations` = (label, expected, observed). Used where the old
+/// tests asserted content presence/absence on the rust grid alone
+/// (e.g. t9_8's boot-window "Connection lost" count). A divergence is
+/// recorded whenever observed != expected.
+pub fn export_survey(scenario: &str, state: &str, observations: &[(&str, u64, u64)]) -> usize {
+    let divergences: Vec<serde_json::Value> = observations
+        .iter()
+        .filter(|&(_label, expected, observed)| expected != observed)
+        .map(|(label, expected, observed)| {
+            serde_json::json!({
+                "line_no": 0,
+                "ref": format!("{label}: expected {expected}"),
+                "rust": format!("{label}: observed {observed}"),
+            })
+        })
+        .collect();
+    let report = serde_json::json!({
+        "scenario": scenario,
+        "state": state,
+        "tree_hash": tree_hash(),
+        "ts": now_ts(),
+        "divergences": divergences,
+        "normalizations_applied": normalization_names(),
+    });
+    write_diff_report(scenario, state, &report);
+    divergences.len()
+}
+
+fn write_diff_report(scenario: &str, state: &str, report: &serde_json::Value) {
+    let dir = diff_report_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let base = format!("{scenario}-{state}");
+    let _ = std::fs::write(
+        dir.join(format!("{base}.json")),
+        serde_json::to_string_pretty(report).unwrap_or_default(),
     );
+    // Human-readable twin: the divergent lines plus the metadata.
+    let mut text = String::new();
+    let _ = writeln!(text, "scenario: {scenario}  state: {state}");
+    let _ = writeln!(
+        text,
+        "tree_hash: {}  ts: {}",
+        report["tree_hash"].as_str().unwrap_or("?"),
+        report["ts"]
+    );
+    let _ = writeln!(text, "normalizations_applied: {}", report["normalizations_applied"]);
+    let divergences = report["divergences"].as_array().cloned().unwrap_or_default();
+    if divergences.is_empty() {
+        let _ = writeln!(text, "divergences: EXACT (none)");
+    } else {
+        let _ = writeln!(text, "divergences: {}", divergences.len());
+        for entry in &divergences {
+            let _ = writeln!(
+                text,
+                "line {}: ref={:?}  rust={:?}",
+                entry["line_no"],
+                entry["ref"].as_str().unwrap_or("?"),
+                entry["rust"].as_str().unwrap_or("?")
+            );
+        }
+    }
+    let _ = std::fs::write(dir.join(format!("{base}.txt")), text);
 }
 
 #[cfg(test)]

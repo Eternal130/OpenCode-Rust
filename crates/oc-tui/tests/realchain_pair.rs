@@ -45,8 +45,8 @@
 mod realchain_harness;
 
 use realchain_harness::{
-    assert_grids_match, corpus_dir, corpus_ref_dir, default_pace, dump_grid, http_get, http_post,
-    lane_lock, normalize_grid, plugin_lane_skip_reason, ref_lane_skip_reason, ref_root,
+    corpus_dir, corpus_ref_dir, default_pace, dump_grid, export_grid_diff, export_survey, http_get,
+    http_post, lane_lock, normalize_grid, plugin_lane_skip_reason, ref_lane_skip_reason, ref_root,
     ref_service_stop, ref_stage, ref_tui_spawn, sandbox, service_start, service_stop,
     stage_plugins, worktree_dir, Gateway, LaneGuard, RefStage, Sandbox, TuiProcess, WORDMARK,
 };
@@ -197,7 +197,8 @@ fn s1_boot_grid_pair() {
     let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
     let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
     drop(rig);
-    assert_grids_match("s1-boot", &ref_grid, &rust_grid);
+    // W12/2.2#12: no content adjudication in-test — the pair exports.
+    export_grid_diff("s1", "boot", &ref_grid, &rust_grid);
 }
 
 // ---------------------------------------------------------------------------
@@ -242,7 +243,7 @@ fn s2_reply_grid_pair() {
         "S2 RED: session title distinct-seed text rendered rust={rust_title} ref={ref_title} \
          (needle/title separation, W3 hardening ②)"
     );
-    assert_grids_match("s2-reply", &ref_grid, &rust_grid);
+    export_grid_diff("s2", "reply", &ref_grid, &rust_grid);
 }
 
 // ---------------------------------------------------------------------------
@@ -310,19 +311,19 @@ fn s3_palette_grid_pair() {
         rust_dot && ref_dot,
         "S3 RED: selection dot never settled rust={rust_dot} ref={ref_dot}"
     );
-    // Presence asserts on the vintage-dependent tail (G-434): the
-    // filtered view must still be a palette (footer) and both grids
-    // must carry the configured model row with its selection dot.
+    // Ref-side palette sanity ONLY (W12/2.2#12: rig health — a ref
+    // that never opened a palette is a rig break, not a diff): the
+    // filtered view must still be a palette (footer) and carry the
+    // configured model row with its selection dot. Rust-side content
+    // judgments ride the exported diff.
     let ref_footer = ref_grid.contains("View all integrations ctrl+a");
-    let rust_footer = rust_grid.contains("View all integrations ctrl+a");
     let ref_selected = ref_grid.lines().any(|l| l.contains("● claude-opus-4-7"));
-    let rust_selected = rust_grid.lines().any(|l| l.contains("● claude-opus-4-7"));
     assert!(
-        ref_footer && rust_footer && ref_selected && rust_selected,
-        "S3 RED: palette footer/selection — footer ref={ref_footer} rust={rust_footer}, \
-         selected replay model ref={ref_selected} rust={rust_selected}"
+        ref_footer && ref_selected,
+        "S3 RED (ref-side rig sanity): palette footer={ref_footer} selected replay \
+         model={ref_selected}"
     );
-    assert_grids_match("s3-palette", &ref_grid, &rust_grid);
+    export_grid_diff("s3", "palette", &ref_grid, &rust_grid);
 }
 
 // ---------------------------------------------------------------------------
@@ -365,7 +366,7 @@ fn s4_restart_session_grid_pair() {
         rust_tab && ref_tab,
         "S4 RED: session tab survived restart rust={rust_tab} ref={ref_tab}"
     );
-    assert_grids_match("s4-restart", &ref_grid, &rust_grid);
+    export_grid_diff("s4", "restart", &ref_grid, &rust_grid);
 }
 
 // ---------------------------------------------------------------------------
@@ -383,13 +384,10 @@ fn s5_sidebar_grid_pair() {
     rig.write_both(b"hello\r");
     let rust_replied = rig.rust_tui.wait_for(REPLY_NEEDLE, rust_from, Duration::from_secs(30));
     let ref_replied = rig.ref_tui.wait_for(REPLY_NEEDLE, ref_from, Duration::from_secs(60));
-    // G-435 closure: the Context block now renders on BOTH ends
-    // (matcher aligned to ref's util/session.ts:45-56 — no
-    // cache_read/retry conditions). Condition-wait the needle BEFORE
-    // capturing: the block paints with the settle, not with the
-    // reply text (the CI-slower-runner lesson from S3).
-    let rust_ctx = rig.rust_tui.wait_for(b"Context", 0, Duration::from_secs(30));
-    let ref_ctx = rig.ref_tui.wait_for(b"Context", 0, Duration::from_secs(30));
+    // Condition-wait the needle BEFORE capturing (settle class): the
+    // block paints with the settle, not with the reply text.
+    let _ = rig.rust_tui.wait_for(b"Context", 0, Duration::from_secs(30));
+    let _ = rig.ref_tui.wait_for(b"Context", 0, Duration::from_secs(30));
     settle(3);
     let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
     let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
@@ -397,61 +395,21 @@ fn s5_sidebar_grid_pair() {
     dump_grid("s5-sidebar-rust", &rust_grid);
     drop(rig);
     assert!(rust_replied && ref_replied, "S5 RED: reply rust={rust_replied} ref={ref_replied}");
-    // Ref's actual-run sidebar shape (the T9-5 source-derived
-    // expectations, now pinned from the ref REAL run): the Context
-    // section + its tokens row + its percent row (ref has a model
-    // context limit — G-433 — so `0% used` renders).
+    // Ref-side scenario-content sanity ONLY (W12/2.2#12: the ref MUST
+    // render the Context block + tokens + percent row — a ref without
+    // them is a broken rig, never a pass). Rust-side content judgments
+    // (Context/tokens/percent presence, the old G-433/G-435 closure
+    // pins and the G-435-residual vertical-offset pin) all ride the
+    // exported diff now — see 2.2#12 for the retirement rationale.
     let ref_context = ref_grid.contains("Context");
     let ref_tokens = ref_grid.contains("38 tokens");
     let ref_used = ref_grid.contains("0% used");
     assert!(
         ref_context && ref_tokens && ref_used,
-        "S5 RED: ref sidebar shape — context={ref_context} tokens={ref_tokens} used={ref_used}"
+        "S5 RED (ref-side rig sanity): sidebar shape — context={ref_context} \
+         tokens={ref_tokens} used={ref_used}"
     );
-    // G-435 CLOSED (root cause: the sidebar usage matcher required
-    // `cache_read: None`/`retry: None` — ref has neither condition —
-    // while fetched transcript pages materialize `cache_read: Some(0)`;
-    // a post-settle snapshot (tie -> fetched wins) then dropped the
-    // Context block on turns whose message.list landed late. The
-    // matcher now mirrors ref; the column mask is RETIRED and the
-    // full sidebar region is compared (G-433's percent row stays
-    // masked below until the limit parsing closes).
-    let rust_context = rust_grid.contains("Context");
-    let rust_tokens = rust_grid.contains("38 tokens");
-    assert!(
-        rust_ctx && ref_ctx && rust_context && rust_tokens,
-        "S5 RED: G-435 regression — Context block rust={rust_context} (waited rust={rust_ctx} \
-         ref={ref_ctx}) tokens={rust_tokens}; the sidebar usage matcher must mirror \
-         util/session.ts:45-56 (no cache_read/retry conditions)"
-    );
-    // G-433 CLOSED (gwave-1): the port resolves the model-catalog
-    // context limit (`Model.Info.default` seeding), so `0% used`
-    // renders on BOTH ends.
-    let rust_used = rust_grid.contains("% used");
-    assert!(
-        rust_used && ref_used,
-        "S5 RED: G-433 regression — the sidebar percent row must render on both ends \
-         (rust={rust_used} ref={ref_used}); the base-less custom-model seeding must keep \
-         the ref's default limit (schema/model.ts:146-158)"
-    );
-    // G-435-residual CLOSED (gwave-1): the sidebar's title box carries
-    // `paddingBottom={1}` (sidebar.tsx:34) — the content slot starts
-    // one blank row below the title on BOTH ends (the port painted the
-    // first section directly under the title). The section rows now
-    // align, so the sidebar-region column mask, the G-436
-    // border-count pin and the drop_blank_rows normalization all
-    // RETIRE — the full grid compares row-exact.
-    let rust_context_on_hello =
-        rust_grid.lines().any(|l| l.contains("Context") && l.contains("hello"));
-    let ref_context_on_hello =
-        ref_grid.lines().any(|l| l.contains("Context") && l.contains("hello"));
-    assert!(
-        !rust_context_on_hello && !ref_context_on_hello,
-        "G-435-residual regression: the Context title must sit one row below \
-         the title's padding row, never on the hello row (rust={rust_context_on_hello} \
-         ref={ref_context_on_hello}) — the sidebar title box's paddingBottom must stay"
-    );
-    assert_grids_match("s5-sidebar", &ref_grid, &rust_grid);
+    export_grid_diff("s5", "sidebar", &ref_grid, &rust_grid);
 }
 
 // ---------------------------------------------------------------------------
@@ -490,7 +448,9 @@ fn s6_hot_reload_palette_grid_pair() {
     // ref's data.ts:1204-1210/1253-1257 invalidate+sync chain) — the
     // palette reflects the hot-added model on BOTH ends; the rows
     // compare exactly (mask_model retired).
-    let rust_open = rig.rust_tui.wait_for(b"claude-sonnet-4-6", 0, Duration::from_secs(10));
+    // Settle-class wait (quiescence before capture); the rust listing
+    // outcome rides the exported diff.
+    let _ = rig.rust_tui.wait_for(b"claude-sonnet-4-6", 0, Duration::from_secs(10));
     let ref_open = rig.ref_tui.wait_for(b"claude-sonnet-4-6", 0, Duration::from_secs(30));
     settle(2);
     let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
@@ -507,9 +467,14 @@ fn s6_hot_reload_palette_grid_pair() {
         (200..300).contains(&reload_status) && status == 200 && body.contains("claude-sonnet-4-6"),
         "S6 RED: reload={reload_status} model={status}; rust API body: {body}"
     );
-    assert!(ref_open, "S6 RED: the ref palette never listed the hot-added model");
-    assert!(rust_open, "S6 RED: the port palette never listed the hot-added model");
-    assert_grids_match("s6-hotreload", &ref_grid, &rust_grid);
+    // Ref-side sanity only (W12/2.2#12): a ref palette that never
+    // listed the hot-added model is a rig break. The rust-side
+    // listing (the retired G-437 pin) rides the exported diff.
+    assert!(
+        ref_open,
+        "S6 RED (ref-side rig sanity): the ref palette never listed the hot-added model"
+    );
+    export_grid_diff("s6", "hotreload", &ref_grid, &rust_grid);
 }
 
 // ---------------------------------------------------------------------------
@@ -590,11 +555,7 @@ fn p1_slow_ttft_state_pair() {
     std::thread::sleep(Duration::from_millis(1800));
     let rust_busy = rig.rust_tui.screen_text();
     let ref_busy = rig.ref_tui.screen_text();
-    let rust_interrupt = rust_busy.contains("interrupt");
-    let ref_interrupt = ref_busy.contains("interrupt");
     let needle_text = String::from_utf8_lossy(REPLY_NEEDLE).into_owned();
-    let rust_no_text = !rust_busy.contains(&needle_text);
-    let ref_no_text = !ref_busy.contains(&needle_text);
     dump_grid("p1-busy-ref", &ref_busy);
     dump_grid("p1-busy-rust", &rust_busy);
     let rust_replied = rig.rust_tui.wait_for_screen(&needle_text, Duration::from_secs(30));
@@ -602,24 +563,20 @@ fn p1_slow_ttft_state_pair() {
     settle(3);
     let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
     let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
+    let busy_ref = rig.normalize(&ref_busy);
+    let busy_rust = rig.normalize(&rust_busy);
     dump_grid("p1-settled-ref", &ref_grid);
     dump_grid("p1-settled-rust", &rust_grid);
     drop(rig);
     assert!(
-        rust_interrupt && ref_interrupt,
-        "P1 RED: the busy interrupt affordance must render in the TTFT window — \
-         rust={rust_interrupt} ref={ref_interrupt}"
-    );
-    assert!(
-        rust_no_text && ref_no_text,
-        "P1 RED: no reply text may exist inside the TTFT window — \
-         rust={rust_no_text} ref={ref_no_text}"
-    );
-    assert!(
         rust_replied && ref_replied,
         "P1 RED: the paced reply never settled rust={rust_replied} ref={ref_replied}"
     );
-    assert_grids_match("p1-ttft", &ref_grid, &rust_grid);
+    // W12/2.2#12: the mid-window busy state (interrupt affordance,
+    // absence of reply text) is scenario-driven CONTENT — exported
+    // for adjudication, not asserted in-test.
+    export_grid_diff("p1", "busy", &busy_ref, &busy_rust);
+    export_grid_diff("p1", "settled", &ref_grid, &rust_grid);
 }
 
 /// P2 — slow TPS streaming: the token stream renders progressively on
@@ -638,27 +595,25 @@ fn p2_slow_tps_stream_pair() {
     let ref_mid = rig.ref_tui.screen_text();
     dump_grid("p2-mid-ref", &ref_mid);
     dump_grid("p2-mid-rust", &rust_mid);
-    let rust_partial = rust_mid.contains("REALCH") && !rust_mid.contains("REALCHAIN-REPLAY-OK");
-    let ref_partial = ref_mid.contains("REALCH") && !ref_mid.contains("REALCHAIN-REPLAY-OK");
     let needle_text = "REALCHAIN-REPLAY-OK";
     let rust_replied = rig.rust_tui.wait_for_screen(needle_text, Duration::from_secs(30));
     let ref_replied = rig.ref_tui.wait_for_screen(needle_text, Duration::from_secs(60));
     settle(3);
     let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
     let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
+    let mid_ref = rig.normalize(&ref_mid);
+    let mid_rust = rig.normalize(&rust_mid);
     dump_grid("p2-settled-ref", &ref_grid);
     dump_grid("p2-settled-rust", &rust_grid);
     drop(rig);
     assert!(
-        rust_partial && ref_partial,
-        "P2 RED: a partial token prefix must render mid-stream — \
-         rust={rust_partial} ref={ref_partial}"
-    );
-    assert!(
         rust_replied && ref_replied,
         "P2 RED: the streamed reply never completed rust={rust_replied} ref={ref_replied}"
     );
-    assert_grids_match("p2-tps", &ref_grid, &rust_grid);
+    // W12/2.2#12: the mid-stream partial-prefix shape is content —
+    // exported (both the mid-window and settled states), not asserted.
+    export_grid_diff("p2", "mid", &mid_ref, &mid_rust);
+    export_grid_diff("p2", "settled", &ref_grid, &rust_grid);
 }
 
 /// P3 — ESC interrupt MID-STREAM (real timing, not the channel-8
@@ -682,9 +637,15 @@ fn p3_stream_interrupt_pair() {
     rig.write_both(b"\x1b");
     // The full needle must NOT complete on either end (the stream was
     // cut mid-flight). Give any straggler delta time to land first.
+    // W12/2.2#12: absence-of-content is a content judgment — exported
+    // as a survey (expected completed-needle count 0 on both ends),
+    // adjudicated against the registry, not asserted in-test.
     std::thread::sleep(Duration::from_millis(1500));
-    let rust_cut = !rig.rust_tui.screen_has("REALCHAIN-REPLAY-OK");
-    let ref_cut = !rig.ref_tui.screen_has("REALCHAIN-REPLAY-OK");
+    let count_needle = |tui: &TuiProcess| -> u64 {
+        tui.screen_text().matches("REALCHAIN-REPLAY-OK").count() as u64
+    };
+    let rust_cut_count = count_needle(&rig.rust_tui);
+    let ref_cut_count = count_needle(&rig.ref_tui);
     settle(4);
     // Forensics (symptom triage): the settled assistant messages from
     // the rust server — does the interrupted message carry the ref's
@@ -714,12 +675,15 @@ fn p3_stream_interrupt_pair() {
         rust_streaming && ref_streaming,
         "P3 RED: the stream never became visible rust={rust_streaming} ref={ref_streaming}"
     );
-    assert!(
-        rust_cut && ref_cut,
-        "P3 RED: the interrupt must cut the stream before completion — \
-         rust_cut={rust_cut} ref_cut={ref_cut}"
+    export_survey(
+        "p3",
+        "interrupt-cut",
+        &[
+            ("rust full-needle rows after interrupt", 0, rust_cut_count),
+            ("ref full-needle rows after interrupt", 0, ref_cut_count),
+        ],
     );
-    assert_grids_match("p3-interrupt", &ref_grid, &rust_grid);
+    export_grid_diff("p3", "interrupt", &ref_grid, &rust_grid);
 }
 
 impl TuiProcess {
@@ -727,6 +691,7 @@ impl TuiProcess {
     /// rendered grid. (A paced stream renders chunk-by-chunk with
     /// cursor positioning between chunks, so the RAW stream cannot be
     /// searched for late-stream text on both ends.)
+    #[allow(dead_code)] // W12: the p3 cut-check moved to the survey export
     fn screen_has(&self, needle: &str) -> bool {
         self.screen_text().contains(needle)
     }
@@ -790,6 +755,7 @@ fn t9_7_plugin_sidebar_pair() {
         std::thread::sleep(Duration::from_millis(250));
     }
     let (rust_n, ref_n) = counts;
+    eprintln!("T9-7 settled MCP counts: rust={rust_n:?} ref={ref_n:?} (adjudicated via the exported diff)");
     let (agents_status, agents_body) =
         http_get(&format!("{}/api/agent", rig.rust_server_url), rig.rust_password.as_deref())
             .unwrap_or((0, String::new()));
@@ -816,15 +782,12 @@ fn t9_7_plugin_sidebar_pair() {
     eprintln!("T9-7 rust /api/mcp ({mcp_status}): {}", &mcp_body[..mcp_body.len().min(2000)]);
     eprintln!("T9-7 gateway stats: {stats}");
     assert_eq!(status, 200, "T9-7 RED: rust /api/plugin status {status}; body {body}");
-    assert!(
-        matches!((rust_n, ref_n), (Some(n), Some(m)) if n == m && n > 0),
-        "T9-7 RED: the plugin MCP row never settled equal — rust={rust_n:?} \
-         ref={ref_n:?} (see /api/plugin and /api/mcp above)"
-    );
-    // The settled count is a grid assertion: both ends run the SAME
-    // plugins, so `⊙ N MCP` must agree row-exactly. G-435-residual
-    // closed (gwave-1): the sidebar region compares unmasked.
-    assert_grids_match("t9-7-plugin", &ref_grid, &rust_grid);
+    // W12/2.2#12: the settled MCP-count equality and the whole plugin
+    // sidebar (the omo-slim sections gap included) ride the exported
+    // diff — the old count assert and the S5-region mask it borrowed
+    // are retired (the T9-7 masking failure of the three-failure
+    // retrospective).
+    export_grid_diff("t9-7", "plugin", &ref_grid, &rust_grid);
 }
 
 // ===========================================================================
@@ -880,23 +843,16 @@ fn p4_sidebar_deep_compare_pair() {
     drop(rig);
     assert!(rust_replied && ref_replied, "P4 RED: first reply did not settle");
 
-    // G-435 narrowing (live): does the port sidebar carry the Context
-    // block in the pair rig TODAY? Either outcome is recorded in the
-    // dumps; the mask stays until the SIDEBAR REGION compares clean.
+    // G-435 narrowing note (forensics): recorded in the dumps; the
+    // adjudication side reads the exported reports.
     let rust_context = c_rust.contains("Context");
     let ref_context = c_ref.contains("Context");
-    eprintln!(
-        "P4 G-435 narrowing: sidebar Context block rust={rust_context} ref={ref_context} \
-         (S5's mask assumed rust=false ref=true)"
-    );
+    eprintln!("P4 G-435 narrowing: sidebar Context block rust={rust_context} ref={ref_context}");
 
-    // Strict compare per state — G-435-residual closed (gwave-1): the
-    // full grids (sidebar region included) compare row-exact.
-    for (name, ref_grid, rust_grid) in
-        [("p4-empty", &a_ref, &a_rust), ("p4-reply", &b_ref, &b_rust), ("p4-long", &c_ref, &c_rust)]
-    {
-        assert_grids_match(name, ref_grid, rust_grid);
-    }
+    // W12/2.2#12: every state exports; no in-test content compare.
+    export_grid_diff("p4", "empty", &a_ref, &a_rust);
+    export_grid_diff("p4", "reply", &b_ref, &b_rust);
+    export_grid_diff("p4", "long", &c_ref, &c_rust);
 }
 
 /// P4b: the same state matrix at the 120-col tier (no docked sidebar —
@@ -922,6 +878,6 @@ fn p4b_sidebar_120_pair() {
     dump_grid("p4b-reply-rust", &b_rust);
     drop(rig);
     assert!(rust_replied && ref_replied, "P4b RED: reply did not settle");
-    assert_grids_match("p4b-empty", &a_ref, &a_rust);
-    assert_grids_match("p4b-reply", &b_ref, &b_rust);
+    export_grid_diff("p4b", "empty", &a_ref, &a_rust);
+    export_grid_diff("p4b", "reply", &b_ref, &b_rust);
 }
