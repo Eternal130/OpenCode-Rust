@@ -318,8 +318,17 @@ impl PipelineExecutor {
             Ok(outcome) => outcome,
             Err(failure) => {
                 if is_declined(&failure) {
-                    // Declines tunnel: the step interrupts, never tool output.
-                    return Err(ToolRunFailure::Declined { message: failure.message });
+                    // Declines tunnel: the step interrupts, never tool
+                    // output. The message is the CAUSE's canonical text
+                    // (step.ts:212-218 — question cancellations carry
+                    // their own, permission declines render "The user
+                    // declined this tool call"), never the leaf wrapper
+                    // ("Unable to execute command: …").
+                    let message = match &failure.cause {
+                        Some(super::FailureCause::Declined { message }) => message.clone(),
+                        _ => failure.message,
+                    };
+                    return Err(ToolRunFailure::Declined { message });
                 }
                 let message = failure.visible_message();
                 let failure = match &failure.cause {
