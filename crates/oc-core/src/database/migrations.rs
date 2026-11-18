@@ -651,7 +651,8 @@ fn backfill_legacy_credentials(conn: &mut Connection, opts: &MigrationOptions) -
     // Cheap gate before opening a write transaction: is there at least one
     // decodable legacy entry whose integration has no credential row?
     let needs_import = 'needs: {
-        let Ok(content) = fs::read_to_string(opts.global_data.as_deref().expect("checked").join("auth.json"))
+        let Ok(content) =
+            fs::read_to_string(opts.global_data.as_deref().expect("checked").join("auth.json"))
         else {
             break 'needs false;
         };
@@ -672,9 +673,8 @@ fn backfill_legacy_credentials(conn: &mut Connection, opts: &MigrationOptions) -
             if integration_id.is_empty() {
                 continue;
             }
-            let present = statement
-                .query_row(rusqlite::params![integration_id], |_| Ok(true))
-                .optional()?;
+            let present =
+                statement.query_row(rusqlite::params![integration_id], |_| Ok(true)).optional()?;
             if present.is_none() {
                 break 'needs true;
             }

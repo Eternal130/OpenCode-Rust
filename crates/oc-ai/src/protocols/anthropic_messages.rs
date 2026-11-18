@@ -2305,7 +2305,8 @@ fn decode_event(frame: &str, route_label: &str) -> Result<Value, AiError> {
             return Err(invalid_stream_event(&value, route_label));
         };
         if let Some(usage) = message_object.get("usage") {
-            check_usage(usage, route_label).map_err(|_| invalid_stream_event(&value, route_label))?;
+            check_usage(usage, route_label)
+                .map_err(|_| invalid_stream_event(&value, route_label))?;
         }
     }
     if let Some(usage) = object.get("usage") {
