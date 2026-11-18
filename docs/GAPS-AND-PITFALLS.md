@@ -3558,3 +3558,12 @@ W6 评审 4 Minor 清偿：①t9_8 整测试体持 armed 守护（ServiceClean �
 - **I-1**：ci.yml adjudicate 步 `if: always()` + reports 目录存在性守卫（realchain 全 skip 的 runner 上不 exit 3 假红，echo 原因跳过）。**I-2**：注册表写回改 tmp+rename 原子写（exit 2 只回写 matched 子集，注明）。**I-3**：t9_8 违规（observed>0）时 survey 附违规帧整屏（`<base>.screen.txt`，.txt 报告指向之）。
 - **Minor**：M-1 normalizations_applied 改 per-report 快照（export 时 drain thread-local；各测试 export 移到该状态 normalize 之后紧邻执行）；M-2 tree_hash 失败留 stderr 一行；M-3 realchain-diff.yml 双份 diff-reports 复制删一处；M-4 G-449 条目 scenario_pattern 放宽 `*`；M-5 exit 2 明细行加 scenario/state/tree_hash。
 - **自证（替代电池重跑）**：注入假差异→exit 2 且明细含新字段；伪造 t9-8 "expected 0…observed 1"→exit 2 且标 "expected-shape VIOLATED (w12-t98-boot-window-connection-lost)"；期望满足轮（零分歧）→exit 0 且输出 "expected-shape satisfied: 3"；陈旧自证（t9-8 旧 last_observed 不进 stale 提示，omo-slim 进、exit 0）；`--help` 语法冒烟 exit 0。改 .rs 文件经 dev-gate 编译+normalizer 单测 2/2+clippy+fmt 绿。
+
+# 第三十一轮增补（W13 控制者裁决，2026-11-18）
+
+- **G-450 🟡**：权限对话框 hint 行集差（ref 有 ctrl+f fullscreen 提示、rust 是 esc reject）——显示层 affordance 提示集，Minor。
+- **G-451 🟡**：reject 后工具行状态渲染——ref 保留已执行工具行+` ! `错误指示器，rust 行集不同（与 rig 的 miss 处理解耦后的真行为面）。
+- **G-452 🟡**：emoji 宽字符模型——两端各错不同（rust 丢 skin-tone/拼接簇；ref 拆单枚+剥 VS16）；**对齐目标=ref 的 grid 而非抽象 Unicode 正确性**（裁决措辞纪律：ref 是锚）。
+- **G-453 🟡**：空流错误态 provider 标签格式（`replay/anthropic-messages` vs `anthropic/anthropic-messages`），Minor。
+- **G-454 🔴**：装载真插件后 rust 主回合不出 HTTP（rig 3/3；footer 显示 agent 已解析→阻塞在主回合组装与 HTTP 之间）。**根因前置两判别实验**（评审 I-1）：①单装 omo-slim（真机形态）vs 双插件；②插件 staging 只读 0555→若宿主写插件目录 EACCES 同步重试即同形——0755 复跑。forensic lane 携带。
+- 评审 Minor 记账：①已 bootstrap 谎报 journal 的库无回填路径（若 beta 产物用户受影响需 backfill——用户真机凭据经 db 整拷路径不受影响，低优先）；②w13_m1/m2 硬编码 journal=48 脆——改引 MIGRATIONS.len()（W14 顺手）；③W13 lane 后台指令违规：报告以"被外部终结"被动语态披露、缺自认——记账（再犯即 lane 评审降档）。
