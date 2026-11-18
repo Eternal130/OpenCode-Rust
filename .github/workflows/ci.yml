@@ -268,13 +268,21 @@ jobs:
       # W12 (user ruling 2026-11-18, GAPS 2.2#12): the realchain tests
       # no longer RED on content — every divergence is exported to
       # .test-logs/diff-reports/ and this controller-side checker is
-      # the new gate (exit 2 = unadjudicated divergence = job red;
-      # exit 0 = EXACT reports or full registry coverage). Runs after
-      # the suite regardless of test failures only when reports exist;
-      # on CI the pair lane skips, so the t9 single-end surveys carry
-      # the expectations.
+      # the new gate (exit 2 = unadjudicated divergence OR an
+      # expected-shape violation = job red; exit 0 = EXACT reports or
+      # full registry coverage). `if: always()` + the directory guard:
+      # on a runner where every realchain test skipped (or the suite
+      # died before exporting), no reports exist — that is a SKIP with
+      # the reason, never an exit-3 false red (the suite's own red
+      # already failed the job in the broken-suite case).
       - name: Adjudicate realchain diff reports
-        run: python3 tools/diff/realchain/adjudicate.py .test-logs/diff-reports
+        if: always()
+        run: |
+          if [ ! -d .test-logs/diff-reports ] || ! ls .test-logs/diff-reports/*.json >/dev/null 2>&1; then
+            echo "adjudicate: no diff-reports exported (realchain tests skipped or suite failed before export) — skipping"
+            exit 0
+          fi
+          python3 tools/diff/realchain/adjudicate.py .test-logs/diff-reports
 
   # Frame-budget runs RELEASE (the product profile; debug numbers are
   # informational only). Runs from the release archive — no compilation.
