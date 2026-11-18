@@ -2,7 +2,8 @@
 
 > 依据：开发规范 2.2#13（2026-11-18 用户裁定二）——能测的都测，不能有任何已知的遗漏；台账要多审几轮保证无缺漏。
 > 状态词汇：**covered**=场景在册；**GAP**=已知遗漏（入排期，两波内不补须波计划显式说明）；**GAP※**=有 ref 锚但无场景（"有锚"=ref 实现存在，可建）；**untestable**=不可测+理由；**audit**=待盘点。
-> 审计轮次：R1=A 路（ref 源码穷举）+B 路（事件/配置/状态空间）双独立审计（2026-11-18）；R2=控制者合并；R3=对抗性攻击（待）；此后每波收口核对。
+> 审计轮次：R1=A 路（ref 源码穷举）+B 路（事件/配置/状态空间）（2026-11-18）；R2=合并；R3=对抗性攻击（CLI 入口/上游回流/组合矩阵/rust 独有/数据形状/抽查——发现族 I 整缺+维度缺+6 新面+3 锚订正）；R4=对抗性攻击（待）；此后每两波至少一轮对抗审计。
+> 可测域维度（R3 新增）：**差分**=双端对拍可测；**单端**=仅 rust 侧可测（ref 枚举不可见：mini 双实现/oc-pty 守护/迁移器自身 UI/--fork --replay 旗标）——H 族及标注「单端」的行走单元 parity 域。
 
 ## A. 输入事件层（PTY 真字节）
 
@@ -24,7 +25,7 @@
 | 悬停 hover（tabs marquee/rail/handle/toast action） | GAP※ | marquee.ts, session-tabs.tsx:1652 |
 | 粘贴：普通+括号 | 部分 | decodePasteBytes；PTY 真字节缺 |
 | 粘贴：图像→附件 | GAP※ | clipboard.ts:25-40, prompt/index.tsx:470-495 |
-| 粘贴：大文本折叠（paste_summary） | GAP※ | prompt/index.tsx:470-495 |
+| 粘贴：大文本折叠（paste_summary） | GAP※ | prompt/index.tsx paste 队列/pasteStyleId ~334-403（R3 订正锚漂移；图像 dedupe/预览 394-403） |
 | resize（SIGWINCH） | covered | pty_{chrome,composer,dialog,diff,footer,overlay}_resize.rs 六文件族；**ref 差分面 audit** |
 | resize 档位边界（sidebar≤120 折叠/home footer 64/80） | GAP※ | app.tsx:459, home/footer.tsx:7-10 |
 | focus/blur（attention FocusState 门控） | audit | attention.ts:23 |
@@ -47,7 +48,7 @@
 | 会话切换/多标签运行中切换 | 部分 | S4 恢复；运行中切换缺 |
 | **多会话并行流式**（多 tab 同时 execution×切换） | GAP | B |
 | queued prompts（流中入队/undo/delete/队列管理） | GAP※ | session/index.tsx:631-663, inbox 4 类事件 |
-| inbox 事件族（enqueued/delivered/cancelled/delivery.changed） | GAP※ | transport.ts:1040-1072 |
+| inbox 事件族（enqueued/delivered/cancelled/delivery.changed） | GAP※ | mini/stream-v2.transport.ts:1040-1072（R3 订正：主前端处理散在 routes/session/index.tsx/render-context.tsx/rows.ts） |
 | 会话生命周期操作（fork/rename/move/delete/viewed/pin） | GAP※ | 各事件（B） |
 | revert/undo/redo | GAP※ | session.revert.* + undo/redo 键（B） |
 | compaction 全周期（started/delta/ended/failed/interrupted/unavailable 分型） | GAP※ | 事件族（B） |
@@ -64,6 +65,12 @@
 | 断连恢复 | 部分 | vt_temporal 单元级；真实链路 audit |
 | instructions.updated/AGENTS.md 热更 | GAP※ | 事件面（B） |
 | worktree.updated | GAP※ | app.tsx（B） |
+
+| transcript 行稳定性（历史 prepend 不跳动） | GAP※ | 上游 40679546d4（R3-2） |
+| open 菜单 awaiting-input 置顶排序 | GAP※ | 上游 a2a543c868（R3-2） |
+| 文件路径后 read ranges 显示 | GAP※ | 上游 375ff827aa（R3-2） |
+| 持久 PTY handoff 不阻断 server 重启/首段输出不丢 | GAP※ | 上游 5ad0786536/334f7a3510（R3-2） |
+| message part 数据形状子表（11 tag×metadata 变体） | audit | session-message.ts:46-238（R3-5：需展开为子表，现「工具族其余」一行不足承载） |
 
 ## C. UI 组件与对话框
 
@@ -97,6 +104,8 @@
 | patch-diff 渲染 | 部分 | G-441 edit 行；独立 viewer 面 audit |
 | error-component 错误边界 | GAP※ | A |
 | theme-error-toast | GAP※ | A |
+
+| plugin select dialog（搜索+actions） | GAP※ | 上游 8380c864bf（R3-2） |
 | panel-host/panel 布局 | audit | A |
 | migration-overlay（迁移进行中 UI） | GAP※ | A（E 族 UI 面） |
 | reconnecting 遮罩（managed/非托管文案分叉） | GAP※ | A+B；G-439 concern① 遗留 |
@@ -123,6 +132,8 @@
 | username 显示 | GAP | B |
 | experimental.policies | GAP | B |
 
+| setup 期间插件 keymap 生效 | GAP※ | 上游 247eb5cc9a（R3-2，A×D 组合） |
+
 ## E. 生命周期与持久化
 
 | 面 | 状态 | 锚/备注 |
@@ -139,7 +150,7 @@
 |---|---|---|
 | 宽度档 120/160 | covered | 通道 8 三档+S5/P4b |
 | kitty 键盘协议 | 部分 | **锚订正（A）：解析在 @opentui/core renderer 层**；端到端 audit |
-| OSC52 剪贴板写 | GAP※ | A |
+| 剪贴板写（host+terminal 双通道：OSC52 为 terminal 通道之一） | GAP※ | app.tsx:55-61 clipboard.writeText（R3 订正：双通道及各自失败面） |
 | 剪贴板图像读取 | GAP※ | clipboard.ts（A） |
 | 终端标题 OSC（"OC \| title"+开关） | GAP※ | app.tsx:572-615（A） |
 | 颜色降档（256/16） | audit | renderer 层 |
@@ -160,14 +171,36 @@
 
 | 面 | 状态 | 锚/备注 |
 |---|---|---|
-| mini 前端整套（footer 7 变体/scrollback/splash/verbosity） | GAP※ | cli/src/mini.ts→runMiniFrontend |
+| mini 前端整套（footer 7 变体/scrollback/splash/verbosity） | GAP※ | cli/src/mini.ts→runMiniFrontend（**单端**：rust mini.rs 双实现） |
 | plugin 自定义路由+route-missing 兜底 | GAP※ | plugin/render.tsx:50-65 |
 | 外部远程驱动（tui.command.execute/toast.show/session.select/prompt.append） | GAP※ | app.tsx:1253-1276（A 新族） |
-| 外部编辑器集成（VISUAL/EDITOR+zed sqlite） | GAP※ | editor.ts:14（A 新族） |
+| 外部编辑器集成（VISUAL/EDITOR+zed sqlite） | GAP※ | editor.ts:14（A 新族；--fork/--replay 旗标单端） |
 | 导出/分享（export-options/result） | GAP※ | ui/dialog-export-*.tsx |
 | storybook（dev-only） | untestable | 生产不可达（OPENCODE_STORY） |
 | devtools-bar（dev-only） | untestable | 同上 |
 | 插件管理 UI（Plugins/Stats/Latex/Merman/DiffViewer 内置插件族） | GAP※ | feature-plugins/ |
+
+## I. CLI 入口族（R3-1 新族：整族双端实装，差分+单元双可测）
+
+| 面 | 状态 | 锚/备注 |
+|---|---|---|
+| 子命令树：upgrade/uninstall/acp/api/debug{agents,config,paths}/models/stats/reload/pair/serve/session{list,delete,export,import} | GAP | ref commands.ts Root Spec 全表；rust oc-cli/src/handlers/ 已全实装 |
+| auth{list,login,logout,export,import,switch} | GAP | auth login 表单关联 C 族 FormPrompt |
+| mcp{list,add,auth,logout} / plugin{list,add,check,update,remove} | GAP | rust handlers auth.rs/mcp.rs/plugin.rs |
+| 根旗标：--standalone/--server/--auto/--yolo/--dangerously-skip-permissions/-c/-s/--prompt | GAP | rust cli.rs prompt_and_auto 仅单测，无场景级 |
+| run 非交互输出（default/json、--thinking、--file、tool_render） | GAP | rust run/noninteractive.rs+tool_render.rs 独立模块 |
+| oc-pty 守护进程接口（daemon/main） | audit | **单端域** |
+
+## J. 组合矩阵（R3-3：输入×状态交叉，均 GAP※）
+
+| 组合 | 备注 |
+|---|---|
+| resize × 权限/FormPrompt 打开中 | resize 族 6 文件均无 dialog 交叉 |
+| 粘贴大文本/图像 × 模态打开中 | paste 队列×焦点抢占 |
+| 并行多 tab 流式 × resize × 切换 | B 单轴已列，无交叉 |
+| queued prompt 入队 × 中断（ESC）瞬间 | inbox×abort 竞态 |
+| 迁移 overlay 进行中 × 任意输入/resize | E 族迁移 UI 无输入面 |
+| composer tab 组 × 持久 PTY 输出到达 × 失焦 | C×B 互不交叉 |
 
 ## 维护规程
 
