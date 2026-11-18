@@ -93,7 +93,7 @@ impl UpdateCache {
             Err(cause) => {
                 // update.ts:41 — a failed probe logs a warning and keeps
                 // the last known answer (false when never checked).
-                eprintln!("opencode plugin: failed to check plugin update for {target}: {cause}");
+                stderrln!("opencode plugin: failed to check plugin update for {target}: {cause}");
                 current.is_some_and(|entry| entry.outdated)
             }
         };
@@ -248,7 +248,7 @@ pub fn collect_stale(root: &Path) {
 fn remove_logged(dir: &Path, name: &str) {
     if let Err(cause) = std::fs::remove_dir_all(dir) {
         // npm.ts:337 — log and continue.
-        eprintln!("opencode plugin: failed to remove stale generation {name}: {cause}");
+        stderrln!("opencode plugin: failed to remove stale generation {name}: {cause}");
     }
 }
 
