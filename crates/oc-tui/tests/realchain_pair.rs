@@ -558,13 +558,17 @@ fn p1_slow_ttft_state_pair() {
     let needle_text = String::from_utf8_lossy(REPLY_NEEDLE).into_owned();
     dump_grid("p1-busy-ref", &ref_busy);
     dump_grid("p1-busy-rust", &rust_busy);
+    // M-1: normalize + export the busy state IMMEDIATELY (before the
+    // settled grids normalize) so the drained normalization snapshot
+    // is this report's own.
+    let busy_ref = rig.normalize(&ref_busy);
+    let busy_rust = rig.normalize(&rust_busy);
+    export_grid_diff("p1", "busy", &busy_ref, &busy_rust);
     let rust_replied = rig.rust_tui.wait_for_screen(&needle_text, Duration::from_secs(30));
     let ref_replied = rig.ref_tui.wait_for_screen(&needle_text, Duration::from_secs(60));
     settle(3);
     let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
     let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
-    let busy_ref = rig.normalize(&ref_busy);
-    let busy_rust = rig.normalize(&rust_busy);
     dump_grid("p1-settled-ref", &ref_grid);
     dump_grid("p1-settled-rust", &rust_grid);
     drop(rig);
@@ -572,10 +576,6 @@ fn p1_slow_ttft_state_pair() {
         rust_replied && ref_replied,
         "P1 RED: the paced reply never settled rust={rust_replied} ref={ref_replied}"
     );
-    // W12/2.2#12: the mid-window busy state (interrupt affordance,
-    // absence of reply text) is scenario-driven CONTENT — exported
-    // for adjudication, not asserted in-test.
-    export_grid_diff("p1", "busy", &busy_ref, &busy_rust);
     export_grid_diff("p1", "settled", &ref_grid, &rust_grid);
 }
 
@@ -596,13 +596,17 @@ fn p2_slow_tps_stream_pair() {
     dump_grid("p2-mid-ref", &ref_mid);
     dump_grid("p2-mid-rust", &rust_mid);
     let needle_text = "REALCHAIN-REPLAY-OK";
+    // M-1: normalize + export the mid state IMMEDIATELY (before the
+    // settled grids normalize) so the drained normalization snapshot
+    // is this report's own.
+    let mid_ref = rig.normalize(&ref_mid);
+    let mid_rust = rig.normalize(&rust_mid);
+    export_grid_diff("p2", "mid", &mid_ref, &mid_rust);
     let rust_replied = rig.rust_tui.wait_for_screen(needle_text, Duration::from_secs(30));
     let ref_replied = rig.ref_tui.wait_for_screen(needle_text, Duration::from_secs(60));
     settle(3);
     let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
     let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
-    let mid_ref = rig.normalize(&ref_mid);
-    let mid_rust = rig.normalize(&rust_mid);
     dump_grid("p2-settled-ref", &ref_grid);
     dump_grid("p2-settled-rust", &rust_grid);
     drop(rig);
@@ -610,9 +614,6 @@ fn p2_slow_tps_stream_pair() {
         rust_replied && ref_replied,
         "P2 RED: the streamed reply never completed rust={rust_replied} ref={ref_replied}"
     );
-    // W12/2.2#12: the mid-stream partial-prefix shape is content —
-    // exported (both the mid-window and settled states), not asserted.
-    export_grid_diff("p2", "mid", &mid_ref, &mid_rust);
     export_grid_diff("p2", "settled", &ref_grid, &rust_grid);
 }
 
@@ -675,6 +676,7 @@ fn p3_stream_interrupt_pair() {
         rust_streaming && ref_streaming,
         "P3 RED: the stream never became visible rust={rust_streaming} ref={ref_streaming}"
     );
+    export_grid_diff("p3", "interrupt", &ref_grid, &rust_grid);
     export_survey(
         "p3",
         "interrupt-cut",
@@ -682,8 +684,8 @@ fn p3_stream_interrupt_pair() {
             ("rust full-needle rows after interrupt", 0, rust_cut_count),
             ("ref full-needle rows after interrupt", 0, ref_cut_count),
         ],
+        None,
     );
-    export_grid_diff("p3", "interrupt", &ref_grid, &rust_grid);
 }
 
 impl TuiProcess {
@@ -809,6 +811,9 @@ fn p4_sidebar_deep_compare_pair() {
     let a_rust = rig.normalize(&rig.rust_tui.screen_text());
     dump_grid("p4-empty-ref", &a_ref);
     dump_grid("p4-empty-rust", &a_rust);
+    // M-1: export immediately after the state's normalize calls so the
+    // drained normalization snapshot is this report's own.
+    export_grid_diff("p4", "empty", &a_ref, &a_rust);
     // State B: reply settled.
     let rust_from = rig.rust_tui.raw_len();
     let ref_from = rig.ref_tui.raw_len();
@@ -821,6 +826,7 @@ fn p4_sidebar_deep_compare_pair() {
     let b_rust = rig.normalize(&rig.rust_tui.screen_text());
     dump_grid("p4-reply-ref", &b_ref);
     dump_grid("p4-reply-rust", &b_rust);
+    export_grid_diff("p4", "reply", &b_ref, &b_rust);
     // State C: long transcript (later turns are gateway-seeded misses
     // — the SAME deterministic seed on both ends).
     for turn in 2..=4 {
@@ -840,6 +846,7 @@ fn p4_sidebar_deep_compare_pair() {
     let c_rust = rig.normalize(&rig.rust_tui.screen_text());
     dump_grid("p4-long-ref", &c_ref);
     dump_grid("p4-long-rust", &c_rust);
+    export_grid_diff("p4", "long", &c_ref, &c_rust);
     drop(rig);
     assert!(rust_replied && ref_replied, "P4 RED: first reply did not settle");
 
@@ -848,11 +855,6 @@ fn p4_sidebar_deep_compare_pair() {
     let rust_context = c_rust.contains("Context");
     let ref_context = c_ref.contains("Context");
     eprintln!("P4 G-435 narrowing: sidebar Context block rust={rust_context} ref={ref_context}");
-
-    // W12/2.2#12: every state exports; no in-test content compare.
-    export_grid_diff("p4", "empty", &a_ref, &a_rust);
-    export_grid_diff("p4", "reply", &b_ref, &b_rust);
-    export_grid_diff("p4", "long", &c_ref, &c_rust);
 }
 
 /// P4b: the same state matrix at the 120-col tier (no docked sidebar —
@@ -866,6 +868,7 @@ fn p4b_sidebar_120_pair() {
     let a_rust = rig.normalize(&rig.rust_tui.screen_text());
     dump_grid("p4b-empty-ref", &a_ref);
     dump_grid("p4b-empty-rust", &a_rust);
+    export_grid_diff("p4b", "empty", &a_ref, &a_rust);
     let rust_from = rig.rust_tui.raw_len();
     let ref_from = rig.ref_tui.raw_len();
     rig.write_both(b"hello\r");
@@ -876,8 +879,7 @@ fn p4b_sidebar_120_pair() {
     let b_rust = rig.normalize(&rig.rust_tui.screen_text());
     dump_grid("p4b-reply-ref", &b_ref);
     dump_grid("p4b-reply-rust", &b_rust);
+    export_grid_diff("p4b", "reply", &b_ref, &b_rust);
     drop(rig);
     assert!(rust_replied && ref_replied, "P4b RED: reply did not settle");
-    export_grid_diff("p4b", "empty", &a_ref, &a_rust);
-    export_grid_diff("p4b", "reply", &b_ref, &b_rust);
 }

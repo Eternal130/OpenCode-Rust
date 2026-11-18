@@ -203,9 +203,9 @@ jobs:
           OUT=/tmp/opencode/realchain-results
           mkdir -p "$OUT"
           cp -a /tmp/opencode/t9w1-* "$OUT"/ 2>/dev/null || true
+          # diff-reports ride the wholesale .test-logs copy (M-3: the
+          # former separate diff-reports copy was a duplicate).
           cp -a .test-logs "$OUT"/ 2>/dev/null || true
-          mkdir -p "$OUT/diff-reports"
-          cp -a .test-logs/diff-reports/. "$OUT/diff-reports"/ 2>/dev/null || true
           tools/diff/realchain/corpus_age.sh encrypt "$OUT" "/tmp/opencode/realchain-results.tar.age"
       - name: Upload encrypted result bundle
         if: always()

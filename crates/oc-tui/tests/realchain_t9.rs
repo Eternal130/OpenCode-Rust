@@ -114,7 +114,7 @@ fn t9_1_boot_connects_and_settles() {
     let bad = ["reconnect", "Reconnect", "failed to connect", "connection lost", "disconnected"];
     let observations: Vec<(&str, u64, u64)> =
         bad.iter().map(|needle| (*needle, 0, screen.matches(needle).count() as u64)).collect();
-    export_survey("t9-1", "boot", &observations);
+    export_survey("t9-1", "boot", &observations, None);
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +268,7 @@ fn t9_5_sidebar_assembles_ref_content() {
             ("Context section", 1, u64::from(screen.contains("Context"))),
             ("tokens row", 1, u64::from(screen.contains("tokens"))),
         ],
+        Some(&screen),
     );
 }
 
@@ -344,9 +345,16 @@ fn t9_8_slow_boot_window_stays_clean_of_connection_lost() {
     // in-test.
     let boot_start = std::time::Instant::now();
     let mut flash_count: u64 = 0;
+    let mut flash_screen: Option<String> = None;
     while boot_start.elapsed() < std::time::Duration::from_secs(12) {
         let screen = tui.screen_text();
-        flash_count += screen.matches("Connection lost").count() as u64;
+        let hits = screen.matches("Connection lost").count() as u64;
+        if hits > 0 {
+            // I-3: keep the violating frame for the in-band evidence
+            // attachment.
+            flash_screen = Some(screen);
+            flash_count += hits;
+        }
         std::thread::sleep(Duration::from_millis(200));
     }
     // The delay elapses, the handshake lands, the wordmark settles.
@@ -370,6 +378,10 @@ fn t9_8_slow_boot_window_stays_clean_of_connection_lost() {
             ("boot-window screen 'Connection lost' rows (poll sum)", 0, flash_count),
             ("boot-window raw-stream 'Connection lost' present", 0, raw_flash_count),
         ],
+        // I-3: attach the violating screen when one was captured (the
+        // raw-stream-only case attaches nothing — the raw log already
+        // rides .test-logs).
+        flash_screen.as_deref(),
     );
     let _ = &server.url;
 }

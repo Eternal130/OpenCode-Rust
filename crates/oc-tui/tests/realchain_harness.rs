@@ -1438,11 +1438,17 @@ fn mark_fired(name: &'static str) {
     });
 }
 
-/// The names of every normalization that fired in this test process
-/// (empty list = raw grids, nothing stripped).
+/// The names of every normalization that fired SINCE THE LAST EXPORT
+/// (M-1, review fix: a per-report snapshot, not a process-lifetime
+/// accumulation — the set is drained by each export, so each report
+/// lists exactly what its own grids triggered, provided the export
+/// follows the state's normalize calls; empty = raw grids, nothing
+/// stripped).
 #[must_use]
 pub fn normalization_names() -> Vec<String> {
-    FIRED_NORMALIZATIONS.with(|set| set.borrow().iter().map(|name| (*name).to_owned()).collect())
+    FIRED_NORMALIZATIONS.with(|set| {
+        std::mem::take(&mut *set.borrow_mut()).into_iter().map(|name| name.to_owned()).collect()
+    })
 }
 
 /// Normalize a settled screen grid for cross-end comparison:
@@ -1778,6 +1784,12 @@ fn tree_hash() -> String {
             }
         }
     }
+    // M-2: leave a trace — a silent "unknown" binds the report to no
+    // tree and voids baseline discipline (2.2#5).
+    eprintln!(
+        "realchain export: tree_hash unavailable (git rev-parse failed in {})",
+        worktree_root().display()
+    );
     "unknown".to_owned()
 }
 
@@ -1823,7 +1835,7 @@ pub fn export_grid_diff(scenario: &str, state: &str, ref_grid: &str, rust_grid: 
         "divergences": divergences,
         "normalizations_applied": normalization_names(),
     });
-    write_diff_report(scenario, state, &report);
+    write_diff_report(scenario, state, &report, None);
     divergences.len()
 }
 
@@ -1831,8 +1843,15 @@ pub fn export_grid_diff(scenario: &str, state: &str, ref_grid: &str, rust_grid: 
 /// — `observations` = (label, expected, observed). Used where the old
 /// tests asserted content presence/absence on the rust grid alone
 /// (e.g. t9_8's boot-window "Connection lost" count). A divergence is
-/// recorded whenever observed != expected.
-pub fn export_survey(scenario: &str, state: &str, observations: &[(&str, u64, u64)]) -> usize {
+/// recorded whenever observed != expected. `screen` (I-3, review fix):
+/// an optional full-screen capture attached verbatim to the .txt twin
+/// — pass the violating frame so the red has its evidence in-band.
+pub fn export_survey(
+    scenario: &str,
+    state: &str,
+    observations: &[(&str, u64, u64)],
+    screen: Option<&str>,
+) -> usize {
     let divergences: Vec<serde_json::Value> = observations
         .iter()
         .filter(|&(_label, expected, observed)| expected != observed)
@@ -1852,11 +1871,16 @@ pub fn export_survey(scenario: &str, state: &str, observations: &[(&str, u64, u6
         "divergences": divergences,
         "normalizations_applied": normalization_names(),
     });
-    write_diff_report(scenario, state, &report);
+    write_diff_report(scenario, state, &report, screen);
     divergences.len()
 }
 
-fn write_diff_report(scenario: &str, state: &str, report: &serde_json::Value) {
+fn write_diff_report(
+    scenario: &str,
+    state: &str,
+    report: &serde_json::Value,
+    attach: Option<&str>,
+) {
     let dir = diff_report_dir();
     let _ = std::fs::create_dir_all(&dir);
     let base = format!("{scenario}-{state}");
@@ -1888,6 +1912,12 @@ fn write_diff_report(scenario: &str, state: &str, report: &serde_json::Value) {
                 entry["rust"].as_str().unwrap_or("?")
             );
         }
+    }
+    // I-3: an optional in-band evidence attachment (the violating
+    // screen for survey violations).
+    if let Some(screen) = attach {
+        let _ = writeln!(text, "attached screen: see {base}.screen.txt");
+        let _ = std::fs::write(dir.join(format!("{base}.screen.txt")), screen);
     }
     let _ = std::fs::write(dir.join(format!("{base}.txt")), text);
 }
