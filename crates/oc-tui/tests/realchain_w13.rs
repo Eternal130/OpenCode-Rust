@@ -86,7 +86,7 @@ fn preset_auth_json(box_: &Sandbox) {
                 "type": "oauth",
                 "refresh": "w13-refresh",
                 "access": "w13-access",
-                "expires": 1893456000000u64
+                "expires": 1_893_456_000_000u64
             },
             "anthropic": { "type": "api", "key": "w13-ant-key" }
         })
@@ -95,26 +95,16 @@ fn preset_auth_json(box_: &Sandbox) {
     .expect("auth.json");
 }
 
-/// Boot the daemon over preset data and return the API facts.
-fn migration_boot(tag: &str) -> (LaneGuard, Sandbox, ManagedServer) {
-    let lane = lane_lock();
-    let gateway = Gateway::spawn(tag, None);
-    let box_ = sandbox(tag, gateway.port);
-    box_.write_config(&[], "replay/claude-opus-4-7");
-    let server = service_start(&box_);
-    drop(gateway);
-    (lane, box_, server)
-}
-
 fn credential_count(url: &str, password: Option<&str>) -> (u16, usize) {
     let (status, body) =
         http_get(&format!("{url}/api/credential"), password).unwrap_or((0, String::new()));
     let count = serde_json::from_str::<serde_json::Value>(&body)
         .ok()
         .and_then(|value| {
-            value.as_array().map(Vec::len).or_else(|| {
-                value.get("data").and_then(|data| data.as_array()).map(Vec::len)
-            })
+            value
+                .as_array()
+                .map(Vec::len)
+                .or_else(|| value.get("data").and_then(|data| data.as_array()).map(Vec::len))
         })
         .unwrap_or(0);
     (status, count)
@@ -147,9 +137,10 @@ fn w13_m1_fresh_install_imports_auth_json() {
     let sessions = serde_json::from_str::<serde_json::Value>(&list_body)
         .ok()
         .and_then(|value| {
-            value.as_array().map(Vec::len).or_else(|| {
-                value.get("data").and_then(|data| data.as_array()).map(Vec::len)
-            })
+            value
+                .as_array()
+                .map(Vec::len)
+                .or_else(|| value.get("data").and_then(|data| data.as_array()).map(Vec::len))
         })
         .unwrap_or(0);
     // Migration markers: the import marker + the full journal live in
@@ -227,7 +218,11 @@ fn w13_m3_corrupted_credential_row_scopes_the_failure() {
         "corrupt-row",
         &[
             ("pre-corruption /api/credential status", 200, u64::from(good_status)),
-            ("post-corruption /api/credential status (ref fail-the-read)", 500, u64::from(cred_status)),
+            (
+                "post-corruption /api/credential status (ref fail-the-read)",
+                500,
+                u64::from(cred_status),
+            ),
         ],
         None,
     );
@@ -361,6 +356,7 @@ fn perm_rig(tag: &str) -> PermRig {
 
 impl Drop for PermRig {
     fn drop(&mut self) {
+        let _ = (&self.rust_gateway, &self.ref_gateway);
         self.rust_tui.shutdown(Duration::from_secs(10));
         self.ref_tui.shutdown(Duration::from_secs(10));
         ref_service_stop(&self.refbox, &self.stage);
@@ -531,16 +527,17 @@ fn w13_omo_sections_at_trigger_width_pair() {
     let server = service_start(&rust);
     let mut rust_tui = TuiProcess::spawn(&rust, 96, ROWS);
     let mut ref_tui = ref_tui_spawn(&refbox, &stage, 96, ROWS);
-    let roots = vec![
-        refbox.root.to_string_lossy().into_owned(),
-        rust.root.to_string_lossy().into_owned(),
-    ];
+    let roots =
+        [refbox.root.to_string_lossy().into_owned(), rust.root.to_string_lossy().into_owned()];
     let refs: Vec<&str> = roots.iter().map(String::as_str).collect();
     let normalize = |grid: &str| normalize_grid(grid, &refs);
 
     let rust_booted = rust_tui.wait_for(WORDMARK, 0, Duration::from_secs(30));
     let ref_booted = ref_tui.wait_for(WORDMARK, 0, Duration::from_secs(60));
-    assert!(rust_booted && ref_booted, "OMO precondition RED: boot rust/rust={rust_booted}/{ref_booted}");
+    assert!(
+        rust_booted && ref_booted,
+        "OMO precondition RED: boot rust/rust={rust_booted}/{ref_booted}"
+    );
     // Plugin load is async — settle past the wordmark.
     settle(8);
     let home_ref = normalize(&ref_tui.screen_text());
@@ -559,7 +556,8 @@ fn w13_omo_sections_at_trigger_width_pair() {
     rust_tui.write(b"hello\r");
     ref_tui.write(b"hello\r");
     let ref_replied = ref_tui.wait_for(b"REALCHAIN-REPLAY-OK", ref_from, Duration::from_secs(60));
-    let rust_replied = rust_tui.wait_for(b"REALCHAIN-REPLAY-OK", rust_from, Duration::from_secs(30));
+    let rust_replied =
+        rust_tui.wait_for(b"REALCHAIN-REPLAY-OK", rust_from, Duration::from_secs(30));
     settle(4);
     let session_ref = normalize(&ref_tui.screen_text());
     let session_rust = normalize(&rust_tui.screen_text());
@@ -625,16 +623,17 @@ fn g_scenario(suffix: &str, prompt: &str) {
     let _server = service_start(&rust);
     let mut rust_tui = TuiProcess::spawn(&rust, COLS, ROWS);
     let mut ref_tui = ref_tui_spawn(&refbox, &stage, COLS, ROWS);
-    let roots = vec![
-        refbox.root.to_string_lossy().into_owned(),
-        rust.root.to_string_lossy().into_owned(),
-    ];
+    let roots =
+        [refbox.root.to_string_lossy().into_owned(), rust.root.to_string_lossy().into_owned()];
     let refs: Vec<&str> = roots.iter().map(String::as_str).collect();
     let normalize = |grid: &str| normalize_grid(grid, &refs);
 
     let rust_booted = rust_tui.wait_for(WORDMARK, 0, Duration::from_secs(30));
     let ref_booted = ref_tui.wait_for(WORDMARK, 0, Duration::from_secs(60));
-    assert!(rust_booted && ref_booted, "G-{suffix} precondition RED: boot {rust_booted}/{ref_booted}");
+    assert!(
+        rust_booted && ref_booted,
+        "G-{suffix} precondition RED: boot {rust_booted}/{ref_booted}"
+    );
     settle(2);
     rust_tui.write(format!("{prompt}\r").as_bytes());
     ref_tui.write(format!("{prompt}\r").as_bytes());
@@ -800,7 +799,10 @@ fn w13x_omo_bootstrap_seed() {
             box_.write_config_ext(&[], "replay/claude-opus-4-7", &spec_refs);
             let _server = service_start(&box_);
             let mut tui = TuiProcess::spawn(&box_, COLS, ROWS);
-            assert!(tui.wait_for(WORDMARK, 0, Duration::from_secs(30)), "rust omo bootstrap settle");
+            assert!(
+                tui.wait_for(WORDMARK, 0, Duration::from_secs(30)),
+                "rust omo bootstrap settle"
+            );
             settle(6);
             tui.write(b"hello\r");
             let ok = tui.wait_for(b"REALCHAIN-REPLAY-OK", 0, Duration::from_secs(60));
@@ -842,6 +844,10 @@ fn w13x_corpus_layout() {
         let entries =
             std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("corpus dir {}: {e}", dir.display()));
         let count = entries.count();
-        assert!(count >= 4, "corpus dir {} must carry the 4 payload cassettes (has {count})", dir.display());
+        assert!(
+            count >= 4,
+            "corpus dir {} must carry the 4 payload cassettes (has {count})",
+            dir.display()
+        );
     }
 }

@@ -461,9 +461,7 @@ pub fn boot(
                 // empty `global_data` pre-wrote the journal without
                 // the import and the engine's later open then saw a
                 // "complete" journal).
-                oc_core::database::MigrationOptions {
-                    global_data: Some(data_root.to_path_buf()),
-                },
+                oc_core::database::MigrationOptions { global_data: Some(data_root.to_path_buf()) },
             )) {
                 Ok(db) => Some(Arc::new(DbStoragePort { db: Arc::new(db) })),
                 Err(error) => {
