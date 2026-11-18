@@ -263,7 +263,11 @@ async fn tool_decode_issues_format_is_exact() {
         .expect_err("minLength");
     assert_eq!(
         error_message(&failure),
-        "Invalid arguments for tool \"grep\":\n- pattern: Pattern must not be empty\n\nArguments provided:\n{\n  \"pattern\": \"\"\n}\n\nUpdate the arguments and call the tool again."
+        // G-455② — the custom message rode `x-opencode-message`, which
+        // the ref's zod never serializes to the wire schema; dropped for
+        // wire parity (the JSON-schema validator's standard minLength
+        // text fires instead).
+        "Invalid arguments for tool \"grep\":\n- pattern: must NOT have fewer than 1 characters\n\nArguments provided:\n{\n  \"pattern\": \"\"\n}\n\nUpdate the arguments and call the tool again."
     );
     // Missing required field.
     let failure = call(&harness.tools, "edit", serde_json::json!({ "path": "x" }))
