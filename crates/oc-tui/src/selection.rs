@@ -133,19 +133,30 @@ pub fn selected_text(frame: &Frame, rect: SelectionRect) -> String {
     lines.join("\n")
 }
 
-/// W6 症状⑧ — paint the live selection's highlight over the final
-/// frame: opentui's renderer draws the mouse selection on the
-/// composited grid (the `renderer.getSelection()` cell model this
-/// module mirrors) as REVERSE VIDEO — each selected cell's fg and bg
-/// swap (a `Default` side resolves against the terminal's own
-/// default pair, exactly like the renderer's unresolved cells).
-/// Called from [`crate::app::App::frame`] AFTER every tree layer
-/// composited, so the highlight rides above the whole screen (the
-/// renderer's own post-grid pass z).
+/// W6 症状⑧ / 真机⑧残余 — paint the live selection's highlight over
+/// the final frame: opentui's selection is a CHARACTER-offset range
+/// over the text renderables (`TextBufferRenderable.onSelectionChanged`
+/// → text-buffer-view.zig `setLocalSelectionStyle`: anchor/focus cell
+/// coordinates convert through `coordsToCharOffset` and the highlighted
+/// cells are exactly those the range's characters occupy — a drag past
+/// a line's text end never paints the trailing background blanks, the
+/// notepad-like extent 真机⑧ observed). The frame-level port clamps
+/// each row's highlight to that row's text extent (the last non-blank
+/// cell), so the rect's background-blank tail stays unselected.
+/// Selected cells render as REVERSE VIDEO — each cell's fg and bg swap
+/// (a `Default` side resolves against the terminal's own default
+/// pair, exactly like the renderer's unresolved cells). Called from
+/// [`crate::app::App::frame`] AFTER every tree layer composited, so
+/// the highlight rides above the whole screen (the renderer's own
+/// post-grid pass z).
 pub fn paint_highlight(frame: &mut Frame, rect: SelectionRect) {
     for y in rect.y..rect.y.saturating_add(rect.height).min(frame.cells.len()) {
         let Some(row) = frame.cells.get_mut(y) else { continue };
-        for x in rect.x..rect.x.saturating_add(rect.width) {
+        // 真机⑧ — the row's text extent: one past the last non-blank
+        // cell of the whole row (the char-range model's line end).
+        let extent = row.iter().rposition(|cell| cell.ch != ' ').map_or(0, |at| at + 1);
+        let last = (rect.x + rect.width).min(extent);
+        for x in rect.x..last {
             if let Some(cell) = row.get_mut(x) {
                 // W7 Minor ② (W6 review): a Default bg is the emitter's
                 // TRANSPARENT black; swapped into the fg slot it renders

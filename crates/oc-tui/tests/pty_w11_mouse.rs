@@ -262,6 +262,24 @@ fn mouse_scenario(driver: &mut HarnessHandle) -> Result<(), String> {
                 "the drag painted no reverse video: baseline vs dragged styles at {inside_cells:?} unchanged"
             ));
         }
+        // 真机⑧残余（W15）— the selection is a CHARACTER range (ref
+        // text-buffer-view.zig setLocalSelectionStyle: cell coords →
+        // char offsets, highlight over the occupied cells only): a row
+        // whose text ends before the rect's right edge keeps its
+        // background blanks UNSELECTED. The scripted lines are 3-4
+        // cells wide against a 11-cell drag — the tail cells must not
+        // flip.
+        for y in y0..=y1 {
+            let extent = grid.row_text(y).trim_end().chars().count().max(x0);
+            for x in (extent + 1)..=x1 {
+                if style_at(&dragged, x, y) != style_at(&baseline, x, y) {
+                    return Err(format!(
+                        "cell ({x},{y}) beyond the row's text extent ({extent}) flipped — \
+                         the selection must clamp to actual characters (真机⑧)"
+                    ));
+                }
+            }
+        }
         // The control cell outside the rect keeps its style.
         if style_at(&dragged, control.0, control.1) != control_before {
             return Err("a cell outside the selection rect changed style".to_owned());

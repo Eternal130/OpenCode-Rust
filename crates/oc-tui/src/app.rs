@@ -10664,8 +10664,15 @@ pub async fn run_with_size(
         }
         // Input / tick wait — while the marquee scrolls, the wake
         // lands exactly on the next 80 ms step boundary (the steady
-        // ticker above pins the clock to it); otherwise the plain
-        // 100 ms poll. G-368⑥: this 100 ms tick is the port's frame
+        // ticker above pins the clock to it); otherwise the wait runs
+        // to the next 100 ms TICK BOUNDARY (⑦''②: the old plain
+        // 100 ms sleep stacked on top of the iteration's ingest+render
+        // work, so a heavy streaming batch stretched the period to
+        // work+100 — the spinner/lamp cadence jittered ("卡卡") and a
+        // slow pass made the busy sweep band appear to drop out
+        // between frames; anchoring the wait on `last_tick` keeps the
+        // tick cadence stable regardless of per-iteration work).
+        // G-368⑥: this 100 ms tick is the port's frame
         // PACER (app.rs:10197 — not the ref's `targetFps: 60`,
         // app.tsx:234): frames are drawn on invalidation (one per
         // batch via `settle(1)`), the ref's 60 fps scheduler only
@@ -10675,7 +10682,13 @@ pub async fn run_with_size(
         // wake immediately through the select.
         let wait_ms = match marquee_deadline {
             Some(deadline) => (deadline.saturating_sub(now_ms)).clamp(1, 100),
-            None => 100,
+            None => u64::try_from(
+                (last_tick + std::time::Duration::from_millis(100))
+                    .saturating_duration_since(std::time::Instant::now())
+                    .as_millis(),
+            )
+            .unwrap_or(1)
+            .clamp(1, 100),
         };
         let event = tokio::select! {
             maybe = event_rx.recv() => maybe,
