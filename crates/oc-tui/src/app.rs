@@ -10682,13 +10682,7 @@ pub async fn run_with_size(
         // wake immediately through the select.
         let wait_ms = match marquee_deadline {
             Some(deadline) => (deadline.saturating_sub(now_ms)).clamp(1, 100),
-            None => u64::try_from(
-                (last_tick + std::time::Duration::from_millis(100))
-                    .saturating_duration_since(std::time::Instant::now())
-                    .as_millis(),
-            )
-            .unwrap_or(1)
-            .clamp(1, 100),
+            None => 100,
         };
         let event = tokio::select! {
             maybe = event_rx.recv() => maybe,
