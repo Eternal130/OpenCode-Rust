@@ -15668,6 +15668,32 @@ fn mouse_drag_selection_paints_reverse_video_highlight() {
     let mut app = App::new((60, 20));
     app.store.open_tab("s1", Some("Alpha".to_owned()));
     app.store.navigate(Route::session("s1".to_owned()));
+    // 真机⑧（W15）— the selection is a CHARACTER range: the highlight
+    // exists only over actual text. Seed a transcript whose lines
+    // cover the drag region (the blank-region drag the test used
+    // before now paints nothing, exactly like the ref's char model).
+    app.store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+        "session.step.started",
+        serde_json::json!({
+            "sessionID": "s1",
+            "assistantMessageID": "msg_asst_1",
+            "agent": "build",
+            "model": { "providerID": "anthropic", "id": "claude-sonnet" },
+        }),
+    ))]);
+    app.store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+        "session.text.delta",
+        serde_json::json!({
+            "sessionID": "s1",
+            "assistantMessageID": "msg_asst_1",
+            "ordinal": 0,
+            "delta": concat!(
+                "0123456789012345678901234567890123456789\n",
+                "2345678901234567890123456789012345678901234\n",
+                "4567890123456789012345678901234567890123456",
+            ),
+        }),
+    ))]);
     // A baseline frame to compare cell attrs against.
     let before = app.frame();
     // Drag rows 3..6, cols 10..30 (the transcript region — the drag
