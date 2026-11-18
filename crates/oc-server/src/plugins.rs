@@ -2275,13 +2275,21 @@ impl oc_plugin_host::RpcEventPort for EngineRpcEventSlot {
 /// The v2 `Session.Info`-shaped JSON for one row (the plugin surface's
 /// read model — the fields guests probe: id/title/directory/time).
 fn session_info_json(row: &oc_core::database::schema::SessionRow) -> Value {
-    json!({
+    // G-454 — the v2 `Session.Info` schema's `parentID?: string` is
+    // OMITTED when unset (ref effect-schema serialization drops
+    // undefined fields). Emitting an explicit `null` made every
+    // strict consumer classify the session as an invalid child
+    // (superpowers' #2160 guard throws on a non-string parentID).
+    let mut info = json!({
         "id": row.id,
         "title": row.title,
         "directory": row.directory,
-        "parentID": row.parent_id,
         "time": { "created": row.time_created, "updated": row.time_updated },
-    })
+    });
+    if let Some(parent) = &row.parent_id {
+        info["parentID"] = json!(parent);
+    }
+    info
 }
 
 /// The pre-engine session-port placeholder: the host starts before

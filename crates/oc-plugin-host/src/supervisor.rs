@@ -35,6 +35,20 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 
+/// G-454 — non-panicking `eprintln!` for plugin-host tasks: the
+/// detached daemon's stderr pipe loses its reader once the spawning
+/// process exits, and `eprintln!` PANICS on the failed write, killing
+/// the task. On the guest-stdout reader task that froze the whole RPC
+/// bridge (a guest `console.error` mid-hook wedged every later
+/// dispatch — the superpowers send-block). Use everywhere in this
+/// crate's tasks.
+macro_rules! stderrln {
+    ($($arg:tt)*) => {{
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr().lock(), $($arg)*);
+    }};
+}
+
 use crate::context::{
     Bridge, HostState, PermissionPort, SessionPort, ToolPort, CODEMODE_METHODS, GENERATE_METHODS,
     SESSION_METHODS,
@@ -398,7 +412,7 @@ impl Shared {
         if self.codemode_kill_pending.swap(true, Ordering::Relaxed) {
             return; // a kill is already in flight
         }
-        eprintln!(
+        stderrln!(
             "opencode plugin-host: codemode evaluate deadline expired; killing the wedged guest (restart follows)"
         );
         self.kill_tx.send_modify(|generation| *generation += 1);
@@ -1462,7 +1476,7 @@ impl Shared {
                     registrations.clear_plugin(&plugin_id);
                 }
             }
-            eprintln!("opencode plugin-host: crash attributed to {entry} ({count}/{max})");
+            stderrln!("opencode plugin-host: crash attributed to {entry} ({count}/{max})");
         }
     }
 }
@@ -1723,7 +1737,7 @@ fn log_guest(params: &Value) {
     let message = params.get("message").and_then(Value::as_str).unwrap_or("");
     let plugin = params.get("pluginId").and_then(Value::as_str).unwrap_or("host");
     if level == "error" || level == "warn" {
-        eprintln!("opencode plugin-host [{plugin}] {level}: {message}");
+        stderrln!("opencode plugin-host [{plugin}] {level}: {message}");
     }
 }
 
@@ -2233,7 +2247,7 @@ impl Supervisor {
         }
 
         let (child, stdin, stdout) = spawn_process(&config).map_err(|error| {
-            eprintln!("opencode plugin-host: spawn failed ({error}); plugin subsystem disabled");
+            stderrln!("opencode plugin-host: spawn failed ({error}); plugin subsystem disabled");
             error
         })?;
         if let Some(pid) = child.id() {
@@ -2290,7 +2304,7 @@ impl Supervisor {
                 // The supervise loop is wedged past the bound; the
                 // kill_on_drop belt (and the guest's EOF self-exit +
                 // PDEATHSIG) still own the child's death.
-                eprintln!("opencode plugin-host: shutdown wait for child reaped timed out");
+                stderrln!("opencode plugin-host: shutdown wait for child reaped timed out");
                 break;
             }
             std::thread::sleep(Duration::from_millis(10));
@@ -2365,7 +2379,7 @@ async fn load_entry(shared: &Arc<Shared>, entry: &std::path::Path) {
                         if let Some(status) = registrations.plugins.get_mut(&key) {
                             status.state = PluginState::Failed(error.to_string());
                         }
-                        eprintln!("opencode plugin-host: tui-only load {key} failed: {error}");
+                        stderrln!("opencode plugin-host: tui-only load {key} failed: {error}");
                     }
                 }
             }
@@ -2406,7 +2420,7 @@ async fn load_entry(shared: &Arc<Shared>, entry: &std::path::Path) {
             if let Some(status) = registrations.plugins.get_mut(&key) {
                 status.state = PluginState::Failed(error.to_string());
             }
-            eprintln!("opencode plugin-host: load {key} failed: {error}");
+            stderrln!("opencode plugin-host: load {key} failed: {error}");
             return;
         }
     };
@@ -2434,12 +2448,12 @@ async fn load_entry(shared: &Arc<Shared>, entry: &std::path::Path) {
                 let tui_id =
                     result.get("pluginId").and_then(Value::as_str).unwrap_or("?").to_owned();
                 let sidebar = result.get("sidebar").and_then(Value::as_bool).unwrap_or(false);
-                eprintln!(
+                stderrln!(
                     "opencode plugin-host: tui entry loaded for {loaded} ({tui_id}, sidebar slot: {sidebar})"
                 );
             }
             Err(error) => {
-                eprintln!(
+                stderrln!(
                     "opencode plugin-host: tui entry for {loaded} failed to load (contained): {error}"
                 );
             }
@@ -2665,7 +2679,7 @@ impl Shared {
                     key.to_owned(),
                     RevisionState { plugin_id, fingerprint: revision, failed: None },
                 );
-                eprintln!("opencode plugin-host: hot reload {key}");
+                stderrln!("opencode plugin-host: hot reload {key}");
                 true
             }
             Err(error) => {
@@ -2690,7 +2704,7 @@ impl Shared {
                         failed: Some(revision),
                     },
                 );
-                eprintln!(
+                stderrln!(
                     "opencode plugin-host: hot reload {key} failed ({error}); previous generation kept"
                 );
                 false
@@ -2902,7 +2916,7 @@ impl Shared {
                         .push_back(UiRequest::SidebarSection { plugin_id, title, rows, clickable });
                 }
                 Err(error) => {
-                    eprintln!(
+                    stderrln!(
                         "opencode plugin-host: sidebar slot {plugin_id} materialize: {error}"
                     );
                 }
@@ -2962,7 +2976,7 @@ impl Shared {
                     Err(error) => {
                         misses += 1;
                         if misses >= 3 {
-                            eprintln!(
+                            stderrln!(
                                 "opencode plugin-host: sidebar refresh for {plugin_id} stopped: {error}"
                             );
                             shared
@@ -3089,7 +3103,7 @@ mod parent_death {
 async fn log_stderr(stderr: tokio::process::ChildStderr) {
     let mut lines = BufReader::new(stderr).lines();
     while let Ok(Some(line)) = lines.next_line().await {
-        eprintln!("opencode plugin-host [guest-stderr] {line}");
+        stderrln!("opencode plugin-host [guest-stderr] {line}");
     }
 }
 
@@ -3122,7 +3136,7 @@ fn spawn_reader(shared: Arc<Shared>, stdout: tokio::process::ChildStdout, genera
             let Ok(Some(line)) = lines.next_line().await else { break };
             let Some(incoming) = protocol::parse_line(&line) else {
                 if !line.trim().is_empty() {
-                    eprintln!("opencode plugin-host: unparseable frame: {line:.200}");
+                    stderrln!("opencode plugin-host: unparseable frame: {line:.200}");
                 }
                 continue;
             };
@@ -3154,7 +3168,7 @@ fn spawn_reader(shared: Arc<Shared>, stdout: tokio::process::ChildStdout, genera
             // A deliberate codemode-timeout kill is NOT a plugin crash:
             // consume the exemption instead of attributing strikes.
             if shared.codemode_kill_pending.swap(false, Ordering::Relaxed) {
-                eprintln!(
+                stderrln!(
                     "opencode plugin-host: deliberate codemode-timeout kill; crash attribution skipped"
                 );
             } else {
@@ -3219,14 +3233,14 @@ async fn supervise_loop(
                 };
                 consecutive += 1;
                 if consecutive > shared.config.max_restarts {
-                    eprintln!(
+                    stderrln!(
                         "opencode plugin-host: {how}; giving up after {consecutive} restarts (plugin subsystem disabled)"
                     );
                     shared.fail_pending("plugin host gave up");
                     return;
                 }
                 let backoff = backoff(shared.config.restart_backoff_base, shared.config.restart_backoff_max, consecutive);
-                eprintln!(
+                stderrln!(
                     "opencode plugin-host: guest died ({how}); restart #{consecutive} in {backoff:?}"
                 );
                 tokio::time::sleep(backoff).await;
@@ -3234,7 +3248,7 @@ async fn supervise_loop(
                 // the restart arm (the select above was not armed):
                 // never respawn a guest the host is tearing down.
                 if shared.shutting_down.load(Ordering::Relaxed) {
-                    eprintln!("opencode plugin-host: shutdown during restart backoff; not respawning");
+                    stderrln!("opencode plugin-host: shutdown during restart backoff; not respawning");
                     return;
                 }
                 match spawn_process(&shared.config) {
@@ -3267,7 +3281,7 @@ async fn supervise_loop(
                         consecutive = 0;
                     }
                     Err(error) => {
-                        eprintln!("opencode plugin-host: respawn failed: {error}; giving up");
+                        stderrln!("opencode plugin-host: respawn failed: {error}; giving up");
                         shared.fail_pending("plugin host respawn failed");
                         return;
                     }
@@ -3323,7 +3337,7 @@ async fn dispatch_pump(shared: Arc<Shared>, mut tap_rx: mpsc::Receiver<TapEvent>
             }
             Err(error) => {
                 shared.dropped_events.fetch_add(1, Ordering::Relaxed);
-                eprintln!("opencode plugin-host: dispatch of {} dropped ({error})", event.typ);
+                stderrln!("opencode plugin-host: dispatch of {} dropped ({error})", event.typ);
             }
         }
     }
