@@ -93,6 +93,12 @@ fn worktree_root() -> PathBuf {
 /// a sibling lane's build cache; cargo's own `CARGO_BIN_EXE_*` paths
 /// follow the same env, so the harness must agree with it).
 fn opencode_bin() -> PathBuf {
+    opencode_bin_pub()
+}
+
+/// G-454 forensics — the production binary path for out-of-harness
+/// service launches (stderr-captured daemon starts).
+pub fn opencode_bin_pub() -> PathBuf {
     match std::env::var_os("CARGO_TARGET_DIR") {
         Some(dir) => Path::new(&dir).join("debug/opencode-rust"),
         None => worktree_root().join("target/debug/opencode-rust"),
@@ -1425,13 +1431,13 @@ fn plugin_payload_stamp(source: &Path) -> Option<PathBuf> {
 /// Copy one install tree into the sandbox read-only (files 0444, dirs
 /// 0555 — the payload is never mutated by either engine's resolve
 /// path, and a stray write must fail loudly).
-fn copy_tree_readonly(source: &Path, target: &Path) {
+fn copy_tree_readonly(source: &Path, target: &Path, writable: bool) {
     use std::os::unix::fs::PermissionsExt;
     if source.is_file() {
         std::fs::copy(source, target)
             .unwrap_or_else(|e| panic!("copy {} -> {}: {e}", source.display(), target.display()));
         let mut perms = std::fs::metadata(target).expect("staged file").permissions();
-        perms.set_mode(0o444);
+        perms.set_mode(if writable { 0o644 } else { 0o444 });
         std::fs::set_permissions(target, perms).expect("chmod staged file");
         return;
     }
@@ -1440,7 +1446,7 @@ fn copy_tree_readonly(source: &Path, target: &Path) {
     perms.set_mode(0o755);
     std::fs::set_permissions(target, perms).expect("chmod staged dir");
     for entry in std::fs::read_dir(source).expect("read plugin payload dir").flatten() {
-        copy_tree_readonly(&entry.path(), &target.join(entry.file_name()));
+        copy_tree_readonly(&entry.path(), &target.join(entry.file_name()), writable);
     }
 }
 
@@ -1453,10 +1459,27 @@ const PAYLOAD_STAMP: &str = "1791474452027";
 /// root: the port's `$XDG_CACHE_HOME/opencode-rust/npm` vs the ref's
 /// `$XDG_CACHE_HOME/opencode/npm`.
 pub fn stage_plugins(sandbox: &Sandbox, ref_side: bool) -> Vec<String> {
+    stage_plugins_g454(sandbox, ref_side, None, false)
+}
+
+/// G-454 discriminator staging — `only` restricts the staged set to one
+/// registry name (the single-plugin confounder), `writable` stages files
+/// 0644 instead of 0444 (the read-only-artifact confounder).
+pub fn stage_plugins_g454(
+    sandbox: &Sandbox,
+    ref_side: bool,
+    only: Option<&str>,
+    writable: bool,
+) -> Vec<String> {
     let base = if ref_side { "opencode" } else { "opencode-rust" };
     let npm_root = sandbox.root.join("xdg-cache").join(base).join("npm");
     let mut specs = Vec::new();
     for (name, spec) in PLUGIN_SPECS {
+        if let Some(want) = only {
+            if *name != want {
+                continue;
+            }
+        }
         let (_, version) = spec.rsplit_once('@').expect("pinned plugin spec");
         // `@org/pkg@ver` safety: the package name is everything before
         // the LAST '@'.
@@ -1465,7 +1488,7 @@ pub fn stage_plugins(sandbox: &Sandbox, ref_side: bool) -> Vec<String> {
             .unwrap_or_else(|| panic!("plugin payload vanished after the skip check: {name}"));
         let target = npm_root.join(format!("{package}@{version}")).join(PAYLOAD_STAMP);
         if !target.join("node_modules").is_dir() {
-            copy_tree_readonly(&stamp_dir, &target);
+            copy_tree_readonly(&stamp_dir, &target, writable);
         }
         specs.push((*spec).to_owned());
     }

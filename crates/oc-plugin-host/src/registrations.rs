@@ -934,7 +934,7 @@ impl Registrations {
                 .filter(|namespace| !namespace.is_empty())
                 .map(str::to_owned);
             if let Some(error) = tool_registration_error(&name, namespace.as_deref(), codemode) {
-                eprintln!(
+                stderrln!(
                     "opencode plugin-host: Skipping invalid tool registration: name={name:?} namespace={namespace:?} error={error}"
                 );
                 continue;

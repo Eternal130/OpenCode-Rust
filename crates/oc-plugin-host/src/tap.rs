@@ -191,7 +191,7 @@ impl BroadcastTap {
 
     fn warn_full(&self) {
         if !self.warned.swap(true, Ordering::Relaxed) {
-            eprintln!("opencode plugin-host: tap queue full or closed; events will be dropped");
+            stderrln!("opencode plugin-host: tap queue full or closed; events will be dropped");
         }
     }
 }
