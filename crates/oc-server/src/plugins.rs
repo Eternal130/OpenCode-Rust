@@ -454,7 +454,16 @@ pub fn boot(
             let _ = std::fs::create_dir_all(data_root);
             match handle.block_on(oc_core::database::Database::open_location(
                 oc_core::database::engine_location(data_root),
-                oc_core::database::MigrationOptions::default(),
+                // G-445 concern②/W13: this EARLY open is often the
+                // process's FIRST — it bootstraps the database, so it
+                // must carry the data root for the fresh-install
+                // legacy `auth.json` import (the default options'
+                // empty `global_data` pre-wrote the journal without
+                // the import and the engine's later open then saw a
+                // "complete" journal).
+                oc_core::database::MigrationOptions {
+                    global_data: Some(data_root.to_path_buf()),
+                },
             )) {
                 Ok(db) => Some(Arc::new(DbStoragePort { db: Arc::new(db) })),
                 Err(error) => {

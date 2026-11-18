@@ -158,7 +158,7 @@ jobs:
       - name: Run the real-chain battery
         run: |
           set -eu
-          TESTS="--test realchain_t9 --test realchain_pair --test realchain_toolloop"
+          TESTS="--test realchain_t9 --test realchain_pair --test realchain_toolloop --test realchain_w13"
           case "${{ inputs.suite }}" in
             realchain)       TESTS="--test realchain_t9" ;;
             pair+toolloop)   TESTS="--test realchain_pair --test realchain_toolloop" ;;
