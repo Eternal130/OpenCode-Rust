@@ -2,7 +2,7 @@
 
 > 依据：开发规范 2.2#13（2026-11-18 用户裁定二）——能测的都测，不能有任何已知的遗漏；台账要多审几轮保证无缺漏。
 > 状态词汇：**covered**=场景在册；**GAP**=已知遗漏（入排期，两波内不补须波计划显式说明）；**GAP※**=有 ref 锚但无场景（"有锚"=ref 实现存在，可建）；**untestable**=不可测+理由；**audit**=待盘点。
-> 审计轮次：R1=A 路（ref 源码穷举）+B 路（事件/配置/状态空间）（2026-11-18）；R2=合并；R3=对抗性攻击（CLI 入口/上游回流/组合矩阵/rust 独有/数据形状/抽查——发现族 I 整缺+维度缺+6 新面+3 锚订正）；R4=对抗性攻击（待）；此后每两波至少一轮对抗审计。
+> 审计轮次：R1=A 路（ref 源码穷举）+B 路（事件/配置/状态空间）（2026-11-18）；R2=合并；R3=对抗性攻击（CLI 入口/上游回流/组合矩阵/rust 独有/数据形状/抽查——发现族 I 整缺+维度缺+6 新面+3 锚订正）；R4=终轮对抗（env 轴/API 协议面/时间/locale/脱敏/性能显式化——7 面+2 锚订正）；R5-lite=定向补录（控制者，2026-11-18）。**台账收敛，进入维护模式**：每两波至少一轮对抗审计+上游 diff 回流；新可测面随时入册。
 > 可测域维度（R3 新增）：**差分**=双端对拍可测；**单端**=仅 rust 侧可测（ref 枚举不可见：mini 双实现/oc-pty 守护/迁移器自身 UI/--fork --replay 旗标）——H 族及标注「单端」的行走单元 parity 域。
 
 ## A. 输入事件层（PTY 真字节）
@@ -26,7 +26,7 @@
 | 粘贴：普通+括号 | 部分 | decodePasteBytes；PTY 真字节缺 |
 | 粘贴：图像→附件 | GAP※ | clipboard.ts:25-40, prompt/index.tsx:470-495 |
 | 粘贴：大文本折叠（paste_summary） | GAP※ | prompt/index.tsx paste 队列/pasteStyleId ~334-403（R3 订正锚漂移；图像 dedupe/预览 394-403） |
-| resize（SIGWINCH） | covered | pty_{chrome,composer,dialog,diff,footer,overlay}_resize.rs 六文件族；**ref 差分面 audit** |
+| resize（SIGWINCH） | covered | pty_{chrome,composer,dialog,diff,footer,overlay,transcript,strip}_resize.rs **八文件族**（R4 订正）；**ref 差分面 audit** |
 | resize 档位边界（sidebar≤120 折叠/home footer 64/80） | GAP※ | app.tsx:459, home/footer.tsx:7-10 |
 | focus/blur（attention FocusState 门控） | audit | attention.ts:23 |
 | interactivity 子树禁用 | GAP※ | context/interactivity.tsx |
@@ -71,6 +71,8 @@
 | 文件路径后 read ranges 显示 | GAP※ | 上游 375ff827aa（R3-2） |
 | 持久 PTY handoff 不阻断 server 重启/首段输出不丢 | GAP※ | 上游 5ad0786536/334f7a3510（R3-2） |
 | message part 数据形状子表（11 tag×metadata 变体） | audit | session-message.ts:46-238（R3-5：需展开为子表，现「工具族其余」一行不足承载） |
+
+| 时间/时钟面：重连退避时序/timeline 完成超时（×4 处）/export 时间戳 toLocaleString/Locale.duration | GAP※ | stream-v2.transport.ts:209,1530；session/index.tsx:3532（R4-3） |
 
 ## C. UI 组件与对话框
 
@@ -150,12 +152,14 @@
 |---|---|---|
 | 宽度档 120/160 | covered | 通道 8 三档+S5/P4b |
 | kitty 键盘协议 | 部分 | **锚订正（A）：解析在 @opentui/core renderer 层**；端到端 audit |
-| 剪贴板写（host+terminal 双通道：OSC52 为 terminal 通道之一） | GAP※ | app.tsx:55-61 clipboard.writeText（R3 订正：双通道及各自失败面） |
+| 剪贴板写（host+terminal 双通道：OSC52 为 terminal 通道之一） | GAP※ | context/clipboard + clipboard.ts createTuiClipboard（app.tsx:105 装配；R4 订正 R3 锚） |
 | 剪贴板图像读取 | GAP※ | clipboard.ts（A） |
 | 终端标题 OSC（"OC \| title"+开关） | GAP※ | app.tsx:572-615（A） |
 | 颜色降档（256/16） | audit | renderer 层 |
 | 图像渲染（cell 字符预览；无 sixel） | 部分 | 随 C 图像附件 |
 | scrollback snapshot（mini 退场 banner） | GAP※ | A（mini 族） |
+
+| 性能预算显式面（帧预算/TTI/内存=可测回归面；OC_FRAME_BUDGET_SCALE 锚） | 部分 | frame budget 族在场（R4-6：显式入册） |
 
 ## G. 内容边界（R1-B 新族：按 payload 属性切分）
 
@@ -166,6 +170,9 @@
 | 空 assistant 消息 | GAP | — |
 | 超快 delta 批次（流节奏边界） | GAP | — |
 | 组合变音符/控制字符/内容中 ANSI 注入 | GAP | — |
+
+| locale/数字格式（Locale.number/Intl 货币 compact/stats 列宽 padStart） | GAP※ | session/index.tsx:2020, mini/footer.view.tsx:67, stats index.tsx:1631-1701（R4-4） |
+| 脱敏渲染（[REDACTED] 剥离×3 处+rust TUI_RECORD_REDACT） | GAP※ | message-parts.tsx:117 等（R4-5） |
 
 ## H. 独立前端与外部驱动（R1-A 新族归并）
 
@@ -201,6 +208,22 @@
 | queued prompt 入队 × 中断（ESC）瞬间 | inbox×abort 竞态 |
 | 迁移 overlay 进行中 × 任意输入/resize | E 族迁移 UI 无输入面 |
 | composer tab 组 × 持久 PTY 输出到达 × 失焦 | C×B 互不交叉 |
+
+## K. 环境变量轴（R4-1 新族：env=可测状态输入）
+
+| 面 | 状态 | 锚/备注 |
+|---|---|---|
+| OPENCODE_* 全族（CONFIG_DIR/CHANNEL/PTY_BIN/FAST_BOOT/ZED_DB…） | audit | **锚=docs/audit/census/ENV-VARS.md（rust census 现成表，直接转录成场景）**；ref 侧 process.env 消费 ×20 |
+| XDG_{CONFIG,DATA,STATE,CACHE}_HOME 重定向 | 部分 | 迁移/harness 已用；场景级 audit |
+| NO_COLOR/COLORTERM/COLORFGBG/TERM 变体（颜色能力探测） | GAP※ | renderer 层 |
+| TZ 时区/CI 检测 | audit | ENV-VARS.md |
+
+## I-2. HTTP API 协议面（R4-2：~52 路由×TUI 消费矩阵；oc-server 单元 parity 域+TUI 消费差分域）
+
+| 面 | 状态 | 锚/备注 |
+|---|---|---|
+| /api/* 路由全表（session/agent/command/config/credential/fs/find/mcp/model/permission/plugin/pty/persistent-pty/experimental/vcs/worktree/pair/form/reference/websearch…） | GAP | ref protocol/src/groups/*.ts 清单；rust routes.gen.rs+handlers 22 文件已实装（R4 抽查✅）；仅 /api/model 热载有场景 |
+| persistent-pty handoff/shutdown 协议 | GAP※ | E/B shell 终端关联 |
 
 ## 维护规程
 
