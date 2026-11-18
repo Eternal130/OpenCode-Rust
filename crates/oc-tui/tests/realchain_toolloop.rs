@@ -48,9 +48,9 @@
 mod realchain_harness;
 
 use realchain_harness::{
-    assert_grids_match, dump_grid, lane_lock, normalize_grid, ref_lane_skip_reason,
-    ref_service_stop, ref_stage, ref_tui_spawn, sandbox, service_start, service_stop, worktree_dir,
-    Gateway, LaneGuard, RefStage, Sandbox, TuiProcess, WORDMARK,
+    dump_grid, export_grid_diff, lane_lock, normalize_grid, ref_lane_skip_reason, ref_service_stop,
+    ref_stage, ref_tui_spawn, sandbox, service_start, service_stop, worktree_dir, Gateway,
+    LaneGuard, RefStage, Sandbox, TuiProcess, WORDMARK,
 };
 use std::path::PathBuf;
 use std::process::Command;
@@ -241,36 +241,13 @@ fn tl_tool_loop_pair() {
     let rust_cmd = tl_wait!(rig.rust_tui, "cargo test", 30, "tl-fail-rust-cmd");
     let ref_cmd = tl_wait!(rig.ref_tui, "cargo test", 60, "tl-fail-ref-cmd");
     // Folded tool output: the shim's recorded cargo output renders.
-    // G-442 (registered): the port's shell tool row occasionally keeps
-    // its running spinner and never projects the output rows when the
-    // command completes within ~100 ms (engine-side result is CORRECT
-    // — the turn-1 request digest proves the shim output rode the
-    // tool_result — a TUI-side row-projection race). A symmetric
-    // no-op repaint nudge (right-arrow in the empty composer) re-sinks
-    // the event on the affected runs; BOTH ends get the SAME nudge so
-    // the grids stay comparable. Drift signal (W7 review minor②): a
-    // process-wide nudge counter — more than 2 uses means the race is
-    // growing beyond the known flake and gets a loud warning.
-    static NUDGE_USES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    let mut rust_out = rig.rust_tui.wait_for_screen(TOOL_OUTPUT_NEEDLE, Duration::from_secs(15));
-    let mut ref_out = rig.ref_tui.wait_for_screen(TOOL_OUTPUT_NEEDLE, Duration::from_secs(20));
-    if !rust_out || !ref_out {
-        let uses = NUDGE_USES.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-        if uses > 2 {
-            eprintln!(
-                "G-442 DRIFT WARNING: repaint nudge used {uses} times in this process — \
-                 the shell-row projection race is growing beyond the known ~50% flake"
-            );
-        }
-        rig.rust_tui.write(b"\x1b[C");
-        rig.ref_tui.write(b"\x1b[C");
-        if !rust_out {
-            rust_out = rig.rust_tui.wait_for_screen(TOOL_OUTPUT_NEEDLE, Duration::from_secs(10));
-        }
-        if !ref_out {
-            ref_out = rig.ref_tui.wait_for_screen(TOOL_OUTPUT_NEEDLE, Duration::from_secs(10));
-        }
-    }
+    // W12/2.2#12: the G-442 repaint nudge is RETIRED — it masked the
+    // shell-row projection race (both ends nudged made the grids
+    // comparable but hid the divergence from every gate). The race
+    // surface now shows up in the exported diff and is adjudicated
+    // from the registry (accepted-gap, G-442 residual).
+    let rust_out = rig.rust_tui.wait_for_screen(TOOL_OUTPUT_NEEDLE, Duration::from_secs(15));
+    let ref_out = rig.ref_tui.wait_for_screen(TOOL_OUTPUT_NEEDLE, Duration::from_secs(20));
     if !rust_out {
         dump_grid("tl-fail-rust-out", &rig.rust_tui.screen_text());
     }
@@ -304,7 +281,11 @@ fn tl_tool_loop_pair() {
          {ref_stats}); rust screen:\n{}",
         rig_snapshot(&rust_grid)
     );
-    assert!(rust_out && ref_out, "TL RED: folded tool output rust={rust_out} ref={ref_out}");
+    // Ref-side sanity only for the folded output (W12/2.2#12): a ref
+    // that never projects the shim output is a rig break; the rust
+    // side's projection (the G-442 residual race surface) rides the
+    // exported diff instead of redding the battery.
+    assert!(ref_out, "TL RED (ref-side rig sanity): folded tool output never rendered on ref");
     assert!(rust_edited && ref_edited, "TL RED: edit surface rust={rust_edited} ref={ref_edited}");
     assert!(rust_done && ref_done, "TL RED: confirmation needle rust={rust_done} ref={ref_done}");
     assert_eq!(
@@ -342,7 +323,10 @@ fn tl_tool_loop_pair() {
     // unified `1 - …` / `1 + …` gutter rows) — the mask_edit_diff
     // masking AND its scroll-offset blank-row collapse retired with
     // it; the grids compare row-exact.
-    assert_grids_match("tl-toolloop", &ref_grid, &rust_grid);
+    // W12/2.2#12: the row-exact compare itself is now an EXPORT (no
+    // in-test panic path); G-442-residual race surfaces show up here
+    // and are adjudicated from the registry.
+    export_grid_diff("tl", "toolloop", &ref_grid, &rust_grid);
 }
 
 fn rig_snapshot(grid: &str) -> String {

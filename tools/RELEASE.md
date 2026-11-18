@@ -364,9 +364,31 @@ tests — never from real user traffic).
   binary), python3, loopback + PTY. CI: rides the general `nextest`
   job (no pty exclusion pattern matches; the lane lock
   `/tmp/opencode/t9w1-realchain.lock` self-serializes).
+- **W12 adjudication gate (mandatory after every realchain battery)** —
+  the realchain tests perform NO bug adjudication (user ruling
+  2026-11-18, GAPS 2.2#12): every divergence lands in
+  `.test-logs/diff-reports/`, and this checker is the merge gate:
+
+  `python3 tools/diff/realchain/adjudicate.py .test-logs/diff-reports`
+
+  exit 0 = every divergence covered by the committed registry
+  `tools/diff/realchain/adjudications.json`; exit 2 = UNADJUDICATED
+  divergence (red); exit 3 = infrastructure error. The full merge
+  gate is the battery plus this checker:
+
+  `tools/dev-gate.sh 'cargo nextest run -p oc-tui --test realchain_t9 --test realchain_pair --test realchain_toolloop --locked --no-fail-fast' && python3 tools/diff/realchain/adjudicate.py .test-logs/diff-reports`
+
+  A NEW divergence = add a registry entry with an honest
+  classification (never quietly framework-diff; uncertain shapes get
+  `needs-controller` and go to the report). Stale registered shapes
+  (unobserved past `--stale-days`) print a retirement hint, never a
+  red. The step is wired into both ci.yml (nextest job) and
+  realchain-diff.yml (after the battery), and diff-reports ride the
+  encrypted result bundle.
 - **Ref-side pair lane (local / lane-carrying machines only)** — same
   gateway, sandboxed ref 2.0.24 end via bun, identical keystrokes,
-  normalized settled-grid comparison:
+  normalized settled-grid comparison (W12: comparison results are
+  EXPORTED, never asserted in-test — only rig-health asserts remain):
 
   `tools/dev-gate.sh 'cargo nextest run -p oc-tui --test realchain_pair --locked --no-fail-fast'`
 
@@ -375,10 +397,9 @@ tests — never from real user traffic).
   1.4.2 (default the main checkout's untracked
   `tools/bin/bun-1.4.2`, override `T9_BUN`). When either is absent —
   the per-push CI, for one — every pair test **skips** with the reason
-  (`ref_lane_skip_reason`), never reds. Mask retirement tripwires:
-  each G-433..G-437 mask asserts its masked shape is still present —
-  a closed gap turns its own test red, prompting mask retirement
-  (never a silent green).
+  (`ref_lane_skip_reason`), never reds. The historical mask
+  retirement tripwires (G-433..G-437) were retired by the W12 ruling —
+  the registry now owns every shape.
 - **W8 CI lane (manual dispatch = optional pre-release deep run)** —
   the workflow `.github/workflows/realchain-diff.yml`
   (`workflow_dispatch`) runs the FULL battery (T9 + pair + toolloop)
@@ -471,11 +492,11 @@ tests — never from real user traffic).
   `tlx_ref_bootstrap_seed`). Scenario `tl_tool_loop_pair`: hello →
   `shell "cargo test"` (shimmed recorded output) → `edit README.md`
   (real fs) → confirmation text; asserts the tool call row, the
-  folded output, byte-exact file state, and the settled grid (EXACT
-  under the G-441 mask: the port's edit row lacks ref's file-diff
-  preview rows — tripwired, see GAPS). Known flake G-442 (shell row
-  output projection race on ~100 ms completions) is nudged
-  symmetrically and registered.
+  folded output (ref-side rig sanity), byte-exact file state; the
+  settled grid is EXPORTED for adjudication (W12: the G-441 mask and
+  the G-442 symmetric repaint nudge are both retired — the projection
+  race surface now shows in the exported diff and rides the registry
+  as accepted-gap G-442).
 
 
 ---

@@ -25,10 +25,9 @@
 mod realchain_harness;
 
 use realchain_harness::{
-    corpus_dir, dump_grid, http_get, http_post, lane_lock, sandbox, service_start, service_stop,
-    Gateway, LaneGuard, Sandbox, TuiProcess, WORDMARK,
+    corpus_dir, dump_grid, export_survey, http_get, http_post, lane_lock, sandbox, service_start,
+    service_stop, Gateway, LaneGuard, Sandbox, TuiProcess, WORDMARK,
 };
-use std::fmt::Write as _;
 use std::time::Duration;
 
 const COLS: u16 = 120;
@@ -106,18 +105,16 @@ fn t9_1_boot_connects_and_settles() {
     let rig = rig("t9-1", false);
     let settled = rig.tui.wait_for(WORDMARK, 0, Duration::from_secs(30));
     let screen = rig.tui.screen_text();
-    let mut evidence = String::new();
-    if !settled {
-        let _ = write!(evidence, "screen:\n{screen}");
-    }
-    // Reconnect/error indicators (the symptom-① surface).
-    let bad = ["reconnect", "Reconnect", "failed to connect", "connection lost", "disconnected"];
-    let surfaced: Vec<&str> = bad.iter().copied().filter(|n| screen.contains(*n)).collect();
     drop(rig);
-    assert!(
-        settled && surfaced.is_empty(),
-        "T9-1 RED: wordmark settled={settled}, error indicators={surfaced:?}\n{evidence}"
-    );
+    assert!(settled, "T9-1 RED: the TUI never settled on the wordmark\n{screen}");
+    // W12/2.2#12: the reconnect/error-indicator scan is rust-side
+    // scenario CONTENT (absence assertion) — exported as a survey for
+    // adjudication (registry expectation: all counts 0), not asserted
+    // in-test.
+    let bad = ["reconnect", "Reconnect", "failed to connect", "connection lost", "disconnected"];
+    let observations: Vec<(&str, u64, u64)> =
+        bad.iter().map(|needle| (*needle, 0, screen.matches(needle).count() as u64)).collect();
+    export_survey("t9-1", "boot", &observations, None);
 }
 
 // ---------------------------------------------------------------------------
@@ -258,17 +255,20 @@ fn t9_5_sidebar_assembles_ref_content() {
     let screen = rig.tui.screen_text();
     dump_grid("t9-5-rust-160", &screen);
     drop(rig);
-    // (a) session title row exists (timestamped fallback), (b) the
-    // Context section with its token rows. The `$X.XX spent` row is
-    // gated by `cost() > 0` (ref context.tsx:33-35) — the replay
-    // provider is unpriced (cost 0), so ref renders NO spent row
-    // here; asserting it would over-pin beyond the ref source.
-    let context = screen.contains("Context");
-    let tokens = screen.contains("tokens");
-    assert!(
-        replied && context && tokens,
-        "T9-5 RED: reply={replied} context-section={context} tokens={tokens}; \
-         screen:\n{screen}"
+    assert!(replied, "T9-5 RED: reply never rendered; screen:\n{screen}");
+    // W12/2.2#12: the sidebar content check (Context section + token
+    // rows, ref-2.0.24 source expectations) is rust-side scenario
+    // CONTENT — exported as a survey (registry expectation: present)
+    // for adjudication, not asserted in-test. The `$X.XX spent` row
+    // stays un-pinned (ref renders none — unpriced replay provider).
+    export_survey(
+        "t9-5",
+        "sidebar",
+        &[
+            ("Context section", 1, u64::from(screen.contains("Context"))),
+            ("tokens row", 1, u64::from(screen.contains("tokens"))),
+        ],
+        Some(&screen),
     );
 }
 
@@ -339,13 +339,21 @@ fn t9_8_slow_boot_window_stays_clean_of_connection_lost() {
     // The boot window: poll the rendered screen for 12 s (the 6 s
     // first-frame hold + margins) — the raw stream check catches even
     // a one-frame flash of the overlay.
+    // W12/2.2#12: the boot-window content-absence judgment (zero
+    // "Connection lost" flashes) is EXPORTED as a survey (registry
+    // expectation: 0) and adjudicated controller-side, not asserted
+    // in-test.
     let boot_start = std::time::Instant::now();
-    let mut flash: Option<String> = None;
+    let mut flash_count: u64 = 0;
+    let mut flash_screen: Option<String> = None;
     while boot_start.elapsed() < std::time::Duration::from_secs(12) {
         let screen = tui.screen_text();
-        if screen.contains("Connection lost") {
-            flash = Some(screen);
-            break;
+        let hits = screen.matches("Connection lost").count() as u64;
+        if hits > 0 {
+            // I-3: keep the violating frame for the in-band evidence
+            // attachment.
+            flash_screen = Some(screen);
+            flash_count += hits;
         }
         std::thread::sleep(Duration::from_millis(200));
     }
@@ -355,17 +363,25 @@ fn t9_8_slow_boot_window_stays_clean_of_connection_lost() {
         let raw = tui.raw.lock().expect("raw").clone();
         raw.windows(b"Connection lost".len()).any(|w| w == b"Connection lost")
     };
+    let raw_flash_count = u64::from(raw_flash);
     tui.shutdown(Duration::from_secs(10));
     service_stop(&box_);
     daemon_clean.disarm(); // the explicit stop above covered the Drop's duty
     drop(tui);
     drop(gateway);
     drop(lane);
-    assert!(
-        flash.is_none() && !raw_flash,
-        "T9-8 RED: the boot window flashed the lost overlay; screen:\n{}",
-        flash.unwrap_or_default()
-    );
     assert!(settled, "T9-8 RED: the TUI never settled on the wordmark after the slow boot");
+    export_survey(
+        "t9-8",
+        "boot-window",
+        &[
+            ("boot-window screen 'Connection lost' rows (poll sum)", 0, flash_count),
+            ("boot-window raw-stream 'Connection lost' present", 0, raw_flash_count),
+        ],
+        // I-3: attach the violating screen when one was captured (the
+        // raw-stream-only case attaches nothing — the raw log already
+        // rides .test-logs).
+        flash_screen.as_deref(),
+    );
     let _ = &server.url;
 }
