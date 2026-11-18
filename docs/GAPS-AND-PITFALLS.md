@@ -289,7 +289,7 @@
 
 ### 2.1 构建门禁与资源
 
-1. **cargo 构建/测试一律经 `tools/dev-gate.sh` 单入口**：强制 eternal130 身份 + systemd scope（CPUQuota=400%、MemoryMax=10G、TasksMax=512），1 分钟 load≥8 拒启动（2026-11-11 owner ruling，`47cd5ab1`——原 6 因稳态常驻 6.x 频繁卡门）；lane 提示词必须写明走 dev-gate。
+1. **cargo 构建/测试一律经 `tools/dev-gate.sh` 单入口**：强制 eternal130 身份 + systemd scope（CPUQuota=400%、MemoryMax=6G、TasksMax=512；2026-11-18 勘正：实配 6G 非旧文 10G；4 路并行链接下 oc-tui 测试构建可 OOM——重构建型任务设 CARGO_BUILD_JOBS=2），1 分钟 load≥8 拒启动（2026-11-11 owner ruling，`47cd5ab1`——原 6 因稳态常驻 6.x 频繁卡门）；lane 提示词必须写明走 dev-gate。
 2. **dev-gate 只包单条 cargo/nextest 命令**：`tools/diff/run-all.sh`、`tools/parity/*.sh` 等验证脚本**直接跑、禁包 dev-gate**（锁套锁）；一次一个门，禁双发。
 3. **一切测试/构建命令全量 tee 落盘**——不止收尾门，**含过滤词单测、`--exact` 复现、fix 迭代**——到 `.test-logs/<crate>-<时间>-<lane>.log`（git-ignored），禁内嵌 tail/head/grep 截断 Summary；显示用 grep 在 tee 之后单独执行。落盘日志是唯一测试证据：**日志丢失=证据丢失，直接导致重复测试与归因事故**（第十四轮教训，2026-11-07）；争议先读盘上日志，禁凭记忆重跑（见 2.2#5）。
 4. 门排队/卡住先 `fuser /tmp/opencode/dev-gate.lock` + `ps` 查残留（含 PPID1 孤儿）再归因。
@@ -3567,3 +3567,9 @@ W6 评审 4 Minor 清偿：①t9_8 整测试体持 armed 守护（ServiceClean �
 - **G-453 🟡**：空流错误态 provider 标签格式（`replay/anthropic-messages` vs `anthropic/anthropic-messages`），Minor。
 - **G-454 🔴**：装载真插件后 rust 主回合不出 HTTP（rig 3/3；footer 显示 agent 已解析→阻塞在主回合组装与 HTTP 之间）。**根因前置两判别实验**（评审 I-1）：①单装 omo-slim（真机形态）vs 双插件；②插件 staging 只读 0555→若宿主写插件目录 EACCES 同步重试即同形——0755 复跑。forensic lane 携带。
 - 评审 Minor 记账：①已 bootstrap 谎报 journal 的库无回填路径（若 beta 产物用户受影响需 backfill——用户真机凭据经 db 整拷路径不受影响，低优先）；②w13_m1/m2 硬编码 journal=48 脆——改引 MIGRATIONS.len()（W14 顺手）；③W13 lane 后台指令违规：报告以"被外部终结"被动语态披露、缺自认——记账（再犯即 lane 评审降档）。
+
+# 第三十二轮（G-454 修关+G-455 立，2026-11-18）
+
+- **G-454 ✅ 修关**（判别 D1/D2/D3→真 bug；根因双缺陷）：oc-plugin-host supervisor.rs `eprintln!` 在 daemon stderr 管道无读者时 panic（std 语义：stderr 写失败即 panic，无 catch_unwind）杀 guest-stdout reader 任务→插件 RPC 桥整体冻结→hook.dispatch 120s 超时→主回合止于 HTTP 前；触发面=oc-server plugins.rs 显式 `"parentID": null` 致 superpowers 守卫（payload superpowers.js:197-204）每次 console.error 踩 panic 面。修复=非 panic `stderrln!` 宏+parentID 仅存在时 emit（对齐 ref 省略语义）。回归 4 场景（双插件/omo 单/superpowers 单/可写）requests≥2。评审微修补残余 panic 面。教训：**daemon/任务路径禁裸 eprintln!**（crate 级宏化）；判别实验设计（单变量分离）值得入方法论。
+- **G-455 🟡 立**：superpowers 在场时 rust 主回合请求与 ref 三处形状差（omo reminder part 多 cache_control/缺 additionalProperties:false/MCP catalog 文本差）+w13-omo reply-render survey 0/1（主回合已抵达、渲染未对齐）+corpus-w13-ref seed（digest 4cc63e0a）rust rig 未装载——归 W14（形状对齐+seed 装载面）。
+- dev-gate MemoryMax 勘正入 2.1#1（实配 6G；重构建 CARGO_BUILD_JOBS=2 提示）。
