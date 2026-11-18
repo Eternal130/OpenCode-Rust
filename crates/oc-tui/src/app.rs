@@ -10664,14 +10664,14 @@ pub async fn run_with_size(
         }
         // Input / tick wait — while the marquee scrolls, the wake
         // lands exactly on the next 80 ms step boundary (the steady
-        // ticker above pins the clock to it); otherwise the wait runs
-        // to the next 100 ms TICK BOUNDARY (⑦''②: the old plain
-        // 100 ms sleep stacked on top of the iteration's ingest+render
-        // work, so a heavy streaming batch stretched the period to
-        // work+100 — the spinner/lamp cadence jittered ("卡卡") and a
-        // slow pass made the busy sweep band appear to drop out
-        // between frames; anchoring the wait on `last_tick` keeps the
-        // tick cadence stable regardless of per-iteration work).
+        // ticker above pins the clock to it); otherwise the plain
+        // 100 ms poll. ⑦''② (W15): a tick-BOUNDARY wait (sleep to
+        // last_tick+100ms) was tried to smooth the spinner cadence
+        // under heavy batches and REVERTED — the E1 flush-cadence gate
+        // (spec_ef2_e1_cells) reads the constant 100 ms flush stream
+        // as its healthy baseline and counts driver-paced gaps as
+        // stall-bursts (21 findings, .test-logs evidence); the plain
+        // poll keeps that baseline.
         // G-368⑥: this 100 ms tick is the port's frame
         // PACER (app.rs:10197 — not the ref's `targetFps: 60`,
         // app.tsx:234): frames are drawn on invalidation (one per
