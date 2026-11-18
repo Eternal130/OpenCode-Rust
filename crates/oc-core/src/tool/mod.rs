@@ -265,7 +265,10 @@ pub enum FailureCause {
 pub fn permission_cause(error: &crate::permission::PermissionError) -> FailureCause {
     match error {
         crate::permission::PermissionError::Declined(_) => {
-            FailureCause::Declined { message: "permission declined".to_string() }
+            // step.ts:218 — the decline message the failTool projection
+            // renders ("The user declined this tool call"), not the leaf's
+            // own "Unable to execute …" wrapper.
+            FailureCause::Declined { message: "The user declined this tool call".to_string() }
         }
         crate::permission::PermissionError::Blocked(blocked) => {
             FailureCause::Permission { message: blocked.to_string() }
