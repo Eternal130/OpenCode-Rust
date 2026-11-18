@@ -187,13 +187,19 @@ fn render_permission_controls(
             Span::new(" scroll", theme.muted, theme.pane),
         ]
     } else {
+        // G-450: the ask's hint row set is the ref's
+        // (`permission.tsx:598-612`, gap 2): the fullscreen toggle
+        // affordance, then `⇆ select`, then `enter confirm`. Escape
+        // still rejects (escapeKey) but is NOT part of the hint row.
         vec![
+            Span::new("ctrl+f", theme.text, theme.pane),
+            Span::new(" fullscreen", theme.muted, theme.pane),
+            Span::new("  ", FILL_FG, theme.pane),
             Span::new("⇆", theme.text, theme.pane),
-            Span::new(" select  ", theme.muted, theme.pane),
+            Span::new(" select", theme.muted, theme.pane),
+            Span::new("  ", FILL_FG, theme.pane),
             Span::new("enter", theme.text, theme.pane),
-            Span::new(" confirm  ", theme.muted, theme.pane),
-            Span::new("esc", theme.text, theme.pane),
-            Span::new(" reject", theme.muted, theme.pane),
+            Span::new(" confirm", theme.muted, theme.pane),
         ]
     };
     canvas.spans_right(y, width - 4, &hint);
@@ -506,7 +512,7 @@ mod tests {
         assert!(grid[6].contains("Path: src/index.ts"));
         assert!(grid[14].contains("Allow once"));
         assert!(grid[14].contains("Reject"));
-        assert!(grid[14].contains("⇆ select  enter confirm  esc reject"));
+        assert!(grid[14].contains("ctrl+f fullscreen  ⇆ select  enter confirm"));
         assert_eq!(grid[15].chars().filter(|ch| *ch != ' ').count(), 0, "pane pad row");
         assert!(display_width(&grid[13]) <= 80);
         assert_eq!(frame.cell(13, 0).bg, theme.pane, "controls pad on the pane bg");
