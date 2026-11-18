@@ -581,13 +581,13 @@ impl Gateway {
             // W13: `seeds` overrides the seeded reply/title bodies (the
             // content-boundary payloads); `None` keeps the channel-9
             // defaults.
-            cmd.arg("--seed-reply").arg(&seeds.map_or_else(
+            cmd.arg("--seed-reply").arg(seeds.map_or_else(
                 || root.join("tools/diff/realchain/seeds/anthropic-text.txt"),
                 |(reply, _)| reply.to_path_buf(),
             ));
             // W3 hardening: title-generator misses seed a DISTINCT text so
             // the session title never echoes the main-turn reply needle.
-            cmd.arg("--seed-title").arg(&seeds.map_or_else(
+            cmd.arg("--seed-title").arg(seeds.map_or_else(
                 || root.join("tools/diff/realchain/seeds/title-sse.txt"),
                 |(_, title)| title.to_path_buf(),
             ));

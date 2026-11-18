@@ -479,9 +479,7 @@ impl Engine {
                 // pre-existing legacy `auth.json` (the default
                 // options' empty `global_data` silently skipped the
                 // import; the ref's `Global.data` rides the layer).
-                crate::database::MigrationOptions {
-                    global_data: Some(options.data_root.clone()),
-                },
+                crate::database::MigrationOptions { global_data: Some(options.data_root.clone()) },
             )
             .await
             .expect("database"),

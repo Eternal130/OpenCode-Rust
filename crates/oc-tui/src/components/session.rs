@@ -2232,7 +2232,10 @@ mod tests {
             serde_json::json!({ "sessionID": "s1", "title": "Refactor the intake" }),
         ))]);
         let strip = session_frame(&store, "s1", &theme.styles(), (80, 24)).text_grid()[0].clone();
-        assert!(strip.contains("Refactor the intake"), "generated title replaces the constant: {strip}");
+        assert!(
+            strip.contains("Refactor the intake"),
+            "generated title replaces the constant: {strip}"
+        );
     }
 
     /// #12 placeholder semantics: an untitled session holds

@@ -45,7 +45,7 @@ fn bootstrap_imports_existing_auth_json_credentials() {
                 "type": "oauth",
                 "refresh": "r-token",
                 "access": "a-token",
-                "expires": 1893456000000u64
+                "expires": 1_893_456_000_000u64
             },
             "anthropic": {
                 "type": "api",
@@ -61,18 +61,13 @@ fn bootstrap_imports_existing_auth_json_credentials() {
     let rows = credential_rows(&conn);
     assert_eq!(rows.len(), 2, "both legacy credentials imported: {rows:?}");
     assert!(rows.contains(&("anthropic".to_owned(), "API key".to_owned())), "{rows:?}");
-    assert!(
-        rows.contains(&("github-copilot".to_owned(), "OAuth".to_owned())),
-        "{rows:?}"
-    );
+    assert!(rows.contains(&("github-copilot".to_owned(), "OAuth".to_owned())), "{rows:?}");
     // The value column decodes with the v2 camelCase shape (G-445's serde
     // fix is what makes these rows readable by the credential store).
     let value: String = conn
-        .query_row(
-            "SELECT value FROM credential WHERE integration_id = 'anthropic'",
-            [],
-            |row| row.get(0),
-        )
+        .query_row("SELECT value FROM credential WHERE integration_id = 'anthropic'", [], |row| {
+            row.get(0)
+        })
         .expect("select value");
     let decoded: serde_json::Value = serde_json::from_str(&value).expect("decode value");
     assert_eq!(decoded["type"], "key");
@@ -82,7 +77,7 @@ fn bootstrap_imports_existing_auth_json_credentials() {
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM migration", [], |row| row.get(0))
         .expect("count journal");
-    assert_eq!(count, MIGRATIONS.len() as i64);
+    assert_eq!(count, i64::try_from(MIGRATIONS.len()).unwrap());
     let import_marker: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM migration WHERE id = '20260805200742_import_legacy_credentials'",
@@ -118,9 +113,9 @@ fn bootstrap_without_auth_json_imports_nothing() {
     let dir = tempfile::tempdir_in("/tmp/opencode").expect("tempdir");
     let mut conn = fresh_file_db(&dir);
     migrations::apply(&mut conn, &options(&dir)).expect("bootstrap");
-    assert!(credential_rows(&conn).is_empty());
+    assert_eq!(credential_rows(&conn), Vec::<(String, String)>::new());
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM migration", [], |row| row.get(0))
         .expect("count journal");
-    assert_eq!(count, MIGRATIONS.len() as i64);
+    assert_eq!(count, i64::try_from(MIGRATIONS.len()).unwrap());
 }
