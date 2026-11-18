@@ -394,12 +394,19 @@ fn doc_lines(schema: &Value, width: usize) -> Vec<String> {
     while lines.last().is_some_and(|line| line.trim().is_empty()) {
         lines.pop();
     }
+    // tool-schema.ts docLines: a single-line description MERGES with the
+    // annotation summary (`line` + `.`-if-unterminated + ` ` + summary)
+    // when the inline form fits — G-455③ (the port returned the summary
+    // alone, dropping the description of every annotated property).
+    let inline = lines.first().map(|first| {
+        format!("{}{} {}", first, if first.ends_with('.') { "" } else { "." }, summary)
+    });
     if !summary.is_empty()
         && lines.len() == 1
         && !summary.contains('\n')
-        && width + summary.len() + 7 <= 120
+        && inline.as_ref().is_some_and(|inline| width + inline.len() + 7 <= 120)
     {
-        return vec![summary];
+        return vec![inline.unwrap_or_default()];
     }
     let mut out = lines;
     if !summary.is_empty() {

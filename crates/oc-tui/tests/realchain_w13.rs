@@ -533,18 +533,26 @@ fn w13_omo_sections_at_trigger_width_pair() {
     // G-455③ — pin the omo plugin's builtin REMOTE MCP set to the
     // deterministic half: `context7` (mcp.context7.com, anonymous
     // access flaps 401/ok between runs and engines) is disabled on
-    // BOTH ends through the plugin's own `omo.disabled_mcps` config;
-    // `gh_grep` stays (anonymous-stable). Without this the system
-    // prompt's Code Mode catalog section set is network-nondeterministic
-    // and the request digest can never converge.
-    for path in [rust.config_path(), refbox.root.join("xdg-config/opencode/opencode.json")] {
-        let text = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("read config {}: {e}", path.display()));
-        let mut config: serde_json::Value =
-            serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse config: {e}"));
-        config["omo"] = serde_json::json!({ "disabled_mcps": ["context7"] });
-        std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap())
-            .unwrap_or_else(|e| panic!("write config {}: {e}", path.display()));
+    // BOTH ends through the plugin's OWN config file
+    // (`<configDir>/oh-my-opencode-slim.json`, `disabled_mcps` — the
+    // plugin never reads opencode.json's plugin keys); `gh_grep`
+    // stays (anonymous-stable). Without this the system prompt's
+    // Code Mode catalog section set is network-nondeterministic and
+    // the request digest can never converge.
+    for dirs in [
+        [rust.root.join("home/.config/opencode"), rust.root.join("xdg-config/opencode")],
+        [refbox.root.join("xdg-config/opencode"), refbox.root.join("home/.config/opencode")],
+    ]
+    .into_iter()
+    .flatten()
+    {
+        std::fs::create_dir_all(&dirs).expect("plugin config dir");
+        std::fs::write(
+            dirs.join("oh-my-opencode-slim.json"),
+            serde_json::to_string_pretty(&serde_json::json!({ "disabled_mcps": ["context7"] }))
+                .unwrap(),
+        )
+        .expect("write omo plugin config");
     }
     let stage = ref_stage(&refbox);
     ref_service_stop(&refbox, &stage);

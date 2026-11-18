@@ -222,6 +222,13 @@ impl Route {
             dedupe_tools(original.tools.clone()),
             &original.model,
         );
+        // G-455 — the model-facing tool table is name-sorted definitions
+        // with the CodeMode `execute` tool APPENDED LAST (ref tool.ts
+        // :225-241; every ref cassette pins the wire order — arrays keep
+        // element order in request digests). Any intermediate map (hook
+        // drafts, registry snapshots) re-sorts by name, so the wire seam
+        // restores the append deterministically.
+        let tools = append_execute_last(tools);
         let updated = original.update(LLMRequestPatch { tools: Some(tools), ..Default::default() });
         let resolved = apply_cache_policy(&apply_effort_updates(self, &updated));
         match &self.headers {
@@ -1039,4 +1046,24 @@ mod tests {
         route.generate(request(&route)).await.unwrap();
         assert_eq!(transport.requests()[0].header("anthropic-version"), Some("2023-06-01"));
     }
+}
+
+/// G-455 — move the CodeMode `execute` tool to the END of the tool
+/// table (ref tool.ts:225-241: definitions sort by name, the CodeMode
+/// tool is appended). No-op when absent or already last; namespace
+/// entries are left in place (the ref appends at the top level).
+fn append_execute_last(tools: Vec<crate::schema::ToolEntry>) -> Vec<crate::schema::ToolEntry> {
+    let Some(position) = tools.iter().position(|entry| match entry {
+        crate::schema::ToolEntry::Definition(tool) => tool.name == "execute",
+        crate::schema::ToolEntry::Namespace(_) => false,
+    }) else {
+        return tools;
+    };
+    if position + 1 == tools.len() {
+        return tools;
+    }
+    let mut tools = tools;
+    let tail = tools.remove(position);
+    tools.push(tail);
+    tools
 }
