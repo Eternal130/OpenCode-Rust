@@ -273,8 +273,38 @@ fn scenarios_match_committed_captures() {
         }
         let committed = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("{}: read {e}", path.display()));
+        // G-455 — the workspace's `serde_json preserve_order` flipped the
+        // CAPTURE serialization's key order (content identical); the
+        // frozen frames stay byte-pinned — compare canonically
+        // (key-sorted) so serialization order alone is never a drift.
+        let canonical = |text: &str| -> String {
+            let mut value: serde_json::Value = serde_json::from_str(text)
+                .unwrap_or_else(|e| panic!("{}: parse {e}", path.display()));
+            fn sort_value(value: &mut serde_json::Value) {
+                match value {
+                    serde_json::Value::Object(map) => {
+                        let mut entries: Vec<(String, serde_json::Value)> =
+                            map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                        entries.sort_by(|a, b| a.0.cmp(&b.0));
+                        *map = entries.into_iter().collect();
+                        for (_, v) in map.iter_mut() {
+                            sort_value(v);
+                        }
+                    }
+                    serde_json::Value::Array(items) => {
+                        for item in items {
+                            sort_value(item);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            sort_value(&mut value);
+            serde_json::to_string(&value).expect("canonical serialization")
+        };
         assert_eq!(
-            committed, json,
+            canonical(&committed),
+            canonical(&json),
             "{}: capture drifted from the committed scenario (regenerate via \
              tools/parity/tree-scenario-capture.sh)",
             spec.name
