@@ -641,11 +641,34 @@ pub fn apply_only(conn: &mut Connection, opts: &MigrationOptions) -> Result<Appl
 /// missing/undecodable `auth.json` is a no-op like the import itself.
 fn backfill_legacy_credentials(conn: &mut Connection, opts: &MigrationOptions) -> Result<()> {
     const LEGACY_IMPORT_ID: &str = "20260805200742_import_legacy_credentials";
+    /// One-shot completion marker (`kv` row): the backfill runs AT MOST
+    /// ONCE per database. Without it a user DELETING an imported
+    /// credential in the UI would see it resurrect on every boot (the
+    /// legacy `auth.json` still lists the integration and the journal
+    /// still claims the import completed).
+    const BACKFILL_MARKER_KEY: &str = "legacy_credential_backfill_completed";
     if opts.global_data.is_none() {
+        return Ok(());
+    }
+    // The marker lives in `kv`, created by migration `20250717…` — an
+    // intermediate journal that pre-seeds the import marker WITHOUT the
+    // kv migration yet has no table to mark into; skip (the next open
+    // after the migrations complete backfills then).
+    if !table_exists(conn, "kv")? {
         return Ok(());
     }
     let completed = journal_ids(conn)?;
     if !completed.contains(LEGACY_IMPORT_ID) {
+        return Ok(());
+    }
+    let marked: Option<String> = conn
+        .query_row(
+            "SELECT value FROM kv WHERE key = ?1",
+            rusqlite::params![BACKFILL_MARKER_KEY],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if marked.is_some() {
         return Ok(());
     }
     // Cheap gate before opening a write transaction: is there at least one
@@ -662,9 +685,8 @@ fn backfill_legacy_credentials(conn: &mut Connection, opts: &MigrationOptions) -
         let Some(map) = input.as_object() else {
             break 'needs false;
         };
-        let mut statement = conn
-            .prepare("SELECT 1 FROM credential WHERE integration_id = ?1 LIMIT 1")
-            .expect("prepare credential probe");
+        let mut statement =
+            conn.prepare("SELECT 1 FROM credential WHERE integration_id = ?1 LIMIT 1")?;
         for (id, raw) in map {
             if decode_legacy_value(raw).is_none() {
                 continue;
@@ -682,8 +704,23 @@ fn backfill_legacy_credentials(conn: &mut Connection, opts: &MigrationOptions) -
         false
     };
     if needs_import {
-        run_top_tx(conn, Begin::Immediate, |tx| import_legacy_credentials(tx, opts))?;
+        run_top_tx(conn, Begin::Immediate, |tx| {
+            import_legacy_credentials(tx, opts)?;
+            mark_backfill_completed(tx, BACKFILL_MARKER_KEY)
+        })?;
+    } else {
+        run_top_tx(conn, Begin::Immediate, |tx| mark_backfill_completed(tx, BACKFILL_MARKER_KEY))?;
     }
+    Ok(())
+}
+
+/// Writes the one-shot backfill marker (`kv` upsert).
+fn mark_backfill_completed(tx: &mut Tx<'_>, key: &str) -> Result<()> {
+    tx.conn().execute(
+        "INSERT INTO kv (key, value, time_created, time_updated) VALUES (?1, '1', ?2, ?2)
+         ON CONFLICT (key) DO UPDATE SET value = '1', time_updated = ?2",
+        rusqlite::params![key, now_ms()],
+    )?;
     Ok(())
 }
 

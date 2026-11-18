@@ -1636,6 +1636,8 @@ fn footer_key_from_spec(spec: &str) -> Option<FooterKey> {
     match spec {
         "ctrl+c" => Some(FooterKey::CtrlC),
         "ctrl+t" => Some(FooterKey::CtrlT),
+        // G-450 — `permission.prompt.fullscreen` (config/keybind.ts:277).
+        "ctrl+f" => Some(FooterKey::CtrlF),
         // G-272 — `session.background`'s ctrl+b (config/keybind.
         // ts:127) and the settings panel's left/right arrows
         // (footer.command.tsx:818-824).

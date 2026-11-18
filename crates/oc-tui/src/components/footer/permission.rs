@@ -189,11 +189,14 @@ fn render_permission_controls(
     } else {
         // G-450: the ask's hint row set is the ref's
         // (`permission.tsx:598-612`, gap 2): the fullscreen toggle
-        // affordance, then `⇆ select`, then `enter confirm`. Escape
-        // still rejects (escapeKey) but is NOT part of the hint row.
+        // affordance (its label flips with the state — the `hint()`
+        // memo, permission.tsx:498), then `⇆ select`, then
+        // `enter confirm`. Escape still rejects (escapeKey) but is
+        // NOT part of the hint row.
+        let toggle = if state.expanded { "minimize" } else { "fullscreen" };
         vec![
             Span::new("ctrl+f", theme.text, theme.pane),
-            Span::new(" fullscreen", theme.muted, theme.pane),
+            Span::new(format!(" {toggle}"), theme.muted, theme.pane),
             Span::new("  ", FILL_FG, theme.pane),
             Span::new("⇆", theme.text, theme.pane),
             Span::new(" select", theme.muted, theme.pane),
@@ -498,6 +501,41 @@ mod tests {
                 "- b.ts".to_owned(),
             ]
         );
+    }
+
+    /// G-450 behavior face — ctrl+f toggles the fullscreen overlay
+    /// (`permission.prompt.fullscreen`, permission.tsx:454-464) and
+    /// escape COLLAPSES an expanded ask before running the
+    /// escape-key reject (`dismiss`, permission.tsx:432-438).
+    #[test]
+    fn ctrl_f_toggles_fullscreen_and_escape_collapses_first() {
+        let request = request("read", &[]);
+        let state = create_permission_body_state(&request);
+        let expanded = match permission_key(&state, &request, false, "ctrl+f") {
+            PermissionKey::State(next) => next,
+            other => panic!("ctrl+f toggles: {other:?}"),
+        };
+        assert!(expanded.expanded, "expanded");
+        let collapsed = match permission_key(&expanded, &request, false, "ctrl+f") {
+            PermissionKey::State(next) => next,
+            other => panic!("ctrl+f toggles back: {other:?}"),
+        };
+        assert!(!collapsed.expanded, "collapsed again");
+        // Escape on the EXPANDED ask collapses — no reject reply.
+        let back = match permission_key(&expanded, &request, false, "escape") {
+            PermissionKey::State(next) => next,
+            other => panic!("escape collapses the expanded ask: {other:?}"),
+        };
+        assert!(!back.expanded, "collapsed without rejecting");
+        // Escape on the COLLAPSED ask still rejects immediately
+        // (top-level session).
+        let reply = match permission_key(&state, &request, false, "escape") {
+            PermissionKey::Reply(reply, _) => reply,
+            other => panic!("escape still rejects: {other:?}"),
+        };
+        assert_eq!(reply.decision, "reject");
+        // Tab is NOT bound (the ref dialog binds arrows only).
+        assert!(matches!(permission_key(&state, &request, false, "tab"), PermissionKey::Ignored));
     }
 
     #[test]
