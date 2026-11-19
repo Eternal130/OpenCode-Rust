@@ -176,11 +176,11 @@
           "cols": 80,
           "txt": {
             "bytes": 1318,
-            "sha256": "ede7ac0a120ee4d37d21bfb785c8566efae068a68e471ae28294ed1b629b316c"
+            "sha256": "5e207fa9588b6eb74c66e2c9cd807dd65ed1a8816a41fe119158cba75e77d028"
           },
           "ansi": {
-            "bytes": 3216,
-            "sha256": "1d5ff7a8760df44581eb061ca1e61c3bd03226f0f586060750d4db682a77331f"
+            "bytes": 3286,
+            "sha256": "836c1feb110b8dbddb323c9b47d75f4c6718f5ae24e083880ac03e7a1b32dc21"
           }
         },
         {
@@ -190,11 +190,11 @@
           "cols": 160,
           "txt": {
             "bytes": 2598,
-            "sha256": "dbad47248ed9b6eba3f4ea7cb8d17c58c686c59214259b0f506e6a94ad6ab273"
+            "sha256": "ef7694d190bed231a45c30c5e1f7a7e464770836ab4d9890642dd140f232e434"
           },
           "ansi": {
-            "bytes": 4496,
-            "sha256": "c834245b51e5f156262bf4ad79500d252f8702f444b9ee7c60ddcad4b4715a3d"
+            "bytes": 4566,
+            "sha256": "83e6d735cafb458726548cfbc0f335672853d728ff2cec1d2aafe8e0bcd6f7d2"
           }
         }
       ]
