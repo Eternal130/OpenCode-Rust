@@ -13,8 +13,8 @@ mod vt_harness;
 
 use std::time::Duration;
 use vt_harness::{
-    assert_exit_ack, open_first_session, pty_lock, run_tui, FakeLlm, HarnessHandle,
-    LiveHarness, standard_sessions, WORDMARK,
+    assert_exit_ack, open_first_session, pty_lock, run_tui, standard_sessions, FakeLlm,
+    HarnessHandle, LiveHarness, WORDMARK,
 };
 
 fn wait_pane(h: &HarnessHandle, needle: &str, timeout: Duration) -> Option<usize> {
@@ -100,19 +100,18 @@ fn pty_g457_real_config_bare_name_omo_sections() {
                 let grid = driver.grid_now();
                 let mut dump = format!("grid rows={}\n", grid.rows);
                 for row in 0..grid.rows.min(30) {
-                    dump.push_str(&format!("row{row:02}|{}|\n", grid.row_text(row)));
+                    dump = format!("{dump}row{row:02}|{}|\n", grid.row_text(row));
                 }
                 let raw = driver.raw_mirror();
                 let tail = raw.len().saturating_sub(2000);
-                dump.push_str(&format!(
-                    "raw tail: {}\n",
-                    String::from_utf8_lossy(&raw[tail..])
-                ));
+                dump = format!("{dump}raw tail: {}\n", String::from_utf8_lossy(&raw[tail..]));
                 let _ = std::fs::write("/tmp/opencode/g457-omo-screen.txt", dump);
                 return Err("the OMO-Slim section header never rendered (rust leg)".to_owned());
             };
-            let roster = wait_pane(&driver, "explorer", Duration::from_secs(5))
-                .ok_or_else(|| "the agent roster never rendered (rust leg)".to_owned())?;
+            let roster = wait_pane(&driver, "explorer", Duration::from_secs(5));
+            let Some(roster) = roster else {
+                return Err("the agent roster never rendered (rust leg)".to_owned());
+            };
             if roster <= header {
                 return Err("the roster must sit under the header".to_owned());
             }

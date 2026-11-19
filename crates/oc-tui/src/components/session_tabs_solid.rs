@@ -175,7 +175,7 @@ struct StripInputs {
     indicator: crate::components::session_tabs::IndicatorConfig,
     /// G-457 — the animation gate (`config.animations ?? true`): the
     /// live `<spinner>` element vs the static `<text>` fallback
-    /// (TabIndicator's Show, session-tabs.tsx:186-200 — the fallback
+    /// (`TabIndicator`'s Show, session-tabs.tsx:186-200 — the fallback
     /// alone carries the selected-tab BOLD).
     animations: bool,
 }
