@@ -1,13 +1,13 @@
 {
-  "capabilities": {
-    "persistentPty": true
-  },
-  "paths": {
-    "tmp": "<SANDBOX>/tmp/opencode"
-  },
+  "version": "<VERSION>",
   "pid": "<PID>",
   "urls": [
     "<URL>"
   ],
-  "version": "<VERSION>"
+  "paths": {
+    "tmp": "<SANDBOX>/tmp/opencode"
+  },
+  "capabilities": {
+    "persistentPty": true
+  }
 }
