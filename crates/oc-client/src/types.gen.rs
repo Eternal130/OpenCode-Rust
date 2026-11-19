@@ -18,26 +18,6 @@ pub struct QueryLocation {
 /// Wire schema: `Agent.Color`.
 pub type AgentColor = String;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum AgentInfoMode {
-    #[serde(rename = "subagent")]
-    Subagent,
-    #[serde(rename = "primary")]
-    Primary,
-    #[serde(rename = "all")]
-    All,
-}
-
-impl AgentInfoMode {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Subagent => "subagent",
-            Self::Primary => "primary",
-            Self::All => "all",
-        }
-    }
-}
-
 /// Wire schema: `Model.Ref`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ModelRef {
@@ -52,43 +32,21 @@ pub struct ModelRef {
     pub variant: Option<String>,
 }
 
-/// Wire schema: `Permission.Effect`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum PermissionEffect {
-    #[serde(rename = "allow")]
-    Allow,
-    #[serde(rename = "deny")]
-    Deny,
-    #[serde(rename = "ask")]
-    Ask,
-}
-
-impl PermissionEffect {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Allow => "allow",
-            Self::Deny => "deny",
-            Self::Ask => "ask",
-        }
-    }
-}
-
-/// Wire schema: `Permission.Rule`.
+/// Untagged union; serde matches variants in declared order (wire schema `ProviderSettingsTimeout`).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct PermissionRule {
-    /// Wire field: `action`.
-    #[serde(rename = "action")]
-    pub action: String,
-    /// Wire field: `effect`.
-    #[serde(rename = "effect")]
-    pub effect: PermissionEffect,
-    /// Wire field: `resource`.
-    #[serde(rename = "resource")]
-    pub resource: String,
+#[serde(untagged)]
+pub enum ProviderSettingsTimeout {
+    Number(f64),
+    Boolean(bool),
 }
 
-/// Wire schema: `Permission.Ruleset`.
-pub type PermissionRuleset = Vec<PermissionRule>;
+/// Untagged union; serde matches variants in declared order (wire schema `ProviderSettingsHeaderTimeout`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum ProviderSettingsHeaderTimeout {
+    Number(f64),
+    Boolean(bool),
+}
 
 /// Untagged union; serde matches variants in declared order (wire schema `ProviderSettingsChunkTimeout`).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -156,22 +114,6 @@ pub enum ProviderCompaction {
     Native(ProviderCompactionVariant2),
 }
 
-/// Untagged union; serde matches variants in declared order (wire schema `ProviderSettingsHeaderTimeout`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum ProviderSettingsHeaderTimeout {
-    Number(f64),
-    Boolean(bool),
-}
-
-/// Untagged union; serde matches variants in declared order (wire schema `ProviderSettingsTimeout`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum ProviderSettingsTimeout {
-    Number(f64),
-    Boolean(bool),
-}
-
 /// Wire schema: `Provider.Transport`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ProviderTransport {
@@ -193,18 +135,18 @@ impl ProviderTransport {
 /// Wire schema: `Provider.Settings`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ProviderSettings {
+    /// Wire field: `timeout`.
+    #[serde(default, rename = "timeout", skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<ProviderSettingsTimeout>,
+    /// Wire field: `headerTimeout`.
+    #[serde(default, rename = "headerTimeout", skip_serializing_if = "Option::is_none")]
+    pub header_timeout: Option<ProviderSettingsHeaderTimeout>,
     /// Wire field: `chunkTimeout`.
     #[serde(default, rename = "chunkTimeout", skip_serializing_if = "Option::is_none")]
     pub chunk_timeout: Option<ProviderSettingsChunkTimeout>,
     /// Wire field: `compaction`.
     #[serde(default, rename = "compaction", skip_serializing_if = "Option::is_none")]
     pub compaction: Option<ProviderCompaction>,
-    /// Wire field: `headerTimeout`.
-    #[serde(default, rename = "headerTimeout", skip_serializing_if = "Option::is_none")]
-    pub header_timeout: Option<ProviderSettingsHeaderTimeout>,
-    /// Wire field: `timeout`.
-    #[serde(default, rename = "timeout", skip_serializing_if = "Option::is_none")]
-    pub timeout: Option<ProviderSettingsTimeout>,
     /// Wire field: `transport`.
     #[serde(default, rename = "transport", skip_serializing_if = "Option::is_none")]
     pub transport: Option<ProviderTransport>,
@@ -213,53 +155,111 @@ pub struct ProviderSettings {
 /// Wire schema: `Provider.Request`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ProviderRequest {
-    /// Wire field: `body`.
-    #[serde(rename = "body")]
-    pub body: std::collections::BTreeMap<String, serde_json::Value>,
-    /// Wire field: `headers`.
-    #[serde(rename = "headers")]
-    pub headers: std::collections::BTreeMap<String, String>,
     /// Wire field: `settings`.
     #[serde(rename = "settings")]
     pub settings: ProviderSettings,
+    /// Wire field: `headers`.
+    #[serde(rename = "headers")]
+    pub headers: std::collections::BTreeMap<String, String>,
+    /// Wire field: `body`.
+    #[serde(rename = "body")]
+    pub body: std::collections::BTreeMap<String, serde_json::Value>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum AgentInfoMode {
+    #[serde(rename = "subagent")]
+    Subagent,
+    #[serde(rename = "primary")]
+    Primary,
+    #[serde(rename = "all")]
+    All,
+}
+
+impl AgentInfoMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Subagent => "subagent",
+            Self::Primary => "primary",
+            Self::All => "all",
+        }
+    }
+}
+
+/// Wire schema: `Permission.Effect`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum PermissionEffect {
+    #[serde(rename = "allow")]
+    Allow,
+    #[serde(rename = "deny")]
+    Deny,
+    #[serde(rename = "ask")]
+    Ask,
+}
+
+impl PermissionEffect {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Deny => "deny",
+            Self::Ask => "ask",
+        }
+    }
+}
+
+/// Wire schema: `Permission.Rule`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PermissionRule {
+    /// Wire field: `action`.
+    #[serde(rename = "action")]
+    pub action: String,
+    /// Wire field: `resource`.
+    #[serde(rename = "resource")]
+    pub resource: String,
+    /// Wire field: `effect`.
+    #[serde(rename = "effect")]
+    pub effect: PermissionEffect,
+}
+
+/// Wire schema: `Permission.Ruleset`.
+pub type PermissionRuleset = Vec<PermissionRule>;
 
 /// Wire schema: `Agent.Info`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AgentInfo {
-    /// Wire field: `color`.
-    #[serde(default, rename = "color", skip_serializing_if = "Option::is_none")]
-    pub color: Option<AgentColor>,
-    /// Wire field: `description`.
-    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Wire field: `hidden`.
-    #[serde(rename = "hidden")]
-    pub hidden: bool,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
-    /// Wire field: `mode`.
-    #[serde(rename = "mode")]
-    pub mode: AgentInfoMode,
-    /// Wire field: `model`.
-    #[serde(default, rename = "model", skip_serializing_if = "Option::is_none")]
-    pub model: Option<ModelRef>,
     /// Wire field: `name`.
     #[serde(rename = "name")]
     pub name: String,
-    /// Wire field: `permissions`.
-    #[serde(rename = "permissions")]
-    pub permissions: PermissionRuleset,
+    /// Wire field: `model`.
+    #[serde(default, rename = "model", skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelRef>,
     /// Wire field: `request`.
     #[serde(rename = "request")]
     pub request: ProviderRequest,
-    /// Wire field: `steps`.
-    #[serde(default, rename = "steps", skip_serializing_if = "Option::is_none")]
-    pub steps: Option<i64>,
     /// Wire field: `system`.
     #[serde(default, rename = "system", skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
+    /// Wire field: `description`.
+    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Wire field: `mode`.
+    #[serde(rename = "mode")]
+    pub mode: AgentInfoMode,
+    /// Wire field: `hidden`.
+    #[serde(rename = "hidden")]
+    pub hidden: bool,
+    /// Wire field: `color`.
+    #[serde(default, rename = "color", skip_serializing_if = "Option::is_none")]
+    pub color: Option<AgentColor>,
+    /// Wire field: `steps`.
+    #[serde(default, rename = "steps", skip_serializing_if = "Option::is_none")]
+    pub steps: Option<i64>,
+    /// Wire field: `permissions`.
+    #[serde(rename = "permissions")]
+    pub permissions: PermissionRuleset,
 }
 
 #[derive(
@@ -296,12 +296,12 @@ pub struct AgentNotFoundErrorEncoded {
 /// Wire schema: `Command.Info`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CommandInfo {
-    /// Wire field: `description`.
-    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
     /// Wire field: `name`.
     #[serde(rename = "name")]
     pub name: String,
+    /// Wire field: `description`.
+    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 #[derive(
@@ -366,6 +366,37 @@ pub struct CommandNotFoundErrorEncoded {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigAgentEncodedModelVariant2 {
+    /// Wire field: `providerID`.
+    #[serde(rename = "providerID")]
+    pub provider_id: String,
+    /// Wire field: `model`.
+    #[serde(rename = "model")]
+    pub model: String,
+    /// Wire field: `variant`.
+    #[serde(default, rename = "variant", skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
+}
+
+/// Untagged union; serde matches variants in declared order (wire schema `ConfigAgentEncodedModel`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum ConfigAgentEncodedModel {
+    String(String),
+    ConfigAgentEncodedModelVariant2(ConfigAgentEncodedModelVariant2),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigAgentEncodedRequest {
+    /// Wire field: `headers`.
+    #[serde(default, rename = "headers", skip_serializing_if = "Option::is_none")]
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
+    /// Wire field: `body`.
+    #[serde(default, rename = "body", skip_serializing_if = "Option::is_none")]
+    pub body: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ConfigAgentEncodedMode {
     #[serde(rename = "subagent")]
@@ -386,80 +417,49 @@ impl ConfigAgentEncodedMode {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigAgentEncodedModelVariant2 {
-    /// Wire field: `model`.
-    #[serde(rename = "model")]
-    pub model: String,
-    /// Wire field: `providerID`.
-    #[serde(rename = "providerID")]
-    pub provider_id: String,
-    /// Wire field: `variant`.
-    #[serde(default, rename = "variant", skip_serializing_if = "Option::is_none")]
-    pub variant: Option<String>,
-}
-
-/// Untagged union; serde matches variants in declared order (wire schema `ConfigAgentEncodedModel`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum ConfigAgentEncodedModel {
-    String(String),
-    ConfigAgentEncodedModelVariant2(ConfigAgentEncodedModelVariant2),
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigAgentEncodedRequest {
-    /// Wire field: `body`.
-    #[serde(default, rename = "body", skip_serializing_if = "Option::is_none")]
-    pub body: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `headers`.
-    #[serde(default, rename = "headers", skip_serializing_if = "Option::is_none")]
-    pub headers: Option<std::collections::BTreeMap<String, String>>,
-}
-
 /// Wire schema: `Config.AgentEncoded`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConfigAgentEncoded {
-    /// Wire field: `color`.
-    #[serde(default, rename = "color", skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
-    /// Wire field: `description`.
-    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Wire field: `disabled`.
-    #[serde(default, rename = "disabled", skip_serializing_if = "Option::is_none")]
-    pub disabled: Option<bool>,
-    /// Wire field: `hidden`.
-    #[serde(default, rename = "hidden", skip_serializing_if = "Option::is_none")]
-    pub hidden: Option<bool>,
-    /// Wire field: `mode`.
-    #[serde(default, rename = "mode", skip_serializing_if = "Option::is_none")]
-    pub mode: Option<ConfigAgentEncodedMode>,
     /// Wire field: `model`.
     #[serde(default, rename = "model", skip_serializing_if = "Option::is_none")]
     pub model: Option<ConfigAgentEncodedModel>,
-    /// Wire field: `permissions`.
-    #[serde(default, rename = "permissions", skip_serializing_if = "Option::is_none")]
-    pub permissions: Option<PermissionRuleset>,
     /// Wire field: `request`.
     #[serde(default, rename = "request", skip_serializing_if = "Option::is_none")]
     pub request: Option<ConfigAgentEncodedRequest>,
-    /// Wire field: `steps`.
-    #[serde(default, rename = "steps", skip_serializing_if = "Option::is_none")]
-    pub steps: Option<i64>,
     /// Wire field: `system`.
     #[serde(default, rename = "system", skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
+    /// Wire field: `description`.
+    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Wire field: `mode`.
+    #[serde(default, rename = "mode", skip_serializing_if = "Option::is_none")]
+    pub mode: Option<ConfigAgentEncodedMode>,
+    /// Wire field: `hidden`.
+    #[serde(default, rename = "hidden", skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<bool>,
+    /// Wire field: `color`.
+    #[serde(default, rename = "color", skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// Wire field: `steps`.
+    #[serde(default, rename = "steps", skip_serializing_if = "Option::is_none")]
+    pub steps: Option<i64>,
+    /// Wire field: `disabled`.
+    #[serde(default, rename = "disabled", skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<bool>,
+    /// Wire field: `permissions`.
+    #[serde(default, rename = "permissions", skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<PermissionRuleset>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConfigCommandEncodedModelVariant2 {
-    /// Wire field: `model`.
-    #[serde(rename = "model")]
-    pub model: String,
     /// Wire field: `providerID`.
     #[serde(rename = "providerID")]
     pub provider_id: String,
+    /// Wire field: `model`.
+    #[serde(rename = "model")]
+    pub model: String,
     /// Wire field: `variant`.
     #[serde(default, rename = "variant", skip_serializing_if = "Option::is_none")]
     pub variant: Option<String>,
@@ -476,12 +476,15 @@ pub enum ConfigCommandEncodedModel {
 /// Wire schema: `Config.CommandEncoded`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConfigCommandEncoded {
-    /// Wire field: `agent`.
-    #[serde(default, rename = "agent", skip_serializing_if = "Option::is_none")]
-    pub agent: Option<String>,
+    /// Wire field: `template`.
+    #[serde(rename = "template")]
+    pub template: String,
     /// Wire field: `description`.
     #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Wire field: `agent`.
+    #[serde(default, rename = "agent", skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
     /// Wire field: `model`.
     #[serde(default, rename = "model", skip_serializing_if = "Option::is_none")]
     pub model: Option<ConfigCommandEncodedModel>,
@@ -491,9 +494,6 @@ pub struct ConfigCommandEncoded {
     /// Deprecated alias for subagent.
     #[serde(default, rename = "subtask", skip_serializing_if = "Option::is_none")]
     pub subtask: Option<bool>,
-    /// Wire field: `template`.
-    #[serde(rename = "template")]
-    pub template: String,
 }
 
 #[derive(
@@ -516,12 +516,407 @@ impl ConfigDirectoryEncodedType {
 /// Wire schema: `Config.DirectoryEncoded`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConfigDirectoryEncoded {
-    /// Wire field: `path`.
-    #[serde(rename = "path")]
-    pub path: String,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: ConfigDirectoryEncodedType,
+    /// Wire field: `path`.
+    #[serde(rename = "path")]
+    pub path: String,
+}
+
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum ConfigDocumentEncodedType {
+    #[default]
+    #[serde(rename = "document")]
+    Document,
+}
+
+impl ConfigDocumentEncodedType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Document => "document",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigInfoEncodedModelVariant2 {
+    /// Wire field: `providerID`.
+    #[serde(rename = "providerID")]
+    pub provider_id: String,
+    /// Wire field: `model`.
+    #[serde(rename = "model")]
+    pub model: String,
+    /// Wire field: `variant`.
+    #[serde(default, rename = "variant", skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
+}
+
+/// Untagged union; serde matches variants in declared order (wire schema `ConfigInfoEncodedModel`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum ConfigInfoEncodedModel {
+    String(String),
+    ConfigInfoEncodedModelVariant2(ConfigInfoEncodedModelVariant2),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum ConfigInfoEncodedUpdate {
+    #[serde(rename = "disable")]
+    Disable,
+    #[serde(rename = "notify")]
+    Notify,
+    #[serde(rename = "auto")]
+    Auto,
+}
+
+impl ConfigInfoEncodedUpdate {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Disable => "disable",
+            Self::Notify => "notify",
+            Self::Auto => "auto",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum ConfigInfoEncodedShare {
+    #[serde(rename = "manual")]
+    Manual,
+    #[serde(rename = "auto")]
+    Auto,
+    #[serde(rename = "disabled")]
+    Disabled,
+}
+
+impl ConfigInfoEncodedShare {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::Auto => "auto",
+            Self::Disabled => "disabled",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigInfoEncodedEnterprise {
+    /// Wire field: `url`.
+    #[serde(default, rename = "url", skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigInfoEncodedWatcher {
+    /// Wire field: `ignore`.
+    #[serde(default, rename = "ignore", skip_serializing_if = "Option::is_none")]
+    pub ignore: Option<Vec<String>>,
+}
+
+/// Wire schema: `Config.Formatter.EntryEncoded`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigFormatterEntryEncoded {
+    /// Wire field: `disabled`.
+    #[serde(default, rename = "disabled", skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<bool>,
+    /// Wire field: `command`.
+    #[serde(default, rename = "command", skip_serializing_if = "Option::is_none")]
+    pub command: Option<Vec<String>>,
+    /// Wire field: `environment`.
+    #[serde(default, rename = "environment", skip_serializing_if = "Option::is_none")]
+    pub environment: Option<std::collections::BTreeMap<String, String>>,
+    /// Wire field: `extensions`.
+    #[serde(default, rename = "extensions", skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Vec<String>>,
+}
+
+/// Untagged union; serde matches variants in declared order (wire schema `ConfigInfoEncodedFormatter`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum ConfigInfoEncodedFormatter {
+    Boolean(bool),
+    Map(std::collections::BTreeMap<String, ConfigFormatterEntryEncoded>),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigInfoEncodedLspVariant2ValueVariant1 {
+    /// Wire field: `disabled`.
+    #[serde(rename = "disabled")]
+    pub disabled: bool,
+}
+
+/// Wire schema: `Config.LSP.ServerEncoded`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigLspServerEncoded {
+    /// Wire field: `command`.
+    #[serde(rename = "command")]
+    pub command: Vec<String>,
+    /// Wire field: `extensions`.
+    #[serde(default, rename = "extensions", skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Vec<String>>,
+    /// Wire field: `disabled`.
+    #[serde(default, rename = "disabled", skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<bool>,
+    /// Wire field: `env`.
+    #[serde(default, rename = "env", skip_serializing_if = "Option::is_none")]
+    pub env: Option<std::collections::BTreeMap<String, String>>,
+    /// Wire field: `initialization`.
+    #[serde(default, rename = "initialization", skip_serializing_if = "Option::is_none")]
+    pub initialization: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+}
+
+/// Untagged union; serde matches variants in declared order (wire schema `ConfigInfoEncodedLspVariant2Value`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum ConfigInfoEncodedLspVariant2Value {
+    ConfigInfoEncodedLspVariant2ValueVariant1(ConfigInfoEncodedLspVariant2ValueVariant1),
+    ServerEncoded(ConfigLspServerEncoded),
+}
+
+/// Untagged union; serde matches variants in declared order (wire schema `ConfigInfoEncodedLsp`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum ConfigInfoEncodedLsp {
+    Boolean(bool),
+    Map(std::collections::BTreeMap<String, ConfigInfoEncodedLspVariant2Value>),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigInfoEncodedMediaImage {
+    /// Wire field: `auto_resize`.
+    #[serde(default, rename = "auto_resize", skip_serializing_if = "Option::is_none")]
+    pub auto_resize: Option<bool>,
+    /// Wire field: `max_width`.
+    #[serde(default, rename = "max_width", skip_serializing_if = "Option::is_none")]
+    pub max_width: Option<i64>,
+    /// Wire field: `max_height`.
+    #[serde(default, rename = "max_height", skip_serializing_if = "Option::is_none")]
+    pub max_height: Option<i64>,
+    /// Wire field: `max_base64_bytes`.
+    #[serde(default, rename = "max_base64_bytes", skip_serializing_if = "Option::is_none")]
+    pub max_base64_bytes: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigInfoEncodedMedia {
+    /// Wire field: `image`.
+    #[serde(default, rename = "image", skip_serializing_if = "Option::is_none")]
+    pub image: Option<ConfigInfoEncodedMediaImage>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigInfoEncodedToolOutput {
+    /// Wire field: `max_lines`.
+    #[serde(default, rename = "max_lines", skip_serializing_if = "Option::is_none")]
+    pub max_lines: Option<i64>,
+    /// Wire field: `max_bytes`.
+    #[serde(default, rename = "max_bytes", skip_serializing_if = "Option::is_none")]
+    pub max_bytes: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigInfoEncodedMcpTimeout {
+    /// Wire field: `startup`.
+    #[serde(default, rename = "startup", skip_serializing_if = "Option::is_none")]
+    pub startup: Option<i64>,
+    /// Wire field: `catalog`.
+    #[serde(default, rename = "catalog", skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<i64>,
+    /// Wire field: `execution`.
+    #[serde(default, rename = "execution", skip_serializing_if = "Option::is_none")]
+    pub execution: Option<i64>,
+}
+
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum McpLocalConfigEncodedType {
+    #[default]
+    #[serde(rename = "local")]
+    Local,
+}
+
+impl McpLocalConfigEncodedType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Local => "local",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct McpLocalConfigEncodedTimeout {
+    /// Wire field: `startup`.
+    #[serde(default, rename = "startup", skip_serializing_if = "Option::is_none")]
+    pub startup: Option<i64>,
+    /// Wire field: `catalog`.
+    #[serde(default, rename = "catalog", skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<i64>,
+    /// Wire field: `execution`.
+    #[serde(default, rename = "execution", skip_serializing_if = "Option::is_none")]
+    pub execution: Option<i64>,
+}
+
+/// MCP protocol negotiation. "legacy" (default) opens with the initialize handshake and speaks protocol revisions up to 2025-11-25. "auto" probes for the 2026-07-28 revision and falls...
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum McpProtocol {
+    #[serde(rename = "legacy")]
+    Legacy,
+    #[serde(rename = "auto")]
+    Auto,
+    #[serde(rename = "2026-07-28")]
+    X20260728,
+}
+
+impl McpProtocol {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Legacy => "legacy",
+            Self::Auto => "auto",
+            Self::X20260728 => "2026-07-28",
+        }
+    }
+}
+
+/// Wire schema: `Mcp.LocalConfigEncoded`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct McpLocalConfigEncoded {
+    /// Wire field: `type`.
+    #[serde(rename = "type")]
+    pub type_: McpLocalConfigEncodedType,
+    /// Wire field: `command`.
+    #[serde(rename = "command")]
+    pub command: Vec<String>,
+    /// Wire field: `cwd`.
+    #[serde(default, rename = "cwd", skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// Wire field: `environment`.
+    #[serde(default, rename = "environment", skip_serializing_if = "Option::is_none")]
+    pub environment: Option<std::collections::BTreeMap<String, String>>,
+    /// Wire field: `disabled`.
+    #[serde(default, rename = "disabled", skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<bool>,
+    /// Wire field: `codemode`.
+    #[serde(default, rename = "codemode", skip_serializing_if = "Option::is_none")]
+    pub codemode: Option<bool>,
+    /// Wire field: `timeout`.
+    #[serde(default, rename = "timeout", skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<McpLocalConfigEncodedTimeout>,
+    /// Wire field: `protocol`.
+    #[serde(default, rename = "protocol", skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<McpProtocol>,
+}
+
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum McpRemoteConfigEncodedType {
+    #[default]
+    #[serde(rename = "remote")]
+    Remote,
+}
+
+impl McpRemoteConfigEncodedType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Remote => "remote",
+        }
+    }
+}
+
+/// Wire schema: `Mcp.OAuthConfigEncoded`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct McpOAuthConfigEncoded {
+    /// Wire field: `client_id`.
+    #[serde(default, rename = "client_id", skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    /// Wire field: `client_secret`.
+    #[serde(default, rename = "client_secret", skip_serializing_if = "Option::is_none")]
+    pub client_secret: Option<String>,
+    /// Wire field: `scope`.
+    #[serde(default, rename = "scope", skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    /// Wire field: `callback_port`.
+    #[serde(default, rename = "callback_port", skip_serializing_if = "Option::is_none")]
+    pub callback_port: Option<i64>,
+    /// Wire field: `redirect_uri`.
+    #[serde(default, rename = "redirect_uri", skip_serializing_if = "Option::is_none")]
+    pub redirect_uri: Option<String>,
+    /// Wire field: `auth_server_metadata_url`.
+    #[serde(default, rename = "auth_server_metadata_url", skip_serializing_if = "Option::is_none")]
+    pub auth_server_metadata_url: Option<String>,
+}
+
+/// Untagged union; serde matches variants in declared order (wire schema `McpRemoteConfigEncodedOauth`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum McpRemoteConfigEncodedOauth {
+    OAuthConfigEncoded(McpOAuthConfigEncoded),
+    Boolean(bool),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct McpRemoteConfigEncodedTimeout {
+    /// Wire field: `startup`.
+    #[serde(default, rename = "startup", skip_serializing_if = "Option::is_none")]
+    pub startup: Option<i64>,
+    /// Wire field: `catalog`.
+    #[serde(default, rename = "catalog", skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<i64>,
+    /// Wire field: `execution`.
+    #[serde(default, rename = "execution", skip_serializing_if = "Option::is_none")]
+    pub execution: Option<i64>,
+}
+
+/// Wire schema: `Mcp.RemoteConfigEncoded`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct McpRemoteConfigEncoded {
+    /// Wire field: `type`.
+    #[serde(rename = "type")]
+    pub type_: McpRemoteConfigEncodedType,
+    /// Wire field: `url`.
+    #[serde(rename = "url")]
+    pub url: String,
+    /// Wire field: `headers`.
+    #[serde(default, rename = "headers", skip_serializing_if = "Option::is_none")]
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
+    /// Wire field: `oauth`.
+    #[serde(default, rename = "oauth", skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<McpRemoteConfigEncodedOauth>,
+    /// Wire field: `disabled`.
+    #[serde(default, rename = "disabled", skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<bool>,
+    /// Wire field: `codemode`.
+    #[serde(default, rename = "codemode", skip_serializing_if = "Option::is_none")]
+    pub codemode: Option<bool>,
+    /// Wire field: `timeout`.
+    #[serde(default, rename = "timeout", skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<McpRemoteConfigEncodedTimeout>,
+    /// Wire field: `protocol`.
+    #[serde(default, rename = "protocol", skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<McpProtocol>,
+}
+
+/// Discriminated union (each variant carries its tag field);
+/// serde matches variants in declared order (wire schema `ConfigInfoEncodedMcpServersValue`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum ConfigInfoEncodedMcpServersValue {
+    LocalConfigEncoded(McpLocalConfigEncoded),
+    RemoteConfigEncoded(McpRemoteConfigEncoded),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigInfoEncodedMcp {
+    /// Wire field: `timeout`.
+    #[serde(default, rename = "timeout", skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<ConfigInfoEncodedMcpTimeout>,
+    /// Wire field: `servers`.
+    #[serde(default, rename = "servers", skip_serializing_if = "Option::is_none")]
+    pub servers: Option<std::collections::BTreeMap<String, ConfigInfoEncodedMcpServersValue>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -536,19 +931,424 @@ pub struct ConfigInfoEncodedCompaction {
     /// Wire field: `auto`.
     #[serde(default, rename = "auto", skip_serializing_if = "Option::is_none")]
     pub auto: Option<bool>,
-    /// Wire field: `buffer`.
-    #[serde(default, rename = "buffer", skip_serializing_if = "Option::is_none")]
-    pub buffer: Option<i64>,
     /// Wire field: `keep`.
     #[serde(default, rename = "keep", skip_serializing_if = "Option::is_none")]
     pub keep: Option<ConfigInfoEncodedCompactionKeep>,
+    /// Wire field: `buffer`.
+    #[serde(default, rename = "buffer", skip_serializing_if = "Option::is_none")]
+    pub buffer: Option<i64>,
+}
+
+/// Wire schema: `Config.Reference.GitEncoded`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigReferenceGitEncoded {
+    /// Wire field: `repository`.
+    #[serde(rename = "repository")]
+    pub repository: String,
+    /// Wire field: `branch`.
+    #[serde(default, rename = "branch", skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Wire field: `description`.
+    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Wire field: `hidden`.
+    #[serde(default, rename = "hidden", skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<bool>,
+}
+
+/// Wire schema: `Config.Reference.LocalEncoded`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigReferenceLocalEncoded {
+    /// Wire field: `path`.
+    #[serde(rename = "path")]
+    pub path: String,
+    /// Wire field: `description`.
+    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Wire field: `hidden`.
+    #[serde(default, rename = "hidden", skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<bool>,
+}
+
+/// Untagged union; serde matches variants in declared order (wire schema `ConfigInfoEncodedReferencesValue`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum ConfigInfoEncodedReferencesValue {
+    String(String),
+    GitEncoded(ConfigReferenceGitEncoded),
+    LocalEncoded(ConfigReferenceLocalEncoded),
+}
+
+/// Wire schema: `ConfigWebSearch.InfoEncoded`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigWebSearchInfoEncoded {
+    /// Wire field: `provider`.
+    #[serde(rename = "provider")]
+    pub provider: String,
+}
+
+/// Untagged union; serde matches variants in declared order (wire schema `ConfigInfoEncodedWebsearch`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum ConfigInfoEncodedWebsearch {
+    Boolean(bool),
+    InfoEncoded(ConfigWebSearchInfoEncoded),
+}
+
+/// Wire schema: `Config.Plugin.EntryEncoded`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigPluginEntryEncoded {
+    /// Wire field: `package`.
+    #[serde(rename = "package")]
+    pub package: String,
+    /// Wire field: `options`.
+    #[serde(default, rename = "options", skip_serializing_if = "Option::is_none")]
+    pub options: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+}
+
+/// Untagged union; serde matches variants in declared order (wire schema `ConfigInfoEncodedPluginsItem`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum ConfigInfoEncodedPluginsItem {
+    String(String),
+    EntryEncoded(ConfigPluginEntryEncoded),
+}
+
+/// Wire schema: `Config.Worktree`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigWorktree {
+    /// Wire field: `directory`.
+    #[serde(rename = "directory")]
+    pub directory: String,
+}
+
+/// Wire schema: `Config.WarmingEncoded`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigWarmingEncoded {
+    /// Wire field: `prompt`.
+    #[serde(default, rename = "prompt", skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// Wire field: `interval`.
+    #[serde(default, rename = "interval", skip_serializing_if = "Option::is_none")]
+    pub interval: Option<String>,
+    /// Wire field: `duration`.
+    #[serde(default, rename = "duration", skip_serializing_if = "Option::is_none")]
+    pub duration: Option<String>,
+}
+
+/// Untagged union; serde matches variants in declared order (wire schema `ConfigInfoEncodedWarming`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum ConfigInfoEncodedWarming {
+    Boolean(bool),
+    WarmingEncoded(ConfigWarmingEncoded),
+}
+
+/// Untagged union; serde matches variants in declared order (wire schema `ConfigProviderSettingsTimeout`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum ConfigProviderSettingsTimeout {
+    Number(f64),
+    Boolean(bool),
+}
+
+/// Untagged union; serde matches variants in declared order (wire schema `ConfigProviderSettingsHeaderTimeout`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum ConfigProviderSettingsHeaderTimeout {
+    Number(f64),
+    Boolean(bool),
+}
+
+/// Untagged union; serde matches variants in declared order (wire schema `ConfigProviderSettingsChunkTimeout`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum ConfigProviderSettingsChunkTimeout {
+    Number(f64),
+    Boolean(bool),
+}
+
+/// Wire schema: `Config.Provider.Settings`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigProviderSettings {
+    /// Wire field: `timeout`.
+    #[serde(default, rename = "timeout", skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<ConfigProviderSettingsTimeout>,
+    /// Wire field: `headerTimeout`.
+    #[serde(default, rename = "headerTimeout", skip_serializing_if = "Option::is_none")]
+    pub header_timeout: Option<ConfigProviderSettingsHeaderTimeout>,
+    /// Wire field: `chunkTimeout`.
+    #[serde(default, rename = "chunkTimeout", skip_serializing_if = "Option::is_none")]
+    pub chunk_timeout: Option<ConfigProviderSettingsChunkTimeout>,
+    /// Wire field: `compaction`.
+    #[serde(default, rename = "compaction", skip_serializing_if = "Option::is_none")]
+    pub compaction: Option<ProviderCompaction>,
+    /// Wire field: `transport`.
+    #[serde(default, rename = "transport", skip_serializing_if = "Option::is_none")]
+    pub transport: Option<ProviderTransport>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum ModelReasoningFieldVariant1 {
+    #[serde(rename = "reasoning")]
+    Reasoning,
+    #[serde(rename = "reasoning_content")]
+    ReasoningContent,
+    #[serde(rename = "reasoning_text")]
+    ReasoningText,
+}
+
+impl ModelReasoningFieldVariant1 {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Reasoning => "reasoning",
+            Self::ReasoningContent => "reasoning_content",
+            Self::ReasoningText => "reasoning_text",
+        }
+    }
+}
+
+/// Wire schema: `Model.ReasoningField`.
+/// Untagged union; serde matches variants in declared order (wire schema `Model.ReasoningField`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum ModelReasoningField {
+    ModelReasoningFieldVariant1(ModelReasoningFieldVariant1),
+    String(String),
+}
+
+/// Wire schema: `Model.MaxTokensField`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum ModelMaxTokensField {
+    #[serde(rename = "max_completion_tokens")]
+    MaxCompletionTokens,
+    #[serde(rename = "max_tokens")]
+    MaxTokens,
+}
+
+impl ModelMaxTokensField {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::MaxCompletionTokens => "max_completion_tokens",
+            Self::MaxTokens => "max_tokens",
+        }
+    }
+}
+
+/// Wire schema: `Model.Compatibility`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ModelCompatibility {
+    /// Wire field: `reasoningField`.
+    #[serde(default, rename = "reasoningField", skip_serializing_if = "Option::is_none")]
+    pub reasoning_field: Option<ModelReasoningField>,
+    /// Wire field: `requireReasoning`.
+    #[serde(default, rename = "requireReasoning", skip_serializing_if = "Option::is_none")]
+    pub require_reasoning: Option<bool>,
+    /// Wire field: `maxTokensField`.
+    #[serde(default, rename = "maxTokensField", skip_serializing_if = "Option::is_none")]
+    pub max_tokens_field: Option<ModelMaxTokensField>,
+    /// Wire field: `requireFinishReason`.
+    #[serde(default, rename = "requireFinishReason", skip_serializing_if = "Option::is_none")]
+    pub require_finish_reason: Option<bool>,
+    /// Wire field: `requireAssistantAfterTool`.
+    #[serde(
+        default,
+        rename = "requireAssistantAfterTool",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub require_assistant_after_tool: Option<bool>,
+    /// Wire field: `supportsPromptCacheKey`.
+    #[serde(default, rename = "supportsPromptCacheKey", skip_serializing_if = "Option::is_none")]
+    pub supports_prompt_cache_key: Option<bool>,
+}
+
+/// Wire schema: `Config.Model.Settings`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigModelSettings {
+    /// Wire field: `compaction`.
+    #[serde(default, rename = "compaction", skip_serializing_if = "Option::is_none")]
+    pub compaction: Option<ProviderCompaction>,
+}
+
+/// Wire schema: `Config.Model.Capabilities`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigModelCapabilities {
+    /// Wire field: `tools`.
+    #[serde(default, rename = "tools", skip_serializing_if = "Option::is_none")]
+    pub tools: Option<bool>,
+    /// Wire field: `input`.
+    #[serde(default, rename = "input", skip_serializing_if = "Option::is_none")]
+    pub input: Option<Vec<String>>,
+    /// Wire field: `output`.
+    #[serde(default, rename = "output", skip_serializing_if = "Option::is_none")]
+    pub output: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigInfoEncodedEnterprise {
-    /// Wire field: `url`.
-    #[serde(default, rename = "url", skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
+pub struct ConfigModelEncodedVariantsItem {
+    /// Wire field: `id`.
+    #[serde(rename = "id")]
+    pub id: String,
+    /// Wire field: `settings`.
+    #[serde(default, rename = "settings", skip_serializing_if = "Option::is_none")]
+    pub settings: Option<ConfigModelSettings>,
+    /// Wire field: `headers`.
+    #[serde(default, rename = "headers", skip_serializing_if = "Option::is_none")]
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
+    /// Wire field: `body`.
+    #[serde(default, rename = "body", skip_serializing_if = "Option::is_none")]
+    pub body: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+}
+
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum ConfigModelCostEncodedTierType {
+    #[default]
+    #[serde(rename = "context")]
+    Context,
+}
+
+impl ConfigModelCostEncodedTierType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Context => "context",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigModelCostEncodedTier {
+    /// Wire field: `type`.
+    #[serde(rename = "type")]
+    pub type_: ConfigModelCostEncodedTierType,
+    /// Wire field: `size`.
+    #[serde(rename = "size")]
+    pub size: i64,
+}
+
+/// Wire schema: `Money.USDPerMillionTokens`.
+pub type MoneyUsdPerMillionTokens = f64;
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigModelCostEncodedCache {
+    /// Wire field: `read`.
+    #[serde(default, rename = "read", skip_serializing_if = "Option::is_none")]
+    pub read: Option<MoneyUsdPerMillionTokens>,
+    /// Wire field: `write`.
+    #[serde(default, rename = "write", skip_serializing_if = "Option::is_none")]
+    pub write: Option<MoneyUsdPerMillionTokens>,
+}
+
+/// Wire schema: `Config.Model.CostEncoded`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigModelCostEncoded {
+    /// Wire field: `tier`.
+    #[serde(default, rename = "tier", skip_serializing_if = "Option::is_none")]
+    pub tier: Option<ConfigModelCostEncodedTier>,
+    /// Wire field: `input`.
+    #[serde(rename = "input")]
+    pub input: MoneyUsdPerMillionTokens,
+    /// Wire field: `output`.
+    #[serde(rename = "output")]
+    pub output: MoneyUsdPerMillionTokens,
+    /// Wire field: `cache`.
+    #[serde(default, rename = "cache", skip_serializing_if = "Option::is_none")]
+    pub cache: Option<ConfigModelCostEncodedCache>,
+}
+
+/// Untagged union; serde matches variants in declared order (wire schema `ConfigModelEncodedCost`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum ConfigModelEncodedCost {
+    CostEncoded(ConfigModelCostEncoded),
+    Array(Vec<ConfigModelCostEncoded>),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigModelEncodedLimit {
+    /// Wire field: `context`.
+    #[serde(default, rename = "context", skip_serializing_if = "Option::is_none")]
+    pub context: Option<i64>,
+    /// Wire field: `input`.
+    #[serde(default, rename = "input", skip_serializing_if = "Option::is_none")]
+    pub input: Option<i64>,
+    /// Wire field: `output`.
+    #[serde(default, rename = "output", skip_serializing_if = "Option::is_none")]
+    pub output: Option<i64>,
+}
+
+/// Wire schema: `Config.ModelEncoded`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigModelEncoded {
+    /// Wire field: `modelID`.
+    #[serde(default, rename = "modelID", skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    /// Wire field: `family`.
+    #[serde(default, rename = "family", skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    /// Wire field: `name`.
+    #[serde(default, rename = "name", skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Wire field: `compatibility`.
+    #[serde(default, rename = "compatibility", skip_serializing_if = "Option::is_none")]
+    pub compatibility: Option<ModelCompatibility>,
+    /// Wire field: `package`.
+    #[serde(default, rename = "package", skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+    /// Wire field: `settings`.
+    #[serde(default, rename = "settings", skip_serializing_if = "Option::is_none")]
+    pub settings: Option<ConfigModelSettings>,
+    /// Wire field: `headers`.
+    #[serde(default, rename = "headers", skip_serializing_if = "Option::is_none")]
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
+    /// Wire field: `body`.
+    #[serde(default, rename = "body", skip_serializing_if = "Option::is_none")]
+    pub body: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+    /// Wire field: `capabilities`.
+    #[serde(default, rename = "capabilities", skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<ConfigModelCapabilities>,
+    /// Wire field: `variants`.
+    #[serde(default, rename = "variants", skip_serializing_if = "Option::is_none")]
+    pub variants: Option<Vec<ConfigModelEncodedVariantsItem>>,
+    /// Wire field: `cost`.
+    #[serde(default, rename = "cost", skip_serializing_if = "Option::is_none")]
+    pub cost: Option<ConfigModelEncodedCost>,
+    /// Wire field: `disabled`.
+    #[serde(default, rename = "disabled", skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<bool>,
+    /// Wire field: `limit`.
+    #[serde(default, rename = "limit", skip_serializing_if = "Option::is_none")]
+    pub limit: Option<ConfigModelEncodedLimit>,
+}
+
+/// Wire schema: `Config.ProviderEncoded`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ConfigProviderEncoded {
+    /// Wire field: `canonical`.
+    #[serde(default, rename = "canonical", skip_serializing_if = "Option::is_none")]
+    pub canonical: Option<String>,
+    /// Wire field: `name`.
+    #[serde(default, rename = "name", skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Wire field: `env`.
+    #[serde(default, rename = "env", skip_serializing_if = "Option::is_none")]
+    pub env: Option<Vec<String>>,
+    /// Wire field: `package`.
+    #[serde(default, rename = "package", skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+    /// Wire field: `settings`.
+    #[serde(default, rename = "settings", skip_serializing_if = "Option::is_none")]
+    pub settings: Option<ConfigProviderSettings>,
+    /// Wire field: `headers`.
+    #[serde(default, rename = "headers", skip_serializing_if = "Option::is_none")]
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
+    /// Wire field: `body`.
+    #[serde(default, rename = "body", skip_serializing_if = "Option::is_none")]
+    pub body: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+    /// Wire field: `models`.
+    #[serde(default, rename = "models", skip_serializing_if = "Option::is_none")]
+    pub models: Option<std::collections::BTreeMap<String, ConfigModelEncoded>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -590,808 +1390,25 @@ pub struct ConfigInfoEncodedExperimentalPoliciesItem {
     /// Wire field: `action`.
     #[serde(rename = "action")]
     pub action: ConfigInfoEncodedExperimentalPoliciesItemAction,
-    /// Wire field: `effect`.
-    #[serde(rename = "effect")]
-    pub effect: ConfigInfoEncodedExperimentalPoliciesItemEffect,
     /// Wire field: `resource`.
     #[serde(rename = "resource")]
     pub resource: String,
+    /// Wire field: `effect`.
+    #[serde(rename = "effect")]
+    pub effect: ConfigInfoEncodedExperimentalPoliciesItemEffect,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConfigInfoEncodedExperimental {
-    /// Wire field: `policies`.
-    #[serde(default, rename = "policies", skip_serializing_if = "Option::is_none")]
-    pub policies: Option<Vec<ConfigInfoEncodedExperimentalPoliciesItem>>,
     /// Wire field: `portable_shell_scanner`.
     #[serde(default, rename = "portable_shell_scanner", skip_serializing_if = "Option::is_none")]
     pub portable_shell_scanner: Option<bool>,
     /// Wire field: `subagent_depth`.
     #[serde(default, rename = "subagent_depth", skip_serializing_if = "Option::is_none")]
     pub subagent_depth: Option<i64>,
-}
-
-/// Wire schema: `Config.Formatter.EntryEncoded`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigFormatterEntryEncoded {
-    /// Wire field: `command`.
-    #[serde(default, rename = "command", skip_serializing_if = "Option::is_none")]
-    pub command: Option<Vec<String>>,
-    /// Wire field: `disabled`.
-    #[serde(default, rename = "disabled", skip_serializing_if = "Option::is_none")]
-    pub disabled: Option<bool>,
-    /// Wire field: `environment`.
-    #[serde(default, rename = "environment", skip_serializing_if = "Option::is_none")]
-    pub environment: Option<std::collections::BTreeMap<String, String>>,
-    /// Wire field: `extensions`.
-    #[serde(default, rename = "extensions", skip_serializing_if = "Option::is_none")]
-    pub extensions: Option<Vec<String>>,
-}
-
-/// Untagged union; serde matches variants in declared order (wire schema `ConfigInfoEncodedFormatter`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum ConfigInfoEncodedFormatter {
-    Boolean(bool),
-    Map(std::collections::BTreeMap<String, ConfigFormatterEntryEncoded>),
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigInfoEncodedLspVariant2ValueVariant1 {
-    /// Wire field: `disabled`.
-    #[serde(rename = "disabled")]
-    pub disabled: bool,
-}
-
-/// Wire schema: `Config.LSP.ServerEncoded`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigLspServerEncoded {
-    /// Wire field: `command`.
-    #[serde(rename = "command")]
-    pub command: Vec<String>,
-    /// Wire field: `disabled`.
-    #[serde(default, rename = "disabled", skip_serializing_if = "Option::is_none")]
-    pub disabled: Option<bool>,
-    /// Wire field: `env`.
-    #[serde(default, rename = "env", skip_serializing_if = "Option::is_none")]
-    pub env: Option<std::collections::BTreeMap<String, String>>,
-    /// Wire field: `extensions`.
-    #[serde(default, rename = "extensions", skip_serializing_if = "Option::is_none")]
-    pub extensions: Option<Vec<String>>,
-    /// Wire field: `initialization`.
-    #[serde(default, rename = "initialization", skip_serializing_if = "Option::is_none")]
-    pub initialization: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-}
-
-/// Untagged union; serde matches variants in declared order (wire schema `ConfigInfoEncodedLspVariant2Value`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum ConfigInfoEncodedLspVariant2Value {
-    ConfigInfoEncodedLspVariant2ValueVariant1(ConfigInfoEncodedLspVariant2ValueVariant1),
-    ServerEncoded(ConfigLspServerEncoded),
-}
-
-/// Untagged union; serde matches variants in declared order (wire schema `ConfigInfoEncodedLsp`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum ConfigInfoEncodedLsp {
-    Boolean(bool),
-    Map(std::collections::BTreeMap<String, ConfigInfoEncodedLspVariant2Value>),
-}
-
-/// MCP protocol negotiation. "legacy" (default) opens with the initialize handshake and speaks protocol revisions up to 2025-11-25. "auto" probes for the 2026-07-28 revision and falls...
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum McpProtocol {
-    #[serde(rename = "legacy")]
-    Legacy,
-    #[serde(rename = "auto")]
-    Auto,
-    #[serde(rename = "2026-07-28")]
-    X20260728,
-}
-
-impl McpProtocol {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Legacy => "legacy",
-            Self::Auto => "auto",
-            Self::X20260728 => "2026-07-28",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct McpLocalConfigEncodedTimeout {
-    /// Wire field: `catalog`.
-    #[serde(default, rename = "catalog", skip_serializing_if = "Option::is_none")]
-    pub catalog: Option<i64>,
-    /// Wire field: `execution`.
-    #[serde(default, rename = "execution", skip_serializing_if = "Option::is_none")]
-    pub execution: Option<i64>,
-    /// Wire field: `startup`.
-    #[serde(default, rename = "startup", skip_serializing_if = "Option::is_none")]
-    pub startup: Option<i64>,
-}
-
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
-)]
-pub enum McpLocalConfigEncodedType {
-    #[default]
-    #[serde(rename = "local")]
-    Local,
-}
-
-impl McpLocalConfigEncodedType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Local => "local",
-        }
-    }
-}
-
-/// Wire schema: `Mcp.LocalConfigEncoded`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct McpLocalConfigEncoded {
-    /// Wire field: `codemode`.
-    #[serde(default, rename = "codemode", skip_serializing_if = "Option::is_none")]
-    pub codemode: Option<bool>,
-    /// Wire field: `command`.
-    #[serde(rename = "command")]
-    pub command: Vec<String>,
-    /// Wire field: `cwd`.
-    #[serde(default, rename = "cwd", skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<String>,
-    /// Wire field: `disabled`.
-    #[serde(default, rename = "disabled", skip_serializing_if = "Option::is_none")]
-    pub disabled: Option<bool>,
-    /// Wire field: `environment`.
-    #[serde(default, rename = "environment", skip_serializing_if = "Option::is_none")]
-    pub environment: Option<std::collections::BTreeMap<String, String>>,
-    /// Wire field: `protocol`.
-    #[serde(default, rename = "protocol", skip_serializing_if = "Option::is_none")]
-    pub protocol: Option<McpProtocol>,
-    /// Wire field: `timeout`.
-    #[serde(default, rename = "timeout", skip_serializing_if = "Option::is_none")]
-    pub timeout: Option<McpLocalConfigEncodedTimeout>,
-    /// Wire field: `type`.
-    #[serde(rename = "type")]
-    pub type_: McpLocalConfigEncodedType,
-}
-
-/// Wire schema: `Mcp.OAuthConfigEncoded`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct McpOAuthConfigEncoded {
-    /// Wire field: `auth_server_metadata_url`.
-    #[serde(default, rename = "auth_server_metadata_url", skip_serializing_if = "Option::is_none")]
-    pub auth_server_metadata_url: Option<String>,
-    /// Wire field: `callback_port`.
-    #[serde(default, rename = "callback_port", skip_serializing_if = "Option::is_none")]
-    pub callback_port: Option<i64>,
-    /// Wire field: `client_id`.
-    #[serde(default, rename = "client_id", skip_serializing_if = "Option::is_none")]
-    pub client_id: Option<String>,
-    /// Wire field: `client_secret`.
-    #[serde(default, rename = "client_secret", skip_serializing_if = "Option::is_none")]
-    pub client_secret: Option<String>,
-    /// Wire field: `redirect_uri`.
-    #[serde(default, rename = "redirect_uri", skip_serializing_if = "Option::is_none")]
-    pub redirect_uri: Option<String>,
-    /// Wire field: `scope`.
-    #[serde(default, rename = "scope", skip_serializing_if = "Option::is_none")]
-    pub scope: Option<String>,
-}
-
-/// Untagged union; serde matches variants in declared order (wire schema `McpRemoteConfigEncodedOauth`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum McpRemoteConfigEncodedOauth {
-    OAuthConfigEncoded(McpOAuthConfigEncoded),
-    Boolean(bool),
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct McpRemoteConfigEncodedTimeout {
-    /// Wire field: `catalog`.
-    #[serde(default, rename = "catalog", skip_serializing_if = "Option::is_none")]
-    pub catalog: Option<i64>,
-    /// Wire field: `execution`.
-    #[serde(default, rename = "execution", skip_serializing_if = "Option::is_none")]
-    pub execution: Option<i64>,
-    /// Wire field: `startup`.
-    #[serde(default, rename = "startup", skip_serializing_if = "Option::is_none")]
-    pub startup: Option<i64>,
-}
-
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
-)]
-pub enum McpRemoteConfigEncodedType {
-    #[default]
-    #[serde(rename = "remote")]
-    Remote,
-}
-
-impl McpRemoteConfigEncodedType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Remote => "remote",
-        }
-    }
-}
-
-/// Wire schema: `Mcp.RemoteConfigEncoded`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct McpRemoteConfigEncoded {
-    /// Wire field: `codemode`.
-    #[serde(default, rename = "codemode", skip_serializing_if = "Option::is_none")]
-    pub codemode: Option<bool>,
-    /// Wire field: `disabled`.
-    #[serde(default, rename = "disabled", skip_serializing_if = "Option::is_none")]
-    pub disabled: Option<bool>,
-    /// Wire field: `headers`.
-    #[serde(default, rename = "headers", skip_serializing_if = "Option::is_none")]
-    pub headers: Option<std::collections::BTreeMap<String, String>>,
-    /// Wire field: `oauth`.
-    #[serde(default, rename = "oauth", skip_serializing_if = "Option::is_none")]
-    pub oauth: Option<McpRemoteConfigEncodedOauth>,
-    /// Wire field: `protocol`.
-    #[serde(default, rename = "protocol", skip_serializing_if = "Option::is_none")]
-    pub protocol: Option<McpProtocol>,
-    /// Wire field: `timeout`.
-    #[serde(default, rename = "timeout", skip_serializing_if = "Option::is_none")]
-    pub timeout: Option<McpRemoteConfigEncodedTimeout>,
-    /// Wire field: `type`.
-    #[serde(rename = "type")]
-    pub type_: McpRemoteConfigEncodedType,
-    /// Wire field: `url`.
-    #[serde(rename = "url")]
-    pub url: String,
-}
-
-/// Discriminated union (each variant carries its tag field);
-/// serde matches variants in declared order (wire schema `ConfigInfoEncodedMcpServersValue`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum ConfigInfoEncodedMcpServersValue {
-    LocalConfigEncoded(McpLocalConfigEncoded),
-    RemoteConfigEncoded(McpRemoteConfigEncoded),
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigInfoEncodedMcpTimeout {
-    /// Wire field: `catalog`.
-    #[serde(default, rename = "catalog", skip_serializing_if = "Option::is_none")]
-    pub catalog: Option<i64>,
-    /// Wire field: `execution`.
-    #[serde(default, rename = "execution", skip_serializing_if = "Option::is_none")]
-    pub execution: Option<i64>,
-    /// Wire field: `startup`.
-    #[serde(default, rename = "startup", skip_serializing_if = "Option::is_none")]
-    pub startup: Option<i64>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigInfoEncodedMcp {
-    /// Wire field: `servers`.
-    #[serde(default, rename = "servers", skip_serializing_if = "Option::is_none")]
-    pub servers: Option<std::collections::BTreeMap<String, ConfigInfoEncodedMcpServersValue>>,
-    /// Wire field: `timeout`.
-    #[serde(default, rename = "timeout", skip_serializing_if = "Option::is_none")]
-    pub timeout: Option<ConfigInfoEncodedMcpTimeout>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigInfoEncodedMediaImage {
-    /// Wire field: `auto_resize`.
-    #[serde(default, rename = "auto_resize", skip_serializing_if = "Option::is_none")]
-    pub auto_resize: Option<bool>,
-    /// Wire field: `max_base64_bytes`.
-    #[serde(default, rename = "max_base64_bytes", skip_serializing_if = "Option::is_none")]
-    pub max_base64_bytes: Option<i64>,
-    /// Wire field: `max_height`.
-    #[serde(default, rename = "max_height", skip_serializing_if = "Option::is_none")]
-    pub max_height: Option<i64>,
-    /// Wire field: `max_width`.
-    #[serde(default, rename = "max_width", skip_serializing_if = "Option::is_none")]
-    pub max_width: Option<i64>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigInfoEncodedMedia {
-    /// Wire field: `image`.
-    #[serde(default, rename = "image", skip_serializing_if = "Option::is_none")]
-    pub image: Option<ConfigInfoEncodedMediaImage>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigInfoEncodedModelVariant2 {
-    /// Wire field: `model`.
-    #[serde(rename = "model")]
-    pub model: String,
-    /// Wire field: `providerID`.
-    #[serde(rename = "providerID")]
-    pub provider_id: String,
-    /// Wire field: `variant`.
-    #[serde(default, rename = "variant", skip_serializing_if = "Option::is_none")]
-    pub variant: Option<String>,
-}
-
-/// Untagged union; serde matches variants in declared order (wire schema `ConfigInfoEncodedModel`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum ConfigInfoEncodedModel {
-    String(String),
-    ConfigInfoEncodedModelVariant2(ConfigInfoEncodedModelVariant2),
-}
-
-/// Wire schema: `Config.Plugin.EntryEncoded`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigPluginEntryEncoded {
-    /// Wire field: `options`.
-    #[serde(default, rename = "options", skip_serializing_if = "Option::is_none")]
-    pub options: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `package`.
-    #[serde(rename = "package")]
-    pub package: String,
-}
-
-/// Untagged union; serde matches variants in declared order (wire schema `ConfigInfoEncodedPluginsItem`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum ConfigInfoEncodedPluginsItem {
-    String(String),
-    EntryEncoded(ConfigPluginEntryEncoded),
-}
-
-/// Wire schema: `Config.Model.Capabilities`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigModelCapabilities {
-    /// Wire field: `input`.
-    #[serde(default, rename = "input", skip_serializing_if = "Option::is_none")]
-    pub input: Option<Vec<String>>,
-    /// Wire field: `output`.
-    #[serde(default, rename = "output", skip_serializing_if = "Option::is_none")]
-    pub output: Option<Vec<String>>,
-    /// Wire field: `tools`.
-    #[serde(default, rename = "tools", skip_serializing_if = "Option::is_none")]
-    pub tools: Option<bool>,
-}
-
-/// Wire schema: `Model.MaxTokensField`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum ModelMaxTokensField {
-    #[serde(rename = "max_completion_tokens")]
-    MaxCompletionTokens,
-    #[serde(rename = "max_tokens")]
-    MaxTokens,
-}
-
-impl ModelMaxTokensField {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::MaxCompletionTokens => "max_completion_tokens",
-            Self::MaxTokens => "max_tokens",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum ModelReasoningFieldVariant1 {
-    #[serde(rename = "reasoning")]
-    Reasoning,
-    #[serde(rename = "reasoning_content")]
-    ReasoningContent,
-    #[serde(rename = "reasoning_text")]
-    ReasoningText,
-}
-
-impl ModelReasoningFieldVariant1 {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Reasoning => "reasoning",
-            Self::ReasoningContent => "reasoning_content",
-            Self::ReasoningText => "reasoning_text",
-        }
-    }
-}
-
-/// Wire schema: `Model.ReasoningField`.
-/// Untagged union; serde matches variants in declared order (wire schema `Model.ReasoningField`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum ModelReasoningField {
-    ModelReasoningFieldVariant1(ModelReasoningFieldVariant1),
-    String(String),
-}
-
-/// Wire schema: `Model.Compatibility`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ModelCompatibility {
-    /// Wire field: `maxTokensField`.
-    #[serde(default, rename = "maxTokensField", skip_serializing_if = "Option::is_none")]
-    pub max_tokens_field: Option<ModelMaxTokensField>,
-    /// Wire field: `reasoningField`.
-    #[serde(default, rename = "reasoningField", skip_serializing_if = "Option::is_none")]
-    pub reasoning_field: Option<ModelReasoningField>,
-    /// Wire field: `requireAssistantAfterTool`.
-    #[serde(
-        default,
-        rename = "requireAssistantAfterTool",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub require_assistant_after_tool: Option<bool>,
-    /// Wire field: `requireFinishReason`.
-    #[serde(default, rename = "requireFinishReason", skip_serializing_if = "Option::is_none")]
-    pub require_finish_reason: Option<bool>,
-    /// Wire field: `requireReasoning`.
-    #[serde(default, rename = "requireReasoning", skip_serializing_if = "Option::is_none")]
-    pub require_reasoning: Option<bool>,
-    /// Wire field: `supportsPromptCacheKey`.
-    #[serde(default, rename = "supportsPromptCacheKey", skip_serializing_if = "Option::is_none")]
-    pub supports_prompt_cache_key: Option<bool>,
-}
-
-/// Wire schema: `Money.USDPerMillionTokens`.
-pub type MoneyUsdPerMillionTokens = f64;
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigModelCostEncodedCache {
-    /// Wire field: `read`.
-    #[serde(default, rename = "read", skip_serializing_if = "Option::is_none")]
-    pub read: Option<MoneyUsdPerMillionTokens>,
-    /// Wire field: `write`.
-    #[serde(default, rename = "write", skip_serializing_if = "Option::is_none")]
-    pub write: Option<MoneyUsdPerMillionTokens>,
-}
-
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
-)]
-pub enum ConfigModelCostEncodedTierType {
-    #[default]
-    #[serde(rename = "context")]
-    Context,
-}
-
-impl ConfigModelCostEncodedTierType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Context => "context",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigModelCostEncodedTier {
-    /// Wire field: `size`.
-    #[serde(rename = "size")]
-    pub size: i64,
-    /// Wire field: `type`.
-    #[serde(rename = "type")]
-    pub type_: ConfigModelCostEncodedTierType,
-}
-
-/// Wire schema: `Config.Model.CostEncoded`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigModelCostEncoded {
-    /// Wire field: `cache`.
-    #[serde(default, rename = "cache", skip_serializing_if = "Option::is_none")]
-    pub cache: Option<ConfigModelCostEncodedCache>,
-    /// Wire field: `input`.
-    #[serde(rename = "input")]
-    pub input: MoneyUsdPerMillionTokens,
-    /// Wire field: `output`.
-    #[serde(rename = "output")]
-    pub output: MoneyUsdPerMillionTokens,
-    /// Wire field: `tier`.
-    #[serde(default, rename = "tier", skip_serializing_if = "Option::is_none")]
-    pub tier: Option<ConfigModelCostEncodedTier>,
-}
-
-/// Untagged union; serde matches variants in declared order (wire schema `ConfigModelEncodedCost`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum ConfigModelEncodedCost {
-    CostEncoded(ConfigModelCostEncoded),
-    Array(Vec<ConfigModelCostEncoded>),
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigModelEncodedLimit {
-    /// Wire field: `context`.
-    #[serde(default, rename = "context", skip_serializing_if = "Option::is_none")]
-    pub context: Option<i64>,
-    /// Wire field: `input`.
-    #[serde(default, rename = "input", skip_serializing_if = "Option::is_none")]
-    pub input: Option<i64>,
-    /// Wire field: `output`.
-    #[serde(default, rename = "output", skip_serializing_if = "Option::is_none")]
-    pub output: Option<i64>,
-}
-
-/// Wire schema: `Config.Model.Settings`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigModelSettings {
-    /// Wire field: `compaction`.
-    #[serde(default, rename = "compaction", skip_serializing_if = "Option::is_none")]
-    pub compaction: Option<ProviderCompaction>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigModelEncodedVariantsItem {
-    /// Wire field: `body`.
-    #[serde(default, rename = "body", skip_serializing_if = "Option::is_none")]
-    pub body: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `headers`.
-    #[serde(default, rename = "headers", skip_serializing_if = "Option::is_none")]
-    pub headers: Option<std::collections::BTreeMap<String, String>>,
-    /// Wire field: `id`.
-    #[serde(rename = "id")]
-    pub id: String,
-    /// Wire field: `settings`.
-    #[serde(default, rename = "settings", skip_serializing_if = "Option::is_none")]
-    pub settings: Option<ConfigModelSettings>,
-}
-
-/// Wire schema: `Config.ModelEncoded`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigModelEncoded {
-    /// Wire field: `body`.
-    #[serde(default, rename = "body", skip_serializing_if = "Option::is_none")]
-    pub body: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `capabilities`.
-    #[serde(default, rename = "capabilities", skip_serializing_if = "Option::is_none")]
-    pub capabilities: Option<ConfigModelCapabilities>,
-    /// Wire field: `compatibility`.
-    #[serde(default, rename = "compatibility", skip_serializing_if = "Option::is_none")]
-    pub compatibility: Option<ModelCompatibility>,
-    /// Wire field: `cost`.
-    #[serde(default, rename = "cost", skip_serializing_if = "Option::is_none")]
-    pub cost: Option<ConfigModelEncodedCost>,
-    /// Wire field: `disabled`.
-    #[serde(default, rename = "disabled", skip_serializing_if = "Option::is_none")]
-    pub disabled: Option<bool>,
-    /// Wire field: `family`.
-    #[serde(default, rename = "family", skip_serializing_if = "Option::is_none")]
-    pub family: Option<String>,
-    /// Wire field: `headers`.
-    #[serde(default, rename = "headers", skip_serializing_if = "Option::is_none")]
-    pub headers: Option<std::collections::BTreeMap<String, String>>,
-    /// Wire field: `limit`.
-    #[serde(default, rename = "limit", skip_serializing_if = "Option::is_none")]
-    pub limit: Option<ConfigModelEncodedLimit>,
-    /// Wire field: `modelID`.
-    #[serde(default, rename = "modelID", skip_serializing_if = "Option::is_none")]
-    pub model_id: Option<String>,
-    /// Wire field: `name`.
-    #[serde(default, rename = "name", skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Wire field: `package`.
-    #[serde(default, rename = "package", skip_serializing_if = "Option::is_none")]
-    pub package: Option<String>,
-    /// Wire field: `settings`.
-    #[serde(default, rename = "settings", skip_serializing_if = "Option::is_none")]
-    pub settings: Option<ConfigModelSettings>,
-    /// Wire field: `variants`.
-    #[serde(default, rename = "variants", skip_serializing_if = "Option::is_none")]
-    pub variants: Option<Vec<ConfigModelEncodedVariantsItem>>,
-}
-
-/// Untagged union; serde matches variants in declared order (wire schema `ConfigProviderSettingsChunkTimeout`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum ConfigProviderSettingsChunkTimeout {
-    Number(f64),
-    Boolean(bool),
-}
-
-/// Untagged union; serde matches variants in declared order (wire schema `ConfigProviderSettingsHeaderTimeout`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum ConfigProviderSettingsHeaderTimeout {
-    Number(f64),
-    Boolean(bool),
-}
-
-/// Untagged union; serde matches variants in declared order (wire schema `ConfigProviderSettingsTimeout`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum ConfigProviderSettingsTimeout {
-    Number(f64),
-    Boolean(bool),
-}
-
-/// Wire schema: `Config.Provider.Settings`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigProviderSettings {
-    /// Wire field: `chunkTimeout`.
-    #[serde(default, rename = "chunkTimeout", skip_serializing_if = "Option::is_none")]
-    pub chunk_timeout: Option<ConfigProviderSettingsChunkTimeout>,
-    /// Wire field: `compaction`.
-    #[serde(default, rename = "compaction", skip_serializing_if = "Option::is_none")]
-    pub compaction: Option<ProviderCompaction>,
-    /// Wire field: `headerTimeout`.
-    #[serde(default, rename = "headerTimeout", skip_serializing_if = "Option::is_none")]
-    pub header_timeout: Option<ConfigProviderSettingsHeaderTimeout>,
-    /// Wire field: `timeout`.
-    #[serde(default, rename = "timeout", skip_serializing_if = "Option::is_none")]
-    pub timeout: Option<ConfigProviderSettingsTimeout>,
-    /// Wire field: `transport`.
-    #[serde(default, rename = "transport", skip_serializing_if = "Option::is_none")]
-    pub transport: Option<ProviderTransport>,
-}
-
-/// Wire schema: `Config.ProviderEncoded`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigProviderEncoded {
-    /// Wire field: `body`.
-    #[serde(default, rename = "body", skip_serializing_if = "Option::is_none")]
-    pub body: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `canonical`.
-    #[serde(default, rename = "canonical", skip_serializing_if = "Option::is_none")]
-    pub canonical: Option<String>,
-    /// Wire field: `env`.
-    #[serde(default, rename = "env", skip_serializing_if = "Option::is_none")]
-    pub env: Option<Vec<String>>,
-    /// Wire field: `headers`.
-    #[serde(default, rename = "headers", skip_serializing_if = "Option::is_none")]
-    pub headers: Option<std::collections::BTreeMap<String, String>>,
-    /// Wire field: `models`.
-    #[serde(default, rename = "models", skip_serializing_if = "Option::is_none")]
-    pub models: Option<std::collections::BTreeMap<String, ConfigModelEncoded>>,
-    /// Wire field: `name`.
-    #[serde(default, rename = "name", skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Wire field: `package`.
-    #[serde(default, rename = "package", skip_serializing_if = "Option::is_none")]
-    pub package: Option<String>,
-    /// Wire field: `settings`.
-    #[serde(default, rename = "settings", skip_serializing_if = "Option::is_none")]
-    pub settings: Option<ConfigProviderSettings>,
-}
-
-/// Wire schema: `Config.Reference.GitEncoded`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigReferenceGitEncoded {
-    /// Wire field: `branch`.
-    #[serde(default, rename = "branch", skip_serializing_if = "Option::is_none")]
-    pub branch: Option<String>,
-    /// Wire field: `description`.
-    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Wire field: `hidden`.
-    #[serde(default, rename = "hidden", skip_serializing_if = "Option::is_none")]
-    pub hidden: Option<bool>,
-    /// Wire field: `repository`.
-    #[serde(rename = "repository")]
-    pub repository: String,
-}
-
-/// Wire schema: `Config.Reference.LocalEncoded`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigReferenceLocalEncoded {
-    /// Wire field: `description`.
-    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Wire field: `hidden`.
-    #[serde(default, rename = "hidden", skip_serializing_if = "Option::is_none")]
-    pub hidden: Option<bool>,
-    /// Wire field: `path`.
-    #[serde(rename = "path")]
-    pub path: String,
-}
-
-/// Untagged union; serde matches variants in declared order (wire schema `ConfigInfoEncodedReferencesValue`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum ConfigInfoEncodedReferencesValue {
-    String(String),
-    GitEncoded(ConfigReferenceGitEncoded),
-    LocalEncoded(ConfigReferenceLocalEncoded),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum ConfigInfoEncodedShare {
-    #[serde(rename = "manual")]
-    Manual,
-    #[serde(rename = "auto")]
-    Auto,
-    #[serde(rename = "disabled")]
-    Disabled,
-}
-
-impl ConfigInfoEncodedShare {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Manual => "manual",
-            Self::Auto => "auto",
-            Self::Disabled => "disabled",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigInfoEncodedToolOutput {
-    /// Wire field: `max_bytes`.
-    #[serde(default, rename = "max_bytes", skip_serializing_if = "Option::is_none")]
-    pub max_bytes: Option<i64>,
-    /// Wire field: `max_lines`.
-    #[serde(default, rename = "max_lines", skip_serializing_if = "Option::is_none")]
-    pub max_lines: Option<i64>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum ConfigInfoEncodedUpdate {
-    #[serde(rename = "disable")]
-    Disable,
-    #[serde(rename = "notify")]
-    Notify,
-    #[serde(rename = "auto")]
-    Auto,
-}
-
-impl ConfigInfoEncodedUpdate {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Disable => "disable",
-            Self::Notify => "notify",
-            Self::Auto => "auto",
-        }
-    }
-}
-
-/// Wire schema: `Config.WarmingEncoded`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigWarmingEncoded {
-    /// Wire field: `duration`.
-    #[serde(default, rename = "duration", skip_serializing_if = "Option::is_none")]
-    pub duration: Option<String>,
-    /// Wire field: `interval`.
-    #[serde(default, rename = "interval", skip_serializing_if = "Option::is_none")]
-    pub interval: Option<String>,
-    /// Wire field: `prompt`.
-    #[serde(default, rename = "prompt", skip_serializing_if = "Option::is_none")]
-    pub prompt: Option<String>,
-}
-
-/// Untagged union; serde matches variants in declared order (wire schema `ConfigInfoEncodedWarming`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum ConfigInfoEncodedWarming {
-    Boolean(bool),
-    WarmingEncoded(ConfigWarmingEncoded),
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigInfoEncodedWatcher {
-    /// Wire field: `ignore`.
-    #[serde(default, rename = "ignore", skip_serializing_if = "Option::is_none")]
-    pub ignore: Option<Vec<String>>,
-}
-
-/// Wire schema: `ConfigWebSearch.InfoEncoded`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigWebSearchInfoEncoded {
-    /// Wire field: `provider`.
-    #[serde(rename = "provider")]
-    pub provider: String,
-}
-
-/// Untagged union; serde matches variants in declared order (wire schema `ConfigInfoEncodedWebsearch`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum ConfigInfoEncodedWebsearch {
-    Boolean(bool),
-    InfoEncoded(ConfigWebSearchInfoEncoded),
-}
-
-/// Wire schema: `Config.Worktree`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConfigWorktree {
-    /// Wire field: `directory`.
-    #[serde(rename = "directory")]
-    pub directory: String,
+    /// Wire field: `policies`.
+    #[serde(default, rename = "policies", skip_serializing_if = "Option::is_none")]
+    pub policies: Option<Vec<ConfigInfoEncodedExperimentalPoliciesItem>>,
 }
 
 /// Wire schema: `Config.InfoEncoded`.
@@ -1400,118 +1417,101 @@ pub struct ConfigInfoEncoded {
     /// Wire field: `$schema`.
     #[serde(default, rename = "$schema", skip_serializing_if = "Option::is_none")]
     pub schema: Option<String>,
-    /// Wire field: `agents`.
-    #[serde(default, rename = "agents", skip_serializing_if = "Option::is_none")]
-    pub agents: Option<std::collections::BTreeMap<String, ConfigAgentEncoded>>,
-    /// Wire field: `commands`.
-    #[serde(default, rename = "commands", skip_serializing_if = "Option::is_none")]
-    pub commands: Option<std::collections::BTreeMap<String, ConfigCommandEncoded>>,
-    /// Wire field: `compaction`.
-    #[serde(default, rename = "compaction", skip_serializing_if = "Option::is_none")]
-    pub compaction: Option<ConfigInfoEncodedCompaction>,
-    /// Wire field: `default_agent`.
-    #[serde(default, rename = "default_agent", skip_serializing_if = "Option::is_none")]
-    pub default_agent: Option<String>,
-    /// Wire field: `enterprise`.
-    #[serde(default, rename = "enterprise", skip_serializing_if = "Option::is_none")]
-    pub enterprise: Option<ConfigInfoEncodedEnterprise>,
-    /// Wire field: `experimental`.
-    #[serde(default, rename = "experimental", skip_serializing_if = "Option::is_none")]
-    pub experimental: Option<ConfigInfoEncodedExperimental>,
-    /// Wire field: `formatter`.
-    #[serde(default, rename = "formatter", skip_serializing_if = "Option::is_none")]
-    pub formatter: Option<ConfigInfoEncodedFormatter>,
-    /// Wire field: `instructions`.
-    #[serde(default, rename = "instructions", skip_serializing_if = "Option::is_none")]
-    pub instructions: Option<Vec<String>>,
-    /// Wire field: `lsp`.
-    #[serde(default, rename = "lsp", skip_serializing_if = "Option::is_none")]
-    pub lsp: Option<ConfigInfoEncodedLsp>,
-    /// Wire field: `mcp`.
-    #[serde(default, rename = "mcp", skip_serializing_if = "Option::is_none")]
-    pub mcp: Option<ConfigInfoEncodedMcp>,
-    /// Wire field: `media`.
-    #[serde(default, rename = "media", skip_serializing_if = "Option::is_none")]
-    pub media: Option<ConfigInfoEncodedMedia>,
-    /// Wire field: `model`.
-    #[serde(default, rename = "model", skip_serializing_if = "Option::is_none")]
-    pub model: Option<ConfigInfoEncodedModel>,
-    /// Wire field: `permissions`.
-    #[serde(default, rename = "permissions", skip_serializing_if = "Option::is_none")]
-    pub permissions: Option<PermissionRuleset>,
-    /// Wire field: `plugins`.
-    #[serde(default, rename = "plugins", skip_serializing_if = "Option::is_none")]
-    pub plugins: Option<Vec<ConfigInfoEncodedPluginsItem>>,
-    /// Wire field: `providers`.
-    #[serde(default, rename = "providers", skip_serializing_if = "Option::is_none")]
-    pub providers: Option<std::collections::BTreeMap<String, ConfigProviderEncoded>>,
-    /// Wire field: `references`.
-    #[serde(default, rename = "references", skip_serializing_if = "Option::is_none")]
-    pub references: Option<std::collections::BTreeMap<String, ConfigInfoEncodedReferencesValue>>,
-    /// Wire field: `share`.
-    #[serde(default, rename = "share", skip_serializing_if = "Option::is_none")]
-    pub share: Option<ConfigInfoEncodedShare>,
     /// Wire field: `shell`.
     #[serde(default, rename = "shell", skip_serializing_if = "Option::is_none")]
     pub shell: Option<String>,
-    /// Wire field: `skills`.
-    #[serde(default, rename = "skills", skip_serializing_if = "Option::is_none")]
-    pub skills: Option<Vec<String>>,
-    /// Wire field: `snapshots`.
-    #[serde(default, rename = "snapshots", skip_serializing_if = "Option::is_none")]
-    pub snapshots: Option<bool>,
-    /// Wire field: `tool_output`.
-    #[serde(default, rename = "tool_output", skip_serializing_if = "Option::is_none")]
-    pub tool_output: Option<ConfigInfoEncodedToolOutput>,
+    /// Wire field: `model`.
+    #[serde(default, rename = "model", skip_serializing_if = "Option::is_none")]
+    pub model: Option<ConfigInfoEncodedModel>,
+    /// Wire field: `default_agent`.
+    #[serde(default, rename = "default_agent", skip_serializing_if = "Option::is_none")]
+    pub default_agent: Option<String>,
     /// Wire field: `update`.
     #[serde(default, rename = "update", skip_serializing_if = "Option::is_none")]
     pub update: Option<ConfigInfoEncodedUpdate>,
+    /// Wire field: `share`.
+    #[serde(default, rename = "share", skip_serializing_if = "Option::is_none")]
+    pub share: Option<ConfigInfoEncodedShare>,
+    /// Wire field: `enterprise`.
+    #[serde(default, rename = "enterprise", skip_serializing_if = "Option::is_none")]
+    pub enterprise: Option<ConfigInfoEncodedEnterprise>,
     /// Wire field: `username`.
     #[serde(default, rename = "username", skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
-    /// Wire field: `warming`.
-    #[serde(default, rename = "warming", skip_serializing_if = "Option::is_none")]
-    pub warming: Option<ConfigInfoEncodedWarming>,
+    /// Wire field: `permissions`.
+    #[serde(default, rename = "permissions", skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<PermissionRuleset>,
+    /// Wire field: `agents`.
+    #[serde(default, rename = "agents", skip_serializing_if = "Option::is_none")]
+    pub agents: Option<std::collections::BTreeMap<String, ConfigAgentEncoded>>,
+    /// Wire field: `snapshots`.
+    #[serde(default, rename = "snapshots", skip_serializing_if = "Option::is_none")]
+    pub snapshots: Option<bool>,
     /// Wire field: `watcher`.
     #[serde(default, rename = "watcher", skip_serializing_if = "Option::is_none")]
     pub watcher: Option<ConfigInfoEncodedWatcher>,
+    /// Wire field: `formatter`.
+    #[serde(default, rename = "formatter", skip_serializing_if = "Option::is_none")]
+    pub formatter: Option<ConfigInfoEncodedFormatter>,
+    /// Wire field: `lsp`.
+    #[serde(default, rename = "lsp", skip_serializing_if = "Option::is_none")]
+    pub lsp: Option<ConfigInfoEncodedLsp>,
+    /// Wire field: `media`.
+    #[serde(default, rename = "media", skip_serializing_if = "Option::is_none")]
+    pub media: Option<ConfigInfoEncodedMedia>,
+    /// Wire field: `tool_output`.
+    #[serde(default, rename = "tool_output", skip_serializing_if = "Option::is_none")]
+    pub tool_output: Option<ConfigInfoEncodedToolOutput>,
+    /// Wire field: `mcp`.
+    #[serde(default, rename = "mcp", skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<ConfigInfoEncodedMcp>,
+    /// Wire field: `compaction`.
+    #[serde(default, rename = "compaction", skip_serializing_if = "Option::is_none")]
+    pub compaction: Option<ConfigInfoEncodedCompaction>,
+    /// Wire field: `skills`.
+    #[serde(default, rename = "skills", skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
+    /// Wire field: `commands`.
+    #[serde(default, rename = "commands", skip_serializing_if = "Option::is_none")]
+    pub commands: Option<std::collections::BTreeMap<String, ConfigCommandEncoded>>,
+    /// Wire field: `instructions`.
+    #[serde(default, rename = "instructions", skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<Vec<String>>,
+    /// Wire field: `references`.
+    #[serde(default, rename = "references", skip_serializing_if = "Option::is_none")]
+    pub references: Option<std::collections::BTreeMap<String, ConfigInfoEncodedReferencesValue>>,
     /// Wire field: `websearch`.
     #[serde(default, rename = "websearch", skip_serializing_if = "Option::is_none")]
     pub websearch: Option<ConfigInfoEncodedWebsearch>,
+    /// Wire field: `plugins`.
+    #[serde(default, rename = "plugins", skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<Vec<ConfigInfoEncodedPluginsItem>>,
     /// Wire field: `worktree`.
     #[serde(default, rename = "worktree", skip_serializing_if = "Option::is_none")]
     pub worktree: Option<ConfigWorktree>,
-}
-
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
-)]
-pub enum ConfigDocumentEncodedType {
-    #[default]
-    #[serde(rename = "document")]
-    Document,
-}
-
-impl ConfigDocumentEncodedType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Document => "document",
-        }
-    }
+    /// Wire field: `warming`.
+    #[serde(default, rename = "warming", skip_serializing_if = "Option::is_none")]
+    pub warming: Option<ConfigInfoEncodedWarming>,
+    /// Wire field: `providers`.
+    #[serde(default, rename = "providers", skip_serializing_if = "Option::is_none")]
+    pub providers: Option<std::collections::BTreeMap<String, ConfigProviderEncoded>>,
+    /// Wire field: `experimental`.
+    #[serde(default, rename = "experimental", skip_serializing_if = "Option::is_none")]
+    pub experimental: Option<ConfigInfoEncodedExperimental>,
 }
 
 /// Wire schema: `Config.DocumentEncoded`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConfigDocumentEncoded {
-    /// Wire field: `info`.
-    #[serde(rename = "info")]
-    pub info: ConfigInfoEncoded,
-    /// Wire field: `path`.
-    #[serde(default, rename = "path", skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: ConfigDocumentEncodedType,
+    /// Wire field: `path`.
+    #[serde(default, rename = "path", skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Wire field: `info`.
+    #[serde(rename = "info")]
+    pub info: ConfigInfoEncoded,
 }
 
 /// Wire schema: `Config.Entry`.
@@ -1535,15 +1535,15 @@ pub struct ConfigPatch {
 /// Wire schema: `ConfigShell.Option`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConfigShellOption {
-    /// Wire field: `acceptable`.
-    #[serde(rename = "acceptable")]
-    pub acceptable: bool,
-    /// Wire field: `name`.
-    #[serde(rename = "name")]
-    pub name: String,
     /// Wire field: `path`.
     #[serde(rename = "path")]
     pub path: String,
+    /// Wire field: `name`.
+    #[serde(rename = "name")]
+    pub name: String,
+    /// Wire field: `acceptable`.
+    #[serde(rename = "acceptable")]
+    pub acceptable: bool,
 }
 
 #[derive(
@@ -1575,6 +1575,23 @@ pub struct ConflictErrorEncoded {
     /// Wire field: `resource`.
     #[serde(default, rename = "resource", skip_serializing_if = "Option::is_none")]
     pub resource: Option<String>,
+}
+
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum ConnectionCredentialInfoType {
+    #[default]
+    #[serde(rename = "credential")]
+    Credential,
+}
+
+impl ConnectionCredentialInfoType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Credential => "credential",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -1614,37 +1631,23 @@ impl ConnectionStatusStatus {
 /// Wire schema: `Connection.Status`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConnectionStatus {
-    /// Wire field: `message`.
-    #[serde(rename = "message")]
-    pub message: String,
     /// Wire field: `status`.
     #[serde(rename = "status")]
     pub status: Option<ConnectionStatusStatus>,
+    /// Wire field: `message`.
+    #[serde(rename = "message")]
+    pub message: String,
     /// Wire field: `url`.
     #[serde(default, rename = "url", skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
 }
 
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
-)]
-pub enum ConnectionCredentialInfoType {
-    #[default]
-    #[serde(rename = "credential")]
-    Credential,
-}
-
-impl ConnectionCredentialInfoType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Credential => "credential",
-        }
-    }
-}
-
 /// Wire schema: `Connection.CredentialInfo`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConnectionCredentialInfo {
+    /// Wire field: `type`.
+    #[serde(rename = "type")]
+    pub type_: ConnectionCredentialInfoType,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
@@ -1657,9 +1660,6 @@ pub struct ConnectionCredentialInfo {
     /// Wire field: `status`.
     #[serde(default, rename = "status", skip_serializing_if = "Option::is_none")]
     pub status: Option<ConnectionStatus>,
-    /// Wire field: `type`.
-    #[serde(rename = "type")]
-    pub type_: ConnectionCredentialInfoType,
 }
 
 #[derive(
@@ -1682,15 +1682,15 @@ impl ConnectionEnvInfoType {
 /// Wire schema: `Connection.EnvInfo`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConnectionEnvInfo {
+    /// Wire field: `type`.
+    #[serde(rename = "type")]
+    pub type_: ConnectionEnvInfoType,
     /// Wire field: `name`.
     #[serde(rename = "name")]
     pub name: String,
     /// Wire field: `status`.
     #[serde(default, rename = "status", skip_serializing_if = "Option::is_none")]
     pub status: Option<ConnectionStatus>,
-    /// Wire field: `type`.
-    #[serde(rename = "type")]
-    pub type_: ConnectionEnvInfoType,
 }
 
 /// Wire schema: `Connection.Info`.
@@ -1723,6 +1723,15 @@ impl CredentialOAuthType {
 /// Wire schema: `Credential.OAuth`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CredentialOAuth {
+    /// Wire field: `type`.
+    #[serde(rename = "type")]
+    pub type_: CredentialOAuthType,
+    /// Wire field: `methodID`.
+    #[serde(rename = "methodID")]
+    pub method_id: String,
+    /// Wire field: `refresh`.
+    #[serde(rename = "refresh")]
+    pub refresh: String,
     /// Wire field: `access`.
     #[serde(rename = "access")]
     pub access: String,
@@ -1732,15 +1741,23 @@ pub struct CredentialOAuth {
     /// Wire field: `metadata`.
     #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
     pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `methodID`.
-    #[serde(rename = "methodID")]
-    pub method_id: String,
-    /// Wire field: `refresh`.
-    #[serde(rename = "refresh")]
-    pub refresh: String,
-    /// Wire field: `type`.
-    #[serde(rename = "type")]
-    pub type_: CredentialOAuthType,
+}
+
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum CredentialKeyType {
+    #[default]
+    #[serde(rename = "key")]
+    Key,
+}
+
+impl CredentialKeyType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Key => "key",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -1785,38 +1802,21 @@ pub enum FormValue {
 /// Wire schema: `Form.Answer_1`.
 pub type FormAnswer1 = std::collections::BTreeMap<String, FormValue>;
 
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
-)]
-pub enum CredentialKeyType {
-    #[default]
-    #[serde(rename = "key")]
-    Key,
-}
-
-impl CredentialKeyType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Key => "key",
-        }
-    }
-}
-
 /// Wire schema: `Credential.Key`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CredentialKey {
-    /// Wire field: `configuration`.
-    #[serde(default, rename = "configuration", skip_serializing_if = "Option::is_none")]
-    pub configuration: Option<FormAnswer1>,
+    /// Wire field: `type`.
+    #[serde(rename = "type")]
+    pub type_: CredentialKeyType,
     /// Wire field: `key`.
     #[serde(rename = "key")]
     pub key: String,
     /// Wire field: `metadata`.
     #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
     pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `type`.
-    #[serde(rename = "type")]
-    pub type_: CredentialKeyType,
+    /// Wire field: `configuration`.
+    #[serde(default, rename = "configuration", skip_serializing_if = "Option::is_none")]
+    pub configuration: Option<FormAnswer1>,
 }
 
 /// Wire schema: `Credential.Value`.
@@ -1832,9 +1832,6 @@ pub enum CredentialValue {
 /// Wire schema: `Credential.CreateInput`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CredentialCreateInput {
-    /// Wire field: `activate`.
-    #[serde(default, rename = "activate", skip_serializing_if = "Option::is_none")]
-    pub activate: Option<bool>,
     /// Wire field: `id`.
     #[serde(default, rename = "id", skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -1847,14 +1844,14 @@ pub struct CredentialCreateInput {
     /// Wire field: `value`.
     #[serde(rename = "value")]
     pub value: CredentialValue,
+    /// Wire field: `activate`.
+    #[serde(default, rename = "activate", skip_serializing_if = "Option::is_none")]
+    pub activate: Option<bool>,
 }
 
 /// Wire schema: `Credential.Entry`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CredentialEntry {
-    /// Wire field: `active`.
-    #[serde(rename = "active")]
-    pub active: bool,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
@@ -1864,6 +1861,9 @@ pub struct CredentialEntry {
     /// Wire field: `label`.
     #[serde(rename = "label")]
     pub label: String,
+    /// Wire field: `active`.
+    #[serde(rename = "active")]
+    pub active: bool,
     /// Wire field: `value`.
     #[serde(rename = "value")]
     pub value: CredentialValue,
@@ -1892,18 +1892,18 @@ impl FileDiffInfoStatus {
 /// Wire schema: `FileDiff.Info`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FileDiffInfo {
-    /// Wire field: `additions`.
-    #[serde(rename = "additions")]
-    pub additions: i64,
-    /// Wire field: `deletions`.
-    #[serde(rename = "deletions")]
-    pub deletions: i64,
     /// Wire field: `file`.
     #[serde(rename = "file")]
     pub file: String,
     /// Wire field: `patch`.
     #[serde(rename = "patch")]
     pub patch: String,
+    /// Wire field: `additions`.
+    #[serde(rename = "additions")]
+    pub additions: i64,
+    /// Wire field: `deletions`.
+    #[serde(rename = "deletions")]
+    pub deletions: i64,
     /// Wire field: `status`.
     #[serde(rename = "status")]
     pub status: FileDiffInfoStatus,
@@ -1932,12 +1932,12 @@ pub struct FileNotFoundErrorEncoded {
     /// Wire field: `_tag`.
     #[serde(rename = "_tag")]
     pub tag: FileNotFoundErrorEncodedTag,
-    /// Wire field: `message`.
-    #[serde(rename = "message")]
-    pub message: String,
     /// Wire field: `path`.
     #[serde(rename = "path")]
     pub path: String,
+    /// Wire field: `message`.
+    #[serde(rename = "message")]
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -2007,23 +2007,6 @@ pub struct ForbiddenErrorEncoded {
 /// Wire schema: `Form.Answer`.
 pub type FormAnswer = std::collections::BTreeMap<String, FormValue>;
 
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
-)]
-pub enum FormBooleanFieldType {
-    #[default]
-    #[serde(rename = "boolean")]
-    Boolean,
-}
-
-impl FormBooleanFieldType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Boolean => "boolean",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum FormWhenOp {
     #[serde(rename = "eq")]
@@ -2092,33 +2075,70 @@ pub struct FormWhen {
     pub value: FormWhenValue,
 }
 
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum FormBooleanFieldType {
+    #[default]
+    #[serde(rename = "boolean")]
+    Boolean,
+}
+
+impl FormBooleanFieldType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Boolean => "boolean",
+        }
+    }
+}
+
 /// Wire schema: `Form.BooleanField`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FormBooleanField {
-    /// Wire field: `default`.
-    #[serde(default, rename = "default", skip_serializing_if = "Option::is_none")]
-    pub default: Option<bool>,
-    /// Wire field: `description`.
-    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Wire field: `hidden`.
-    #[serde(default, rename = "hidden", skip_serializing_if = "Option::is_none")]
-    pub hidden: Option<bool>,
     /// Wire field: `key`.
     #[serde(rename = "key")]
     pub key: String,
-    /// Wire field: `required`.
-    #[serde(default, rename = "required", skip_serializing_if = "Option::is_none")]
-    pub required: Option<bool>,
     /// Wire field: `title`.
     #[serde(default, rename = "title", skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    /// Wire field: `type`.
-    #[serde(rename = "type")]
-    pub type_: FormBooleanFieldType,
+    /// Wire field: `description`.
+    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Wire field: `required`.
+    #[serde(default, rename = "required", skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
+    /// Wire field: `hidden`.
+    #[serde(default, rename = "hidden", skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<bool>,
     /// Wire field: `when`.
     #[serde(default, rename = "when", skip_serializing_if = "Option::is_none")]
     pub when: Option<Vec<FormWhen>>,
+    /// Wire field: `type`.
+    #[serde(rename = "type")]
+    pub type_: FormBooleanFieldType,
+    /// Wire field: `default`.
+    #[serde(default, rename = "default", skip_serializing_if = "Option::is_none")]
+    pub default: Option<bool>,
+}
+
+/// Wire schema: `Form.Metadata`.
+pub type FormMetadata = std::collections::BTreeMap<String, serde_json::Value>;
+
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum FormStringFieldType {
+    #[default]
+    #[serde(rename = "string")]
+    String,
+}
+
+impl FormStringFieldType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::String => "string",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -2147,86 +2167,86 @@ impl FormStringFieldFormat {
 /// Wire schema: `Form.Option`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FormOption {
-    /// Wire field: `description`.
-    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Wire field: `label`.
-    #[serde(rename = "label")]
-    pub label: String,
     /// Wire field: `value`.
     #[serde(rename = "value")]
     pub value: String,
-}
-
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
-)]
-pub enum FormStringFieldType {
-    #[default]
-    #[serde(rename = "string")]
-    String,
-}
-
-impl FormStringFieldType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::String => "string",
-        }
-    }
+    /// Wire field: `label`.
+    #[serde(rename = "label")]
+    pub label: String,
+    /// Wire field: `description`.
+    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// Wire schema: `Form.StringField`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FormStringField {
-    /// Wire field: `custom`.
-    #[serde(default, rename = "custom", skip_serializing_if = "Option::is_none")]
-    pub custom: Option<bool>,
-    /// Wire field: `default`.
-    #[serde(default, rename = "default", skip_serializing_if = "Option::is_none")]
-    pub default: Option<String>,
-    /// Wire field: `description`.
-    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Wire field: `format`.
-    #[serde(default, rename = "format", skip_serializing_if = "Option::is_none")]
-    pub format: Option<FormStringFieldFormat>,
-    /// Wire field: `hidden`.
-    #[serde(default, rename = "hidden", skip_serializing_if = "Option::is_none")]
-    pub hidden: Option<bool>,
     /// Wire field: `key`.
     #[serde(rename = "key")]
     pub key: String,
-    /// Wire field: `maxLength`.
-    #[serde(default, rename = "maxLength", skip_serializing_if = "Option::is_none")]
-    pub max_length: Option<i64>,
+    /// Wire field: `title`.
+    #[serde(default, rename = "title", skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Wire field: `description`.
+    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Wire field: `required`.
+    #[serde(default, rename = "required", skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
+    /// Wire field: `hidden`.
+    #[serde(default, rename = "hidden", skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<bool>,
+    /// Wire field: `when`.
+    #[serde(default, rename = "when", skip_serializing_if = "Option::is_none")]
+    pub when: Option<Vec<FormWhen>>,
+    /// Wire field: `type`.
+    #[serde(rename = "type")]
+    pub type_: FormStringFieldType,
+    /// Wire field: `format`.
+    #[serde(default, rename = "format", skip_serializing_if = "Option::is_none")]
+    pub format: Option<FormStringFieldFormat>,
     /// Wire field: `minLength`.
     #[serde(default, rename = "minLength", skip_serializing_if = "Option::is_none")]
     pub min_length: Option<i64>,
-    /// Wire field: `options`.
-    #[serde(default, rename = "options", skip_serializing_if = "Option::is_none")]
-    pub options: Option<Vec<FormOption>>,
+    /// Wire field: `maxLength`.
+    #[serde(default, rename = "maxLength", skip_serializing_if = "Option::is_none")]
+    pub max_length: Option<i64>,
     /// Wire field: `pattern`.
     #[serde(default, rename = "pattern", skip_serializing_if = "Option::is_none")]
     pub pattern: Option<String>,
     /// Wire field: `placeholder`.
     #[serde(default, rename = "placeholder", skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<String>,
-    /// Wire field: `required`.
-    #[serde(default, rename = "required", skip_serializing_if = "Option::is_none")]
-    pub required: Option<bool>,
-    /// Wire field: `title`.
-    #[serde(default, rename = "title", skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    /// Wire field: `type`.
-    #[serde(rename = "type")]
-    pub type_: FormStringFieldType,
-    /// Wire field: `when`.
-    #[serde(default, rename = "when", skip_serializing_if = "Option::is_none")]
-    pub when: Option<Vec<FormWhen>>,
+    /// Wire field: `default`.
+    #[serde(default, rename = "default", skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+    /// Wire field: `options`.
+    #[serde(default, rename = "options", skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<FormOption>>,
+    /// Wire field: `custom`.
+    #[serde(default, rename = "custom", skip_serializing_if = "Option::is_none")]
+    pub custom: Option<bool>,
+}
+
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum FormNumberFieldType {
+    #[default]
+    #[serde(rename = "number")]
+    Number,
+}
+
+impl FormNumberFieldType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Number => "number",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum FormNumberFieldDefaultVariant2 {
+pub enum FormNumberFieldMinimumVariant2 {
     #[serde(rename = "Infinity")]
     Infinity,
     #[serde(rename = "-Infinity")]
@@ -2235,7 +2255,7 @@ pub enum FormNumberFieldDefaultVariant2 {
     NaN,
 }
 
-impl FormNumberFieldDefaultVariant2 {
+impl FormNumberFieldMinimumVariant2 {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Infinity => "Infinity",
@@ -2245,12 +2265,12 @@ impl FormNumberFieldDefaultVariant2 {
     }
 }
 
-/// Untagged union; serde matches variants in declared order (wire schema `FormNumberFieldDefault`).
+/// Untagged union; serde matches variants in declared order (wire schema `FormNumberFieldMinimum`).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
-pub enum FormNumberFieldDefault {
+pub enum FormNumberFieldMinimum {
     Number(f64),
-    FormNumberFieldDefaultVariant2(FormNumberFieldDefaultVariant2),
+    FormNumberFieldMinimumVariant2(FormNumberFieldMinimumVariant2),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -2282,7 +2302,7 @@ pub enum FormNumberFieldMaximum {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum FormNumberFieldMinimumVariant2 {
+pub enum FormNumberFieldDefaultVariant2 {
     #[serde(rename = "Infinity")]
     Infinity,
     #[serde(rename = "-Infinity")]
@@ -2291,7 +2311,7 @@ pub enum FormNumberFieldMinimumVariant2 {
     NaN,
 }
 
-impl FormNumberFieldMinimumVariant2 {
+impl FormNumberFieldDefaultVariant2 {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Infinity => "Infinity",
@@ -2301,68 +2321,68 @@ impl FormNumberFieldMinimumVariant2 {
     }
 }
 
-/// Untagged union; serde matches variants in declared order (wire schema `FormNumberFieldMinimum`).
+/// Untagged union; serde matches variants in declared order (wire schema `FormNumberFieldDefault`).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
-pub enum FormNumberFieldMinimum {
+pub enum FormNumberFieldDefault {
     Number(f64),
-    FormNumberFieldMinimumVariant2(FormNumberFieldMinimumVariant2),
-}
-
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
-)]
-pub enum FormNumberFieldType {
-    #[default]
-    #[serde(rename = "number")]
-    Number,
-}
-
-impl FormNumberFieldType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Number => "number",
-        }
-    }
+    FormNumberFieldDefaultVariant2(FormNumberFieldDefaultVariant2),
 }
 
 /// Wire schema: `Form.NumberField`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FormNumberField {
-    /// Wire field: `default`.
-    #[serde(default, rename = "default", skip_serializing_if = "Option::is_none")]
-    pub default: Option<FormNumberFieldDefault>,
-    /// Wire field: `description`.
-    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Wire field: `hidden`.
-    #[serde(default, rename = "hidden", skip_serializing_if = "Option::is_none")]
-    pub hidden: Option<bool>,
     /// Wire field: `key`.
     #[serde(rename = "key")]
     pub key: String,
-    /// Wire field: `maximum`.
-    #[serde(default, rename = "maximum", skip_serializing_if = "Option::is_none")]
-    pub maximum: Option<FormNumberFieldMaximum>,
-    /// Wire field: `minimum`.
-    #[serde(default, rename = "minimum", skip_serializing_if = "Option::is_none")]
-    pub minimum: Option<FormNumberFieldMinimum>,
-    /// Wire field: `required`.
-    #[serde(default, rename = "required", skip_serializing_if = "Option::is_none")]
-    pub required: Option<bool>,
     /// Wire field: `title`.
     #[serde(default, rename = "title", skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    /// Wire field: `type`.
-    #[serde(rename = "type")]
-    pub type_: FormNumberFieldType,
+    /// Wire field: `description`.
+    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Wire field: `required`.
+    #[serde(default, rename = "required", skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
+    /// Wire field: `hidden`.
+    #[serde(default, rename = "hidden", skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<bool>,
     /// Wire field: `when`.
     #[serde(default, rename = "when", skip_serializing_if = "Option::is_none")]
     pub when: Option<Vec<FormWhen>>,
+    /// Wire field: `type`.
+    #[serde(rename = "type")]
+    pub type_: FormNumberFieldType,
+    /// Wire field: `minimum`.
+    #[serde(default, rename = "minimum", skip_serializing_if = "Option::is_none")]
+    pub minimum: Option<FormNumberFieldMinimum>,
+    /// Wire field: `maximum`.
+    #[serde(default, rename = "maximum", skip_serializing_if = "Option::is_none")]
+    pub maximum: Option<FormNumberFieldMaximum>,
+    /// Wire field: `default`.
+    #[serde(default, rename = "default", skip_serializing_if = "Option::is_none")]
+    pub default: Option<FormNumberFieldDefault>,
+}
+
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum FormIntegerFieldType {
+    #[default]
+    #[serde(rename = "integer")]
+    Integer,
+}
+
+impl FormIntegerFieldType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Integer => "integer",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum FormIntegerFieldDefaultVariant2 {
+pub enum FormIntegerFieldMinimumVariant2 {
     #[serde(rename = "Infinity")]
     Infinity,
     #[serde(rename = "-Infinity")]
@@ -2371,7 +2391,7 @@ pub enum FormIntegerFieldDefaultVariant2 {
     NaN,
 }
 
-impl FormIntegerFieldDefaultVariant2 {
+impl FormIntegerFieldMinimumVariant2 {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Infinity => "Infinity",
@@ -2381,12 +2401,12 @@ impl FormIntegerFieldDefaultVariant2 {
     }
 }
 
-/// Untagged union; serde matches variants in declared order (wire schema `FormIntegerFieldDefault`).
+/// Untagged union; serde matches variants in declared order (wire schema `FormIntegerFieldMinimum`).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
-pub enum FormIntegerFieldDefault {
+pub enum FormIntegerFieldMinimum {
     Number(f64),
-    FormIntegerFieldDefaultVariant2(FormIntegerFieldDefaultVariant2),
+    FormIntegerFieldMinimumVariant2(FormIntegerFieldMinimumVariant2),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -2418,7 +2438,7 @@ pub enum FormIntegerFieldMaximum {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum FormIntegerFieldMinimumVariant2 {
+pub enum FormIntegerFieldDefaultVariant2 {
     #[serde(rename = "Infinity")]
     Infinity,
     #[serde(rename = "-Infinity")]
@@ -2427,7 +2447,7 @@ pub enum FormIntegerFieldMinimumVariant2 {
     NaN,
 }
 
-impl FormIntegerFieldMinimumVariant2 {
+impl FormIntegerFieldDefaultVariant2 {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Infinity => "Infinity",
@@ -2437,64 +2457,47 @@ impl FormIntegerFieldMinimumVariant2 {
     }
 }
 
-/// Untagged union; serde matches variants in declared order (wire schema `FormIntegerFieldMinimum`).
+/// Untagged union; serde matches variants in declared order (wire schema `FormIntegerFieldDefault`).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
-pub enum FormIntegerFieldMinimum {
+pub enum FormIntegerFieldDefault {
     Number(f64),
-    FormIntegerFieldMinimumVariant2(FormIntegerFieldMinimumVariant2),
-}
-
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
-)]
-pub enum FormIntegerFieldType {
-    #[default]
-    #[serde(rename = "integer")]
-    Integer,
-}
-
-impl FormIntegerFieldType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Integer => "integer",
-        }
-    }
+    FormIntegerFieldDefaultVariant2(FormIntegerFieldDefaultVariant2),
 }
 
 /// Wire schema: `Form.IntegerField`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FormIntegerField {
-    /// Wire field: `default`.
-    #[serde(default, rename = "default", skip_serializing_if = "Option::is_none")]
-    pub default: Option<FormIntegerFieldDefault>,
-    /// Wire field: `description`.
-    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Wire field: `hidden`.
-    #[serde(default, rename = "hidden", skip_serializing_if = "Option::is_none")]
-    pub hidden: Option<bool>,
     /// Wire field: `key`.
     #[serde(rename = "key")]
     pub key: String,
-    /// Wire field: `maximum`.
-    #[serde(default, rename = "maximum", skip_serializing_if = "Option::is_none")]
-    pub maximum: Option<FormIntegerFieldMaximum>,
-    /// Wire field: `minimum`.
-    #[serde(default, rename = "minimum", skip_serializing_if = "Option::is_none")]
-    pub minimum: Option<FormIntegerFieldMinimum>,
-    /// Wire field: `required`.
-    #[serde(default, rename = "required", skip_serializing_if = "Option::is_none")]
-    pub required: Option<bool>,
     /// Wire field: `title`.
     #[serde(default, rename = "title", skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    /// Wire field: `type`.
-    #[serde(rename = "type")]
-    pub type_: FormIntegerFieldType,
+    /// Wire field: `description`.
+    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Wire field: `required`.
+    #[serde(default, rename = "required", skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
+    /// Wire field: `hidden`.
+    #[serde(default, rename = "hidden", skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<bool>,
     /// Wire field: `when`.
     #[serde(default, rename = "when", skip_serializing_if = "Option::is_none")]
     pub when: Option<Vec<FormWhen>>,
+    /// Wire field: `type`.
+    #[serde(rename = "type")]
+    pub type_: FormIntegerFieldType,
+    /// Wire field: `minimum`.
+    #[serde(default, rename = "minimum", skip_serializing_if = "Option::is_none")]
+    pub minimum: Option<FormIntegerFieldMinimum>,
+    /// Wire field: `maximum`.
+    #[serde(default, rename = "maximum", skip_serializing_if = "Option::is_none")]
+    pub maximum: Option<FormIntegerFieldMaximum>,
+    /// Wire field: `default`.
+    #[serde(default, rename = "default", skip_serializing_if = "Option::is_none")]
+    pub default: Option<FormIntegerFieldDefault>,
 }
 
 #[derive(
@@ -2517,42 +2520,42 @@ impl FormMultiselectFieldType {
 /// Wire schema: `Form.MultiselectField`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FormMultiselectField {
+    /// Wire field: `key`.
+    #[serde(rename = "key")]
+    pub key: String,
+    /// Wire field: `title`.
+    #[serde(default, rename = "title", skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Wire field: `description`.
+    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Wire field: `required`.
+    #[serde(default, rename = "required", skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
+    /// Wire field: `hidden`.
+    #[serde(default, rename = "hidden", skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<bool>,
+    /// Wire field: `when`.
+    #[serde(default, rename = "when", skip_serializing_if = "Option::is_none")]
+    pub when: Option<Vec<FormWhen>>,
+    /// Wire field: `type`.
+    #[serde(rename = "type")]
+    pub type_: FormMultiselectFieldType,
+    /// Wire field: `options`.
+    #[serde(rename = "options")]
+    pub options: Vec<FormOption>,
+    /// Wire field: `minItems`.
+    #[serde(default, rename = "minItems", skip_serializing_if = "Option::is_none")]
+    pub min_items: Option<i64>,
+    /// Wire field: `maxItems`.
+    #[serde(default, rename = "maxItems", skip_serializing_if = "Option::is_none")]
+    pub max_items: Option<i64>,
     /// Wire field: `custom`.
     #[serde(default, rename = "custom", skip_serializing_if = "Option::is_none")]
     pub custom: Option<bool>,
     /// Wire field: `default`.
     #[serde(default, rename = "default", skip_serializing_if = "Option::is_none")]
     pub default: Option<Vec<String>>,
-    /// Wire field: `description`.
-    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Wire field: `hidden`.
-    #[serde(default, rename = "hidden", skip_serializing_if = "Option::is_none")]
-    pub hidden: Option<bool>,
-    /// Wire field: `key`.
-    #[serde(rename = "key")]
-    pub key: String,
-    /// Wire field: `maxItems`.
-    #[serde(default, rename = "maxItems", skip_serializing_if = "Option::is_none")]
-    pub max_items: Option<i64>,
-    /// Wire field: `minItems`.
-    #[serde(default, rename = "minItems", skip_serializing_if = "Option::is_none")]
-    pub min_items: Option<i64>,
-    /// Wire field: `options`.
-    #[serde(rename = "options")]
-    pub options: Vec<FormOption>,
-    /// Wire field: `required`.
-    #[serde(default, rename = "required", skip_serializing_if = "Option::is_none")]
-    pub required: Option<bool>,
-    /// Wire field: `title`.
-    #[serde(default, rename = "title", skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    /// Wire field: `type`.
-    #[serde(rename = "type")]
-    pub type_: FormMultiselectFieldType,
-    /// Wire field: `when`.
-    #[serde(default, rename = "when", skip_serializing_if = "Option::is_none")]
-    pub when: Option<Vec<FormWhen>>,
 }
 
 #[derive(
@@ -2575,21 +2578,21 @@ impl FormExternalFieldType {
 /// Wire schema: `Form.ExternalField`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FormExternalField {
-    /// Wire field: `description`.
-    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
     /// Wire field: `key`.
     #[serde(rename = "key")]
     pub key: String,
-    /// Wire field: `title`.
-    #[serde(default, rename = "title", skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: FormExternalFieldType,
     /// Wire field: `url`.
     #[serde(rename = "url")]
     pub url: String,
+    /// Wire field: `title`.
+    #[serde(default, rename = "title", skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Wire field: `description`.
+    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// Wire schema: `Form.Field`.
@@ -2609,24 +2612,21 @@ pub enum FormField {
 /// Wire schema: `Form.Fields`.
 pub type FormFields = Vec<FormField>;
 
-/// Wire schema: `Form.Metadata`.
-pub type FormMetadata = std::collections::BTreeMap<String, serde_json::Value>;
-
 /// Wire schema: `Form.CreatePayload`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FormCreatePayload {
-    /// Wire field: `fields`.
-    #[serde(rename = "fields")]
-    pub fields: FormFields,
     /// Wire field: `id`.
     #[serde(default, rename = "id", skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-    /// Wire field: `metadata`.
-    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<FormMetadata>,
     /// Wire field: `title`.
     #[serde(rename = "title")]
     pub title: String,
+    /// Wire field: `metadata`.
+    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<FormMetadata>,
+    /// Wire field: `fields`.
+    #[serde(rename = "fields")]
+    pub fields: FormFields,
 }
 
 #[derive(
@@ -2672,12 +2672,12 @@ impl FormStateVariant2Status {
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FormStateVariant2 {
-    /// Wire field: `answer`.
-    #[serde(rename = "answer")]
-    pub answer: FormAnswer,
     /// Wire field: `status`.
     #[serde(rename = "status")]
     pub status: FormStateVariant2Status,
+    /// Wire field: `answer`.
+    #[serde(rename = "answer")]
+    pub answer: FormAnswer,
 }
 
 #[derive(
@@ -2699,12 +2699,12 @@ impl FormStateVariant3Status {
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FormStateVariant3 {
-    /// Wire field: `message`.
-    #[serde(default, rename = "message", skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
     /// Wire field: `status`.
     #[serde(rename = "status")]
     pub status: FormStateVariant3Status,
+    /// Wire field: `message`.
+    #[serde(default, rename = "message", skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 /// Wire schema: `Form.State`.
@@ -2721,24 +2721,24 @@ pub enum FormState {
 /// Wire schema: `Form.Detail`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FormDetail {
-    /// Wire field: `fields`.
-    #[serde(rename = "fields")]
-    pub fields: FormFields,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
-    /// Wire field: `metadata`.
-    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<FormMetadata>,
     /// Wire field: `sessionID`.
     #[serde(rename = "sessionID")]
     pub session_id: String,
-    /// Wire field: `state`.
-    #[serde(rename = "state")]
-    pub state: FormState,
     /// Wire field: `title`.
     #[serde(rename = "title")]
     pub title: String,
+    /// Wire field: `metadata`.
+    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<FormMetadata>,
+    /// Wire field: `fields`.
+    #[serde(rename = "fields")]
+    pub fields: FormFields,
+    /// Wire field: `state`.
+    #[serde(rename = "state")]
+    pub state: FormState,
 }
 
 /// Wire schema: `Form.Fields_1`.
@@ -2750,21 +2750,21 @@ pub type FormFields2 = Vec<FormField>;
 /// Wire schema: `Form.Info`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FormInfo {
-    /// Wire field: `fields`.
-    #[serde(rename = "fields")]
-    pub fields: FormFields,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
-    /// Wire field: `metadata`.
-    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<FormMetadata>,
     /// Wire field: `sessionID`.
     #[serde(rename = "sessionID")]
     pub session_id: String,
     /// Wire field: `title`.
     #[serde(rename = "title")]
     pub title: String,
+    /// Wire field: `metadata`.
+    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<FormMetadata>,
+    /// Wire field: `fields`.
+    #[serde(rename = "fields")]
+    pub fields: FormFields,
 }
 
 /// Wire schema: `Form.Reply`.
@@ -3020,6 +3020,9 @@ pub struct IntegrationAttemptEncoded {
     /// Wire field: `attemptID`.
     #[serde(rename = "attemptID")]
     pub attempt_id: String,
+    /// Wire field: `url`.
+    #[serde(rename = "url")]
+    pub url: String,
     /// Wire field: `instructions`.
     #[serde(rename = "instructions")]
     pub instructions: String,
@@ -3029,9 +3032,6 @@ pub struct IntegrationAttemptEncoded {
     /// Wire field: `time`.
     #[serde(rename = "time")]
     pub time: IntegrationAttemptEncodedTime,
-    /// Wire field: `url`.
-    #[serde(rename = "url")]
-    pub url: String,
 }
 
 #[derive(
@@ -3317,12 +3317,12 @@ pub struct IntegrationAttemptStatusVariant3Time {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IntegrationAttemptStatusVariant3 {
-    /// Wire field: `message`.
-    #[serde(rename = "message")]
-    pub message: String,
     /// Wire field: `status`.
     #[serde(rename = "status")]
     pub status: IntegrationAttemptStatusVariant3Status,
+    /// Wire field: `message`.
+    #[serde(rename = "message")]
+    pub message: String,
     /// Wire field: `time`.
     #[serde(rename = "time")]
     pub time: IntegrationAttemptStatusVariant3Time,
@@ -3603,12 +3603,12 @@ pub struct IntegrationCommandAttemptStatusVariant1Time {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IntegrationCommandAttemptStatusVariant1 {
-    /// Wire field: `message`.
-    #[serde(default, rename = "message", skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
     /// Wire field: `status`.
     #[serde(rename = "status")]
     pub status: IntegrationCommandAttemptStatusVariant1Status,
+    /// Wire field: `message`.
+    #[serde(default, rename = "message", skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
     /// Wire field: `time`.
     #[serde(rename = "time")]
     pub time: IntegrationCommandAttemptStatusVariant1Time,
@@ -3800,12 +3800,12 @@ pub struct IntegrationCommandAttemptStatusVariant3Time {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IntegrationCommandAttemptStatusVariant3 {
-    /// Wire field: `message`.
-    #[serde(rename = "message")]
-    pub message: String,
     /// Wire field: `status`.
     #[serde(rename = "status")]
     pub status: IntegrationCommandAttemptStatusVariant3Status,
+    /// Wire field: `message`.
+    #[serde(rename = "message")]
+    pub message: String,
     /// Wire field: `time`.
     #[serde(rename = "time")]
     pub time: IntegrationCommandAttemptStatusVariant3Time,
@@ -3940,18 +3940,18 @@ impl IntegrationCommandMethodType {
 /// Wire schema: `Integration.CommandMethod`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IntegrationCommandMethod {
-    /// Wire field: `command`.
-    #[serde(rename = "command")]
-    pub command: Vec<String>,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
-    /// Wire field: `label`.
-    #[serde(rename = "label")]
-    pub label: String,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: IntegrationCommandMethodType,
+    /// Wire field: `label`.
+    #[serde(rename = "label")]
+    pub label: String,
+    /// Wire field: `command`.
+    #[serde(rename = "command")]
+    pub command: Vec<String>,
 }
 
 #[derive(
@@ -3974,12 +3974,12 @@ impl IntegrationEnvMethodType {
 /// Wire schema: `Integration.EnvMethod`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IntegrationEnvMethod {
-    /// Wire field: `names`.
-    #[serde(rename = "names")]
-    pub names: Vec<String>,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: IntegrationEnvMethodType,
+    /// Wire field: `names`.
+    #[serde(rename = "names")]
+    pub names: Vec<String>,
 }
 
 #[derive(
@@ -4002,18 +4002,18 @@ impl IntegrationOAuthMethodType {
 /// Wire schema: `Integration.OAuthMethod`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IntegrationOAuthMethod {
-    /// Wire field: `form`.
-    #[serde(default, rename = "form", skip_serializing_if = "Option::is_none")]
-    pub form: Option<FormFields1>,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
-    /// Wire field: `label`.
-    #[serde(rename = "label")]
-    pub label: String,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: IntegrationOAuthMethodType,
+    /// Wire field: `label`.
+    #[serde(rename = "label")]
+    pub label: String,
+    /// Wire field: `form`.
+    #[serde(default, rename = "form", skip_serializing_if = "Option::is_none")]
+    pub form: Option<FormFields1>,
 }
 
 #[derive(
@@ -4036,15 +4036,15 @@ impl IntegrationKeyMethodType {
 /// Wire schema: `Integration.KeyMethod`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IntegrationKeyMethod {
-    /// Wire field: `form`.
-    #[serde(default, rename = "form", skip_serializing_if = "Option::is_none")]
-    pub form: Option<FormFields2>,
-    /// Wire field: `label`.
-    #[serde(default, rename = "label", skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: IntegrationKeyMethodType,
+    /// Wire field: `label`.
+    #[serde(default, rename = "label", skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Wire field: `form`.
+    #[serde(default, rename = "form", skip_serializing_if = "Option::is_none")]
+    pub form: Option<FormFields2>,
 }
 
 /// Wire schema: `Integration.Method`.
@@ -4062,21 +4062,21 @@ pub enum IntegrationMethod {
 /// Wire schema: `Integration.Info`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IntegrationInfo {
-    /// Wire field: `connections`.
-    #[serde(rename = "connections")]
-    pub connections: Vec<ConnectionInfo>,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
+    /// Wire field: `name`.
+    #[serde(rename = "name")]
+    pub name: String,
     /// Wire field: `metadata`.
     #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
     pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
     /// Wire field: `methods`.
     #[serde(rename = "methods")]
     pub methods: Vec<IntegrationMethod>,
-    /// Wire field: `name`.
-    #[serde(rename = "name")]
-    pub name: String,
+    /// Wire field: `connections`.
+    #[serde(rename = "connections")]
+    pub connections: Vec<ConnectionInfo>,
 }
 
 #[derive(
@@ -4102,12 +4102,12 @@ pub struct IntegrationAttemptNotFoundErrorEncoded {
     /// Wire field: `_tag`.
     #[serde(rename = "_tag")]
     pub tag: IntegrationAttemptNotFoundErrorEncodedTag,
-    /// Wire field: `attemptID`.
-    #[serde(rename = "attemptID")]
-    pub attempt_id: String,
     /// Wire field: `integrationID`.
     #[serde(rename = "integrationID")]
     pub integration_id: String,
+    /// Wire field: `attemptID`.
+    #[serde(rename = "attemptID")]
+    pub attempt_id: String,
     /// Wire field: `message`.
     #[serde(rename = "message")]
     pub message: String,
@@ -4139,12 +4139,12 @@ pub struct IntegrationMethodNotFoundErrorEncoded {
     /// Wire field: `integrationID`.
     #[serde(rename = "integrationID")]
     pub integration_id: String,
-    /// Wire field: `message`.
-    #[serde(rename = "message")]
-    pub message: String,
     /// Wire field: `methodID`.
     #[serde(rename = "methodID")]
     pub method_id: String,
+    /// Wire field: `message`.
+    #[serde(rename = "message")]
+    pub message: String,
 }
 
 #[derive(
@@ -4229,28 +4229,28 @@ pub struct InvalidRequestErrorEncoded {
     /// Wire field: `_tag`.
     #[serde(rename = "_tag")]
     pub tag: InvalidRequestErrorEncodedTag,
-    /// Wire field: `field`.
-    #[serde(default, rename = "field", skip_serializing_if = "Option::is_none")]
-    pub field: Option<String>,
-    /// Wire field: `kind`.
-    #[serde(default, rename = "kind", skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
     /// Wire field: `message`.
     #[serde(rename = "message")]
     pub message: String,
+    /// Wire field: `kind`.
+    #[serde(default, rename = "kind", skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Wire field: `field`.
+    #[serde(default, rename = "field", skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LocationPublicInfoProject {
-    /// Wire field: `canonical`.
-    #[serde(rename = "canonical")]
-    pub canonical: String,
-    /// Wire field: `directory`.
-    #[serde(rename = "directory")]
-    pub directory: String,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
+    /// Wire field: `directory`.
+    #[serde(rename = "directory")]
+    pub directory: String,
+    /// Wire field: `canonical`.
+    #[serde(rename = "canonical")]
+    pub canonical: String,
 }
 
 /// Wire schema: `Location.PublicInfo`.
@@ -4275,41 +4275,41 @@ pub struct LocationPublicRef {
 /// Wire schema: `Mcp.Resource`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct McpResource {
+    /// Wire field: `server`.
+    #[serde(rename = "server")]
+    pub server: String,
+    /// Wire field: `name`.
+    #[serde(rename = "name")]
+    pub name: String,
+    /// Wire field: `uri`.
+    #[serde(rename = "uri")]
+    pub uri: String,
     /// Wire field: `description`.
     #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Wire field: `mimeType`.
     #[serde(default, rename = "mimeType", skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
-    /// Wire field: `name`.
-    #[serde(rename = "name")]
-    pub name: String,
-    /// Wire field: `server`.
-    #[serde(rename = "server")]
-    pub server: String,
-    /// Wire field: `uri`.
-    #[serde(rename = "uri")]
-    pub uri: String,
 }
 
 /// Wire schema: `Mcp.ResourceTemplate`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct McpResourceTemplate {
+    /// Wire field: `server`.
+    #[serde(rename = "server")]
+    pub server: String,
+    /// Wire field: `name`.
+    #[serde(rename = "name")]
+    pub name: String,
+    /// Wire field: `uriTemplate`.
+    #[serde(rename = "uriTemplate")]
+    pub uri_template: String,
     /// Wire field: `description`.
     #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Wire field: `mimeType`.
     #[serde(default, rename = "mimeType", skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
-    /// Wire field: `name`.
-    #[serde(rename = "name")]
-    pub name: String,
-    /// Wire field: `server`.
-    #[serde(rename = "server")]
-    pub server: String,
-    /// Wire field: `uriTemplate`.
-    #[serde(rename = "uriTemplate")]
-    pub uri_template: String,
 }
 
 /// Wire schema: `Mcp.ResourceCatalog`.
@@ -4418,12 +4418,12 @@ impl McpStatusFailedStatus {
 /// Wire schema: `Mcp.Status.Failed`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct McpStatusFailed {
-    /// Wire field: `error`.
-    #[serde(rename = "error")]
-    pub error: String,
     /// Wire field: `status`.
     #[serde(rename = "status")]
     pub status: McpStatusFailedStatus,
+    /// Wire field: `error`.
+    #[serde(rename = "error")]
+    pub error: String,
 }
 
 #[derive(
@@ -4446,12 +4446,12 @@ impl McpStatusNeedsAuthStatus {
 /// Wire schema: `Mcp.Status.NeedsAuth`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct McpStatusNeedsAuth {
-    /// Wire field: `error`.
-    #[serde(rename = "error")]
-    pub error: String,
     /// Wire field: `status`.
     #[serde(rename = "status")]
     pub status: McpStatusNeedsAuthStatus,
+    /// Wire field: `error`.
+    #[serde(rename = "error")]
+    pub error: String,
 }
 
 /// Discriminated union (each variant carries its tag field);
@@ -4469,15 +4469,15 @@ pub enum McpServerStatus {
 /// Wire schema: `Mcp.Server`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct McpServer {
-    /// Wire field: `integrationID`.
-    #[serde(default, rename = "integrationID", skip_serializing_if = "Option::is_none")]
-    pub integration_id: Option<String>,
     /// Wire field: `name`.
     #[serde(rename = "name")]
     pub name: String,
     /// Wire field: `status`.
     #[serde(rename = "status")]
     pub status: McpServerStatus,
+    /// Wire field: `integrationID`.
+    #[serde(default, rename = "integrationID", skip_serializing_if = "Option::is_none")]
+    pub integration_id: Option<String>,
 }
 
 #[derive(
@@ -4503,12 +4503,12 @@ pub struct McpServerNotFoundErrorEncoded {
     /// Wire field: `_tag`.
     #[serde(rename = "_tag")]
     pub tag: McpServerNotFoundErrorEncodedTag,
-    /// Wire field: `message`.
-    #[serde(rename = "message")]
-    pub message: String,
     /// Wire field: `server`.
     #[serde(rename = "server")]
     pub server: String,
+    /// Wire field: `message`.
+    #[serde(rename = "message")]
+    pub message: String,
 }
 
 #[derive(
@@ -4534,39 +4534,29 @@ pub struct MessageNotFoundErrorEncoded {
     /// Wire field: `_tag`.
     #[serde(rename = "_tag")]
     pub tag: MessageNotFoundErrorEncodedTag,
-    /// Wire field: `message`.
-    #[serde(rename = "message")]
-    pub message: String,
-    /// Wire field: `messageID`.
-    #[serde(rename = "messageID")]
-    pub message_id: String,
     /// Wire field: `sessionID`.
     #[serde(rename = "sessionID")]
     pub session_id: String,
+    /// Wire field: `messageID`.
+    #[serde(rename = "messageID")]
+    pub message_id: String,
+    /// Wire field: `message`.
+    #[serde(rename = "message")]
+    pub message: String,
 }
 
 /// Wire schema: `Model.Capabilities`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ModelCapabilities {
+    /// Wire field: `tools`.
+    #[serde(rename = "tools")]
+    pub tools: bool,
     /// Wire field: `input`.
     #[serde(rename = "input")]
     pub input: Vec<String>,
     /// Wire field: `output`.
     #[serde(rename = "output")]
     pub output: Vec<String>,
-    /// Wire field: `tools`.
-    #[serde(rename = "tools")]
-    pub tools: bool,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ModelCostCache {
-    /// Wire field: `read`.
-    #[serde(rename = "read")]
-    pub read: MoneyUsdPerMillionTokens,
-    /// Wire field: `write`.
-    #[serde(rename = "write")]
-    pub write: MoneyUsdPerMillionTokens,
 }
 
 #[derive(
@@ -4588,42 +4578,39 @@ impl ModelCostTierType {
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ModelCostTier {
-    /// Wire field: `size`.
-    #[serde(rename = "size")]
-    pub size: i64,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: ModelCostTierType,
+    /// Wire field: `size`.
+    #[serde(rename = "size")]
+    pub size: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ModelCostCache {
+    /// Wire field: `read`.
+    #[serde(rename = "read")]
+    pub read: MoneyUsdPerMillionTokens,
+    /// Wire field: `write`.
+    #[serde(rename = "write")]
+    pub write: MoneyUsdPerMillionTokens,
 }
 
 /// Wire schema: `Model.Cost`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ModelCost {
-    /// Wire field: `cache`.
-    #[serde(rename = "cache")]
-    pub cache: ModelCostCache,
+    /// Wire field: `tier`.
+    #[serde(default, rename = "tier", skip_serializing_if = "Option::is_none")]
+    pub tier: Option<ModelCostTier>,
     /// Wire field: `input`.
     #[serde(rename = "input")]
     pub input: MoneyUsdPerMillionTokens,
     /// Wire field: `output`.
     #[serde(rename = "output")]
     pub output: MoneyUsdPerMillionTokens,
-    /// Wire field: `tier`.
-    #[serde(default, rename = "tier", skip_serializing_if = "Option::is_none")]
-    pub tier: Option<ModelCostTier>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ModelInfoLimit {
-    /// Wire field: `context`.
-    #[serde(rename = "context")]
-    pub context: i64,
-    /// Wire field: `input`.
-    #[serde(default, rename = "input", skip_serializing_if = "Option::is_none")]
-    pub input: Option<i64>,
-    /// Wire field: `output`.
-    #[serde(rename = "output")]
-    pub output: i64,
+    /// Wire field: `cache`.
+    #[serde(rename = "cache")]
+    pub cache: ModelCostCache,
 }
 
 /// Wire schema: `Model.Settings`.
@@ -4632,6 +4619,30 @@ pub struct ModelSettings {
     /// Wire field: `compaction`.
     #[serde(default, rename = "compaction", skip_serializing_if = "Option::is_none")]
     pub compaction: Option<ProviderCompaction>,
+}
+
+/// Wire schema: `Model.Variant`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ModelVariant {
+    /// Wire field: `id`.
+    #[serde(rename = "id")]
+    pub id: String,
+    /// Wire field: `settings`.
+    #[serde(default, rename = "settings", skip_serializing_if = "Option::is_none")]
+    pub settings: Option<ModelSettings>,
+    /// Wire field: `headers`.
+    #[serde(default, rename = "headers", skip_serializing_if = "Option::is_none")]
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
+    /// Wire field: `body`.
+    #[serde(default, rename = "body", skip_serializing_if = "Option::is_none")]
+    pub body: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ModelInfoTime {
+    /// Wire field: `released`.
+    #[serde(rename = "released")]
+    pub released: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -4658,86 +4669,75 @@ impl ModelInfoStatus {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ModelInfoTime {
-    /// Wire field: `released`.
-    #[serde(rename = "released")]
-    pub released: f64,
-}
-
-/// Wire schema: `Model.Variant`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ModelVariant {
-    /// Wire field: `body`.
-    #[serde(default, rename = "body", skip_serializing_if = "Option::is_none")]
-    pub body: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `headers`.
-    #[serde(default, rename = "headers", skip_serializing_if = "Option::is_none")]
-    pub headers: Option<std::collections::BTreeMap<String, String>>,
-    /// Wire field: `id`.
-    #[serde(rename = "id")]
-    pub id: String,
-    /// Wire field: `settings`.
-    #[serde(default, rename = "settings", skip_serializing_if = "Option::is_none")]
-    pub settings: Option<ModelSettings>,
+pub struct ModelInfoLimit {
+    /// Wire field: `context`.
+    #[serde(rename = "context")]
+    pub context: i64,
+    /// Wire field: `input`.
+    #[serde(default, rename = "input", skip_serializing_if = "Option::is_none")]
+    pub input: Option<i64>,
+    /// Wire field: `output`.
+    #[serde(rename = "output")]
+    pub output: i64,
 }
 
 /// Wire schema: `Model.Info`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ModelInfo {
-    /// Wire field: `body`.
-    #[serde(default, rename = "body", skip_serializing_if = "Option::is_none")]
-    pub body: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `canonical`.
-    #[serde(default, rename = "canonical", skip_serializing_if = "Option::is_none")]
-    pub canonical: Option<String>,
-    /// Wire field: `capabilities`.
-    #[serde(rename = "capabilities")]
-    pub capabilities: ModelCapabilities,
-    /// Wire field: `compatibility`.
-    #[serde(default, rename = "compatibility", skip_serializing_if = "Option::is_none")]
-    pub compatibility: Option<ModelCompatibility>,
-    /// Wire field: `cost`.
-    #[serde(rename = "cost")]
-    pub cost: Vec<ModelCost>,
-    /// Wire field: `enabled`.
-    #[serde(rename = "enabled")]
-    pub enabled: bool,
-    /// Wire field: `family`.
-    #[serde(default, rename = "family", skip_serializing_if = "Option::is_none")]
-    pub family: Option<String>,
-    /// Wire field: `headers`.
-    #[serde(default, rename = "headers", skip_serializing_if = "Option::is_none")]
-    pub headers: Option<std::collections::BTreeMap<String, String>>,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
-    /// Wire field: `limit`.
-    #[serde(rename = "limit")]
-    pub limit: ModelInfoLimit,
     /// Wire field: `modelID`.
     #[serde(rename = "modelID")]
     pub model_id: String,
-    /// Wire field: `name`.
-    #[serde(rename = "name")]
-    pub name: String,
-    /// Wire field: `package`.
-    #[serde(default, rename = "package", skip_serializing_if = "Option::is_none")]
-    pub package: Option<String>,
     /// Wire field: `providerID`.
     #[serde(rename = "providerID")]
     pub provider_id: String,
+    /// Wire field: `canonical`.
+    #[serde(default, rename = "canonical", skip_serializing_if = "Option::is_none")]
+    pub canonical: Option<String>,
+    /// Wire field: `family`.
+    #[serde(default, rename = "family", skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    /// Wire field: `name`.
+    #[serde(rename = "name")]
+    pub name: String,
+    /// Wire field: `compatibility`.
+    #[serde(default, rename = "compatibility", skip_serializing_if = "Option::is_none")]
+    pub compatibility: Option<ModelCompatibility>,
+    /// Wire field: `package`.
+    #[serde(default, rename = "package", skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
     /// Wire field: `settings`.
     #[serde(default, rename = "settings", skip_serializing_if = "Option::is_none")]
     pub settings: Option<ModelSettings>,
-    /// Wire field: `status`.
-    #[serde(rename = "status")]
-    pub status: ModelInfoStatus,
-    /// Wire field: `time`.
-    #[serde(rename = "time")]
-    pub time: ModelInfoTime,
+    /// Wire field: `headers`.
+    #[serde(default, rename = "headers", skip_serializing_if = "Option::is_none")]
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
+    /// Wire field: `body`.
+    #[serde(default, rename = "body", skip_serializing_if = "Option::is_none")]
+    pub body: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+    /// Wire field: `capabilities`.
+    #[serde(rename = "capabilities")]
+    pub capabilities: ModelCapabilities,
     /// Wire field: `variants`.
     #[serde(rename = "variants")]
     pub variants: Vec<ModelVariant>,
+    /// Wire field: `time`.
+    #[serde(rename = "time")]
+    pub time: ModelInfoTime,
+    /// Wire field: `cost`.
+    #[serde(rename = "cost")]
+    pub cost: Vec<ModelCost>,
+    /// Wire field: `status`.
+    #[serde(rename = "status")]
+    pub status: ModelInfoStatus,
+    /// Wire field: `enabled`.
+    #[serde(rename = "enabled")]
+    pub enabled: bool,
+    /// Wire field: `limit`.
+    #[serde(rename = "limit")]
+    pub limit: ModelInfoLimit,
 }
 
 /// Wire schema: `Money.USD`.
@@ -4802,15 +4802,15 @@ impl PermissionSourceVariant1Type {
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PermissionSourceVariant1 {
-    /// Wire field: `id`.
-    #[serde(rename = "id")]
-    pub id: String,
-    /// Wire field: `messageID`.
-    #[serde(rename = "messageID")]
-    pub message_id: String,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: PermissionSourceVariant1Type,
+    /// Wire field: `messageID`.
+    #[serde(rename = "messageID")]
+    pub message_id: String,
+    /// Wire field: `id`.
+    #[serde(rename = "id")]
+    pub id: String,
 }
 
 /// Wire schema: `Permission.Source`.
@@ -4825,30 +4825,30 @@ pub enum PermissionSource {
 /// Wire schema: `Permission.Request`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PermissionRequest {
-    /// Wire field: `action`.
-    #[serde(rename = "action")]
-    pub action: String,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
-    /// Wire field: `message`.
-    #[serde(default, rename = "message", skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-    /// Wire field: `metadata`.
-    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+    /// Wire field: `sessionID`.
+    #[serde(rename = "sessionID")]
+    pub session_id: String,
+    /// Wire field: `action`.
+    #[serde(rename = "action")]
+    pub action: String,
     /// Wire field: `resources`.
     #[serde(rename = "resources")]
     pub resources: Vec<String>,
     /// Wire field: `save`.
     #[serde(default, rename = "save", skip_serializing_if = "Option::is_none")]
     pub save: Option<Vec<String>>,
-    /// Wire field: `sessionID`.
-    #[serde(rename = "sessionID")]
-    pub session_id: String,
+    /// Wire field: `metadata`.
+    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
     /// Wire field: `source`.
     #[serde(default, rename = "source", skip_serializing_if = "Option::is_none")]
     pub source: Option<PermissionSource>,
+    /// Wire field: `message`.
+    #[serde(default, rename = "message", skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 #[derive(
@@ -4874,12 +4874,12 @@ pub struct PermissionNotFoundErrorEncoded {
     /// Wire field: `_tag`.
     #[serde(rename = "_tag")]
     pub tag: PermissionNotFoundErrorEncodedTag,
-    /// Wire field: `message`.
-    #[serde(rename = "message")]
-    pub message: String,
     /// Wire field: `requestID`.
     #[serde(rename = "requestID")]
     pub request_id: String,
+    /// Wire field: `message`.
+    #[serde(rename = "message")]
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -4895,15 +4895,15 @@ pub struct PermissionSavedInfoTime {
 /// Wire schema: `PermissionSaved.Info`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PermissionSavedInfo {
-    /// Wire field: `action`.
-    #[serde(rename = "action")]
-    pub action: String,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
     /// Wire field: `projectID`.
     #[serde(rename = "projectID")]
     pub project_id: String,
+    /// Wire field: `action`.
+    #[serde(rename = "action")]
+    pub action: String,
     /// Wire field: `resource`.
     #[serde(rename = "resource")]
     pub resource: String,
@@ -4925,24 +4925,24 @@ pub struct PersistentPtyCreateInputSize {
 /// Wire schema: `PersistentPty.CreateInput`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PersistentPtyCreateInput {
-    /// Wire field: `args`.
-    #[serde(rename = "args")]
-    pub args: Vec<String>,
     /// Wire field: `command`.
     #[serde(default, rename = "command", skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// Wire field: `args`.
+    #[serde(rename = "args")]
+    pub args: Vec<String>,
     /// Wire field: `cwd`.
     #[serde(default, rename = "cwd", skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    /// Wire field: `title`.
+    #[serde(rename = "title")]
+    pub title: String,
     /// Wire field: `env`.
     #[serde(rename = "env")]
     pub env: std::collections::BTreeMap<String, String>,
     /// Wire field: `size`.
     #[serde(default, rename = "size", skip_serializing_if = "Option::is_none")]
     pub size: Option<PersistentPtyCreateInputSize>,
-    /// Wire field: `title`.
-    #[serde(rename = "title")]
-    pub title: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -4979,35 +4979,15 @@ pub struct PersistentPtyHandoff {
     /// Wire field: `directory`.
     #[serde(rename = "directory")]
     pub directory: String,
-    /// Wire field: `expiresAt`.
-    #[serde(rename = "expiresAt")]
-    pub expires_at: PersistentPtyHandoffExpiresAt,
     /// Wire field: `instanceID`.
     #[serde(rename = "instanceID")]
     pub instance_id: String,
     /// Wire field: `ticket`.
     #[serde(rename = "ticket")]
     pub ticket: String,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct PersistentPtyInfoOutput {
-    /// Wire field: `head`.
-    #[serde(rename = "head")]
-    pub head: i64,
-    /// Wire field: `tail`.
-    #[serde(rename = "tail")]
-    pub tail: i64,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct PersistentPtyInfoSize {
-    /// Wire field: `cols`.
-    #[serde(rename = "cols")]
-    pub cols: i64,
-    /// Wire field: `rows`.
-    #[serde(rename = "rows")]
-    pub rows: i64,
+    /// Wire field: `expiresAt`.
+    #[serde(rename = "expiresAt")]
+    pub expires_at: PersistentPtyHandoffExpiresAt,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -5027,45 +5007,65 @@ impl PersistentPtyInfoStatus {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PersistentPtyInfoSize {
+    /// Wire field: `cols`.
+    #[serde(rename = "cols")]
+    pub cols: i64,
+    /// Wire field: `rows`.
+    #[serde(rename = "rows")]
+    pub rows: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PersistentPtyInfoOutput {
+    /// Wire field: `head`.
+    #[serde(rename = "head")]
+    pub head: i64,
+    /// Wire field: `tail`.
+    #[serde(rename = "tail")]
+    pub tail: i64,
+}
+
 /// Wire schema: `PersistentPty.Info`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PersistentPtyInfo {
-    /// Wire field: `args`.
-    #[serde(rename = "args")]
-    pub args: Vec<String>,
-    /// Wire field: `command`.
-    #[serde(rename = "command")]
-    pub command: String,
-    /// Wire field: `cwd`.
-    #[serde(rename = "cwd")]
-    pub cwd: String,
-    /// Wire field: `exitCode`.
-    #[serde(default, rename = "exitCode", skip_serializing_if = "Option::is_none")]
-    pub exit_code: Option<i64>,
-    /// Wire field: `foregroundProcess`.
-    #[serde(rename = "foregroundProcess")]
-    pub foreground_process: Option<String>,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
-    /// Wire field: `output`.
-    #[serde(rename = "output")]
-    pub output: PersistentPtyInfoOutput,
-    /// Wire field: `pid`.
-    #[serde(rename = "pid")]
-    pub pid: i64,
-    /// Wire field: `sessionID`.
-    #[serde(rename = "sessionID")]
-    pub session_id: String,
-    /// Wire field: `size`.
-    #[serde(rename = "size")]
-    pub size: PersistentPtyInfoSize,
-    /// Wire field: `status`.
-    #[serde(rename = "status")]
-    pub status: PersistentPtyInfoStatus,
     /// Wire field: `title`.
     #[serde(rename = "title")]
     pub title: String,
+    /// Wire field: `command`.
+    #[serde(rename = "command")]
+    pub command: String,
+    /// Wire field: `args`.
+    #[serde(rename = "args")]
+    pub args: Vec<String>,
+    /// Wire field: `cwd`.
+    #[serde(rename = "cwd")]
+    pub cwd: String,
+    /// Wire field: `status`.
+    #[serde(rename = "status")]
+    pub status: PersistentPtyInfoStatus,
+    /// Wire field: `pid`.
+    #[serde(rename = "pid")]
+    pub pid: i64,
+    /// Wire field: `exitCode`.
+    #[serde(default, rename = "exitCode", skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i64>,
+    /// Wire field: `sessionID`.
+    #[serde(rename = "sessionID")]
+    pub session_id: String,
+    /// Wire field: `foregroundProcess`.
+    #[serde(rename = "foregroundProcess")]
+    pub foreground_process: Option<String>,
+    /// Wire field: `size`.
+    #[serde(rename = "size")]
+    pub size: PersistentPtyInfoSize,
+    /// Wire field: `output`.
+    #[serde(rename = "output")]
+    pub output: PersistentPtyInfoOutput,
 }
 
 /// Wire schema: `PersistentPty.ReadLinesEncoded`.
@@ -5083,38 +5083,38 @@ pub struct PersistentPtyReadResultScreenCursor {
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PersistentPtyReadResultScreen {
-    /// Wire field: `cols`.
-    #[serde(rename = "cols")]
-    pub cols: i64,
-    /// Wire field: `cursor`.
-    #[serde(rename = "cursor")]
-    pub cursor: PersistentPtyReadResultScreenCursor,
-    /// Wire field: `rows`.
-    #[serde(rename = "rows")]
-    pub rows: i64,
     /// Wire field: `text`.
     #[serde(rename = "text")]
     pub text: String,
+    /// Wire field: `cols`.
+    #[serde(rename = "cols")]
+    pub cols: i64,
+    /// Wire field: `rows`.
+    #[serde(rename = "rows")]
+    pub rows: i64,
+    /// Wire field: `cursor`.
+    #[serde(rename = "cursor")]
+    pub cursor: PersistentPtyReadResultScreenCursor,
 }
 
 /// Wire schema: `PersistentPty.ReadResult`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PersistentPtyReadResult {
+    /// Wire field: `ptyID`.
+    #[serde(rename = "ptyID")]
+    pub pty_id: String,
+    /// Wire field: `title`.
+    #[serde(rename = "title")]
+    pub title: String,
     /// Wire field: `cwd`.
     #[serde(rename = "cwd")]
     pub cwd: String,
     /// Wire field: `foregroundProcess`.
     #[serde(rename = "foregroundProcess")]
     pub foreground_process: Option<String>,
-    /// Wire field: `ptyID`.
-    #[serde(rename = "ptyID")]
-    pub pty_id: String,
     /// Wire field: `screen`.
     #[serde(rename = "screen")]
     pub screen: PersistentPtyReadResultScreen,
-    /// Wire field: `title`.
-    #[serde(rename = "title")]
-    pub title: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -5130,18 +5130,18 @@ pub struct PersistentPtySnapshotCursor {
 /// Wire schema: `PersistentPty.Snapshot`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PersistentPtySnapshot {
-    /// Wire field: `checkpoint`.
-    #[serde(rename = "checkpoint")]
-    pub checkpoint: String,
-    /// Wire field: `cursor`.
-    #[serde(rename = "cursor")]
-    pub cursor: PersistentPtySnapshotCursor,
     /// Wire field: `info`.
     #[serde(rename = "info")]
     pub info: PersistentPtyInfo,
     /// Wire field: `text`.
     #[serde(rename = "text")]
     pub text: String,
+    /// Wire field: `checkpoint`.
+    #[serde(rename = "checkpoint")]
+    pub checkpoint: String,
+    /// Wire field: `cursor`.
+    #[serde(rename = "cursor")]
+    pub cursor: PersistentPtySnapshotCursor,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -5168,15 +5168,15 @@ pub struct PersistentPtyUpdateInput {
 /// Wire schema: `Plugin.Features`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PluginFeatures {
-    /// Wire field: `rpc`.
-    #[serde(default, rename = "rpc", skip_serializing_if = "Option::is_none")]
-    pub rpc: Option<bool>,
     /// Wire field: `server`.
     #[serde(default, rename = "server", skip_serializing_if = "Option::is_none")]
     pub server: Option<bool>,
     /// Wire field: `tui`.
     #[serde(default, rename = "tui", skip_serializing_if = "Option::is_none")]
     pub tui: Option<bool>,
+    /// Wire field: `rpc`.
+    #[serde(default, rename = "rpc", skip_serializing_if = "Option::is_none")]
+    pub rpc: Option<bool>,
 }
 
 #[derive(
@@ -5222,21 +5222,21 @@ impl PluginSourceVariant2Type {
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PluginSourceVariant2 {
-    /// Wire field: `outdated`.
-    #[serde(default, rename = "outdated", skip_serializing_if = "Option::is_none")]
-    pub outdated: Option<bool>,
-    /// Wire field: `target`.
-    #[serde(rename = "target")]
-    pub target: String,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: PluginSourceVariant2Type,
-    /// Wire field: `updating`.
-    #[serde(default, rename = "updating", skip_serializing_if = "Option::is_none")]
-    pub updating: Option<bool>,
+    /// Wire field: `target`.
+    #[serde(rename = "target")]
+    pub target: String,
     /// Wire field: `version`.
     #[serde(default, rename = "version", skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// Wire field: `outdated`.
+    #[serde(default, rename = "outdated", skip_serializing_if = "Option::is_none")]
+    pub outdated: Option<bool>,
+    /// Wire field: `updating`.
+    #[serde(default, rename = "updating", skip_serializing_if = "Option::is_none")]
+    pub updating: Option<bool>,
 }
 
 #[derive(
@@ -5258,12 +5258,12 @@ impl PluginSourceVariant3Type {
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PluginSourceVariant3 {
-    /// Wire field: `path`.
-    #[serde(rename = "path")]
-    pub path: String,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: PluginSourceVariant3Type,
+    /// Wire field: `path`.
+    #[serde(rename = "path")]
+    pub path: String,
 }
 
 #[derive(
@@ -5345,15 +5345,15 @@ impl PluginStateVariant2Status {
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PluginStateVariant2 {
+    /// Wire field: `status`.
+    #[serde(rename = "status")]
+    pub status: PluginStateVariant2Status,
     /// Wire field: `error`.
     #[serde(rename = "error")]
     pub error: String,
     /// Wire field: `ref`.
     #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
     pub ref_: Option<String>,
-    /// Wire field: `status`.
-    #[serde(rename = "status")]
-    pub status: PluginStateVariant2Status,
 }
 
 /// Wire schema: `Plugin.State`.
@@ -5369,18 +5369,35 @@ pub enum PluginState {
 /// Wire schema: `Plugin.Info`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PluginInfo {
-    /// Wire field: `features`.
-    #[serde(rename = "features")]
-    pub features: PluginFeatures,
     /// Wire field: `id`.
     #[serde(default, rename = "id", skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     /// Wire field: `source`.
     #[serde(rename = "source")]
     pub source: PluginSource,
+    /// Wire field: `features`.
+    #[serde(rename = "features")]
+    pub features: PluginFeatures,
     /// Wire field: `state`.
     #[serde(rename = "state")]
     pub state: PluginState,
+}
+
+/// Wire schema: `Project.Vcs`.
+pub type ProjectVcs = String;
+
+/// Wire schema: `Project.Icon`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ProjectIcon {
+    /// Wire field: `url`.
+    #[serde(default, rename = "url", skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Wire field: `override`.
+    #[serde(default, rename = "override", skip_serializing_if = "Option::is_none")]
+    pub override_: Option<String>,
+    /// Wire field: `color`.
+    #[serde(default, rename = "color", skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
 }
 
 /// Wire schema: `Project.Commands`.
@@ -5391,64 +5408,47 @@ pub struct ProjectCommands {
     pub start: Option<String>,
 }
 
-/// Wire schema: `Project.Icon`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ProjectIcon {
-    /// Wire field: `color`.
-    #[serde(default, rename = "color", skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
-    /// Wire field: `override`.
-    #[serde(default, rename = "override", skip_serializing_if = "Option::is_none")]
-    pub override_: Option<String>,
-    /// Wire field: `url`.
-    #[serde(default, rename = "url", skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
-}
-
 /// Wire schema: `Project.Time`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ProjectTime {
-    /// Wire field: `active`.
-    #[serde(rename = "active")]
-    pub active: i64,
     /// Wire field: `created`.
     #[serde(rename = "created")]
     pub created: i64,
     /// Wire field: `updated`.
     #[serde(rename = "updated")]
     pub updated: i64,
+    /// Wire field: `active`.
+    #[serde(rename = "active")]
+    pub active: i64,
 }
-
-/// Wire schema: `Project.Vcs`.
-pub type ProjectVcs = String;
 
 /// Wire schema: `Project`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Project {
-    /// Wire field: `canonical`.
-    #[serde(rename = "canonical")]
-    pub canonical: String,
-    /// Wire field: `commands`.
-    #[serde(default, rename = "commands", skip_serializing_if = "Option::is_none")]
-    pub commands: Option<ProjectCommands>,
-    /// Wire field: `icon`.
-    #[serde(default, rename = "icon", skip_serializing_if = "Option::is_none")]
-    pub icon: Option<ProjectIcon>,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
-    /// Wire field: `name`.
-    #[serde(default, rename = "name", skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Wire field: `sandboxes`.
-    #[serde(rename = "sandboxes")]
-    pub sandboxes: Vec<String>,
-    /// Wire field: `time`.
-    #[serde(rename = "time")]
-    pub time: ProjectTime,
+    /// Wire field: `canonical`.
+    #[serde(rename = "canonical")]
+    pub canonical: String,
     /// Wire field: `vcs`.
     #[serde(default, rename = "vcs", skip_serializing_if = "Option::is_none")]
     pub vcs: Option<ProjectVcs>,
+    /// Wire field: `name`.
+    #[serde(default, rename = "name", skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Wire field: `icon`.
+    #[serde(default, rename = "icon", skip_serializing_if = "Option::is_none")]
+    pub icon: Option<ProjectIcon>,
+    /// Wire field: `commands`.
+    #[serde(default, rename = "commands", skip_serializing_if = "Option::is_none")]
+    pub commands: Option<ProjectCommands>,
+    /// Wire field: `time`.
+    #[serde(rename = "time")]
+    pub time: ProjectTime,
+    /// Wire field: `sandboxes`.
+    #[serde(rename = "sandboxes")]
+    pub sandboxes: Vec<String>,
 }
 
 #[derive(
@@ -5474,23 +5474,23 @@ pub struct ProjectNotFoundErrorEncoded {
     /// Wire field: `_tag`.
     #[serde(rename = "_tag")]
     pub tag: ProjectNotFoundErrorEncodedTag,
-    /// Wire field: `message`.
-    #[serde(rename = "message")]
-    pub message: String,
     /// Wire field: `projectID`.
     #[serde(rename = "projectID")]
     pub project_id: String,
+    /// Wire field: `message`.
+    #[serde(rename = "message")]
+    pub message: String,
 }
 
 /// Wire schema: `Prompt.Mention`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PromptMention {
-    /// Wire field: `end`.
-    #[serde(rename = "end")]
-    pub end: f64,
     /// Wire field: `start`.
     #[serde(rename = "start")]
     pub start: f64,
+    /// Wire field: `end`.
+    #[serde(rename = "end")]
+    pub end: f64,
     /// Wire field: `text`.
     #[serde(rename = "text")]
     pub text: String,
@@ -5499,12 +5499,12 @@ pub struct PromptMention {
 /// Wire schema: `Prompt.AgentAttachment`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PromptAgentAttachment {
-    /// Wire field: `mention`.
-    #[serde(default, rename = "mention", skip_serializing_if = "Option::is_none")]
-    pub mention: Option<PromptMention>,
     /// Wire field: `name`.
     #[serde(rename = "name")]
     pub name: String,
+    /// Wire field: `mention`.
+    #[serde(default, rename = "mention", skip_serializing_if = "Option::is_none")]
+    pub mention: Option<PromptMention>,
 }
 
 /// Wire schema: `Prompt.Base64`.
@@ -5577,21 +5577,21 @@ pub struct PromptFileAttachment {
     /// Wire field: `data`.
     #[serde(rename = "data")]
     pub data: PromptBase64,
+    /// Wire field: `mime`.
+    #[serde(rename = "mime")]
+    pub mime: String,
+    /// Wire field: `source`.
+    #[serde(rename = "source")]
+    pub source: PromptFileSource,
+    /// Wire field: `name`.
+    #[serde(default, rename = "name", skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// Wire field: `description`.
     #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Wire field: `mention`.
     #[serde(default, rename = "mention", skip_serializing_if = "Option::is_none")]
     pub mention: Option<PromptMention>,
-    /// Wire field: `mime`.
-    #[serde(rename = "mime")]
-    pub mime: String,
-    /// Wire field: `name`.
-    #[serde(default, rename = "name", skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Wire field: `source`.
-    #[serde(rename = "source")]
-    pub source: PromptFileSource,
 }
 
 /// Wire schema: `Prompt.SkillAttachment`.
@@ -5600,32 +5600,32 @@ pub struct PromptSkillAttachment {
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
-    /// Wire field: `mention`.
-    #[serde(default, rename = "mention", skip_serializing_if = "Option::is_none")]
-    pub mention: Option<PromptMention>,
     /// Wire field: `name`.
     #[serde(rename = "name")]
     pub name: String,
     /// Wire field: `text`.
     #[serde(default, rename = "text", skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// Wire field: `mention`.
+    #[serde(default, rename = "mention", skip_serializing_if = "Option::is_none")]
+    pub mention: Option<PromptMention>,
 }
 
 /// Wire schema: `PromptInput.FileAttachment`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PromptInputFileAttachment {
+    /// Wire field: `uri`.
+    #[serde(rename = "uri")]
+    pub uri: String,
+    /// Wire field: `name`.
+    #[serde(default, rename = "name", skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// Wire field: `description`.
     #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Wire field: `mention`.
     #[serde(default, rename = "mention", skip_serializing_if = "Option::is_none")]
     pub mention: Option<PromptMention>,
-    /// Wire field: `name`.
-    #[serde(default, rename = "name", skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// Wire field: `uri`.
-    #[serde(rename = "uri")]
-    pub uri: String,
 }
 
 /// Wire schema: `PromptInput.SkillAttachment`.
@@ -5662,33 +5662,33 @@ impl ProviderInfoActivation {
 /// Wire schema: `Provider.Info`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ProviderInfo {
-    /// Wire field: `activation`.
-    #[serde(rename = "activation")]
-    pub activation: ProviderInfoActivation,
-    /// Wire field: `body`.
-    #[serde(default, rename = "body", skip_serializing_if = "Option::is_none")]
-    pub body: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `canonical`.
-    #[serde(default, rename = "canonical", skip_serializing_if = "Option::is_none")]
-    pub canonical: Option<String>,
-    /// Wire field: `headers`.
-    #[serde(default, rename = "headers", skip_serializing_if = "Option::is_none")]
-    pub headers: Option<std::collections::BTreeMap<String, String>>,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
+    /// Wire field: `canonical`.
+    #[serde(default, rename = "canonical", skip_serializing_if = "Option::is_none")]
+    pub canonical: Option<String>,
     /// Wire field: `integrationID`.
     #[serde(default, rename = "integrationID", skip_serializing_if = "Option::is_none")]
     pub integration_id: Option<String>,
     /// Wire field: `name`.
     #[serde(rename = "name")]
     pub name: String,
+    /// Wire field: `activation`.
+    #[serde(rename = "activation")]
+    pub activation: ProviderInfoActivation,
     /// Wire field: `package`.
     #[serde(rename = "package")]
     pub package: String,
     /// Wire field: `settings`.
     #[serde(default, rename = "settings", skip_serializing_if = "Option::is_none")]
     pub settings: Option<ProviderSettings>,
+    /// Wire field: `headers`.
+    #[serde(default, rename = "headers", skip_serializing_if = "Option::is_none")]
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
+    /// Wire field: `body`.
+    #[serde(default, rename = "body", skip_serializing_if = "Option::is_none")]
+    pub body: Option<std::collections::BTreeMap<String, serde_json::Value>>,
 }
 
 #[derive(
@@ -5714,12 +5714,12 @@ pub struct ProviderNotFoundErrorEncoded {
     /// Wire field: `_tag`.
     #[serde(rename = "_tag")]
     pub tag: ProviderNotFoundErrorEncodedTag,
-    /// Wire field: `message`.
-    #[serde(rename = "message")]
-    pub message: String,
     /// Wire field: `providerID`.
     #[serde(rename = "providerID")]
     pub provider_id: String,
+    /// Wire field: `message`.
+    #[serde(rename = "message")]
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -5742,30 +5742,30 @@ impl PtyStatus {
 /// Wire schema: `Pty`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Pty {
-    /// Wire field: `args`.
-    #[serde(rename = "args")]
-    pub args: Vec<String>,
-    /// Wire field: `command`.
-    #[serde(rename = "command")]
-    pub command: String,
-    /// Wire field: `cwd`.
-    #[serde(rename = "cwd")]
-    pub cwd: String,
-    /// Wire field: `exitCode`.
-    #[serde(default, rename = "exitCode", skip_serializing_if = "Option::is_none")]
-    pub exit_code: Option<i64>,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
-    /// Wire field: `pid`.
-    #[serde(rename = "pid")]
-    pub pid: i64,
-    /// Wire field: `status`.
-    #[serde(rename = "status")]
-    pub status: PtyStatus,
     /// Wire field: `title`.
     #[serde(rename = "title")]
     pub title: String,
+    /// Wire field: `command`.
+    #[serde(rename = "command")]
+    pub command: String,
+    /// Wire field: `args`.
+    #[serde(rename = "args")]
+    pub args: Vec<String>,
+    /// Wire field: `cwd`.
+    #[serde(rename = "cwd")]
+    pub cwd: String,
+    /// Wire field: `status`.
+    #[serde(rename = "status")]
+    pub status: PtyStatus,
+    /// Wire field: `pid`.
+    #[serde(rename = "pid")]
+    pub pid: i64,
+    /// Wire field: `exitCode`.
+    #[serde(default, rename = "exitCode", skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i64>,
 }
 
 #[derive(
@@ -5791,23 +5791,23 @@ pub struct PtyNotFoundErrorEncoded {
     /// Wire field: `_tag`.
     #[serde(rename = "_tag")]
     pub tag: PtyNotFoundErrorEncodedTag,
-    /// Wire field: `message`.
-    #[serde(rename = "message")]
-    pub message: String,
     /// Wire field: `ptyID`.
     #[serde(rename = "ptyID")]
     pub pty_id: String,
+    /// Wire field: `message`.
+    #[serde(rename = "message")]
+    pub message: String,
 }
 
 /// Wire schema: `PtyTicket.ConnectToken`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PtyTicketConnectToken {
-    /// Wire field: `expires_in`.
-    #[serde(rename = "expires_in")]
-    pub expires_in: i64,
     /// Wire field: `ticket`.
     #[serde(rename = "ticket")]
     pub ticket: String,
+    /// Wire field: `expires_in`.
+    #[serde(rename = "expires_in")]
+    pub expires_in: i64,
 }
 
 #[derive(
@@ -5830,15 +5830,15 @@ impl ReferenceGitSourceType {
 /// Wire schema: `Reference.GitSource`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ReferenceGitSource {
-    /// Wire field: `branch`.
-    #[serde(default, rename = "branch", skip_serializing_if = "Option::is_none")]
-    pub branch: Option<String>,
-    /// Wire field: `repository`.
-    #[serde(rename = "repository")]
-    pub repository: String,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: ReferenceGitSourceType,
+    /// Wire field: `repository`.
+    #[serde(rename = "repository")]
+    pub repository: String,
+    /// Wire field: `branch`.
+    #[serde(default, rename = "branch", skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
 }
 
 #[derive(
@@ -5861,12 +5861,12 @@ impl ReferenceLocalSourceType {
 /// Wire schema: `Reference.LocalSource`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ReferenceLocalSource {
-    /// Wire field: `path`.
-    #[serde(rename = "path")]
-    pub path: String,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: ReferenceLocalSourceType,
+    /// Wire field: `path`.
+    #[serde(rename = "path")]
+    pub path: String,
 }
 
 /// Wire schema: `Reference.Source`.
@@ -5882,18 +5882,18 @@ pub enum ReferenceSource {
 /// Wire schema: `Reference.Info`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ReferenceInfo {
-    /// Wire field: `description`.
-    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Wire field: `hidden`.
-    #[serde(default, rename = "hidden", skip_serializing_if = "Option::is_none")]
-    pub hidden: Option<bool>,
     /// Wire field: `name`.
     #[serde(rename = "name")]
     pub name: String,
     /// Wire field: `path`.
     #[serde(rename = "path")]
     pub path: String,
+    /// Wire field: `description`.
+    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Wire field: `hidden`.
+    #[serde(default, rename = "hidden", skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<bool>,
     /// Wire field: `source`.
     #[serde(rename = "source")]
     pub source: ReferenceSource,
@@ -5938,15 +5938,15 @@ pub struct RpcErrorEncoded {
     /// Wire field: `_tag`.
     #[serde(rename = "_tag")]
     pub tag: RpcErrorEncodedTag,
-    /// Wire field: `data`.
-    #[serde(default, rename = "data", skip_serializing_if = "Option::is_none")]
-    pub data: Option<serde_json::Value>,
-    /// Wire field: `message`.
-    #[serde(rename = "message")]
-    pub message: String,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: String,
+    /// Wire field: `message`.
+    #[serde(rename = "message")]
+    pub message: String,
+    /// Wire field: `data`.
+    #[serde(default, rename = "data", skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
 }
 
 #[derive(
@@ -5989,22 +5989,15 @@ pub struct RpcInternalErrorEncoded {
     /// Wire field: `_tag`.
     #[serde(rename = "_tag")]
     pub tag: RpcInternalErrorEncodedTag,
-    /// Wire field: `data`.
-    #[serde(default, rename = "data", skip_serializing_if = "Option::is_none")]
-    pub data: Option<serde_json::Value>,
-    /// Wire field: `message`.
-    #[serde(rename = "message")]
-    pub message: String,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: RpcInternalErrorEncodedType,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ServerInfoCapabilities {
-    /// Wire field: `persistentPty`.
-    #[serde(default, rename = "persistentPty", skip_serializing_if = "Option::is_none")]
-    pub persistent_pty: Option<bool>,
+    /// Wire field: `message`.
+    #[serde(rename = "message")]
+    pub message: String,
+    /// Wire field: `data`.
+    #[serde(default, rename = "data", skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -6014,24 +6007,31 @@ pub struct ServerInfoPaths {
     pub tmp: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ServerInfoCapabilities {
+    /// Wire field: `persistentPty`.
+    #[serde(default, rename = "persistentPty", skip_serializing_if = "Option::is_none")]
+    pub persistent_pty: Option<bool>,
+}
+
 /// Wire schema: `ServerInfo`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ServerInfo {
-    /// Wire field: `capabilities`.
-    #[serde(default, rename = "capabilities", skip_serializing_if = "Option::is_none")]
-    pub capabilities: Option<ServerInfoCapabilities>,
-    /// Wire field: `paths`.
-    #[serde(rename = "paths")]
-    pub paths: ServerInfoPaths,
+    /// Wire field: `version`.
+    #[serde(rename = "version")]
+    pub version: String,
     /// Wire field: `pid`.
     #[serde(rename = "pid")]
     pub pid: i64,
     /// Wire field: `urls`.
     #[serde(rename = "urls")]
     pub urls: Vec<String>,
-    /// Wire field: `version`.
-    #[serde(rename = "version")]
-    pub version: String,
+    /// Wire field: `paths`.
+    #[serde(rename = "paths")]
+    pub paths: ServerInfoPaths,
+    /// Wire field: `capabilities`.
+    #[serde(default, rename = "capabilities", skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<ServerInfoCapabilities>,
 }
 
 #[derive(
@@ -6084,12 +6084,12 @@ impl SessionForkBoundaryVariant1Type {
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionForkBoundaryVariant1 {
-    /// Wire field: `messageID`.
-    #[serde(rename = "messageID")]
-    pub message_id: String,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: SessionForkBoundaryVariant1Type,
+    /// Wire field: `messageID`.
+    #[serde(rename = "messageID")]
+    pub message_id: String,
 }
 
 #[derive(
@@ -6111,12 +6111,12 @@ impl SessionForkBoundaryVariant2Type {
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionForkBoundaryVariant2 {
-    /// Wire field: `messageID`.
-    #[serde(rename = "messageID")]
-    pub message_id: String,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: SessionForkBoundaryVariant2Type,
+    /// Wire field: `messageID`.
+    #[serde(rename = "messageID")]
+    pub message_id: String,
 }
 
 /// Wire schema: `Session.ForkBoundary`.
@@ -6127,33 +6127,6 @@ pub struct SessionForkBoundaryVariant2 {
 pub enum SessionForkBoundary {
     Before(SessionForkBoundaryVariant1),
     Through(SessionForkBoundaryVariant2),
-}
-
-/// Wire schema: `Session.Inbox.Delivery`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum SessionInboxDelivery {
-    #[serde(rename = "steer")]
-    Steer,
-    #[serde(rename = "queue")]
-    Queue,
-}
-
-impl SessionInboxDelivery {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Steer => "steer",
-            Self::Queue => "queue",
-        }
-    }
-}
-
-/// Wire schema: `Session.Inbox.CompactionPayload`.
-/// Untagged union; serde matches variants in declared order (wire schema `Session.Inbox.CompactionPayload`).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum SessionInboxCompactionPayload {
-    Map(std::collections::BTreeMap<String, serde_json::Value>),
-    Array(Vec<serde_json::Value>),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -6180,18 +6153,39 @@ impl SessionInboxCompactionType {
     }
 }
 
+/// Wire schema: `Session.Inbox.CompactionPayload`.
+/// Untagged union; serde matches variants in declared order (wire schema `Session.Inbox.CompactionPayload`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum SessionInboxCompactionPayload {
+    Map(std::collections::BTreeMap<String, serde_json::Value>),
+    Array(Vec<serde_json::Value>),
+}
+
+/// Wire schema: `Session.Inbox.Delivery`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum SessionInboxDelivery {
+    #[serde(rename = "steer")]
+    Steer,
+    #[serde(rename = "queue")]
+    Queue,
+}
+
+impl SessionInboxDelivery {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Steer => "steer",
+            Self::Queue => "queue",
+        }
+    }
+}
+
 /// Wire schema: `Session.Inbox.Compaction`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionInboxCompaction {
-    /// Wire field: `delivery`.
-    #[serde(rename = "delivery")]
-    pub delivery: SessionInboxDelivery,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
-    /// Wire field: `payload`.
-    #[serde(rename = "payload")]
-    pub payload: SessionInboxCompactionPayload,
     /// Wire field: `sessionID`.
     #[serde(rename = "sessionID")]
     pub session_id: String,
@@ -6201,26 +6195,12 @@ pub struct SessionInboxCompaction {
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: SessionInboxCompactionType,
-}
-
-/// Wire schema: `Session.Inbox.UserPayload`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SessionInboxUserPayload {
-    /// Wire field: `agents`.
-    #[serde(default, rename = "agents", skip_serializing_if = "Option::is_none")]
-    pub agents: Option<Vec<PromptAgentAttachment>>,
-    /// Wire field: `files`.
-    #[serde(default, rename = "files", skip_serializing_if = "Option::is_none")]
-    pub files: Option<Vec<PromptFileAttachment>>,
-    /// Wire field: `metadata`.
-    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `skills`.
-    #[serde(default, rename = "skills", skip_serializing_if = "Option::is_none")]
-    pub skills: Option<Vec<PromptSkillAttachment>>,
-    /// Wire field: `text`.
-    #[serde(rename = "text")]
-    pub text: String,
+    /// Wire field: `payload`.
+    #[serde(rename = "payload")]
+    pub payload: SessionInboxCompactionPayload,
+    /// Wire field: `delivery`.
+    #[serde(rename = "delivery")]
+    pub delivery: SessionInboxDelivery,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -6247,18 +6227,32 @@ impl SessionInboxUserType {
     }
 }
 
+/// Wire schema: `Session.Inbox.UserPayload`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SessionInboxUserPayload {
+    /// Wire field: `text`.
+    #[serde(rename = "text")]
+    pub text: String,
+    /// Wire field: `files`.
+    #[serde(default, rename = "files", skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<PromptFileAttachment>>,
+    /// Wire field: `agents`.
+    #[serde(default, rename = "agents", skip_serializing_if = "Option::is_none")]
+    pub agents: Option<Vec<PromptAgentAttachment>>,
+    /// Wire field: `skills`.
+    #[serde(default, rename = "skills", skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<PromptSkillAttachment>>,
+    /// Wire field: `metadata`.
+    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+}
+
 /// Wire schema: `Session.Inbox.User`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionInboxUser {
-    /// Wire field: `delivery`.
-    #[serde(rename = "delivery")]
-    pub delivery: SessionInboxDelivery,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
-    /// Wire field: `payload`.
-    #[serde(rename = "payload")]
-    pub payload: SessionInboxUserPayload,
     /// Wire field: `sessionID`.
     #[serde(rename = "sessionID")]
     pub session_id: String,
@@ -6268,20 +6262,12 @@ pub struct SessionInboxUser {
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: SessionInboxUserType,
-}
-
-/// Wire schema: `Session.Inbox.SyntheticPayload`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SessionInboxSyntheticPayload {
-    /// Wire field: `description`.
-    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// Wire field: `metadata`.
-    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `text`.
-    #[serde(rename = "text")]
-    pub text: String,
+    /// Wire field: `payload`.
+    #[serde(rename = "payload")]
+    pub payload: SessionInboxUserPayload,
+    /// Wire field: `delivery`.
+    #[serde(rename = "delivery")]
+    pub delivery: SessionInboxDelivery,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -6308,18 +6294,26 @@ impl SessionInboxSyntheticType {
     }
 }
 
+/// Wire schema: `Session.Inbox.SyntheticPayload`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SessionInboxSyntheticPayload {
+    /// Wire field: `text`.
+    #[serde(rename = "text")]
+    pub text: String,
+    /// Wire field: `description`.
+    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Wire field: `metadata`.
+    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+}
+
 /// Wire schema: `Session.Inbox.Synthetic`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionInboxSynthetic {
-    /// Wire field: `delivery`.
-    #[serde(rename = "delivery")]
-    pub delivery: SessionInboxDelivery,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
-    /// Wire field: `payload`.
-    #[serde(rename = "payload")]
-    pub payload: SessionInboxSyntheticPayload,
     /// Wire field: `sessionID`.
     #[serde(rename = "sessionID")]
     pub session_id: String,
@@ -6329,20 +6323,12 @@ pub struct SessionInboxSynthetic {
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: SessionInboxSyntheticType,
-}
-
-/// Wire schema: `Session.Inbox.MovePayload`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SessionInboxMovePayload {
-    /// Wire field: `location`.
-    #[serde(rename = "location")]
-    pub location: LocationPublicRef,
-    /// Wire field: `projectID`.
-    #[serde(rename = "projectID")]
-    pub project_id: String,
-    /// Wire field: `subpath`.
-    #[serde(default, rename = "subpath", skip_serializing_if = "Option::is_none")]
-    pub subpath: Option<String>,
+    /// Wire field: `payload`.
+    #[serde(rename = "payload")]
+    pub payload: SessionInboxSyntheticPayload,
+    /// Wire field: `delivery`.
+    #[serde(rename = "delivery")]
+    pub delivery: SessionInboxDelivery,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -6369,18 +6355,26 @@ impl SessionInboxMoveType {
     }
 }
 
+/// Wire schema: `Session.Inbox.MovePayload`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SessionInboxMovePayload {
+    /// Wire field: `projectID`.
+    #[serde(rename = "projectID")]
+    pub project_id: String,
+    /// Wire field: `subpath`.
+    #[serde(default, rename = "subpath", skip_serializing_if = "Option::is_none")]
+    pub subpath: Option<String>,
+    /// Wire field: `location`.
+    #[serde(rename = "location")]
+    pub location: LocationPublicRef,
+}
+
 /// Wire schema: `Session.Inbox.Move`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionInboxMove {
-    /// Wire field: `delivery`.
-    #[serde(rename = "delivery")]
-    pub delivery: SessionInboxDelivery,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
-    /// Wire field: `payload`.
-    #[serde(rename = "payload")]
-    pub payload: SessionInboxMovePayload,
     /// Wire field: `sessionID`.
     #[serde(rename = "sessionID")]
     pub session_id: String,
@@ -6390,6 +6384,12 @@ pub struct SessionInboxMove {
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: SessionInboxMoveType,
+    /// Wire field: `delivery`.
+    #[serde(rename = "delivery")]
+    pub delivery: SessionInboxDelivery,
+    /// Wire field: `payload`.
+    #[serde(rename = "payload")]
+    pub payload: SessionInboxMovePayload,
 }
 
 /// Wire schema: `Session.Inbox.Info`.
@@ -6406,16 +6406,40 @@ pub enum SessionInboxInfo {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionInfoFork {
-    /// Wire field: `boundary`.
-    #[serde(rename = "boundary")]
-    pub boundary: SessionForkBoundary,
     /// Wire field: `sessionID`.
     #[serde(rename = "sessionID")]
     pub session_id: String,
+    /// Wire field: `boundary`.
+    #[serde(rename = "boundary")]
+    pub boundary: SessionForkBoundary,
 }
 
-/// Wire schema: `Session.Metadata`.
-pub type SessionMetadata = std::collections::BTreeMap<String, serde_json::Value>;
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TokenUsageInfoCache {
+    /// Wire field: `read`.
+    #[serde(rename = "read")]
+    pub read: f64,
+    /// Wire field: `write`.
+    #[serde(rename = "write")]
+    pub write: f64,
+}
+
+/// Wire schema: `TokenUsage.Info`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TokenUsageInfo {
+    /// Wire field: `input`.
+    #[serde(rename = "input")]
+    pub input: f64,
+    /// Wire field: `output`.
+    #[serde(rename = "output")]
+    pub output: f64,
+    /// Wire field: `reasoning`.
+    #[serde(rename = "reasoning")]
+    pub reasoning: f64,
+    /// Wire field: `cache`.
+    #[serde(rename = "cache")]
+    pub cache: TokenUsageInfoCache,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum SessionInfoOutcome {
@@ -6437,12 +6461,31 @@ impl SessionInfoOutcome {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SessionInfoTime {
+    /// Wire field: `created`.
+    #[serde(rename = "created")]
+    pub created: f64,
+    /// Wire field: `updated`.
+    #[serde(rename = "updated")]
+    pub updated: f64,
+    /// Wire field: `idle`.
+    #[serde(default, rename = "idle", skip_serializing_if = "Option::is_none")]
+    pub idle: Option<f64>,
+    /// Wire field: `viewed`.
+    #[serde(default, rename = "viewed", skip_serializing_if = "Option::is_none")]
+    pub viewed: Option<f64>,
+    /// Wire field: `archived`.
+    #[serde(default, rename = "archived", skip_serializing_if = "Option::is_none")]
+    pub archived: Option<f64>,
+}
+
+/// Wire schema: `Session.Metadata`.
+pub type SessionMetadata = std::collections::BTreeMap<String, serde_json::Value>;
+
 /// Wire schema: `Session.Revert`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionRevert {
-    /// Wire field: `files`.
-    #[serde(default, rename = "files", skip_serializing_if = "Option::is_none")]
-    pub files: Option<Vec<FileDiffInfo>>,
     /// Wire field: `messageID`.
     #[serde(rename = "messageID")]
     pub message_id: String,
@@ -6452,105 +6495,62 @@ pub struct SessionRevert {
     /// Wire field: `snapshot`.
     #[serde(default, rename = "snapshot", skip_serializing_if = "Option::is_none")]
     pub snapshot: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SessionInfoTime {
-    /// Wire field: `archived`.
-    #[serde(default, rename = "archived", skip_serializing_if = "Option::is_none")]
-    pub archived: Option<f64>,
-    /// Wire field: `created`.
-    #[serde(rename = "created")]
-    pub created: f64,
-    /// Wire field: `idle`.
-    #[serde(default, rename = "idle", skip_serializing_if = "Option::is_none")]
-    pub idle: Option<f64>,
-    /// Wire field: `updated`.
-    #[serde(rename = "updated")]
-    pub updated: f64,
-    /// Wire field: `viewed`.
-    #[serde(default, rename = "viewed", skip_serializing_if = "Option::is_none")]
-    pub viewed: Option<f64>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct TokenUsageInfoCache {
-    /// Wire field: `read`.
-    #[serde(rename = "read")]
-    pub read: f64,
-    /// Wire field: `write`.
-    #[serde(rename = "write")]
-    pub write: f64,
-}
-
-/// Wire schema: `TokenUsage.Info`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct TokenUsageInfo {
-    /// Wire field: `cache`.
-    #[serde(rename = "cache")]
-    pub cache: TokenUsageInfoCache,
-    /// Wire field: `input`.
-    #[serde(rename = "input")]
-    pub input: f64,
-    /// Wire field: `output`.
-    #[serde(rename = "output")]
-    pub output: f64,
-    /// Wire field: `reasoning`.
-    #[serde(rename = "reasoning")]
-    pub reasoning: f64,
+    /// Wire field: `files`.
+    #[serde(default, rename = "files", skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<FileDiffInfo>>,
 }
 
 /// Wire schema: `Session.Info`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionInfo {
-    /// Wire field: `agent`.
-    #[serde(default, rename = "agent", skip_serializing_if = "Option::is_none")]
-    pub agent: Option<String>,
-    /// Wire field: `cost`.
-    #[serde(rename = "cost")]
-    pub cost: MoneyUsd,
-    /// Wire field: `fork`.
-    #[serde(default, rename = "fork", skip_serializing_if = "Option::is_none")]
-    pub fork: Option<SessionInfoFork>,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
-    /// Wire field: `location`.
-    #[serde(rename = "location")]
-    pub location: LocationPublicRef,
-    /// Wire field: `metadata`.
-    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<SessionMetadata>,
-    /// Wire field: `model`.
-    #[serde(default, rename = "model", skip_serializing_if = "Option::is_none")]
-    pub model: Option<ModelRef>,
-    /// Wire field: `outcome`.
-    #[serde(default, rename = "outcome", skip_serializing_if = "Option::is_none")]
-    pub outcome: Option<SessionInfoOutcome>,
     /// Wire field: `parentID`.
     #[serde(default, rename = "parentID", skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
-    /// Wire field: `permissions`.
-    #[serde(default, rename = "permissions", skip_serializing_if = "Option::is_none")]
-    pub permissions: Option<PermissionRuleset>,
+    /// Wire field: `fork`.
+    #[serde(default, rename = "fork", skip_serializing_if = "Option::is_none")]
+    pub fork: Option<SessionInfoFork>,
     /// Wire field: `projectID`.
     #[serde(rename = "projectID")]
     pub project_id: String,
-    /// Wire field: `revert`.
-    #[serde(default, rename = "revert", skip_serializing_if = "Option::is_none")]
-    pub revert: Option<SessionRevert>,
-    /// Wire field: `subpath`.
-    #[serde(default, rename = "subpath", skip_serializing_if = "Option::is_none")]
-    pub subpath: Option<String>,
+    /// Wire field: `agent`.
+    #[serde(default, rename = "agent", skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    /// Wire field: `model`.
+    #[serde(default, rename = "model", skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelRef>,
+    /// Wire field: `cost`.
+    #[serde(rename = "cost")]
+    pub cost: MoneyUsd,
+    /// Wire field: `tokens`.
+    #[serde(rename = "tokens")]
+    pub tokens: TokenUsageInfo,
+    /// Wire field: `outcome`.
+    #[serde(default, rename = "outcome", skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<SessionInfoOutcome>,
     /// Wire field: `time`.
     #[serde(rename = "time")]
     pub time: SessionInfoTime,
     /// Wire field: `title`.
     #[serde(default, rename = "title", skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    /// Wire field: `tokens`.
-    #[serde(rename = "tokens")]
-    pub tokens: TokenUsageInfo,
+    /// Wire field: `subpath`.
+    #[serde(default, rename = "subpath", skip_serializing_if = "Option::is_none")]
+    pub subpath: Option<String>,
+    /// Wire field: `metadata`.
+    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<SessionMetadata>,
+    /// Wire field: `permissions`.
+    #[serde(default, rename = "permissions", skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<PermissionRuleset>,
+    /// Wire field: `revert`.
+    #[serde(default, rename = "revert", skip_serializing_if = "Option::is_none")]
+    pub revert: Option<SessionRevert>,
+    /// Wire field: `location`.
+    #[serde(rename = "location")]
+    pub location: LocationPublicRef,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -6580,28 +6580,55 @@ impl SessionMessageAgentSelectedType {
 /// Wire schema: `Session.Message.AgentSelected`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMessageAgentSelected {
-    /// Wire field: `agent`.
-    #[serde(rename = "agent")]
-    pub agent: String,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
     /// Wire field: `metadata`.
     #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
     pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `previous`.
-    #[serde(default, rename = "previous", skip_serializing_if = "Option::is_none")]
-    pub previous: Option<String>,
     /// Wire field: `time`.
     #[serde(rename = "time")]
     pub time: SessionMessageAgentSelectedTime,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: SessionMessageAgentSelectedType,
+    /// Wire field: `agent`.
+    #[serde(rename = "agent")]
+    pub agent: String,
+    /// Wire field: `previous`.
+    #[serde(default, rename = "previous", skip_serializing_if = "Option::is_none")]
+    pub previous: Option<String>,
 }
 
-/// Wire schema: `Session.Message.ProviderState`.
-pub type SessionMessageProviderState = std::collections::BTreeMap<String, serde_json::Value>;
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SessionMessageAssistantTime {
+    /// Wire field: `created`.
+    #[serde(rename = "created")]
+    pub created: f64,
+    /// Wire field: `streamed`.
+    #[serde(default, rename = "streamed", skip_serializing_if = "Option::is_none")]
+    pub streamed: Option<f64>,
+    /// Wire field: `completed`.
+    #[serde(default, rename = "completed", skip_serializing_if = "Option::is_none")]
+    pub completed: Option<f64>,
+}
+
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum SessionMessageAssistantType {
+    #[default]
+    #[serde(rename = "assistant")]
+    Assistant,
+}
+
+impl SessionMessageAssistantType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Assistant => "assistant",
+        }
+    }
+}
 
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
@@ -6620,31 +6647,21 @@ impl SessionMessageAssistantTextType {
     }
 }
 
+/// Wire schema: `Session.Message.ProviderState`.
+pub type SessionMessageProviderState = std::collections::BTreeMap<String, serde_json::Value>;
+
 /// Wire schema: `Session.Message.Assistant.Text`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMessageAssistantText {
-    /// Wire field: `state`.
-    #[serde(default, rename = "state", skip_serializing_if = "Option::is_none")]
-    pub state: Option<SessionMessageProviderState>,
-    /// Wire field: `text`.
-    #[serde(rename = "text")]
-    pub text: String,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: SessionMessageAssistantTextType,
-}
-
-/// Wire schema: `Session.Message.ProviderState_1`.
-pub type SessionMessageProviderState1 = std::collections::BTreeMap<String, serde_json::Value>;
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SessionMessageAssistantReasoningTime {
-    /// Wire field: `completed`.
-    #[serde(default, rename = "completed", skip_serializing_if = "Option::is_none")]
-    pub completed: Option<f64>,
-    /// Wire field: `created`.
-    #[serde(rename = "created")]
-    pub created: f64,
+    /// Wire field: `text`.
+    #[serde(rename = "text")]
+    pub text: String,
+    /// Wire field: `state`.
+    #[serde(default, rename = "state", skip_serializing_if = "Option::is_none")]
+    pub state: Option<SessionMessageProviderState>,
 }
 
 #[derive(
@@ -6664,28 +6681,58 @@ impl SessionMessageAssistantReasoningType {
     }
 }
 
+/// Wire schema: `Session.Message.ProviderState_1`.
+pub type SessionMessageProviderState1 = std::collections::BTreeMap<String, serde_json::Value>;
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SessionMessageAssistantReasoningTime {
+    /// Wire field: `created`.
+    #[serde(rename = "created")]
+    pub created: f64,
+    /// Wire field: `completed`.
+    #[serde(default, rename = "completed", skip_serializing_if = "Option::is_none")]
+    pub completed: Option<f64>,
+}
+
 /// Wire schema: `Session.Message.Assistant.Reasoning`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMessageAssistantReasoning {
-    /// Wire field: `state`.
-    #[serde(default, rename = "state", skip_serializing_if = "Option::is_none")]
-    pub state: Option<SessionMessageProviderState1>,
-    /// Wire field: `text`.
-    #[serde(rename = "text")]
-    pub text: String,
-    /// Wire field: `time`.
-    #[serde(default, rename = "time", skip_serializing_if = "Option::is_none")]
-    pub time: Option<SessionMessageAssistantReasoningTime>,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: SessionMessageAssistantReasoningType,
+    /// Wire field: `text`.
+    #[serde(rename = "text")]
+    pub text: String,
+    /// Wire field: `state`.
+    #[serde(default, rename = "state", skip_serializing_if = "Option::is_none")]
+    pub state: Option<SessionMessageProviderState1>,
+    /// Wire field: `time`.
+    #[serde(default, rename = "time", skip_serializing_if = "Option::is_none")]
+    pub time: Option<SessionMessageAssistantReasoningTime>,
 }
 
-/// Wire schema: `Session.Message.ProviderState_3`.
-pub type SessionMessageProviderState3 = std::collections::BTreeMap<String, serde_json::Value>;
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum SessionMessageAssistantToolType {
+    #[default]
+    #[serde(rename = "tool")]
+    Tool,
+}
+
+impl SessionMessageAssistantToolType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Tool => "tool",
+        }
+    }
+}
 
 /// Wire schema: `Session.Message.ProviderState_2`.
 pub type SessionMessageProviderState2 = std::collections::BTreeMap<String, serde_json::Value>;
+
+/// Wire schema: `Session.Message.ProviderState_3`.
+pub type SessionMessageProviderState3 = std::collections::BTreeMap<String, serde_json::Value>;
 
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
@@ -6707,12 +6754,12 @@ impl SessionMessageToolStateStreamingStatus {
 /// Wire schema: `Session.Message.ToolState.Streaming`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMessageToolStateStreaming {
-    /// Wire field: `input`.
-    #[serde(rename = "input")]
-    pub input: String,
     /// Wire field: `status`.
     #[serde(rename = "status")]
     pub status: SessionMessageToolStateStreamingStatus,
+    /// Wire field: `input`.
+    #[serde(rename = "input")]
+    pub input: String,
 }
 
 #[derive(
@@ -6735,15 +6782,32 @@ impl SessionMessageToolStateRunningStatus {
 /// Wire schema: `Session.Message.ToolState.Running`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMessageToolStateRunning {
+    /// Wire field: `status`.
+    #[serde(rename = "status")]
+    pub status: SessionMessageToolStateRunningStatus,
     /// Wire field: `input`.
     #[serde(rename = "input")]
     pub input: std::collections::BTreeMap<String, serde_json::Value>,
     /// Wire field: `metadata`.
     #[serde(rename = "metadata")]
     pub metadata: std::collections::BTreeMap<String, serde_json::Value>,
-    /// Wire field: `status`.
-    #[serde(rename = "status")]
-    pub status: SessionMessageToolStateRunningStatus,
+}
+
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum SessionMessageToolStateCompletedStatus {
+    #[default]
+    #[serde(rename = "completed")]
+    Completed,
+}
+
+impl SessionMessageToolStateCompletedStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+        }
+    }
 }
 
 #[derive(
@@ -6766,12 +6830,12 @@ impl ToolTextContentType {
 /// Wire schema: `Tool.TextContent`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ToolTextContent {
-    /// Wire field: `text`.
-    #[serde(rename = "text")]
-    pub text: String,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: ToolTextContentType,
+    /// Wire field: `text`.
+    #[serde(rename = "text")]
+    pub text: String,
 }
 
 #[derive(
@@ -6794,18 +6858,18 @@ impl ToolFileContentType {
 /// Wire schema: `Tool.FileContent`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ToolFileContent {
-    /// Wire field: `mime`.
-    #[serde(rename = "mime")]
-    pub mime: String,
-    /// Wire field: `name`.
-    #[serde(default, rename = "name", skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: ToolFileContentType,
     /// Wire field: `uri`.
     #[serde(rename = "uri")]
     pub uri: String,
+    /// Wire field: `mime`.
+    #[serde(rename = "mime")]
+    pub mime: String,
+    /// Wire field: `name`.
+    #[serde(default, rename = "name", skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// Wire schema: `Tool.Content`.
@@ -6818,62 +6882,21 @@ pub enum ToolContent {
     FileContent(ToolFileContent),
 }
 
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
-)]
-pub enum SessionMessageToolStateCompletedStatus {
-    #[default]
-    #[serde(rename = "completed")]
-    Completed,
-}
-
-impl SessionMessageToolStateCompletedStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Completed => "completed",
-        }
-    }
-}
-
 /// Wire schema: `Session.Message.ToolState.Completed`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMessageToolStateCompleted {
-    /// Wire field: `content`.
-    #[serde(rename = "content")]
-    pub content: Vec<ToolContent>,
-    /// Wire field: `input`.
-    #[serde(rename = "input")]
-    pub input: std::collections::BTreeMap<String, serde_json::Value>,
-    /// Wire field: `metadata`.
-    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
     /// Wire field: `status`.
     #[serde(rename = "status")]
     pub status: SessionMessageToolStateCompletedStatus,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SessionStructuredErrorResponse {
-    /// Wire field: `body`.
-    #[serde(rename = "body")]
-    pub body: String,
-}
-
-/// Wire schema: `Session.StructuredError`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SessionStructuredError {
-    /// Wire field: `message`.
-    #[serde(rename = "message")]
-    pub message: String,
-    /// Wire field: `response`.
-    #[serde(default, rename = "response", skip_serializing_if = "Option::is_none")]
-    pub response: Option<SessionStructuredErrorResponse>,
-    /// Wire field: `status`.
-    #[serde(default, rename = "status", skip_serializing_if = "Option::is_none")]
-    pub status: Option<i64>,
-    /// Wire field: `type`.
-    #[serde(rename = "type")]
-    pub type_: String,
+    /// Wire field: `input`.
+    #[serde(rename = "input")]
+    pub input: std::collections::BTreeMap<String, serde_json::Value>,
+    /// Wire field: `content`.
+    #[serde(rename = "content")]
+    pub content: Vec<ToolContent>,
+    /// Wire field: `metadata`.
+    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
 }
 
 #[derive(
@@ -6893,24 +6916,48 @@ impl SessionMessageToolStateErrorStatus {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SessionStructuredErrorResponse {
+    /// Wire field: `body`.
+    #[serde(rename = "body")]
+    pub body: String,
+}
+
+/// Wire schema: `Session.StructuredError`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SessionStructuredError {
+    /// Wire field: `type`.
+    #[serde(rename = "type")]
+    pub type_: String,
+    /// Wire field: `message`.
+    #[serde(rename = "message")]
+    pub message: String,
+    /// Wire field: `status`.
+    #[serde(default, rename = "status", skip_serializing_if = "Option::is_none")]
+    pub status: Option<i64>,
+    /// Wire field: `response`.
+    #[serde(default, rename = "response", skip_serializing_if = "Option::is_none")]
+    pub response: Option<SessionStructuredErrorResponse>,
+}
+
 /// Wire schema: `Session.Message.ToolState.Error`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMessageToolStateError {
-    /// Wire field: `content`.
-    #[serde(default, rename = "content", skip_serializing_if = "Option::is_none")]
-    pub content: Option<Vec<ToolContent>>,
-    /// Wire field: `error`.
-    #[serde(rename = "error")]
-    pub error: SessionStructuredError,
-    /// Wire field: `input`.
-    #[serde(rename = "input")]
-    pub input: std::collections::BTreeMap<String, serde_json::Value>,
-    /// Wire field: `metadata`.
-    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
     /// Wire field: `status`.
     #[serde(rename = "status")]
     pub status: SessionMessageToolStateErrorStatus,
+    /// Wire field: `input`.
+    #[serde(rename = "input")]
+    pub input: std::collections::BTreeMap<String, serde_json::Value>,
+    /// Wire field: `error`.
+    #[serde(rename = "error")]
+    pub error: SessionStructuredError,
+    /// Wire field: `content`.
+    #[serde(default, rename = "content", skip_serializing_if = "Option::is_none")]
+    pub content: Option<Vec<ToolContent>>,
+    /// Wire field: `metadata`.
+    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
 }
 
 /// Discriminated union (each variant carries its tag field);
@@ -6926,61 +6973,44 @@ pub enum SessionMessageAssistantToolState {
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMessageAssistantToolTime {
-    /// Wire field: `completed`.
-    #[serde(default, rename = "completed", skip_serializing_if = "Option::is_none")]
-    pub completed: Option<f64>,
     /// Wire field: `created`.
     #[serde(rename = "created")]
     pub created: f64,
     /// Wire field: `ran`.
     #[serde(default, rename = "ran", skip_serializing_if = "Option::is_none")]
     pub ran: Option<f64>,
-}
-
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
-)]
-pub enum SessionMessageAssistantToolType {
-    #[default]
-    #[serde(rename = "tool")]
-    Tool,
-}
-
-impl SessionMessageAssistantToolType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Tool => "tool",
-        }
-    }
+    /// Wire field: `completed`.
+    #[serde(default, rename = "completed", skip_serializing_if = "Option::is_none")]
+    pub completed: Option<f64>,
 }
 
 /// Wire schema: `Session.Message.Assistant.Tool`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMessageAssistantTool {
-    /// Wire field: `executed`.
-    #[serde(default, rename = "executed", skip_serializing_if = "Option::is_none")]
-    pub executed: Option<bool>,
+    /// Wire field: `type`.
+    #[serde(rename = "type")]
+    pub type_: SessionMessageAssistantToolType,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
     /// Wire field: `name`.
     #[serde(rename = "name")]
     pub name: String,
-    /// Wire field: `providerResultState`.
-    #[serde(default, rename = "providerResultState", skip_serializing_if = "Option::is_none")]
-    pub provider_result_state: Option<SessionMessageProviderState3>,
+    /// Wire field: `executed`.
+    #[serde(default, rename = "executed", skip_serializing_if = "Option::is_none")]
+    pub executed: Option<bool>,
     /// Wire field: `providerState`.
     #[serde(default, rename = "providerState", skip_serializing_if = "Option::is_none")]
     pub provider_state: Option<SessionMessageProviderState2>,
+    /// Wire field: `providerResultState`.
+    #[serde(default, rename = "providerResultState", skip_serializing_if = "Option::is_none")]
+    pub provider_result_state: Option<SessionMessageProviderState3>,
     /// Wire field: `state`.
     #[serde(rename = "state")]
     pub state: SessionMessageAssistantToolState,
     /// Wire field: `time`.
     #[serde(rename = "time")]
     pub time: SessionMessageAssistantToolTime,
-    /// Wire field: `type`.
-    #[serde(rename = "type")]
-    pub type_: SessionMessageAssistantToolType,
 }
 
 /// Discriminated union (each variant carries its tag field);
@@ -6991,6 +7021,19 @@ pub enum SessionMessageAssistantContentItem {
     Text(SessionMessageAssistantText),
     Reasoning(SessionMessageAssistantReasoning),
     Tool(SessionMessageAssistantTool),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SessionMessageAssistantSnapshot {
+    /// Wire field: `start`.
+    #[serde(default, rename = "start", skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
+    /// Wire field: `end`.
+    #[serde(default, rename = "end", skip_serializing_if = "Option::is_none")]
+    pub end: Option<String>,
+    /// Wire field: `files`.
+    #[serde(default, rename = "files", skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -7028,149 +7071,65 @@ pub type SessionMessageProviderState4 = std::collections::BTreeMap<String, serde
 /// Wire schema: `Session.Message.Assistant.Retry`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMessageAssistantRetry {
-    /// Wire field: `at`.
-    #[serde(rename = "at")]
-    pub at: f64,
     /// Wire field: `attempt`.
     #[serde(rename = "attempt")]
     pub attempt: i64,
+    /// Wire field: `at`.
+    #[serde(rename = "at")]
+    pub at: f64,
     /// Wire field: `error`.
     #[serde(rename = "error")]
     pub error: SessionStructuredError,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SessionMessageAssistantSnapshot {
-    /// Wire field: `end`.
-    #[serde(default, rename = "end", skip_serializing_if = "Option::is_none")]
-    pub end: Option<String>,
-    /// Wire field: `files`.
-    #[serde(default, rename = "files", skip_serializing_if = "Option::is_none")]
-    pub files: Option<Vec<String>>,
-    /// Wire field: `start`.
-    #[serde(default, rename = "start", skip_serializing_if = "Option::is_none")]
-    pub start: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SessionMessageAssistantTime {
-    /// Wire field: `completed`.
-    #[serde(default, rename = "completed", skip_serializing_if = "Option::is_none")]
-    pub completed: Option<f64>,
-    /// Wire field: `created`.
-    #[serde(rename = "created")]
-    pub created: f64,
-    /// Wire field: `streamed`.
-    #[serde(default, rename = "streamed", skip_serializing_if = "Option::is_none")]
-    pub streamed: Option<f64>,
-}
-
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
-)]
-pub enum SessionMessageAssistantType {
-    #[default]
-    #[serde(rename = "assistant")]
-    Assistant,
-}
-
-impl SessionMessageAssistantType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Assistant => "assistant",
-        }
-    }
-}
-
 /// Wire schema: `Session.Message.Assistant`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMessageAssistant {
-    /// Wire field: `agent`.
-    #[serde(rename = "agent")]
-    pub agent: String,
-    /// Wire field: `content`.
-    #[serde(rename = "content")]
-    pub content: Vec<SessionMessageAssistantContentItem>,
-    /// Wire field: `cost`.
-    #[serde(default, rename = "cost", skip_serializing_if = "Option::is_none")]
-    pub cost: Option<MoneyUsd>,
-    /// Wire field: `error`.
-    #[serde(default, rename = "error", skip_serializing_if = "Option::is_none")]
-    pub error: Option<SessionStructuredError>,
-    /// Wire field: `finish`.
-    #[serde(default, rename = "finish", skip_serializing_if = "Option::is_none")]
-    pub finish: Option<SessionMessageAssistantFinish>,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
     /// Wire field: `metadata`.
     #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
     pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `model`.
-    #[serde(rename = "model")]
-    pub model: ModelRef,
-    /// Wire field: `providerState`.
-    #[serde(default, rename = "providerState", skip_serializing_if = "Option::is_none")]
-    pub provider_state: Option<SessionMessageProviderState4>,
-    /// Wire field: `rawFinish`.
-    #[serde(default, rename = "rawFinish", skip_serializing_if = "Option::is_none")]
-    pub raw_finish: Option<String>,
-    /// Wire field: `retry`.
-    #[serde(default, rename = "retry", skip_serializing_if = "Option::is_none")]
-    pub retry: Option<SessionMessageAssistantRetry>,
-    /// Wire field: `snapshot`.
-    #[serde(default, rename = "snapshot", skip_serializing_if = "Option::is_none")]
-    pub snapshot: Option<SessionMessageAssistantSnapshot>,
     /// Wire field: `time`.
     #[serde(rename = "time")]
     pub time: SessionMessageAssistantTime,
-    /// Wire field: `tokens`.
-    #[serde(default, rename = "tokens", skip_serializing_if = "Option::is_none")]
-    pub tokens: Option<TokenUsageInfo>,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: SessionMessageAssistantType,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum SessionMessageCompactionRunningReason {
-    #[serde(rename = "auto")]
-    Auto,
-    #[serde(rename = "manual")]
-    Manual,
-}
-
-impl SessionMessageCompactionRunningReason {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Manual => "manual",
-        }
-    }
-}
-
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
-)]
-pub enum SessionMessageCompactionRunningStatus {
-    #[default]
-    #[serde(rename = "running")]
-    Running,
-}
-
-impl SessionMessageCompactionRunningStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Running => "running",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SessionMessageCompactionRunningTime {
-    /// Wire field: `created`.
-    #[serde(rename = "created")]
-    pub created: f64,
+    /// Wire field: `agent`.
+    #[serde(rename = "agent")]
+    pub agent: String,
+    /// Wire field: `model`.
+    #[serde(rename = "model")]
+    pub model: ModelRef,
+    /// Wire field: `content`.
+    #[serde(rename = "content")]
+    pub content: Vec<SessionMessageAssistantContentItem>,
+    /// Wire field: `snapshot`.
+    #[serde(default, rename = "snapshot", skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<SessionMessageAssistantSnapshot>,
+    /// Wire field: `finish`.
+    #[serde(default, rename = "finish", skip_serializing_if = "Option::is_none")]
+    pub finish: Option<SessionMessageAssistantFinish>,
+    /// Wire field: `rawFinish`.
+    #[serde(default, rename = "rawFinish", skip_serializing_if = "Option::is_none")]
+    pub raw_finish: Option<String>,
+    /// Wire field: `providerState`.
+    #[serde(default, rename = "providerState", skip_serializing_if = "Option::is_none")]
+    pub provider_state: Option<SessionMessageProviderState4>,
+    /// Wire field: `cost`.
+    #[serde(default, rename = "cost", skip_serializing_if = "Option::is_none")]
+    pub cost: Option<MoneyUsd>,
+    /// Wire field: `tokens`.
+    #[serde(default, rename = "tokens", skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<TokenUsageInfo>,
+    /// Wire field: `error`.
+    #[serde(default, rename = "error", skip_serializing_if = "Option::is_none")]
+    pub error: Option<SessionStructuredError>,
+    /// Wire field: `retry`.
+    #[serde(default, rename = "retry", skip_serializing_if = "Option::is_none")]
+    pub retry: Option<SessionMessageAssistantRetry>,
 }
 
 #[derive(
@@ -7190,84 +7149,39 @@ impl SessionMessageCompactionRunningType {
     }
 }
 
-/// Wire schema: `Session.Message.Compaction.Running`.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SessionMessageCompactionRunning {
-    /// Wire field: `id`.
-    #[serde(rename = "id")]
-    pub id: String,
-    /// Wire field: `metadata`.
-    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `reason`.
-    #[serde(rename = "reason")]
-    pub reason: SessionMessageCompactionRunningReason,
-    /// Wire field: `recent`.
-    #[serde(rename = "recent")]
-    pub recent: String,
-    /// Wire field: `status`.
-    #[serde(rename = "status")]
-    pub status: SessionMessageCompactionRunningStatus,
-    /// Wire field: `summary`.
-    #[serde(rename = "summary")]
-    pub summary: String,
-    /// Wire field: `time`.
-    #[serde(rename = "time")]
-    pub time: SessionMessageCompactionRunningTime,
-    /// Wire field: `type`.
-    #[serde(rename = "type")]
-    pub type_: SessionMessageCompactionRunningType,
-}
-
-/// Wire schema: `Session.ProviderContext.Provenance`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SessionProviderContextProvenance {
-    /// Wire field: `endpoint`.
-    #[serde(rename = "endpoint")]
-    pub endpoint: String,
-    /// Wire field: `modelID`.
-    #[serde(rename = "modelID")]
-    pub model_id: String,
-    /// Wire field: `protocol`.
-    #[serde(rename = "protocol")]
-    pub protocol: String,
-    /// Wire field: `provider`.
-    #[serde(rename = "provider")]
-    pub provider: String,
-    /// Wire field: `providerID`.
-    #[serde(rename = "providerID")]
-    pub provider_id: String,
-    /// Wire field: `route`.
-    #[serde(rename = "route")]
-    pub route: String,
+pub struct SessionMessageCompactionRunningTime {
+    /// Wire field: `created`.
+    #[serde(rename = "created")]
+    pub created: f64,
 }
 
-/// Wire schema: `Session.ProviderContext`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SessionProviderContext {
-    /// Wire field: `messages`.
-    #[serde(rename = "messages")]
-    pub messages: serde_json::Value,
-    /// Wire field: `provenance`.
-    #[serde(rename = "provenance")]
-    pub provenance: SessionProviderContextProvenance,
-    /// Wire field: `version`.
-    #[serde(rename = "version")]
-    pub version: f64,
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum SessionMessageCompactionRunningStatus {
+    #[default]
+    #[serde(rename = "running")]
+    Running,
 }
 
-/// Wire schema: `Session.Message.ProviderState_5`.
-pub type SessionMessageProviderState5 = std::collections::BTreeMap<String, serde_json::Value>;
+impl SessionMessageCompactionRunningStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Running => "running",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum SessionMessageCompactionCompletedReason {
+pub enum SessionMessageCompactionRunningReason {
     #[serde(rename = "auto")]
     Auto,
     #[serde(rename = "manual")]
     Manual,
 }
 
-impl SessionMessageCompactionCompletedReason {
+impl SessionMessageCompactionRunningReason {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Auto => "auto",
@@ -7276,28 +7190,33 @@ impl SessionMessageCompactionCompletedReason {
     }
 }
 
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
-)]
-pub enum SessionMessageCompactionCompletedStatus {
-    #[default]
-    #[serde(rename = "completed")]
-    Completed,
-}
-
-impl SessionMessageCompactionCompletedStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Completed => "completed",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SessionMessageCompactionCompletedTime {
-    /// Wire field: `created`.
-    #[serde(rename = "created")]
-    pub created: f64,
+/// Wire schema: `Session.Message.Compaction.Running`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SessionMessageCompactionRunning {
+    /// Wire field: `type`.
+    #[serde(rename = "type")]
+    pub type_: SessionMessageCompactionRunningType,
+    /// Wire field: `id`.
+    #[serde(rename = "id")]
+    pub id: String,
+    /// Wire field: `metadata`.
+    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+    /// Wire field: `time`.
+    #[serde(rename = "time")]
+    pub time: SessionMessageCompactionRunningTime,
+    /// Wire field: `status`.
+    #[serde(rename = "status")]
+    pub status: SessionMessageCompactionRunningStatus,
+    /// Wire field: `reason`.
+    #[serde(rename = "reason")]
+    pub reason: SessionMessageCompactionRunningReason,
+    /// Wire field: `summary`.
+    #[serde(rename = "summary")]
+    pub summary: String,
+    /// Wire field: `recent`.
+    #[serde(rename = "recent")]
+    pub recent: String,
 }
 
 #[derive(
@@ -7317,59 +7236,39 @@ impl SessionMessageCompactionCompletedType {
     }
 }
 
-/// Wire schema: `Session.Message.Compaction.Completed`.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SessionMessageCompactionCompleted {
-    /// Wire field: `cost`.
-    #[serde(default, rename = "cost", skip_serializing_if = "Option::is_none")]
-    pub cost: Option<MoneyUsd>,
-    /// Wire field: `id`.
-    #[serde(rename = "id")]
-    pub id: String,
-    /// Wire field: `metadata`.
-    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `model`.
-    #[serde(default, rename = "model", skip_serializing_if = "Option::is_none")]
-    pub model: Option<ModelRef>,
-    /// Wire field: `providerContext`.
-    #[serde(default, rename = "providerContext", skip_serializing_if = "Option::is_none")]
-    pub provider_context: Option<SessionProviderContext>,
-    /// Wire field: `providerState`.
-    #[serde(default, rename = "providerState", skip_serializing_if = "Option::is_none")]
-    pub provider_state: Option<SessionMessageProviderState5>,
-    /// Wire field: `reason`.
-    #[serde(rename = "reason")]
-    pub reason: SessionMessageCompactionCompletedReason,
-    /// Wire field: `recent`.
-    #[serde(rename = "recent")]
-    pub recent: String,
-    /// Wire field: `status`.
-    #[serde(rename = "status")]
-    pub status: SessionMessageCompactionCompletedStatus,
-    /// Wire field: `summary`.
-    #[serde(rename = "summary")]
-    pub summary: String,
-    /// Wire field: `time`.
-    #[serde(rename = "time")]
-    pub time: SessionMessageCompactionCompletedTime,
-    /// Wire field: `tokens`.
-    #[serde(default, rename = "tokens", skip_serializing_if = "Option::is_none")]
-    pub tokens: Option<TokenUsageInfo>,
-    /// Wire field: `type`.
-    #[serde(rename = "type")]
-    pub type_: SessionMessageCompactionCompletedType,
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SessionMessageCompactionCompletedTime {
+    /// Wire field: `created`.
+    #[serde(rename = "created")]
+    pub created: f64,
+}
+
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum SessionMessageCompactionCompletedStatus {
+    #[default]
+    #[serde(rename = "completed")]
+    Completed,
+}
+
+impl SessionMessageCompactionCompletedStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum SessionMessageCompactionFailedReason {
+pub enum SessionMessageCompactionCompletedReason {
     #[serde(rename = "auto")]
     Auto,
     #[serde(rename = "manual")]
     Manual,
 }
 
-impl SessionMessageCompactionFailedReason {
+impl SessionMessageCompactionCompletedReason {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Auto => "auto",
@@ -7378,28 +7277,88 @@ impl SessionMessageCompactionFailedReason {
     }
 }
 
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
-)]
-pub enum SessionMessageCompactionFailedStatus {
-    #[default]
-    #[serde(rename = "failed")]
-    Failed,
-}
+/// Wire schema: `Session.Message.ProviderState_5`.
+pub type SessionMessageProviderState5 = std::collections::BTreeMap<String, serde_json::Value>;
 
-impl SessionMessageCompactionFailedStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Failed => "failed",
-        }
-    }
-}
-
+/// Wire schema: `Session.ProviderContext.Provenance`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SessionMessageCompactionFailedTime {
-    /// Wire field: `created`.
-    #[serde(rename = "created")]
-    pub created: f64,
+pub struct SessionProviderContextProvenance {
+    /// Wire field: `providerID`.
+    #[serde(rename = "providerID")]
+    pub provider_id: String,
+    /// Wire field: `provider`.
+    #[serde(rename = "provider")]
+    pub provider: String,
+    /// Wire field: `modelID`.
+    #[serde(rename = "modelID")]
+    pub model_id: String,
+    /// Wire field: `route`.
+    #[serde(rename = "route")]
+    pub route: String,
+    /// Wire field: `protocol`.
+    #[serde(rename = "protocol")]
+    pub protocol: String,
+    /// Wire field: `endpoint`.
+    #[serde(rename = "endpoint")]
+    pub endpoint: String,
+}
+
+/// Wire schema: `Session.ProviderContext`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SessionProviderContext {
+    /// Wire field: `version`.
+    #[serde(rename = "version")]
+    pub version: f64,
+    /// Wire field: `provenance`.
+    #[serde(rename = "provenance")]
+    pub provenance: SessionProviderContextProvenance,
+    /// Wire field: `messages`.
+    #[serde(rename = "messages")]
+    pub messages: serde_json::Value,
+}
+
+/// Wire schema: `Session.Message.Compaction.Completed`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SessionMessageCompactionCompleted {
+    /// Wire field: `type`.
+    #[serde(rename = "type")]
+    pub type_: SessionMessageCompactionCompletedType,
+    /// Wire field: `id`.
+    #[serde(rename = "id")]
+    pub id: String,
+    /// Wire field: `metadata`.
+    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+    /// Wire field: `time`.
+    #[serde(rename = "time")]
+    pub time: SessionMessageCompactionCompletedTime,
+    /// Wire field: `status`.
+    #[serde(rename = "status")]
+    pub status: SessionMessageCompactionCompletedStatus,
+    /// Wire field: `reason`.
+    #[serde(rename = "reason")]
+    pub reason: SessionMessageCompactionCompletedReason,
+    /// Wire field: `model`.
+    #[serde(default, rename = "model", skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelRef>,
+    /// Wire field: `providerState`.
+    #[serde(default, rename = "providerState", skip_serializing_if = "Option::is_none")]
+    pub provider_state: Option<SessionMessageProviderState5>,
+    /// Wire field: `summary`.
+    #[serde(rename = "summary")]
+    pub summary: String,
+    /// Wire field: `recent`.
+    #[serde(rename = "recent")]
+    pub recent: String,
+    /// Wire field: `providerContext`.
+    #[serde(default, rename = "providerContext", skip_serializing_if = "Option::is_none")]
+    pub provider_context: Option<SessionProviderContext>,
+    /// Wire field: `cost`.
+    #[serde(default, rename = "cost", skip_serializing_if = "Option::is_none")]
+    pub cost: Option<MoneyUsd>,
+    /// Wire field: `tokens`.
+    #[serde(default, rename = "tokens", skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<TokenUsageInfo>,
 }
 
 #[derive(
@@ -7419,36 +7378,77 @@ impl SessionMessageCompactionFailedType {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SessionMessageCompactionFailedTime {
+    /// Wire field: `created`.
+    #[serde(rename = "created")]
+    pub created: f64,
+}
+
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum SessionMessageCompactionFailedStatus {
+    #[default]
+    #[serde(rename = "failed")]
+    Failed,
+}
+
+impl SessionMessageCompactionFailedStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum SessionMessageCompactionFailedReason {
+    #[serde(rename = "auto")]
+    Auto,
+    #[serde(rename = "manual")]
+    Manual,
+}
+
+impl SessionMessageCompactionFailedReason {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Manual => "manual",
+        }
+    }
+}
+
 /// Wire schema: `Session.Message.Compaction.Failed`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMessageCompactionFailed {
-    /// Wire field: `cost`.
-    #[serde(default, rename = "cost", skip_serializing_if = "Option::is_none")]
-    pub cost: Option<MoneyUsd>,
-    /// Wire field: `error`.
-    #[serde(rename = "error")]
-    pub error: SessionStructuredError,
+    /// Wire field: `type`.
+    #[serde(rename = "type")]
+    pub type_: SessionMessageCompactionFailedType,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
     /// Wire field: `metadata`.
     #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
     pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `reason`.
-    #[serde(rename = "reason")]
-    pub reason: SessionMessageCompactionFailedReason,
-    /// Wire field: `status`.
-    #[serde(rename = "status")]
-    pub status: SessionMessageCompactionFailedStatus,
     /// Wire field: `time`.
     #[serde(rename = "time")]
     pub time: SessionMessageCompactionFailedTime,
+    /// Wire field: `status`.
+    #[serde(rename = "status")]
+    pub status: SessionMessageCompactionFailedStatus,
+    /// Wire field: `reason`.
+    #[serde(rename = "reason")]
+    pub reason: SessionMessageCompactionFailedReason,
+    /// Wire field: `error`.
+    #[serde(rename = "error")]
+    pub error: SessionStructuredError,
+    /// Wire field: `cost`.
+    #[serde(default, rename = "cost", skip_serializing_if = "Option::is_none")]
+    pub cost: Option<MoneyUsd>,
     /// Wire field: `tokens`.
     #[serde(default, rename = "tokens", skip_serializing_if = "Option::is_none")]
     pub tokens: Option<TokenUsageInfo>,
-    /// Wire field: `type`.
-    #[serde(rename = "type")]
-    pub type_: SessionMessageCompactionFailedType,
 }
 
 /// Wire schema: `Session.Message.Compaction`.
@@ -7460,26 +7460,6 @@ pub enum SessionMessageCompaction {
     Running(SessionMessageCompactionRunning),
     Completed(SessionMessageCompactionCompleted),
     Failed(SessionMessageCompactionFailed),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum SessionMessageIdleOutcome {
-    #[serde(rename = "succeeded")]
-    Succeeded,
-    #[serde(rename = "failed")]
-    Failed,
-    #[serde(rename = "interrupted")]
-    Interrupted,
-}
-
-impl SessionMessageIdleOutcome {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Succeeded => "succeeded",
-            Self::Failed => "failed",
-            Self::Interrupted => "interrupted",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -7506,6 +7486,26 @@ impl SessionMessageIdleType {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum SessionMessageIdleOutcome {
+    #[serde(rename = "succeeded")]
+    Succeeded,
+    #[serde(rename = "failed")]
+    Failed,
+    #[serde(rename = "interrupted")]
+    Interrupted,
+}
+
+impl SessionMessageIdleOutcome {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::Interrupted => "interrupted",
+        }
+    }
+}
+
 /// Wire schema: `Session.Message.Idle`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMessageIdle {
@@ -7515,15 +7515,15 @@ pub struct SessionMessageIdle {
     /// Wire field: `metadata`.
     #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
     pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `outcome`.
-    #[serde(rename = "outcome")]
-    pub outcome: SessionMessageIdleOutcome,
     /// Wire field: `time`.
     #[serde(rename = "time")]
     pub time: SessionMessageIdleTime,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: SessionMessageIdleType,
+    /// Wire field: `outcome`.
+    #[serde(rename = "outcome")]
+    pub outcome: SessionMessageIdleOutcome,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -7559,31 +7559,18 @@ pub struct SessionMessageModelSelected {
     /// Wire field: `metadata`.
     #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
     pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `model`.
-    #[serde(rename = "model")]
-    pub model: ModelRef,
-    /// Wire field: `previous`.
-    #[serde(default, rename = "previous", skip_serializing_if = "Option::is_none")]
-    pub previous: Option<ModelRef>,
     /// Wire field: `time`.
     #[serde(rename = "time")]
     pub time: SessionMessageModelSelectedTime,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: SessionMessageModelSelectedType,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SessionMessageLocationSwitchedPrevious {
-    /// Wire field: `location`.
-    #[serde(rename = "location")]
-    pub location: LocationPublicRef,
-    /// Wire field: `projectID`.
-    #[serde(default, rename = "projectID", skip_serializing_if = "Option::is_none")]
-    pub project_id: Option<String>,
-    /// Wire field: `subpath`.
-    #[serde(default, rename = "subpath", skip_serializing_if = "Option::is_none")]
-    pub subpath: Option<String>,
+    /// Wire field: `model`.
+    #[serde(rename = "model")]
+    pub model: ModelRef,
+    /// Wire field: `previous`.
+    #[serde(default, rename = "previous", skip_serializing_if = "Option::is_none")]
+    pub previous: Option<ModelRef>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -7610,33 +7597,46 @@ impl SessionMessageLocationSwitchedType {
     }
 }
 
-/// Wire schema: `Session.Message.LocationSwitched`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SessionMessageLocationSwitched {
-    /// Wire field: `id`.
-    #[serde(rename = "id")]
-    pub id: String,
+pub struct SessionMessageLocationSwitchedPrevious {
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
-    /// Wire field: `metadata`.
-    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `previous`.
-    #[serde(default, rename = "previous", skip_serializing_if = "Option::is_none")]
-    pub previous: Option<SessionMessageLocationSwitchedPrevious>,
     /// Wire field: `projectID`.
     #[serde(default, rename = "projectID", skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
     /// Wire field: `subpath`.
     #[serde(default, rename = "subpath", skip_serializing_if = "Option::is_none")]
     pub subpath: Option<String>,
+}
+
+/// Wire schema: `Session.Message.LocationSwitched`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SessionMessageLocationSwitched {
+    /// Wire field: `id`.
+    #[serde(rename = "id")]
+    pub id: String,
+    /// Wire field: `metadata`.
+    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
     /// Wire field: `time`.
     #[serde(rename = "time")]
     pub time: SessionMessageLocationSwitchedTime,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: SessionMessageLocationSwitchedType,
+    /// Wire field: `projectID`.
+    #[serde(default, rename = "projectID", skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    /// Wire field: `subpath`.
+    #[serde(default, rename = "subpath", skip_serializing_if = "Option::is_none")]
+    pub subpath: Option<String>,
+    /// Wire field: `location`.
+    #[serde(rename = "location")]
+    pub location: LocationPublicRef,
+    /// Wire field: `previous`.
+    #[serde(default, rename = "previous", skip_serializing_if = "Option::is_none")]
+    pub previous: Option<SessionMessageLocationSwitchedPrevious>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -7666,27 +7666,27 @@ impl SessionMessageUserType {
 /// Wire schema: `Session.Message.User`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMessageUser {
-    /// Wire field: `agents`.
-    #[serde(default, rename = "agents", skip_serializing_if = "Option::is_none")]
-    pub agents: Option<Vec<PromptAgentAttachment>>,
-    /// Wire field: `files`.
-    #[serde(default, rename = "files", skip_serializing_if = "Option::is_none")]
-    pub files: Option<Vec<PromptFileAttachment>>,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
     /// Wire field: `metadata`.
     #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
     pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `skills`.
-    #[serde(default, rename = "skills", skip_serializing_if = "Option::is_none")]
-    pub skills: Option<Vec<PromptSkillAttachment>>,
-    /// Wire field: `text`.
-    #[serde(rename = "text")]
-    pub text: String,
     /// Wire field: `time`.
     #[serde(rename = "time")]
     pub time: SessionMessageUserTime,
+    /// Wire field: `text`.
+    #[serde(rename = "text")]
+    pub text: String,
+    /// Wire field: `files`.
+    #[serde(default, rename = "files", skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<PromptFileAttachment>>,
+    /// Wire field: `agents`.
+    #[serde(default, rename = "agents", skip_serializing_if = "Option::is_none")]
+    pub agents: Option<Vec<PromptAgentAttachment>>,
+    /// Wire field: `skills`.
+    #[serde(default, rename = "skills", skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<PromptSkillAttachment>>,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: SessionMessageUserType,
@@ -7719,21 +7719,21 @@ impl SessionMessageSyntheticType {
 /// Wire schema: `Session.Message.Synthetic`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMessageSynthetic {
-    /// Wire field: `description`.
-    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
     /// Wire field: `metadata`.
     #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
     pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `text`.
-    #[serde(rename = "text")]
-    pub text: String,
     /// Wire field: `time`.
     #[serde(rename = "time")]
     pub time: SessionMessageSyntheticTime,
+    /// Wire field: `text`.
+    #[serde(rename = "text")]
+    pub text: String,
+    /// Wire field: `description`.
+    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: SessionMessageSyntheticType,
@@ -7766,24 +7766,24 @@ impl SessionMessageSystemType {
 /// Wire schema: `Session.Message.System`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMessageSystem {
-    /// Wire field: `description`.
-    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
     /// Wire field: `metadata`.
     #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
     pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `text`.
-    #[serde(rename = "text")]
-    pub text: String,
     /// Wire field: `time`.
     #[serde(rename = "time")]
     pub time: SessionMessageSystemTime,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: SessionMessageSystemType,
+    /// Wire field: `text`.
+    #[serde(rename = "text")]
+    pub text: String,
+    /// Wire field: `description`.
+    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -7819,21 +7819,71 @@ pub struct SessionMessageSkill {
     /// Wire field: `metadata`.
     #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
     pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `name`.
-    #[serde(rename = "name")]
-    pub name: String,
-    /// Wire field: `skill`.
-    #[serde(rename = "skill")]
-    pub skill: String,
-    /// Wire field: `text`.
-    #[serde(rename = "text")]
-    pub text: String,
     /// Wire field: `time`.
     #[serde(rename = "time")]
     pub time: SessionMessageSkillTime,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: SessionMessageSkillType,
+    /// Wire field: `skill`.
+    #[serde(rename = "skill")]
+    pub skill: String,
+    /// Wire field: `name`.
+    #[serde(rename = "name")]
+    pub name: String,
+    /// Wire field: `text`.
+    #[serde(rename = "text")]
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SessionMessageShellTime {
+    /// Wire field: `created`.
+    #[serde(rename = "created")]
+    pub created: f64,
+    /// Wire field: `completed`.
+    #[serde(default, rename = "completed", skip_serializing_if = "Option::is_none")]
+    pub completed: Option<f64>,
+}
+
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub enum SessionMessageShellType {
+    #[default]
+    #[serde(rename = "shell")]
+    Shell,
+}
+
+impl SessionMessageShellType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Shell => "shell",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum SessionMessageShellStatus {
+    #[serde(rename = "running")]
+    Running,
+    #[serde(rename = "exited")]
+    Exited,
+    #[serde(rename = "timeout")]
+    Timeout,
+    #[serde(rename = "killed")]
+    Killed,
+}
+
+impl SessionMessageShellStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Exited => "exited",
+            Self::Timeout => "timeout",
+            Self::Killed => "killed",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -7866,12 +7916,12 @@ pub enum SessionMessageShellExit {
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMessageShellOutput {
-    /// Wire field: `cursor`.
-    #[serde(rename = "cursor")]
-    pub cursor: i64,
     /// Wire field: `output`.
     #[serde(rename = "output")]
     pub output: String,
+    /// Wire field: `cursor`.
+    #[serde(rename = "cursor")]
+    pub cursor: i64,
     /// Wire field: `size`.
     #[serde(rename = "size")]
     pub size: i64,
@@ -7880,86 +7930,36 @@ pub struct SessionMessageShellOutput {
     pub truncated: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum SessionMessageShellStatus {
-    #[serde(rename = "running")]
-    Running,
-    #[serde(rename = "exited")]
-    Exited,
-    #[serde(rename = "timeout")]
-    Timeout,
-    #[serde(rename = "killed")]
-    Killed,
-}
-
-impl SessionMessageShellStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Running => "running",
-            Self::Exited => "exited",
-            Self::Timeout => "timeout",
-            Self::Killed => "killed",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SessionMessageShellTime {
-    /// Wire field: `completed`.
-    #[serde(default, rename = "completed", skip_serializing_if = "Option::is_none")]
-    pub completed: Option<f64>,
-    /// Wire field: `created`.
-    #[serde(rename = "created")]
-    pub created: f64,
-}
-
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
-)]
-pub enum SessionMessageShellType {
-    #[default]
-    #[serde(rename = "shell")]
-    Shell,
-}
-
-impl SessionMessageShellType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Shell => "shell",
-        }
-    }
-}
-
 /// Wire schema: `Session.Message.Shell`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMessageShell {
-    /// Wire field: `command`.
-    #[serde(rename = "command")]
-    pub command: String,
-    /// Wire field: `exit`.
-    #[serde(default, rename = "exit", skip_serializing_if = "Option::is_none")]
-    pub exit: Option<SessionMessageShellExit>,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
     /// Wire field: `metadata`.
     #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
     pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `output`.
-    #[serde(default, rename = "output", skip_serializing_if = "Option::is_none")]
-    pub output: Option<SessionMessageShellOutput>,
-    /// Wire field: `shellID`.
-    #[serde(rename = "shellID")]
-    pub shell_id: String,
-    /// Wire field: `status`.
-    #[serde(rename = "status")]
-    pub status: SessionMessageShellStatus,
     /// Wire field: `time`.
     #[serde(rename = "time")]
     pub time: SessionMessageShellTime,
     /// Wire field: `type`.
     #[serde(rename = "type")]
     pub type_: SessionMessageShellType,
+    /// Wire field: `shellID`.
+    #[serde(rename = "shellID")]
+    pub shell_id: String,
+    /// Wire field: `command`.
+    #[serde(rename = "command")]
+    pub command: String,
+    /// Wire field: `status`.
+    #[serde(rename = "status")]
+    pub status: SessionMessageShellStatus,
+    /// Wire field: `exit`.
+    #[serde(default, rename = "exit", skip_serializing_if = "Option::is_none")]
+    pub exit: Option<SessionMessageShellExit>,
+    /// Wire field: `output`.
+    #[serde(default, rename = "output", skip_serializing_if = "Option::is_none")]
+    pub output: Option<SessionMessageShellOutput>,
 }
 
 /// Wire schema: `Session.Message.Info`.
@@ -8028,12 +8028,12 @@ pub struct SessionBusyErrorEncoded {
     /// Wire field: `_tag`.
     #[serde(rename = "_tag")]
     pub tag: SessionBusyErrorEncodedTag,
-    /// Wire field: `message`.
-    #[serde(rename = "message")]
-    pub message: String,
     /// Wire field: `sessionID`.
     #[serde(rename = "sessionID")]
     pub session_id: String,
+    /// Wire field: `message`.
+    #[serde(rename = "message")]
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -8064,23 +8064,23 @@ pub type SessionLogItemEncoded = String;
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMessagesResponseCursor {
-    /// Wire field: `next`.
-    #[serde(default, rename = "next", skip_serializing_if = "Option::is_none")]
-    pub next: Option<String>,
     /// Wire field: `previous`.
     #[serde(default, rename = "previous", skip_serializing_if = "Option::is_none")]
     pub previous: Option<String>,
+    /// Wire field: `next`.
+    #[serde(default, rename = "next", skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
 }
 
 /// Wire schema: `SessionMessagesResponse`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMessagesResponse {
-    /// Wire field: `cursor`.
-    #[serde(rename = "cursor")]
-    pub cursor: SessionMessagesResponseCursor,
     /// Wire field: `data`.
     #[serde(rename = "data")]
     pub data: Vec<SessionMessageInfo>,
+    /// Wire field: `cursor`.
+    #[serde(rename = "cursor")]
+    pub cursor: SessionMessagesResponseCursor,
 }
 
 #[derive(
@@ -8106,12 +8106,12 @@ pub struct SessionNotFoundErrorEncoded {
     /// Wire field: `_tag`.
     #[serde(rename = "_tag")]
     pub tag: SessionNotFoundErrorEncodedTag,
-    /// Wire field: `message`.
-    #[serde(rename = "message")]
-    pub message: String,
     /// Wire field: `sessionID`.
     #[serde(rename = "sessionID")]
     pub session_id: String,
+    /// Wire field: `message`.
+    #[serde(rename = "message")]
+    pub message: String,
 }
 
 /// Wire schema: `SessionStats.Activity`.
@@ -8123,23 +8123,6 @@ pub struct SessionStatsActivity {
     /// Wire field: `steps`.
     #[serde(rename = "steps")]
     pub steps: i64,
-}
-
-/// Wire schema: `SessionStats.ModelUsage`.
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SessionStatsModelUsage {
-    /// Wire field: `cost`.
-    #[serde(rename = "cost")]
-    pub cost: MoneyUsd,
-    /// Wire field: `model`.
-    #[serde(rename = "model")]
-    pub model: ModelRef,
-    /// Wire field: `steps`.
-    #[serde(rename = "steps")]
-    pub steps: i64,
-    /// Wire field: `tokens`.
-    #[serde(rename = "tokens")]
-    pub tokens: TokenUsageInfo,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -8199,12 +8182,12 @@ pub struct SessionStatsToolTotals {
     /// Wire field: `calls`.
     #[serde(rename = "calls")]
     pub calls: i64,
-    /// Wire field: `failed`.
-    #[serde(rename = "failed")]
-    pub failed: i64,
     /// Wire field: `succeeded`.
     #[serde(rename = "succeeded")]
     pub succeeded: i64,
+    /// Wire field: `failed`.
+    #[serde(rename = "failed")]
+    pub failed: i64,
     /// Wire field: `unfinished`.
     #[serde(rename = "unfinished")]
     pub unfinished: i64,
@@ -8240,24 +8223,24 @@ impl SessionStatsToolsVariant3Mode {
 /// Wire schema: `SessionStats.ToolUsage`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionStatsToolUsage {
-    /// Wire field: `calls`.
-    #[serde(rename = "calls")]
-    pub calls: i64,
-    /// Wire field: `durationP50`.
-    #[serde(default, rename = "durationP50", skip_serializing_if = "Option::is_none")]
-    pub duration_p50: Option<f64>,
-    /// Wire field: `failed`.
-    #[serde(rename = "failed")]
-    pub failed: i64,
     /// Wire field: `name`.
     #[serde(rename = "name")]
     pub name: String,
+    /// Wire field: `calls`.
+    #[serde(rename = "calls")]
+    pub calls: i64,
     /// Wire field: `succeeded`.
     #[serde(rename = "succeeded")]
     pub succeeded: i64,
+    /// Wire field: `failed`.
+    #[serde(rename = "failed")]
+    pub failed: i64,
     /// Wire field: `unfinished`.
     #[serde(rename = "unfinished")]
     pub unfinished: i64,
+    /// Wire field: `durationP50`.
+    #[serde(default, rename = "durationP50", skip_serializing_if = "Option::is_none")]
+    pub duration_p50: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -8284,45 +8267,62 @@ pub enum SessionStatsTools {
     Detail(SessionStatsToolsVariant3),
 }
 
-/// Wire schema: `SessionStats.Info`.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct SessionStatsInfo {
-    /// Wire field: `activeDays`.
-    #[serde(rename = "activeDays")]
-    pub active_days: i64,
-    /// Wire field: `activity`.
-    #[serde(rename = "activity")]
-    pub activity: Vec<SessionStatsActivity>,
+/// Wire schema: `SessionStats.ModelUsage`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SessionStatsModelUsage {
+    /// Wire field: `model`.
+    #[serde(rename = "model")]
+    pub model: ModelRef,
+    /// Wire field: `steps`.
+    #[serde(rename = "steps")]
+    pub steps: i64,
+    /// Wire field: `tokens`.
+    #[serde(rename = "tokens")]
+    pub tokens: TokenUsageInfo,
     /// Wire field: `cost`.
     #[serde(rename = "cost")]
     pub cost: MoneyUsd,
-    /// Wire field: `models`.
-    #[serde(rename = "models")]
-    pub models: Vec<SessionStatsModelUsage>,
-    /// Wire field: `prompts`.
-    #[serde(rename = "prompts")]
-    pub prompts: i64,
+}
+
+/// Wire schema: `SessionStats.Info`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SessionStatsInfo {
     /// Wire field: `range`.
     #[serde(rename = "range")]
     pub range: SessionStatsInfoRange,
     /// Wire field: `sessions`.
     #[serde(rename = "sessions")]
     pub sessions: i64,
-    /// Wire field: `steps`.
-    #[serde(rename = "steps")]
-    pub steps: i64,
-    /// Wire field: `streak`.
-    #[serde(rename = "streak")]
-    pub streak: i64,
     /// Wire field: `subagents`.
     #[serde(rename = "subagents")]
     pub subagents: i64,
+    /// Wire field: `prompts`.
+    #[serde(rename = "prompts")]
+    pub prompts: i64,
+    /// Wire field: `steps`.
+    #[serde(rename = "steps")]
+    pub steps: i64,
     /// Wire field: `tokens`.
     #[serde(rename = "tokens")]
     pub tokens: TokenUsageInfo,
+    /// Wire field: `cost`.
+    #[serde(rename = "cost")]
+    pub cost: MoneyUsd,
     /// Wire field: `tools`.
     #[serde(rename = "tools")]
     pub tools: SessionStatsTools,
+    /// Wire field: `activeDays`.
+    #[serde(rename = "activeDays")]
+    pub active_days: i64,
+    /// Wire field: `streak`.
+    #[serde(rename = "streak")]
+    pub streak: i64,
+    /// Wire field: `activity`.
+    #[serde(rename = "activity")]
+    pub activity: Vec<SessionStatsActivity>,
+    /// Wire field: `models`.
+    #[serde(rename = "models")]
+    pub models: Vec<SessionStatsModelUsage>,
 }
 
 /// Wire schema: `SessionTransfer.Data`.
@@ -8338,23 +8338,23 @@ pub struct SessionTransferData {
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionsResponseCursor {
-    /// Wire field: `next`.
-    #[serde(default, rename = "next", skip_serializing_if = "Option::is_none")]
-    pub next: Option<String>,
     /// Wire field: `previous`.
     #[serde(default, rename = "previous", skip_serializing_if = "Option::is_none")]
     pub previous: Option<String>,
+    /// Wire field: `next`.
+    #[serde(default, rename = "next", skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
 }
 
 /// Wire schema: `SessionsResponse`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionsResponse {
-    /// Wire field: `cursor`.
-    #[serde(rename = "cursor")]
-    pub cursor: SessionsResponseCursor,
     /// Wire field: `data`.
     #[serde(rename = "data")]
     pub data: Vec<SessionInfo>,
+    /// Wire field: `cursor`.
+    #[serde(rename = "cursor")]
+    pub cursor: SessionsResponseCursor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -8382,47 +8382,47 @@ impl ShellInfoStatus {
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ShellInfoTime {
-    /// Wire field: `completed`.
-    #[serde(default, rename = "completed", skip_serializing_if = "Option::is_none")]
-    pub completed: Option<f64>,
     /// Start time in milliseconds since the Unix epoch
     #[serde(rename = "started")]
     pub started: f64,
+    /// Wire field: `completed`.
+    #[serde(default, rename = "completed", skip_serializing_if = "Option::is_none")]
+    pub completed: Option<f64>,
 }
 
 /// Wire schema: `Shell.Info`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ShellInfo {
+    /// Wire field: `id`.
+    #[serde(rename = "id")]
+    pub id: String,
+    /// Wire field: `status`.
+    #[serde(rename = "status")]
+    pub status: ShellInfoStatus,
     /// Wire field: `command`.
     #[serde(rename = "command")]
     pub command: String,
     /// Wire field: `cwd`.
     #[serde(rename = "cwd")]
     pub cwd: String,
-    /// Wire field: `exit`.
-    #[serde(default, rename = "exit", skip_serializing_if = "Option::is_none")]
-    pub exit: Option<f64>,
-    /// Wire field: `file`.
-    #[serde(rename = "file")]
-    pub file: String,
-    /// Wire field: `id`.
-    #[serde(rename = "id")]
-    pub id: String,
-    /// Wire field: `metadata`.
-    #[serde(rename = "metadata")]
-    pub metadata: std::collections::BTreeMap<String, serde_json::Value>,
-    /// Wire field: `pid`.
-    #[serde(default, rename = "pid", skip_serializing_if = "Option::is_none")]
-    pub pid: Option<i64>,
     /// Wire field: `shell`.
     #[serde(rename = "shell")]
     pub shell: String,
+    /// Wire field: `file`.
+    #[serde(rename = "file")]
+    pub file: String,
+    /// Wire field: `pid`.
+    #[serde(default, rename = "pid", skip_serializing_if = "Option::is_none")]
+    pub pid: Option<i64>,
+    /// Wire field: `exit`.
+    #[serde(default, rename = "exit", skip_serializing_if = "Option::is_none")]
+    pub exit: Option<f64>,
     /// Wire field: `signal`.
     #[serde(default, rename = "signal", skip_serializing_if = "Option::is_none")]
     pub signal: Option<String>,
-    /// Wire field: `status`.
-    #[serde(rename = "status")]
-    pub status: ShellInfoStatus,
+    /// Wire field: `metadata`.
+    #[serde(rename = "metadata")]
+    pub metadata: std::collections::BTreeMap<String, serde_json::Value>,
     /// Wire field: `time`.
     #[serde(rename = "time")]
     pub time: ShellInfoTime,
@@ -8462,24 +8462,24 @@ pub struct ShellNotFoundErrorEncoded {
 /// Wire schema: `Skill.Info`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SkillInfo {
-    /// Wire field: `autoinvoke`.
-    #[serde(default, rename = "autoinvoke", skip_serializing_if = "Option::is_none")]
-    pub autoinvoke: Option<bool>,
-    /// Wire field: `content`.
-    #[serde(rename = "content")]
-    pub content: String,
-    /// Wire field: `description`.
-    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
     /// Wire field: `name`.
     #[serde(rename = "name")]
     pub name: String,
+    /// Wire field: `description`.
+    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Wire field: `autoinvoke`.
+    #[serde(default, rename = "autoinvoke", skip_serializing_if = "Option::is_none")]
+    pub autoinvoke: Option<bool>,
     /// Wire field: `path`.
     #[serde(rename = "path")]
     pub path: String,
+    /// Wire field: `content`.
+    #[serde(rename = "content")]
+    pub content: String,
 }
 
 #[derive(
@@ -8505,12 +8505,12 @@ pub struct SkillNotFoundErrorEncoded {
     /// Wire field: `_tag`.
     #[serde(rename = "_tag")]
     pub tag: SkillNotFoundErrorEncodedTag,
-    /// Wire field: `message`.
-    #[serde(rename = "message")]
-    pub message: String,
     /// Wire field: `skill`.
     #[serde(rename = "skill")]
     pub skill: String,
+    /// Wire field: `message`.
+    #[serde(rename = "message")]
+    pub message: String,
 }
 
 #[derive(
@@ -8643,15 +8643,15 @@ impl VcsFileStatusStatus {
 /// Wire schema: `Vcs.FileStatus`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct VcsFileStatus {
+    /// Wire field: `file`.
+    #[serde(rename = "file")]
+    pub file: String,
     /// Wire field: `additions`.
     #[serde(rename = "additions")]
     pub additions: i64,
     /// Wire field: `deletions`.
     #[serde(rename = "deletions")]
     pub deletions: i64,
-    /// Wire field: `file`.
-    #[serde(rename = "file")]
-    pub file: String,
     /// Wire field: `status`.
     #[serde(rename = "status")]
     pub status: VcsFileStatusStatus,
@@ -8660,12 +8660,12 @@ pub struct VcsFileStatus {
 /// Wire schema: `Vcs.Info`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct VcsInfo {
-    /// Wire field: `branch`.
-    #[serde(rename = "branch")]
-    pub branch: VcsBranch,
     /// Wire field: `provider`.
     #[serde(default, rename = "provider", skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// Wire field: `branch`.
+    #[serde(rename = "branch")]
+    pub branch: VcsBranch,
 }
 
 /// Wire schema: `Vcs.Mode`.
@@ -8712,12 +8712,12 @@ pub struct VcsInitNotSupportedErrorEncoded {
     /// Wire field: `_tag`.
     #[serde(rename = "_tag")]
     pub tag: VcsInitNotSupportedErrorEncodedTag,
-    /// Wire field: `message`.
-    #[serde(rename = "message")]
-    pub message: String,
     /// Wire field: `providerID`.
     #[serde(rename = "providerID")]
     pub provider_id: String,
+    /// Wire field: `message`.
+    #[serde(rename = "message")]
+    pub message: String,
 }
 
 /// Wire schema: `WebSearch.Provider`.
@@ -8741,18 +8741,18 @@ pub struct WebSearchResultTime {
 /// Wire schema: `WebSearch.Result`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct WebSearchResult {
+    /// Wire field: `url`.
+    #[serde(rename = "url")]
+    pub url: String,
+    /// Wire field: `title`.
+    #[serde(default, rename = "title", skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Wire field: `content`.
     #[serde(default, rename = "content", skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
     /// Wire field: `time`.
     #[serde(rename = "time")]
     pub time: WebSearchResultTime,
-    /// Wire field: `title`.
-    #[serde(default, rename = "title", skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    /// Wire field: `url`.
-    #[serde(rename = "url")]
-    pub url: String,
 }
 
 /// Wire schema: `WebSearch.ResponseEncoded`.
@@ -8769,21 +8769,21 @@ pub struct WebSearchResponseEncoded {
 /// Wire schema: `Worktree.CreateInput`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct WorktreeCreateInput {
+    /// Wire field: `projectID`.
+    #[serde(rename = "projectID")]
+    pub project_id: String,
+    /// Wire field: `from`.
+    #[serde(default, rename = "from", skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
     /// Wire field: `branch`.
     #[serde(default, rename = "branch", skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
     /// Wire field: `directory`.
     #[serde(default, rename = "directory", skip_serializing_if = "Option::is_none")]
     pub directory: Option<String>,
-    /// Wire field: `from`.
-    #[serde(default, rename = "from", skip_serializing_if = "Option::is_none")]
-    pub from: Option<String>,
     /// Wire field: `name`.
     #[serde(default, rename = "name", skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Wire field: `projectID`.
-    #[serde(rename = "projectID")]
-    pub project_id: String,
 }
 
 /// Wire schema: `Worktree.Directory`.
@@ -8811,15 +8811,15 @@ pub type WorktreeList = Vec<WorktreeDirectory>;
 /// Wire schema: `Worktree.RemoveInput`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct WorktreeRemoveInput {
+    /// Wire field: `projectID`.
+    #[serde(rename = "projectID")]
+    pub project_id: String,
     /// Wire field: `directory`.
     #[serde(rename = "directory")]
     pub directory: String,
     /// Wire field: `force`.
     #[serde(rename = "force")]
     pub force: bool,
-    /// Wire field: `projectID`.
-    #[serde(rename = "projectID")]
-    pub project_id: String,
 }
 
 #[derive(
@@ -8839,16 +8839,6 @@ impl WorktreeErrorEncodedTag {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct WorktreeErrorEncodedData {
-    /// Wire field: `forceRequired`.
-    #[serde(default, rename = "forceRequired", skip_serializing_if = "Option::is_none")]
-    pub force_required: Option<bool>,
-    /// Wire field: `message`.
-    #[serde(rename = "message")]
-    pub message: String,
-}
-
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
 )]
@@ -8866,18 +8856,28 @@ impl WorktreeErrorEncodedName {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct WorktreeErrorEncodedData {
+    /// Wire field: `message`.
+    #[serde(rename = "message")]
+    pub message: String,
+    /// Wire field: `forceRequired`.
+    #[serde(default, rename = "forceRequired", skip_serializing_if = "Option::is_none")]
+    pub force_required: Option<bool>,
+}
+
 /// Wire schema: `WorktreeErrorEncoded`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct WorktreeErrorEncoded {
     /// Wire field: `_tag`.
     #[serde(rename = "_tag")]
     pub tag: WorktreeErrorEncodedTag,
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: WorktreeErrorEncodedData,
     /// Wire field: `name`.
     #[serde(rename = "name")]
     pub name: WorktreeErrorEncodedName,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: WorktreeErrorEncodedData,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -8889,12 +8889,12 @@ pub struct AgentListQuery {
 /// Response envelope for `agent.list`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AgentListResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Vec<AgentInfo>,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Vec<AgentInfo>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -8906,12 +8906,12 @@ pub struct AgentGetQuery {
 /// Response envelope for `agent.get`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AgentGetResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: AgentInfo,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: AgentInfo,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -8923,12 +8923,12 @@ pub struct CommandListQuery {
 /// Response envelope for `command.list`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CommandListResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Vec<CommandInfo>,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Vec<CommandInfo>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -8962,23 +8962,23 @@ pub struct ExperimentalFsWriteQuery {
 /// Response envelope for `experimental.fs.write`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ExperimentalFsWriteResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: FileSystemWrite,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: FileSystemWrite,
 }
 
 /// Request body for `experimental.generate.text`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ExperimentalGenerateTextBody {
-    /// Wire field: `model`.
-    #[serde(default, rename = "model", skip_serializing_if = "Option::is_none")]
-    pub model: Option<ModelRef>,
     /// Wire field: `prompt`.
     #[serde(rename = "prompt")]
     pub prompt: String,
+    /// Wire field: `model`.
+    #[serde(default, rename = "model", skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelRef>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9060,19 +9060,6 @@ pub struct ExperimentalMigrationV1StatusResponseVariant1 {
     pub status: ExperimentalMigrationV1StatusResponseVariant1Status,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ExperimentalMigrationV1StatusResponseVariant2Progress {
-    /// Wire field: `denominator`.
-    #[serde(default, rename = "denominator", skip_serializing_if = "Option::is_none")]
-    pub denominator: Option<i64>,
-    /// Wire field: `label`.
-    #[serde(rename = "label")]
-    pub label: String,
-    /// Wire field: `numerator`.
-    #[serde(default, rename = "numerator", skip_serializing_if = "Option::is_none")]
-    pub numerator: Option<i64>,
-}
-
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
 )]
@@ -9091,13 +9078,26 @@ impl ExperimentalMigrationV1StatusResponseVariant2Status {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ExperimentalMigrationV1StatusResponseVariant2Progress {
+    /// Wire field: `label`.
+    #[serde(rename = "label")]
+    pub label: String,
+    /// Wire field: `numerator`.
+    #[serde(default, rename = "numerator", skip_serializing_if = "Option::is_none")]
+    pub numerator: Option<i64>,
+    /// Wire field: `denominator`.
+    #[serde(default, rename = "denominator", skip_serializing_if = "Option::is_none")]
+    pub denominator: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ExperimentalMigrationV1StatusResponseVariant2 {
-    /// Wire field: `progress`.
-    #[serde(rename = "progress")]
-    pub progress: ExperimentalMigrationV1StatusResponseVariant2Progress,
     /// Wire field: `status`.
     #[serde(rename = "status")]
     pub status: ExperimentalMigrationV1StatusResponseVariant2Status,
+    /// Wire field: `progress`.
+    #[serde(rename = "progress")]
+    pub progress: ExperimentalMigrationV1StatusResponseVariant2Progress,
 }
 
 #[derive(
@@ -9119,12 +9119,12 @@ impl ExperimentalMigrationV1StatusResponseVariant3Status {
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ExperimentalMigrationV1StatusResponseVariant3 {
-    /// Wire field: `error`.
-    #[serde(rename = "error")]
-    pub error: String,
     /// Wire field: `status`.
     #[serde(rename = "status")]
     pub status: ExperimentalMigrationV1StatusResponseVariant3Status,
+    /// Wire field: `error`.
+    #[serde(rename = "error")]
+    pub error: String,
 }
 
 /// Untagged union; serde matches variants in declared order (wire schema `ExperimentalMigrationV1StatusResponse`).
@@ -9172,12 +9172,12 @@ pub struct ExperimentalSessionImportBody {
     /// Wire field: `info`.
     #[serde(rename = "info")]
     pub info: SessionInfo,
-    /// Wire field: `location`.
-    #[serde(default, rename = "location", skip_serializing_if = "Option::is_none")]
-    pub location: Option<LocationPublicRef>,
     /// Wire field: `messages`.
     #[serde(rename = "messages")]
     pub messages: Vec<SessionMessageInfo>,
+    /// Wire field: `location`.
+    #[serde(default, rename = "location", skip_serializing_if = "Option::is_none")]
+    pub location: Option<LocationPublicRef>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -9296,12 +9296,12 @@ pub struct FormListQuery {
 /// Response envelope for `form.list`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FormListResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Vec<FormInfo>,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Vec<FormInfo>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -9336,12 +9336,12 @@ pub struct FsFindQuery {
 /// Response envelope for `fs.find`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FsFindResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Vec<FileSystemEntry>,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Vec<FileSystemEntry>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9355,12 +9355,12 @@ pub struct FsListQuery {
 /// Response envelope for `fs.list`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FsListResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Vec<FileSystemEntry>,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Vec<FileSystemEntry>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9378,12 +9378,12 @@ pub struct IntegrationListQuery {
 /// Response envelope for `integration.list`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IntegrationListResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Vec<IntegrationInfo>,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Vec<IntegrationInfo>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9395,12 +9395,12 @@ pub struct IntegrationGetQuery {
 /// Response envelope for `integration.get`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IntegrationGetResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: IntegrationInfo,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: IntegrationInfo,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9412,23 +9412,23 @@ pub struct IntegrationCommandConnectQuery {
 /// Request body for `integration.command.connect`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IntegrationCommandConnectBody {
-    /// Wire field: `label`.
-    #[serde(default, rename = "label", skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
     /// Wire field: `methodID`.
     #[serde(rename = "methodID")]
     pub method_id: String,
+    /// Wire field: `label`.
+    #[serde(default, rename = "label", skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 /// Response envelope for `integration.command.connect`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IntegrationCommandConnectResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: IntegrationCommandAttempt,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: IntegrationCommandAttempt,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9446,12 +9446,12 @@ pub struct IntegrationCommandStatusQuery {
 /// Response envelope for `integration.command.status`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IntegrationCommandStatusResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: IntegrationCommandAttemptStatus,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: IntegrationCommandAttemptStatus,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9463,12 +9463,12 @@ pub struct IntegrationConnectKeyQuery {
 /// Request body for `integration.connect.key`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IntegrationConnectKeyBody {
-    /// Wire field: `answer`.
-    #[serde(default, rename = "answer", skip_serializing_if = "Option::is_none")]
-    pub answer: Option<FormAnswer>,
     /// Wire field: `key`.
     #[serde(rename = "key")]
     pub key: String,
+    /// Wire field: `answer`.
+    #[serde(default, rename = "answer", skip_serializing_if = "Option::is_none")]
+    pub answer: Option<FormAnswer>,
     /// Wire field: `label`.
     #[serde(default, rename = "label", skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
@@ -9483,26 +9483,26 @@ pub struct IntegrationOauthConnectQuery {
 /// Request body for `integration.oauth.connect`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IntegrationOauthConnectBody {
+    /// Wire field: `methodID`.
+    #[serde(rename = "methodID")]
+    pub method_id: String,
     /// Wire field: `answer`.
     #[serde(default, rename = "answer", skip_serializing_if = "Option::is_none")]
     pub answer: Option<FormAnswer>,
     /// Wire field: `label`.
     #[serde(default, rename = "label", skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    /// Wire field: `methodID`.
-    #[serde(rename = "methodID")]
-    pub method_id: String,
 }
 
 /// Response envelope for `integration.oauth.connect`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IntegrationOauthConnectResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: IntegrationAttemptEncoded,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: IntegrationAttemptEncoded,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9520,12 +9520,12 @@ pub struct IntegrationOauthStatusQuery {
 /// Response envelope for `integration.oauth.status`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct IntegrationOauthStatusResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: IntegrationAttemptStatus,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: IntegrationAttemptStatus,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9557,12 +9557,12 @@ pub struct McpListQuery {
 /// Response envelope for `mcp.list`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct McpListResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Vec<McpServer>,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Vec<McpServer>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9574,12 +9574,12 @@ pub struct McpResourceCatalogQuery {
 /// Response envelope for `mcp.resource.catalog`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct McpResourceCatalogResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: McpResourceCatalog,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: McpResourceCatalog,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9591,12 +9591,12 @@ pub struct ModelListQuery {
 /// Response envelope for `model.list`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ModelListResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Vec<ModelInfo>,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Vec<ModelInfo>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9608,12 +9608,12 @@ pub struct ModelDefaultQuery {
 /// Response envelope for `model.default`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ModelDefaultResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Option<ModelInfo>,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Option<ModelInfo>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9625,12 +9625,12 @@ pub struct PermissionRequestListQuery {
 /// Response envelope for `permission.request.list`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PermissionRequestListResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Vec<PermissionRequest>,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Vec<PermissionRequest>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9648,12 +9648,12 @@ pub struct PluginListQuery {
 /// Response envelope for `plugin.list`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PluginListResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Vec<PluginInfo>,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Vec<PluginInfo>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9673,12 +9673,12 @@ pub struct PluginCheckBody {
 /// Response envelope for `plugin.check`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PluginCheckResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Vec<PluginInfo>,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Vec<PluginInfo>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9715,15 +9715,15 @@ pub struct ProjectUpdateBody {
     /// Wire field: `canonical`.
     #[serde(default, rename = "canonical", skip_serializing_if = "Option::is_none")]
     pub canonical: Option<String>,
-    /// Wire field: `commands`.
-    #[serde(default, rename = "commands", skip_serializing_if = "Option::is_none")]
-    pub commands: Option<ProjectCommands>,
-    /// Wire field: `icon`.
-    #[serde(default, rename = "icon", skip_serializing_if = "Option::is_none")]
-    pub icon: Option<ProjectIcon>,
     /// Wire field: `name`.
     #[serde(default, rename = "name", skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Wire field: `icon`.
+    #[serde(default, rename = "icon", skip_serializing_if = "Option::is_none")]
+    pub icon: Option<ProjectIcon>,
+    /// Wire field: `commands`.
+    #[serde(default, rename = "commands", skip_serializing_if = "Option::is_none")]
+    pub commands: Option<ProjectCommands>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9735,12 +9735,12 @@ pub struct ProviderListQuery {
 /// Response envelope for `provider.list`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ProviderListResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Vec<ProviderInfo>,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Vec<ProviderInfo>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9752,12 +9752,12 @@ pub struct ProviderGetQuery {
 /// Response envelope for `provider.get`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ProviderGetResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: ProviderInfo,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: ProviderInfo,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9769,12 +9769,12 @@ pub struct PtyListQuery {
 /// Response envelope for `pty.list`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PtyListResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Vec<Pty>,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Vec<Pty>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9786,32 +9786,32 @@ pub struct PtyCreateQuery {
 /// Request body for `pty.create`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PtyCreateBody {
-    /// Wire field: `args`.
-    #[serde(default, rename = "args", skip_serializing_if = "Option::is_none")]
-    pub args: Option<Vec<String>>,
     /// Wire field: `command`.
     #[serde(default, rename = "command", skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// Wire field: `args`.
+    #[serde(default, rename = "args", skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
     /// Wire field: `cwd`.
     #[serde(default, rename = "cwd", skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
-    /// Wire field: `env`.
-    #[serde(default, rename = "env", skip_serializing_if = "Option::is_none")]
-    pub env: Option<std::collections::BTreeMap<String, String>>,
     /// Wire field: `title`.
     #[serde(default, rename = "title", skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Wire field: `env`.
+    #[serde(default, rename = "env", skip_serializing_if = "Option::is_none")]
+    pub env: Option<std::collections::BTreeMap<String, String>>,
 }
 
 /// Response envelope for `pty.create`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PtyCreateResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Pty,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Pty,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9829,12 +9829,12 @@ pub struct PtyGetQuery {
 /// Response envelope for `pty.get`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PtyGetResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Pty,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Pty,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9845,34 +9845,34 @@ pub struct PtyUpdateQuery {
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PtyUpdateBodySize {
-    /// Wire field: `cols`.
-    #[serde(rename = "cols")]
-    pub cols: i64,
     /// Wire field: `rows`.
     #[serde(rename = "rows")]
     pub rows: i64,
+    /// Wire field: `cols`.
+    #[serde(rename = "cols")]
+    pub cols: i64,
 }
 
 /// Request body for `pty.update`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PtyUpdateBody {
-    /// Wire field: `size`.
-    #[serde(default, rename = "size", skip_serializing_if = "Option::is_none")]
-    pub size: Option<PtyUpdateBodySize>,
     /// Wire field: `title`.
     #[serde(default, rename = "title", skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Wire field: `size`.
+    #[serde(default, rename = "size", skip_serializing_if = "Option::is_none")]
+    pub size: Option<PtyUpdateBodySize>,
 }
 
 /// Response envelope for `pty.update`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PtyUpdateResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Pty,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Pty,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9896,12 +9896,12 @@ pub struct PtyConnectTokenQuery {
 /// Response envelope for `pty.connect.token`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PtyConnectTokenResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: PtyTicketConnectToken,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: PtyTicketConnectToken,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9913,12 +9913,12 @@ pub struct ReferenceListQuery {
 /// Response envelope for `reference.list`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ReferenceListResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Vec<ReferenceInfo>,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Vec<ReferenceInfo>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -9967,44 +9967,44 @@ pub struct SessionListQuery {
 /// Request body for `session.create`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionCreateBody {
-    /// Wire field: `agent`.
-    #[serde(default, rename = "agent", skip_serializing_if = "Option::is_none")]
-    pub agent: Option<String>,
     /// Wire field: `id`.
     #[serde(default, rename = "id", skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// Wire field: `parentID`.
+    #[serde(default, rename = "parentID", skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    /// Wire field: `title`.
+    #[serde(default, rename = "title", skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Wire field: `agent`.
+    #[serde(default, rename = "agent", skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    /// Wire field: `model`.
+    #[serde(default, rename = "model", skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelRef>,
     /// Wire field: `location`.
     #[serde(default, rename = "location", skip_serializing_if = "Option::is_none")]
     pub location: Option<LocationPublicRef>,
     /// Wire field: `metadata`.
     #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
     pub metadata: Option<SessionMetadata>,
-    /// Wire field: `model`.
-    #[serde(default, rename = "model", skip_serializing_if = "Option::is_none")]
-    pub model: Option<ModelRef>,
-    /// Wire field: `parentID`.
-    #[serde(default, rename = "parentID", skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<String>,
     /// Wire field: `permissions`.
     #[serde(default, rename = "permissions", skip_serializing_if = "Option::is_none")]
     pub permissions: Option<PermissionRuleset>,
-    /// Wire field: `title`.
-    #[serde(default, rename = "title", skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
 }
 
 /// Request body for `session.update`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionUpdateBody {
+    /// Wire field: `title`.
+    #[serde(default, rename = "title", skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Wire field: `metadata`.
     #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
     pub metadata: Option<SessionMetadata>,
     /// Wire field: `permissions`.
     #[serde(default, rename = "permissions", skip_serializing_if = "Option::is_none")]
     pub permissions: Option<PermissionRuleset>,
-    /// Wire field: `title`.
-    #[serde(default, rename = "title", skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
 }
 
 /// Request body for `session.switchAgent`.
@@ -10018,35 +10018,35 @@ pub struct SessionSwitchAgentBody {
 /// Request body for `session.command`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionCommandBody {
-    /// Wire field: `agents`.
-    #[serde(default, rename = "agents", skip_serializing_if = "Option::is_none")]
-    pub agents: Option<Vec<PromptAgentAttachment>>,
-    /// Wire field: `delivery`.
-    #[serde(default, rename = "delivery", skip_serializing_if = "Option::is_none")]
-    pub delivery: Option<SessionInboxDelivery>,
-    /// Wire field: `files`.
-    #[serde(default, rename = "files", skip_serializing_if = "Option::is_none")]
-    pub files: Option<Vec<PromptInputFileAttachment>>,
     /// Wire field: `name`.
     #[serde(rename = "name")]
     pub name: String,
-    /// Wire field: `skills`.
-    #[serde(default, rename = "skills", skip_serializing_if = "Option::is_none")]
-    pub skills: Option<Vec<PromptInputSkillAttachment>>,
     /// Wire field: `text`.
     #[serde(rename = "text")]
     pub text: String,
+    /// Wire field: `files`.
+    #[serde(default, rename = "files", skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<PromptInputFileAttachment>>,
+    /// Wire field: `agents`.
+    #[serde(default, rename = "agents", skip_serializing_if = "Option::is_none")]
+    pub agents: Option<Vec<PromptAgentAttachment>>,
+    /// Wire field: `skills`.
+    #[serde(default, rename = "skills", skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<PromptInputSkillAttachment>>,
+    /// Wire field: `delivery`.
+    #[serde(default, rename = "delivery", skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<SessionInboxDelivery>,
 }
 
 /// Request body for `session.compact`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionCompactBody {
-    /// Wire field: `delivery`.
-    #[serde(default, rename = "delivery", skip_serializing_if = "Option::is_none")]
-    pub delivery: Option<SessionInboxDelivery>,
     /// Wire field: `id`.
     #[serde(default, rename = "id", skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// Wire field: `delivery`.
+    #[serde(default, rename = "delivery", skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<SessionInboxDelivery>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -10201,48 +10201,48 @@ pub struct SessionSwitchModelBody {
 /// Request body for `session.move`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMoveBody {
-    /// Wire field: `delivery`.
-    #[serde(default, rename = "delivery", skip_serializing_if = "Option::is_none")]
-    pub delivery: Option<SessionInboxDelivery>,
     /// Wire field: `directory`.
     #[serde(rename = "directory")]
     pub directory: String,
+    /// Wire field: `delivery`.
+    #[serde(default, rename = "delivery", skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<SessionInboxDelivery>,
 }
 
 /// Request body for `session.permission.create`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionPermissionCreateBody {
-    /// Wire field: `action`.
-    #[serde(rename = "action")]
-    pub action: String,
-    /// Wire field: `agent`.
-    #[serde(default, rename = "agent", skip_serializing_if = "Option::is_none")]
-    pub agent: Option<String>,
     /// Wire field: `id`.
     #[serde(default, rename = "id", skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-    /// Wire field: `metadata`.
-    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+    /// Wire field: `action`.
+    #[serde(rename = "action")]
+    pub action: String,
     /// Wire field: `resources`.
     #[serde(rename = "resources")]
     pub resources: Vec<String>,
     /// Wire field: `save`.
     #[serde(default, rename = "save", skip_serializing_if = "Option::is_none")]
     pub save: Option<Vec<String>>,
+    /// Wire field: `metadata`.
+    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
     /// Wire field: `source`.
     #[serde(default, rename = "source", skip_serializing_if = "Option::is_none")]
     pub source: Option<PermissionSource>,
+    /// Wire field: `agent`.
+    #[serde(default, rename = "agent", skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionPermissionCreateResponseData {
-    /// Wire field: `effect`.
-    #[serde(rename = "effect")]
-    pub effect: PermissionEffect,
     /// Wire field: `id`.
     #[serde(rename = "id")]
     pub id: String,
+    /// Wire field: `effect`.
+    #[serde(rename = "effect")]
+    pub effect: PermissionEffect,
 }
 
 /// Request body for `session.permission.reply`.
@@ -10259,75 +10259,75 @@ pub struct SessionPermissionReplyBody {
 /// Request body for `session.prompt`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionPromptBody {
-    /// Wire field: `agents`.
-    #[serde(default, rename = "agents", skip_serializing_if = "Option::is_none")]
-    pub agents: Option<Vec<PromptAgentAttachment>>,
-    /// Wire field: `delivery`.
-    #[serde(default, rename = "delivery", skip_serializing_if = "Option::is_none")]
-    pub delivery: Option<SessionInboxDelivery>,
-    /// Wire field: `files`.
-    #[serde(default, rename = "files", skip_serializing_if = "Option::is_none")]
-    pub files: Option<Vec<PromptInputFileAttachment>>,
     /// Wire field: `id`.
     #[serde(default, rename = "id", skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-    /// Wire field: `metadata`.
-    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `resume`.
-    #[serde(default, rename = "resume", skip_serializing_if = "Option::is_none")]
-    pub resume: Option<bool>,
-    /// Wire field: `skills`.
-    #[serde(default, rename = "skills", skip_serializing_if = "Option::is_none")]
-    pub skills: Option<Vec<PromptInputSkillAttachment>>,
     /// Wire field: `text`.
     #[serde(rename = "text")]
     pub text: String,
+    /// Wire field: `files`.
+    #[serde(default, rename = "files", skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<PromptInputFileAttachment>>,
+    /// Wire field: `agents`.
+    #[serde(default, rename = "agents", skip_serializing_if = "Option::is_none")]
+    pub agents: Option<Vec<PromptAgentAttachment>>,
+    /// Wire field: `skills`.
+    #[serde(default, rename = "skills", skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<PromptInputSkillAttachment>>,
+    /// Wire field: `metadata`.
+    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+    /// Wire field: `delivery`.
+    #[serde(default, rename = "delivery", skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<SessionInboxDelivery>,
+    /// Wire field: `resume`.
+    #[serde(default, rename = "resume", skip_serializing_if = "Option::is_none")]
+    pub resume: Option<bool>,
 }
 
 /// Request body for `session.revert.stage`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionRevertStageBody {
-    /// Wire field: `files`.
-    #[serde(default, rename = "files", skip_serializing_if = "Option::is_none")]
-    pub files: Option<bool>,
     /// Wire field: `messageID`.
     #[serde(rename = "messageID")]
     pub message_id: String,
+    /// Wire field: `files`.
+    #[serde(default, rename = "files", skip_serializing_if = "Option::is_none")]
+    pub files: Option<bool>,
 }
 
 /// Request body for `session.shell`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionShellBody {
-    /// Wire field: `command`.
-    #[serde(rename = "command")]
-    pub command: String,
     /// Wire field: `id`.
     #[serde(default, rename = "id", skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// Wire field: `command`.
+    #[serde(rename = "command")]
+    pub command: String,
 }
 
 /// Request body for `session.synthetic`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SessionSyntheticBody {
-    /// Wire field: `delivery`.
-    #[serde(default, rename = "delivery", skip_serializing_if = "Option::is_none")]
-    pub delivery: Option<SessionInboxDelivery>,
-    /// Wire field: `description`.
-    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
     /// Wire field: `id`.
     #[serde(default, rename = "id", skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-    /// Wire field: `metadata`.
-    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
-    /// Wire field: `resume`.
-    #[serde(default, rename = "resume", skip_serializing_if = "Option::is_none")]
-    pub resume: Option<bool>,
     /// Wire field: `text`.
     #[serde(rename = "text")]
     pub text: String,
+    /// Wire field: `description`.
+    #[serde(default, rename = "description", skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Wire field: `metadata`.
+    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+    /// Wire field: `delivery`.
+    #[serde(default, rename = "delivery", skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<SessionInboxDelivery>,
+    /// Wire field: `resume`.
+    #[serde(default, rename = "resume", skip_serializing_if = "Option::is_none")]
+    pub resume: Option<bool>,
 }
 
 /// Request body for `session.view`.
@@ -10347,12 +10347,12 @@ pub struct ShellListQuery {
 /// Response envelope for `shell.list`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ShellListResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Vec<ShellInfo>,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Vec<ShellInfo>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -10370,23 +10370,23 @@ pub struct ShellCreateBody {
     /// Wire field: `cwd`.
     #[serde(default, rename = "cwd", skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
-    /// Wire field: `metadata`.
-    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
     /// Wire field: `timeout`.
     #[serde(default, rename = "timeout", skip_serializing_if = "Option::is_none")]
     pub timeout: Option<i64>,
+    /// Wire field: `metadata`.
+    #[serde(default, rename = "metadata", skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<std::collections::BTreeMap<String, serde_json::Value>>,
 }
 
 /// Response envelope for `shell.create`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ShellCreateResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: ShellInfo,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: ShellInfo,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -10404,12 +10404,12 @@ pub struct ShellGetQuery {
 /// Response envelope for `shell.get`.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ShellGetResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: ShellInfo,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: ShellInfo,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -10424,12 +10424,12 @@ pub struct ShellOutputQuery {
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ShellOutputResponseData {
-    /// Wire field: `cursor`.
-    #[serde(rename = "cursor")]
-    pub cursor: i64,
     /// Wire field: `output`.
     #[serde(rename = "output")]
     pub output: String,
+    /// Wire field: `cursor`.
+    #[serde(rename = "cursor")]
+    pub cursor: i64,
     /// Wire field: `size`.
     #[serde(rename = "size")]
     pub size: i64,
@@ -10441,12 +10441,12 @@ pub struct ShellOutputResponseData {
 /// Response envelope for `shell.output`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ShellOutputResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: ShellOutputResponseData,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: ShellOutputResponseData,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -10458,12 +10458,12 @@ pub struct SkillListQuery {
 /// Response envelope for `skill.list`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SkillListResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Vec<SkillInfo>,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Vec<SkillInfo>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -10475,12 +10475,12 @@ pub struct VcsGetQuery {
 /// Response envelope for `vcs.get`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct VcsGetResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: VcsInfo,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: VcsInfo,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -10492,12 +10492,12 @@ pub struct VcsBaseQuery {
 /// Response envelope for `vcs.base`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct VcsBaseResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Option<VcsBase>,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Option<VcsBase>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -10513,12 +10513,12 @@ pub struct VcsBranchListQuery {
 /// Response envelope for `vcs.branch.list`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct VcsBranchListResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: VcsBranchList,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: VcsBranchList,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -10536,12 +10536,12 @@ pub struct VcsDiffQuery {
 /// Response envelope for `vcs.diff`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct VcsDiffResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Vec<FileDiffInfo>,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Vec<FileDiffInfo>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -10561,12 +10561,12 @@ pub struct VcsStatusQuery {
 /// Response envelope for `vcs.status`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct VcsStatusResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Vec<VcsFileStatus>,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Vec<VcsFileStatus>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -10578,23 +10578,23 @@ pub struct WebsearchQueryQuery {
 /// Request body for `websearch.query`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct WebsearchQueryBody {
-    /// Wire field: `providerID`.
-    #[serde(default, rename = "providerID", skip_serializing_if = "Option::is_none")]
-    pub provider_id: Option<String>,
     /// Wire field: `query`.
     #[serde(rename = "query")]
     pub query: String,
+    /// Wire field: `providerID`.
+    #[serde(default, rename = "providerID", skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
 }
 
 /// Response envelope for `websearch.query`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct WebsearchQueryResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: WebSearchResponseEncoded,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: WebSearchResponseEncoded,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -10606,12 +10606,12 @@ pub struct WebsearchProvidersQuery {
 /// Response envelope for `websearch.providers`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct WebsearchProvidersResponse {
-    /// Wire field: `data`.
-    #[serde(rename = "data")]
-    pub data: Vec<WebSearchProvider>,
     /// Wire field: `location`.
     #[serde(rename = "location")]
     pub location: LocationPublicRef,
+    /// Wire field: `data`.
+    #[serde(rename = "data")]
+    pub data: Vec<WebSearchProvider>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
