@@ -1,5 +1,6 @@
 //! SSE data layer on `oc-client`: a [`Connection`] with reconnect
-//! (exponential backoff), the G-300 **connect/idle watchdog** (a 2s
+//! (fixed 1s delay, attempt reset after a stable connection — ref
+//! `connection.ts`), the G-300 **connect/idle watchdog** (a 2s
 //! connect+first-frame window, a `server.connected` first-frame
 //! assertion, and a 45s per-read idle deadline — ref
 //! `connection.ts`), **resync on reconnect** (session re-fetch +
@@ -281,11 +282,16 @@ pub enum Ingest {
     },
 }
 
-/// Reconnect/backoff configuration.
+/// Reconnect configuration.
 #[derive(Debug, Clone)]
 pub struct ConnectionConfig {
-    pub backoff_base: Duration,
-    pub backoff_max: Duration,
+    /// G-458 — the FIXED reconnect delay (ref `reconnectDelay` 1s,
+    /// connection.ts:33): every retry waits exactly this long (no
+    /// exponential ladder), and a connection that stayed up for at
+    /// least this long resets the attempt counter
+    /// (connection.ts:158), so the next failure starts over at
+    /// attempt 1.
+    pub reconnect_delay: Duration,
     /// Give up (report [`ConnectionState::Failed`]) after this many
     /// attempts; `None` retries forever.
     pub max_attempts: Option<u32>,
@@ -306,25 +312,11 @@ pub struct ConnectionConfig {
 impl Default for ConnectionConfig {
     fn default() -> Self {
         Self {
-            backoff_base: Duration::from_millis(500),
-            backoff_max: Duration::from_secs(8),
+            reconnect_delay: Duration::from_secs(1),
             max_attempts: None,
             connect_timeout: Duration::from_secs(2),
             idle_timeout: Duration::from_secs(45),
         }
-    }
-}
-
-impl ConnectionConfig {
-    /// Backoff before attempt `n` (1-based): base · 2^(n-1), capped.
-    /// Millisecond magnitudes stay far below 2^23; the u128→u64 casts
-    /// cannot truncate real inputs.
-    #[must_use]
-    pub fn backoff(&self, attempt: u32) -> Duration {
-        let factor = 2u64.saturating_pow(attempt.saturating_sub(1).min(16));
-        let base = u64::try_from(self.backoff_base.as_millis()).unwrap_or(u64::MAX / 2);
-        let max = u64::try_from(self.backoff_max.as_millis()).unwrap_or(u64::MAX);
-        Duration::from_millis((base * factor).min(max))
     }
 }
 
@@ -1039,7 +1031,8 @@ pub fn message_from_info(
 }
 
 /// The SSE connection state machine: subscribe, relay, reconnect with
-/// backoff, resync on reconnect, feed one ordered ingest channel.
+/// a fixed 1s delay (attempt reset after a stable connection), resync
+/// on reconnect, feed one ordered ingest channel.
 ///
 /// Gate-9 finding 6 wiring:
 ///
@@ -1155,7 +1148,11 @@ impl Connection {
                 {
                     return;
                 }
-                tokio::time::sleep(self.config.backoff(self.attempts - 1)).await;
+                // G-458 — the retry delay is the FIXED 1s
+                // `reconnectDelay` (connection.ts:33/181), not an
+                // exponential ladder: a weak network reconnects every
+                // second, same as the ref.
+                tokio::time::sleep(self.config.reconnect_delay).await;
             }
             // Resubscription carries the tracked cursor as the SSE
             // `Last-Event-ID` header: a cursor-aware server resumes the
@@ -1223,6 +1220,14 @@ impl Connection {
             if tx.send(Ingest::Connected).await.is_err() {
                 return;
             }
+            // G-458 — record when the connection came up: on its end,
+            // a connection that stayed healthy for at least
+            // `reconnectDelay` resets the attempt counter (ref
+            // `connectedAt`, connection.ts:158 —
+            // `Date.now() - result.connectedAt >= reconnectDelay`
+            // → `attempt = 0`), so the next failure retries after the
+            // base 1s instead of a climbed ladder.
+            let connected_at = tokio::time::Instant::now();
             if !connected.id.is_empty() {
                 self.cursor = Some(connected.id.clone());
             }
@@ -1262,7 +1267,13 @@ impl Connection {
                 }
             }
             // Stream end, decode error, or watchdog stall — all fall
-            // through and reconnect.
+            // through and reconnect. G-458: a connection that was
+            // stable for at least `reconnectDelay` resets the attempt
+            // counter (connection.ts:158); only consecutive failures
+            // (or sub-second flaps) keep it climbing.
+            if connected_at.elapsed() >= self.config.reconnect_delay {
+                self.attempts = 0;
+            }
         }
     }
 }
@@ -1291,19 +1302,154 @@ mod tests {
         assert!(connected.is_server_connected());
     }
 
-    #[test]
-    fn backoff_is_exponential_and_capped() {
-        let config = ConnectionConfig {
-            backoff_base: Duration::from_millis(500),
-            backoff_max: Duration::from_secs(8),
-            max_attempts: None,
-            ..Default::default()
-        };
-        assert_eq!(config.backoff(1), Duration::from_millis(500));
-        assert_eq!(config.backoff(2), Duration::from_millis(1000));
-        assert_eq!(config.backoff(3), Duration::from_millis(2000));
-        assert_eq!(config.backoff(5), Duration::from_millis(8000), "capped at max");
-        assert_eq!(config.backoff(50), Duration::from_millis(8000));
+    /// G-458 ① — the retry delay is FIXED (`reconnectDelay`,
+    /// connection.ts:33/181): consecutive failures keep waiting the
+    /// same 1s (test: 50 ms), never an exponential ladder. The server
+    /// rejects every `/api/event` subscribe; the gaps between the
+    /// `Reconnecting` observations must stay flat (an exponential
+    /// ladder would push the 4th interval past 3.5× the base).
+    #[tokio::test]
+    async fn reconnect_delay_is_fixed_not_exponential() {
+        use std::sync::{Arc, Mutex};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let (mut reader, _) = socket.split();
+                let mut request = vec![0u8; 8192];
+                let _ = reader.read(&mut request).await;
+                // Every subscribe fails → the loop retries forever.
+                let _ = socket
+                    .write_all(b"HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+                    .await;
+            }
+        });
+
+        let delay = Duration::from_millis(50);
+        let client = oc_client::Client::new(&format!("http://{addr}")).expect("client");
+        let fetcher = HttpResync::new(client.clone());
+        let connection = Connection::with_config(
+            client,
+            ConnectionConfig {
+                reconnect_delay: delay,
+                max_attempts: Some(5),
+                ..Default::default()
+            },
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let runner = tokio::spawn(connection.run(tx, fetcher));
+
+        let stamps: Arc<Mutex<Vec<tokio::time::Instant>>> = Arc::new(Mutex::new(Vec::new()));
+        let stamps_rx = Arc::clone(&stamps);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while stamps_rx.lock().expect("stamps").len() < 4 {
+            let Some(message) = tokio::time::timeout_at(deadline, rx.recv()).await.expect("deadline")
+            else {
+                break;
+            };
+            if let Ingest::Connection(ConnectionState::Reconnecting { attempt }) = message {
+                assert!(attempt >= 2, "retries are 2-based: {attempt}");
+                stamps_rx.lock().expect("stamps").push(tokio::time::Instant::now());
+            }
+        }
+        let _ = runner.await;
+        server.abort();
+
+        let stamps = stamps.lock().expect("stamps").clone();
+        assert!(stamps.len() >= 4, "need ≥4 retries, got {}", stamps.len());
+        let intervals: Vec<Duration> =
+            stamps.windows(2).map(|pair| pair[1] - pair[0]).collect::<Vec<_>>();
+        for interval in &intervals {
+            assert!(
+                *interval < delay * 7 / 2,
+                "a retry waited {interval:?} — the delay must stay flat at {delay:?}, \
+                 not climb (intervals: {intervals:?})"
+            );
+        }
+    }
+
+    /// G-458 ② — a connection stable for ≥ `reconnectDelay` RESETS
+    /// the attempt counter (ref `connectedAt`, connection.ts:158):
+    /// after the first (stable) stream drops, the next attempt is
+    /// attempt 1 again — no `Reconnecting` overlay and no climbed
+    /// delay. Without the reset the reconnect would publish
+    /// `Reconnecting { attempt: 2 }` between the two connections.
+    #[tokio::test]
+    async fn stable_connection_resets_attempt_counter() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let server = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                // Concurrent per-connection handling: the resync's
+                // /api/session fetch must not queue behind this
+                // socket's 90 ms hold (a sequential accept would drop
+                // the event stream before the client even publishes
+                // Connected, and the stability window would measure
+                // zero).
+                tokio::spawn(async move {
+                    let (mut reader, _) = socket.split();
+                    let mut request = vec![0u8; 8192];
+                    let _ = reader.read(&mut request).await;
+                    // Handshake marker, then a stream that stays open well
+                    // past the (30 ms) reconnect delay before EOF.
+                    let body = sse_frame("e1", "server.connected", "{}");
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{body}"
+                    );
+                    let _ = socket.write_all(head.as_bytes()).await;
+                    tokio::time::sleep(Duration::from_millis(90)).await;
+                    // EOF — the connection was stable ≥ reconnect_delay.
+                });
+            }
+        });
+
+        let client = oc_client::Client::new(&format!("http://{addr}")).expect("client");
+        let fetcher = HttpResync::new(client.clone());
+        let connection = Connection::with_config(
+            client,
+            ConnectionConfig {
+                reconnect_delay: Duration::from_millis(30),
+                max_attempts: None,
+                ..Default::default()
+            },
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let runner = tokio::spawn(connection.run(tx, fetcher));
+
+        let mut observed = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let mut connected = 0;
+        while connected < 2 {
+            let Some(message) = tokio::time::timeout_at(deadline, rx.recv()).await.expect("deadline")
+            else {
+                break;
+            };
+            if matches!(message, Ingest::Connected) {
+                connected += 1;
+            }
+            observed.push(message);
+        }
+        runner.abort();
+        server.abort();
+
+        assert_eq!(connected, 2, "two full connections: {observed:?}");
+        assert!(
+            observed
+                .iter()
+                .all(|message| !matches!(message, Ingest::Connection(_))),
+            "a stable (≥ reconnect_delay) connection resets the attempt counter — \
+             the second connect is attempt 1 with no Reconnecting overlay: {observed:?}"
+        );
     }
 
     #[test]
@@ -1429,8 +1575,7 @@ mod tests {
         let connection = Connection::with_config(
             client.clone(),
             ConnectionConfig {
-                backoff_base: Duration::from_millis(10),
-                backoff_max: Duration::from_millis(10),
+                reconnect_delay: Duration::from_millis(10),
                 max_attempts: Some(2),
                 connect_timeout: Duration::from_secs(2),
                 idle_timeout: Duration::from_secs(45),
@@ -1627,8 +1772,7 @@ mod tests {
         let connection = Connection::with_config(
             client,
             ConnectionConfig {
-                backoff_base: Duration::from_millis(10),
-                backoff_max: Duration::from_millis(10),
+                reconnect_delay: Duration::from_millis(10),
                 max_attempts: Some(2),
                 connect_timeout: Duration::from_secs(2),
                 idle_timeout: Duration::from_secs(45),
@@ -1835,8 +1979,7 @@ mod tests {
         let connection = Connection::with_config(
             client,
             ConnectionConfig {
-                backoff_base: Duration::from_millis(10),
-                backoff_max: Duration::from_millis(10),
+                reconnect_delay: Duration::from_millis(10),
                 max_attempts: Some(2),
                 connect_timeout: Duration::from_secs(2),
                 idle_timeout: Duration::from_secs(45),
@@ -1980,8 +2123,7 @@ mod tests {
         let connection = Connection::with_config(
             client,
             ConnectionConfig {
-                backoff_base: Duration::from_millis(10),
-                backoff_max: Duration::from_millis(10),
+                reconnect_delay: Duration::from_millis(10),
                 max_attempts: Some(2),
                 connect_timeout: Duration::from_secs(2),
                 idle_timeout: Duration::from_secs(45),
@@ -2087,8 +2229,7 @@ mod tests {
         let connection = Connection::with_config(
             client.clone(),
             ConnectionConfig {
-                backoff_base: Duration::from_millis(10),
-                backoff_max: Duration::from_millis(10),
+                reconnect_delay: Duration::from_millis(10),
                 max_attempts: Some(2),
                 connect_timeout: Duration::from_millis(150),
                 idle_timeout: Duration::from_secs(45),
@@ -2194,8 +2335,7 @@ mod tests {
         let connection = Connection::with_config(
             client,
             ConnectionConfig {
-                backoff_base: Duration::from_millis(10),
-                backoff_max: Duration::from_millis(10),
+                reconnect_delay: Duration::from_millis(10),
                 max_attempts: Some(2),
                 connect_timeout: Duration::from_secs(2),
                 idle_timeout: Duration::from_secs(45),
@@ -2294,7 +2434,13 @@ mod tests {
                                 .map(|value| value.trim().to_owned())
                         });
                         cursors.lock().expect("cursor log").push(cursor);
-                        if first {
+                        if connections >= 3 {
+                            // Connections 3+ always fail the subscribe:
+                            // the retry ladder climbs to max_attempts.
+                            let _ = socket
+                                .write_all(b"HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+                                .await;
+                        } else if first {
                             // Handshake, then SILENCE — the socket stays
                             // open with no further frames (the stall).
                             let body = sse_frame("e1", "server.connected", "{}");
@@ -2304,12 +2450,17 @@ mod tests {
                             let _ = socket.write_all(response.as_bytes()).await;
                             tokio::time::sleep(Duration::from_secs(3600)).await;
                         } else {
+                            // Connection 2: handshake + live event, then
+                            // SILENCE too — its stall (also ≥ the 10 ms
+                            // reconnect delay) resets the attempt counter
+                            // just like connection 1's.
                             let body = sse_frame("c2", "server.connected", "{}")
                                 + &sse_frame("e3", "message.updated", "{\"sessionID\":\"s1\"}");
                             let response = format!(
-                                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{body}"
+                                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n{body}"
                             );
                             let _ = socket.write_all(response.as_bytes()).await;
+                            tokio::time::sleep(Duration::from_secs(3600)).await;
                         }
                     } else if path.starts_with("/api/session") {
                         let body = session_list_body();
@@ -2331,8 +2482,7 @@ mod tests {
         let connection = Connection::with_config(
             client,
             ConnectionConfig {
-                backoff_base: Duration::from_millis(10),
-                backoff_max: Duration::from_millis(10),
+                reconnect_delay: Duration::from_millis(10),
                 max_attempts: Some(2),
                 connect_timeout: Duration::from_secs(2),
                 idle_timeout: Duration::from_millis(150),
@@ -2346,7 +2496,7 @@ mod tests {
 
         let mut observed = Vec::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        while observed.len() < 8 {
+        while observed.len() < 10 {
             let Some(message) =
                 tokio::time::timeout_at(deadline, rx.recv()).await.expect("deadline")
             else {
@@ -2357,31 +2507,48 @@ mod tests {
         let _ = runner.await;
         server.abort();
 
-        // Connection 1: resync + handshake, then the stall → the
-        // reconnect transition; connection 2: resync + handshake + the
-        // live event.
-        assert_eq!(observed.len(), 8, "observed: {observed:?}");
+        // G-458 note: connection 1 stalls AFTER being stable ≥ the
+        // 10 ms reconnect delay, so the attempt counter RESETS
+        // (connection.ts:158) and the reconnect is SILENT (attempt 1,
+        // no overlay). Connection 2 does the same; only the always-500
+        // connections 3+ climb the ladder to `Failed`.
+        assert_eq!(observed.len(), 10, "observed: {observed:?}");
         assert!(matches!(&observed[0], Ingest::Resync { .. }), "{observed:?}");
         assert!(matches!(observed[1], Ingest::Connected), "{observed:?}");
         assert!(
             matches!(&observed[2], Ingest::Event(event) if event.id == "e1" && event.type_ == "server.connected"),
             "{observed:?}"
         );
+        // The watchdog stall followed the reconnect path — silently,
+        // because the stalled connection was stable ≥ reconnect_delay.
+        assert!(
+            matches!(&observed[3], Ingest::Resync { .. }),
+            "stable-stall reconnect must not publish a Reconnecting overlay: {observed:?}"
+        );
+        assert!(matches!(observed[4], Ingest::Connected), "{observed:?}");
+        assert!(matches!(&observed[5], Ingest::Event(event) if event.id == "c2"), "{observed:?}");
+        assert!(matches!(&observed[6], Ingest::Event(event) if event.id == "e3"), "{observed:?}");
+        // Connection 2's stall also resets; the 500-failures then climb
+        // 1 → 2 (overlay) → 3 (> max_attempts → Failed).
         assert!(
             matches!(
-                &observed[3],
+                &observed[7],
                 Ingest::Connection(ConnectionState::Reconnecting { attempt: 2 })
             ),
-            "the watchdog stall followed the reconnect path: {observed:?}"
+            "{observed:?}"
         );
-        assert!(matches!(&observed[4], Ingest::Resync { .. }), "{observed:?}");
-        assert!(matches!(observed[5], Ingest::Connected), "{observed:?}");
-        assert!(matches!(&observed[6], Ingest::Event(event) if event.id == "c2"), "{observed:?}");
-        assert!(matches!(&observed[7], Ingest::Event(event) if event.id == "e3"), "{observed:?}");
+        assert!(
+            matches!(
+                &observed[8],
+                Ingest::Connection(ConnectionState::Reconnecting { attempt: 3 })
+            ),
+            "{observed:?}"
+        );
+        assert!(matches!(observed[9], Ingest::Connection(ConnectionState::Failed)), "{observed:?}");
         // The watchdog-triggered resubscribe carried the tracked cursor.
         let cursors = seen_cursors.lock().expect("cursor log").clone();
         assert_eq!(
-            cursors,
+            cursors[..2.min(cursors.len())].to_vec(),
             vec![None, Some("e1".to_owned())],
             "Last-Event-ID resume survived the stall"
         );

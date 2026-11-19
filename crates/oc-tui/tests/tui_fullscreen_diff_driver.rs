@@ -830,8 +830,7 @@ async fn tui_fullscreen_diff_driver() {
             let (ingest_rx, connection_task, open_sessions) = spawn_connection(
                 client.clone(),
                 ConnectionConfig {
-                    backoff_base: Duration::from_millis(10),
-                    backoff_max: Duration::from_millis(10),
+                    reconnect_delay: Duration::from_millis(10),
                     max_attempts: None,
                     connect_timeout: Duration::from_secs(5),
                     idle_timeout: Duration::from_secs(600),
