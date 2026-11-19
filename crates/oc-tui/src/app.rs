@@ -9166,6 +9166,21 @@ pub async fn run_with_size(
                         }
                     }
                 }
+                // G-459 — the lone-ESC timeout window's pump-side arm
+                // (opentui StdinParser's 20 ms force-flush,
+                // stdin-parser.ts:113/826-876): an incomplete unit a
+                // later tick still cannot reassemble flushes here as
+                // one final event (a lone ESC → the escape key). The
+                // 50 ms poll(2) tick bounds the window's granularity —
+                // every tick is ≥ the 20 ms window, so a pending unit
+                // resolves on the first tick past its arm. Input-parse
+                // layer only; the pump cadence and wait_deadline faces
+                // (G-456/G-457) are untouched.
+                for event in pipeline.flush_timeout() {
+                    if event_tx.blocking_send(event).is_err() {
+                        return;
+                    }
+                }
                 // The resize watch (B3a: check_resize on the 50 ms
                 // tick; ≤50 ms latency, B3b revisits).
                 let resized = if let Ok(mut terminal) = session.lock() {
@@ -11092,6 +11107,12 @@ pub async fn run_with_size(
             if graphics.as_ref().is_some_and(|caps| caps.kitty_graphics || caps.sixel) {
                 let _ = out.write_all(crate::terminal_proto::KITTY_GRAPHICS_DELETE_ALL);
             }
+            // G-460 — the exit title reset (ref util/renderer.ts:3-7:
+            // `destroyRenderer` writes `setTerminalTitle("")` before
+            // `destroy`). UNCONDITIONAL on teardown, unlike the draw
+            // seam's change-gated OSC 0 emitter — the terminal title
+            // must not outlive the session as a stale "OC | …".
+            let _ = out.write_all(&crate::terminal_proto::osc_title_sequence(""));
             let _ = out.flush();
         }
         // D2.1b — the session Terminal's teardown epilogue now rides

@@ -15,9 +15,13 @@
 //! over the same read chunks. The two gaps that forced this split:
 //!
 //! * a lone `ESC` never resolves inside `CliRenderer::feed_bytes`
-//!   (`complete_unit_len`: "lone ESC(s): timeout resolution"), while
-//!   crossterm flushed it at read-chunk end — the pipeline flushes
-//!   all-ESC pending at chunk end for parity;
+//!   (`complete_unit_len`: "lone ESC(s): timeout resolution") — the
+//!   pipeline owns the same timeout window itself (G-459): an
+//!   incomplete unit stays pending armed with a 20 ms window
+//!   (opentui `StdinParser`'s `DEFAULT_TIMEOUT_MS`, stdin-parser.ts
+//!   :113); bytes arriving within the window reassemble (chunk-shape
+//!   invariance), and only a window that elapses force-flushes the
+//!   prefix as one final event (a lone ESC → the escape key);
 //! * a headless renderer drains mouse sequences into its (empty)
 //!   renderable tree with no consumer surface — the pipeline
 //!   intercepts them with opentui's public `MouseParser` first.
@@ -226,13 +230,28 @@ fn plain_key_spec(name: &str) -> Option<String> {
 
 /// The adapter's own feed state machine over raw read chunks: mouse
 /// interception, bracketed-paste collection, focus sequences, and key
-/// units (with the lone-ESC chunk-end flush crossterm had).
+/// units (with the lone-ESC timeout window of opentui's `StdinParser`).
 #[derive(Default)]
 pub struct KeyPipeline {
     pending: Vec<u8>,
     mouse: opentui_core::parse_mouse::MouseParser,
     paste: Option<opentui_core::paste::BracketedPasteCollector>,
+    /// G-459 — when the pending incomplete unit was (re)armed. The
+    /// force-flush window: opentui's `StdinParser` re-arms
+    /// `pendingSinceMs` at every chunk end that still ends mid-unit
+    /// (`markPending`, stdin-parser.ts:1005-1011) and force-flushes
+    /// once `now - pendingSinceMs >= timeoutMs`
+    /// (`flushTimeout`, stdin-parser.ts:826-838) with
+    /// `DEFAULT_TIMEOUT_MS = 20` (stdin-parser.ts:113).
+    pending_since: Option<std::time::Instant>,
 }
+
+/// G-459 — the lone-ESC/incomplete-unit force-flush window, opentui's
+/// `DEFAULT_TIMEOUT_MS` (stdin-parser.ts:113). The app input thread's
+/// 50 ms poll tick bounds the window's granularity from above: any
+/// pending unit is flushed on the first tick ≥ 20 ms after its arm,
+/// and bytes arriving within the window reassemble first.
+const UNIT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(20);
 
 impl KeyPipeline {
     #[must_use]
@@ -240,15 +259,52 @@ impl KeyPipeline {
         Self::default()
     }
 
-    /// Process one read chunk into app events (in order).
+    /// Process one read chunk into app events (in order). A chunk
+    /// that ends mid-unit leaves the unit pending armed with the
+    /// timeout window — the next call after the window elapses
+    /// force-flushes it first (opentui's `read()` re-scan arm,
+    /// stdin-parser.ts:789-802), so every consumer of this pipeline
+    /// resolves lone ESCs without a separate ticker.
     pub fn process(&mut self, bytes: &[u8]) -> Vec<TermEvent> {
-        let mut events = Vec::new();
-        if bytes.is_empty() {
-            return events;
+        // A prior window that already elapsed flushes BEFORE the new
+        // bytes parse (the forceFlush → read() ordering, stdin-parser
+        // .ts:606-609: the timeout sets the flag, the next read()
+        // converts the incomplete unit into its final event).
+        let mut events = self.flush_timeout();
+        if !bytes.is_empty() {
+            self.pending.extend_from_slice(bytes);
+            self.drain(&mut events);
+            // `markPending` parity (stdin-parser.ts:1005-1011): a
+            // chunk end that still ends mid-unit (re)arms the window
+            // from now; a fully drained buffer disarms it. Empty
+            // poll ticks never re-arm (the arm survives from the
+            // chunk that left the unit incomplete).
+            self.pending_since = (!self.pending.is_empty()).then(std::time::Instant::now);
         }
-        self.pending.extend_from_slice(bytes);
-        self.drain(&mut events);
-        self.flush_lone_escape(&mut events);
+        events
+    }
+
+    /// G-459 — the timeout force-flush (`flushTimeout` +
+    /// `forceFlush`, stdin-parser.ts:826-876): once the window elapses
+    /// with the unit still incomplete, the pending prefix emits as
+    /// ONE final atomic event (a lone ESC → the escape key — the esc
+    /// state's forceFlush arm, stdin-parser.ts:1005-1015). Within the
+    /// window this is a no-op, so a later chunk reassembles the unit
+    /// instead (chunk-shape invariance, stdin-parser.ts:583-586).
+    pub fn flush_timeout(&mut self) -> Vec<TermEvent> {
+        let mut events = Vec::new();
+        let armed = self
+            .pending_since
+            .is_some_and(|since| std::time::Instant::now().duration_since(since) >= UNIT_TIMEOUT);
+        if armed && !self.pending.is_empty() {
+            let unit = std::mem::take(&mut self.pending);
+            if let Some(event) = Self::key_event(&unit) {
+                events.push(event);
+            }
+        }
+        if self.pending.is_empty() {
+            self.pending_since = None;
+        }
         events
     }
 
@@ -285,6 +341,38 @@ impl KeyPipeline {
                 self.pending.drain(..len);
                 continue;
             }
+            // G-459 follow-up — the window's coalescing case: a
+            // lone-ESC prefix held INSIDE the timeout window followed
+            // by a mouse sequence (the click landed within 20 ms of
+            // the ESC's read). Ref recovers the delayed `[<...M/m`
+            // continuation after a timeout flush (`esc_recovery`,
+            // stdin-parser.ts:920-934, 1087-1120) — the same recovery
+            // applies pre-flush: the ESC prefix resolves as the
+            // escape key, the mouse sequence as mouse events. Without
+            // this, `ESC ESC [ <...m` would parse as one opaque CSI
+            // unit and drop the click. The mouse sequence's OWN
+            // leading ESC is the last of the ESC run — the prefix is
+            // everything before it.
+            let mut esc_run = 0;
+            while self.pending.get(esc_run) == Some(&0x1b) {
+                esc_run += 1;
+            }
+            if esc_run > 1 && self.pending.len() > esc_run - 1 {
+                let seq_at = esc_run - 1;
+                if let Some(len) = self.mouse.parse_mouse_sequence_len(&self.pending, seq_at) {
+                    let prefix: Vec<u8> = self.pending.drain(..seq_at).collect();
+                    if let Some(event) = Self::key_event(&prefix) {
+                        events.push(event);
+                    }
+                    let sequence: Vec<u8> = self.pending.drain(..len).collect();
+                    for raw in self.mouse.parse_all_mouse_events(&sequence) {
+                        if let Some(event) = convert_mouse(&raw) {
+                            events.push(TermEvent::Mouse(event));
+                        }
+                    }
+                    continue;
+                }
+            }
             // Terminal focus sequences.
             if self.pending.starts_with(b"\x1b[I") {
                 self.pending.drain(..3);
@@ -301,18 +389,6 @@ impl KeyPipeline {
                 return;
             };
             let unit: Vec<u8> = self.pending.drain(..unit_len).collect();
-            if let Some(event) = Self::key_event(&unit) {
-                events.push(event);
-            }
-        }
-    }
-
-    /// The crossterm lone-ESC parity flush: a read chunk that ENDS on
-    /// bare `ESC` byte(s) resolves to the escape key immediately
-    /// (crossterm's `input_available=false` arm), never held pending.
-    fn flush_lone_escape(&mut self, events: &mut Vec<TermEvent>) {
-        if !self.pending.is_empty() && self.pending.iter().all(|b| *b == 0x1b) {
-            let unit = std::mem::take(&mut self.pending);
             if let Some(event) = Self::key_event(&unit) {
                 events.push(event);
             }
@@ -388,8 +464,8 @@ fn convert_mouse(raw: &opentui_core::parse_mouse::RawMouseEvent) -> Option<Mouse
 /// while incomplete — the semantics of opentui's (private)
 /// `complete_unit_len`, ported so the adapter can pre-split units:
 /// single ASCII bytes, `ESC`-introduced sequences, complete UTF-8
-/// codepoints. Lone `ESC`s report incomplete (the caller's chunk-end
-/// flush resolves them).
+/// codepoints. Lone `ESC`s report incomplete (the caller's timeout
+/// window — [`KeyPipeline::flush_timeout`] — resolves them).
 fn complete_unit_len(data: &[u8]) -> Option<usize> {
     let first = *data.first()?;
     if first != 0x1b {
@@ -481,7 +557,6 @@ mod tests {
         assert_eq!(first_key(b"("), Some("(".to_owned()));
         assert_eq!(first_key(b"\r"), Some("return".to_owned()));
         assert_eq!(first_key(b"\n"), Some("\n".to_owned()));
-        assert_eq!(first_key(b"\x1b"), Some("escape".to_owned()));
         assert_eq!(first_key(b"\x7f"), Some("backspace".to_owned()));
         assert_eq!(first_key(b"\t"), Some("tab".to_owned()));
         assert_eq!(first_key(b"\x1b[Z"), Some("shift+tab".to_owned()));
@@ -583,21 +658,112 @@ mod tests {
         assert_eq!(events, vec![TermEvent::Paste("hello world".to_owned())]);
     }
 
-    /// The lone-ESC flush: an ESC-final chunk resolves immediately, a
-    /// split sequence across chunks resolves once complete.
+    /// G-459 — the lone-ESC timeout window (opentui `StdinParser`:
+    /// `DEFAULT_TIMEOUT_MS = 20`, stdin-parser.ts:113; a lone ESC
+    /// resolves via timeout, stdin-parser.ts:583-586). Within the
+    /// window an incomplete unit holds pending (split sequences
+    /// reassemble, Alt-chord prefixes are not eaten); once it elapses
+    /// the prefix flushes as one final event.
     #[test]
-    fn lone_escape_flushes_at_chunk_end() {
+    fn lone_escape_resolves_via_timeout_window() {
+        // (1) A CSI sequence split across two reads reassembles — no
+        // false Escape at the first chunk boundary.
         let mut pipeline = KeyPipeline::new();
-        assert_eq!(pipeline.process(b"\x1b"), vec![TermEvent::Key("escape".to_owned())]);
-        let mut pipeline = KeyPipeline::new();
-        assert!(pipeline.process(b"\x1b[").is_empty(), "incomplete CSI holds");
+        assert!(pipeline.process(b"\x1b[").is_empty(), "incomplete CSI holds (no false escape)");
+        assert!(pipeline.flush_timeout().is_empty(), "within the window nothing flushes");
         assert_eq!(pipeline.process(b"A"), vec![TermEvent::Key("up".to_owned())]);
-        // ESC + key in ONE chunk is the alt+key chord (two-byte unit)
+
+        // (2) A true lone ESC: holds within the window, then the
+        // force-flush emits the escape key.
+        let mut pipeline = KeyPipeline::new();
+        assert!(pipeline.process(b"\x1b").is_empty(), "lone ESC holds inside the window");
+        assert!(pipeline.flush_timeout().is_empty(), "the window has not elapsed yet");
+        std::thread::sleep(UNIT_TIMEOUT + std::time::Duration::from_millis(10));
+        assert_eq!(pipeline.flush_timeout(), vec![TermEvent::Key("escape".to_owned())]);
+
+        // (3) ESC + key split across reads INSIDE the window: the
+        // prefix is an Alt-chord prefix, not a swallowed escape —
+        // the next chunk completes the two-byte unit.
+        let mut pipeline = KeyPipeline::new();
+        assert_eq!(pipeline.process(b"\x1b"), Vec::new());
+        assert_eq!(pipeline.process(b"x"), vec![TermEvent::Key("alt+x".to_owned())]);
+
+        // ESC + key in ONE chunk is the same alt+key chord.
         let mut pipeline = KeyPipeline::new();
         assert_eq!(pipeline.process(b"\x1bx"), vec![TermEvent::Key("alt+x".to_owned())]);
-        // ESC alone then the key in the NEXT chunk: escape fired first
+
+        // The empty poll tick never re-arms the window, and once the
+        // window elapses the NEXT process() call flushes the unit
+        // first (the read() re-scan arm, stdin-parser.ts:789-802) —
+        // consumers without a separate flush ticker still resolve.
         let mut pipeline = KeyPipeline::new();
-        assert_eq!(pipeline.process(b"\x1b"), vec![TermEvent::Key("escape".to_owned())]);
-        assert_eq!(pipeline.process(b"x"), vec![TermEvent::Key("x".to_owned())]);
+        assert_eq!(pipeline.process(b"\x1b"), Vec::new());
+        assert!(pipeline.process(b"").is_empty(), "inside the window the idle tick holds");
+        std::thread::sleep(UNIT_TIMEOUT + std::time::Duration::from_millis(10));
+        assert_eq!(pipeline.process(b""), vec![TermEvent::Key("escape".to_owned())]);
+
+        // After the flush the arm disarms: a later lone ESC starts a
+        // fresh window instead of flushing immediately.
+        let mut pipeline = KeyPipeline::new();
+        assert_eq!(pipeline.process(b"\x1b"), Vec::new());
+        std::thread::sleep(UNIT_TIMEOUT + std::time::Duration::from_millis(10));
+        assert_eq!(pipeline.flush_timeout(), vec![TermEvent::Key("escape".to_owned())]);
+        assert!(pipeline.process(b"\x1b").is_empty(), "the next lone ESC re-arms");
+        assert!(pipeline.flush_timeout().is_empty(), "its window starts over");
+    }
+
+    /// G-459 follow-up — the window's coalescing recovery: a mouse
+    /// sequence landing within the window of a held lone ESC (the
+    /// `ESC ESC [ <...m` shape) recovers as escape + mouse events
+    /// (ref's delayed `[<...M/m` continuation recovery, `esc_recovery`
+    /// stdin-parser.ts:920-934, 1087-1120) instead of one opaque CSI
+    /// unit that drops the click.
+    #[test]
+    fn mouse_sequence_within_esc_window_recovers() {
+        // The ESC chunk holds (in-window), the SGR release chunk
+        // coalesces onto it: escape + Up(Left) both surface.
+        let mut pipeline = KeyPipeline::new();
+        assert_eq!(pipeline.process(b"\x1b"), Vec::new());
+        let events = pipeline.process(b"\x1b[<0;4;23m");
+        assert_eq!(events[0], TermEvent::Key("escape".to_owned()));
+        assert!(matches!(
+            &events[1],
+            TermEvent::Mouse(mouse) if mouse.kind == MouseEventKind::Up(MouseButton::Left)
+                && mouse.column == 3 && mouse.row == 22
+        ));
+        assert_eq!(events.len(), 2);
+
+        // The direct (un-prefixed) mouse route is unchanged.
+        let mut pipeline = KeyPipeline::new();
+        assert!(matches!(pipeline.process(b"\x1b[<0;4;23m").as_slice(), [TermEvent::Mouse(_)]));
+
+        // An incomplete coalesced mouse sequence still holds pending.
+        let mut pipeline = KeyPipeline::new();
+        assert_eq!(pipeline.process(b"\x1b"), Vec::new());
+        assert_eq!(pipeline.process(b"\x1b[<0;4"), Vec::new());
+        assert_eq!(
+            pipeline.process(b";23m"),
+            vec![
+                TermEvent::Key("escape".to_owned()),
+                TermEvent::Mouse(MouseEvent {
+                    kind: MouseEventKind::Up(MouseButton::Left),
+                    column: 3,
+                    row: 22,
+                    modifiers: KeyModifiers::empty(),
+                }),
+            ]
+        );
+
+        // A NON-mouse ESC ESC CSI (e.g. a delayed arrow after a held
+        // ESC) still takes the CSI-unit path — no false mouse
+        // recovery, no dropped events beyond the pre-existing
+        // ESC-prefixed-CSI parse.
+        let mut pipeline = KeyPipeline::new();
+        assert_eq!(pipeline.process(b"\x1b"), Vec::new());
+        let events = pipeline.process(b"\x1b[A");
+        assert!(
+            events.iter().all(|event| !matches!(event, TermEvent::Mouse(_))),
+            "no mouse recovery without a mouse sequence"
+        );
     }
 }
