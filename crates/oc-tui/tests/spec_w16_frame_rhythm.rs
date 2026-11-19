@@ -85,11 +85,8 @@ fn audit(tag: &str, stamps: &[u64]) -> (u64, u64, f64, u64, usize, usize) {
 fn w16_frame_rhythm_thinking_stream() {
     let _lock = pty_lock();
     let _sandbox = sandbox_env("w16rhythm");
-    let no_stream = std::env::var("OC_W16_NO_STREAM").ok().as_deref() == Some("1");
     let fake = FakeLlm::spawn(standard_sessions());
-    if !no_stream {
-        fake.arm_script(streaming_thinking_script("ses_alpha", "count very slowly indeed"));
-    }
+    fake.arm_script(streaming_thinking_script("ses_alpha", "count very slowly indeed"));
     let harness = LiveHarness::attach(80, 24);
     let mut driver = harness.handle();
     let result: Arc<Mutex<Option<Result<(), String>>>> = Arc::new(Mutex::new(None));
@@ -105,11 +102,9 @@ fn w16_frame_rhythm_thinking_stream() {
                 if !driver.wait_for(b"Alpha", Duration::from_secs(5)) {
                     return Err("tab title never painted".into());
                 }
-                if !no_stream {
-                    driver.write(b"count very slowly indeed\r");
-                    if !driver.wait_for(b"Thinking", Duration::from_secs(5)) {
-                        return Err("streaming turn never showed its Thinking row".into());
-                    }
+                driver.write(b"count very slowly indeed\r");
+                if !driver.wait_for(b"Thinking", Duration::from_secs(5)) {
+                    return Err("streaming turn never showed its Thinking row".into());
                 }
                 // Phase A (quiet): let the spinner animate alone for
                 // the first half of the window — the pure tick-cadence
@@ -119,19 +114,12 @@ fn w16_frame_rhythm_thinking_stream() {
                 // work per keystroke — the "typing × streaming" cell,
                 // the heaviest steady-state iteration mix).
                 let began = std::time::Instant::now();
-                // G-456 diagnostics: the typing cadence is env-tunable
-                // (`OC_W16_TYPE_MS`, default 120) for the beat-frequency
-                // scan; `OC_W16_NO_STREAM=1` skips arming the scripted
-                // streaming turn below (the fetch-source bisection —
-                // typing with NO SSE/session-fetch activity).
-                let type_ms: u64 =
-                    std::env::var("OC_W16_TYPE_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(120);
                 let mut i = 0usize;
                 while began.elapsed() < Duration::from_millis(WINDOW_MS / 2) {
                     let ch = b"the quick brown fox jumps over"[i % 30];
                     driver.write(&[ch]);
                     i += 1;
-                    std::thread::sleep(Duration::from_millis(type_ms));
+                    std::thread::sleep(Duration::from_millis(120));
                 }
                 // Hold the session live briefly past the window (the
                 // scripted turn keeps streaming), then exit.
@@ -151,8 +139,8 @@ fn w16_frame_rhythm_thinking_stream() {
     // Wait for the Thinking row (the spinner is animating from here),
     // then let the window elapse and read the flush stream once.
     let started = std::time::Instant::now();
-    let mut thinking = no_stream;
-    while !no_stream && started.elapsed() < Duration::from_secs(20) {
+    let mut thinking = false;
+    while started.elapsed() < Duration::from_secs(20) {
         std::thread::sleep(Duration::from_millis(50));
         let handle = harness.handle();
         let vt = handle.vt.lock().expect("vt");
@@ -195,13 +183,12 @@ fn w16_frame_rhythm_thinking_stream() {
     let (q_a, mx_a, sd_a, med_a, t250_a, t400_a) = audit("quiet", &phase_a);
     let (q_b, mx_b, sd_b, med_b, t250_b, t400_b) = audit("typing", &phase_b);
     // No-stall baseline shape: no long-tail gap in EITHER phase and a
-    // bounded p95. The W16 anchor experiment (work-compensated wait,
-    // the ref's renderer.ts:4772-4801 model) made the QUIET phase
-    // near-perfect (σ 0.9 ms) but introduced ~390 ms typing-phase
-    // stalls at a ~609 ms period — this test's typing phase is the
-    // regression pin for exactly that (the anchor stays out until its
-    // stall is root-caused; see the W16 lane report + app.rs's wait
-    // comment).
+    // bounded p95. The W15/W16 anchor experiments' typing stalls were
+    // never reproducible against the G-456 landing (the work-
+    // compensated anchor, DEFAULT ON since G-456 — quiet σ 2-3 ms,
+    // typing unchanged; the historical stalls attribute to the W16
+    // lane's since-removed trace writes, see the app.rs wait-site
+    // comment) — this typing phase is the standing regression pin.
     assert!(
         t400_a == 0 && t400_b == 0,
         "long-tail flush gap while the spinner animates (max {mx_a}/{mx_b} ms) — the un-paced work+tick stacking"
