@@ -620,8 +620,7 @@ fn c3_probe_script_delivery() {
     let conn = oc_tui::data::Connection::with_config(
         client.clone(),
         oc_tui::data::ConnectionConfig {
-            backoff_base: Duration::from_millis(10),
-            backoff_max: Duration::from_millis(10),
+            reconnect_delay: Duration::from_millis(10),
             max_attempts: Some(3),
             ..oc_tui::data::ConnectionConfig::default()
         },
