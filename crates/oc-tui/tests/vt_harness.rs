@@ -289,10 +289,15 @@ pub struct VtStream {
 
 impl VtStream {
     /// Default quiet window (ms): bursts separated by more than this
-    /// are distinct snapshots. 80 ms keeps the 100 ms-tick animation
-    /// bursts (spinner/caret) in separate snapshots while merging the
-    /// chunks of one logical frame paint.
-    pub const DEFAULT_QUIET_MS: u64 = 80;
+    /// are distinct snapshots. 70 keeps animation bursts in separate
+    /// snapshots while merging the chunks of one logical frame paint —
+    /// G-457: the live loop now pins the busy-spinner flushes to the
+    /// spinner's own 80 ms grid (the ref's `<spinner>` cadence), so
+    /// the window must sit strictly under 80 ms or every animation
+    /// frame merges into one giant snapshot (the pre-G-457 100 ms
+    /// tick made 80 safe; an exact-80 window never closes at
+    /// exact-80 gaps).
+    pub const DEFAULT_QUIET_MS: u64 = 70;
 
     #[must_use]
     pub fn new(cols: usize, rows: usize) -> Self {

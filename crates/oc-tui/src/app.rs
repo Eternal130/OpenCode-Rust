@@ -10439,6 +10439,41 @@ pub async fn run_with_size(
         let now_ms = system_now_ms();
         let passed_boundary = crate::components::session_tabs_solid::marquee_passed_step(now_ms);
         let marquee_deadline = crate::components::session_tabs_solid::marquee_next_step(now_ms);
+        // G-457 — the busy spinner's frame-boundary pin. The ref's
+        // `<spinner>` self-schedules at its own interval
+        // (opentui-spinner 0.0.7's scheduler advances + requestRender
+        // per frame); the port's frame index derives from the store
+        // clock sampled at repaint, and the plain 100 ms tick BEATS
+        // against the 80 ms dots interval — frames skip visibly (the
+        // beta.20 "跑马灯/思考指示卡顿" A/B: ref smooth, rust janky).
+        // While any tab runs, pin the clock to each spinner boundary
+        // exactly like the marquee pin below (one boundary per wake).
+        let spinner_interval = if app.store.animations_enabled() {
+            let busy = app
+                .store
+                .strip_tabs_ordered()
+                .iter()
+                .any(|tab| app.store.session_busy(&tab.session_id));
+            busy.then(|| app.store.tabs_indicator_config().spinner.interval_ms().max(1))
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let spinner_boundary_after_clock =
+            (spinner_interval > 0).then(|| (app.store.clock() / spinner_interval + 1) * spinner_interval);
+        let passed_boundary = match (passed_boundary, spinner_boundary_after_clock) {
+            (Some(marquee), Some(spinner)) => Some(if marquee < spinner { marquee } else { spinner })
+                .filter(|b| *b <= now_ms),
+            (Some(marquee), None) => Some(marquee),
+            (None, Some(spinner)) => Some(spinner).filter(|b| *b <= now_ms),
+            (None, None) => None,
+        };
+        let wait_deadline = match (marquee_deadline, spinner_boundary_after_clock) {
+            (Some(marquee), Some(spinner)) => Some(marquee.min(spinner.max(now_ms))),
+            (Some(marquee), None) => Some(marquee),
+            (None, Some(spinner)) => Some(spinner.max(now_ms + 1)),
+            (None, None) => None,
+        };
         let mut ticked = false;
         if let Some(boundary) = passed_boundary.filter(|boundary| *boundary > app.store.clock()) {
             app.store.advance_clock(boundary);
@@ -10829,7 +10864,7 @@ pub async fn run_with_size(
         // now DEFAULT ON with `OC_TUI_TICK_ANCHOR=0` as the escape
         // hatch (measured: quiet median 101/p95 102/σ 2-3 ms vs the
         // plain poll's 110/111/9.1; typing unchanged at 120/122).
-        let wait_ms = match marquee_deadline {
+        let wait_ms = match wait_deadline {
             Some(deadline) => (deadline.saturating_sub(now_ms)).clamp(1, 100),
             None if tick_anchor_enabled() => u64::try_from(
                 (frame_anchor + std::time::Duration::from_millis(100))
