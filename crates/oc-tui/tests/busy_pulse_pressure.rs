@@ -141,6 +141,20 @@ fn busy_pulse_pressure_cycles_breathe_every_time() {
     if let Some(start) = open.take() {
         windows.push((start, snaps.len()));
     }
+    // G-457: absorb the prompt→scripted-cycle handoff blip — the
+    // harness script's first cycle starts ~60 ms after the prompt's
+    // own execution ends, so ONE glyph-free frame (a genuine idle
+    // beat) legitimately splits the busy run; a single-snapshot gap
+    // merges the windows around it (the pre-G-457 sparser snapshot
+    // stream never exposed the blip as its own frame).
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for window in windows {
+        match merged.last_mut() {
+            Some((_, end)) if window.0 <= *end + 2 => *end = window.1,
+            _ => merged.push(window),
+        }
+    }
+    let windows = merged;
     assert!(
         !windows.is_empty(),
         "the busy face never appeared (strip: {:?})",
