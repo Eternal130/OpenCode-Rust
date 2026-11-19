@@ -23,12 +23,13 @@
 
 | 波 | 族 | 状态 |
 |---|---|---|
-| MF-1 | 渲染管线 / 时序调度 / 状态同步 / 插件桥机制 / 终端控制 / 文本布局 / 配置装载 / 键盘 / 剪贴板 / 进程拓扑 | 进行中（oracle 只读审计） |
+| MF-1 | 渲染管线 / 时序调度 / 状态同步 / 插件桥机制 / 终端控制 / 文本布局 / 配置装载 / 键盘 / 剪贴板 / 进程拓扑 | **完成**（2026-11-19，oracle 只读审计；报告 .superpowers/sdd/mf1/report.md） |
+| MF-1b（可选） | components/* 对话框组件级机制、prompt/*、theme/* | 未开——组件级非机制族，控制者视需排 |
 | MF-2 | 鼠标滚轮 / 选区 / spinner 动画 / omo 侧栏渲染 | 待 G-457 合并后复审（活动面，禁双写） |
 
 ## 条目
 
-（MF-1 报告回收后填充；已知种子如下）
+MF-1 主表见报告；此处维护跨波索引（新发现 → G 条目 → 修复闭环）。
 
 | # | 族 | ref 锚 | rust 锚 | 级 | 证据 / 行动 |
 |---|---|---|---|---|---|
@@ -36,3 +37,12 @@
 | S-2 | 鼠标所有权 | app.tsx:241/593 useMouse:config.mouse（默认 true） | app.rs:8446/9013 SessionTerminal 使能 + CliRenderer use_mouse:false（倒置） | M1/M2 | G-457 取证中 |
 | S-3 | 选区模型 | selection.ts（cell/word/line + 端点扩展 + 真文本提取） | clamp 近似 | M1 | G-457 修（端点扩展） |
 | S-4 | SSE 空闲判定 | connection.ts 每读复位（注释帧也算活性） | sse.rs `next_json_alive` + data.rs 换接 | M0 | 2026-11-19 断连热修（45s 看门狗盲心跳→周期误杀） |
+| MF-1 #7 | 状态同步：重连退避 | connection.ts:33,181 固定 1s；:158 稳定≥1s 复位 attempt | data.rs:309-329/1158 指数 500ms→8s；attempt 不复位 | M1 | **G-458 立**——S4 同类残口；断连体验族（长断后 8s vs ref 1s） |
+| MF-1 #19 | 键盘：孤立 ESC 判定 | opentui complete_unit_len 超时窗 | input_term.rs:17-20/311-313 读块边界立即判（注释锚退役 crossterm=锚错树） | M1 | **G-459 立**——CSI 跨读分裂先发假 Escape 再吞残字节 |
+| MF-1 #3 | 渲染管线：退出标题 | renderer.ts:3-7 destroy setTerminalTitle("") | teardown（app.rs:8217/9799）无标题复位 | M2 | **G-460 立**——退出后终端标题残留 |
+| MF-1 #10 | 状态同步：强制 resync | connection.ts:212-217 resync(reason) | 无（仅 watchdog/错误路径） | X/N-A | 已裁：ref TUI 无终端侧触发点，双侧同靠看门狗 |
+| MF-1 #12 | 插件桥：内容热重载 | watch.ts modify 事件 + context.tsx:274 仅重启变更件 | lib.rs:658-663 digest 扫描 reload_changed；增/删独立路径 | M0 | 已裁：digest 扫描覆盖 modify 语义 |
+| MF-1 #2 | 渲染管线：簇发射 | opentui grapheme 延迟 pass | opentui_emit.rs:32-38 inline 打印 | M1(登记) | 维持登记；真机含簇帧分帧 bytes 不同 |
+| MF-1 #15 | 终端控制：输入读模型 | opentui 阻塞读 | app.rs:8975-8985 50ms poll tick | M1(登记) | 上界 50ms 通常不可感；备查 |
+| MF-1 #16 | 文本布局：折行 | UAX-29/UAX-14 全表 | wrap.rs 语料钉定近似 | M1(登记) | 语料外脚本未锚定；扩 corpus 备查 |
+| MF-1 #18 | 配置：热载 watch | fs.watch 目录 | mtime 轮询 ≤100ms | M2(登记) | 可接受；零延迟需求时换 notify |

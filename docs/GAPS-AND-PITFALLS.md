@@ -3584,3 +3584,12 @@ W6 评审 4 Minor 清偿：①t9_8 整测试体持 armed 守护（ServiceClean �
 - **⑦''② 呼吸灯时有时无**：busy_pulse_pressure（真 PTY、6 次 busy/idle 循环 × 冻结段/逐窗运动/退出三断言）**未复现**——赛道登记为真机观察通道（复现截图 + OC_TUI_DEBUG=1 trace 即可定位）。
 - **pty_form/pty_permission/vt_hover_sweep 49 红（预存）**：W16 全套件跑出的该族失败在基线 6b73f910 上同样红（代表用例 form_mounts_and_blocks_keys 双侧验证），非本 lane 引入；登记待环境/独立排查。
 - **勘注（2026-11-19 评审 Important 清偿+控制者二分定案）**：49 红实为尾修 6b73f910 引入（McpList Err 臂用 keymap::log_skip=CONFIG 错误汇→error toast 盖模态+eprintln 裸写 raw 终端毁帧）——控制者二分链定案（基点 b4571356 绿→尾修红→关 boot send 绿→关 drain 臂绿→Err 臂锁定），main 已热修（7753a863 静默降级，ref `?? []` 语义）。**无需环境排查 lane**。方法学教训入规范：lane 判"预存"时基点同红必查 base~1——基点后一 commit 无法区分"预存"与"上一 commit 引入"。
+
+# 第三十六轮（MF-1 机制保真度审计立三项，2026-11-19）
+
+用户裁定四落地：**机制保真度**为一等审计维度（输出对拍过关≠机制移植到位；滚轮/选区证明存在自建近似替代 ref 机制的整类缺口）。台账 `docs/audit/diff/MECHANISM-FIDITY` 见 `docs/audit/diff/MECHANISM-FIDELITY.md`（分类法 M0-M3+X、波次覆盖表）；MF-1（十族：渲染管线/时序/状态同步/插件桥/终端控制/文本布局/配置/键盘/剪贴板/进程拓扑）oracle 只读审计完成，报告 `.superpowers/sdd/mf1/report.md`。无 M3；三项 needs-controller 已裁（#10 强制 resync=N/A——ref TUI 无终端侧触发点；#12 插件内容热重载=M0——digest 扫描在案；#3 退出标题=M2 实锤）。
+
+- **G-458 🟡 立**（MF-1 #7，状态同步族，S4 同类残口）：SSE 重连退避自建指数 500ms→8s（data.rs:309-329/1158）替代 ref 固定 `reconnectDelay=1_000`（connection.ts:33,181），且缺"稳定连接≥1s 复位 attempt=0"（connection.ts:158；G-47 只修了 editor_ide.rs 臂，主 Connection 漏）。断连体验族：弱网长断后 rust 重连间隔最长 8s vs ref 恒 1s。修=固定 1s+稳定复位。归 MF 修复波（hotfix-conn 合并后）。
+- **G-459 🟡 立**（MF-1 #19，键盘族）：孤立 ESC 判定——rust 读块边界立即判 ESC（input_term.rs:17-20/311-313，注释锚的是**退役 crossterm** 行为而非 ref opentui complete_unit_len 超时窗）=锚错树+机制自建，滚轮/选区同类。CSI 序列跨读分裂时 rust 先发假 Escape 再吞残字节（慢 tty/高负载真机可感）。修=超时窗判定（复用泵等待）或正式登记对 opentui 分歧。
+- **G-460 🟡 立**（MF-1 #3，渲染管线族）：退出终端标题复位缺——ref renderer destroy 发 `setTerminalTitle("")`（util/renderer.ts:3-7），rust teardown（app.rs:8217/9799-9804）与 opentui-rust 均无标题清空→退出后终端标题残留 "OC \| …"。修=teardown 前发空 OSC0。小修。
+- 登记 M1 维持（真机备查）：簇 inline 发射（#2）、输入 50ms poll（#15）、折行 UAX 近似（#16）、配置 mtime 轮询（#18=M2）。MF-2（滚轮/选区/spinner/omo）待 G-457 合并后复审。
