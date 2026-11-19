@@ -10019,11 +10019,19 @@ pub async fn run_with_size(
                 LoopFetch::McpList(Ok(rows)) => {
                     app.store.set_mcp_servers(rows);
                 }
+                // Transient fetch failures degrade SILENTLY (the ref's
+                // `?? []` semantics — data.ts:1914's resource fallback).
+                // log_skip is the CONFIG-error sink: it records a
+                // config error that the toast pump reshapes into an
+                // on-screen ERROR TOAST (and its eprintln writes onto
+                // the raw-mode terminal, corrupting the frame) — a
+                // failed mcp/session list fetch must do NEITHER
+                // (incident 2026-11-19: 49 PTY-family reds).
                 LoopFetch::McpList(Err(error)) => {
-                    crate::keymap::log_skip(&format!("mcp list fetch {error}"));
+                    let _ = error;
                 }
                 LoopFetch::SessionList(Err(error)) => {
-                    crate::keymap::log_skip(&format!("session list refresh: {error}"));
+                    let _ = error;
                 }
                 // G-271⑤ — the search result folds into the dialog's
                 // row source (the settled query + rows or the error
