@@ -265,7 +265,11 @@ impl OpentuiEmitter {
     /// * while the caret is hidden, every frame carries `?25l` — the
     ///   E1 dialog-open-idle flush-cadence detector.
     /// * a fully invisible frame writes nothing (no envelope).
-    pub fn emit<W: std::io::Write>(&mut self, out: &mut W, frame: &Frame) -> std::io::Result<()> {
+    pub fn emit<W: std::io::Write>(
+        &mut self,
+        out: &mut W,
+        frame: &Frame,
+    ) -> std::io::Result<usize> {
         self.emit_with_links(out, frame, &[])
     }
 
@@ -280,7 +284,7 @@ impl OpentuiEmitter {
         out: &mut W,
         frame: &Frame,
         links: &[FrameLinkRect],
-    ) -> std::io::Result<()> {
+    ) -> std::io::Result<usize> {
         let mut sgr = self.render_sgr(frame, links);
         let cursor = &self.renderer.cursor_state;
         if cursor.visible {
@@ -291,12 +295,14 @@ impl OpentuiEmitter {
             sgr.push_str("\x1b[?25l");
         }
         if sgr.is_empty() {
-            return Ok(()); // no-op invisible frame — no envelope
+            return Ok(0); // no-op invisible frame — no envelope
         }
+        let bytes = SYNC_BEGIN.len() + sgr.len() + SYNC_END.len();
         out.write_all(SYNC_BEGIN)?;
         out.write_all(sgr.as_bytes())?;
         out.write_all(SYNC_END)?;
-        out.flush()
+        out.flush()?;
+        Ok(bytes)
     }
 }
 
