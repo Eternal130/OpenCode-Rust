@@ -72,6 +72,67 @@ impl SseStream {
         self.double_decode
     }
 
+    /// [`next_json`] with a **byte-activity-aware** idle deadline
+    /// (2026-11-19 connection-flap incident): the deadline fires only
+    /// when NO bytes arrive for `idle` — heartbeat/comment blocks keep
+    /// the stream alive exactly like ref's per-read idle on the raw
+    /// stream (its connection reads every chunk; any bytes reset it).
+    /// The plain `next_json` under a timeout is BLIND to comments
+    /// (they parse to no frame), so a quiet bus tripped the TUI's 45s
+    /// watchdog every cycle despite healthy 15s heartbeats.
+    pub async fn next_json_alive(
+        &mut self,
+        idle: std::time::Duration,
+    ) -> Result<Option<serde_json::Value>, ClientError> {
+        let mut last_byte = std::time::Instant::now();
+        loop {
+            if let Some(boundary) = find_nl_nl(&self.buf) {
+                let mut block: Vec<u8> = self.buf.drain(..boundary + 2).collect();
+                block.truncate(boundary);
+                if let Some(frame) = parse_block(&block) {
+                    return self.frame_to_json(&frame);
+                }
+                continue; // comment/heartbeat block — ALIVE, keep parsing
+            }
+            if self.done {
+                if self.buf.is_empty() {
+                    return Ok(None);
+                }
+                self.buf.extend_from_slice(b"\n\n");
+                continue;
+            }
+            let chunk = match tokio::time::timeout(
+                idle.saturating_sub(last_byte.elapsed()),
+                self.inner.next(),
+            )
+            .await
+            {
+                Ok(Some(Ok(chunk))) => chunk,
+                Ok(Some(Err(e))) => return Err(ClientError::from(e)),
+                Ok(None) => {
+                    self.done = true;
+                    continue;
+                }
+                Err(_) => {
+                    return Err(ClientError::MalformedResponse(
+                        "event stream stalled: no bytes within the idle deadline".to_owned(),
+                    ));
+                }
+            };
+            if !chunk.is_empty() {
+                last_byte = std::time::Instant::now();
+                if let Some(callback) = &mut self.on_activity {
+                    callback();
+                }
+                self.buf.extend_from_slice(&chunk);
+                if exceeds_char_limit(&self.buf, self.cap) {
+                    return Err(ClientError::SseEventTooLarge(self.cap));
+                }
+                normalize_crlf(&mut self.buf);
+            }
+        }
+    }
+
     /// Next data-carrying frame; `None` on stream end. Heartbeat/comment-only
     /// blocks are skipped.
     pub async fn next_frame(&mut self) -> Result<Option<SseFrame>, ClientError> {
@@ -120,6 +181,12 @@ impl SseStream {
         let Some(frame) = self.next_frame().await? else {
             return Ok(None);
         };
+        self.frame_to_json(&frame)
+    }
+
+    /// Decode one parsed frame's `data` payload (shared by
+    /// [`next_json`] and [`next_json_alive`]).
+    fn frame_to_json(&mut self, frame: &SseFrame) -> Result<Option<serde_json::Value>, ClientError> {
         let value: serde_json::Value = serde_json::from_str(&frame.data)
             .map_err(|e| ClientError::MalformedResponse(format!("sse data: {e}")))?;
         if self.double_decode {
@@ -302,6 +369,85 @@ mod tests {
         let parsed = frames(b": heartbeat\n\ndata: 1\n\n: keepalive\ndata: 2\n\n");
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[1].data, "2");
+    }
+
+    /// 2026-11-19 connection-flap regression, half 1: heartbeat comments
+    /// are BYTE ACTIVITY — `next_json_alive` must consume comment-only
+    /// chunks, keep the idle deadline alive, and still return the next
+    /// data frame (the plain `next_json` under a timeout was blind to
+    /// comments, so a quiet bus tripped the 45s watchdog every cycle).
+    #[tokio::test]
+    async fn alive_deadline_passes_heartbeats_to_data() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let activity = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = activity.clone();
+        let mut stream = SseStream {
+            inner: Box::pin(futures::stream::iter(vec![
+                Ok::<_, reqwest::Error>(bytes::Bytes::from_static(b": heartbeat\n\n")),
+                Ok::<_, reqwest::Error>(bytes::Bytes::from_static(b": heartbeat\n\n")),
+                Ok::<_, reqwest::Error>(bytes::Bytes::from_static(b"data: {\"a\":1}\n\n")),
+            ])),
+            buf: Vec::new(),
+            done: false,
+            cap: 64 * 1024,
+            double_decode: false,
+            on_activity: Some(Box::new(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+            })),
+        };
+        let value = stream
+            .next_json_alive(std::time::Duration::from_millis(50))
+            .await
+            .expect("heartbeats keep the stream alive until the data frame")
+            .expect("data frame");
+        assert_eq!(value, serde_json::json!({"a": 1}));
+        // Every received chunk — comments included — signals activity.
+        assert_eq!(activity.load(Ordering::SeqCst), 3);
+    }
+
+    /// 2026-11-19 connection-flap regression, half 2: TRUE silence (no
+    /// bytes at all — a half-open connection gone fully quiet) must
+    /// still trip the byte-activity deadline.
+    #[tokio::test]
+    async fn alive_deadline_trips_on_silence() {
+        let mut stream = SseStream {
+            inner: Box::pin(futures::stream::pending::<
+                Result<bytes::Bytes, reqwest::Error>,
+            >()),
+            buf: Vec::new(),
+            done: false,
+            cap: 64 * 1024,
+            double_decode: false,
+            on_activity: None,
+        };
+        let err = stream
+            .next_json_alive(std::time::Duration::from_millis(50))
+            .await
+            .expect_err("a silent stream must stall");
+        assert!(err.to_string().contains("stalled"), "unexpected error: {err}");
+    }
+
+    /// Stream end under [`next_json_alive`] mirrors [`SseStream::next_json`]:
+    /// `Ok(None)`, not a stall.
+    #[tokio::test]
+    async fn alive_deadline_stream_end_returns_none() {
+        let mut stream = SseStream {
+            inner: Box::pin(futures::stream::iter(
+                Vec::<Result<bytes::Bytes, reqwest::Error>>::new(),
+            )),
+            buf: Vec::new(),
+            done: false,
+            cap: 64 * 1024,
+            double_decode: false,
+            on_activity: None,
+        };
+        assert!(
+            stream
+                .next_json_alive(std::time::Duration::from_millis(50))
+                .await
+                .expect("clean stream end")
+                .is_none()
+        );
     }
 
     #[test]
