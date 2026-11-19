@@ -1236,8 +1236,16 @@ impl Connection {
             // loop reconnects through the SAME path as an error or EOF;
             // the resubscription carries the tracked cursor as before.
             loop {
-                let next = tokio::time::timeout(self.config.idle_timeout, stream.next_json()).await;
-                let Ok(Ok(Some(value))) = next else {
+                // 2026-11-19 connection-flap fix: the idle deadline must be
+                // BYTE-activity-aware — heartbeat comments (`: heartbeat`)
+                // parse to no frame, so a plain timeout over `next_json` is
+                // blind to them and a quiet bus tripped the watchdog every
+                // ~45s despite healthy 15s heartbeats (23 overlays in a
+                // 40-minute idle repro). `next_json_alive` resets its
+                // deadline on every received chunk (ref's per-read idle on
+                // the raw stream, connection.ts).
+                let next = stream.next_json_alive(self.config.idle_timeout).await;
+                let Ok(Some(value)) = next else {
                     break; // stall, decode error, or stream end → reconnect
                 };
                 oc_util::recorder::event(&value); // diff-ext C1 (env-gated no-op)
