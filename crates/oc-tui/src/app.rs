@@ -10744,13 +10744,28 @@ pub async fn run_with_size(
         // Input / tick wait — while the marquee scrolls, the wake
         // lands exactly on the next 80 ms step boundary (the steady
         // ticker above pins the clock to it); otherwise the plain
-        // 100 ms poll. ⑦''② (W15): a tick-BOUNDARY wait (sleep to
-        // last_tick+100ms) was tried to smooth the spinner cadence
-        // under heavy batches and REVERTED — the E1 flush-cadence gate
-        // (spec_ef2_e1_cells) reads the constant 100 ms flush stream
-        // as its healthy baseline and counts driver-paced gaps as
-        // stall-bursts (21 findings, .test-logs evidence); the plain
-        // poll keeps that baseline.
+        // 100 ms poll.
+        //
+        // ⑦''② W16 investigation (the second anchor attempt, both
+        // reverted): the ref's scheduler IS work-compensated
+        // (renderer.ts:4772-4801: `delay = max(1, targetFrameTime −
+        // overallFrameTime)`, rescheduled from the frame's END), and
+        // anchoring the wait on `last_tick` reproduces it exactly —
+        // the QUIET cadence becomes perfect (measured: median 101 /
+        // p95 102 / max 103 / σ 0.9 ms vs the plain poll's 110/111/
+        // 157/9.1; `.test-logs/w16-rhythm-*`). But under TYPING the
+        // anchor reproducibly introduced ~390 ms pipeline stalls at a
+        // ~609 ms period (emit-level traces: the loop's select AND
+        // the input thread both go quiet, the stall ends in a
+        // full-repaint resync) — a REAL freeze, not detector noise:
+        // the W15 revert's 21 E1 findings were TRUE positives for
+        // exactly this shape (the controlled on/off pair is in the W16
+        // lane report). Root cause (suspected: the anchored wake phase
+        // against the SSE/session fetch tasks on the same
+        // current-thread runtime) is NOT yet isolated — the anchor
+        // stays OUT until that lane lands; the plain poll keeps the
+        // work+100 stacking but never stalls.
+        //
         // G-368⑥: this 100 ms tick is the port's frame
         // PACER (app.rs:10197 — not the ref's `targetFps: 60`,
         // app.tsx:234): frames are drawn on invalidation (one per
