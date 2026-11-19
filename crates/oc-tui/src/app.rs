@@ -519,11 +519,12 @@ impl App {
     /// (double-click), 3 = line (triple-click), then the cycle
     /// restarts. Any move past the window/cell resets to 1.
     fn next_selection_click(&mut self, col: usize, row: usize) -> u32 {
-        let now_ms = u64::try_from(self.clock.now_ms_value().max(0)).unwrap_or(0);
+        let now_ms = self.clock.now_ms_value();
         let rapid = self
             .selection_last_press
             .is_some_and(|(at, x, y)| now_ms.saturating_sub(at) <= 500 && (x, y) == (col, row));
-        self.selection_click_count = if rapid { self.selection_click_count.saturating_add(1) } else { 1 };
+        self.selection_click_count =
+            if rapid { self.selection_click_count.saturating_add(1) } else { 1 };
         self.selection_last_press = Some((now_ms, col, row));
         self.selection_click_count
     }
@@ -1885,7 +1886,8 @@ impl App {
                 self.copy_behavior == crate::config::CopyBehavior::Select,
             ) {
                 crate::selection::SelectionKeyAction::CopyAndConsume => {
-                    if let Some(resolved) = self.screen_selection.resolve(self.last_frame.as_ref()) {
+                    if let Some(resolved) = self.screen_selection.resolve(self.last_frame.as_ref())
+                    {
                         self.copy_selection(resolved);
                     }
                     self.screen_selection.clear();
@@ -10454,16 +10456,20 @@ pub async fn run_with_size(
                 .strip_tabs_ordered()
                 .iter()
                 .any(|tab| app.store.session_busy(&tab.session_id));
-            busy.then(|| app.store.tabs_indicator_config().spinner.interval_ms().max(1))
-                .unwrap_or(0)
+            if busy {
+                app.store.tabs_indicator_config().spinner.interval_ms().max(1)
+            } else {
+                0
+            }
         } else {
             0
         };
-        let spinner_boundary_after_clock =
-            (spinner_interval > 0).then(|| (app.store.clock() / spinner_interval + 1) * spinner_interval);
+        let spinner_boundary_after_clock = (spinner_interval > 0)
+            .then(|| (app.store.clock() / spinner_interval + 1) * spinner_interval);
         let passed_boundary = match (passed_boundary, spinner_boundary_after_clock) {
-            (Some(marquee), Some(spinner)) => Some(if marquee < spinner { marquee } else { spinner })
-                .filter(|b| *b <= now_ms),
+            (Some(marquee), Some(spinner)) => {
+                Some(if marquee < spinner { marquee } else { spinner }).filter(|b| *b <= now_ms)
+            }
             (Some(marquee), None) => Some(marquee),
             (None, Some(spinner)) => Some(spinner).filter(|b| *b <= now_ms),
             (None, None) => None,
@@ -10898,83 +10904,83 @@ pub async fn run_with_size(
         let mut pending_event = event;
         loop {
             match pending_event {
-            Some(TermEvent::Key(spec)) => {
-                if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
-                    eprintln!("[tui] key: {spec}");
+                Some(TermEvent::Key(spec)) => {
+                    if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
+                        eprintln!("[tui] key: {spec}");
+                    }
+                    app.press(&spec);
                 }
-                app.press(&spec);
-            }
-            // SIGWINCH stand-in (B3a): the input thread's 50 ms
-            // check_resize tick — relayout at the new size; the
-            // emitter's prev grid invalidates (B3b: full repaint at
-            // the new size, upstream's fresh-blank-buffers resize).
-            Some(TermEvent::Resize(width, height)) => {
-                app.resize((width, height));
-                emitter.resize(usize::from(width), usize::from(height));
-                render_renderer.borrow_mut().resize(u32::from(width), u32::from(height));
-                redraw_at = 0; // force one redraw
-            }
-            // Focus: the attention marker consumes on FocusGained (the
-            // bell itself fired regardless — the sound channel is
-            // "always" in v2's notifications plugin). FocusLost blurs
-            // the attention engine (OS notifications become eligible).
-            Some(TermEvent::FocusGained) => {
-                app.store.set_focused();
-                // Lane TAIL (auditC P6): the ?997 stand-in — a terminal
-                // theme flip re-queries OSC 10/11 on focus (10 s
-                // cooldown, only while `theme.mode == "system"`); the
-                // answers reduce through opentui's theme watch into the
-                // ThemeMode event below — v2's `refreshPalette()`.
-                if config.theme.mode.as_deref() == Some("system")
-                    && theme_probe_at.elapsed() >= std::time::Duration::from_secs(10)
-                {
-                    theme_probe_at = std::time::Instant::now();
-                    if let Ok(mut session) = session_terminal.lock() {
-                        use std::io::Write as _;
-                        let _ = session.output().write_all(b"\x1b]10;?\x07\x1b]11;?\x07");
-                        let _ = session.output().flush();
+                // SIGWINCH stand-in (B3a): the input thread's 50 ms
+                // check_resize tick — relayout at the new size; the
+                // emitter's prev grid invalidates (B3b: full repaint at
+                // the new size, upstream's fresh-blank-buffers resize).
+                Some(TermEvent::Resize(width, height)) => {
+                    app.resize((width, height));
+                    emitter.resize(usize::from(width), usize::from(height));
+                    render_renderer.borrow_mut().resize(u32::from(width), u32::from(height));
+                    redraw_at = 0; // force one redraw
+                }
+                // Focus: the attention marker consumes on FocusGained (the
+                // bell itself fired regardless — the sound channel is
+                // "always" in v2's notifications plugin). FocusLost blurs
+                // the attention engine (OS notifications become eligible).
+                Some(TermEvent::FocusGained) => {
+                    app.store.set_focused();
+                    // Lane TAIL (auditC P6): the ?997 stand-in — a terminal
+                    // theme flip re-queries OSC 10/11 on focus (10 s
+                    // cooldown, only while `theme.mode == "system"`); the
+                    // answers reduce through opentui's theme watch into the
+                    // ThemeMode event below — v2's `refreshPalette()`.
+                    if config.theme.mode.as_deref() == Some("system")
+                        && theme_probe_at.elapsed() >= std::time::Duration::from_secs(10)
+                    {
+                        theme_probe_at = std::time::Instant::now();
+                        if let Ok(mut session) = session_terminal.lock() {
+                            use std::io::Write as _;
+                            let _ = session.output().write_all(b"\x1b]10;?\x07\x1b]11;?\x07");
+                            let _ = session.output().flush();
+                        }
                     }
                 }
-            }
-            Some(TermEvent::FocusLost) => app.store.set_blurred(),
-            // The probe/theme-watch reduction reported a system mode
-            // (the boot answer or a live terminal theme flip).
-            Some(TermEvent::ThemeMode(mode)) => {
-                if mode != system_mode {
-                    system_mode = mode;
-                    app.store.set_theme_mode_inputs(config.theme.mode.clone(), system_mode);
-                    app.apply_config(&config, system_mode);
-                    redraw_at = 0; // one repaint on the palette change
+                Some(TermEvent::FocusLost) => app.store.set_blurred(),
+                // The probe/theme-watch reduction reported a system mode
+                // (the boot answer or a live terminal theme flip).
+                Some(TermEvent::ThemeMode(mode)) => {
+                    if mode != system_mode {
+                        system_mode = mode;
+                        app.store.set_theme_mode_inputs(config.theme.mode.clone(), system_mode);
+                        app.apply_config(&config, system_mode);
+                        redraw_at = 0; // one repaint on the palette change
+                    }
                 }
-            }
-            // R-07/D3-4b: the opentui capability snapshot (kitty
-            // graphics + DA1 sixel + cell-px resolution) drives
-            // `protocol="auto"`; a new snapshot repaints so the image
-            // strip switches protocol immediately.
-            Some(TermEvent::Capabilities(capabilities)) => {
-                let hyperlinks = capabilities.hyperlinks;
-                app.store.set_graphics_capabilities(Some(*capabilities));
-                // G-287⑧ — the same snapshot's OSC-8 verdict drives the
-                // markdown hyperlink seam (`ctx.capabilities?.hyperlinks
-                // === true`, Markdown.ts:385-390): a capable terminal
-                // flips the seam (the repaint below re-renders the
-                // transcript with concealed `](url)` tails + OSC-8).
-                app.store.set_hyperlinks_supported(hyperlinks);
-                redraw_at = 0;
-            }
-            // Bracketed paste (R-07): resolve attachment file paths →
-            // chips, else insert the text (`pasteInputText`).
-            Some(TermEvent::Paste(text)) => app.paste_terminal_text(&text),
-            // Mouse (beta.8 bugs 3/4): the tab strip's hover/select/
-            // close/add surface and the transcript's reasoning-row
-            // disclosure toggle.
-            Some(TermEvent::Mouse(mouse)) => {
-                if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
-                    eprintln!("[tui] mouse: {mouse:?}");
+                // R-07/D3-4b: the opentui capability snapshot (kitty
+                // graphics + DA1 sixel + cell-px resolution) drives
+                // `protocol="auto"`; a new snapshot repaints so the image
+                // strip switches protocol immediately.
+                Some(TermEvent::Capabilities(capabilities)) => {
+                    let hyperlinks = capabilities.hyperlinks;
+                    app.store.set_graphics_capabilities(Some(*capabilities));
+                    // G-287⑧ — the same snapshot's OSC-8 verdict drives the
+                    // markdown hyperlink seam (`ctx.capabilities?.hyperlinks
+                    // === true`, Markdown.ts:385-390): a capable terminal
+                    // flips the seam (the repaint below re-renders the
+                    // transcript with concealed `](url)` tails + OSC-8).
+                    app.store.set_hyperlinks_supported(hyperlinks);
+                    redraw_at = 0;
                 }
-                app.mouse_event(&mouse);
-            }
-            None => {}
+                // Bracketed paste (R-07): resolve attachment file paths →
+                // chips, else insert the text (`pasteInputText`).
+                Some(TermEvent::Paste(text)) => app.paste_terminal_text(&text),
+                // Mouse (beta.8 bugs 3/4): the tab strip's hover/select/
+                // close/add surface and the transcript's reasoning-row
+                // disclosure toggle.
+                Some(TermEvent::Mouse(mouse)) => {
+                    if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
+                        eprintln!("[tui] mouse: {mouse:?}");
+                    }
+                    app.mouse_event(&mouse);
+                }
+                None => {}
             }
             // The next already-queued event rides this same pass.
             if app.exit_requested {

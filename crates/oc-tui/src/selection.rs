@@ -42,7 +42,10 @@ pub fn behavior_for_click_count(count: u32) -> SelectionBehavior {
 /// rule the endpoints extend over.
 fn is_word_codepoint(ch: char) -> bool {
     if (ch as u32) <= 0x7F {
-        return ch.is_ascii_lowercase() || ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_';
+        return ch.is_ascii_lowercase()
+            || ch.is_ascii_uppercase()
+            || ch.is_ascii_digit()
+            || ch == '_';
     }
     opentui_core::text_buffer::is_cjk_word_codepoint(ch as u32)
 }
@@ -122,7 +125,7 @@ pub struct ScreenSelection {
     /// v2's renderer keeps the painted selection until the next
     /// stroke).
     retained: bool,
-    /// The drag's endpoint-extension mode (SelectionBehavior,
+    /// The drag's endpoint-extension mode (`SelectionBehavior`,
     /// types.d.ts:35) — set at press from the click count.
     behavior: SelectionBehavior,
     /// The release-resolved selection manual mode keeps (the
@@ -243,17 +246,13 @@ impl ScreenSelection {
                         last_row_end: end,
                     })
                 } else {
-                    let (top, bottom) = if anchor.1 < head.1 { (anchor, head) } else { (head, anchor) };
+                    let (top, bottom) =
+                        if anchor.1 < head.1 { (anchor, head) } else { (head, anchor) };
                     let (top_start, _) = word_at(frame, top.0, top.1)?;
                     let (_, bottom_end) = word_at(frame, bottom.0, bottom.1)?;
                     let width = frame.width.max(1);
                     Some(ResolvedSelection {
-                        rect: SelectionRect {
-                            x: 0,
-                            y: top.1,
-                            width,
-                            height: bottom.1 - top.1 + 1,
-                        },
+                        rect: SelectionRect { x: 0, y: top.1, width, height: bottom.1 - top.1 + 1 },
                         first_row_start: top_start,
                         last_row_end: bottom_end,
                     })
@@ -298,11 +297,8 @@ impl ScreenSelection {
 /// right-trimmed, rows joined with `\n` — trailing blank rows drop.
 #[must_use]
 pub fn selected_text(frame: &Frame, rect: SelectionRect) -> String {
-    let resolved = ResolvedSelection {
-        rect,
-        first_row_start: rect.x,
-        last_row_end: rect.x + rect.width,
-    };
+    let resolved =
+        ResolvedSelection { rect, first_row_start: rect.x, last_row_end: rect.x + rect.width };
     selected_text_resolved(frame, &resolved)
 }
 
@@ -354,11 +350,8 @@ pub fn selected_text_resolved(frame: &Frame, resolved: &ResolvedSelection) -> St
 /// the highlight rides above the whole screen (the renderer's own
 /// post-grid pass z).
 pub fn paint_highlight(frame: &mut Frame, rect: SelectionRect) {
-    let resolved = ResolvedSelection {
-        rect,
-        first_row_start: rect.x,
-        last_row_end: rect.x + rect.width,
-    };
+    let resolved =
+        ResolvedSelection { rect, first_row_start: rect.x, last_row_end: rect.x + rect.width };
     paint_resolved(frame, &resolved);
 }
 
@@ -377,7 +370,7 @@ pub fn paint_resolved(frame: &mut Frame, resolved: &ResolvedSelection) {
         let last_row = y + 1 == rect.y + rect.height;
         let start = if first_row { resolved.first_row_start } else { rect.x }.max(rect.x);
         let last = if last_row {
-            resolved.last_row_end.min(usize::MAX).min(extent)
+            resolved.last_row_end.min(extent)
         } else {
             (rect.x + rect.width).min(extent)
         };
@@ -473,7 +466,10 @@ mod tests {
         assert_eq!(resolved.rect, SelectionRect { x: 5, y: 1, width: 4, height: 3 });
         // The release retained it (manual mode's copy window).
         assert!(selection.is_active());
-        assert_eq!(selection.resolve(None).map(|r| r.rect), Some(SelectionRect { x: 5, y: 1, width: 4, height: 3 }));
+        assert_eq!(
+            selection.resolve(None).map(|r| r.rect),
+            Some(SelectionRect { x: 5, y: 1, width: 4, height: 3 })
+        );
         selection.clear();
         assert!(!selection.is_active());
     }
@@ -592,7 +588,8 @@ mod tests {
     }
 
     #[test]
-    fn key_actions_follow_the_copy_mode() {        // Copy-on-select: ctrl+c clears AND falls through (the
+    fn key_actions_follow_the_copy_mode() {
+        // Copy-on-select: ctrl+c clears AND falls through (the
         // release already copied; selection.ts:76-79 returns without
         // preventDefault so the interrupt still fires).
         assert_eq!(selection_key_action("ctrl+c", true), SelectionKeyAction::ClearAndPass);

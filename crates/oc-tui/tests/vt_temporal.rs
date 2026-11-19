@@ -256,13 +256,16 @@ fn vt_temporal_spinner_animates_100ms_frames() {
                 "spinner cell ({x},{y}): {changes} char changes, median gap {period} ms, glyphs {distinct:?}"
             ));
             // Assertions: EXISTS and animates with a stable period.
-            // Nominal: 100 ms tick / 80 ms frame. Bound: 100–600 ms
-            // (median; 5 ms floor slack for PTY jitter).
+            // G-457: the live loop pins the busy spinner's flushes to
+            // the spinner's own 80 ms grid (the ref's <spinner>
+            // cadence; pre-G-457 this was the 100 ms tick sampling an
+            // 80 ms animation). Bound: 75–600 ms (median; jitter floor
+            // slack for PTY timing).
             if changes < 20 {
                 return Err(format!("spinner changed only {changes} times in 3.5s: {report:?}"));
             }
-            if !(95..=600).contains(&period) {
-                return Err(format!("spinner median gap {period} ms outside 100–600: {report:?}"));
+            if !(75..=600).contains(&period) {
+                return Err(format!("spinner median gap {period} ms outside 75–600: {report:?}"));
             }
             Ok(report)
         },

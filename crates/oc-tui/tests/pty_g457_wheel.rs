@@ -27,6 +27,7 @@ fn now_ms() -> u64 {
         .map_or(1_000_000, |since| u64::try_from(since.as_millis()).unwrap_or(1_000_000))
 }
 
+#[allow(clippy::needless_pass_by_value)] // mirrors pty_w11_mouse's helper shape
 fn bus_event(id: &str, kind: &str, data: serde_json::Value) -> ScriptEvent {
     ScriptEvent {
         delay_ms: 30,
@@ -43,22 +44,42 @@ fn bus_event(id: &str, kind: &str, data: serde_json::Value) -> ScriptEvent {
 fn long_transcript_script(session: &str) -> Vec<ScriptEvent> {
     let lines = (0..60).map(|index| format!("L{index:02}")).collect::<Vec<_>>().join("\n");
     vec![
-        bus_event("evt_inbox", "session.inbox.enqueued", serde_json::json!({
-            "sessionID": session, "inboxID": "msg_user_1",
-            "item": { "type": "user", "payload": { "text": "list the lines" } },
-        })),
-        bus_event("evt_step", "session.step.started", serde_json::json!({
-            "sessionID": session, "assistantMessageID": "msg_asst_1",
-            "agent": "build", "model": { "providerID": "anthropic", "id": "claude-sonnet" },
-        })),
-        bus_event("evt_text", "session.text.delta", serde_json::json!({
-            "sessionID": session, "assistantMessageID": "msg_asst_1",
-            "ordinal": 0, "delta": lines,
-        })),
-        bus_event("evt_ended", "session.step.ended", serde_json::json!({
-            "sessionID": session, "assistantMessageID": "msg_asst_1", "finish": "success",
-        })),
-        bus_event("evt_idle", "session.idle", serde_json::json!({ "sessionID": session, "id": "msg_idle_1" })),
+        bus_event(
+            "evt_inbox",
+            "session.inbox.enqueued",
+            serde_json::json!({
+                "sessionID": session, "inboxID": "msg_user_1",
+                "item": { "type": "user", "payload": { "text": "list the lines" } },
+            }),
+        ),
+        bus_event(
+            "evt_step",
+            "session.step.started",
+            serde_json::json!({
+                "sessionID": session, "assistantMessageID": "msg_asst_1",
+                "agent": "build", "model": { "providerID": "anthropic", "id": "claude-sonnet" },
+            }),
+        ),
+        bus_event(
+            "evt_text",
+            "session.text.delta",
+            serde_json::json!({
+                "sessionID": session, "assistantMessageID": "msg_asst_1",
+                "ordinal": 0, "delta": lines,
+            }),
+        ),
+        bus_event(
+            "evt_ended",
+            "session.step.ended",
+            serde_json::json!({
+                "sessionID": session, "assistantMessageID": "msg_asst_1", "finish": "success",
+            }),
+        ),
+        bus_event(
+            "evt_idle",
+            "session.idle",
+            serde_json::json!({ "sessionID": session, "id": "msg_idle_1" }),
+        ),
     ]
 }
 
