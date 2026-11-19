@@ -10824,7 +10824,23 @@ pub async fn run_with_size(
         };
         // G-456: the anchor for the NEXT wait — this iteration's start.
         frame_anchor = std::time::Instant::now();
-        match event {
+        // G-457 — BATCH the event dispatch. The select wakes on ONE
+        // event, but the loop body is a full pump pass (SSE ingest
+        // drain, plugin pump, sync, render gate): dispatching one
+        // event per pass gave every queued event that pass's whole
+        // cost (~9 ms/event measured). A real terminal in ?1003
+        // any-motion mode queues a motion report per pointer move —
+        // a moving mouse (60-120 reports/s) grew an unbounded
+        // backlog and the wheel behind it appeared dead on real
+        // machines (beta.20 symptom 1; the PTY suites never sent
+        // unsolicited motion, so G-447's proof missed it). Ref
+        // parity: opentui dispatches mouse natively per frame, never
+        // one main-loop pass per report. The batch drains everything
+        // ALREADY queued (try_recv), preserving order; the cadence
+        // wait above still paces idle iterations exactly as before.
+        let mut pending_event = event;
+        loop {
+            match pending_event {
             Some(TermEvent::Key(spec)) => {
                 if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
                     eprintln!("[tui] key: {spec}");
@@ -10902,6 +10918,15 @@ pub async fn run_with_size(
                 app.mouse_event(&mouse);
             }
             None => {}
+            }
+            // The next already-queued event rides this same pass.
+            if app.exit_requested {
+                break;
+            }
+            match event_rx.try_recv() {
+                Ok(next) => pending_event = Some(next),
+                Err(_) => break,
+            }
         }
         if app.exit_requested {
             break Ok(());
