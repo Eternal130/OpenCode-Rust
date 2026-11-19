@@ -519,7 +519,13 @@ impl App {
     /// (double-click), 3 = line (triple-click), then the cycle
     /// restarts. Any move past the window/cell resets to 1.
     fn next_selection_click(&mut self, col: usize, row: usize) -> u32 {
-        let now_ms = self.clock.now_ms_value();
+        // G-457 rework: read the STORE clock — `self.clock`
+        // (ManualClock) only advances in unit tests; frozen at 0 in
+        // the live loop it classified EVERY same-cell press as a
+        // rapid double-click (the transcript disclosure toggle's
+        // second click became a word-select copy). The store clock
+        // is the live path's only advancing time base.
+        let now_ms = self.store.clock();
         let rapid = self
             .selection_last_press
             .is_some_and(|(at, x, y)| now_ms.saturating_sub(at) <= 500 && (x, y) == (col, row));
@@ -1581,7 +1587,9 @@ impl App {
                 // 3-rows-a-notch line scroll. The event's arrival
                 // time feeds the streak (the input stream carries no wheel
                 // timestamps — `Date.now()` at `tick` in the ref).
-                let now_ms = i64::try_from(self.clock.now_ms_value()).unwrap_or(0);
+                // G-457 rework: the STORE clock (the live time base;
+                // `self.clock` only advances in unit tests).
+                let now_ms = i64::try_from(self.store.clock()).unwrap_or(0);
                 let step = self.store.wheel_step(now_ms);
                 let delta = if down { step } else { -step };
                 // A modal select's option window scrolls WITHOUT
@@ -8976,6 +8984,9 @@ pub async fn run_with_size(
     // G-456 (env-gated anchor): the work-compensated wait's anchor —
     // captured right after each select returns (iteration start).
     let mut frame_anchor = std::time::Instant::now();
+    // G-457 rework: a semantic event pulled mid-motion-batch — it
+    // dispatches first on the NEXT pass (its own full pump pass).
+    let mut semantic_carry: Option<TermEvent> = None;
     // The shell output viewer's 1s live poll (ref
     // dialog-shell-output.tsx refreshes the open viewer every 1s).
     // Rides the existing periodic tick like the other polling
@@ -10881,13 +10892,20 @@ pub async fn run_with_size(
             .clamp(1, 100),
             None => 100,
         };
-        let event = tokio::select! {
-            maybe = event_rx.recv() => maybe,
-            () = tokio::time::sleep(std::time::Duration::from_millis(wait_ms)) => None,
+        let event = if let Some(held) = semantic_carry.take() {
+            // G-457 rework: a semantic event held back from the last
+            // batch runs FIRST, bypassing the wait (it already owns
+            // this pass).
+            Some(held)
+        } else {
+            tokio::select! {
+                maybe = event_rx.recv() => maybe,
+                () = tokio::time::sleep(std::time::Duration::from_millis(wait_ms)) => None,
+            }
         };
         // G-456: the anchor for the NEXT wait — this iteration's start.
         frame_anchor = std::time::Instant::now();
-        // G-457 — BATCH the event dispatch. The select wakes on ONE
+        // G-457 — BATCH the MOTION dispatch. The select wakes on ONE
         // event, but the loop body is a full pump pass (SSE ingest
         // drain, plugin pump, sync, render gate): dispatching one
         // event per pass gave every queued event that pass's whole
@@ -10898,9 +10916,16 @@ pub async fn run_with_size(
         // machines (beta.20 symptom 1; the PTY suites never sent
         // unsolicited motion, so G-447's proof missed it). Ref
         // parity: opentui dispatches mouse natively per frame, never
-        // one main-loop pass per report. The batch drains everything
-        // ALREADY queued (try_recv), preserving order; the cadence
-        // wait above still paces idle iterations exactly as before.
+        // one main-loop pass per report. G-457 rework (merge-gate
+        // bisect): the batch takes ONLY motion reports (Moved/Drag —
+        // the flood's sole source); every SEMANTIC event (key, click
+        // Down/Up, wheel, paste, focus, resize) keeps its own full
+        // pump pass — click hit-testing and multi-step interactions
+        // read the post-event render state between strokes
+        // (f15-long-title click + km strip-drag regressed when the
+        // whole queue drained per pass). Order preserved; a semantic
+        // event pulled mid-batch is held in `semantic_carry` and
+        // dispatches first next pass.
         let mut pending_event = event;
         loop {
             match pending_event {
@@ -10982,12 +11007,25 @@ pub async fn run_with_size(
                 }
                 None => {}
             }
-            // The next already-queued event rides this same pass.
+            // The next queued MOTION report rides this same pass; a
+            // semantic event is held for its own pass.
             if app.exit_requested {
                 break;
             }
             match event_rx.try_recv() {
-                Ok(next) => pending_event = Some(next),
+                Ok(TermEvent::Mouse(m))
+                    if matches!(
+                        m.kind,
+                        crate::input_term::MouseEventKind::Moved
+                            | crate::input_term::MouseEventKind::Drag(_)
+                    ) =>
+                {
+                    pending_event = Some(TermEvent::Mouse(m));
+                }
+                Ok(semantic) => {
+                    semantic_carry = Some(semantic);
+                    break;
+                }
                 Err(_) => break,
             }
         }
