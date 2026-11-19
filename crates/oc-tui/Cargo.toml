@@ -76,6 +76,10 @@ libc = "0.2"
 
 [dev-dependencies]
 opentui-keymap = { workspace = true }
+# G-462: the omo forensic scenario runs the production v2→rust
+# migration pass (same call the CLI main makes) before the in-process
+# TUI boot.
+oc-core = { workspace = true }
 parity = { path = "../../tools/parity" }
 # Lane TB (dual-engine tree gate): the standing test rebuilds the
 # captured tree scenarios through opentui's own tree desugarer +
