@@ -9056,15 +9056,8 @@ pub async fn run_with_size(
                 if input_stop.load(std::sync::atomic::Ordering::Relaxed) {
                     break;
                 }
-                let pass_started = std::time::Instant::now();
                 let bytes =
                     read_session_input(tty_input_fd.load(std::sync::atomic::Ordering::Acquire), 50);
-                let lock_wait = pass_started.elapsed();
-                rhythm_trace(&format!(
-                    "input bytes={} fd_ms={}",
-                    bytes.len(),
-                    lock_wait.as_millis()
-                ));
                 if bytes.is_empty() {
                     // The no-input feed tick still advances the probe's
                     // wall-clock deadline.
@@ -10730,7 +10723,6 @@ pub async fn run_with_size(
             if emission.is_err() {
                 break Err("terminal draw failed".to_owned());
             }
-            rhythm_trace(&format!("emit wrote={}", emission.unwrap_or(0)));
             // TUI-18 — the window title (`renderer.setTerminalTitle`
             // effect, app.tsx:596-622): OSC 0 rides the draw seam,
             // emitted only on CHANGE (route flips, a titled echo, the
@@ -10793,59 +10785,48 @@ pub async fn run_with_size(
         // clock reproduces deterministically — so 100 ms caps the
         // IDLE tick, not the frame rate; input and invalidation
         // wake immediately through the select.
+        // Input / tick wait — while the marquee scrolls, the wake
+        // lands exactly on the next 80 ms step boundary (the steady
+        // ticker above pins the clock to it); otherwise the wait runs
+        // to the next 100 ms TICK BOUNDARY — the G-456 landing of the
+        // ref's work-compensated scheduler (renderer.ts:4772-4801:
+        // `delay = max(1, targetFrameTime − overallFrameTime)`,
+        // rescheduled from the frame's END — arithmetically the wake
+        // at iteration_start + target; `frame_anchor` is captured
+        // right after the select returns, i.e. at the START of the
+        // work this wait compensates for).
+        //
+        // ⑦''②/G-456 history: W15 anchored on `last_tick` and W16
+        // re-tried an anchored form; both were reverted after E1
+        // flagged typing-phase ~390 ms stalls at a ~609 ms period.
+        // G-456 re-implemented BOTH shapes env-gated and could NOT
+        // reproduce the stall in the current tree (frame-rhythm
+        // quiet/typing at 120/240 ms cadence, the 60 ms cell fails
+        // identically with the anchor OFF — a VtStream 80 ms snapshot
+        // merge artifact of continuous typing, not a stall; the E1
+        // paste cell; fetch-source on/off; multi-thread runtime; 4x
+        // repeats each, trace-parked never > 98 ms). Verdict: the
+        // anchored model is sound; the historical stall attributes to
+        // the W16 lane's since-removed per-event trace writes under
+        // that day's box load, not to the wait model. The anchor is
+        // now DEFAULT ON with `OC_TUI_TICK_ANCHOR=0` as the escape
+        // hatch (measured: quiet median 101/p95 102/σ 2-3 ms vs the
+        // plain poll's 110/111/9.1; typing unchanged at 120/122).
         let wait_ms = match marquee_deadline {
             Some(deadline) => (deadline.saturating_sub(now_ms)).clamp(1, 100),
-            None => {
-                if tick_anchor_enabled() {
-                    // G-456 experiment (env-gated): two anchored
-                    // variants —
-                    //  * `1`: the ref's work-compensated scheduler
-                    //    (renderer.ts:4772-4801: `delay = max(1,
-                    //    target − work)` rescheduled from the frame's
-                    //    END — arithmetically the wake at
-                    //    iteration_start + target; `frame_anchor` is
-                    //    captured right after the select returns).
-                    //  * `2`: the W15/W16 experiment's exact shape —
-                    //    the wait anchored on `last_tick` (updated
-                    //    only when a tick FIRES), the variant that
-                    //    carried the ~609 ms-period typing stalls.
-                    match std::env::var("OC_TUI_TICK_ANCHOR").ok().as_deref() {
-                        Some("2") => u64::try_from(
-                            (last_tick + std::time::Duration::from_millis(100))
-                                .saturating_duration_since(std::time::Instant::now())
-                                .as_millis(),
-                        )
-                        .unwrap_or(1)
-                        .clamp(1, 100),
-                        _ => u64::try_from(
-                            (frame_anchor + std::time::Duration::from_millis(100))
-                                .saturating_duration_since(std::time::Instant::now())
-                                .as_millis(),
-                        )
-                        .unwrap_or(1)
-                        .clamp(1, 100),
-                    }
-                } else {
-                    100
-                }
-            }
+            None if tick_anchor_enabled() => u64::try_from(
+                (frame_anchor + std::time::Duration::from_millis(100))
+                    .saturating_duration_since(std::time::Instant::now())
+                    .as_millis(),
+            )
+            .unwrap_or(1)
+            .clamp(1, 100),
+            None => 100,
         };
-        rhythm_trace(&format!("wait={wait_ms}"));
-        let select_entered_at = std::time::Instant::now();
         let event = tokio::select! {
-            maybe = event_rx.recv() => {
-                rhythm_trace("A event");
-                maybe
-            }
-            () = tokio::time::sleep(std::time::Duration::from_millis(wait_ms)) => {
-                rhythm_trace("A tick");
-                None
-            }
+            maybe = event_rx.recv() => maybe,
+            () = tokio::time::sleep(std::time::Duration::from_millis(wait_ms)) => None,
         };
-        rhythm_trace(&format!(
-            "S parked={:?}",
-            select_entered_at.elapsed()
-        ));
         // G-456: the anchor for the NEXT wait — this iteration's start.
         frame_anchor = std::time::Instant::now();
         match event {
@@ -11047,33 +11028,12 @@ fn cache_tty_input_fd(
     }
 }
 
-/// G-456 experiment gate — the work-compensated tick anchor (see the
-/// wait-site comment). Env-gated OFF by default; the anchored model's
-/// final landing (or its replacement) is this lane's deliverable.
+/// G-456 — the work-compensated tick anchor is DEFAULT ON (see the
+/// wait-site comment for the model + the W15/W16 stall verdict);
+/// `OC_TUI_TICK_ANCHOR=0` is the escape hatch (the plain 100 ms poll
+/// of the pre-G-456 port).
 fn tick_anchor_enabled() -> bool {
-    std::env::var("OC_TUI_TICK_ANCHOR").ok().as_deref() == Some("1")
-}
-
-/// G-456 diagnostics — a tiny env-gated file trace (`/tmp/opencode/
-/// g456/loop.log`) stamping the run loop's select/wait shape, the
-/// emit byte counts, and the input thread's pass cadence, so a stall
-/// can be attributed (parked select vs busy loop vs lock block).
-fn rhythm_trace(line: &str) {
-    use std::io::Write as _;
-    static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if !*ON.get_or_init(|| std::env::var("OC_TUI_RHYTHM_TRACE").ok().as_deref() == Some("1")) {
-        return;
-    }
-    let t0 = T0.get_or_init(std::time::Instant::now);
-    let t = t0.elapsed().as_millis();
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/opencode/g456/loop.log")
-    {
-        let _ = writeln!(file, "t={t} {line}");
-    }
+    std::env::var("OC_TUI_TICK_ANCHOR").ok().as_deref() != Some("0")
 }
 
 /// The session tty's input fd, cached at boot so the input thread can

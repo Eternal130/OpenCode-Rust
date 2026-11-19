@@ -2023,24 +2023,11 @@ pub fn run_tui(url: &str, cols: u16, rows: u16, limit: Duration) {
 /// path, not a post-boot store poke).
 pub fn run_tui_boot(url: &str, cols: u16, rows: u16, limit: Duration, boot: oc_tui::app::BootArgs) {
     let client = oc_client::Client::new(url).expect("client");
-    // G-456 differential: `OC_W16_MT=1` swaps the runtime flavor — the
-    // current-thread-vs-multi-thread discriminator for the stall class
-    // (a lost-wake/timer-registration bug is current-thread-shaped).
-    let multi_thread = std::env::var("OC_W16_MT").ok().as_deref() == Some("1");
-    let finished = if multi_thread {
-        let runtime =
-            tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("rt");
-        runtime.block_on(async {
-            tokio::time::timeout(limit, oc_tui::app::run_with_size(client, Some((cols, rows)), boot))
-                .await
-        })
-    } else {
-        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("rt");
-        runtime.block_on(async {
-            tokio::time::timeout(limit, oc_tui::app::run_with_size(client, Some((cols, rows)), boot))
-                .await
-        })
-    };
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("rt");
+    let finished = runtime.block_on(async {
+        tokio::time::timeout(limit, oc_tui::app::run_with_size(client, Some((cols, rows)), boot))
+            .await
+    });
     match finished {
         Ok(Ok(())) => {}
         Ok(Err(error)) => panic!("run_with_size failed: {error}"),
