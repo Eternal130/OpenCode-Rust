@@ -10786,7 +10786,17 @@ pub async fn run_with_size(
             // the session terminal's output writer (a no-op frame
             // writes nothing).
             let emission = match session_terminal.lock() {
-                Ok(mut session) => emitter.emit_with_links(session.output(), &frame, &frame_links),
+                // G-457 — the idle heartbeat rides ONLY the plain
+                // tick: while the spinner pin / marquee owns the
+                // cadence (wait_deadline set) content frames flow at
+                // their own interval and extra cursor-assertion
+                // frames would land between them.
+                Ok(mut session) => emitter.emit_opts(
+                    session.output(),
+                    &frame,
+                    &frame_links,
+                    wait_deadline.is_none(),
+                ),
                 Err(_) => Err(std::io::Error::other("session terminal lock poisoned")),
             };
             if emission.is_err() {
