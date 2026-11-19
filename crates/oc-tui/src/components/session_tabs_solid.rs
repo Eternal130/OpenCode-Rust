@@ -173,6 +173,11 @@ struct StripInputs {
     /// G-143 — the indicator config (`tabs.indicators` + the ref
     /// `spinner`/`unreadMarker` prop defaults).
     indicator: crate::components::session_tabs::IndicatorConfig,
+    /// G-457 — the animation gate (`config.animations ?? true`): the
+    /// live `<spinner>` element vs the static `<text>` fallback
+    /// (`TabIndicator`'s Show, session-tabs.tsx:186-200 — the fallback
+    /// alone carries the selected-tab BOLD).
+    animations: bool,
 }
 
 impl StripInputs {
@@ -576,15 +581,18 @@ fn indicator_chunks(inputs: &StripInputs, key: &str) -> StyledText {
     } else {
         inputs.colors.text
     };
-    // G-426④ — the indicator glyph's attributes: the corpus runs with
-    // the fixture's `animations:false`, so ref renders the
-    // TabIndicator's FALLBACK text (`label()` = spinner frames[0] /
-    // unread marker / `!`/`?`) with `attributes={selected ? BOLD :
-    // undefined}` (session-tabs.tsx:195-197 + :970/:1057) — the whole
-    // fallback label is bold on the SELECTED tab (rec-…-bb7f1e74's
-    // selected busy tab pins ⠋ bold; rec-…-db261f5f's unselected busy
-    // tab pins ⠋ plain).
-    let attributes = u32::from(inputs.active.as_deref() == Some(key));
+    // G-426④/G-457 — the indicator glyph's attributes. The ref's LIVE
+    // spinner (`<spinner frames interval color>`, session-tabs.tsx:
+    // 197-199) renders through opentui-spinner's `drawChar` — fg color
+    // ONLY, no bold ever (opentui-spinner 0.0.7, `renderSelf`). The
+    // BOLD face belongs to the FALLBACK `<text
+    // attributes={selected ? BOLD : undefined}>` (:195-197) — the
+    // `animations:false` path (corpus fixtures pin its frames[0]
+    // glyph bold on the selected tab; rec-…-db261f5f's unselected
+    // busy tab pins ⠋ plain). The port's live animations path must
+    // NOT carry the fallback's bold — beta.20's "spinner glyph looks
+    // bigger than ref" was the braille boldface.
+    let attributes = u32::from(!inputs.animations && inputs.active.as_deref() == Some(key));
     StyledText::new(vec![TextChunk {
         text: glyph.clone(),
         fg: Some(rgba(fg)),
@@ -1111,6 +1119,7 @@ pub fn mount_solid_bar_clock(
     clock_ms: u64,
     tracks: std::collections::HashMap<String, TabPulseTrack>,
     indicator: crate::components::session_tabs::IndicatorConfig,
+    animations: bool,
     left: usize,
     top: usize,
 ) {
@@ -1127,6 +1136,7 @@ pub fn mount_solid_bar_clock(
         clock_ms,
         tracks,
         indicator,
+        animations,
     };
     strip_mount(inputs, left, top);
 }
@@ -1223,6 +1233,9 @@ pub fn paint_solid_bar_held(
         clock_ms: 0,
         tracks: std::collections::HashMap::new(),
         indicator: crate::components::session_tabs::IndicatorConfig::default(),
+        // the harness twin renders the corpus fixtures' static face
+        // (`animations:false` — the fallback text path, bold intact).
+        animations: false,
     };
     paint_inputs(inputs)
 }
@@ -1244,6 +1257,7 @@ pub fn paint_solid_bar_clock(
     clock_ms: u64,
     tracks: std::collections::HashMap<String, TabPulseTrack>,
     indicator: crate::components::session_tabs::IndicatorConfig,
+    animations: bool,
 ) -> Frame {
     let inputs = StripInputs {
         tabs: tabs.to_vec(),
@@ -1258,6 +1272,7 @@ pub fn paint_solid_bar_clock(
         clock_ms,
         tracks,
         indicator,
+        animations,
     };
     paint_inputs(inputs)
 }
@@ -1518,6 +1533,7 @@ mod tests {
             0,
             std::collections::HashMap::new(),
             crate::components::session_tabs::IndicatorConfig::default(),
+            false,
         );
         let spinner_cell = frame.cells[0]
             .iter()
@@ -1534,6 +1550,33 @@ mod tests {
             CellColor::Rgb(colors.interactive.0, colors.interactive.1, colors.interactive.2),
             "the busy spinner paints hue.interactive[200]"
         );
+        // G-457 attrs-level pin: the FALLBACK face (animations off)
+        // carries the selected-tab BOLD (session-tabs.tsx:195-197's
+        // `<text attributes={selected ? BOLD}>`), the LIVE `<spinner>`
+        // face never does (opentui-spinner 0.0.7's renderSelf draws
+        // fg-only) — the beta.20 "glyph looks bigger" was the braille
+        // boldface riding the live path.
+        assert_eq!(spinner_cell.attrs & 1, 1, "fallback (static) face: bold on the selected tab");
+        let frame = paint_solid_bar_clock(
+            &tabs,
+            Some("busy"),
+            false,
+            80,
+            &styles,
+            None,
+            None,
+            false,
+            None,
+            0,
+            std::collections::HashMap::new(),
+            crate::components::session_tabs::IndicatorConfig::default(),
+            true,
+        );
+        let live_cell = frame.cells[0]
+            .iter()
+            .find(|cell| cell.ch != ' ' && cell.ch != 'W')
+            .expect("live spinner glyph");
+        assert_eq!(live_cell.attrs & 1, 0, "live <spinner> face: no bold, fg-only drawChar");
         // The full cycle: each 80 ms step advances one frame (the
         // braille dot rotates clockwise ⠋→⠙→⠹→⠸→…).
         let frames: Vec<char> = (0..10)
@@ -1551,6 +1594,7 @@ mod tests {
                     step * 80,
                     std::collections::HashMap::new(),
                     crate::components::session_tabs::IndicatorConfig::default(),
+                    false,
                 );
                 frame.cells[0]
                     .iter()
@@ -1593,6 +1637,9 @@ mod tests {
                 clock,
                 tracks.clone(),
                 crate::components::session_tabs::IndicatorConfig::default(),
+                // G-457: the harness twin keeps the corpus fixtures'
+                // static face (animations:false → fallback bold).
+                false,
             );
             frame.cell(0, col).bg
         };
@@ -1641,6 +1688,7 @@ mod tests {
                 clock,
                 std::collections::HashMap::new(),
                 crate::components::session_tabs::IndicatorConfig::default(),
+                false,
             )
         };
         let title_at = |clock: u64, hover: Option<&str>| {
@@ -1713,6 +1761,7 @@ mod tests {
                     clock,
                     tracks.clone(),
                     crate::components::session_tabs::IndicatorConfig::default(),
+                    false,
                 );
                 *slot = (*slot).min(t.elapsed());
             }
