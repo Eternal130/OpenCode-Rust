@@ -8949,6 +8949,9 @@ pub async fn run_with_size(
         .and_then(|path| std::fs::metadata(path).ok())
         .and_then(|meta| meta.modified().ok());
     let mut last_tick = std::time::Instant::now();
+    // G-456 (env-gated anchor): the work-compensated wait's anchor —
+    // captured right after each select returns (iteration start).
+    let mut frame_anchor = std::time::Instant::now();
     // The shell output viewer's 1s live poll (ref
     // dialog-shell-output.tsx refreshes the open viewer every 1s).
     // Rides the existing periodic tick like the other polling
@@ -9053,8 +9056,15 @@ pub async fn run_with_size(
                 if input_stop.load(std::sync::atomic::Ordering::Relaxed) {
                     break;
                 }
+                let pass_started = std::time::Instant::now();
                 let bytes =
                     read_session_input(tty_input_fd.load(std::sync::atomic::Ordering::Acquire), 50);
+                let lock_wait = pass_started.elapsed();
+                rhythm_trace(&format!(
+                    "input bytes={} fd_ms={}",
+                    bytes.len(),
+                    lock_wait.as_millis()
+                ));
                 if bytes.is_empty() {
                     // The no-input feed tick still advances the probe's
                     // wall-clock deadline.
@@ -10720,6 +10730,7 @@ pub async fn run_with_size(
             if emission.is_err() {
                 break Err("terminal draw failed".to_owned());
             }
+            rhythm_trace(&format!("emit wrote={}", emission.unwrap_or(0)));
             // TUI-18 — the window title (`renderer.setTerminalTitle`
             // effect, app.tsx:596-622): OSC 0 rides the draw seam,
             // emitted only on CHANGE (route flips, a titled echo, the
@@ -10784,12 +10795,59 @@ pub async fn run_with_size(
         // wake immediately through the select.
         let wait_ms = match marquee_deadline {
             Some(deadline) => (deadline.saturating_sub(now_ms)).clamp(1, 100),
-            None => 100,
+            None => {
+                if tick_anchor_enabled() {
+                    // G-456 experiment (env-gated): two anchored
+                    // variants —
+                    //  * `1`: the ref's work-compensated scheduler
+                    //    (renderer.ts:4772-4801: `delay = max(1,
+                    //    target − work)` rescheduled from the frame's
+                    //    END — arithmetically the wake at
+                    //    iteration_start + target; `frame_anchor` is
+                    //    captured right after the select returns).
+                    //  * `2`: the W15/W16 experiment's exact shape —
+                    //    the wait anchored on `last_tick` (updated
+                    //    only when a tick FIRES), the variant that
+                    //    carried the ~609 ms-period typing stalls.
+                    match std::env::var("OC_TUI_TICK_ANCHOR").ok().as_deref() {
+                        Some("2") => u64::try_from(
+                            (last_tick + std::time::Duration::from_millis(100))
+                                .saturating_duration_since(std::time::Instant::now())
+                                .as_millis(),
+                        )
+                        .unwrap_or(1)
+                        .clamp(1, 100),
+                        _ => u64::try_from(
+                            (frame_anchor + std::time::Duration::from_millis(100))
+                                .saturating_duration_since(std::time::Instant::now())
+                                .as_millis(),
+                        )
+                        .unwrap_or(1)
+                        .clamp(1, 100),
+                    }
+                } else {
+                    100
+                }
+            }
         };
+        rhythm_trace(&format!("wait={wait_ms}"));
+        let select_entered_at = std::time::Instant::now();
         let event = tokio::select! {
-            maybe = event_rx.recv() => maybe,
-            () = tokio::time::sleep(std::time::Duration::from_millis(wait_ms)) => None,
+            maybe = event_rx.recv() => {
+                rhythm_trace("A event");
+                maybe
+            }
+            () = tokio::time::sleep(std::time::Duration::from_millis(wait_ms)) => {
+                rhythm_trace("A tick");
+                None
+            }
         };
+        rhythm_trace(&format!(
+            "S parked={:?}",
+            select_entered_at.elapsed()
+        ));
+        // G-456: the anchor for the NEXT wait — this iteration's start.
+        frame_anchor = std::time::Instant::now();
         match event {
             Some(TermEvent::Key(spec)) => {
                 if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
@@ -10986,6 +11044,35 @@ fn cache_tty_input_fd(
     use std::os::fd::AsRawFd as _;
     if let Ok(mut terminal) = session.lock() {
         cache.store(terminal.tty().input_fd().as_raw_fd(), std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// G-456 experiment gate — the work-compensated tick anchor (see the
+/// wait-site comment). Env-gated OFF by default; the anchored model's
+/// final landing (or its replacement) is this lane's deliverable.
+fn tick_anchor_enabled() -> bool {
+    std::env::var("OC_TUI_TICK_ANCHOR").ok().as_deref() == Some("1")
+}
+
+/// G-456 diagnostics — a tiny env-gated file trace (`/tmp/opencode/
+/// g456/loop.log`) stamping the run loop's select/wait shape, the
+/// emit byte counts, and the input thread's pass cadence, so a stall
+/// can be attributed (parked select vs busy loop vs lock block).
+fn rhythm_trace(line: &str) {
+    use std::io::Write as _;
+    static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var("OC_TUI_RHYTHM_TRACE").ok().as_deref() == Some("1")) {
+        return;
+    }
+    let t0 = T0.get_or_init(std::time::Instant::now);
+    let t = t0.elapsed().as_millis();
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/opencode/g456/loop.log")
+    {
+        let _ = writeln!(file, "t={t} {line}");
     }
 }
 
