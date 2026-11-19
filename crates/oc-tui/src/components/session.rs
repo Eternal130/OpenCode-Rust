@@ -162,6 +162,7 @@ pub fn mount_live_tabs_bar(
         store.clock(),
         tracks,
         store.tabs_indicator_config(),
+        store.animations_enabled(),
         left,
         top,
     );

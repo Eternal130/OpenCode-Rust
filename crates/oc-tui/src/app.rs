@@ -86,6 +86,10 @@ pub struct App {
     /// TUI-16 — the mouse text-selection state machine
     /// (util/selection.ts's cell model).
     pub screen_selection: crate::selection::ScreenSelection,
+    /// G-457 — the multi-click tracker (`nextClickBehavior`'s input):
+    /// the last left press's (time, cell) and the running count.
+    selection_last_press: Option<(u64, usize, usize)>,
+    selection_click_count: u32,
     /// TUI-16 — the last drawn frame (the selection's text source).
     pub last_frame: Option<crate::render::Frame>,
     /// TUI-16 — `terminal.copy` (select/manual).
@@ -204,6 +208,8 @@ impl App {
         Self {
             store,
             screen_selection: crate::selection::ScreenSelection::default(),
+            selection_last_press: None,
+            selection_click_count: 0,
             last_frame: None,
             copy_behavior: crate::config::CopyBehavior::default(),
             keymap: Keymap::new(),
@@ -485,9 +491,9 @@ impl App {
     /// TUI-16 — copy the selection's text (`copy`, selection.ts:
     /// 62-98 → `clipboard.write` + the `Copied to clipboard` info
     /// toast, app.tsx:564-571).
-    fn copy_selection(&mut self, rect: crate::selection::SelectionRect) {
+    fn copy_selection(&mut self, resolved: crate::selection::ResolvedSelection) {
         let Some(frame) = self.last_frame.clone() else { return };
-        let selected = crate::selection::selected_text(&frame, rect);
+        let selected = crate::selection::selected_text_resolved(&frame, &resolved);
         if selected.is_empty() {
             return;
         }
@@ -505,6 +511,28 @@ impl App {
                 ..crate::components::toast::ToastOptions::info("")
             });
         }
+    }
+
+    /// G-457 — the multi-click count for one left press (the
+    /// renderer's `nextClickBehavior` input): rapid same-cell presses
+    /// (≤500 ms) increment the count — 1 = cell, 2 = word
+    /// (double-click), 3 = line (triple-click), then the cycle
+    /// restarts. Any move past the window/cell resets to 1.
+    fn next_selection_click(&mut self, col: usize, row: usize) -> u32 {
+        // G-457 rework: read the STORE clock — `self.clock`
+        // (ManualClock) only advances in unit tests; frozen at 0 in
+        // the live loop it classified EVERY same-cell press as a
+        // rapid double-click (the transcript disclosure toggle's
+        // second click became a word-select copy). The store clock
+        // is the live path's only advancing time base.
+        let now_ms = self.store.clock();
+        let rapid = self
+            .selection_last_press
+            .is_some_and(|(at, x, y)| now_ms.saturating_sub(at) <= 500 && (x, y) == (col, row));
+        self.selection_click_count =
+            if rapid { self.selection_click_count.saturating_add(1) } else { 1 };
+        self.selection_last_press = Some((now_ms, col, row));
+        self.selection_click_count
     }
 
     /// One terminal mouse event (beta.8 bugs 3 + 4). v2's tab strip
@@ -708,9 +736,9 @@ impl App {
                 // util/selection.ts:44-60 + app.tsx:546-571); a
                 // resolved drag ALSO suppresses the click beneath it
                 // (the renderer's selection consumes the release).
-                if let Some(rect) = self.screen_selection.release() {
+                if let Some(resolved) = self.screen_selection.release(self.last_frame.as_ref()) {
                     if self.copy_behavior == crate::config::CopyBehavior::Select {
-                        self.copy_selection(rect);
+                        self.copy_selection(resolved);
                         // Copy-on-select ends the selection with the
                         // release (the renderer's drag ends; the
                         // retained selection is MANUAL mode's wait
@@ -1358,7 +1386,8 @@ impl App {
                 // TUI-16 — every left press arms a potential screen
                 // selection (the renderer's cell model; the release
                 // only resolves one when the pointer crossed cells).
-                self.screen_selection.press(col, row);
+                let click_count = self.next_selection_click(col, row);
+                self.screen_selection.press(col, row, click_count);
                 // TUI-3 — the rail's handle press arms the resize
                 // (`onMouseDown`, pane-resize.ts:82-97); the boundary
                 // double-click (<300 ms) resets the rail to the
@@ -1558,7 +1587,9 @@ impl App {
                 // 3-rows-a-notch line scroll. The event's arrival
                 // time feeds the streak (the input stream carries no wheel
                 // timestamps — `Date.now()` at `tick` in the ref).
-                let now_ms = i64::try_from(self.clock.now_ms_value()).unwrap_or(0);
+                // G-457 rework: the STORE clock (the live time base;
+                // `self.clock` only advances in unit tests).
+                let now_ms = i64::try_from(self.store.clock()).unwrap_or(0);
                 let step = self.store.wheel_step(now_ms);
                 let delta = if down { step } else { -step };
                 // A modal select's option window scrolls WITHOUT
@@ -1863,8 +1894,9 @@ impl App {
                 self.copy_behavior == crate::config::CopyBehavior::Select,
             ) {
                 crate::selection::SelectionKeyAction::CopyAndConsume => {
-                    if let Some(rect) = self.screen_selection.rect() {
-                        self.copy_selection(rect);
+                    if let Some(resolved) = self.screen_selection.resolve(self.last_frame.as_ref())
+                    {
+                        self.copy_selection(resolved);
                     }
                     self.screen_selection.clear();
                     self.keymap.clear_pending();
@@ -3564,8 +3596,8 @@ impl App {
         // NOTHING; paint the highlight here, over every layer the
         // frame composited below (the scrim-equivalent z of the
         // renderer's own post-grid pass).
-        if let Some(rect) = self.screen_selection.rect() {
-            crate::selection::paint_highlight(&mut frame, rect);
+        if let Some(resolved) = self.screen_selection.resolve(Some(&frame)) {
+            crate::selection::paint_resolved(&mut frame, &resolved);
         }
         frame
     }
@@ -8952,6 +8984,9 @@ pub async fn run_with_size(
     // G-456 (env-gated anchor): the work-compensated wait's anchor —
     // captured right after each select returns (iteration start).
     let mut frame_anchor = std::time::Instant::now();
+    // G-457 rework: a semantic event pulled mid-motion-batch — it
+    // dispatches first on the NEXT pass (its own full pump pass).
+    let mut semantic_carry: Option<TermEvent> = None;
     // The shell output viewer's 1s live poll (ref
     // dialog-shell-output.tsx refreshes the open viewer every 1s).
     // Rides the existing periodic tick like the other polling
@@ -10417,6 +10452,45 @@ pub async fn run_with_size(
         let now_ms = system_now_ms();
         let passed_boundary = crate::components::session_tabs_solid::marquee_passed_step(now_ms);
         let marquee_deadline = crate::components::session_tabs_solid::marquee_next_step(now_ms);
+        // G-457 — the busy spinner's frame-boundary pin. The ref's
+        // `<spinner>` self-schedules at its own interval
+        // (opentui-spinner 0.0.7's scheduler advances + requestRender
+        // per frame); the port's frame index derives from the store
+        // clock sampled at repaint, and the plain 100 ms tick BEATS
+        // against the 80 ms dots interval — frames skip visibly (the
+        // beta.20 "跑马灯/思考指示卡顿" A/B: ref smooth, rust janky).
+        // While any tab runs, pin the clock to each spinner boundary
+        // exactly like the marquee pin below (one boundary per wake).
+        let spinner_interval = if app.store.animations_enabled() {
+            let busy = app
+                .store
+                .strip_tabs_ordered()
+                .iter()
+                .any(|tab| app.store.session_busy(&tab.session_id));
+            if busy {
+                app.store.tabs_indicator_config().spinner.interval_ms().max(1)
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        let spinner_boundary_after_clock = (spinner_interval > 0)
+            .then(|| (app.store.clock() / spinner_interval + 1) * spinner_interval);
+        let passed_boundary = match (passed_boundary, spinner_boundary_after_clock) {
+            (Some(marquee), Some(spinner)) => {
+                Some(if marquee < spinner { marquee } else { spinner }).filter(|b| *b <= now_ms)
+            }
+            (Some(marquee), None) => Some(marquee),
+            (None, Some(spinner)) => Some(spinner).filter(|b| *b <= now_ms),
+            (None, None) => None,
+        };
+        let wait_deadline = match (marquee_deadline, spinner_boundary_after_clock) {
+            (Some(marquee), Some(spinner)) => Some(marquee.min(spinner.max(now_ms))),
+            (Some(marquee), None) => Some(marquee),
+            (None, Some(spinner)) => Some(spinner.max(now_ms + 1)),
+            (None, None) => None,
+        };
         let mut ticked = false;
         if let Some(boundary) = passed_boundary.filter(|boundary| *boundary > app.store.clock()) {
             app.store.advance_clock(boundary);
@@ -10807,7 +10881,7 @@ pub async fn run_with_size(
         // now DEFAULT ON with `OC_TUI_TICK_ANCHOR=0` as the escape
         // hatch (measured: quiet median 101/p95 102/σ 2-3 ms vs the
         // plain poll's 110/111/9.1; typing unchanged at 120/122).
-        let wait_ms = match marquee_deadline {
+        let wait_ms = match wait_deadline {
             Some(deadline) => (deadline.saturating_sub(now_ms)).clamp(1, 100),
             None if tick_anchor_enabled() => u64::try_from(
                 (frame_anchor + std::time::Duration::from_millis(100))
@@ -10818,90 +10892,142 @@ pub async fn run_with_size(
             .clamp(1, 100),
             None => 100,
         };
-        let event = tokio::select! {
-            maybe = event_rx.recv() => maybe,
-            () = tokio::time::sleep(std::time::Duration::from_millis(wait_ms)) => None,
+        let event = if let Some(held) = semantic_carry.take() {
+            // G-457 rework: a semantic event held back from the last
+            // batch runs FIRST, bypassing the wait (it already owns
+            // this pass).
+            Some(held)
+        } else {
+            tokio::select! {
+                maybe = event_rx.recv() => maybe,
+                () = tokio::time::sleep(std::time::Duration::from_millis(wait_ms)) => None,
+            }
         };
         // G-456: the anchor for the NEXT wait — this iteration's start.
         frame_anchor = std::time::Instant::now();
-        match event {
-            Some(TermEvent::Key(spec)) => {
-                if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
-                    eprintln!("[tui] key: {spec}");
+        // G-457 — BATCH the MOTION dispatch. The select wakes on ONE
+        // event, but the loop body is a full pump pass (SSE ingest
+        // drain, plugin pump, sync, render gate): dispatching one
+        // event per pass gave every queued event that pass's whole
+        // cost (~9 ms/event measured). A real terminal in ?1003
+        // any-motion mode queues a motion report per pointer move —
+        // a moving mouse (60-120 reports/s) grew an unbounded
+        // backlog and the wheel behind it appeared dead on real
+        // machines (beta.20 symptom 1; the PTY suites never sent
+        // unsolicited motion, so G-447's proof missed it). Ref
+        // parity: opentui dispatches mouse natively per frame, never
+        // one main-loop pass per report. G-457 rework (merge-gate
+        // bisect): the batch takes ONLY motion reports (Moved/Drag —
+        // the flood's sole source); every SEMANTIC event (key, click
+        // Down/Up, wheel, paste, focus, resize) keeps its own full
+        // pump pass — click hit-testing and multi-step interactions
+        // read the post-event render state between strokes
+        // (f15-long-title click + km strip-drag regressed when the
+        // whole queue drained per pass). Order preserved; a semantic
+        // event pulled mid-batch is held in `semantic_carry` and
+        // dispatches first next pass.
+        let mut pending_event = event;
+        loop {
+            match pending_event {
+                Some(TermEvent::Key(spec)) => {
+                    if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
+                        eprintln!("[tui] key: {spec}");
+                    }
+                    app.press(&spec);
                 }
-                app.press(&spec);
-            }
-            // SIGWINCH stand-in (B3a): the input thread's 50 ms
-            // check_resize tick — relayout at the new size; the
-            // emitter's prev grid invalidates (B3b: full repaint at
-            // the new size, upstream's fresh-blank-buffers resize).
-            Some(TermEvent::Resize(width, height)) => {
-                app.resize((width, height));
-                emitter.resize(usize::from(width), usize::from(height));
-                render_renderer.borrow_mut().resize(u32::from(width), u32::from(height));
-                redraw_at = 0; // force one redraw
-            }
-            // Focus: the attention marker consumes on FocusGained (the
-            // bell itself fired regardless — the sound channel is
-            // "always" in v2's notifications plugin). FocusLost blurs
-            // the attention engine (OS notifications become eligible).
-            Some(TermEvent::FocusGained) => {
-                app.store.set_focused();
-                // Lane TAIL (auditC P6): the ?997 stand-in — a terminal
-                // theme flip re-queries OSC 10/11 on focus (10 s
-                // cooldown, only while `theme.mode == "system"`); the
-                // answers reduce through opentui's theme watch into the
-                // ThemeMode event below — v2's `refreshPalette()`.
-                if config.theme.mode.as_deref() == Some("system")
-                    && theme_probe_at.elapsed() >= std::time::Duration::from_secs(10)
-                {
-                    theme_probe_at = std::time::Instant::now();
-                    if let Ok(mut session) = session_terminal.lock() {
-                        use std::io::Write as _;
-                        let _ = session.output().write_all(b"\x1b]10;?\x07\x1b]11;?\x07");
-                        let _ = session.output().flush();
+                // SIGWINCH stand-in (B3a): the input thread's 50 ms
+                // check_resize tick — relayout at the new size; the
+                // emitter's prev grid invalidates (B3b: full repaint at
+                // the new size, upstream's fresh-blank-buffers resize).
+                Some(TermEvent::Resize(width, height)) => {
+                    app.resize((width, height));
+                    emitter.resize(usize::from(width), usize::from(height));
+                    render_renderer.borrow_mut().resize(u32::from(width), u32::from(height));
+                    redraw_at = 0; // force one redraw
+                }
+                // Focus: the attention marker consumes on FocusGained (the
+                // bell itself fired regardless — the sound channel is
+                // "always" in v2's notifications plugin). FocusLost blurs
+                // the attention engine (OS notifications become eligible).
+                Some(TermEvent::FocusGained) => {
+                    app.store.set_focused();
+                    // Lane TAIL (auditC P6): the ?997 stand-in — a terminal
+                    // theme flip re-queries OSC 10/11 on focus (10 s
+                    // cooldown, only while `theme.mode == "system"`); the
+                    // answers reduce through opentui's theme watch into the
+                    // ThemeMode event below — v2's `refreshPalette()`.
+                    if config.theme.mode.as_deref() == Some("system")
+                        && theme_probe_at.elapsed() >= std::time::Duration::from_secs(10)
+                    {
+                        theme_probe_at = std::time::Instant::now();
+                        if let Ok(mut session) = session_terminal.lock() {
+                            use std::io::Write as _;
+                            let _ = session.output().write_all(b"\x1b]10;?\x07\x1b]11;?\x07");
+                            let _ = session.output().flush();
+                        }
                     }
                 }
-            }
-            Some(TermEvent::FocusLost) => app.store.set_blurred(),
-            // The probe/theme-watch reduction reported a system mode
-            // (the boot answer or a live terminal theme flip).
-            Some(TermEvent::ThemeMode(mode)) => {
-                if mode != system_mode {
-                    system_mode = mode;
-                    app.store.set_theme_mode_inputs(config.theme.mode.clone(), system_mode);
-                    app.apply_config(&config, system_mode);
-                    redraw_at = 0; // one repaint on the palette change
+                Some(TermEvent::FocusLost) => app.store.set_blurred(),
+                // The probe/theme-watch reduction reported a system mode
+                // (the boot answer or a live terminal theme flip).
+                Some(TermEvent::ThemeMode(mode)) => {
+                    if mode != system_mode {
+                        system_mode = mode;
+                        app.store.set_theme_mode_inputs(config.theme.mode.clone(), system_mode);
+                        app.apply_config(&config, system_mode);
+                        redraw_at = 0; // one repaint on the palette change
+                    }
                 }
-            }
-            // R-07/D3-4b: the opentui capability snapshot (kitty
-            // graphics + DA1 sixel + cell-px resolution) drives
-            // `protocol="auto"`; a new snapshot repaints so the image
-            // strip switches protocol immediately.
-            Some(TermEvent::Capabilities(capabilities)) => {
-                let hyperlinks = capabilities.hyperlinks;
-                app.store.set_graphics_capabilities(Some(*capabilities));
-                // G-287⑧ — the same snapshot's OSC-8 verdict drives the
-                // markdown hyperlink seam (`ctx.capabilities?.hyperlinks
-                // === true`, Markdown.ts:385-390): a capable terminal
-                // flips the seam (the repaint below re-renders the
-                // transcript with concealed `](url)` tails + OSC-8).
-                app.store.set_hyperlinks_supported(hyperlinks);
-                redraw_at = 0;
-            }
-            // Bracketed paste (R-07): resolve attachment file paths →
-            // chips, else insert the text (`pasteInputText`).
-            Some(TermEvent::Paste(text)) => app.paste_terminal_text(&text),
-            // Mouse (beta.8 bugs 3/4): the tab strip's hover/select/
-            // close/add surface and the transcript's reasoning-row
-            // disclosure toggle.
-            Some(TermEvent::Mouse(mouse)) => {
-                if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
-                    eprintln!("[tui] mouse: {mouse:?}");
+                // R-07/D3-4b: the opentui capability snapshot (kitty
+                // graphics + DA1 sixel + cell-px resolution) drives
+                // `protocol="auto"`; a new snapshot repaints so the image
+                // strip switches protocol immediately.
+                Some(TermEvent::Capabilities(capabilities)) => {
+                    let hyperlinks = capabilities.hyperlinks;
+                    app.store.set_graphics_capabilities(Some(*capabilities));
+                    // G-287⑧ — the same snapshot's OSC-8 verdict drives the
+                    // markdown hyperlink seam (`ctx.capabilities?.hyperlinks
+                    // === true`, Markdown.ts:385-390): a capable terminal
+                    // flips the seam (the repaint below re-renders the
+                    // transcript with concealed `](url)` tails + OSC-8).
+                    app.store.set_hyperlinks_supported(hyperlinks);
+                    redraw_at = 0;
                 }
-                app.mouse_event(&mouse);
+                // Bracketed paste (R-07): resolve attachment file paths →
+                // chips, else insert the text (`pasteInputText`).
+                Some(TermEvent::Paste(text)) => app.paste_terminal_text(&text),
+                // Mouse (beta.8 bugs 3/4): the tab strip's hover/select/
+                // close/add surface and the transcript's reasoning-row
+                // disclosure toggle.
+                Some(TermEvent::Mouse(mouse)) => {
+                    if std::env::var("OC_TUI_DEBUG").ok().as_deref() == Some("1") {
+                        eprintln!("[tui] mouse: {mouse:?}");
+                    }
+                    app.mouse_event(&mouse);
+                }
+                None => {}
             }
-            None => {}
+            // The next queued MOTION report rides this same pass; a
+            // semantic event is held for its own pass.
+            if app.exit_requested {
+                break;
+            }
+            match event_rx.try_recv() {
+                Ok(TermEvent::Mouse(m))
+                    if matches!(
+                        m.kind,
+                        crate::input_term::MouseEventKind::Moved
+                            | crate::input_term::MouseEventKind::Drag(_)
+                    ) =>
+                {
+                    pending_event = Some(TermEvent::Mouse(m));
+                }
+                Ok(semantic) => {
+                    semantic_carry = Some(semantic);
+                    break;
+                }
+                Err(_) => break,
+            }
         }
         if app.exit_requested {
             break Ok(());
