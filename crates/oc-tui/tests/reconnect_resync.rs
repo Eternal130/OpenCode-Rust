@@ -410,8 +410,7 @@ async fn reconnect_fetches_pending_permissions_and_forms() {
     let connection = Connection::with_config(
         client,
         ConnectionConfig {
-            backoff_base: Duration::from_millis(10),
-            backoff_max: Duration::from_millis(10),
+            reconnect_delay: Duration::from_millis(10),
             max_attempts: Some(1),
             connect_timeout: Duration::from_secs(2),
             idle_timeout: Duration::from_secs(45),
