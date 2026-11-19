@@ -173,15 +173,28 @@ fn busy_pulse_pressure_cycles_breathe_every_time() {
     for &(start, end) in &windows {
         let profiles: Vec<&Vec<u64>> = snaps[start..end].iter().map(|(_, p, _)| p).collect();
         let distinct: std::collections::HashSet<&Vec<u64>> = profiles.iter().copied().collect();
+        if distinct.len() < 2 && std::env::var("OC_TUI_TRACE_PIN").is_ok() {
+            eprintln!(
+                "[bp] frozen window [{start}:{end}] t={:?} rows={:?}",
+                snaps[start..end].iter().map(|s| s.0).collect::<Vec<_>>(),
+                snaps[start..end]
+                    .iter()
+                    .map(|(_, _, r)| r.trim().chars().find(|c| "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏".contains(*c)))
+                    .collect::<Vec<_>>()
+            );
+        }
         if distinct.len() >= 2 {
             moving_windows += 1;
         }
     }
     assert!(
         moving_windows == windows.len(),
-        "busy sweep frozen in {} of {} windows (breathing-lamp miss)",
+        "busy sweep frozen in {} of {} windows (breathing-lamp miss); windows {windows:?} snaps {} first/last t {:?}/{:?}",
         windows.len() - moving_windows,
-        windows.len()
+        windows.len(),
+        snaps.len(),
+        snaps.first().map(|s| s.0),
+        snaps.last().map(|s| s.0),
     );
     // (c) EXIT: the final snapshots (past the last scripted cycle)
     // must be idle — the running set cleared.

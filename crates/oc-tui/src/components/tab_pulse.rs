@@ -291,9 +291,18 @@ pub struct TabPulseTrack {
 }
 
 impl TabPulseTrack {
-    /// Stamp any status transition at `now`.
+    /// Stamp any status transition at `now`. G-457: a re-ON while a
+    /// release fade is still armed (`idle_since` set) RETRIGGERS the
+    /// note — `active_since` re-stamps and the idle arm clears.
+    /// Without this, an OFF/ON pair landing inside one clock step
+    /// (the spinner-pin's 80 ms grid coalesces fast transitions —
+    /// the store's busy flag flickers false between two mounts of
+    /// one render pass) left `idle_since == active_since` and
+    /// `sweep_clock` clamped at the constant fade tail: the sweep
+    /// band froze while the spinner glyph marched on (the
+    /// busy-pulse pressure regression).
     pub fn sync(&mut self, runs: bool, glow: bool, complete: bool, now: u64) {
-        if runs != self.active_since.is_some() {
+        if runs != self.active_since.is_some() || (runs && self.idle_since.is_some()) {
             if runs {
                 self.active_since = Some(now);
                 self.idle_since = None;
