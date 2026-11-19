@@ -46,11 +46,17 @@ fn emit_bytes(new: &mut OpentuiEmitter, frame: &Frame, cursor: CursorInput) -> V
 /// The policy tail: every emitted frame with a visible caret ends
 /// with CUP + `?25h` inside the envelope; every frame with a hidden
 /// caret carries `?25l`; a fully invisible frame writes nothing.
+/// G-457: a no-op frame (empty diff, unchanged cursor) inside the
+/// idle-heartbeat window is ALSO byte-silent — upstream's no-op
+/// frame rule (renderer.zig:3029-3032); past the window the cursor
+/// assertion goes out as the idle heartbeat.
 fn assert_cursor_policy(bytes: &[u8], cursor: CursorInput, label: &str) {
     let text = String::from_utf8_lossy(bytes);
     if cursor.is_some() {
         assert!(
-            text == "\x1b[?2026h\x1b[?25l\x1b[?2026l" || text.ends_with("\x1b[?25h\x1b[?2026l"),
+            text.is_empty()
+                || text == "\x1b[?2026h\x1b[?25l\x1b[?2026l"
+                || text.ends_with("\x1b[?25h\x1b[?2026l"),
             "{label}: visible policy: {text:?}"
         );
     } else {
@@ -157,7 +163,14 @@ fn replay_corpus_emission_is_pinned() {
     // bound). The w13-perm-once dialog export shows the same hint row on
     // BOTH engines after the change; the footer/mini permission goldens
     // of this wave re-bless the same bytes.
-    assert_eq!(digest, 0x8a8c_9d84_9fa8_c9ba, "the corpus emission bytes drifted");
+    // Re-pinned at G-457 r3 — no-op frames inside the idle-heartbeat
+    // window are byte-silent (upstream's no-op-frame rule,
+    // renderer.zig:3029-3032; the E1 rhythm detector flagged the
+    // redundant cursor-tail emissions the old policy forced out of
+    // back-to-back passes). CONTENT frames' bytes are unchanged; the
+    // channel-8 GRID channels stay zero-drift (tree scenarios + the
+    // fullscreen diff driver green on the same tree).
+    assert_eq!(digest, 0x9bcb_acaf_8c64_2396, "the corpus emission bytes drifted");
 }
 
 // -- the emitter vocabulary -------------------------------------------------
@@ -261,8 +274,12 @@ fn vocabulary_emission_is_pinned() {
     f2.cells[1][4].ch = '!';
     digest = digest.wrapping_add(fnv1a(&emit_bytes(&mut emitter, &f2, None)));
 
-    // PINNED (lane D4.2, the differential proof of commit 41783d2a).
-    assert_eq!(digest, 0xf748_ba52_0bf0_d923, "the vocabulary emission bytes drifted");
+    // PINNED (lane D4.2, the differential proof of commit 41783d2a;
+    // re-pinned G-457: no-op frames inside the idle-heartbeat window
+    // are now byte-silent — upstream's no-op-frame rule,
+    // renderer.zig:3029-3032 — so their cursor tails left the
+    // stream; every CONTENT frame's bytes are unchanged).
+    assert_eq!(digest, 0x8012_e1ce_c84c_1bc2, "the vocabulary emission bytes drifted");
 }
 
 /// The cluster pixel contract (the retired emitter's

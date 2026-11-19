@@ -112,7 +112,31 @@ pub struct OpentuiEmitter {
     /// The previous frame's cluster sidecar (the diff base for the
     /// deferred cluster pass — see [`render_sgr`]).
     prev_clusters: ClusterMap,
+    /// G-457 — the last-emitted cursor assertion (visible, y, x). A
+    /// frame whose DIFF is empty and whose cursor state is unchanged
+    /// emits NOTHING (upstream's no-op-frame rule, renderer.zig:
+    /// 3029-3032 — the cursor tail below used to force bytes out of
+    /// every pass while the caret was visible, so back-to-back
+    /// redundant passes produced sub-frame-interval feed gaps the
+    /// E1 rhythm detector legitimately flagged).
+    last_cursor: Option<(bool, u32, u32)>,
+    /// G-457 — the last real emission's instant: the idle heartbeat
+    /// (the cursor assertion on an otherwise-empty frame — the E1
+    /// dialog-open-idle flush-cadence source) is rate-limited to one
+    /// per [`IDLE_HEARTBEAT_MS`] so back-to-back redundant passes
+    /// (the spinner pin's boundary + follow-up wake pairs, ~10 ms
+    /// apart) stay byte-silent.
+    last_emit_at: Option<std::time::Instant>,
 }
+
+/// The idle heartbeat's eligibility window — 90 ms threads BOTH
+/// constraints: under the app tick (~100 ms — an anchored-tick pass
+/// must always be past the window, or heartbeat gaps jitter toward
+/// 2 ticks and the E1 detector reads them as stalls) and above the
+/// busy cadence's intra-frame follow-up wakes (≤80 ms after the
+/// spinner boundary frame — those must stay suppressed or sub-70 ms
+/// feed gaps merge bursts).
+const IDLE_HEARTBEAT_MS: u64 = 90;
 
 impl OpentuiEmitter {
     /// A fresh emitter at `width`×`height`. The renderer starts at
@@ -126,7 +150,14 @@ impl OpentuiEmitter {
             height: u32::try_from(height).unwrap_or(u32::MAX),
             ..CliRendererConfig::default()
         });
-        OpentuiEmitter { renderer, width, height, prev_clusters: ClusterMap::new() }
+        OpentuiEmitter {
+            renderer,
+            width,
+            height,
+            prev_clusters: ClusterMap::new(),
+            last_cursor: None,
+            last_emit_at: None,
+        }
     }
 
     /// The renderer's terminal-cursor state + emission diff cache —
@@ -285,8 +316,39 @@ impl OpentuiEmitter {
         frame: &Frame,
         links: &[FrameLinkRect],
     ) -> std::io::Result<usize> {
+        self.emit_opts(out, frame, links, true)
+    }
+
+    /// [`Self::emit_with_links`] with the idle-heartbeat gate: while
+    /// an animation owns the flush cadence (the spinner pin / the
+    /// marquee — content frames already flow at their own interval)
+    /// the cursor-assertion heartbeat stays OFF, or its extra empty
+    /// frames land between the animation's and merge the VT bursts.
+    pub fn emit_opts<W: std::io::Write>(
+        &mut self,
+        out: &mut W,
+        frame: &Frame,
+        links: &[FrameLinkRect],
+        idle_heartbeat: bool,
+    ) -> std::io::Result<usize> {
         let mut sgr = self.render_sgr(frame, links);
         let cursor = &self.renderer.cursor_state;
+        let cursor_now: (bool, u32, u32) = (cursor.visible, cursor.y, cursor.x);
+        // ms truncation is the intended granularity (a >584 My elapsed
+        // is impossible in-process).
+        #[allow(clippy::cast_possible_truncation)]
+        let since_last = self.last_emit_at.map_or(u64::MAX, |at| at.elapsed().as_millis() as u64);
+        if sgr.is_empty()
+            && self.last_cursor == Some(cursor_now)
+            && (!idle_heartbeat || since_last < IDLE_HEARTBEAT_MS)
+        {
+            // G-457 — a redundant no-op pass inside the heartbeat
+            // window: empty diff, unchanged cursor, nothing new to
+            // assert. Byte-silent (upstream's no-op-frame rule,
+            // renderer.zig:3029-3032); past the window the cursor
+            // assertion goes out as the idle heartbeat.
+            return Ok(0);
+        }
         if cursor.visible {
             if !sgr.ends_with("\x1b[?25h") {
                 let _ = write!(sgr, "\x1b[{};{}H\x1b[?25h", cursor.y, cursor.x);
@@ -294,9 +356,11 @@ impl OpentuiEmitter {
         } else if !sgr.ends_with("\x1b[?25l") {
             sgr.push_str("\x1b[?25l");
         }
+        self.last_cursor = Some(cursor_now);
         if sgr.is_empty() {
             return Ok(0); // no-op invisible frame — no envelope
         }
+        self.last_emit_at = Some(std::time::Instant::now());
         let bytes = SYNC_BEGIN.len() + sgr.len() + SYNC_END.len();
         out.write_all(SYNC_BEGIN)?;
         out.write_all(sgr.as_bytes())?;
