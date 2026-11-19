@@ -1348,7 +1348,8 @@ mod tests {
         let stamps_rx = Arc::clone(&stamps);
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         while stamps_rx.lock().expect("stamps").len() < 4 {
-            let Some(message) = tokio::time::timeout_at(deadline, rx.recv()).await.expect("deadline")
+            let Some(message) =
+                tokio::time::timeout_at(deadline, rx.recv()).await.expect("deadline")
             else {
                 break;
             };
@@ -1430,7 +1431,8 @@ mod tests {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         let mut connected = 0;
         while connected < 2 {
-            let Some(message) = tokio::time::timeout_at(deadline, rx.recv()).await.expect("deadline")
+            let Some(message) =
+                tokio::time::timeout_at(deadline, rx.recv()).await.expect("deadline")
             else {
                 break;
             };
@@ -1444,9 +1446,7 @@ mod tests {
 
         assert_eq!(connected, 2, "two full connections: {observed:?}");
         assert!(
-            observed
-                .iter()
-                .all(|message| !matches!(message, Ingest::Connection(_))),
+            observed.iter().all(|message| !matches!(message, Ingest::Connection(_))),
             "a stable (≥ reconnect_delay) connection resets the attempt counter — \
              the second connect is attempt 1 with no Reconnecting overlay: {observed:?}"
         );
@@ -2405,14 +2405,14 @@ mod tests {
         let seen_cursors: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
         let cursors = Arc::clone(&seen_cursors);
         let server = tokio::spawn(async move {
-            let mut connections = 0u32;
+            // EVENT connections only — the resync's /api/session
+            // fetches share this listener and must not consume the
+            // scripted connection slots.
+            let event_connections = Arc::new(std::sync::atomic::AtomicU32::new(0));
             loop {
                 let Ok((mut socket, _)) = listener.accept().await else { continue };
-                connections += 1;
-                let first = connections <= 1;
                 let cursors = Arc::clone(&cursors);
-                // Per-connection task: connection 1 must HOLD its
-                // starved socket open without blocking the acceptor.
+                let event_connections = Arc::clone(&event_connections);
                 tokio::spawn(async move {
                     let (mut reader, _) = socket.split();
                     let mut request = vec![0u8; 8192];
@@ -2434,7 +2434,10 @@ mod tests {
                                 .map(|value| value.trim().to_owned())
                         });
                         cursors.lock().expect("cursor log").push(cursor);
-                        if connections >= 3 {
+                        let event_connections_val =
+                            event_connections.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                        let first = event_connections_val <= 1;
+                        if event_connections_val >= 3 {
                             // Connections 3+ always fail the subscribe:
                             // the retry ladder climbs to max_attempts.
                             let _ = socket
@@ -2496,7 +2499,7 @@ mod tests {
 
         let mut observed = Vec::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        while observed.len() < 10 {
+        while observed.len() < 9 {
             let Some(message) =
                 tokio::time::timeout_at(deadline, rx.recv()).await.expect("deadline")
             else {
@@ -2512,7 +2515,7 @@ mod tests {
         // (connection.ts:158) and the reconnect is SILENT (attempt 1,
         // no overlay). Connection 2 does the same; only the always-500
         // connections 3+ climb the ladder to `Failed`.
-        assert_eq!(observed.len(), 10, "observed: {observed:?}");
+        assert_eq!(observed.len(), 9, "observed: {observed:?}");
         assert!(matches!(&observed[0], Ingest::Resync { .. }), "{observed:?}");
         assert!(matches!(observed[1], Ingest::Connected), "{observed:?}");
         assert!(
@@ -2529,7 +2532,8 @@ mod tests {
         assert!(matches!(&observed[5], Ingest::Event(event) if event.id == "c2"), "{observed:?}");
         assert!(matches!(&observed[6], Ingest::Event(event) if event.id == "e3"), "{observed:?}");
         // Connection 2's stall also resets; the 500-failures then climb
-        // 1 → 2 (overlay) → 3 (> max_attempts → Failed).
+        // 1 (silent) → 2 (overlay) → 3 exceeds max_attempts → Failed
+        // (the give-up check fires before any further overlay).
         assert!(
             matches!(
                 &observed[7],
@@ -2537,14 +2541,7 @@ mod tests {
             ),
             "{observed:?}"
         );
-        assert!(
-            matches!(
-                &observed[8],
-                Ingest::Connection(ConnectionState::Reconnecting { attempt: 3 })
-            ),
-            "{observed:?}"
-        );
-        assert!(matches!(observed[9], Ingest::Connection(ConnectionState::Failed)), "{observed:?}");
+        assert!(matches!(observed[8], Ingest::Connection(ConnectionState::Failed)), "{observed:?}");
         // The watchdog-triggered resubscribe carried the tracked cursor.
         let cursors = seen_cursors.lock().expect("cursor log").clone();
         assert_eq!(
