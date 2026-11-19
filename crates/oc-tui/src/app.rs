@@ -86,6 +86,10 @@ pub struct App {
     /// TUI-16 — the mouse text-selection state machine
     /// (util/selection.ts's cell model).
     pub screen_selection: crate::selection::ScreenSelection,
+    /// G-457 — the multi-click tracker (`nextClickBehavior`'s input):
+    /// the last left press's (time, cell) and the running count.
+    selection_last_press: Option<(u64, usize, usize)>,
+    selection_click_count: u32,
     /// TUI-16 — the last drawn frame (the selection's text source).
     pub last_frame: Option<crate::render::Frame>,
     /// TUI-16 — `terminal.copy` (select/manual).
@@ -204,6 +208,8 @@ impl App {
         Self {
             store,
             screen_selection: crate::selection::ScreenSelection::default(),
+            selection_last_press: None,
+            selection_click_count: 0,
             last_frame: None,
             copy_behavior: crate::config::CopyBehavior::default(),
             keymap: Keymap::new(),
@@ -485,9 +491,9 @@ impl App {
     /// TUI-16 — copy the selection's text (`copy`, selection.ts:
     /// 62-98 → `clipboard.write` + the `Copied to clipboard` info
     /// toast, app.tsx:564-571).
-    fn copy_selection(&mut self, rect: crate::selection::SelectionRect) {
+    fn copy_selection(&mut self, resolved: crate::selection::ResolvedSelection) {
         let Some(frame) = self.last_frame.clone() else { return };
-        let selected = crate::selection::selected_text(&frame, rect);
+        let selected = crate::selection::selected_text_resolved(&frame, &resolved);
         if selected.is_empty() {
             return;
         }
@@ -505,6 +511,21 @@ impl App {
                 ..crate::components::toast::ToastOptions::info("")
             });
         }
+    }
+
+    /// G-457 — the multi-click count for one left press (the
+    /// renderer's `nextClickBehavior` input): rapid same-cell presses
+    /// (≤500 ms) increment the count — 1 = cell, 2 = word
+    /// (double-click), 3 = line (triple-click), then the cycle
+    /// restarts. Any move past the window/cell resets to 1.
+    fn next_selection_click(&mut self, col: usize, row: usize) -> u32 {
+        let now_ms = u64::try_from(self.clock.now_ms_value().max(0)).unwrap_or(0);
+        let rapid = self
+            .selection_last_press
+            .is_some_and(|(at, x, y)| now_ms.saturating_sub(at) <= 500 && (x, y) == (col, row));
+        self.selection_click_count = if rapid { self.selection_click_count.saturating_add(1) } else { 1 };
+        self.selection_last_press = Some((now_ms, col, row));
+        self.selection_click_count
     }
 
     /// One terminal mouse event (beta.8 bugs 3 + 4). v2's tab strip
@@ -708,9 +729,9 @@ impl App {
                 // util/selection.ts:44-60 + app.tsx:546-571); a
                 // resolved drag ALSO suppresses the click beneath it
                 // (the renderer's selection consumes the release).
-                if let Some(rect) = self.screen_selection.release() {
+                if let Some(resolved) = self.screen_selection.release(self.last_frame.as_ref()) {
                     if self.copy_behavior == crate::config::CopyBehavior::Select {
-                        self.copy_selection(rect);
+                        self.copy_selection(resolved);
                         // Copy-on-select ends the selection with the
                         // release (the renderer's drag ends; the
                         // retained selection is MANUAL mode's wait
@@ -1358,7 +1379,8 @@ impl App {
                 // TUI-16 — every left press arms a potential screen
                 // selection (the renderer's cell model; the release
                 // only resolves one when the pointer crossed cells).
-                self.screen_selection.press(col, row);
+                let click_count = self.next_selection_click(col, row);
+                self.screen_selection.press(col, row, click_count);
                 // TUI-3 — the rail's handle press arms the resize
                 // (`onMouseDown`, pane-resize.ts:82-97); the boundary
                 // double-click (<300 ms) resets the rail to the
@@ -1863,8 +1885,8 @@ impl App {
                 self.copy_behavior == crate::config::CopyBehavior::Select,
             ) {
                 crate::selection::SelectionKeyAction::CopyAndConsume => {
-                    if let Some(rect) = self.screen_selection.rect() {
-                        self.copy_selection(rect);
+                    if let Some(resolved) = self.screen_selection.resolve(self.last_frame.as_ref()) {
+                        self.copy_selection(resolved);
                     }
                     self.screen_selection.clear();
                     self.keymap.clear_pending();
@@ -3564,8 +3586,8 @@ impl App {
         // NOTHING; paint the highlight here, over every layer the
         // frame composited below (the scrim-equivalent z of the
         // renderer's own post-grid pass).
-        if let Some(rect) = self.screen_selection.rect() {
-            crate::selection::paint_highlight(&mut frame, rect);
+        if let Some(resolved) = self.screen_selection.resolve(Some(&frame)) {
+            crate::selection::paint_resolved(&mut frame, &resolved);
         }
         frame
     }
