@@ -229,6 +229,47 @@ pub fn collect_plugin_ops(files: &[PathBuf]) -> Vec<PluginOp> {
             ));
             continue;
         };
+        // G-462: the v1 `plugin` key merges BEFORE the native `plugins`
+        // entries — the ref's normalize does exactly this
+        // (packages/core/src/config/normalize.ts:185-190: legacy
+        // `decodeList(input.plugin, ...)` maps `"pkg"` and
+        // `["pkg", opts]` onto the plugin list, chained ahead of
+        // `input.plugins`), and the rust server leg rides the same
+        // merge through the normalized config
+        // (oc-core config/normalize.rs:447-469 → oc-server
+        // plugins.rs:1093 `document.info.plugins`). The TUI's raw-file
+        // discovery read ONLY `plugins`, so a bare v1 name (the real
+        // omo-slim face: `{"plugin": ["oh-my-opencode-slim"]}`) never
+        // booted the host — the sidebar sections silently vanished.
+        if let Some(entries) = document.get("plugin").and_then(Value::as_array) {
+            for entry in entries {
+                match entry {
+                    // `"pkg"` → the v2 spec string as-is.
+                    Value::String(_) => raw.push(entry.clone()),
+                    // `["pkg", opts]` → `{package, options}` (the v1
+                    // tuple shape; ref `ConfigPluginV1.Spec`).
+                    Value::Array(parts) if parts.len() == 2 => {
+                        let package = parts[0].as_str().map(str::to_owned);
+                        match package {
+                            Some(package) => {
+                                raw.push(serde_json::json!({
+                                    "package": package,
+                                    "options": parts[1],
+                                }));
+                            }
+                            None => crate::keymap::log_skip(&format!(
+                                "plugin config {}: v1 tuple without a package string (skipped)",
+                                path.display()
+                            )),
+                        }
+                    }
+                    other => crate::keymap::log_skip(&format!(
+                        "plugin config {}: unparseable v1 plugin entry {other} (skipped)",
+                        path.display()
+                    )),
+                }
+            }
+        }
         if let Some(entries) = document.get("plugins").and_then(Value::as_array) {
             raw.extend(entries.iter().cloned());
         }
@@ -1829,8 +1870,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// The builtin seed shape (the fallback when agent.list is
-    /// unreachable).
+    /// G-462: the v1 `plugin` key merges into the op list ahead of the
+    /// native `plugins` entries (the ref's normalize.ts:185-190 — the
+    /// user's real face `{"plugin": ["oh-my-opencode-slim"]}` never
+    /// booted the host before this).
+    #[test]
+    fn v1_plugin_key_merges_before_native_plugins() {
+        let root = temp_root("v1plugin");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("opencode.json"),
+            r#"{ "plugin": ["legacy-pkg", ["tuple-pkg", { "flag": true }]],
+                "plugins": ["native-pkg"] }"#,
+        )
+        .unwrap();
+        let ops = collect_plugin_ops(&[root.join("opencode.json")]);
+        assert_eq!(
+            ops,
+            vec![
+                PluginOp::Add { target: "legacy-pkg".into(), options: Value::Null },
+                PluginOp::Add { target: "tuple-pkg".into(), options: json!({ "flag": true }) },
+                PluginOp::Add { target: "native-pkg".into(), options: Value::Null },
+            ],
+            "legacy string + tuple entries lead the native list"
+        );
+        // The bare-name face alone boots an Add op (the omo-slim shape).
+        std::fs::write(root.join("opencode.json"), r#"{ "plugin": ["oh-my-opencode-slim"] }"#)
+            .unwrap();
+        let ops = collect_plugin_ops(&[root.join("opencode.json")]);
+        assert_eq!(
+            ops,
+            vec![PluginOp::Add { target: "oh-my-opencode-slim".into(), options: Value::Null }]
+        );
+        // Unparseable v1 entries log + skip, never brick the TUI.
+        std::fs::write(root.join("opencode.json"), r#"{ "plugin": [42, ["ok-pkg"]] }"#).unwrap();
+        let ops = collect_plugin_ops(&[root.join("opencode.json")]);
+        assert_eq!(
+            ops,
+            vec![],
+            "the bad scalar and the non-2-tuple both skip (log + skip, never brick)"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
     #[test]
     fn builtin_seed_agents_cover_the_native_table() {
         let agents = builtin_seed_agents();

@@ -33,17 +33,25 @@ fn wait_pane(h: &HarnessHandle, needle: &str, timeout: Duration) -> Option<usize
 
 #[test]
 fn pty_g457_real_config_bare_name_omo_sections() {
-    // FORENSIC (G-457 T5, env-gated): runs only with an explicitly
-    // staged install cache (OC_OMO_CACHE) + bun (OC_OMO_BUN) — the
-    // repro of beta.20's real-machine symptom. Currently RED: with
-    // the real oh-my-opencode-slim loaded through the user's exact
-    // trigger face (bare name under the v1 `plugin` key), the rust
-    // leg WEDGES (the session dialog stalls open; the output stream
-    // spins empty ?2026 repaint envelopes) and the OMO-Slim section
-    // never renders — the W13-registered High bug
-    // `w13-omo-session-plugin-send` face, now shown to wedge BEFORE
-    // any send (dialog navigation). Needs the controller's forensic
-    // lane; kept env-gated so the default suite stays green.
+    // FORENSIC (G-457 T5, env-gated; fixed in G-462): runs only with an
+    // explicitly staged install cache (OC_OMO_CACHE) + bun (OC_OMO_BUN)
+    // — the repro of beta.20's real-machine symptom. G-462 root-caused
+    // the two faces this scenario pinned:
+    // * the OMO-Slim section never rendered because the TUI's raw-file
+    //   plugin discovery read only the v2 `plugins` key — the user's
+    //   bare v1 `plugin: ["oh-my-opencode-slim"]` never booted the
+    //   host (fixed in plugin_boot.rs `collect_plugin_ops`, which now
+    //   merges the v1 key like the ref's normalize.ts:185-190);
+    // * the pre-send WEDGE (dialog stalled open + empty ?2026 repaint
+    //   envelope spin) was a HERMETICITY artifact of this very
+    //   scenario — it ran against the live developer state/db (no
+    //   OPENCODE_TEST_HOME/XDG_STATE_HOME sandbox) and never ran the
+    //   v2→rust migration pass the production CLI main performs, so
+    //   the staged config/cache never landed where discovery reads
+    //   them. Both are now part of the scenario (the same production
+    //   boot face), and the run asserts the sections render with the
+    //   plugin ACTIVE. Still env-gated so the default suite stays
+    //   green.
     if std::env::var("OC_OMO_CACHE").is_err() {
         eprintln!("G-457 forensic scenario: set OC_OMO_CACHE (+ OC_OMO_BUN) to run; skipping");
         return;
@@ -77,6 +85,20 @@ fn pty_g457_real_config_bare_name_omo_sections() {
     )
     .expect("cfg");
     let _lock = pty_lock();
+    // G-462: FULL state/home isolation (the same scheme as every other
+    // PTY suite's `sandbox_env`) — the original scenario left
+    // HOME/XDG_STATE_HOME live, so the run touched the developer's
+    // real state/db (the pre-send wedge face).
+    let home = std::path::PathBuf::from(format!("/tmp/opencode/g462-home-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(home.join(".local/state")).expect("state dir");
+    // The legacy v2 data dir gates the migration pass
+    // (v2_migration.rs: `if !legacy.data.is_dir()` short-circuits) —
+    // stage it empty so the copy actually runs like on the user's
+    // real machine.
+    std::fs::create_dir_all(home.join(".local/share/opencode")).expect("legacy data dir");
+    std::env::set_var("OPENCODE_TEST_HOME", &home);
+    std::env::set_var("XDG_STATE_HOME", home.join(".local/state"));
     std::env::set_var("XDG_CONFIG_HOME", &cfg_root);
     // Resolution reads `<XDG_CACHE_HOME>/opencode/npm/...` (install.rs
     // default_root) — the staging dir holds exactly that `opencode/npm`
@@ -84,6 +106,13 @@ fn pty_g457_real_config_bare_name_omo_sections() {
     if let Ok(cache) = std::env::var("OC_OMO_CACHE") {
         std::env::set_var("XDG_CACHE_HOME", cache);
     }
+    // G-462: production boots through the CLI, whose main runs the
+    // v2→rust migration (legacy `opencode` roots → `opencode-rust`)
+    // BEFORE the TUI — the in-process `run_with_size` harness must run
+    // the same pass or the config/cache under test never lands where
+    // discovery reads it. Runs AFTER the cache env staging so the
+    // legacy npm subtree is among what the pass copies.
+    oc_core::v2_migration::ensure_migrated_logged();
     std::env::remove_var("OPENCODE_CONFIG");
 
     let fake = FakeLlm::spawn(standard_sessions());
@@ -131,5 +160,7 @@ fn pty_g457_real_config_bare_name_omo_sections() {
     fake.stop();
     std::env::remove_var("XDG_CONFIG_HOME");
     std::env::remove_var("XDG_CACHE_HOME");
+    std::env::remove_var("XDG_STATE_HOME");
+    std::env::remove_var("OPENCODE_TEST_HOME");
     result.expect("the bare-name omo-slim sidebar renders on rust");
 }
