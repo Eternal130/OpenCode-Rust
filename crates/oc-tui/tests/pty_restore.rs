@@ -963,6 +963,21 @@ fn pty_kitty_handshake_and_teardown_bytes() {
     // Teardown: the pop + the cursor reset, at the tail.
     assert!(contains(b"\x1b[<u"), "the kitty pop at teardown");
     assert!(contains(b"\x1b[0 q"), "DECSCUSR reset at teardown");
+    // G-460 — the exit title reset (ref util/renderer.ts:3-7:
+    // destroyRenderer writes setTerminalTitle("") before destroy —
+    // unconditional, not the draw seam's change gate): teardown
+    // emits the EMPTY OSC 0 title after the kitty pop (the teardown
+    // epilogue's own write, not a boot draw's same-bytes emission)
+    // so no stale "OC | …" outlives the session.
+    let pop_at =
+        captured.windows(4).position(|w| w == b"\x1b[<u").expect("the kitty pop is in the stream");
+    let title_at = captured
+        .windows(5)
+        .skip(pop_at)
+        .position(|w| w == b"\x1b]0;\x07")
+        .map(|offset| offset + pop_at)
+        .expect("the empty OSC 0 title reset at teardown (after the kitty pop)");
+    let _ = title_at;
 }
 
 /// D2.1b (e1) — destroy-under-load: the exit chord lands while the
