@@ -10030,12 +10030,7 @@ pub async fn run_with_size(
                 // the raw-mode terminal, corrupting the frame) — a
                 // failed mcp/session list fetch must do NEITHER
                 // (incident 2026-11-19: 49 PTY-family reds).
-                LoopFetch::McpList(Err(error)) => {
-                    let _ = error;
-                }
-                LoopFetch::SessionList(Err(error)) => {
-                    let _ = error;
-                }
+                LoopFetch::McpList(Err(_)) | LoopFetch::SessionList(Err(_)) => {}
                 // G-271⑤ — the search result folds into the dialog's
                 // row source (the settled query + rows or the error
                 // fallback).
