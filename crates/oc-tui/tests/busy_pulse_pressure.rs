@@ -66,6 +66,7 @@ fn busy_cycle_script(session: &str) -> Vec<vt_harness::ScriptEvent> {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn busy_pulse_pressure_cycles_breathe_every_time() {
     let _lock = pty_lock();
     let _sandbox = sandbox_env("w16pulse");
@@ -111,8 +112,7 @@ fn busy_pulse_pressure_cycles_breathe_every_time() {
         vt.snapshots()
             .iter()
             .map(|s| {
-                let profile: Vec<u64> =
-                    (0..80).map(|x| s.grid.cell(x, 0).style).collect();
+                let profile: Vec<u64> = (0..80).map(|x| s.grid.cell(x, 0).style).collect();
                 (s.t_ms, profile, s.grid.row_text(0))
             })
             .collect()
@@ -185,15 +185,8 @@ fn busy_pulse_pressure_cycles_breathe_every_time() {
     );
     // (c) EXIT: the final snapshots (past the last scripted cycle)
     // must be idle — the running set cleared.
-    let tail_idle = snaps
-        .iter()
-        .rev()
-        .take(3)
-        .all(|(_, _, row)| !glyph(row));
-    assert!(
-        tail_idle,
-        "the busy face never exited after the last session.execution.succeeded"
-    );
+    let tail_idle = snaps.iter().rev().take(3).all(|(_, _, row)| !glyph(row));
+    assert!(tail_idle, "the busy face never exited after the last session.execution.succeeded");
     eprintln!(
         "[w16-pulse] windows={} moving={} snapshots={}",
         windows.len(),
