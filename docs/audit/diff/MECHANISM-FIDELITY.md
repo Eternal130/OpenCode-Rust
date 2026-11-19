@@ -25,7 +25,7 @@
 |---|---|---|
 | MF-1 | 渲染管线 / 时序调度 / 状态同步 / 插件桥机制 / 终端控制 / 文本布局 / 配置装载 / 键盘 / 剪贴板 / 进程拓扑 | **完成**（2026-11-19，oracle 只读审计；报告 .superpowers/sdd/mf1/report.md） |
 | MF-1b（可选） | components/* 对话框组件级机制、prompt/*、theme/* | 未开——组件级非机制族，控制者视需排 |
-| MF-2 | 鼠标滚轮 / 选区 / spinner 动画 / omo 侧栏渲染 | 待 G-457 合并后复审（活动面，禁双写） |
+| MF-2 | 鼠标滚轮 / 选区 / spinner 动画 / omo 侧栏渲染 | **完成（2026-11-20 控制者桌审收口）**——四族修复合并时均带双锚+测试（S-1/2/3/5、G-462 行），复审=合并评审已核机制面；无新增 M1/M3 |
 
 ## 条目
 
@@ -39,8 +39,8 @@ MF-1 主表见报告；此处维护跨波索引（新发现 → G 条目 → 修
 | S-4 | SSE 空闲判定 | connection.ts 每读复位（注释帧也算活性） | sse.rs `next_json_alive` + data.rs 换接 | M0 | 2026-11-19 断连热修（45s 看门狗盲心跳→周期误杀） |
 | S-5 | spinner 字形 | opentui-spinner 0.0.7 renderSelf 仅 fg 色 drawChar（永不加粗） | live `<spinner>` 面误带 fallback 文本路径 BOLD | **M0（G-457 修）** | 2026-11-19 d6570c42：live 面 never-bold（animations 门），静态 fallback 保留 bold pins；"字形大一点"=braille 加粗 |
 | MF-1 #7 | 状态同步：重连退避 | connection.ts:33,181 固定 1s；:158 稳定≥1s 复位 attempt | data.rs `reconnect_delay` 固定 1s + `connected_at` 稳定复位 attempts | **M0（G-458 修）** | 2026-11-20 dd524717：指数梯删除、G-47 模式落主 Connection；双测钉（恒 1s/稳定复位） |
-| MF-1 #19 | 键盘：孤立 ESC 判定 | opentui complete_unit_len 超时窗 | input_term.rs:17-20/311-313 读块边界立即判（注释锚退役 crossterm=锚错树） | M1 | **G-459 立**——CSI 跨读分裂先发假 Escape 再吞残字节 |
-| MF-1 #3 | 渲染管线：退出标题 | renderer.ts:3-7 destroy setTerminalTitle("") | teardown（app.rs:8217/9799）无标题复位 | M2 | **G-460 立**——退出后终端标题残留 |
+| MF-1 #19 | 键盘：孤立 ESC 判定 | stdin-parser.ts:113(20ms)/789-812/826-876/1005-1015 超时窗+esc_recovery | input_term.rs `UNIT_TIMEOUT=20ms`+`flush_timeout`+窗口内鼠标恢复 | **M0（G-459 修）** | 2026-11-20 5d12974c：锚错树修正，renderer/mod.rs:1596/1626 明示窗口归 port 所有 |
+| MF-1 #3 | 渲染管线：退出标题 | renderer.ts:3-7 destroy setTerminalTitle("")（无条件） | app.rs teardown epilogue 无条件空 OSC0（KITTY pops 后、destroy 前） | **M0（G-460 修）** | 2026-11-20 5d12974c；pty_kitty_handshake 断言空标题 |
 | MF-1 #10 | 状态同步：强制 resync | connection.ts:212-217 resync(reason) | 无（仅 watchdog/错误路径） | X/N-A | 已裁：ref TUI 无终端侧触发点，双侧同靠看门狗 |
 | MF-1 #12 | 插件桥：内容热重载 | watch.ts modify 事件 + context.tsx:274 仅重启变更件 | lib.rs:658-663 digest 扫描 reload_changed；增/删独立路径 | M0 | 已裁：digest 扫描覆盖 modify 语义 |
 | G-462 | 插件桥：v1 键发现 | normalize.ts:185-190 legacy `plugin` 与 native `plugins` 合并 | plugin_boot.rs 只读 v2 `plugins`（v1 裸名从不产生 op→宿主不启动） | **M0（G-462 修）** | 2026-11-20 a54a74bc：v1 先于 native 合入。**MF-1 #11 判 M0 的盲点教训**——M0 结论须覆盖配置键域全谱（v1/v2 双键），非仅装载顺序 |
