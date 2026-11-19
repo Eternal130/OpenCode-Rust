@@ -166,7 +166,7 @@ fn busy_pulse_pressure_cycles_breathe_every_time() {
         frozen == 0,
         "the busy strip froze for ≥5 consecutive frames in {frozen} stretch(es) — the 呼吸灯 miss reproduced"
     );
-    // (b) MOVEMENT per window: every busy window with ≥2 snapshots
+    // every window (single-snapshot windows included) must show motion — the
     // must show at least two distinct style profiles (the sweep band
     // crosses).
     let mut moving_windows = 0usize;
