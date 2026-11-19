@@ -38,11 +38,12 @@ MF-1 主表见报告；此处维护跨波索引（新发现 → G 条目 → 修
 | S-3 | 选区模型 | selection.ts（cell/word/line + 端点扩展 + 真文本提取）+ text-buffer-view.zig:871-891 expandSelectionRange + renderer nextClickBehavior | clamp 近似 | **M0（G-457 修）** | 2026-11-19 083ac2d2：SelectionBehavior 全套移植（500ms 多击循环、word 跨行端点联合、line 整行、retained 可复制）；clamp 未触碰 |
 | S-4 | SSE 空闲判定 | connection.ts 每读复位（注释帧也算活性） | sse.rs `next_json_alive` + data.rs 换接 | M0 | 2026-11-19 断连热修（45s 看门狗盲心跳→周期误杀） |
 | S-5 | spinner 字形 | opentui-spinner 0.0.7 renderSelf 仅 fg 色 drawChar（永不加粗） | live `<spinner>` 面误带 fallback 文本路径 BOLD | **M0（G-457 修）** | 2026-11-19 d6570c42：live 面 never-bold（animations 门），静态 fallback 保留 bold pins；"字形大一点"=braille 加粗 |
-| MF-1 #7 | 状态同步：重连退避 | connection.ts:33,181 固定 1s；:158 稳定≥1s 复位 attempt | data.rs:309-329/1158 指数 500ms→8s；attempt 不复位 | M1 | **G-458 立**——S4 同类残口；断连体验族（长断后 8s vs ref 1s） |
+| MF-1 #7 | 状态同步：重连退避 | connection.ts:33,181 固定 1s；:158 稳定≥1s 复位 attempt | data.rs `reconnect_delay` 固定 1s + `connected_at` 稳定复位 attempts | **M0（G-458 修）** | 2026-11-20 dd524717：指数梯删除、G-47 模式落主 Connection；双测钉（恒 1s/稳定复位） |
 | MF-1 #19 | 键盘：孤立 ESC 判定 | opentui complete_unit_len 超时窗 | input_term.rs:17-20/311-313 读块边界立即判（注释锚退役 crossterm=锚错树） | M1 | **G-459 立**——CSI 跨读分裂先发假 Escape 再吞残字节 |
 | MF-1 #3 | 渲染管线：退出标题 | renderer.ts:3-7 destroy setTerminalTitle("") | teardown（app.rs:8217/9799）无标题复位 | M2 | **G-460 立**——退出后终端标题残留 |
 | MF-1 #10 | 状态同步：强制 resync | connection.ts:212-217 resync(reason) | 无（仅 watchdog/错误路径） | X/N-A | 已裁：ref TUI 无终端侧触发点，双侧同靠看门狗 |
 | MF-1 #12 | 插件桥：内容热重载 | watch.ts modify 事件 + context.tsx:274 仅重启变更件 | lib.rs:658-663 digest 扫描 reload_changed；增/删独立路径 | M0 | 已裁：digest 扫描覆盖 modify 语义 |
+| G-462 | 插件桥：v1 键发现 | normalize.ts:185-190 legacy `plugin` 与 native `plugins` 合并 | plugin_boot.rs 只读 v2 `plugins`（v1 裸名从不产生 op→宿主不启动） | **M0（G-462 修）** | 2026-11-20 a54a74bc：v1 先于 native 合入。**MF-1 #11 判 M0 的盲点教训**——M0 结论须覆盖配置键域全谱（v1/v2 双键），非仅装载顺序 |
 | MF-1 #2 | 渲染管线：簇发射 | opentui grapheme 延迟 pass | opentui_emit.rs:32-38 inline 打印 | M1(登记) | 维持登记；真机含簇帧分帧 bytes 不同 |
 | MF-1 #15 | 终端控制：输入读模型 | opentui 阻塞读 | app.rs:8975-8985 50ms poll tick | M1(登记) | 上界 50ms 通常不可感；备查 |
 | MF-1 #16 | 文本布局：折行 | UAX-29/UAX-14 全表 | wrap.rs 语料钉定近似 | M1(登记) | 语料外脚本未锚定；扩 corpus 备查 |
