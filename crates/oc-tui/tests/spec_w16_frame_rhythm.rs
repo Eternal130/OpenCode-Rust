@@ -169,8 +169,9 @@ fn w16_frame_rhythm_thinking_stream() {
         let sd = stddev(mean, &gaps);
         let tail250 = gaps.iter().filter(|g| **g > 250).count();
         let tail400 = gaps.iter().filter(|g| **g > 400).count();
+        let seq = if tail250 > 0 { format!("{gaps:?}") } else { String::new() };
         let line = format!(
-            "[w16-rhythm:{tag}] gaps={} median={}ms p95={}ms max={}ms stddev={:.1}ms >250ms={} >400ms={}",
+            "[w16-rhythm:{tag}] gaps={} median={}ms p95={}ms max={}ms stddev={:.1}ms >250ms={} >400ms={} gaps_seq={seq}",
             gaps.len(), median, p95, max, sd, tail250, tail400
         );
         eprintln!("{line}");
@@ -189,11 +190,14 @@ fn w16_frame_rhythm_thinking_stream() {
 
     let (p95a, maxa, sda, meda, tail250a, tail400a) = audit("quiet", &phase_a);
     let (p95b, maxb, sdb, medb, tail250b, tail400b) = audit("typing", &phase_b);
-    // Post-fix shape (the ref's work-compensated pacer): the tail
-    // collapses in BOTH phases — no gap beyond 2× the pump's
-    // worst-case period and a bounded p95. The pre-fix baseline
-    // (plain work+100 sleep) is the same audit lines on the
-    // unmodified tree (the lane report's before/after table).
+    // No-stall baseline shape: no long-tail gap in EITHER phase and a
+    // bounded p95. The W16 anchor experiment (work-compensated wait,
+    // the ref's renderer.ts:4772-4801 model) made the QUIET phase
+    // near-perfect (σ 0.9 ms) but introduced ~390 ms typing-phase
+    // stalls at a ~609 ms period — this test's typing phase is the
+    // regression pin for exactly that (the anchor stays out until its
+    // stall is root-caused; see the W16 lane report + app.rs's wait
+    // comment).
     assert!(
         tail400a == 0 && tail400b == 0,
         "long-tail flush gap while the spinner animates (max {maxa}/{maxb} ms) — the un-paced work+tick stacking"
