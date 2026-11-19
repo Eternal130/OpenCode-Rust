@@ -33,10 +33,11 @@ MF-1 主表见报告；此处维护跨波索引（新发现 → G 条目 → 修
 
 | # | 族 | ref 锚 | rust 锚 | 级 | 证据 / 行动 |
 |---|---|---|---|---|---|
-| S-1 | spinner 动画 | session-tabs.tsx:197 `<spinner>` 元素渲染器自调度 | session_tabs.rs:48-50 重绘时刻派生 | M1 | G-457 修（80ms vs 100ms 拍频假设） |
-| S-2 | 鼠标所有权 | app.tsx:241/593 useMouse:config.mouse（默认 true） | app.rs:8446/9013 SessionTerminal 使能 + CliRenderer use_mouse:false（倒置） | M1/M2 | G-457 取证中 |
-| S-3 | 选区模型 | selection.ts（cell/word/line + 端点扩展 + 真文本提取） | clamp 近似 | M1 | G-457 修（端点扩展） |
+| S-1 | spinner 动画 | session-tabs.tsx:197 `<spinner>` 元素渲染器自调度 | session_tabs.rs:48-50 重绘时刻派生 | **M0（G-457 修）** | 2026-11-19 f7dbb92a：busy 期间 clock 钉 spinner 80ms 帧边界（marquee pin 同构）；trace 落精确 80ms 网格 |
+| S-2 | 鼠标派发 | opentui 按帧原生派发鼠标（非每主循环 pass 一报） | app.rs 每事件一次全量 pump pass（~9ms/报）→?1003 motion 洪峰无界积压 | **M0（G-457 修）** | 2026-11-19 f8be1e5c：select 唤醒后批量 drain（保序、每 pass 一次 render）；滚轮生效 1767ms→26ms。注：原"所有权倒置"假设证伪（使能字节全程存活） |
+| S-3 | 选区模型 | selection.ts（cell/word/line + 端点扩展 + 真文本提取）+ text-buffer-view.zig:871-891 expandSelectionRange + renderer nextClickBehavior | clamp 近似 | **M0（G-457 修）** | 2026-11-19 083ac2d2：SelectionBehavior 全套移植（500ms 多击循环、word 跨行端点联合、line 整行、retained 可复制）；clamp 未触碰 |
 | S-4 | SSE 空闲判定 | connection.ts 每读复位（注释帧也算活性） | sse.rs `next_json_alive` + data.rs 换接 | M0 | 2026-11-19 断连热修（45s 看门狗盲心跳→周期误杀） |
+| S-5 | spinner 字形 | opentui-spinner 0.0.7 renderSelf 仅 fg 色 drawChar（永不加粗） | live `<spinner>` 面误带 fallback 文本路径 BOLD | **M0（G-457 修）** | 2026-11-19 d6570c42：live 面 never-bold（animations 门），静态 fallback 保留 bold pins；"字形大一点"=braille 加粗 |
 | MF-1 #7 | 状态同步：重连退避 | connection.ts:33,181 固定 1s；:158 稳定≥1s 复位 attempt | data.rs:309-329/1158 指数 500ms→8s；attempt 不复位 | M1 | **G-458 立**——S4 同类残口；断连体验族（长断后 8s vs ref 1s） |
 | MF-1 #19 | 键盘：孤立 ESC 判定 | opentui complete_unit_len 超时窗 | input_term.rs:17-20/311-313 读块边界立即判（注释锚退役 crossterm=锚错树） | M1 | **G-459 立**——CSI 跨读分裂先发假 Escape 再吞残字节 |
 | MF-1 #3 | 渲染管线：退出标题 | renderer.ts:3-7 destroy setTerminalTitle("") | teardown（app.rs:8217/9799）无标题复位 | M2 | **G-460 立**——退出后终端标题残留 |

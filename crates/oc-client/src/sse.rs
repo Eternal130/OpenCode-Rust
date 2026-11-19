@@ -186,7 +186,10 @@ impl SseStream {
 
     /// Decode one parsed frame's `data` payload (shared by
     /// [`next_json`] and [`next_json_alive`]).
-    fn frame_to_json(&mut self, frame: &SseFrame) -> Result<Option<serde_json::Value>, ClientError> {
+    fn frame_to_json(
+        &mut self,
+        frame: &SseFrame,
+    ) -> Result<Option<serde_json::Value>, ClientError> {
         let value: serde_json::Value = serde_json::from_str(&frame.data)
             .map_err(|e| ClientError::MalformedResponse(format!("sse data: {e}")))?;
         if self.double_decode {
@@ -411,9 +414,7 @@ mod tests {
     #[tokio::test]
     async fn alive_deadline_trips_on_silence() {
         let mut stream = SseStream {
-            inner: Box::pin(futures::stream::pending::<
-                Result<bytes::Bytes, reqwest::Error>,
-            >()),
+            inner: Box::pin(futures::stream::pending::<Result<bytes::Bytes, reqwest::Error>>()),
             buf: Vec::new(),
             done: false,
             cap: 64 * 1024,
@@ -441,13 +442,11 @@ mod tests {
             double_decode: false,
             on_activity: None,
         };
-        assert!(
-            stream
-                .next_json_alive(std::time::Duration::from_millis(50))
-                .await
-                .expect("clean stream end")
-                .is_none()
-        );
+        assert!(stream
+            .next_json_alive(std::time::Duration::from_millis(50))
+            .await
+            .expect("clean stream end")
+            .is_none());
     }
 
     #[test]
