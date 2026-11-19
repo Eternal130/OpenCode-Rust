@@ -16,7 +16,7 @@
 //! (median/p95/max/σ + tail counts) is the quantification artifact
 //! for the lane report (before/after numbers).
 
-#![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
 
 #[path = "vt_harness.rs"]
 mod vt_harness;
@@ -39,17 +39,49 @@ fn percentile(mut v: Vec<u64>, p: f64) -> u64 {
 
 fn stddev(mean: f64, v: &[u64]) -> f64 {
     let n = v.len().max(1) as f64;
-    (v.iter().map(|x| {
-        let d = *x as f64 - mean;
-        d * d
-    }).sum::<f64>()
+    (v.iter()
+        .map(|x| {
+            let d = *x as f64 - mean;
+            d * d
+        })
+        .sum::<f64>()
         / n)
         .sqrt()
 }
 
 const WINDOW_MS: u64 = 6_000;
 
+fn audit(tag: &str, stamps: &[u64]) -> (u64, u64, f64, u64, usize, usize) {
+    let gaps: Vec<u64> = stamps.windows(2).map(|w| w[1] - w[0]).collect();
+    assert!(gaps.len() >= 6, "phase {tag} capture too thin ({} gaps)", gaps.len());
+    let median = percentile(gaps.clone(), 0.5);
+    let p95 = percentile(gaps.clone(), 0.95);
+    let max = gaps.iter().copied().max().unwrap_or(0);
+    let mean = gaps.iter().sum::<u64>() as f64 / gaps.len() as f64;
+    let sd = stddev(mean, &gaps);
+    let tail250 = gaps.iter().filter(|g| **g > 250).count();
+    let tail400 = gaps.iter().filter(|g| **g > 400).count();
+    let seq = if tail250 > 0 { format!("{gaps:?}") } else { String::new() };
+    let line = format!(
+        "[w16-rhythm:{tag}] gaps={} median={}ms p95={}ms max={}ms stddev={:.1}ms >250ms={} >400ms={} gaps_seq={seq}",
+        gaps.len(), median, p95, max, sd, tail250, tail400
+    );
+    eprintln!("{line}");
+    std::fs::create_dir_all("/tmp/opencode/scanef2").ok();
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/opencode/scanef2/w16-frame-rhythm.audit.txt")
+        .and_then(|mut f| {
+            use std::io::Write;
+            writeln!(f, "{line}")
+        })
+        .ok();
+    (p95, max, sd, median, tail250, tail400)
+}
+
 #[test]
+#[allow(clippy::too_many_lines)]
 fn w16_frame_rhythm_thinking_stream() {
     let _lock = pty_lock();
     let _sandbox = sandbox_env("w16rhythm");
@@ -113,8 +145,7 @@ fn w16_frame_rhythm_thinking_stream() {
         let handle = harness.handle();
         let vt = handle.vt.lock().expect("vt");
         let grid = vt.grid_now();
-        let has_thinking = (0..grid.rows)
-            .any(|y| grid.row_text(y).contains("Thinking"));
+        let has_thinking = (0..grid.rows).any(|y| grid.row_text(y).contains("Thinking"));
         drop(grid);
         drop(vt);
         if has_thinking {
@@ -123,73 +154,34 @@ fn w16_frame_rhythm_thinking_stream() {
         }
     }
     assert!(thinking, "streaming turn never showed its Thinking row");
-    let phase_a_start = harness.handle().now_ms();
+    let quiet_start = harness.handle().now_ms();
     std::thread::sleep(Duration::from_millis(WINDOW_MS / 2));
-    let phase_b_start = harness.handle().now_ms();
+    let typing_start = harness.handle().now_ms();
     std::thread::sleep(Duration::from_millis(WINDOW_MS / 2 + 500));
     harness.handle().settle_snapshot();
     // Surface driver failures before the rhythm asserts.
     if let Some(Err(e)) = result.lock().expect("r").clone() {
         panic!("driver failed: {e} (fed_bytes={})", harness.handle().raw_len());
     }
-    let stamps: Vec<u64> = harness
-        .handle()
-        .vt
-        .lock()
-        .expect("vt")
-        .snapshots()
-        .iter()
-        .map(|s| s.t_ms)
-        .collect();
+    let stamps: Vec<u64> =
+        harness.handle().vt.lock().expect("vt").snapshots().iter().map(|s| s.t_ms).collect();
     assert!(stamps.len() > 10, "capture too thin ({} flushes)", stamps.len());
 
     // Phase A: the QUIET spinner cadence (pure tick pacing — each
     // flush is a clock-tick frame advance).
-    let phase_a: Vec<u64> = stamps
-        .iter()
-        .copied()
-        .filter(|t| *t >= phase_a_start && *t < phase_b_start)
-        .collect();
+    let phase_a: Vec<u64> =
+        stamps.iter().copied().filter(|t| *t >= quiet_start && *t < typing_start).collect();
     // Phase B: typing × streaming (the keystroke cadence rides on top
     // of the tick; a pacing regression long-tails here — the W15
     // revert's E1 findings were exactly this cell's shape).
     let phase_b: Vec<u64> = stamps
         .iter()
         .copied()
-        .filter(|t| *t >= phase_b_start && *t <= phase_b_start + WINDOW_MS / 2 + 400)
+        .filter(|t| *t >= typing_start && *t <= typing_start + WINDOW_MS / 2 + 400)
         .collect();
 
-    fn audit(tag: &str, stamps: &[u64]) -> (u64, u64, f64, u64, usize, usize) {
-        let gaps: Vec<u64> = stamps.windows(2).map(|w| w[1] - w[0]).collect();
-        assert!(gaps.len() >= 6, "phase {tag} capture too thin ({} gaps)", gaps.len());
-        let median = percentile(gaps.clone(), 0.5);
-        let p95 = percentile(gaps.clone(), 0.95);
-        let max = gaps.iter().copied().max().unwrap_or(0);
-        let mean = gaps.iter().sum::<u64>() as f64 / gaps.len() as f64;
-        let sd = stddev(mean, &gaps);
-        let tail250 = gaps.iter().filter(|g| **g > 250).count();
-        let tail400 = gaps.iter().filter(|g| **g > 400).count();
-        let seq = if tail250 > 0 { format!("{gaps:?}") } else { String::new() };
-        let line = format!(
-            "[w16-rhythm:{tag}] gaps={} median={}ms p95={}ms max={}ms stddev={:.1}ms >250ms={} >400ms={} gaps_seq={seq}",
-            gaps.len(), median, p95, max, sd, tail250, tail400
-        );
-        eprintln!("{line}");
-        std::fs::create_dir_all("/tmp/opencode/scanef2").ok();
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/tmp/opencode/scanef2/w16-frame-rhythm.audit.txt")
-            .and_then(|mut f| {
-                use std::io::Write;
-                writeln!(f, "{line}")
-            })
-            .ok();
-        (p95, max, sd, median, tail250, tail400)
-    }
-
-    let (p95a, maxa, sda, meda, tail250a, tail400a) = audit("quiet", &phase_a);
-    let (p95b, maxb, sdb, medb, tail250b, tail400b) = audit("typing", &phase_b);
+    let (q_a, mx_a, sd_a, med_a, t250_a, t400_a) = audit("quiet", &phase_a);
+    let (q_b, mx_b, sd_b, med_b, t250_b, t400_b) = audit("typing", &phase_b);
     // No-stall baseline shape: no long-tail gap in EITHER phase and a
     // bounded p95. The W16 anchor experiment (work-compensated wait,
     // the ref's renderer.ts:4772-4801 model) made the QUIET phase
@@ -199,14 +191,14 @@ fn w16_frame_rhythm_thinking_stream() {
     // stall is root-caused; see the W16 lane report + app.rs's wait
     // comment).
     assert!(
-        tail400a == 0 && tail400b == 0,
-        "long-tail flush gap while the spinner animates (max {maxa}/{maxb} ms) — the un-paced work+tick stacking"
+        t400_a == 0 && t400_b == 0,
+        "long-tail flush gap while the spinner animates (max {mx_a}/{mx_b} ms) — the un-paced work+tick stacking"
     );
     assert!(
-        p95a <= 250 && p95b <= 250,
-        "flush cadence jitter too wide (p95 {p95a}/{p95b} ms, σ {sda:.1}/{sdb:.1}) — spinner stutter"
+        q_a <= 250 && q_b <= 250,
+        "flush cadence jitter too wide (p95 {q_a}/{q_b} ms, σ {sd_a:.1}/{sd_b:.1}) — spinner stutter"
     );
-    let _ = (meda, medb, tail250a, tail250b);
+    let _ = (med_a, med_b, t250_a, t250_b);
     // The app must exit cleanly on the chord (join with slack; a
     // swallowed teardown would mask a wedge).
     let joined = {

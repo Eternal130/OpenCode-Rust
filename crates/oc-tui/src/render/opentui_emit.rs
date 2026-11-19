@@ -265,7 +265,11 @@ impl OpentuiEmitter {
     /// * while the caret is hidden, every frame carries `?25l` — the
     ///   E1 dialog-open-idle flush-cadence detector.
     /// * a fully invisible frame writes nothing (no envelope).
-    pub fn emit<W: std::io::Write>(&mut self, out: &mut W, frame: &Frame) -> std::io::Result<usize> {
+    pub fn emit<W: std::io::Write>(
+        &mut self,
+        out: &mut W,
+        frame: &Frame,
+    ) -> std::io::Result<usize> {
         self.emit_with_links(out, frame, &[])
     }
 
