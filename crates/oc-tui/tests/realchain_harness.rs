@@ -1460,7 +1460,7 @@ pub fn plugin_payload_root() -> PathBuf {
         .output()
         .ok()
         .filter(|out| out.status.success())
-        .map(|out| {
+        .and_then(|out| {
             let dir = String::from_utf8_lossy(&out.stdout).trim().to_owned();
             // In the main checkout itself this yields ".git" — the
             // local path check above already covered that case.
@@ -1470,7 +1470,6 @@ pub fn plugin_payload_root() -> PathBuf {
                 worktree_root().join(dir).canonicalize().ok()
             }
         })
-        .flatten()
         .and_then(|git_dir| git_dir.parent().map(Path::to_path_buf))
         .map(|main_root| main_root.join("tools/diff/realchain/plugin-payload"));
     if let Some(main) = &main {
@@ -1490,14 +1489,13 @@ pub fn plugin_lane_skip_reason() -> Option<String> {
     let reason = plugin_lane_skip_reason_at(&plugin_payload_root())?;
     let log = worktree_dir(".test-logs");
     let _ = std::fs::create_dir_all(&log);
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log.join("skips.log"))
-        .and_then(|mut file| {
-            use std::io::Write;
-            writeln!(file, "[plugin-payload] {reason}")
-        });
+    let _ =
+        std::fs::OpenOptions::new().create(true).append(true).open(log.join("skips.log")).and_then(
+            |mut file| {
+                use std::io::Write;
+                writeln!(file, "[plugin-payload] {reason}")
+            },
+        );
     Some(reason)
 }
 
