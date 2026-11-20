@@ -871,6 +871,42 @@ impl TuiProcess {
         out
     }
 
+    /// Rider (the s3-palette export settle race): wait until the
+    /// render stream is QUIET — `window` of wall time with no new
+    /// bytes on the raw stream — before a grid capture. A capture
+    /// taken mid-paint (one end between two partial writes of a
+    /// state change) is exactly the "mid-state grid" the s3 race
+    /// exported: deterministic on rerun, intermittent under full
+    /// battery load. A screen that never goes quiet inside `cap`
+    /// (a live spinner/toast cadence) still exports — annotated via
+    /// [`quiescence_note`] so the adjudication side sees the capture
+    /// was NOT settled. Returns true when quiescent, false on cap.
+    ///
+    /// Byte-stream quiet is the right quiescence signal here: every
+    /// grid mutation the VT parser applies arrives as stream bytes,
+    /// so `raw_len` stalling means the screen stopped changing.
+    #[must_use]
+    pub fn wait_quiescent(&self, window: Duration, cap: Duration) -> bool {
+        let deadline = Instant::now() + cap;
+        let mut last_len = self.raw_len();
+        let mut quiet_since = Instant::now();
+        loop {
+            if Instant::now() + window > deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(50).min(window));
+            let len = self.raw_len();
+            if len == last_len {
+                if quiet_since.elapsed() >= window {
+                    return true;
+                }
+            } else {
+                last_len = len;
+                quiet_since = Instant::now();
+            }
+        }
+    }
+
     /// The app's exit footprint in the raw stream.
     #[must_use]
     pub fn exited_alt_screen(&self, from: usize) -> bool {
@@ -1696,6 +1732,46 @@ fn mark_fired(name: &'static str) {
     });
 }
 
+// Rider (the s3-palette settle race): the quiescence state of the
+// LAST capture_settled pair (per capture, like FIRED_NORMALIZATIONS
+// per export) — "settled" (a full quiet window before the capture)
+// or "capped" (the stream never went quiet inside the cap; the grid
+// exported anyway, annotated). Null = the capture did not go through
+// the quiescence gate.
+thread_local! {
+    static QUIESCENCE: std::cell::RefCell<Vec<&'static str>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Record one end's quiescence verdict (called by
+/// [`capture_settled`]).
+fn mark_quiescence(settled: bool) {
+    QUIESCENCE.with(|state| {
+        state.borrow_mut().push(if settled { "settled" } else { "capped" });
+    });
+}
+
+/// The quiescence annotations of the captures since the last export
+/// (drained per report, mirroring [`normalization_names`]).
+#[must_use]
+pub fn quiescence_names() -> Vec<String> {
+    QUIESCENCE.with(|state| {
+        std::mem::take(&mut *state.borrow_mut()).into_iter().map(str::to_owned).collect()
+    })
+}
+
+/// A SETTLED grid capture: [`TuiProcess::wait_quiescent`] gates the
+/// read (250 ms without stream bytes; 1.5 s cap), the verdict rides
+/// the next exported report. The anti-rider for the s3-palette
+/// export race: a mid-paint capture (one end between the partial
+/// writes of a state change) never exports as a divergence.
+#[must_use]
+pub fn capture_settled(tui: &TuiProcess) -> String {
+    let settled = tui.wait_quiescent(Duration::from_millis(250), Duration::from_millis(1500));
+    mark_quiescence(settled);
+    tui.screen_text()
+}
+
 /// The names of every normalization that fired SINCE THE LAST EXPORT
 /// (M-1, review fix: a per-report snapshot, not a process-lifetime
 /// accumulation — the set is drained by each export, so each report
@@ -2092,6 +2168,7 @@ pub fn export_grid_diff(scenario: &str, state: &str, ref_grid: &str, rust_grid: 
         "ts": now_ts(),
         "divergences": divergences,
         "normalizations_applied": normalization_names(),
+        "quiescence": quiescence_names(),
     });
     write_diff_report(scenario, state, &report, None);
     divergences.len()
@@ -2128,6 +2205,7 @@ pub fn export_survey(
         "ts": now_ts(),
         "divergences": divergences,
         "normalizations_applied": normalization_names(),
+        "quiescence": quiescence_names(),
     });
     write_diff_report(scenario, state, &report, screen);
     divergences.len()
@@ -2156,6 +2234,7 @@ fn write_diff_report(
         report["ts"]
     );
     let _ = writeln!(text, "normalizations_applied: {}", report["normalizations_applied"]);
+    let _ = writeln!(text, "quiescence: {}", report["quiescence"]);
     let divergences = report["divergences"].as_array().cloned().unwrap_or_default();
     if divergences.is_empty() {
         let _ = writeln!(text, "divergences: EXACT (none)");
@@ -2178,6 +2257,34 @@ fn write_diff_report(
         let _ = std::fs::write(dir.join(format!("{base}.screen.txt")), screen);
     }
     let _ = std::fs::write(dir.join(format!("{base}.txt")), text);
+}
+
+#[cfg(test)]
+mod rider_quiescence_tests {
+    use super::*;
+
+    /// Rider (s3-palette settle race): the quiescence gate returns
+    /// settled=true once the stream stops growing (a `cat` echo tail)
+    /// and settled=false inside the cap while the stream never stops
+    /// (a `yes` flood) — the annotated export-anyway path.
+    #[test]
+    fn quiescent_when_stream_stops_capped_under_flood() {
+        let mut quiet = TuiProcess::spawn_command(std::process::Command::new("cat"), 40, 10);
+        quiet.write(b"quiesce-probe");
+        assert!(
+            quiet.wait_quiescent(Duration::from_millis(250), Duration::from_secs(5)),
+            "an echo tail never went quiescent"
+        );
+        quiet.shutdown(Duration::from_secs(2));
+
+        let mut flood = TuiProcess::spawn_command(std::process::Command::new("yes"), 40, 10);
+        std::thread::sleep(Duration::from_millis(300)); // let the flood fill the stream
+        assert!(
+            !flood.wait_quiescent(Duration::from_millis(250), Duration::from_millis(1200)),
+            "a forever-growing stream reported quiescent"
+        );
+        flood.shutdown(Duration::from_secs(2));
+    }
 }
 
 #[cfg(test)]

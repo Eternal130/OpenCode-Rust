@@ -45,10 +45,11 @@
 mod realchain_harness;
 
 use realchain_harness::{
-    corpus_dir, corpus_ref_dir, default_pace, dump_grid, export_grid_diff, export_survey, http_get,
-    http_post, lane_lock, normalize_grid, plugin_lane_skip_reason, ref_lane_skip_reason, ref_root,
-    ref_service_stop, ref_stage, ref_tui_spawn, sandbox, service_start, service_stop,
-    stage_plugins, worktree_dir, Gateway, LaneGuard, RefStage, Sandbox, TuiProcess, WORDMARK,
+    corpus_dir, corpus_ref_dir, capture_settled, default_pace, dump_grid, export_grid_diff,
+    export_survey, http_get, http_post, lane_lock, normalize_grid, plugin_lane_skip_reason,
+    ref_lane_skip_reason, ref_root, ref_service_stop, ref_stage, ref_tui_spawn, sandbox,
+    service_start, service_stop, stage_plugins, worktree_dir, Gateway, LaneGuard, RefStage,
+    Sandbox, TuiProcess, WORDMARK,
 };
 use std::time::{Duration, Instant};
 
@@ -194,8 +195,8 @@ fn s1_boot_grid_pair() {
     skip_without_ref_lane!();
     let mut rig = pair_rig("s1", COLS);
     boot_both(&mut rig);
-    let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
-    let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
+    let ref_grid = rig.normalize(&capture_settled(&rig.ref_tui));
+    let rust_grid = rig.normalize(&capture_settled(&rig.rust_tui));
     drop(rig);
     // W12/2.2#12: no content adjudication in-test — the pair exports.
     export_grid_diff("s1", "boot", &ref_grid, &rust_grid);
@@ -298,8 +299,8 @@ fn s3_palette_grid_pair() {
     let rust_dot = wait_grid(&rig.rust_tui, 15);
     let ref_dot = wait_grid(&rig.ref_tui, 25);
     settle(2);
-    let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
-    let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
+    let ref_grid = rig.normalize(&capture_settled(&rig.ref_tui));
+    let rust_grid = rig.normalize(&capture_settled(&rig.rust_tui));
     dump_grid("s3-palette-ref", &ref_grid);
     dump_grid("s3-palette-rust", &rust_grid);
     drop(rig);
@@ -352,8 +353,8 @@ fn s4_restart_session_grid_pair() {
     let rust_tab = rust_tui.wait_for(TITLE_TEXT.as_bytes(), 0, Duration::from_secs(20));
     let ref_tab = ref_tui.wait_for(TITLE_TEXT.as_bytes(), 0, Duration::from_secs(30));
     std::thread::sleep(Duration::from_secs(3));
-    let ref_grid = rig.normalize(&ref_tui.screen_text());
-    let rust_grid = rig.normalize(&rust_tui.screen_text());
+    let ref_grid = rig.normalize(&capture_settled(&ref_tui));
+    let rust_grid = rig.normalize(&capture_settled(&rust_tui));
     rust_tui.shutdown(Duration::from_secs(10));
     ref_tui.shutdown(Duration::from_secs(10));
     drop(rig);
@@ -389,8 +390,8 @@ fn s5_sidebar_grid_pair() {
     let _ = rig.rust_tui.wait_for(b"Context", 0, Duration::from_secs(30));
     let _ = rig.ref_tui.wait_for(b"Context", 0, Duration::from_secs(30));
     settle(3);
-    let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
-    let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
+    let ref_grid = rig.normalize(&capture_settled(&rig.ref_tui));
+    let rust_grid = rig.normalize(&capture_settled(&rig.rust_tui));
     dump_grid("s5-sidebar-ref", &ref_grid);
     dump_grid("s5-sidebar-rust", &rust_grid);
     drop(rig);
@@ -453,8 +454,8 @@ fn s6_hot_reload_palette_grid_pair() {
     let _ = rig.rust_tui.wait_for(b"claude-sonnet-4-6", 0, Duration::from_secs(10));
     let ref_open = rig.ref_tui.wait_for(b"claude-sonnet-4-6", 0, Duration::from_secs(30));
     settle(2);
-    let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
-    let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
+    let ref_grid = rig.normalize(&capture_settled(&rig.ref_tui));
+    let rust_grid = rig.normalize(&capture_settled(&rig.rust_tui));
     dump_grid("s6-hotreload-ref", &ref_grid);
     dump_grid("s6-hotreload-rust", &rust_grid);
     // Rust-side outcome parity at the server level (the API reflects
@@ -567,8 +568,8 @@ fn p1_slow_ttft_state_pair() {
     let rust_replied = rig.rust_tui.wait_for_screen(&needle_text, Duration::from_secs(30));
     let ref_replied = rig.ref_tui.wait_for_screen(&needle_text, Duration::from_secs(60));
     settle(3);
-    let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
-    let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
+    let ref_grid = rig.normalize(&capture_settled(&rig.ref_tui));
+    let rust_grid = rig.normalize(&capture_settled(&rig.rust_tui));
     dump_grid("p1-settled-ref", &ref_grid);
     dump_grid("p1-settled-rust", &rust_grid);
     drop(rig);
@@ -605,8 +606,8 @@ fn p2_slow_tps_stream_pair() {
     let rust_replied = rig.rust_tui.wait_for_screen(needle_text, Duration::from_secs(30));
     let ref_replied = rig.ref_tui.wait_for_screen(needle_text, Duration::from_secs(60));
     settle(3);
-    let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
-    let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
+    let ref_grid = rig.normalize(&capture_settled(&rig.ref_tui));
+    let rust_grid = rig.normalize(&capture_settled(&rig.rust_tui));
     dump_grid("p2-settled-ref", &ref_grid);
     dump_grid("p2-settled-rust", &rust_grid);
     drop(rig);
@@ -667,8 +668,8 @@ fn p3_stream_interrupt_pair() {
         .unwrap_or_default();
         eprintln!("P3 rust messages ({sid}): {}", &messages[..messages.len().min(3000)]);
     }
-    let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
-    let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
+    let ref_grid = rig.normalize(&capture_settled(&rig.ref_tui));
+    let rust_grid = rig.normalize(&capture_settled(&rig.rust_tui));
     dump_grid("p3-interrupt-ref", &ref_grid);
     dump_grid("p3-interrupt-rust", &rust_grid);
     drop(rig);
@@ -770,8 +771,8 @@ fn t9_7_plugin_sidebar_pair() {
     let (status, body) =
         http_get(&format!("{}/api/plugin", rig.rust_server_url), rig.rust_password.as_deref())
             .unwrap_or((0, String::new()));
-    let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
-    let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
+    let ref_grid = rig.normalize(&capture_settled(&rig.ref_tui));
+    let rust_grid = rig.normalize(&capture_settled(&rig.rust_tui));
     dump_grid("t9-7-plugin-ref", &ref_grid);
     dump_grid("t9-7-plugin-rust", &rust_grid);
     let stats = rig.gateway.stats();
@@ -807,8 +808,8 @@ fn p4_sidebar_deep_compare_pair() {
     let mut rig = pair_rig_ext("p4", 160, "instant", false, true);
     boot_both(&mut rig);
     // State A: empty session (sidebar region docked at 160 cols).
-    let a_ref = rig.normalize(&rig.ref_tui.screen_text());
-    let a_rust = rig.normalize(&rig.rust_tui.screen_text());
+    let a_ref = rig.normalize(&capture_settled(&rig.ref_tui));
+    let a_rust = rig.normalize(&capture_settled(&rig.rust_tui));
     dump_grid("p4-empty-ref", &a_ref);
     dump_grid("p4-empty-rust", &a_rust);
     // M-1: export immediately after the state's normalize calls so the
@@ -822,8 +823,8 @@ fn p4_sidebar_deep_compare_pair() {
     let ref_replied = rig.ref_tui.wait_for(REPLY_NEEDLE, ref_from, Duration::from_secs(60));
     let _ = rig.ref_tui.wait_for(TITLE_TEXT.as_bytes(), ref_from, Duration::from_secs(30));
     settle(3);
-    let b_ref = rig.normalize(&rig.ref_tui.screen_text());
-    let b_rust = rig.normalize(&rig.rust_tui.screen_text());
+    let b_ref = rig.normalize(&capture_settled(&rig.ref_tui));
+    let b_rust = rig.normalize(&capture_settled(&rig.rust_tui));
     dump_grid("p4-reply-ref", &b_ref);
     dump_grid("p4-reply-rust", &b_rust);
     export_grid_diff("p4", "reply", &b_ref, &b_rust);
@@ -842,8 +843,8 @@ fn p4_sidebar_deep_compare_pair() {
         );
     }
     settle(3);
-    let c_ref = rig.normalize(&rig.ref_tui.screen_text());
-    let c_rust = rig.normalize(&rig.rust_tui.screen_text());
+    let c_ref = rig.normalize(&capture_settled(&rig.ref_tui));
+    let c_rust = rig.normalize(&capture_settled(&rig.rust_tui));
     dump_grid("p4-long-ref", &c_ref);
     dump_grid("p4-long-rust", &c_rust);
     export_grid_diff("p4", "long", &c_ref, &c_rust);
@@ -864,8 +865,8 @@ fn p4b_sidebar_120_pair() {
     skip_without_ref_lane!();
     let mut rig = pair_rig_ext("p4b", COLS, "instant", false, true);
     boot_both(&mut rig);
-    let a_ref = rig.normalize(&rig.ref_tui.screen_text());
-    let a_rust = rig.normalize(&rig.rust_tui.screen_text());
+    let a_ref = rig.normalize(&capture_settled(&rig.ref_tui));
+    let a_rust = rig.normalize(&capture_settled(&rig.rust_tui));
     dump_grid("p4b-empty-ref", &a_ref);
     dump_grid("p4b-empty-rust", &a_rust);
     export_grid_diff("p4b", "empty", &a_ref, &a_rust);
@@ -875,8 +876,8 @@ fn p4b_sidebar_120_pair() {
     let rust_replied = rig.rust_tui.wait_for(REPLY_NEEDLE, rust_from, Duration::from_secs(30));
     let ref_replied = rig.ref_tui.wait_for(REPLY_NEEDLE, ref_from, Duration::from_secs(60));
     settle(3);
-    let b_ref = rig.normalize(&rig.ref_tui.screen_text());
-    let b_rust = rig.normalize(&rig.rust_tui.screen_text());
+    let b_ref = rig.normalize(&capture_settled(&rig.ref_tui));
+    let b_rust = rig.normalize(&capture_settled(&rig.rust_tui));
     dump_grid("p4b-reply-ref", &b_ref);
     dump_grid("p4b-reply-rust", &b_rust);
     export_grid_diff("p4b", "reply", &b_ref, &b_rust);
