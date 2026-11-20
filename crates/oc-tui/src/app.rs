@@ -2082,7 +2082,8 @@ impl App {
     /// diff-viewer.tsx:726-732); the base exit chords (ctrl+c,
     /// `<leader>q`) still exit.
     fn stroke_in_diff(&mut self, stroke: &KeyStroke) {
-        if let Outcome::Command { command, args } = self.keymap.lookup(stroke.clone(), &StoreClock(&self.store))
+        if let Outcome::Command { command, args } =
+            self.keymap.lookup(stroke.clone(), &StoreClock(&self.store))
         {
             if command == "app.exit" {
                 if stroke.ctrl && !stroke.alt && stroke.key == "d" {
@@ -2111,7 +2112,9 @@ impl App {
     /// the entries. Unbound strokes are consumed — the prompt is
     /// unmounted, nothing types.
     fn stroke_in_picker(&mut self, stroke: KeyStroke) {
-        if let Outcome::Command { command, args } = self.keymap.lookup(stroke, &StoreClock(&self.store)) {
+        if let Outcome::Command { command, args } =
+            self.keymap.lookup(stroke, &StoreClock(&self.store))
+        {
             let dispatch = self.dispatcher.dispatch(&self.store, &command, args.as_deref());
             if let Dispatch::ServerPending(reason) = dispatch {
                 let _ = reason;
@@ -2402,7 +2405,13 @@ impl App {
         // The pump owns the keymap; the dialog layer borrows it for the
         // dialog.* commands — split borrows via a temporary take.
         let mut keymap = std::mem::take(&mut self.keymap);
-        let outcome = handle_dialog_key(&self.store, &mut keymap, &StoreClock(&self.store), stroke, self.size);
+        let outcome = handle_dialog_key(
+            &self.store,
+            &mut keymap,
+            &StoreClock(&self.store),
+            stroke,
+            self.size,
+        );
         self.keymap = keymap;
         match outcome {
             crate::components::dialog::DialogKeyOutcome::Submitted(value) => {
@@ -2797,7 +2806,8 @@ impl App {
         // 3. The input/base keymap (input mode pushed while a composer
         //    is focused): editing chords resolve as input.* commands,
         //    everything else falls to base.
-        if let Outcome::Command { command, args } = self.keymap.lookup(stroke.clone(), &StoreClock(&self.store))
+        if let Outcome::Command { command, args } =
+            self.keymap.lookup(stroke.clone(), &StoreClock(&self.store))
         {
             if command == "app.exit" {
                 self.request_exit();
