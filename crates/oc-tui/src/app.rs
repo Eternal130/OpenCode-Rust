@@ -10640,17 +10640,18 @@ pub async fn run_with_size(
         // flag on a real fs change (modify or rename-save); the mtime
         // compare gates the re-apply. Keybinds + theme re-merge
         // through the store.
-        let mtime =
-            if config_watch.as_ref().is_some_and(crate::config_watch::ConfigFileWatch::take_dirty)
-            {
-                config
-                    .path
-                    .as_ref()
-                    .and_then(|path| std::fs::metadata(path).ok())
-                    .and_then(|meta| meta.modified().ok())
-            } else {
-                None
-            };
+        let mtime = if config_watch
+            .as_ref()
+            .is_some_and(crate::config_watch::ConfigFileWatch::take_dirty)
+        {
+            config
+                .path
+                .as_ref()
+                .and_then(|path| std::fs::metadata(path).ok())
+                .and_then(|meta| meta.modified().ok())
+        } else {
+            None
+        };
         // The notice-file watch (the CLI checker's channel): a new
         // line lands the banner; the update dialog's `Installing`
         // state resolves to `Installed` when the file says so.
