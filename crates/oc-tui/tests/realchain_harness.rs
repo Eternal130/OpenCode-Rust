@@ -1184,12 +1184,43 @@ fn set_exec_bit(path: &Path) {
 }
 
 impl Sandbox {
-    /// The unique port the ref managed daemon binds (see
-    /// `write_ref_config`): disjoint from the rust sandbox's
-    /// `service_port` range.
+    /// The unique port the ref managed daemon binds — G-461: pinned
+    /// per-sandbox (hash of the sandbox root into 50000-60000, a band
+    /// disjoint from BOTH the rust sandbox's `service_port` range
+    /// 20000-40000 and the legacy ref band 40000-50000), with a
+    /// bind-probe fallback that walks past any incumbent listener
+    /// BEFORE the first boot (a stray user-run `ref serve --service`
+    /// DETACH child on the old shared/fixed port once EADDRINUSE'd
+    /// every leg). Cached: once written, the sandbox reuses its port.
     #[must_use]
-    pub fn ref_service_port() -> u16 {
-        40_000 + (std::process::id() % 10_000) as u16
+    pub fn ref_service_port(&self) -> u16 {
+        // Reuse the staged pin when write_ref_config already ran (the
+        // probe below would otherwise walk past OUR OWN live daemon
+        // on a re-call and silently re-point the sandbox).
+        let pin = self.root.join(".ref-service-port");
+        if let Ok(text) = std::fs::read_to_string(&pin) {
+            if let Ok(port) = text.trim().parse::<u16>() {
+                return port;
+            }
+        }
+        // Deterministic per-sandbox base: hash the sandbox ROOT path
+        // (unique per test/tag), not the PID (all sandboxes in one
+        // test process share it).
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.root.hash(&mut hasher);
+        let mut port = 50_000 + (hasher.finish() % 10_000) as u16;
+        // Incumbent probe: never hand out a port something already
+        // listens on (a user's manually-source-run ref service, or a
+        // neighbor sandbox's daemon). Walk forward until bind works.
+        for _ in 0..2_000 {
+            if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+                std::fs::write(&pin, port.to_string()).expect("pin ref service port");
+                return port;
+            }
+            port = 50_000 + ((u32::from(port) + 1 - 50_000) % 10_000) as u16;
+        }
+        panic!("no free ref service port in 50000-60000 for {}", self.root.display());
     }
 
     /// Ref-shaped env: the rust env plus the staged `bin` first on PATH
@@ -1274,15 +1305,26 @@ impl Sandbox {
         std::fs::create_dir_all(path.parent().unwrap()).expect("ref config dir");
         std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap())
             .unwrap_or_else(|e| panic!("write ref config: {e}"));
-        // The ref channel-local managed service port defaults to the
-        // FIXED 0xc0df (service-config.ts defaultPort) — sandboxes must
-        // not fight over it (nor a stray real daemon). Unique per PID,
-        // mirrored into `cli.json` (the ref `ServiceConfig.Info` file in
-        // the same config dir). The TUI's OWN config is ALSO cli.json —
-        // `debug.devtools: false` pins the release shape (channel-local
-        // builds default the devtools bar ON, app.tsx:457).
-        let mut cli = serde_json::json!({ "port": Self::ref_service_port() });
-        cli["debug"] = serde_json::json!({ "devtools": false });
+        // G-461 — the ref channel-local managed service's port comes
+        // from the ServiceConfig file `service-local.json`
+        // (`filename("local")` in the ref's service-config.ts) under
+        // the SAME XDG config dir — the OLD write stuffed `port` into
+        // `cli.json`, which the service-config reader NEVER reads, so
+        // every leg bound the FIXED channel default 0xc0df (49375)
+        // and one stray user-run `serve --service` DETACH child
+        // EADDRINUSE'd the whole lane. The pin is per-sandbox with a
+        // pre-boot incumbent probe (see `ref_service_port`).
+        let service = self.root.join("xdg-config/opencode/service-local.json");
+        std::fs::write(
+            &service,
+            serde_json::to_string_pretty(&serde_json::json!({ "port": self.ref_service_port() }))
+                .unwrap(),
+        )
+        .unwrap_or_else(|e| panic!("write ref service-local.json: {e}"));
+        // The TUI's own config is cli.json — `debug.devtools: false`
+        // pins the release shape (channel-local builds default the
+        // devtools bar ON, app.tsx:457).
+        let cli = serde_json::json!({ "debug": { "devtools": false } });
         let cli_path = self.root.join("xdg-config/opencode/cli.json");
         std::fs::write(&cli_path, serde_json::to_string_pretty(&cli).unwrap())
             .unwrap_or_else(|e| panic!("write ref cli.json: {e}"));
@@ -1391,19 +1433,77 @@ pub const PLUGIN_SPECS: &[(&str, &str)] = &[
 ];
 
 /// The plugin payload registry root (see [`PLUGIN_SPECS`]).
+///
+/// Rider (Lane D pitfall, 2026-11-20): the registry is git-ignored, so
+/// it exists ONLY in the main checkout — a worktree lane's local path
+/// is absent and every plugin scenario silently skipped (a 0.004s PASS
+/// fake-green). The default resolution therefore falls back to the
+/// MAIN checkout's copy via `git rev-parse --git-common-dir` (the
+/// shared `.git` of the worktree's repo) when the worktree-local path
+/// does not exist. `T9_PLUGIN_PAYLOAD_ROOT` still wins outright.
 #[must_use]
 pub fn plugin_payload_root() -> PathBuf {
-    std::env::var_os("T9_PLUGIN_PAYLOAD_ROOT").map_or_else(
-        || worktree_dir("tools/diff/realchain/plugin-payload"),
-        |dir| Path::new(&dir).to_path_buf(),
-    )
+    if let Some(dir) = std::env::var_os("T9_PLUGIN_PAYLOAD_ROOT") {
+        return Path::new(&dir).to_path_buf();
+    }
+    let local = worktree_dir("tools/diff/realchain/plugin-payload");
+    if local.is_dir() {
+        return local;
+    }
+    // Worktree-local payload absent — fall back to the main checkout
+    // (the shared git dir's parent). Any git failure keeps the local
+    // path (and the skip guard below reports it loudly).
+    let main = std::process::Command::new("git")
+        .arg("rev-parse")
+        .arg("--git-common-dir")
+        .current_dir(worktree_root())
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| {
+            let dir = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+            // In the main checkout itself this yields ".git" — the
+            // local path check above already covered that case.
+            if dir == ".git" {
+                None
+            } else {
+                worktree_root().join(dir).canonicalize().ok()
+            }
+        })
+        .flatten()
+        .and_then(|git_dir| git_dir.parent().map(Path::to_path_buf))
+        .map(|main_root| main_root.join("tools/diff/realchain/plugin-payload"));
+    if let Some(main) = &main {
+        if main.is_dir() {
+            return main.clone();
+        }
+    }
+    local
 }
 
 /// Skip guard for the plugin rig: `Some(reason)` when the real plugin
-/// payload trees are absent on this machine (never a red).
+/// payload trees are absent on this machine (never a red). Every skip
+/// is APPENDED to `.test-logs/skips.log` (rider: a silent 0.004s PASS
+/// fake-green once hid the missing payload for a whole lane — the
+/// eprintln callers' output is captured away by nextest on PASS).
 pub fn plugin_lane_skip_reason() -> Option<String> {
+    let reason = plugin_lane_skip_reason_at(&plugin_payload_root())?;
+    let log = worktree_dir(".test-logs");
+    let _ = std::fs::create_dir_all(&log);
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log.join("skips.log"))
+        .and_then(|mut file| {
+            use std::io::Write;
+            writeln!(file, "[plugin-payload] {reason}")
+        });
+    Some(reason)
+}
+
+fn plugin_lane_skip_reason_at(root: &Path) -> Option<String> {
     for (name, spec) in PLUGIN_SPECS {
-        let source = plugin_payload_root().join(name);
+        let source = root.join(name);
         if plugin_payload_stamp(&source).is_none() {
             return Some(format!(
                 "real plugin payload unavailable: no <stamp>/node_modules under {} \
@@ -1413,6 +1513,44 @@ pub fn plugin_lane_skip_reason() -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod rider_payload_root_tests {
+    use super::*;
+
+    /// Rider (Lane D pitfall) — the git-ignored payload registry lives
+    /// only in the main checkout: in a lane worktree the local path is
+    /// absent and the root MUST fall back to the main checkout's copy
+    /// (a silent skip once fake-greened a whole omo lane).
+    #[test]
+    fn payload_root_falls_back_to_main_checkout() {
+        let local = worktree_dir("tools/diff/realchain/plugin-payload");
+        let root = plugin_payload_root();
+        if local.is_dir() {
+            // Main-checkout shape: the local copy wins outright.
+            assert_eq!(root, local);
+        } else {
+            assert!(
+                root.is_dir(),
+                "worktree-local payload absent: fallback must resolve the main checkout copy (got {})",
+                root.display()
+            );
+            assert_ne!(root, local);
+        }
+    }
+
+    /// Skip semantics survive without a payload supply: an empty root
+    /// yields a reason naming the missing tree (never a red).
+    #[test]
+    fn payload_skip_reason_names_missing_root() {
+        let tmp = std::env::temp_dir().join(format!("t9-payload-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).expect("tmp payload root");
+        let reason = plugin_lane_skip_reason_at(&tmp)
+            .expect("empty payload root must produce a skip reason");
+        assert!(reason.contains("oh-my-opencode-slim"), "reason names the spec dir: {reason}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
 
 /// The newest `<stamp>` generation under a payload registry entry that
@@ -2042,6 +2180,45 @@ fn write_diff_report(
         let _ = std::fs::write(dir.join(format!("{base}.screen.txt")), screen);
     }
     let _ = std::fs::write(dir.join(format!("{base}.txt")), text);
+}
+
+#[cfg(test)]
+mod g461_ref_port_tests {
+    use super::*;
+
+    /// Mirror of the deterministic hashed base in `Sandbox::ref_service_port`.
+    fn hashed_base(root: &Path) -> u16 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        root.hash(&mut hasher);
+        50_000 + (hasher.finish() % 10_000) as u16
+    }
+
+    /// G-461 — an incumbent listener on a sandbox's hashed base port
+    /// (the shape of a stray user-run `ref serve --service` DETACH
+    /// child) must never be handed out: the probe walks past it, stays
+    /// in the 50000-60000 band, and the pick is pinned so a re-call
+    /// cannot silently re-point the sandbox at its own live daemon.
+    #[test]
+    fn ref_port_walks_past_incumbent_listener() {
+        let sb = sandbox("g461incumbent", 0);
+        let other = sandbox("g461other", 0);
+        let base = hashed_base(&sb.root);
+        // Distinct sandbox roots pin distinct bases (no cross-sandbox
+        // fights inside one test process).
+        assert_ne!(base, hashed_base(&other.root));
+        let incumbent = std::net::TcpListener::bind(("127.0.0.1", base))
+            .expect("dummy incumbent on the hashed base port (band free by construction)");
+        let port = sb.ref_service_port();
+        assert!((50_000..60_000).contains(&port), "port {port} outside the pinned band");
+        assert_ne!(port, base, "must walk past the incumbent listener");
+        drop(incumbent);
+        // The pin is cached: even after the incumbent is gone, the
+        // sandbox keeps its port (a live daemon owns it now).
+        assert_eq!(sb.ref_service_port(), port);
+        let _ = std::fs::remove_dir_all(&sb.root);
+        let _ = std::fs::remove_dir_all(&other.root);
+    }
 }
 
 #[cfg(test)]

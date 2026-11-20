@@ -54,7 +54,7 @@ use crate::components::footer::{FooterTheme, FooterView};
 use crate::components::session_tabs::AdaptiveLayout;
 use crate::data::{Connection, HttpResync, Ingest};
 use crate::input_term::{KeyPipeline, TermEvent};
-use crate::keymap::{KeyStroke, Keymap, ManualClock, Outcome};
+use crate::keymap::{KeyStroke, Keymap, ManualClock, Outcome, StoreClock};
 use crate::render::color_mode::{self, ColorMode};
 use crate::render::Frame;
 use crate::store::{Focus, Route, Store};
@@ -1941,7 +1941,7 @@ impl App {
             // rebound), unbound strokes are consumed — the page
             // carries no composer.
             if let Outcome::Command { command, args } =
-                self.keymap.lookup(stroke.clone(), &self.clock)
+                self.keymap.lookup(stroke.clone(), &StoreClock(&self.store))
             {
                 let dispatch = self.dispatcher.dispatch(&self.store, &command, args.as_deref());
                 if let Dispatch::ServerPending(reason) = dispatch {
@@ -2036,7 +2036,7 @@ impl App {
     /// back to the session pane). Every other unbound stroke is
     /// consumed — the panel never types into the composer under it.
     fn stroke_in_panel(&mut self, stroke: &KeyStroke) {
-        match self.keymap.lookup(stroke.clone(), &self.clock) {
+        match self.keymap.lookup(stroke.clone(), &StoreClock(&self.store)) {
             Outcome::Command { command, .. } if command == "app.exit" => {
                 // The exit chord still exits from the panel's scope
                 // (the ref's global keymap keeps the base chords over
@@ -2082,7 +2082,7 @@ impl App {
     /// diff-viewer.tsx:726-732); the base exit chords (ctrl+c,
     /// `<leader>q`) still exit.
     fn stroke_in_diff(&mut self, stroke: &KeyStroke) {
-        if let Outcome::Command { command, args } = self.keymap.lookup(stroke.clone(), &self.clock)
+        if let Outcome::Command { command, args } = self.keymap.lookup(stroke.clone(), &StoreClock(&self.store))
         {
             if command == "app.exit" {
                 if stroke.ctrl && !stroke.alt && stroke.key == "d" {
@@ -2111,7 +2111,7 @@ impl App {
     /// the entries. Unbound strokes are consumed — the prompt is
     /// unmounted, nothing types.
     fn stroke_in_picker(&mut self, stroke: KeyStroke) {
-        if let Outcome::Command { command, args } = self.keymap.lookup(stroke, &self.clock) {
+        if let Outcome::Command { command, args } = self.keymap.lookup(stroke, &StoreClock(&self.store)) {
             let dispatch = self.dispatcher.dispatch(&self.store, &command, args.as_deref());
             if let Dispatch::ServerPending(reason) = dispatch {
                 let _ = reason;
@@ -2402,7 +2402,7 @@ impl App {
         // The pump owns the keymap; the dialog layer borrows it for the
         // dialog.* commands — split borrows via a temporary take.
         let mut keymap = std::mem::take(&mut self.keymap);
-        let outcome = handle_dialog_key(&self.store, &mut keymap, &self.clock, stroke, self.size);
+        let outcome = handle_dialog_key(&self.store, &mut keymap, &StoreClock(&self.store), stroke, self.size);
         self.keymap = keymap;
         match outcome {
             crate::components::dialog::DialogKeyOutcome::Submitted(value) => {
@@ -2667,7 +2667,7 @@ impl App {
             if had_pending && queue_live {
                 self.keymap.set_command_enabled("app.exit", false);
             }
-            match self.keymap.lookup_base(stroke.clone(), &self.clock) {
+            match self.keymap.lookup_base(stroke.clone(), &StoreClock(&self.store)) {
                 Outcome::Command { command, .. } if command == "app.exit" => {
                     self.request_exit();
                     return;
@@ -2707,7 +2707,7 @@ impl App {
             if had_pending && queue_live {
                 self.keymap.set_command_enabled("app.exit", false);
             }
-            match self.keymap.lookup_base(stroke.clone(), &self.clock) {
+            match self.keymap.lookup_base(stroke.clone(), &StoreClock(&self.store)) {
                 Outcome::Command { command, .. } if command == "app.exit" => {
                     self.request_exit();
                     return;
@@ -2797,7 +2797,7 @@ impl App {
         // 3. The input/base keymap (input mode pushed while a composer
         //    is focused): editing chords resolve as input.* commands,
         //    everything else falls to base.
-        if let Outcome::Command { command, args } = self.keymap.lookup(stroke.clone(), &self.clock)
+        if let Outcome::Command { command, args } = self.keymap.lookup(stroke.clone(), &StoreClock(&self.store))
         {
             if command == "app.exit" {
                 self.request_exit();
@@ -13914,6 +13914,30 @@ mod core_interaction_tests {
         app.press("q");
         assert!(app.store.dialogs().is_empty(), "empty queue never opens");
         assert!(app.exit_requested, "G-103: the empty queue exits via app.exit");
+    }
+
+    /// G-463 — chord expiry rides the STORE clock. `App.clock`
+    /// (`ManualClock`) never moves in production, so a pending leader
+    /// whose deadline passed STORE-side must still expire: the tail
+    /// stroke types into the composer instead of firing the chord
+    /// (the G-457 r2 frozen-clock class, keymap read-point edition).
+    #[test]
+    fn leader_chord_expires_on_store_clock_only() {
+        let mut app = App::new((80, 24));
+        app.store.open_tab("s1", Some("S".to_owned()));
+        app.press("ctrl+x");
+        // ONLY the store clock advances — the production shape (the
+        // pump ticks `store.advance_clock(system_now_ms)`; the manual
+        // clock stays frozen at 0). Pre-G-463 this kept the chord
+        // armed forever and `l` opened the session dialog.
+        app.store.advance_clock(crate::keymap::LEADER_TIMEOUT_MS + 1);
+        app.press("l");
+        assert_eq!(
+            app.store.dialogs().len(),
+            0,
+            "the expired chord never opens the session dialog"
+        );
+        assert_eq!(app.store.prompt_draft("s1").text, "l", "the tail types into the composer");
     }
 
     /// G-103 — the shared `<leader>q` chord (keybind.ts:48 vs :131):
