@@ -103,7 +103,7 @@
 | timeline/fork/message/execute 会话内嵌对话框 | GAP※ | routes/session/dialog-*.tsx |
 | FormPrompt（MCP elicitation 表单 UI，form 3 类事件） | GAP※ | A/B 新族 |
 | toast（info/error/action hover+tui.toast.show 远程） | 部分 | copy toast（W11）；其余 GAP※ |
-| patch-diff 渲染 | 部分 | G-441 edit 行；独立 viewer 面 audit |
+| patch-diff 渲染 | 部分 | G-441 edit 行已修关（gcb 轮帧级复核：tl toolloop EXACT）；独立 viewer 面 audit |
 | error-component 错误边界 | GAP※ | A |
 | theme-error-toast | GAP※ | A |
 

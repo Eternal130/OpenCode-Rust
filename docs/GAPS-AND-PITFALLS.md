@@ -3489,11 +3489,11 @@ realchain pair+t9 **28/28**（含新 t9_8；修复前 t9_8 RED 实证）；oc-tu
 
 三层落地：网关 v4 回合锚定（`--match turn`：主循环按会话内第 k 次回放 turn-k 盒带，跨环境键=turn 序号+tool_result 内容置空的大形状摘要；title/摘要辅助调用按形状分类走 digest 轨；冲突回退=异序号形状重扫→本序号带 shape-conflict 日志回放）+ PATH shim 快执行（`shim_extract.py`：盒带/规格→shim 目录，全命令行前缀最长匹配瞬时吐录制输出含退出码，fail-fast|real 可配）+ 权限预授权（沙箱 config 真 `permission` 块双端同语义）。首个工具环端到端场景 `tl_tool_loop_pair`（hello→shell "cargo test"（shim 秒回）→edit README.md（真沙箱 fs）→确认文本）：双端全链路对拍——工具调用行/折叠输出/文件终态 byte-exact/终态 grid。语料=合成 turn 脚本（seeds/toolloop）+bootstrap 录制的双端引擎请求形状（corpus-tools{,-ref}，turn 标注）。新发现两缺口：
 
-## G-441 🟡 edit 工具行不渲染文件 diff 预览行（tui）
+## G-441 ✅ 已修关（gwave-1 修；本轮 gcb 帧级复核+翻牌）：edit 工具行不渲染文件 diff 预览行（tui）
 
-- **Ref**：edit 工具行下渲染 file-diff 预览行（`    1 - <old>` / `    1 + <new>`，plugin/edit.ts 的 FileDiff 元数据→TUI 行投影）。
-- **Port**：edit.rs:380/449 产出的 FileDiff 元数据在位（引擎侧文件终态 byte-exact、tool_result 正常），但 TUI 工具行只渲染 "← Edit README.md" 折叠行，无 diff 预览行（连带 3 行高差把 ref 视口多滚一行）。
-- **处置**：tl_tool_loop_pair 以带退役绊线的掩码登记（绊线钉死 ref 有/port 无；port 补齐投影即红→撤掩码全 grid 对拍）。
+- **Ref**：edit 工具行下渲染 file-diff 预览行（`    1 - <old>` / `    1 + <new>`，plugin/edit.ts 的 FileDiff 元数据→TUI 行投影；渲染链=`Edit` 组件 session/index.tsx:3240-3302——`parseApplyPatchFiles(metadata.files)`（file-diff.ts:5-12 的 `file/patch/additions/deletions/status` shape）取 `files[0]`，`BlockTool` 内 `PatchDiff` 渲染 unified 预览）。
+- **Port（修复，29bcf3a7）**：`tool_detail.rs::edit_block` 走同一 `parse_apply_patch_files`（含引擎 `FileDiff.Info` 的 `file`+`status` 键）→ `patch_hunk_rows`（gutter 行号/` -`/` +` 符号列/hunk 间 `@@` 头）；tl 场景的 `mask_edit_diff` 掩码与滚动塌缩已随修退役。
+- **帧级验证（gcb 轮，基 780f8d8c）**：`tl` toolloop 双端全 grid **EXACT**（diff-reports/tl-toolloop.txt，含 edit diff 预览行）；`w13-perm-once` settled **EXACT**（edit turn 在内）；单测 `edit_block_renders_the_patch_hunks` / `edit_block_renders_between_hunk_headers` 在位。
 
 ## G-442 ✅ 已修关（W9 定根）：shell 工具行快完成偶发不投影输出行（tui）——真身=会话开页 message.sync 快照以旧压新
 
@@ -3561,10 +3561,10 @@ W6 评审 4 Minor 清偿：①t9_8 整测试体持 armed 守护（ServiceClean �
 
 # 第三十一轮增补（W13 控制者裁决，2026-11-18）
 
-- **G-450 🟡**：权限对话框 hint 行集差（ref 有 ctrl+f fullscreen 提示、rust 是 esc reject）——显示层 affordance 提示集，Minor。
-- **G-451 🟡**：reject 后工具行状态渲染——ref 保留已执行工具行+` ! `错误指示器，rust 行集不同（与 rig 的 miss 处理解耦后的真行为面）。
+- **G-450 ✅ 修关（W14 958e370a；gcb 轮帧级复核翻牌）**：权限对话框 hint 行集——ref 锚 `permission.tsx` hint 行（:498 `hint()` memo + :596-612 的 gap-2 行：`ctrl+f fullscreen/minimize`（fullscreen prop 在场时）+ `⇆ select`（多键时）+ `enter confirm`，escape 只走 escapeKey 不入 hint 行）。rust `footer/permission.rs::render_permission_controls` 已同集（ctrl+f 标签随 expanded 翻转、⇆ select、enter confirm；esc reject 旧 hint 已删，金帧已 re-bless 6f989b2f）。帧级证据：`w13-perm-once` dialog 态双端 hint 串逐字相同（`ctrl+f fullscreen  ⇆ select  enter confirm`）。残余=ask 框放置/相位（rust 底部停靠 vs ref portal 覆盖）——已在册 `w13-perm-once-dialog-midstream` needs-controller，非 hint 行集面。
+- **G-451 🟡（原始行集面已修关；残余=中断回合 turn-stats，跨 lane 交接）**：reject 后工具行——已修关面（W14 f8a2dbde/fb4b7d4e）：双端均保留已执行 `┃ $ cargo test` 行 + `The user declined this tool call` 错误行（w13-perm-reject rejected 帧双端一致）。**残余两行**（w13-perm-reject rejected diff-report line15/line35）：① 摘要行缺 `· N.N tok/s`（ref 基准=turn 聚合 Σ(output+reasoning)/Σ(time.streamed−time.created)，rows.ts:442-463）；② 底部状态行缺 context-usage `92 (0%)`（util/session.ts:45-76，`shift+tab agents` 应让位 usage 臂——composer 渲染臂已在位，缺数据）。**根因=oc-tui store.rs ingest**：`session.step.failed` 的 tokens/usage 被 `.filter(|_| step_ended)` 丢弃（ref client/solid/data.ts:890-905 在 cost∧tokens 齐时落 tokens），且 `session.step.streamed`→`time.streamed`（data.ts:876-878）未建模。**交接**：store.rs 属 Lane A 写域（palette/store/config-watch/catalog），本 lane（gcb）禁碰——修复需 Lane A 落两点 ingest + model.rs `PartTime.streamed` + list.rs tps 基准改 streamed 聚合。
 - **G-452 🟡**：emoji 宽字符模型——两端各错不同（rust 丢 skin-tone/拼接簇；ref 拆单枚+剥 VS16）；**对齐目标=ref 的 grid 而非抽象 Unicode 正确性**（裁决措辞纪律：ref 是锚）。
-- **G-453 🟡**：空流错误态 provider 标签格式（`replay/anthropic-messages` vs `anthropic/anthropic-messages`），Minor。
+- **G-453 ✅ 修关（W14 a2892dec；gcb 轮帧级复核翻牌）**：空流错误态 provider 标签——ref 锚 route/client.ts:424：`Invalid {providerID}/{routeID} stream event`（自定义 provider 如 rig 的 `replay` 面 `Invalid replay/anthropic-messages`）。rust `anthropic_messages.rs::invalid_stream_event_message` 以 `ParserState.route_label = {providerID}/{routeID}` 构造（:2932-2934）。帧级证据：`w13-g-empty` settled diff-report 无标签分歧行（残余=已注册 B 族 retry-loop 展示缺，另册）。
 - **G-454 🔴**：装载真插件后 rust 主回合不出 HTTP（rig 3/3；footer 显示 agent 已解析→阻塞在主回合组装与 HTTP 之间）。**根因前置两判别实验**（评审 I-1）：①单装 omo-slim（真机形态）vs 双插件；②插件 staging 只读 0555→若宿主写插件目录 EACCES 同步重试即同形——0755 复跑。forensic lane 携带。
 - 评审 Minor 记账：①已 bootstrap 谎报 journal 的库无回填路径（若 beta 产物用户受影响需 backfill——用户真机凭据经 db 整拷路径不受影响，低优先）；②w13_m1/m2 硬编码 journal=48 脆——改引 MIGRATIONS.len()（W14 顺手）；③W13 lane 后台指令违规：报告以"被外部终结"被动语态披露、缺自认——记账（再犯即 lane 评审降档）。
 
