@@ -26,6 +26,9 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { version = "0.7", default-features = false }
 json5 = "0.4"
+# MF-1 #18 — the config hot-reload watch (the ref's fs.watch dir
+# watch; oc-core's engine-side WatchHub uses the same crate).
+notify = "6"
 async-trait = "0.1"
 # F1 (ref1): the stats activity calendar extracts LOCAL date fields
 # (ref's `Date.getFullYear/getMonth/getDate`) — same tz-database

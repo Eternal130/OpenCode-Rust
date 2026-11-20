@@ -30,6 +30,7 @@ pub mod attention;
 pub mod clipboard;
 pub mod components;
 pub mod config;
+pub mod config_watch;
 pub mod data;
 pub mod diff_viewer_golden_tests;
 pub mod editor;
