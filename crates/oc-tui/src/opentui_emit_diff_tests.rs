@@ -282,11 +282,17 @@ fn vocabulary_emission_is_pinned() {
     assert_eq!(digest, 0x8012_e1ce_c84c_1bc2, "the vocabulary emission bytes drifted");
 }
 
-/// The cluster pixel contract (the retired emitter's
-/// `cluster_roundtrip_through_vt100`, pinned on the new emitter): a
-/// multi-codepoint cluster prints its FULL symbol and the cells
-/// beyond the span's overflow survive — the deferred cluster pass is
-/// the pixel-preserving policy on top of the opentui stream.
+/// The cluster emission contract (MF-1 #2 — re-pinned from the
+/// retired deferred pass to the REF's own inline shape): a
+/// multi-codepoint cluster prints its FULL symbol INLINE in the base
+/// SGR run and the run repositions with a CUP to the first column
+/// after the cluster's reserved span (upstream renderer.zig:
+/// 2788-2812) — so the base text AFTER the span ("flag") keeps its
+/// frame position (the old a3/w13 drift is gone). Note the vt100
+/// replay model does not grapheme-cluster: the glyph's cell content
+/// may read split there — identically on both ends of every
+/// vt-replayed differential (the real terminal clusters, and the
+/// ref's identical bytes land identically).
 #[test]
 fn cluster_frames_keep_pixels_through_vt100() {
     let mut frame = grid(30, 1, &["                              "]);
@@ -306,6 +312,14 @@ fn cluster_frames_keep_pixels_through_vt100() {
     let mut emitter = OpentuiEmitter::new(30, 1);
     let mut sink = Vec::new();
     emitter.emit(&mut sink, &frame).expect("emit");
+    let bytes = String::from_utf8_lossy(&sink).into_owned();
+    // The full symbol rides the base run (inline, the ref shape).
+    assert!(bytes.contains(family), "cluster bytes print inline: {bytes:?}");
+    // The post-span reposition: the span is x=7..8, so the CUP lands
+    // at column 10 (1-based) — the run resumes at the frame's next
+    // cell, no drift.
+    assert!(bytes.contains("\x1b[1;10H"), "post-extent CUP missing: {bytes:?}");
+    // The base text after the span keeps its frame position.
     let mut parser = vt100::Parser::new(1, 30, 0);
     parser.process(&sink);
     let screen = parser.screen();
@@ -321,10 +335,24 @@ fn cluster_frames_keep_pixels_through_vt100() {
             text.push_str(&c);
         }
     }
-    let norm: String = text.chars().filter(|c| *c != ' ').collect();
-    let target: String = family.chars().filter(|c| *c != ' ').collect();
-    assert!(norm.contains(&target), "family must round-trip: {text:?}");
-    assert!(text.contains("flag"), "flag must survive: {text:?}");
+    assert!(text.starts_with("family "), "prefix survives: {text:?}");
+    assert!(text.contains("flag"), "flag must survive at its frame position: {text:?}");
+    // The COLUMN of the flag (cell contents may be multi-char, so the
+    // column is tracked during the walk, not derived from the String).
+    let mut flag_col = None;
+    let mut walk = String::new();
+    for x in 0..30 {
+        let c = screen
+            .cell(0, u16::try_from(x).unwrap_or(u16::MAX))
+            .map(vt100::Cell::contents)
+            .unwrap_or_default();
+        let cell_text = if c.is_empty() { " ".to_owned() } else { c };
+        if cell_text == "f" {
+            flag_col = Some(x);
+        }
+        walk.push_str(&cell_text);
+    }
+    assert_eq!(flag_col, Some(22), "the post-span text drifted: {walk:?}");
 }
 
 // -- G-287⑧: OSC-8 hyperlink emission --------------------------------------

@@ -116,9 +116,9 @@ oc-uqr = { path = "third_party/oc-uqr" }
 # Consumed by oc-tui lane K (gb13): mini scrollback bodies emit
 # styled commits (theme colors + syntax highlight) instead of
 # mono plain text.
-opentui-core = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "259e0a9" }
-opentui-keymap = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "259e0a9" }
-opentui-solid = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "259e0a9" }
+opentui-core = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "69466c4" }
+opentui-keymap = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "69466c4" }
+opentui-solid = { git = "https://github.com/Eternal130/opentui-rust.git", rev = "69466c4" }
 
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
