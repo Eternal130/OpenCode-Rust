@@ -256,7 +256,8 @@
       "g_ref": "G-454",
       "adjudicated_by": "G-454 lane",
       "adjudicated_at": "2026-11-18",
-      "last_observed": "2026-11-18"
+      "last_observed": "2026-11-18",
+      "status": "RESOLVED (W15 G-455 alignment; gcd lane 2026-11-20 re-verified on 39f3d4f6): all five G-455 shapes converged — ap-dichotomy/execute-last/io-input schema alignment removed the cache_control/additionalProperties/max_tokens deltas, the codemode catalog text matches, corpus-w13-ref seed 4cc63e0a is strict-hit by BOTH engines (gateway-w13-omo log), and w13-omo home/session/session-reply all export 0 divergences with reply rendered (survey observed=1)."
     },
     {
       "id": "w13-midstream-spinner-newsession",
