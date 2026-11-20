@@ -187,25 +187,6 @@
       "last_observed": "2026-11-18"
     },
     {
-      "id": "w13-g-emoji-zwj-width",
-      "scenario_pattern": "w13-g-emoji",
-      "state_pattern": "settled",
-      "shape": {
-        "kind": "substring",
-        "any_contains": [
-          "Family:"
-        ]
-      },
-      "classification": "real-bug",
-      "justification": "ADJUDICATED REAL DIFF, FIXABLE (controller re-adjudication 2026-11-18 per W14 review): the width source IS available — the native zig layer is vendored at /opt/opentui-rust/third_party/opentui/packages/native/src/ (utf8.zig:438-459 EAW fullwidth/wide=2 + emoji range tables; grapheme.zig cluster packing semantics) and opentui-rust crates/opentui-core/src/text_buffer.rs is the Rust port with zig line anchors (findWrapPosByWidthGraphemeSafe ← utf8.zig:783-794). Fix path: port the emoji/EAW tables and cluster-drop rules into the oc-tui emission layer (or reuse opentui-rust text_buffer), pinning tests case-by-case against the observed ref cell model (astral=2, modifier drop). The earlier blocked-on-native label was wrong (only the JS dist was checked). G-452 scheduled W15.",
-      "g_ref": "G-452",
-      "adjudicated_by": "W13 lane",
-      "adjudicated_at": "2026-11-18",
-      "last_observed": "2026-11-18",
-      "status": "RESOLVED (W15 G-452): head+ZWJ family collapse, skin-tone drop, VS16 kept+padded — w13-g-emoji settled 0 divergences (both engines byte-equal through the vt grid)",
-      "last_seen": "2026-11-19"
-    },
-    {
       "id": "w13-g-empty-stream-error",
       "scenario_pattern": "w13-g-empty",
       "state_pattern": "settled",

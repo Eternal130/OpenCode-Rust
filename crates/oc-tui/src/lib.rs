@@ -83,4 +83,7 @@ pub mod system;
 pub mod terminal_pane;
 pub mod terminal_proto;
 pub mod theme;
+pub mod width_emoji_regex;
+pub mod width_model;
+pub mod width_tables;
 pub mod wrap;
