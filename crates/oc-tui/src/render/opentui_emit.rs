@@ -29,19 +29,22 @@
 //! assertion), which this emitter layers on top of the upstream
 //! stream exactly where the old `GridEmitter::emit` did.
 //!
-//! Known bounded divergence (documented): multi-codepoint cluster
-//! cells print INLINE mid-run (upstream's grapheme path) instead of
-//! the old emitter's deferred cluster pass. The golden corpus frames
-//! carry no cluster sidecars (paint.rs's "no golden or rig corpus
-//! carried wide clusters" note, lane M4), so corpus parity is
-//! constructive; cluster-bearing frames keep their pixels (the full
-//! symbol still prints) with different framing bytes.
+//! MF-1 #2 (closed): multi-codepoint cluster cells print INLINE
+//! mid-run through upstream's own grapheme path — the pool-backed
+//! grapheme word pokes below, the emitter's post-cluster CUP
+//! reposition, and the frame diff's pool-bytes equality (all on the
+//! opentui-rust side, gf2 rev 69466c4). The retired oc-tui deferred
+//! cluster pass (G-452's spaces + per-cluster CUP/SGR burst) is
+//! deleted: cluster-bearing frames now carry the REF's own byte
+//! shape. The golden corpus frames carry no cluster sidecars
+//! (paint.rs's "no golden or rig corpus carried wide clusters" note,
+//! lane M4), so corpus parity stays constructive.
 
 use opentui_core::buffer::{OptimizedBuffer, CHAR_FLAG_CONTINUATION};
 use opentui_core::color::Rgba;
 use opentui_core::renderer::{create_cli_renderer, CliRenderer, CliRendererConfig};
 
-use super::{Cell, CellColor, ClusterMap, Frame, CONTINUATION};
+use super::{Cell, CellColor, Frame, CONTINUATION};
 use std::fmt::Write as _; // format_push_string: write! into the existing String
 
 /// G-287⑧ — one OSC-8 link rectangle of the frame being emitted:
@@ -109,9 +112,6 @@ pub struct OpentuiEmitter {
     renderer: CliRenderer,
     width: usize,
     height: usize,
-    /// The previous frame's cluster sidecar (the diff base for the
-    /// deferred cluster pass — see [`render_sgr`]).
-    prev_clusters: ClusterMap,
     /// G-457 — the last-emitted cursor assertion (visible, y, x). A
     /// frame whose DIFF is empty and whose cursor state is unchanged
     /// emits NOTHING (upstream's no-op-frame rule, renderer.zig:
@@ -154,7 +154,6 @@ impl OpentuiEmitter {
             renderer,
             width,
             height,
-            prev_clusters: ClusterMap::new(),
             last_cursor: None,
             last_emit_at: None,
         }
@@ -188,7 +187,6 @@ impl OpentuiEmitter {
             u32::try_from(width).unwrap_or(u32::MAX),
             u32::try_from(height).unwrap_or(u32::MAX),
         );
-        self.prev_clusters.clear();
     }
 
     /// The current grid size.
@@ -203,7 +201,6 @@ impl OpentuiEmitter {
     /// next emission takes the `frame_id == 0` forced path.
     pub fn invalidate_full(&mut self) {
         self.renderer.bench_force_full_frame();
-        self.prev_clusters.clear();
     }
 
     /// Write one composed frame's cells into the renderer's next
@@ -227,7 +224,9 @@ impl OpentuiEmitter {
             let (width, height) = (frame.width, frame.height);
             self.resize(width, height);
         }
-        let force = self.renderer.frame_id() == 0;
+        // (MF-1 #2: the retired deferred cluster pass carried the
+        // `force` flag; the inline path needs no cluster-side force —
+        // frame_id == 0 is the buffer emitter's own full-repaint.)
         // G-287⑧ — resolve the frame's link rects into per-cell link
         // ids over the renderer's own link pool (`allocLink`/
         // link.zig — interned, so the same URL keeps its id across
@@ -248,17 +247,11 @@ impl OpentuiEmitter {
             }
         }
         poke(&mut self.renderer, frame, &link_cells);
-        // The rows this emission touches (upstream's row-equality
-        // outcome, computed over the poked buffers + the cluster
-        // sidecar diff): rows whose cells changed OR whose clusters
-        // changed — the deferred pass prints the changed clusters of
-        // exactly these rows.
-        let touched_rows =
-            touched_rows(&self.renderer, frame, &self.prev_clusters, self.width, self.height);
+        // MF-1 #2 — clusters print inline in this stream (the poked
+        // grapheme words + upstream's post-cluster CUP); the retired
+        // deferred cluster pass and its sidecar diff are gone.
         let mut out = String::new();
         self.renderer.bench_emit_frame_sgr(&mut out);
-        emit_cluster_pass(&mut out, frame, &self.prev_clusters, &touched_rows, force);
-        self.prev_clusters = cluster_sized(frame, self.width, self.height);
         // The `render()` tail (renderer/frame.rs :122-127): the
         // just-emitted frame becomes the diff base.
         core::mem::swap(
@@ -397,28 +390,43 @@ fn poke(
             let cell = &row[x];
             // G-452 — the vt-advance accounting of the base SGR pass
             // (a sequential byte stream a real terminal advances by
-            // each glyph's own width):
-            // * a CLUSTER span reserves its full width in spaces (the
-            //   deferred cluster pass writes the real bytes at these
-            //   columns afterwards — without the reservation the base
-            //   text after the span drifts left and the cluster
-            //   bytes overwrite it, the observed `w13-g-emoji`
-            //   misalignment);
-            // * a PLAIN wide glyph emits the glyph (the terminal
-            //   advances its 2 columns itself) and its continuation
-            //   cell emits NO bytes — reserving there would
-            //   double-advance and drift the other way.
+            // MF-1 #2 — a CLUSTER span rides the buffer's own grapheme
+            // pool and prints INLINE in the base SGR run (the ref's
+            // per-grapheme-cluster emission, upstream renderer.zig:
+            // 2788-2812): the start cell packs the pool id + extent,
+            // the span's remaining cells are continuation words (no
+            // bytes), and the emitter's post-cluster CUP reposition
+            // lands the run exactly after the reserved span — the
+            // retired deferred cluster pass's pixel guarantee, now
+            // with the ref's own byte shape (the old G-452 spaces +
+            // deferred pass is gone).
             if let Some(symbol) = frame.cluster_at(y, x) {
+                let attrs = match link_cells.get(&(x, y)) {
+                    Some(id) => {
+                        opentui_core::ansi::set_link_id(u32::from(cell.attrs & 0xFF), *id)
+                    }
+                    None => u32::from(cell.attrs & 0xFF),
+                };
                 let span = crate::wrap::display_width(symbol).max(1);
-                for dx in 0..span {
-                    if let Some(cell) = row.get(x + dx) {
-                        let attrs = match link_cells.get(&(x + dx, y)) {
-                            Some(id) => {
-                                opentui_core::ansi::set_link_id(u32::from(cell.attrs & 0xFF), *id)
-                            }
-                            None => u32::from(cell.attrs & 0xFF),
+                let span32 = u32::try_from(span).unwrap_or(u32::MAX);
+                let gid = buffer.alloc_grapheme_pub(symbol);
+                let start = opentui_core::buffer::pack_grapheme_start(gid, span32);
+                set_word(buffer, x, y, start, cell, attrs);
+                for dx in 1..span {
+                    if let Some(span_cell) = row.get(x + dx) {
+                        let span_attrs = match link_cells.get(&(x + dx, y)) {
+                            Some(id) => opentui_core::ansi::set_link_id(
+                                u32::from(span_cell.attrs & 0xFF),
+                                *id,
+                            ),
+                            None => u32::from(span_cell.attrs & 0xFF),
                         };
-                        set_word(buffer, x + dx, y, u32::from(' '), cell, attrs);
+                        let cont = opentui_core::buffer::pack_continuation(
+                            u32::try_from(dx).unwrap_or(u32::MAX),
+                            span32 - 1 - u32::try_from(dx).unwrap_or(u32::MAX),
+                            gid,
+                        );
+                        set_word(buffer, x + dx, y, cont, span_cell, span_attrs);
                     }
                 }
                 x += span;
@@ -439,80 +447,6 @@ fn poke(
     }
 }
 
-/// The rows this emission touches: rows whose buffer cells differ
-/// (current = the previous frame, next = the poked frame) or whose
-/// cluster sidecar entries changed — the row set the deferred
-/// cluster pass prints in (upstream's own row-equality outcome plus
-/// the cluster-aware diff the retired emitter layered on it).
-fn touched_rows(
-    renderer: &CliRenderer,
-    frame: &Frame,
-    prev_clusters: &ClusterMap,
-    width: usize,
-    height: usize,
-) -> Vec<bool> {
-    let mut touched = vec![false; height];
-    for (y, row) in touched.iter_mut().enumerate() {
-        for x in 0..width {
-            let (cx, cy) =
-                (u32::try_from(x).unwrap_or(u32::MAX), u32::try_from(y).unwrap_or(u32::MAX));
-            if renderer.current_render_buffer.get(cx, cy) != renderer.next_render_buffer.get(cx, cy)
-            {
-                *row = true;
-                break;
-            }
-        }
-        if !*row {
-            // cluster-aware row equality: same-symbol sidecar entries
-            let changed = frame.clusters.as_ref().is_some_and(|m| {
-                m.range((y, 0)..(y + 1, 0)).any(|(key, symbol)| {
-                    prev_clusters.get(key).map(String::as_str) != Some(symbol.as_str())
-                })
-            }) || prev_clusters.range((y, 0)..(y + 1, 0)).next().is_some()
-                && frame
-                    .clusters
-                    .as_ref()
-                    .is_none_or(|m| m.range((y, 0)..(y + 1, 0)).next().is_none());
-            *row = changed;
-        }
-    }
-    touched
-}
-
-/// The deferred cluster pass (the retired emitter's policy, verbatim
-/// shape): every CHANGED cluster of a touched row prints with its own
-/// CUP + SGR burst + full symbol + RESET — last-writer-wins on the
-/// overflow span keeps every non-cluster cell at its frame position
-/// under the vt width model (the B3b pixel-preservation rationale).
-fn emit_cluster_pass(
-    out: &mut String,
-    frame: &Frame,
-    prev_clusters: &ClusterMap,
-    touched: &[bool],
-    force: bool,
-) {
-    let Some(map) = frame.clusters.as_ref() else { return };
-    for ((y, x), symbol) in map.iter() {
-        let (row, col) = (*y, *x);
-        if row >= touched.len() {
-            continue;
-        }
-        let changed =
-            force || prev_clusters.get(&(row, col)).map(String::as_str) != Some(symbol.as_str());
-        if changed && touched[row] {
-            let cell = frame.cells.get(row).and_then(|r| r.get(col));
-            if let Some(cell) = cell {
-                let _ = write!(out, "\x1b[{};{}H", row + 1, col + 1);
-                super::ansi::emit_fg(out, cell.fg);
-                super::ansi::emit_bg(out, cell.bg);
-                super::ansi::apply_attributes(out, cell.attrs);
-                out.push_str(symbol);
-                out.push_str("\x1b[0m");
-            }
-        }
-    }
-}
-
 fn set_word(buffer: &mut OptimizedBuffer, x: usize, y: usize, word: u32, cell: &Cell, attrs: u32) {
     buffer.set_cell_word(
         u32::try_from(x).unwrap_or(u32::MAX),
@@ -522,16 +456,4 @@ fn set_word(buffer: &mut OptimizedBuffer, x: usize, y: usize, word: u32, cell: &
         bg_rgba(cell.bg),
         attrs,
     );
-}
-
-/// The frame's cluster sidecar, cropped to a size (the digest
-/// harness's stable serialization input).
-#[must_use]
-pub fn cluster_sized(frame: &Frame, width: usize, height: usize) -> ClusterMap {
-    frame.clusters.as_ref().map_or_else(ClusterMap::new, |m| {
-        m.iter()
-            .filter(|&((y, x), _)| *y < height && *x < width)
-            .map(|(k, v)| (*k, v.clone()))
-            .collect()
-    })
 }
