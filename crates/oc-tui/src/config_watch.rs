@@ -97,6 +97,7 @@ impl ConfigFileWatch {
 
     /// Drain the dirty flag (the pump loop's per-pass check): true
     /// exactly once per change storm.
+    #[must_use]
     pub fn take_dirty(&self) -> bool {
         self.dirty.swap(false, Ordering::AcqRel)
     }

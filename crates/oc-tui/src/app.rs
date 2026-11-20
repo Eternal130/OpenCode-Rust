@@ -8995,7 +8995,7 @@ pub async fn run_with_size(
         .as_ref()
         .and_then(|path| std::fs::metadata(path).ok())
         .and_then(|meta| meta.modified().ok());
-    let _config_watch = config
+    let config_watch = config
         .path
         .as_ref()
         .and_then(|path: &std::path::PathBuf| crate::config_watch::ConfigFileWatch::start(path));
@@ -9130,8 +9130,8 @@ pub async fn run_with_size(
             // only ever SHORTENS an idle block (a reply that already
             // settled the probe makes the deadline a harmless extra
             // wake).
-            let mut probe_deadline = Some(std::time::Instant::now()
-                + opentui_core::terminal::probe::PROBE_TIMEOUT);
+            let mut probe_deadline =
+                Some(std::time::Instant::now() + opentui_core::terminal::probe::PROBE_TIMEOUT);
             loop {
                 if input_stop.is_stopped() {
                     break;
@@ -9140,12 +9140,11 @@ pub async fn run_with_size(
                 // deadline — the pending input unit's flush window
                 // (G-459), then the probe expiry — else block until a
                 // fd wakes (the ref's blocking read).
-                let timeout_ms = deadline_ms(pipeline.pending_deadline())
+                let timeout_ms: i32 = deadline_ms(pipeline.pending_deadline())
                     .into_iter()
                     .chain(deadline_ms(probe_deadline))
                     .min()
-                    .map(|ms: u64| i32::try_from(ms).unwrap_or(i32::MAX))
-                    .map_or(-1, |ms: i32| ms);
+                    .map_or(-1, |ms| i32::try_from(ms).unwrap_or(i32::MAX));
                 let wake = wait_session_input(
                     tty_input_fd.load(std::sync::atomic::Ordering::Acquire),
                     stop_rd,
@@ -9195,7 +9194,9 @@ pub async fn run_with_size(
                                             opentui_core::renderer::ThemeMode::Dark => Mode::Dark,
                                             opentui_core::renderer::ThemeMode::Light => Mode::Light,
                                         };
-                                        if event_tx.blocking_send(TermEvent::ThemeMode(mode)).is_err()
+                                        if event_tx
+                                            .blocking_send(TermEvent::ThemeMode(mode))
+                                            .is_err()
                                         {
                                             return;
                                         }
@@ -10639,18 +10640,17 @@ pub async fn run_with_size(
         // flag on a real fs change (modify or rename-save); the mtime
         // compare gates the re-apply. Keybinds + theme re-merge
         // through the store.
-        let mtime = if _config_watch
-            .as_ref()
-            .is_some_and(crate::config_watch::ConfigFileWatch::take_dirty)
-        {
-            config
-                .path
-                .as_ref()
-                .and_then(|path| std::fs::metadata(path).ok())
-                .and_then(|meta| meta.modified().ok())
-        } else {
-            None
-        };
+        let mtime =
+            if config_watch.as_ref().is_some_and(crate::config_watch::ConfigFileWatch::take_dirty)
+            {
+                config
+                    .path
+                    .as_ref()
+                    .and_then(|path| std::fs::metadata(path).ok())
+                    .and_then(|meta| meta.modified().ok())
+            } else {
+                None
+            };
         // The notice-file watch (the CLI checker's channel): a new
         // line lands the banner; the update dialog's `Installing`
         // state resolves to `Installed` when the file says so.
@@ -11284,9 +11284,7 @@ impl InputStopHandle {
         use std::os::fd::FromRawFd as _;
         let mut fds = [0i32; 2];
         // SAFETY: pipe2 with O_NONBLOCK|O_CLOEXEC, closed on failure.
-        let ok = unsafe {
-            libc::pipe2(fds.as_mut_ptr(), libc::O_NONBLOCK | libc::O_CLOEXEC) == 0
-        };
+        let ok = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_NONBLOCK | libc::O_CLOEXEC) == 0 };
         if !ok {
             return None;
         }
@@ -11340,8 +11338,7 @@ fn tick_anchor_enabled() -> bool {
 /// loop's `check_resize` reconciles immediately. Installed once per
 /// process (first input thread); `TIOCSWINSZ`-without-signal pty
 /// harnesses stay covered by the per-wake re-check in the loop.
-static WINCH_PIPE_WR: std::sync::atomic::AtomicI32 =
-    std::sync::atomic::AtomicI32::new(-1);
+static WINCH_PIPE_WR: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
 
 /// Create (once) the SIGWINCH self-pipe and install the handler;
 /// returns the pipe's raw fd pair (process-lifetime fds, never
@@ -11483,7 +11480,8 @@ fn drain_fd(fd: std::os::fd::RawFd) {
     let mut scratch = [0u8; 64];
     // SAFETY: read(2) of at most 64 bytes on a non-blocking pipe.
     while unsafe { libc::read(fd, scratch.as_mut_ptr().cast::<libc::c_void>(), scratch.len()) } > 0
-    {}
+    {
+    }
 }
 
 // SAFETY: the handler only writes one byte to a static pipe fd.
@@ -11491,13 +11489,12 @@ fn drain_fd(fd: std::os::fd::RawFd) {
 extern "C" fn on_sigwinch(_sig: libc::c_int) {
     let fd = WINCH_PIPE_WR.load(std::sync::atomic::Ordering::Relaxed);
     if fd >= 0 {
-        let byte: libc::c_char = b'w' as libc::c_char;
+        let byte: libc::c_char = b'w'.cast_signed();
         unsafe {
             let _ = libc::write(fd, std::ptr::addr_of!(byte).cast::<libc::c_void>(), 1);
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -11506,9 +11503,9 @@ mod tests {
     /// armed deadline respects its own window (not a 50 ms tick).
     #[test]
     fn mf15_stop_pipe_wakes_parked_read() {
+        use std::os::fd::AsRawFd as _;
         let stop = std::sync::Arc::new(InputStopHandle::new());
         let read = stop.stop_pipe_read().expect("pipe2");
-        use std::os::fd::AsRawFd as _;
         let stop_rd = read.as_raw_fd();
         let (_winch_rd, _winch_wr) = winch_pipe_fds();
         let parked = std::thread::spawn(move || {
@@ -11557,15 +11554,11 @@ mod tests {
         let parked = std::thread::spawn(move || wait_session_input(-1, -1, winch_rd, -1));
         std::thread::sleep(std::time::Duration::from_millis(50));
         assert!(!parked.is_finished(), "the read returned before SIGWINCH");
-        let byte: libc::c_char = b'w' as libc::c_char;
+        let byte: libc::c_char = b'w'.cast_signed();
         // SAFETY: write(2) one byte on the non-blocking self-pipe.
         #[allow(unsafe_code)]
         unsafe {
-            libc::write(
-                winch_wr,
-                std::ptr::addr_of!(byte).cast::<libc::c_void>(),
-                1,
-            );
+            libc::write(winch_wr, std::ptr::addr_of!(byte).cast::<libc::c_void>(), 1);
         }
         match parked.join().expect("reader thread") {
             SessionWake::Winch => {}

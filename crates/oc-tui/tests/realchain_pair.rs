@@ -45,7 +45,7 @@
 mod realchain_harness;
 
 use realchain_harness::{
-    corpus_dir, corpus_ref_dir, capture_settled, default_pace, dump_grid, export_grid_diff,
+    capture_settled, corpus_dir, corpus_ref_dir, default_pace, dump_grid, export_grid_diff,
     export_survey, http_get, http_post, lane_lock, normalize_grid, plugin_lane_skip_reason,
     ref_lane_skip_reason, ref_root, ref_service_stop, ref_stage, ref_tui_spawn, sandbox,
     service_start, service_stop, stage_plugins, worktree_dir, Gateway, LaneGuard, RefStage,

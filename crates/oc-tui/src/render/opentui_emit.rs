@@ -150,13 +150,7 @@ impl OpentuiEmitter {
             height: u32::try_from(height).unwrap_or(u32::MAX),
             ..CliRendererConfig::default()
         });
-        OpentuiEmitter {
-            renderer,
-            width,
-            height,
-            last_cursor: None,
-            last_emit_at: None,
-        }
+        OpentuiEmitter { renderer, width, height, last_cursor: None, last_emit_at: None }
     }
 
     /// The renderer's terminal-cursor state + emission diff cache —
@@ -402,9 +396,7 @@ fn poke(
             // deferred pass is gone).
             if let Some(symbol) = frame.cluster_at(y, x) {
                 let attrs = match link_cells.get(&(x, y)) {
-                    Some(id) => {
-                        opentui_core::ansi::set_link_id(u32::from(cell.attrs & 0xFF), *id)
-                    }
+                    Some(id) => opentui_core::ansi::set_link_id(u32::from(cell.attrs & 0xFF), *id),
                     None => u32::from(cell.attrs & 0xFF),
                 };
                 let span = crate::wrap::display_width(symbol).max(1);
