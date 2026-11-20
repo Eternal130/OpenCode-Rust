@@ -10,6 +10,20 @@ pub use oc_tui_core::keymap::{
     Outcome, OwnedCommandDef, SystemClock, LEADER_DEFAULT, LEADER_TIMEOUT_MS,
 };
 
+/// G-463 — the store-backed keymap clock. Chord/leader expiry must
+/// sample the STORE clock (the live time base the pump advances from
+/// the system tick); `App.clock` (`ManualClock`) never moves in
+/// production, so a pending chord's deadline could never pass and the
+/// sequence froze forever. Same class as the G-457 r2 selection and
+/// wheel reworks (read the store clock, not the frozen manual one).
+pub struct StoreClock<'a>(pub &'a crate::store::Store);
+
+impl Clock for StoreClock<'_> {
+    fn now_ms(&self) -> u64 {
+        self.0.clock()
+    }
+}
+
 /// Shape one pending config error as a toast (the F5 surface):
 ///
 /// * `theme {name}: {reason} (skipped)` → the reference's
