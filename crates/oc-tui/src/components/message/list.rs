@@ -999,7 +999,7 @@ fn render_row(
             }
         }
         Row::Entry(Entry::AssistantFooter { message_id }) => {
-            let Some(Message::Assistant { agent, model, error, tokens, time, retry, .. }) =
+            let Some(Message::Assistant { agent, model, error, retry, .. }) =
                 messages.iter().find(|m| m.id() == message_id.as_str())
             else {
                 return RowRender::default();
@@ -1013,30 +1013,18 @@ fn render_row(
                 .find(|(key, _)| key == model)
                 .map_or_else(|| model.clone(), |(_, name)| name.clone());
             // tok/s (`turnTokensPerSecond`, rows.ts:442-463): the
-            // step's output+reasoning tokens over its streamed span —
-            // the VALUE is per-run (b); the row + `X.X tok/s` format
-            // is the (a) surface this pins. G-370⑧ (bounded): the
-            // ref's exact basis is TURN-aggregated —
-            // Σ(output+reasoning) over the turn's steps divided by
-            // Σ(`time.streamed − time.created`) per step — and
-            // `time.streamed` is not modeled on the port's wire
-            // (PartTime carries created/completed only); modeling it
-            // means new ingest plumbing through every step event and
-            // re-basing every footer value (needs oracle re-pin if
-            // taken). `session.tps` gates the span (index.tsx:1892
+            // turn-aggregate rate — Σ(output+reasoning) over the
+            // turn's steps divided by Σ(`time.streamed −
+            // time.created`), aggregated before dividing (G-451: the
+            // old per-step `completed−created` stand-in retired once
+            // `session.step.streamed` ingest landed).
+            // `session.tps` gates the span (index.tsx:1892
             // `config.data.session.tps && tokensPerSecond()` —
             // default off).
-            let tps = match (tokens, time.created, time.completed) {
-                (Some(tokens), Some(created), Some(created_end))
-                    if created_end > created && options.tps_enabled =>
-                {
-                    // Display-rate rounding, not accounting: u64→f64
-                    // loss is irrelevant at one decimal.
-                    #[allow(clippy::cast_precision_loss)]
-                    let tps = *tokens as f64 * 1000.0 / (created_end - created) as f64;
-                    Some(tps)
-                }
-                _ => None,
+            let tps = if options.tps_enabled {
+                crate::components::message::model::turn_tokens_per_second(message_id, messages)
+            } else {
+                None
             };
             // `interrupted` (index.tsx:1872): the step error IS the
             // interrupt marker — no `Error:` row, a ` · interrupted`
@@ -1554,7 +1542,7 @@ pub fn message_groups_fixture() -> Vec<Message> {
                 Part::Tool {
                     id: "grp-tool-read".into(),
                     name: "read".into(),
-                    time: PartTime { created: Some(1), completed: Some(1) },
+                    time: PartTime { created: Some(1), completed: Some(1), streamed: None },
                     state: ToolState::default(),
                 },
                 Part::Text {
@@ -1564,7 +1552,7 @@ pub fn message_groups_fixture() -> Vec<Message> {
             ],
             finish: Some("stop".into()),
             error: None,
-            time: PartTime { created: Some(1), completed: Some(2) },
+            time: PartTime { created: Some(1), completed: Some(2), streamed: None },
             tokens: None,
             usage_total: None,
             retry: None,
@@ -1583,7 +1571,7 @@ pub fn message_groups_fixture() -> Vec<Message> {
             parts: vec![
                 Part::Reasoning {
                     text: "**Failure modes**\n\nConsider recursion limits first".into(),
-                    time: PartTime { created: Some(11), completed: Some(12) },
+                    time: PartTime { created: Some(11), completed: Some(12), streamed: None },
                 },
                 Part::Text {
                     text: "Three failure modes dominate: recursion limits, cycle detection and budget exhaustion.".into(),
@@ -1592,7 +1580,7 @@ pub fn message_groups_fixture() -> Vec<Message> {
             ],
             finish: Some("stop".into()),
             error: None,
-            time: PartTime { created: Some(11), completed: Some(14) },
+            time: PartTime { created: Some(11), completed: Some(14), streamed: None },
             tokens: None,
             usage_total: None,
             retry: None,
@@ -1626,7 +1614,11 @@ pub fn vscroll_messages_fixture() -> Vec<Message> {
             }],
             finish: Some("stop".into()),
             error: None,
-            time: PartTime { created: Some(index * 10 + 1), completed: Some(index * 10 + 2) },
+            time: PartTime {
+                created: Some(index * 10 + 1),
+                completed: Some(index * 10 + 2),
+                streamed: None,
+            },
             tokens: None,
             usage_total: None,
             retry: None,
@@ -1653,7 +1645,7 @@ pub fn vscroll_appended_turn() -> Message {
         }],
         finish: Some("stop".into()),
         error: None,
-        time: PartTime { created: Some(101), completed: Some(103) },
+        time: PartTime { created: Some(101), completed: Some(103), streamed: None },
         tokens: None,
         usage_total: None,
         retry: None,
@@ -2021,6 +2013,7 @@ mod surf1_tests {
                     time: crate::components::message::model::PartTime {
                         created: Some(1),
                         completed: None,
+                        streamed: None,
                     },
                 }],
                 finish: None,

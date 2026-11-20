@@ -128,7 +128,11 @@ impl ScriptedServer {
                             parts: Vec::new(),
                             finish: None,
                             error: None,
-                            time: PartTime { created: Some(frame.t), completed: None },
+                            time: PartTime {
+                                created: Some(frame.t),
+                                completed: None,
+                                streamed: None,
+                            },
                             tokens: None,
                             usage_total: None,
                             cache_read: None,
@@ -144,7 +148,11 @@ impl ScriptedServer {
                         parts.push(Part::Text {
                             // Deltas are ephemeral — NEVER in the fetch.
                             text: String::new(),
-                            time: PartTime { created: Some(frame.t), completed: None },
+                            time: PartTime {
+                                created: Some(frame.t),
+                                completed: None,
+                                streamed: None,
+                            },
                         });
                     }
                 }

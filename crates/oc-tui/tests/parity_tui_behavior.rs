@@ -1113,7 +1113,7 @@ fn backgroundtool() {
     let tool = |name: &str, status: ToolStatus, created: Option<u64>| Part::Tool {
         id: "t1".to_owned(),
         name: name.to_owned(),
-        time: PartTime { created, completed: None },
+        time: PartTime { created, completed: None, streamed: None },
         state: ToolState { status, ..ToolState::default() },
     };
     let assistant = |parts: Vec<Part>, completed: Option<u64>| Message::Assistant {
@@ -1123,7 +1123,7 @@ fn backgroundtool() {
         parts,
         finish: None,
         error: None,
-        time: PartTime { created: Some(4_000), completed },
+        time: PartTime { created: Some(4_000), completed, streamed: None },
         tokens: None,
         usage_total: None,
         cache_read: None,

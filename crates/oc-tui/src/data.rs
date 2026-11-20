@@ -816,7 +816,7 @@ pub fn message_from_info(
                     oc_client::types::SessionMessageAssistantContentItem::Text(text) => {
                         parts.push(Part::Text {
                             text: text.text.clone(),
-                            time: PartTime { created: None, completed: None },
+                            time: PartTime { created: None, completed: None, streamed: None },
                         });
                     }
                     oc_client::types::SessionMessageAssistantContentItem::Reasoning(reasoning) => {
@@ -831,6 +831,7 @@ pub fn message_from_info(
                                     .time
                                     .as_ref()
                                     .and_then(|time| epoch(time.completed)),
+                                streamed: None,
                             },
                         });
                     }
@@ -841,6 +842,7 @@ pub fn message_from_info(
                             time: PartTime {
                                 created: epoch(Some(tool.time.created)),
                                 completed: epoch(tool.time.completed),
+                                streamed: None,
                             },
                             state: tool_state_from_wire(&tool.state),
                         });
@@ -859,6 +861,9 @@ pub fn message_from_info(
                 time: PartTime {
                     created: epoch(Some(assistant.time.created)),
                     completed: epoch(assistant.time.completed),
+                    // `time.streamed` (SessionMessageAssistantTime) —
+                    // the tok/s denominator (rows.ts:442-463).
+                    streamed: epoch(assistant.time.streamed),
                 },
                 finish,
                 tokens,

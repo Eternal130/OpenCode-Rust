@@ -14255,7 +14255,7 @@ impl Store {
                     with_tool_part(messages, &assistant, &part_id, |part| {
                         if let Part::Tool { name: slot, time, state, .. } = part {
                             *slot = name;
-                            *time = PartTime { created, completed: None };
+                            *time = PartTime { created, completed: None, streamed: None };
                             // v2 pushes `{status: "streaming", input: ""}`
                             // (data.ts:919-929).
                             *state = crate::components::message::model::ToolState::default();
@@ -14452,13 +14452,30 @@ impl Store {
                                 parts: Vec::new(),
                                 finish: None,
                                 error: None,
-                                time: PartTime { created: started.or(created), completed: None },
+                                time: PartTime {
+                                    created: started.or(created),
+                                    completed: None,
+                                    streamed: None,
+                                },
                                 tokens: None,
                                 usage_total: None,
                                 retry: None,
                                 cache_read: None,
                             });
                         }
+                    }
+                });
+            }
+            "session.step.streamed" => {
+                // data.ts:876-878 — `assistant.time.streamed =
+                // event.created`: the tok/s denominator's per-step span
+                // start (`turnTokensPerSecond`, rows.ts:442-463).
+                let Some((session, assistant)) = session_and_assistant(event) else { return };
+                self.update_messages(&session, |messages| {
+                    if let Some(Message::Assistant { time, .. }) =
+                        messages.iter_mut().find(|m| m.id() == assistant.as_str())
+                    {
+                        time.streamed = event.created;
                     }
                 });
             }
@@ -14496,13 +14513,22 @@ impl Store {
                     )
                 });
                 let step_ended = event.type_ == "session.step.ended";
+                // G-451 — ref's commit gates (data.ts:878-905):
+                // `session.step.ended` assigns tokens unconditionally;
+                // `session.step.failed` commits cost/tokens only when
+                // BOTH keys are present (`if (cost !== undefined &&
+                // tokens !== undefined)`) — a rejected turn's partial
+                // usage still lands (the footer's `92 (0%)` context
+                // arm + the turn-aggregate tok/s numerator).
+                let has_cost_and_tokens = step_ended
+                    || (event.data.get("cost").is_some() && event.data.get("tokens").is_some());
                 let tokens = token_parts
                     .filter(|(output_reasoning, _)| *output_reasoning > 0)
-                    .filter(|_| step_ended)
+                    .filter(|_| has_cost_and_tokens)
                     .map(|(output_reasoning, _)| output_reasoning);
                 let usage_total = token_parts
                     .filter(|(_, total)| *total > 0)
-                    .filter(|_| step_ended)
+                    .filter(|_| has_cost_and_tokens)
                     .map(|(_, total)| total);
                 self.update_messages(&session, |messages| {
                     if let Some(Message::Assistant {
@@ -15291,6 +15317,7 @@ fn message_from_event(event: &BusEvent) -> Option<Message> {
     let time = PartTime {
         created: event.data.pointer("/time/created").and_then(Value::as_u64),
         completed: event.data.pointer("/time/completed").and_then(Value::as_u64),
+        streamed: event.data.pointer("/time/streamed").and_then(Value::as_u64),
     };
     match event.string("type").as_deref() {
         Some("user") => Some(Message::User {
@@ -15309,6 +15336,7 @@ fn message_from_event(event: &BusEvent) -> Option<Message> {
                 let part_time = PartTime {
                     created: part.pointer("/time/created").and_then(Value::as_u64),
                     completed: part.pointer("/time/completed").and_then(Value::as_u64),
+                    streamed: part.pointer("/time/streamed").and_then(Value::as_u64),
                 };
                 match kind {
                     "text" | "reasoning" => {
@@ -15529,12 +15557,12 @@ mod tests {
             parts: vec![Part::Tool {
                 id: "toolu_1".to_owned(),
                 name: "bash".to_owned(),
-                time: PartTime { created: Some(10), completed },
+                time: PartTime { created: Some(10), completed, streamed: None },
                 state: ToolState { status, ..ToolState::default() },
             }],
             finish: None,
             error: None,
-            time: PartTime { created: Some(10), completed },
+            time: PartTime { created: Some(10), completed, streamed: None },
             tokens: None,
             usage_total: None,
             retry: None,
@@ -15606,12 +15634,12 @@ mod tests {
             parts: vec![Part::Tool {
                 id: "toolu_1".to_owned(),
                 name: "bash".to_owned(),
-                time: PartTime { created: Some(10), completed },
+                time: PartTime { created: Some(10), completed, streamed: None },
                 state: ToolState { status, ..ToolState::default() },
             }],
             finish: None,
             error: None,
-            time: PartTime { created: Some(10), completed },
+            time: PartTime { created: Some(10), completed, streamed: None },
             tokens: None,
             usage_total: None,
             retry: None,
@@ -17104,10 +17132,10 @@ mod tests {
                 error: None,
                 parts: vec![Part::Text {
                     text: "final answer".into(),
-                    time: PartTime { created: Some(1), completed: Some(2) },
+                    time: PartTime { created: Some(1), completed: Some(2), streamed: None },
                 }],
                 finish: Some("stop".into()),
-                time: PartTime { created: Some(1), completed: Some(2) },
+                time: PartTime { created: Some(1), completed: Some(2), streamed: None },
                 tokens: None,
                 usage_total: None,
                 retry: None,
@@ -17277,6 +17305,98 @@ mod tests {
         let Part::Text { text, .. } = &parts[0] else { panic!("text part") };
         assert_eq!(text, "final text LATE", "late delta appends to the stream-completed message");
         assert!(time.completed.is_some(), "the late delta does not un-complete the message");
+    }
+
+    /// G-451① — `session.step.streamed` lands `time.streamed` (the
+    /// tok/s denominator, data.ts:876-878); a failed step with BOTH
+    /// cost ∧ tokens commits the partial usage (data.ts:890-905),
+    /// without cost it does not.
+    #[test]
+    fn g451_step_streamed_and_failed_step_partial_usage() {
+        let store = Store::new(Runtime::new());
+        let event = |id: &str, type_: &str, data: serde_json::Value, created: Option<u64>| {
+            Ingest::Event(BusEvent {
+                id: id.into(),
+                kind: oc_client::bus_event::EventKind::parse(type_),
+                type_: type_.to_owned(),
+                data,
+                created,
+            })
+        };
+        let base = |extra: serde_json::Value| {
+            let mut data = serde_json::json!({
+                "sessionID": "ses_g451", "assistantMessageID": "msg_a",
+                "agent": "build", "model": { "providerID": "replay", "id": "m" },
+                "started": 1_000
+            });
+            if let (serde_json::Value::Object(to), serde_json::Value::Object(eo)) =
+                (&mut data, extra)
+            {
+                for (key, value) in eo {
+                    to.insert(key, value);
+                }
+            }
+            data
+        };
+        store.ingest_all([event(
+            "evt_ss0",
+            "session.step.started",
+            base(serde_json::json!({})),
+            Some(1_000),
+        )]);
+        store.ingest_all([event(
+            "evt_ss",
+            "session.step.streamed",
+            base(serde_json::json!({})),
+            Some(2_500),
+        )]);
+        let tokens = serde_json::json!({
+            "input": 50, "output": 40, "reasoning": 2,
+            "cache": { "read": 0, "write": 0 }
+        });
+        store.ingest_all([event(
+            "evt_sf",
+            "session.step.failed",
+            base(serde_json::json!({ "cost": 0.001, "tokens": tokens })),
+            Some(4_000),
+        )]);
+        let messages = store.messages("ses_g451");
+        let Message::Assistant { time, tokens: got_tokens, usage_total, finish, .. } = &messages[0]
+        else {
+            panic!("assistant")
+        };
+        assert_eq!(time.streamed, Some(2_500), "session.step.streamed lands time.streamed");
+        assert_eq!(
+            *got_tokens,
+            Some(42),
+            "failed step commits output+reasoning when cost ∧ tokens present"
+        );
+        assert_eq!(*usage_total, Some(92), "failed step commits the context-usage total");
+        assert_eq!(finish.as_deref(), Some("error"), "failed step finish");
+        // Without `cost` the failed step does NOT commit (ref's
+        // cost ∧ tokens guard).
+        store.ingest_all([event(
+            "evt_ss2",
+            "session.step.started",
+            base(serde_json::json!({})),
+            Some(5_000),
+        )]);
+        store.ingest_all([event(
+            "evt_sf2",
+            "session.step.failed",
+            base(serde_json::json!({ "tokens": {
+                "input": 1, "output": 99, "reasoning": 0,
+                "cache": { "read": 0, "write": 0 }
+            } })),
+            Some(6_000),
+        )]);
+        let messages = store.messages("ses_g451");
+        let Message::Assistant { tokens, .. } = &messages[0] else { panic!("assistant") };
+        assert_eq!(
+            *tokens,
+            Some(42),
+            "no-cost failed step does not commit tokens (ref cost ∧ tokens guard)"
+        );
     }
 
     #[test]
