@@ -663,10 +663,10 @@ mod tests {
         let catalog = Catalog::embedded();
         // Pinned parity counts from the committed snapshot (224 providers —
         // G-258 drops the azure-cognitive-services/google-vertex-anthropic
-        // aliases; W14 G-434 re-syncs the snapshot to the ref tree's
-        // generation: 8443 models after the alias/profile drops).
+        // aliases; G-434 re-syncs the snapshot to the ref tree's current
+        // generation: 8380 models after the alias/profile drops).
         assert_eq!(catalog.provider_count(), 224);
-        assert_eq!(catalog.model_count(), 8443);
+        assert_eq!(catalog.model_count(), 8380);
     }
 
     /// G-258 — the models-dev plugin's two-level snapshot filter
@@ -870,13 +870,12 @@ mod tests {
             );
         }
         // The pinned free set from the committed snapshot (v2's rig
-        // listing): 11 models, newest first (W14 G-434 snapshot sync
-        // adds "Exo Free" to the head of the list).
+        // listing): 10 models, newest first (G-434 re-sync: the ref
+        // tree's generation no longer carries "Exo Free").
         let names: Vec<&str> = pairs.iter().map(|(_, model)| model.name.as_str()).collect();
         assert_eq!(
             names,
             vec![
-                "Exo Free",
                 "Fledge Alpha Free",
                 "Ling 3.1 Flash Free",
                 "LongCat 2.5 Preview Free",
