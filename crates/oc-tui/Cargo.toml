@@ -34,6 +34,7 @@ jiff = "0.2"
 flate2 = "1.1"
 taffy = { version = "0.9", default-features = false, features = ["std", "flexbox", "taffy_tree"] }
 unicode-width = "0.2"
+regex = "1"
 uuid = { version = "1", features = ["v4"] }
 # TUI-15 (lane-tui): Zed's editor-context sqlite, READ-ONLY — the same
 # version + bundled feature oc-core already builds (feature unification

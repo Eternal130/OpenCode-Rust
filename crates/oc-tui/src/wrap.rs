@@ -14,13 +14,16 @@
 //! seam): wrapping per-span would diverge at every wrap boundary that
 //! falls inside a span.
 //!
-//! Clusters are approximated for the corpus scripts pinned by the
-//! `width-edge-*` sidecars (see [`flatten_spans`] for the joining
-//! rules): marks/ZWJ/VS16 join their base, skin tones absorb, regional
-//! indicators pair into flags, virama forms conjuncts, spacing
-//! combining marks (Mc) attach. **A hard break therefore never splits
-//! a cluster** (gate-9 finding 7: ZWJ families stay whole) because the
-//! wrap loop moves whole atoms.
+//! Clusters are the ref's grapheme rules on full tables (MF#16): joining
+//! is a port of the ref's own `Intl.Segmenter` behavior as observed under
+//! bun-1.4.2 (see [`flatten_spans`]) — marks/ZWJ/VS16 join their base,
+//! skin tones absorb, regional indicators pair into flags, spacing marks
+//! (Mc, full `\p{gc=Spacing_Mark}` sweep) attach, and `GB9c` conjuncts join
+//! through the engine's exact linker/consonant sets (Khmer coeng and
+//! Myanmar asat conjunct, Gurmukhi/Kannada/Sinhala/Tamil viramas do not —
+//! the ref engine's observed behavior, [`crate::width_tables`]).
+//! **A hard break therefore never splits a cluster** (gate-9 finding 7:
+//! ZWJ families stay whole) because the wrap loop moves whole atoms.
 //!
 //! # Break opportunities (the single seam)
 //!
@@ -44,7 +47,9 @@
 //! set reproduces every golden wrap.
 
 use crate::style::Style as PaintStyle;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use crate::width_model;
+use crate::width_tables::{EXTENDED_PICTOGRAPHIC, INCB_CONSONANT, INCB_LINKER, SPACING_MARK};
+use unicode_width::UnicodeWidthChar;
 
 /// One styled run of a styled-segment text leaf: the span's text plus
 /// the style applied to every cell it occupies. Reused as the run type
@@ -74,179 +79,69 @@ pub struct Atom {
     pub link: Option<String>,
 }
 
-/// Display width of a string in the renderer's "unicode" width method
-/// (`string-width@7.2.0` bundled by `@opentui/core`,
-/// `ambiguousIsNarrow=true`, emoji presentation = 2) — pinned by the
-/// `width-edge-*` golden sidecars.
-///
-/// `unicode-width` 0.2 already covers emoji ZWJ sequences, skin-tone
-/// modifiers, VS16, keycap clusters, flag pairs and non-spacing marks.
-/// The remaining gap is Brahmic-derived scripts: **spacing combining
-/// marks** (Mc) count as their own cell there and **virama conjuncts**
-/// split into two, while the reference clusters them into one grapheme
-/// each. [`merged_cells`] subtracts those merges.
+/// Display width of a string in the renderer's "unicode" width method —
+/// the full-table port of the ref's `string-width.node.ts` (MF#16:
+/// `string-width@7.2.0` measure + the wrapper's text-presentation emoji
+/// narrowing, per grapheme cluster). See
+/// [`width_model::ref_cluster_width`] for the per-semantics anchor and
+/// [`width_model`] for the generated-table provenance; the
+/// `ref_behavior_tests` module pins the model to behavior vectors
+/// captured from the ref under bun-1.4.2.
 #[must_use]
 pub fn display_width(text: &str) -> usize {
-    text.width().saturating_sub(merged_cells(text)).saturating_sub(text_emoji_narrowed_cells(text))
+    let mut total = 0usize;
+    for_each_cluster(text, |cluster| total += width_model::ref_cluster_width(cluster));
+    total
 }
 
 /// Cluster-aware display width of one grapheme cluster — the same
-/// formula as [`display_width`], applied per cluster. Atoms carry this
+/// measure as [`display_width`], applied per cluster. Atoms carry this
 /// value, so the sum of a flattened stream's atom widths equals the
 /// display width of the concatenated text.
 fn atom_width(cluster: &str) -> usize {
-    cluster
-        .width()
-        .saturating_sub(merged_cells(cluster))
-        .saturating_sub(usize::from(text_emoji_narrow(cluster)))
+    width_model::ref_cluster_width(cluster)
 }
 
-// -- G-129: the text-presentation emoji narrowing ---------------------------
+// -- G-129 → MF#16: the width model moved to `width_model` ---------------
+// The text-presentation emoji narrowing and its tables now live in
+// [`crate::width_model`] as a full-property port of the ref's
+// `string-width.node.ts` (the static `TEXT_EMOJI_BASE` block table is
+// retired; `\p{Emoji}` / `\p{Emoji_Presentation}` /
+// `\p{Default_Ignorable_Code_Point}` / EAW F/W are swept from the ref
+// runtime). Its `ref_behavior_tests` module pins the per-class behavior.
 
-/// G-129 — the text-presentation emoji narrowing (ref
-/// `string-width.node.ts:9-26`): a GRAPHENE cluster that measures 2
-/// cells but is a default-text-presentation emoji — not East-Asian
-/// Wide/Fullwidth, no VS16/20E3/ZWJ, base + `Mark*` only — counts 1
-/// (`❤`-style symbols render one cell wide in the ref).
-///
-/// Guard chain, mirroring the ref's condition order:
-/// * the cluster must measure 2 (`width !== 2` returns early);
-/// * `eastAsianWidth(codePoint) === 2` is excluded — proxied by
-///   `width_cjk() == Some(2)`: every EAW Wide/Fullwidth codepoint is
-///   wide in the CJK measure (and so are `Emoji_Presentation`
-///   codepoints, which the ref's `emojiPresentation` check also
-///   excludes — one proxy covers both ref exclusions);
-/// * the base must be an emoji — the ref regex
-///   `/^\p{Emoji}\p{Mark}*$/u` needs the full Unicode `Emoji`
-///   property; the port uses a bounded static range table
-///   (`TEXT_EMOJI_BASE`) covering the emoji blocks (documented
-///   bounded deviation, G-129);
-/// * trailing chars approximate `\p{Mark}*` as zero-width;
-/// * VS16 (`FE0F`), keycap (`20E3`) and ZWJ anywhere abort.
-///
-/// Empirical note (probed against unicode-width 0.2): the library
-/// assigns 2 only to EAW W/F or `Emoji_Presentation` codepoints, so the
-/// rule's firing set is empty for plain clusters today — `❤` already
-/// measures 1 like the ref. The guard chain is ported anyway so any
-/// cluster a future width table measures as 2 narrows exactly like
-/// the reference.
-fn text_emoji_narrow(cluster: &str) -> bool {
-    use unicode_width::UnicodeWidthChar;
-    let mut chars = cluster.chars();
-    let Some(base) = chars.next() else { return false };
-    if cluster.width() != 2 {
-        return false;
-    }
-    // EAW Wide/Fullwidth and Emoji_Presentation bases stay 2.
-    if base.width_cjk() == Some(2) {
-        return false;
-    }
-    if !emoji_base(base as u32) {
-        return false;
-    }
-    if cluster.contains('\u{FE0F}') || cluster.contains('\u{20E3}') || cluster.contains('\u{200D}')
-    {
-        return false;
-    }
-    // `\p{Mark}*` — only zero-width trailers may follow the base.
-    chars.all(|ch| matches!(ch.width(), None | Some(0)))
-}
-
-/// G-129 — the bounded `Emoji`-property stand-in (see
-/// [`text_emoji_narrow`]): the emoji base blocks ( Miscellaneous
-/// Symbols, Dingbats, SMP emoji planes, the scattered ASCII/Latin
-/// emoji codepoints).
-static TEXT_EMOJI_BASE: &[(u32, u32)] = &[
-    (0x00A9, 0x00A9),
-    (0x00AE, 0x00AE),
-    (0x203C, 0x203C),
-    (0x2049, 0x2049),
-    (0x2122, 0x2122),
-    (0x2139, 0x2139),
-    (0x2194, 0x21AA),
-    (0x231A, 0x231B),
-    (0x2328, 0x2328),
-    (0x23CF, 0x23FA),
-    (0x24C2, 0x24C2),
-    (0x25AA, 0x25FE),
-    (0x2600, 0x27BF),
-    (0x2934, 0x2935),
-    (0x2B00, 0x2BFF),
-    (0x3030, 0x3030),
-    (0x303D, 0x303D),
-    (0x3297, 0x3299),
-    (0x1F000, 0x1FAFF),
-];
-
-/// G-129 — membership in the bounded emoji table.
-fn emoji_base(code: u32) -> bool {
-    TEXT_EMOJI_BASE.iter().any(|&(lo, hi)| code >= lo && code <= hi)
-}
-
-/// G-129 — the per-cluster narrowing applied over a whole string
-/// (`stringWidth`'s grapheme reduce): one cell back per narrowed
-/// cluster. Cheap pre-gate: only strings touching the emoji blocks
-/// pay the segmentation.
-fn text_emoji_narrowed_cells(text: &str) -> usize {
-    use unicode_segmentation::UnicodeSegmentation;
-    if !text.chars().any(|ch| emoji_base(ch as u32)) {
-        return 0;
-    }
-    text.graphemes(true).map(|cluster| usize::from(text_emoji_narrow(cluster))).sum()
-}
-
-/// Cells the per-char sum overcounts vs grapheme clustering: one per
-/// spacing combining mark, one per virama-joined consonant.
-fn merged_cells(text: &str) -> usize {
-    let mut merged = 0usize;
-    let mut previous_virama = false;
-    for ch in text.chars() {
-        if is_spacing_combining(ch) {
-            merged += ch.width().unwrap_or(1);
-        } else if previous_virama && ch.width() == Some(1) {
-            // Virama + consonant = one conjunct grapheme (न्द counts once).
-            merged += 1;
-        }
-        previous_virama = is_virama(ch);
-    }
-    merged
-}
-
-/// Spacing combining marks (Unicode `Mc`) of the Brahmic scripts — the
-/// marks `unicode-width` measures as a cell but the reference clusters
-/// into the preceding base (मे = one cell). Approximate range table;
-/// the `width-edge-*` sidecars pin the sampled scripts.
+/// Spacing combining marks (Unicode `Mc`, full
+/// `\p{gc=Spacing_Mark}` sweep) — joins the preceding cluster (UAX-29
+/// `GB9a`): मे = one cell in the ref.
 fn is_spacing_combining(ch: char) -> bool {
-    let c = ch as u32;
-    matches!(c,
-        0x0903 | 0x093B | 0x093E..=0x0940 | 0x0949..=0x094C | 0x094F            // Devanagari
-        | 0x0983 | 0x09BE..=0x09C0 | 0x09C7..=0x09C8 | 0x09CB..=0x09CC | 0x09D7 // Bengali
-        | 0x0A03 | 0x0A70..=0x0A71 | 0x0A75                                      // Gurmukhi
-        | 0x0A83 | 0x0ABE..=0x0AC0 | 0x0AC2..=0x0AC4 | 0x0AC7..=0x0AC8
-        | 0x0ACB..=0x0ACC                                                       // Gujarati
-        | 0x0B03 | 0x0B3E | 0x0B40 | 0x0B47..=0x0B48 | 0x0B4B..=0x0B4C
-        | 0x0B56..=0x0B57                                                       // Oriya
-        | 0x0B83 | 0x0BBE..=0x0BBF | 0x0BC1..=0x0BC2 | 0x0BC6..=0x0BC8
-        | 0x0BCA..=0x0BCC | 0x0BD7                                              // Tamil
-        | 0x0C03 | 0x0C3E..=0x0C40 | 0x0C46..=0x0C48 | 0x0C4A..=0x0C4C
-        | 0x0C55..=0x0C56                                                       // Telugu
-        | 0x0CBE..=0x0CBF | 0x0CC6 | 0x0CCC | 0x0CD5..=0x0CD6                    // Kannada
-        | 0x0D03 | 0x0D3E..=0x0D40 | 0x0D46..=0x0D48 | 0x0D4A..=0x0D4C | 0x0D57 // Malayalam
-        | 0x0D82..=0x0D83 | 0x0DCF..=0x0DD1 | 0x0DD8..=0x0DDF | 0x0DF2..=0x0DF3 // Sinhala
-        | 0x0F3E..=0x0F3F | 0x0F7F                                              // Tibetan
-        | 0x1031 | 0x103B..=0x103C | 0x1056..=0x1057 | 0x1084                   // Myanmar
-        | 0x17B6 | 0x17BE..=0x17C5 | 0x17C7..=0x17C8                             // Khmer
-        | 0x0EB1                                                               // Lao
-    )
+    width_model::in_table(SPACING_MARK, ch as u32)
 }
 
-/// Sanskrit viramas: `virama + consonant` merges into one conjunct
-/// grapheme (the reference counts one cell for न्द).
-fn is_virama(ch: char) -> bool {
-    matches!(
-        ch as u32,
-        0x094D | 0x09CD | 0x0A4D | 0x0ACD | 0x0B4D | 0x0C4D | 0x0CCD | 0x0D4D | 0x0DCA
-    )
+/// `GB9c` conjunct linkers as the REF's segmenter implements them
+/// (derived by probing bun-1.4.2 `Intl.Segmenter`; see
+/// [`crate::width_tables::INCB_LINKER`]): Devanagari/Bengali/Gujarati/
+/// Oriya/Telugu/Malayalam viramas, Myanmar asat (1039), Khmer coeng
+/// (17D2), Tai Tham (1A60). Gurmukhi 0A4D, Kannada 0CCD, Sinhala 0DCA
+/// and Tamil 0BCD do NOT link in the ref's engine.
+fn is_linker(ch: char) -> bool {
+    width_model::in_table(INCB_LINKER, ch as u32)
+}
+
+/// `GB9c` conjunct consonants per the ref's segmenter
+/// ([`crate::width_tables::INCB_CONSONANT`]): a linker joins the
+/// FOLLOWING consonant into the cluster (न्द counts once); anything
+/// else after a linker starts a new cluster, exactly like the ref.
+fn is_incb_consonant(ch: char) -> bool {
+    width_model::in_table(INCB_CONSONANT, ch as u32)
+}
+
+/// `\p{Extended_Pictographic}` — `GB11`: a ZWJ joins only a pictographic
+/// codepoint into the cluster. Regional indicators are not joinable
+/// across a ZWJ (the ref engine splits `🏳‍🇺‍🇸` into three clusters —
+/// probed under bun-1.4.2), so the ZWJ join requires `ExtPict` AND not a
+/// regional indicator.
+fn is_extended_pictographic(ch: char) -> bool {
+    width_model::in_table(EXTENDED_PICTOGRAPHIC, ch as u32)
 }
 
 /// Emoji skin-tone modifiers (U+1F3FB..=U+1F3FF): absorbed by the
@@ -303,6 +198,50 @@ fn ref_emission_shape(cluster: &str) -> String {
     }
 }
 
+/// The ref's grapheme-cluster seam (UAX-29 as bun-1.4.2's
+/// `Intl.Segmenter` implements it, on full property tables — see
+/// [`crate::width_tables`]): zero-width chars (marks, ZWJ, VS16) join,
+/// a ZWJ joins the following `Extended_Pictographic` codepoint (`GB11`
+/// emoji sequences — regional indicators do NOT join across a ZWJ:
+/// `🏳‍🇺‍🇸` is three clusters, exactly like the ref engine), skin
+/// tones absorb, spacing marks attach (`GB9a`), the second regional
+/// indicator of a pair joins (`GB12`/`GB13`), and a `GB9c` linker joins the
+/// following `InCB` consonant (conjuncts) — the engine's own
+/// linker/consonant sets, so Khmer ក្ម and Myanmar ကျ conjunct while
+/// Gurmukhi/Kannada/Sinhala/Tamil viramas do not, exactly like the ref.
+///
+/// Single seam shared by [`flatten_spans`] (atoms) and
+/// [`display_width`] (measurement), so a flattened stream's atom widths
+/// always sum to the text's display width.
+fn for_each_cluster(text: &str, mut emit: impl FnMut(&str)) {
+    let mut cluster = String::new();
+    let mut indicators = 0u8;
+    let mut after_linker = false;
+    let mut after_zwj = false;
+    for ch in text.chars() {
+        let joins = !cluster.is_empty()
+            && ((after_zwj && is_extended_pictographic(ch) && !is_regional_indicator(ch))
+                || ch.width() == Some(0)
+                || is_skin_tone(ch)
+                || is_spacing_combining(ch)
+                || (is_regional_indicator(ch) && indicators == 1)
+                || (after_linker && is_incb_consonant(ch)));
+        if !joins {
+            if !cluster.is_empty() {
+                emit(&std::mem::take(&mut cluster));
+            }
+            indicators = 0;
+        }
+        cluster.push(ch);
+        after_linker = is_linker(ch);
+        after_zwj = ch == '\u{200D}';
+        indicators = if is_regional_indicator(ch) { indicators.saturating_add(1) } else { 0 };
+    }
+    if !cluster.is_empty() {
+        emit(&cluster);
+    }
+}
+
 /// Flatten a plain string under one style (the plain-leaf case of
 /// [`flatten_spans`]).
 #[must_use]
@@ -315,56 +254,21 @@ pub fn flatten(text: &str, style: PaintStyle) -> Vec<Atom> {
 /// (wrapping treats concatenated spans as one text, like opentui text
 /// children), and clusters never merge ACROSS spans — a span is a text
 /// node, so a modifier that opens a span forms its own cluster.
-///
-/// Cluster joining (char → preceding cluster), approximating UAX-29 for
-/// the sidecar-pinned scripts: zero-width chars (marks, ZWJ, VS16)
-/// join; any char after a ZWJ joins (emoji sequences); skin tones and
-/// spacing combining marks join; the second regional indicator of a
-/// pair joins; a width-1 char after a virama joins (conjuncts).
 #[must_use]
 pub fn flatten_spans(spans: &[StyledSpan]) -> Vec<Atom> {
     let mut atoms: Vec<Atom> = Vec::new();
     for span in spans {
         let style = span.style;
         let link = span.link.clone();
-        let mut cluster = String::new();
-        let mut indicators = 0u8;
-        let mut after_virama = false;
-        let mut after_zwj = false;
-        for ch in span.text.chars() {
-            let joins = !cluster.is_empty()
-                && (after_zwj
-                    || ch.width() == Some(0)
-                    || is_skin_tone(ch)
-                    || is_spacing_combining(ch)
-                    || (is_regional_indicator(ch) && indicators == 1)
-                    || (after_virama && ch.width() == Some(1)));
-            if !joins {
-                if !cluster.is_empty() {
-                    let width = atom_width(&cluster);
-                    atoms.push(Atom {
-                        text: ref_emission_shape(&std::mem::take(&mut cluster)),
-                        width,
-                        style,
-                        link: link.clone(),
-                    });
-                }
-                indicators = 0;
-            }
-            cluster.push(ch);
-            after_virama = is_virama(ch);
-            after_zwj = ch == '\u{200D}';
-            indicators = if is_regional_indicator(ch) { indicators.saturating_add(1) } else { 0 };
-        }
-        if !cluster.is_empty() {
-            let width = atom_width(&cluster);
+        for_each_cluster(&span.text, |cluster| {
+            let width = atom_width(cluster);
             atoms.push(Atom {
-                text: ref_emission_shape(&cluster),
+                text: ref_emission_shape(cluster),
                 width,
                 style,
                 link: link.clone(),
             });
-        }
+        });
     }
     atoms
 }
@@ -911,16 +815,23 @@ mod tests {
     }
 }
 
-// -- G-129: text-presentation emoji narrowing --------------------------------
+// -- MF#16: the width model lives in `width_model` --------------------------
+// The per-class behavior tests (text-emoji narrowing, presentation
+// emoji, CJK, standalone marks, `Default_Ignorable`, emoji-regex corpus)
+// are `width_model::ref_behavior_tests`; the `width-edge-*` sidecars
+// and the anchors below still pin `display_width` end-to-end.
 
 #[cfg(test)]
 mod g129_tests {
     use super::*;
 
+    const STYLE: PaintStyle = PaintStyle::new();
+
     #[test]
     fn heart_and_text_symbols_measure_one_cell() {
         // ❤ / ⚠ / ☀ / ✔ — default-text-presentation emoji: 1 in the
-        // ref (string-width.node.ts:9-26) and 1 here.
+        // ref (string-width.node.ts:9-26) and 1 here (the full-table
+        // narrowing; behavior vectors pin these classes).
         assert_eq!(display_width("❤"), 1);
         assert_eq!(display_width("⚠"), 1);
         assert_eq!(display_width("☀"), 1);
@@ -930,7 +841,7 @@ mod g129_tests {
     #[test]
     fn presentation_and_wide_emoji_stay_two_cells() {
         assert_eq!(display_width("❤️"), 2, "VS16 forces the wide form");
-        assert_eq!(display_width("✅"), 2, "Emoji_Presentation stays 2");
+        assert_eq!(display_width("✅"), 2, "`Emoji_Presentation` stays 2");
         assert_eq!(display_width("⌚"), 2);
         assert_eq!(display_width("🙋"), 2);
         assert_eq!(display_width("🇺🇸"), 2, "a flag pair stays 2");
@@ -942,17 +853,23 @@ mod g129_tests {
         assert_eq!(display_width("ｆｕｌｌ"), 8);
     }
 
+    /// `GB9c` conjuncts per the REF's segmenter (derived tables, MF#16):
+    /// Khmer/Myanmar/Tai Tham conjunct; Gurmukhi/Kannada/Sinhala/Tamil
+    /// viramas split — each exactly like bun-1.4.2 `Intl.Segmenter`.
     #[test]
-    fn narrow_rule_fires_only_under_its_guards() {
-        // The guard chain itself (unicode-width 0.2 already measures
-        // the text-presentation emoji at 1, so the width==2 gate
-        // leaves them at 1 — the ref's own result — and the remaining
-        // guards pin the exclusions for any 2-wide cluster).
-        assert!(!text_emoji_narrow("❤"), "already 1-wide: the gate keeps it 1");
-        assert!(!text_emoji_narrow("❤️"), "VS16 aborts");
-        assert!(!text_emoji_narrow("1️⃣"), "keycap (20E3) aborts");
-        assert!(!text_emoji_narrow("✅"), "Emoji_Presentation aborts");
-        assert!(!text_emoji_narrow("寛"), "EAW wide aborts");
-        assert!(!text_emoji_narrow("a"), "not an emoji base");
+    fn conjunct_linkers_follow_the_ref_segmenter() {
+        // Devanagari न्द / Khmer ក្ម / Myanmar က္က: ONE cluster, one cell.
+        assert_eq!(flatten("न्द", STYLE).len(), 1);
+        assert_eq!(display_width("न्द"), 1);
+        assert_eq!(display_width("\u{1780}\u{17D2}\u{1798}"), 1, "Khmer coeng conjuncts");
+        assert_eq!(flatten("\u{1780}\u{17D2}\u{1798}", STYLE).len(), 1);
+        assert_eq!(display_width("\u{1000}\u{1039}\u{1001}"), 1, "Myanmar asat conjuncts");
+        // Tamil/Gurmukhi/Kannada/Sinhala viramas do NOT link in the ref.
+        assert_eq!(flatten("\u{0B95}\u{0BCD}\u{0B9A}", STYLE).len(), 2, "Tamil splits");
+        assert_eq!(flatten("\u{0A15}\u{0A4D}\u{0A15}", STYLE).len(), 2, "Gurmukhi splits");
+        assert_eq!(flatten("\u{0C95}\u{0CCD}\u{0C95}", STYLE).len(), 2, "Kannada splits");
+        assert_eq!(flatten("\u{0D9A}\u{0DCA}\u{0D9A}", STYLE).len(), 2, "Sinhala splits");
+        // A linker + NON-consonant splits (Latin after virama).
+        assert_eq!(flatten("\u{0915}\u{094D}a", STYLE).len(), 2);
     }
 }

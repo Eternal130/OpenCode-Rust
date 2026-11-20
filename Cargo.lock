@@ -2520,6 +2520,7 @@ dependencies = [
  "opentui-keymap",
  "opentui-solid",
  "parity",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",
