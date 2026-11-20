@@ -1761,15 +1761,35 @@ pub fn quiescence_names() -> Vec<String> {
 }
 
 /// A SETTLED grid capture: [`TuiProcess::wait_quiescent`] gates the
-/// read (250 ms without stream bytes; 1.5 s cap), the verdict rides
-/// the next exported report. The anti-rider for the s3-palette
-/// export race: a mid-paint capture (one end between the partial
-/// writes of a state change) never exports as a divergence.
+/// read (250 ms without stream bytes), then the GRID itself must be
+/// STABLE — two consecutive quiet-window captures identical. The
+/// stream gate alone still let one load-race shape through (the
+/// workspace battery's s3 export: the byte stream was quiet at the
+/// capture instant but the app's composed screen was MID-STATE — a
+/// state change half-applied across components paints its rows in
+/// separate quiet bursts). The grid-stability arm closes that: a
+/// transitional screen keeps changing across quiet windows; the cap
+/// (2 s) still exports a never-stable screen (a live spinner),
+/// annotated via [`mark_quiescence`].
 #[must_use]
 pub fn capture_settled(tui: &TuiProcess) -> String {
-    let settled = tui.wait_quiescent(Duration::from_millis(250), Duration::from_millis(1500));
-    mark_quiescence(settled);
-    tui.screen_text()
+    let start = Instant::now();
+    let cap = Duration::from_millis(2_000);
+    let mut prev: Option<String> = None;
+    loop {
+        let remaining = cap.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
+            mark_quiescence(false);
+            return tui.screen_text();
+        }
+        let quiet = tui.wait_quiescent(Duration::from_millis(250), remaining);
+        let grid = tui.screen_text();
+        if quiet && prev.as_deref() == Some(grid.as_str()) {
+            mark_quiescence(true);
+            return grid;
+        }
+        prev = Some(grid);
+    }
 }
 
 /// The names of every normalization that fired SINCE THE LAST EXPORT
