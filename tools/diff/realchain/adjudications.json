@@ -42,25 +42,6 @@
       "last_seen": "2026-11-19"
     },
     {
-      "id": "w12-omo-slim-sections",
-      "scenario_pattern": "t9-7",
-      "state_pattern": "*",
-      "shape": {
-        "kind": "substring",
-        "ref_contains": [
-          "OMO"
-        ]
-      },
-      "classification": "accepted-gap",
-      "justification": "oh-my-opencode-slim sidebar sections: the sandbox empty-session state renders them on neither end (both plugins mount but the sections need session state); on the REAL machine with a live session the rust port does not render them (in-register, pending fix — the previous masking borrowed S5's sidebar mask and hid this gap; the W12 ruling removed it).",
-      "g_ref": "omo-slim sections (T9-7 masking failure of the 2026-11-18 retrospective)",
-      "adjudicated_by": "W12 seed migration",
-      "adjudicated_at": "2026-11-18",
-      "last_observed": "2026-11-18",
-      "status": "RESOLVED (W15 G-455): rust omo request digest converged with the ref cassette (4cc63e0a strict hit) after the ap-dichotomy/execute-last/catalog-output/io-input schema alignment; w13-omo session diff 0 divergences, reply rendered (survey observed=1).",
-      "last_seen": "2026-11-19"
-    },
-    {
       "id": "w12-selection-range-semantics",
       "scenario_pattern": "pty_w11_mouse*",
       "state_pattern": "*",
@@ -240,24 +221,6 @@
       "adjudicated_by": "W13 lane",
       "adjudicated_at": "2026-11-18",
       "last_observed": "2026-11-18"
-    },
-    {
-      "id": "w13-omo-session-plugin-send",
-      "scenario_pattern": "w13-omo",
-      "state_pattern": "session*",
-      "shape": {
-        "kind": "regex",
-        "any_contains": [
-          "(?:Sandbox Replay Session|REALCHAIN-REPLAY-OK|Orchestrator|esc interrupt|reply rendered with plugins loaded)"
-        ]
-      },
-      "classification": "real-bug",
-      "justification": "RESOLVED REAL BUG (G-454 lane 2026-11-18) for the HANG (stderrln! macro + parentID omission). W14 residual: the rust main turn now REACHES the gateway but strict-misses the ref cassette (digest 6c4d4ab0 vs recorded 4cc63e0a) because the REQUEST SHAPE diverges (G-455 family, needs-controller with forensics): rust adds cache_control on the last tool + the omo system-reminder tail part and a max_tokens field the ref request lacks; additionalProperties:false is INVERTED (rust: plugin-defined tools, ref: builtin effect-schema tools); the codemode tool-catalog text differs (rust alphabetizes params and renders Promise<void> where ref keeps schema order and renders declared output types / Promise<unknown>; rust's catalog includes a context7 MCP section the ref request omits). Fixing these converges the digest and unblocks the omo reply-render + sidebar-sections comparison (G-454-unlocked ⑥).",
-      "g_ref": "G-454",
-      "adjudicated_by": "G-454 lane",
-      "adjudicated_at": "2026-11-18",
-      "last_observed": "2026-11-18",
-      "status": "RESOLVED (W15 G-455 alignment; gcd lane 2026-11-20 re-verified on 39f3d4f6): all five G-455 shapes converged — ap-dichotomy/execute-last/io-input schema alignment removed the cache_control/additionalProperties/max_tokens deltas, the codemode catalog text matches, corpus-w13-ref seed 4cc63e0a is strict-hit by BOTH engines (gateway-w13-omo log), and w13-omo home/session/session-reply all export 0 divergences with reply rendered (survey observed=1)."
     },
     {
       "id": "w13-midstream-spinner-newsession",
