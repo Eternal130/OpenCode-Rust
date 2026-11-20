@@ -3394,11 +3394,11 @@ G-412/413/414/415/416/417/418/420/422 ✅；**G-419/G-421 勘误撤销**（登�
 ## 双端对拍新登记（G-432~G-437，均有实跑证据）
 
 - **G-432 🔴→🟢（已修）**：rust `switchModel` 无条件 publish `session.model.selected` → 首回合幻影 "Switched model to …" 时间线行（ref `Session.switchModel` session.ts:101-106 对未变选择 no-op；且 ref 数据层把 composer 选择带进 create body）。修复双点：oc-server handlers/session.rs 未变选择 no-op + oc-tui app.rs home 提交把已解析 model 带进 `SessionCreateBody.model`。
-- **G-433 🟡**：自定义 provider 模型的 catalog 基座解析——ref 对 anthropic 包族自定义 provider 解析出基座（实测 `/api/model` replay/claude-opus-4-7 `limit.context=200000`）→ footer 渲染 `38 (0%)`；rust limit=0 → 只渲染 `38`。对拍以 G 标注双侧对称掩码 `(N%)` 组，待基座解析对齐后撤。
-- **G-434 🟡**：models.dev 目录快照 vintage 分叉——palette 免费层模型列表 ref 树 snapshot.txt 与 rust 内嵌目录不同代（生产是同一活目录）。S3 以过滤搜索行级钉配置模型 + 免费层仅存在性断言。
+- **G-433 ✅（2026-11-20 闭合，f982b1ef）**：自定义 provider 模型的 limit 解析——根因定案：ref 对 base-less 自定义模型走 `Model.Info.default(providerID, id)`（ref model.ts:152 schema 默认 limit {context 200_000, output 32_000}，`/api/model` 实测 200000 即此默认而非 catalog 基座）；rust 侧播零 limit → footer 只渲染 `38` 无 `(N%)`。修复=rust `custom_model_info`/model handlers 同步播 default limits（oc-core engine/resolver.rs + oc-server handlers/model.rs，f982b1ef）。S2 掩码/钉已撤转全 grid 对拍；本轮 gca 复跑 `t9_2_model_catalog_lists_replay_model` PASS、S2 footer 全 grid 一致（.test-logs/oc-tui-realchain-*-gca.log）。
+- **G-434 ✅（2026-11-20 闭合，842ccd9e）**：models.dev 目录快照 vintage 分叉——rust 内嵌目录重刷至 ref 树同代（8380 models；zen 免费层 drop Exo Free），双侧 palette 免费层列表一致。S3 保持过滤搜索行级钉 + 免费层存在性断言（历史 adjudication 条目已 RESOLVED 留档）。
 - **G-435 ✅（2026-11-17 闭合，控制者轮）**：侧栏 Context 块"滞后一回合"根因定案——sidebar usage 匹配器（session.rs）误植 `cache_read: None`+`retry: None` 条件（ref util/session.ts:45-56 `lastAssistantWithUsage` 无此条件，只要求 tokens 载荷在场）；而快照页转换（data.rs）把 `cache_read` 无条件物化 `Some(0)`。会话开页 `message.list` 快照 post-settle 落地（W9 单调守卫平手→取快照）→ `Some(0)` → 匹配失败 → Context 块不渲染；快照 mid-turn（本地更鲜保本地）→ 渲染——时序二值化即"滞后一回合/flaky"。修复=匹配器对齐 ref（删两条件）；s5 ×10 稳定绿。**残留**（掩码由 G-435-residual 垂直偏移钉持有）：sidebar Context 块 rust 比 ref 高一行（rust Context 标题与 hello 同行、ref 低一行）——对齐闭合时绊线红→撤区掩码全栏比对。
 - **G-436 ✅（2026-11-17 作为伪影闭合）**：原登记"宽档用户消息盒高 1 行"不成立——旧 `ref > rust` 边框行数信号是 sidebar Context 行被列截断成裸 `┃` 的伪影（只在 rust 缺 Context 块时代在）；G-435 闭合后双侧 4=4。全宽 dump 证实左区逐行一致。`drop_blank_rows` 转为截断伪影归一化（双侧在场、计数钉 >0 且相等），随区掩码一并退役。
-- **G-437 🟡**：rust TUI palette 不反映热载后的模型列表（服务器 `/api/model` 已反映——t9-6 机器代理绿；ref 原生 watcher 双端都达）；S6 钉 ref palette 形状 + rust API 级 outcome + 该行 G 标注掩码。
+- **G-437 ✅（2026-11-20 闭合，38b33d74）**：rust TUI palette 不反映热载后模型列表——根因=Store 只在 boot 摄取 catalog，无热载事件触发。修复=oc-tui app.rs 订阅 inventory 事件（model/provider 清单变更）触发重同步（38b33d74，oc-core resolver.rs 一处配套）。S6 掩码/钉已撤转全 grid 对拍；本轮 gca 复跑 `t9_6_config_hot_reload_updates_models` PASS、热载新模型行双端一致（.test-logs/oc-tui-realchain-*-gca.log）。注：store ingest 改动与 Lane B G-451 turn-stats 无交汇冲突。
 
 ## 六场景对拍终态（同一网关、同键序、归一化 grid 比对）
 
