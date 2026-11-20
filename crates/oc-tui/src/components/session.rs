@@ -2025,6 +2025,15 @@ mod tests {
         );
         started.created = Some(101);
         store.ingest_all([Ingest::Event(started)]);
+        // G-451 — `session.step.streamed` (data.ts:876-878) supplies
+        // `time.streamed`, the tok/s denominator; without it the whole
+        // turn's rate is undefined (rows.ts:456-458).
+        let mut step_streamed = crate::data::BusEvent::new(
+            "session.step.streamed",
+            serde_json::json!({ "sessionID": "s1", "assistantMessageID": "msg_a1" }),
+        );
+        step_streamed.created = Some(259);
+        store.ingest_all([Ingest::Event(step_streamed)]);
         store.ingest_all([Ingest::Event(crate::data::BusEvent::new(
             "session.text.started",
             serde_json::json!({ "sessionID": "s1", "assistantMessageID": "msg_a1" }),
@@ -2373,7 +2382,11 @@ mod tests {
                     }],
                     finish: Some("stop".into()),
                     error: None,
-                    time: PartTime { created: Some(n as u64), completed: Some(n as u64 + 1) },
+                    time: PartTime {
+                        created: Some(n as u64),
+                        completed: Some(n as u64 + 1),
+                        streamed: None,
+                    },
                     tokens: None,
                     usage_total: None,
                     cache_read: None,

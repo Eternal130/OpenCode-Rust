@@ -22,10 +22,10 @@ fn assistant(id: &str, text: &str) -> oc_tui::components::message::model::Messag
         error: None,
         parts: vec![Part::Text {
             text: text.to_owned(),
-            time: PartTime { created: Some(1), completed: Some(2) },
+            time: PartTime { created: Some(1), completed: Some(2), streamed: None },
         }],
         finish: Some("stop".to_owned()),
-        time: PartTime { created: Some(1), completed: Some(2) },
+        time: PartTime { created: Some(1), completed: Some(2), streamed: None },
         tokens: None,
         usage_total: None,
         cache_read: None,
@@ -195,16 +195,16 @@ mod t3 {
                 parts: vec![
                     Part::Reasoning {
                         text: "INNER-THOUGHT-XYZ planning the run".into(),
-                        time: PartTime { created: Some(10), completed: Some(12) },
+                        time: PartTime { created: Some(10), completed: Some(12), streamed: None },
                     },
                     Part::Text {
                         text: "**BOLD-MARKER** answer".into(),
-                        time: PartTime { created: Some(10), completed: Some(12) },
+                        time: PartTime { created: Some(10), completed: Some(12), streamed: None },
                     },
                     Part::Tool {
                         id: "tool_1".into(),
                         name: "read".into(),
-                        time: PartTime { created: Some(10), completed: Some(11) },
+                        time: PartTime { created: Some(10), completed: Some(11), streamed: None },
                         state: ToolState {
                             status: ToolStatus::Completed,
                             input: [("path".to_owned(), "src/main.rs".to_owned())]
@@ -216,7 +216,7 @@ mod t3 {
                 ],
                 finish: Some("stop".into()),
                 error: None,
-                time: PartTime { created: Some(1000), completed: Some(2000) },
+                time: PartTime { created: Some(1000), completed: Some(2000), streamed: Some(2000) },
                 tokens: Some(900),
                 usage_total: None,
                 cache_read: None,

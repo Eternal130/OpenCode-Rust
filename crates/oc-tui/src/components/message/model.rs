@@ -15,11 +15,14 @@ use std::collections::HashMap;
 pub type PartRef = (String, String);
 
 /// Timestamps a part/message carries (`time.created` / `time.completed`,
-/// epoch milliseconds; `None` while open).
+/// epoch milliseconds; `None` while open). `streamed` is the assistant
+/// step's `time.streamed` (data.ts:876-878, set by `session.step.streamed`)
+/// — the tok/s denominator (`turnTokensPerSecond`, rows.ts:442-463).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PartTime {
     pub created: Option<u64>,
     pub completed: Option<u64>,
+    pub streamed: Option<u64>,
 }
 
 /// One user-message attachment file (`Session.Message.User.files` —
@@ -1052,6 +1055,44 @@ pub fn turn_duration(message_id: &str, messages: &[Message]) -> u64 {
     completed.saturating_sub(input_created.unwrap_or_else(|| message_created(&messages[index])))
 }
 
+/// `turnTokensPerSecond` (rows.ts:442-463) — the TURN-aggregate rate:
+/// Σ(output+reasoning) over the turn's assistant steps divided by
+/// Σ(`time.streamed − time.created`) per step, aggregated BEFORE
+/// dividing (each step weighted by its provider-active duration).
+/// `None` when the turn has no steps, ANY step lacks `time.streamed`
+/// (G-451: the old per-step `completed−created` basis was the bounded
+/// stand-in; `session.step.streamed` ingest now carries the real
+/// denominator), or either total is 0.
+#[must_use]
+pub fn turn_tokens_per_second(message_id: &str, messages: &[Message]) -> Option<f64> {
+    let index = messages.iter().position(|m| m.id() == message_id)?;
+    let legacy = legacy_turns(messages);
+    // rows.ts:469-481's `inputIndex` yields −1 when no input precedes
+    // the turn (the slice then spans from 0) — mirror that instead of
+    // bailing.
+    let start = input_index(messages, index + 1, legacy).map_or(0usize, |start| start + 1);
+    let mut steps = 0usize;
+    let mut output = 0u64;
+    let mut duration = 0u64;
+    for step in &messages[start..=index] {
+        let Message::Assistant { tokens, time, .. } = step else { continue };
+        steps += 1;
+        let (Some(created), Some(streamed)) = (time.created, time.streamed) else {
+            // rows.ts:456-458: durations.length !== steps.length →
+            // undefined — one unstreamed step kills the whole turn's
+            // rate, not just its own row.
+            return None;
+        };
+        output = output.saturating_add(tokens.unwrap_or(0));
+        duration = duration.saturating_add(streamed.saturating_sub(created));
+    }
+    if steps == 0 || output == 0 || duration == 0 {
+        return None;
+    }
+    #[allow(clippy::cast_precision_loss)] // token counts: integral in practice
+    Some(output as f64 / (duration as f64 / 1_000.0))
+}
+
 fn message_created(message: &Message) -> u64 {
     message.created()
 }
@@ -1226,7 +1267,7 @@ mod tests {
             parts,
             finish: Some("stop".into()),
             error: None,
-            time: PartTime { created: Some(created), completed: Some(completed) },
+            time: PartTime { created: Some(created), completed: Some(completed), streamed: None },
             tokens: None,
             usage_total: None,
             cache_read: None,
@@ -1248,7 +1289,7 @@ mod tests {
                     Part::Tool {
                         id: "grp-tool-read".into(),
                         name: "read".into(),
-                        time: PartTime { created: Some(1), completed: Some(1) },
+                        time: PartTime { created: Some(1), completed: Some(1), streamed: None },
                         state: ToolState::default(),
                     },
                     Part::Text {
@@ -1265,7 +1306,7 @@ mod tests {
                 vec![
                     Part::Reasoning {
                         text: "**Failure modes**\n\nConsider recursion limits first".into(),
-                        time: PartTime { created: Some(11), completed: Some(12) },
+                        time: PartTime { created: Some(11), completed: Some(12), streamed: None },
                     },
                     Part::Text {
                         text: "Three failure modes dominate: recursion limits, cycle detection and budget exhaustion.".into(),
@@ -1327,19 +1368,19 @@ mod tests {
                     Part::Tool {
                         id: "t1".into(),
                         name: "grep".into(),
-                        time: PartTime { created: Some(1), completed: None },
+                        time: PartTime { created: Some(1), completed: None, streamed: None },
                         state: ToolState::default(),
                     },
                     Part::Tool {
                         id: "t2".into(),
                         name: "read".into(),
-                        time: PartTime { created: Some(2), completed: None },
+                        time: PartTime { created: Some(2), completed: None, streamed: None },
                         state: ToolState::default(),
                     },
                 ],
                 finish: None,
                 error: None,
-                time: PartTime { created: Some(1), completed: None },
+                time: PartTime { created: Some(1), completed: None, streamed: None },
                 tokens: None,
                 usage_total: None,
                 cache_read: None,
@@ -1360,6 +1401,57 @@ mod tests {
         assert_eq!(exploration_label(&["read"], true), "Explored: 1 read");
     }
 
+    fn assistant_step(
+        id: &str,
+        created: u64,
+        streamed: Option<u64>,
+        tokens: Option<u64>,
+    ) -> Message {
+        Message::Assistant {
+            id: id.into(),
+            agent: "build".into(),
+            model: "m".into(),
+            parts: vec![],
+            finish: Some("stop".into()),
+            error: None,
+            time: PartTime { created: Some(created), completed: None, streamed },
+            tokens,
+            usage_total: None,
+            cache_read: None,
+            retry: None,
+        }
+    }
+
+    /// G-451① — `turnTokensPerSecond` (rows.ts:442-463): the
+    /// turn-aggregate Σ(output+reasoning) / Σ(streamed−created);
+    /// one unstreamed step kills the whole turn's rate.
+    #[test]
+    fn turn_tokens_per_second_aggregates_the_turn_and_requires_streamed() {
+        // Two steered steps: 42 tokens over 1.5s + 2.0s streamed spans
+        // → 42/3.5 ≈ 12.0 tok/s (aggregate BEFORE dividing).
+        let steered = vec![
+            user("u", "?", 0),
+            assistant_step("a", 1_000, Some(2_500), Some(42)),
+            assistant_step("b", 6_000, Some(8_000), None),
+        ];
+        let got = turn_tokens_per_second("b", &steered).expect("aggregate rate");
+        assert!((got - 42.0 / 3.5).abs() < 1e-9, "{got}");
+        // A step missing time.streamed → None for the whole turn.
+        let unstreamed = vec![
+            user("u", "?", 0),
+            assistant_step("a", 1_000, Some(2_500), Some(42)),
+            assistant_step("b", 6_000, None, None),
+        ];
+        assert!(
+            turn_tokens_per_second("b", &unstreamed).is_none(),
+            "unstreamed step kills the rate"
+        );
+        // No tokens at all → None (output <= 0).
+        assert!(turn_tokens_per_second("a", &steered[..2]).is_some());
+        let dry = vec![user("u", "?", 0), assistant_step("a", 1_000, Some(2_500), None)];
+        assert!(turn_tokens_per_second("a", &dry).is_none(), "output=0 → None");
+    }
+
     #[test]
     fn idle_marker_closes_turns_and_legacies_end_at_terminal_step() {
         let with_idle = vec![
@@ -1371,7 +1463,7 @@ mod tests {
                 parts: vec![Part::Text { text: "hi".into(), time: PartTime::default() }],
                 finish: Some("stop".into()),
                 error: None,
-                time: PartTime { created: Some(1), completed: Some(5) },
+                time: PartTime { created: Some(1), completed: Some(5), streamed: None },
                 tokens: None,
                 usage_total: None,
                 cache_read: None,
@@ -1393,7 +1485,7 @@ mod tests {
                 parts: vec![Part::Text { text: "hi".into(), time: PartTime::default() }],
                 finish: Some("tool-calls".into()),
                 error: None,
-                time: PartTime { created: Some(1), completed: Some(5) },
+                time: PartTime { created: Some(1), completed: Some(5), streamed: None },
                 tokens: None,
                 usage_total: None,
                 cache_read: None,
@@ -1406,7 +1498,7 @@ mod tests {
                 parts: vec![Part::Text { text: "there".into(), time: PartTime::default() }],
                 finish: Some("stop".into()),
                 error: None,
-                time: PartTime { created: Some(6), completed: Some(9) },
+                time: PartTime { created: Some(6), completed: Some(9), streamed: None },
                 tokens: None,
                 usage_total: None,
                 cache_read: None,
@@ -1500,19 +1592,19 @@ mod tests {
                     Part::Tool {
                         id: "t-read".into(),
                         name: "read".into(),
-                        time: PartTime { created: Some(1), completed: Some(1) },
+                        time: PartTime { created: Some(1), completed: Some(1), streamed: None },
                         state: ToolState::default(),
                     },
                     Part::Tool {
                         id: "t-blocked".into(),
                         name: "read".into(),
-                        time: PartTime { created: Some(2), completed: None },
+                        time: PartTime { created: Some(2), completed: None, streamed: None },
                         state: ToolState::default(),
                     },
                     Part::Tool {
                         id: "t-grep".into(),
                         name: "grep".into(),
-                        time: PartTime { created: Some(3), completed: Some(3) },
+                        time: PartTime { created: Some(3), completed: Some(3), streamed: None },
                         state: ToolState::default(),
                     },
                 ],
@@ -1719,7 +1811,7 @@ mod g370_input_index_tests {
             parts: vec![],
             finish: Some("stop".into()),
             error: None,
-            time: PartTime { created: Some(created), completed: Some(completed) },
+            time: PartTime { created: Some(created), completed: Some(completed), streamed: None },
             tokens: None,
             usage_total: None,
             cache_read: None,
@@ -1786,7 +1878,7 @@ mod g370_input_index_tests {
             parts,
             finish: Some("stop".into()),
             error: None,
-            time: PartTime { created: Some(1), completed: Some(2) },
+            time: PartTime { created: Some(1), completed: Some(2), streamed: None },
             tokens: None,
             usage_total: None,
             cache_read: None,

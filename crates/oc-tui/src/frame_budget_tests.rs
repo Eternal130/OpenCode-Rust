@@ -84,17 +84,25 @@ fn large_transcript(groups: usize) -> Vec<Message> {
             agent: "build".into(),
             model: "fixture/fixture".into(),
             finish: Some("stop".into()),
-            time: PartTime { created: Some(index as u64), completed: Some(index as u64) },
+            time: PartTime {
+                created: Some(index as u64),
+                completed: Some(index as u64),
+                streamed: None,
+            },
             parts: vec![
                 Part::Tool {
                     id: format!("bench-tool-{index}"),
                     name: "read".into(),
-                    time: PartTime { created: Some(index as u64), completed: Some(index as u64) },
+                    time: PartTime {
+                        created: Some(index as u64),
+                        completed: Some(index as u64),
+                        streamed: None,
+                    },
                     state: crate::components::message::model::ToolState::default(),
                 },
                 Part::Text {
                     text,
-                    time: PartTime { created: Some(index as u64), completed: None },
+                    time: PartTime { created: Some(index as u64), completed: None, streamed: None },
                 },
             ],
             error: None,

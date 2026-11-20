@@ -443,7 +443,7 @@ fn transcript_openlink_rows_drive_osc8_under_the_probe_gate() {
             }],
             finish: Some("success".into()),
             error: None,
-            time: PartTime { created: Some(1), completed: Some(2) },
+            time: PartTime { created: Some(1), completed: Some(2), streamed: None },
             tokens: None,
             usage_total: None,
             cache_read: None,
