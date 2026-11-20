@@ -8984,12 +8984,21 @@ pub async fn run_with_size(
     app.autoaccept = config.permission_autoaccept(boot.auto);
     app.store.set_permission_autoaccept(app.autoaccept);
 
-    // Config reload: mtime check per tick (the reference watches the dir).
+    // Config reload: MF-1 #18 — the ref watches the config directory
+    // (`config/index.tsx:356-365` fs.watch); this port now watches the
+    // file's parent through notify (rename-saves included, 100 ms
+    // debounce). The dirty flag drains per pass below; the mtime
+    // compare remains the change gate (a touched-but-equal file never
+    // re-applies).
     let mut config_mtime = config
         .path
         .as_ref()
         .and_then(|path| std::fs::metadata(path).ok())
         .and_then(|meta| meta.modified().ok());
+    let _config_watch = config
+        .path
+        .as_ref()
+        .and_then(|path: &std::path::PathBuf| crate::config_watch::ConfigFileWatch::start(path));
     let mut last_tick = std::time::Instant::now();
     // G-456 (env-gated anchor): the work-compensated wait's anchor —
     // captured right after each select returns (iteration start).
@@ -10568,12 +10577,22 @@ pub async fn run_with_size(
                 let _ = loop_fetch_tx.send(LoopRequest::ShellInline { shell_id, cursor });
             }
         }
-        // Config reload: keybinds + theme re-merge through the store.
-        let mtime = config
-            .path
+        // Config reload (MF-1 #18): the notify watch raises the dirty
+        // flag on a real fs change (modify or rename-save); the mtime
+        // compare gates the re-apply. Keybinds + theme re-merge
+        // through the store.
+        let mtime = if _config_watch
             .as_ref()
-            .and_then(|path| std::fs::metadata(path).ok())
-            .and_then(|meta| meta.modified().ok());
+            .is_some_and(crate::config_watch::ConfigFileWatch::take_dirty)
+        {
+            config
+                .path
+                .as_ref()
+                .and_then(|path| std::fs::metadata(path).ok())
+                .and_then(|meta| meta.modified().ok())
+        } else {
+            None
+        };
         // The notice-file watch (the CLI checker's channel): a new
         // line lands the banner; the update dialog's `Installing`
         // state resolves to `Installed` when the file says so.
