@@ -376,7 +376,7 @@ tests — never from real user traffic).
   divergence (red); exit 3 = infrastructure error. The full merge
   gate is the battery plus this checker:
 
-  `tools/dev-gate.sh 'cargo nextest run -p oc-tui --test realchain_t9 --test realchain_pair --test realchain_toolloop --locked --no-fail-fast' && python3 tools/diff/realchain/adjudicate.py .test-logs/diff-reports`
+  `tools/dev-gate.sh 'cargo nextest run -p oc-tui --test realchain_t9 --test realchain_pair --test realchain_toolloop --test realchain_w13 --locked --no-fail-fast' && python3 tools/diff/realchain/adjudicate.py .test-logs/diff-reports`（**W13 起 `realchain_w13` 必含**——注册表覆盖其场景族；**push 以 adjudicate exit 0 为前置，禁无条件链式 push**：diff-reports 中的陈旧报告会在条目退役后暴露为未裁决红，处置=重跑该场景族再生报告，不是放宽注册表）
 
   A NEW divergence = add a registry entry with an honest
   classification (never quietly framework-diff; uncertain shapes get
