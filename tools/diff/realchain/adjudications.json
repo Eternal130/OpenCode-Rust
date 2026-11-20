@@ -206,23 +206,6 @@
       "last_observed": "2026-11-18"
     },
     {
-      "id": "w13-perm-reject-post-state",
-      "scenario_pattern": "w13-perm-reject",
-      "state_pattern": "rejected",
-      "shape": {
-        "kind": "regex",
-        "any_contains": [
-          "(?:Sandbox Replay Session|cargo test|Running the test suite|hello|Edit README|tests::|test result|Permission required|t9 sandbox project|Build ·|shift\\+tab agents|Replay Anthropic|Allow once|running \\d+ tests)"
-        ]
-      },
-      "classification": "needs-controller",
-      "justification": "RESOLVED (gcb 2026-11-20, tree a98d852a): the W14 residual turn-stats divergences are FIXED — (1) store ingest: `session.step.failed` commits cost∧tokens partial usage (data.ts:890-905 gate) and `session.step.streamed` lands `time.streamed` (data.ts:876-878); (2) footer tps re-based to the turn aggregate Σ(output+reasoning)/Σ(streamed−created) (rows.ts:442-463). w13-perm-reject rejected frame now exports EXACT (both ends render `__TOKS__` and the `92 (0%)` context-usage arm, diff-reports/w13-perm-reject-rejected). Entry retained as the scenario's ref-liveness registration; retire at the controller's discretion. History (controller 2026-11-18): the rig drives reject via ESCAPE on both ends (the ref dialog binds left/h + right/l, NOT tab); G-451 declined-row message FIXED (fb4b7d4e family).",
-      "g_ref": "W13 report task 3",
-      "adjudicated_by": "W13 lane",
-      "adjudicated_at": "2026-11-18",
-      "last_observed": "2026-11-18"
-    },
-    {
       "id": "w13-g-emoji-zwj-width",
       "scenario_pattern": "w13-g-emoji",
       "state_pattern": "settled",
