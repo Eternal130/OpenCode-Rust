@@ -3046,7 +3046,7 @@ G-391 经单 lane worktree（`.worktrees/g391`，TDD red→green）落地并 ff 
 ## 事故与流程注记（并入 lane 模板）
 
 - **ENOSPC**：lane5 worktree 私有 target（136G）一度打满磁盘（96%→100%）；以 `CARGO_TARGET_DIR` 复用主 target 走完门后回收。收尾按 2.1#6（主 target 255G>100G）执行整清。
-- **陈旧 worktree 二进制污染**：verify 门首轮 122 假红——已删 worktree 编译的测试二进制烘焙死绝对路径（ENOENT）；以 touch 源强制重编译消除。教训：worktree 回收后如遇大面积 ENOENT 假红，先疑陈旧二进制再归因代码。
+- **陈旧 worktree 二进制污染**：verify 门首轮 122 假红——已删 worktree 编译的测试二进制烘焙死绝对路径（ENOENT）；以 touch 源强制重编译消除。教训：worktree 回收后如遇大面积 ENOENT 假红，先疑陈旧二进制再归因代码。**2026-11-20 勘注（同型新面）**：共享主 target 的 worktree lane（`CARGO_TARGET_DIR` 指向主 target）会把 worktree 绝对路径烘焙进主 target 的测试二进制（`env!(CARGO_MANIFEST_DIR)`）——lane 合并后主检出门跑大面积 ENOENT 假红（`opencode_bin()` 解析到 worktree 私有 target 路径，spawn NotFound），处置同 touch 强制重编（本轮 realchain 电池 29 红→touch 五测试源→49/49 实证）。**此后 worktree lane 一律用自有 target**（Lane A/B 模式，收尾删）；确需复用主 target 的，合并后主链必须先 touch 受影响测试源再跑。
 
 ## 第二十八轮判定
 
