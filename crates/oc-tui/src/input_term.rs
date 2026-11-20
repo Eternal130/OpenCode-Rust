@@ -284,6 +284,17 @@ impl KeyPipeline {
         events
     }
 
+    /// G-459/MF#15 — the pending unit's flush deadline (`None` when no
+    /// incomplete unit is armed): the input thread's BLOCKING read
+    /// sizes its poll timeout to this deadline (the retired 50 ms
+    /// tick's granularity bound, now exact), so the force-flush still
+    /// fires ~20 ms after the arm — the window's semantics are
+    /// unchanged, only the wait is no longer tick-quantized.
+    #[must_use]
+    pub fn pending_deadline(&self) -> Option<std::time::Instant> {
+        self.pending_since.map(|since| since + UNIT_TIMEOUT)
+    }
+
     /// G-459 — the timeout force-flush (`flushTimeout` +
     /// `forceFlush`, stdin-parser.ts:826-876): once the window elapses
     /// with the unit still incomplete, the pending prefix emits as

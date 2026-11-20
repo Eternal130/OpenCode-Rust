@@ -9029,29 +9029,45 @@ pub async fn run_with_size(
     let (auto_failure_tx, mut auto_failure_rx) =
         tokio::sync::mpsc::unbounded_channel::<(String, String)>();
 
-    // Input thread (lane B3a): one 50 ms poll(2) tick on the session
-    // terminal's tty — raw bytes through `Terminal::feed_input` (the
-    // capability probe, the late-OSC theme watch, terminal focus) and
-    // through the oc-tui `KeyPipeline` (keys / mouse / paste, the
-    // adapter layer the lane inventory mandated) — then the resize
-    // watch. Resize rides this loop until B3b (≤50 ms latency).
+    // Input thread (lane B3a; MF-1 #15 — BLOCKING read): the ref's
+    // input read model is a blocking stdin read (opentui's reader
+    // parks until bytes arrive), not a poll tick. This port now
+    // blocks in poll(2) with an ADAPTIVE timeout (never a fixed
+    // 50 ms tick): the wake set is the session tty + the stop pipe +
+    // the SIGWINCH self-pipe, and the timeout is the EARLIEST of the
+    // armed deadlines — the lone-ESC/incomplete-unit flush window
+    // (G-459, preserved verbatim: ~20 ms after the arm) and the
+    // capability probe's expiry (the retired tick's idle
+    // `feed_input(&[])` advance). With nothing armed the thread
+    // blocks INDEFINITELY — keystroke latency is the read itself, the
+    // ref semantics (the retired tick's ≤50 ms bound is gone).
+    // Resize now rides the ref's mechanism too: the SIGWINCH
+    // self-pipe wakes the thread (the retired 50 ms `check_resize`
+    // tick's ≤50 ms latency bound becomes signal-latency).
     //
     // SA-F13 (re-entrance): the reader must STOP at teardown — a stale
     // reader from an abandoned boot is stopped by the slot swap below
-    // before this one spawns, and the Drop guard fires on the normal
-    // return AND when an outer timeout cancels the run future.
+    // before this one spawns (the stop pipe wakes its parked poll),
+    // and the Drop guard fires on the normal return AND when an outer
+    // timeout cancels the run future.
     let boot_gate = std::time::Instant::now() + BOOT_DISCARD_WINDOW;
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<TermEvent>(64);
     let input_stop = {
-        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop = Arc::new(InputStopHandle::new());
         if let Ok(mut slot) = INPUT_READER_STOP.lock() {
             if let Some(stale) = slot.replace(Arc::clone(&stop)) {
-                stale.store(true, std::sync::atomic::Ordering::Relaxed);
+                stale.stop();
             }
         }
         stop
     };
     let _input_guard = StopInputReader(Arc::clone(&input_stop));
+    // The stop pipe's read end (owned here: alive for the whole run;
+    // the closed-after-drop case degenerates to a POLLNVAL wake the
+    // reader treats as stop — the stop byte is written first).
+    let stop_pipe = input_stop.stop_pipe_read();
+    let stop_rd = stop_pipe.as_ref().map_or(-1, std::os::fd::AsRawFd::as_raw_fd);
+    let (winch_rd, _winch_wr_keep) = winch_pipe_fds();
     {
         let input_stop = Arc::clone(&input_stop);
         let session = Arc::clone(&session_terminal);
@@ -9106,102 +9122,144 @@ pub async fn run_with_size(
                 let _ = opentui_core::write_pixel_resolution_query(terminal.output());
                 let _ = terminal.output().flush();
             }
+            // MF-1 #15 — the capability probe's local deadline mirror:
+            // the thread sizes its blocking timeout to the probe's
+            // expiry so a silent terminal still settles it (the
+            // retired tick's idle `feed_input(&[])` advance). The
+            // terminal's own state machine owns the truth; this mirror
+            // only ever SHORTENS an idle block (a reply that already
+            // settled the probe makes the deadline a harmless extra
+            // wake).
+            let mut probe_deadline = Some(std::time::Instant::now()
+                + opentui_core::terminal::probe::PROBE_TIMEOUT);
             loop {
-                if input_stop.load(std::sync::atomic::Ordering::Relaxed) {
+                if input_stop.is_stopped() {
                     break;
                 }
-                let bytes =
-                    read_session_input(tty_input_fd.load(std::sync::atomic::Ordering::Acquire), 50);
-                if bytes.is_empty() {
-                    // The no-input feed tick still advances the probe's
-                    // wall-clock deadline.
-                    if let Ok(mut terminal) = session.lock() {
-                        let _ = terminal.feed_input(&mut renderer, &[]);
-                    }
-                } else {
-                    let cli_events = if let Ok(mut terminal) = session.lock() {
-                        terminal.feed_input(&mut renderer, &bytes)
-                    } else {
-                        Vec::new()
-                    };
-                    for event in cli_events {
-                        match event {
-                            opentui_core::renderer::CliRenderEvent::TerminalFocus => {
-                                if event_tx.blocking_send(TermEvent::FocusGained).is_err() {
-                                    return;
+                // The adaptive timeout (MF-1 #15): the earliest armed
+                // deadline — the pending input unit's flush window
+                // (G-459), then the probe expiry — else block until a
+                // fd wakes (the ref's blocking read).
+                let timeout_ms = deadline_ms(pipeline.pending_deadline())
+                    .into_iter()
+                    .chain(deadline_ms(probe_deadline))
+                    .min()
+                    .map(|ms: u64| i32::try_from(ms).unwrap_or(i32::MAX))
+                    .map_or(-1, |ms: i32| ms);
+                let wake = wait_session_input(
+                    tty_input_fd.load(std::sync::atomic::Ordering::Acquire),
+                    stop_rd,
+                    winch_rd,
+                    timeout_ms,
+                );
+                if probe_deadline.is_some_and(|at| std::time::Instant::now() >= at) {
+                    // The expiry wake: the idle feed below settles the
+                    // probe (timeout path); the mirror disarms so idle
+                    // blocks go back to indefinite.
+                    probe_deadline = None;
+                }
+                match wake {
+                    SessionWake::Stop => break,
+                    SessionWake::Winch | SessionWake::Bytes(_) | SessionWake::Timeout => {
+                        let bytes = match wake {
+                            SessionWake::Bytes(bytes) => bytes,
+                            _ => Vec::new(),
+                        };
+                        if bytes.is_empty() {
+                            // The no-input feed (the probe's expiry
+                            // path; a harmless no-op once settled).
+                            if let Ok(mut terminal) = session.lock() {
+                                let _ = terminal.feed_input(&mut renderer, &[]);
+                            }
+                        } else {
+                            let cli_events = if let Ok(mut terminal) = session.lock() {
+                                terminal.feed_input(&mut renderer, &bytes)
+                            } else {
+                                Vec::new()
+                            };
+                            for event in cli_events {
+                                match event {
+                                    opentui_core::renderer::CliRenderEvent::TerminalFocus => {
+                                        if event_tx.blocking_send(TermEvent::FocusGained).is_err() {
+                                            return;
+                                        }
+                                    }
+                                    opentui_core::renderer::CliRenderEvent::TerminalBlur => {
+                                        if event_tx.blocking_send(TermEvent::FocusLost).is_err() {
+                                            return;
+                                        }
+                                    }
+                                    opentui_core::renderer::CliRenderEvent::ThemeMode { mode } => {
+                                        // opentui's reduction → oc-theme's Mode.
+                                        let mode = match mode {
+                                            opentui_core::renderer::ThemeMode::Dark => Mode::Dark,
+                                            opentui_core::renderer::ThemeMode::Light => Mode::Light,
+                                        };
+                                        if event_tx.blocking_send(TermEvent::ThemeMode(mode)).is_err()
+                                        {
+                                            return;
+                                        }
+                                    }
+                                    opentui_core::renderer::CliRenderEvent::Capabilities(caps) => {
+                                        // Lane TAIL (auditC P2/TM-1): the
+                                        // terminal answered the kitty keyboard
+                                        // query — push the v2 flag set
+                                        // (`CSI > 5u`; opentui's SetupOptions
+                                        // owns setup only) and flip the parser
+                                        // to the kitty encoding.
+                                        if caps.kitty_keyboard && !kitty_pushed {
+                                            kitty_pushed = true;
+                                            if let Ok(mut terminal) = session.lock() {
+                                                use std::io::Write as _;
+                                                let _ = terminal
+                                                    .output()
+                                                    .write_all(crate::terminal_proto::KITTY_PUSH);
+                                                let _ = terminal.output().flush();
+                                            }
+                                        }
+                                        // R-07/D3-4b: the full snapshot carries
+                                        // kitty graphics, sixel and the cell-px
+                                        // resolution ("auto" resolves in the
+                                        // image bridge).
+                                        if event_tx
+                                            .blocking_send(TermEvent::Capabilities(Box::new(caps)))
+                                            .is_err()
+                                        {
+                                            return;
+                                        }
+                                    }
+                                    _ => {}
                                 }
                             }
-                            opentui_core::renderer::CliRenderEvent::TerminalBlur => {
-                                if event_tx.blocking_send(TermEvent::FocusLost).is_err() {
-                                    return;
-                                }
-                            }
-                            opentui_core::renderer::CliRenderEvent::ThemeMode { mode } => {
-                                // opentui's reduction → oc-theme's Mode.
-                                let mode = match mode {
-                                    opentui_core::renderer::ThemeMode::Dark => Mode::Dark,
-                                    opentui_core::renderer::ThemeMode::Light => Mode::Light,
-                                };
-                                if event_tx.blocking_send(TermEvent::ThemeMode(mode)).is_err() {
-                                    return;
-                                }
-                            }
-                            opentui_core::renderer::CliRenderEvent::Capabilities(caps) => {
-                                // Lane TAIL (auditC P2/TM-1): the
-                                // terminal answered the kitty keyboard
-                                // query — push the v2 flag set
-                                // (`CSI > 5u`; opentui's SetupOptions
-                                // owns setup only) and flip the parser
-                                // to the kitty encoding.
-                                if caps.kitty_keyboard && !kitty_pushed {
-                                    kitty_pushed = true;
-                                    if let Ok(mut terminal) = session.lock() {
-                                        use std::io::Write as _;
-                                        let _ = terminal
-                                            .output()
-                                            .write_all(crate::terminal_proto::KITTY_PUSH);
-                                        let _ = terminal.output().flush();
+                            if std::time::Instant::now() >= boot_discard_until {
+                                for event in pipeline.process(&bytes) {
+                                    if event_tx.blocking_send(event).is_err() {
+                                        return;
                                     }
                                 }
-                                // R-07/D3-4b: the full snapshot carries
-                                // kitty graphics, sixel and the cell-px
-                                // resolution ("auto" resolves in the
-                                // image bridge).
-                                if event_tx
-                                    .blocking_send(TermEvent::Capabilities(Box::new(caps)))
-                                    .is_err()
-                                {
-                                    return;
-                                }
                             }
-                            _ => {}
                         }
-                    }
-                    if std::time::Instant::now() >= boot_discard_until {
-                        for event in pipeline.process(&bytes) {
+                        // G-459 — the lone-ESC timeout window's pump-side arm
+                        // (opentui StdinParser's 20 ms force-flush,
+                        // stdin-parser.ts:113/826-876): an incomplete unit a
+                        // later read still cannot reassemble flushes here as
+                        // one final event (a lone ESC → the escape key). The
+                        // blocking read's timeout IS this window's deadline
+                        // (MF-1 #15 — the retired 50 ms tick only bounded its
+                        // granularity from above; the semantics are the ref's
+                        // own timer). Input-parse layer only; the pump cadence
+                        // and wait_deadline faces (G-456/G-457) are untouched.
+                        for event in pipeline.flush_timeout() {
                             if event_tx.blocking_send(event).is_err() {
                                 return;
                             }
                         }
                     }
                 }
-                // G-459 — the lone-ESC timeout window's pump-side arm
-                // (opentui StdinParser's 20 ms force-flush,
-                // stdin-parser.ts:113/826-876): an incomplete unit a
-                // later tick still cannot reassemble flushes here as
-                // one final event (a lone ESC → the escape key). The
-                // 50 ms poll(2) tick bounds the window's granularity —
-                // every tick is ≥ the 20 ms window, so a pending unit
-                // resolves on the first tick past its arm. Input-parse
-                // layer only; the pump cadence and wait_deadline faces
-                // (G-456/G-457) are untouched.
-                for event in pipeline.flush_timeout() {
-                    if event_tx.blocking_send(event).is_err() {
-                        return;
-                    }
-                }
-                // The resize watch (B3a: check_resize on the 50 ms
-                // tick; ≤50 ms latency, B3b revisits).
+                // The resize watch (MF-1 #15: SIGWINCH wakes the thread;
+                // every other wake re-checks too, keeping the winch-less
+                // resize paths — the pty harness's master-side
+                // TIOCSWINSZ without a signal — covered).
                 let resized = if let Ok(mut terminal) = session.lock() {
                     terminal.check_resize(&mut renderer).ok().flatten()
                 } else {
@@ -11177,20 +11235,78 @@ fn system_now_ms() -> u64 {
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(0))
 }
 
-/// The live input reader's stop flag (SA-F13 — one reader per process
-/// at a time; see the input-thread comment in [`run_with_size`]).
-static INPUT_READER_STOP: std::sync::Mutex<Option<Arc<std::sync::atomic::AtomicBool>>> =
+/// The live input reader's stop handle (SA-F13 — one reader per
+/// process at a time; see the input-thread comment in [`run_with_size`]).
+static INPUT_READER_STOP: std::sync::Mutex<Option<Arc<InputStopHandle>>> =
     std::sync::Mutex::new(None);
+
+/// MF-1 #15 — the input reader's stop signal: the flag the loop
+/// checks PLUS a wake pipe (a thread parked in a blocking poll is
+/// woken by one byte on the pipe — the flag alone would leave the
+/// last read parked until the next keystroke).
+struct InputStopHandle {
+    stopped: std::sync::atomic::AtomicBool,
+    /// The pipe's write end; the read end rides the reader's poll set.
+    wake_write: std::sync::Mutex<Option<std::fs::File>>,
+}
+
+impl InputStopHandle {
+    fn new() -> Self {
+        Self {
+            stopped: std::sync::atomic::AtomicBool::new(false),
+            wake_write: std::sync::Mutex::new(None),
+        }
+    }
+
+    fn is_stopped(&self) -> bool {
+        self.stopped.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Signal stop: set the flag and wake the parked poll.
+    fn stop(&self) {
+        self.stopped.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut guard) = self.wake_write.lock() {
+            if let Some(write) = guard.as_mut() {
+                use std::io::Write as _;
+                let _ = write.write_all(b"x");
+                let _ = write.flush();
+            }
+        }
+    }
+
+    /// The stop pipe's READ end for the reader's poll set (the write
+    /// end parks inside the handle). `pipe2(O_NONBLOCK)`: a second
+    /// stop write into a full pipe must not block the dropper. A
+    /// `None` return degrades to flag-only stop (the loop still exits
+    /// on its next wake).
+    #[allow(unsafe_code)] // pipe2 FFI
+    fn stop_pipe_read(self: &Arc<Self>) -> Option<std::os::fd::OwnedFd> {
+        use std::os::fd::FromRawFd as _;
+        let mut fds = [0i32; 2];
+        // SAFETY: pipe2 with O_NONBLOCK|O_CLOEXEC, closed on failure.
+        let ok = unsafe {
+            libc::pipe2(fds.as_mut_ptr(), libc::O_NONBLOCK | libc::O_CLOEXEC) == 0
+        };
+        if !ok {
+            return None;
+        }
+        let read = unsafe { std::os::fd::OwnedFd::from_raw_fd(fds[0]) };
+        let write = unsafe { std::os::fd::OwnedFd::from_raw_fd(fds[1]) };
+        *self.wake_write.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(std::fs::File::from(write));
+        Some(read)
+    }
+}
 
 /// Stops this boot's input reader on drop — the normal teardown AND
 /// an outer cancellation (a test's `tokio::time::timeout` dropping
 /// the run future) both route through here, so no reader ever stays
 /// parked on the session terminal's tty after its loop is gone.
-struct StopInputReader(Arc<std::sync::atomic::AtomicBool>);
+struct StopInputReader(Arc<InputStopHandle>);
 
 impl Drop for StopInputReader {
     fn drop(&mut self) {
-        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.0.stop();
     }
 }
 
@@ -11217,56 +11333,259 @@ fn tick_anchor_enabled() -> bool {
     std::env::var("OC_TUI_TICK_ANCHOR").ok().as_deref() != Some("0")
 }
 
-/// The session tty's input fd, cached at boot so the input thread can
-/// `poll(2)`/`read(2)` WITHOUT holding the session lock (B3b: the
-/// frame emitter writes through the session terminal every ~100 ms —
-/// a poll parked on the lock stalls the render loop a full 50 ms tick
-/// per pass; the fd is refreshed on session rebuilds via
-/// [`cache_tty_input_fd`], and the reads below are the only reader
-/// (SA-F13's one-reader gate) — serialized against the OSC 52
-/// clipboard query window through [`crate::terminal_proto`]'s stdin
-/// lock (G-342), with the window's leftover keystrokes drained
-/// first.
-#[allow(unsafe_code)] // poll/read/ioctl on the tty fd are libc FFI
-fn read_session_input(fd: std::os::fd::RawFd, timeout_ms: i32) -> Vec<u8> {
-    // G-342 — stdin has exactly one owner at a time: the same lock
-    // the OSC 52 clipboard query window holds. The input thread's
-    // 50 ms poll passes release quickly; when a query window is in
-    // flight this parks until it closes (≤150 ms + the query's own
-    // wait), so the two fd 0 consumers never interleave reads.
-    let _stdin_guard = crate::terminal_proto::STDIN_READ_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    // Keystrokes the query window read (bytes that were not its
-    // reply) come back first — delayed, never lost.
-    let pushed = crate::terminal_proto::take_stdin_pushback();
-    if !pushed.is_empty() {
-        return pushed;
-    }
-    let mut poll_fd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
-    // SAFETY: poll(2) with a bounded timeout on the session's tty fd.
-    let ready = unsafe { libc::poll(std::ptr::from_mut(&mut poll_fd), 1, timeout_ms) };
-    if ready <= 0 {
-        return Vec::new();
-    }
-    let mut available: i32 = 0;
-    // SAFETY: FIONREAD on the same fd.
-    unsafe { libc::ioctl(fd, libc::FIONREAD, std::ptr::from_mut(&mut available)) };
-    if available <= 0 {
-        return Vec::new();
-    }
-    let mut buffer = vec![0u8; usize::try_from(available).unwrap_or(0)];
-    // SAFETY: read(2) of at most FIONREAD bytes.
-    let read = unsafe { libc::read(fd, buffer.as_mut_ptr().cast::<libc::c_void>(), buffer.len()) };
-    if read <= 0 {
-        return Vec::new();
-    }
-    buffer.truncate(usize::try_from(read).unwrap_or(0));
-    buffer
+/// MF-1 #15 — the SIGWINCH self-pipe (the ref's resize mechanism:
+/// the signal, not a poll tick). The handler writes one byte
+/// (async-signal-safe `write(2)`); the input thread's poll set
+/// carries the read end, so a resize wakes the parked read and the
+/// loop's `check_resize` reconciles immediately. Installed once per
+/// process (first input thread); `TIOCSWINSZ`-without-signal pty
+/// harnesses stay covered by the per-wake re-check in the loop.
+static WINCH_PIPE_WR: std::sync::atomic::AtomicI32 =
+    std::sync::atomic::AtomicI32::new(-1);
+
+/// Create (once) the SIGWINCH self-pipe and install the handler;
+/// returns the pipe's raw fd pair (process-lifetime fds, never
+/// closed — the handler needs the write end, the reader's poll the
+/// read end). Failure degrades to the per-wake re-check (resize
+/// latency then rides input wakes only) — never fatal.
+#[allow(unsafe_code)] // pipe2/signal FFI
+fn winch_pipe_fds() -> (std::os::fd::RawFd, std::os::fd::RawFd) {
+    use std::sync::OnceLock;
+    static WINCH: OnceLock<(std::os::fd::RawFd, std::os::fd::RawFd)> = OnceLock::new();
+    *WINCH.get_or_init(|| {
+        let mut fds = [0i32; 2];
+        // SAFETY: pipe2 with O_NONBLOCK|O_CLOEXEC.
+        if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_NONBLOCK | libc::O_CLOEXEC) } != 0 {
+            return (-1, -1);
+        }
+        WINCH_PIPE_WR.store(fds[1], std::sync::atomic::Ordering::Relaxed);
+        // SAFETY: signal(2) handler install (same shape as
+        // suspend.rs's SIGCONT / terminal_proto.rs's SIGHUP).
+        unsafe {
+            libc::signal(libc::SIGWINCH, on_sigwinch as *const () as usize);
+        }
+        (fds[0], fds[1])
+    })
 }
+
+/// MF-1 #15 — one armed deadline as a poll timeout (ms since now,
+/// `None` when unarmed; a past deadline maps to 0). The caller takes
+/// the min over the armed set; nothing armed → `-1` (block until a
+/// fd wakes — the ref's blocking read).
+fn deadline_ms(deadline: Option<std::time::Instant>) -> Option<u64> {
+    let at = deadline?;
+    let now = std::time::Instant::now();
+    if at <= now {
+        return Some(0);
+    }
+    Some(u64::try_from((at - now).as_millis()).unwrap_or(0))
+}
+
+/// One wake of the input thread's blocking read (MF-1 #15).
+#[derive(Debug)]
+enum SessionWake {
+    /// Bytes off the session tty (possibly empty — an ioctl/read
+    /// race degrades to the idle-feed path).
+    Bytes(Vec<u8>),
+    /// The poll timed out (an armed deadline — the ESC flush window
+    /// or the probe expiry) or was interrupted (EINTR — the loop
+    /// re-arms with fresh deadlines; a spurious idle feed is a
+    /// no-op).
+    Timeout,
+    /// SIGWINCH wrote the self-pipe.
+    Winch,
+    /// The stop pipe (or its post-drop POLLNVAL).
+    Stop,
+}
+
+/// The session tty's input read, BLOCKING (MF-1 #15 — the ref's read
+/// model; the retired 50 ms poll tick). The fd is cached at boot so
+/// the thread polls/reads WITHOUT holding the session lock (B3b: the
+/// frame emitter writes through the session terminal every ~100 ms —
+/// a poll parked on the lock stalls the render loop). The wake set:
+/// the tty, the stop pipe, the SIGWINCH pipe; the timeout is the
+/// earliest armed deadline (`-1` = block until a fd wakes).
+///
+/// G-342 — stdin has exactly one owner at a time: the STDIN lock is
+/// taken only around the actual READ (after the poll reports bytes),
+/// never around the blocking wait — the retired 50 ms tick released
+/// quickly, an indefinite block would starve the OSC 52 clipboard
+/// query window. Keystrokes the query window read (bytes that were
+/// not its reply) come back first — delayed, never lost.
+#[allow(unsafe_code)] // poll/read/ioctl on the tty fd are libc FFI
+fn wait_session_input(
+    fd: std::os::fd::RawFd,
+    stop_rd: std::os::fd::RawFd,
+    winch_rd: std::os::fd::RawFd,
+    timeout_ms: i32,
+) -> SessionWake {
+    let mut poll_fds: Vec<libc::pollfd> = Vec::with_capacity(3);
+    let tty_slot = (fd >= 0).then(|| {
+        poll_fds.push(libc::pollfd { fd, events: libc::POLLIN, revents: 0 });
+        0
+    });
+    let stop_slot = (stop_rd >= 0).then(|| {
+        poll_fds.push(libc::pollfd { fd: stop_rd, events: libc::POLLIN, revents: 0 });
+        poll_fds.len() - 1
+    });
+    let winch_slot = (winch_rd >= 0).then(|| {
+        poll_fds.push(libc::pollfd { fd: winch_rd, events: libc::POLLIN, revents: 0 });
+        poll_fds.len() - 1
+    });
+    // SAFETY: poll(2) — a negative timeout blocks until a fd wakes.
+    let ready = unsafe {
+        libc::poll(poll_fds.as_mut_ptr(), poll_fds.len().try_into().unwrap_or(0), timeout_ms)
+    };
+    if ready <= 0 {
+        return SessionWake::Timeout;
+    }
+    if stop_slot.is_some_and(|slot| poll_fds[slot].revents != 0) {
+        drain_fd(stop_rd);
+        return SessionWake::Stop;
+    }
+    if winch_slot.is_some_and(|slot| poll_fds[slot].revents & libc::POLLIN != 0) {
+        drain_fd(winch_rd);
+        return SessionWake::Winch;
+    }
+    if tty_slot.is_some_and(|slot| poll_fds[slot].revents != 0) {
+        // The stdin lock scopes the READ only (G-342 — see above).
+        let _stdin_guard = crate::terminal_proto::STDIN_READ_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Keystrokes the OSC 52 query window read come back first.
+        let pushed = crate::terminal_proto::take_stdin_pushback();
+        if !pushed.is_empty() {
+            return SessionWake::Bytes(pushed);
+        }
+        let mut available: i32 = 0;
+        // SAFETY: FIONREAD on the same fd.
+        unsafe { libc::ioctl(fd, libc::FIONREAD, std::ptr::from_mut(&mut available)) };
+        if available <= 0 {
+            return SessionWake::Bytes(Vec::new());
+        }
+        let mut buffer = vec![0u8; usize::try_from(available).unwrap_or(0)];
+        // SAFETY: read(2) of at most FIONREAD bytes.
+        let read =
+            unsafe { libc::read(fd, buffer.as_mut_ptr().cast::<libc::c_void>(), buffer.len()) };
+        if read <= 0 {
+            return SessionWake::Bytes(Vec::new());
+        }
+        buffer.truncate(usize::try_from(read).unwrap_or(0));
+        return SessionWake::Bytes(buffer);
+    }
+    SessionWake::Timeout
+}
+
+/// Drain a non-blocking self-pipe (one read sweep; the byte's meaning
+/// rides the fd it came from).
+#[allow(unsafe_code)] // read(2) on the self-pipe
+fn drain_fd(fd: std::os::fd::RawFd) {
+    let mut scratch = [0u8; 64];
+    // SAFETY: read(2) of at most 64 bytes on a non-blocking pipe.
+    while unsafe { libc::read(fd, scratch.as_mut_ptr().cast::<libc::c_void>(), scratch.len()) } > 0
+    {}
+}
+
+// SAFETY: the handler only writes one byte to a static pipe fd.
+#[allow(unsafe_code)]
+extern "C" fn on_sigwinch(_sig: libc::c_int) {
+    let fd = WINCH_PIPE_WR.load(std::sync::atomic::Ordering::Relaxed);
+    if fd >= 0 {
+        let byte: libc::c_char = b'w' as libc::c_char;
+        unsafe {
+            let _ = libc::write(fd, std::ptr::addr_of!(byte).cast::<libc::c_void>(), 1);
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
+    /// MF-1 #15 — the blocking read's wake machinery: the stop pipe
+    /// wakes a parked (indefinite-timeout) read; a timeout with no
+    /// armed deadline respects its own window (not a 50 ms tick).
+    #[test]
+    fn mf15_stop_pipe_wakes_parked_read() {
+        let stop = std::sync::Arc::new(InputStopHandle::new());
+        let read = stop.stop_pipe_read().expect("pipe2");
+        use std::os::fd::AsRawFd as _;
+        let stop_rd = read.as_raw_fd();
+        let (_winch_rd, _winch_wr) = winch_pipe_fds();
+        let parked = std::thread::spawn(move || {
+            // No tty fd, nothing armed: a pure block until the stop
+            // pipe writes.
+            wait_session_input(-1, stop_rd, -1, -1)
+        });
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(!parked.is_finished(), "the read returned before the stop signal");
+        stop.stop();
+        match parked.join().expect("reader thread") {
+            SessionWake::Stop => {}
+            other => panic!("expected Stop, got {other:?}"),
+        }
+    }
+
+    /// MF-1 #15 — an armed deadline sizes the poll timeout exactly
+    /// (the ESC flush window's ~20 ms; no tick quantization).
+    #[test]
+    fn mf15_deadline_sizes_timeout_and_winch_wakes() {
+        let (_winch_rd, winch_wr) = winch_pipe_fds();
+        let start = std::time::Instant::now();
+        // 120 ms armed deadline, nothing ready: the wake is Timeout
+        // at ~120 ms — the retired tick would have returned at 50.
+        let deadline = Some(start + std::time::Duration::from_millis(120));
+        let timeout_ms = deadline_ms(deadline).map(i32::try_from).unwrap().unwrap();
+        let wake = wait_session_input(-1, -1, -1, timeout_ms);
+        assert!(matches!(wake, SessionWake::Timeout));
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= std::time::Duration::from_millis(115),
+            "timeout wake came early: {elapsed:?}"
+        );
+        assert!(elapsed < std::time::Duration::from_millis(400), "wake came late: {elapsed:?}");
+        // A past deadline maps to 0; an unarmed one to None (block).
+        assert_eq!(deadline_ms(Some(start)), Some(0));
+        assert_eq!(deadline_ms(None), None);
+        let _ = winch_wr;
+    }
+
+    /// MF-1 #15 — the SIGWINCH self-pipe carries a handler write to a
+    /// parked read as `Winch`.
+    #[test]
+    fn mf15_winch_self_pipe_wakes_parked_read() {
+        let (winch_rd, winch_wr) = winch_pipe_fds();
+        let parked = std::thread::spawn(move || wait_session_input(-1, -1, winch_rd, -1));
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(!parked.is_finished(), "the read returned before SIGWINCH");
+        let byte: libc::c_char = b'w' as libc::c_char;
+        // SAFETY: write(2) one byte on the non-blocking self-pipe.
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::write(
+                winch_wr,
+                std::ptr::addr_of!(byte).cast::<libc::c_void>(),
+                1,
+            );
+        }
+        match parked.join().expect("reader thread") {
+            SessionWake::Winch => {}
+            other => panic!("expected Winch, got {other:?}"),
+        }
+    }
+
+    /// MF-1 #15/G-459 — the pipeline's pending-unit deadline is the
+    /// flush window's arm + 20 ms (the blocking read sizes to it).
+    #[test]
+    fn mf15_pending_deadline_is_the_esc_window() {
+        let mut pipeline = crate::input_term::KeyPipeline::new();
+        assert_eq!(pipeline.pending_deadline(), None);
+        let _ = pipeline.process(b"\x1b"); // lone ESC arms the window
+        let deadline = pipeline.pending_deadline().expect("armed");
+        let lower = std::time::Instant::now() + std::time::Duration::from_millis(15);
+        let upper = std::time::Instant::now() + std::time::Duration::from_millis(25);
+        assert!(deadline >= lower && deadline <= upper, "deadline {deadline:?}");
+    }
+
     /// G-142 — `cliErrorMessage` (util/error.ts:5-87) over the
     /// declared envelope fields.
     #[test]
