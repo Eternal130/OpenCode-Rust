@@ -309,6 +309,11 @@ pub struct SidebarView {
     /// The store clock (ms) — the shimmer's only time source (a
     /// frozen clock pins the un-faded bold row).
     pub clock_ms: u64,
+    /// G-430 face 5 — ref `title_shimmer`'s `enabled` prop
+    /// (sidebar.tsx:39 `config.animations ?? true`): `false` keeps
+    /// the title static (BOLD, or DIM while rename-pending —
+    /// sidebar.tsx:43-45).
+    pub animations: bool,
     /// The content-slot sections (blank in the golden fixture).
     pub sections: SidebarSections,
     /// Show the getting-started card (hidden when dismissed or a
@@ -328,6 +333,7 @@ impl SidebarView {
             title_pending_since: None,
             title_arrival: None,
             clock_ms: 0,
+            animations: true,
             sections: SidebarSections::empty(),
             onboarding: true,
             location: Some(location.to_owned()),
@@ -490,7 +496,22 @@ pub fn render_sidebar_scrolled(
         .title_arrival
         .as_ref()
         .is_some_and(|arrival| view.clock_ms.saturating_sub(arrival.since) < ARRIVAL_DURATION_MS);
-    if arrival_active {
+    // G-430 face 5 — ref (sidebar.tsx:33-48): animations off keeps
+    // the title static — the pending row renders DIM (the
+    // `pending && config.animations === false` attributes branch),
+    // never the shimmer's animated fg.
+    if !view.animations && (view.title_pending_since.is_some() || arrival_active) {
+        paint.placed.push(Placed {
+            x: 2,
+            y: 1,
+            width: crate::wrap::display_width(&view.title),
+            lines: vec![PlacedLine::plain(
+                view.title.as_str(),
+                Style::new().fg(fg_base).bg(raised).add_modifier(Modifier::DIM),
+            )],
+            tag: Some("sidebar.title".into()),
+        });
+    } else if arrival_active {
         let arrival =
             view.title_arrival.as_ref().expect("checked above: the arrival window is open");
         let elapsed = view.clock_ms.saturating_sub(arrival.since);
@@ -1006,6 +1027,49 @@ mod tests {
         ThemeState::v2_dark().styles()
     }
 
+    /// G-430 face 5 — ref (sidebar.tsx:33-48): `title_shimmer
+    /// enabled={config.animations ?? true}` — animations off keeps
+    /// the rename-pending title STATIC with DIM attributes (the
+    /// `pending && config.animations === false` branch), never the
+    /// shimmer's animated per-glyph fg.
+    #[test]
+    fn sidebar_title_static_dim_when_animations_off() {
+        let theme = theme();
+        let mut view = SidebarView::fixture("Pending title", "/tmp/opencode:main");
+        view.title_pending_since = Some(1_000);
+        view.clock_ms = 1_600;
+        view.animations = false;
+        let paint = render_sidebar(&view, &theme, 30);
+        let placed = paint
+            .placed
+            .iter()
+            .find(|p| p.tag.as_deref() == Some("sidebar.title"))
+            .expect("title");
+        assert_eq!(placed.lines[0].runs.len(), 1, "one static run, no per-glyph shimmer");
+        assert_eq!(placed.lines[0].runs[0].text, "Pending title");
+        assert!(
+            placed.lines[0].runs[0]
+                .style
+                .add_modifier
+                .contains(crate::style::Modifier::DIM),
+            "DIM while gated: {:?}",
+            placed.lines[0].runs[0].style
+        );
+        // Gate open: the shimmer's per-glyph runs return (BOLD, one
+        // run per column).
+        view.animations = true;
+        let paint = render_sidebar(&view, &theme, 30);
+        let placed = paint
+            .placed
+            .iter()
+            .find(|p| p.tag.as_deref() == Some("sidebar.title"))
+            .expect("title");
+        assert!(
+            placed.lines[0].runs.len() > 1,
+            "the animated per-glyph shimmer"
+        );
+    }
+
     /// G-327 — the arrival wipe: a title change that landed while
     /// rename-pending was armed opens on the OLD glyphs (the wipe
     /// front starts left of column 0), reveals the new title left of
@@ -1337,6 +1401,7 @@ mod surf1_tests {
             title_pending_since: None,
             title_arrival: None,
             clock_ms: 0,
+            animations: true,
             sections: SidebarSections {
                 context: SidebarContextWidget { tokens: Some(60_400), percent: None, cost: None },
                 mcp: SidebarMcpWidget {
@@ -1405,6 +1470,7 @@ fn sidebar_scrollbar_paints_only_on_overflow() {
         title_pending_since: None,
         title_arrival: None,
         clock_ms: 0,
+        animations: true,
         sections: sections(30),
         onboarding: false,
         location: None,
@@ -1426,6 +1492,7 @@ fn sidebar_scrollbar_paints_only_on_overflow() {
         title_pending_since: None,
         title_arrival: None,
         clock_ms: 0,
+        animations: true,
         sections: sections(1),
         onboarding: false,
         location: None,

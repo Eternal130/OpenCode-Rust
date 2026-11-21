@@ -14216,7 +14216,6 @@ impl Store {
                 // text-arm fix's sister); only a missing/malformed
                 // field skips.
                 let Some(delta) = event.string("delta") else { return };
-                let ordinal = event.ordinal();
                 // G11-F1 / G-399 — only SNAPSHOT-completed messages
                 // drop deltas (the fetch's text is authoritative); a
                 // stream-completed message keeps appending (ref

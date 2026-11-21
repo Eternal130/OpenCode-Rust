@@ -1772,21 +1772,27 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             // glyph + the label swept by the shimmer-text mask
             // (spinner.tsx:45 — the glyph table advances with the
             // store clock; a frozen clock pins both).
+            // G-430 face 3 — ref `Spinner` (spinner.tsx:26-31):
+            // animations off renders the static `⋯ {children}`
+            // fallback — no glyph, no shimmer sweep.
             let busy = matches!(
                 state,
                 crate::components::update::UpdateDialogState::Checking
                     | crate::components::update::UpdateDialogState::Installing(_)
             );
-            let title = if busy {
+            let animations = store.animations_enabled();
+            let title = if busy && animations {
                 format!(
                     "{} {title}",
                     crate::components::message::rows::spinner_frame(store.clock())
                 )
+            } else if busy {
+                format!("⋯ {title}")
             } else {
                 title
             };
             let mut row = SelectOption::titled(title, detail).muted_placeholder();
-            if busy {
+            if busy && animations {
                 row = row.with_shimmer(store.clock());
             }
             let mut options = vec![row];
@@ -3988,6 +3994,34 @@ mod tests {
     use super::*;
     use crate::reactive::Runtime;
     use crate::store::{ListState, ServerProvider};
+
+    /// G-430 face 3 — ref `Spinner` (dialog-update.tsx:107,115 +
+    /// spinner.tsx:26-31): animations off renders the busy row at
+    /// the static `⋯ {label}` fallback — no braille glyph, no
+    /// shimmer sweep.
+    #[test]
+    fn update_dialog_busy_row_static_fallback_when_animations_off() {
+        let store = Store::new(Runtime::new());
+        store.replace_dialog(DialogKind::Update, DialogSize::Medium);
+        store.set_update_dialog(crate::components::update::UpdateDialogState::Checking);
+        store.set_animations_enabled(false);
+        let props = select_props_for(&DialogKind::Update, &store);
+        let busy = &props.options[0];
+        assert_eq!(busy.title, "⋯ Checking for updates…");
+        assert!(busy.shimmer.is_none(), "the sweep is gated off");
+        // Gate open: the braille glyph + shimmer return.
+        store.set_animations_enabled(true);
+        let props = select_props_for(&DialogKind::Update, &store);
+        let busy = &props.options[0];
+        assert!(
+            crate::components::message::rows::SPINNER_FRAMES
+                .iter()
+                .any(|frame| busy.title.starts_with(*frame)),
+            "the animated glyph title: {}",
+            busy.title
+        );
+        assert!(busy.shimmer.is_some(), "the sweep rides the clock");
+    }
 
     #[test]
     fn registry_covers_the_replay_anchors() {

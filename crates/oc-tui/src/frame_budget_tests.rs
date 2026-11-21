@@ -538,6 +538,7 @@ fn sidebar_pane_budget_body() {
         title_pending_since: None,
         title_arrival: None,
         clock_ms: 0,
+        animations: true,
         sections: SidebarSections {
             context: SidebarContextWidget::default(),
             mcp: SidebarMcpWidget::default(),

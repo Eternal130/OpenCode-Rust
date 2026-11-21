@@ -1420,6 +1420,7 @@ fn live_sidebar_view(store: &Store, session_id: &str, height: usize) -> SidebarV
         title_pending_since: store.title_pending_since(session_id),
         title_arrival: store.title_arrival(session_id),
         clock_ms: store.clock(),
+        animations: store.animations_enabled(),
         sections: SidebarSections {
             context,
             mcp: SidebarMcpWidget { servers: store.mcp_servers(), open: store.sidebar_mcp_open() },
@@ -1572,9 +1573,17 @@ fn composer_footer_hints(
             // RE-13: `/btw`'s pending spinner (btw.tsx:28-40 — the
             // `prompt.footer.status` slot's `<Spinner>/btw</Spinner>`
             // while the side answer generates).
+            // G-430 face 2 — ref `Spinner` (spinner.tsx:29-31):
+            // animations off renders the static `⋯ {children}`
+            // fallback (`⋯ /btw`).
             if store.btw_pending() > 0 {
-                let frame = crate::components::message::rows::spinner_frame(store.clock());
-                hints.push(format!("{frame} /btw"));
+                let hint = if store.animations_enabled() {
+                    let frame = crate::components::message::rows::spinner_frame(store.clock());
+                    format!("{frame} /btw")
+                } else {
+                    "⋯ /btw".to_owned()
+                };
+                hints.push(hint);
             }
             hints
         },
@@ -1591,6 +1600,17 @@ fn composer_footer_hints(
         // unresolved — at `interval={40}`, blocks style,
         // inactiveFactor 0.6, minAlpha 0.3).
         spinner: if store.session_running(session_id) && !shell {
+            // G-430 face 1 — ref (prompt/index.tsx:1891): animations
+            // off replaces the knight-rider spinner with the static
+            // muted fallback `<text fg={muted}>[⋯]</text>`.
+            if !store.animations_enabled() {
+                let muted = store.theme().styles().text_muted.fg.unwrap_or_default();
+                let muted = style_color_to_rgba(muted);
+                ['[', '⋯', ']']
+                    .into_iter()
+                    .map(|ch| crate::components::composer::render::SpinnerCell { ch, fg: muted })
+                    .collect()
+            } else {
             let color = store.composer_rail_color(session_id).map_or_else(
                 || style_color_to_rgba(store.theme().styles().border),
                 style_color_to_rgba,
@@ -1605,6 +1625,7 @@ fn composer_footer_hints(
                 .into_iter()
                 .map(|(ch, fg)| crate::components::composer::render::SpinnerCell { ch, fg })
                 .collect()
+            }
         } else {
             Vec::new()
         },
@@ -1986,6 +2007,7 @@ fn paste(target: &mut Frame, region: &Frame, x: usize, y: usize) {
 mod tests {
     use super::*;
     use crate::reactive::Runtime;
+    use crate::data::Ingest;
 
     /// The headless twin of `render_app`'s seam: `render_session`
     /// mounts the shared-tree families (D2.2: the composer wrapper);
@@ -2518,6 +2540,59 @@ mod tests {
         let composer = store.composer("s1");
         let hints = composer_footer_hints(&store, "s1", &composer, "");
         assert!(hints.plugin_hints.contains(&"pf row".to_owned()), "{:?}", hints.plugin_hints);
+    }
+
+    /// G-430 face 1 — ref prompt/index.tsx:1891: animations off
+    /// replaces the knight-rider spinner with the static muted
+    /// `[⋯]` fallback (`<Show when={config.animations ?? true}
+    /// fallback={<text fg={muted}>[⋯]</text>}>`).
+    #[test]
+    fn running_spinner_static_fallback_when_animations_off() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", None);
+        store.ingest_all([Ingest::Event(crate::data::BusEvent::new(
+            "session.execution.started",
+            serde_json::json!({ "sessionID": "s1" }),
+        ))]);
+        assert!(store.session_running("s1"), "the turn is running");
+        let composer = store.composer("s1");
+        store.set_animations_enabled(false);
+        let hints = composer_footer_hints(&store, "s1", &composer, "");
+        let glyph: String = hints.spinner.iter().map(|cell| cell.ch).collect();
+        assert_eq!(glyph, "[⋯]", "the static muted fallback");
+        // Gate open: the animated knight-rider cells (8 columns) ride
+        // the clock instead.
+        store.set_animations_enabled(true);
+        let hints = composer_footer_hints(&store, "s1", &composer, "");
+        assert_eq!(hints.spinner.len(), 8, "the knight-rider frame width");
+    }
+
+    /// G-430 face 2 — ref `Spinner` (btw.tsx:35 + spinner.tsx:26-31):
+    /// animations off renders the static `⋯ /btw` fallback.
+    #[test]
+    fn btw_pending_static_fallback_when_animations_off() {
+        let store = Store::new(Runtime::new());
+        store.open_tab("s1", None);
+        store.btw_ask("s1", "side question?");
+        store.set_animations_enabled(false);
+        let composer = store.composer("s1");
+        let hints = composer_footer_hints(&store, "s1", &composer, "");
+        assert!(
+            hints.plugin_hints.contains(&"⋯ /btw".to_owned()),
+            "the static fallback segment: {:?}",
+            hints.plugin_hints
+        );
+        // Gate open: the braille-glyph segment returns.
+        store.set_animations_enabled(true);
+        let hints = composer_footer_hints(&store, "s1", &composer, "");
+        assert!(
+            hints.plugin_hints.iter().any(|hint| hint.ends_with("/btw")
+                && crate::components::message::rows::SPINNER_FRAMES
+                    .iter()
+                    .any(|frame| hint.starts_with(*frame))),
+            "the animated glyph segment: {:?}",
+            hints.plugin_hints
+        );
     }
 
     /// RE-13: `/btw`'s pending spinner (btw.tsx:28-40) — the
