@@ -1761,27 +1761,38 @@ pub fn quiescence_names() -> Vec<String> {
 }
 
 /// A SETTLED grid capture: [`TuiProcess::wait_quiescent`] gates the
-/// read (250 ms without stream bytes), then the GRID itself must be
-/// STABLE — THREE consecutive quiet-window captures identical. The
-/// stream gate alone still let one load-race shape through (the
-/// workspace battery's s3 export: the byte stream was quiet at the
-/// capture instant but the app's composed screen was MID-STATE — a
-/// state change half-applied across components paints its rows in
-/// separate quiet bursts). The grid-stability arm closes that: a
-/// transitional screen keeps changing across quiet windows. W38
-/// third-arm hardening (2026-11-21, controller ruling after the
-/// SECOND full-load sighting — w13-perm-reject, same shape both
-/// times: footer painted, declined rows lagging into later bursts):
-/// under full-load deschedule two consecutive quiet windows can both
-/// catch the SAME incomplete grid; N=3 makes a mid-state export need
-/// the same incomplete grid across three windows (the burst cadence
-/// that fooled N=2 does not repeat identically twice). The cap
-/// (3 s) still exports a never-stable screen (a live spinner),
-/// annotated via [`mark_quiescence`].
+/// read, then the GRID itself must be STABLE — THREE consecutive
+/// quiet-window captures identical. The stream gate alone still let
+/// one load-race shape through (the workspace battery's s3 export:
+/// the byte stream was quiet at the capture instant but the app's
+/// composed screen was MID-STATE — a state change half-applied across
+/// components paints its rows in separate quiet bursts). The
+/// grid-stability arm closes that: a transitional screen keeps
+/// changing across quiet windows. W38 third-arm hardening
+/// (2026-11-21, controller ruling after the SECOND full-load
+/// sighting — w13-perm-reject, same shape both times): N=3. W38
+/// FOURTH arm (2026-11-22, controller ruling after a THIRD sighting
+/// — the mid-state export recurred under full battery load even with
+/// N=3; controlled reproduction did not reproduce, so the ruling was
+/// conservative COMBINED hardening of both candidate mechanisms):
+/// * mechanism A (a settlement chain slower than the cap): the cap
+///   rises to 10 s and the quiet window to 500 ms — a slow chain now
+///   settles inside the gate instead of capping through it;
+/// * mechanism B (three windows fooled by a long-lived incomplete
+///   grid): every candidate settle re-verifies across ONE more
+///   relaxed 1 s window — a grid that completes after the three
+///   matching windows re-enters the loop (history reset), bounded by
+///   the cap.
+///
+/// A never-stable screen (a live spinner) still exports at the cap,
+/// annotated via [`mark_quiescence`]. Conservative by construction:
+/// a settled export now proves ≥3×500 ms identical + a further 1 s
+/// unchanged (≈2.5 s of grid stability); 宁可慢，不可再导中途态.
 #[must_use]
 pub fn capture_settled(tui: &TuiProcess) -> String {
     let start = Instant::now();
-    let cap = Duration::from_millis(3_000);
+    let cap = Duration::from_secs(10);
+    let window = Duration::from_millis(500);
     let mut prev: Option<String> = None;
     let mut prev2: Option<String> = None;
     loop {
@@ -1790,14 +1801,28 @@ pub fn capture_settled(tui: &TuiProcess) -> String {
             mark_quiescence(false);
             return tui.screen_text();
         }
-        let quiet = tui.wait_quiescent(Duration::from_millis(250), remaining);
+        let quiet = tui.wait_quiescent(window, remaining);
         let grid = tui.screen_text();
         if quiet
             && prev.as_deref() == Some(grid.as_str())
             && prev2.as_deref() == Some(grid.as_str())
         {
-            mark_quiescence(true);
-            return grid;
+            // Mechanism B: re-verify the candidate across one relaxed
+            // 1 s window — quiet is measured from THIS call, so any
+            // late completion inside the window mismatches and the
+            // loop re-settles on the final grid.
+            let remaining = cap.saturating_sub(start.elapsed());
+            if remaining.is_zero() {
+                mark_quiescence(false);
+                return tui.screen_text();
+            }
+            if tui.wait_quiescent(Duration::from_secs(1), remaining) && tui.screen_text() == grid {
+                mark_quiescence(true);
+                return grid;
+            }
+            prev = None;
+            prev2 = None;
+            continue;
         }
         prev2 = prev;
         prev = Some(grid);
@@ -2320,10 +2345,11 @@ mod rider_quiescence_tests {
 
     /// W38 third arm — the settle needs THREE consecutive identical
     /// quiet-window grids. A stream that shows frame A for exactly
-    /// TWO quiet windows (0.58 s of quiet — windows land ~0.25 s and
-    /// ~0.50 s) then changes to B: the retired N=2 arm froze on the
-    /// stale A grid; N=3 must wait past the change and export B,
-    /// annotated settled.
+    /// TWO quiet windows then changes to B: the retired N=2 arm froze
+    /// on the stale A grid; the settle must wait past the change and
+    /// export B, annotated settled. (Fourth-arm note: windows are now
+    /// 500 ms + a 1 s re-verification, so the same script settles
+    /// through the wider gate.)
     #[test]
     fn grid_stability_requires_three_matching_quiet_windows() {
         let script = "printf 'frameA\r\n'; sleep 0.58; printf 'frameA2\r\n'; sleep 9";
@@ -2347,7 +2373,9 @@ mod rider_quiescence_tests {
     /// W38 third arm — a grid that keeps CHANGING across quiet
     /// windows (a growing tick line each 0.4 s burst, the mid-state
     /// cadence shape) never produces three identical consecutive
-    /// windows: capped inside 3 s, exported anyway, annotated.
+    /// windows: capped, exported anyway, annotated. (Fourth-arm note:
+    /// the cap is now 10 s — a forever-changing grid still caps and
+    /// exports, just with the longer conservative budget.)
     #[test]
     fn changing_grid_caps_inside_three_second_window() {
         let script = "i=0; while true; do i=$((i+1)); printf 'tick %s\r\n' \"$i\"; sleep 0.4; done";
@@ -2357,6 +2385,66 @@ mod rider_quiescence_tests {
         let _grid = capture_settled(&proc);
         let verdict = quiescence_names();
         assert_eq!(verdict, ["capped".to_owned()], "a forever-changing grid must cap, not settle");
+        proc.shutdown(Duration::from_secs(2));
+    }
+
+    /// W38 fourth arm, mechanism A — a settlement chain SLOWER than
+    /// the retired 3 s cap (one changed burst each 0.9 s for ~4 s,
+    /// then the final frame + quiet): the 10 s / 500 ms gate settles
+    /// on the FINAL frame instead of capping through the chain and
+    /// exporting a mid-burst grid.
+    #[test]
+    fn slow_settlement_chain_settles_in_the_fourth_arm_gate() {
+        let script = "printf 'chain1\r\n'; sleep 0.9; printf 'chain2\r\n'; sleep 0.9; \
+                      printf 'chain3\r\n'; sleep 0.9; printf 'chain4\r\n'; sleep 0.9; \
+                      printf 'final-frame\r\n'; sleep 9";
+        let mut command = std::process::Command::new("sh");
+        command.arg("-c").arg(script);
+        let mut proc = TuiProcess::spawn_command(command, 40, 10);
+        let grid = capture_settled(&proc);
+        let verdict = quiescence_names();
+        assert_eq!(
+            verdict,
+            ["settled".to_owned()],
+            "the slow chain settles inside the 10 s gate (the 3 s cap would have exported mid-chain)"
+        );
+        assert!(
+            grid.contains("final-frame"),
+            "the exported grid is the settled final frame, not a mid-chain burst: {grid:?}"
+        );
+        proc.shutdown(Duration::from_secs(2));
+    }
+
+    /// W38 fourth arm, mechanism B — a grid that stays IDENTICAL
+    /// across three quiet windows (the candidate settle) and THEN
+    /// completes (frameX ~1.8 s → frameY): the 1 s post-settle
+    /// re-verification catches the late completion, the history
+    /// resets, and the export settles on the FINAL grid.
+    #[test]
+    fn post_settle_recheck_rewaits_on_late_completion() {
+        let script = "printf 'frameX\r\n'; sleep 1.8; printf 'frameY\r\n'; sleep 9";
+        let mut command = std::process::Command::new("sh");
+        command.arg("-c").arg(script);
+        let mut proc = TuiProcess::spawn_command(command, 40, 10);
+        let grid = capture_settled(&proc);
+        let verdict = quiescence_names();
+        assert_eq!(
+            verdict,
+            ["settled".to_owned()],
+            "the late completion re-settles instead of exporting the stale candidate"
+        );
+        assert!(
+            grid.lines().any(|line| line.trim() == "frameY"),
+            "the exported grid carries the completed frame: {grid:?}"
+        );
+        // The completion is the LAST content row (the printf rig
+        // appends — like a transcript, the settled export ends on it).
+        let last_content = grid.lines().rev().find(|line| !line.trim().is_empty());
+        assert_eq!(
+            last_content.map(str::trim),
+            Some("frameY"),
+            "the settled grid ends on the completed frame: {grid:?}"
+        );
         proc.shutdown(Duration::from_secs(2));
     }
 }
