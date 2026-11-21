@@ -143,6 +143,7 @@ pub(crate) fn reconnecting_geometry(width: usize, height: usize) -> (usize, usiz
 pub(crate) fn mount_reconnecting_solid(
     styles: &ThemeStyles,
     elapsed_ms: u64,
+    animations: bool,
     width: usize,
     height: usize,
 ) {
@@ -172,7 +173,11 @@ pub(crate) fn mount_reconnecting_solid(
     // narrow-frame tail chars stay a post-seam paint: the old paste
     // loop clipped them out and the follow-up walk re-inked them over
     // the dimmed base).
-    let headline: String = format!("{} Connection lost…", spinner_frame(elapsed_ms))
+    // G-430 face 4 — ref (reconnecting.tsx:31 + spinner.tsx:26-31):
+    // the headline is `<Spinner>{label}</Spinner>`; animations off
+    // renders the static `⋯ {label}` fallback (no braille glyph).
+    let glyph = if animations { spinner_frame(elapsed_ms).to_string() } else { "⋯".to_owned() };
+    let headline: String = format!("{glyph} Connection lost…")
         .chars()
         .take(box_w.saturating_sub(2))
         .collect();
@@ -240,11 +245,16 @@ pub(crate) fn paint_reconnecting_tail(frame: &mut Frame, styles: &ThemeStyles, w
 /// reconnecting scrim + box over a LIVE frame, composite, then the
 /// tail — the bytes the old `overlay_reconnecting_solid` painter
 /// produced, by construction.
-pub fn reconnecting_over_frame(frame: &mut Frame, styles: &ThemeStyles, elapsed_ms: u64) {
+pub fn reconnecting_over_frame(
+    frame: &mut Frame,
+    styles: &ThemeStyles,
+    elapsed_ms: u64,
+    animations: bool,
+) {
     let width = frame.width;
     let height = frame.height;
     crate::components::chrome_solid::reset_hub();
-    mount_reconnecting_solid(styles, elapsed_ms, width, height);
+    mount_reconnecting_solid(styles, elapsed_ms, animations, width, height);
     crate::components::chrome_solid::composite_chrome_tree(frame);
     paint_reconnecting_tail(frame, styles, width);
 }

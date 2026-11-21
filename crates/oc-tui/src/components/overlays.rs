@@ -86,6 +86,7 @@ pub fn mount_overlays_family(store: &Store, styles: &ThemeStyles, width: usize, 
         super::overlays_solid::mount_reconnecting_solid(
             styles,
             now.saturating_sub(store.connection_since()),
+            store.animations_enabled(),
             width,
             height,
         );
@@ -150,12 +151,29 @@ mod tests {
     fn reconnecting_scrim_and_box() {
         let styles = crate::theme::ThemeState::v2_dark().styles();
         let mut frame = frame_with(60, 12);
-        super::super::overlays_solid::reconnecting_over_frame(&mut frame, &styles, 0);
+        super::super::overlays_solid::reconnecting_over_frame(&mut frame, &styles, 0, true);
         // The corner dims (200 * (1 - 150/255)) ≈ 82.
         assert_eq!(frame.cell(0, 0).bg, CellColor::Rgb(82, 82, 82));
         let text = frame.text_grid().join("\n");
         assert!(text.contains("Connection lost…"), "headline: {text}");
         assert!(text.contains("Reconnecting to the server automatically."), "copy: {text}");
+    }
+
+    /// G-430 face 4 — ref (reconnecting.tsx:31 + spinner.tsx:26-31):
+    /// animations off renders the headline at the static `⋯ {label}`
+    /// fallback — no braille glyph.
+    #[test]
+    fn reconnecting_headline_static_fallback_when_animations_off() {
+        let styles = crate::theme::ThemeState::v2_dark().styles();
+        let mut frame = frame_with(60, 12);
+        super::super::overlays_solid::reconnecting_over_frame(&mut frame, &styles, 0, false);
+        let text = frame.text_grid().join("\n");
+        assert!(text.contains("⋯ Connection lost…"), "static headline: {text}");
+        let glyphs: String = text
+            .chars()
+            .filter(|ch| crate::components::message::rows::SPINNER_FRAMES.contains(ch))
+            .collect();
+        assert!(glyphs.is_empty(), "no braille glyph while gated: {text}");
     }
 
     /// The thresholds (app.tsx:1308-1314): retry shows after 1 s, the

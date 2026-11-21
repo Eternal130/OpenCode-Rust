@@ -660,6 +660,7 @@ fn surf1_sidebar_live_sections_match_the_golden_assembly() {
         title_pending_since: None,
         title_arrival: None,
         clock_ms: 0,
+        animations: true,
         sections: crate::components::sidebar::SidebarSections {
             context: crate::components::sidebar::SidebarContextWidget {
                 tokens: Some(60_400),
