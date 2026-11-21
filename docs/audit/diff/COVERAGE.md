@@ -182,7 +182,7 @@
 | mini 前端整套（footer 7 变体/scrollback/splash/verbosity） | GAP※ | cli/src/mini.ts→runMiniFrontend（**单端**：rust mini.rs 双实现） |
 | plugin 自定义路由+route-missing 兜底 | GAP※ | plugin/render.tsx:50-65 |
 | 外部远程驱动（tui.command.execute/toast.show/session.select/prompt.append） | GAP※ | app.tsx:1253-1276（A 新族） |
-| 外部编辑器集成（VISUAL/EDITOR+zed sqlite） | GAP※ | editor.ts:14（A 新族；--fork/--replay 旗标单端） |
+| 外部编辑器集成（VISUAL/EDITOR+zed sqlite） | 部分 | editor.ts:14（A 新族；--fork/--replay 旗标单端）。**gf4（2026-11-21）**：`$EDITOR` 往返 mention 附件保全面 covered（pty_daily `editor_roundtrip_{keeps,drops}_mention_attachment`——stub 编辑器 PTY 往返+submit POST `skills` 数组 field 断言；单测 ⑤ undo/redo 栈 `set_text_realigned_resets_editing_history`）；zed sqlite/--fork/--replay 仍 GAP※ |
 | 导出/分享（export-options/result） | GAP※ | ui/dialog-export-*.tsx |
 | storybook（dev-only） | untestable | 生产不可达（OPENCODE_STORY） |
 | devtools-bar（dev-only） | untestable | 同上 |

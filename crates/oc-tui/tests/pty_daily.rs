@@ -2696,7 +2696,6 @@ fn mini_new_session_factory() {
 // ---------------------------------------------------------------------------
 
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::io::AsRawFd;
 
 /// Write a PID-unique stub `$EDITOR` that REWRITES the buffer to
 /// `content` (trailing newline; `normalizePromptContent` strips it).
@@ -2751,6 +2750,10 @@ fn g93_insert_skill_chip(h: &mut HarnessHandle) -> Result<(), String> {
 /// app instances colliding on the same millisecond read each other's
 /// edits. The pty profile serializes anyway; this flock keeps the
 /// default profile (test-threads=4) deterministic too.
+type G93Bodies = Arc<Mutex<Vec<String>>>;
+type G93BodiesSlot = Arc<Mutex<Option<G93Bodies>>>;
+
+#[expect(dead_code, reason = "the held File IS the lock")]
 struct G93EditorLock(std::fs::File);
 
 impl G93EditorLock {
@@ -2758,8 +2761,7 @@ impl G93EditorLock {
         let path = std::path::Path::new("/tmp/opencode").join("oc-tui-g93-editor.lock");
         let file =
             std::fs::File::create(&path).unwrap_or_else(|error| panic!("lock file: {error}"));
-        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
-        assert!(rc == 0, "flock");
+        file.lock().unwrap_or_else(|error| panic!("flock: {error}"));
         Self(file)
     }
 }
@@ -2772,12 +2774,8 @@ fn g93_wait_prompt_body(
 ) -> Result<String, String> {
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        let found = bodies
-            .lock()
-            .expect("bodies")
-            .iter()
-            .find(|body| body.contains(needle))
-            .cloned();
+        let found =
+            bodies.lock().expect("bodies").iter().find(|body| body.contains(needle)).cloned();
         if let Some(body) = found {
             return Ok(body);
         }
@@ -2795,36 +2793,42 @@ fn g93_wait_prompt_body(
 #[test]
 fn editor_roundtrip_keeps_mention_attachments() {
     let _editor_lock = G93EditorLock::acquire();
-    let bodies_slot: Arc<Mutex<Option<Arc<Mutex<Vec<String>>>>>> = Arc::new(Mutex::new(None));
+    let bodies_slot: G93BodiesSlot = Arc::new(Mutex::new(None));
     let captured = Arc::clone(&bodies_slot);
     let stub = g93_editor_stub("keep", "kept prose @greet tail after edit");
     std::env::set_var("EDITOR", &stub);
-    run_daily_test("g93-editor-keep", 120, 30, |fake, _sandbox| {
-        fake.arm_skills();
-        let recorded = Arc::clone(&fake.prompt_bodies);
-        *captured.lock().expect("slot") = Some(recorded);
-    }, move |h| {
-        boot_to_session(h, b"Alpha")?;
-        g93_insert_skill_chip(h)?;
-        // <leader>e → the stub $EDITOR rewrites the buffer, keeping
-        // the "@greet" occurrence at a NEW offset (realign DP).
-        h.write(b"\x18e");
-        wait_text(h, "tail after edit", Duration::from_secs(10))?;
-        // Submit: the attachment must ride the POST (field-level
-        // proof — the chip survived the round-trip, not just text).
-        h.write(b"\r");
-        let bodies = bodies_slot.lock().expect("slot").clone().expect("recorded");
-        let body = g93_wait_prompt_body(&bodies, "tail after edit", Duration::from_secs(15))?;
-        assert!(
-            body.contains("\"id\":\"greet\""),
-            "the skill attachment rides the POST: {body}"
-        );
-        assert!(
-            body.contains("\"text\":\"@greet\""),
-            "the realigned mention text rides the POST: {body}"
-        );
-        Ok(())
-    });
+    run_daily_test(
+        "g93-editor-keep",
+        120,
+        30,
+        |fake, _sandbox| {
+            fake.arm_skills();
+            let recorded = Arc::clone(&fake.prompt_bodies);
+            *captured.lock().expect("slot") = Some(recorded);
+        },
+        move |h| {
+            boot_to_session(h, b"Alpha")?;
+            g93_insert_skill_chip(h)?;
+            // <leader>e → the stub $EDITOR rewrites the buffer, keeping
+            // the "@greet" occurrence at a NEW offset (realign DP).
+            h.write(b"\x18e");
+            wait_text(h, "tail after edit", Duration::from_secs(10))?;
+            // Submit: the attachment must ride the POST (field-level
+            // proof — the chip survived the round-trip, not just text).
+            h.write(b"\r");
+            let bodies = bodies_slot.lock().expect("slot").clone().expect("recorded");
+            let body = g93_wait_prompt_body(&bodies, "tail after edit", Duration::from_secs(15))?;
+            assert!(
+                body.contains("\"id\":\"greet\""),
+                "the skill attachment rides the POST: {body}"
+            );
+            assert!(
+                body.contains("\"text\":\"@greet\""),
+                "the realigned mention text rides the POST: {body}"
+            );
+            Ok(())
+        },
+    );
     let _ = std::fs::remove_file(&stub);
     std::env::remove_var("EDITOR");
 }
@@ -2835,29 +2839,38 @@ fn editor_roundtrip_keeps_mention_attachments() {
 #[test]
 fn editor_roundtrip_drops_removed_mention_attachment() {
     let _editor_lock = G93EditorLock::acquire();
-    let bodies_slot: Arc<Mutex<Option<Arc<Mutex<Vec<String>>>>>> = Arc::new(Mutex::new(None));
+    let bodies_slot: G93BodiesSlot = Arc::new(Mutex::new(None));
     let captured = Arc::clone(&bodies_slot);
     let stub = g93_editor_stub("drop", "the chip is gone entirely");
     std::env::set_var("EDITOR", &stub);
-    run_daily_test("g93-editor-drop", 120, 30, |fake, _sandbox| {
-        fake.arm_skills();
-        let recorded = Arc::clone(&fake.prompt_bodies);
-        *captured.lock().expect("slot") = Some(recorded);
-    }, move |h| {
-        boot_to_session(h, b"Alpha")?;
-        g93_insert_skill_chip(h)?;
-        h.write(b"\x18e");
-        wait_text(h, "the chip is gone entirely", Duration::from_secs(10))?;
-        h.write(b"\r");
-        let bodies = bodies_slot.lock().expect("slot").clone().expect("recorded");
-        let body =
-            g93_wait_prompt_body(&bodies, "the chip is gone entirely", Duration::from_secs(15))?;
-        assert!(
-            !body.contains("greet"),
-            "the removed mention's attachment dropped with it: {body}"
-        );
-        Ok(())
-    });
+    run_daily_test(
+        "g93-editor-drop",
+        120,
+        30,
+        |fake, _sandbox| {
+            fake.arm_skills();
+            let recorded = Arc::clone(&fake.prompt_bodies);
+            *captured.lock().expect("slot") = Some(recorded);
+        },
+        move |h| {
+            boot_to_session(h, b"Alpha")?;
+            g93_insert_skill_chip(h)?;
+            h.write(b"\x18e");
+            wait_text(h, "the chip is gone entirely", Duration::from_secs(10))?;
+            h.write(b"\r");
+            let bodies = bodies_slot.lock().expect("slot").clone().expect("recorded");
+            let body = g93_wait_prompt_body(
+                &bodies,
+                "the chip is gone entirely",
+                Duration::from_secs(15),
+            )?;
+            assert!(
+                !body.contains("greet"),
+                "the removed mention's attachment dropped with it: {body}"
+            );
+            Ok(())
+        },
+    );
     let _ = std::fs::remove_file(&stub);
     std::env::remove_var("EDITOR");
 }
