@@ -47,6 +47,7 @@
 | 长会话多轮 | covered | P4-C |
 | 会话切换/多标签运行中切换 | 部分 | S4 恢复；运行中切换缺 |
 | **多会话并行流式**（多 tab 同时 execution×切换） | GAP | B |
+| **多 reasoning part 交错流**（started A→delta A→started B→delta B→ended→delta 定位） | covered（unit 侧，gf3：`g428_reasoning_targets_last_incomplete_part` 镜像 ref editReasoning findLast 语义；端到端差分场景仍 GAP——真实 provider 交错 reasoning 流语料无命中） | data.ts:460-466,982-1002 + gf3 单测 |
 | queued prompts（流中入队/undo/delete/队列管理） | GAP※ | session/index.tsx:631-663, inbox 4 类事件 |
 | inbox 事件族（enqueued/delivered/cancelled/delivery.changed） | GAP※ | mini/stream-v2.transport.ts:1040-1072（R3 订正：主前端处理散在 routes/session/index.tsx/render-context.tsx/rows.ts） |
 | 会话生命周期操作（fork/rename/move/delete/viewed/pin） | GAP※ | 各事件（B） |
@@ -122,7 +123,7 @@
 | 模型目录（自定义 provider） | covered | S3/G-433 |
 | agent/command 定义变更 | GAP | — |
 | 主题切换+theme.mode.lock | GAP※ | dialog-theme-list（B+A） |
-| animations/mouse/cursor.style/blinking 开关+toggle | GAP | B |
+| animations/mouse/cursor.style/blinking 开关+toggle | covered（unit 侧，gf3：G-430 五面门测 + gb17 主门族；差分场景仍 GAP——语料无 animations:false 场景） | B + gf3 |
 | attention 提醒+音效 5 种+桌面通知 | GAP※ | B+A 新族 |
 | diffs wrap/scroll 配置+toggle | GAP | B |
 | autoupdate（disable/notify/auto→更新提示） | GAP※ | B+A |
