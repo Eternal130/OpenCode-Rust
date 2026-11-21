@@ -14187,7 +14187,6 @@ impl Store {
                 // reducer left `time.created` None and the suffix
                 // never rendered).
                 let Some((session, assistant)) = session_and_assistant(event) else { return };
-                let ordinal = event.ordinal();
                 let created = event.created;
                 // G11-F1 / G-399 — same snapshot-only guard as the
                 // deltas.
@@ -14196,11 +14195,17 @@ impl Store {
                     if snapshot_authoritative {
                         return;
                     }
-                    with_part(messages, &assistant, "reasoning", ordinal, |part| {
-                        if let Part::Reasoning { time, .. } = part {
-                            time.created = created;
-                        }
-                    });
+                    // G-428 — ref (data.ts:982-990) `started` always
+                    // PUSHES a new reasoning part (no findLast, no
+                    // positional targeting); it never mutates an
+                    // existing one.
+                    let index = assistant_or_open(messages, &assistant);
+                    if let Some(Message::Assistant { parts, .. }) = messages.get_mut(index) {
+                        parts.push(Part::Reasoning {
+                            text: String::new(),
+                            time: PartTime { created, completed: None, streamed: None },
+                        });
+                    }
                 });
             }
             "session.reasoning.delta" => {
@@ -14221,7 +14226,11 @@ impl Store {
                     if snapshot_authoritative {
                         return;
                     }
-                    with_part(messages, &assistant, "reasoning", ordinal, |part| {
+                    // G-428 — ref `editReasoning` (data.ts:460-466,
+                    // 992-996): findLast of the NOT-yet-completed
+                    // reasoning parts; a missing target drops the
+                    // delta (the ordinal is advisory only).
+                    with_reasoning(messages, &assistant, |part| {
                         if let Part::Reasoning { text, .. } = part {
                             text.push_str(&delta);
                         }
@@ -14235,12 +14244,20 @@ impl Store {
                 // an empty string is a real value (only a missing
                 // field skips).
                 let Some(text) = event.string("text") else { return };
-                let ordinal = event.ordinal();
                 let completed = event.created;
                 self.update_messages(&session, |messages| {
-                    with_part(messages, &assistant, "reasoning", ordinal, |part| {
+                    // G-428 — ref `editReasoning` (data.ts:997-1002):
+                    // findLast of the NOT-yet-completed reasoning
+                    // parts; a missing target drops the event. `ended`
+                    // replaces the text and stamps completed, keeping
+                    // the existing `created` (the ?? fallback in
+                    // data.ts:1000 covers an unstarted part).
+                    with_reasoning(messages, &assistant, |part| {
                         if let Part::Reasoning { text: slot, time } = part {
                             *slot = text;
+                            // data.ts:1000 `created: reasoning.time?.created
+                            // ?? event.created` — backfill only.
+                            time.created = time.created.or(completed);
                             time.completed = completed;
                         }
                     });
@@ -15008,59 +15025,29 @@ fn with_last_text_part(
     mutate(&mut parts[target]);
 }
 
-/// Find or create the `kind:ordinal` text/reasoning part on the
-/// assistant message and mutate it. Parts keep **arrival order** (a
-/// missing part is appended; an existing one merges in place — deltas
-/// accumulate, `ended` replaces); a missing message is created open.
-fn with_part(
+/// G-428 — ref's `editReasoning` (data.ts:460-466): mutate the LAST
+/// reasoning part that is not yet completed (`findLast(item =>
+/// item.type === "reasoning" && !item.time?.completed)`); when no
+/// such part exists the event is DROPPED (the `if (reasoning)` skip).
+/// This retires the previous positional `kind:ordinal` targeting and
+/// its gap-fill padding: ref has no gap-fill — `started` (data.ts:
+/// 982-990) always pushes the part before any delta/ended targets it,
+/// so a delta arriving with no open part is skipped, not padded. The
+/// rows side keys reasoning rows positionally (`reasoning:{ordinal}`,
+/// model.rs), which is unaffected: parts keep arrival order whether
+/// they were pushed by `started` or loaded from a snapshot.
+fn with_reasoning(
     messages: &mut Vec<Message>,
     assistant: &str,
-    kind: &str,
-    ordinal: u64,
     mutate: impl FnOnce(&mut Part),
 ) {
     let index = assistant_or_open(messages, assistant);
     let Some(Message::Assistant { parts, .. }) = messages.get_mut(index) else {
         return;
     };
-    let mut seen = 0u64;
-    let target = parts
-        .iter()
-        .position(|part| {
-            if part.kind() == kind {
-                if seen == ordinal {
-                    return true;
-                }
-                seen += 1;
-            }
-            false
-        })
-        .or_else(|| {
-            // Not present yet: append when this is the next ordinal, or
-            // GAP-FILL a skip (G-288⑧, reasoning arm only — ref keys
-            // reasoning rows by the explicit `kind:ordinal` id
-            // (rows.ts:284-292), so an out-of-order ordinal still lands
-            // its text; the positional port pads the missing ordinals
-            // with empty parts so the delta is not dropped — a later
-            // event for a padded ordinal fills it in place, and empty
-            // parts render nothing). The text arm no longer routes
-            // through here (G-423: ref `editText` targets the last
-            // text part, ordinal ignored).
-            (seen <= ordinal).then(|| {
-                for _ in seen..ordinal {
-                    parts.push(match kind {
-                        "text" => Part::Text { text: String::new(), time: PartTime::default() },
-                        _ => Part::Reasoning { text: String::new(), time: PartTime::default() },
-                    });
-                }
-                parts.push(match kind {
-                    "text" => Part::Text { text: String::new(), time: PartTime::default() },
-                    _ => Part::Reasoning { text: String::new(), time: PartTime::default() },
-                });
-                parts.len() - 1
-            })
-        });
-    if let Some(position) = target {
+    if let Some(position) = parts.iter().rposition(|part| {
+        matches!(part, Part::Reasoning { time, .. } if time.completed.is_none())
+    }) {
         mutate(&mut parts[position]);
     }
 }
@@ -16598,6 +16585,14 @@ mod tests {
     #[test]
     fn reasoning_tools_and_steps_build_the_tree() {
         let store = Store::new(Runtime::new());
+        // G-428 — ref: `started` (data.ts:982-990) pushes the part a
+        // delta/ended later targets.
+        let mut event = BusEvent::new(
+            "session.reasoning.started",
+            serde_json::json!({ "sessionID": "s", "assistantMessageID": "a" }),
+        );
+        event.created = Some(10);
+        store.ingest_all([Ingest::Event(event)]);
         let mut event = BusEvent::new(
             "session.reasoning.delta",
             serde_json::json!({ "sessionID": "s", "assistantMessageID": "a", "delta": "**Title**" }),
@@ -17199,6 +17194,16 @@ mod tests {
                 created: Some(1),
             })
         };
+        // G-428 — ref: started pushes the part the deltas target.
+        store.ingest_all([Ingest::Event(BusEvent {
+            id: "evt_r0".into(),
+            kind: oc_client::bus_event::EventKind::SessionReasoningStarted,
+            type_: "session.reasoning.started".into(),
+            data: serde_json::json!({
+                "sessionID": "ses_g393", "assistantMessageID": "msg_a", "ordinal": 0
+            }),
+            created: Some(1),
+        })]);
         store.ingest_all([delta("evt_r1", " \n")]);
         store.ingest_all([delta("evt_r2", "thought")]);
         store.ingest_all([delta("evt_r3", " ")]);
@@ -17206,6 +17211,80 @@ mod tests {
         let Message::Assistant { parts, .. } = &messages[0] else { panic!("assistant") };
         let Part::Reasoning { text, .. } = &parts[0] else { panic!("reasoning part") };
         assert_eq!(text, " \nthought ", "whitespace deltas append verbatim");
+    }
+
+    #[test]
+    fn g428_reasoning_targets_last_incomplete_part() {
+        // G-428 — mirrors ref `editReasoning` (data.ts:460-466): the
+        // delta/ended target is the LAST reasoning part with no
+        // `time.completed`; the ordinal is advisory.
+        let store = Store::new(Runtime::new());
+        let mut seq = 0u64;
+        let mut event = |type_: &str, extra: serde_json::Value| {
+            seq += 1;
+            let mut data = serde_json::json!({
+                "sessionID": "ses_g428", "assistantMessageID": "msg_a"
+            });
+            if let (serde_json::Value::Object(to), serde_json::Value::Object(eo)) =
+                (&mut data, extra)
+            {
+                for (key, value) in eo {
+                    to.insert(key, value);
+                }
+            }
+            Ingest::Event(BusEvent {
+                id: format!("evt_{seq}"),
+                kind: oc_client::bus_event::EventKind::parse(type_),
+                type_: type_.to_owned(),
+                data,
+                created: Some(seq),
+            })
+        };
+        // ① single part: started → delta → ended.
+        store.ingest_all([event("session.reasoning.started", serde_json::json!({ "ordinal": 0 }))]);
+        store.ingest_all([event("session.reasoning.delta", serde_json::json!({ "ordinal": 0, "delta": "solo" }))]);
+        store.ingest_all([event("session.reasoning.ended", serde_json::json!({ "ordinal": 0, "text": "solo final" }))]);
+        // ② interleaved: B starts while A is open; the ordinal-1
+        // `ended` targets findLast-incomplete = B (the ordinal is
+        // advisory); the next delta then lands on A (the only
+        // remaining open part), and the ordinal-2 `ended` closes A.
+        store.ingest_all([event("session.reasoning.started", serde_json::json!({ "ordinal": 1 }))]);
+        store.ingest_all([event("session.reasoning.delta", serde_json::json!({ "ordinal": 1, "delta": "alpha" }))]);
+        store.ingest_all([event("session.reasoning.started", serde_json::json!({ "ordinal": 2 }))]);
+        store.ingest_all([event("session.reasoning.delta", serde_json::json!({ "ordinal": 2, "delta": "beta" }))]);
+        store.ingest_all([event("session.reasoning.ended", serde_json::json!({ "ordinal": 1, "text": "alpha final" }))]);
+        store.ingest_all([event("session.reasoning.delta", serde_json::json!({ "ordinal": 1, "delta": "+late" }))]);
+        // ③ all completed → a new started opens a fresh target.
+        store.ingest_all([event("session.reasoning.ended", serde_json::json!({ "ordinal": 2, "text": "beta final" }))]);
+        store.ingest_all([event("session.reasoning.started", serde_json::json!({ "ordinal": 3 }))]);
+        store.ingest_all([event("session.reasoning.delta", serde_json::json!({ "ordinal": 3, "delta": "third" }))]);
+        // ④ a delta with NO open part is dropped (ref's `if (reasoning)` skip).
+        store.ingest_all([event("session.reasoning.ended", serde_json::json!({ "ordinal": 3, "text": "third final" }))]);
+        store.ingest_all([event("session.reasoning.delta", serde_json::json!({ "ordinal": 9, "delta": "orphan" }))]);
+
+        let messages = store.messages("ses_g428");
+        let Message::Assistant { parts, .. } = &messages[0] else { panic!("assistant") };
+        let texts: Vec<(String, bool)> = parts
+            .iter()
+            .map(|part| {
+                let Part::Reasoning { text, time } = part else { panic!("reasoning: {part:?}") };
+                (text.clone(), time.completed.is_some())
+            })
+            .collect();
+        // Arrival order: solo, A, B, C. The ordinal-1 ended landed on
+        // B ("alpha final"); the late delta and the ordinal-2 ended
+        // landed on A; C settles its own stream.
+        assert_eq!(
+            texts,
+            vec![
+                ("solo final".into(), true),
+                ("beta final".into(), true),
+                ("alpha final".into(), true),
+                ("third final".into(), true),
+            ],
+            "ordinal is advisory; targeting is findLast-incomplete"
+        );
+        assert_eq!(parts.len(), 4, "no gap-fill: the orphan delta opened nothing");
     }
 
     #[test]
@@ -17236,6 +17315,9 @@ mod tests {
         // text.ended with "" assigns and settles over accumulated text.
         store.ingest_all([base("session.text.delta", serde_json::json!({ "delta": "kept" }))]);
         store.ingest_all([base("session.text.ended", serde_json::json!({ "text": "" }))]);
+        // G-428 — ref: started pushes the part `ended` targets (an
+        // `ended` with no open part is dropped).
+        store.ingest_all([base("session.reasoning.started", serde_json::json!({}))]);
         // reasoning.ended with "" assigns AND marks completed.
         store.ingest_all([base("session.reasoning.ended", serde_json::json!({ "text": "" }))]);
         // step.ended with finish "" persists as "".
