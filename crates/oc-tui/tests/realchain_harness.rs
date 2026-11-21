@@ -1762,20 +1762,28 @@ pub fn quiescence_names() -> Vec<String> {
 
 /// A SETTLED grid capture: [`TuiProcess::wait_quiescent`] gates the
 /// read (250 ms without stream bytes), then the GRID itself must be
-/// STABLE — two consecutive quiet-window captures identical. The
+/// STABLE — THREE consecutive quiet-window captures identical. The
 /// stream gate alone still let one load-race shape through (the
 /// workspace battery's s3 export: the byte stream was quiet at the
 /// capture instant but the app's composed screen was MID-STATE — a
 /// state change half-applied across components paints its rows in
 /// separate quiet bursts). The grid-stability arm closes that: a
-/// transitional screen keeps changing across quiet windows; the cap
-/// (2 s) still exports a never-stable screen (a live spinner),
+/// transitional screen keeps changing across quiet windows. W38
+/// third-arm hardening (2026-11-21, controller ruling after the
+/// SECOND full-load sighting — w13-perm-reject, same shape both
+/// times: footer painted, declined rows lagging into later bursts):
+/// under full-load deschedule two consecutive quiet windows can both
+/// catch the SAME incomplete grid; N=3 makes a mid-state export need
+/// the same incomplete grid across three windows (the burst cadence
+/// that fooled N=2 does not repeat identically twice). The cap
+/// (3 s) still exports a never-stable screen (a live spinner),
 /// annotated via [`mark_quiescence`].
 #[must_use]
 pub fn capture_settled(tui: &TuiProcess) -> String {
     let start = Instant::now();
-    let cap = Duration::from_millis(2_000);
+    let cap = Duration::from_millis(3_000);
     let mut prev: Option<String> = None;
+    let mut prev2: Option<String> = None;
     loop {
         let remaining = cap.saturating_sub(start.elapsed());
         if remaining.is_zero() {
@@ -1784,10 +1792,14 @@ pub fn capture_settled(tui: &TuiProcess) -> String {
         }
         let quiet = tui.wait_quiescent(Duration::from_millis(250), remaining);
         let grid = tui.screen_text();
-        if quiet && prev.as_deref() == Some(grid.as_str()) {
+        if quiet
+            && prev.as_deref() == Some(grid.as_str())
+            && prev2.as_deref() == Some(grid.as_str())
+        {
             mark_quiescence(true);
             return grid;
         }
+        prev2 = prev;
         prev = Some(grid);
     }
 }
@@ -2304,6 +2316,48 @@ mod rider_quiescence_tests {
             "a forever-growing stream reported quiescent"
         );
         flood.shutdown(Duration::from_secs(2));
+    }
+
+    /// W38 third arm — the settle needs THREE consecutive identical
+    /// quiet-window grids. A stream that shows frame A for exactly
+    /// TWO quiet windows (0.58 s of quiet — windows land ~0.25 s and
+    /// ~0.50 s) then changes to B: the retired N=2 arm froze on the
+    /// stale A grid; N=3 must wait past the change and export B,
+    /// annotated settled.
+    #[test]
+    fn grid_stability_requires_three_matching_quiet_windows() {
+        let script = "printf 'frameA\r\n'; sleep 0.58; printf 'frameA2\r\n'; sleep 9";
+        let mut command = std::process::Command::new("sh");
+        command.arg("-c").arg(script);
+        let mut proc = TuiProcess::spawn_command(command, 40, 10);
+        let grid = capture_settled(&proc);
+        let verdict = quiescence_names();
+        assert_eq!(
+            verdict,
+            ["settled".to_owned()],
+            "the two-window-then-change stream settled on the FINAL grid"
+        );
+        assert!(
+            grid.contains("frameA2"),
+            "the exported grid is the final frame, not the two-window stale one: {grid:?}"
+        );
+        proc.shutdown(Duration::from_secs(2));
+    }
+
+    /// W38 third arm — a grid that keeps CHANGING across quiet
+    /// windows (a growing tick line each 0.4 s burst, the mid-state
+    /// cadence shape) never produces three identical consecutive
+    /// windows: capped inside 3 s, exported anyway, annotated.
+    #[test]
+    fn changing_grid_caps_inside_three_second_window() {
+        let script = "i=0; while true; do i=$((i+1)); printf 'tick %s\r\n' \"$i\"; sleep 0.4; done";
+        let mut command = std::process::Command::new("sh");
+        command.arg("-c").arg(script);
+        let mut proc = TuiProcess::spawn_command(command, 40, 10);
+        let _grid = capture_settled(&proc);
+        let verdict = quiescence_names();
+        assert_eq!(verdict, ["capped".to_owned()], "a forever-changing grid must cap, not settle");
+        proc.shutdown(Duration::from_secs(2));
     }
 }
 
