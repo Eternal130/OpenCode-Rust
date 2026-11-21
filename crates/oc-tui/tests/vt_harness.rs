@@ -631,6 +631,9 @@ pub struct FakeLlm {
     pub url: String,
     shutdown: Arc<AtomicBool>,
     pub prompt_posts: Arc<AtomicUsize>,
+    /// G-93 — every `POST /api/session/:id/prompt` body (the
+    /// `$EDITOR` round-trip's server-side attachment evidence).
+    pub prompt_bodies: Arc<Mutex<Vec<String>>>,
     /// Whether `/api/vcs` answers (opt-in — lane/if's footer-label
     /// proof): the default OFF keeps the vcs lookup failing, so the
     /// location label stays absent for the suites whose baselines
@@ -704,6 +707,7 @@ impl FakeLlm {
         let addr = listener.local_addr().expect("addr");
         let shutdown = Arc::new(AtomicBool::new(false));
         let prompt_posts = Arc::new(AtomicUsize::new(0));
+        let prompt_bodies: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let vcs = Arc::new(AtomicBool::new(false));
         let mcp = Arc::new(AtomicBool::new(false));
         let pair = Arc::new(AtomicBool::new(false));
@@ -726,6 +730,7 @@ impl FakeLlm {
         let shared_delivered = Arc::clone(&delivered_feed);
         let shared_boot_stretch = Arc::clone(&boot_stretch_until);
         let shared_posts = Arc::clone(&prompt_posts);
+        let shared_prompt_bodies = Arc::clone(&prompt_bodies);
         let shared_vcs = Arc::clone(&vcs);
         let shared_mcp = Arc::clone(&mcp);
         let shared_pair = Arc::clone(&pair);
@@ -750,6 +755,7 @@ impl FakeLlm {
                         let delivered = Arc::clone(&shared_delivered);
                         let boot_stretch = Arc::clone(&shared_boot_stretch);
                         let posts = Arc::clone(&shared_posts);
+                        let prompt_bodies = Arc::clone(&shared_prompt_bodies);
                         let vcs = Arc::clone(&shared_vcs);
                         let mcp = Arc::clone(&shared_mcp);
                         let pair = Arc::clone(&shared_pair);
@@ -772,6 +778,7 @@ impl FakeLlm {
                                 &delivered,
                                 &boot_stretch,
                                 &posts,
+                                &prompt_bodies,
                                 &vcs,
                                 &mcp,
                                 &pair,
@@ -800,6 +807,7 @@ impl FakeLlm {
             url: format!("http://{addr}"),
             shutdown,
             prompt_posts,
+            prompt_bodies,
             vcs,
             mcp,
             pair,
@@ -909,6 +917,7 @@ fn handle(
     delivered_feed: &Arc<Mutex<Vec<String>>>,
     boot_stretch_until: &Arc<Mutex<Option<std::time::Instant>>>,
     prompt_posts: &Arc<AtomicUsize>,
+    prompt_bodies: &Arc<Mutex<Vec<String>>>,
     vcs: &Arc<AtomicBool>,
     mcp: &Arc<AtomicBool>,
     pair: &Arc<AtomicBool>,
@@ -1135,6 +1144,12 @@ fn handle(
             }
         }
         let parsed: Option<serde_json::Value> = serde_json::from_slice(&body_bytes).ok();
+        // G-93 — keep the raw body for the round-trip attachment
+        // assertions (skills/agents ride the POST, not the text).
+        prompt_bodies
+            .lock()
+            .expect("prompt bodies")
+            .push(String::from_utf8_lossy(&body_bytes).into_owned());
         // The client mints the inbox id (optimistic admit) and sends
         // it on the body — echo it verbatim; the fallbacks keep the
         // old decodable shape for malformed bodies.
