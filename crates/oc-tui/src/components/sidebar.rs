@@ -1040,18 +1040,12 @@ mod tests {
         view.clock_ms = 1_600;
         view.animations = false;
         let paint = render_sidebar(&view, &theme, 30);
-        let placed = paint
-            .placed
-            .iter()
-            .find(|p| p.tag.as_deref() == Some("sidebar.title"))
-            .expect("title");
+        let placed =
+            paint.placed.iter().find(|p| p.tag.as_deref() == Some("sidebar.title")).expect("title");
         assert_eq!(placed.lines[0].runs.len(), 1, "one static run, no per-glyph shimmer");
         assert_eq!(placed.lines[0].runs[0].text, "Pending title");
         assert!(
-            placed.lines[0].runs[0]
-                .style
-                .add_modifier
-                .contains(crate::style::Modifier::DIM),
+            placed.lines[0].runs[0].style.add_modifier.contains(crate::style::Modifier::DIM),
             "DIM while gated: {:?}",
             placed.lines[0].runs[0].style
         );
@@ -1059,15 +1053,9 @@ mod tests {
         // run per column).
         view.animations = true;
         let paint = render_sidebar(&view, &theme, 30);
-        let placed = paint
-            .placed
-            .iter()
-            .find(|p| p.tag.as_deref() == Some("sidebar.title"))
-            .expect("title");
-        assert!(
-            placed.lines[0].runs.len() > 1,
-            "the animated per-glyph shimmer"
-        );
+        let placed =
+            paint.placed.iter().find(|p| p.tag.as_deref() == Some("sidebar.title")).expect("title");
+        assert!(placed.lines[0].runs.len() > 1, "the animated per-glyph shimmer");
     }
 
     /// G-327 — the arrival wipe: a title change that landed while

@@ -1603,28 +1603,28 @@ fn composer_footer_hints(
             // G-430 face 1 — ref (prompt/index.tsx:1891): animations
             // off replaces the knight-rider spinner with the static
             // muted fallback `<text fg={muted}>[⋯]</text>`.
-            if !store.animations_enabled() {
+            if store.animations_enabled() {
+                let color = store.composer_rail_color(session_id).map_or_else(
+                    || style_color_to_rgba(store.theme().styles().border),
+                    style_color_to_rgba,
+                );
+                let options = crate::components::composer::knight::KnightOptions {
+                    color,
+                    inactive_factor: 0.6,
+                    min_alpha: 0.3,
+                    ..crate::components::composer::knight::KnightOptions::default()
+                };
+                crate::components::composer::knight::composer_spinner_cell(&options, store.clock())
+                    .into_iter()
+                    .map(|(ch, fg)| crate::components::composer::render::SpinnerCell { ch, fg })
+                    .collect()
+            } else {
                 let muted = store.theme().styles().text_muted.fg.unwrap_or_default();
                 let muted = style_color_to_rgba(muted);
                 ['[', '⋯', ']']
                     .into_iter()
                     .map(|ch| crate::components::composer::render::SpinnerCell { ch, fg: muted })
                     .collect()
-            } else {
-            let color = store.composer_rail_color(session_id).map_or_else(
-                || style_color_to_rgba(store.theme().styles().border),
-                style_color_to_rgba,
-            );
-            let options = crate::components::composer::knight::KnightOptions {
-                color,
-                inactive_factor: 0.6,
-                min_alpha: 0.3,
-                ..crate::components::composer::knight::KnightOptions::default()
-            };
-            crate::components::composer::knight::composer_spinner_cell(&options, store.clock())
-                .into_iter()
-                .map(|(ch, fg)| crate::components::composer::render::SpinnerCell { ch, fg })
-                .collect()
             }
         } else {
             Vec::new()
@@ -2006,8 +2006,8 @@ fn paste(target: &mut Frame, region: &Frame, x: usize, y: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reactive::Runtime;
     use crate::data::Ingest;
+    use crate::reactive::Runtime;
 
     /// The headless twin of `render_app`'s seam: `render_session`
     /// mounts the shared-tree families (D2.2: the composer wrapper);

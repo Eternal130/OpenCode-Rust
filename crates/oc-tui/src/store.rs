@@ -15035,18 +15035,15 @@ fn with_last_text_part(
 /// rows side keys reasoning rows positionally (`reasoning:{ordinal}`,
 /// model.rs), which is unaffected: parts keep arrival order whether
 /// they were pushed by `started` or loaded from a snapshot.
-fn with_reasoning(
-    messages: &mut Vec<Message>,
-    assistant: &str,
-    mutate: impl FnOnce(&mut Part),
-) {
+fn with_reasoning(messages: &mut Vec<Message>, assistant: &str, mutate: impl FnOnce(&mut Part)) {
     let index = assistant_or_open(messages, assistant);
     let Some(Message::Assistant { parts, .. }) = messages.get_mut(index) else {
         return;
     };
-    if let Some(position) = parts.iter().rposition(|part| {
-        matches!(part, Part::Reasoning { time, .. } if time.completed.is_none())
-    }) {
+    if let Some(position) = parts
+        .iter()
+        .rposition(|part| matches!(part, Part::Reasoning { time, .. } if time.completed.is_none()))
+    {
         mutate(&mut parts[position]);
     }
 }
@@ -17241,25 +17238,55 @@ mod tests {
         };
         // ① single part: started → delta → ended.
         store.ingest_all([event("session.reasoning.started", serde_json::json!({ "ordinal": 0 }))]);
-        store.ingest_all([event("session.reasoning.delta", serde_json::json!({ "ordinal": 0, "delta": "solo" }))]);
-        store.ingest_all([event("session.reasoning.ended", serde_json::json!({ "ordinal": 0, "text": "solo final" }))]);
+        store.ingest_all([event(
+            "session.reasoning.delta",
+            serde_json::json!({ "ordinal": 0, "delta": "solo" }),
+        )]);
+        store.ingest_all([event(
+            "session.reasoning.ended",
+            serde_json::json!({ "ordinal": 0, "text": "solo final" }),
+        )]);
         // ② interleaved: B starts while A is open; the ordinal-1
         // `ended` targets findLast-incomplete = B (the ordinal is
         // advisory); the next delta then lands on A (the only
         // remaining open part), and the ordinal-2 `ended` closes A.
         store.ingest_all([event("session.reasoning.started", serde_json::json!({ "ordinal": 1 }))]);
-        store.ingest_all([event("session.reasoning.delta", serde_json::json!({ "ordinal": 1, "delta": "alpha" }))]);
+        store.ingest_all([event(
+            "session.reasoning.delta",
+            serde_json::json!({ "ordinal": 1, "delta": "alpha" }),
+        )]);
         store.ingest_all([event("session.reasoning.started", serde_json::json!({ "ordinal": 2 }))]);
-        store.ingest_all([event("session.reasoning.delta", serde_json::json!({ "ordinal": 2, "delta": "beta" }))]);
-        store.ingest_all([event("session.reasoning.ended", serde_json::json!({ "ordinal": 1, "text": "alpha final" }))]);
-        store.ingest_all([event("session.reasoning.delta", serde_json::json!({ "ordinal": 1, "delta": "+late" }))]);
+        store.ingest_all([event(
+            "session.reasoning.delta",
+            serde_json::json!({ "ordinal": 2, "delta": "beta" }),
+        )]);
+        store.ingest_all([event(
+            "session.reasoning.ended",
+            serde_json::json!({ "ordinal": 1, "text": "alpha final" }),
+        )]);
+        store.ingest_all([event(
+            "session.reasoning.delta",
+            serde_json::json!({ "ordinal": 1, "delta": "+late" }),
+        )]);
         // ③ all completed → a new started opens a fresh target.
-        store.ingest_all([event("session.reasoning.ended", serde_json::json!({ "ordinal": 2, "text": "beta final" }))]);
+        store.ingest_all([event(
+            "session.reasoning.ended",
+            serde_json::json!({ "ordinal": 2, "text": "beta final" }),
+        )]);
         store.ingest_all([event("session.reasoning.started", serde_json::json!({ "ordinal": 3 }))]);
-        store.ingest_all([event("session.reasoning.delta", serde_json::json!({ "ordinal": 3, "delta": "third" }))]);
+        store.ingest_all([event(
+            "session.reasoning.delta",
+            serde_json::json!({ "ordinal": 3, "delta": "third" }),
+        )]);
         // ④ a delta with NO open part is dropped (ref's `if (reasoning)` skip).
-        store.ingest_all([event("session.reasoning.ended", serde_json::json!({ "ordinal": 3, "text": "third final" }))]);
-        store.ingest_all([event("session.reasoning.delta", serde_json::json!({ "ordinal": 9, "delta": "orphan" }))]);
+        store.ingest_all([event(
+            "session.reasoning.ended",
+            serde_json::json!({ "ordinal": 3, "text": "third final" }),
+        )]);
+        store.ingest_all([event(
+            "session.reasoning.delta",
+            serde_json::json!({ "ordinal": 9, "delta": "orphan" }),
+        )]);
 
         let messages = store.messages("ses_g428");
         let Message::Assistant { parts, .. } = &messages[0] else { panic!("assistant") };
