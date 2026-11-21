@@ -617,6 +617,12 @@ fn busy_window_script() -> Vec<vt_harness::ScriptEvent> {
             r#"{"sessionID":"ses_alpha","assistantMessageID":"msg_busy_a1","agent":"build","model":{"providerID":"anthropic","id":"claude-sonnet"}}"#,
         ),
         event(
+            70,
+            "evt_rs",
+            "session.reasoning.started",
+            r#"{"sessionID":"ses_alpha","assistantMessageID":"msg_busy_a1","ordinal":0}"#,
+        ),
+        event(
             80,
             "evt_r1",
             "session.reasoning.delta",

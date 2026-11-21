@@ -582,6 +582,12 @@ pub fn streaming_thinking_script(session: &str, text: &str) -> Vec<ScriptEvent> 
             ),
         },
         ScriptEvent {
+            delay_ms: 70,
+            body: format!(
+                r#"{{"id":"evt_rs","created":{now_ms},"type":"session.reasoning.started","data":{{"sessionID":"{session}","assistantMessageID":"msg_asst_1","ordinal":0}}}}"#
+            ),
+        },
+        ScriptEvent {
             delay_ms: 80,
             body: format!(
                 r#"{{"id":"evt_r1","created":{now_ms},"type":"session.reasoning.delta","data":{{"sessionID":"{session}","assistantMessageID":"msg_asst_1","ordinal":0,"delta":"Pondering"}}}}"#
