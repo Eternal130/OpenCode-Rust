@@ -1673,6 +1673,25 @@ impl Composer {
         self.autocomplete.frecency.update(name, autocomplete::now_ms());
     }
 
+    /// G-464 — the `/skills` dialog's onSelect (prompt/index.tsx:
+    /// 583-605): insert `@{skill} ` at the caret AND attach the skill
+    /// part (the ref does both — `input.insertText(text + " ")` plus
+    /// the `setStore` skills push with the mention range; the chip
+    /// renders and rides the submit POST's wire `skills` array). A
+    /// skill already attached is a no-op (`hasSkill`,
+    /// prompt/index.tsx:586).
+    pub fn insert_skill_chip(&mut self, id: &str) -> bool {
+        if self.draft.skills.iter().any(|skill| skill.id == id) {
+            return false;
+        }
+        let start = self.edit.caret();
+        let chip = format!("@{id}");
+        self.insert_text(&format!("{chip} "));
+        let end = start + chip.chars().count();
+        self.draft.skills.push(SkillMention { name: id.to_owned(), id: id.to_owned(), start, end });
+        true
+    }
+
     /// RD-05 — replace the `@query` trigger token with the virtual
     /// chip `@<name>` (autocomplete.tsx:160-190): the token range
     /// (trigger index through the caret) deletes first, the chip (+ a
@@ -1960,6 +1979,33 @@ mod tests {
         assert!(!state.undo(), "the rope history reset with setText");
         assert_eq!(state.draft.text, "edited @build now");
         assert_eq!(state.draft.agents.len(), 1);
+    }
+
+    /// G-464 — the `/skills` dialog accept attaches the skill part
+    /// with the text insert (prompt/index.tsx:583-605: `insertText` +
+    /// `setStore` skills push); a duplicate id is a no-op (`hasSkill`).
+    #[test]
+    fn insert_skill_chip_attaches_the_part() {
+        let mut state = composer("see ");
+        assert!(state.insert_skill_chip("greet"));
+        assert_eq!(state.draft.text, "see @greet ");
+        assert_eq!(state.draft.skills.len(), 1);
+        assert_eq!(state.draft.skills[0].id, "greet");
+        assert_eq!(state.draft.skills[0].name, "greet");
+        assert_eq!(state.draft.skills[0].start, 4);
+        assert_eq!(state.draft.skills[0].end, 10);
+        // The submit payload carries the wire skills attachment.
+        let prompt = state.take_submit().expect("the draft submits");
+        assert_eq!(prompt.text, "see @greet ");
+        assert_eq!(prompt.skills.len(), 1);
+        assert_eq!(prompt.skills[0].id, "greet");
+        // hasSkill: a second accept of the same id neither inserts
+        // text nor duplicates the part.
+        let mut second = composer("see ");
+        assert!(second.insert_skill_chip("greet"));
+        assert!(!second.insert_skill_chip("greet"), "the duplicate is a no-op");
+        assert_eq!(second.draft.text, "see @greet ");
+        assert_eq!(second.draft.skills.len(), 1);
     }
 
     #[test]

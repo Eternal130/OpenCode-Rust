@@ -2874,3 +2874,58 @@ fn editor_roundtrip_drops_removed_mention_attachment() {
     let _ = std::fs::remove_file(&stub);
     std::env::remove_var("EDITOR");
 }
+
+/// G-464 — the `/skills` dialog accept attaches the skill part
+/// (prompt/index.tsx:583-605): the chip lands in the composer AND the
+/// submit POST's wire `skills` array carries the id + realigned-free
+/// mention range (field-level proof via `prompt_bodies`).
+#[test]
+fn skills_dialog_accept_attaches_skill_part() {
+    let bodies_slot: G93BodiesSlot = Arc::new(Mutex::new(None));
+    let captured = Arc::clone(&bodies_slot);
+    run_daily_test(
+        "g464-skills-attach",
+        120,
+        30,
+        |fake, _sandbox| {
+            fake.arm_skills();
+            let recorded = Arc::clone(&fake.prompt_bodies);
+            *captured.lock().expect("slot") = Some(recorded);
+        },
+        move |h| {
+            boot_to_session(h, b"Alpha")?;
+            h.write(b"/skills");
+            wait_text(h, "Skills", Duration::from_secs(5))?;
+            h.write(b"\r");
+            wait_grid(
+                h,
+                |g| (0..g.rows).any(|row| g.row_text(row).contains("Greet the user")),
+                Duration::from_secs(8),
+            )
+            .map_err(|error| format!("the dialog rows never rendered: {error}"))?;
+            // Accept the first row (greet): the composer carries the
+            // `@greet` chip (text + attachment both, ref parity).
+            h.write(b"\r");
+            wait_grid(
+                h,
+                |g| (0..g.rows).any(|row| g.row_text(row).contains("@greet")),
+                Duration::from_secs(8),
+            )
+            .map_err(|error| format!("the chip never landed in the composer: {error}"))?;
+            // Submit: the attachment must ride the POST (the pre-G-464
+            // behavior degraded to plain text — no skills array).
+            h.write(b"\r");
+            let bodies = bodies_slot.lock().expect("slot").clone().expect("recorded");
+            let body = g93_wait_prompt_body(&bodies, "@greet", Duration::from_secs(15))?;
+            assert!(
+                body.contains("\"id\":\"greet\""),
+                "the skill attachment rides the POST: {body}"
+            );
+            assert!(
+                body.contains("\"text\":\"@greet\""),
+                "the mention text rides the POST: {body}"
+            );
+            Ok(())
+        },
+    );
+}

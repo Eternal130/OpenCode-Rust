@@ -2063,7 +2063,10 @@ pub fn execute_submission(
                 crate::store::Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
             };
             let mut composer = store.composer(&key);
-            composer.insert_text(&format!("@{skill} "));
+            // G-464 — the ref's onSelect attaches the skill part
+            // alongside the text insert (prompt/index.tsx:583-605):
+            // the chip rides the submit POST's `skills` array.
+            composer.insert_skill_chip(&skill);
             store.set_composer(&key, &composer);
             return crate::components::command_palette::Dispatch::Handled;
         }
