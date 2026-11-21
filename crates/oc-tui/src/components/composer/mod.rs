@@ -1929,6 +1929,39 @@ mod tests {
         assert_eq!(state.caret(), state.draft.text.chars().count());
     }
 
+    /// G-93⑤ — the round-trip resets the editing history like the
+    /// ref's `input.setText(normalized)` (prompt/index.tsx:566: v2's
+    /// `setText` clears the rope history — undo never restores across
+    /// an external replace) and the `setStore("prompt", …)` restore
+    /// path clears the attachment stacks (`PromptRef.set`): after the
+    /// round-trip, undo does NOT bring back the pre-edit draft and
+    /// every attachment undo/redo stack is empty.
+    #[test]
+    fn set_text_realigned_resets_editing_history() {
+        let mut state = Composer::default();
+        state.set(PromptDraft {
+            text: "check @build".to_owned(),
+            agents: vec![AgentMention { name: "build".to_owned(), start: 6, end: 12 }],
+            ..PromptDraft::default()
+        });
+        // Seed the parallel attachment stacks as tracked edits would
+        // (run_tracked pushes the pre-edit snapshots).
+        state.agents_undo = vec![Vec::new()];
+        state.agents_redo = vec![Vec::new()];
+        state.files_undo = vec![Vec::new()];
+        state.files_redo = vec![Vec::new()];
+        state.set_text_realigned("check @build", "edited @build now");
+        assert!(state.files_undo.is_empty() && state.files_redo.is_empty());
+        assert!(state.agents_undo.is_empty() && state.agents_redo.is_empty());
+        assert!(state.pasted_undo.is_empty() && state.pasted_redo.is_empty());
+        assert!(state.skills_undo.is_empty() && state.skills_redo.is_empty());
+        // Undo is a no-op over the external replace: the edited text
+        // (and its re-attached chip) stays.
+        assert!(!state.undo(), "the rope history reset with setText");
+        assert_eq!(state.draft.text, "edited @build now");
+        assert_eq!(state.draft.agents.len(), 1);
+    }
+
     #[test]
     fn multiline_editing_per_the_v2_table() {
         let mut state = Composer::default();
