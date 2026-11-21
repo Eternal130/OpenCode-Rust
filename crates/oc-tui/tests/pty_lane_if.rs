@@ -527,6 +527,14 @@ fn pty_thought_and_group_disclosures_toggle() {
             .to_string(),
         },
         ScriptEvent {
+            delay_ms: 80,
+            body: serde_json::json!({
+                "id": "evt_rs", "created": now, "type": "session.reasoning.started",
+                "data": { "sessionID": session, "assistantMessageID": "msg_asst_1", "ordinal": 0 },
+            })
+            .to_string(),
+        },
+        ScriptEvent {
             delay_ms: 90,
             body: serde_json::json!({
                 "id": "evt_r1", "created": now, "type": "session.reasoning.delta",
