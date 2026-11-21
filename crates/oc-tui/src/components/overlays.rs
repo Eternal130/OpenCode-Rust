@@ -123,7 +123,12 @@ pub fn paint_overlays_post_seam(
     }
     let now = store.clock();
     if store.reconnecting_overlay_visible(now) {
-        super::overlays_solid::paint_reconnecting_tail(frame, styles, width, store.managed_service());
+        super::overlays_solid::paint_reconnecting_tail(
+            frame,
+            styles,
+            width,
+            store.managed_service(),
+        );
     }
 }
 

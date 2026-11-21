@@ -773,39 +773,35 @@ pub fn turn_failure_log_line(session_id: &str, model: &str, error: &SessionError
 /// settlement (`session.execution.failed` never published, the TUI spun
 /// busy forever while the ref settled idle). The line rides a dedicated
 /// drainer thread with a bounded queue: when the worker is wedged the
-/// OLDEST lines drop (try_send), and the settlement path always
+/// line drops (`try_send`), and the settlement path always
 /// returns.
 pub(crate) fn emit_nonblocking_stderr(line: String) {
-    use std::sync::mpsc::{SyncSender, TrySendError};
+    use std::sync::mpsc::SyncSender;
     use std::sync::OnceLock;
     static SENDER: OnceLock<Option<SyncSender<String>>> = OnceLock::new();
     let sender = SENDER.get_or_init(|| {
         let (tx, rx) = std::sync::mpsc::sync_channel::<String>(64);
-        match std::thread::Builder::new()
-            .name("turn-failure-log".to_owned())
-            .spawn(move || {
-                while let Ok(line) = rx.recv() {
-                    // Best effort: a broken/blocked stderr drops the line,
-                    // never the caller's progress.
-                    let _ = std::io::Write::write_all(
-                        &mut std::io::stderr().lock(),
-                        format!("{line}\n").as_bytes(),
-                    );
-                }
-            })
-        {
+        match std::thread::Builder::new().name("daemon-log-line".to_owned()).spawn(move || {
+            while let Ok(line) = rx.recv() {
+                // Best effort: a broken/blocked stderr drops the line,
+                // never the caller's progress.
+                let _ = std::io::Write::write_all(
+                    &mut std::io::stderr().lock(),
+                    format!("{line}\n").as_bytes(),
+                );
+            }
+        }) {
             Ok(_) => Some(tx),
             Err(_) => None,
         }
     });
     match sender {
-        Some(tx) => match tx.try_send(line) {
-            Ok(()) => {}
-            // Queue full (the worker is wedged on a full pipe): drop this
-            // line — the worker drains the backlog when the pipe unblocks.
-            Err(TrySendError::Full(_)) => {}
-            Err(TrySendError::Disconnected(_)) => {}
-        },
+        // Best effort on every arm: queue full (the worker is wedged on a
+        // full pipe) or disconnected drops the line — the worker drains
+        // the backlog when the pipe unblocks.
+        Some(tx) => {
+            let _ = tx.try_send(line);
+        }
         // No worker thread (spawn failed — test runtimes): direct write.
         None => eprintln!("{line}"),
     }

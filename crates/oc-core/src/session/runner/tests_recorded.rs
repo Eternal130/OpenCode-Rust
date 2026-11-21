@@ -425,15 +425,14 @@ async fn runner_drain_step_failed_on_stream_error() {
 /// while the header spinner + busy footer spun forever.
 #[tokio::test]
 async fn runner_drain_invalid_stream_event_settles_idle() {
-    let invalid_stream_event = oc_ai::schema::AiError::new(
-        oc_ai::schema::AiErrorReason::InvalidProviderOutput {
+    let invalid_stream_event =
+        oc_ai::schema::AiError::new(oc_ai::schema::AiErrorReason::InvalidProviderOutput {
             fields: oc_ai::schema::ReasonFields::new(
                 "Invalid replay/anthropic-messages stream event",
             ),
             classification: None,
             route: Some("replay/anthropic-messages".to_owned()),
-        },
-    );
+        });
     let llm = oc_ai::testing::TestLlm::new();
     llm.push([TestResponse::error(invalid_stream_event)]);
     let harness = harness_with(llm).await;
@@ -441,13 +440,12 @@ async fn runner_drain_invalid_stream_event_settles_idle() {
     harness.admit_prompt("msg_invalid", "empty").await;
     // The run must TERMINATE promptly (no retry: not retryable, no
     // output started) — a hang here is the busy-forever face.
-    let exit =
-        tokio::time::timeout(std::time::Duration::from_secs(30), harness.execution.resume(
-            harness.session_id().as_str(),
-        ))
-        .await
-        .expect("the run terminalizes instead of hanging")
-        .map(|_| ());
+    let exit = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        harness.execution.resume(harness.session_id().as_str()),
+    )
+    .await
+    .expect("the run terminalizes instead of hanging");
     assert!(exit.is_err(), "the failed run exits with an error");
     let events = harness.durable_events().await;
     assert!(
@@ -455,10 +453,8 @@ async fn runner_drain_invalid_stream_event_settles_idle() {
         "execution.failed published: {events:?}"
     );
     assert!(
-        events
-            .iter()
-            .any(|(type_, _, data)| type_ == "session.inbox.delivered"
-                && data["sessionID"] == serde_json::json!(harness.session_id().as_str())),
+        events.iter().any(|(type_, _, data)| type_ == "session.inbox.delivered"
+            && data["sessionID"] == serde_json::json!(harness.session_id().as_str())),
         "the admitted prompt's inbox row delivered (busy clears): {events:?}"
     );
 }

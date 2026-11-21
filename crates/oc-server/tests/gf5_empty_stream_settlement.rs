@@ -63,10 +63,7 @@ fn user_config(provider_port: u16) -> String {
 /// Serves the empty seed to every /v1/messages request.
 async fn seed_provider(listener: TcpListener) {
     loop {
-        let (mut stream, _) = match listener.accept().await {
-            Ok(accepted) => accepted,
-            Err(_) => return,
-        };
+        let Ok((mut stream, _)) = listener.accept().await else { return };
         if read_one_request(&mut stream).await.is_some() {
             let _ = stream.write_all(EMPTY_SEED_SSE.as_bytes()).await;
         }
@@ -84,7 +81,7 @@ async fn read_one_request(stream: &mut TcpStream) -> Option<()> {
         }
         buf.extend_from_slice(&chunk[..read]);
         if let Some(position) = buf.windows(4).position(|window| window == b"\r\n\r\n") {
-            let head = String::from_utf8_lossy(&buf[..position]).to_owned();
+            let head = String::from_utf8_lossy(&buf[..position]).into_owned();
             let length = head
                 .lines()
                 .find_map(|line| {
@@ -222,16 +219,16 @@ async fn invalid_stream_event_terminalizes_the_run_on_the_wire() {
         let active = server
             .state
             .engine
-            .location(oc_core::location::LocationRef::new(
-                workspace_dir.clone(),
-                None,
-            ))
+            .location(oc_core::location::LocationRef::new(workspace_dir.clone(), None))
             .await
             .expect("location services")
             .execution
             .active();
         if active.is_empty() || std::time::Instant::now() > deadline {
-            assert!(active.is_empty(), "the engine idles after the failed turn (active={active:?})");
+            assert!(
+                active.is_empty(),
+                "the engine idles after the failed turn (active={active:?})"
+            );
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
