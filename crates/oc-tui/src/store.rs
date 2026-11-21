@@ -2032,6 +2032,14 @@ pub struct Store {
     /// [`Store::reconnecting_overlay_visible`]); a never-connected
     /// boot must not either.
     connection_ever_connected: Cell<bool>,
+    /// G-439 — `managed={client.restart !== undefined}`
+    /// (app.tsx:1393): the boot-resolved flag selecting the
+    /// reconnecting overlay's managed copy ("Restarting service…" /
+    /// "Your session will resume automatically.",
+    /// reconnecting.tsx:31-36) over the unmanaged default
+    /// ("Connection lost…" / "Reconnecting to the server
+    /// automatically.").
+    managed_service: Cell<bool>,
     /// SURF-2: the `StartupLoading` pill's state machine.
     startup_state: RefCell<StartupLoadingState>,
     /// CONFIG-E3 — `skipInitialLoading`
@@ -4387,6 +4395,7 @@ impl Store {
             caret_cell: Cell::new(None),
             connection_since: Cell::new(0),
             connection_ever_connected: Cell::new(false),
+            managed_service: Cell::new(false),
             startup_state: RefCell::new(StartupLoadingState::default()),
             skip_initial_loading: std::cell::Cell::new(false),
             migration_progress: RefCell::new(None),
@@ -13089,6 +13098,20 @@ impl Store {
     /// semantics).
     pub fn set_skip_initial_loading(&self, skip: bool) {
         self.skip_initial_loading.set(skip);
+    }
+
+    /// G-439 — arm the reconnecting overlay's managed copy arm
+    /// (`client.restart !== undefined`, app.tsx:1393). Set once at
+    /// boot from [`crate::app::BootArgs::managed`].
+    pub fn set_managed_service(&self, managed: bool) {
+        self.managed_service.set(managed);
+    }
+
+    /// G-439 — whether the reconnecting overlay reads the managed
+    /// copy ("Restarting service…", reconnecting.tsx:31-36).
+    #[must_use]
+    pub fn managed_service(&self) -> bool {
+        self.managed_service.get()
     }
 
     /// The plugin host finished booting (or none was configured) —

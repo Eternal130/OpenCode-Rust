@@ -415,6 +415,54 @@ async fn runner_drain_step_failed_on_stream_error() {
     assert!(events.iter().any(|(type_, _, _)| type_ == "session.execution.failed"));
 }
 
+/// G-453 residual (w13-g-empty-stream-error): an invalid-stream-event
+/// failure (`InvalidProviderOutput` WITHOUT the incomplete-stream
+/// classification — not retryable, output never started) must
+/// terminalize the run: `session.execution.failed` published AND the
+/// admitted prompt's inbox row delivered (`session.inbox.delivered`)
+/// so the TUI's busy verdict (`status().busy` = running OR pending
+/// inbox) clears — the observed defect was the error part rendering
+/// while the header spinner + busy footer spun forever.
+#[tokio::test]
+async fn runner_drain_invalid_stream_event_settles_idle() {
+    let invalid_stream_event = oc_ai::schema::AiError::new(
+        oc_ai::schema::AiErrorReason::InvalidProviderOutput {
+            fields: oc_ai::schema::ReasonFields::new(
+                "Invalid replay/anthropic-messages stream event",
+            ),
+            classification: None,
+            route: Some("replay/anthropic-messages".to_owned()),
+        },
+    );
+    let llm = oc_ai::testing::TestLlm::new();
+    llm.push([TestResponse::error(invalid_stream_event)]);
+    let harness = harness_with(llm).await;
+    harness.create_session().await;
+    harness.admit_prompt("msg_invalid", "empty").await;
+    // The run must TERMINATE promptly (no retry: not retryable, no
+    // output started) — a hang here is the busy-forever face.
+    let exit =
+        tokio::time::timeout(std::time::Duration::from_secs(30), harness.execution.resume(
+            harness.session_id().as_str(),
+        ))
+        .await
+        .expect("the run terminalizes instead of hanging")
+        .map(|_| ());
+    assert!(exit.is_err(), "the failed run exits with an error");
+    let events = harness.durable_events().await;
+    assert!(
+        events.iter().any(|(type_, _, _)| type_ == "session.execution.failed"),
+        "execution.failed published: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|(type_, _, data)| type_ == "session.inbox.delivered"
+                && data["sessionID"] == serde_json::json!(harness.session_id().as_str())),
+        "the admitted prompt's inbox row delivered (busy clears): {events:?}"
+    );
+}
+
 #[tokio::test]
 async fn runner_drain_reuses_instructions_between_steps() {
     let llm = oc_ai::testing::TestLlm::new();

@@ -146,6 +146,7 @@ pub(crate) fn mount_reconnecting_solid(
     animations: bool,
     width: usize,
     height: usize,
+    managed: bool,
 ) {
     if width == 0 || height == 0 {
         return;
@@ -176,11 +177,20 @@ pub(crate) fn mount_reconnecting_solid(
     // G-430 face 4 — ref (reconnecting.tsx:31 + spinner.tsx:26-31):
     // the headline is `<Spinner>{label}</Spinner>`; animations off
     // renders the static `⋯ {label}` fallback (no braille glyph).
+    // G-439 — the label itself is the managed arm's copy
+    // (`props.managed ? "Restarting service…" : "Connection lost…"`,
+    // reconnecting.tsx:31) and the muted copy row switches with it
+    // (:33-36 "Your session will resume automatically.").
+    let label = if managed { "Restarting service…" } else { "Connection lost…" };
     let glyph = if animations { spinner_frame(elapsed_ms).to_string() } else { "⋯".to_owned() };
     let headline: String =
-        format!("{glyph} Connection lost…").chars().take(box_w.saturating_sub(2)).collect();
+        format!("{glyph} {label}").chars().take(box_w.saturating_sub(2)).collect();
     units.extend(chrome_run_units("recon.head", left + 2, top + 1, &headline, fg_base, raised, 0));
-    let copy = "Reconnecting to the server automatically.";
+    let copy = if managed {
+        "Your session will resume automatically."
+    } else {
+        "Reconnecting to the server automatically."
+    };
     let copy_clipped: String = copy.chars().take(box_w.saturating_sub(2)).collect();
     units.extend(chrome_run_units(
         "recon.copy",
@@ -222,9 +232,19 @@ pub(crate) fn mount_reconnecting_solid(
 /// The reconnecting narrow-frame tail (the old painter's last walk):
 /// copy chars past the clamped box right edge keep the DIMMED
 /// background — ch/fg only, the bg stays whatever the scrim left.
-pub(crate) fn paint_reconnecting_tail(frame: &mut Frame, styles: &ThemeStyles, width: usize) {
+pub(crate) fn paint_reconnecting_tail(
+    frame: &mut Frame,
+    styles: &ThemeStyles,
+    width: usize,
+    managed: bool,
+) {
     let (left, top, box_w, _box_h) = reconnecting_geometry(width, frame.height);
-    let copy = "Reconnecting to the server automatically.";
+    // G-439 — the managed arm's copy (reconnecting.tsx:33-36).
+    let copy = if managed {
+        "Your session will resume automatically."
+    } else {
+        "Reconnecting to the server automatically."
+    };
     let copy_start = left + 2;
     let fg_muted = styles.text_muted.fg.map_or(CellColor::Default, CellColor::from);
     let edge = left + box_w;
@@ -248,13 +268,14 @@ pub fn reconnecting_over_frame(
     styles: &ThemeStyles,
     elapsed_ms: u64,
     animations: bool,
+    managed: bool,
 ) {
     let width = frame.width;
     let height = frame.height;
     crate::components::chrome_solid::reset_hub();
-    mount_reconnecting_solid(styles, elapsed_ms, animations, width, height);
+    mount_reconnecting_solid(styles, elapsed_ms, animations, width, height, managed);
     crate::components::chrome_solid::composite_chrome_tree(frame);
-    paint_reconnecting_tail(frame, styles, width);
+    paint_reconnecting_tail(frame, styles, width, managed);
 }
 
 /// The `StartupLoading` pill at `bottom=1` — a family wrapper at

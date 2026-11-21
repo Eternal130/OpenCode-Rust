@@ -8169,6 +8169,13 @@ pub struct BootArgs {
     /// never mounts (permission.tsx:14's `args.auto ?
     /// "autoaccept"`).
     pub auto: bool,
+    /// G-439 — `client.restart !== undefined` (app.tsx:1393): the TUI
+    /// was handed the MANAGED background service (`Resolved.managed`:
+    /// neither `--server` nor `--standalone`), so the reconnecting
+    /// overlay reads the managed copy — "Restarting service…" /
+    /// "Your session will resume automatically." (reconnecting.tsx:31-36)
+    /// — instead of "Connection lost…".
+    pub managed: bool,
 }
 
 /// Resolve the session `--continue` opens: the newest ROOT session in
@@ -8526,6 +8533,10 @@ pub async fn run_with_size(
     if fast_boot_from_env(std::env::var("OPENCODE_FAST_BOOT").ok().as_deref()) {
         app.store.set_skip_initial_loading(true);
     }
+    // G-439 — `managed={client.restart !== undefined}`
+    // (app.tsx:1393): the reconnecting overlay's copy arm rides the
+    // boot-resolved managed flag for the process lifetime.
+    app.store.set_managed_service(boot.managed);
     // R-07/D3-4b: image protocol selection rides opentui's capability
     // probe ("auto" + TerminalCapabilities); no env seed remains.
     // SURF-2 (F-1): the config persistence sink — cli.json

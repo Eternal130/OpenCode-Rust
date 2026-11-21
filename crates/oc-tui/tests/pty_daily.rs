@@ -564,6 +564,7 @@ fn run_td07_test<T: Send + 'static>(
             new_session_id: None,
             prompt: None,
             auto: false,
+            managed: false,
         },
     );
     shutdown.store(true, std::sync::atomic::Ordering::SeqCst);

@@ -89,6 +89,7 @@ pub fn mount_overlays_family(store: &Store, styles: &ThemeStyles, width: usize, 
             store.animations_enabled(),
             width,
             height,
+            store.managed_service(),
         );
     }
 }
@@ -122,7 +123,7 @@ pub fn paint_overlays_post_seam(
     }
     let now = store.clock();
     if store.reconnecting_overlay_visible(now) {
-        super::overlays_solid::paint_reconnecting_tail(frame, styles, width);
+        super::overlays_solid::paint_reconnecting_tail(frame, styles, width, store.managed_service());
     }
 }
 
@@ -151,12 +152,28 @@ mod tests {
     fn reconnecting_scrim_and_box() {
         let styles = crate::theme::ThemeState::v2_dark().styles();
         let mut frame = frame_with(60, 12);
-        super::super::overlays_solid::reconnecting_over_frame(&mut frame, &styles, 0, true);
+        super::super::overlays_solid::reconnecting_over_frame(&mut frame, &styles, 0, true, false);
         // The corner dims (200 * (1 - 150/255)) ≈ 82.
         assert_eq!(frame.cell(0, 0).bg, CellColor::Rgb(82, 82, 82));
         let text = frame.text_grid().join("\n");
         assert!(text.contains("Connection lost…"), "headline: {text}");
         assert!(text.contains("Reconnecting to the server automatically."), "copy: {text}");
+    }
+
+    /// G-439 — the managed arm (`client.restart !== undefined`,
+    /// app.tsx:1393 → reconnecting.tsx:31-36): the headline reads
+    /// "Restarting service…" and the muted copy "Your session will
+    /// resume automatically." — never the unmanaged pair.
+    #[test]
+    fn reconnecting_managed_copy_arm() {
+        let styles = crate::theme::ThemeState::v2_dark().styles();
+        let mut frame = frame_with(60, 12);
+        super::super::overlays_solid::reconnecting_over_frame(&mut frame, &styles, 0, true, true);
+        let text = frame.text_grid().join("\n");
+        assert!(text.contains("Restarting service…"), "managed headline: {text}");
+        assert!(text.contains("Your session will resume automatically."), "managed copy: {text}");
+        assert!(!text.contains("Connection lost…"), "no unmanaged headline: {text}");
+        assert!(!text.contains("Reconnecting to the server"), "no unmanaged copy: {text}");
     }
 
     /// G-430 face 4 — ref (reconnecting.tsx:31 + spinner.tsx:26-31):
@@ -166,7 +183,7 @@ mod tests {
     fn reconnecting_headline_static_fallback_when_animations_off() {
         let styles = crate::theme::ThemeState::v2_dark().styles();
         let mut frame = frame_with(60, 12);
-        super::super::overlays_solid::reconnecting_over_frame(&mut frame, &styles, 0, false);
+        super::super::overlays_solid::reconnecting_over_frame(&mut frame, &styles, 0, false, false);
         let text = frame.text_grid().join("\n");
         assert!(text.contains("⋯ Connection lost…"), "static headline: {text}");
         let glyphs: String = text

@@ -406,9 +406,13 @@ pub fn install_projectors(bus: &Bus) {
                     // server-side only), so stderr carries the line —
                     // `OPENCODE_PRINT_LOGS=1` surfaces it in daemon
                     // mode; the failure never panics the fan-out chain.
-                    eprintln!(
+                    // G-453 residual hardening: the same undrained-pipe
+                    // wedge — a direct eprintln here would hang this
+                    // fan-out chain segment and, through
+                    // `wait_usage_fanout`, every later settlement.
+                    crate::session::execution::emit_nonblocking_stderr(format!(
                         "opencode: usage fan-out failed for {fanout_session} (event {event_id}): {err}"
-                    );
+                    ));
                 }
             }
             .boxed()

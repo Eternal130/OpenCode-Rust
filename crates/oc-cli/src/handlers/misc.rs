@@ -76,7 +76,14 @@ pub async fn root(
             return 1;
         }
     };
-    let boot = oc_tui::app::BootArgs { continue_last, session, new_session_id, prompt, auto };
+    let boot = oc_tui::app::BootArgs {
+        continue_last,
+        session,
+        new_session_id,
+        prompt,
+        auto,
+        managed: resolved.managed,
+    };
     match oc_tui::app::run(client, boot).await {
         Ok(()) => 0,
         Err(message) => {

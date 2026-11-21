@@ -765,6 +765,52 @@ pub fn turn_failure_log_line(session_id: &str, model: &str, error: &SessionError
     )
 }
 
+/// Emit a daemon log line to stderr WITHOUT ever blocking the caller (G-453
+/// residual, w13-g-empty-stream-error): a daemon whose stderr pipe stops
+/// being drained (the managed-service parent exits without reaping the
+/// read end) leaves fd 2 write-blocked once the 64 KiB pipe buffer
+/// fills — a direct `eprintln!` here wedged the ENTIRE terminal
+/// settlement (`session.execution.failed` never published, the TUI spun
+/// busy forever while the ref settled idle). The line rides a dedicated
+/// drainer thread with a bounded queue: when the worker is wedged the
+/// OLDEST lines drop (try_send), and the settlement path always
+/// returns.
+pub(crate) fn emit_nonblocking_stderr(line: String) {
+    use std::sync::mpsc::{SyncSender, TrySendError};
+    use std::sync::OnceLock;
+    static SENDER: OnceLock<Option<SyncSender<String>>> = OnceLock::new();
+    let sender = SENDER.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<String>(64);
+        match std::thread::Builder::new()
+            .name("turn-failure-log".to_owned())
+            .spawn(move || {
+                while let Ok(line) = rx.recv() {
+                    // Best effort: a broken/blocked stderr drops the line,
+                    // never the caller's progress.
+                    let _ = std::io::Write::write_all(
+                        &mut std::io::stderr().lock(),
+                        format!("{line}\n").as_bytes(),
+                    );
+                }
+            })
+        {
+            Ok(_) => Some(tx),
+            Err(_) => None,
+        }
+    });
+    match sender {
+        Some(tx) => match tx.try_send(line) {
+            Ok(()) => {}
+            // Queue full (the worker is wedged on a full pipe): drop this
+            // line — the worker drains the backlog when the pipe unblocks.
+            Err(TrySendError::Full(_)) => {}
+            Err(TrySendError::Disconnected(_)) => {}
+        },
+        // No worker thread (spawn failed — test runtimes): direct write.
+        None => eprintln!("{line}"),
+    }
+}
+
 /// The label used in the failure log for a model reference.
 #[must_use]
 fn model_log_label(model: &oc_schema::model::Ref) -> String {
@@ -866,10 +912,14 @@ impl ExecutionHooks {
                     model = self.newest_assistant_model(session_id).await;
                 }
                 let model = model.unwrap_or_else(unset_model_ref);
-                eprintln!(
-                    "{}",
-                    turn_failure_log_line(session_id, &model_log_label(&model), &error)
-                );
+                // G-453 residual: NEVER a direct `eprintln!` — a daemon
+                // with an undrained stderr pipe would wedge the whole
+                // settlement here (see `emit_nonblocking_stderr`).
+                emit_nonblocking_stderr(turn_failure_log_line(
+                    session_id,
+                    &model_log_label(&model),
+                    &error,
+                ));
                 // (a) The user-visible error part: a pre-step failure (the
                 // model never resolved — no assistant message exists) gets
                 // the v2 failed-turn shape so the transcript and
@@ -1109,5 +1159,30 @@ impl ExecutionHooks {
             .await
             .map(|_| ())
             .map_err(|err| RunError::Defect(format!("failed to publish {type_}: {err}")))
+    }
+}
+
+#[cfg(test)]
+mod gf5_tests {
+    use super::emit_nonblocking_stderr;
+
+    /// G-453 residual (w13-g-empty-stream-error): the daemon-log emit
+    /// must NEVER block the caller — a wedged stderr pipe (the
+    /// observed daemon defect: fd 2 write-blocked, the whole
+    /// `session.execution.failed` settlement hung on a direct
+    /// `eprintln!`) can only ever DROP lines, not stall the run. Ten
+    /// thousand pending lines (a queue no live worker could drain at
+    /// test speed if it were synchronous) must return promptly.
+    #[test]
+    fn nonblocking_stderr_emit_never_blocks_the_caller() {
+        let started = std::time::Instant::now();
+        for round in 0..10_000 {
+            emit_nonblocking_stderr(format!("gf5 probe line {round}"));
+        }
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "the emit is non-blocking: took {elapsed:?}"
+        );
     }
 }

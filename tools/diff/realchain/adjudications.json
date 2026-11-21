@@ -146,23 +146,6 @@
       "last_observed": "2026-11-18"
     },
     {
-      "id": "w13-g-empty-stream-error",
-      "scenario_pattern": "w13-g-empty",
-      "state_pattern": "settled",
-      "shape": {
-        "kind": "regex",
-        "any_contains": [
-          "(?:Sandbox Replay Session|stream event|esc interrupt)"
-        ]
-      },
-      "classification": "real-bug",
-      "justification": "ADJUDICATED REAL DIFF (controller 2026-11-18): provider label divergence G-453 FIXED in W14 (a2892dec — invalid-stream-event now carries the route label provider/route like ref route/client.ts:424; the label line left the export). Remaining matching lines are the retry-loop display gap (already-registered B-family GAP: rust stays in the retry spinner, ref settles) — not double-counted.",
-      "g_ref": "G-453",
-      "adjudicated_by": "W13 lane",
-      "adjudicated_at": "2026-11-18",
-      "last_observed": "2026-11-18"
-    },
-    {
       "id": "w13-midstream-spinner-newsession",
       "scenario_pattern": "p*",
       "state_pattern": "*",
