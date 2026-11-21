@@ -177,10 +177,8 @@ pub(crate) fn mount_reconnecting_solid(
     // the headline is `<Spinner>{label}</Spinner>`; animations off
     // renders the static `⋯ {label}` fallback (no braille glyph).
     let glyph = if animations { spinner_frame(elapsed_ms).to_string() } else { "⋯".to_owned() };
-    let headline: String = format!("{glyph} Connection lost…")
-        .chars()
-        .take(box_w.saturating_sub(2))
-        .collect();
+    let headline: String =
+        format!("{glyph} Connection lost…").chars().take(box_w.saturating_sub(2)).collect();
     units.extend(chrome_run_units("recon.head", left + 2, top + 1, &headline, fg_base, raised, 0));
     let copy = "Reconnecting to the server automatically.";
     let copy_clipped: String = copy.chars().take(box_w.saturating_sub(2)).collect();
