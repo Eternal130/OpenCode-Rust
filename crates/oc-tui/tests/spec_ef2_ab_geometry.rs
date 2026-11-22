@@ -219,6 +219,30 @@ fn a3_wide_char_corpus_renders() {
             if !driver.wait_for("支付宝".as_bytes(), Duration::from_secs(6)) {
                 return Err("the CJK corpus never rendered".into());
             }
+            // SETTLE before the snapshot: `支付宝` is the FIRST thinking
+            // delta — snapshotting there catches the transcript
+            // mid-stream (the live thinking part expanded: the ZWJ family
+            // spelled out, the text delta pushed to the wrap boundary,
+            // `🇺🇸` split across rows) and the glyph needles below miss
+            // (`corpus glyph "🇺🇸" missing`, 12 reds 11-03..11-05; the
+            // "TUI did not exit in time" that follows is the harness exit
+            // wait after the panic). Wait for the text delta's tail on
+            // the grid, then let the last paint land, before reading it.
+            let settle_deadline = std::time::Instant::now() + Duration::from_secs(6);
+            loop {
+                let grid = driver.grid_now();
+                if (0..grid.rows).any(|y| grid.row_text(y).contains(" end")) {
+                    break;
+                }
+                if std::time::Instant::now() > settle_deadline {
+                    return Err("the text delta's tail (` end`) never rendered".into());
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            // (not `wait_grid_stable`: the spinner, the caret blink and
+            // the tab strip repaint more cells per probe than its
+            // tolerance — the screen is never "stable" here.)
+            std::thread::sleep(Duration::from_millis(700));
             let grid = driver.grid_now();
             let all: String = (0..grid.rows).map(|y| grid.row_text(y)).collect();
             // G-452: ZWJ families render as head + first ZWJ (the
@@ -240,8 +264,18 @@ fn a3_wide_char_corpus_renders() {
     });
     run_tui(&fake.url, 80, 24, Duration::from_secs(60));
     fake.stop();
-    if let Some(Err(e)) = done.lock().unwrap().take() {
-        panic!("a3 wide-char: {e}");
+    // The driver stores its outcome AFTER `exit_chord`; the run loop can
+    // return first, and a `None` read here used to pass the test over a
+    // failed driver (va1: a 6 s driver timeout came back PASS 34/34).
+    // Give the store a moment, then a missing report is a failure.
+    let store_deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while done.lock().unwrap().is_none() && std::time::Instant::now() < store_deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    match done.lock().unwrap().take() {
+        Some(Ok(())) => {}
+        Some(Err(e)) => panic!("a3 wide-char: {e}"),
+        None => panic!("a3 wide-char: the driver thread never reported"),
     }
     eprintln!("[A3] wide-char corpus rendered (CJK/NFD/ZWJ/VS16 present, no panic)");
 }
