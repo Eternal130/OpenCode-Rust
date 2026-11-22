@@ -2277,10 +2277,11 @@ fn seed_project(project: &Path, stub_url: &str) -> Result<()> {
     Ok(())
 }
 
+#[must_use]
 pub fn home_bun_dir() -> String {
     // The invoking user's bun install dir (hermetic children may need to
     // re-exec bun); falls back to the plain system PATH.
-    std::env::var("HOME").map(|h| format!("{h}/.bun/bin")).unwrap_or_else(|_| "/usr/local/bin".to_owned())
+    std::env::var("HOME").map_or_else(|_| "/usr/local/bin".to_owned(), |h| format!("{h}/.bun/bin"))
 }
 
 fn home_env(home: &Path, password: &str, config: &Path) -> Vec<(String, String)> {
@@ -3558,9 +3559,7 @@ pub fn find_bun() -> Option<PathBuf> {
         candidates.push(PathBuf::from(home).join(".bun/bin/bun"));
     }
     candidates.extend(
-        ["/usr/local/bin/bun", "/usr/bin/bun", "/opt/homebrew/bin/bun"]
-            .iter()
-            .map(PathBuf::from),
+        ["/usr/local/bin/bun", "/usr/bin/bun", "/opt/homebrew/bin/bun"].iter().map(PathBuf::from),
     );
     for candidate in candidates {
         if candidate.is_file() {

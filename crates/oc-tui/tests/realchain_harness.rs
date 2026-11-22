@@ -1111,7 +1111,8 @@ fn ref_root_default() -> PathBuf {
 
 #[must_use]
 pub fn ref_root() -> PathBuf {
-    std::env::var("T9_REF_ROOT").map_or_else(|_: std::env::VarError| ref_root_default(), PathBuf::from)
+    std::env::var("T9_REF_ROOT")
+        .map_or_else(|_: std::env::VarError| ref_root_default(), PathBuf::from)
 }
 
 /// The pinned bun runtime path (`T9_BUN` override; default the MAIN
@@ -1119,23 +1120,22 @@ pub fn ref_root() -> PathBuf {
 /// untracked helpers).
 #[must_use]
 pub fn bun_runtime() -> PathBuf {
-    std::env::var("T9_BUN")
-        .map_or_else(
-            |_: std::env::VarError| {
-                let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .parent()
-                    .and_then(Path::parent)
-                    .map(Path::to_path_buf)
-                    .unwrap_or_else(|| PathBuf::from("."));
-                if root.parent().and_then(Path::file_name).is_some_and(|n| n == ".worktrees") {
-                    if let Some(main) = root.parent().and_then(Path::parent) {
-                        root = main.to_path_buf();
-                    }
+    std::env::var("T9_BUN").map_or_else(
+        |_: std::env::VarError| {
+            let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .and_then(Path::parent)
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+            if root.parent().and_then(Path::file_name).is_some_and(|n| n == ".worktrees") {
+                if let Some(main) = root.parent().and_then(Path::parent) {
+                    root = main.to_path_buf();
                 }
-                root.join("tools/bin/bun-1.4.2")
-            },
-            PathBuf::from,
-        )
+            }
+            root.join("tools/bin/bun-1.4.2")
+        },
+        PathBuf::from,
+    )
 }
 
 /// Skip guard for the pair lane (W4 Important ②): `Some(reason)` when

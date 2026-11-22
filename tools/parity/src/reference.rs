@@ -175,13 +175,7 @@ fn well_known_bun() -> Vec<PathBuf> {
         candidates.push(PathBuf::from(home).join(".bun/bin/bun"));
     }
     candidates.extend(
-        [
-            "/usr/local/bin/bun",
-            "/usr/bin/bun",
-            "/opt/homebrew/bin/bun",
-        ]
-        .iter()
-        .map(PathBuf::from),
+        ["/usr/local/bin/bun", "/usr/bin/bun", "/opt/homebrew/bin/bun"].iter().map(PathBuf::from),
     );
     candidates
 }
@@ -193,7 +187,7 @@ fn bun_path() -> Option<PathBuf> {
     }
     for candidate in well_known_bun() {
         if candidate.is_file() {
-            return Some(PathBuf::from(candidate));
+            return Some(candidate);
         }
     }
     if let Ok(paths) = std::env::var("PATH") {
@@ -255,7 +249,8 @@ fn reference_unavailable_reason() -> Option<String> {
     if reference_checkout_present() {
         return None;
     }
-    let source = std::env::var("PARITY_REF_SOURCE").unwrap_or_else(|_| ref_source_default().display().to_string());
+    let source = std::env::var("PARITY_REF_SOURCE")
+        .unwrap_or_else(|_| ref_source_default().display().to_string());
     if Path::new(&source).join("packages/cli").is_dir() {
         return None; // missing, but rebuildable on demand
     }
@@ -279,26 +274,16 @@ fn reference_checkout_present() -> bool {
 pub fn ref_source_default() -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     // tools/parity -> tools -> repo root
-    let mut repo_root = manifest
-        .parent()
-        .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .unwrap_or(manifest);
+    let mut repo_root =
+        manifest.parent().and_then(Path::parent).map(Path::to_path_buf).unwrap_or(manifest);
     // A lane worktree root sits directly inside `.worktrees/`; the MAIN
     // checkout (whose sibling holds the ref) is one level above that.
-    if repo_root
-        .parent()
-        .and_then(Path::file_name)
-        .is_some_and(|n| n == ".worktrees")
-    {
+    if repo_root.parent().and_then(Path::file_name).is_some_and(|n| n == ".worktrees") {
         if let Some(main) = repo_root.parent().and_then(Path::parent) {
             repo_root = main.to_path_buf();
         }
     }
-    repo_root
-        .parent()
-        .map(|p| p.join("opencode-ref"))
-        .unwrap_or_else(|| PathBuf::from("opencode-ref"))
+    repo_root.parent().map_or_else(|| PathBuf::from("opencode-ref"), |p| p.join("opencode-ref"))
 }
 
 /// Ref-dir self-healing: before spawning, rebuild `/tmp/opencode/ref` from
@@ -317,8 +302,10 @@ pub fn ensure_reference_checkout() -> Result<()> {
             root.display()
         )
     })?;
-    let source =
-        PathBuf::from(std::env::var("PARITY_REF_SOURCE").unwrap_or_else(|_| ref_source_default().display().to_string()));
+    let source = PathBuf::from(
+        std::env::var("PARITY_REF_SOURCE")
+            .unwrap_or_else(|_| ref_source_default().display().to_string()),
+    );
     if !source.join("packages/cli").is_dir() {
         return Err(anyhow!(
             "reference source checkout missing {} (set PARITY_REF_SOURCE); cannot rebuild {}",

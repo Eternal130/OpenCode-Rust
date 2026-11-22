@@ -118,9 +118,7 @@ fn bun_path() -> Option<PathBuf> {
         well_known.push(PathBuf::from(home).join(".bun/bin/bun"));
     }
     well_known.extend(
-        ["/usr/local/bin/bun", "/usr/bin/bun", "/opt/homebrew/bin/bun"]
-            .iter()
-            .map(PathBuf::from),
+        ["/usr/local/bin/bun", "/usr/bin/bun", "/opt/homebrew/bin/bun"].iter().map(PathBuf::from),
     );
     if let Some(candidate) = well_known.iter().find(|c| c.is_file()) {
         return Some(candidate.clone());
@@ -223,7 +221,15 @@ fn build_command(
         .arg("--port")
         .arg(port.to_string())
         .env_clear()
-        .env("PATH", format!("{}:/usr/local/bin:/usr/bin:/bin", std::env::var("HOME").map(|h| format!("{h}/.bun/bin")).unwrap_or_else(|_| "/usr/local/bin".to_owned())))
+        .env(
+            "PATH",
+            format!(
+                "{}:/usr/local/bin:/usr/bin:/bin",
+                std::env::var("HOME")
+                    .map(|h| format!("{h}/.bun/bin"))
+                    .unwrap_or_else(|_| "/usr/local/bin".to_owned())
+            ),
+        )
         .env("HOME", home)
         .env("OPENCODE_TEST_HOME", home)
         .env("XDG_DATA_HOME", home.join(".local/share"))

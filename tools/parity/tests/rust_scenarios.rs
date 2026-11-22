@@ -94,9 +94,7 @@ fn which_bun() -> Result<String, ()> {
     if let Ok(home) = std::env::var("HOME") {
         candidates.push(format!("{home}/.bun/bin/bun"));
     }
-    candidates.extend(
-        ["/usr/local/bin/bun", "/usr/bin/bun"].iter().map(ToString::to_string),
-    );
+    candidates.extend(["/usr/local/bin/bun", "/usr/bin/bun"].iter().map(ToString::to_string));
     for candidate in candidates {
         if std::path::Path::new(&candidate).exists() {
             return Ok(candidate);

@@ -162,7 +162,10 @@ fn home_env(home: &Path, password: &str, config: &Path) -> Vec<(String, String)>
         ("TMPDIR".to_owned(), home.join("tmp").display().to_string()),
         ("OPENCODE_PASSWORD".to_owned(), password.to_owned()),
         ("OPENCODE_CONFIG".to_owned(), config.display().to_string()),
-        ("PATH".to_owned(), format!("{}:/usr/local/bin:/usr/bin:/bin", parity::tui_diff::home_bun_dir()).to_owned()),
+        (
+            "PATH".to_owned(),
+            format!("{}:/usr/local/bin:/usr/bin:/bin", parity::tui_diff::home_bun_dir()).to_owned(),
+        ),
         ("LANG".to_owned(), "C.UTF-8".to_owned()),
         ("LC_ALL".to_owned(), "C.UTF-8".to_owned()),
         // Plugin logs visible in captured mirrors.

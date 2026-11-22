@@ -367,8 +367,7 @@ async fn server_process_cors_allowlist() {
         Some("Origin, Access-Control-Request-Method, Access-Control-Request-Headers")
     );
 
-    for origin in
-        ["http://192.0.2.10:3001", "https://example.com", "https://untrusted.example.com"]
+    for origin in ["http://192.0.2.10:3001", "https://example.com", "https://untrusted.example.com"]
     {
         let allowed = (origin != "https://untrusted.example.com").then_some(origin);
         let preflight = request(

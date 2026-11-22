@@ -293,7 +293,15 @@ async fn spawn_reference() -> Result<(ReferenceServer, std::path::PathBuf), Stri
         .arg(root.join("packages/cli"))
         .arg("w4a-parity-serve.ts")
         .env_clear()
-        .env("PATH", format!("{}:/usr/local/bin:/usr/bin:/bin", std::env::var("HOME").map(|h| format!("{h}/.bun/bin")).unwrap_or_else(|_| "/usr/local/bin".to_owned())))
+        .env(
+            "PATH",
+            format!(
+                "{}:/usr/local/bin:/usr/bin:/bin",
+                std::env::var("HOME")
+                    .map(|h| format!("{h}/.bun/bin"))
+                    .unwrap_or_else(|_| "/usr/local/bin".to_owned())
+            ),
+        )
         .env("HOME", &home)
         .env("XDG_DATA_HOME", home.join(".local/share"))
         .env("XDG_CACHE_HOME", home.join(".cache"))

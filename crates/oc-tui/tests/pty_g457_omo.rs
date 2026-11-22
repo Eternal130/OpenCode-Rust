@@ -63,13 +63,10 @@ fn pty_g457_real_config_bare_name_omo_sections() {
     // The real install cache (root-owned on this box) is staged
     // readable at the OC_OMO_CACHE override (a cache-home root holding
     // `opencode/npm/...`); bun rides OC_PLUGIN_BUN.
-    let cache = std::path::PathBuf::from(
-        std::env::var("OC_OMO_CACHE")
-            .unwrap_or_else(|_| {
-                std::env::var("XDG_CACHE_HOME")
-                    .unwrap_or_else(|_| std::env::var("HOME").map(|h| h + "/.cache").unwrap_or_default())
-            }),
-    );
+    let cache = std::path::PathBuf::from(std::env::var("OC_OMO_CACHE").unwrap_or_else(|_| {
+        std::env::var("XDG_CACHE_HOME")
+            .unwrap_or_else(|_| std::env::var("HOME").map(|h| h + "/.cache").unwrap_or_default())
+    }));
     if !cache.join("opencode/npm/oh-my-opencode-slim@latest").is_dir() {
         eprintln!("omo-slim install cache unavailable; skipping");
         return;

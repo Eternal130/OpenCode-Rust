@@ -74,7 +74,8 @@ async fn gate0_dual_end_environment() -> Result<()> {
     eprintln!("[gate0] bun {} => {}", bun.display(), bun_version);
 
     // 2. the pinned source commit (read-only `git log -1`).
-    let ref_source = std::env::var("PARITY_REF_SOURCE").unwrap_or_else(|_: std::env::VarError| ref_source_default());
+    let ref_source = std::env::var("PARITY_REF_SOURCE")
+        .unwrap_or_else(|_: std::env::VarError| ref_source_default());
     let commit = std::process::Command::new("git")
         // The pinned checkout is root-owned; per-command safe.directory
         // lets the gate user read it without touching global git config.

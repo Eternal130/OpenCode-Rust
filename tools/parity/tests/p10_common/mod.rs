@@ -107,7 +107,8 @@ pub fn golden_dir() -> PathBuf {
 /// The pinned reference source checkout (default: the `opencode-ref`
 /// sibling of this repository; override: `PARITY_REF_SOURCE`).
 pub fn ref_source() -> PathBuf {
-    std::env::var("PARITY_REF_SOURCE").map_or_else(parity::reference::ref_source_default, PathBuf::from)
+    std::env::var("PARITY_REF_SOURCE")
+        .map_or_else(|_: std::env::VarError| parity::reference::ref_source_default(), PathBuf::from)
 }
 
 /// Locate bun for auxiliary uses (TUI launch, sqlite inspection).
