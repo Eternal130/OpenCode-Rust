@@ -1095,7 +1095,22 @@ fn handle(
             .lock()
             .expect("synthetic posts")
             .push(format!("{path} {}", String::from_utf8_lossy(&body_bytes)));
-        let body = r#"{"data":{"id":"synthetic_1","type":"synthetic","time":{"created":0}}}"#;
+        // gf7 (the swallowed-Enter race, first seen g457 runA 2026-11-19):
+        // the response body MUST satisfy the generated client schema
+        // (`SessionInboxSynthetic` — `id` + REQUIRED `sessionID` +
+        // `time` + `type`). The old body omitted `sessionID`, so
+        // EVERY synthetic POST failed client-side → `SendFailed` →
+        // the draft restored a few ms after the submit cleared it —
+        // the zed_context composer-empty gate then raced the ~40 ms
+        // clear window (a missed 60 ms poll sample = the 10 s red).
+        // The session id echoes the path's own segment.
+        let session_id = path
+            .strip_prefix("/api/session/")
+            .and_then(|rest| rest.strip_suffix("/synthetic"))
+            .unwrap_or_default();
+        let body = format!(
+            r#"{{"data":{{"id":"synthetic_1","sessionID":"{session_id}","type":"synthetic","time":{{"created":0}},"payload":{{"text":"ctx"}},"delivery":"steer"}}}}"#
+        );
         let response = format!(
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}",
             body.len()
