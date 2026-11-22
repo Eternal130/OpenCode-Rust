@@ -110,7 +110,7 @@ fi
 # (the log is the only test evidence — log lost = evidence lost). The tee
 # captures the complete, untruncated stream; display filtering (grep/tail)
 # belongs AFTER the run, on the file. Lane label via OC_GATE_LANE.
-LOG_CRATES=$(printf '%s' "$1" | grep -oE -- '-p [A-Za-z0-9_-]+' | sed 's/^-p //' | paste -sd, -)
+LOG_CRATES=$(printf '%s' "$1" | grep -oE -- '-p [A-Za-z0-9_-]+' | sed 's/^-p //' | paste -sd, - || true)
 if printf '%s' "$1" | grep -q -- '--workspace'; then LOG_CRATES="workspace"; fi
 [ -n "$LOG_CRATES" ] || LOG_CRATES="gate"
 LOG_DIR="${GATE_DIR}/.test-logs"
