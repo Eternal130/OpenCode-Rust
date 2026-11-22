@@ -124,11 +124,11 @@ Installed binaries can update themselves: `opencode-rust upgrade` checks the [re
 
 ### Commit identity (hard gate)
 
-All commits are authored and committed as `Eternal130 <Eternal130@outlook.com>`
-(repo discipline; agent/subagent shells sometimes attach ad-hoc identities).
-`.git/hooks/pre-commit` enforces it via `git var` — if it rejects you:
-
-    git -c user.name=Eternal130 -c user.email=Eternal130@outlook.com commit ...
+All commits are authored and committed with the identity configured in the
+repo's git config files (repo discipline; agent/subagent shells sometimes
+attach ad-hoc identities). `.git/hooks/pre-commit` enforces it via `git var`
+— configure `user.name` / `user.email` (repo-local `.git/config` or global)
+if it rejects you.
 
 Re-install the hook on a fresh clone with the snippet in
 `tools/git-identity-hook.sh` (tracked copy).
