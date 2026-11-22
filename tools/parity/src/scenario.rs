@@ -155,6 +155,11 @@ pub enum Step {
         expect_status: Option<u16>,
         /// `(name, json-pointer)` pairs extracted from the response body.
         captures: Vec<(&'static str, &'static str)>,
+        /// Retry gate: `(json-pointer, wanted string, max tries, delay ms)`.
+        /// A 2xx response whose pointer does not equal the wanted string
+        /// is re-sent after the delay, up to `max tries` in total; the
+        /// captures read the MATCHING response. `None` = one shot.
+        until: Option<(&'static str, &'static str, u32, u64)>,
     },
     /// Create/overwrite a file (templated path and contents).
     WriteFile { path: String, contents: String },
@@ -170,7 +175,14 @@ pub enum Step {
 impl Step {
     /// A request step (defaults: any 2xx status, no captures).
     pub fn request(method: &'static str, path: impl Into<String>, body: Option<Value>) -> Self {
-        Step::Request { method, path: path.into(), body, expect_status: None, captures: Vec::new() }
+        Step::Request {
+            method,
+            path: path.into(),
+            body,
+            expect_status: None,
+            captures: Vec::new(),
+            until: None,
+        }
     }
 
     /// A request with no JSON body.
@@ -183,6 +195,22 @@ impl Step {
     pub fn expect(mut self, status: u16) -> Self {
         if let Step::Request { expect_status, .. } = &mut self {
             *expect_status = Some(status);
+        }
+        self
+    }
+
+    /// Re-send the request (after `delay_ms`) until the response's
+    /// `pointer` equals `value`, at most `max_tries` sends in total.
+    #[must_use]
+    pub fn until(
+        mut self,
+        pointer: &'static str,
+        value: &'static str,
+        max_tries: u32,
+        delay_ms: u64,
+    ) -> Self {
+        if let Step::Request { until, .. } = &mut self {
+            *until = Some((pointer, value, max_tries, delay_ms));
         }
         self
     }
@@ -281,20 +309,63 @@ pub async fn drive(
     let auth = minih::basic_auth("opencode", server.password());
     for (index, step) in steps.iter().enumerate() {
         match step {
-            Step::Request { method, path, body, expect_status, captures: wanted } => {
+            Step::Request { method, path, body, expect_status, captures: wanted, until } => {
                 let path = render(path, &captures);
                 let body_text = body.as_ref().map(|b| render(&b.to_string(), &captures));
-                let response = minih::request(
-                    server.url(),
-                    Some(&auth),
-                    method,
-                    &path,
-                    body_text.as_deref(),
-                    "application/json",
-                    Duration::from_secs(30),
-                )
-                .await
-                .with_context(|| format!("step {index}: {method} {path}"))?;
+                let (max_tries, gate): (u32, Option<(&str, &str, u64)>) = match until {
+                    Some((pointer, value, max_tries, delay_ms)) => {
+                        (*max_tries, Some((*pointer, *value, *delay_ms)))
+                    }
+                    None => (1, None),
+                };
+                let mut tries = 0u32;
+                let response = loop {
+                    let response = minih::request(
+                        server.url(),
+                        Some(&auth),
+                        method,
+                        &path,
+                        body_text.as_deref(),
+                        "application/json",
+                        Duration::from_secs(30),
+                    )
+                    .await
+                    .with_context(|| format!("step {index}: {method} {path}"))?;
+                    tries += 1;
+                    let status_ok = match expect_status {
+                        Some(expected) => response.status == *expected,
+                        None => (200..=299).contains(&response.status),
+                    };
+                    let matched = match (status_ok, gate) {
+                        (false, _) => true, // surface the status error below
+                        (true, None) => true,
+                        (true, Some((pointer, value, _))) => {
+                            let text = String::from_utf8_lossy(&response.body);
+                            serde_json::from_str::<Value>(&text).ok().is_some_and(|value_json| {
+                                value_json
+                                    .pointer(pointer)
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|found| found == value)
+                            })
+                        }
+                    };
+                    if matched || tries >= max_tries {
+                        if !matched {
+                            let text = String::from_utf8_lossy(&response.body);
+                            return Err(anyhow!(
+                                "step {index}: {method} {path}: {} tries, never {:?}={:?} (last: {})",
+                                tries,
+                                gate.map(|g| g.0),
+                                gate.map(|g| g.1),
+                                text.chars().take(400).collect::<String>()
+                            ));
+                        }
+                        break response;
+                    }
+                    if let Some((_, _, delay_ms)) = gate {
+                        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                    }
+                };
                 let ok = match expect_status {
                     Some(expected) => response.status == *expected,
                     None => (200..300).contains(&response.status),
@@ -712,6 +783,18 @@ pub mod scripts {
                         "/api/session/{session_id}/permission",
                         Some(json!({ "action": "read", "resources": ["/etc/parity-warmup"] })),
                     ),
+                    // The real ask is GATED on `effect == "ask"`: the
+                    // reference's cold/closing Permission service
+                    // short-circuits an ask to `deny` (no pending entry —
+                    // the reply would 404 `PermissionNotFoundError`), and
+                    // that state outlives the single warm-up ask in a
+                    // minority of boots (va1 2026-11-22: 7 of 30 runs
+                    // red on the first try, 3 of them on both tries;
+                    // the same ask traced `effect:"deny"` in every red).
+                    // A `deny`
+                    // try publishes no frame, so the retries are
+                    // golden-invisible; the matching try is the one
+                    // captured and replied to.
                     Step::request(
                         "POST",
                         "/api/session/{session_id}/permission",
@@ -721,6 +804,7 @@ pub mod scripts {
                             "save": ["/etc/parity-readonly"]
                         })),
                     )
+                    .until("/data/effect", "ask", 40, 250)
                     .capture("request_id", "/data/id"),
                     Step::request(
                         "POST",
