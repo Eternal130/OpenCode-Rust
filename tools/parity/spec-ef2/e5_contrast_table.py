@@ -11,8 +11,9 @@ clause's inherited-findings rule), not parity breaks.
 Thresholds per spec E5: text 4.5:1, UI/large 3:1.
 """
 import json
+import os
 
-THEME = "./repo/.worktrees/lane-scanef2/crates/oc-theme/assets/v2/opencode.json"
+THEME = os.environ.get("E5_THEME", "<repo>/crates/oc-theme/assets/v2/opencode.json")
 
 
 def lum(hex_color: str) -> float:

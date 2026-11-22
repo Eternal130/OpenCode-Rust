@@ -1,4 +1,4 @@
-# OPENCODE_* env reads in ./ref/packages (process.env.* only).
+# OPENCODE_* env reads in the pinned ref source packages (process.env.* only).
 # Regenerate: python3 tools/guards/env_inventory.py --refresh
 OPENCODE_API_KEY
 OPENCODE_BASE_URL

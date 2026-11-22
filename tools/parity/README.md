@@ -196,7 +196,7 @@ OC_P10=1 cargo nextest run -p parity --run-ignored only -E 'test(p10_)'
 
 | Test | What it pins |
 | --- | --- |
-| `p10_openapi` | `GET /openapi.json` from the booted port vs the pinned `./ref/packages/protocol/openapi.json`: semantic diff (`src/openapi_diff.rs` — path×method sets, per-op operationId/parameters/`$ref` sets, schema names) must be empty minus `goldens/p10/openapi-whitelist.json`; the summary golden pins counts + byte-identity. |
+| `p10_openapi` | `GET /openapi.json` from the booted port vs the pinned ref source `packages/protocol/openapi.json`: semantic diff (`src/openapi_diff.rs` — path×method sets, per-op operationId/parameters/`$ref` sets, schema names) must be empty minus `goldens/p10/openapi-whitelist.json`; the summary golden pins counts + byte-identity. |
 | `p10_error_paths` | 7 representative error routes probed on a booted reference AND port side-by-side; normalized bodies byte-compared; `goldens/p10/error-paths.json` pins each side + the divergence report (fails on new OR stale divergences). |
 | `p10_cross_tui` | The real v2.0.24 TUI (bun + tmux) against the Rust server: prompt+reply (`FakeLlm`), rename (`ctrl+r`, verified server-side), permission-once (external read → footer → TUI replies → tool proceeds). Captures in `goldens/p10/tui/`. |
 | `p10_cross_client` | The generated `oc-client` (dev-dependency) against a booted reference server: create → prompt → parked ask → permission reply → `message.list`, every response decoded. |

@@ -20,7 +20,7 @@ set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
 DEST=${T9_PLUGIN_PAYLOAD_ROOT:-$REPO/tools/diff/realchain/plugin-payload}
-HOST_CACHE=${HOME:-./ref-checkout}/.cache/opencode/npm
+HOST_CACHE=${HOME}/.cache/opencode/npm
 LEGACY=/tmp/opencode/plugin-payload
 
 # (registry name, npm spec)

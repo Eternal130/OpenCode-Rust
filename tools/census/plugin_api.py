@@ -6,7 +6,7 @@ Axis 1 — server-plugin ctx face: the object literal the rust guest
   crates/oc-plugin-host/src/host/host.js — the api/vcs/rpc/ui/…
   namespaces a plugin's setup receives) vs the ref's in-process
   equivalent (`const context2: PromiseContext = {…}` in
-  ./ref/packages/plugin/src/promise/adapter.ts). Dotted
+  <pinned ref source>/packages/plugin/src/promise/adapter.ts). Dotted
   key paths, both sides parsed by the same object-literal walker.
 Axis 2 — ref TUI-plugin entrypoint face: the ref exposes a SECOND
   plugin contract (packages/plugin/src/tui — a solid.js TUI face with
@@ -22,7 +22,7 @@ Known anchors to verify per-item: G-239 (panel/PanelHost unmounted —
 plugin_slots.rs), G-332 (markdown renderer registration chain), the
 G-379.x vcs/worktree read faces (expect BOTH at the ctx level).
 
-Usage: python3 tools/census/plugin_api.py [--ref ./ref]
+Usage: python3 tools/census/plugin_api.py [--ref $OC_REF_ROOT]
            [--write docs/audit/census/PLUGIN-API.md]
 """
 from __future__ import annotations
@@ -37,6 +37,15 @@ sys.path.insert(0, str(Path(__file__).parent))
 from common import Report  # noqa: E402
 
 from rpc_methods import parse_object_literals  # noqa: E402
+import os
+
+# Pinned ref source: $OC_REF_ROOT override, else the `opencode-ref`
+# sibling of this repository (lane worktrees resolve via the main checkout).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if _REPO_ROOT.parent.name == ".worktrees":
+    _REPO_ROOT = _REPO_ROOT.parent.parent
+REF_DEFAULT = os.environ.get("OC_REF_ROOT", str(_REPO_ROOT.parent / "opencode-ref"))
+
 
 HOST_JS = Path("crates/oc-plugin-host/src/host/host.js")
 
@@ -138,7 +147,7 @@ def ref_tui_keys(ref: str) -> dict[str, int]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ref", default="./ref")
+    ap.add_argument("--ref", default=REF_DEFAULT)
     ap.add_argument("--write", default="docs/audit/census/PLUGIN-API.md")
     args = ap.parse_args()
 

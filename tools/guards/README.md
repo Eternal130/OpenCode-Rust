@@ -119,7 +119,7 @@ surface.
 
 ### env_inventory
 Reference `OPENCODE_*` env read with no Rust claim point. Canonical list
-= READ-ONLY scan of `./ref/packages` for
+= READ-ONLY scan of the pinned ref source `packages` for
 `process.env.OPENCODE_*` (fast, ~50 ms); CI (no ref checkout) uses the
 committed snapshot `tools/guards/snapshots/env_ref.txt`, regenerated
 with `--refresh` (the only other writing mode). A claim point is the

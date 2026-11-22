@@ -1095,12 +1095,23 @@ pub const WORDMARK: &[u8] = "█▀▀█".as_bytes();
 // ---------------------------------------------------------------------------
 
 /// Default ref checkout (read-only; its `node_modules` are used).
-const REF_ROOT_DEFAULT: &str = "./ref";
+fn ref_root_default() -> PathBuf {
+    let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    if root.parent().and_then(Path::file_name).is_some_and(|n| n == ".worktrees") {
+        if let Some(main) = root.parent().and_then(Path::parent) {
+            root = main.to_path_buf();
+        }
+    }
+    root.parent().map(|p| p.join("opencode-ref")).unwrap_or_else(|| PathBuf::from("opencode-ref"))
+}
 
 #[must_use]
 pub fn ref_root() -> PathBuf {
-    Path::new(&std::env::var("T9_REF_ROOT").unwrap_or_else(|_| REF_ROOT_DEFAULT.to_owned()))
-        .to_path_buf()
+    std::env::var("T9_REF_ROOT").map_or_else(ref_root_default, PathBuf::from)
 }
 
 /// The pinned bun runtime path (`T9_BUN` override; default the MAIN
@@ -1109,7 +1120,22 @@ pub fn ref_root() -> PathBuf {
 #[must_use]
 pub fn bun_runtime() -> PathBuf {
     std::env::var("T9_BUN")
-        .map_or_else(|_| PathBuf::from("./repo/tools/bin/bun-1.4.2"), PathBuf::from)
+        .map_or_else(
+            || {
+                let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .parent()
+                    .and_then(Path::parent)
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| PathBuf::from("."));
+                if root.parent().and_then(Path::file_name).is_some_and(|n| n == ".worktrees") {
+                    if let Some(main) = root.parent().and_then(Path::parent) {
+                        root = main.to_path_buf();
+                    }
+                }
+                root.join("tools/bin/bun-1.4.2")
+            },
+            PathBuf::from,
+        )
 }
 
 /// Skip guard for the pair lane (W4 Important ②): `Some(reason)` when
@@ -1147,7 +1173,7 @@ pub fn ref_lane_skip_reason() -> Option<String> {
 /// are absent — the pair lane's environment dependencies, which CI does
 /// not provision — every pair test SKIPs through [`ref_lane_skip_reason`]
 /// (a skip with the reason, never a red). On machines that DO carry the
-/// lane (`T9_REF_ROOT` default `./ref`, `T9_BUN` default the
+/// lane (`T9_REF_ROOT` default the pinned ref-source sibling, `T9_BUN` default the
 /// main checkout's `tools/bin/bun-1.4.2`), the tests run directly; a
 /// present-but-wrong bun version still fails (a contract, not an
 /// availability gap).

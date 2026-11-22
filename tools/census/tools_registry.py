@@ -21,7 +21,7 @@ Scope declaration (out of scope, stated): MCP dynamic tool registration
   schema; ref tool/mcp.ts) is runtime-driven and not part of the builtin
   static registry. Plugin/agent-dynamic tools are likewise out of scope.
 
-Usage: python3 tools/census/tools_registry.py [--ref ./ref] [--write docs/audit/census/TOOLS.md]
+Usage: python3 tools/census/tools_registry.py [--ref $OC_REF_ROOT] [--write docs/audit/census/TOOLS.md]
 """
 from __future__ import annotations
 
@@ -32,6 +32,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from common import Report, _match_brace, strip_tests  # noqa: E402
+import os
+
+# Pinned ref source: $OC_REF_ROOT override, else the `opencode-ref`
+# sibling of this repository (lane worktrees resolve via the main checkout).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if _REPO_ROOT.parent.name == ".worktrees":
+    _REPO_ROOT = _REPO_ROOT.parent.parent
+REF_DEFAULT = os.environ.get("OC_REF_ROOT", str(_REPO_ROOT.parent / "opencode-ref"))
+
 
 TOOL_DIR = Path("crates/oc-core/src/tool")
 ENGINE = Path("crates/oc-core/src/engine/mod.rs")
@@ -194,7 +203,7 @@ def ref_tool_entries(ref: Path) -> list[dict]:
 # ---------------------------------------------------------------- main
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ref", default="./ref")
+    ap.add_argument("--ref", default=REF_DEFAULT)
     ap.add_argument("--write", default=None)
     args = ap.parse_args()
     ref = Path(args.ref)

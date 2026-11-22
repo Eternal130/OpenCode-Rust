@@ -1,7 +1,7 @@
 # Phase-10 parity verification battery — report ledger
 
-Run as `dev`, 2026-10-10. Reference = pinned v2.0.24 worktree
-(`./ref`, executed via bun from `/tmp/opencode/ref`);
+Run as the configured non-root dev user, 2026-10-10. Reference = pinned v2.0.24 worktree
+(the pinned ref source, executed via bun from `/tmp/opencode/ref`);
 port = `oc-server`/`oc-client` of this repo (debug build,
 `CARGO_TARGET_DIR=/tmp/opencode/target-parity`). The harness never binds
 49374 and never touches live service state (scrubbed, sandboxed `HOME` per
@@ -20,7 +20,7 @@ OC_P10=1 cargo nextest run -p parity --run-ignored only -E 'test(p10_)'
 
 | # | Test (binary) | Verifies | Evidence | Status |
 |---|---------------|----------|----------|--------|
-| 1 | `p10_openapi_semantic_equivalence` (`tests/p10_openapi.rs`) | Boot the Rust server, `GET /openapi.json`, semantic-diff vs the pinned `./ref/packages/protocol/openapi.json`: path×method sets, per-op operationId/parameter shapes/`$ref` sets (params, requestBody, per-status responses), `components.schemas` names | `openapi-summary.json`; whitelist `openapi-whitelist.json` | **PASS — 0 differences** (117 paths / 141 operations / 256 schemas; served document **byte-identical** to the pinned file, sha256 `06124183…73ee`; whitelist EMPTY) |
+| 1 | `p10_openapi_semantic_equivalence` (`tests/p10_openapi.rs`) | Boot the Rust server, `GET /openapi.json`, semantic-diff vs the pinned ref source `packages/protocol/openapi.json`: path×method sets, per-op operationId/parameter shapes/`$ref` sets (params, requestBody, per-status responses), `components.schemas` names | `openapi-summary.json`; whitelist `openapi-whitelist.json` | **PASS — 0 differences** (117 paths / 141 operations / 256 schemas; served document **byte-identical** to the pinned file, sha256 `06124183…73ee`; whitelist EMPTY) |
 | 2 | `p10_error_path_goldens_side_by_side` (`tests/p10_error_paths.rs`) | 7 representative error routes hit on a booted reference AND a booted port side-by-side; normalized bodies byte-compared (canonical serialization of the normalized shapes) | `error-paths.json` (pins both sides + divergence per route) | **PASS — 7/7 byte-equal** (P10-E1/E2/E3 closed by the remediation sweep; the test fails on any NEW divergence) |
 | 3 | `p10_ts_tui_against_rust_server` (`tests/p10_cross_tui.rs`) | Cross-replacement (a): the REAL v2.0.24 TUI (bun in tmux, m1 pattern) drives the Rust server through 3 interactions: prompt+reply via `FakeLlm`, session rename (`ctrl+r` dialog → server row), permission-once (external read → "Allow once" footer → TUI POSTs the reply → tool proceeds) | pane captures + server rows in `tui/` | **PASS — 3/3 interactions** |
 | 4 | `p10_rust_client_against_reference_server` (`tests/p10_cross_client.rs`) | Cross-replacement (b): the generated `oc-client` (in-process) drives a booted REFERENCE server: `session.create` → `session.prompt` → parked `external_directory` ask → `permission_list`/`permission_reply(once)` → `message.list` — every response decoded into the wire-faithful types | `evidence/client-messages.json` | **PASS — full flow decoded** |
@@ -89,14 +89,14 @@ includes the pinned `tools/openapi-gen/openapi.json`, sha-guarded by
 
 (Readiness gating is covered by the existing suite, not re-pinned here.)
 
-## 5. Gate status (as dev)
+## 5. Gate status (as the configured non-root dev user)
 
 - `cargo fmt -p parity -- --check` — **clean**
 - `cargo clippy -p parity --all-targets -- -D warnings` — **clean**
 - default suite `cargo nextest run -p parity` — **85/85 passed** (8 skips =
   the opt-in tests), i.e. the default suite is unaffected by the battery.
 
-## 6. Final remediation sweep re-verification (2026-10-10, dev)
+## 6. Final remediation sweep re-verification (2026-10-10, dev user)
 
 - Battery re-run after the P10-E1/E2/E3 + P10-DB1 fixes: **6/6 PASS**
   (the five original tests + the new stable-channel DB lane).

@@ -30,12 +30,20 @@ use std::time::Duration;
 
 use oc_plugin_host::context::install::resolve_subpath_entry;
 
+/// The user's npm cache root (`$XDG_CACHE_HOME`, else `$HOME/.cache`).
+fn npm_cache_root() -> PathBuf {
+    if let Ok(x) = std::env::var("XDG_CACHE_HOME") {
+        return PathBuf::from(x);
+    }
+    std::env::var("HOME").map(|h| PathBuf::from(h).join(".cache")).unwrap_or_default()
+}
+
 fn flagship_source() -> Option<PathBuf> {
     if let Ok(root) = std::env::var("OC_OMOS_ROOT") {
         let root = PathBuf::from(root);
         return root.join("dist/server/index.js").is_file().then_some(root);
     }
-    let base = Path::new("~/.cache/opencode/npm/oh-my-opencode-slim@latest");
+    let base = npm_cache_root().join("opencode/npm/oh-my-opencode-slim@latest");
     let mut stamps: Vec<PathBuf> = std::fs::read_dir(base)
         .ok()?
         .filter_map(std::result::Result::ok)

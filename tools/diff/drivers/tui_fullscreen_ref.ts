@@ -20,7 +20,7 @@
  *                                                later the orchestrator's
  *                                                STAGE dir)
  *   OPENTUI_REF_ROOT=/tmp/opencode/ref           DIFF_REF_ROOT (default
- *                                                ./ref), read-only
+ *                                                the pinned ref source), read-only
  *   link_modules.ts node_modules symlinks        NOT needed: we never import
  *                                                bare @opentui/* packages
  *                                                ourselves — the ref app and
@@ -37,7 +37,7 @@
  *                                                (1.3.10, controller ruling)
  *
  * Run (dev, cwd = repo root):
- *   DIFF_REF_ROOT=./ref \
+ *   DIFF_REF_ROOT=<pinned ref source> \
  *   bun --preload $DIFF_REF_ROOT/packages/tui/node_modules/@opentui/solid/scripts/preload.js \
  *       tools/diff/drivers/tui_fullscreen_ref.ts \
  *       --manifest <manifest.json> --out <dir>
@@ -65,7 +65,7 @@ import { existsSync } from "node:fs"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
 
-const REF_ROOT = process.env.DIFF_REF_ROOT ?? "./ref"
+const REF_ROOT = process.env.DIFF_REF_ROOT ?? path.join(import.meta.dir, "../../../..", "opencode-ref")
 const REF_APP_FIXTURE = path.join(REF_ROOT, "packages/tui/test/fixture/app.ts")
 const REF_THEME_INDEX = path.join(REF_ROOT, "packages/tui/src/theme/index.ts")
 

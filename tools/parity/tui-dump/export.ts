@@ -116,7 +116,7 @@ async function main() {
   const verify = args.includes("--verify")
   const jsonOut = args.includes("--json")
   const outArg = args.findIndex((a) => a === "--out")
-  const outDir = outArg >= 0 ? args[outArg + 1] : "./repo/tools/parity/goldens/tui-frames"
+  const outDir = outArg >= 0 ? args[outArg + 1] : import.meta.dir + "/../goldens/tui-frames"
   const onlyIdx = args.findIndex((a) => a === "--only")
   const only = onlyIdx >= 0 ? args[onlyIdx + 1].split(",") : undefined
 

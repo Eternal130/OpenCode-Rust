@@ -1,6 +1,6 @@
 # 与 ref 的已知分歧（Known Divergences）——opencode-rust 移植登记册
 
-> **说明（2026-11-22 用户裁定）**：本册为公开的已知分歧登记（原 43 轮判定史精简拆分而来）。全部历史——逐轮判定、G-1..G-464 已修项 forensics、事故记录、清理注记——经 git 历史可溯（2026-11-22 精简提交的父提交），盘上副本归档于仓外。现役分歧唯一活登记=tools/diff/realchain/adjudications.json（裁决注册表）；开发规范见本地私有册（git-ignored，不入克隆）。
+> **说明（2026-11-22 用户裁定）**：本册为公开的已知分歧登记（原 43 轮判定史精简拆分而来）。全部历史——逐轮判定、G-1..G-464 已修项 forensics、事故记录、清理注记——完整判定史不随公开仓分发（2026-11-22 隐私清理已历史重写）；全文副本=本地备份与仓外归档（不入库）。现役分歧唯一活登记=tools/diff/realchain/adjudications.json（裁决注册表）；开发规范见本地私有册（git-ignored，不入克隆）。
 
 ## 一、已知与 ref 的分歧（截至 2026-11-22）
 
@@ -67,9 +67,9 @@
 
 ### 已收口登记（摘要）
 
-- G-1..G-464 修法/取证全文：git 历史（精简提交的父提交）；盘上归档 ./archive/。
+- G-1..G-464 修法/取证全文：完整判定史不随公开仓分发（2026-11-22 隐私清理已历史重写）；全文副本=本地备份与仓外归档（不入库）。
 - 出族近期翻正：G-211 split-footer 整族经 ADR-0019 全量移植并消费；G-328 TAB_SPINNERS 四样式全量落地；G-329 mini demo 剧本 13/13（2026-11-22 复审翻正，第五次登记滞后实例）。
-- 覆盖台账（原 docs/audit/diff/COVERAGE.md，12 族，四轮审收敛）与差分台账族（JSON-SCHEMA/HTTP-FULL/TUI-FULLSCREEN/ACP-TRANSLATE 等 11 本）：随本批出树，git 历史可溯；**覆盖完备性裁定（§2.2#13）持续有效**——新增可测面发现时（用户报告/代码审读/上游 diff）从 git 历史复活台账或重建。
+- 覆盖台账（原 docs/audit/diff/COVERAGE.md，12 族，四轮审收敛）与差分台账族（JSON-SCHEMA/HTTP-FULL/TUI-FULLSCREEN/ACP-TRANSLATE 等 11 本）：随本批出树，完整判定史不随公开仓分发（2026-11-22 隐私清理已历史重写）；**覆盖完备性裁定（§2.2#13）持续有效**——新增可测面发现时（用户报告/代码审读/上游 diff）从 git 历史复活台账或重建。
 - 观察名单（活）：`pty_composer_cycle_type_edit_submit_reply_stats_solid_path`（一见）、`pty_wheel_after_real_terminal_probe_replies`（一见）、W38 settle 竞态第四臂已落（再现即升级）、`tl_tool_loop_pair`（两见）。flake 白名单见 §2.2#4。
 
 
@@ -77,4 +77,4 @@
 
 - 开发规范与现行制度速查 → 本地私有册 `docs/GAPS-AND-PITFALLS.md`（git-ignored；规范权威源=tools/lane-brief.sh 逐字抽取，见 `AGENTS.md`）
 - 架构对比 → `ARCHITECTURE-VS-REF.md`
-- 历史全文（43 轮判定、G-1..G-464 forensics）→ git 历史 + ./archive/
+- 历史全文（43 轮判定、G-1..G-464 forensics）→ 本地备份与仓外归档（不入库；完整判定史不随公开仓分发，2026-11-22 隐私清理已历史重写）

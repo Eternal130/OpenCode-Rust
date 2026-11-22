@@ -16,6 +16,6 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO_ROOT}"
 
 export OC_TUI_TREE_CAPTURE_UPDATE=1
-./repo/tools/dev-gate.sh \
+"${REPO_ROOT}/tools/dev-gate.sh" \
   'cargo nextest run -p oc-tui --locked --run-ignored only scenario_capture_rewrite'
 echo "scenarios regenerated — re-freeze oracles next: TREE_ORACLE_FREEZE=1 tools/parity/tree-oracle-freeze.sh"

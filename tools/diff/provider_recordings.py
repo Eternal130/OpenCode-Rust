@@ -2,7 +2,7 @@
 """Provider protocol-decode differential (channel 7 of the diff layer).
 
 Corpus: the ref HttpRecorder cassettes
-(./ref/packages/ai/test/fixtures/recordings, same-source copy at
+(<pinned ref source>/packages/ai/test/fixtures/recordings, same-source copy at
 crates/oc-ai/test-fixtures/recordings).  The RECORDED RESPONSE BODY of every
 LLM-protocol interaction (SSE text or JSON) is fed to BOTH sides' protocol
 decoders and the decoded LLMEvent streams are diffed after normalization.
@@ -53,7 +53,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent.parent
-REF_DEFAULT = Path("./ref")
+REF_DEFAULT = Path(REF_DEFAULT)
 STAGE = Path("/tmp/opencode/diff-provrec")
 
 # ---------------------------------------------------------------------------

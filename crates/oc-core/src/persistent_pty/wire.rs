@@ -2,7 +2,7 @@
 //! checkpoints and runtime-record helpers shared by the daemon binary
 //! (D1) and the in-server client transport (D2).
 //!
-//! Port of `daemon.ts` (`./ref/packages/core/src/persistent-pty/daemon.ts`):
+//! Port of `daemon.ts` (`<pinned ref source>/packages/core/src/persistent-pty/daemon.ts`):
 //!
 //! - **Framing** (`daemon.ts:659-682`): `u32 BE length` + payload,
 //!   `MaxFrameBytes = 8 MiB`; oversized/truncated frames are protocol

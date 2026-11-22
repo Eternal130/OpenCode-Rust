@@ -10,18 +10,24 @@ D. Verbatim containment:
         are present in scan-spec.md v7 character-exact modulo whitespace;
    D2 - the R8-authored blocks (C22 clause, I10b census discipline) in the
         spec are present in docs/spec-round8.md character-exact ditto.
-E. MG-2 census: `ls -1 ./ref/packages/ | sort` (35 names)
+E. MG-2 census: `ls -1 <pinned ref source>/packages/ | sort` (35 names)
    equals the I10b pin's enumerated universe (6 exhaustive + 29
    family-granular), and the count is 35.
 """
-import re, subprocess, sys, pathlib
+import os, re, subprocess, sys, pathlib
 from collections import Counter as Cnt
 
 WT = pathlib.Path(__file__).resolve().parents[3]  # worktree root
 SPEC = WT / "docs/scan-spec.md"
 ROUND8 = WT / "docs/spec-round8.md"
 RATIFY = WT / "docs/ratify-1.md"
-REF_PKGS = pathlib.Path("./ref/packages")
+def _ref_root() -> pathlib.Path:
+    root = pathlib.Path(__file__).resolve().parents[3]  # repo root
+    if root.parent.name == ".worktrees":  # lane worktree -> main checkout
+        root = root.parent.parent
+    return pathlib.Path(os.environ.get("OC_REF_ROOT", str(root.parent / "opencode-ref")))
+
+REF_PKGS = _ref_root() / "packages"
 spec = SPEC.read_text(encoding="utf-8")
 ratify = RATIFY.read_text(encoding="utf-8")
 round8 = ROUND8.read_text(encoding="utf-8")

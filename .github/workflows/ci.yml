@@ -133,7 +133,7 @@ jobs:
       # python3 (runner stock), the committed synthetic corpora
       # (in-repo), loopback + PTY (harness allocates its own). The
       # ref-side PAIR lane skips in CI (ref_lane_skip_reason: no
-      # ./ref, no pinned bun).
+      # the pinned ref source, no pinned bun).
       - name: Build the opencode-rust binary (realchain T9 lane)
         run: |
           cargo build --locked -p oc-cli --bin opencode-rust

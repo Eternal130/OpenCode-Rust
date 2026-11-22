@@ -393,7 +393,7 @@ tests — never from real user traffic).
   `tools/dev-gate.sh 'cargo nextest run -p oc-tui --test realchain_pair --locked --no-fail-fast'`
 
   Requirements beyond the above: the ref checkout (default
-  `./ref`, override `T9_REF_ROOT`) and the pinned bun
+  the pinned ref source, override `T9_REF_ROOT`) and the pinned bun
   1.4.2 (default the main checkout's untracked
   `tools/bin/bun-1.4.2`, override `T9_BUN`). When either is absent —
   the per-push CI, for one — every pair test **skips** with the reason
@@ -711,7 +711,7 @@ The side-by-side TUI differential (`tools/parity/tui-diff/`, the
 `OC_TUI_DIFF` gate) needs the **runnable v2.0.24 checkout** at
 `/tmp/opencode/ref` (bun + node_modules), exactly like the local
 parity harness self-heals it (`tools/parity/src/reference.rs`:
-tar copy from the pinned `./ref` source, then
+tar copy from the pinned ref source, then
 `bun install --frozen-lockfile`). When CI grows a job for it, model it
 on `web-assets`:
 

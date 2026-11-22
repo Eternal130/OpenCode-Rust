@@ -947,14 +947,14 @@ mod tests {
     #[test]
     fn config_directories_walk_cwd_ancestors() {
         let directories = config_directories(
-            Path::new("~/.config/opencode"),
-            Path::new("./repo/crates/oc-tui"),
+            Path::new("/home/u/.config/opencode"),
+            Path::new("/home/u/src/opencode-rust/crates/oc-tui"),
         );
-        assert_eq!(directories[0], Path::new("~/.config/opencode"));
+        assert_eq!(directories[0], Path::new("/home/u/.config/opencode"));
         assert_eq!(directories[1], Path::new("/.opencode"));
-        assert!(directories.contains(&PathBuf::from("./repo/.opencode")));
+        assert!(directories.contains(&PathBuf::from("/home/u/src/opencode-rust/.opencode")));
         let last = directories.last().unwrap();
-        assert_eq!(last, Path::new("./repo/crates/oc-tui/.opencode"));
+        assert_eq!(last, Path::new("/home/u/src/opencode-rust/crates/oc-tui/.opencode"));
     }
 }
 

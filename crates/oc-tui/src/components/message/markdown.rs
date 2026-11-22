@@ -4,7 +4,7 @@
 //! the same upstream, but the pipeline is the ONE proven line: the
 //! marked@17 lexer port, the settled block tree, and the tree-sitter
 //! markdown/code highlighter are all differential-oracle-zero-diff
-//! against @opentui 0.5.14 — see `./opentui`).
+//! against @opentui 0.5.14 — see the opentui-rust checkout).
 //!
 //! The v2 consumption shape (`routes/session/message-parts.tsx`
 //! `TextPart`): `<markdown content={text.trim()} conceal

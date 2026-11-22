@@ -172,7 +172,7 @@ env:
   # the ubuntu-26.04 disk-death class of run 42674936717 (linker SIGBUS).
   CARGO_PROFILE_DEV_DEBUG: "0"
   # The pinned v2.0.24 reference source (docs/parity-baseline.md:
-  # ./ref @ e7a34f09bf). Runners fetch this tarball the same
+  # the pinned ref source @ e7a34f09bf). Runners fetch this tarball the same
   # way release.yml fetches APP_REF for the web UI.
   PARITY_REF: e7a34f09bfd9134dfade5a8ddb843f7030bc9a69
   # Single pin for every setup-bun + the install-cache key. v2.0.24's own

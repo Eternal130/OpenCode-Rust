@@ -26,9 +26,9 @@ diffing reference only.
 ```bash
 cd /tmp/opencode/tui-dump   # or restore this mirror there
 bun --preload @opentui/solid/preload export.ts \
-    --out ./repo/tools/parity/goldens/tui-frames
+    --out tools/parity/goldens/tui-frames
 bun --preload @opentui/solid/preload export.ts --verify \
-    --out ./repo/tools/parity/goldens/tui-frames   # determinism gate
+    --out tools/parity/goldens/tui-frames   # determinism gate
 ```
 
 - `--preload @opentui/solid/preload` is required (matches the reference

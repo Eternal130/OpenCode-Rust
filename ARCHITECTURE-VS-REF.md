@@ -39,7 +39,7 @@
 ## 构建与工具链
 
 - Rust `1.99.0` 钉扎（`rust-toolchain.toml`）；仓库级 incremental=false 强制。
-- `tools/dev-gate.sh` 单入口：dev 身份 + systemd scope（CPUQuota=400% / MemoryMax=6G / TasksMax=512）+ load/磁盘闸；验证脚本（diff/parity/guards）直跑禁包门。
+- `tools/dev-gate.sh` 单入口：配置的非 root 开发身份（动态解析，OC_DEV_USER 可覆盖）+ systemd scope（CPUQuota=400% / MemoryMax=6G / TasksMax=512）+ load/磁盘闸；验证脚本（diff/parity/guards）直跑禁包门。
 - CI 四流水线（`.github/workflows/`）：`ci.yml` / `runtime-gates.yml` / `release.yml` / `realchain-diff.yml`。
 - 差分工具族：`tools/diff/*.py`（HTTP/SSE/JSON-SCHEMA/ACP/TUI 整屏）、`tools/parity/`（金帧）、`tools/diff/realchain/`（真链路电池+裁决）。
 
@@ -47,4 +47,4 @@
 
 - 已知分歧登记册 → `DIVERGENCES.md`；开发规范 → 本地私有册 `docs/GAPS-AND-PITFALLS.md`（git-ignored）
 - agent 入口（规范权威源 `tools/lane-brief.sh`）→ `AGENTS.md`
-- 历史 ADR / 审计台账 / 设计文档 → git 历史（2026-11-22 出树，盘上归档 ./archive/）
+- 历史 ADR / 审计台账 / 设计文档 → 本地仓外归档（不入库；完整判定史不随公开仓分发——2026-11-22 隐私清理已历史重写；全文副本=本地备份与仓外归档）

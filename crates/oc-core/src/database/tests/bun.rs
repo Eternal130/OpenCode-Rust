@@ -34,6 +34,28 @@ use super::super::Database;
 
 /// Reference checkout root (override with `PARITY_REF_ROOT`).
 const REF_ROOT: &str = "/tmp/opencode/ref";
+
+/// The pinned ref SOURCE checkout (override: `OC_REF_ROOT`): the
+/// `opencode-ref` sibling of this repository (lane worktrees resolve
+/// via the main checkout).
+fn ref_source_default() -> PathBuf {
+    let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    if root.parent().and_then(Path::file_name).is_some_and(|n| n == ".worktrees") {
+        if let Some(main) = root.parent().and_then(Path::parent) {
+            root = main.to_path_buf();
+        }
+    }
+    if let Some(dir) = std::env::var_os("OC_REF_ROOT") {
+        return PathBuf::from(dir);
+    }
+    root.parent().map(|p| p.join("opencode-ref")).unwrap_or_else(|| PathBuf::from("opencode-ref"))
+}
 /// Sandbox parent for these tests (override with `PARITY_SANDBOX_ROOT`).
 const SANDBOX_ROOT: &str = "/tmp/opencode/core-db-sandbox";
 /// The managed-service default port; never bound here.
@@ -58,12 +80,15 @@ fn ensure_ref_runtime() -> bool {
         return true;
     }
     eprintln!("[ref-selfheal] reference runtime missing — rebuilding");
-    let bun = ["/usr/local/bin/bun", "~/.bun/bin/bun"]
-        .iter()
-        .find(|p| std::path::Path::new(p).exists());
+    let mut bun_candidates: Vec<String> = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        bun_candidates.push(format!("{home}/.bun/bin/bun"));
+    }
+    bun_candidates.push("/usr/local/bin/bun".to_owned());
+    let bun = bun_candidates.iter().find(|p| std::path::Path::new(p).exists());
     let ok = std::process::Command::new("sh")
         .arg("-c")
-        .arg("mkdir -p /tmp/opencode && chmod 1777 /tmp/opencode 2>/dev/null; mkdir -p /tmp/opencode/ref.tmp && cd ./ref && tar -cf - --exclude=.git . | (cd /tmp/opencode/ref.tmp && tar -xf -) && mv /tmp/opencode/ref.tmp /tmp/opencode/ref")
+        .arg(format!("mkdir -p /tmp/opencode && chmod 1777 /tmp/opencode 2>/dev/null; mkdir -p /tmp/opencode/ref.tmp && cd {src} && tar -cf - --exclude=.git . | (cd /tmp/opencode/ref.tmp && tar -xf -) && mv /tmp/opencode/ref.tmp /tmp/opencode/ref", src = ref_source_default().display()))
         .output()
         .is_ok_and(|o| o.status.success());
     if !ok {
@@ -88,10 +113,17 @@ fn ref_root() -> PathBuf {
 }
 
 fn bun_path() -> Option<PathBuf> {
-    let well_known =
-        ["~/.bun/bin/bun", "/usr/local/bin/bun", "/usr/bin/bun", "/opt/homebrew/bin/bun"];
-    if let Some(candidate) = well_known.iter().find(|c| Path::new(c).is_file()) {
-        return Some(PathBuf::from(*candidate));
+    let mut well_known: Vec<PathBuf> = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        well_known.push(PathBuf::from(home).join(".bun/bin/bun"));
+    }
+    well_known.extend(
+        ["/usr/local/bin/bun", "/usr/bin/bun", "/opt/homebrew/bin/bun"]
+            .iter()
+            .map(PathBuf::from),
+    );
+    if let Some(candidate) = well_known.iter().find(|c| c.is_file()) {
+        return Some(candidate.clone());
     }
     if let Ok(paths) = std::env::var("PATH") {
         for dir in paths.split(':') {
@@ -191,7 +223,7 @@ fn build_command(
         .arg("--port")
         .arg(port.to_string())
         .env_clear()
-        .env("PATH", "~/.bun/bin:/usr/local/bin:/usr/bin:/bin")
+        .env("PATH", format!("{}:/usr/local/bin:/usr/bin:/bin", std::env::var("HOME").map(|h| format!("{h}/.bun/bin")).unwrap_or_else(|_| "/usr/local/bin".to_owned())))
         .env("HOME", home)
         .env("OPENCODE_TEST_HOME", home)
         .env("XDG_DATA_HOME", home.join(".local/share"))

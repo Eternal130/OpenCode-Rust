@@ -32,7 +32,7 @@ Axis 3 — the catalog-only census (the ~180 blind spot, mechanized):
                        protocol -> typed UnsupportedProtocol (gap
                        candidates, declared registered exemption).
 
-Usage: python3 tools/census/providers.py [--ref ./ref] [--write docs/audit/census/PROVIDERS.md]
+Usage: python3 tools/census/providers.py [--ref $OC_REF_ROOT] [--write docs/audit/census/PROVIDERS.md]
 """
 from __future__ import annotations
 
@@ -45,6 +45,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from common import Report, _match_brace, strip_tests  # noqa: E402
+import os
+
+# Pinned ref source: $OC_REF_ROOT override, else the `opencode-ref`
+# sibling of this repository (lane worktrees resolve via the main checkout).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if _REPO_ROOT.parent.name == ".worktrees":
+    _REPO_ROOT = _REPO_ROOT.parent.parent
+REF_DEFAULT = os.environ.get("OC_REF_ROOT", str(_REPO_ROOT.parent / "opencode-ref"))
+
 
 GENERIC_NPM = {
     "@ai-sdk/openai-compatible": "chat",
@@ -171,7 +180,7 @@ def resolve(provider_id: str, npm: str | None, packages: dict, hosts: dict) -> s
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ref", default="./ref")
+    ap.add_argument("--ref", default=REF_DEFAULT)
     ap.add_argument("--write", default=None)
     args = ap.parse_args()
     ref = Path(args.ref)

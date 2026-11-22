@@ -4,14 +4,14 @@ r"""Guard `env_inventory` (§9.1): reference `OPENCODE_*` env read no Rust claim
 
 WHAT IT CHECKS
   Every `OPENCODE_*` environment variable the v2 reference READS
-  (`process.env.OPENCODE_*` under `./ref/packages/**`) must
+  (`process.env.OPENCODE_*` under the pinned ref source `packages/**`) must
   have a claim point in the Rust port (the variable name appearing in
   `crates/**/*.rs`). A violation is a ref env read with no Rust claim —
   the env-parity gap the ledger's CONFIG entries track.
 
 CANONICAL LIST + SNAPSHOT
   * The canonical list is produced by a READ-ONLY scan of
-    `./ref/packages` (only `process.env.OPENCODE_*` reads;
+    the pinned ref source `packages` (only `process.env.OPENCODE_*` reads;
     bare `OPENCODE_*` string constants such as icon/favicon names are
     NOT env reads and are ignored).
   * CI has no reference checkout, so the guard falls back to the
@@ -42,8 +42,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import guardlib  # noqa: E402
+import os
 
-REF_ROOT = Path("./ref")
+# Pinned ref source: $OC_REF_ROOT override, else the `opencode-ref`
+# sibling of this repository (lane worktrees resolve via the main checkout).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if _REPO_ROOT.parent.name == ".worktrees":
+    _REPO_ROOT = _REPO_ROOT.parent.parent
+REF_DEFAULT = os.environ.get("OC_REF_ROOT", str(_REPO_ROOT.parent / "opencode-ref"))
+
+
+REF_ROOT = Path(REF_DEFAULT)
 PACKAGES_DIR = REF_ROOT / "packages"
 SNAPSHOT = Path(__file__).resolve().parent / "snapshots" / "env_ref.txt"
 
@@ -120,7 +129,7 @@ def main() -> int:
     parser.add_argument("--update-baseline", action="store_true",
                         help="rewrite tools/guards/baseline/env_inventory.json with the current set")
     parser.add_argument("--refresh", action="store_true",
-                        help="re-scan ./ref (READ-ONLY) and rewrite snapshots/env_ref.txt")
+                        help="re-scan the pinned ref source (READ-ONLY) and rewrite snapshots/env_ref.txt")
     parser.add_argument("--format", choices=("text", "json"), default="text")
     args = parser.parse_args()
 
@@ -132,7 +141,7 @@ def main() -> int:
             return 2
         SNAPSHOT.parent.mkdir(parents=True, exist_ok=True)
         SNAPSHOT.write_text(
-            "# OPENCODE_* env reads in ./ref/packages (process.env.* only).\n"
+            "# OPENCODE_* env reads in the pinned ref source packages (process.env.* only).\n"
             "# Regenerate: python3 tools/guards/env_inventory.py --refresh\n"
             + "\n".join(vars_) + "\n",
             encoding="utf-8",

@@ -56,14 +56,14 @@ fn ensure_ref_runtime_or_skip(name: &str) -> bool {
             "mkdir -p /tmp/opencode && chmod 1777 /tmp/opencode 2>/dev/null; \
              mkdir -p /tmp/opencode/ref.tmp && cd {src} && tar -cf - --exclude=.git . | (cd /tmp/opencode/ref.tmp && tar -xf -) && \
              mv /tmp/opencode/ref.tmp /tmp/opencode/ref",
-            src = "./ref"
+            src = parity::reference::ref_source_default().display()
         ))
         .output();
     match out {
         Ok(o) if o.status.success() => {}
         _ => {
             return parity::gate::skip_or_fail(&format!(
-                "m1:{name}: reference runtime rebuild failed (copy from ./ref)"
+                "m1:{name}: reference runtime rebuild failed (copy from the pinned ref source)"
             ));
         }
     }

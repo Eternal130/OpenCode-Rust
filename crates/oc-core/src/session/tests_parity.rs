@@ -44,6 +44,28 @@ use crate::database::Database;
 use crate::session::projector::install_projectors;
 
 const REF_ROOT: &str = "/tmp/opencode/ref";
+
+/// The pinned ref SOURCE checkout (override: `OC_REF_ROOT`): the
+/// `opencode-ref` sibling of this repository (lane worktrees resolve
+/// via the main checkout).
+fn ref_source_default() -> PathBuf {
+    let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    if root.parent().and_then(Path::file_name).is_some_and(|n| n == ".worktrees") {
+        if let Some(main) = root.parent().and_then(Path::parent) {
+            root = main.to_path_buf();
+        }
+    }
+    if let Some(dir) = std::env::var_os("OC_REF_ROOT") {
+        return PathBuf::from(dir);
+    }
+    root.parent().map(|p| p.join("opencode-ref")).unwrap_or_else(|| PathBuf::from("opencode-ref"))
+}
 const SANDBOX_ROOT: &str = "/tmp/opencode/w4a-sandbox";
 const FORBIDDEN_PORT: u16 = 49374;
 const REF_PASSWORD: &str = "core-w4a-ref-password";
@@ -56,12 +78,15 @@ fn ensure_ref_runtime() -> bool {
         return true;
     }
     eprintln!("[ref-selfheal] reference runtime missing — rebuilding");
-    let bun = ["/usr/local/bin/bun", "~/.bun/bin/bun"]
-        .iter()
-        .find(|p| std::path::Path::new(p).exists());
+    let mut bun_candidates: Vec<String> = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        bun_candidates.push(format!("{home}/.bun/bin/bun"));
+    }
+    bun_candidates.push("/usr/local/bin/bun".to_owned());
+    let bun = bun_candidates.iter().find(|p| std::path::Path::new(p).exists());
     let ok = std::process::Command::new("sh")
         .arg("-c")
-        .arg("mkdir -p /tmp/opencode && chmod 1777 /tmp/opencode 2>/dev/null; mkdir -p /tmp/opencode/ref.tmp && cd ./ref && tar -cf - --exclude=.git . | (cd /tmp/opencode/ref.tmp && tar -xf -) && mv /tmp/opencode/ref.tmp /tmp/opencode/ref")
+        .arg(format!("mkdir -p /tmp/opencode && chmod 1777 /tmp/opencode 2>/dev/null; mkdir -p /tmp/opencode/ref.tmp && cd {src} && tar -cf - --exclude=.git . | (cd /tmp/opencode/ref.tmp && tar -xf -) && mv /tmp/opencode/ref.tmp /tmp/opencode/ref", src = ref_source_default().display()))
         .output()
         .is_ok_and(|o| o.status.success());
     if !ok {
@@ -89,9 +114,14 @@ fn has_bun() -> bool {
 }
 
 fn bun_path() -> Option<PathBuf> {
-    for candidate in ["~/.bun/bin/bun", "/usr/local/bin/bun", "/usr/bin/bun"] {
-        if Path::new(candidate).is_file() {
-            return Some(PathBuf::from(candidate));
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        candidates.push(PathBuf::from(home).join(".bun/bin/bun"));
+    }
+    candidates.extend(["/usr/local/bin/bun", "/usr/bin/bun"].iter().map(PathBuf::from));
+    for candidate in candidates {
+        if candidate.is_file() {
+            return Some(candidate);
         }
     }
     std::env::var("PATH").ok().and_then(|paths| {
@@ -263,7 +293,7 @@ async fn spawn_reference() -> Result<(ReferenceServer, std::path::PathBuf), Stri
         .arg(root.join("packages/cli"))
         .arg("w4a-parity-serve.ts")
         .env_clear()
-        .env("PATH", "~/.bun/bin:/usr/local/bin:/usr/bin:/bin")
+        .env("PATH", format!("{}:/usr/local/bin:/usr/bin:/bin", std::env::var("HOME").map(|h| format!("{h}/.bun/bin")).unwrap_or_else(|_| "/usr/local/bin".to_owned())))
         .env("HOME", &home)
         .env("XDG_DATA_HOME", home.join(".local/share"))
         .env("XDG_CACHE_HOME", home.join(".cache"))

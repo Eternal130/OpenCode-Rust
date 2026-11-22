@@ -257,7 +257,9 @@ fn omos_source() -> Option<std::path::PathBuf> {
         let root = std::path::PathBuf::from(root);
         return root.join("dist/server/index.js").is_file().then_some(root);
     }
-    let base = std::path::Path::new("~/.cache/opencode/npm/oh-my-opencode-slim@latest");
+    let cache_root = std::env::var("XDG_CACHE_HOME")
+        .unwrap_or_else(|_| std::env::var("HOME").map(|h| h + "/.cache").unwrap_or_default());
+    let base = std::path::Path::new(&cache_root).join("opencode/npm/oh-my-opencode-slim@latest");
     let mut stamps: Vec<std::path::PathBuf> = std::fs::read_dir(base)
         .ok()?
         .filter_map(std::result::Result::ok)

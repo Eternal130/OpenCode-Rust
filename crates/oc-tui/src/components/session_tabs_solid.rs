@@ -5,7 +5,7 @@
 //! **What this module is.** A 1:1 structural port of v2's
 //! `HorizontalSessionTabs` (`component/session-tabs.tsx:1288-1803`)
 //! as an opentui-solid builder tree (`box_`/`text`/`show`/`for_list`
-//! — see `./opentui/crates/opentui-solid`), driven by the
+//! — see the opentui-rust checkout `crates/opentui-solid`), driven by the
 //! SAME oc-tui store data the hand-rolled renderer
 //! ([`crate::components::session_tabs`]) consumes. The store, the
 //! mouse routing (`app.rs` → `strip_hit` → `Store::select_tab` /

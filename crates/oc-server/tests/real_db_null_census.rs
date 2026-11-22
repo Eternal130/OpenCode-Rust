@@ -6,8 +6,8 @@
 //! never-silent-500 assertion on the sandboxed server log.
 //!
 //! Source of truth: a pre-staged copy at `/tmp/opencode/dbfix/
-//! real-opencode.db` (online-backup of `~/.local/share/opencode-rust/
-//! opencode.db`, owned by the build user — the original is root-only and
+//! real-opencode.db` (online-backup of the
+//! real machine's opencode-rust `opencode.db`, owned by the build user — the original is root-only and
 //! must never be touched by tests). The test copies the staged master
 //! into its own sandbox, so repeated runs never mutate the master.
 //! Skips (with a message, green) when the staged copy is absent — e.g.

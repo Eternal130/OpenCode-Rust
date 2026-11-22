@@ -24,7 +24,7 @@ comment); kebab/snake case never occurs on this axis, so NO case
 normalization is applied. Only the family/tag NAME set is compared —
 HTTP status mappings and field shapes are out of scope.
 
-Usage: python3 tools/census/errors.py [--ref ./ref] [--write docs/audit/census/ERRORS.md]
+Usage: python3 tools/census/errors.py [--ref $OC_REF_ROOT] [--write docs/audit/census/ERRORS.md]
 """
 from __future__ import annotations
 
@@ -35,6 +35,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from common import Report, strip_tests  # noqa: E402
+import os
+
+# Pinned ref source: $OC_REF_ROOT override, else the `opencode-ref`
+# sibling of this repository (lane worktrees resolve via the main checkout).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if _REPO_ROOT.parent.name == ".worktrees":
+    _REPO_ROOT = _REPO_ROOT.parent.parent
+REF_DEFAULT = os.environ.get("OC_REF_ROOT", str(_REPO_ROOT.parent / "opencode-ref"))
+
 
 REF_DIRS = ("packages/protocol/src", "packages/schema/src")
 RUST_SERVER = Path("crates/oc-server/src")
@@ -93,7 +102,7 @@ def rust_readiness() -> dict[str, tuple[str, int]]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ref", default="./ref")
+    ap.add_argument("--ref", default=REF_DEFAULT)
     ap.add_argument("--write", default=None)
     args = ap.parse_args()
 

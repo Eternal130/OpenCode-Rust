@@ -96,7 +96,7 @@ jobs:
           bun --version
 
       # ref 2.0.24, same source+pin the local lane uses: the v2.0.24
-      # tag tarball from the ref upstream (the ./ref
+      # tag tarball from the ref upstream (the pinned ref source
       # checkout's upstream remote), installed into a TEMP root (never
       # a repo path) with the workspace deps via the pinned bun.
       - name: Install ref 2.0.24 tarball into T9_REF_ROOT

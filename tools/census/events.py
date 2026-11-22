@@ -21,7 +21,7 @@ TUI_LOCAL), exit 0 always — census, not gate. REF_ONLY rows are gap
 candidates (red); RUST_ONLY rows are rust-extra faces needing register
 backing. Payload FIELD-level differences are out of scope (names only).
 
-Usage: python3 tools/census/events.py [--ref ./ref] [--write docs/audit/census/EVENTS.md]
+Usage: python3 tools/census/events.py [--ref $OC_REF_ROOT] [--write docs/audit/census/EVENTS.md]
 """
 from __future__ import annotations
 
@@ -33,6 +33,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from common import Report, strip_tests  # noqa: E402
+import os
+
+# Pinned ref source: $OC_REF_ROOT override, else the `opencode-ref`
+# sibling of this repository (lane worktrees resolve via the main checkout).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if _REPO_ROOT.parent.name == ".worktrees":
+    _REPO_ROOT = _REPO_ROOT.parent.parent
+REF_DEFAULT = os.environ.get("OC_REF_ROOT", str(_REPO_ROOT.parent / "opencode-ref"))
+
 
 SESSION_TAG = r'"(session\.[a-z][a-z.]*)"'
 
@@ -121,7 +130,7 @@ def tui_session_literals() -> dict[str, tuple[str, int]]:
 # ---------------------------------------------------------------- main
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ref", default="./ref")
+    ap.add_argument("--ref", default=REF_DEFAULT)
     ap.add_argument("--write", default="docs/audit/census/EVENTS.md")
     args = ap.parse_args()
 

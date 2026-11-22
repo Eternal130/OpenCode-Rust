@@ -76,7 +76,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent.parent
-REF_DEFAULT = Path("./ref")
+REF_DEFAULT = Path(REF_DEFAULT)
 STAGE = Path("/tmp/opencode/diff-tuifull")
 LOG_DIR = Path("/tmp/opencode/logs")
 
@@ -152,7 +152,7 @@ PLUGIN_PAYLOADS = {
 # env overrides (payload roots), e.g. OC_DIFF_PLUGIN_OMO_SLIM=/path/to/pkg
 PLUGIN_ENV = {"omo-slim": "OC_DIFF_PLUGIN_OMO_SLIM",
               "superpowers": "OC_DIFF_PLUGIN_SUPERPOWERS"}
-NPM_CACHE = Path(os.environ.get("OC_DIFF_NPM_CACHE", "~/.cache/opencode/npm"))
+NPM_CACHE = Path(os.environ.get("OC_DIFF_NPM_CACHE", os.path.join(os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache")), "opencode/npm")))
 
 # B2-fix (controller-confirmed root cause): the ref plugin-boot failure
 # pinned in the first B2 round was bun 1.3.10's ResolveMessage NOT
@@ -286,7 +286,7 @@ def build_manifest(stage: Path) -> tuple[list[dict], list[str]]:
     scenarios_dir = stage / "scenarios"
     scenarios_dir.mkdir(parents=True)
     # the rust leg runs through tools/dev-gate.sh as a different user
-    # (dev, the gate's identity rule) — stage world-writable
+    # (the gate's non-root identity rule) — stage world-writable
     # with the sticky bit (1777, like /tmp)
     os.chmod(stage, 0o1777)
     os.chmod(scenarios_dir, 0o1777)
@@ -1449,7 +1449,7 @@ def write_report(path: Path, cases: list[dict], ref: dict[str, dict], rust: dict
     # --- ⑦ out-of-scope declaration ---
     lines.append("## 范围外声明")
     lines.append("")
-    lines.append("- ./opentui 127 场景 = 框架层（OpenTUI 渲染器）边界，本通道只测 oc-tui 应用层，")
+    lines.append("- opentui-rust 检出 127 场景 = 框架层（OpenTUI 渲染器）边界，本通道只测 oc-tui 应用层，")
     lines.append("  不在其上做差分裁决")
     lines.append("- 动画中间帧 G-128/G-49/G-368：A2 起有了 frames 维度的可断言面（anim 场景"
                  "逐拍对拍，上节）；纯静息场景仍只比静止帧，frames 簇豁免收窄为"

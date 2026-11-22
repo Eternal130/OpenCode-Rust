@@ -160,7 +160,7 @@ fn is_regional_indicator(ch: char) -> bool {
 /// G-452 — the reference's emoji emission shape (observed ref grid,
 /// `w13-g-emoji` pair dump; native shaper semantics vendored in the
 /// sister repo at
-/// `./opentui/third_party/opentui/packages/native/src/utf8.zig:438-459`
+/// opentui-rust checkout `third_party/opentui/packages/native/src/utf8.zig:438-459`
 /// plus grapheme packing): the ref terminal never receives the full
 /// ZWJ family or the skin-tone modifier bytes. Per cluster:
 ///

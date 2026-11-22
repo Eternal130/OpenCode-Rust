@@ -510,7 +510,7 @@ fn transcript_openlink_rows_drive_osc8_under_the_probe_gate() {
 /// to width 2 — the double space after `❤️` and `🏳️‍`), regional
 /// pairs round-trip. Anchors: the vendored native shaper in the
 /// SISTER REPO at
-/// `./opentui/third_party/opentui/packages/native/src/utf8.zig:438-459`
+/// opentui-rust checkout `third_party/opentui/packages/native/src/utf8.zig:438-459`
 /// (ZWJ/VS16 zero-width, EAW wide = 2) and the
 /// `w13-g-emoji-settled` ref dump the adjudication registered.
 #[test]

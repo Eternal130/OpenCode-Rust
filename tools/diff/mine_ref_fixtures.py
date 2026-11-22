@@ -7,7 +7,7 @@ corpus files, drivers, and orchestrators are never modified. Re-running
 produces byte-identical output: every channel first deletes its own
 `mined-*` files, then regenerates deterministically from the ref checkout.
 
-Sources (read-only, ./ref default):
+Sources (read-only, the pinned ref-source sibling; $OC_REF_ROOT overrides):
   ch1 config   : packages/core/test/config/config.test.ts
                  (JSON.stringify / writeFile string-literal args, regex +
                  balanced-paren extraction, evaluated with bun), plus
@@ -32,7 +32,7 @@ Sources (read-only, ./ref default):
   ch6 http     : packages/server/test/*.test.ts request shapes ->
                  corpus/http/mined-http.json (error paths + POST bodies)
 
-Usage: python3 tools/diff/mine_ref_fixtures.py [--ref ./ref]
+Usage: python3 tools/diff/mine_ref_fixtures.py [--ref $OC_REF_ROOT]
 """
 from __future__ import annotations
 
@@ -42,6 +42,15 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+import os
+
+# Pinned ref source: $OC_REF_ROOT override, else the `opencode-ref`
+# sibling of this repository (lane worktrees resolve via the main checkout).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if _REPO_ROOT.parent.name == ".worktrees":
+    _REPO_ROOT = _REPO_ROOT.parent.parent
+REF_DEFAULT = os.environ.get("OC_REF_ROOT", str(_REPO_ROOT.parent / "opencode-ref"))
+
 
 REPO = Path(__file__).resolve().parent.parent.parent
 DIFF = REPO / "tools/diff"
@@ -899,7 +908,7 @@ def mine_http() -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ref", default="./ref")
+    ap.add_argument("--ref", default=REF_DEFAULT)
     ap.add_argument("--only", help="comma list: config,acp,sse,json_schema,compaction,http")
     args = ap.parse_args()
     ref = Path(args.ref)

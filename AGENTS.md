@@ -54,7 +54,7 @@ python3 tools/guards/<name>.py               # 单跑
 ### 5. parity — 金帧与双端对拍
 
 ```sh
-cd ./opentui && tools/diff/run-all.sh   # opentui 渲染差分全套 127 场景（直跑禁包 dev-gate）
+cd <opentui-rust 检出> && tools/diff/run-all.sh   # opentui 渲染差分全套 127 场景（直跑禁包 dev-gate）
 ```
 
 `tools/parity/goldens/` = 334 金帧（重钉=stop-and-escalate，禁擅自重冻结）；树场景 capture/freeze 两脚本；详见 `tools/parity/README.md` 与 `NORMALIZATION.md`。

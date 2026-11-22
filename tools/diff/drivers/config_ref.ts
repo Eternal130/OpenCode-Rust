@@ -1,6 +1,6 @@
 // Config-parse differential driver (ref side).
 // Staged by tools/diff/config_parse.py into /tmp/opencode/ with a
-// node_modules symlink to ./ref/node_modules so bare
+// node_modules symlink to the pinned ref source's node_modules so bare
 // specifiers resolve inside the ref workspace. REF_ROOT env points at
 // the ref checkout. Mirrors packages/core/src/config.ts parseInfo:
 //   jsonc-parser parse(allowTrailingComma) -> ConfigNormalize.normalize ->

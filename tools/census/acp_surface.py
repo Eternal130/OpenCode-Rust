@@ -5,7 +5,7 @@ Axis 1 — SessionUpdate event kinds: every update kind the rust ACP
   adapter can emit (`SessionUpdate::X` constructor sites across
   crates/oc-cli/src/acp/*.rs, `#[cfg(test)]`/`#[test]` regions stripped,
   comments stripped) vs every `sessionUpdate: "x"` literal in the ref
-  adapter (./ref/packages/cli/src/acp/*.ts). Kind-level
+  adapter (<pinned ref source>/packages/cli/src/acp/*.ts). Kind-level
   only: per-field shape and ordering are behavioral and out of scope.
 Axis 2 — request/notification method face: the ref's registered ACP
   methods (`request("x", …)` / `notification("x", …)` in
@@ -21,7 +21,7 @@ Known anchors: G-339/G-340/G-354/G-355 were behavioral diffs (already
 fixed) — this census compares KIND sets only; behavior is out of scope
 (declared).
 
-Usage: python3 tools/census/acp_surface.py [--ref ./ref]
+Usage: python3 tools/census/acp_surface.py [--ref $OC_REF_ROOT]
            [--write docs/audit/census/ACP.md]
 """
 from __future__ import annotations
@@ -36,6 +36,15 @@ sys.path.insert(0, str(Path(__file__).parent))
 from common import Report, strip_tests  # noqa: E402
 
 from rpc_methods import strip_comments_keep_lines  # noqa: E402
+import os
+
+# Pinned ref source: $OC_REF_ROOT override, else the `opencode-ref`
+# sibling of this repository (lane worktrees resolve via the main checkout).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if _REPO_ROOT.parent.name == ".worktrees":
+    _REPO_ROOT = _REPO_ROOT.parent.parent
+REF_DEFAULT = os.environ.get("OC_REF_ROOT", str(_REPO_ROOT.parent / "opencode-ref"))
+
 
 RUST_ACP = Path("crates/oc-cli/src/acp")
 
@@ -117,7 +126,7 @@ def ref_methods(ref: str) -> dict[str, tuple[str, int]]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ref", default="./ref")
+    ap.add_argument("--ref", default=REF_DEFAULT)
     ap.add_argument("--write", default="docs/audit/census/ACP.md")
     args = ap.parse_args()
 

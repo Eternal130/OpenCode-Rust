@@ -28,6 +28,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Pinned ref source: $OC_REF_ROOT override, else the `opencode-ref`
+# sibling of this repository (lane worktrees resolve via the main checkout).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if _REPO_ROOT.parent.name == ".worktrees":
+    _REPO_ROOT = _REPO_ROOT.parent.parent
+REF_DEFAULT = os.environ.get("OC_REF_ROOT", str(_REPO_ROOT.parent / "opencode-ref"))
+
+
 REPO = Path(__file__).resolve().parent.parent.parent
 CORPUS_DEFAULT = REPO / "tools/diff/corpus/config"
 STAGE = Path("/tmp/opencode/diff-config")
@@ -90,7 +98,7 @@ def normalize_case(rec: dict) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ref", default="./ref")
+    ap.add_argument("--ref", default=REF_DEFAULT)
     ap.add_argument("--corpus", default=str(CORPUS_DEFAULT))
     ap.add_argument("--write", default="docs/audit/diff/CONFIG-PARSE.md")
     args = ap.parse_args()

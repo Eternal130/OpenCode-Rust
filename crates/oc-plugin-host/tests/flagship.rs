@@ -29,12 +29,20 @@ use serde_json::{json, Value};
 use oc_plugin_host::{PluginHost, PluginHostConfig, RegistrationSnapshot, SessionPort};
 
 /// The live install (read-only; never loaded in place).
+/// The user's npm cache root (`$XDG_CACHE_HOME`, else `$HOME/.cache`).
+fn npm_cache_root() -> PathBuf {
+    if let Ok(x) = std::env::var("XDG_CACHE_HOME") {
+        return PathBuf::from(x);
+    }
+    std::env::var("HOME").map(|h| PathBuf::from(h).join(".cache")).unwrap_or_default()
+}
+
 fn flagship_source() -> Option<PathBuf> {
     if let Ok(root) = std::env::var("OC_OMOS_ROOT") {
         let root = PathBuf::from(root);
         return root.join("dist/server/index.js").is_file().then_some(root);
     }
-    let base = Path::new("~/.cache/opencode/npm/oh-my-opencode-slim@latest");
+    let base = npm_cache_root().join("opencode/npm/oh-my-opencode-slim@latest");
     let mut stamps: Vec<PathBuf> = std::fs::read_dir(base)
         .ok()?
         .filter_map(std::result::Result::ok)
@@ -50,12 +58,20 @@ fn flagship_source() -> Option<PathBuf> {
 }
 
 /// The machine's config preset for the flagship (read-only; copied).
+/// The user's config root (`$XDG_CONFIG_HOME`, else `$HOME/.config`).
+fn config_root() -> PathBuf {
+    if let Ok(x) = std::env::var("XDG_CONFIG_HOME") {
+        return PathBuf::from(x);
+    }
+    std::env::var("HOME").map(|h| PathBuf::from(h).join(".config")).unwrap_or_default()
+}
+
 fn flagship_preset() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("OC_OMOS_CONFIG") {
         let path = PathBuf::from(path);
         return path.is_file().then_some(path);
     }
-    let path = PathBuf::from("~/.config/opencode/oh-my-opencode-slim.json");
+    let path = config_root().join("opencode/oh-my-opencode-slim.json");
     path.is_file().then_some(path)
 }
 

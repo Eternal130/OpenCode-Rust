@@ -32,7 +32,7 @@ files; every field semantic below is normative for both.
   then replay `events` below in order.
 - `events` — ordered array of `/api/event` SSE payloads, each the
   reference envelope shape `{ id, created, type, durable?, location?,
-  data }` (see `./ref/packages/tui/test/fixture/tui-client.ts`,
+  data }` (see the pinned ref source `packages/tui/test/fixture/tui-client.ts`,
   `createEventStream`; event schemas live in the ref
   `packages/schema/src/session-event.ts` / `v1/session.ts`). Emitted as
   `data: <json>\n\n` frames after the initial `server.connected`.
@@ -48,11 +48,11 @@ files; every field semantic below is normative for both.
   Shape: `[<payload-id>, ...]` with the symbolic ids of the pinned
   payload registry:
     - `"omo-slim"` — oh-my-opencode-slim 3.0.3 (npm entity under
-      `~/.cache/opencode/npm/oh-my-opencode-slim@latest/<stamp>/
+      `<npm cache>/opencode/npm/oh-my-opencode-slim@latest/<stamp>/
       node_modules/oh-my-opencode-slim`; server entry
       `dist/server/index.js`, TUI companion export `dist/tui2.js`).
     - `"superpowers"` — superpowers 7.0.0 (git entity under
-      `~/.cache/opencode/npm/git-superpowers-*/<stamp>/node_modules/
+      `<npm cache>/opencode/npm/git-superpowers-*/<stamp>/node_modules/
       superpowers`; main `.opencode/plugins/superpowers.js`, pure skill
       system, no external deps).
     - `"broken"` — the DELIBERATELY-broken committed fixture

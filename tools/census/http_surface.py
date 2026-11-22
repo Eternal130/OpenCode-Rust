@@ -18,7 +18,7 @@ RUST_EXTRA_MOUNT / REF_EXTRA_PATH), exit 0 always — this is a census, not a
 gate. New RUST_EXTRA_MOUNT / REF_ONLY rows are gap candidates for the
 register; RUST_ONLY vs ref are documented rust-extra divergences.
 
-Usage: python3 tools/census/http_surface.py [--ref ./ref] [--write docs/audit/census/HTTP-SURFACE.md]
+Usage: python3 tools/census/http_surface.py [--ref $OC_REF_ROOT] [--write docs/audit/census/HTTP-SURFACE.md]
 """
 from __future__ import annotations
 
@@ -29,6 +29,15 @@ import sys
 from pathlib import Path
 
 from common import VERBS, Report, canon_axum, canon_ref, strip_tests  # noqa: E402
+import os
+
+# Pinned ref source: $OC_REF_ROOT override, else the `opencode-ref`
+# sibling of this repository (lane worktrees resolve via the main checkout).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if _REPO_ROOT.parent.name == ".worktrees":
+    _REPO_ROOT = _REPO_ROOT.parent.parent
+REF_DEFAULT = os.environ.get("OC_REF_ROOT", str(_REPO_ROOT.parent / "opencode-ref"))
+
 
 
 
@@ -101,7 +110,7 @@ def ref_path_literals(server_src: Path, known: set[str]) -> list[tuple[str, str,
 # ---------------------------------------------------------------- main
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ref", default="./ref")
+    ap.add_argument("--ref", default=REF_DEFAULT)
     ap.add_argument("--write", default=None)
     args = ap.parse_args()
 

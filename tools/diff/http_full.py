@@ -67,6 +67,14 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+# Pinned ref source: $OC_REF_ROOT override, else the `opencode-ref`
+# sibling of this repository (lane worktrees resolve via the main checkout).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if _REPO_ROOT.parent.name == ".worktrees":
+    _REPO_ROOT = _REPO_ROOT.parent.parent
+REF_DEFAULT = os.environ.get("OC_REF_ROOT", str(_REPO_ROOT.parent / "opencode-ref"))
+
+
 REPO = Path(__file__).resolve().parent.parent.parent
 STAGE = Path("/tmp/opencode/diff-http")
 REF_DRIVER = REPO / "tools/diff/drivers/http_ref_server.ts"
@@ -555,7 +563,7 @@ def boot_with_retry(boot_fn, *args):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ref", default="./ref")
+    ap.add_argument("--ref", default=REF_DEFAULT)
     ap.add_argument("--write", default="docs/audit/diff/HTTP-FULL.md")
     ap.add_argument("--skip-build", action="store_true")
     args = ap.parse_args()

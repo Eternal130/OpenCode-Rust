@@ -16,7 +16,7 @@ channel. Known anchor: a prior round pinned "keybind 230/230 aligned";
 the ref table has since grown — deviations are checked against
 extraction first (see the report's verification section).
 
-Usage: python3 tools/census/keybinds.py [--ref ./ref] [--write docs/audit/census/KEYBINDS.md]
+Usage: python3 tools/census/keybinds.py [--ref $OC_REF_ROOT] [--write docs/audit/census/KEYBINDS.md]
 """
 from __future__ import annotations
 
@@ -27,6 +27,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from common import Report  # noqa: E402
+import os
+
+# Pinned ref source: $OC_REF_ROOT override, else the `opencode-ref`
+# sibling of this repository (lane worktrees resolve via the main checkout).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if _REPO_ROOT.parent.name == ".worktrees":
+    _REPO_ROOT = _REPO_ROOT.parent.parent
+REF_DEFAULT = os.environ.get("OC_REF_ROOT", str(_REPO_ROOT.parent / "opencode-ref"))
+
 
 REF_KEYBIND = "packages/tui/src/config/keybind.ts"
 RUST_TABLE = "crates/oc-tui-core/src/keymap/table.rs"
@@ -63,7 +72,7 @@ def rust_actions() -> dict[str, int]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ref", default="./ref")
+    ap.add_argument("--ref", default=REF_DEFAULT)
     ap.add_argument("--write", default=None)
     args = ap.parse_args()
 
