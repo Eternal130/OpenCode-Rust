@@ -169,7 +169,7 @@ jobs:
           T9_BUN: ${{ github.workspace }}/tools/bin/bun-1.4.2
           T9_PACE: ${{ inputs.pace }}
 
-      # W12 adjudication gate (user ruling 2026-11-18, GAPS 2.2#12):
+      # W12 adjudication gate (user ruling 2026-11-18, GAPS 2.2#11):
       # the battery itself performs NO bug adjudication — every grid
       # divergence lands in .test-logs/diff-reports/. This step is the
       # NEW merge gate: exit 0 = every divergence covered by the

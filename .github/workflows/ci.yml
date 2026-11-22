@@ -265,7 +265,7 @@ jobs:
         env:
           OPENCODE_DISABLE_BUN_DOWNLOAD: "1"
 
-      # W12 (user ruling 2026-11-18, GAPS 2.2#12): the realchain tests
+      # W12 (user ruling 2026-11-18, GAPS 2.2#11): the realchain tests
       # no longer RED on content — every divergence is exported to
       # .test-logs/diff-reports/ and this controller-side checker is
       # the new gate (exit 2 = unadjudicated divergence OR an

@@ -1880,7 +1880,7 @@ pub fn normalization_names() -> Vec<String> {
 /// * clock faces (`HH:MM`, `HH:MM:SS`) → `__TIME__`
 /// * trailing row whitespace
 ///
-/// These remove ENVIRONMENT artifacts (not bug judgments — W12/2.2#12:
+/// These remove ENVIRONMENT artifacts (not bug judgments — W12/2.2#11:
 /// every fired one is exported in the report's
 /// `normalizations_applied`).
 #[must_use]
@@ -2171,7 +2171,7 @@ pub fn dump_grid(name: &str, grid: &str) {
 }
 
 // ---------------------------------------------------------------------------
-// W12 — the DIFF EXPORTER (user ruling 2026-11-18, register 2.2#12): the
+// W12 — the DIFF EXPORTER (user ruling 2026-11-18, register 2.2#11): the
 // sandbox lane performs NO bug adjudication of its own. Every grid
 // comparison (and every single-end content observation) becomes a
 // structured artifact under `.test-logs/diff-reports/`, and the

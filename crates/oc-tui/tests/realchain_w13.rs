@@ -1,4 +1,4 @@
-//! W13 — the coverage-ledger execution wave (2.2#13): the ledger's
+//! W13 — the coverage-ledger execution wave (2.2#12): the ledger's
 //! top-priority GAP families become real-chain scenarios under the
 //! W12 adjudication architecture (2.2#12 — NO content adjudication
 //! in-test; every judgment is an `export_grid_diff`/`export_survey`

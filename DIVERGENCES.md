@@ -69,7 +69,7 @@
 
 - G-1..G-464 修法/取证全文：完整判定史不随公开仓分发（2026-11-22 隐私清理已历史重写）；全文副本=本地备份与仓外归档（不入库）。
 - 出族近期翻正：G-211 split-footer 整族经 ADR-0019 全量移植并消费；G-328 TAB_SPINNERS 四样式全量落地；G-329 mini demo 剧本 13/13（2026-11-22 复审翻正，第五次登记滞后实例）。
-- 覆盖台账（原 docs/audit/diff/COVERAGE.md，12 族，四轮审收敛）与差分台账族（JSON-SCHEMA/HTTP-FULL/TUI-FULLSCREEN/ACP-TRANSLATE 等 11 本）：随本批出树，完整判定史不随公开仓分发（2026-11-22 隐私清理已历史重写）；**覆盖完备性裁定（§2.2#13）持续有效**——新增可测面发现时（用户报告/代码审读/上游 diff）从 git 历史复活台账或重建。
+- 覆盖台账（原 docs/audit/diff/COVERAGE.md，12 族，四轮审收敛）与差分台账族（JSON-SCHEMA/HTTP-FULL/TUI-FULLSCREEN/ACP-TRANSLATE 等 11 本）：随本批出树，完整判定史不随公开仓分发（2026-11-22 隐私清理已历史重写）；**覆盖完备性裁定（§2.2#12）持续有效**——新增可测面发现时（用户报告/代码审读/上游 diff）从 git 历史复活台账或重建。
 - 观察名单（活）：`pty_composer_cycle_type_edit_submit_reply_stats_solid_path`（一见）、`pty_wheel_after_real_terminal_probe_replies`（一见）、W38 settle 竞态第四臂已落（再现即升级）、`tl_tool_loop_pair`（两见）。flake 白名单见 §2.2#4。
 
 
