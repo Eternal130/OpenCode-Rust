@@ -99,11 +99,17 @@ fn pty_g457_real_config_bare_name_omo_sections() {
     // real machine.
     std::fs::create_dir_all(home.join(".local/share/opencode")).expect("legacy data dir");
     std::env::set_var("OPENCODE_TEST_HOME", &home);
+    // uid-agnostic sandbox: the caller's real HOME/data/cache must never
+    // leak into the in-process TUI (2026-11-22 root-identity incident).
+    std::env::set_var("HOME", &home);
     std::env::set_var("XDG_STATE_HOME", home.join(".local/state"));
     std::env::set_var("XDG_CONFIG_HOME", &cfg_root);
+    std::env::set_var("XDG_DATA_HOME", home.join(".local/share"));
+    std::fs::create_dir_all(home.join(".cache")).expect("cache dir");
+    std::env::set_var("XDG_CACHE_HOME", home.join(".cache"));
     // Resolution reads `<XDG_CACHE_HOME>/opencode/npm/...` (install.rs
     // default_root) — the staging dir holds exactly that `opencode/npm`
-    // subtree; HOME stays untouched.
+    // subtree; the sandbox cache above stays the fallback.
     if let Ok(cache) = std::env::var("OC_OMO_CACHE") {
         std::env::set_var("XDG_CACHE_HOME", cache);
     }
@@ -162,6 +168,8 @@ fn pty_g457_real_config_bare_name_omo_sections() {
     std::env::remove_var("XDG_CONFIG_HOME");
     std::env::remove_var("XDG_CACHE_HOME");
     std::env::remove_var("XDG_STATE_HOME");
+    std::env::remove_var("XDG_DATA_HOME");
     std::env::remove_var("OPENCODE_TEST_HOME");
+    std::env::remove_var("HOME");
     result.expect("the bare-name omo-slim sidebar renders on rust");
 }

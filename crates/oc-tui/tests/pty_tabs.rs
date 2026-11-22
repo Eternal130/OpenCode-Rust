@@ -207,9 +207,16 @@ fn sandbox_env(tag: &str) -> std::path::PathBuf {
     ));
     std::fs::create_dir_all(root.join(".config")).expect("config dir");
     std::fs::create_dir_all(root.join(".local/state")).expect("state dir");
+    // uid-agnostic sandbox: the caller's real HOME/data/cache must never
+    // leak into the in-process TUI (2026-11-22 root-identity incident).
+    std::fs::create_dir_all(root.join(".local/share")).expect("data dir");
+    std::fs::create_dir_all(root.join(".cache")).expect("cache dir");
     std::env::set_var("OPENCODE_TEST_HOME", &root);
+    std::env::set_var("HOME", &root);
     std::env::set_var("XDG_CONFIG_HOME", root.join(".config"));
     std::env::set_var("XDG_STATE_HOME", root.join(".local/state"));
+    std::env::set_var("XDG_DATA_HOME", root.join(".local/share"));
+    std::env::set_var("XDG_CACHE_HOME", root.join(".cache"));
     root
 }
 

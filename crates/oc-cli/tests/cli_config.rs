@@ -641,6 +641,7 @@ fn migrated_history_consumed() {
         "OPENCODE_TUI_CHANNEL",
         "OPENCODE_CHANNEL",
         "OPENCODE_TEST_HOME",
+        "HOME",
         "XDG_STATE_HOME",
         "XDG_CONFIG_HOME",
         "XDG_DATA_HOME",
@@ -650,6 +651,9 @@ fn migrated_history_consumed() {
     let state = sandbox.home().join(".local/state/opencode-rust");
     std::fs::create_dir_all(&state).expect("state root");
     std::env::set_var("OPENCODE_TEST_HOME", sandbox.home());
+    // uid-agnostic sandbox: the caller's real HOME/data/cache must never
+    // leak into the in-process resolution (2026-11-22 root-identity incident).
+    std::env::set_var("HOME", sandbox.home());
     std::env::set_var("XDG_STATE_HOME", sandbox.home().join(".local/state"));
     std::env::set_var("XDG_CONFIG_HOME", sandbox.home().join(".config"));
     std::env::set_var("XDG_DATA_HOME", sandbox.home().join(".local/share"));
