@@ -1,6 +1,6 @@
 # 与 ref 的架构对比（opencode v2.0.24：TypeScript 参考实现 → Rust 移植）
 
-一句话总览：ref 是 bun monorepo（`packages/*`，TS），rust 是 cargo workspace 14 crates（源码 53.9 万行，2026-11-22 实测 `crates/*/src`），逐包映射并对每个结构性分歧做文档化裁决（见 `docs/GAPS-AND-PITFALLS.md`）。
+一句话总览：ref 是 bun monorepo（`packages/*`，TS），rust 是 cargo workspace 14 crates（源码 53.9 万行，2026-11-22 实测 `crates/*/src`），逐包映射并对每个结构性分歧做文档化裁决（见 `DIVERGENCES.md`）。
 
 ## 两树拓扑
 
