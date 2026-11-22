@@ -33,3 +33,4 @@ tools/parity/tui-diff/cache/
 __pycache__/
 docs/GAPS-AND-PITFALLS.md
 .superpowers/
+tools/diff/realchain/corpus-w5/
