@@ -25,9 +25,9 @@
 | 语法高亮（tree-sitter 内嵌） | oc-syntax（1,880） | grammar+query vendor；高亮引擎走 opentui TreeSitterClient |
 | —（ref 无对应） | vendored：ACP×2、tree-sitter grammar×4、oc-uqr（`third_party/`） | ACP 带 serde 差异 patch |
 
-## 关键结构决策（决策 → 为什么 → GAPS 指针）
+## 关键结构决策（决策 → 为什么 → 分歧指针：G 号条目见 `DIVERGENCES.md`）
 
-1. **渲染引擎**：ref 内嵌 opentui（Solid TSX）→ rust 用跨仓 opentui-rust（git rev `0f7fb04` 钉扎，opentui-core/keymap/solid）+ oc-tui。防漂手段=双引擎金帧 oracle + 树场景 334 金帧差分（`tools/parity/`）。→ 已收口（历史缺口 G-1..G-464 全清；见 GAPS 现状节）
+1. **渲染引擎**：ref 内嵌 opentui（Solid TSX）→ rust 用跨仓 opentui-rust（git rev `0f7fb04` 钉扎，opentui-core/keymap/solid）+ oc-tui。防漂手段=双引擎金帧 oracle + 树场景 334 金帧差分（`tools/parity/`）。→ 已收口（历史缺口 G-1..G-464 全清；现状见 `DIVERGENCES.md`）
 2. **插件运行时**：ref per-Location worker → rust 全进程单 bun guest（G-289）+ TSX 有界 shim：渲染树跨 IPC 拍平为 `{title,rows,clickable}` 行形状；markdown 渲染器注册链与 panel slot 已落地，声明面收窄（G-28）。
 3. **HTTP 服务**：ref workerd 可嵌入（fetch.ts/workerd.ts）→ rust 原生 axum `boot_and_serve`，无 JS 运行时嵌入目标（G-163）。
 4. **Schema**：ref Effect Schema → 手写 serde + schemars + golden 对拍防漂；`/openapi.json` sha256 钉死、升级走人工 baseline-bump（G-16，长期漂移维护坑）。
