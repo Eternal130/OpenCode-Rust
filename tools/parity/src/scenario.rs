@@ -337,11 +337,12 @@ pub async fn drive(
                         None => (200..=299).contains(&response.status),
                     };
                     let matched = match (status_ok, gate) {
-                        (false, _) => true, // surface the status error below
-                        (true, None) => true,
+                        // A status miss or an ungated request: take this
+                        // response (a status miss surfaces below).
+                        (_, None) | (false, _) => true,
                         (true, Some((pointer, value, _))) => {
                             let text = String::from_utf8_lossy(&response.body);
-                            serde_json::from_str::<Value>(&text).ok().is_some_and(|value_json| {
+                            serde_json::from_str::<Value>(&text).is_ok_and(|value_json| {
                                 value_json
                                     .pointer(pointer)
                                     .and_then(Value::as_str)
