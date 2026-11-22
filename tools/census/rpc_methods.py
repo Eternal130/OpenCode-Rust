@@ -64,12 +64,12 @@ RPC_NORM = {
 
 DOTTED = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z0-9_]+)+$")
 
-# ref → rust 名称归一（声明式；均已对照双侧当前代码核实）：
-#  - ref `<domain>.hook(name, cb)` 在 rust 桥上是统一登记方法 `hook.register`
-#  - ref rpc 动态面（rpcFromEffect）映射到 rust 桥名
-#  - ref `command.transform` 的 draft.add 落 rust 桥 `command.add` 同一路径
-#  - ref `integration.transform` 的 method.update 编辑臂落 rust 桥
-#    `integration.method.update`（其余编辑臂 rust 为 guest 本地表）
+# ref → rust name normalization (declarative; all verified against current code on both sides):
+#  - ref `<domain>.hook(name, cb)` is the unified registration method `hook.register` on the rust bridge
+#  - the ref rpc dynamic surface (rpcFromEffect) maps to the rust bridge names
+#  - ref `command.transform`'s draft.add lands on the same rust bridge path `command.add`
+#  - ref `integration.transform`'s method.update edit arm lands on the rust bridge
+#    `integration.method.update` (the other edit arms are rust guest-local tables)
 REF_TO_RUST = {
     "rpc.call(client)": "rpc.invoke",
     "rpc.events.emit": "rpc.event",
@@ -84,9 +84,11 @@ def hook_name(path: str) -> str | None:
     return None
 
 
-# ref 面中 rust 于 guest 本地实现（host.js 编辑器表/本地命令表，无桥方法）
-# 的项 —— 种类面在 rust ctx 上等价存在（PLUGIN-API.md 通道核验），桥层
-# REF_ONLY 不构成缺口，但行为等价性归行为通道。
+# ref-surface items that rust implements guest-locally (host.js editor table /
+# local command table, no bridge method) — the kind-level surface exists
+# equivalently on the rust ctx (verified via the PLUGIN-API.md channel), so
+# bridge-level REF_ONLY is not a gap; behavioral equivalence belongs to the
+# behavior channels.
 REF_LOCAL = {
     "agent.get", "agent.list", "agent.reload",
     "command.list", "command.reload",
@@ -290,7 +292,7 @@ def rust_served() -> dict[str, tuple[str, int]]:
             continue  # host→guest rpc.call is not guest-callable
         if name not in served:
             served[name] = (str(SUPERVISOR), line0 + body[: m.start()].count("\n"))
-    for bare in ("ping", "log"):  # 无点名的桥字面量
+    for bare in ("ping", "log"):  # bridge literals without dotted names
         at = body.find(f'"{bare}"')
         if at != -1:
             served.setdefault(bare, (str(SUPERVISOR), line0 + body[:at].count("\n")))
@@ -378,7 +380,7 @@ def main() -> int:
     if "session.<m>" in called:
         called_names |= {n for n in served if n.startswith("session.")}
     uncalled = sorted(set(served) - called_names)
-    # guest→host 通知（无应答面，不经 answer_guest 请求派发）
+    # guest→host notifications (no reply surface, not dispatched via answer_guest requests)
     GUEST_NOTIFIES = {"plugin.busy", "plugin.idle", "plugin.fault", "host.exit",
                       "tui.route.plugin", "tui.route.navigate", "tui.route"}
     unserved_calls = sorted(

@@ -51,7 +51,8 @@ REF_DEFAULT = os.environ.get("OC_REF_ROOT", str(_REPO_ROOT.parent / "opencode-re
 
 GAPS_DOC = Path("docs/GAPS-AND-PITFALLS.md")
 
-# 差异裁定表：运行时相关 REF_ONLY 项的亲读定性（构建/脚本类由机械分组处理）
+# Divergence adjudication table: read-first qualitative rulings for runtime-relevant REF_ONLY items
+# (build/script items are handled by mechanical grouping)
 ENV_ADJUDICATIONS = {
     "OPENCODE_FILEWATCHER_DISABLE": (
         "已文档化缺口",

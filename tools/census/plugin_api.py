@@ -49,17 +49,18 @@ REF_DEFAULT = os.environ.get("OC_REF_ROOT", str(_REPO_ROOT.parent / "opencode-re
 
 HOST_JS = Path("crates/oc-plugin-host/src/host/host.js")
 
-# ctx 键归一（声明式；双侧形状差异的已知对应）：
-#  ref `app: host.app`（值注入）↔ rust `app.version`；ref `location` ↔ rust
-#  `location.directory`；ref `vcs.branch.list`（嵌套对象）↔ rust `vcs.branch`
-#  （方法面，host.js:1149 注记引 adapter.ts:510-514）。
+# ctx key normalization (declarative; known shape-divergence correspondences
+#  between the two sides):
+#  ref `app: host.app` (value injection) ↔ rust `app.version`; ref `location` ↔
+#  rust `location.directory`; ref `vcs.branch.list` (nested object) ↔ rust
+#  `vcs.branch` (method surface, host.js:1149 note cites adapter.ts:510-514).
 REF_CTX_MAP = {
     "app": "app.version",
     "location": "location.directory",
     "vcs.branch.list": "vcs.branch",
 }
 
-# rust 侧非映射面的登记册背书/说明
+# registry backing / notes for rust-side non-mapped surfaces
 RUST_BACKING = {
     "ping": "rust 桥活探面（死锁规则配套，ref 无对应）",
     "log": "rust 桥日志面（console 重路由，ref 无对应）",
@@ -73,7 +74,7 @@ RUST_BACKING = {
     "location.project.id": "rust 自报面（location.project.id）",
 }
 
-# 登记册背书（手工核对 docs/GAPS-AND-PITFALLS.md 当前状态）。
+# Registry backing (manually checked against docs/GAPS-AND-PITFALLS.md current state).
 REGISTER_BACKING = {
     "ui": "TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref 无 server-ctx ui 域）",
     "keymap": "PLUG-TUI-SLOT（api.tsx:179-199 keymap.layer 面）",
@@ -82,8 +83,8 @@ REGISTER_BACKING = {
     "markdown": "G-332（插件 markdown 代码块渲染器注册链缺失）",
 }
 
-# ref tui 上下文键 → 登记册/说明（axis 2 的逐项背书；键集 =
-# context.ts `export interface Context` 顶层 readonly 键）
+# ref tui context keys → registry/notes (per-item backing for axis 2; key set =
+# context.ts `export interface Context` top-level readonly keys)
 TUI_KEYS = {
     "options": "插件 options 注入面",
     "location": "location 引用面（vcs/agent/command/… 集合的入口）",
@@ -103,7 +104,7 @@ TUI_KEYS = {
 
 def rust_ctx() -> dict[str, int]:
     src = HOST_JS.read_text()
-    # makeCtx 内的 ctx 字面量（host.js 全文唯一的 `const ctx = {`）
+    # the ctx object literal inside makeCtx (host.js's only `const ctx = {`)
     return parse_object_literals(src, "const ctx = {")
 
 
@@ -111,7 +112,7 @@ def ref_ctx(ref: str) -> dict[str, int]:
     adapter = Path(ref) / "packages/plugin/src/promise/adapter.ts"
     src = adapter.read_text()
     face = parse_object_literals(src, "const context2: PromiseContext = {")
-    face.pop("rpc", None)  # 动态域 → RPC_FACE 归一
+    face.pop("rpc", None)  # dynamic domain → RPC_FACE normalization
     return face
 
 
@@ -153,14 +154,14 @@ def main() -> int:
 
     r_face = rust_ctx()
     f_face = ref_ctx(args.ref)
-    # rpc 域归一（双侧动态构造：rust register/call/client；ref register/call/events）
+    # rpc domain normalization (dynamically built on both sides: rust register/call/client; ref register/call/events)
     js = HOST_JS.read_text()
     for name in ("rpc.register", "rpc.call", "rpc.client"):
         r_face.setdefault(name, js[: js.find("async register(definition, handlers)")].count("\n") + 1)
     adapter_src = (Path(args.ref) / "packages/plugin/src/promise/adapter.ts").read_text()
     for name in ("rpc.register", "rpc.call", "rpc.events"):
         f_face.setdefault(name, adapter_src[: adapter_src.find("rpcFromEffect")].count("\n") + 1)
-    # ref 键归一（值注入/形状差异的声明映射）
+    # ref key normalization (declarative mapping for value injection / shape divergence)
     for old, new in REF_CTX_MAP.items():
         if old in f_face:
             f_face.setdefault(new, f_face.pop(old))

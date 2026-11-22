@@ -70,7 +70,7 @@ const REF_APP_FIXTURE = path.join(REF_ROOT, "packages/tui/test/fixture/app.ts")
 const REF_THEME_INDEX = path.join(REF_ROOT, "packages/tui/src/theme/index.ts")
 
 // ---------------------------------------------------------------------------
-// key vocabulary — SCHEMA.md 键名表 (source of truth: tools/parity/src/tui_diff.rs encode_key)
+// key vocabulary — SCHEMA.md key-name table (source of truth: tools/parity/src/tui_diff.rs encode_key)
 // mapped onto mockInput.pressKey (kitty protocol: the test renderer is created
 // with kittyKeyboard: true). Modifiers are encoded natively by the mock-keys
 // kitty path; tokens whose bytes have no kitty name (pageup/pagedown/alt+arrows
@@ -137,7 +137,7 @@ function pressToken(mockInput: any, token: string) {
 }
 
 // C3 review Important#1 — the two non-key input surfaces, mapped onto
-// the fixture's own mocks (SCHEMA 键名表): `paste:<literal>` rides
+// the fixture's own mocks (SCHEMA key-name table): `paste:<literal>` rides
 // mockInput.pasteBracketedText; `mouse:<kind>:<col>,<row>` rides
 // mockMouse (pressDown/release for down/up, moveTo for moved,
 // emitMouseEvent("drag") for drags, scroll for wheels — the minimal
@@ -332,7 +332,7 @@ async function main() {
   const cases = [...manifest.cases].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
 
   // theme defaults: the pinned corpus theme (opencode v2, dark) resolved via
-  // the reference's own theme loader — default fg/bg tokens (SCHEMA 主题 pinning).
+  // the reference's own theme loader — default fg/bg tokens (SCHEMA theme pinning).
   const themeIndex: any = await import(REF_THEME_INDEX)
   const tuiTheme: any = await import(path.join(REF_ROOT, "packages/theme/src/tui/index.ts"))
   const resolved = tuiTheme.resolveThemeDocument(themeIndex.getOpenCodeTheme(), "dark")

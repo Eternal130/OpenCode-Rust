@@ -54,7 +54,7 @@ DEFAULT_OUT = CORPUS / "recorded-local"
 
 CENSUS_REF = CORPUS / "scenarios/home-empty.json"  # boot-stub defaults
 
-# press-spec -> SCHEMA 键名表 token (everything else passes through)
+# press-spec -> SCHEMA key-name table token (everything else passes through)
 KEY_ALIASES = {"return": "enter", "escape": "esc", " ": "space"}
 
 CONTENT_KEYS = ("text", "title", "summary", "reasoning", "output")

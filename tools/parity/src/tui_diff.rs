@@ -2849,7 +2849,7 @@ pub async fn run_script_once(
         })
         .transpose();
     let our_side = our_server.as_ref().and_then(|server| {
-        // Lane M1 (换血 pilot): forward the migration renderer flags to
+        // Lane M1 (overhaul pilot): forward the migration renderer flags to
         // OUR side only (the ref has no such switches) — every
         // `OC_*_OPENTUI` surface flag (M1 tabs, M2 dialogs, M3 the
         // composer, …) rides the same seam; run the rig with e.g.

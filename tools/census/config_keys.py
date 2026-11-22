@@ -779,7 +779,8 @@ def ref_resolve_defaults(src: str) -> dict[str, str]:
     return out
 
 
-# 差异裁定表：提取器收敛后剩余差异项的亲读定性（file:line 以提取器证据为准）
+# Divergence adjudication table: read-first qualitative rulings for remaining
+# divergence items after extractor convergence (file:line per extractor evidence)
 ADJUDICATIONS = {
     "experimental.file_retention.cleanup_interval": (
         "RUST_ONLY·加固旋钮",

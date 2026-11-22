@@ -849,7 +849,7 @@ def compare_frames(ref_grid: dict, rust_grid: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 # Known-cause annotations (dual file:line), channel-7 lambda style:
-# (label, matcher(divergence_record)->bool, (定性文, ref file:line, rust file:line)).
+# (label, matcher(divergence_record)->bool, (ruling text, ref file:line, rust file:line)).
 # A divergence_record is {"id","dimension","verdict","first_diff"/
 # "first_tick_diff","cells_diff_count","per_tick"?}. Matchers are written
 # against EXACT shapes (scenario-id prefix + precise divergence form);
@@ -960,7 +960,7 @@ CAUSES = [
         ),
     ),
     # RETIRED (gb17 tool-glyph, 2026-11-16): the A2 animation-gate
-    # artifact cluster ("A2 ref 动画门控夹具伪影") is REMOVED — the
+    # artifact cluster ("A2 ref animation-gate fixture artifact") is REMOVED — the
     # animations gate is now PORTED: the store carries
     # `config.animations ?? true` (spinner.tsx:29-31's gate; default
     # true — the production face), the diff driver mirrors the ref
@@ -975,7 +975,7 @@ CAUSES = [
     # gradient, spinner rotation once a stable ref clock exists)
     # requires a NEW CAUSES entry with its own probe evidence.
     (
-        # B2 CAUSES version-skew 簇 (user ruling 2026-11-14): residual
+        # B2 CAUSES version-skew cluster (user ruling 2026-11-14): residual
         # 2.0.24-vs-2.2.x PLUGIN BEHAVIOR diffs — local shapes where the
         # payload's newer-host API assumptions degrade on the 2.0.24
         # face (evidenced shape: omo-slim's tui entry, once loaded,
@@ -1024,7 +1024,7 @@ CAUSES = [
         # is the bounded sidebar shim (the payload's own render under
         # the bridge walk drops the blank spacer + remote-hydrated
         # `Preset zhipuai ▸` row) — the G-28 shape face the original
-        # entry predicted ("320×80 档 … G-28 形状面共现"), now
+        # entry predicted ("320×80 tier … G-28 shape-face co-occurrence"), now
         # CAUGHT by G-28. 0 hits on this cluster, removed. Production
         # loading is UNCHANGED (default tui_only=false: the unified
         # process still loads server+tui).
@@ -1359,7 +1359,7 @@ def write_report(path: Path, cases: list[dict], ref: dict[str, dict], rust: dict
     lines.append("")
     lines.append("未命中任何簇的分歧保持未裁决进入 T9；CAUSES 不为绿灯放宽 matcher。")
     lines.append("")
-    # --- ⑥ frames 维度（A2 帧序列对拍独立小节） ---
+    # --- ⑥ frames dimension (A2 frame-sequence diffing, standalone section) ---
     anim_cases = [c for c in cases if c["id"] in frame_results]
     lines.append("## frames 维度（A2 帧序列对拍）")
     lines.append("")
@@ -1413,7 +1413,7 @@ def write_report(path: Path, cases: list[dict], ref: dict[str, dict], rust: dict
             cause_s = f" — CAUSES: {cause}" if cause else " — 未裁决（T9 候选）"
             lines.append(f"- `{cid}` {cause_s}")
         lines.append("")
-    # --- ⑥b recorded-local（真实语料，聚合计数 only — diff-ext C2） ---
+    # --- ⑥b recorded-local (real corpus, aggregate counts only — diff-ext C2) ---
     if rec_cases or skipped and any(str(c).split("@")[0].startswith("rec-") for c in skipped):
         lines.append("## recorded-local（真实语料，聚合计数 — advisory）")
         lines.append("")
