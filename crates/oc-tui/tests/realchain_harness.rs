@@ -1111,7 +1111,7 @@ fn ref_root_default() -> PathBuf {
 
 #[must_use]
 pub fn ref_root() -> PathBuf {
-    std::env::var("T9_REF_ROOT").map_or_else(ref_root_default, PathBuf::from)
+    std::env::var("T9_REF_ROOT").map_or_else(|_: std::env::VarError| ref_root_default(), PathBuf::from)
 }
 
 /// The pinned bun runtime path (`T9_BUN` override; default the MAIN
@@ -1121,7 +1121,7 @@ pub fn ref_root() -> PathBuf {
 pub fn bun_runtime() -> PathBuf {
     std::env::var("T9_BUN")
         .map_or_else(
-            || {
+            |_: std::env::VarError| {
                 let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                     .parent()
                     .and_then(Path::parent)
