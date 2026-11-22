@@ -6,9 +6,23 @@
 
 ### Current state
 
-- Open unresolved gaps (🟡/❌): **zero** — G-1..G-464 are all closed (last batches 2026-11-21/22: G-428 reasoning positioning, G-430 animations six faces, G-93 $EDITOR attachment, G-464 skill attachment, G-94/95/96/400 server API alignment, G-439 managed copy, empty-stream remnants).
+- Open unresolved gaps (🟡/❌): **two** — G-465 and G-466, both found 2026-11-23 by a paired ref↔rust probe at non-default geometries (see "Open gaps" below). G-1..G-464 are all closed (last batches 2026-11-21/22: G-428 reasoning positioning, G-430 animations six faces, G-93 $EDITOR attachment, G-464 skill attachment, G-94/95/96/400 server API alignment, G-439 managed copy, empty-stream remnants).
 - realchain adjudication registry: `tools/diff/realchain/adjudications.json` (10 entries, all benign: framework-diff×6 / expected-shape×3 / env-artifact×1; exit semantics and the checker live in `tools/diff/realchain/adjudicate.py`).
 - Pending live-machine observation (1): busy breathing-light symptom ⑦''② — not reproduced in-tree, feature present, frame sequence pinned; awaiting user reproduction material (screenshot + OC_TUI_DEBUG=1 trace).
+
+#### Open gaps (🟡) — 2026-11-23
+
+Found by a paired ref↔rust probe at three non-default geometries (10x6, 40x12, 160x40; two runs per end per size). The probe exists because `a2_geometry_width_sweep_10_40_160` — the in-tree sweep meant to guard exactly this surface — had been passing over a failed driver (a null driver report read as PASS). No paired realchain scenario covers these states.
+
+- **G-465 — the Sessions dialog header loses the project-name suffix** (size-independent; verified at source level). Ref renders BOLD `Sessions` followed by a muted ` for <project name>` whenever the list is not the all-projects view and a project name exists (`dialog-session-list.tsx:198-207`, the `titleView`). The port renders the bare `Sessions` title. Evidence: paired grids at 40x12 and 160x40 (`Sessions for project` vs `Sessions`).
+- **G-466 — render divergences at non-default geometries** (observed in the paired grids; source-level characterization pending — each sub-item needs its ref anchor before fix-or-accept is ruled):
+  1. 10x6 with a session open — ref keeps the strip title on row 0 and the composer box on rows 2–5; the port draws the composer border on the strip row (`   ┃     + `) and the tab title is missing.
+  2. 40x12 home — ref presents the wordmark as two large lines; the port as one small line.
+  3. 40x12 Sessions dialog — the port's footer hints overprint each other and wordmark glyphs show beside the dialog; ref differs on both.
+  4. 160x40 with a long session title — ref wraps the sidebar title over two rows; the port truncates it to one.
+  5. 40x12 Sessions dialog list viewport — both ends compute a 0-row viewport (`min(rows, floor(h/2) - 6)`); ref still leaks one overprinted row, the port clips (a ref-side rendering artifact at a degenerate size).
+
+  The bottom-right pill (`local` vs `2.0.24`) visible in the same grids is the known build-artifact delta the harness normalizes (G-315 family), not a gap.
 
 ### Documented-decision families (32 ℹ️ entries — intentional divergences from the reference, not gaps)
 
