@@ -105,7 +105,9 @@ fn corpus_hook_mutation_ordering() {
 /// arms are asserted as DOCUMENTED behavior: a post-return mutation is
 /// provably invisible to the host and later plugins (R2 — the
 /// isolation benefit of the process boundary), and a non-JSON stash
-/// value crosses only as its JSON coercion (R4). See FINDINGS.md §5.
+/// value crosses only as its JSON coercion (R4). See §5 of the archived
+/// findings ledger (out-of-repo archive; not distributed with the
+/// public repo).
 #[test]
 fn corpus_hook_mutation_replacement_shapes() {
     let sandbox = common::sandbox("corpus-hookswap");

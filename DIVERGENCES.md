@@ -10,11 +10,11 @@
 - realchain adjudication registry: `tools/diff/realchain/adjudications.json` (10 entries, all benign: framework-diff×6 / expected-shape×3 / env-artifact×1; exit semantics and the checker live in `tools/diff/realchain/adjudicate.py`).
 - Pending live-machine observation (1): busy breathing-light symptom ⑦''② — not reproduced in-tree, feature present, frame sequence pinned; awaiting user reproduction material (screenshot + OC_TUI_DEBUG=1 trace).
 
-### Documented-decision families (31 ℹ️ entries — intentional divergences from the reference, not gaps)
+### Documented-decision families (32 ℹ️ entries — intentional divergences from the reference, not gaps)
 
 (Originally 34: G-211 split-footer was fully ported via ADR-0019 and flipped ✅ out of the family; G-328/G-329 were re-audited and flipped ✅ out — see "Closed register".)
 
-**① Intentionally not ported (6)**
+**① Intentionally not ported (7)**
 
 | G# | Divergence in one line | Ruling source |
 |---|---|---|
@@ -24,6 +24,7 @@
 | G-238 | heap snapshot (SIGUSR1) / CPU profile (SIGPROF) not ported — V8 inspector platform specifics; native alternatives are pprof/tokio-console | Round-15 ℹ️ entry (G-17 family style) |
 | G-313 | Plugin npm package startup auto-install not ported — installation authority belongs to `opencode plugin add`; the resolve-failure wire hint has landed | Round-17 entry; 2026-11-22 re-audit annotation |
 | G-38 | OTel feature not on by default (ref defaults it on); release builds pull no telemetry dependencies | Round-3 ℹ️ (release decision) |
+| COV-tabs-marquee | Tab-title hover marquee is not ported — ref shifts a hovered truncated title's content window ~1 cell per tick (`marquee.ts`, `session-tabs.tsx:1652`); the port renders the tab-pulse envelopes (ignition/release/sweep/flash/marquee) as the static C2 class (`components/tab_pulse.rs`), so a truncated title stays truncated. `vt_temporal_marquee_shifts_one_cell_per_tick` is `#[ignore]`d as the pin: it turns green the day the feature lands | Retired coverage-ledger row (tabs, GAP※), re-verified unported 2026-11-22 |
 
 **② Intentional corrections / supersets (9)**
 
@@ -70,7 +71,7 @@
 - Full fix/forensics text for G-1..G-464: the complete adjudication history is not distributed with the public repo (2026-11-22 privacy cleanup rewrote history); full copies live in local backups and the out-of-repo archive (not committed).
 - Recent flips out of the families: G-211 split-footer fully ported and consumed via ADR-0019; G-328 TAB_SPINNERS all four styles landed; G-329 mini demo scripts 13/13 (2026-11-22 re-audit flips — the fifth stale-ledger instance).
 - The coverage ledger (formerly docs/audit/diff/COVERAGE.md, 12 families, four audit rounds into maintenance mode) and the diff-ledger family (JSON-SCHEMA/HTTP-FULL/TUI-FULLSCREEN/ACP-TRANSLATE etc., 11 books): left the tree in that batch and are not distributed with the public repo; **the coverage-completeness ruling (§2.2#12) remains in force** — when new testable surfaces appear (user reports, code reading, upstream diffs), revive the ledger from local backups or rebuild it.
-- Watchlist (live): `pty_composer_cycle_type_edit_submit_reply_stats_solid_path` (once), `pty_wheel_after_real_terminal_probe_replies` (once), the W38 settle-race fourth arm has landed (recurrence escalates), `tl_tool_loop_pair` (twice). Flake whitelist: §2.2#4.
+- Watchlist (live): `pty_wheel_after_real_terminal_probe_replies` (once), `tl_tool_loop_pair` (twice), the W38 settle-race fourth arm has landed (recurrence escalates). (`pty_composer_cycle_type_edit_submit_reply_stats_solid_path` left the list 2026-11-23: instrumented down to a harness mark race, fixed.) Flake whitelist and its entry threshold: §2.2#4.
 
 ## Pointers
 

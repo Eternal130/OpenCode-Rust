@@ -139,7 +139,7 @@
         ]
       },
       "classification": "framework-diff",
-      "justification": "ADJUDICATED (controller 2026-11-21, final): capture-phase framework-diff — the settled frame is EXACT on both ends (W13/W4 evidence); the mid-capture ask-dock placement (rust docked vs ref portal overlaying the transcript) is a portal-capture artifact with no settled-state behavior face. G-450 hint-row face FIXED (958e370a); the fullscreen-toggle behavior face remains unported (G-450 bounded, in-register).",
+      "justification": "ADJUDICATED (controller 2026-11-21, final): capture-phase framework-diff — the settled frame is EXACT on both ends (W13/W4 evidence); the mid-capture ask-dock placement (rust docked vs ref portal overlaying the transcript) is a portal-capture artifact with no settled-state behavior face. G-450 hint-row face FIXED (958e370a); the fullscreen-toggle behavior face landed in W14 (595104f7, the real ctrl+f toggle) — this entry's residual is the mid-capture placement phase only (stale wording corrected 2026-11-23).",
       "g_ref": "W13 report task 3",
       "adjudicated_by": "controller",
       "adjudicated_at": "2026-11-21",
