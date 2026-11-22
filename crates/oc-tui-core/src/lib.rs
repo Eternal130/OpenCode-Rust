@@ -1,6 +1,6 @@
 //! # oc-tui-core — the opencode TUI interaction-contract crate
 //!
-//! Wave A lane (ROADMAP §架构决策 B): the TUI's INTERACTION half as a
+//! Wave A lane (ROADMAP §architecture-decision B): the TUI's INTERACTION half as a
 //! proper crate, ported from the v2 reference (v2.0.24) with
 //! `file:line` citations on every ported semantic:
 //!

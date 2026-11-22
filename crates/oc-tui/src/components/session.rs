@@ -1856,7 +1856,7 @@ pub fn composer_metadata(
     });
     // `promptDisplay().agentLabel = Locale.titlecase(agent.id)`
     // (prompt/index.tsx:1550) — titlecase of the ID, never the list's
-    // display name (F1 重裁: the server default build agent's name is
+    // display name (F1 re-ruling: the server default build agent's name is
     // "build"; the composer label is "Build").
     let agent = agent_id
         .map(|agent| crate::components::message::model::titlecase(&agent))

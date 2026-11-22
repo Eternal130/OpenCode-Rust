@@ -1,4 +1,4 @@
-//! Lane M1 (换血 pilot): the session tab strip re-homed onto
+//! Lane M1 (overhaul pilot): the session tab strip re-homed onto
 //! opentui-solid — the first migration surface, the template for
 //! M2..Mn.
 //!

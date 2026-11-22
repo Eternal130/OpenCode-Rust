@@ -1,4 +1,4 @@
-//! Frame-budget guard (ROADMAP §架构决策 B 的永久护栏): at terminal
+//! Frame-budget guard (the permanent guardrail of ROADMAP §architecture-decision B): at terminal
 //! scales an immediate-mode full-buffer rebuild must stay far below the
 //! ~16 ms perception threshold. This test renders a LARGE synthetic
 //! transcript at 200×50 and asserts per-frame cost against a budget
@@ -32,7 +32,7 @@ fn session_seamed(store: &crate::store::Store, theme: &ThemeState) -> crate::ren
 /// REPORT the number — they are 10-50× slower and would make the guard
 /// flaky, while the release number is the one users feel.
 // G-287⑩ — REGISTERED DEBT (round-17 registry, GAPS-AND-PITFALLS
-// 第十七轮): the transcript's shared E1 walk is O(all-rows) per frame
+// round 17): the transcript's shared E1 walk is O(all-rows) per frame
 // on the non-solid path — the solid path's Wave-B visible-rows
 // windowing landed, this legacy walk keeps the 40 ms TEMP ceiling
 // until the windowing covers it. The ceiling is the registered

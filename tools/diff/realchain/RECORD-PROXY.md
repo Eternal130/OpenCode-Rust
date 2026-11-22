@@ -1,15 +1,18 @@
-# RECORD-PROXY — opencode v2 日常流量录制代理
+# RECORD-PROXY — opencode v2 daily-traffic recording proxy
 
-`tools/diff/realchain/record_proxy.py` 是一个纯 Python 3.12 标准库的
-HTTP 反向代理：把 opencode v2（TS 官方版，2.2.x）日常开发里发出的
-provider 线缆流量（工具调用、文件编辑、指令——全部真实交互）逐字
-转发给真实上游，同时把每次交互录制为 **cassette v2** 文件，自动积
-累成语料，供通道 9 回放网关（replay_gateway.py，另一 lane）未来按
-原时序回放。
+`tools/diff/realchain/record_proxy.py` is a pure-Python-3.12-stdlib
+HTTP reverse proxy: it forwards opencode v2's (the official TS
+release, 2.2.x) day-to-day provider wire traffic (tool calls, file
+edits, prompts — all real interactions) verbatim to the real upstream,
+while recording every interaction as a **cassette v2** file,
+automatically accumulating a corpus for the channel-9 replay gateway
+(replay_gateway.py, another lane) to replay in the original timing
+later.
 
-## 三步启用
+## Enablement in three steps
 
-**第 1 步 —— 准备 routes.json**（可直接复制样例 `tools/diff/realchain/routes.sample.json`）：
+**Step 1 — prepare routes.json** (you can copy the sample
+`tools/diff/realchain/routes.sample.json` directly):
 
 ```json
 {
@@ -18,7 +21,8 @@ provider 线缆流量（工具调用、文件编辑、指令——全部真实�
 }
 ```
 
-**第 2 步 —— 启动代理**（终端里常驻，或 tmux/screen 里）：
+**Step 2 — start the proxy** (keep it running in a terminal, or inside
+tmux/screen):
 
 ```bash
 python3 tools/diff/realchain/record_proxy.py \
@@ -27,68 +31,85 @@ python3 tools/diff/realchain/record_proxy.py \
     --port 8099
 ```
 
-启动后打印监听地址与路由表。语料目录会自动创建。
+On startup it prints the listen address and the routing table. The
+corpus directory is created automatically.
 
-**第 3 步 —— 改 opencode v2 配置里每个 provider 的 baseURL**。
-编辑 `~/.config/opencode/opencode.json`，把每个 provider 的
-`options.baseURL` 换成本地代理地址，路由名对应 routes.json 的键：
+**Step 3 — change each provider's baseURL in the opencode v2 config**.
+Edit `~/.config/opencode/opencode.json`, replacing each provider's
+`options.baseURL` with the local proxy address; the route name
+corresponds to the key in routes.json:
 
-| provider 原 baseURL | 改成 |
+| provider original baseURL | change to |
 |---|---|
 | `https://api.anthropic.com` | `http://127.0.0.1:8099/r/anthropic` |
-| `https://api.openai.com/v1`（AI SDK 已拼 `/v1` 的写法保持原样，见下） | `http://127.0.0.1:8099/r/openai/v1` |
+| `https://api.openai.com/v1` (keep AI-SDK-style URLs that already append `/v1` as-is, see below) | `http://127.0.0.1:8099/r/openai/v1` |
 
-规则：本地 URL 形如 `http://127.0.0.1:PORT/r/<route>/<rest>`，代理
-把它原样映射为 `<routes.json 里 route 的 base URL>/<rest>`。所以
-只需把官方域名部分替换成 `/r/<route>`，路径后缀不动。
+Rule: the local URL looks like
+`http://127.0.0.1:PORT/r/<route>/<rest>`, and the proxy maps it
+verbatim to `<the route's base URL from routes.json>/<rest>`. So you
+only replace the official domain part with `/r/<route>` and leave the
+path suffix untouched.
 
-## 热载验证结论（实测，2026-11-17）
+## Hot-reload verification conclusion (measured, 2026-11-17)
 
-**结论：opencode v2.2.7 的 config watcher 确实热载 baseURL，改完
-配置无需重启，下一次对话即走新地址。**
+**Conclusion: opencode v2.2.7's config watcher really does hot-reload
+baseURL — after editing the config no restart is needed; the next
+conversation goes through the new address.**
 
-实验方法（stub 上游，不碰真 provider）：
+Experiment method (stub upstreams, no real provider touched):
 
-1. 起两个本地 stub 上游（端口 A=4721、B=4722，模拟两个不同
-   baseURL，记录每次命中）；
-2. 隔离 XDG 目录写 `opencode.json`（`@ai-sdk/openai-compatible`
-   provider，baseURL→A），起 `opencode serve`（v2.2.7，
-   ~/.opencode/bin/opencode）；
-3. 经 HTTP API（`POST /api/session` + `POST
-   /api/session/{id}/prompt`，Basic auth）发第一条消息 → stub 日志
-   命中端口 A（2 次命中：标题生成 + 主回复，均在 A）；
-4. 服务器进程**保持运行**，改写 `opencode.json` 的 baseURL→B；
-   等 3 秒再发第二条消息 → 命中全部落在端口 B（A 零命中）。
+1. Start two local stub upstreams (ports A=4721, B=4722, emulating two
+   different baseURLs, logging every hit);
+2. In an isolated XDG directory write `opencode.json`
+   (`@ai-sdk/openai-compatible` provider, baseURL→A), start
+   `opencode serve` (v2.2.7, ~/.opencode/bin/opencode);
+3. Via the HTTP API (`POST /api/session` + `POST
+   /api/session/{id}/prompt`, Basic auth) send the first message →
+   the stub log hits port A (2 hits: title generation + main reply,
+   both on A);
+4. With the server process **still running**, rewrite baseURL→B in
+   `opencode.json`; wait 3 seconds and send the second message → all
+   hits land on port B (zero hits on A).
 
-证据（stub 命中日志，时间戳 Unix）：prompt A 后
-`[{"port":4721,"path":"/v1/chat/completions",...},{"port":4721,...}]`；
-改配置后 prompt B →
-`[{"port":4722,...},{"port":4722,...}]`。
-完整实验记录：`.test-logs/hotload-experiment.log`（复现脚本思路见
-上文；API 鉴权为 `Authorization: Basic base64("opencode:<server
-password>")`，server password 在 `opencode serve` 启动日志里）。
+Evidence (stub hit logs, Unix timestamps): after prompt A,
+`[{"port":4721,"path":"/v1/chat/completions",...},{"port":4721,...}]`;
+after the config change, prompt B →
+`[{"port":4722,...},{"port":4722,...}]`.
+Full experiment log: `.test-logs/hotload-experiment.log` (reproduction
+script sketch above; API auth is `Authorization: Basic
+base64("opencode:<server password>")`, the server password appears in
+the `opencode serve` startup log).
 
-因此**日常接入不需要重启 opencode**：改完 baseURL，下一个新会话
-（或继续中的会话下一条消息）即经代理录制。若你的版本行为不同，
-回退路径是：退出 opencode → 改 baseURL → `opencode`（TUI 内
-`/resume` 或 `opencode -c` 继续会话）。
+Therefore **daily onboarding needs no opencode restart**: after
+changing baseURL, the next new session (or the next message in an
+ongoing session) is recorded through the proxy. If your version
+behaves differently, the fallback path is: quit opencode → change
+baseURL → `opencode` (inside the TUI `/resume`, or `opencode -c` to
+continue the session).
 
-## 隐私说明
+## Privacy notes
 
-* **密钥红线**：`Authorization` / `x-api-key` / `api-key`（及
-  cookie）头会原样透传给上游（你的使用不受影响），但**绝不落盘**——
-  cassette 里这些头一律记为 `<redacted>`。自测显式断言密钥字节不
-  出现在任何落盘文件中。
-* **内容存本地**：cassette 只写入你用 `--corpus-dir` 指定的本地目
-  录，代理不做任何网络上报。注意：cassette **包含完整请求/响应明
-  文**（那是它的用途），目录权限请自行收紧（如 `chmod 700`）。
-* **崩溃安全**：每个交互完成即原子落盘（tmp+rename），代理崩溃/
-  重启不损已有 cassette。
-* **后续入库流程（规划）**：语料积累后，将按既定 age 流程做本地
-  脱敏审查 → age 加密 → 打包进入回放语料库；未经加密不入任何仓库。
-  在此之前 corpus-dir 纯属你机器上的私有数据。
+* **Key red line**: `Authorization` / `x-api-key` / `api-key` (and
+  cookie) headers are passed through to the upstream verbatim (your
+  usage is unaffected) but are **never written to disk** — in the
+  cassette these headers are always recorded as `<redacted>`. The
+  self-test explicitly asserts that key bytes appear in no on-disk
+  file.
+* **Content stays local**: cassettes are written only to the local
+  directory you chose with `--corpus-dir`; the proxy does no network
+  reporting. Note: a cassette **contains the full request/response
+  plaintext** (that is its purpose) — tighten the directory
+  permissions yourself (e.g. `chmod 700`).
+* **Crash safety**: every interaction is atomically written on
+  completion (tmp+rename); a proxy crash/restart never damages
+  existing cassettes.
+* **Later ingestion process (planned)**: once the corpus has
+  accumulated, the established age workflow applies — local redaction
+  review → age encryption → packaging into the replay corpus;
+  nothing enters any repository unencrypted. Until then the
+  corpus-dir is purely private data on your machine.
 
-## Cassette v2 格式（钉死规格）
+## Cassette v2 format (pinned spec)
 
 ```json
 {"version": 2,
@@ -104,24 +125,29 @@ password>")`，server password 在 `opencode serve` 启动日志里）。
                             "delay_ms": 342.1}]}}]}
 ```
 
-`frames` 逐 SSE 事件块记录，`delay_ms` 为距上一块的毫秒数（首块
-即 TTFT）；非流式 JSON 响应折叠为单帧。W5 回放网关合流时按帧+延迟
-还原 TTFT/TPS 时序。
+`frames` records per SSE event chunk; `delay_ms` is the milliseconds
+elapsed since the previous chunk (the first chunk is the TTFT);
+non-streaming JSON responses collapse to a single frame. When the W5
+replay gateway merges, frames+delays reconstruct the TTFT/TPS timing.
 
-## 透传保真
+## Passthrough fidelity
 
-* SSE 逐块转发：上游首字节到达即 flush 给客户端，TTFT 零附加延迟；
-* 状态码与头忠实透传（仅剥 hop-by-hop 头；转发用 chunked 编码或精
-  确 Content-Length）；
-* 上游 HTTPS 走 Python 标准库 TLS；
-* 并发会话安全：每连接一个线程，cassette 写出串行化。
+* SSE forwarded chunk by chunk: flushed to the client on the
+  upstream's first byte — zero added TTFT latency;
+* Status codes and headers passed through faithfully (only hop-by-hop
+  headers stripped; forwarding uses chunked encoding or an exact
+  Content-Length);
+* Upstream HTTPS via the Python standard-library TLS;
+* Concurrent-session safety: one thread per connection, cassette
+  writes serialized.
 
-## 自测
+## Self-test
 
 ```bash
 python3 tools/diff/realchain/record_proxy_test.py
 ```
 
-4 个用例（stub 上游，不碰真 provider）：SSE 逐字节透传+cassette v2
-形状+密钥脱敏、非流式 JSON 单帧、并发两请求各自成 interaction、
-未知路由 404 不落盘。
+4 cases (stub upstreams, no real provider touched): SSE byte-exact
+passthrough + cassette v2 shape + key redaction; non-streaming JSON
+single frame; two concurrent requests each forming its own
+interaction; unknown route 404 with nothing written to disk.

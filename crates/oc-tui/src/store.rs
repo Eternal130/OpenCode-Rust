@@ -2026,7 +2026,7 @@ pub struct Store {
     /// SURF-2: when the connection state last changed (the
     /// Reconnecting overlay's threshold anchor).
     connection_since: Cell<u64>,
-    /// W6 症状① — whether the SSE connection EVER reached `Connected`
+    /// W6 symptom ① — whether the SSE connection EVER reached `Connected`
     /// since construction. The ref's boot chain never shows the lost
     /// overlay before the first successful connect (see
     /// [`Store::reconnecting_overlay_visible`]); a never-connected
@@ -10452,11 +10452,12 @@ impl Store {
         });
     }
 
-    /// G-426③（评审修复）— `data.session.prompt` 的失败回滚
+    /// G-426③ (review fix) — the failure rollback of `data.session.prompt`
     /// （client/solid/data.ts:1600-1607：`.catch` →
     /// `retractLocal`，"Roll back only rows this call admitted"）：
-    /// 撤回本客户端铸 id 的 pending 注册表行与投影 User 行。
-    /// 仅按精确 id 撤——服务器已 echo/认可过的其它行不动。
+    /// Withdraws the pending registry row and the projected User row for a
+    /// client-minted id.
+    /// Withdraws by exact id only — rows the server has already echoed/accepted are untouched.
     pub fn retract_submitted_prompt(&self, session_id: &str, inbox_id: &str) {
         self.retract_inbox_item(session_id, inbox_id);
     }
@@ -13013,7 +13014,7 @@ impl Store {
     /// after 5 s ("Initial connection gets a longer grace period;
     /// retries surface more quickly").
     ///
-    /// W6 症状① — the never-connected boot NEVER surfaces the lost
+    /// W6 symptom ① — the never-connected boot NEVER surfaces the lost
     /// overlay. Ref anchors: (a) the ref CLI health-gates the managed
     /// daemon BEFORE the TUI mounts (`Service.ensure` polls up to
     /// 120 s — server-connection.ts:46-50 + service-timing.ts's

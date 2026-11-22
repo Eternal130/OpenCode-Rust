@@ -307,7 +307,7 @@ fn pty_boot_home_then_one_tab_open_then_close() {
     pty_boot_open_close_body();
 }
 
-/// Lane M1 (换血 pilot): the opentui-solid strip path's POINTER cycle —
+/// Lane M1 (overhaul pilot): the opentui-solid strip path's POINTER cycle —
 /// hover reveals the `✕`, the ` + ` add navigates home, the `✕` click
 /// closes the tab — over the real app loop on a pty, driven with SGR
 /// mouse sequences (`session-tabs.tsx:1652-1754` + `1768-1796`; the

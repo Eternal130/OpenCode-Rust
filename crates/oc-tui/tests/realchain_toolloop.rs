@@ -295,7 +295,7 @@ fn tl_tool_loop_pair() {
     );
     // Corpus completeness: the strict run must have zero gateway
     // misses (turn-anchored main turns + digest aux calls all hit).
-    // W7 review Important①: misses==0 alone let a全程 turn-shape-
+    // W7 review Important①: misses==0 alone let a whole-turn turn-shape-
     // conflict replay (wrong-shape cassette served every turn) stay
     // green — the gateway's /__stats now carries `turn_matches` by
     // event, and a strict run must be PURE hits: any turn-rematch or

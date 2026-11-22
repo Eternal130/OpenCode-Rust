@@ -847,7 +847,7 @@ fn render_discovery(files: &[(String, String)]) -> String {
 }
 
 /// `renderUpdate` (ref instruction-discovery.ts:124-151): per-file
-/// removed/added/changed 三态 — changed files render a 3-context unified
+/// removed/added/changed three states — changed files render a 3-context unified
 /// diff when it is shorter than restating the file, exactly the reference's
 /// shorter-wins rule.
 pub(crate) fn render_update_discovery(

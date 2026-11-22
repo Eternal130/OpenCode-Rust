@@ -309,7 +309,7 @@ def parse_02(text: str) -> list[Rec]:
 def parse_03(text: str) -> list[Rec]:
     """M-table (§2) + protocol tables (§3.1/3.3/3.4/3.5) + curated section records."""
     recs = []
-    # §2 M table: | # | 项 | ref 证据 | 严重度 | KNOWN/NEW |
+    # §2 M table: | # | item | ref evidence | severity | KNOWN/NEW |
     sec = section(text, r"^## 2\. ", r"^## 3\. ")
     for ln in sec.splitlines():
         if not is_table_row(ln):
@@ -320,7 +320,7 @@ def parse_03(text: str) -> list[Rec]:
             recs.append(Rec(3, c[0], title=clean(c[1], 110), sev=norm_sev(c[3]),
                             refs=refs, known=clean(c[4], 80),
                             expected=clean(c[2], 350), actual="见影响（协议未接线/缺失）"))
-    # §3 protocol tables: | # | 差异 | EXPECTED | ACTUAL | 影响 | 级 |
+    # §3 protocol tables: | # | divergence | EXPECTED | ACTUAL | impact | level |
     for start, end in ((r"^### 3\.1 ", r"^### 3\.2 "), (r"^### 3\.3 ", r"^### 3\.4 "),
                        (r"^### 3\.4 ", r"^### 3\.5 "), (r"^### 3\.5 ", r"^### 3\.6 ")):
         sec = section(text, start, end)
@@ -797,18 +797,18 @@ MANIFEST: dict[int, list[str]] = {
 FOLD_TO_SEED: dict[str, str] = {
     # cross-report same-root-cause folds into immutable seed rows
     "01:M-01": "AI-M1",
-    "01:K-06": "AI-M1",          # native compaction 不传 webSocket="session"（与 M-01 同根）
-    "08:D-23": "PLUG-M02",       # session.http/ws hook 无 dispatch 站点 = 01:M-02
-    "03:R1": "AI-M1",            # openai-responses 默认 WS 通道 = M1
-    "03:R2": "AI-M5",            # xai-responses 适配 = M5
+    "01:K-06": "AI-M1",          # native compaction does not pass webSocket="session" (same root as M-01)
+    "08:D-23": "PLUG-M02",       # session.http/ws hooks have no dispatch site = 01:M-02
+    "03:R1": "AI-M1",            # openai-responses default WS channel = M1
+    "03:R2": "AI-M5",            # xai-responses adapter = M5
     "03:V4": "AI-M3",            # google interactions = M3
-    "03:B1": "AI-M10",           # SigV4 凭证链 = M10
-    "03:§3.7": "AI-COPILOT-C1",  # copilot responses lane（16:C1 升 S1）
-    "05:F10": "VCS-3",           # /api/vcs/diff 形状 = 11:#3
+    "03:B1": "AI-M10",           # SigV4 credential chain = M10
+    "03:§3.7": "AI-COPILOT-C1",  # copilot responses lane (16:C1 upgraded to S1)
+    "05:F10": "VCS-3",           # /api/vcs/diff shape = 11:#3
     "11:#4": "VCS-4",            # worktree.remove = 09:D5
     "07:F-1": "CLI-K1",          # serve/hostname = K-1
-    "07:F-5": "CLI-K2",          # upgrade 方法集/通道 = K-2
-    "08:D-15": "TOOL-C2",        # shell.create.before 未派发 = 02:C2（seed）
+    "07:F-5": "CLI-K2",          # upgrade method set/channel = K-2
+    "08:D-15": "TOOL-C2",        # shell.create.before not dispatched = 02:C2 (seed)
     "10:P0-browser": "SURF-BROWSER",
     "10:P0-latex": "SURF-LATEX-MERMAID",
     "10:PLATFORM": "SURF-PLATFORM",
@@ -821,19 +821,19 @@ FOLD_TO_SEED: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 GROUPS: dict[str, list[str]] = {
-    "01:R-05": ["05:F11"],                      # title "" 再生（PATCH/清除 → LLM 重命名）
-    "03:M6": ["03:B", "03:B3"],                  # bedrock-mantle messages 路由（§3.1:B / §3.5:B3 同根）
-    "03:M7": ["03:R3", "03:R4"],                # gateway-protocol（路由选项/元数据）
-    "05:F12": ["15:EV-4", "15:EV-8", "15:EV-9"],  # 公共 SSE 事件集合（4+1 多发）
-    "09:D14": ["15:EV-7"],                      # project.updated 载荷字段
+    "01:R-05": ["05:F11"],                      # title "" regeneration (PATCH/clear → LLM rename)
+    "03:M6": ["03:B", "03:B3"],                  # bedrock-mantle messages routing (§3.1:B / §3.5:B3 same root)
+    "03:M7": ["03:R3", "03:R4"],                # gateway-protocol (routing options/metadata)
+    "05:F12": ["15:EV-4", "15:EV-8", "15:EV-9"],  # public SSE event set (4+1 multi-emit)
+    "09:D14": ["15:EV-7"],                      # project.updated payload fields
     "11:#5": ["01:P-03", "02:A6"],                                # image normalize/photon
-    "11:#6": ["01:C-01", "11:map-13"],                            # reference 物化（repo.clone）
-    "11:#8": ["11:map-14", "11:map-22"],                          # snapshot 行为分歧
-    "11:#9": ["11:map-16", "11:map-17", "11:map-21"],             # vcs/git 细节
-    "11:#10": ["11:map-11"],                                      # modal 动态模型
-    "11:#14": ["09:D13"],                                         # workspace 生命周期
-    "11:#15": ["11:map-5", "11:map-6", "11:map-7"],               # environment 执行平面
-    "13:C-9": ["13:T-2", "14:TD-24"],           # new-session-location 子系统
+    "11:#6": ["01:C-01", "11:map-13"],                            # reference materialization (repo.clone)
+    "11:#8": ["11:map-14", "11:map-22"],                          # snapshot behavior divergence
+    "11:#9": ["11:map-16", "11:map-17", "11:map-21"],             # vcs/git details
+    "11:#10": ["11:map-11"],                                      # modal dynamic models
+    "11:#14": ["09:D13"],                                         # workspace lifecycle
+    "11:#15": ["11:map-5", "11:map-6", "11:map-7"],               # environment execution plane
+    "13:C-9": ["13:T-2", "14:TD-24"],           # new-session-location subsystem
 }
 
 # raw key -> (new ledger id, cluster); singletons not listed get an

@@ -200,7 +200,7 @@ mod tests {
 
     /// The thresholds (app.tsx:1308-1314): retry shows after 1 s, the
     /// initial connect waits 5 s; recovery hides immediately.
-    /// W6 症状①: the overlay arms only AFTER a first successful
+    /// W6 symptom ①: the overlay arms only AFTER a first successful
     /// connect — these paths run with the ever-connected latch set.
     #[test]
     fn reconnecting_thresholds() {
@@ -223,7 +223,7 @@ mod tests {
         assert!(!store.reconnecting_overlay_visible(15_001));
     }
 
-    /// W6 症状① — the never-connected boot (any duration, any state
+    /// W6 symptom ① — the never-connected boot (any duration, any state
     /// family the SSE machine passes through: the constructed
     /// `Connecting`, or `Reconnecting{n}` after the connect window
     /// trips on a slow daemon) NEVER surfaces the lost overlay:

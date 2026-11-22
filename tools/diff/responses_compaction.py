@@ -110,9 +110,9 @@ def normalize_case(rec: dict) -> dict:
     }
 
 
-# Per-divergence qualitative annotations (双侧 file:line + 定性), keyed by
+# Per-divergence qualitative annotations (dual file:line + ruling), keyed by
 # corpus case name. Rendered verbatim into the report; unknown divergences
-# are listed as 待定性.
+# are listed as unadjudicated.
 DIVERGE_NOTES: dict[str, str] = {
     "b21-no-checkpoint-and-bad-item.json": (
         "错误次序分歧（同为失败，错误类不同）：ref 先整体 schema decode 再查 checkpoint"

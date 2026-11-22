@@ -626,7 +626,7 @@ fn apply_stamp(frame: &mut Frame, base_left: usize, base_top: usize, stamp: &Chr
 }
 
 /// The chrome family's fixed draw order — today's paint order frozen
-/// (ruling attempt 2: mount 非路由门控, 后者胜=树子序). The base pages
+/// (ruling attempt 2: mount is not route-gated, last-wins = tree child order). The base pages
 /// first, then the chrome that today pasted after them; pill/migration
 /// last (today's frame tail). The family-6 overlays (console/which-key/
 /// toast/reconnecting) still paste AFTER the composite seam and so stay

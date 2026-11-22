@@ -1,4 +1,4 @@
-# runtime-gates — CI-RUNTIME lane (user ruling 2026-10-20: 使用 GitHub CI)
+# runtime-gates — CI-RUNTIME lane (user ruling 2026-10-20: use GitHub CI)
 #
 # Everything runtime-shaped that cannot live in the fast ci.yml loop:
 # the p10 battery (§12.2), the §12.3 runtime gates, the 9 needs-runtime

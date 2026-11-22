@@ -1,4 +1,4 @@
-//! W6 症状⑨ (G-128 verification) — the busy session tab's breathing
+//! W6 symptom ⑨ (G-128 verification) — the busy session tab's breathing
 //! animation as a frame sequence: the strip's busy face must MOVE on
 //! the store clock, exactly like the ref's `TabPulseRenderable`
 //! (tab-pulse.tsx):
@@ -12,7 +12,7 @@
 //!
 //! The W6 audit found the port's sweep ALREADY animated in-tree
 //! (W5's lane TAIL landed the clock-driven envelopes — the stale
-//! "static sweep" premise in G-128's勘注 predates it); this sequence
+//! "static sweep" premise in G-128's annotation predates it); this sequence
 //! test pins BOTH moving faces so a regression to a static strip
 //! goes red. The frames sample the WALL-time clock the live run
 //! loop advances every ~100 ms (app.rs's tick — the port's frame

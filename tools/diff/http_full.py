@@ -185,7 +185,7 @@ ADJUDICATED = {
     "model": "无凭据+禁网态下模型清单成员随目录新鲜度浮动；只比形状",
 }
 
-# 定性（人工归属）for known DIVERGE surfaces — printed with the detail.
+# Qualitative rulings (manual attribution) for known DIVERGE surfaces — printed with the detail.
 DIV_NOTES = {
     "agent": "内置 agent 的 permissions 清单与 system prompt 文本漂移（rust 少 5-9 条权限项）",
     "skill": "rust 序列化 autoinvoke:null（ref 省略缺省键）+ 内置 skill 正文文本漂移",

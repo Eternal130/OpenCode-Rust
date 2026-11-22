@@ -76,7 +76,7 @@ RUST_ANCHORS = {
 REF_ANCHOR = "packages/core/src/tool/runtime.ts:101-107 (jsonSchema) / :78 (decodeUnknownEffect) / :9-18 (Cache catch->undefined->accept)"
 
 # Pre-registered classifications for divergences expected/observed.
-# Anything not listed here reports as 未定性（人工裁定）.
+# Anything not listed here reports as unadjudicated (manual ruling).
 CLASSIFICATIONS = {
     "type-integer/float-int": ("rust-reject-ref-accept", "记录性严格差：serde_json 保留 `5.0` 为 f64（is_i64=false→非 integer），JS 中 5.0===5 为整数。数字表示差，非能力缺口。"),
     "enum-mixed/float-1": ("rust-reject-ref-accept", "记录性严格差：enum 含 u64(1)，实例 f64(1.0)，serde_json Number 按变体判等→不等；JS 数值 1===1.0。与上一条同根因。"),
@@ -97,7 +97,7 @@ CLASSIFICATIONS = {
     "schema-false/null": ("rust-accept-ref-reject", "预登记方向与实测不符（实测 MATCH）：同上（ref 生产对 schema:false accept）。"),
     "type-boolean/one": ("rust-accept-ref-reject", "待观察：若出现——rust matches_type 对 bool 严格（1 非 true）。"),
     "one-of-both-match/int": ("rust-reject-ref-accept", "待观察：rust oneOf 计数匹配数（integer 5 同时匹配 number）→拒绝；若 ref 判定不同则记录。"),
-    # --- ref 侧 effect 编译器宽松（build-error → Cache catch → accept-all），probe 证实 ---
+    # --- ref side's effect compiler is lenient (build-error → Cache catch → accept-all), confirmed by probe ---
     "pattern/upper": ("rust-reject-ref-accept", "记录性宽松差（ref 侧，重大）：effect Draft2020-12 编译器对 pattern 默认抛错（\"Pattern encountered while patterns is set to error\"）→ runtime.ts Cache catch → accept-all。ref 生产路径不校验 pattern；rust（G-59 补充）执行校验。"),
     "pattern/space": ("rust-reject-ref-accept", "记录性宽松差（ref 侧）：同上（pattern 编译抛错→catch→accept-all）。"),
     "additional-properties-false/extra": ("rust-reject-ref-accept", "记录性宽松差（ref 侧，重大）：effect SchemaRepresentation 对 additionalProperties:false 不产生封闭对象校验（probe 直证 ACCEPT）；rust 执行拒绝。"),
@@ -109,7 +109,7 @@ CLASSIFICATIONS = {
     "integer-big-int/big-ok": ("rust-accept-ref-reject", "记录性严格差（ref 侧）：2^53 恰可精确表示但 effect 仍拒绝——安全整数边界取 < 2^53。"),
     "integer-big-int/neg-big": ("rust-accept-ref-reject", "记录性严格差（ref 侧）：同上，负方向对称。"),
     "prefix-items-plus-items/ok": ("rust-reject-ref-accept", "缺口候选（rust prefixItems 未实现的直接后果）：items 被应用到全部元素，前缀位置的 \"a\" 也按 {type:\"integer\"} 校验→误拒合法输入。"),
-    # --- R29 mined 裁定回填（登记册第二十九轮「归类与复认」节） ---
+    # --- R29 mined adjudication backfill (registry round 29 "classification and re-affirmation" section) ---
     "mined-repair-extras-closed-objects/in2": ("rust-reject-ref-accept", "G-407 族：effect Draft2020-12 对空 properties+additionalProperties:false 不产生封闭对象校验（R29 裁定补注）。"),
     "mined-repair-pattern-ownership/in1": ("rust-reject-ref-accept", "G-407 族：pattern 编译错经 Cache catch 洗成 accept-all（R29 裁定补注）。"),
     "mined-repair-refs-dictionary/in1": ("rust-reject-ref-accept", "G-407 族：draft-07 选择+$defs/$ref 失效→accept-all（R29 裁定补注）。"),

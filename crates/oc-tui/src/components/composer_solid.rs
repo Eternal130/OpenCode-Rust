@@ -913,7 +913,7 @@ fn composer_element(inputs: &Signal<ComposerInputs>, geo: &ComposerInputs) -> El
 /// (`surface-composer`): 2, ABOVE the transcript (1) — the composer's
 /// slash/`@` popup pasted AFTER the transcript region in the old
 /// frame stack and so paints over its bottom rows (ruling attempt 2's
-/// construction equivalence: 今日绘制序 = 后者胜 = 树子序; the
+/// construction equivalence: today's draw order = last-wins = tree child order; the
 /// transcript lane re-seated the families to pin it).
 const COMPOSER_SKELETON_INDEX: usize = 2;
 

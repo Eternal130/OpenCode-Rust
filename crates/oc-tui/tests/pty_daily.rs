@@ -2689,7 +2689,7 @@ fn mini_new_session_factory() {
 
 // ---------------------------------------------------------------------------
 // G-93 (lane gf4): the `$EDITOR` round-trip must not drop the
-// composer's mention attachments — PTY/field-level proofs (规范
+// composer's mention attachments — PTY/field-level proofs (standards
 // 2.5#3). The ref re-attaches the chips to their mention occurrences
 // in the edited text (`realignPromptInputMentions`,
 // component/prompt/index.tsx:566-576); the surviving attachment rides

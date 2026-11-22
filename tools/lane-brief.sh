@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Emit the canonical 开发规范 (sections 2.1-2.5) VERBATIM from the registry.
+# Emit the canonical development standards (sections 2.1-2.5) VERBATIM from the registry.
 #
 # LANE DISPATCH RULE (user ruling 2026-11-17): every lane prompt MUST embed
 # this script's output verbatim. Hand-compressed/rewritten summaries have
@@ -12,8 +12,8 @@
 #   ... include "$DISCIPLINE" in the subagent prompt ...
 #
 # Usage:
-#   tools/lane-brief.sh            # 开发规范 2.1-2.5 verbatim
-#   tools/lane-brief.sh --all      # + 现行制度速查 table
+#   tools/lane-brief.sh            # 开发规范 sections 2.1-2.5, verbatim
+#   tools/lane-brief.sh --all      # + 现行制度速查 (quick-reference) table
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
