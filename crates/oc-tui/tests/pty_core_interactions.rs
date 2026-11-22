@@ -972,9 +972,16 @@ fn pty_composer_cycle_type_edit_submit_reply_stats_solid_path() {
         );
         // STATS ROW: the long fixture's messages hydrate the session
         // (the newest assistant carries tokens) — the footer's usage
-        // arm lights while no turn runs.
+        // arm lights while no turn runs. The mark is the SHARED submit
+        // mark, NOT a fresh `len()` taken here: the arm can land in the
+        // gap between the interrupt-arm assert above and a fresh mark
+        // (the driver thread descheduled under gate load — a 500 ms
+        // pause there reproduced the red 6/6), and a fresh mark then
+        // waits 8 s for bytes that are already behind it (g457 runA /
+        // g458 TRY 1 reds; the "TUI did not exit in time" that follows
+        // is the harness exit wait after the panic, not a teardown hang).
         assert!(
-            wait_for_after(&probe(), b"18 (1%)", len(&probe()), Duration::from_secs(8)),
+            wait_for_after(&probe(), b"18 (1%)", after_submit, Duration::from_secs(8)),
             "the usage arm rendered on the completed turn"
         );
         // Exit.
