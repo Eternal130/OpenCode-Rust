@@ -30,7 +30,7 @@ Every consistency claim is backed by a replay or golden artifact against the pin
 - **Plugins** — registration, commands, tools, config presets, CodeMode interpreter, crash containment (kill -9 fuzzing), V1/V2 formats
 - **Suite** — per-crate gates at the 2026-10-24 burn-down head: oc-core 1046/1046, oc-server 263/263, oc-tui ~1215, oc-pty 30/30, oc-client 57/57 (last consolidated workspace run: 3951/3951 on 2026-10-22; the post-burn-down consolidated gate is pending), `clippy --workspace --all-targets -D warnings` clean, `rustfmt` clean
 
-Performance (measured on Linux, vs upstream v2 on Bun): `--version` 3 ms vs 744 ms; server boot to listening 111 ms; idle RSS ~80 MB; release binary ~44 MB.
+Performance (measured on Linux, vs upstream v2 on Bun): `--version` 3 ms vs 744 ms; server boot to listening 111 ms; idle RSS ~80 MB (~210 MB with the flagship plugin loaded); release binary ~44 MB.
 
 ## Architecture
 
@@ -109,16 +109,6 @@ Installed binaries can update themselves: `opencode-rust upgrade` checks the [re
 [MIT](./LICENSE). This project is a from-scratch Rust port of the MIT-licensed [opencode](https://github.com/anomalyco/opencode); it is an independent effort and is not affiliated with or endorsed by the upstream project.
 
 ---
-
-## 中文说明
-
-本项目是 [opencode v2](https://github.com/anomalyco/opencode)（钉版 **v2.0.24**，commit [`e7a34f0`](https://github.com/anomalyco/opencode/commit/e7a34f09bfd9134dfade5a8ddb843f7030bc9a69)）的**全量 Rust 重写**：CLI、HTTP 服务端、TUI、插件系统全部移植，桌面端与 Web UI 不在范围内。
-
-一致性靠验收体系背书，不靠感觉：OpenAPI 契约与上游语义 diff 为空；官方 v2.0.24 TUI 可直连本服务端；会话数据库与 v2 双向互通；TUI 以 golden 帧按文本+ANSI 逐字节分级验收；LLM 协议 274 盒带逐事件重放；社区插件（旗舰 oh-my-opencode-slim）不修改直接可用。2026-10-24 gap 收尾后各 crate 门：oc-core 1046、oc-server 263、oc-tui ~1215、oc-pty 30（全仓合并门待跑；上一轮全仓 3951/3951）；clippy/rustfmt 零告警。
-
-应用本体是纯 Rust 单二进制（约 44 MB，空闲内存约 80 MB）；Bun 仅在配置了插件或 MCP 服务器时作为子进程拉起（有旗舰插件满载时约 210 MB，无插件则完全不启动）。
-
-协议：MIT（与上游一致）。详见上方英文部分。
 
 ## Development
 
