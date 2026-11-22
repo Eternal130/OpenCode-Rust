@@ -105,6 +105,19 @@ else
   GATE_DIR="${REPO_ROOT}"
 fi
 
+# --- evidence tee (register 2.1#3) ------------------------------------------
+# Every gated run is logged IN FULL to the target checkout's .test-logs/
+# (the log is the only test evidence — log lost = evidence lost). The tee
+# captures the complete, untruncated stream; display filtering (grep/tail)
+# belongs AFTER the run, on the file. Lane label via OC_GATE_LANE.
+LOG_CRATES=$(printf '%s' "$1" | grep -oE -- '-p [A-Za-z0-9_-]+' | sed 's/^-p //' | paste -sd, -)
+if printf '%s' "$1" | grep -q -- '--workspace'; then LOG_CRATES="workspace"; fi
+[ -n "$LOG_CRATES" ] || LOG_CRATES="gate"
+LOG_DIR="${GATE_DIR}/.test-logs"
+mkdir -p "$LOG_DIR"
+LOG="${LOG_DIR}/${LOG_CRATES}-$(date +%Y%m%d-%H%M%S)-${OC_GATE_LANE:-gate}.log"
+echo "dev-gate: logging full output to ${LOG}" >&2
+
 # FD-inheritance fix (2026-11-18 incident): the gate's lock fd 9 was
 # inherited by EVERY gated child (cargo/nextest/test binaries/TUI+ref
 # children) — a single leaked test child kept the flock held forever
@@ -113,10 +126,18 @@ fi
 # at the gated bash boundary: the gate (this script, then systemd-run)
 # keeps owning the flock for the run's duration, and nothing below
 # inherits it.
-exec systemd-run --scope --quiet \
+systemd-run --scope --quiet \
   --unit="opencode-gate-$(date +%s)-$$" \
   -p CPUQuota=400% \
   -p MemoryMax=6G \
   -p TasksMax=512 \
   --setenv=OPENCODE_DEV_GATE=1 \
-  bash 9>&- -c "cd ${GATE_DIR} && $1"
+  bash 9>&- -c "cd ${GATE_DIR} && $1" 2>&1 | tee "$LOG"
+ps=("${PIPESTATUS[@]}")
+run_rc=${ps[0]}; tee_rc=${ps[1]}
+if [ "$tee_rc" -ne 0 ]; then
+  echo "dev-gate: tee FAILED (rc=$tee_rc) — evidence-loss risk for ${LOG}" >&2
+  run_rc=1
+fi
+echo "dev-gate: full log at ${LOG}" >&2
+exit "$run_rc"

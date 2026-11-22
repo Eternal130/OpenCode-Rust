@@ -6,9 +6,9 @@
 
 - 一切本地 cargo 构建/测试经 `tools/dev-gate.sh`（CPU/内存配额 + 负载闸；exit 3=负载拒启、exit 5=磁盘拒启——立即停，勿重试绕门）
 - 禁 plain `cargo test` 作回归证据（canonical harness=nextest）
-- 一切测试命令全量 tee 落盘 `.test-logs/<crate>-<时间>-<lane>.log`（唯一测试证据；日志丢失=证据丢失）
+- 一切测试命令全量 tee 落盘 `.test-logs/<crate>-<时间>-<lane>.log`（唯一测试证据；日志丢失=证据丢失）——dev-gate 已内建自动 tee（lane 标签 `OC_GATE_LANE`；直跑的验证脚本仍需手动 tee）
 - 每 lane 独立 worktree（`.worktrees/`）+ 串行合并回 main；禁碰主检出
-- git 提交一律仓库既有身份 Eternal130 <Eternal130@outlook.com>（禁 `--author` / `-c user.*` / `GIT_AUTHOR_*`）
+- git 提交一律仓库 git config 既有身份（`tools/git-identity-hook.sh` 钉扎：作者/提交者必须一致匹配 config 层身份——禁 `--author` / `-c user.*` / `GIT_AUTHOR_*`）
 - 在册缺口/豁免/判定权归属等制度见 GAPS §2.2（掩码裁决 SLA、覆盖台账、沙箱禁判定三裁定）
 
 ## 测试工具用法
@@ -20,6 +20,8 @@ tools/dev-gate.sh 'cargo nextest run -p oc-tui --locked <过滤词>'   # 日常�
 ```
 
 每条 cargo 命令单独包一次。验证脚本（`tools/diff/*.py`、`tools/parity/*.sh`、`tools/guards/run.sh`）**直接跑、禁包 dev-gate**（锁套锁）。
+
+**自动 tee**：dev-gate 将整条命令的完整输出（stdout+stderr，不截断）自动落盘 `.test-logs/<crates>-<时间>-<OC_GATE_LANE>.log`（`-p` 提取 crate 名、`--workspace`→workspace、默认标签 `gate`）——测试证据以该日志为准，**禁再手动接 tee**（双写）；直跑的验证脚本仍需手动 tee。
 
 ### 2. nextest 分层（`.config/nextest.toml`：threads=4、全局 retry=1；pty/be1 家族 retry=2）
 
