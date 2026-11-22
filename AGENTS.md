@@ -1,6 +1,6 @@
 # opencode-rust — Agent 工作入口
 
-一句话：opencode v2.0.24（TS 参考实现）的 Rust 全量移植。绝对遵循 `docs/GAPS-AND-PITFALLS.md` 的开发规范（权威源，`tools/lane-brief.sh --all` 逐字输出 §2.1-2.5）。
+一句话：opencode v2.0.24（TS 参考实现）的 Rust 全量移植。绝对遵循开发规范——**权威源=本地私有册 `docs/GAPS-AND-PITFALLS.md`（git-ignored，不在克隆内；盘上路径同右）**，`tools/lane-brief.sh --all` 逐字输出其 §2.1-2.5 与速查表。公开分歧登记册=根级 `DIVERGENCES.md`。
 
 ## 硬纪律（违反即事故）
 

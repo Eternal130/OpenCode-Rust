@@ -31,3 +31,4 @@ tools/bin/
 tools/parity/tui-diff/cache/
 .test-logs/
 __pycache__/
+docs/GAPS-AND-PITFALLS.md

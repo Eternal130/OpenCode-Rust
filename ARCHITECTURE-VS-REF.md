@@ -45,6 +45,6 @@
 
 ## 指针
 
-- 已知分歧登记册 + 开发规范 → `docs/GAPS-AND-PITFALLS.md`
+- 已知分歧登记册 → `DIVERGENCES.md`；开发规范 → 本地私有册 `docs/GAPS-AND-PITFALLS.md`（git-ignored）
 - agent 入口（规范权威源 `tools/lane-brief.sh`）→ `AGENTS.md`
 - 历史 ADR / 审计台账 / 设计文档 → git 历史（2026-11-22 出树，盘上归档 ./archive/）
