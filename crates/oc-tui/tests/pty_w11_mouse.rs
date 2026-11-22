@@ -262,7 +262,7 @@ fn mouse_scenario(driver: &mut HarnessHandle) -> Result<(), String> {
                 "the drag painted no reverse video: baseline vs dragged styles at {inside_cells:?} unchanged"
             ));
         }
-        // 真机⑧残余（W15）— the selection is a CHARACTER range (ref
+        // real-machine ⑧ residue (W15)— the selection is a CHARACTER range (ref
         // text-buffer-view.zig setLocalSelectionStyle: cell coords →
         // char offsets, highlight over the occupied cells only): a row
         // whose text ends before the rect's right edge keeps its

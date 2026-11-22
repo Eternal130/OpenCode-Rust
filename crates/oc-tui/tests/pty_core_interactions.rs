@@ -250,7 +250,7 @@ struct Shared {
     /// closed right after the headers (a scripted server loss — the
     /// Reconnecting overlay's trigger).
     sse_drops: Arc<AtomicUsize>,
-    /// W6 症状①: when > 0, that-many ALREADY-OPEN event streams (past
+    /// W6 symptom ①: when > 0, that-many ALREADY-OPEN event streams (past
     /// the handshake, idling in the broadcast loop) close — a genuine
     /// mid-run LOSS after a first successful connect (the overlay's
     /// new arm condition).
@@ -484,7 +484,7 @@ fn handle(mut socket: std::net::TcpStream, shared: &Shared) {
                         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                     ) =>
                 {
-                    // W6 症状①: a scripted mid-run stream loss (see
+                    // W6 symptom ①: a scripted mid-run stream loss (see
                     // `sse_close_open`) — one stream per increment.
                     if shared.sse_close_open.load(Ordering::SeqCst) > 0 {
                         shared.sse_close_open.fetch_sub(1, Ordering::SeqCst);
@@ -1145,7 +1145,7 @@ fn pty_reconnecting_overlay_on_loss_and_recovery() {
     let sandbox = sandbox_env("reconnect");
     let _ = sandbox;
     let (url, shared) = spawn_scripted_server(false);
-    // W6 症状①: the overlay arms only AFTER a first successful connect
+    // W6 symptom ①: the overlay arms only AFTER a first successful connect
     // (the never-connected boot stays clean — ref gates the daemon's
     // health before the TUI mounts and its managed copy never reads
     // "Connection lost…"). So the FIRST stream completes (the boot
@@ -1162,7 +1162,7 @@ fn pty_reconnecting_overlay_on_loss_and_recovery() {
             "the home wordmark rendered"
         );
         // Boot connected cleanly (no overlay during the never-connected
-        // window — the W6 症状① face): the armed losses fire now (the
+        // window — the W6 symptom ① face): the armed losses fire now (the
         // open stream closes on its next idle tick, the next two
         // attempts die at the headers).
         std::thread::sleep(Duration::from_millis(500));

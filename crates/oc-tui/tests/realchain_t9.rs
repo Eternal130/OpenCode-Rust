@@ -303,7 +303,7 @@ fn t9_6_config_hot_reload_updates_models() {
 }
 
 // ---------------------------------------------------------------------------
-// W6 症状① — T9-8: the slow-boot window. A daemon that is HEALTHY on
+// W6 symptom ① — T9-8: the slow-boot window. A daemon that is HEALTHY on
 // /api/info (the CLI's ensure gate passes, the TUI mounts) but holds
 // the event stream's first frame (`OPENCODE_TEST_SSE_FIRST_FRAME_DELAY_MS`,
 // the deterministic stand-in for the real machine's slow config/plugin/

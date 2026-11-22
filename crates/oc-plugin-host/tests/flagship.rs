@@ -1,4 +1,4 @@
-//! The wave-2 acceptance test (oracle-gate11 §4 波 2): the flagship
+//! The wave-2 acceptance test (oracle-gate11 §4 wave 2): the flagship
 //! plugin — oh-my-opencode-slim v3.0.3 — loads on the deliberately
 //! minimal Context, its setup completes, and everything it registers
 //! materializes into the Rust structures:

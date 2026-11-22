@@ -1,4 +1,4 @@
-//! W16 ⑦''② — the busy tab's breathing lamp ("呼吸灯时有时无") under
+//! W16 ⑦''② — the busy tab's breathing lamp (the "breathing lamp sometimes on, sometimes off" symptom) under
 //! TEMPORAL PRESSURE: N busy→idle cycles over a real PTY, sampling the
 //! actual emitted frames (the VT stream), hunting the track
 //! registration race (a cycle where the busy face never appears or

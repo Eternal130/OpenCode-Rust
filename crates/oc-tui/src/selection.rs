@@ -333,14 +333,14 @@ pub fn selected_text_resolved(frame: &Frame, resolved: &ResolvedSelection) -> St
     lines.join("\n")
 }
 
-/// W6 症状⑧ / 真机⑧残余 — paint the live selection's highlight over
+/// W6 symptom ⑧ / real-machine ⑧ residue — paint the live selection's highlight over
 /// the final frame: opentui's selection is a CHARACTER-offset range
 /// over the text renderables (`TextBufferRenderable.onSelectionChanged`
 /// → text-buffer-view.zig `setLocalSelectionStyle`: anchor/focus cell
 /// coordinates convert through `coordsToCharOffset` and the highlighted
 /// cells are exactly those the range's characters occupy — a drag past
 /// a line's text end never paints the trailing background blanks, the
-/// notepad-like extent 真机⑧ observed). The frame-level port clamps
+/// notepad-like extent real-machine ⑧ observed). The frame-level port clamps
 /// each row's highlight to that row's text extent (the last non-blank
 /// cell), so the rect's background-blank tail stays unselected.
 /// Selected cells render as REVERSE VIDEO — each cell's fg and bg swap
@@ -363,7 +363,7 @@ pub fn paint_resolved(frame: &mut Frame, resolved: &ResolvedSelection) {
     let rect = resolved.rect;
     for y in rect.y..rect.y.saturating_add(rect.height).min(frame.cells.len()) {
         let Some(row) = frame.cells.get_mut(y) else { continue };
-        // 真机⑧ — the row's text extent: one past the last non-blank
+        // real-machine ⑧ — the row's text extent: one past the last non-blank
         // cell of the whole row (the char-range model's line end).
         let extent = row.iter().rposition(|cell| cell.ch != ' ').map_or(0, |at| at + 1);
         let first_row = y == rect.y;
@@ -484,7 +484,7 @@ mod tests {
         assert_eq!(selected_text(&frame, rect), "a\nt");
     }
 
-    /// W6 症状⑧ — the highlight paints reverse video over exactly the
+    /// W6 symptom ⑧ — the highlight paints reverse video over exactly the
     /// selected rect (opentui's post-grid selection pass).
     #[test]
     fn highlight_swaps_fg_bg_inside_the_rect_only() {

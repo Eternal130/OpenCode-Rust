@@ -37,7 +37,7 @@
 //!   frame must be identical 3 pumps in a row, cap 64 pumps — a
 //!   non-settling case is recorded as an `error` on its grid and fails
 //!   the run.
-//! * Theme: the pinned corpus theme (opencode v2 dark, SCHEMA 主题
+//! * Theme: the pinned corpus theme (opencode v2 dark, SCHEMA theme
 //!   pinning) is the rust theme model's own default
 //!   (`ThemeState::v2_dark`); `CellColor::Default` resolves to its
 //!   `text.base` / `background.base` RGB — no hardcoded magic numbers.
@@ -437,7 +437,7 @@ impl Pump {
 }
 
 // ---------------------------------------------------------------------------
-// key vocabulary (SCHEMA 键名表) → `App::press` specs
+// key vocabulary (SCHEMA key table) → `App::press` specs
 // ---------------------------------------------------------------------------
 
 fn press_token(app: &mut App, token: &str) {
@@ -448,7 +448,7 @@ fn press_token(app: &mut App, token: &str) {
         return;
     }
     // C3 review Important#1 — the two non-key input surfaces replayed
-    // through their production seams (SCHEMA 键名表).
+    // through their production seams (SCHEMA key table).
     if let Some(text) = token.strip_prefix("paste:") {
         app.paste_terminal_text(text);
         return;
@@ -721,7 +721,7 @@ async fn tui_fullscreen_diff_driver() {
     let mut cases = manifest.cases;
     cases.sort_by(|a, b| a.id.cmp(&b.id));
 
-    // The pinned corpus theme (SCHEMA 主题 pinning) via the rust theme
+    // The pinned corpus theme (SCHEMA theme pinning) via the rust theme
     // model's own default — `CellColor::Default` resolves through it.
     let resolved = ThemeState::v2_dark();
     let theme = ThemeDefaults {

@@ -3596,7 +3596,7 @@ impl App {
         // (`sync_footer_family` above) and the keys live in
         // `stroke_in_form`.
         //
-        // W6 症状⑧ — the live selection's highlight: opentui's
+        // W6 symptom ⑧ — the live selection's highlight: opentui's
         // renderer paints the mouse selection over the FINAL grid
         // (the `renderer.getSelection()` cell model the drag state
         // machine mirrors, selection.rs) as reverse video — each
@@ -3891,7 +3891,7 @@ pub enum PromptSinkEvent {
         message: String,
         /// The submitted text (the restore candidate).
         draft: String,
-        /// G-426③（评审修复）— the client-minted inbox id of the
+        /// G-426③ (review fix)— the client-minted inbox id of the
         /// optimistic admission this send created (`data.session.
         /// prompt`'s rollback target, data.ts:1600-1607 — retract
         /// ONLY the row this call admitted). `None` when the failing
@@ -5422,7 +5422,7 @@ pub fn apply_send_failure(store: &Store, event: PromptSinkEvent) {
     let PromptSinkEvent::SendFailed { session_key, title, message, draft, inbox_id } = event else {
         return;
     };
-    // G-426③（评审修复）— ref's optimistic rollback (data.ts:
+    // G-426③ (review fix)— ref's optimistic rollback (data.ts:
     // 1600-1607): a failed POST retracts ONLY the row this send
     // admitted (the client-minted id) — pending registry + projected
     // user row — before the toast/draft restore, so the ghost row,
@@ -10562,7 +10562,7 @@ pub async fn run_with_size(
         // per frame); the port's frame index derives from the store
         // clock sampled at repaint, and the plain 100 ms tick BEATS
         // against the 80 ms dots interval — frames skip visibly (the
-        // beta.20 "跑马灯/思考指示卡顿" A/B: ref smooth, rust janky).
+        // beta.20 "marquee/thinking-indicator jank" A/B: ref smooth, rust janky).
         // While any tab runs, pin the clock to each spinner boundary
         // exactly like the marquee pin below (one boundary per wake).
         let spinner_interval = if app.store.animations_enabled() {
@@ -16327,7 +16327,7 @@ mod render_scheduler_equiv_tests {
     }
 }
 
-/// W6 症状⑧ — the mouse-drag selection paints a visible highlight:
+/// W6 symptom ⑧ — the mouse-drag selection paints a visible highlight:
 /// opentui's renderer draws the live selection over the composited
 /// grid as reverse video; the port's drag machine fed only the copy
 /// path, so a drag (and manual mode's retained rect) rendered
@@ -16340,7 +16340,7 @@ fn mouse_drag_selection_paints_reverse_video_highlight() {
     let mut app = App::new((60, 20));
     app.store.open_tab("s1", Some("Alpha".to_owned()));
     app.store.navigate(Route::session("s1".to_owned()));
-    // 真机⑧（W15）— the selection is a CHARACTER range: the highlight
+    // real-machine ⑧ (W15)— the selection is a CHARACTER range: the highlight
     // exists only over actual text. Seed a transcript whose lines
     // cover the drag region (the blank-region drag the test used
     // before now paints nothing, exactly like the ref's char model).

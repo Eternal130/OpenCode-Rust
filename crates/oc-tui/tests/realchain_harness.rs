@@ -953,7 +953,7 @@ pub fn service_start(sandbox: &Sandbox) -> ManagedServer {
     service_start_with_env(sandbox, &[])
 }
 
-/// W6 症状① — `service start` with EXTRA daemon env (the slow-boot
+/// W6 symptom ① — `service start` with EXTRA daemon env (the slow-boot
 /// scenario's `OPENCODE_TEST_SSE_FIRST_FRAME_DELAY_MS` injection:
 /// a daemon that is healthy on `/api/info` but holds the event
 /// stream's first frame).
@@ -1403,7 +1403,7 @@ impl Sandbox {
         }
     }
 
-    /// W7 权限自动化 — pre-authorize the tool loop through the REAL
+    /// W7 permission automation — pre-authorize the tool loop through the REAL
     /// config `permission` block (the same v2 semantic both engines
     /// parse): bash/edit/write/read allowed, so the scenario's tool
     /// calls run straight through with no permission dialog on either
@@ -1813,7 +1813,7 @@ pub fn quiescence_names() -> Vec<String> {
 /// A never-stable screen (a live spinner) still exports at the cap,
 /// annotated via [`mark_quiescence`]. Conservative by construction:
 /// a settled export now proves ≥3×500 ms identical + a further 1 s
-/// unchanged (≈2.5 s of grid stability); 宁可慢，不可再导中途态.
+/// unchanged (≈2.5 s of grid stability); better slow than exporting a mid-state again.
 #[must_use]
 pub fn capture_settled(tui: &TuiProcess) -> String {
     let start = Instant::now();

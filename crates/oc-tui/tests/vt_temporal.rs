@@ -52,7 +52,7 @@
 //!   test (`…_pill_never_connect_resolves_locally`) pins the ref's
 //!   divergence case — the pill resolves (flip + shown+3 s unmount)
 //!   while the server NEVER connects and the screen stays clean of
-//!   the lost overlay (W6 症状①: it arms only after the first
+//!   the lost overlay (W6 symptom ①: it arms only after the first
 //!   successful connect).
 
 // Terminal coordinates are u16 by VT definition; harness instants are
@@ -992,7 +992,7 @@ fn hold_forever(
 /// boot future resolves (the failure arm: the bogus plugin target
 /// fails resolve, no runtime), unmount by shown+3 s — while the
 /// screen stays CLEAN of the Reconnecting overlay for the whole
-/// never-connected window (W6 症状①: the lost overlay arms only after
+/// never-connected window (W6 symptom ①: the lost overlay arms only after
 /// the FIRST successful connect — the ref health-gates the daemon
 /// pre-mount and its managed copy reads "Restarting service…", never
 /// the boot-window "Connection lost…" flash).
@@ -1097,7 +1097,7 @@ fn vt_temporal_startup_loading_pill_never_connect_resolves_locally() {
         "the pill held past shown+3 s ({last_pill} ms > {show_at} + 3400) under a never-connecting \
          server"
     );
-    // (c) the Reconnecting overlay: W6 症状① — a NEVER-connected boot
+    // (c) the Reconnecting overlay: W6 symptom ① — a NEVER-connected boot
     // stays clean, no matter how long the handshake stalls or how
     // many G-300 connect-window retries trip. The pre-W6 port flashed
     // "Connection lost…" here (the beta.15/16 user-visible symptom);
@@ -1112,7 +1112,7 @@ fn vt_temporal_startup_loading_pill_never_connect_resolves_locally() {
     assert!(
         overlay_at == u64::MAX,
         "the Reconnecting overlay appeared at {overlay_at} ms over a NEVER-connected boot — \
-         W6 症状①: the boot window must stay clean until the first successful connect"
+         W6 symptom ①: the boot window must stay clean until the first successful connect"
     );
     let (_, last_seen) = *overlay.last().expect("overlay samples");
     assert!(!last_seen, "the Reconnecting overlay was present at the window's end");

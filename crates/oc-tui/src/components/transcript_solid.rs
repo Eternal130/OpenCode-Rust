@@ -491,8 +491,8 @@ fn transcript_element(
 
 /// The transcript family's seat under the shared tree's root. The
 /// skeleton table's nominal index is 2 (after composer), but
-/// construction equivalence (ruling attempt 2: 今日绘制序 = 后者胜 =
-/// 树子序) seats the transcript BELOW the composer wrapper: the
+/// construction equivalence (ruling attempt 2: today's draw order = last-wins =
+/// tree child order) seats the transcript BELOW the composer wrapper: the
 /// composer's slash/`@` popup pastes AFTER the region today and so
 /// paints OVER the transcript's bottom rows (app.rs's G-6 popup proof
 /// and `pty_composer_tabs` pin it) — a transcript child above the

@@ -1,5 +1,5 @@
 //! W16 frame-rhythm quantification — the thinking indicator's flush
-//! cadence under a live streaming turn (the ⑦''② "卡卡" measurement).
+//! cadence under a live streaming turn (the ⑦''② "stutter" measurement).
 //!
 //! The port's frame pacer is the app loop's tick (app.rs). The ref's
 //! model is opentui's work-compensated scheduler (renderer.ts:4772-4801:
@@ -8,7 +8,7 @@
 //! regardless of per-iteration work. A plain `sleep(100)` stacked
 //! after the work makes the period `work + 100` — under a chunky
 //! streaming batch the spinner's flushes jitter and occasionally
-//! long-tail ("卡").
+//! long-tail ("stutter").
 //!
 //! This test measures the inter-flush gap DISTRIBUTION of the VT
 //! snapshot stream while the scripted thinking turn animates and pins
