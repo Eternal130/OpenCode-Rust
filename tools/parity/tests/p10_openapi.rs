@@ -1,6 +1,6 @@
 //! Phase-10 openapi equivalence gate: boot the Rust server, GET
 //! `/openapi.json`, and semantic-diff it against the **pinned reference
-//! document** (`./ref/packages/protocol/openapi.json`).
+//! document** (pinned ref source `packages/protocol/openapi.json`).
 //!
 //! Semantic means (see `parity::openapi_diff`): path × method sets equal;
 //! per-operation `operationId`, canonical parameter lists, `$ref` sets
@@ -127,8 +127,8 @@ async fn p10_openapi_semantic_equivalence() -> Result<()> {
     let summary = serde_json::json!({
         "pinned": {
             // Machine-independent relative path (the reference checkout root
-            // differs per environment — ./ref locally,
-            // /tmp/opencode/ref in CI; sha256 is the authoritative pin).
+            // differs per environment — the pinned ref sibling checkout
+            // locally, /tmp/opencode/ref in CI; sha256 is the authoritative pin).
             "path": "packages/protocol/openapi.json",
             "sha256": format!("{pinned_sha:x}"),
         },

@@ -98,7 +98,7 @@ async fn m1_official_tui_smoke_against_rust_server() -> anyhow::Result<()> {
     let launch = format!(
         "cd {cwd} && TERM=xterm-256color HOME={home} OPENCODE_VERSION=2.0.24 \
          OPENCODE_PASSWORD={password} OPENCODE_CONFIG={config} \
-         ~/.bun/bin/bun run --cwd {cli} --define OPENCODE_VERSION='\"2.0.24\"' \
+         {bun} run --cwd {cli} --define OPENCODE_VERSION='\"2.0.24\"' \
          --define OPENCODE_CHANNEL='\"stable\"' --define OPENCODE_ARTIFACT='\"cli\"' \
          src/index.ts --server {url}",
         cwd = tui_home.display(),
@@ -107,6 +107,9 @@ async fn m1_official_tui_smoke_against_rust_server() -> anyhow::Result<()> {
         config = server.sandbox().join("project/opencode.json").display(),
         cli = tui_root().join("../cli").display(),
         url = server.url(),
+        bun = parity::tui_diff::find_bun()
+            .unwrap_or_else(|| std::path::PathBuf::from("/usr/local/bin/bun"))
+            .display(),
     );
     let status = Command::new("tmux")
         .args(["new-session", "-d", "-s", "m1", "-x", "160", "-y", "40", &launch])

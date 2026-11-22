@@ -29,7 +29,7 @@
 //!   packages/cli --define OPENCODE_VERSION="2.0.24" … src/index.ts
 //!   --server <url>`), on a PTY we own. The ref checkout is
 //!   self-healed by [`crate::reference::ensure_reference_checkout`]
-//!   (tar copy from `./ref` + `bun install`).
+//!   (tar copy from the pinned ref source + `bun install`).
 //! * **Same project directory**: both TUI children run with the SAME
 //!   cwd — one seeded sandbox project (git repo + identical files) —
 //!   so project names, titles and file trees match. Each side gets
@@ -1978,7 +1978,7 @@ impl RefCaptureCache {
         // working root is a tar copy WITHOUT .git), plus a manifest
         // hash of the live root so a drifted rebuild also misses.
         let source = std::env::var("PARITY_REF_SOURCE")
-            .map_or_else(|_| PathBuf::from("./ref"), PathBuf::from);
+            .map_or_else(|_| crate::reference::ref_source_default(), PathBuf::from);
         let head = std::process::Command::new("git")
             .arg("-C")
             .arg(&source)
@@ -2277,6 +2277,12 @@ fn seed_project(project: &Path, stub_url: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn home_bun_dir() -> String {
+    // The invoking user's bun install dir (hermetic children may need to
+    // re-exec bun); falls back to the plain system PATH.
+    std::env::var("HOME").map(|h| format!("{h}/.bun/bin")).unwrap_or_else(|_| "/usr/local/bin".to_owned())
+}
+
 fn home_env(home: &Path, password: &str, config: &Path) -> Vec<(String, String)> {
     vec![
         ("TERM".to_owned(), "xterm-256color".to_owned()),
@@ -2289,7 +2295,7 @@ fn home_env(home: &Path, password: &str, config: &Path) -> Vec<(String, String)>
         ("TMPDIR".to_owned(), home.join("tmp").display().to_string()),
         ("OPENCODE_PASSWORD".to_owned(), password.to_owned()),
         ("OPENCODE_CONFIG".to_owned(), config.display().to_string()),
-        ("PATH".to_owned(), "~/.bun/bin:/usr/local/bin:/usr/bin:/bin".to_owned()),
+        ("PATH".to_owned(), format!("{}:/usr/local/bin:/usr/bin:/bin", home_bun_dir()).to_owned()),
         // Determinism: no locale surprises in either stack.
         ("LANG".to_owned(), "C.UTF-8".to_owned()),
         ("LC_ALL".to_owned(), "C.UTF-8".to_owned()),
@@ -3547,11 +3553,18 @@ pub fn find_bun() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("PARITY_BUN") {
         return Some(PathBuf::from(path));
     }
-    for candidate in
-        ["~/.bun/bin/bun", "/usr/local/bin/bun", "/usr/bin/bun", "/opt/homebrew/bin/bun"]
-    {
-        if Path::new(candidate).is_file() {
-            return Some(PathBuf::from(candidate));
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        candidates.push(PathBuf::from(home).join(".bun/bin/bun"));
+    }
+    candidates.extend(
+        ["/usr/local/bin/bun", "/usr/bin/bun", "/opt/homebrew/bin/bun"]
+            .iter()
+            .map(PathBuf::from),
+    );
+    for candidate in candidates {
+        if candidate.is_file() {
+            return Some(candidate);
         }
     }
     std::env::var("PATH").ok().and_then(|paths| {

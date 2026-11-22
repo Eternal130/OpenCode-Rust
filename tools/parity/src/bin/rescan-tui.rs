@@ -43,12 +43,20 @@ fn copy_dir_all(source: &Path, destination: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The user's npm cache root (`$XDG_CACHE_HOME`, else `$HOME/.cache`).
+fn npm_cache_root() -> PathBuf {
+    if let Ok(x) = std::env::var("XDG_CACHE_HOME") {
+        return PathBuf::from(x);
+    }
+    std::env::var("HOME").map(|h| PathBuf::from(h).join(".cache")).unwrap_or_default()
+}
+
 fn omos_source() -> Option<PathBuf> {
     if let Ok(root) = std::env::var("OC_OMOS_ROOT") {
         let root = PathBuf::from(root);
         return root.join("dist/server/index.js").is_file().then_some(root);
     }
-    let base = Path::new("~/.cache/opencode/npm/oh-my-opencode-slim@latest");
+    let base = npm_cache_root().join("opencode/npm/oh-my-opencode-slim@latest");
     let mut stamps: Vec<PathBuf> = std::fs::read_dir(base)
         .ok()?
         .filter_map(Result::ok)
@@ -154,7 +162,7 @@ fn home_env(home: &Path, password: &str, config: &Path) -> Vec<(String, String)>
         ("TMPDIR".to_owned(), home.join("tmp").display().to_string()),
         ("OPENCODE_PASSWORD".to_owned(), password.to_owned()),
         ("OPENCODE_CONFIG".to_owned(), config.display().to_string()),
-        ("PATH".to_owned(), "~/.bun/bin:/usr/local/bin:/usr/bin:/bin".to_owned()),
+        ("PATH".to_owned(), format!("{}:/usr/local/bin:/usr/bin:/bin", parity::tui_diff::home_bun_dir()).to_owned()),
         ("LANG".to_owned(), "C.UTF-8".to_owned()),
         ("LC_ALL".to_owned(), "C.UTF-8".to_owned()),
         // Plugin logs visible in captured mirrors.
@@ -197,7 +205,13 @@ fn ref_checkout_root() -> PathBuf {
 }
 
 fn resolve_bun() -> PathBuf {
-    std::env::var("PARITY_BUN").map_or_else(|_| PathBuf::from("~/.bun/bin/bun"), PathBuf::from)
+    if let Ok(path) = std::env::var("PARITY_BUN") {
+        return PathBuf::from(path);
+    }
+    if let Some(bun) = parity::tui_diff::find_bun() {
+        return bun;
+    }
+    PathBuf::from("/usr/local/bin/bun")
 }
 
 struct Args {

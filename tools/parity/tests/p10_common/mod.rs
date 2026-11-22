@@ -116,13 +116,13 @@ pub fn bun_path() -> Result<PathBuf> {
     if let Ok(path) = std::env::var("PARITY_BUN") {
         return Ok(PathBuf::from(path));
     }
-    for candidate in [
-        "/usr/local/bin/bun",
-        "~/.bun/bin/bun",
-        "/home/dev/.bun/bin/bun",
-        "/usr/bin/bun",
-    ] {
-        if Path::new(candidate).is_file() {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        candidates.push(PathBuf::from(home).join(".bun/bin/bun"));
+    }
+    candidates.extend(["/usr/local/bin/bun", "/usr/bin/bun"].iter().map(PathBuf::from));
+    for candidate in candidates {
+        if candidate.is_file() {
             return Ok(PathBuf::from(candidate));
         }
     }

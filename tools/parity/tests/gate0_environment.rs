@@ -2,12 +2,14 @@
 //! dual-end gate environment proven end to end in one test.
 //!
 //! Verifies, for the user actually running the test (gate runs execute
-//! as `dev` via `tools/dev-gate.sh`, whose PATH has no bun — set
+//! as the configured non-root dev user via `tools/dev-gate.sh`, whose
+//! PATH has no bun — set
 //! `PARITY_BUN` explicitly in gate commands):
 //!
 //! 1. bun resolves and `bun --version` executes as this user;
 //! 2. the pinned read-only reference source commit is recorded
-//!    (`git -C $PARITY_REF_SOURCE log -1`, default `./ref`);
+//!    (`git -C $PARITY_REF_SOURCE log -1`, default the pinned ref
+//!    source — the `opencode-ref` sibling checkout of this repo);
 //! 3. the runnable reference checkout boots, answers `GET /api/info`
 //!    with 200, and stops cleanly;
 //! 4. the Rust server boots, answers `GET /api/info` with 200, and stops
@@ -29,8 +31,11 @@ use parity::scenario::ScenarioHost;
 use parity::{minih, reference, rust_server};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
-/// The pinned read-only reference source (override: `PARITY_REF_SOURCE`).
-const REF_SOURCE: &str = "./ref";
+/// The pinned read-only reference source (override: `PARITY_REF_SOURCE`;
+/// default = the `opencode-ref` sibling checkout of this repository).
+fn ref_source_default() -> String {
+    parity::reference::ref_source_default().display().to_string()
+}
 
 /// `GET /api/info` must answer 200 with auth.
 async fn api_info_ok(base: &str, password: &str) -> Result<()> {
@@ -69,7 +74,7 @@ async fn gate0_dual_end_environment() -> Result<()> {
     eprintln!("[gate0] bun {} => {}", bun.display(), bun_version);
 
     // 2. the pinned source commit (read-only `git log -1`).
-    let ref_source = std::env::var("PARITY_REF_SOURCE").unwrap_or_else(|_| REF_SOURCE.to_owned());
+    let ref_source = std::env::var("PARITY_REF_SOURCE").unwrap_or_else(|_: std::env::VarError| ref_source_default());
     let commit = std::process::Command::new("git")
         // The pinned checkout is root-owned; per-command safe.directory
         // lets the gate user read it without touching global git config.

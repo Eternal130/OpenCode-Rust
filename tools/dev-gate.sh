@@ -3,8 +3,9 @@
 # repo MUST run through this script (lane specs reference it; CI is exempt).
 #
 # Enforces the frozen rules structurally, not by memory:
-#   1. IDENTITY: always executes as dev (root running cargo/fmt dirtied
-#      file ownership three times in project history — never again).
+#   1. IDENTITY: always executes as the configured non-root dev user
+#      (OC_DEV_USER, else the uid-1000 account; root running cargo/fmt
+#      dirtied file ownership three times in project history — never again).
 #   2. CPU CAP: transient systemd scope with CPUQuota=400% (4 of 16 cores).
 #      A forgotten -j4, a parallel lane, or a runaway linker physically cannot
 #      saturate the box (newapi + the live service share it).
@@ -84,7 +85,24 @@ if [[ -n "${OPENCODE_DEV_GATE:-}" ]]; then
   exec bash -c "$1"
 fi
 
-# Target checkout: ./repo by default; lanes may set
+# Dev identity: OC_DEV_USER overrides; otherwise the uid-1000 account.
+# All paths (HOME, group, cargo bin) are derived from that account — no
+# hardcoded local usernames.
+DEV_USER="${OC_DEV_USER:-$(getent passwd 1000 | cut -d: -f1)}"
+if [[ -z "${DEV_USER}" ]]; then
+  echo "dev-gate: cannot resolve the non-root dev user (no uid-1000 account; set OC_DEV_USER)" >&2
+  exit 6
+fi
+DEV_HOME="$(getent passwd "${DEV_USER}" | cut -d: -f6)"
+if [[ -z "${DEV_HOME}" ]]; then
+  echo "dev-gate: cannot resolve HOME for user ${DEV_USER}" >&2
+  exit 6
+fi
+DEV_GID="$(id -g "${DEV_USER}")"
+# Repo root = this script's checkout (works from any worktree invocation).
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Target checkout: the main checkout by default; lanes may set
 # OPENCODE_DEV_GATE_DIR to run against an isolated git worktree.
 # Footgun guard: with the env var unset, a lane-worktree invocation used
 # to silently build the MAIN checkout (false greens). When the caller's
@@ -93,11 +111,11 @@ fi
 # keep the old default.
 if [[ -n "${OPENCODE_DEV_GATE_DIR:-}" ]]; then
   GATE_DIR="${OPENCODE_DEV_GATE_DIR}"
-elif [[ "${PWD}" != "./repo" && -f "${PWD}/Cargo.toml" ]]; then
+elif [[ "${PWD}" != "${REPO_ROOT}" && -f "${PWD}/Cargo.toml" ]]; then
   GATE_DIR="${PWD}"
   echo "dev-gate: OPENCODE_DEV_GATE_DIR unset; using caller dir ${GATE_DIR}" >&2
 else
-  GATE_DIR="./repo"
+  GATE_DIR="${REPO_ROOT}"
 fi
 
 # FD-inheritance fix (2026-11-18 incident): the gate's lock fd 9 was
@@ -110,11 +128,11 @@ fi
 # inherits it.
 exec systemd-run --scope --quiet \
   --unit="opencode-gate-$(date +%s)-$$" \
-  --uid=dev --gid=dev \
+  --uid="${DEV_USER}" --gid="${DEV_GID}" \
   -p CPUQuota=400% \
   -p MemoryMax=6G \
   -p TasksMax=512 \
   --setenv=OPENCODE_DEV_GATE=1 \
-  --setenv=HOME=/home/dev \
-  --setenv=PATH="/home/dev/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+  --setenv=HOME="${DEV_HOME}" \
+  --setenv=PATH="${DEV_HOME}/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
   bash 9>&- -c "cd ${GATE_DIR} && $1"

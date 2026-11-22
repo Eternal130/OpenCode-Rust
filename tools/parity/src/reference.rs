@@ -164,26 +164,35 @@ fn sandbox_root() -> PathBuf {
 }
 
 /// Well-known bun install paths probed when `PARITY_BUN` is unset. The
-/// lane home is probed right after root's: gate runs execute as
-/// `dev` (`tools/dev-gate.sh`), whose `$HOME` bun install is the
-/// reachable one on this host — `/root` is mode 700, so
-/// `~/.bun/bin/bun` only ever resolves for root, and root must not
-/// run gates (PARITY-LOOP.md §2.1 incident B).
-const WELL_KNOWN_BUN: &[&str] = &[
-    "~/.bun/bin/bun",
-    "/home/dev/.bun/bin/bun",
-    "/usr/local/bin/bun",
-    "/usr/bin/bun",
-    "/opt/homebrew/bin/bun",
-];
+/// running user's `$HOME` install is probed first: gate runs execute as
+/// the configured non-root dev user (`tools/dev-gate.sh`), whose
+/// `$HOME` bun install is the reachable one on this host — `/root` is
+/// mode 700, so a root-home bun only ever resolves for root, and root
+/// must not run gates (PARITY-LOOP.md §2.1 incident B).
+fn well_known_bun() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        candidates.push(PathBuf::from(home).join(".bun/bin/bun"));
+    }
+    candidates.extend(
+        [
+            "/usr/local/bin/bun",
+            "/usr/bin/bun",
+            "/opt/homebrew/bin/bun",
+        ]
+        .iter()
+        .map(PathBuf::from),
+    );
+    candidates
+}
 
 /// Locate bun: `$PARITY_BUN`, then well-known install paths, then `PATH`.
 fn bun_path() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("PARITY_BUN") {
         return Some(PathBuf::from(path));
     }
-    for candidate in WELL_KNOWN_BUN {
-        if Path::new(candidate).is_file() {
+    for candidate in well_known_bun() {
+        if candidate.is_file() {
             return Some(PathBuf::from(candidate));
         }
     }
@@ -225,7 +234,11 @@ fn reference_unavailable_reason() -> Option<String> {
         None => {
             return Some(format!(
                 "bun not found (set PARITY_BUN; probed $PARITY_BUN, well-known paths [{}], then $PATH)",
-                WELL_KNOWN_BUN.join(", ")
+                well_known_bun()
+                    .iter()
+                    .map(|p| p.to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
         // Strict only: Gate 0 must fail fast with the path named when the
@@ -242,7 +255,7 @@ fn reference_unavailable_reason() -> Option<String> {
     if reference_checkout_present() {
         return None;
     }
-    let source = std::env::var("PARITY_REF_SOURCE").unwrap_or_else(|_| REF_SOURCE.to_owned());
+    let source = std::env::var("PARITY_REF_SOURCE").unwrap_or_else(|_| ref_source_default().display().to_string());
     if Path::new(&source).join("packages/cli").is_dir() {
         return None; // missing, but rebuildable on demand
     }
@@ -259,12 +272,38 @@ fn reference_checkout_present() -> bool {
     ref_root().join("packages/cli").is_dir()
 }
 
-/// The canonical source checkout the working copy is rebuilt from.
-const REF_SOURCE: &str = "./ref";
+/// The canonical source checkout the working copy is rebuilt from:
+/// the pinned `opencode-ref` sibling of this repository (no hardcoded
+/// host paths; on the canonical host this resolves to the same
+/// checkout the docs refer to).
+pub fn ref_source_default() -> PathBuf {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // tools/parity -> tools -> repo root
+    let mut repo_root = manifest
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or(manifest);
+    // A lane worktree root sits directly inside `.worktrees/`; the MAIN
+    // checkout (whose sibling holds the ref) is one level above that.
+    if repo_root
+        .parent()
+        .and_then(Path::file_name)
+        .is_some_and(|n| n == ".worktrees")
+    {
+        if let Some(main) = repo_root.parent().and_then(Path::parent) {
+            repo_root = main.to_path_buf();
+        }
+    }
+    repo_root
+        .parent()
+        .map(|p| p.join("opencode-ref"))
+        .unwrap_or_else(|| PathBuf::from("opencode-ref"))
+}
 
 /// Ref-dir self-healing: before spawning, rebuild `/tmp/opencode/ref` from
-/// `./ref` when `packages/cli` is missing (tmpfs cleanup, fresh
-/// sandbox). The copy excludes `.git`; dependencies come from
+/// the pinned ref source when `packages/cli` is missing (tmpfs cleanup,
+/// fresh sandbox). The copy excludes `.git`; dependencies come from
 /// `bun install --frozen-lockfile`. Every step is logged so a failing
 /// rebuild is diagnosable from test output.
 pub fn ensure_reference_checkout() -> Result<()> {
@@ -279,7 +318,7 @@ pub fn ensure_reference_checkout() -> Result<()> {
         )
     })?;
     let source =
-        PathBuf::from(std::env::var("PARITY_REF_SOURCE").unwrap_or_else(|_| REF_SOURCE.to_owned()));
+        PathBuf::from(std::env::var("PARITY_REF_SOURCE").unwrap_or_else(|_| ref_source_default().display().to_string()));
     if !source.join("packages/cli").is_dir() {
         return Err(anyhow!(
             "reference source checkout missing {} (set PARITY_REF_SOURCE); cannot rebuild {}",
@@ -389,7 +428,15 @@ fn build_command(
         // Hermetic environment: nothing from the parent leaks in (most
         // importantly no live-service credentials or state paths).
         .env_clear()
-        .env("PATH", "~/.bun/bin:/usr/local/bin:/usr/bin:/bin")
+        // Hermetic PATH: the resolved bun's own directory first (so
+        // child re-exec of bun works), then the system defaults.
+        .env(
+            "PATH",
+            format!(
+                "{}:/usr/local/bin:/usr/bin:/bin",
+                bun.parent().unwrap_or(std::path::Path::new("/usr/local/bin")).display()
+            ),
+        )
         .env("HOME", home)
         .env("OPENCODE_TEST_HOME", home)
         .env("XDG_DATA_HOME", home.join(".local/share"))

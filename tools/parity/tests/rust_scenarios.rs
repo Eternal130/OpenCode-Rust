@@ -90,9 +90,16 @@ fn which_bun() -> Result<String, ()> {
     if let Ok(path) = std::env::var("PARITY_BUN") {
         return Ok(path);
     }
-    for candidate in ["/usr/local/bin/bun", "~/.bun/bin/bun", "/home/dev/.bun/bin/bun"] {
-        if std::path::Path::new(candidate).exists() {
-            return Ok(candidate.to_owned());
+    let mut candidates: Vec<String> = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        candidates.push(format!("{home}/.bun/bin/bun"));
+    }
+    candidates.extend(
+        ["/usr/local/bin/bun", "/usr/bin/bun"].iter().map(ToString::to_string),
+    );
+    for candidate in candidates {
+        if std::path::Path::new(&candidate).exists() {
+            return Ok(candidate);
         }
     }
     std::env::var("PATH")
