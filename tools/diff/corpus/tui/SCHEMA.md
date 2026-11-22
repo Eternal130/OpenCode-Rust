@@ -10,9 +10,9 @@ files; every field semantic below is normative for both.
 ```json
 {"schema":"tui-diff-scenario/1","id":"home-empty","width":80,"height":24,
  "fetch":{"/api/path":{"status":200,"body":<json>}},
- "events":[<ref /api/event SSE payload 形状的 JSON 数组>],
- "keys":["<tui_diff.rs ScriptStep 键名>"],
- "settle_ms":200,"note":"一句话场景语义，双侧实现等价性论证处"}
+ "events":[<ordered JSON array of /api/event SSE payloads>],
+ "keys":["<tui_diff.rs ScriptStep key token>"],
+ "settle_ms":200,"note":"one-sentence scenario semantics; where cross-implementation equivalence is argued"}
 ```
 
 ### Field semantics
@@ -154,7 +154,7 @@ files; every field semantic below is normative for both.
 - `note` — one-sentence scenario semantics; the place where
   equivalence between the two implementations is argued.
 
-### 尺寸档位 (size tiers)
+### Size tiers
 
 The corpus renders every scenario at **three tiers by default**:
 `80×24`, `120×30`, and `320×80`. A scenario file carries a single
@@ -182,7 +182,7 @@ that cannot reflow) or genuinely broken-by-design at some size — and
 (GAPS rounds) treats an unjustified `tiers` override as green-gaming
 the gate: it is not a license to drop a size that merely diverges.
 
-### 主题 (theme pinning)
+### Theme (theme pinning)
 
 Channel 8 renders every scenario under the reference default theme: the
 built-in `opencode` **v2 theme in dark mode**
@@ -199,16 +199,19 @@ concrete ids (e.g. `/api/session/ses_smoke_text`). The harness boots
 the app into that session: the session id is the one appearing in the
 `/api/session` list stub plus `/api/session/active`.
 
-### recorded-local（`rec-*` 前缀）门语义（控制者裁定 2026-11-15）
+### recorded-local (`rec-*` prefix) gate semantics (controller ruling 2026-11-15)
 
-本地真实语料（git-ignored `tools/diff/corpus/tui/recorded-local/`，
-由 `tui_record_compile.py` 编译）在目录存在时自动纳入清单与重放；
-其裁决 = **advisory**：未裁决分歧不参与 gate exit（日常录制常驻
-未裁决项，committed 语料绿才是门绿；报告 recorded-local 小节单列
-聚合计数）。`rec-*` 的 **infra 失败仍 = exit 1**——stub_gap/网格
-缺损说明重放机制本身坏了，与裁定无关。
+Local real-session corpus (git-ignored `tools/diff/corpus/tui/recorded-local/`,
+compiled by `tui_record_compile.py`) is automatically included in the inventory
+and replay when the directory exists; its adjudication = **advisory**:
+unadjudicated divergences do not participate in the gate exit (daily recordings
+carry standing unadjudicated items; the gate is green only when the committed
+corpus is green; the report lists the recorded-local section separately with
+aggregate counts). An **infra failure on a `rec-*` case still = exit 1** — a
+stub_gap or missing grid means the replay machinery itself is broken,
+regardless of adjudication.
 
-## 端点普查 (Step 1 probe)
+## Endpoint census (Step 1 probe)
 
 Probed by booting the reference v2.0.24 TUI through its own fixture
 (`packages/tui/test/fixture/app.ts` `createAppFixture`, no keys fed,
@@ -258,7 +261,7 @@ scenario's `fetch` map does not cover is a `stub_gap` and counts as an
 503/fallback). Harnesses (T2 bun-side, T4 rust-side) must detect and
 report stub_gaps before comparing frames.
 
-## 键名表 (key vocabulary)
+## Key vocabulary (key table)
 
 Source of truth: `tools/parity/src/tui_diff.rs`, function
 **`encode_key`** (module `tui_diff`, ~line 1206) — it maps each token
