@@ -17,7 +17,7 @@ Ported from v2.0.24:
 - **TUI** — full port on the [opentui-rust](https://github.com/Eternal130/opentui-rust) crates (solid renderer) over ratatui + taffy; 42 golden scenarios verified in tiers — 35 Tier-A byte-equal in both text grid and ANSI styling, plus Tier-B (256-color degradation), Tier-C1, and width-edge classes
 - **Plugin system** — Bun-subprocess host; community plugins run unmodified (flagship [`oh-my-opencode-slim`](https://github.com/alvinunreal/oh-my-opencode-slim) v3.0.3 passes its own self-check through the real binary path: 12 agents / 12 tools / 8 skills registered, session round-trips verified)
 
-Not ported (out of scope by design): the desktop app, GUI extensions, and the web UI frontend (static hosting + release asset embedding are ported; the app itself is not). All deferrals from the frozen report §3 have since landed (mini, ACP, worktree UI, sounds/OS notifications, C2 tier, tree-sitter highlighting, images, Bedrock/Vertex — beta.4–beta.7), and the 2026-10-24 gap burn-down closed the rest of the §1 register (RS256/JWKS enterprise sign-in, skill URL sources, console merges, the PTY daemon process boundary, rmcp elicitation, the R-11 platform matrix). The only remaining items are named exemptions tracked in [docs/GAPS-AND-PITFALLS.md](./docs/GAPS-AND-PITFALLS.md) §1 and [ROADMAP.md](./ROADMAP.md) §5.
+Not ported (out of scope by design): the desktop app, GUI extensions, and the web UI frontend (static hosting + release asset embedding are ported; the app itself is not). All deferrals from the frozen report §3 have since landed (mini, ACP, worktree UI, sounds/OS notifications, C2 tier, tree-sitter highlighting, images, Bedrock/Vertex — beta.4–beta.7), and the 2026-10-24 gap burn-down closed the rest of the §1 register (RS256/JWKS enterprise sign-in, skill URL sources, console merges, the PTY daemon process boundary, rmcp elicitation, the R-11 platform matrix). The only remaining items are named exemptions tracked in [docs/GAPS-AND-PITFALLS.md](./docs/GAPS-AND-PITFALLS.md) (register + per-round history).
 
 ## Verified parity, not vibes
 
@@ -52,7 +52,7 @@ Performance (measured on Linux, vs upstream v2 on Bun): `--version` 3 ms vs 744 
 | `tools/parity` | Parity harness: golden frames, scenarios, replays, acceptance batteries |
 | `tools/openapi-gen` | OpenAPI contract generator |
 
-Design docs: [docs/GAPS-AND-PITFALLS.md](./docs/GAPS-AND-PITFALLS.md) (gap ledger & development standards), [ROADMAP.md](./ROADMAP.md) (campaign log), [docs/adr/](./docs/adr/) (architecture decisions).
+Design docs: [docs/GAPS-AND-PITFALLS.md](./docs/GAPS-AND-PITFALLS.md) (gap ledger & development standards), [docs/adr/](./docs/adr/) (architecture decisions).
 
 ## Build
 
