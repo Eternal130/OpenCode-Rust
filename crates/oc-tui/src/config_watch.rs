@@ -12,7 +12,12 @@
 //! saves land as the renamed-in path), debounces 100 ms (ref
 //! `config/watch.ts`'s `DEBOUNCE` window — a save storm coalesces
 //! into one dirty flag), and raises a single dirty flag the pump
-//! loop drains per pass. The reload itself stays in the loop (the
+//! loop drains per pass. The flag is raised by the debounce thread
+//! AFTER the window goes quiet, never in the event callback: one
+//! in-place `write(2)` surfaces as TWO inotify events (`Modify(Data)`
+//! then `Access(Close(Write))`), and a callback-side raise made the
+//! pump able to drain between them (a second raise for the same
+//! write — and a read of a file still open for writing). The reload itself stays in the loop (the
 //! mtime compare remains the CHANGE gate, so a touched-but-equal
 //! file never re-applies).
 //!
@@ -61,7 +66,6 @@ impl ConfigFileWatch {
                     // files) never raise the flag.
                     let hits = event.paths.iter().any(|p| p == &target);
                     if hits {
-                        dirty_flag.store(true, Ordering::Release);
                         let _ = tx.send(());
                     }
                 }
@@ -83,11 +87,14 @@ impl ConfigFileWatch {
                 let _watcher = watcher;
                 while !thread_stop.load(Ordering::Relaxed) {
                     if rx.recv_timeout(Duration::from_secs(1)).is_ok() {
-                        // Debounce: collapse the storm inside the
-                        // window before the loop sees the flag (the
-                        // flag itself is already coalescing — one
-                        // store per storm tail is enough).
+                        // Debounce: hold the storm inside the window
+                        // (a save's Modify + Close(Write) pair, an
+                        // editor's temp + rename) and raise ONCE on
+                        // the quiet tail — the storm's last event
+                        // has landed by then, so the pump's reload
+                        // never reads a file mid-write.
                         while rx.recv_timeout(DEBOUNCE).is_ok() {}
+                        dirty_flag.store(true, Ordering::Release);
                     }
                 }
             })
