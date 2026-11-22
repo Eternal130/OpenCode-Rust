@@ -4,8 +4,8 @@
 
 ## 硬纪律（违反即事故）
 
-- 一切本地 cargo 构建/测试经 `tools/dev-gate.sh`（身份 + CPU/内存配额 + 负载闸；exit 3=负载拒启、exit 5=磁盘拒启——立即停，勿重试绕门）
-- 禁 root 直跑 cargo；禁 plain `cargo test` 作回归证据（canonical harness=nextest）
+- 一切本地 cargo 构建/测试经 `tools/dev-gate.sh`（CPU/内存配额 + 负载闸；exit 3=负载拒启、exit 5=磁盘拒启——立即停，勿重试绕门）
+- 禁 plain `cargo test` 作回归证据（canonical harness=nextest）
 - 一切测试命令全量 tee 落盘 `.test-logs/<crate>-<时间>-<lane>.log`（唯一测试证据；日志丢失=证据丢失）
 - 每 lane 独立 worktree（`.worktrees/`）+ 串行合并回 main；禁碰主检出
 - git 提交一律仓库既有身份 Eternal130 <Eternal130@outlook.com>（禁 `--author` / `-c user.*` / `GIT_AUTHOR_*`）

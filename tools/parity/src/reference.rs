@@ -164,11 +164,10 @@ fn sandbox_root() -> PathBuf {
 }
 
 /// Well-known bun install paths probed when `PARITY_BUN` is unset. The
-/// running user's `$HOME` install is probed first: gate runs execute as
-/// the configured non-root dev user (`tools/dev-gate.sh`), whose
-/// `$HOME` bun install is the reachable one on this host — `/root` is
-/// mode 700, so a root-home bun only ever resolves for root, and root
-/// must not run gates (PARITY-LOOP.md §2.1 incident B).
+/// running user's `$HOME` install is probed first: gates execute under
+/// the invoking user (`tools/dev-gate.sh`), whose `$HOME` bun install is
+/// the reachable one on this host — `/root` is mode 700, so a root-home
+/// bun only ever resolves for root (PARITY-LOOP.md §2.1 incident B).
 fn well_known_bun() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if let Ok(home) = std::env::var("HOME") {

@@ -1,6 +1,6 @@
 # Phase-10 parity verification battery — report ledger
 
-Run as the configured non-root dev user, 2026-10-10. Reference = pinned v2.0.24 worktree
+Run via tools/dev-gate.sh, 2026-10-10. Reference = pinned v2.0.24 worktree
 (the pinned ref source, executed via bun from `/tmp/opencode/ref`);
 port = `oc-server`/`oc-client` of this repo (debug build,
 `CARGO_TARGET_DIR=/tmp/opencode/target-parity`). The harness never binds
@@ -89,7 +89,7 @@ includes the pinned `tools/openapi-gen/openapi.json`, sha-guarded by
 
 (Readiness gating is covered by the existing suite, not re-pinned here.)
 
-## 5. Gate status (as the configured non-root dev user)
+## 5. Gate status (via tools/dev-gate.sh)
 
 - `cargo fmt -p parity -- --check` — **clean**
 - `cargo clippy -p parity --all-targets -- -D warnings` — **clean**

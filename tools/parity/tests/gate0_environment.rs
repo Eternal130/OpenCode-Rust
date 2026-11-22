@@ -2,8 +2,8 @@
 //! dual-end gate environment proven end to end in one test.
 //!
 //! Verifies, for the user actually running the test (gate runs execute
-//! as the configured non-root dev user via `tools/dev-gate.sh`, whose
-//! PATH has no bun — set
+//! under the invoking user via `tools/dev-gate.sh`, whose PATH may have
+//! no bun — set
 //! `PARITY_BUN` explicitly in gate commands):
 //!
 //! 1. bun resolves and `bun --version` executes as this user;
