@@ -884,3 +884,281 @@ fn p4b_sidebar_120_pair() {
     drop(rig);
     assert!(rust_replied && ref_replied, "P4b RED: reply did not settle");
 }
+
+// ===========================================================================
+// va4 — GEOMETRY pair scenarios (the graduated va3 one-shot probe, now a
+// realchain battery member). Three terminal sizes — 10x6 (extreme
+// narrow), 40x12 (narrow), 160x40 (wide, docked sidebar) — × both ends
+// × three states: A = home after a session-seeded boot, B = after
+// `<leader>l` (\x18l, Sessions dialog), C = after Enter (dialog action).
+// Two history sessions ("Alpha" and the long truncating title) are
+// created over EACH side's own HTTP API before the probed boot (boot 1
+// starts the daemons — the ref server self-spawns on TUI boot, its
+// password read via ref_registration() — then sessions are POSTed, then
+// the TUIs restart), so the Sessions dialog has rows on both ends.
+//
+// W12/2.2#11 model, unchanged: EXPORT ONLY. In-test assertions are
+// rig-health class exclusively (both ends' wordmark settle, the REF
+// dialog listing Alpha, both TUI processes alive at every capture).
+// ALL grid content — including the known divergences below — rides the
+// exported diff-reports and the controller's adjudication registry.
+//
+// Un-normalized diff triage (va4 first run, tree_hash of this commit):
+// known gaps G-465 (Sessions dialog header missing the muted
+// ` for <project>` suffix at 40x12/160x40) and G-465/G-466 five
+// sub-items (10x6 composer border spillover + title loss; 40x12 home
+// wordmark two-line large vs one-line small; 40x12 dialog footer hint
+// overprint + missing right-side wordmark glyphs; 160x40 sidebar long
+// title wrap-vs-truncate; 40x12 zero-row list viewport ref-side
+// overprint artifact) PLUS one unledgered item: 10x6 home composer box
+// placement (ref r02–r05 no bottom border vs rust r01–r04 + r05 bottom
+// border — one row offset overall). All registered in
+// adjudications.json as accepted-gap entries annotated "known gap, fix
+// in flight — G-465/G-466, remove when fixed" (deliberately NOT
+// expected-shape: when the fixes land the shapes disappear and the
+// stale entries merely prompt, they do not red).
+//
+// Test-fn layout: one fn per size. The three legs serialize on
+// lane_lock either way (identical total cost, va3 measured ~17s/leg),
+// and separate fns buy per-leg nextest retry granularity and failure
+// isolation.
+// ===========================================================================
+
+const GEOM_LONG_TITLE: &str = "Long Session Title That Must Truncate In The Tab Strip";
+
+struct GeomRig {
+    _lane: LaneGuard,
+    _gateway: Gateway,
+    rust: Sandbox,
+    refbox: Sandbox,
+    stage: RefStage,
+    rust_url: String,
+    rust_password: Option<String>,
+    ref_url: String,
+    ref_password: Option<String>,
+    rust_tui: Option<TuiProcess>,
+    ref_tui: Option<TuiProcess>,
+    cols: u16,
+    rows: u16,
+}
+
+impl GeomRig {
+    fn roots(&self) -> Vec<String> {
+        vec![
+            self.refbox.root.to_string_lossy().into_owned(),
+            self.rust.root.to_string_lossy().into_owned(),
+        ]
+    }
+
+    fn normalize(&self, grid: &str) -> String {
+        let roots = self.roots();
+        let refs: Vec<&str> = roots.iter().map(String::as_str).collect();
+        normalize_grid(grid, &refs)
+    }
+
+    fn write_both(&mut self, bytes: &[u8]) {
+        self.rust_tui.as_mut().expect("rust tui").write(bytes);
+        self.ref_tui.as_mut().expect("ref tui").write(bytes);
+    }
+
+    fn spawn_tuis(&mut self) {
+        self.rust_tui = Some(TuiProcess::spawn(&self.rust, self.cols, self.rows));
+        self.ref_tui = Some(ref_tui_spawn(&self.refbox, &self.stage, self.cols, self.rows));
+    }
+
+    fn stop_tuis(&mut self) {
+        if let Some(mut tui) = self.rust_tui.take() {
+            tui.shutdown(Duration::from_secs(8));
+        }
+        if let Some(mut tui) = self.ref_tui.take() {
+            tui.shutdown(Duration::from_secs(8));
+        }
+    }
+
+    /// Both TUI processes still alive (rig health before every capture).
+    /// `try_wait` needs `&mut`, so the handles are taken and restored.
+    fn alive(&mut self) -> bool {
+        let mut rust_tui = self.rust_tui.take();
+        let mut ref_tui = self.ref_tui.take();
+        let ok = |t: &mut Option<TuiProcess>| {
+            t.as_mut()
+                .is_some_and(|p| p.child.try_wait().map(|w| w.is_none()).unwrap_or(false))
+        };
+        let rust_ok = ok(&mut rust_tui);
+        let ref_ok = ok(&mut ref_tui);
+        self.rust_tui = rust_tui;
+        self.ref_tui = ref_tui;
+        rust_ok && ref_ok
+    }
+}
+
+impl Drop for GeomRig {
+    fn drop(&mut self) {
+        self.stop_tuis();
+        ref_service_stop(&self.refbox, &self.stage);
+        service_stop(&self.rust);
+    }
+}
+
+fn geom_rig(tag: &str, cols: u16, rows: u16) -> GeomRig {
+    let lane = lane_lock();
+    let gateway = Gateway::spawn_paced(tag, None, &default_pace());
+    let rust = sandbox(tag, gateway.port);
+    let refbox = sandbox(&format!("{tag}ref"), gateway.port);
+    rust.write_config(&[], "replay/claude-opus-4-7");
+    refbox.write_ref_config(&[], "replay/claude-opus-4-7");
+    let stage = ref_stage(&refbox);
+    ref_service_stop(&refbox, &stage);
+    let server = service_start(&rust);
+    let ref_url = format!("http://127.0.0.1:{}", refbox.ref_service_port());
+    GeomRig {
+        _lane: lane,
+        _gateway: gateway,
+        rust,
+        refbox,
+        stage,
+        rust_url: server.url,
+        rust_password: server.password,
+        ref_url,
+        ref_password: None,
+        rust_tui: None,
+        ref_tui: None,
+        cols,
+        rows,
+    }
+}
+
+fn geom_wait_api(url: &str, password: Option<&str>) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let hit =
+            http_get(&format!("{url}/api/session"), password).filter(|(code, _)| *code == 200);
+        if hit.is_some() || Instant::now() > deadline {
+            return hit.is_some();
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+fn geom_seed_sessions(url: &str, password: Option<&str>, project: &std::path::Path) {
+    for title in ["Alpha", GEOM_LONG_TITLE] {
+        let body = format!(
+            "{{\"title\":{},\"location\":{{\"directory\":{}}}}}",
+            serde_json::to_string(title).expect("title json"),
+            serde_json::to_string(&project.to_string_lossy()).expect("dir json")
+        );
+        let (code, payload) = http_post(&format!("{url}/api/session"), &body, password)
+            .unwrap_or((0, String::new()));
+        assert!(
+            (200..300).contains(&code),
+            "GEOM rig RED: session create {title:?} on {url} -> {code}: {}",
+            payload.chars().take(200).collect::<String>()
+        );
+    }
+}
+
+/// One geometry leg: seed, probed boot, three exported states.
+fn geom_probe(tag: &str, scenario: &str, cols: u16, rows: u16) {
+    let mut rig = geom_rig(tag, cols, rows);
+    // Boot 1: start the daemons (the ref server self-spawns on TUI
+    // boot; wait for its registration to carry the password — va3's
+    // first run 401'd reading it any other way).
+    rig.spawn_tuis();
+    assert!(geom_wait_api(&rig.rust_url, rig.rust_password.as_deref()), "GEOM rig RED: rust API never came up");
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while rig.refbox.ref_registration().get("password").is_none() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    rig.ref_password = rig
+        .refbox
+        .ref_registration()
+        .get("password")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    assert!(
+        geom_wait_api(&rig.ref_url, rig.ref_password.as_deref()),
+        "GEOM rig RED: ref API never came up (password read: {})",
+        rig.ref_password.is_some()
+    );
+    geom_seed_sessions(&rig.rust_url, rig.rust_password.as_deref(), &rig.rust.project);
+    geom_seed_sessions(&rig.ref_url, rig.ref_password.as_deref(), &rig.refbox.project);
+    rig.stop_tuis();
+    settle(2);
+    // Boot 2: the probed boot, with the seeded history.
+    rig.spawn_tuis();
+    // State A — home. Rig health (settle class): wait for each end's
+    // boot face before capturing. At the extreme-narrow 10x6 the
+    // wordmark does not fit on EITHER end (va3 grid evidence: both
+    // home grids are composer-only) — there the settle needle is the
+    // composer "Ask" prompt instead; the 40x12 home wordmark shape
+    // difference itself rides the export (G-466.2).
+    let needle: &[u8] = if cols <= 16 { b"Ask" } else { WORDMARK };
+    let rust_a =
+        rig.rust_tui.as_ref().expect("rust tui").wait_for(needle, 0, Duration::from_secs(30));
+    let ref_a =
+        rig.ref_tui.as_ref().expect("ref tui").wait_for(needle, 0, Duration::from_secs(60));
+    settle(3);
+    assert!(rig.alive(), "GEOM rig RED: a TUI died before state A");
+    let a_ref = rig.normalize(&capture_settled(rig.ref_tui.as_ref().expect("ref tui")));
+    let a_rust = rig.normalize(&capture_settled(rig.rust_tui.as_ref().expect("rust tui")));
+    dump_grid(&format!("{scenario}-home-ref"), &a_ref);
+    dump_grid(&format!("{scenario}-home-rust"), &a_rust);
+    export_grid_diff(scenario, "home", &a_ref, &a_rust);
+    // State B — `<leader>l` opens the Sessions dialog. Rig health: the
+    // REF dialog must show its session rows (a ref that never opened it
+    // is a rig break, never a pass); at 10x6 the titles truncate away
+    // entirely (va3 grid: the ref dialog rows degrade to `S` glyphs),
+    // so the needle is width-dependent. The rust-side dialog content
+    // rides the export.
+    let ref_needle: &[u8] = if cols <= 16 { b"S" } else { b"Alpha" };
+    let ref_b_from = rig.ref_tui.as_ref().map(TuiProcess::raw_len).unwrap_or(0);
+    rig.write_both(b"\x18l");
+    let ref_b_alpha = rig
+        .ref_tui
+        .as_ref()
+        .expect("ref tui")
+        .wait_for(ref_needle, ref_b_from, Duration::from_secs(10));
+    settle(2);
+    assert!(rig.alive(), "GEOM rig RED: a TUI died before state B");
+    let b_ref = rig.normalize(&capture_settled(rig.ref_tui.as_ref().expect("ref tui")));
+    let b_rust = rig.normalize(&capture_settled(rig.rust_tui.as_ref().expect("rust tui")));
+    dump_grid(&format!("{scenario}-dialog-ref"), &b_ref);
+    dump_grid(&format!("{scenario}-dialog-rust"), &b_rust);
+    export_grid_diff(scenario, "dialog", &b_ref, &b_rust);
+    // State C — Enter (dialog action on the selected row).
+    rig.write_both(b"\r");
+    settle(3);
+    assert!(rig.alive(), "GEOM rig RED: a TUI died before state C");
+    let c_ref = rig.normalize(&capture_settled(rig.ref_tui.as_ref().expect("ref tui")));
+    let c_rust = rig.normalize(&capture_settled(rig.rust_tui.as_ref().expect("rust tui")));
+    dump_grid(&format!("{scenario}-enter-ref"), &c_ref);
+    dump_grid(&format!("{scenario}-enter-rust"), &c_rust);
+    export_grid_diff(scenario, "enter", &c_ref, &c_rust);
+    drop(rig);
+    assert!(
+        rust_a && ref_a,
+        "GEOM RED (rig): probed boot settle needle (wordmark / Ask) rust={rust_a} ref={ref_a}"
+    );
+    assert!(
+        ref_b_alpha,
+        "GEOM RED (ref-side rig sanity): the ref Sessions dialog never showed its rows"
+    );
+}
+
+#[test]
+fn geom10_narrow_extreme_pair() {
+    skip_without_ref_lane!();
+    geom_probe("geom10", "geom10", 10, 6);
+}
+
+#[test]
+fn geom40_narrow_pair() {
+    skip_without_ref_lane!();
+    geom_probe("geom40", "geom40", 40, 12);
+}
+
+#[test]
+fn geom160_wide_pair() {
+    skip_without_ref_lane!();
+    geom_probe("geom160", "geom160", 160, 40);
+}

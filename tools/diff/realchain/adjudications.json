@@ -181,6 +181,159 @@
       "adjudicated_by": "controller",
       "adjudicated_at": "2026-11-18",
       "last_observed": "2026-11-18"
+    },
+    {
+      "id": "va4-g465-sessions-header-suffix-40",
+      "scenario_pattern": "geom40",
+      "state_pattern": "dialog",
+      "shape": {
+        "kind": "substring",
+        "ref_contains": [
+          "Sessions for project"
+        ]
+      },
+      "classification": "accepted-gap",
+      "justification": "Sessions dialog header: ref renders the muted ` for <project>` suffix, the port truncates to `Sessions`. known gap, fix in flight — G-465/G-466, remove when fixed",
+      "g_ref": "G-465",
+      "adjudicated_by": "va4 geometry pair graduation",
+      "adjudicated_at": "2026-11-23",
+      "last_observed": "2026-11-23"
+    },
+    {
+      "id": "va4-g466-3-5-dialog-40-overprint",
+      "scenario_pattern": "geom40",
+      "state_pattern": "dialog",
+      "shape": {
+        "kind": "regex",
+        "any_contains": [
+          "AlphaSession|ctrl\\+d|rename ctrl\\+r"
+        ]
+      },
+      "classification": "accepted-gap",
+      "justification": "40x12 dialog body artifacts: zero-row list viewport ref-side overdraw (extra AlphaSession row) + footer hint overprint (delete/rename/all-projects run together; ref draws the second hint row the port clips). known gap, fix in flight — G-465/G-466, remove when fixed",
+      "g_ref": "G-466",
+      "adjudicated_by": "va4 geometry pair graduation",
+      "adjudicated_at": "2026-11-23",
+      "last_observed": "2026-11-23"
+    },
+    {
+      "id": "va4-g466-composer-indent-40-enter",
+      "scenario_pattern": "geom40",
+      "state_pattern": "enter",
+      "shape": {
+        "kind": "substring",
+        "any_contains": [
+          "claude-opus"
+        ]
+      },
+      "classification": "accepted-gap",
+      "justification": "40x12 post-enter composer left-border indent off by one space (ref ` ┃` vs rust `  ┃`); same width-allocation family as the 10x6 composer row offset — ledger with the G-465/G-466 batch. known gap, fix in flight — G-465/G-466, remove when fixed",
+      "g_ref": "G-466",
+      "adjudicated_by": "va4 geometry pair graduation",
+      "adjudicated_at": "2026-11-23",
+      "last_observed": "2026-11-23"
+    },
+    {
+      "id": "va4-g466-composer-box-offset-10-home",
+      "scenario_pattern": "geom10",
+      "state_pattern": "home",
+      "shape": {
+        "kind": "regex",
+        "any_contains": [
+          "Ask|claude|┃ c"
+        ]
+      },
+      "classification": "accepted-gap",
+      "justification": "10x6 home composer box placement: ref draws r02–r05 without a bottom border, rust r01–r04 + r05 bottom border (one-row offset overall; unledgered companion observed in va3/va4). known gap, fix in flight — G-465/G-466, remove when fixed",
+      "g_ref": "G-466",
+      "adjudicated_by": "va4 geometry pair graduation",
+      "adjudicated_at": "2026-11-23",
+      "last_observed": "2026-11-23"
+    },
+    {
+      "id": "va4-g466-dialog-10-truncated-titles",
+      "scenario_pattern": "geom10",
+      "state_pattern": "dialog",
+      "shape": {
+        "kind": "regex",
+        "any_contains": [
+          "^\\s*S$|^\\s*e$"
+        ]
+      },
+      "classification": "accepted-gap",
+      "justification": "10x6 dialog row glyph divergence under total title truncation (ref `S` vs rust `e` at the same cell). known gap, fix in flight — G-465/G-466, remove when fixed",
+      "g_ref": "G-466",
+      "adjudicated_by": "va4 geometry pair graduation",
+      "adjudicated_at": "2026-11-23",
+      "last_observed": "2026-11-23"
+    },
+    {
+      "id": "va4-g466-enter-10-tabtitle",
+      "scenario_pattern": "geom10",
+      "state_pattern": "enter",
+      "shape": {
+        "kind": "regex",
+        "any_contains": [
+          "Long|claude|┃ c"
+        ]
+      },
+      "classification": "accepted-gap",
+      "justification": "10x6 post-enter: ref still shows the truncated `Long` tab title row and its composer border rows sit one row off vs rust (same composer-offset family as home). known gap, fix in flight — G-465/G-466, remove when fixed",
+      "g_ref": "G-466",
+      "adjudicated_by": "va4 geometry pair graduation",
+      "adjudicated_at": "2026-11-23",
+      "last_observed": "2026-11-23"
+    },
+    {
+      "id": "va4-g465-sessions-header-suffix-160",
+      "scenario_pattern": "geom160",
+      "state_pattern": "dialog",
+      "shape": {
+        "kind": "substring",
+        "ref_contains": [
+          "Sessions for project"
+        ]
+      },
+      "classification": "accepted-gap",
+      "justification": "Sessions dialog header muted ` for <project>` suffix at 160x40 (wide tier of the same G-465 shape). known gap, fix in flight — G-465/G-466, remove when fixed",
+      "g_ref": "G-465",
+      "adjudicated_by": "va4 geometry pair graduation",
+      "adjudicated_at": "2026-11-23",
+      "last_observed": "2026-11-23"
+    },
+    {
+      "id": "va4-g466-4-sidebar-title-wrap-160",
+      "scenario_pattern": "geom160",
+      "state_pattern": "enter",
+      "shape": {
+        "kind": "regex",
+        "any_contains": [
+          "Long Session Title That Must|Truncate In The Tab Strip"
+        ]
+      },
+      "classification": "accepted-gap",
+      "justification": "160x40 sidebar long session title: ref wraps to two lines, rust single-line truncates. known gap, fix in flight — G-465/G-466, remove when fixed",
+      "g_ref": "G-466",
+      "adjudicated_by": "va4 geometry pair graduation",
+      "adjudicated_at": "2026-11-23",
+      "last_observed": "2026-11-23"
+    },
+    {
+      "id": "va4-g466-footer-path-trunc-160",
+      "scenario_pattern": "geom160",
+      "state_pattern": "enter",
+      "shape": {
+        "kind": "substring",
+        "any_contains": [
+          "__ROOT__/proje"
+        ]
+      },
+      "classification": "accepted-gap",
+      "justification": "160x40 footer bottom path row truncates one char earlier on rust (`__ROOT__/proje` vs ref `__ROOT__/project`); width-allocation family — ledger with the G-465/G-466 batch. known gap, fix in flight — G-465/G-466, remove when fixed",
+      "g_ref": "G-466",
+      "adjudicated_by": "va4 geometry pair graduation",
+      "adjudicated_at": "2026-11-23",
+      "last_observed": "2026-11-23"
     }
   ]
 }
