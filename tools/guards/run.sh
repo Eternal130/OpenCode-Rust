@@ -25,6 +25,7 @@ GUARDS=(
   process_safety
   error_envelope
   recorded_local
+  orphan_daemon
 )
 
 extra=""

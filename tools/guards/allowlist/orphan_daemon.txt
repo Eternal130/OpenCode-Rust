@@ -1,0 +1,4 @@
+# orphan_daemon allowlist — explicit, ledger-backed exceptions.
+# Normal state: EMPTY (no entry covers a leaked daemon; the exclusion of
+# /root/.opencode/bin/opencode is structural, in the guard itself).
+# Format: pattern | reason | ledger-id | owner | review-date

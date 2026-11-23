@@ -616,6 +616,7 @@ impl Gateway {
             .expect("open gateway log");
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::from(err_sink));
+        arm_pdeathsig(&mut cmd);
         let mut child = cmd.spawn().expect("spawn replay gateway");
 
         // Read stdout lines until the READY line (with a deadline).
@@ -805,6 +806,7 @@ impl TuiProcess {
                 Ok(())
             });
         }
+        arm_pdeathsig(&mut command);
         let child = command.spawn().expect("spawn opencode-rust");
         unsafe {
             libc::close(slave_fd);
@@ -946,6 +948,91 @@ pub struct ManagedServer {
     pub password: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// va6 — daemon orphan hardening (2026-11-23 incident: 64 PPID=1
+// `opencode-rust serve --service` daemons, ~22GB)
+// ---------------------------------------------------------------------------
+
+/// PDEATHSIG hardening for DIRECT children of the test process (gateway
+/// bun, TUI, the `service start` probe). The realchain harness is fully
+/// synchronous (`std::process::Command`, no async runtime), so the spawn
+/// happens on the test thread, which lives exactly as long as the test —
+/// PR_SET_PDEATHSIG is therefore safe here (the async-worker-thread
+/// caveat does not apply). When the test process is SIGKILLed, the
+/// kernel delivers SIGKILL to these children on the next parent death
+/// notification, so no direct child can outlive its test.
+///
+/// NOTE: this deliberately does NOT reach the managed daemon itself —
+/// `service start` daemonizes it into a detached grandchild (reparented
+/// to PID 1), whose real reaper is the polling supervisor below.
+fn arm_pdeathsig(command: &mut Command) {
+    unsafe {
+        command.pre_exec(|| {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
+/// The daemon supervisor: a tiny `/bin/sh` DIRECT child of the test
+/// process that polls the test's own PID every 200ms. The managed daemon
+/// is a detached grandchild of `service start` (it reparents to PID 1),
+/// so PR_SET_PDEATHSIG on the spawn-site thread can never reach it —
+/// hence a polling supervisor (supervision option (a) from the va6 lane
+/// spec; option (b) is structurally unusable for the daemon itself and
+/// the sync-stack caveat that would forbid it here does not exist).
+///
+/// Semantics:
+///   * While the test lives the supervisor does NOTHING — the daemon
+///     outlives any in-test TUI death (s6 hot-reload restarts reconnect
+///     to the same daemon) and the normal teardown's `service stop`
+///     behaves exactly as before (zero behavior change on the pass path;
+///     the supervisor only re-runs a no-op `service stop` at exit).
+///   * When the test process dies (SIGKILL from nextest timeout, external
+///     kill, or plain exit), the supervisor notices, reclaims the daemon
+///     through the production graceful path (`service stop` — the
+///     sandbox env is inherited via `Sandbox::command`), then verifies
+///     the registration PID and escalates to SIGKILL if the graceful
+///     stop left it alive. Well under the 3s reclamation requirement.
+fn spawn_daemon_supervisor(sandbox: &Sandbox) {
+    let test_pid = std::process::id();
+    let script = format!(
+        r#"
+test_pid=$1
+while kill -0 "$test_pid" 2>/dev/null; do sleep 0.2; done
+"$OC_BIN" service stop >/dev/null 2>&1 || true
+pid=""
+for f in "$OC_STATE"/opencode-rust/service*.json "$OC_STATE"/opencode/service*.json; do
+  [ -f "$f" ] || continue
+  p=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$f" | head -n 1)
+  if [ -n "$p" ]; then pid=$p; break; fi
+done
+case "$pid" in ''|1|"$test_pid"|$$) exit 0;; esac
+i=0
+while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 10 ]; do sleep 0.1; i=$((i+1)); done
+if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; fi
+exit 0
+"#
+    );
+    let mut command = sandbox.command(&PathBuf::from("/bin/sh"));
+    command
+        .arg("-c")
+        .arg(&script)
+        .arg("daemon-supervisor")
+        .arg(test_pid.to_string())
+        .env("OC_BIN", opencode_bin())
+        .env("OC_STATE", sandbox.root.join("xdg-state"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // NO PDEATHSIG here: the supervisor must SURVIVE the test process's
+    // death to do its job (PR_SET_PDEATHSIG would kill it at the exact
+    // moment it needs to act). It self-exits after reclaiming the daemon.
+    let _ = command.spawn();
+}
+
 /// `opencode-rust service start` under the sandbox env — the exact
 /// production managed-daemon path (`lifecycle::ensure`); the TUI then
 /// attaches to the same registration.
@@ -963,11 +1050,15 @@ pub fn service_start_with_env(sandbox: &Sandbox, extra_env: &[(String, String)])
     service_stop(sandbox);
     let mut command = sandbox.command(&opencode_bin());
     command.args(["service", "start"]);
+    arm_pdeathsig(&mut command);
     for (key, value) in extra_env {
         command.env(key, value);
     }
-    let mut child =
-        command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().expect("spawn service start");
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn service start");
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut url = None;
     let mut early_exit: Option<String> = None;
@@ -1024,6 +1115,9 @@ pub fn service_start_with_env(sandbox: &Sandbox, extra_env: &[(String, String)])
     });
     let password =
         sandbox.registration().get("password").and_then(|v| v.as_str()).map(str::to_owned);
+    // va6 orphan hardening: arm the polling supervisor once the daemon
+    // has registered (a supervisor with no daemon to reap is a no-op).
+    spawn_daemon_supervisor(sandbox);
     ManagedServer { url: url.trim_end_matches('/').to_owned(), password }
 }
 

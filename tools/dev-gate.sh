@@ -118,21 +118,25 @@ mkdir -p "$LOG_DIR"
 LOG="${LOG_DIR}/${LOG_CRATES}-$(date +%Y%m%d-%H%M%S)-${OC_GATE_LANE:-gate}.log"
 echo "dev-gate: logging full output to ${LOG}" >&2
 
-# FD-inheritance fix (2026-11-18 incident): the gate's lock fd 9 was
-# inherited by EVERY gated child (cargo/nextest/test binaries/TUI+ref
-# children) — a single leaked test child kept the flock held forever
+# FD-inheritance fix (2026-11-18 incident, va6 hardening): the gate's lock
+# fd 9 was inherited by EVERY gated child (cargo/nextest/test binaries/TUI+
+# ref children) — a single leaked test child kept the flock held forever
 # after the gate exited, wedging all later gates ("another gate scope
-# is active" while nothing legitimate ran). `9>&-` closes the lock fd
-# at the gated bash boundary: the gate (this script, then systemd-run)
-# keeps owning the flock for the run's duration, and nothing below
-# inherits it.
-systemd-run --scope --quiet \
+# is active" while nothing legitimate ran). Closures at every layer:
+#   * `9>&-` on systemd-run: if the gate SCRIPT is killed, nothing in the
+#     scope chain still holds the lock — it releases immediately.
+#   * `9>&-` on the gated bash: nothing below (cargo/nextest/tests/TUI/
+#     daemons) ever sees the lock fd.
+#   * `9>&-` on tee: the evidence tee is also a lock-fd holder otherwise.
+# The gate script itself (this shell) keeps owning the flock for the run's
+# duration; a killed gate therefore frees the lock at once.
+systemd-run --scope --quiet 9>&- \
   --unit="opencode-gate-$(date +%s)-$$" \
   -p CPUQuota=400% \
   -p MemoryMax=6G \
   -p TasksMax=512 \
   --setenv=OPENCODE_DEV_GATE=1 \
-  bash 9>&- -c "cd ${GATE_DIR} && $1" 2>&1 | tee "$LOG"
+  bash 9>&- -c "cd ${GATE_DIR} && $1" 2>&1 | tee "$LOG" 9>&-
 ps=("${PIPESTATUS[@]}")
 run_rc=${ps[0]}; tee_rc=${ps[1]}
 if [ "$tee_rc" -ne 0 ]; then
