@@ -272,6 +272,9 @@ impl WindowRow {
 struct DialogInputs {
     family: Family,
     box_width: usize,
+    /// G-466.3 — the terminal width (the footer's `<60` column-wrap
+    /// gate, ui/dialog-select.tsx:838).
+    terminal_width: usize,
     colors: DialogColors,
     // -- the select family -------------------------------------------------
     title: String,
@@ -424,11 +427,17 @@ fn content_height(inputs: &DialogInputs) -> usize {
     match inputs.family {
         // title block (title + paddingTop gap + input = 3) + root
         // gap + window + root gap + [footer] + paddingBottom 1.
+        // G-466.3: below 60 cols the left footer box is a COLUMN
+        // (ui/dialog-select.tsx:838) — one row per left action.
         Family::Select => {
-            4 + inputs.window.len()
-                + 1
-                + usize::from(!(inputs.actions.is_empty() && inputs.footer_hint.is_none()))
-                + 1
+            let footer_rows = if inputs.actions.is_empty() && inputs.footer_hint.is_none() {
+                0
+            } else if inputs.terminal_width < 60 {
+                inputs.actions.len().max(1)
+            } else {
+                1
+            };
+            4 + inputs.window.len() + 1 + footer_rows + 1
         }
         // title, gap, input, gap, footer, the footer's paddingBottom.
         // RE-13: the /btw question prompt and the G-29 plugin install
@@ -866,7 +875,11 @@ fn actions_for(inputs: &Signal<DialogInputs>) -> Rc<dyn opentui_solid::DynChildr
     // The port has no `gap` prop — the tsx's gap 2 between action
     // pairs is the SECOND-ONWARD children's marginLeft (index-aware
     // at mount; the pair set changes only with the dialog kind).
+    // G-466.3: below 60 cols the box is a column with gap 0
+    // (ui/dialog-select.tsx:838) — no marginLeft.
+    let column = inputs.get().terminal_width < 60;
     Rc::new(for_list(Rc::new(source), move |item: &ForItem, index: usize| {
+        let margin = if index > 0 && !column { 2.0 } else { 0.0 };
         let title = item.key.clone();
         let title_for_label = title.clone();
         let label_at = move |i: &DialogInputs| {
@@ -878,7 +891,7 @@ fn actions_for(inputs: &Signal<DialogInputs>) -> Rc<dyn opentui_solid::DynChildr
         box_()
             .flex_direction("row")
             .flex_shrink(0.0)
-            .margin_left(if index > 0 { 2.0 } else { 0.0 })
+            .margin_left(margin)
             .children(Children::Static(vec![
                 text()
                     .wrap_mode("none")
@@ -1129,7 +1142,14 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
                     .margin_top(1.0)
                     .children(Children::Static(vec![
                         box_()
-                            .flex_direction("row")
+                            // G-466.3 — the left footer box stacks as
+                            // a COLUMN below 60 cols
+                            // (`flexDirection={dimensions().width <
+                            // 60 ? "column" : "row"}`, gap 0,
+                            // ui/dialog-select.tsx:838).
+                            .flex_direction(
+                                if inputs.get().terminal_width < 60 { "column" } else { "row" },
+                            )
                             .children_dyn(actions_for(&inputs))
                             .into_element(),
                         right_carrier.into_element(),
@@ -2359,11 +2379,13 @@ fn chrome_element(
 /// (`chrome_solid::mount_family_wrapper`, D2.2 dialog lane).
 struct DialogTree {
     inputs: Signal<DialogInputs>,
-    key: (usize, usize, DialogColors, usize),
+    key: (usize, usize, usize, DialogColors, usize),
 }
 
-fn mount_key(inputs: &DialogInputs) -> (usize, usize, DialogColors, usize) {
-    (inputs.family as usize, inputs.box_width, inputs.colors, 1 + content_height(inputs))
+fn mount_key(inputs: &DialogInputs) -> (usize, usize, usize, DialogColors, usize) {
+    // G-466.3: terminal_width rides the key — the footer's column
+    // wrap is a build-time decision.
+    (inputs.family as usize, inputs.box_width, inputs.terminal_width, inputs.colors, 1 + content_height(inputs))
 }
 
 thread_local! {
@@ -2673,6 +2695,7 @@ fn build_inputs(
             DialogInputs {
                 family,
                 box_width,
+            terminal_width,
                 colors,
                 title: props.title.clone(),
                 placeholder: props.placeholder.clone(),
@@ -2720,6 +2743,7 @@ fn build_inputs(
         | Family::PluginInstallPrompt => DialogInputs {
             family,
             box_width,
+            terminal_width,
             colors,
             title: String::new(),
             placeholder: String::new(),
@@ -2762,6 +2786,7 @@ fn build_inputs(
             DialogInputs {
                 family,
                 box_width,
+            terminal_width,
                 colors,
                 title: title.clone(),
                 placeholder: placeholder.clone(),
@@ -2824,6 +2849,7 @@ fn build_inputs(
             DialogInputs {
                 family,
                 box_width,
+            terminal_width,
                 colors,
                 title: String::new(),
                 placeholder: String::new(),
@@ -2864,6 +2890,7 @@ fn build_inputs(
         Family::ConnectPrompt => DialogInputs {
             family,
             box_width,
+            terminal_width,
             colors,
             title: props.title.clone(),
             placeholder: props.placeholder.clone(),
@@ -2915,6 +2942,7 @@ fn build_inputs(
             DialogInputs {
                 family,
                 box_width,
+            terminal_width,
                 colors,
                 title: String::new(),
                 placeholder: String::new(),
@@ -2953,6 +2981,7 @@ fn build_inputs(
             DialogInputs {
                 family,
                 box_width,
+            terminal_width,
                 colors,
                 title: String::new(),
                 placeholder: String::new(),
@@ -3013,6 +3042,7 @@ fn build_inputs(
             DialogInputs {
                 family,
                 box_width,
+            terminal_width,
                 colors,
                 title: String::new(),
                 placeholder: String::new(),
@@ -3060,6 +3090,7 @@ fn build_inputs(
             DialogInputs {
                 family,
                 box_width,
+            terminal_width,
                 colors,
                 title: String::new(),
                 placeholder: String::new(),
@@ -3111,6 +3142,7 @@ fn build_inputs(
             DialogInputs {
                 family,
                 box_width,
+            terminal_width,
                 colors,
                 title: String::new(),
                 placeholder: String::new(),
@@ -3173,6 +3205,7 @@ fn build_inputs(
             DialogInputs {
                 family,
                 box_width,
+            terminal_width,
                 colors,
                 title: String::new(),
                 placeholder: String::new(),
@@ -3210,6 +3243,7 @@ fn build_inputs(
         Family::Status => DialogInputs {
             family,
             box_width,
+            terminal_width,
             colors,
             title: String::new(),
             placeholder: String::new(),

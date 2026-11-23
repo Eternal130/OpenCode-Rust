@@ -2257,6 +2257,12 @@ fn grid_divergences(ref_grid: &str, rust_grid: &str) -> Vec<serde_json::Value> {
 /// normalizer stripped VISIBLE to the adjudication side.
 pub fn export_grid_diff(scenario: &str, state: &str, ref_grid: &str, rust_grid: &str) -> usize {
     let divergences = grid_divergences(ref_grid, rust_grid);
+    // va5: full-grid dump for source-anchored triage (env-gated so
+    // the default battery output stays divergence-only).
+    if std::env::var_os("OC_DIFF_FULL_GRIDS").is_some() {
+        dump_grid(&format!("{scenario}-{state}-ref-full"), ref_grid);
+        dump_grid(&format!("{scenario}-{state}-rust-full"), rust_grid);
+    }
     let report = serde_json::json!({
         "scenario": scenario,
         "state": state,
