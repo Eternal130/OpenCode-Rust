@@ -1,288 +1,320 @@
 {
-    "_schema": "W12 diff-adjudication registry (user ruling 2026-11-18, GAPS 2.2#12): the sandbox realchain battery performs NO bug adjudication — every divergence is exported to .test-logs/diff-reports/ and matched here. Entry fields: id, scenario_pattern (exact scenario or '*'), state_pattern (optional, default '*'), shape ({kind: substring|regex, ref_contains/rust_contains/any_contains: all must appear in the divergence line, rust_missing/ref_missing: none may appear}), classification (framework-diff|env-artifact|accepted-gap|expected-shape|real-bug|needs-controller), justification, g_ref, adjudicated_by, adjudicated_at, last_observed. Matching is most-specific-first (longest scenario_pattern, then file order); a divergence matched by NO entry = unadjudicated (checker exit 2 = merge gate red). SEMANTIC FORK (review C-1): an expected-shape entry describes the VIOLATION form — a match is a RED in adjudicate.py, and its green channel is the scenario/state report existing without a matching divergence.",
-    "entries": [
-        {
-            "id": "w12-g434-freelist-vintage",
-            "scenario_pattern": "s3",
-            "state_pattern": "*",
-            "shape": {
-                "kind": "substring",
-                "any_contains": [
-                    " Free",
-                    "__FREELIST__"
-                ]
-            },
-            "classification": "env-artifact",
-            "justification": "RESOLVED in W14 (f8cd3e6e): the port's embedded models-dev snapshot re-synced to the ref tree's generation (8443 models; zen free tier gains 'Exo Free'); s3 palette export is now EXACT. Entry kept for history; the shape no longer occurs.",
-            "g_ref": "G-434",
-            "adjudicated_by": "W12 seed migration",
-            "adjudicated_at": "2026-11-18",
-            "last_observed": "2026-11-18"
-        },
-        {
-            "id": "w12-t98-boot-window-connection-lost",
-            "scenario_pattern": "t9-8",
-            "state_pattern": "boot-window",
-            "shape": {
-                "kind": "substring",
-                "ref_contains": [
-                    "expected 0"
-                ],
-                "rust_contains": [
-                    "Connection lost"
-                ]
-            },
-            "classification": "expected-shape",
-            "justification": "t9_8 (single-end): the slow-boot window must stay clean of the 'Connection lost' overlay — expectation count 0; any observed count > 0 is an UNADJUDICATED red (G-439 regression surface).",
-            "g_ref": "G-439",
-            "adjudicated_by": "W12 seed migration",
-            "adjudicated_at": "2026-11-18",
-            "last_observed": "2026-11-18"
-        },
-        {
-            "id": "w12-t91-boot-indicators",
-            "scenario_pattern": "t9-1",
-            "state_pattern": "boot",
-            "shape": {
-                "kind": "substring",
-                "ref_contains": [
-                    "expected 0"
-                ]
-            },
-            "classification": "expected-shape",
-            "justification": "t9_1 (single-end): the settled boot screen carries no reconnect/error indicators — expectation count 0 per indicator; any observed count > 0 is an UNADJUDICATED red (symptom-① surface).",
-            "g_ref": "symptom-① (beta.15)",
-            "adjudicated_by": "W12 seed migration",
-            "adjudicated_at": "2026-11-18",
-            "last_observed": "2026-11-18"
-        },
-        {
-            "id": "w12-midstream-spinner-phase",
-            "scenario_pattern": "p*",
-            "state_pattern": "*",
-            "shape": {
-                "kind": "regex",
-                "any_contains": [
-                    "[⬝■]{2,}",
-                    "esc interrupt"
-                ]
-            },
-            "classification": "framework-diff",
-            "justification": "Mid-window footer spinner cells (⬝/■ fill phase) differ at the capture instant: both ends animate independently and the mid-stream captures are not frame-locked — a capture-time race, not content. Settled grids are EXACT. Shape narrowed (review C-2) to the spinner glyph runs on the interrupt footer row (a run of >=2 ⬝/■ glyphs AND the footer anchor text), not the shared footer text alone.",
-            "g_ref": "none (W12 first-run, timing)",
-            "adjudicated_by": "w12 lane",
-            "adjudicated_at": "2026-11-18",
-            "last_observed": "2026-11-18"
-        },
-        {
-            "id": "w12-midstream-partial-phase",
-            "scenario_pattern": "p2",
-            "state_pattern": "mid",
-            "shape": {
-                "kind": "substring",
-                "any_contains": [
-                    "REALCH"
-                ]
-            },
-            "classification": "framework-diff",
-            "justification": "Mid-stream PARTIAL-prefix phase (review-fix round find): the mid-window capture lands at a different streamed-token offset on each end (same gateway schedule, jittered render clocks) — the partial needle prefix differs by a few chars at the capture instant. Settled grids are EXACT. Same capture-time-race family as w12-midstream-spinner-phase.",
-            "g_ref": "none (W12 first-run, timing)",
-            "adjudicated_by": "w12 lane",
-            "adjudicated_at": "2026-11-18",
-            "last_observed": "2026-11-18"
-        },
-        {
-            "id": "w12-t95-sidebar-content",
-            "scenario_pattern": "t9-5",
-            "state_pattern": "sidebar",
-            "shape": {
-                "kind": "substring",
-                "ref_contains": [
-                    "expected 1"
-                ]
-            },
-            "classification": "expected-shape",
-            "justification": "t9_5 (single-end): the wide-dock sidebar carries the Context section and its tokens row after a settled reply — expectation present; absence is an UNADJUDICATED red (G-435 family surface).",
-            "g_ref": "G-435",
-            "adjudicated_by": "W12 seed migration",
-            "adjudicated_at": "2026-11-18",
-            "last_observed": "2026-11-18"
-        },
-        {
-            "id": "t9-7-plugin-mcp-settle-race",
-            "scenario_pattern": "t9-7",
-            "state_pattern": "*",
-            "shape": {
-                "kind": "substring",
-                "ref_contains": [
-                    "2 MCP"
-                ],
-                "rust_contains": [
-                    "1 MCP"
-                ]
-            },
-            "classification": "framework-diff",
-            "justification": "Load-sensitive plugin MCP settle race (controller adjudication 2026-11-18): under concurrent battery load the rust side's second plugin MCP registers after the settle capture; rerun in isolation shows divergences:0. Historical family: multiple retry-green occurrences since W7 (registered observation in progress.md). Direction-specific — a flipped direction (rust=2/ref=1) would surface as unadjudicated for fresh adjudication.",
-            "g_ref": "t9_7 flake observation (2026-11-17)",
-            "adjudicated_by": "controller",
-            "adjudicated_at": "2026-11-18",
-            "last_observed": "2026-11-18"
-        },
-        {
-            "id": "w13-perm-once-dialog-midstream",
-            "scenario_pattern": "w13-perm-once",
-            "state_pattern": "dialog",
-            "shape": {
-                "kind": "regex",
-                "any_contains": [
-                    "(?:Permission required|Shell command|cargo test|Allow once)"
-                ]
-            },
-            "classification": "framework-diff",
-            "justification": "ADJUDICATED (controller 2026-11-21, final): capture-phase framework-diff — the settled frame is EXACT on both ends (W13/W4 evidence); the mid-capture ask-dock placement (rust docked vs ref portal overlaying the transcript) is a portal-capture artifact with no settled-state behavior face. G-450 hint-row face FIXED (958e370a); the fullscreen-toggle behavior face landed in W14 (595104f7, the real ctrl+f toggle) — this entry's residual is the mid-capture placement phase only (stale wording corrected 2026-11-23).",
-            "g_ref": "W13 report task 3",
-            "adjudicated_by": "controller",
-            "adjudicated_at": "2026-11-21",
-            "last_observed": "2026-11-18"
-        },
-        {
-            "id": "w13-midstream-spinner-newsession",
-            "scenario_pattern": "p*",
-            "state_pattern": "*",
-            "shape": {
-                "kind": "substring",
-                "any_contains": [
-                    "New session"
-                ]
-            },
-            "classification": "framework-diff",
-            "justification": "G-449 fixed (W13): both ends now carry the model constant 'New session' as the untitled tab title; the residual p1-busy/p2-mid line-1 divergence is the spinner GLYPH phase at capture (⠋/⠧/⠸) — the same capture-phase artifact family as w12-midstream-spinner-phase.",
-            "g_ref": "G-449 residual",
-            "adjudicated_by": "W13 lane",
-            "adjudicated_at": "2026-11-18",
-            "last_observed": "2026-11-18"
-        },
-        {
-            "id": "s3-palette-paint-race-under-load",
-            "scenario_pattern": "s3",
-            "state_pattern": "*",
-            "shape": {
-                "kind": "substring",
-                "ref_contains": [
-                    "claude-opus-4-7"
-                ],
-                "rust_missing": [
-                    "claude-opus-4-7"
-                ]
-            },
-            "classification": "framework-diff",
-            "justification": "Load-sensitive palette paint race (controller adjudication 2026-11-18): under the full concurrent battery the rust palette rows (selection dot line / View-all footer) paint after the capture instant; isolated rerun shows divergences:0. Same family as t9-7-plugin-mcp-settle-race. Direction-specific (ref has rows, rust blank); a flipped shape would surface unadjudicated.",
-            "g_ref": "S3 CI-slower-runner lesson (W9 era) + this incident",
-            "adjudicated_by": "controller",
-            "adjudicated_at": "2026-11-18",
-            "last_observed": "2026-11-18"
-        },
-        {
-            "id": "va4-g466-3-5-dialog-40-overprint",
-            "scenario_pattern": "geom40",
-            "state_pattern": "dialog",
-            "shape": {
-                "kind": "substring",
-                "ref_contains": [
-                    "AlphaSession Title That Must T"
-                ]
-            },
-            "classification": "accepted-gap",
-            "justification": "RESIDUAL after va5 (a774892a fixed the footer overprint + wordmark bleed; G-465 suffix landed in 41c339f): the zero-row list viewport's ref-side overdraw — ref paints an extra 'AlphaSession Title That Must T' row the rust dialog correctly clips (G-466.5 ruling: ref artifact, do not fix).",
-            "g_ref": "G-466",
-            "adjudicated_by": "va4 geometry pair graduation",
-            "adjudicated_at": "2026-11-23",
-            "last_observed": "2026-11-23"
-        },
-        {
-            "id": "va4-nc-composer-box-offset-10-home",
-            "scenario_pattern": "geom10",
-            "state_pattern": "home*",
-            "shape": {
-                "kind": "regex",
-                "any_contains": [
-                    "Ask|claude|┃|╹"
-                ]
-            },
-            "classification": "needs-controller",
-            "justification": "10x6 home composer box placement: ref draws r02-r05 without a bottom border, rust r01-r04 + r05 bottom border (one-row offset overall; observed va3/va4). NEEDS-CONTROLLER (ruling 2026-11-23): beyond the controller's va4 baseline triage — NOT folded into G-465/G-466, feeds the fix lane's scope; controller adjudicates.",
-            "g_ref": "needs-ledger",
-            "adjudicated_by": "va4 geometry pair graduation",
-            "adjudicated_at": "2026-11-23",
-            "last_observed": "2026-11-23"
-        },
-        {
-            "id": "va4-nc-dialog-10-truncated-titles",
-            "scenario_pattern": "geom10",
-            "state_pattern": "dialog",
-            "shape": {
-                "kind": "regex",
-                "any_contains": [
-                    "┃|S$|e$|-$"
-                ]
-            },
-            "classification": "needs-controller",
-            "justification": "10x6 dialog row glyph divergence under total title truncation (ref 'S' vs rust 'e' at the same cell). NEEDS-CONTROLLER (ruling 2026-11-23): beyond the controller's va4 baseline triage — NOT folded into G-465/G-466, feeds the fix lane's scope; controller adjudicates.",
-            "g_ref": "needs-ledger",
-            "adjudicated_by": "va4 geometry pair graduation",
-            "adjudicated_at": "2026-11-23",
-            "last_observed": "2026-11-23"
-        },
-        {
-            "id": "va4-g466-enter-10-tabtitle",
-            "scenario_pattern": "geom10",
-            "state_pattern": "enter",
-            "shape": {
-                "kind": "substring",
-                "ref_contains": [
-                    "Long"
-                ]
-            },
-            "classification": "accepted-gap",
-            "justification": "10x6 post-enter: rust loses the truncated `Long` tab-title row ref still shows (G-466.1 title-loss shape). known gap, fix in flight — G-465/G-466, remove when fixed",
-            "g_ref": "G-466",
-            "adjudicated_by": "va4 geometry pair graduation",
-            "adjudicated_at": "2026-11-23",
-            "last_observed": "2026-11-23"
-        },
-        {
-            "id": "va4-nc-enter-10-composer-rows",
-            "scenario_pattern": "geom10",
-            "state_pattern": "enter",
-            "shape": {
-                "kind": "substring",
-                "any_contains": [
-                    "┃"
-                ]
-            },
-            "classification": "needs-controller",
-            "justification": "10x6 post-enter composer border rows sit one row off between ends (same unledgered composer-offset family as home). NEEDS-CONTROLLER (ruling 2026-11-23): beyond the controller's va4 baseline — NOT folded into G-465/G-466, feeds the fix lane's scope.",
-            "g_ref": "needs-ledger",
-            "adjudicated_by": "va4 geometry pair graduation",
-            "adjudicated_at": "2026-11-23",
-            "last_observed": "2026-11-23"
-        },
-        {
-            "id": "va4-nc-wordmark-bleed-w13-permonce",
-            "scenario_pattern": "w13-perm-once",
-            "state_pattern": "dialog",
-            "shape": {
-                "kind": "regex",
-                "any_contains": [
-                    "█|┃"
-                ]
-            },
-            "classification": "needs-controller",
-            "justification": "va5 finding: the rust '█' column is the permission body's scrollbar track (footer/permission.rs mini-footer dock, PERMISSION_MOUNT_HEIGHT 16) vs the ref's composer-slot SessionQuestion (permission.tsx:514-523, border-left, maxHeight 15) — the same docked-placement family the controller ruled framework-diff for the mid-capture phase (w13-perm-once-dialog-midstream); the settled frame is EXACT. Structural rework candidate, parked with this record.",
-            "g_ref": "needs-ledger",
-            "adjudicated_by": "va4 normalizer fix triage",
-            "adjudicated_at": "2026-11-23",
-            "last_observed": "2026-11-23"
-        }
+ "_schema": "W12 diff-adjudication registry (user ruling 2026-11-18, GAPS 2.2#12): the sandbox realchain battery performs NO bug adjudication — every divergence is exported to .test-logs/diff-reports/ and matched here. Entry fields: id, scenario_pattern (exact scenario or '*'), state_pattern (optional, default '*'), shape ({kind: substring|regex, ref_contains/rust_contains/any_contains: all must appear in the divergence line, rust_missing/ref_missing: none may appear}), classification (framework-diff|env-artifact|accepted-gap|expected-shape|real-bug|needs-controller), justification, g_ref, adjudicated_by, adjudicated_at, last_observed. Matching is most-specific-first (longest scenario_pattern, then file order); a divergence matched by NO entry = unadjudicated (checker exit 2 = merge gate red). SEMANTIC FORK (review C-1): an expected-shape entry describes the VIOLATION form — a match is a RED in adjudicate.py, and its green channel is the scenario/state report existing without a matching divergence.",
+ "entries": [
+  {
+   "id": "w12-g434-freelist-vintage",
+   "scenario_pattern": "s3",
+   "state_pattern": "*",
+   "shape": {
+    "kind": "substring",
+    "any_contains": [
+     " Free",
+     "__FREELIST__"
     ]
+   },
+   "classification": "env-artifact",
+   "justification": "RESOLVED in W14 (f8cd3e6e): the port's embedded models-dev snapshot re-synced to the ref tree's generation (8443 models; zen free tier gains 'Exo Free'); s3 palette export is now EXACT. Entry kept for history; the shape no longer occurs.",
+   "g_ref": "G-434",
+   "adjudicated_by": "W12 seed migration",
+   "adjudicated_at": "2026-11-18",
+   "last_observed": "2026-11-18"
+  },
+  {
+   "id": "w12-t98-boot-window-connection-lost",
+   "scenario_pattern": "t9-8",
+   "state_pattern": "boot-window",
+   "shape": {
+    "kind": "substring",
+    "ref_contains": [
+     "expected 0"
+    ],
+    "rust_contains": [
+     "Connection lost"
+    ]
+   },
+   "classification": "expected-shape",
+   "justification": "t9_8 (single-end): the slow-boot window must stay clean of the 'Connection lost' overlay — expectation count 0; any observed count > 0 is an UNADJUDICATED red (G-439 regression surface).",
+   "g_ref": "G-439",
+   "adjudicated_by": "W12 seed migration",
+   "adjudicated_at": "2026-11-18",
+   "last_observed": "2026-11-18"
+  },
+  {
+   "id": "w12-t91-boot-indicators",
+   "scenario_pattern": "t9-1",
+   "state_pattern": "boot",
+   "shape": {
+    "kind": "substring",
+    "ref_contains": [
+     "expected 0"
+    ]
+   },
+   "classification": "expected-shape",
+   "justification": "t9_1 (single-end): the settled boot screen carries no reconnect/error indicators — expectation count 0 per indicator; any observed count > 0 is an UNADJUDICATED red (symptom-① surface).",
+   "g_ref": "symptom-① (beta.15)",
+   "adjudicated_by": "W12 seed migration",
+   "adjudicated_at": "2026-11-18",
+   "last_observed": "2026-11-18"
+  },
+  {
+   "id": "w12-midstream-spinner-phase",
+   "scenario_pattern": "p*",
+   "state_pattern": "*",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "[⬝■]{2,}",
+     "esc interrupt"
+    ]
+   },
+   "classification": "framework-diff",
+   "justification": "Mid-window footer spinner cells (⬝/■ fill phase) differ at the capture instant: both ends animate independently and the mid-stream captures are not frame-locked — a capture-time race, not content. Settled grids are EXACT. Shape narrowed (review C-2) to the spinner glyph runs on the interrupt footer row (a run of >=2 ⬝/■ glyphs AND the footer anchor text), not the shared footer text alone.",
+   "g_ref": "none (W12 first-run, timing)",
+   "adjudicated_by": "w12 lane",
+   "adjudicated_at": "2026-11-18",
+   "last_observed": "2026-11-18"
+  },
+  {
+   "id": "w12-midstream-partial-phase",
+   "scenario_pattern": "p2",
+   "state_pattern": "mid",
+   "shape": {
+    "kind": "substring",
+    "any_contains": [
+     "REALCH"
+    ]
+   },
+   "classification": "framework-diff",
+   "justification": "Mid-stream PARTIAL-prefix phase (review-fix round find): the mid-window capture lands at a different streamed-token offset on each end (same gateway schedule, jittered render clocks) — the partial needle prefix differs by a few chars at the capture instant. Settled grids are EXACT. Same capture-time-race family as w12-midstream-spinner-phase.",
+   "g_ref": "none (W12 first-run, timing)",
+   "adjudicated_by": "w12 lane",
+   "adjudicated_at": "2026-11-18",
+   "last_observed": "2026-11-18"
+  },
+  {
+   "id": "w12-t95-sidebar-content",
+   "scenario_pattern": "t9-5",
+   "state_pattern": "sidebar",
+   "shape": {
+    "kind": "substring",
+    "ref_contains": [
+     "expected 1"
+    ]
+   },
+   "classification": "expected-shape",
+   "justification": "t9_5 (single-end): the wide-dock sidebar carries the Context section and its tokens row after a settled reply — expectation present; absence is an UNADJUDICATED red (G-435 family surface).",
+   "g_ref": "G-435",
+   "adjudicated_by": "W12 seed migration",
+   "adjudicated_at": "2026-11-18",
+   "last_observed": "2026-11-18"
+  },
+  {
+   "id": "t9-7-plugin-mcp-settle-race",
+   "scenario_pattern": "t9-7",
+   "state_pattern": "*",
+   "shape": {
+    "kind": "substring",
+    "ref_contains": [
+     "2 MCP"
+    ],
+    "rust_contains": [
+     "1 MCP"
+    ]
+   },
+   "classification": "framework-diff",
+   "justification": "Load-sensitive plugin MCP settle race (controller adjudication 2026-11-18): under concurrent battery load the rust side's second plugin MCP registers after the settle capture; rerun in isolation shows divergences:0. Historical family: multiple retry-green occurrences since W7 (registered observation in progress.md). Direction-specific — a flipped direction (rust=2/ref=1) would surface as unadjudicated for fresh adjudication.",
+   "g_ref": "t9_7 flake observation (2026-11-17)",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-18",
+   "last_observed": "2026-11-18"
+  },
+  {
+   "id": "w13-perm-once-dialog-midstream",
+   "scenario_pattern": "w13-perm-once",
+   "state_pattern": "dialog",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:Permission required|Shell command|cargo test|Allow once)"
+    ]
+   },
+   "classification": "framework-diff",
+   "justification": "ADJUDICATED (controller 2026-11-21, final): capture-phase framework-diff — the settled frame is EXACT on both ends (W13/W4 evidence); the mid-capture ask-dock placement (rust docked vs ref portal overlaying the transcript) is a portal-capture artifact with no settled-state behavior face. G-450 hint-row face FIXED (958e370a); the fullscreen-toggle behavior face landed in W14 (595104f7, the real ctrl+f toggle) — this entry's residual is the mid-capture placement phase only (stale wording corrected 2026-11-23).",
+   "g_ref": "W13 report task 3",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-21",
+   "last_observed": "2026-11-18"
+  },
+  {
+   "id": "w13-midstream-spinner-newsession",
+   "scenario_pattern": "p*",
+   "state_pattern": "*",
+   "shape": {
+    "kind": "substring",
+    "any_contains": [
+     "New session"
+    ]
+   },
+   "classification": "framework-diff",
+   "justification": "G-449 fixed (W13): both ends now carry the model constant 'New session' as the untitled tab title; the residual p1-busy/p2-mid line-1 divergence is the spinner GLYPH phase at capture (⠋/⠧/⠸) — the same capture-phase artifact family as w12-midstream-spinner-phase.",
+   "g_ref": "G-449 residual",
+   "adjudicated_by": "W13 lane",
+   "adjudicated_at": "2026-11-18",
+   "last_observed": "2026-11-18"
+  },
+  {
+   "id": "s3-palette-paint-race-under-load",
+   "scenario_pattern": "s3",
+   "state_pattern": "*",
+   "shape": {
+    "kind": "substring",
+    "ref_contains": [
+     "claude-opus-4-7"
+    ],
+    "rust_missing": [
+     "claude-opus-4-7"
+    ]
+   },
+   "classification": "framework-diff",
+   "justification": "Load-sensitive palette paint race (controller adjudication 2026-11-18): under the full concurrent battery the rust palette rows (selection dot line / View-all footer) paint after the capture instant; isolated rerun shows divergences:0. Same family as t9-7-plugin-mcp-settle-race. Direction-specific (ref has rows, rust blank); a flipped shape would surface unadjudicated.",
+   "g_ref": "S3 CI-slower-runner lesson (W9 era) + this incident",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-18",
+   "last_observed": "2026-11-18"
+  },
+  {
+   "id": "va4-g466-3-5-dialog-40-overprint",
+   "scenario_pattern": "geom40",
+   "state_pattern": "dialog",
+   "shape": {
+    "kind": "substring",
+    "ref_contains": [
+     "AlphaSession Title That Must T"
+    ]
+   },
+   "classification": "accepted-gap",
+   "justification": "RESIDUAL after va5 (a774892a fixed the footer overprint + wordmark bleed; G-465 suffix landed in 41c339f): the zero-row list viewport's ref-side overdraw — ref paints an extra 'AlphaSession Title That Must T' row the rust dialog correctly clips (G-466.5 ruling: ref artifact, do not fix).",
+   "g_ref": "G-466",
+   "adjudicated_by": "va4 geometry pair graduation",
+   "adjudicated_at": "2026-11-23",
+   "last_observed": "2026-11-23"
+  },
+  {
+   "id": "va4-nc-composer-box-offset-10-home",
+   "scenario_pattern": "geom10",
+   "state_pattern": "home*",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "Ask|claude|┃|╹"
+    ]
+   },
+   "classification": "needs-controller",
+   "justification": "10x6 home composer box placement: ref draws r02-r05 without a bottom border, rust r01-r04 + r05 bottom border (one-row offset overall; observed va3/va4). NEEDS-CONTROLLER (ruling 2026-11-23): beyond the controller's va4 baseline triage — NOT folded into G-465/G-466, feeds the fix lane's scope; controller adjudicates.",
+   "g_ref": "needs-ledger",
+   "adjudicated_by": "va4 geometry pair graduation",
+   "adjudicated_at": "2026-11-23",
+   "last_observed": "2026-11-23"
+  },
+  {
+   "id": "va4-nc-dialog-10-truncated-titles",
+   "scenario_pattern": "geom10",
+   "state_pattern": "dialog",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "┃|S$|e$|-$"
+    ]
+   },
+   "classification": "needs-controller",
+   "justification": "10x6 dialog row glyph divergence under total title truncation (ref 'S' vs rust 'e' at the same cell). NEEDS-CONTROLLER (ruling 2026-11-23): beyond the controller's va4 baseline triage — NOT folded into G-465/G-466, feeds the fix lane's scope; controller adjudicates.",
+   "g_ref": "needs-ledger",
+   "adjudicated_by": "va4 geometry pair graduation",
+   "adjudicated_at": "2026-11-23",
+   "last_observed": "2026-11-23"
+  },
+  {
+   "id": "va4-g466-enter-10-tabtitle",
+   "scenario_pattern": "geom10",
+   "state_pattern": "enter",
+   "shape": {
+    "kind": "substring",
+    "ref_contains": [
+     "Long"
+    ]
+   },
+   "classification": "accepted-gap",
+   "justification": "10x6 post-enter: rust loses the truncated `Long` tab-title row ref still shows (G-466.1 title-loss shape). known gap, fix in flight — G-465/G-466, remove when fixed",
+   "g_ref": "G-466",
+   "adjudicated_by": "va4 geometry pair graduation",
+   "adjudicated_at": "2026-11-23",
+   "last_observed": "2026-11-23"
+  },
+  {
+   "id": "va4-nc-enter-10-composer-rows",
+   "scenario_pattern": "geom10",
+   "state_pattern": "enter",
+   "shape": {
+    "kind": "substring",
+    "any_contains": [
+     "┃"
+    ]
+   },
+   "classification": "needs-controller",
+   "justification": "10x6 post-enter composer border rows sit one row off between ends (same unledgered composer-offset family as home). NEEDS-CONTROLLER (ruling 2026-11-23): beyond the controller's va4 baseline — NOT folded into G-465/G-466, feeds the fix lane's scope.",
+   "g_ref": "needs-ledger",
+   "adjudicated_by": "va4 geometry pair graduation",
+   "adjudicated_at": "2026-11-23",
+   "last_observed": "2026-11-23"
+  },
+  {
+   "id": "va4-nc-wordmark-bleed-w13-permonce",
+   "scenario_pattern": "w13-perm-once",
+   "state_pattern": "dialog",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "█|┃"
+    ]
+   },
+   "classification": "needs-controller",
+   "justification": "va5 finding: the rust '█' column is the permission body's scrollbar track (footer/permission.rs mini-footer dock, PERMISSION_MOUNT_HEIGHT 16) vs the ref's composer-slot SessionQuestion (permission.tsx:514-523, border-left, maxHeight 15) — the same docked-placement family the controller ruled framework-diff for the mid-capture phase (w13-perm-once-dialog-midstream); the settled frame is EXACT. Structural rework candidate, parked with this record.",
+   "g_ref": "needs-ledger",
+   "adjudicated_by": "va4 normalizer fix triage",
+   "adjudicated_at": "2026-11-23",
+   "last_observed": "2026-11-23"
+  },
+  {
+   "classification": "framework-diff",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24",
+   "g_ref": "va8 audit / push-battery regeneration run",
+   "id": "geom160-home0-footer-midstream",
+   "scenario_pattern": "geom160",
+   "state_pattern": "home0",
+   "shape": {
+    "kind": "regex",
+    "rust_contains": [
+     "Build · claude-opus-4-7 Replay Anthropic"
+    ]
+   },
+   "justification": "ADJUDICATED (controller 2026-11-24): capture-phase transient — at the SAME tree (61404143) the isolated rerun exports EXACT while the full-battery export paints the rust footer model/replay row on the composer border row mid-capture. Load-dependent footer paint ordering, no settled-state face (isolated reruns EXACT). Same mid-capture placement family as w13-perm-once-dialog-midstream. Re-triage if a settled-state divergence ever appears."
+  },
+  {
+   "classification": "framework-diff",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24",
+   "g_ref": "va8 audit / push-battery regeneration run",
+   "id": "geom160-home0-path-ellipsis-unreexpanded",
+   "scenario_pattern": "geom160",
+   "state_pattern": "home0",
+   "shape": {
+    "kind": "regex",
+    "ref_contains": [
+     "t9w1…-geom160ref"
+    ]
+   },
+   "justification": "ADJUDICATED (controller 2026-11-24): normalization-coverage gap, not a render divergence — the ref-side truncated sandbox path (t9w1…-geom160ref) is not re-expanded by ellipsis-path-reexpand (its ellipsis pattern misses this shape) while the rust side normalizes to __ROOT__. Harness normalizer-coverage candidate; re-triage if the raw path ever leaks into a settled export."
+  }
+ ]
 }
