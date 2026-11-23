@@ -44,6 +44,39 @@ Plan: raise the battery-run TasksMax (or run the battery outside the
 512-task scope). Controller decision required — `tools/dev-gate.sh` is
 the shared single-entry gate; not changed unilaterally in va8.
 
+### RL-3 — oc-plugin-host flagship_sidebar ×2: /tmp/code-* IDE-socket interference (environmental, deterministic)
+
+Shape (`.test-logs/workspace-20261123-230321-va8ws.log`, oc-plugin-host::flagship_sidebar,
+`flagship_sidebar_renders_plugin_version_and_padded_columns` + `flagship_sidebar_section_materializes_from_the_real_plugin`,
+failed TRY1+TRY2 AND standalone rerun — retry does NOT pass):
+
+```
+opencode plugin-host: tui entry loaded for oh-my-opencode-slim (oh-my-opencode-slim:tui, sidebar slot: true)
+opencode plugin-host [host] error: uncaughtException: ENXIO: no such device or address, open '/tmp/code-19560cfb-5f7e-4d77-9e55-ac85c122d43c'
+thread 'flagship_sidebar_renders_plugin_version_and_padded_columns' panicked at crates/oc-plugin-host/tests/flagship_sidebar.rs:226:5:
+the badge shows the plugin's own version 3.0.3: ""
+```
+
+Attribution: the uncaughtException path is the host's VS Code remote
+server socket (`/root/.vscode-server/.../code-server
+--socket-path=/tmp/code-19560cfb-...`, alive since 09:58). Empirical:
+`fs.openSync` on ANY unix socket inode returns ENXIO on Linux
+(reproduced with both the pinned and /usr/local/bin bun on a probe
+script). Some code in the plugin-host boot chain enumerates /tmp/code-*
+and hard-fails on the foreign IDE socket, killing the plugin's tui
+entry → the sidebar section never materializes → empty title. The same
+ENXIO line appears in the RL-1 logs inside daemon boot failures — it is
+environment noise of this box, not a product regression of va8 (va8's
+diff touches no oc-plugin-host code; the tests previously only SKIPPED
+in old workspace gates at 0.004s because the flagship source resolved
+from an npm stamp that did not exist then).
+
+Plan: (a) product-side — the /tmp/code-* discovery must tolerate
+socket ENXIO (skip non-openable sockets) instead of an uncaught
+exception; (b) test-side — if (a) is not taken, gate
+flagship_sidebar on the absence of foreign /tmp/code-* sockets. Not
+whitelisted (retry fails). Controller decision required for both.
+
 ### RL-2 — stale-binary guard vs shared CARGO_TARGET_DIR
 
 Shape: `realchain_harness.rs:161` "stale binary ... rebuild via
