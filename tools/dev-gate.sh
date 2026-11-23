@@ -6,8 +6,10 @@
 #   1. CPU CAP: transient systemd scope with CPUQuota=400% (4 of 16 cores).
 #      A forgotten -j4, a parallel lane, or a runaway linker physically cannot
 #      saturate the box (newapi + the live service share it).
-#   2. MEMORY CAP: MemoryMax=6G (box has 22G, shared with production
-#      services; the 2026-10-19 oomd incident cut this from 10G).
+#   2. MEMORY CAP: MemoryMax=12G (box has 22G, shared with production
+#      services; 6G per the 2026-10-19 oomd incident ruling, raised to 12G
+#      2026-11-23 by owner ruling for the nextest-concurrency experiment —
+#      execution-phase tests are wait-bound, memory was the tight ceiling).
 #   3. LOAD BACKSTOP: refuses to start while 1-min load >= 8 (the per-lane
 #      courtesy check remains "< 2 before gates"; this is the hard ceiling).
 #   4. GLOBAL SERIALIZATION: exactly one gate scope on the machine at a
@@ -133,7 +135,7 @@ echo "dev-gate: logging full output to ${LOG}" >&2
 systemd-run --scope --quiet 9>&- \
   --unit="opencode-gate-$(date +%s)-$$" \
   -p CPUQuota=400% \
-  -p MemoryMax=6G \
+  -p MemoryMax=12G \
   -p TasksMax=512 \
   --setenv=OPENCODE_DEV_GATE=1 \
   bash 9>&- -c "cd ${GATE_DIR} && $1" 2>&1 | tee "$LOG" 9>&-
