@@ -93,11 +93,7 @@ fn worktree_root() -> PathBuf {
         .nth(2)
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf();
-    if root
-        .parent()
-        .and_then(Path::file_name)
-        .is_some_and(|n| n == ".worktrees")
-    {
+    if root.parent().and_then(Path::file_name).is_some_and(|n| n == ".worktrees") {
         if let Some(main) = root.parent().and_then(Path::parent) {
             root = main.to_path_buf();
         }
