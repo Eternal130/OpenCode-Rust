@@ -315,8 +315,11 @@ pub fn render_session(
         && terminal_pane.is_none()
         && store.sidebar_shown(session_id, content_width);
     // The session column's padding (v2's prompt mounts inside
-    // paddingLeft/Right 2): the composer `┃` and footer paste at x2.
-    let inset = 2;
+    // paddingLeft/Right — `dimensions().width < 44 ? 1 : 2`,
+    // session/index.tsx:1370): the composer `┃` and footer paste at
+    // the inset. G-466.8: the gate reads the TERMINAL width, not the
+    // post-rail content width.
+    let inset = if width < 44 { 1 } else { 2 };
     let sidebar_docked = sidebar_shown && content_width > SIDEBAR_AUTO_BREAKPOINT;
     let sidebar_overlay = sidebar_shown && !sidebar_docked;
     // G-239/G-331 — the panel pane's geometry (panel.tsx:14-15 +

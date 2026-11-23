@@ -318,7 +318,14 @@ pub(crate) fn plan_home(view: &HomeView, width: usize, height: usize) -> HomePla
     let prompt_width = content.clamp(1, PROMPT_MAX_WIDTH);
     let mount =
         1 + crate::components::composer::render::mount_height(view.draft, prompt_width, height);
-    let fixed = if show_logo { 3 + logo_rows + 1 } else { 0 } + mount;
+    // The home column's fixed children (home.tsx:78-97): the 3-row
+    // shrinkable spacer, the logo block (0 rows when hidden), the
+    // ALWAYS-PRESENT 1-row spacer, and the prompt mount. G-466.6:
+    // the 1-row spacer after the wordmark renders even when the
+    // logo is height-gated off — the composer still seats one row
+    // lower (ref 10x6 home: the composer's bordered pad lands on
+    // row 2, not row 1).
+    let fixed = 3 + logo_rows + 1 + mount;
     let free = height.saturating_sub(footer_rows + fixed);
     let spacer_top = free.div_ceil(2);
     let mut y = spacer_top;

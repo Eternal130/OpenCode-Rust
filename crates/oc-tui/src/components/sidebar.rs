@@ -288,6 +288,11 @@ pub struct TitleArrival {
 
 /// The arrival wipe's duration (ref `ARRIVAL_DURATION`).
 const ARRIVAL_DURATION_MS: u64 = 450;
+/// G-466.4 — the header title's wrap width: pane 40 − the pane's
+/// paddingLeft/Right 2/2 − the title box's paddingRight 2
+/// (sidebar.tsx:25-34).
+const SIDEBAR_TITLE_WRAP_WIDTH: usize = crate::components::session_tabs::SESSION_SIDEBAR_WIDTH - 6;
+
 /// The wipe edge's feather width in columns (ref `WIPE_FEATHER`).
 const ARRIVAL_FEATHER: f64 = 4.0;
 
@@ -613,16 +618,24 @@ pub fn render_sidebar_scrolled(
             tag: Some("sidebar.title".into()),
         });
     } else {
-        paint.placed.push(Placed {
-            x: 2,
-            y: 1,
-            width: crate::wrap::display_width(&view.title),
-            lines: vec![PlacedLine::plain(
-                view.title.as_str(),
-                Style::new().fg(fg_base).bg(raised).add_modifier(Modifier::BOLD),
-            )],
-            tag: Some("sidebar.title".into()),
-        });
+        // G-466.4 — the header's `title_shimmer` carries NO
+        // `wrapMode="none"` (sidebar.tsx:33-48): the title WORD-WRAPS
+        // at the title box's 34-col content width (pane 40 − the
+        // pane's padding 2/2 − the box's paddingRight 2).
+        for (row, line) in
+            crate::wrap::wrap_label(&view.title, SIDEBAR_TITLE_WRAP_WIDTH).iter().enumerate()
+        {
+            paint.placed.push(Placed {
+                x: 2,
+                y: 1 + row,
+                width: crate::wrap::display_width(line),
+                lines: vec![PlacedLine::plain(
+                    line.as_str(),
+                    Style::new().fg(fg_base).bg(raised).add_modifier(Modifier::BOLD),
+                )],
+                tag: Some("sidebar.title".into()),
+            });
+        }
     }
 
     // The content slot's viewport: rows [3, footer_top) (the title on
@@ -646,7 +659,12 @@ pub fn render_sidebar_scrolled(
     // (sidebar.tsx:34), so the content slot starts one blank row lower
     // than the title: the first section renders on row 3 (the ref's
     // title / blank / section stack).
-    let slot_row = |y: usize| y.checked_sub(scroll).map(|visible| visible + 3);
+    // G-466.4 — the content slot starts under the WRAPPED title (its
+    // row count) plus the title box's paddingBottom blank.
+    let title_rows =
+        crate::wrap::wrap_label(&view.title, SIDEBAR_TITLE_WRAP_WIDTH).len().max(1);
+    let slot_row =
+        |y: usize| y.checked_sub(scroll).map(|visible| visible + title_rows + 2);
 
     // The context widget (context.tsx:24-45): the bold `Context`
     // title, then the muted token/percent/cost rows.
@@ -878,11 +896,15 @@ pub fn render_sidebar_scrolled(
     // gap 1, then the onboarding card above it with its own 1-row
     // top pad (the footer box's paddingTop).
     if let Some(location) = &view.location {
+        // G-466.9 — the footer's `FilePath` (sidebar/footer.tsx:87-97):
+        // `truncateFilePath(value, maxWidth 38)` — the `…/basename`
+        // compaction, not a pane-edge clip.
+        let text = crate::components::composer::render::truncate_file_path(location, 38);
         paint.placed.push(Placed {
             x: 2,
             y: height.saturating_sub(2),
-            width: crate::wrap::display_width(location),
-            lines: vec![PlacedLine::plain(location.as_str(), Style::new().fg(fg_muted).bg(raised))],
+            width: crate::wrap::display_width(&text),
+            lines: vec![PlacedLine::plain(text.as_str(), Style::new().fg(fg_muted).bg(raised))],
             tag: Some("sidebar.footer.location".into()),
         });
     }
