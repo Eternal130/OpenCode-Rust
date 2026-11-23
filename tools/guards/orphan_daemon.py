@@ -16,6 +16,15 @@ WHAT IT CHECKS (runtime scan, not static text)
     ref-serve         PPID=1 and cmdline contains /tmp/opencode/ref/packages
                       — the reference checkout's bun-launched server.
 
+  IN-FLIGHT EXCLUSION (the "die WITH the test" semantic, va6):
+    A PPID=1 daemon is only an ORPHAN if its owning test process is gone.
+    The daemon's environ names its sandbox root
+    (/tmp/opencode/t9w1-<testpid>-<tag>/... via XDG_* / HOME); the guard
+    parses <testpid> out of it and checks /proc/<testpid>: still alive =
+    a legitimate in-flight daemon of a running battery (PPID=1 from the
+    moment `service start` daemonizes — by design), NOT flagged; dead or
+    unresolvable = orphan, flagged.
+
   EXPLICIT EXCLUSION (by design, the legitimate 2-day service):
     /root/.opencode/bin/opencode serve --service — the user's own long-
     lived service process, NOT a lane orphan. Never flagged.
@@ -38,6 +47,7 @@ EXIT CODES (guardlib convention)
 Stdlib only. Reads /proc; signals nothing.
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -71,6 +81,25 @@ def proc_ppid(pid_dir: Path) -> int:
     return -1
 
 
+SANDBOX_PID_RE = re.compile(r"/tmp/opencode/[^-\0]+-(\d+)-")
+
+
+def owning_test_alive(pid_dir: Path) -> bool | None:
+    """True/False if the daemon's owning test pid can be resolved, None if
+    the environ names no recognizable lane sandbox (be conservative then:
+    the caller decides)."""
+    try:
+        raw = (pid_dir / "environ").read_bytes()
+    except OSError:
+        return None
+    for chunk in raw.split(b"\0"):
+        value = chunk.decode("utf-8", "replace").split("=", 1)[-1]
+        match = SANDBOX_PID_RE.search(value)
+        if match:
+            return Path(f"/proc/{match.group(1)}").exists()
+    return None
+
+
 def collect() -> tuple[list[dict], dict]:
     violations: list[dict] = []
     scanned = 0
@@ -96,6 +125,12 @@ def collect() -> tuple[list[dict], dict]:
             vid = f"ref-serve:{cmdline[0]}"
             detail = f"pid={entry.name} cmdline={joined[:200]!r}"
         if vid is not None:
+            owner = owning_test_alive(entry)
+            if owner is True:
+                # In-flight daemon of a live test — legitimate by design.
+                continue
+            detail = (f"pid={entry.name} owner_test="
+                      f"{'dead' if owner is False else 'unresolved'} {detail}")
             violations.append({"id": vid, "detail": detail})
     meta = {"scanned": scanned, "excluded": EXCLUDED_PREFIX}
     return violations, meta

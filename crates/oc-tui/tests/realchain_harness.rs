@@ -1003,13 +1003,17 @@ fn spawn_daemon_supervisor(sandbox: &Sandbox) {
     let script = r#"
 test_pid=$1
 while kill -0 "$test_pid" 2>/dev/null; do sleep 0.2; done
+pid_from_reg=${2:-}
 "$OC_BIN" service stop >/dev/null 2>&1 || true
 pid=""
+if [ -n "$pid_from_reg" ]; then pid=$pid_from_reg; fi
+if [ -z "$pid" ]; then
 for f in "$OC_STATE"/opencode-rust/service*.json "$OC_STATE"/opencode/service*.json; do
   [ -f "$f" ] || continue
   p=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$f" | head -n 1)
   if [ -n "$p" ]; then pid=$p; break; fi
 done
+fi
 case "$pid" in ''|1|"$test_pid"|$$) exit 0;; esac
 i=0
 while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 10 ]; do sleep 0.1; i=$((i+1)); done
@@ -1017,12 +1021,23 @@ if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; fi
 exit 0
 "#
     .to_string();
+    // Capture the daemon pid at ARM time: the test-exit sandbox sweep can
+    // delete the registration file before the supervisor reacts, and the
+    // t9-7 battery leak (2026-11-23) proved the registration lookup alone
+    // is not enough — the pid rides in as $2.
+    let daemon_pid = sandbox
+        .registration()
+        .get("pid")
+        .and_then(|v| v.as_u64())
+        .map(|v| v.to_string())
+        .unwrap_or_default();
     let mut command = sandbox.command(&PathBuf::from("/bin/sh"));
     command
         .arg("-c")
         .arg(&script)
         .arg("daemon-supervisor")
         .arg(test_pid.to_string())
+        .arg(&daemon_pid)
         .env("OC_BIN", opencode_bin())
         .env("OC_STATE", sandbox.root.join("xdg-state"))
         .stdin(Stdio::null())
