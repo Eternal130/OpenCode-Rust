@@ -11287,36 +11287,14 @@ impl InputStopHandle {
     }
 
     /// The stop pipe's READ end for the reader's poll set (the write
-    /// end parks inside the handle). `pipe2(O_NONBLOCK)`: a second
-    /// stop write into a full pipe must not block the dropper. A
-    /// `None` return degrades to flag-only stop (the loop still exits
-    /// on its next wake).
-    #[allow(unsafe_code)] // pipe FFI
+    /// end parks inside the handle). `O_NONBLOCK`: a second stop
+    /// write into a full pipe must not block the dropper. A `None`
+    /// return degrades to flag-only stop (the loop still exits on
+    /// its next wake).
+    #[allow(unsafe_code)] // from_raw_fd on fresh, never-shared fds
     fn stop_pipe_read(self: &Arc<Self>) -> Option<std::os::fd::OwnedFd> {
         use std::os::fd::FromRawFd as _;
-        let mut fds = [0i32; 2];
-        // SAFETY: pipe with O_NONBLOCK|O_CLOEXEC applied right after
-        // (pipe2 is glibc-only — macOS has no pipe2), closed on failure.
-        // va10 lesson: this self-pipe shipped broken on darwin (beta.21
-        // release matrix) until the platform split.
-        #[cfg(target_os = "macos")]
-        let ok = unsafe {
-            if libc::pipe(fds.as_mut_ptr()) != 0 {
-                false
-            } else {
-                for fd in fds.iter() {
-                    let flags = libc::fcntl(*fd, libc::F_GETFL);
-                    libc::fcntl(*fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
-                    libc::fcntl(*fd, libc::F_SETFD, libc::FD_CLOEXEC);
-                }
-                true
-            }
-        };
-        #[cfg(not(target_os = "macos"))]
-        let ok = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_NONBLOCK | libc::O_CLOEXEC) == 0 };
-        if !ok {
-            return None;
-        }
+        let fds = pipe_nonblock_cloexec()?;
         let read = unsafe { std::os::fd::OwnedFd::from_raw_fd(fds[0]) };
         let write = unsafe { std::os::fd::OwnedFd::from_raw_fd(fds[1]) };
         *self.wake_write.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
@@ -11369,21 +11347,50 @@ fn tick_anchor_enabled() -> bool {
 /// harnesses stay covered by the per-wake re-check in the loop.
 static WINCH_PIPE_WR: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
 
+/// Platform-portable pipe with both ends `O_NONBLOCK|O_CLOEXEC`.
+/// `pipe2` is glibc-only — macOS has no `pipe2` binding, so darwin
+/// builds `pipe` + `fcntl(F_SETFL O_NONBLOCK, F_SETFD FD_CLOEXEC)`
+/// (beta.21 release matrix lesson, RL-4). `None` on failure.
+#[allow(unsafe_code)] // pipe/fcntl FFI
+fn pipe_nonblock_cloexec() -> Option<[std::os::fd::RawFd; 2]> {
+    let mut fds = [0i32; 2];
+    // SAFETY: pipe creation + immediate flag application; fds closed
+    // by the caller on failure.
+    #[cfg(target_os = "macos")]
+    let ok = unsafe {
+        if libc::pipe(fds.as_mut_ptr()) != 0 {
+            false
+        } else {
+            for fd in fds.iter() {
+                let flags = libc::fcntl(*fd, libc::F_GETFL);
+                libc::fcntl(*fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+                libc::fcntl(*fd, libc::F_SETFD, libc::FD_CLOEXEC);
+            }
+            true
+        }
+    };
+    #[cfg(not(target_os = "macos"))]
+    let ok = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_NONBLOCK | libc::O_CLOEXEC) == 0 };
+    if ok {
+        Some(fds)
+    } else {
+        None
+    }
+}
+
 /// Create (once) the SIGWINCH self-pipe and install the handler;
 /// returns the pipe's raw fd pair (process-lifetime fds, never
 /// closed — the handler needs the write end, the reader's poll the
 /// read end). Failure degrades to the per-wake re-check (resize
 /// latency then rides input wakes only) — never fatal.
-#[allow(unsafe_code)] // pipe2/signal FFI
+#[allow(unsafe_code)] // pipe/signal FFI
 fn winch_pipe_fds() -> (std::os::fd::RawFd, std::os::fd::RawFd) {
     use std::sync::OnceLock;
     static WINCH: OnceLock<(std::os::fd::RawFd, std::os::fd::RawFd)> = OnceLock::new();
     *WINCH.get_or_init(|| {
-        let mut fds = [0i32; 2];
-        // SAFETY: pipe2 with O_NONBLOCK|O_CLOEXEC.
-        if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_NONBLOCK | libc::O_CLOEXEC) } != 0 {
+        let Some(fds) = pipe_nonblock_cloexec() else {
             return (-1, -1);
-        }
+        };
         WINCH_PIPE_WR.store(fds[1], std::sync::atomic::Ordering::Relaxed);
         // SAFETY: signal(2) handler install (same shape as
         // suspend.rs's SIGCONT / terminal_proto.rs's SIGHUP).
