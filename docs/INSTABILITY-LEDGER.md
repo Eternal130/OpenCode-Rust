@@ -154,10 +154,57 @@ same-shard legs merely serialize.
 
 ### pty_fuzz_smoke — booked watchlist; also the merge gate's single slowest test
 
+va9: RESOLVED by split — `pty_fuzz_smoke` (3 fixed seeds × 120 keys in
+one test fn, 325.18s) is now `pty_fuzz_smoke_seed1/2/3`, one seed per
+test; two clean rounds at 157.09s / 156.72s wall (4-way nextest
+overlap). ci.yml / .config/nextest.toml `test(pty_fuzz)` substring
+filters still match; `pty_fuzz_long` stays `#[ignore]`. The 325.18s
+watchlist entry is retired by this split (log
+`va9/.test-logs/oc-cli-20261124-003540-va9.log`,
+`oc-cli-20261124-004004-va9.log`).
+
 `oc-cli::pty_fuzz pty_fuzz_smoke` = **325.18s** in the va7 merge gate —
 29% of the entire oc-cli family's summed time, one test. Booked as a
 flake; also the top T4 speedup target (cap/tune fuzz iterations).
 Plan: split out of this ledger once tuned.
+
+### PTY_LANE_SHARDS soak (va9, T1) — NEGATIVE, keep default off
+
+Filter = the 41 `pty_lock()`-consuming oc-tui test binaries (full
+`binary(...)` union in `va9/.test-logs` soak logs; 202 tests).
+Baseline unset: 193.3s, 0 TRY1 reds. With the shard flock, the flock
+serializes concurrent nextest test processes sharing a shard, roughly
+doubling per-test wall and tripping the vt_hover_sweep internal
+timeouts (these tests own a 60 s slow-timeout band):
+
+| tier | round | wall | outcome |
+|---|---|---|---|
+| unset | 1 | 193.3s | green, 0 TRY1 red |
+| SHARDS=2 | 1 | (failed) | `vt_hover_home_rows_16_23` FAIL ×3 tries + 3 flaky — non-whitelist hard red, tier stopped |
+| SHARDS=3 | 1 | 437.3s | `vt_hover_home_rows_8_15` FAIL ×3 tries — non-whitelist hard red, tier stopped |
+| SHARDS=4 | 1 | 409.2s | 4 TRY1 reds (all vt_hover_sweep), all retry-passed → flaky; tier stopped per protocol |
+
+Conclusion: the shard flock adds contention without a second lane to
+overlap (its designed use case); with a single nextest run it only
+slows the pty family and destabilizes vt_hover_sweep. Recommendation
+to controller: PTY_LANE_SHARDS stays default-off permanently unless
+multi-lane PTY overlap becomes a real workflow. Logs:
+`va9/.test-logs/oc-tui-20261124-000314-va9.log` (baseline),
+`-001022-` (s2), `-002018-va9.log` (s3), `-002741-va9.log` (s4).
+
+### vt_hover_sweep probe settle — va9 T3 candidate, STOPPED (risk)
+
+Post-realchain/pty_fuzz, the largest wall block is vt_hover_sweep
+(408.8s summed test time, 10 tests × ~42s ≈ ~110s merge-gate wall):
+~95% of each test is the fixed 60 ms `SETTLE_MS` sleep per hover probe
+(vt_hover_sweep.rs probe_hover). An event-driven settle could roughly
+halve it, but the settle is assertion-cadence-sensitive (corpus2 #28
+glyph-tight hit-zone and the strip-row jitter-guard retry exist
+because the window was marginal; the family also exhibited contention
+flakes in the T1 soak). Stopped per lane rule; proposal for a future
+lane: measure median hover-paint latency with a dedicated harness
+(rider-quiescence pattern), then lower SETTLE_MS or add early-exit-on-
+diff only after re-validating the hit-zone assertions.
 
 ---
 
