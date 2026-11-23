@@ -285,6 +285,37 @@ pub struct VtStream {
     bursts: Vec<Vec<u8>>,
     last_feed_ms: Option<u64>,
     fed_bytes: usize,
+    /// FNV-1a digest of the current screen cells (updated per feed).
+    digest: u64,
+}
+
+/// FNV-1a over every cell (visible char + style digest + full
+/// contents) — a cheap "screen unchanged" test for pollers (see
+/// `VtStream::feed`).
+fn screen_digest(parser: &vt100::Parser) -> u64 {
+    let screen = parser.screen();
+    let (rows, cols) = screen.size();
+    let (rows, cols) = (usize::from(rows), usize::from(cols));
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for y in 0..rows {
+        for x in 0..cols {
+            let mix = |word: u64, hash: &mut u64| {
+                *hash ^= word;
+                *hash = hash.wrapping_mul(0x100_0000_01b3);
+            };
+            if let Some(cell) = screen.cell(y as u16, x as u16) {
+                let text = cell.contents();
+                mix(text.len() as u64, &mut hash);
+                for byte in text.as_bytes() {
+                    mix(u64::from(*byte), &mut hash);
+                }
+                mix(style_digest(cell), &mut hash);
+            } else {
+                mix(u64::MAX, &mut hash);
+            }
+        }
+    }
+    hash
 }
 
 impl VtStream {
@@ -309,6 +340,7 @@ impl VtStream {
             bursts: Vec::new(),
             last_feed_ms: None,
             fed_bytes: 0,
+            digest: 0,
         }
     }
 
@@ -328,6 +360,11 @@ impl VtStream {
         self.current_burst.extend_from_slice(bytes);
         self.fed_bytes += bytes.len();
         self.last_feed_ms = Some(now_ms);
+        // va10: keep the screen digest hot so pollers can test
+        // "unchanged" in O(1) — cloning the full grid per poll
+        // (1920 cells + contents) starves the app's render thread
+        // under load and was the SHARDS=2 contention amplifier.
+        self.digest = screen_digest(&self.parser);
     }
 
     /// Close the open burst into a snapshot if it has been quiet long
@@ -358,6 +395,13 @@ impl VtStream {
     #[must_use]
     pub fn grid_now(&self) -> Grid {
         Grid::from_parser(&self.parser)
+    }
+
+    /// The current screen digest (see `feed`) — an O(1) "unchanged"
+    /// probe against a previously captured digest.
+    #[must_use]
+    pub fn digest_now(&self) -> u64 {
+        self.digest
     }
 
     #[must_use]
@@ -445,6 +489,60 @@ pub fn median_gap(times: &[u64]) -> Option<u64> {
 // ---------------------------------------------------------------------------
 // PTY attach (size-parameterized; the existing suites' pattern)
 // ---------------------------------------------------------------------------
+
+/// The libtest 60-second warning needle ("test … has been running for
+/// over 60 seconds"). libtest writes it to the TEST PROCESS's fd 1 —
+/// which attach_pty has dup2'd to the PTY slave — so the bytes enter
+/// the terminal stream at the app's CURRENT CURSOR and overwrite live
+/// screen cells (observed 2026-11-24, `PTY_LANE_SHARDS=2` soak: the
+/// warning landed in the session composer's row and re-classified
+/// off-strip sweeps as ContentChange). The warning is test-runner
+/// self-noise, never app behavior: the reader drops it BEFORE the
+/// parser sees it (instrument repair, SA-F4 precedent) — the sweep
+/// assertions themselves are untouched, and a genuinely slow test
+/// still reports its full duration in nextest.
+const LIBTEST_60S_NEEDLE: &[u8] = b"has been running for over 60 seconds";
+
+/// Streaming filter: drop every [`LIBTEST_60S_NEEDLE`] occurrence from
+/// the master stream. Only a suffix that is a genuine needle PREFIX is
+/// carried across chunks (normally ZERO bytes — a blanket 35-byte
+/// hold-back delays every small paint beyond the probe window, va10
+/// finding: the filter itself must not lag the stream). Pass `eof` to
+/// flush (call with `chunk` empty).
+fn strip_libtest_warning(carry: &mut Vec<u8>, chunk: &[u8], eof: bool) -> Vec<u8> {
+    let needle_len = LIBTEST_60S_NEEDLE.len();
+    let mut buf = std::mem::take(carry);
+    buf.extend_from_slice(chunk);
+    let mut out = Vec::with_capacity(buf.len());
+    let mut cursor = 0;
+    while cursor + needle_len <= buf.len() {
+        match buf[cursor..].windows(needle_len).position(|window| window == LIBTEST_60S_NEEDLE) {
+            Some(rel) => {
+                let at = cursor + rel;
+                out.extend_from_slice(&buf[cursor..at]);
+                cursor = at + needle_len;
+            }
+            None => break,
+        }
+    }
+    if eof {
+        out.extend_from_slice(&buf[cursor..]);
+        *carry = Vec::new();
+    } else {
+        // Hold back only the longest suffix that is a proper prefix of
+        // the needle (a needle split by a read boundary must still be
+        // caught); the common case holds nothing.
+        let hold = (1..needle_len.min(buf.len() - cursor + 1))
+            .rev()
+            .find(|candidate| {
+                LIBTEST_60S_NEEDLE.starts_with(&buf[buf.len() - candidate..])
+            })
+            .unwrap_or(0);
+        out.extend_from_slice(&buf[cursor..buf.len() - hold]);
+        *carry = buf[buf.len() - hold..].to_vec();
+    }
+    out
+}
 
 struct PtyGuard {
     master: File,
@@ -1947,6 +2045,13 @@ impl HarnessHandle {
         self.vt.lock().expect("vt").grid_now()
     }
 
+    /// The current screen digest — O(1) "unchanged" test against a
+    /// digest captured earlier (va10 hover poller fast path).
+    #[must_use]
+    pub fn grid_digest(&self) -> u64 {
+        self.vt.lock().expect("vt").digest_now()
+    }
+
     /// Flush the open burst into a snapshot if the quiet window has
     /// passed (idempotent).
     pub fn settle_snapshot(&self) {
@@ -2065,13 +2170,26 @@ impl LiveHarness {
             std::thread::spawn(move || {
                 let mut reader = reader_master;
                 let mut chunk = [0u8; 4096];
+                let mut carry: Vec<u8> = Vec::new();
                 loop {
                     match reader.read(&mut chunk) {
-                        Ok(0) | Err(_) => break,
-                        Ok(count) => {
+                        Ok(0) | Err(_) => {
+                            // EOF: flush the held-back filter tail.
+                            let tail = strip_libtest_warning(&mut carry, &[], true);
                             let now_ms = thread_start.elapsed().as_millis() as u64;
-                            feed_vt.lock().expect("vt").feed(&chunk[..count], now_ms);
-                            feed_raw.lock().expect("raw").extend_from_slice(&chunk[..count]);
+                            feed_vt.lock().expect("vt").feed(&tail, now_ms);
+                            feed_raw.lock().expect("raw").extend_from_slice(&tail);
+                            break;
+                        }
+                        Ok(count) => {
+                            // Instrument repair (LIBTEST_60S_NEEDLE):
+                            // the runner's 60 s warning is harness
+                            // self-noise injected into the terminal
+                            // stream — dropped before parsing.
+                            let filtered = strip_libtest_warning(&mut carry, &chunk[..count], false);
+                            let now_ms = thread_start.elapsed().as_millis() as u64;
+                            feed_vt.lock().expect("vt").feed(&filtered, now_ms);
+                            feed_raw.lock().expect("raw").extend_from_slice(&filtered);
                         }
                     }
                 }

@@ -72,6 +72,36 @@ enum Response {
     ContentChange,
 }
 
+// ---- va10 wait-mechanism constants ------------------------------------
+//
+// Derived from `vt_hover_paint_latency_harness` (the #[ignore]d
+// measurement probe at the bottom of this file) under a quiet box:
+//
+//   n=240 median=10ms p90=11ms p99=11ms max=12ms
+//
+// The effective NoChange attribution window is
+// RESPONSE_WINDOW + LATE_WATCH = 36 ms ≥ 3× median (10) and 3× the
+// measured tail (12) — a responding surface is never truncated by the
+// window, and a diff observed late is still attributed to its own
+// probe (see `probe_hover`). Stability/clear spans cover one paint's
+// span-group settling plus the frame-queue drain of a later motion.
+// Re-run the harness to re-derive.
+
+/// Poll granularity while waiting for a hover paint (and between
+/// stability checks).
+const HOVER_POLL_MS: u64 = 2;
+/// Max wait for the FIRST baseline diff after the probe motion.
+const HOVER_RESPONSE_WINDOW_MS: u64 = 30;
+/// Quiet span a diff signature must hold before it is classified.
+const HOVER_STABLE_MS: u64 = 12;
+/// Quiet span confirming the return-to-baseline after the neutral
+/// corner motion (for probes whose paint was already observed).
+const HOVER_CLEAR_QUIET_MS: u64 = 6;
+/// Extra late-paint watch after the neutral corner motion for probes
+/// whose observation window closed with NO diff — a paint arriving
+/// here is still attributed to this probe (never the next one).
+const HOVER_LATE_WATCH_MS: u64 = 6;
+
 impl Response {
     fn label(self) -> &'static str {
         match self {
@@ -138,25 +168,49 @@ struct SweepOutcome {
     plus_probes: Vec<(usize, Response)>,
 }
 
-/// Hover one cell, then classify the settled grid against the
-/// baseline (volatile cells skipped). Grid-based, not byte-based: the
-/// run loop re-emits the writer's hide-cursor sequence every 100 ms tick
-/// regardless of hover, so byte deltas are noise; only CELL changes
-/// count as a response.
-fn probe_hover(
-    harness: &mut HarnessHandle,
-    x: u16,
-    y: u16,
-    baseline: &Grid,
-    volatile: &HashSet<(usize, usize)>,
-) -> Response {
-    const SETTLE_MS: u64 = 60;
-    harness.sgr_motion(x, y);
-    // The run loop wakes on input immediately (the input thread is
-    // a dedicated thread); a hover that changes anything has painted
-    // well inside the settle window.
-    std::thread::sleep(Duration::from_millis(SETTLE_MS));
-    let diffs = baseline.diff(&harness.grid_now(), volatile);
+/// Hover-paint latencies observed by [`probe_hover`] (ms from the
+/// probe motion to the FIRST baseline diff) — the va10 measurement
+/// sink. Every band test prints the running distribution; the
+/// `#[ignore]`d [`vt_hover_paint_latency_harness`] below samples it
+/// densely for re-deriving the wait constants.
+static HOVER_LATENCIES: Mutex<Vec<u128>> = Mutex::new(Vec::new());
+
+fn note_latency(elapsed: Duration) {
+    if let Ok(mut sink) = HOVER_LATENCIES.lock() {
+        sink.push(elapsed.as_millis());
+    }
+}
+
+/// Median / p90 / p99 / max of the recorded paint latencies.
+fn latency_report() -> String {
+    let mut samples = HOVER_LATENCIES.lock().expect("latency sink").clone();
+    if samples.is_empty() {
+        return "n=0".to_owned();
+    }
+    samples.sort_unstable();
+    let pick = |q: f64| samples[((samples.len() as f64 - 1.0) * q).floor() as usize];
+    format!(
+        "n={} median={}ms p90={}ms p99={}ms max={}ms",
+        samples.len(),
+        pick(0.5),
+        pick(0.9),
+        pick(0.99),
+        samples[samples.len() - 1]
+    )
+}
+
+/// The neutral clear cell: the trailing end of the PROBE'S OWN row —
+/// a no-op on every swept view (strip trailing cells past the '+'
+/// affordance and all off-strip cells are inert), and it keeps the
+/// pointer inside the same mouse region (an off-strip corner motion
+/// turned out to leave the app's mouse handling in a state where a
+/// subsequent strip hover never repaints — va10 experiment, see the
+/// plus-probe debug trace).
+fn clear_cell(baseline: &Grid, y: u16) -> (u16, u16) {
+    ((baseline.cols.max(1) - 1) as u16, y)
+}
+
+fn classify_diffs(diffs: &[vt_harness::CellDiff]) -> Response {
     if diffs.is_empty() {
         Response::NoChange
     } else if diffs.iter().all(|diff| diff.kind == vt_harness::DiffKind::Style) {
@@ -164,6 +218,164 @@ fn probe_hover(
     } else {
         Response::ContentChange
     }
+}
+
+/// Poll until the (volatile-skipped) diff signature vs `baseline`
+/// holds UNCHANGED for `stable_ms`, then classify it; gives up at
+/// `deadline` with the last signature's classification. The digest
+/// fast path keeps "unchanged" polls O(1) — no grid clone per poll.
+fn settle_classify(
+    harness: &HarnessHandle,
+    baseline: &Grid,
+    volatile: &HashSet<(usize, usize)>,
+    baseline_digest: u64,
+    stable_ms: u128,
+    deadline: std::time::Instant,
+) -> Response {
+    let mut last: Option<(String, Response)> = None;
+    let mut held_since = std::time::Instant::now();
+    loop {
+        std::thread::sleep(Duration::from_millis(HOVER_POLL_MS));
+        let response = if harness.grid_digest() == baseline_digest {
+            Response::NoChange
+        } else {
+            let diffs = baseline.diff(&harness.grid_now(), volatile);
+            classify_diffs(&diffs)
+        };
+        let sig = if response == Response::NoChange {
+            String::new()
+        } else {
+            format!("{:?}", baseline.diff(&harness.grid_now(), volatile))
+        };
+        let now = std::time::Instant::now();
+        if last.as_ref().is_some_and(|(prev, _)| *prev == sig) {
+            if now.duration_since(held_since).as_millis() >= stable_ms {
+                return response;
+            }
+        } else {
+            held_since = now;
+        }
+        last = Some((sig, response));
+        if now >= deadline {
+            return last.map_or(Response::NoChange, |(_, response)| response);
+        }
+    }
+}
+
+/// Hover one cell, then classify the settled grid against the
+/// baseline (volatile cells skipped). Grid-based, not byte-based: the
+/// run loop re-emits the writer's hide-cursor sequence every 100 ms tick
+/// regardless of hover, so byte deltas are noise; only CELL changes
+/// count as a response.
+///
+/// ## The va10 wait mechanism (event-driven, replacing the fixed 60 ms
+/// sleep)
+///
+/// Phase 1 sends the probe motion, then POLLS the grid
+/// (`HOVER_POLL_MS`): a responding surface paints within a few ms
+/// (the run loop wakes on input) and the FIRST diff's latency is
+/// recorded in [`HOVER_LATENCIES`]; classification then waits for the
+/// diff signature to hold [`HOVER_STABLE_MS`] so one paint's spans
+/// settle together. Only a cell still at baseline after
+/// [`HOVER_RESPONSE_WINDOW_MS`] is a NoChange candidate — the window
+/// covers the measured tail paint latency (≥3× median), so a slow
+/// surface is never truncated.
+///
+/// Phase 2 moves to the neutral corner and waits back to baseline:
+/// any diff appearing there is a LATE paint of THIS probe (the corner
+/// is a no-op on every swept view) and is attributed to it, so a
+/// barely-missed slow surface can neither poison the next probe nor
+/// shift the interactive map. Assertion semantics are unchanged —
+/// only the waiting mechanism was rebuilt.
+fn probe_hover(
+    harness: &mut HarnessHandle,
+    x: u16,
+    y: u16,
+    baseline: &Grid,
+    volatile: &HashSet<(usize, usize)>,
+    baseline_digest: u64,
+) -> Response {
+    let sent = std::time::Instant::now();
+    harness.sgr_motion(x, y);
+    let response_window = sent + Duration::from_millis(HOVER_RESPONSE_WINDOW_MS);
+    let mut observed: Option<Response> = None;
+    while std::time::Instant::now() < response_window {
+        std::thread::sleep(Duration::from_millis(HOVER_POLL_MS));
+        // Fast path: unchanged screen (digest; O(1), no clone) → keep
+        // polling without touching the parser grid.
+        if harness.grid_digest() == baseline_digest {
+            continue;
+        }
+        let diffs = baseline.diff(&harness.grid_now(), volatile);
+        if diffs.is_empty() {
+            continue;
+        }
+        note_latency(sent.elapsed());
+        observed = Some(settle_classify(
+            harness,
+            baseline,
+            volatile,
+            baseline_digest,
+            u128::from(HOVER_STABLE_MS),
+            sent + Duration::from_millis(HOVER_RESPONSE_WINDOW_MS + HOVER_STABLE_MS),
+        ));
+        break;
+    }
+    // Phase 2: neutral corner, back to the known baseline. An
+    // observed probe only needs one quiet baseline span; an
+    // unobserved one keeps watching for a late paint for
+    // `HOVER_LATE_WATCH_MS`.
+    let clear = clear_cell(baseline, y);
+    harness.sgr_motion(clear.0, clear.1);
+    let watch_ms = if observed.is_some() {
+        HOVER_CLEAR_QUIET_MS + HOVER_POLL_MS
+    } else {
+        HOVER_LATE_WATCH_MS
+    };
+    let clear_deadline = std::time::Instant::now() + Duration::from_millis(watch_ms);
+    let mut baseline_since: Option<std::time::Instant> = None;
+    let result;
+    loop {
+        std::thread::sleep(Duration::from_millis(HOVER_POLL_MS));
+        let now = std::time::Instant::now();
+        let diffs = if harness.grid_digest() == baseline_digest {
+            Vec::new()
+        } else {
+            baseline.diff(&harness.grid_now(), volatile)
+        };
+        if diffs.is_empty() {
+            // For an observed probe the baseline only needs to hold
+            // one quiet span; an unobserved probe keeps watching for
+            // its late paint until the window closes.
+            if observed.is_some()
+                && baseline_since
+                    .is_some_and(|since| now.duration_since(since).as_millis() >= u128::from(HOVER_CLEAR_QUIET_MS))
+            {
+                break;
+            }
+            if observed.is_none() {
+                baseline_since.get_or_insert(now);
+            }
+        } else {
+            baseline_since = None;
+            if observed.is_none() {
+                note_latency(now.duration_since(sent));
+                observed = Some(settle_classify(
+                    harness,
+                    baseline,
+                    volatile,
+                    baseline_digest,
+                    u128::from(HOVER_STABLE_MS),
+                    clear_deadline,
+                ));
+            }
+        }
+        if now >= clear_deadline {
+            break;
+        }
+    }
+    result = observed.unwrap_or(Response::NoChange);
+    result
 }
 
 /// Targeted probes of the `" + "` affordance's EXACT columns: the
@@ -175,11 +387,12 @@ fn probe_plus_rect(
     strip: &str,
     baseline: &Grid,
     volatile: &HashSet<(usize, usize)>,
+    baseline_digest: u64,
 ) -> Vec<(usize, Response)> {
     let plus = strip.chars().position(|ch| ch == '+').expect("the affordance glyph");
     [plus.saturating_sub(1), plus, plus + 1]
         .into_iter()
-        .map(|x| (x, probe_hover(harness, x as u16, 0, baseline, volatile)))
+        .map(|x| (x, probe_hover(harness, x as u16, 0, baseline, volatile, baseline_digest)))
         .collect()
 }
 
@@ -191,6 +404,7 @@ fn sweep_band(
     harness: &mut HarnessHandle,
     baseline: &Grid,
     volatile: &HashSet<(usize, usize)>,
+    baseline_digest: u64,
     stride: usize,
     y0: usize,
     y1: usize,
@@ -200,9 +414,9 @@ fn sweep_band(
     while y < y1.min(baseline.rows) {
         let mut x = 0;
         while x < baseline.cols {
-            let mut response = probe_hover(harness, x as u16, y as u16, baseline, volatile);
+            let mut response = probe_hover(harness, x as u16, y as u16, baseline, volatile, baseline_digest);
             if y == 0 && response == Response::NoChange && x % stride == 0 {
-                response = probe_hover(harness, x as u16, y as u16, baseline, volatile);
+                response = probe_hover(harness, x as u16, y as u16, baseline, volatile, baseline_digest);
             }
             let grid = harness.grid_now();
             if grid.is_blank() {
@@ -342,10 +556,11 @@ fn home_band(y0: usize, y1: usize) -> SweepOutcome {
         }
         std::thread::sleep(Duration::from_millis(200));
         let (baseline, volatile) = harness.capture_baseline();
+        let baseline_digest = harness.grid_digest();
         if baseline.is_blank() {
             return Err("the settled home screen is blank".to_owned());
         }
-        let result = sweep_band(harness, &baseline, &volatile, 1, y0, y1);
+        let result = sweep_band(harness, &baseline, &volatile, baseline_digest, 1, y0, y1);
         Ok(SweepOutcome {
             sweep: result,
             strip: baseline.row_text(0),
@@ -354,9 +569,10 @@ fn home_band(y0: usize, y1: usize) -> SweepOutcome {
         })
     });
     eprintln!(
-        "[vt_hover home rows {y0}-{y1}] {} (volatile: {:?})",
+        "[vt_hover home rows {y0}-{y1}] {} (volatile: {:?}; paint latency: {})",
         outcome.sweep.summary(),
-        outcome.volatile
+        outcome.volatile,
+        latency_report()
     );
     // TODAY'S TRUTH: HOME has no hover surfaces — the mouse surface is
     // session-route-only, so every cell classifies NoChange.
@@ -490,6 +706,7 @@ fn session_band(y0: usize, y1: usize) -> SweepOutcome {
     let outcome = run_sweep_test(&tag, 80, 24, move |harness| {
         boot_to_two_tabs(harness)?;
         let (baseline, volatile) = harness.capture_baseline();
+        let baseline_digest = harness.grid_digest();
         if baseline.is_blank() {
             return Err("the settled session screen is blank".to_owned());
         }
@@ -497,8 +714,8 @@ fn session_band(y0: usize, y1: usize) -> SweepOutcome {
         if !strip.contains('+') {
             return Err(format!("the strip never painted its affordance: {strip:?}"));
         }
-        let result = sweep_band(harness, &baseline, &volatile, 1, y0, y1);
-        let plus_probes = probe_plus_rect(harness, &strip, &baseline, &volatile);
+        let result = sweep_band(harness, &baseline, &volatile, baseline_digest, 1, y0, y1);
+        let plus_probes = probe_plus_rect(harness, &strip, &baseline, &volatile, baseline_digest);
         Ok(SweepOutcome {
             sweep: result,
             strip,
@@ -507,9 +724,10 @@ fn session_band(y0: usize, y1: usize) -> SweepOutcome {
         })
     });
     eprintln!(
-        "[vt_hover session 80x24 rows {y0}-{y1}] {} (volatile: {:?})",
+        "[vt_hover session 80x24 rows {y0}-{y1}] {} (volatile: {:?}; paint latency: {})",
         outcome.sweep.summary(),
-        outcome.volatile
+        outcome.volatile,
+        latency_report()
     );
     outcome
 }
@@ -520,6 +738,7 @@ fn session_band_160(y0: usize, y1: usize) -> SweepOutcome {
     let outcome = run_sweep_test(&tag, 160, 50, move |harness| {
         boot_to_two_tabs(harness)?;
         let (baseline, volatile) = harness.capture_baseline();
+        let baseline_digest = harness.grid_digest();
         if baseline.is_blank() {
             return Err("the settled session screen is blank".to_owned());
         }
@@ -529,8 +748,8 @@ fn session_band_160(y0: usize, y1: usize) -> SweepOutcome {
         }
         // Strided subset (every 2nd cell both axes) for speed — still
         // hits the strip's marks at 2-cell resolution.
-        let result = sweep_band(harness, &baseline, &volatile, 2, y0, y1);
-        let plus_probes = probe_plus_rect(harness, &strip, &baseline, &volatile);
+        let result = sweep_band(harness, &baseline, &volatile, baseline_digest, 2, y0, y1);
+        let plus_probes = probe_plus_rect(harness, &strip, &baseline, &volatile, baseline_digest);
         Ok(SweepOutcome {
             sweep: result,
             strip,
@@ -539,9 +758,10 @@ fn session_band_160(y0: usize, y1: usize) -> SweepOutcome {
         })
     });
     eprintln!(
-        "[vt_hover session 160x50 strided rows {y0}-{y1}] {} (volatile: {:?})",
+        "[vt_hover session 160x50 strided rows {y0}-{y1}] {} (volatile: {:?}; paint latency: {})",
         outcome.sweep.summary(),
-        outcome.volatile
+        outcome.volatile,
+        latency_report()
     );
     outcome
 }
@@ -602,4 +822,70 @@ fn vt_hover_session_160_rows_30_39() {
 fn vt_hover_session_160_rows_40_49() {
     let outcome = session_band_160(40, 50);
     assert_off_strip_clean(&outcome, "session 160x50 strided rows 40-49");
+}
+
+// ---------------------------------------------------------------------------
+// va10 measurement harness: hover paint-latency distribution
+// ---------------------------------------------------------------------------
+
+/// Dense sampling of the hover PAINT latency (probe motion → first
+/// baseline diff) under `probe_hover`'s exact semantics: boot to the
+/// 2-tab session view at 80×24, then sweep every strip letter/glyph
+/// column (the responding surface) plus a handful of no-op cells for
+/// `ROUNDS` rounds, printing the median/p90/p99/max distribution. This
+/// test asserts NOTHING about the interactive map (the sweep tests
+/// own those); it is the measurement probe the wait constants
+/// (`HOVER_*`) are derived from — `#[ignore]`d so the canonical suites
+/// never pay its wall; run it explicitly when re-deriving:
+/// `cargo nextest run -p oc-tui -E 'test(vt_hover_paint_latency_harness)'`.
+#[test]
+#[ignore = "va10 measurement harness — run explicitly to re-derive the hover wait constants"]
+fn vt_hover_paint_latency_harness() {
+    const ROUNDS: usize = 8;
+    let outcome = run_sweep_test("hover-latency-harness", 80, 24, move |harness| {
+        boot_to_two_tabs(harness)?;
+        let (baseline, volatile) = harness.capture_baseline();
+        let baseline_digest = harness.grid_digest();
+        if baseline.is_blank() {
+            return Err("the settled session screen is blank".to_owned());
+        }
+        let strip = baseline.row_text(0);
+        if !strip.contains('+') {
+            return Err(format!("the strip never painted its affordance: {strip:?}"));
+        }
+        // Every column that should respond (tab letters + the '+'
+        // glyph) and a few that must not (off-strip rows, the neutral
+        // corner) — both classes exercise the wait mechanism.
+        let mut positions: Vec<(u16, u16)> = strip
+            .chars()
+            .enumerate()
+            .filter(|(_, ch)| ch.is_alphabetic() || *ch == '+')
+            .map(|(x, _)| (x as u16, 0))
+            .collect();
+        positions.extend([
+            (10, 6),
+            (40, 12),
+            (70, 18),
+            (baseline.cols.max(1) as u16 - 1, baseline.rows.max(1) as u16 - 1),
+        ]);
+        for round in 0..ROUNDS {
+            for (index, (x, y)) in positions.iter().enumerate() {
+                let _ = probe_hover(harness, *x, *y, &baseline, &volatile, baseline_digest);
+                if (round + index) % 16 == 15 {
+                    // Mid-harness blank guard, same as the sweep.
+                    if harness.grid_now().is_blank() {
+                        return Err("the screen went blank mid-harness".to_owned());
+                    }
+                }
+            }
+        }
+        Ok(SweepOutcome {
+            sweep: SweepResult::default(),
+            strip,
+            volatile: volatile.iter().copied().collect(),
+            plus_probes: Vec::new(),
+        })
+    });
+    let _ = outcome;
+    eprintln!("HOVER PAINT LATENCY ({}): {}", std::process::id(), latency_report());
 }

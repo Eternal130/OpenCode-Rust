@@ -618,7 +618,16 @@ fn seed_model_ring(root: &std::path::Path) {
 }
 
 /// Boot the app on the pty against `url`; `keys` drives the input.
-fn drive(url: &str, keys: impl FnOnce(Boot, std::fs::File) + Send + 'static) {
+/// The outer `budget` bounds the whole run loop (`drive` keeps the
+/// historical 25 s — RL-T5: tests whose internal wait bands sum past
+/// it, like the Reconnecting overlay's 5+20+20+30 s choreography,
+/// use [`drive_with_budget`] with a budget that covers them; the
+/// outer cap is harness plumbing, not an assertion).
+fn drive_with_budget(
+    url: &str,
+    budget: Duration,
+    keys: impl FnOnce(Boot, std::fs::File) + Send + 'static,
+) {
     let guard = attach_pty();
     let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
     let reader_master = guard.master.try_clone().expect("clone read");
@@ -647,7 +656,7 @@ fn drive(url: &str, keys: impl FnOnce(Boot, std::fs::File) + Send + 'static) {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("rt");
     let finished = runtime.block_on(async {
         tokio::time::timeout(
-            Duration::from_secs(25),
+            budget,
             oc_tui::app::run_with_size(client, Some((80, 24)), oc_tui::app::BootArgs::default()),
         )
         .await
@@ -665,6 +674,11 @@ fn drive(url: &str, keys: impl FnOnce(Boot, std::fs::File) + Send + 'static) {
         }
     }
     drop(guard);
+}
+
+/// The historical entry point: `drive_with_budget` at the 25 s cap.
+fn drive(url: &str, keys: impl FnOnce(Boot, std::fs::File) + Send + 'static) {
+    drive_with_budget(url, Duration::from_secs(25), keys);
 }
 
 /// The streaming-turn harness: boot home, submit a prompt (creating
@@ -1169,7 +1183,14 @@ fn pty_reconnecting_overlay_on_loss_and_recovery() {
     // the 1 s retry threshold; the 4th stream recovers.
     shared.sse_drops.store(2, Ordering::SeqCst);
     shared.sse_close_open.store(1, Ordering::SeqCst);
-    drive(&url, move |boot, mut writer| {
+    // RL-T5 fix: the test's internal wait bands (5 s boot + 20 s overlay
+    // + 20 s managed-copy + 30 s recovery quiesce + teardown) sum past
+    // the historical 25 s outer cap — under 4-way load the run loop
+    // could be killed while a legit paint was still in flight, surfacing
+    // as "the Reconnecting overlay appeared after the retry threshold".
+    // The outer budget is harness plumbing (not an assertion): raise it
+    // to cover the sum with headroom.
+    drive_with_budget(&url, Duration::from_secs(60), move |boot, mut writer| {
         let probe = || Boot { output: Arc::clone(&boot.output) };
         assert!(
             wait_for_after(&probe(), "█▀▀█".as_bytes(), 0, Duration::from_secs(5)),
