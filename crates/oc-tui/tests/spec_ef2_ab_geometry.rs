@@ -83,11 +83,7 @@ fn a2_geometry_width_sweep_10_40_160() {
                 // wordmark only renders at h >= 12 (Logo's height
                 // gate, component/logo.tsx:57) — below that the
                 // settled composer's placeholder is the boot evidence.
-                let boot_needle: &[u8] = if rows >= 12 {
-                    vt_harness::WORDMARK
-                } else {
-                    b"Ask"
-                };
+                let boot_needle: &[u8] = if rows >= 12 { vt_harness::WORDMARK } else { b"Ask" };
                 log("boot wait");
                 if !driver.wait_for(boot_needle, Duration::from_secs(8)) {
                     log("FAIL boot settle");
@@ -175,9 +171,7 @@ fn a2_geometry_width_sweep_10_40_160() {
                                 log(&format!("r{y:02}: {t:?}"));
                             }
                         }
-                        return Err(format!(
-                            "the long-title tab never painted (strip {long:?})"
-                        ));
+                        return Err(format!("the long-title tab never painted (strip {long:?})"));
                     }
                 }
                 Ok(())

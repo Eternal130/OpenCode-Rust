@@ -661,10 +661,8 @@ pub fn render_sidebar_scrolled(
     // title / blank / section stack).
     // G-466.4 — the content slot starts under the WRAPPED title (its
     // row count) plus the title box's paddingBottom blank.
-    let title_rows =
-        crate::wrap::wrap_label(&view.title, SIDEBAR_TITLE_WRAP_WIDTH).len().max(1);
-    let slot_row =
-        |y: usize| y.checked_sub(scroll).map(|visible| visible + title_rows + 2);
+    let title_rows = crate::wrap::wrap_label(&view.title, SIDEBAR_TITLE_WRAP_WIDTH).len().max(1);
+    let slot_row = |y: usize| y.checked_sub(scroll).map(|visible| visible + title_rows + 2);
 
     // The context widget (context.tsx:24-45): the bold `Context`
     // title, then the muted token/percent/cost rows.

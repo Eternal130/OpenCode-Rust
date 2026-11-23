@@ -49,7 +49,9 @@ use opentui_solid::reactive::Reactive;
 use opentui_solid::{box_, map, text, Element, Signal};
 
 use crate::components::composer::render::{FooterHints, PromptView};
-use crate::components::home::{plan_home, HomeView, LogoMode, LOGO_GO_RIGHT, LOGO_LEFT, LOGO_RIGHT};
+use crate::components::home::{
+    plan_home, HomeView, LogoMode, LOGO_GO_RIGHT, LOGO_LEFT, LOGO_RIGHT,
+};
 use crate::render::Frame;
 use crate::theme::ThemeState;
 use oc_theme::Rgba as ThemeRgba;

@@ -341,11 +341,11 @@ pub(crate) fn plan_home(view: &HomeView, width: usize, height: usize) -> HomePla
         origin
     });
     y += 1; // the 1-row spacer under the wordmark (home.tsx:82)
-    // The slash-palette popup floats ABOVE the mount: the prompt
-    // frame grows by `popup_rows` rows (the composer at
-    // `top = 1 + popup_rows`), pasted at `y - popup_rows` so the
-    // composer itself never moves (no popup ⇒ the golden
-    // single-mount geometry).
+            // The slash-palette popup floats ABOVE the mount: the prompt
+            // frame grows by `popup_rows` rows (the composer at
+            // `top = 1 + popup_rows`), pasted at `y - popup_rows` so the
+            // composer itself never moves (no popup ⇒ the golden
+            // single-mount geometry).
     let popup_rows = match view.autocomplete.as_ref() {
         Some(popup) => crate::components::composer::autocomplete::popup_height(
             popup.options.len(),

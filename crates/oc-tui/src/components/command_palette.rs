@@ -722,7 +722,8 @@ fn picker_project_name(store: &Store) -> Option<String> {
     None
 }
 
-pub fn palette_props(store: &Store) -> SelectProps {    palette_props_filtered(store, "")
+pub fn palette_props(store: &Store) -> SelectProps {
+    palette_props_filtered(store, "")
 }
 
 #[must_use]

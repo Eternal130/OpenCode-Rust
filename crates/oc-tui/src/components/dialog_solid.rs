@@ -1147,9 +1147,11 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
                             // (`flexDirection={dimensions().width <
                             // 60 ? "column" : "row"}`, gap 0,
                             // ui/dialog-select.tsx:838).
-                            .flex_direction(
-                                if inputs.get().terminal_width < 60 { "column" } else { "row" },
-                            )
+                            .flex_direction(if inputs.get().terminal_width < 60 {
+                                "column"
+                            } else {
+                                "row"
+                            })
                             .children_dyn(actions_for(&inputs))
                             .into_element(),
                         right_carrier.into_element(),
@@ -2385,7 +2387,13 @@ struct DialogTree {
 fn mount_key(inputs: &DialogInputs) -> (usize, usize, usize, DialogColors, usize) {
     // G-466.3: terminal_width rides the key — the footer's column
     // wrap is a build-time decision.
-    (inputs.family as usize, inputs.box_width, inputs.terminal_width, inputs.colors, 1 + content_height(inputs))
+    (
+        inputs.family as usize,
+        inputs.box_width,
+        inputs.terminal_width,
+        inputs.colors,
+        1 + content_height(inputs),
+    )
 }
 
 thread_local! {
@@ -2695,7 +2703,7 @@ fn build_inputs(
             DialogInputs {
                 family,
                 box_width,
-            terminal_width,
+                terminal_width,
                 colors,
                 title: props.title.clone(),
                 placeholder: props.placeholder.clone(),
@@ -2757,7 +2765,7 @@ fn build_inputs(
             window: Vec::new(),
             actions: Vec::new(),
             footer_hint: None,
-                title_suffix: String::new(),
+            title_suffix: String::new(),
             prompt_value: entry.value.clone(),
             hint_lines: Vec::new(),
             plugin_title: String::new(),
@@ -2786,7 +2794,7 @@ fn build_inputs(
             DialogInputs {
                 family,
                 box_width,
-            terminal_width,
+                terminal_width,
                 colors,
                 title: title.clone(),
                 placeholder: placeholder.clone(),
@@ -2849,7 +2857,7 @@ fn build_inputs(
             DialogInputs {
                 family,
                 box_width,
-            terminal_width,
+                terminal_width,
                 colors,
                 title: String::new(),
                 placeholder: String::new(),
@@ -2904,7 +2912,7 @@ fn build_inputs(
             window: Vec::new(),
             actions: Vec::new(),
             footer_hint: None,
-                title_suffix: String::new(),
+            title_suffix: String::new(),
             prompt_value: entry.value.clone(),
             hint_lines: props.hints.clone(),
             plugin_title: String::new(),
@@ -2942,7 +2950,7 @@ fn build_inputs(
             DialogInputs {
                 family,
                 box_width,
-            terminal_width,
+                terminal_width,
                 colors,
                 title: String::new(),
                 placeholder: String::new(),
@@ -2981,7 +2989,7 @@ fn build_inputs(
             DialogInputs {
                 family,
                 box_width,
-            terminal_width,
+                terminal_width,
                 colors,
                 title: String::new(),
                 placeholder: String::new(),
@@ -3042,7 +3050,7 @@ fn build_inputs(
             DialogInputs {
                 family,
                 box_width,
-            terminal_width,
+                terminal_width,
                 colors,
                 title: String::new(),
                 placeholder: String::new(),
@@ -3090,7 +3098,7 @@ fn build_inputs(
             DialogInputs {
                 family,
                 box_width,
-            terminal_width,
+                terminal_width,
                 colors,
                 title: String::new(),
                 placeholder: String::new(),
@@ -3142,7 +3150,7 @@ fn build_inputs(
             DialogInputs {
                 family,
                 box_width,
-            terminal_width,
+                terminal_width,
                 colors,
                 title: String::new(),
                 placeholder: String::new(),
@@ -3205,7 +3213,7 @@ fn build_inputs(
             DialogInputs {
                 family,
                 box_width,
-            terminal_width,
+                terminal_width,
                 colors,
                 title: String::new(),
                 placeholder: String::new(),
@@ -3257,7 +3265,7 @@ fn build_inputs(
             window: Vec::new(),
             actions: Vec::new(),
             footer_hint: None,
-                title_suffix: String::new(),
+            title_suffix: String::new(),
             prompt_value: String::new(),
             // The status rows ride the hints (the props layer derives
             // them — see the `DialogKind::Status` props arm).
