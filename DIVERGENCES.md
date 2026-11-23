@@ -6,13 +6,13 @@
 
 ### Current state
 
-- Open unresolved gaps (🟡/❌): **two** — G-465 and G-466, both found 2026-11-23 by a paired ref↔rust probe at non-default geometries (see "Open gaps" below). G-1..G-464 are all closed (last batches 2026-11-21/22: G-428 reasoning positioning, G-430 animations six faces, G-93 $EDITOR attachment, G-464 skill attachment, G-94/95/96/400 server API alignment, G-439 managed copy, empty-stream remnants).
+- Open unresolved gaps (🟡/❌): **three** — G-465 and G-466 (paired geometry probe, 2026-11-23) and G-467 (default-geometry divergences surfaced by the no-alnum normalizer fix the same day, lane va4 `85029a33`); see "Open gaps" below. G-1..G-464 are all closed (last batches 2026-11-21/22: G-428 reasoning positioning, G-430 animations six faces, G-93 $EDITOR attachment, G-464 skill attachment, G-94/95/96/400 server API alignment, G-439 managed copy, empty-stream remnants).
 - realchain adjudication registry: `tools/diff/realchain/adjudications.json` (10 entries, all benign: framework-diff×6 / expected-shape×3 / env-artifact×1; exit semantics and the checker live in `tools/diff/realchain/adjudicate.py`).
 - Pending live-machine observation (1): busy breathing-light symptom ⑦''② — not reproduced in-tree, feature present, frame sequence pinned; awaiting user reproduction material (screenshot + OC_TUI_DEBUG=1 trace).
 
 #### Open gaps (🟡) — 2026-11-23
 
-Found by a paired ref↔rust probe at three non-default geometries (10x6, 40x12, 160x40; two runs per end per size). The probe exists because `a2_geometry_width_sweep_10_40_160` — the in-tree sweep meant to guard exactly this surface — had been passing over a failed driver (a null driver report read as PASS). No paired realchain scenario covers these states.
+Found by a paired ref↔rust probe at three non-default geometries (10x6, 40x12, 160x40; two runs per end per size). The probe exists because `a2_geometry_width_sweep_10_40_160` — the in-tree sweep meant to guard exactly this surface — had been passing over a failed driver (a null driver report read as PASS). The probe was graduated 2026-11-23 (lane va4) into permanent paired scenarios (`geom10_narrow_extreme_pair` / `geom40_narrow_pair` / `geom160_wide_pair` in `crates/oc-tui/tests/realchain_pair.rs`, states home0/home/dialog/enter, export-only) — these gaps stay visible to the tripwire until fixed (adjudicated accepted-gap entries, removed when fixed). Items 6–9 were characterized by the graduated scenarios' exports.
 
 - **G-465 — the Sessions dialog header loses the project-name suffix** (size-independent; verified at source level). Ref renders BOLD `Sessions` followed by a muted ` for <project name>` whenever the list is not the all-projects view and a project name exists (`dialog-session-list.tsx:198-207`, the `titleView`). The port renders the bare `Sessions` title. Evidence: paired grids at 40x12 and 160x40 (`Sessions for project` vs `Sessions`).
 - **G-466 — render divergences at non-default geometries** (observed in the paired grids; source-level characterization pending — each sub-item needs its ref anchor before fix-or-accept is ruled):
@@ -21,8 +21,18 @@ Found by a paired ref↔rust probe at three non-default geometries (10x6, 40x12,
   3. 40x12 Sessions dialog — the port's footer hints overprint each other and wordmark glyphs show beside the dialog; ref differs on both.
   4. 160x40 with a long session title — ref wraps the sidebar title over two rows; the port truncates it to one.
   5. 40x12 Sessions dialog list viewport — both ends compute a 0-row viewport (`min(rows, floor(h/2) - 6)`); ref still leaks one overprinted row, the port clips (a ref-side rendering artifact at a degenerate size).
+  6. 10x6 home (pre-seed boot) — composer box vertical placement: ref rows 2–5 without a bottom border, the port rows 1–4 with the `╹▀▀▀` bottom border on row 5 (`va4-nc-composer-box-offset-10-home`).
+  7. 10x6 Sessions dialog — the first truncated session title diverges (ref `S` vs port `e`, `va4-nc-dialog-10-truncated-titles`).
+  8. post-enter composer geometry at 10x6/40x12 — row content and the one-column indent diverge (ref ` ┃` vs port `  ┃`; the `╹` bottom border one row off; `va4-nc-enter-10-composer-rows`, `va4-nc-composer-indent-40-enter`).
+  9. 160x40 footer path truncation — ref truncates the project path as `__ROOT__/proje…`, the port shows `project` (`va4-nc-footer-path-trunc-160`).
 
   The bottom-right pill (`local` vs `2.0.24`) visible in the same grids is the known build-artifact delta the harness normalizes (G-315 family), not a gap.
+
+- **G-467 — default-geometry divergences surfaced by the no-alnum normalizer fix** (found 2026-11-23, lane va4, commit `85029a33`): the paired-export normalizer `replace_id_shapes` had silently blanked every row containing no ASCII alphanumerics on BOTH ends — false EXACT. With the remainder now passed through, two families are visible at the default 80x24 geometry (source anchors pending, fix lane scope):
+  1. w13-g settled CJK wrap — ref wraps one CJK column earlier than the port (pure-CJK rows were invisible to every paired export before the fix; evidence `.test-logs/diff-reports/w13-g-cjk-settled.*` under the va4 battery run).
+  2. w13-perm-once permission dialog — the port leaks wordmark `█` glyphs into dialog rows where ref draws `┃` (same family as G-466.3's dialog bleed).
+
+  Historical caveat: every paired EXACT verdict recorded before `85029a33` verified only alnum-bearing rows; citing one as full-frame proof requires re-export on the fixed harness.
 
 ### Documented-decision families (32 ℹ️ entries — intentional divergences from the reference, not gaps)
 
@@ -85,7 +95,7 @@ Found by a paired ref↔rust probe at three non-default geometries (10x6, 40x12,
 - Full fix/forensics text for G-1..G-464: the complete adjudication history is not distributed with the public repo (2026-11-22 privacy cleanup rewrote history); full copies live in local backups and the out-of-repo archive (not committed).
 - Recent flips out of the families: G-211 split-footer fully ported and consumed via ADR-0019; G-328 TAB_SPINNERS all four styles landed; G-329 mini demo scripts 13/13 (2026-11-22 re-audit flips — the fifth stale-ledger instance).
 - The coverage ledger (formerly docs/audit/diff/COVERAGE.md, 12 families, four audit rounds into maintenance mode) and the diff-ledger family (JSON-SCHEMA/HTTP-FULL/TUI-FULLSCREEN/ACP-TRANSLATE etc., 11 books): left the tree in that batch and are not distributed with the public repo; **the coverage-completeness ruling (§2.2#12) remains in force** — when new testable surfaces appear (user reports, code reading, upstream diffs), revive the ledger from local backups or rebuild it.
-- Watchlist (live): `pty_wheel_after_real_terminal_probe_replies` (once), `tl_tool_loop_pair` (twice), the W38 settle-race fourth arm has landed (recurrence escalates). (`pty_composer_cycle_type_edit_submit_reply_stats_solid_path` left the list 2026-11-23: instrumented down to a harness mark race, fixed.) Flake whitelist and its entry threshold: §2.2#4.
+- Watchlist (live): `pty_wheel_after_real_terminal_probe_replies` (once), `tl_tool_loop_pair` (twice), `geom160_wide_pair` (once — battery1 TRY1 red 276s / TRY2 187s pass, shape text unrecorded, re-runs clean), `pty_fuzz_smoke` (once — merge-gate TRY1 red, retry passed, re-runs clean), the W38 settle-race fourth arm has landed (recurrence escalates). (`pty_composer_cycle_type_edit_submit_reply_stats_solid_path` left the list 2026-11-23: instrumented down to a harness mark race, fixed.) Flake whitelist and its entry threshold: §2.2#4.
 
 ## Pointers
 
