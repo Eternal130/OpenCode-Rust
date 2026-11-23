@@ -54,8 +54,7 @@ fn ref_source_default() -> PathBuf {
         .and_then(Path::parent)
         .and_then(Path::parent)
         .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
     if root.parent().and_then(Path::file_name).is_some_and(|n| n == ".worktrees") {
         if let Some(main) = root.parent().and_then(Path::parent) {
             root = main.to_path_buf();
@@ -64,7 +63,7 @@ fn ref_source_default() -> PathBuf {
     if let Some(dir) = std::env::var_os("OC_REF_ROOT") {
         return PathBuf::from(dir);
     }
-    root.parent().map(|p| p.join("opencode-ref")).unwrap_or_else(|| PathBuf::from("opencode-ref"))
+    root.parent().map_or_else(|| PathBuf::from("opencode-ref"), |p| p.join("opencode-ref"))
 }
 const SANDBOX_ROOT: &str = "/tmp/opencode/w4a-sandbox";
 const FORBIDDEN_PORT: u16 = 49374;
@@ -298,8 +297,7 @@ async fn spawn_reference() -> Result<(ReferenceServer, std::path::PathBuf), Stri
             format!(
                 "{}:/usr/local/bin:/usr/bin:/bin",
                 std::env::var("HOME")
-                    .map(|h| format!("{h}/.bun/bin"))
-                    .unwrap_or_else(|_| "/usr/local/bin".to_owned())
+                    .map_or_else(|_| "/usr/local/bin".to_owned(), |h| format!("{h}/.bun/bin"))
             ),
         )
         .env("HOME", &home)

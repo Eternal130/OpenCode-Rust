@@ -123,7 +123,7 @@ pub fn bun_path() -> Result<PathBuf> {
     candidates.extend(["/usr/local/bin/bun", "/usr/bin/bun"].iter().map(PathBuf::from));
     for candidate in candidates {
         if candidate.is_file() {
-            return Ok(PathBuf::from(candidate));
+            return Ok(candidate);
         }
     }
     std::env::var("PATH")

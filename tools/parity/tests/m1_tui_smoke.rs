@@ -39,6 +39,7 @@ fn sleep(secs: u64) {
 
 #[tokio::test]
 #[ignore = "official-TUI smoke: needs tmux + the reference checkout; opt in with OC_M1_TUI=1"]
+#[allow(clippy::too_many_lines)] // pre-existing: the smoke walk is one linear async body
 async fn m1_official_tui_smoke_against_rust_server() -> anyhow::Result<()> {
     if std::env::var("OC_M1_TUI").ok().as_deref() != Some("1") {
         eprintln!("skipping: OC_M1_TUI != 1 (opt-in; see the module docs)");
