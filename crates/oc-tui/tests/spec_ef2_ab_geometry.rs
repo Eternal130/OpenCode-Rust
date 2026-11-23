@@ -29,6 +29,7 @@ fn exit_ok(h: &mut vt_harness::HarnessHandle) {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // the three-leg driver (boot/open/strip rules per width)
 fn a2_geometry_width_sweep_10_40_160() {
     let widths: Vec<(u16, u16)> = std::env::var("EF2_A2_WIDTH")
         .ok()

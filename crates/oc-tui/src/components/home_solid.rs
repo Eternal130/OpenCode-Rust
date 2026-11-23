@@ -204,6 +204,60 @@ where
     opentui_solid::dyn_(source, |value: &StyledText| PropValue::Styled(value.clone()))
 }
 
+/// The wordmark rows (G-466.2 — `Logo`'s width ladder, extracted to
+/// keep [`home_element`] inside the lint budget). Below 22 cols only
+/// the `go` mark's bold half; below 44 the halves STACK (the muted
+/// left's 3 art rows, then the bold right's 4); wider, the
+/// side-by-side rows (two text elements per row — the halves never
+/// touch, the `gap={1}` cell keeps the page fill, pinned by the
+/// goldens).
+fn push_logo_rows(
+    children: &mut Vec<Element>,
+    plan: &crate::components::home::HomePlan,
+    colors: &LogoColors,
+) {
+    let Some((logo_x, logo_y)) = plan.logo else { return };
+    let push = |children: &mut Vec<Element>, x: usize, y: usize, content: StyledText| {
+        children.push(
+            text()
+                .position("absolute")
+                .left(x as f32)
+                .top(y as f32)
+                .wrap_mode("none")
+                .flex_shrink(0.0)
+                .content(PropValue::Styled(content))
+                .into_element(),
+        );
+    };
+    let halves = logo_rows(colors);
+    match plan.logo_mode {
+        LogoMode::Go => {
+            for (row, line) in LOGO_GO_RIGHT.iter().enumerate() {
+                push(
+                    children,
+                    logo_x,
+                    logo_y + row,
+                    logo_row_chunks(line, colors.text_base, colors.shadow_base, colors.base, true),
+                );
+            }
+        }
+        LogoMode::Stacked => {
+            for (row, (left, _)) in halves.iter().enumerate().skip(1) {
+                push(children, logo_x, logo_y + row - 1, left.clone());
+            }
+            for (row, (_, right)) in halves.iter().enumerate() {
+                push(children, logo_x, logo_y + 3 + row, right.clone());
+            }
+        }
+        LogoMode::Side => {
+            for (row, (left, right)) in halves.into_iter().enumerate() {
+                push(children, logo_x, logo_y + row, left);
+                push(children, logo_x + 20, logo_y + row, right);
+            }
+        }
+    }
+}
+
 /// The home chrome mount: a positioned root carrying the page
 /// background + the wordmark's eight STATIC text rows (the art is
 /// theme-static — a theme swap rebuilds through the mount key) + the
@@ -218,87 +272,7 @@ fn home_element(
 ) -> Element {
     let mut children: Vec<Element> = Vec::new();
 
-    // The wordmark (G-466.2 — `Logo`'s width ladder,
-    // component/logo.tsx:57-75): below 22 cols only the `go` mark's
-    // bold half; below 44 the halves STACK (the muted left's 3 art
-    // rows, then the bold right's 4); wider, the side-by-side rows
-    // (two text elements per row — the halves never touch, the
-    // `gap={1}` cell keeps the page fill, pinned by the goldens).
-    if let Some((logo_x, logo_y)) = plan.logo {
-        match plan.logo_mode {
-            LogoMode::Go => {
-                for (row, line) in LOGO_GO_RIGHT.iter().enumerate() {
-                    children.push(
-                        text()
-                            .position("absolute")
-                            .left(logo_x as f32)
-                            .top((logo_y + row) as f32)
-                            .wrap_mode("none")
-                            .flex_shrink(0.0)
-                            .content(PropValue::Styled(logo_row_chunks(
-                                line,
-                                colors.text_base,
-                                colors.shadow_base,
-                                colors.base,
-                                true,
-                            )))
-                            .into_element(),
-                    );
-                }
-            }
-            LogoMode::Stacked => {
-                let halves = logo_rows(colors);
-                for (row, (left, _)) in halves.iter().enumerate().skip(1) {
-                    children.push(
-                        text()
-                            .position("absolute")
-                            .left(logo_x as f32)
-                            .top((logo_y + row - 1) as f32)
-                            .wrap_mode("none")
-                            .flex_shrink(0.0)
-                            .content(PropValue::Styled(left.clone()))
-                            .into_element(),
-                    );
-                }
-                for (row, (_, right)) in halves.iter().enumerate() {
-                    children.push(
-                        text()
-                            .position("absolute")
-                            .left(logo_x as f32)
-                            .top((logo_y + 3 + row) as f32)
-                            .wrap_mode("none")
-                            .flex_shrink(0.0)
-                            .content(PropValue::Styled(right.clone()))
-                            .into_element(),
-                    );
-                }
-            }
-            LogoMode::Side => {
-                for (row, (left, right)) in logo_rows(colors).into_iter().enumerate() {
-                    children.push(
-                        text()
-                            .position("absolute")
-                            .left(logo_x as f32)
-                            .top((logo_y + row) as f32)
-                            .wrap_mode("none")
-                            .flex_shrink(0.0)
-                            .content(PropValue::Styled(left))
-                            .into_element(),
-                    );
-                    children.push(
-                        text()
-                            .position("absolute")
-                            .left((logo_x + 20) as f32)
-                            .top((logo_y + row) as f32)
-                            .wrap_mode("none")
-                            .flex_shrink(0.0)
-                            .content(PropValue::Styled(right))
-                            .into_element(),
-                    );
-                }
-            }
-        }
-    }
+    push_logo_rows(&mut children, plan, colors);
 
     // The footer content row: the version right-aligned (the <64
     // gate resolved by the plan — the label empties), the plugin
