@@ -356,14 +356,14 @@ tests — never from real user traffic).
 
 - **T9 rust lane (CI-runnable)** — canonical command:
 
-  `tools/dev-gate.sh 'cargo nextest run -p oc-tui --test realchain_t9 --locked --no-fail-fast'`
+  `T9_LANE_SHARDS=4 tools/dev-gate.sh 'cargo nextest run -p oc-tui --test realchain_t9 --test realchain_pair --test realchain_toolloop --test realchain_w13 --test realchain_g454 --locked --no-fail-fast'`
 
   Requirements: the production debug binary
   (`target/debug/opencode-rust` — CI builds+strips it into the shared
   target artifact; the harness's freshness guard red-fails on a stale
   binary), python3, loopback + PTY. CI: rides the general `nextest`
-  job (no pty exclusion pattern matches; the lane lock
-  `/tmp/opencode/t9w1-realchain.lock` self-serializes).
+  job (no pty exclusion pattern matches; CI runs without the shard
+  env and self-serializes on the single lock).
 - **W12 adjudication gate (mandatory after every realchain battery)** —
   the realchain tests perform NO bug adjudication (user ruling
   2026-11-18, GAPS 2.2#12): every divergence lands in
@@ -376,7 +376,7 @@ tests — never from real user traffic).
   divergence (red); exit 3 = infrastructure error. The full merge
   gate is the battery plus this checker:
 
-  `tools/dev-gate.sh 'cargo nextest run -p oc-tui --test realchain_t9 --test realchain_pair --test realchain_toolloop --test realchain_w13 --locked --no-fail-fast' && python3 tools/diff/realchain/adjudicate.py .test-logs/diff-reports` (**from W13 on, `realchain_w13` is mandatory** — the registry covers its scenario family; **push is gated on adjudicate exit 0, unconditional chained pushes are forbidden**: stale reports in diff-reports surface as unadjudicated reds after entries retire; the remedy is re-running that scenario family to regenerate the report, never loosening the registry)
+  `T9_LANE_SHARDS=4 tools/dev-gate.sh 'cargo nextest run -p oc-tui --test realchain_t9 --test realchain_pair --test realchain_toolloop --test realchain_w13 --test realchain_g454 --locked --no-fail-fast' && python3 tools/diff/realchain/adjudicate.py .test-logs/diff-reports` (**from W13 on, `realchain_w13` is mandatory** — the registry covers its scenario family; **push is gated on adjudicate exit 0, unconditional chained pushes are forbidden**: stale reports in diff-reports surface as unadjudicated reds after entries retire; the remedy is re-running that scenario family to regenerate the report, never loosening the registry)
 
   A NEW divergence = add a registry entry with an honest
   classification (never quietly framework-diff; uncertain shapes get

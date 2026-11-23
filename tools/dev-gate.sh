@@ -136,7 +136,7 @@ systemd-run --scope --quiet 9>&- \
   --unit="opencode-gate-$(date +%s)-$$" \
   -p CPUQuota=400% \
   -p MemoryMax=12G \
-  -p TasksMax=512 \
+  -p TasksMax=2048 \
   --setenv=OPENCODE_DEV_GATE=1 \
   bash 9>&- -c "cd ${GATE_DIR} && $1" 2>&1 | tee "$LOG" 9>&-
 ps=("${PIPESTATUS[@]}")

@@ -28,18 +28,20 @@ Wrap exactly one cargo command per invocation. Verification scripts (`tools/diff
 | Tier | Command | Purpose / time |
 |---|---|---|
 | Standing render gate | `tools/dev-gate.sh 'cargo nextest run -p oc-tui --locked dual_engine_matches_frozen_oracle'` | 0.1s smoke |
-| Merge gate | `tools/dev-gate.sh 'cargo nextest run -p oc-tui -p oc-cli -p parity --locked --no-fail-fast'` | ~7min |
+| Merge gate | `T9_LANE_SHARDS=4 tools/dev-gate.sh 'cargo nextest run -p oc-tui -p oc-cli -p parity --locked --no-fail-fast'` | ~17min |
 | Workspace gate | `tools/dev-gate.sh 'cargo nextest run --workspace --locked --no-fail-fast'` | required at closure |
 | PTY family | the above + `--profile pty` | serialized test-threads=1, ~28min |
 
 First round unfiltered + `--no-fail-fast`; red tests are re-run in the same round with `--exact <name> -- --nocapture` to capture output; the flake whitelist lives in GAPS §2.2#4 (retry-passes = not a regression; never loosen it on your own).
 
-### 3. realchain battery (four targets) + adjudication checker
+### 3. realchain battery (five targets) + adjudication checker
 
 ```sh
-tools/dev-gate.sh 'cargo nextest run -p oc-tui --test realchain_t9 --test realchain_pair --test realchain_toolloop --test realchain_w13 --locked --no-fail-fast'
+T9_LANE_SHARDS=4 tools/dev-gate.sh 'cargo nextest run -p oc-tui --test realchain_t9 --test realchain_pair --test realchain_toolloop --test realchain_w13 --test realchain_g454 --locked --no-fail-fast'
 python3 tools/diff/realchain/adjudicate.py .test-logs/diff-reports
 ```
+
+The realchain family serializes on a **sharded cross-process flock**: `T9_LANE_SHARDS=<N>` (owner ruling 2026-11-23, default 4; pid-bucketed lock files, ~746s → ~420s for the battery). Unset or `1` = the historical single lock (byte-identical behavior; CI without the env self-serializes). `PTY_LANE_SHARDS` (pty family) stays default-off pending a soak.
 
 The tests only export differences to diff-reports/; judgment belongs to the controller's adjudication registry `tools/diff/realchain/adjudications.json` (exit 0 = all adjudicated / 2 = unadjudicated remains = merge red / 3 = infrastructure error). After changing product code, rebuild the binary first: `tools/dev-gate.sh 'cargo build -p oc-cli --bin opencode-rust'` — the freshness guard rejects stale binaries. When running omo scenarios from a worktree, the harness automatically falls back to the main checkout's plugin-payload.
 
