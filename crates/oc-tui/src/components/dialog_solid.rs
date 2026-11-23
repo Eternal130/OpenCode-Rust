@@ -965,44 +965,44 @@ fn actions_for(inputs: &Signal<DialogInputs>) -> Rc<dyn opentui_solid::DynChildr
 #[allow(clippy::too_many_lines)] // the DialogSelect root, ui/dialog-select.tsx:672-847
 fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder {
     // The title row: bold title left, `esc` right (ends at the
-    // paddingRight-4 edge).
+    // paddingRight-4 edge). G-465: when a `titleView` suffix rides
+    // the row the left pair is a nested ROW box (the space-between
+    // spread must stay two-sided); without one the ORIGINAL single
+    // title text stands — the tree scenario captures pin the
+    // wrapper-free structure.
+    let title_text = text()
+        .dyn_prop(
+            "content",
+            dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                styled(vec![chunk(i.title.clone(), i.colors.text, None, 1)])
+            })),
+        )
+        .into_element();
+    let title_left = if inputs.get().title_suffix.is_empty() {
+        title_text
+    } else {
+        box_()
+            .flex_direction("row")
+            .children(Children::Static(vec![
+                title_text,
+                // G-465 — the muted `titleView` suffix rides the same
+                // row right after the bold title
+                // (dialog-session-list.tsx:198-207).
+                text()
+                    .wrap_mode("none")
+                    .dyn_prop(
+                        "content",
+                        dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                            styled(vec![chunk(i.title_suffix.clone(), i.colors.muted, None, 0)])
+                        })),
+                    )
+                    .into_element(),
+            ]))
+            .into_element()
+    };
     let title_row = box_().flex_direction("row").justify_content("space-between").children(
         Children::Static(vec![
-            box_()
-                .flex_direction("row")
-                .children(Children::Static(vec![
-                    text()
-                        .wrap_mode("none")
-                        .dyn_prop(
-                            "content",
-                            dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
-                                styled(vec![chunk(i.title.clone(), i.colors.text, None, 1)])
-                            })),
-                        )
-                        .into_element(),
-                    // G-465 — the muted `titleView` suffix rides the
-                    // same row right after the bold title
-                    // (dialog-session-list.tsx:198-207).
-                    text()
-                        .wrap_mode("none")
-                        .dyn_prop(
-                            "content",
-                            dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
-                                if i.title_suffix.is_empty() {
-                                    styled(Vec::new())
-                                } else {
-                                    styled(vec![chunk(
-                                        i.title_suffix.clone(),
-                                        i.colors.muted,
-                                        None,
-                                        0,
-                                    )])
-                                }
-                            })),
-                        )
-                        .into_element(),
-                ]))
-                .into_element(),
+            title_left,
             text()
                 .dyn_prop(
                     "content",
@@ -2381,16 +2381,19 @@ fn chrome_element(
 /// (`chrome_solid::mount_family_wrapper`, D2.2 dialog lane).
 struct DialogTree {
     inputs: Signal<DialogInputs>,
-    key: (usize, usize, usize, DialogColors, usize),
+    key: (usize, usize, usize, bool, DialogColors, usize),
 }
 
-fn mount_key(inputs: &DialogInputs) -> (usize, usize, usize, DialogColors, usize) {
+fn mount_key(inputs: &DialogInputs) -> (usize, usize, usize, bool, DialogColors, usize) {
     // G-466.3: terminal_width rides the key — the footer's column
-    // wrap is a build-time decision.
+    // wrap is a build-time decision. G-465: so is the title-suffix
+    // wrapper's presence (the wrapper-free structure is committed in
+    // the tree-scenario captures).
     (
         inputs.family as usize,
         inputs.box_width,
         inputs.terminal_width,
+        inputs.title_suffix.is_empty(),
         inputs.colors,
         1 + content_height(inputs),
     )
