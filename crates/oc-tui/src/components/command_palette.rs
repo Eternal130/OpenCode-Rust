@@ -690,8 +690,39 @@ fn palette_options_slice(commands: &[&PaletteCommand], store: &Store) -> Vec<Sel
 /// filter and `suggested + options()` without one. The palette mounts
 /// flat with a `0.7` threshold.
 #[must_use]
-pub fn palette_props(store: &Store) -> SelectProps {
-    palette_props_filtered(store, "")
+/// G-465 — the session picker's current project name
+/// (`currentProjectName`, dialog-session-list.tsx:134-140): the
+/// picker location's owning project, named via
+/// `projectName` (configured name else the canonical basename).
+/// `None` when no location/project resolves (the `Show` gate hides
+/// the suffix).
+fn picker_project_name(store: &Store) -> Option<String> {
+    let directory = match store.route() {
+        crate::store::Route::Session { session_id, .. } => store
+            .session_history()
+            .into_iter()
+            .find(|session| session.id == session_id)
+            .and_then(|session| session.directory),
+        crate::store::Route::Home => store.home_location(),
+    }
+    .or_else(|| std::env::current_dir().ok().map(|path| path.display().to_string()));
+    let directory = directory?;
+    if let crate::store::ListState::Loaded(projects) = store.project_list() {
+        let owned = projects.into_iter().find(|project| {
+            project.canonical == directory
+                || directory.starts_with(&format!("{}/", project.canonical))
+        });
+        if let Some(project) = owned {
+            return Some(crate::components::dialog_open::project_name(
+                project.name.as_deref(),
+                &project.canonical,
+            ));
+        }
+    }
+    None
+}
+
+pub fn palette_props(store: &Store) -> SelectProps {    palette_props_filtered(store, "")
 }
 
 #[must_use]
@@ -1057,6 +1088,19 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                 if store.session_list_all_projects() { "current directory" } else { "all projects" },
                 "ctrl+a",
             );
+            // G-465 — the `titleView` suffix (dialog-session-list.tsx
+            // :198-207): bold `Sessions` + muted ` for
+            // {currentProjectName()}` while the picker stays scoped
+            // (the Show gate `!allProjects() && name`). The name
+            // resolves through the picker location (the session's
+            // directory on a session route, else the home location /
+            // cwd — `pickerLocation()`, :46-49) onto the owning
+            // project row (`projectName`, util/project.ts).
+            if !store.session_list_all_projects() {
+                if let Some(name) = picker_project_name(store) {
+                    props = props.with_title_suffix(format!(" for {name}"));
+                }
+            }
             props
         }
         // TUI-5 (lane-tui2): `DialogOpen` — the Sessions recents +

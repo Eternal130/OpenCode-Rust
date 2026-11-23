@@ -350,6 +350,10 @@ pub struct SelectProps {
     /// footer bar's right box (the session list's `all projects
     /// ctrl+a`, dialog-session-list.tsx:288-291).
     pub footer_hint: Option<(String, String)>,
+    /// G-465 — v2's `titleView` suffix (dialog-session-list.tsx:198-207):
+    /// a muted run painted directly after the bold title (the
+    /// Sessions dialog's ` for {currentProjectName()}`).
+    pub title_suffix: Option<String>,
 }
 
 impl SelectProps {
@@ -371,6 +375,7 @@ impl SelectProps {
             hints: Vec::new(),
             locked: false,
             footer_hint: None,
+            title_suffix: None,
         }
     }
 
@@ -454,6 +459,14 @@ impl SelectProps {
     #[must_use]
     pub fn with_footer_hint(mut self, title: &str, label: &str) -> Self {
         self.footer_hint = Some((title.to_owned(), label.to_owned()));
+        self
+    }
+
+    /// G-465 — the `titleView` suffix run: muted text painted right
+    /// after the bold title.
+    #[must_use]
+    pub fn with_title_suffix(mut self, suffix: impl Into<String>) -> Self {
+        self.title_suffix = Some(suffix.into());
         self
     }
 }
@@ -1091,6 +1104,12 @@ pub fn render_select(
     // the esc ends at the content edge `width - 4`).
     let mut title = Row::blank(width, default, surface_bg);
     title.text(4, &props.title, styles.text, surface_bg, BOLD);
+    // G-465 — the muted `titleView` suffix rides the same row right
+    // after the bold title (dialog-session-list.tsx:198-207).
+    if let Some(suffix) = props.title_suffix.as_deref() {
+        let at = 4 + props.title.chars().count();
+        title.text(at, suffix, styles.muted, surface_bg, 0);
+    }
     title.text_end(width - 4, "esc", styles.muted, surface_bg, 0);
     rows.push(title.cells);
 

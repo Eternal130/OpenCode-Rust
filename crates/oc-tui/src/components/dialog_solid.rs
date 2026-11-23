@@ -296,6 +296,9 @@ struct DialogInputs {
     /// A right-side footer hint (`footerHints side:"right"`): bold
     /// title + muted ` {label}` in the footer bar's right box.
     footer_hint: Option<(String, String)>,
+    /// G-465 — the `titleView` suffix: muted text right after the
+    /// bold title (the Sessions dialog's ` for {project}`).
+    title_suffix: String,
     // -- the prompt family -------------------------------------------------
     prompt_value: String,
     // -- help ---------------------------------------------------------------
@@ -952,13 +955,40 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
     // paddingRight-4 edge).
     let title_row = box_().flex_direction("row").justify_content("space-between").children(
         Children::Static(vec![
-            text()
-                .dyn_prop(
-                    "content",
-                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
-                        styled(vec![chunk(i.title.clone(), i.colors.text, None, 1)])
-                    })),
-                )
+            box_()
+                .flex_direction("row")
+                .children(Children::Static(vec![
+                    text()
+                        .wrap_mode("none")
+                        .dyn_prop(
+                            "content",
+                            dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                                styled(vec![chunk(i.title.clone(), i.colors.text, None, 1)])
+                            })),
+                        )
+                        .into_element(),
+                    // G-465 — the muted `titleView` suffix rides the
+                    // same row right after the bold title
+                    // (dialog-session-list.tsx:198-207).
+                    text()
+                        .wrap_mode("none")
+                        .dyn_prop(
+                            "content",
+                            dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                                if i.title_suffix.is_empty() {
+                                    styled(Vec::new())
+                                } else {
+                                    styled(vec![chunk(
+                                        i.title_suffix.clone(),
+                                        i.colors.muted,
+                                        None,
+                                        0,
+                                    )])
+                                }
+                            })),
+                        )
+                        .into_element(),
+                ]))
                 .into_element(),
             text()
                 .dyn_prop(
@@ -2662,6 +2692,7 @@ fn build_inputs(
                     })
                     .collect(),
                 footer_hint: props.footer_hint.clone(),
+                title_suffix: props.title_suffix.clone().unwrap_or_default(),
                 prompt_value: String::new(),
                 hint_lines: Vec::new(),
                 plugin_title: String::new(),
@@ -2702,6 +2733,7 @@ fn build_inputs(
             window: Vec::new(),
             actions: Vec::new(),
             footer_hint: None,
+                title_suffix: String::new(),
             prompt_value: entry.value.clone(),
             hint_lines: Vec::new(),
             plugin_title: String::new(),
@@ -2743,6 +2775,7 @@ fn build_inputs(
                 window: Vec::new(),
                 actions: Vec::new(),
                 footer_hint: None,
+                title_suffix: String::new(),
                 prompt_value: entry.value.clone(),
                 hint_lines: if description.is_empty() {
                     Vec::new()
@@ -2804,6 +2837,7 @@ fn build_inputs(
                 window: Vec::new(),
                 actions: Vec::new(),
                 footer_hint: None,
+                title_suffix: String::new(),
                 prompt_value: String::new(),
                 hint_lines: Vec::new(),
                 plugin_title: "/btw".to_owned(),
@@ -2843,6 +2877,7 @@ fn build_inputs(
             window: Vec::new(),
             actions: Vec::new(),
             footer_hint: None,
+                title_suffix: String::new(),
             prompt_value: entry.value.clone(),
             hint_lines: props.hints.clone(),
             plugin_title: String::new(),
@@ -2893,6 +2928,7 @@ fn build_inputs(
                 window: Vec::new(),
                 actions: Vec::new(),
                 footer_hint: None,
+                title_suffix: String::new(),
                 prompt_value: String::new(),
                 hint_lines: crate::wrap::wrap_label(&hint, content_width.max(1)),
                 plugin_title: String::new(),
@@ -2930,6 +2966,7 @@ fn build_inputs(
                 window: Vec::new(),
                 actions: Vec::new(),
                 footer_hint: None,
+                title_suffix: String::new(),
                 prompt_value: String::new(),
                 hint_lines: Vec::new(),
                 plugin_title: content.title,
@@ -2989,6 +3026,7 @@ fn build_inputs(
                 window: Vec::new(),
                 actions: Vec::new(),
                 footer_hint: None,
+                title_suffix: String::new(),
                 prompt_value: String::new(),
                 hint_lines: Vec::new(),
                 plugin_title,
@@ -3035,6 +3073,7 @@ fn build_inputs(
                 window: Vec::new(),
                 actions: Vec::new(),
                 footer_hint: None,
+                title_suffix: String::new(),
                 prompt_value: String::new(),
                 hint_lines: Vec::new(),
                 plugin_title: title.clone(),
@@ -3085,6 +3124,7 @@ fn build_inputs(
                 window: Vec::new(),
                 actions: Vec::new(),
                 footer_hint: None,
+                title_suffix: String::new(),
                 prompt_value: String::new(),
                 hint_lines: Vec::new(),
                 plugin_title: String::new(),
@@ -3146,6 +3186,7 @@ fn build_inputs(
                 window: Vec::new(),
                 actions: Vec::new(),
                 footer_hint: None,
+                title_suffix: String::new(),
                 prompt_value: String::new(),
                 hint_lines: Vec::new(),
                 plugin_title: String::new(),
@@ -3182,6 +3223,7 @@ fn build_inputs(
             window: Vec::new(),
             actions: Vec::new(),
             footer_hint: None,
+                title_suffix: String::new(),
             prompt_value: String::new(),
             // The status rows ride the hints (the props layer derives
             // them — see the `DialogKind::Status` props arm).
