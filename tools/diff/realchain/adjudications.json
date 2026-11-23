@@ -217,7 +217,7 @@
       "last_observed": "2026-11-23"
     },
     {
-      "id": "va4-g466-composer-indent-40-enter",
+      "id": "va4-nc-composer-indent-40-enter",
       "scenario_pattern": "geom40",
       "state_pattern": "enter",
       "shape": {
@@ -226,15 +226,15 @@
           "claude-opus"
         ]
       },
-      "classification": "accepted-gap",
-      "justification": "40x12 post-enter composer left-border indent off by one space (ref ` ┃` vs rust `  ┃`); same width-allocation family as the 10x6 composer row offset — ledger with the G-465/G-466 batch. known gap, fix in flight — G-465/G-466, remove when fixed",
-      "g_ref": "G-466",
+      "classification": "needs-controller",
+      "justification": "40x12 post-enter composer left-border indent off by one space (ref ' ┃' vs rust '  ┃'). NEEDS-CONTROLLER (ruling 2026-11-23): beyond the controller's va4 baseline triage — NOT folded into G-465/G-466, feeds the fix lane's scope; controller adjudicates.",
+      "g_ref": "needs-ledger",
       "adjudicated_by": "va4 geometry pair graduation",
       "adjudicated_at": "2026-11-23",
       "last_observed": "2026-11-23"
     },
     {
-      "id": "va4-g466-composer-box-offset-10-home",
+      "id": "va4-nc-composer-box-offset-10-home",
       "scenario_pattern": "geom10",
       "state_pattern": "home",
       "shape": {
@@ -243,15 +243,15 @@
           "Ask|claude|┃ c"
         ]
       },
-      "classification": "accepted-gap",
-      "justification": "10x6 home composer box placement: ref draws r02–r05 without a bottom border, rust r01–r04 + r05 bottom border (one-row offset overall; unledgered companion observed in va3/va4). known gap, fix in flight — G-465/G-466, remove when fixed",
-      "g_ref": "G-466",
+      "classification": "needs-controller",
+      "justification": "10x6 home composer box placement: ref draws r02-r05 without a bottom border, rust r01-r04 + r05 bottom border (one-row offset overall; observed va3/va4). NEEDS-CONTROLLER (ruling 2026-11-23): beyond the controller's va4 baseline triage — NOT folded into G-465/G-466, feeds the fix lane's scope; controller adjudicates.",
+      "g_ref": "needs-ledger",
       "adjudicated_by": "va4 geometry pair graduation",
       "adjudicated_at": "2026-11-23",
       "last_observed": "2026-11-23"
     },
     {
-      "id": "va4-g466-dialog-10-truncated-titles",
+      "id": "va4-nc-dialog-10-truncated-titles",
       "scenario_pattern": "geom10",
       "state_pattern": "dialog",
       "shape": {
@@ -260,9 +260,9 @@
           "^\\s*S$|^\\s*e$"
         ]
       },
-      "classification": "accepted-gap",
-      "justification": "10x6 dialog row glyph divergence under total title truncation (ref `S` vs rust `e` at the same cell). known gap, fix in flight — G-465/G-466, remove when fixed",
-      "g_ref": "G-466",
+      "classification": "needs-controller",
+      "justification": "10x6 dialog row glyph divergence under total title truncation (ref 'S' vs rust 'e' at the same cell). NEEDS-CONTROLLER (ruling 2026-11-23): beyond the controller's va4 baseline triage — NOT folded into G-465/G-466, feeds the fix lane's scope; controller adjudicates.",
+      "g_ref": "needs-ledger",
       "adjudicated_by": "va4 geometry pair graduation",
       "adjudicated_at": "2026-11-23",
       "last_observed": "2026-11-23"
@@ -272,13 +272,13 @@
       "scenario_pattern": "geom10",
       "state_pattern": "enter",
       "shape": {
-        "kind": "regex",
-        "any_contains": [
-          "Long|claude|┃ c"
+        "kind": "substring",
+        "ref_contains": [
+          "Long"
         ]
       },
       "classification": "accepted-gap",
-      "justification": "10x6 post-enter: ref still shows the truncated `Long` tab title row and its composer border rows sit one row off vs rust (same composer-offset family as home). known gap, fix in flight — G-465/G-466, remove when fixed",
+      "justification": "10x6 post-enter: rust loses the truncated `Long` tab-title row ref still shows (G-466.1 title-loss shape). known gap, fix in flight — G-465/G-466, remove when fixed",
       "g_ref": "G-466",
       "adjudicated_by": "va4 geometry pair graduation",
       "adjudicated_at": "2026-11-23",
@@ -319,7 +319,7 @@
       "last_observed": "2026-11-23"
     },
     {
-      "id": "va4-g466-footer-path-trunc-160",
+      "id": "va4-nc-footer-path-trunc-160",
       "scenario_pattern": "geom160",
       "state_pattern": "enter",
       "shape": {
@@ -328,9 +328,26 @@
           "__ROOT__/proje"
         ]
       },
-      "classification": "accepted-gap",
-      "justification": "160x40 footer bottom path row truncates one char earlier on rust (`__ROOT__/proje` vs ref `__ROOT__/project`); width-allocation family — ledger with the G-465/G-466 batch. known gap, fix in flight — G-465/G-466, remove when fixed",
-      "g_ref": "G-466",
+      "classification": "needs-controller",
+      "justification": "160x40 footer bottom path row truncates one char earlier on rust ('__ROOT__/proje' vs ref '__ROOT__/project'). NEEDS-CONTROLLER (ruling 2026-11-23): beyond the controller's va4 baseline triage — NOT folded into G-465/G-466, feeds the fix lane's scope; controller adjudicates.",
+      "g_ref": "needs-ledger",
+      "adjudicated_by": "va4 geometry pair graduation",
+      "adjudicated_at": "2026-11-23",
+      "last_observed": "2026-11-23"
+    },
+    {
+      "id": "va4-nc-enter-10-composer-rows",
+      "scenario_pattern": "geom10",
+      "state_pattern": "enter",
+      "shape": {
+        "kind": "regex",
+        "any_contains": [
+          "claude|┃ c"
+        ]
+      },
+      "classification": "needs-controller",
+      "justification": "10x6 post-enter composer border rows sit one row off between ends (same unledgered composer-offset family as home). NEEDS-CONTROLLER (ruling 2026-11-23): beyond the controller's va4 baseline — NOT folded into G-465/G-466, feeds the fix lane's scope.",
+      "g_ref": "needs-ledger",
       "adjudicated_by": "va4 geometry pair graduation",
       "adjudicated_at": "2026-11-23",
       "last_observed": "2026-11-23"

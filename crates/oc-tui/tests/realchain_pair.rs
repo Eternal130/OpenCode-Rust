@@ -903,20 +903,29 @@ fn p4b_sidebar_120_pair() {
 // ALL grid content — including the known divergences below — rides the
 // exported diff-reports and the controller's adjudication registry.
 //
-// Un-normalized diff triage (va4 first run, tree_hash of this commit):
-// known gaps G-465 (Sessions dialog header missing the muted
-// ` for <project>` suffix at 40x12/160x40) and G-465/G-466 five
-// sub-items (10x6 composer border spillover + title loss; 40x12 home
-// wordmark two-line large vs one-line small; 40x12 dialog footer hint
-// overprint + missing right-side wordmark glyphs; 160x40 sidebar long
-// title wrap-vs-truncate; 40x12 zero-row list viewport ref-side
-// overprint artifact) PLUS one unledgered item: 10x6 home composer box
-// placement (ref r02–r05 no bottom border vs rust r01–r04 + r05 bottom
-// border — one row offset overall). All registered in
-// adjudications.json as accepted-gap entries annotated "known gap, fix
-// in flight — G-465/G-466, remove when fixed" (deliberately NOT
-// expected-shape: when the fixes land the shapes disappear and the
-// stale entries merely prompt, they do not red).
+// Un-normalized diff triage (va4 rounds 1-2, exported grids under
+// .test-logs/diff-reports/geom*):
+//  - G-465: Sessions dialog header muted ` for <project>` suffix
+//    missing on rust (geom40/geom160 dialog) — accepted-gap, fix in
+//    flight.
+//  - G-466 sub-items: 10x6 post-enter tab-title loss (geom10 enter);
+//    40x12 dialog footer-hint overprint + zero-row-viewport ref-side
+//    overdraw (geom40 dialog); 160x40 sidebar long-title wrap-vs-
+//    truncate (geom160 enter). All accepted-gap, fix in flight.
+//  - G-466.2 (40x12 home wordmark, ref two-line large vs rust one-line
+//    small): the post-seed boot-2 home settled wordmark-less on BOTH
+//    ends in va4 round 1, so the state-`home0` FIRST-BOOT PRE-SEED
+//    capture (controller ruling 2026-11-23) keeps the shape visible —
+//    va3 boot1 grids carry the wordmark in exactly that state.
+//  - FIVE needs-controller shapes beyond the controller's va4 baseline
+//    (ruling 2026-11-23: NOT folded into G-465/G-466, registered as
+//    ordinary adjudicated entries annotated needs-controller, feed the
+//    fix lane's scope): 10x6 home composer box one-row offset
+//    (ref r02-r05 borderless-bottom vs rust r01-r04 + r05 bottom
+//    border); 10x6 post-enter composer border row offset; 10x6 dialog
+//    truncated-title glyph divergence (ref `S` vs rust `e`); 40x12
+//    post-enter composer left-border indent off by one space; 160x40
+//    footer bottom path row truncating one char earlier on rust.
 //
 // Test-fn layout: one fn per size. The three legs serialize on
 // lane_lock either way (identical total cost, va3 measured ~17s/leg),
@@ -1080,6 +1089,21 @@ fn geom_probe(tag: &str, scenario: &str, cols: u16, rows: u16) {
         "GEOM rig RED: ref API never came up (password read: {})",
         rig.ref_password.is_some()
     );
+    // State home0 — first-boot PRE-SEED home (controller ruling
+    // 2026-11-23): the empty-project boot home carries the wordmark on
+    // both ends at 40x12 (va3 boot1 grids), so G-466.2 (ref two-line
+    // large vs rust one-line small wordmark) stays visible to this
+    // regularized tripwire until fixed. The post-seed boot-2 home can
+    // settle into a wordmark-less composer layout (observed va4 first
+    // round), which is why the pre-seed capture exists — do NOT paper
+    // over the shape with a normalization.
+    settle(8);
+    assert!(rig.alive(), "GEOM rig RED: a TUI died before state home0");
+    let h0_ref = rig.normalize(&capture_settled(rig.ref_tui.as_ref().expect("ref tui")));
+    let h0_rust = rig.normalize(&capture_settled(rig.rust_tui.as_ref().expect("rust tui")));
+    dump_grid(&format!("{scenario}-home0-ref"), &h0_ref);
+    dump_grid(&format!("{scenario}-home0-rust"), &h0_rust);
+    export_grid_diff(scenario, "home0", &h0_ref, &h0_rust);
     geom_seed_sessions(&rig.rust_url, rig.rust_password.as_deref(), &rig.rust.project);
     geom_seed_sessions(&rig.ref_url, rig.ref_password.as_deref(), &rig.refbox.project);
     rig.stop_tuis();
@@ -1097,7 +1121,7 @@ fn geom_probe(tag: &str, scenario: &str, cols: u16, rows: u16) {
         rig.rust_tui.as_ref().expect("rust tui").wait_for(needle, 0, Duration::from_secs(30));
     let ref_a =
         rig.ref_tui.as_ref().expect("ref tui").wait_for(needle, 0, Duration::from_secs(60));
-    settle(3);
+    settle(8);
     assert!(rig.alive(), "GEOM rig RED: a TUI died before state A");
     let a_ref = rig.normalize(&capture_settled(rig.ref_tui.as_ref().expect("ref tui")));
     let a_rust = rig.normalize(&capture_settled(rig.rust_tui.as_ref().expect("rust tui")));
