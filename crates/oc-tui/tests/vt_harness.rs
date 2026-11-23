@@ -537,7 +537,7 @@ const SSE_HANDSHAKE_FRAME: &str =
 /// serializing to 1, set `PTY_LANE_SHARDS=N` (default: unset = the
 /// historical behavior, no cross-process lock): the guard then also
 /// takes an exclusive flock on `/tmp/opencode/oc-tui-pty.shard<pid%N>.lock`
-/// — the T9_LANE_SHARDS pattern (va7) applied to the pty family, pid-keyed
+/// — the `T9_LANE_SHARDS` pattern (va7) applied to the pty family, pid-keyed
 /// per nextest test process, two legs in one shard merely serialize.
 pub struct PtyLockGuard {
     _mutex: std::sync::MutexGuard<'static, ()>,
