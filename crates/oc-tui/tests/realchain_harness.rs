@@ -998,8 +998,9 @@ fn arm_pdeathsig(command: &mut Command) {
 ///     stop left it alive. Well under the 3s reclamation requirement.
 fn spawn_daemon_supervisor(sandbox: &Sandbox) {
     let test_pid = std::process::id();
-    let script = format!(
-        r#"
+    // The script takes the test pid as $1 — a static shell text (no
+    // interpolation), passed verbatim below.
+    let script = r#"
 test_pid=$1
 while kill -0 "$test_pid" 2>/dev/null; do sleep 0.2; done
 "$OC_BIN" service stop >/dev/null 2>&1 || true
@@ -1015,7 +1016,7 @@ while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 10 ]; do sleep 0.1; i=$((i+1)); d
 if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; fi
 exit 0
 "#
-    );
+    .to_string();
     let mut command = sandbox.command(&PathBuf::from("/bin/sh"));
     command
         .arg("-c")
@@ -1054,11 +1055,8 @@ pub fn service_start_with_env(sandbox: &Sandbox, extra_env: &[(String, String)])
     for (key, value) in extra_env {
         command.env(key, value);
     }
-    let mut child = command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn service start");
+    let mut child =
+        command.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().expect("spawn service start");
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut url = None;
     let mut early_exit: Option<String> = None;
