@@ -2042,7 +2042,13 @@ fn replace_placeholder(row: &str) -> String {
             let end = rest.find('"').unwrap_or(rest.len());
             let mut out = String::from(&row[..start]);
             out.push_str("__PROMPT__");
-            out.push_str(&rest[end..]);
+            // va4: at narrow widths the row truncates INSIDE the random
+            // suggestion, so whether the closing quote survives to the
+            // grid differs per END per BOOT (Math.random length) —
+            // drop the immediately-following closing quote so the
+            // truncation point of a random string is not a diff.
+            let tail = &rest[end..];
+            out.push_str(tail.strip_prefix('"').unwrap_or(tail));
             out
         }
         None => row.to_owned(),
@@ -2129,6 +2135,13 @@ fn replace_id_shapes(row: &str) -> String {
         result.push_str(token);
         rest = tail_rest;
     }
+    // The loop exits at the first position with NO further alnum/_
+    // char — everything from there on (block-glyph rows, the boot
+    // hero wordmark, pure punctuation) is pass-through content, NOT a
+    // droppable remainder. Dropping it silently blanked every
+    // no-alnum row in BOTH ends' grids (va4: the G-466.2 hero rows
+    // vanished from every geom export while present on both screens).
+    result.push_str(rest);
     result
 }
 

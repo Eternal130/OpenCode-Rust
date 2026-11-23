@@ -1073,6 +1073,46 @@ fn geom_probe(tag: &str, scenario: &str, cols: u16, rows: u16) {
     // boot; wait for its registration to carry the password — va3's
     // first run 401'd reading it any other way).
     rig.spawn_tuis();
+    // State home0 — first-boot PRE-SEED home (controller ruling
+    // 2026-11-23): the empty-project boot home carries the wordmark on
+    // both ends at 40x12 (va3 boot1 grids), so G-466.2 (ref two-line
+    // large vs rust one-line small wordmark) stays visible to this
+    // regularized tripwire until fixed. The post-seed boot-2 home can
+    // settle into a wordmark-less composer layout (observed va4 first
+    // round), which is why the pre-seed capture exists — do NOT paper
+    // over the shape with a normalization. CAPTURE EARLY: fixed 5s
+    // after spawn, BEFORE the API/registration waits — the boot hero
+    // wordmark is cleared ~8-10s after spawn on BOTH ends, and cold
+    // ref registration alone can burn past that window (va4 rounds
+    // 1-3 lost the state exactly this way; the va3 repro kept it only
+    // because its capture preceded the slow waits).
+    settle(5);
+    assert!(rig.alive(), "GEOM rig RED: a TUI died before state home0");
+    // CAPTURE-WITH-RETRY: the boot hero paints a few seconds AFTER
+    // spawn AND flickers on the wire (va4 diag rounds: the screen
+    // carries the wordmark at one screen_text() call, hero-less at the
+    // next microseconds later, back again after; fixed marks and
+    // condition-then-capture both lose it) — so the capture retries
+    // until the CAPTURED GRID itself carries the hero on each end
+    // (bounded 30s; the whatever-state-at-timeout exports as-is, no
+    // content assertion — the G-466.2 diff rides the export either
+    // way). This is a settle-class condition wait, the same license
+    // as s3's selection-dot poll.
+    let capture_with_hero = |tui: Option<&TuiProcess>| -> String {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let grid = tui.expect("tui").screen_text();
+            if grid.contains("█▀▀█") || Instant::now() > deadline {
+                return grid;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    let h0_ref = rig.normalize(&capture_with_hero(rig.ref_tui.as_ref()));
+    let h0_rust = rig.normalize(&capture_with_hero(rig.rust_tui.as_ref()));
+    dump_grid(&format!("{scenario}-home0-ref"), &h0_ref);
+    dump_grid(&format!("{scenario}-home0-rust"), &h0_rust);
+    export_grid_diff(scenario, "home0", &h0_ref, &h0_rust);
     assert!(geom_wait_api(&rig.rust_url, rig.rust_password.as_deref()), "GEOM rig RED: rust API never came up");
     let deadline = Instant::now() + Duration::from_secs(120);
     while rig.refbox.ref_registration().get("password").is_none() && Instant::now() < deadline {
@@ -1089,42 +1129,35 @@ fn geom_probe(tag: &str, scenario: &str, cols: u16, rows: u16) {
         "GEOM rig RED: ref API never came up (password read: {})",
         rig.ref_password.is_some()
     );
-    // State home0 — first-boot PRE-SEED home (controller ruling
-    // 2026-11-23): the empty-project boot home carries the wordmark on
-    // both ends at 40x12 (va3 boot1 grids), so G-466.2 (ref two-line
-    // large vs rust one-line small wordmark) stays visible to this
-    // regularized tripwire until fixed. The post-seed boot-2 home can
-    // settle into a wordmark-less composer layout (observed va4 first
-    // round), which is why the pre-seed capture exists — do NOT paper
-    // over the shape with a normalization.
-    settle(8);
-    assert!(rig.alive(), "GEOM rig RED: a TUI died before state home0");
-    let h0_ref = rig.normalize(&capture_settled(rig.ref_tui.as_ref().expect("ref tui")));
-    let h0_rust = rig.normalize(&capture_settled(rig.rust_tui.as_ref().expect("rust tui")));
-    dump_grid(&format!("{scenario}-home0-ref"), &h0_ref);
-    dump_grid(&format!("{scenario}-home0-rust"), &h0_rust);
-    export_grid_diff(scenario, "home0", &h0_ref, &h0_rust);
     geom_seed_sessions(&rig.rust_url, rig.rust_password.as_deref(), &rig.rust.project);
     geom_seed_sessions(&rig.ref_url, rig.ref_password.as_deref(), &rig.refbox.project);
     rig.stop_tuis();
     settle(2);
     // Boot 2: the probed boot, with the seeded history.
     rig.spawn_tuis();
-    // State A — home. Rig health (settle class): wait for each end's
-    // boot face before capturing. At the extreme-narrow 10x6 the
-    // wordmark does not fit on EITHER end (va3 grid evidence: both
-    // home grids are composer-only) — there the settle needle is the
-    // composer "Ask" prompt instead; the 40x12 home wordmark shape
-    // difference itself rides the export (G-466.2).
-    let needle: &[u8] = if cols <= 16 { b"Ask" } else { WORDMARK };
-    let rust_a =
-        rig.rust_tui.as_ref().expect("rust tui").wait_for(needle, 0, Duration::from_secs(30));
-    let ref_a =
-        rig.ref_tui.as_ref().expect("ref tui").wait_for(needle, 0, Duration::from_secs(60));
-    settle(8);
+    // State A — home. Rig health (settle class): condition-wait each
+    // end's boot face — the hero wordmark at >=40 cols paints a few
+    // seconds after spawn and persists (G-466.2's stage; fixed marks
+    // lose it, va4 bisect), the composer "Ask" prompt at 10x6 (the
+    // wordmark does not fit on EITHER end there — va3 grid evidence).
+    // The needle waits scan the live screen; the needle merely
+    // observed (rig health), all content judgments ride the export.
+    let needle_text: &str = if cols <= 16 { "Ask" } else { "█▀▀█" };
+    let face = |t: Option<&TuiProcess>| {
+        t.as_ref().is_some_and(|t| t.screen_text().contains(needle_text))
+    };
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !(face(rig.rust_tui.as_ref()) && face(rig.ref_tui.as_ref())) && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    let rust_a = face(rig.rust_tui.as_ref());
+    let ref_a = face(rig.ref_tui.as_ref());
     assert!(rig.alive(), "GEOM rig RED: a TUI died before state A");
-    let a_ref = rig.normalize(&capture_settled(rig.ref_tui.as_ref().expect("ref tui")));
-    let a_rust = rig.normalize(&capture_settled(rig.rust_tui.as_ref().expect("rust tui")));
+    // Capture the instant the condition holds — same hero-lifecycle
+    // discipline as home0 (no settle slack between wait and capture).
+    let a_ref = rig.normalize(&rig.ref_tui.as_ref().expect("ref tui").screen_text());
+    let a_rust = rig.normalize(&rig.rust_tui.as_ref().expect("rust tui").screen_text());
     dump_grid(&format!("{scenario}-home-ref"), &a_ref);
     dump_grid(&format!("{scenario}-home-rust"), &a_rust);
     export_grid_diff(scenario, "home", &a_ref, &a_rust);
@@ -1186,3 +1219,4 @@ fn geom160_wide_pair() {
     skip_without_ref_lane!();
     geom_probe("geom160", "geom160", 160, 40);
 }
+
