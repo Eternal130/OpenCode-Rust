@@ -166,7 +166,16 @@ fn scenario(driver: &mut HarnessHandle) -> Result<(), String> {
         let sticky0 = sticky.clone();
         while std::time::Instant::now() < deadline {
             let freed = visible_markers(driver);
-            let step = freed.first().zip(sticky0.first()).map_or(0, |(f, s)| s - f);
+            // The wheel-up signature is the first visible marker's
+            // line number DECREASING. A transient sample where the
+            // first marker moved the other way (CI geometry /
+            // mid-drain re-render) is "not applied yet", never an
+            // arithmetic underflow panic (CI: `attempt to subtract
+            // with overflow` at this line) — keep polling.
+            let step = freed
+                .first()
+                .zip(sticky0.first())
+                .map_or(0, |(f, s)| s.checked_sub(*f).unwrap_or(0));
             if step != 0 {
                 return Some(step);
             }
