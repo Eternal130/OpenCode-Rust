@@ -298,6 +298,36 @@ fn is_space_atom(atom: &Atom) -> bool {
     atom.text == " "
 }
 
+/// G-467.1 — kinsoku (UAX-14's "cl/ex" classes, simplified): CJK
+/// closing punctuation may not START a wrapped line. When a break
+/// would land right before such a character, the break moves one
+/// atom earlier (the trailing ideograph carries the punctuation's
+/// lead — ref w13-g: the line breaks after `…中日韩文`, never
+/// leaving `，` to open the next line).
+fn is_forbidden_line_start(ch: char) -> bool {
+    matches!(
+        ch,
+        '，' | '、' | '。' | '？' | '！' | '：' | '；' | '）' | '】' | '」' | '』' | '〉' | '》'
+            | '〕' | '］' | '｝' | '…' | '・' | '～'
+    )
+}
+
+/// Pull a line end back while the NEXT line would open on a
+/// forbidden-start character (kinsoku) — never below one atom.
+fn kinsoku_pull_back(atoms: &[Atom], line_start: usize, line_end: usize) -> usize {
+    let mut end = line_end;
+    while end > line_start + 1
+        && atoms
+            .get(end)
+            .and_then(|next| next.text.chars().next())
+            .is_some_and(is_forbidden_line_start)
+        && !is_space_atom(&atoms[end - 1])
+    {
+        end -= 1;
+    }
+    end
+}
+
 /// The CJK break class: ideographs, kana, Hangul, fullwidth forms and
 /// extensions — every character in these ranges is its own break
 /// opportunity (UAX-14 `ID`/`CJK` behavior, simplified).
@@ -392,6 +422,9 @@ pub fn wrap_atoms(atoms: &[Atom], width: usize) -> Vec<Vec<Atom>> {
             {
                 line_end -= 1;
             }
+            // G-467.1 — kinsoku: never open the next line on CJK
+            // closing punctuation.
+            let line_end = kinsoku_pull_back(atoms, line_start, line_end);
             lines.push(atoms[line_start..line_end].to_vec());
             line_start = skip_spaces(atoms, line_end);
             last_break = None;
