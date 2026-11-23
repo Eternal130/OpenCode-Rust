@@ -529,9 +529,48 @@ const SSE_HANDSHAKE_FRAME: &str =
 /// Serialize the tests of one binary under plain `cargo test`
 /// (nextest runs one process per test anyway): PTY attach and the
 /// sandbox env vars are process-global state.
-pub fn pty_lock() -> std::sync::MutexGuard<'static, ()> {
+///
+/// va8 (merge-gate audit): cross-process this lock is INERT (a process
+/// static — nextest gives every test its own process). PTY-family
+/// cross-process serialization is a RUNNER property (`--profile pty`,
+/// test-threads=1). When a lane wants cross-process sharding WITHOUT
+/// serializing to 1, set `PTY_LANE_SHARDS=N` (default: unset = the
+/// historical behavior, no cross-process lock): the guard then also
+/// takes an exclusive flock on `/tmp/opencode/oc-tui-pty.shard<pid%N>.lock`
+/// — the T9_LANE_SHARDS pattern (va7) applied to the pty family, pid-keyed
+/// per nextest test process, two legs in one shard merely serialize.
+pub struct PtyLockGuard {
+    _mutex: std::sync::MutexGuard<'static, ()>,
+    _flock: Option<FlockGuard>,
+}
+
+/// An exclusive flock held for the guard's lifetime (released on drop
+/// or process death — no stale-lock window).
+pub struct FlockGuard {
+    _file: std::fs::File,
+}
+
+pub fn pty_lock() -> PtyLockGuard {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock().expect("pty lock")
+    let mutex = LOCK.lock().expect("pty lock");
+    let flock = std::env::var("PTY_LANE_SHARDS")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|shards| *shards > 0)
+        .map(|shards| {
+            let path = std::path::Path::new("/tmp/opencode")
+                .join(format!("oc-tui-pty.shard{}.lock", std::process::id() % shards));
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(&path)
+                .unwrap_or_else(|e| panic!("open {} : {e}", path.display()));
+            let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+            assert_eq!(rc, 0, "flock {}", path.display());
+            FlockGuard { _file: file }
+        });
+    PtyLockGuard { _mutex: mutex, _flock: flock }
 }
 
 // ---------------------------------------------------------------------------
