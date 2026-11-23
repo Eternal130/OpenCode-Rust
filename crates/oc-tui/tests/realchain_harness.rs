@@ -204,13 +204,54 @@ fn log_file(tag: &str) -> PathBuf {
 
 /// The cross-process lane lock (nextest = one process per test; a
 /// std Mutex cannot serialize those). Held for the whole test.
+///
+/// WHY A LOCK EXISTS (archaeology, 1be5467b W1): the harness was
+/// written before the per-test isolation was fully proven, so the
+/// flock serialized the whole realchain family as a blunt
+/// determinism guard. The isolation audit (va7, tree 885d2d16) found
+/// NO cross-process shared MUTABLE resource: sandbox roots are
+/// pid-scoped (`/tmp/opencode/t9w1-<pid>-<tag>`), the replay gateway
+/// binds an ephemeral port (`--port 0`), the managed-daemon service
+/// port is pid-derived (`20_000 + pid % 20_000`), PTYs are per
+/// process, the shared ref stage is read-only, and every
+/// `.test-logs` artifact name embeds the scenario tag. The battery
+/// is wait-bound (746s wall vs ~4m user CPU — ~0.3 cores), so the
+/// serial surface is pure scheduling cost, not CPU saturation.
+///
+/// OPT-IN SHARDING: `T9_LANE_SHARDS=<N>` (N ≥ 2) splits the lock
+/// into N files keyed by the test process's pid — within a shard,
+/// tests still serialize; across shards, legs run concurrently on
+/// their own isolated sandboxes. Default (unset/1) is byte-identical
+/// to the historical single lock. Known residual risks when sharded
+/// (documented, not guarded): (a) the pid-derived daemon port can
+/// collide across concurrent processes (bind conflict fails that leg
+/// only; retry=1 recovers); (b) fixed `settle()` sleeps see ~N×
+/// ambient load — the wait-bound profile measured in va7 leaves
+/// ample quota headroom at N=2; (c) the w13x_* bootstrap tests only
+/// write their corpus in record mode (corpora are committed, so the
+/// battery never writes).
 pub struct LaneGuard {
     _file: File,
 }
 
 #[must_use]
 pub fn lane_lock() -> LaneGuard {
-    let path = Path::new("/tmp/opencode").join("t9w1-realchain.lock");
+    let shards = std::env::var("T9_LANE_SHARDS")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|shards| *shards > 0)
+        .unwrap_or(1);
+    let name = if shards == 1 {
+        "t9w1-realchain.lock".to_owned()
+    } else {
+        // pid-keyed shard: each nextest test is its own process, so
+        // this distributes legs uniformly across the shards without
+        // threading a tag through every call site. Two legs landing
+        // in the same shard just serialize — never a correctness
+        // issue.
+        format!("t9w1-realchain.shard{}.lock", std::process::id() % shards)
+    };
+    let path = Path::new("/tmp/opencode").join(&name);
     let file = File::create(&path).unwrap_or_else(|_| panic!("open {}", path.display()));
     unsafe {
         let rc = libc::flock(file.as_raw_fd(), libc::LOCK_EX);
