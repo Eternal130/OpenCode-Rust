@@ -11291,11 +11291,28 @@ impl InputStopHandle {
     /// stop write into a full pipe must not block the dropper. A
     /// `None` return degrades to flag-only stop (the loop still exits
     /// on its next wake).
-    #[allow(unsafe_code)] // pipe2 FFI
+    #[allow(unsafe_code)] // pipe FFI
     fn stop_pipe_read(self: &Arc<Self>) -> Option<std::os::fd::OwnedFd> {
         use std::os::fd::FromRawFd as _;
         let mut fds = [0i32; 2];
-        // SAFETY: pipe2 with O_NONBLOCK|O_CLOEXEC, closed on failure.
+        // SAFETY: pipe with O_NONBLOCK|O_CLOEXEC applied right after
+        // (pipe2 is glibc-only — macOS has no pipe2), closed on failure.
+        // va10 lesson: this self-pipe shipped broken on darwin (beta.21
+        // release matrix) until the platform split.
+        #[cfg(target_os = "macos")]
+        let ok = unsafe {
+            if libc::pipe(fds.as_mut_ptr()) != 0 {
+                false
+            } else {
+                for fd in fds.iter() {
+                    let flags = libc::fcntl(*fd, libc::F_GETFL);
+                    libc::fcntl(*fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+                    libc::fcntl(*fd, libc::F_SETFD, libc::FD_CLOEXEC);
+                }
+                true
+            }
+        };
+        #[cfg(not(target_os = "macos"))]
         let ok = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_NONBLOCK | libc::O_CLOEXEC) == 0 };
         if !ok {
             return None;
@@ -11501,7 +11518,12 @@ fn drain_fd(fd: std::os::fd::RawFd) {
 extern "C" fn on_sigwinch(_sig: libc::c_int) {
     let fd = WINCH_PIPE_WR.load(std::sync::atomic::Ordering::Relaxed);
     if fd >= 0 {
-        let byte: libc::c_char = b'w'.cast_signed();
+        // c_char is u8 on aarch64-linux and i8 elsewhere — `as` is the
+        // only target-independent form (cast_signed is i8-only); the
+        // pedantic cast_possible_wrap lint is scoped to this line.
+        // Signal-handler discipline: no panicking paths here.
+        #[allow(clippy::cast_possible_wrap)]
+        let byte = b'w' as libc::c_char;
         unsafe {
             let _ = libc::write(fd, std::ptr::addr_of!(byte).cast::<libc::c_void>(), 1);
         }
@@ -11566,7 +11588,8 @@ mod tests {
         let parked = std::thread::spawn(move || wait_session_input(-1, -1, winch_rd, -1));
         std::thread::sleep(std::time::Duration::from_millis(50));
         assert!(!parked.is_finished(), "the read returned before SIGWINCH");
-        let byte: libc::c_char = b'w'.cast_signed();
+        #[allow(clippy::cast_possible_wrap)] // c_char sign differs by target
+        let byte = b'w' as libc::c_char;
         // SAFETY: write(2) one byte on the non-blocking self-pipe.
         #[allow(unsafe_code)]
         unsafe {
