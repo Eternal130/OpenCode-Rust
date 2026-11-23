@@ -447,7 +447,13 @@ pub fn sandbox(tag: &str, gateway_port: u16) -> Sandbox {
         std::fs::create_dir_all(root.join(dir)).expect("sandbox dir");
     }
     std::fs::write(root.join("project/README.md"), "# t9 sandbox project\n").expect("project file");
-    let service_port = 20_000 + (std::process::id() % 20_000) as u16;
+    // va8: adaptive port pick (G-461 mirror of `ref_service_port`). The
+    // bare `20000 + pid%20000` bucketing collided under sharded battery
+    // concurrency: the band is NOT lane-exclusive (unrelated long-lived
+    // dev servers/buns occupy 30000-40000 ports on this box) and prior
+    // rounds' daemons linger. Bind-probe walk from a root-hashed base,
+    // pinned per sandbox root.
+    let service_port = adaptive_service_port(&root);
     Sandbox {
         root: root.clone(),
         project: root.join("project"),
@@ -455,6 +461,32 @@ pub fn sandbox(tag: &str, gateway_port: u16) -> Sandbox {
         service_port,
         shim_dir: None,
     }
+}
+
+/// va8: adaptive managed-daemon port for the rust sandbox — hashed base
+/// in the 20000-40000 band, walk past any incumbent listener, pin to a
+/// file in the sandbox root (the `ref_service_port` pattern). Distinct
+/// sandbox roots hash to distinct bases; a walking step only happens on
+/// a genuine incumbent.
+fn adaptive_service_port(root: &Path) -> u16 {
+    use std::hash::{Hash, Hasher};
+    let pin = root.join(".rust-service-port");
+    if let Ok(text) = std::fs::read_to_string(&pin) {
+        if let Ok(port) = text.trim().parse::<u16>() {
+            return port;
+        }
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    root.hash(&mut hasher);
+    let mut port = 20_000 + (hasher.finish() % 20_000) as u16;
+    for _ in 0..10_000 {
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            std::fs::write(&pin, port.to_string()).expect("pin rust service port");
+            return port;
+        }
+        port = if port >= 39_999 { 20_000 } else { port + 1 };
+    }
+    panic!("no free rust service port in 20000-40000 for {}", root.display());
 }
 
 /// Prepend `dir` to a prepared command's PATH (the W7 shim lane: the
