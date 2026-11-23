@@ -1038,6 +1038,13 @@ fn arm_pdeathsig(command: &mut Command) {
 ///     the registration PID and escalates to SIGKILL if the graceful
 ///     stop left it alive. Well under the 3s reclamation requirement.
 fn spawn_daemon_supervisor(sandbox: &Sandbox) {
+    // va8 (2026-11-23): the supervisor runs in its OWN session (setsid).
+    // It previously inherited the test process's process group, so a
+    // group-wide cascade kill (the va7/s4 shape: kill the gate's whole
+    // process tree) reached the supervisor at the exact moment it needed
+    // to survive — the "supervisor died before polling" race that leaked
+    // 6 PPID=1 daemons. A setsid supervisor is invisible to group-kill
+    // cascades; it self-exits after reclaiming the daemon.
     let test_pid = std::process::id();
     // The script takes the test pid as $1 — a static shell text (no
     // interpolation), passed verbatim below.
@@ -1087,6 +1094,83 @@ exit 0
     // NO PDEATHSIG here: the supervisor must SURVIVE the test process's
     // death to do its job (PR_SET_PDEATHSIG would kill it at the exact
     // moment it needs to act). It self-exits after reclaiming the daemon.
+    // va8: setsid — its own session, so process-group cascade kills
+    // (kill(-pgid)) cannot reach it (the va7/s4 supervisor race).
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let _ = command.spawn();
+}
+
+/// va8 (2026-11-23): the REF-side counterpart of
+/// [`spawn_daemon_supervisor`]. The ref TUI self-spawns its managed
+/// daemon as a DETACHED grandchild (`bun <ref-entry> serve --service`),
+/// so a test process that dies abnormally (SIGKILL/SIGTERM from a
+/// cascade kill) strands a PPID=1 ref bun — the s4 round's 3 ref-bun
+/// orphans and the never-caught `t9w1-694206-geom10ref` (20:34) were
+/// exactly this shape. The supervisor waits for the ref daemon's
+/// registration to appear (arm happens at TUI spawn, the daemon boots
+/// seconds later), waits for the test's death, then runs the daemon's
+/// own graceful `service stop` with a hard-kill backstop. Same session
+/// isolation as the rust supervisor (setsid), same self-exit.
+fn spawn_ref_supervisor(sandbox: &Sandbox, stage: &RefStage) {
+    let test_pid = std::process::id();
+    let script = r#"
+test_pid=$1
+reg_pid() {
+for f in "$OC_STATE"/opencode-rust/service*.json "$OC_STATE"/opencode/service*.json; do
+  [ -f "$f" ] || continue
+  p=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$f" | head -n 1)
+  if [ -n "$p" ]; then echo "$p"; return; fi
+done
+}
+pid=""
+i=0
+while [ "$i" -lt 600 ]; do
+  kill -0 "$test_pid" 2>/dev/null || break
+  pid=$(reg_pid)
+  [ -n "$pid" ] && break
+  sleep 0.1
+  i=$((i+1))
+done
+if [ -z "$pid" ]; then exit 0; fi
+while kill -0 "$test_pid" 2>/dev/null; do sleep 0.2; done
+case "$pid" in ''|1|"$test_pid"|$$) exit 0;; esac
+if kill -0 "$pid" 2>/dev/null; then
+  "$OC_BUN" "$OC_ENTRY" service stop >/dev/null 2>&1 || true
+  j=0
+  while kill -0 "$pid" 2>/dev/null && [ "$j" -lt 10 ]; do sleep 0.1; j=$((j+1)); done
+  kill -9 "$pid" 2>/dev/null || true
+fi
+exit 0
+"#
+    .to_string();
+    let mut command = sandbox.command_ref(stage, &PathBuf::from("/bin/sh"));
+    command
+        .arg("-c")
+        .arg(&script)
+        .arg("ref-supervisor")
+        .arg(test_pid.to_string())
+        .env("OC_STATE", sandbox.root.join("xdg-state"))
+        .env("OC_BUN", &stage.bun)
+        .env("OC_ENTRY", &stage.entry)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // Own session — immune to process-group cascade kills (va8).
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
     let _ = command.spawn();
 }
 
@@ -1605,6 +1689,10 @@ impl Sandbox {
 pub fn ref_tui_spawn(sandbox: &Sandbox, stage: &RefStage, cols: u16, rows: u16) -> TuiProcess {
     let mut command = sandbox.command_ref(stage, &stage.bun);
     command.arg(&stage.entry);
+    // va8: belt-and-braces ref-daemon reaper (see `spawn_ref_supervisor`)
+    // — armed at TUI spawn so an abnormal test death cannot strand the
+    // self-spawned detached ref daemon at PPID=1.
+    spawn_ref_supervisor(sandbox, stage);
     TuiProcess::spawn_command(command, cols, rows)
 }
 

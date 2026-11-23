@@ -13,8 +13,16 @@ WHAT IT CHECKS (runtime scan, not static text)
                       followed by `serve --service` — the managed-daemon
                       path a realchain test leaked (2026-11-23: 64 such
                       daemons, ~340MB each, ~22GB total).
-    ref-serve         PPID=1 and cmdline contains /tmp/opencode/ref/packages
-                      — the reference checkout's bun-launched server.
+    ref-serve         PPID=1 and cmdline contains the ref CLI entry
+                      (/tmp/opencode/ref/packages — legacy staging; or
+                      /opt/opencode-ref/packages/cli/src/index.ts — the
+                      current T9_REF_ROOT default) — the reference
+                      checkout's bun-launched TUI/daemon (va8 audit:
+                      the va7/s4 round's 3 ref-bun orphans and the
+                      20:34 `t9w1-694206-geom10ref` were this shape and
+                      the old single `/tmp/opencode/ref/packages`
+                      needle matched NOTHING in the current
+                      deployment).
 
   IN-FLIGHT EXCLUSION (the "die WITH the test" semantic, va6):
     A PPID=1 daemon is only an ORPHAN if its owning test process is gone.
@@ -24,6 +32,15 @@ WHAT IT CHECKS (runtime scan, not static text)
     a legitimate in-flight daemon of a running battery (PPID=1 from the
     moment `service start` daemonizes — by design), NOT flagged; dead or
     unresolvable = orphan, flagged.
+
+    va8 (owner-liveness hardening): a bare `/proc/<pid>` exists check
+    is NOT a liveness proof — pids recycle within minutes on a busy
+    box, and the va7/s4 round's 6 orphans were audited as "only 1/6
+    reported": the recycled owner pids pointed at LIVE unrelated
+    processes, so daemons were wrongly excluded as in-flight. The
+    check now additionally requires the owner's cmdline to look like a
+    lane test process (a target test binary or a cargo/nextest
+    driver) — a recycled pid running anything else is an orphan.
 
   EXPLICIT EXCLUSION (by design, the legitimate 2-day service):
     /root/.opencode/bin/opencode serve --service — the user's own long-
@@ -57,7 +74,10 @@ import guardlib  # noqa: E402
 GUARD = "orphan_daemon"
 
 TARGET_PREFIX = "/opt/opencode-rust/target/"
-REF_NEEDLE = "/tmp/opencode/ref/packages"
+# The ref CLI entry: the legacy staging path AND the current T9_REF_ROOT
+# default (`../opencode-ref` beside the repo). The va8 audit: the old
+# single needle matched nothing in the current deployment.
+REF_NEEDLES = ("/tmp/opencode/ref/packages", "/opt/opencode-ref/packages/cli/src/index.ts")
 # The legitimate user service — excluded BEFORE any rule matches.
 EXCLUDED_PREFIX = "/root/.opencode/bin/opencode"
 
@@ -84,6 +104,21 @@ def proc_ppid(pid_dir: Path) -> int:
 SANDBOX_PID_RE = re.compile(r"/tmp/opencode/[^-\0]+-(\d+)-")
 
 
+def lane_test_alive(pid: str) -> bool:
+    """True when /proc/<pid> exists AND its cmdline looks like a lane
+    test process (a target test binary or a cargo/nextest driver).
+    A bare /proc existence check is not enough — pids recycle (va8:
+    the s4 round's recycled owner pids pointed at live unrelated
+    processes, excluding real orphans as in-flight)."""
+    cmdline = proc_cmdline(Path("/proc") / pid)
+    if not cmdline:
+        return False
+    joined = "\0".join(cmdline)
+    if "nextest" in joined or "cargo" in joined:
+        return True
+    return cmdline[0].startswith(TARGET_PREFIX)
+
+
 def owning_test_alive(pid_dir: Path) -> bool | None:
     """True/False if the daemon's owning test pid can be resolved, None if
     the environ names no recognizable lane sandbox (be conservative then:
@@ -96,7 +131,7 @@ def owning_test_alive(pid_dir: Path) -> bool | None:
         value = chunk.decode("utf-8", "replace").split("=", 1)[-1]
         match = SANDBOX_PID_RE.search(value)
         if match:
-            return Path(f"/proc/{match.group(1)}").exists()
+            return lane_test_alive(match.group(1))
     return None
 
 
@@ -121,7 +156,7 @@ def collect() -> tuple[list[dict], dict]:
                 and cmdline[1:3] == ["serve", "--service"]:
             vid = f"rust-serve:{cmdline[0]}"
             detail = f"pid={entry.name} cmdline={joined!r}"
-        elif REF_NEEDLE in joined:
+        elif any(needle in joined for needle in REF_NEEDLES):
             vid = f"ref-serve:{cmdline[0]}"
             detail = f"pid={entry.name} cmdline={joined[:200]!r}"
         if vid is not None:
@@ -132,7 +167,7 @@ def collect() -> tuple[list[dict], dict]:
             detail = (f"pid={entry.name} owner_test="
                       f"{'dead' if owner is False else 'unresolved'} {detail}")
             violations.append({"id": vid, "detail": detail})
-    meta = {"scanned": scanned, "excluded": EXCLUDED_PREFIX}
+    meta = {"scanned": scanned, "excluded": EXCLUDED_PREFIX, "ref_needles": list(REF_NEEDLES)}
     return violations, meta
 
 
