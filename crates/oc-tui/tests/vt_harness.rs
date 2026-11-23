@@ -492,11 +492,11 @@ pub fn median_gap(times: &[u64]) -> Option<u64> {
 
 /// The libtest 60-second warning needle ("test … has been running for
 /// over 60 seconds"). libtest writes it to the TEST PROCESS's fd 1 —
-/// which attach_pty has dup2'd to the PTY slave — so the bytes enter
+/// which `attach_pty` has dup2'd to the PTY slave — so the bytes enter
 /// the terminal stream at the app's CURRENT CURSOR and overwrite live
 /// screen cells (observed 2026-11-24, `PTY_LANE_SHARDS=2` soak: the
 /// warning landed in the session composer's row and re-classified
-/// off-strip sweeps as ContentChange). The warning is test-runner
+/// off-strip sweeps as `ContentChange`). The warning is test-runner
 /// self-noise, never app behavior: the reader drops it BEFORE the
 /// parser sees it (instrument repair, SA-F4 precedent) — the sweep
 /// assertions themselves are untouched, and a genuinely slow test
@@ -509,6 +509,10 @@ const LIBTEST_60S_NEEDLE: &[u8] = b"has been running for over 60 seconds";
 /// hold-back delays every small paint beyond the probe window, va10
 /// finding: the filter itself must not lag the stream). Pass `eof` to
 /// flush (call with `chunk` empty).
+/// va10 debug: how many warning spans the filter actually dropped.
+pub static DROPPED_WARN_SPANS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 fn strip_libtest_warning(carry: &mut Vec<u8>, chunk: &[u8], eof: bool) -> Vec<u8> {
     let needle_len = LIBTEST_60S_NEEDLE.len();
     let mut buf = std::mem::take(carry);
@@ -519,8 +523,25 @@ fn strip_libtest_warning(carry: &mut Vec<u8>, chunk: &[u8], eof: bool) -> Vec<u8
         match buf[cursor..].windows(needle_len).position(|window| window == LIBTEST_60S_NEEDLE) {
             Some(rel) => {
                 let at = cursor + rel;
-                out.extend_from_slice(&buf[cursor..at]);
-                cursor = at + needle_len;
+                // Drop the WHOLE enclosing line: libtest writes
+                // "\ntest <name> has been running for over 60
+                // seconds\n" — dropping only the needle would leave the
+                // "\ntest <name> " prefix to render at the app's cursor
+                // (and the trailing newline to scroll the screen).
+                let mut start = buf[cursor..at]
+                    .iter()
+                    .rposition(|byte| *byte == b'\n')
+                    .map_or(cursor, |offset| cursor + offset);
+                if start < cursor {
+                    start = cursor;
+                }
+                let mut end = at + needle_len;
+                if buf.get(end) == Some(&b'\n') {
+                    end += 1;
+                }
+                out.extend_from_slice(&buf[cursor..start]);
+                cursor = end;
+                DROPPED_WARN_SPANS.fetch_add(1, Ordering::Relaxed);
             }
             None => break,
         }
@@ -534,9 +555,7 @@ fn strip_libtest_warning(carry: &mut Vec<u8>, chunk: &[u8], eof: bool) -> Vec<u8
         // caught); the common case holds nothing.
         let hold = (1..needle_len.min(buf.len() - cursor + 1))
             .rev()
-            .find(|candidate| {
-                LIBTEST_60S_NEEDLE.starts_with(&buf[buf.len() - candidate..])
-            })
+            .find(|candidate| LIBTEST_60S_NEEDLE.starts_with(&buf[buf.len() - candidate..]))
             .unwrap_or(0);
         out.extend_from_slice(&buf[cursor..buf.len() - hold]);
         *carry = buf[buf.len() - hold..].to_vec();
@@ -2186,7 +2205,8 @@ impl LiveHarness {
                             // the runner's 60 s warning is harness
                             // self-noise injected into the terminal
                             // stream — dropped before parsing.
-                            let filtered = strip_libtest_warning(&mut carry, &chunk[..count], false);
+                            let filtered =
+                                strip_libtest_warning(&mut carry, &chunk[..count], false);
                             let now_ms = thread_start.elapsed().as_millis() as u64;
                             feed_vt.lock().expect("vt").feed(&filtered, now_ms);
                             feed_raw.lock().expect("raw").extend_from_slice(&filtered);

@@ -227,3 +227,55 @@ battery shard lever (T9_LANE_SHARDS / PTY_LANE_SHARDS, both default
 off) or the RL-1 resource fix so legs stop inflating each other's
 in-test lock waits (nextest per-test durations for realchain legs
 include lane_lock flock wait).
+
+## va10 round — vt_hover_sweep wait mechanism rebuilt; RL-T5 fixed (2026-11-24)
+
+1. **Root-cause correction (supersedes the SHARDS soak attribution above).**
+   The SHARDS=2/3 hard reds were NOT wall-inflation time-outs. Failure
+   shape (015449 log): libtest's 60-second warning ("test … has been
+   running for over 60 seconds") is written to the TEST PROCESS's fd 1 —
+   which `attach_pty` dup2'd to the PTY slave — so the bytes enter the
+   terminal stream at the app's cursor (observed: landed in the session
+   composer row; the trailing newline scrolls the screen), re-classifying
+   off-strip sweeps as ContentChange. Fix: the vt_harness master reader
+   drops the whole enclosing line of the needle before parsing
+   (`LIBTEST_60S_NEEDLE`, instrument repair — assertions untouched). A
+   first filter version with a blanket 35-byte hold-back caused a NEW
+   deterministic red (small style-only paints ~15-30 bytes were held past
+   the probe window — the '+' GLYPH highlight was invisible for up to
+   100 ms); the hold-back is now the longest genuine needle-prefix
+   suffix (normally zero bytes).
+
+2. **vt_hover_sweep wait mechanism (T1).** probe_hover: fixed 60 ms
+   sleep → event-driven two-phase wait (poll → first diff → 12 ms
+   stability span → neutral same-row clear motion absorbing late
+   paints). Constants from the measurement harness `vt_hover_paint_
+   latency_harness` (#[ignore]d, re-runnable): n=240 median=10ms
+   p90/p99=11ms max=12ms (quiet box); contended (SHARDS=2) median 2-4ms
+   p99=4-9ms max≤30ms. Attribution window 30+6=36 ms ≥ 3× median and
+   ≥ measured tail. Poller fast path = per-feed FNV screen digest
+   (O(1) "unchanged"; a full-grid clone per poll starved the app's
+   render thread under load). Assertions unchanged.
+
+3. **RL-T5 retired.** `drive_with_budget`; pty_reconnecting_overlay
+   uses a 60 s outer budget (its internal wait bands 5+20+20+30 s sum
+   past the historical 25 s cap). 10× consecutive --exact runs green.
+   Removal from the observation list pending controller check.
+
+4. **Verification.** Family ×4 green (74.3 s wall each, was ~110 s);
+   SHARDS=2 contention probe ×3: 11/11 PASS (last two runs zero
+   fails/retries, 142.4-161.3 s; the soak's 3× all-FAIL shape gone).
+   Merge gate t4: 773.668 s, zero flakes (baseline 773.655 s).
+   In-gate vt_hover per-test durations 19-30 s (was 36-63 s).
+
+5. **T3 threads probe (kept t4).** `--test-threads 6` ×1: wall 607.5 s
+   (−21% vs t4) BUT two NEW retry-pass flake classes appeared
+   (mini_pty_g221 footer queued count; parity scenario_config_touch
+   frame census) — kept t4 per lane rule; candidates for the
+   watchlist only with three-element justification.
+
+6. **needs-controller.** Battery 98/98 PASS but adjudicate exits 2:
+   `geom160-home0` footer divergence (rust shows `Build · claude-
+   opus-4-7 Replay Anthropic` / normalized footer line, ref does not)
+   — pre-existing at va7-era tree 43220196, reproduced at va10 tree
+   0412f259. Not introduced by this lane; unadjudicated.

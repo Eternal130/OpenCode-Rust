@@ -188,6 +188,7 @@ fn latency_report() -> String {
         return "n=0".to_owned();
     }
     samples.sort_unstable();
+    #[allow(clippy::cast_precision_loss)] // harness instants are bounded magnitudes
     let pick = |q: f64| samples[((samples.len() as f64 - 1.0) * q).floor() as usize];
     format!(
         "n={} median={}ms p90={}ms p99={}ms max={}ms",
@@ -277,7 +278,7 @@ fn settle_classify(
 /// recorded in [`HOVER_LATENCIES`]; classification then waits for the
 /// diff signature to hold [`HOVER_STABLE_MS`] so one paint's spans
 /// settle together. Only a cell still at baseline after
-/// [`HOVER_RESPONSE_WINDOW_MS`] is a NoChange candidate — the window
+/// `HOVER_RESPONSE_WINDOW_MS` is a `NoChange` candidate — the window
 /// covers the measured tail paint latency (≥3× median), so a slow
 /// surface is never truncated.
 ///
@@ -327,14 +328,10 @@ fn probe_hover(
     // `HOVER_LATE_WATCH_MS`.
     let clear = clear_cell(baseline, y);
     harness.sgr_motion(clear.0, clear.1);
-    let watch_ms = if observed.is_some() {
-        HOVER_CLEAR_QUIET_MS + HOVER_POLL_MS
-    } else {
-        HOVER_LATE_WATCH_MS
-    };
+    let watch_ms =
+        if observed.is_some() { HOVER_CLEAR_QUIET_MS + HOVER_POLL_MS } else { HOVER_LATE_WATCH_MS };
     let clear_deadline = std::time::Instant::now() + Duration::from_millis(watch_ms);
     let mut baseline_since: Option<std::time::Instant> = None;
-    let result;
     loop {
         std::thread::sleep(Duration::from_millis(HOVER_POLL_MS));
         let now = std::time::Instant::now();
@@ -348,8 +345,9 @@ fn probe_hover(
             // one quiet span; an unobserved probe keeps watching for
             // its late paint until the window closes.
             if observed.is_some()
-                && baseline_since
-                    .is_some_and(|since| now.duration_since(since).as_millis() >= u128::from(HOVER_CLEAR_QUIET_MS))
+                && baseline_since.is_some_and(|since| {
+                    now.duration_since(since).as_millis() >= u128::from(HOVER_CLEAR_QUIET_MS)
+                })
             {
                 break;
             }
@@ -374,8 +372,7 @@ fn probe_hover(
             break;
         }
     }
-    result = observed.unwrap_or(Response::NoChange);
-    result
+    observed.unwrap_or(Response::NoChange)
 }
 
 /// Targeted probes of the `" + "` affordance's EXACT columns: the
@@ -414,9 +411,11 @@ fn sweep_band(
     while y < y1.min(baseline.rows) {
         let mut x = 0;
         while x < baseline.cols {
-            let mut response = probe_hover(harness, x as u16, y as u16, baseline, volatile, baseline_digest);
+            let mut response =
+                probe_hover(harness, x as u16, y as u16, baseline, volatile, baseline_digest);
             if y == 0 && response == Response::NoChange && x % stride == 0 {
-                response = probe_hover(harness, x as u16, y as u16, baseline, volatile, baseline_digest);
+                response =
+                    probe_hover(harness, x as u16, y as u16, baseline, volatile, baseline_digest);
             }
             let grid = harness.grid_now();
             if grid.is_blank() {
