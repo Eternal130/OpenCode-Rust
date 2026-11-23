@@ -33,8 +33,11 @@
 //! written to `/tmp/opencode/pty-fuzz-fail-s<seed>.txt`.
 //!
 //! Entrypoints:
-//! * `pty_fuzz_smoke` — 3 fixed seeds × 120 keys (CI, the serialized
-//!   pty job);
+//! * `pty_fuzz_smoke_seed1/2/3` — one fixed seed × 120 keys each (CI,
+//!   the serialized pty job; va9 split of the former single
+//!   `pty_fuzz_smoke` body so nextest can run the three seeds
+//!   concurrently — the same `test(pty_fuzz)` filters in ci.yml and
+//!   .config/nextest.toml keep matching these names by substring);
 //! * `pty_fuzz_long` (`#[ignore]`) — 20 seeds × 250 keys; run
 //!   nightly-style locally:
 //!
@@ -1320,17 +1323,33 @@ fn keys_from_env(default: usize) -> usize {
     std::env::var("OC_PTY_FUZZ_KEYS").ok().and_then(|v| v.parse().ok()).unwrap_or(default)
 }
 
-/// CI smoke: 3 fixed seeds × 120 keys (deterministic; the serialized
-/// pty job). Env overrides: `OC_PTY_FUZZ_SEEDS`, `OC_PTY_FUZZ_KEYS`.
-#[tokio::test(flavor = "multi_thread")]
-async fn pty_fuzz_smoke() {
+/// CI smoke: one fixed seed × 120 keys per test (deterministic; the
+/// serialized pty job), split into one test per seed (va9) so nextest's
+/// 4-thread runner overlaps them. Env overrides: `OC_PTY_FUZZ_SEEDS`
+/// (the i-th listed seed rides `pty_fuzz_smoke_seed{i}`, wrapping to
+/// the last listed seed if the list is shorter), `OC_PTY_FUZZ_KEYS`.
+async fn smoke_one_seed(index: usize) {
     let seeds = seeds_from_env(&[20_260_101, 20_260_102, 20_260_103]);
+    let seed = seeds.get(index).copied().unwrap_or(seeds[seeds.len() - 1]);
     let keys = keys_from_env(120);
-    for seed in seeds {
-        if let Err(message) = fuzz_one(seed, keys).await {
-            panic!("pty_fuzz_smoke: {message}");
-        }
+    if let Err(message) = fuzz_one(seed, keys).await {
+        panic!("pty_fuzz_smoke: {message}");
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pty_fuzz_smoke_seed1() {
+    smoke_one_seed(0).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pty_fuzz_smoke_seed2() {
+    smoke_one_seed(1).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pty_fuzz_smoke_seed3() {
+    smoke_one_seed(2).await;
 }
 
 /// Nightly/local long pass: 20 seeds × 250 keys.

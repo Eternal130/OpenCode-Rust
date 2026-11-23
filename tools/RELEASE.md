@@ -336,8 +336,9 @@ alive / no escape-response garbage (`rgb:` leak) / non-void screen /
 escape-recoverability / bounded cell corruption. Failures dump the
 exact reproducer to `/tmp/opencode/pty-fuzz-fail-s<seed>.txt`.
 
-- CI smoke (serialized pty job): `pty_fuzz_smoke` — 3 fixed seeds ×
-  120 keys.
+- CI smoke (serialized pty job): `pty_fuzz_smoke_seed1/2/3` (va9
+  split of the former single `pty_fuzz_smoke`) — one fixed seed ×
+  120 keys each.
 - Nightly-style long pass (local, ~20× the smoke):
   `cargo nextest run -p oc-cli --run-ignored only -E 'test(pty_fuzz_long)'`
   — 20 seeds × 250 keys; sweep custom seeds/lengths via
