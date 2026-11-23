@@ -368,6 +368,40 @@
       "adjudicated_by": "va4 geometry pair graduation",
       "adjudicated_at": "2026-11-23",
       "last_observed": "2026-11-23"
+    },
+    {
+      "id": "va4-nc-cjk-wrap-w13g",
+      "scenario_pattern": "w13-g-cjk",
+      "state_pattern": "settled",
+      "shape": {
+        "kind": "regex",
+        "any_contains": [
+          "折行|日韩|文本"
+        ]
+      },
+      "classification": "needs-controller",
+      "justification": "CJK transcript wrapping: ref breaks the long CJK run one column earlier than rust (ref wraps after 中日韩文, rust after 中日韩文本) — the rows are pure CJK (no ASCII alnum) so the pre-va4 normalizer dropped them identically and the wrap divergence was invisible. NEEDS-CONTROLLER (va4 normalizer fix): surfaced by the replace_id_shapes remainder-drop fix (no-alnum rows were silently blanked on BOTH ends before va4) — controller adjudicates; feeds the fix lane's scope.",
+      "g_ref": "needs-ledger",
+      "adjudicated_by": "va4 normalizer fix triage",
+      "adjudicated_at": "2026-11-23",
+      "last_observed": "2026-11-23"
+    },
+    {
+      "id": "va4-nc-wordmark-bleed-w13-permonce",
+      "scenario_pattern": "w13-perm-once",
+      "state_pattern": "dialog",
+      "shape": {
+        "kind": "regex",
+        "any_contains": [
+          "█|┃"
+        ]
+      },
+      "classification": "needs-controller",
+      "justification": "Permission dialog: rust bleeds wordmark glyphs (█ at the right edge) across dialog rows 26-32 where ref draws the composer border (┃) — same glyph-bleed family as the geom40 dialog right-side spillover, newly visible after the va4 normalizer fix. NEEDS-CONTROLLER (va4 normalizer fix): surfaced by the replace_id_shapes remainder-drop fix (no-alnum rows were silently blanked on BOTH ends before va4) — controller adjudicates; feeds the fix lane's scope.",
+      "g_ref": "needs-ledger",
+      "adjudicated_by": "va4 normalizer fix triage",
+      "adjudicated_at": "2026-11-23",
+      "last_observed": "2026-11-23"
     }
   ]
 }
