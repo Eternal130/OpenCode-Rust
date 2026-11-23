@@ -33,7 +33,7 @@ snapshots switch/default, session.tps default) are probed mechanically with
 regex evidence on both sides.
 
 Usage: python3 tools/census/config_keys.py [--ref $OC_REF_ROOT]
-          [--write docs/audit/census/CONFIG-KEYS.md]
+          [--write .test-logs/census/CONFIG-KEYS.md]
 """
 from __future__ import annotations
 
@@ -880,7 +880,7 @@ def diff(rust: dict, refk: dict):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ref", default=REF_DEFAULT)
-    ap.add_argument("--write", default="docs/audit/census/CONFIG-KEYS.md")
+    ap.add_argument("--write", default=".test-logs/census/CONFIG-KEYS.md")
     args = ap.parse_args()
     ref = Path(args.ref)
 
@@ -919,7 +919,7 @@ def main() -> int:
         "CONFIG-KEYS Census（缺口普查 · 通道 2/∞）",
         "双侧配置键全集机械提取 + 字面默认值对拍；census 非门禁，exit 0。",
     )
-    rep.w("> 生成命令：`python3 tools/census/config_keys.py --write docs/audit/census/CONFIG-KEYS.md`")
+    rep.w("> 生成命令：`python3 tools/census/config_keys.py --write .test-logs/census/CONFIG-KEYS.md`")
     rep.w("> 权威源：rust serde 结构体（oc-schema/config + oc-core/cli_config）vs ref effect Schema"
           "（packages/schema/src/config* + packages/tui/src/config/index.tsx）。")
     rep.w("")

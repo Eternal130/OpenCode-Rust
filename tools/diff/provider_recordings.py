@@ -37,7 +37,7 @@ the gateway-wrapped protocols (vercel-native, cloudflare-ai-gateway) whose
 step machines are wrapped by gateway usage-merge logic outside this
 channel's decode-only seam.
 
-Output: markdown report (default docs/audit/diff/PROVIDER-RECORDINGS.md).
+Output: markdown report (default .test-logs/diff/PROVIDER-RECORDINGS.md).
 Verdicts per interaction: MATCH / DIVERGE.  Exit 0 - a census/diff report,
 not a gate.  Deterministic: sorted cases, canonical JSON.
 """
@@ -504,7 +504,7 @@ def write_report(path: Path, cases: list[dict], census: dict, ref_recs, rust_rec
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ref", default=str(REF_DEFAULT))
-    ap.add_argument("--write", default="docs/audit/diff/PROVIDER-RECORDINGS.md")
+    ap.add_argument("--write", default=".test-logs/diff/PROVIDER-RECORDINGS.md")
     ap.add_argument("--manifest-only", action="store_true")
     args = ap.parse_args()
     ref = Path(args.ref)

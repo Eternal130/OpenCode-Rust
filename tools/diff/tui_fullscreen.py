@@ -51,7 +51,7 @@ Out of scope (later tasks on this channel): divergence adjudication
 matchers are exact-shape (scenario-id prefix + divergence form); an
 unknown divergence never matches and stays unadjudicated => exit 2.
 
-Output: markdown report (default docs/audit/diff/TUI-FULLSCREEN.md).
+Output: markdown report (default .test-logs/diff/TUI-FULLSCREEN.md).
 Exit codes (gate): 0 — report produced and every COMMITTED case
 adjudicated (exact, or non-exact covered by a CAUSES matcher);
 recorded-local (`rec-*`) unadjudicated divergences are ADVISORY (the
@@ -1250,7 +1250,7 @@ def write_report(path: Path, cases: list[dict], ref: dict[str, dict], rust: dict
     lines.append("adjudication 属 T9——committed 语料未命中 CAUSES 的一切非 exact 均未裁决 → exit 2")
     lines.append("（recorded-local `rec-*` 未裁决=advisory，见其小节；控制者裁定 2026-11-15）。")
     lines.append("")
-    lines.append("> 复现：python3 tools/diff/tui_fullscreen.py --write docs/audit/diff/TUI-FULLSCREEN.md")
+    lines.append("> 复现：python3 tools/diff/tui_fullscreen.py --write .test-logs/diff/TUI-FULLSCREEN.md")
     lines.append("")
     lines.append("- rust 侧: `cargo nextest -p oc-tui --test tui_fullscreen_diff_driver`（env 门控")
     lines.append("  TUI_DIFF_MANIFEST/TUI_DIFF_OUT，dev-gate 身份）。驱动面:")
@@ -1468,7 +1468,7 @@ def write_report(path: Path, cases: list[dict], ref: dict[str, dict], rust: dict
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ref", default=str(REF_DEFAULT))
-    ap.add_argument("--write", default="docs/audit/diff/TUI-FULLSCREEN.md")
+    ap.add_argument("--write", default=".test-logs/diff/TUI-FULLSCREEN.md")
     ap.add_argument("--manifest-only", action="store_true")
     args = ap.parse_args()
     ref = Path(args.ref)

@@ -21,7 +21,7 @@ Normalizations (identical on both sides, see report header):
   model -> `providerID/id`; tool streaming-input accumulator masked;
   tool metadata compared as raw JSON; tokens/usage/cost excluded.
 
-Output: markdown report (default docs/audit/diff/SSE-PROJECTION.md).
+Output: markdown report (default .test-logs/diff/SSE-PROJECTION.md).
 Verdicts: MATCH / DIVERGE(first-event-index, fields). Exit 0 — a diff
 report, not a gate. Deterministic: sorted sequences, canonical JSON.
 """
@@ -194,7 +194,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ref", default=REF_DEFAULT)
     ap.add_argument("--corpus", default=str(CORPUS_DEFAULT))
-    ap.add_argument("--write", default="docs/audit/diff/SSE-PROJECTION.md")
+    ap.add_argument("--write", default=".test-logs/diff/SSE-PROJECTION.md")
     args = ap.parse_args()
     corpus = Path(args.corpus)
 

@@ -24,7 +24,7 @@ comment); kebab/snake case never occurs on this axis, so NO case
 normalization is applied. Only the family/tag NAME set is compared —
 HTTP status mappings and field shapes are out of scope.
 
-Usage: python3 tools/census/errors.py [--ref $OC_REF_ROOT] [--write docs/audit/census/ERRORS.md]
+Usage: python3 tools/census/errors.py [--ref $OC_REF_ROOT] [--write .test-logs/census/ERRORS.md]
 """
 from __future__ import annotations
 
@@ -120,7 +120,7 @@ def main() -> int:
 
     r = Report(
         "ERRORS Census（缺口普查 · server API 错误族）",
-        "双侧 HttpApi 错误 tag 全集 + readiness `code` 信封对拍；生成命令：`python3 tools/census/errors.py --write docs/audit/census/ERRORS.md`",
+        "双侧 HttpApi 错误 tag 全集 + readiness `code` 信封对拍；生成命令：`python3 tools/census/errors.py --write .test-logs/census/ERRORS.md`",
     )
     r.w("## 轴 1：HttpApi 错误 tag（`_tag` 类名）全集")
     r.w("")

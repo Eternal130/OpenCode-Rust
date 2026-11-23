@@ -32,7 +32,7 @@ Axis 3 — the catalog-only census (the ~180 blind spot, mechanized):
                        protocol -> typed UnsupportedProtocol (gap
                        candidates, declared registered exemption).
 
-Usage: python3 tools/census/providers.py [--ref $OC_REF_ROOT] [--write docs/audit/census/PROVIDERS.md]
+Usage: python3 tools/census/providers.py [--ref $OC_REF_ROOT] [--write .test-logs/census/PROVIDERS.md]
 """
 from __future__ import annotations
 
@@ -236,7 +236,7 @@ def main() -> int:
 
     r = Report(
         "PROVIDERS Census（缺口普查 · provider 配置族）",
-        "三轴机械对拍：native entrypoint 族 / 配置键存在性 / catalog-only 家族逐项裁定；生成命令：`python3 tools/census/providers.py --write docs/audit/census/PROVIDERS.md`",
+        "三轴机械对拍：native entrypoint 族 / 配置键存在性 / catalog-only 家族逐项裁定；生成命令：`python3 tools/census/providers.py --write .test-logs/census/PROVIDERS.md`",
     )
     r.w("## 前置锚：models.dev 快照双侧一致")
     r.w("")

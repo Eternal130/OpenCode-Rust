@@ -16,7 +16,7 @@ channel. Known anchor: a prior round pinned "keybind 230/230 aligned";
 the ref table has since grown — deviations are checked against
 extraction first (see the report's verification section).
 
-Usage: python3 tools/census/keybinds.py [--ref $OC_REF_ROOT] [--write docs/audit/census/KEYBINDS.md]
+Usage: python3 tools/census/keybinds.py [--ref $OC_REF_ROOT] [--write .test-logs/census/KEYBINDS.md]
 """
 from __future__ import annotations
 
@@ -85,7 +85,7 @@ def main() -> int:
 
     r = Report(
         "KEYBINDS Census（缺口普查 · 键位动作全集）",
-        "双侧可绑定动作名全集机械对拍；生成命令：`python3 tools/census/keybinds.py --write docs/audit/census/KEYBINDS.md`",
+        "双侧可绑定动作名全集机械对拍；生成命令：`python3 tools/census/keybinds.py --write .test-logs/census/KEYBINDS.md`",
     )
     r.w("## 轴：可绑定动作名全集")
     r.w("")

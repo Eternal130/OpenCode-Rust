@@ -21,7 +21,7 @@ TUI_LOCAL), exit 0 always — census, not gate. REF_ONLY rows are gap
 candidates (red); RUST_ONLY rows are rust-extra faces needing register
 backing. Payload FIELD-level differences are out of scope (names only).
 
-Usage: python3 tools/census/events.py [--ref $OC_REF_ROOT] [--write docs/audit/census/EVENTS.md]
+Usage: python3 tools/census/events.py [--ref $OC_REF_ROOT] [--write .test-logs/census/EVENTS.md]
 """
 from __future__ import annotations
 
@@ -131,7 +131,7 @@ def tui_session_literals() -> dict[str, tuple[str, int]]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ref", default=REF_DEFAULT)
-    ap.add_argument("--write", default="docs/audit/census/EVENTS.md")
+    ap.add_argument("--write", default=".test-logs/census/EVENTS.md")
     args = ap.parse_args()
 
     ref_root = Path(args.ref)
@@ -171,7 +171,7 @@ def main() -> int:
         "EVENTS Census（最小验证 · 通道 2/∞）",
         "双侧权威 schema 对拍（事件名全集）+ rust TUI 消费面 + 全 schema 跨检三轴。",
     )
-    r.w("> 生成命令：`python3 tools/census/events.py --write docs/audit/census/EVENTS.md`")
+    r.w("> 生成命令：`python3 tools/census/events.py --write .test-logs/census/EVENTS.md`")
     r.w("> 范围声明：仅比对 wire 事件**名**（`type` tag）；payload 字段级差异不在本通道"
         "范围（见 G-270⑩/G-380② 等已登记条目）。")
     r.w("")

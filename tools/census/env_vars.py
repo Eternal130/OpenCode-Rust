@@ -27,7 +27,7 @@ Classification:
               census (declared, no behavioural verdict).
 
 Usage: python3 tools/census/env_vars.py [--ref $OC_REF_ROOT]
-          [--write docs/audit/census/ENV-VARS.md]
+          [--write .test-logs/census/ENV-VARS.md]
 """
 from __future__ import annotations
 
@@ -333,7 +333,7 @@ def ref_env(ref: Path) -> tuple[dict[str, dict[str, list[tuple[str, int]]]], int
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ref", default=REF_DEFAULT)
-    ap.add_argument("--write", default="docs/audit/census/ENV-VARS.md")
+    ap.add_argument("--write", default=".test-logs/census/ENV-VARS.md")
     args = ap.parse_args()
 
     rust, rust_dyn = rust_env(Path("crates"))
@@ -394,7 +394,7 @@ def main() -> int:
         "ENV-VARS Census（缺口普查 · 通道 3/∞）",
         "双侧进程边界环境变量全集机械提取（字面量）；census 非门禁，exit 0。",
     )
-    rep.w("> 生成命令：`python3 tools/census/env_vars.py --write docs/audit/census/ENV-VARS.md`")
+    rep.w("> 生成命令：`python3 tools/census/env_vars.py --write .test-logs/census/ENV-VARS.md`")
     rep.w(f"> 权威源：rust `crates/`（strip_tests 后的 var/var_os/env!/set_var/remove_var 字面量）"
           f"vs ref `packages/`（process.env.X / Bun.env.X / process.env[\"X\"]，测试与脚本目录排除）。")
     rep.w("")

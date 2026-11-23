@@ -26,7 +26,7 @@ face — needs register backing, e.g. the G-379.7/G-379.8 vcs/worktree
 read faces). Exit 0 always — census, not a gate.
 
 Usage: python3 tools/census/rpc_methods.py [--ref $OC_REF_ROOT]
-           [--write docs/audit/census/RPC.md]
+           [--write .test-logs/census/RPC.md]
 """
 from __future__ import annotations
 
@@ -369,7 +369,7 @@ UI_RUST = "TUI-25 / G-237 / PLUG-TUI-SLOT（rust TUI 插件 UI 面；ref v2 serv
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ref", default=REF_DEFAULT)
-    ap.add_argument("--write", default="docs/audit/census/RPC.md")
+    ap.add_argument("--write", default=".test-logs/census/RPC.md")
     args = ap.parse_args()
 
     served = rust_served()
@@ -396,7 +396,7 @@ def main() -> int:
         "RPC-Methods Census（缺口普查 · 通道 1：插件 RPC 派发面）",
         "rust 桥派发表（answer_guest + 前缀族展开）× ref ctx 方法面（adapter.ts context2）。",
     )
-    r.w("> 生成命令：`python3 tools/census/rpc_methods.py --write docs/audit/census/RPC.md`")
+    r.w("> 生成命令：`python3 tools/census/rpc_methods.py --write .test-logs/census/RPC.md`")
     r.w("> 确定性：全部提取自当前代码静态扫描，排序输出，无时间戳。")
     r.w("")
     r.w("## 轴 1：rust 桥派发面（supervisor.rs `answer_guest` 匹配臂 + 前缀族白名单）")

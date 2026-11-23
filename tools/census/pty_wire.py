@@ -23,7 +23,7 @@ Output: markdown census report (BOTH / REF_ONLY / RUST_ONLY), exit 0 —
 census, not gate. Field-level payload differences (e.g. `rows.terminal`
 nullability, `attached` chunked-replay fields) are declared, not diffed.
 
-Usage: python3 tools/census/pty_wire.py [--ref $OC_REF_ROOT] [--write docs/audit/census/PTY-WIRE.md]
+Usage: python3 tools/census/pty_wire.py [--ref $OC_REF_ROOT] [--write .test-logs/census/PTY-WIRE.md]
 """
 from __future__ import annotations
 
@@ -158,7 +158,7 @@ def find_line(path: Path, pattern: str) -> tuple[str, int]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ref", default=REF_DEFAULT)
-    ap.add_argument("--write", default="docs/audit/census/PTY-WIRE.md")
+    ap.add_argument("--write", default=".test-logs/census/PTY-WIRE.md")
     args = ap.parse_args()
     ref = Path(args.ref)
 
@@ -196,7 +196,7 @@ def main() -> int:
         "PTY-WIRE Census（最小验证 · 通道 3/∞）",
         "persistent-pty daemon wire op/response 双侧对拍 + 非持久 pty 事件/帧协议三轴。",
     )
-    r.w("> 生成命令：`python3 tools/census/pty_wire.py --write docs/audit/census/PTY-WIRE.md`")
+    r.w("> 生成命令：`python3 tools/census/pty_wire.py --write .test-logs/census/PTY-WIRE.md`")
     r.w("> 范围声明：仅比对 wire **op/tag 名**与协议常量；字段级差异"
         "（如 ref `rows.terminal` 必填 vs rust `Option`、rust `attached` 追加 "
         "`replay_chunked`/`replay_length`/`replay_complete`、`subscribe.chunked_replay` "

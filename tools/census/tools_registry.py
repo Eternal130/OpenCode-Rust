@@ -21,7 +21,7 @@ Scope declaration (out of scope, stated): MCP dynamic tool registration
   schema; ref tool/mcp.ts) is runtime-driven and not part of the builtin
   static registry. Plugin/agent-dynamic tools are likewise out of scope.
 
-Usage: python3 tools/census/tools_registry.py [--ref $OC_REF_ROOT] [--write docs/audit/census/TOOLS.md]
+Usage: python3 tools/census/tools_registry.py [--ref $OC_REF_ROOT] [--write .test-logs/census/TOOLS.md]
 """
 from __future__ import annotations
 
@@ -232,7 +232,7 @@ def main() -> int:
         "TOOLS Census（内建工具注册表 · 通道 2）",
         "rust 内建静态注册（BuiltinTool + execute 合成）vs ref tool/plugin 注册表；轴 2 input schema 存在性；轴 3 output schema 声明（G-230 锚）。",
     )
-    rep.w("> 生成命令：`python3 tools/census/tools_registry.py --write docs/audit/census/TOOLS.md`")
+    rep.w("> 生成命令：`python3 tools/census/tools_registry.py --write .test-logs/census/TOOLS.md`")
     rep.w()
     rep.w("## 归一化与范围声明")
     rep.w()

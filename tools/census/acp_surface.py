@@ -22,7 +22,7 @@ fixed) — this census compares KIND sets only; behavior is out of scope
 (declared).
 
 Usage: python3 tools/census/acp_surface.py [--ref $OC_REF_ROOT]
-           [--write docs/audit/census/ACP.md]
+           [--write .test-logs/census/ACP.md]
 """
 from __future__ import annotations
 
@@ -127,7 +127,7 @@ def ref_methods(ref: str) -> dict[str, tuple[str, int]]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ref", default=REF_DEFAULT)
-    ap.add_argument("--write", default="docs/audit/census/ACP.md")
+    ap.add_argument("--write", default=".test-logs/census/ACP.md")
     args = ap.parse_args()
 
     # ---------------- axis 1: SessionUpdate kinds
@@ -148,7 +148,7 @@ def main() -> int:
         "ACP Census（缺口普查 · 通道 2：agent-client-protocol 面）",
         "rust ACP 适配器（crates/oc-cli/src/acp/）× ref 适配器（packages/cli/src/acp/）种类级对拍。",
     )
-    r.w("> 生成命令：`python3 tools/census/acp_surface.py --write docs/audit/census/ACP.md`")
+    r.w("> 生成命令：`python3 tools/census/acp_surface.py --write .test-logs/census/ACP.md`")
     r.w("> 确定性：静态扫描当前代码，排序输出，无时间戳。")
     r.w("> 范围声明：**只比事件/方法种类全集**；字段形状、次序、错误语义等行为级差异不在范围")
     r.w("> （G-339/G-340/G-354/G-355 为已修复的行为级项，本通道不重复裁定）。")

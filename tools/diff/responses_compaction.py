@@ -19,7 +19,7 @@ Per case, three compared fields:
   recursively key-sorted; null-valued optional keys stripped — TS drops
   `undefined` where rust serde writes JSON nulls)
 
-Output: markdown report (default docs/audit/diff/RESPONSES-COMPACTION.md).
+Output: markdown report (default .test-logs/diff/RESPONSES-COMPACTION.md).
 Verdicts: MATCH / DIVERGE(field,...). Exit 0 — a census/diff report, not a
 gate. Deterministic: sorted cases, sorted keys.
 """
@@ -162,7 +162,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ref", default=REF_DEFAULT)
     ap.add_argument("--corpus", default=str(CORPUS_DEFAULT))
-    ap.add_argument("--write", default="docs/audit/diff/RESPONSES-COMPACTION.md")
+    ap.add_argument("--write", default=".test-logs/diff/RESPONSES-COMPACTION.md")
     args = ap.parse_args()
     corpus = Path(args.corpus)
 

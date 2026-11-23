@@ -47,7 +47,7 @@ Stability: boot retried once per side; per-request timeout; both sides
 execute the identical corpus in identical order; child processes killed
 by process group on exit (orphan sweep at the end).
 
-Output: markdown report (default docs/audit/diff/HTTP-FULL.md) with
+Output: markdown report (default .test-logs/diff/HTTP-FULL.md) with
 MATCH/DIVERGE/ADJUDICATED counts and per-case dual-side file:line hints
 (locate by grepping the route literal in both trees). Exit 0 — a diff
 report, not a gate. Infrastructure failure (boot impossible) exits 1.
@@ -564,7 +564,7 @@ def boot_with_retry(boot_fn, *args):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ref", default=REF_DEFAULT)
-    ap.add_argument("--write", default="docs/audit/diff/HTTP-FULL.md")
+    ap.add_argument("--write", default=".test-logs/diff/HTTP-FULL.md")
     ap.add_argument("--skip-build", action="store_true")
     args = ap.parse_args()
     ref = Path(args.ref)

@@ -14,7 +14,7 @@ Per case, five compared fields:
   diagnostics ({kind,path} multiset, kind lowercased) |
   decode_ok | encoded canonical (recursively key-sorted)
 
-Output: markdown report (default docs/audit/diff/CONFIG-PARSE.md).
+Output: markdown report (default .test-logs/diff/CONFIG-PARSE.md).
 Verdicts: MATCH / DIVERGE(field,...). Exit 0 — a census/diff report,
 not a gate. Deterministic: sorted cases, sorted keys, sorted diagnostics.
 """
@@ -100,7 +100,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ref", default=REF_DEFAULT)
     ap.add_argument("--corpus", default=str(CORPUS_DEFAULT))
-    ap.add_argument("--write", default="docs/audit/diff/CONFIG-PARSE.md")
+    ap.add_argument("--write", default=".test-logs/diff/CONFIG-PARSE.md")
     args = ap.parse_args()
     corpus = Path(args.corpus)
 

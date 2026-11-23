@@ -19,7 +19,7 @@ Known anchor: the previous audit round concluded "48 migration IDs all
 identical". This census re-extracts both sides from current code; any
 deviation from that anchor is flagged for re-inspection first.
 
-Usage: python3 tools/census/migrations.py [--ref $OC_REF_ROOT] [--write docs/audit/census/MIGRATIONS.md]
+Usage: python3 tools/census/migrations.py [--ref $OC_REF_ROOT] [--write .test-logs/census/MIGRATIONS.md]
 """
 from __future__ import annotations
 
@@ -97,7 +97,7 @@ def main() -> int:
         "MIGRATIONS Census（数据库迁移 ID 集 · 通道 3）",
         "rust `MIGRATIONS` 静态数组 vs ref `migration/*.ts` 文件名 ID 集 + 生成清单交叉核对。",
     )
-    rep.w("> 生成命令：`python3 tools/census/migrations.py --write docs/audit/census/MIGRATIONS.md`")
+    rep.w("> 生成命令：`python3 tools/census/migrations.py --write .test-logs/census/MIGRATIONS.md`")
     rep.w()
     rep.w("## 归一化与范围声明")
     rep.w()

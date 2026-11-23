@@ -29,7 +29,7 @@ Normalization rules (explicit):
   N4 framework builtins (`--help`, `--version`) exist on both sides and are
      out of scope.
 
-Usage: python3 tools/census/cli_surface.py [--ref $OC_REF_ROOT] [--write docs/audit/census/CLI.md]
+Usage: python3 tools/census/cli_surface.py [--ref $OC_REF_ROOT] [--write .test-logs/census/CLI.md]
 """
 from __future__ import annotations
 
@@ -368,7 +368,7 @@ def main() -> int:
         "CLI Census（命令×旗标面 · 通道 1）",
         "rust oc-cli clap 定义（cli.rs）vs ref packages/cli effect-cli Spec 定义（commands.ts）。",
     )
-    rep.w("> 生成命令：`python3 tools/census/cli_surface.py --write docs/audit/census/CLI.md`")
+    rep.w("> 生成命令：`python3 tools/census/cli_surface.py --write .test-logs/census/CLI.md`")
     rep.w()
     rep.w("## 归一化与范围声明")
     rep.w()

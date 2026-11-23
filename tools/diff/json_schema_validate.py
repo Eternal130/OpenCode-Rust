@@ -13,7 +13,7 @@ EITHER direction is a finding:
          JSON_SCHEMA_DIFF_CORPUS/JSON_SCHEMA_DIFF_OUT) calling
          crates/oc-ai/src/json_schema.rs validate_input (G-59/G-100/G-230)
 
-Output: markdown report (default docs/audit/diff/JSON-SCHEMA.md).
+Output: markdown report (default .test-logs/diff/JSON-SCHEMA.md).
 Verdicts: MATCH / rust-accept-ref-reject / rust-reject-ref-accept.
 Exit 0 — a census/diff report, not a gate. Deterministic (sorted pairs).
 """
@@ -148,7 +148,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ref", default=REF_DEFAULT)
     ap.add_argument("--corpus", default=str(CORPUS_DEFAULT))
-    ap.add_argument("--write", default="docs/audit/diff/JSON-SCHEMA.md")
+    ap.add_argument("--write", default=".test-logs/diff/JSON-SCHEMA.md")
     args = ap.parse_args()
     corpus = Path(args.corpus)
 

@@ -18,7 +18,7 @@ RUST_EXTRA_MOUNT / REF_EXTRA_PATH), exit 0 always — this is a census, not a
 gate. New RUST_EXTRA_MOUNT / REF_ONLY rows are gap candidates for the
 register; RUST_ONLY vs ref are documented rust-extra divergences.
 
-Usage: python3 tools/census/http_surface.py [--ref $OC_REF_ROOT] [--write docs/audit/census/HTTP-SURFACE.md]
+Usage: python3 tools/census/http_surface.py [--ref $OC_REF_ROOT] [--write .test-logs/census/HTTP-SURFACE.md]
 """
 from __future__ import annotations
 
@@ -147,7 +147,7 @@ def main() -> int:
     w("# HTTP-Surface Census（最小验证 · 通道 1/∞）")
     w("")
     w("> 双侧权威自报对拍 + 生产挂载提取 + ref 非 spec 路径字面量三轴。")
-    w("> 生成命令：`python3 tools/census/http_surface.py --write docs/audit/census/HTTP-SURFACE.md`")
+    w("> 生成命令：`python3 tools/census/http_surface.py --write .test-logs/census/HTTP-SURFACE.md`")
     w("")
     w("## 轴 1：双侧 openapi 自报 diff")
     w("")

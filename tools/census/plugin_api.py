@@ -23,7 +23,7 @@ plugin_slots.rs), G-332 (markdown renderer registration chain), the
 G-379.x vcs/worktree read faces (expect BOTH at the ctx level).
 
 Usage: python3 tools/census/plugin_api.py [--ref $OC_REF_ROOT]
-           [--write docs/audit/census/PLUGIN-API.md]
+           [--write .test-logs/census/PLUGIN-API.md]
 """
 from __future__ import annotations
 
@@ -149,7 +149,7 @@ def ref_tui_keys(ref: str) -> dict[str, int]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ref", default=REF_DEFAULT)
-    ap.add_argument("--write", default="docs/audit/census/PLUGIN-API.md")
+    ap.add_argument("--write", default=".test-logs/census/PLUGIN-API.md")
     args = ap.parse_args()
 
     r_face = rust_ctx()
@@ -177,7 +177,7 @@ def main() -> int:
         "Plugin-API Census（缺口普查 · 通道 3：guest 全局 API 面）",
         "rust guest ctx（host.js makeCtx）× ref plugin SDK ctx（adapter.ts context2）；轴 2 = ref tui 入口面。",
     )
-    r.w("> 生成命令：`python3 tools/census/plugin_api.py --write docs/audit/census/PLUGIN-API.md`")
+    r.w("> 生成命令：`python3 tools/census/plugin_api.py --write .test-logs/census/PLUGIN-API.md`")
     r.w("> 确定性：静态扫描当前代码，排序输出，无时间戳。交叉验证：oc-plugin-host/src/host/ 桥接实现（supervisor.rs 派发表，见 RPC.md 轴 1）。")
     r.w("> 范围声明：**API 面（命名空间×方法名）种类级对拍**；参数/返回值形状与行为语义不在范围。")
     r.w("")
