@@ -329,18 +329,18 @@ pub(crate) fn plan_home(view: &HomeView, width: usize, height: usize) -> HomePla
     let free = height.saturating_sub(footer_rows + fixed);
     let spacer_top = free.div_ceil(2);
     let mut y = spacer_top;
+    // The 3-row shrinkable spacer collapses first under overflow
+    // (G-466.2/G-466.6); the logo block and the ALWAYS-PRESENT 1-row
+    // spacer advance `y` even when the wordmark is height-gated off.
+    let deficit = fixed.saturating_sub(height.saturating_sub(footer_rows));
+    let shrink = deficit.min(3);
+    y += 3 - shrink;
     let logo = show_logo.then(|| {
-        // The 3-row spacer above the wordmark is the column's ONLY
-        // shrinkable child (`flexShrink={1}`, home.tsx:80) — under
-        // overflow it collapses first (G-466.2: the 40x12 stacked
-        // block starts at row 0).
-        let deficit = fixed.saturating_sub(height.saturating_sub(footer_rows));
-        let shrink = deficit.min(3);
-        y += 3 - shrink;
         let origin = (centered(logo_mode.width()), y);
-        y += logo_rows + 1; // logo + the 1-row spacer
+        y += logo_rows;
         origin
     });
+    y += 1; // the 1-row spacer under the wordmark (home.tsx:82)
     // The slash-palette popup floats ABOVE the mount: the prompt
     // frame grows by `popup_rows` rows (the composer at
     // `top = 1 + popup_rows`), pasted at `y - popup_rows` so the
