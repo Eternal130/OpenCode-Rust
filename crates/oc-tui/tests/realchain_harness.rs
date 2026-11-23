@@ -2659,6 +2659,12 @@ mod g461_ref_port_tests {
     /// child) must never be handed out: the probe walks past it, stays
     /// in the 50000-60000 band, and the pick is pinned so a re-call
     /// cannot silently re-point the sandbox at its own live daemon.
+    ///
+    /// Adaptive incumbent: we try to bind the hashed base ourselves.
+    /// If the bind succeeds we own a dummy incumbent; if it fails with
+    /// AddrInUse a real listener (e.g. a parallel test's live ref
+    /// service in the same band) IS the incumbent — the walk must
+    /// still clear it. No "band free by construction" assumption.
     #[test]
     fn ref_port_walks_past_incumbent_listener() {
         let sb = sandbox("g461incumbent", 0);
@@ -2667,8 +2673,15 @@ mod g461_ref_port_tests {
         // Distinct sandbox roots pin distinct bases (no cross-sandbox
         // fights inside one test process).
         assert_ne!(base, hashed_base(&other.root));
-        let incumbent = std::net::TcpListener::bind(("127.0.0.1", base))
-            .expect("dummy incumbent on the hashed base port (band free by construction)");
+        let incumbent = match std::net::TcpListener::bind(("127.0.0.1", base)) {
+            Ok(l) => Some(l),
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                // A real listener already owns the base port — that
+                // occupant itself is the incumbent to walk past.
+                None
+            }
+            Err(e) => panic!("unexpected bind error on base port {base}: {e}"),
+        };
         let port = sb.ref_service_port();
         assert!((50_000..60_000).contains(&port), "port {port} outside the pinned band");
         assert_ne!(port, base, "must walk past the incumbent listener");
