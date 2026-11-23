@@ -80,12 +80,29 @@ use serde_json::Value;
 // ---------------------------------------------------------------------------
 
 /// The worktree root (`crates/oc-tui/tests` → up three: tests, oc-tui, crates).
+/// va10 lesson (2026-11-24): with the shared `CARGO_TARGET_DIR`, a
+/// content-identical merge keeps the worktree-compiled test binary alive
+/// after the worktree is removed — every compile-time path (gateway
+/// script, corpus dirs, logs) then ENOENTs from the main checkout
+/// (`gateway never reported READY`, 98/98). Same remedy as
+/// `ref_root_default`/`bun_runtime`: redirect `.worktrees/<name>` to the
+/// main checkout.
 fn worktree_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    let mut root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
         .unwrap_or_else(|| Path::new("."))
-        .to_path_buf()
+        .to_path_buf();
+    if root
+        .parent()
+        .and_then(Path::file_name)
+        .is_some_and(|n| n == ".worktrees")
+    {
+        if let Some(main) = root.parent().and_then(Path::parent) {
+            root = main.to_path_buf();
+        }
+    }
+    root
 }
 
 /// The production binary built from this worktree. Honors an explicit
