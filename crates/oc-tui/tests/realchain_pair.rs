@@ -990,8 +990,7 @@ impl GeomRig {
         let mut rust_tui = self.rust_tui.take();
         let mut ref_tui = self.ref_tui.take();
         let ok = |t: &mut Option<TuiProcess>| {
-            t.as_mut()
-                .is_some_and(|p| p.child.try_wait().map(|w| w.is_none()).unwrap_or(false))
+            t.as_mut().is_some_and(|p| p.child.try_wait().map(|w| w.is_none()).unwrap_or(false))
         };
         let rust_ok = ok(&mut rust_tui);
         let ref_ok = ok(&mut ref_tui);
@@ -1056,8 +1055,8 @@ fn geom_seed_sessions(url: &str, password: Option<&str>, project: &std::path::Pa
             serde_json::to_string(title).expect("title json"),
             serde_json::to_string(&project.to_string_lossy()).expect("dir json")
         );
-        let (code, payload) = http_post(&format!("{url}/api/session"), &body, password)
-            .unwrap_or((0, String::new()));
+        let (code, payload) =
+            http_post(&format!("{url}/api/session"), &body, password).unwrap_or((0, String::new()));
         assert!(
             (200..300).contains(&code),
             "GEOM rig RED: session create {title:?} on {url} -> {code}: {}",
@@ -1113,17 +1112,16 @@ fn geom_probe(tag: &str, scenario: &str, cols: u16, rows: u16) {
     dump_grid(&format!("{scenario}-home0-ref"), &h0_ref);
     dump_grid(&format!("{scenario}-home0-rust"), &h0_rust);
     export_grid_diff(scenario, "home0", &h0_ref, &h0_rust);
-    assert!(geom_wait_api(&rig.rust_url, rig.rust_password.as_deref()), "GEOM rig RED: rust API never came up");
+    assert!(
+        geom_wait_api(&rig.rust_url, rig.rust_password.as_deref()),
+        "GEOM rig RED: rust API never came up"
+    );
     let deadline = Instant::now() + Duration::from_secs(120);
     while rig.refbox.ref_registration().get("password").is_none() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(500));
     }
-    rig.ref_password = rig
-        .refbox
-        .ref_registration()
-        .get("password")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
+    rig.ref_password =
+        rig.refbox.ref_registration().get("password").and_then(|v| v.as_str()).map(str::to_owned);
     assert!(
         geom_wait_api(&rig.ref_url, rig.ref_password.as_deref()),
         "GEOM rig RED: ref API never came up (password read: {})",
@@ -1143,9 +1141,8 @@ fn geom_probe(tag: &str, scenario: &str, cols: u16, rows: u16) {
     // The needle waits scan the live screen; the needle merely
     // observed (rig health), all content judgments ride the export.
     let needle_text: &str = if cols <= 16 { "Ask" } else { "█▀▀█" };
-    let face = |t: Option<&TuiProcess>| {
-        t.as_ref().is_some_and(|t| t.screen_text().contains(needle_text))
-    };
+    let face =
+        |t: Option<&TuiProcess>| t.as_ref().is_some_and(|t| t.screen_text().contains(needle_text));
     let deadline = Instant::now() + Duration::from_secs(30);
     while !(face(rig.rust_tui.as_ref()) && face(rig.ref_tui.as_ref())) && Instant::now() < deadline
     {
@@ -1170,11 +1167,11 @@ fn geom_probe(tag: &str, scenario: &str, cols: u16, rows: u16) {
     let ref_needle: &[u8] = if cols <= 16 { b"S" } else { b"Alpha" };
     let ref_b_from = rig.ref_tui.as_ref().map(TuiProcess::raw_len).unwrap_or(0);
     rig.write_both(b"\x18l");
-    let ref_b_alpha = rig
-        .ref_tui
-        .as_ref()
-        .expect("ref tui")
-        .wait_for(ref_needle, ref_b_from, Duration::from_secs(10));
+    let ref_b_alpha = rig.ref_tui.as_ref().expect("ref tui").wait_for(
+        ref_needle,
+        ref_b_from,
+        Duration::from_secs(10),
+    );
     settle(2);
     assert!(rig.alive(), "GEOM rig RED: a TUI died before state B");
     let b_ref = rig.normalize(&capture_settled(rig.ref_tui.as_ref().expect("ref tui")));
@@ -1219,4 +1216,3 @@ fn geom160_wide_pair() {
     skip_without_ref_lane!();
     geom_probe("geom160", "geom160", 160, 40);
 }
-
