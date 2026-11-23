@@ -49,7 +49,7 @@ use opentui_solid::reactive::Reactive;
 use opentui_solid::{box_, map, text, Element, Signal};
 
 use crate::components::composer::render::{FooterHints, PromptView};
-use crate::components::home::{plan_home, HomeView, LOGO_LEFT, LOGO_RIGHT};
+use crate::components::home::{plan_home, HomeView, LogoMode, LOGO_GO_RIGHT, LOGO_LEFT, LOGO_RIGHT};
 use crate::render::Frame;
 use crate::theme::ThemeState;
 use oc_theme::Rgba as ThemeRgba;
@@ -216,31 +216,85 @@ fn home_element(
 ) -> Element {
     let mut children: Vec<Element> = Vec::new();
 
-    // The wordmark: two text elements per art row (the halves never
-    // touch — the `gap={1}` cell keeps the page fill, pinned by the
-    // goldens).
+    // The wordmark (G-466.2 — `Logo`'s width ladder,
+    // component/logo.tsx:57-75): below 22 cols only the `go` mark's
+    // bold half; below 44 the halves STACK (the muted left's 3 art
+    // rows, then the bold right's 4); wider, the side-by-side rows
+    // (two text elements per row — the halves never touch, the
+    // `gap={1}` cell keeps the page fill, pinned by the goldens).
     if let Some((logo_x, logo_y)) = plan.logo {
-        for (row, (left, right)) in logo_rows(colors).into_iter().enumerate() {
-            children.push(
-                text()
-                    .position("absolute")
-                    .left(logo_x as f32)
-                    .top((logo_y + row) as f32)
-                    .wrap_mode("none")
-                    .flex_shrink(0.0)
-                    .content(PropValue::Styled(left))
-                    .into_element(),
-            );
-            children.push(
-                text()
-                    .position("absolute")
-                    .left((logo_x + 20) as f32)
-                    .top((logo_y + row) as f32)
-                    .wrap_mode("none")
-                    .flex_shrink(0.0)
-                    .content(PropValue::Styled(right))
-                    .into_element(),
-            );
+        match plan.logo_mode {
+            LogoMode::Go => {
+                for (row, line) in LOGO_GO_RIGHT.iter().enumerate() {
+                    children.push(
+                        text()
+                            .position("absolute")
+                            .left(logo_x as f32)
+                            .top((logo_y + row) as f32)
+                            .wrap_mode("none")
+                            .flex_shrink(0.0)
+                            .content(PropValue::Styled(logo_row_chunks(
+                                line,
+                                colors.text_base,
+                                colors.shadow_base,
+                                colors.base,
+                                true,
+                            )))
+                            .into_element(),
+                    );
+                }
+            }
+            LogoMode::Stacked => {
+                let halves = logo_rows(colors);
+                for (row, (left, _)) in halves.iter().enumerate().skip(1) {
+                    children.push(
+                        text()
+                            .position("absolute")
+                            .left(logo_x as f32)
+                            .top((logo_y + row - 1) as f32)
+                            .wrap_mode("none")
+                            .flex_shrink(0.0)
+                            .content(PropValue::Styled(left.clone()))
+                            .into_element(),
+                    );
+                }
+                for (row, (_, right)) in halves.iter().enumerate() {
+                    children.push(
+                        text()
+                            .position("absolute")
+                            .left(logo_x as f32)
+                            .top((logo_y + 3 + row) as f32)
+                            .wrap_mode("none")
+                            .flex_shrink(0.0)
+                            .content(PropValue::Styled(right.clone()))
+                            .into_element(),
+                    );
+                }
+            }
+            LogoMode::Side => {
+                for (row, (left, right)) in logo_rows(colors).into_iter().enumerate() {
+                    children.push(
+                        text()
+                            .position("absolute")
+                            .left(logo_x as f32)
+                            .top((logo_y + row) as f32)
+                            .wrap_mode("none")
+                            .flex_shrink(0.0)
+                            .content(PropValue::Styled(left))
+                            .into_element(),
+                    );
+                    children.push(
+                        text()
+                            .position("absolute")
+                            .left((logo_x + 20) as f32)
+                            .top((logo_y + row) as f32)
+                            .wrap_mode("none")
+                            .flex_shrink(0.0)
+                            .content(PropValue::Styled(right))
+                            .into_element(),
+                    );
+                }
+            }
         }
     }
 

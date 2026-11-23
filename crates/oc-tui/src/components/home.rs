@@ -82,8 +82,62 @@ pub(crate) const LOGO_LEFT: [&str; 4] =
 pub(crate) const LOGO_RIGHT: [&str; 4] =
     ["             ▄     ", "█▀▀▀ █▀▀█ █▀▀█ █▀▀█", "█___ █__█ █__█ █^^^", "▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"];
 
+/// The `go` mark's bold half (`logo.ts` — `go.right.slice(1)`, the
+/// width<22 tier's 3-row block).
+pub(crate) const LOGO_GO_RIGHT: [&str; 3] = ["█▀▀█", "█__█", "▀▀▀▀"];
+
 /// The logo's full width: left 19 + gap 1 + right 19.
 pub(crate) const LOGO_WIDTH: usize = 19 + 1 + 19;
+
+/// The logo's width tier (`Logo`, component/logo.tsx:57-75): below
+/// 22 cols only the `go` mark's bold half renders; below 44 the two
+/// halves STACK (the muted left half's 3 art rows, then the bold
+/// right half's 4); wider, the side-by-side 4-row block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LogoMode {
+    /// `go.right.slice(1)` — 3 rows, 4 cols, bold base.
+    Go,
+    /// `logo.left.slice(1)` then `logo.right` — 7 rows, 19 cols.
+    Stacked,
+    /// `logo.left` + gap + `logo.right` — 4 rows, 39 cols.
+    Side,
+}
+
+impl LogoMode {
+    /// The block's row count.
+    #[must_use]
+    pub(crate) fn rows(self) -> usize {
+        match self {
+            Self::Go => 3,
+            Self::Stacked => 7,
+            Self::Side => 4,
+        }
+    }
+
+    /// The block's cell width (the centering input): the `go` mark's
+    /// rows are 4 cells, a stacked half is 19, the side-by-side
+    /// join is 19+1+19.
+    #[must_use]
+    pub(crate) fn width(self) -> usize {
+        match self {
+            Self::Go => 4,
+            Self::Stacked => 19,
+            Self::Side => LOGO_WIDTH,
+        }
+    }
+
+    /// Resolve the tier from the terminal width (`dimensions().width`).
+    #[must_use]
+    pub(crate) fn of(width: usize) -> Self {
+        if width < 22 {
+            Self::Go
+        } else if width < 44 {
+            Self::Stacked
+        } else {
+            Self::Side
+        }
+    }
+}
 
 /// The wordmark halves for the stats poster (stats.tsx:70's `<Logo/>`
 /// — the same art the home screen paints).
@@ -217,6 +271,9 @@ pub(crate) struct HomePlan {
     pub popup_rows: usize,
     /// The logo block's top-left (absent ⇒ hidden).
     pub logo: Option<(usize, usize)>,
+    /// The logo's width tier (G-466.2 — `Logo`'s go/stacked/side
+    /// ladder, component/logo.tsx:57-75).
+    pub logo_mode: LogoMode,
     /// The prompt frame's paste origin.
     pub paste: (usize, usize),
 }
@@ -233,6 +290,8 @@ pub(crate) fn plan_home(view: &HomeView, width: usize, height: usize) -> HomePla
     let centered = |item_width: usize| padding + content.saturating_sub(item_width).div_ceil(2);
 
     let show_logo = height >= 12;
+    let logo_mode = LogoMode::of(width);
+    let logo_rows = logo_mode.rows();
     let show_footer = height >= 12 && width >= 44;
     // The footer slot's height (`feature-plugins/home/footer.tsx`):
     // paddingY 1/1 at h≥16 (none below), one content row — which
@@ -259,14 +318,20 @@ pub(crate) fn plan_home(view: &HomeView, width: usize, height: usize) -> HomePla
     let prompt_width = content.clamp(1, PROMPT_MAX_WIDTH);
     let mount =
         1 + crate::components::composer::render::mount_height(view.draft, prompt_width, height);
-    let fixed = if show_logo { 3 + 4 + 1 } else { 0 } + mount;
+    let fixed = if show_logo { 3 + logo_rows + 1 } else { 0 } + mount;
     let free = height.saturating_sub(footer_rows + fixed);
     let spacer_top = free.div_ceil(2);
     let mut y = spacer_top;
     let logo = show_logo.then(|| {
-        y += 3; // the fixed 3-row spacer (`height={3}`)
-        let origin = (centered(LOGO_WIDTH), y);
-        y += 4 + 1; // logo + the 1-row spacer
+        // The 3-row spacer above the wordmark is the column's ONLY
+        // shrinkable child (`flexShrink={1}`, home.tsx:80) — under
+        // overflow it collapses first (G-466.2: the 40x12 stacked
+        // block starts at row 0).
+        let deficit = fixed.saturating_sub(height.saturating_sub(footer_rows));
+        let shrink = deficit.min(3);
+        y += 3 - shrink;
+        let origin = (centered(logo_mode.width()), y);
+        y += logo_rows + 1; // logo + the 1-row spacer
         origin
     });
     // The slash-palette popup floats ABOVE the mount: the prompt
@@ -340,6 +405,7 @@ pub(crate) fn plan_home(view: &HomeView, width: usize, height: usize) -> HomePla
         mount,
         popup_rows,
         logo,
+        logo_mode,
         paste: (centered(prompt_width), y - popup_rows),
     }
 }
