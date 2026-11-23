@@ -279,3 +279,31 @@ include lane_lock flock wait).
    opus-4-7 Replay Anthropic` / normalized footer line, ref does not)
    — pre-existing at va7-era tree 43220196, reproduced at va10 tree
    0412f259. Not introduced by this lane; unadjudicated.
+
+### RL-4 — SIGWINCH self-pipe platform portability (release matrix, beta.21 first tag attempt)
+
+The MF-1 #15 WINCH self-pipe (b6a2914c, post-beta.20) shipped two
+platform-portability bugs that linux-x64 CI structurally cannot see
+(CI = ubuntu-latest only; the arm/darwin gates are the TAG-triggered
+release matrix):
+
+1. `libc::pipe2` is glibc-only — darwin (macOS) has no `pipe2` binding
+   → `E0425 cannot find function pipe2` (darwin-arm64 leg, run
+   45276412076). Fix: cfg split — macOS `pipe` + `fcntl(F_SETFL
+   O_NONBLOCK, F_SETFD FD_CLOEXEC)`, else `pipe2` (c7b31c81).
+2. `b'w'.cast_signed()` produces i8; `libc::c_char` is **u8 on
+   aarch64-linux** and i8 elsewhere → `E0308 mismatched types`
+   (linux-arm64/musl legs, same run). Introduced by b9a57f75's clippy
+   cleanup. Fix: plain `as` cast + scoped
+   `#[allow(clippy::cast_possible_wrap)]` (pedantic is warn-on in this
+   workspace), panic-free as required in the signal handler
+   (c7b31c81).
+
+Caught by the beta.21 first tag attempt (release run 45276412076);
+windows legs stayed in the pre-existing registered experimental unix-seam
+class (non-blocking). **Checklist addition for any tag: `rustup target
+add aarch64-unknown-linux-gnu aarch64-apple-darwin` + `cargo check
+--target … -p oc-tui` catches the class locally** (aws-lc-sys build
+scripts may fail on cross targets before reaching oc-tui — the oc-tui
+check itself is what matters; the release matrix remains the final
+gate).
