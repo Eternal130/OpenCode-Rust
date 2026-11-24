@@ -767,12 +767,38 @@ fn option_element(inputs: &Signal<DialogInputs>, index: usize) -> Element {
 
     box_()
         .flex_direction("row")
-        .margin_left(1.0)
-        .margin_right(1.0)
-        .padding_right(3.0)
+        // G-488 — the tab menu's rows are NOT select rows: the ref's
+        // menu row is `paddingLeft 1` + title + `paddingRight 1`
+        // straight inside the scrollbox (session-tabs.tsx:460-462) —
+        // no scrollbox side pads, no 3-wide select marker column.
+        .dyn_prop(
+            "marginLeft",
+            dyn_num(map(inputs.clone(), |i: &DialogInputs| {
+                usize::from(i.family != Family::Menu)
+            })),
+        )
+        .dyn_prop(
+            "marginRight",
+            dyn_num(map(inputs.clone(), |i: &DialogInputs| {
+                usize::from(i.family != Family::Menu)
+            })),
+        )
+        .dyn_prop(
+            "paddingRight",
+            dyn_num(map(inputs.clone(), |i: &DialogInputs| {
+                if i.family == Family::Menu {
+                    1
+                } else {
+                    3
+                }
+            })),
+        )
         .dyn_prop(
             "paddingLeft",
             dyn_num(map(inputs.clone(), move |i: &DialogInputs| {
+                if i.family == Family::Menu {
+                    return 1;
+                }
                 paint_at(i).map_or(
                     3,
                     |paint| {
@@ -2461,10 +2487,13 @@ pub fn mount_dialog_tree(
             .map(|option| crate::wrap::display_width(&option.title).min(50) + 2)
             .max()
             .unwrap_or(0);
-        // The option rows reuse the select's marker column (title
-        // starts 4 cells in), so the box adds that padding over
-        // v2's 1-left scrollbox rows — registered approximation.
-        let menu_width = width.min(longest.max(20) + 6);
+        // G-488 — the ref's `width()` is exactly `min(term, max(20,
+        // max(min(50, len+2))))` (session-tabs.tsx:424-426) and its
+        // rows are `paddingLeft 1` + title + `paddingRight 1`
+        // (:460-462) — the previous +6/4-cell marker column (a
+        // registered approximation) is gone: the menu rows are NOT
+        // select rows.
+        let menu_width = width.min(longest.max(20));
         let menu_height = (props.options.len()).min(height).max(1) + 1;
         let DialogKind::TabMenu { x, y, .. } = &entry.kind else {
             unreachable!("the TabMenu guard")
