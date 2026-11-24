@@ -1396,54 +1396,12 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             }
             SelectProps::new("Fork session", options)
         }
-        // G-132 — `DialogExportOptions` (dialog-export-options.tsx:
-        // 25-31 + 44-52) as the select-form: the format radio, the
-        // format-scoped toggles ([x]/[ ] rows), and the Copy/Export
-        // actions. Toggling/radio submits FLIP the store's
-        // `export_options` state and re-render the dialog; the action
-        // rows submit the export with the chosen values (the old
-        // four static destination rows are gone).
-        DialogKind::SessionExport { .. } => {
-            let options = store.export_options_state();
-            let markdown = options.format.as_str() == "markdown";
-            let mut rows = vec![
-                SelectOption::titled(
-                    format!("{} Markdown", if markdown { "◉" } else { "○" }),
-                    "format:markdown",
-                ),
-                SelectOption::titled(
-                    format!("{} JSON", if markdown { "○" } else { "◉" }),
-                    "format:json",
-                ),
-            ];
-            if markdown {
-                rows.push(
-                    SelectOption::titled(
-                        format!("{} Include thinking", checked(options.thinking)),
-                        "toggle:thinking",
-                    )
-                    .described("markdown only"),
-                );
-                rows.push(
-                    SelectOption::titled(
-                        format!("{} Include tools", checked(options.tools)),
-                        "toggle:tools",
-                    )
-                    .described("markdown only"),
-                );
-            } else {
-                rows.push(
-                    SelectOption::titled(
-                        format!("{} Sanitize sensitive data", checked(options.sanitize)),
-                        "toggle:sanitize",
-                    )
-                    .described("json only"),
-                );
-            }
-            rows.push(SelectOption::titled("Copy to clipboard", "action:copy"));
-            rows.push(SelectOption::titled("Export to file", "action:export"));
-            SelectProps::new("Export session", rows)
-        }
+        // G-487 — `DialogExportOptions` (dialog-export-options.tsx:
+        // 24-34) is a CUSTOM form now: the pill row + the
+        // format-scoped toggles + the Copy/Export buttons render
+        // through the ExportOptions family (the sidecar carries the
+        // state); the props arm only seeds the chrome's title.
+        DialogKind::SessionExport { .. } => SelectProps::new("Export session", Vec::new()),
         // `DialogExportResult` (dialog-export-result.tsx:5-27): the
         // written path row; return/esc closes.
         DialogKind::ExportResult { path } => {
@@ -2509,15 +2467,6 @@ fn active_selection(store: &Store) -> crate::store::SessionSelection {
 }
 
 /// A muted status row (loading/error) — the placeholder surface.
-/// G-132 — the toggle row's checkbox (`[x]`/`[ ]`,
-/// dialog-export-options.tsx:135/159/183).
-fn checked(on: bool) -> &'static str {
-    if on {
-        "[x]"
-    } else {
-        "[ ]"
-    }
-}
 
 fn status_option(text: &str) -> SelectOption {
     SelectOption::titled(text, "status").muted_placeholder()
@@ -3243,6 +3192,10 @@ impl CommandDispatcher for StoreDispatcher {
                 let Route::Session { session_id, .. } = store.route() else {
                     return Dispatch::Handled;
                 };
+                // G-487 — the form's fresh mount: the component's
+                // local store resets on every `DialogExportOptions.
+                // show` (dialog-export-options.tsx:28-34).
+                store.export_options_reset();
                 store.replace_dialog(
                     DialogKind::SessionExport { session_id: session_id.clone() },
                     DialogSize::Medium,

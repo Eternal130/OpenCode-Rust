@@ -967,6 +967,17 @@ pub struct DialogStyles {
     /// `text.feedback.error.base` — the pair dialog's failed-load
     /// header (dialog-pair.tsx:121).
     pub error_fg: Color,
+    /// G-487 — `background.formfield.selected` (the export pill's
+    /// selected-but-not-focused state).
+    pub formfield_selected_bg: Color,
+    /// G-487 — `background.formfield.base` (the unfocused pill).
+    pub formfield_base_bg: Color,
+    /// G-487 — `background.raised.high` (the export Copy button).
+    pub raised_high_bg: Color,
+    /// G-487 — `background.action.primary.base` (the Export button).
+    pub action_base_bg: Color,
+    /// G-487 — `text.action.primary.base`.
+    pub action_base_fg: Color,
 }
 
 impl DialogStyles {
@@ -989,6 +1000,11 @@ impl DialogStyles {
             destructive_fg: color(tokens.text.action.destructive.focused),
             destructive_bg: color(tokens.background.action.destructive.focused),
             error_fg: color(tokens.text.feedback.error.base),
+            formfield_selected_bg: color(tokens.background.formfield.selected),
+            formfield_base_bg: color(tokens.background.formfield.base),
+            raised_high_bg: color(tokens.background.raised.high),
+            action_base_bg: color(tokens.background.action.primary.base),
+            action_base_fg: color(tokens.text.action.primary.base),
         }
     }
 }

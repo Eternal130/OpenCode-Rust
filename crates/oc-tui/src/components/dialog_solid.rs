@@ -119,6 +119,13 @@ struct DialogColors {
     /// `text.feedback.error.base` — the pair dialog's failed-load
     /// header (dialog-pair.tsx:121).
     error_fg: Rgb,
+    /// G-487 — the export form's pill/button tokens
+    /// (dialog-export-options.tsx:100-268).
+    formfield_selected_bg: Rgb,
+    formfield_base_bg: Rgb,
+    raised_high_bg: Rgb,
+    action_base_bg: Rgb,
+    action_base_fg: Rgb,
 }
 
 impl DialogColors {
@@ -145,6 +152,11 @@ impl DialogColors {
             destructive_fg: rgb(styles.destructive_fg),
             destructive_bg: rgb(styles.destructive_bg),
             error_fg: rgb(styles.error_fg),
+            formfield_selected_bg: rgb(styles.formfield_selected_bg),
+            formfield_base_bg: rgb(styles.formfield_base_bg),
+            raised_high_bg: rgb(styles.raised_high_bg),
+            action_base_bg: rgb(styles.action_base_bg),
+            action_base_fg: rgb(styles.action_base_fg),
         }
     }
 }
@@ -233,6 +245,13 @@ enum Family {
     /// (or the muted-branch "No MCP servers" fallback), `gap 1`,
     /// `paddingBottom 1`. No filter input.
     Status,
+    /// G-487 — `ui/dialog-export-options.tsx`: a CUSTOM form, never a
+    /// `DialogSelect` — the bold `Export session` header + `esc`
+    /// chrome, the `Export as: ◉ Markdown ○ JSON` pill row, the
+    /// format-scoped `[x]` toggles, and the right-justified
+    /// Copy/Export buttons. Tab cycles the active control; return
+    /// activates it.
+    ExportOptions,
 }
 
 /// One rendered row of the scroll window — the same walk the old
@@ -345,6 +364,9 @@ struct DialogInputs {
     /// For identity) and the styled rows (the markdown paint).
     btw_window: Vec<String>,
     btw_styled: Vec<StyledText>,
+    /// G-487 — the export form's live state (the store's
+    /// `ExportOptionsState` snapshot: format + focus + toggles).
+    export: crate::store::ExportOptionsState,
 }
 
 /// TUI-10/24 + F15: the custom families' store-side sidecar — the
@@ -366,6 +388,8 @@ pub struct DialogSidecar {
     /// scroll offset.
     pub btw_rows: Vec<StyledText>,
     pub btw_scroll: usize,
+    /// G-487 — the export form's state snapshot.
+    pub export: crate::store::ExportOptionsState,
 }
 
 /// The windowed rows — the old renderer's walk (`render_select`),
@@ -498,6 +522,19 @@ fn content_height(inputs: &DialogInputs) -> usize {
         // W4 (dialog-status.tsx:22-61): the `Status` title row, the
         // root's gap 1, the status rows, the root paddingBottom 1.
         Family::Status => inputs.hint_lines.len() + 3,
+        // G-487 (dialog-export-options.tsx:85-270): the root's gap 1
+        // separates all four children — title, pill row, the
+        // format-scoped toggle rows (2 markdown / 1 json), and the
+        // Copy/Export button row with its paddingBottom 1:
+        // markdown = 5 rows + 3 gaps + 1 pad = 10; json = 4 + 2 + 1
+        // = 7.
+        Family::ExportOptions => {
+            if inputs.export.format == crate::store::ExportFormat::Markdown {
+                10
+            } else {
+                7
+            }
+        }
     }
 }
 
@@ -2343,6 +2380,219 @@ fn status_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
     ))
 }
 
+/// G-487 — `DialogExportOptions` (dialog-export-options.tsx:85-270):
+/// the custom export form — the bold `Export session` header + `esc`
+/// chrome, the `Export as:` pill row (the focused pill carries the
+/// formfield focused pair, the selected format the selected pair, the
+/// rest the base pair), the format-scoped `[x]`/`[ ]` toggles, and
+/// the right-justified Copy/Export buttons (Copy on raised.high,
+/// Export on action.primary with its focused state while active).
+fn export_options_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder {
+    use crate::store::{ExportActive, ExportFormat};
+    let title_row = box_().flex_direction("row").justify_content("space-between").children(
+        Children::Static(vec![
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk("Export session".to_owned(), i.colors.text, None, 1)])
+                    })),
+                )
+                .into_element(),
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk("esc".to_owned(), i.colors.muted, None, 0)])
+                    })),
+                )
+                .into_element(),
+        ]),
+    );
+    // One pill: `◉ Markdown` / `○ JSON` (:98-125) — paddingLeft 1,
+    // paddingRight 1, the radio glyph prefixed to the label.
+    let pill = |inputs: &Signal<DialogInputs>, format: ExportFormat, label: &str| {
+        let label = label.to_owned();
+        box_()
+            .padding_left(1.0)
+            .padding_right(1.0)
+            .dyn_prop(
+                "backgroundColor",
+                dyn_color(map(inputs.clone(), move |i: &DialogInputs| {
+                    let active = i.export.active == active_of(format);
+                    if active {
+                        i.colors.formfield_bg
+                    } else if i.export.format == format {
+                        i.colors.formfield_selected_bg
+                    } else {
+                        i.colors.formfield_base_bg
+                    }
+                })),
+            )
+            .child(text().dyn_prop(
+                "content",
+                dyn_styled(map(inputs.clone(), move |i: &DialogInputs| {
+                    let active = i.export.active == active_of(format);
+                    let fg = if active {
+                        i.colors.formfield_fg
+                    } else if i.export.format == format {
+                        i.colors.current_fg
+                    } else {
+                        i.colors.formfield_base_fg
+                    };
+                    let radio = if i.export.format == format { "◉" } else { "○" };
+                    styled(vec![chunk(format!("{radio} {label}"), fg, None, 0)])
+                })),
+            ))
+    };
+    let pill_row = box_().flex_direction("row").children(Children::Static(vec![
+        text()
+            .dyn_prop(
+                "content",
+                dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                    styled(vec![chunk("Export as:".to_owned(), i.colors.text, None, 0)])
+                })),
+            )
+            .into_element(),
+        pill(&inputs, ExportFormat::Markdown, "Markdown")
+            .margin_left(1.0)
+            .into_element(),
+        pill(&inputs, ExportFormat::Json, "JSON").margin_left(1.0).into_element(),
+    ]));
+    // One `[x] Include thinking`-style toggle row (:128-204 markdown,
+    // :206-245 json).
+    let toggle = |inputs: &Signal<DialogInputs>, active_kind: ExportActive, label: &str| {
+        let label = label.to_owned();
+        box_()
+            .flex_direction("row")
+            .dyn_prop(
+                "backgroundColor",
+                dyn_color(map(inputs.clone(), move |i: &DialogInputs| {
+                    if i.export.active == active_kind {
+                        i.colors.formfield_bg
+                    } else {
+                        i.colors.surface
+                    }
+                })),
+            )
+            .child(text().dyn_prop(
+                "content",
+                dyn_styled(map(inputs.clone(), move |i: &DialogInputs| {
+                    let on = match active_kind {
+                        ExportActive::Thinking => i.export.thinking,
+                        ExportActive::Tools => i.export.tools,
+                        ExportActive::Sanitize => i.export.sanitize,
+                        _ => false,
+                    };
+                    let fg = if i.export.active == active_kind {
+                        i.colors.formfield_fg
+                    } else if on {
+                        i.colors.current_fg
+                    } else {
+                        i.colors.formfield_base_fg
+                    };
+                    let mark = if on { "[x]" } else { "[ ]" };
+                    styled(vec![chunk(format!("{mark} {label}"), fg, None, 0)])
+                })),
+            ))
+    };
+    // The Copy / Export buttons (:246-269) — padding 4, right
+    // justified, gap 1, the row's paddingBottom 1.
+    let copy_button = box_()
+        .padding_left(4.0)
+        .padding_right(4.0)
+        .dyn_prop(
+            "backgroundColor",
+            dyn_color(map(inputs.clone(), |i: &DialogInputs| i.colors.raised_high_bg)),
+        )
+        .child(text().dyn_prop(
+            "content",
+            dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                styled(vec![chunk("Copy".to_owned(), i.colors.text, None, 0)])
+            })),
+        ));
+    let export_button = box_()
+        .padding_left(4.0)
+        .padding_right(4.0)
+        .dyn_prop(
+            "backgroundColor",
+            dyn_color(map(inputs.clone(), |i: &DialogInputs| {
+                if i.export.active == ExportActive::Export {
+                    i.colors.selected_bg
+                } else {
+                    i.colors.action_base_bg
+                }
+            })),
+        )
+        .child(text().dyn_prop(
+            "content",
+            dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                if i.export.active == ExportActive::Export {
+                    styled(vec![chunk("Export".to_owned(), i.colors.selected_fg, None, 0)])
+                } else {
+                    styled(vec![chunk("Export".to_owned(), i.colors.action_base_fg, None, 0)])
+                }
+            })),
+        ));
+    let button_row = box_()
+        .flex_direction("row")
+        .justify_content("flex-end")
+        .padding_bottom(1.0)
+        .children(Children::Static(vec![
+            copy_button.into_element(),
+            export_button.margin_left(1.0).into_element(),
+        ]));
+    // The format-scoped toggle group mounts per the current format
+    // (the Show swap rebuilds the rows — the builders are not Clone).
+    let inputs_md = inputs.clone();
+    let toggles_markdown = show(
+        Rc::new(map(inputs.clone(), |i: &DialogInputs| {
+            i.export.format == ExportFormat::Markdown
+        })) as Rc<dyn Reactive<bool>>,
+        move || {
+            vec![
+                toggle(&inputs_md, ExportActive::Thinking, "Include thinking").into_element(),
+                // The two toggles are ROOT siblings in the tsx
+                // (:128-204) — the root's gap 1 separates them.
+                toggle(&inputs_md, ExportActive::Tools, "Include tools")
+                    .margin_top(1.0)
+                    .into_element(),
+            ]
+        },
+    );
+    let inputs_js = inputs.clone();
+    let toggles_json = show(
+        Rc::new(map(inputs.clone(), |i: &DialogInputs| {
+            i.export.format == ExportFormat::Json
+        })) as Rc<dyn Reactive<bool>>,
+        move || {
+            vec![toggle(&inputs_js, ExportActive::Sanitize, "Sanitize sensitive data")
+                .into_element()]
+        },
+    );
+    let children: Vec<Element> = vec![
+        title_row.into_element(),
+        pill_row.margin_top(1.0).into_element(),
+        // One box PER format group (a builder carries a single dyn
+        // children slot — two children_dyn calls would clobber); the
+        // root's gap 1 rides each child's margin (the hidden group's
+        // box still takes its gap slot only while mounted — the Show
+        // unmounts the whole box).
+        box_().children_dyn(Rc::new(toggles_markdown)).margin_top(1.0).into_element(),
+        box_().children_dyn(Rc::new(toggles_json)).margin_top(1.0).into_element(),
+        button_row.margin_top(1.0).into_element(),
+    ];
+    box_().padding_left(2.0).padding_right(2.0).children(Children::Static(children))
+}
+
+/// The pill focus enum of a format (dialog-export-options.tsx:22).
+fn active_of(format: crate::store::ExportFormat) -> crate::store::ExportActive {
+    match format {
+        crate::store::ExportFormat::Markdown => crate::store::ExportActive::Markdown,
+        crate::store::ExportFormat::Json => crate::store::ExportActive::Json,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // the mount
 // ---------------------------------------------------------------------------
@@ -2384,6 +2634,7 @@ fn chrome_element(
         Family::GenericPrompt => generic_prompt_builder(&family_inputs),
         Family::BtwAnswer => btw_answer_builder(&family_inputs),
         Family::Status => status_builder(&family_inputs),
+        Family::ExportOptions => export_options_builder(&family_inputs),
     };
     box_()
         .width(width as f32)
@@ -2645,7 +2896,8 @@ fn dialog_chrome_button_hits(
         | Family::PluginInstallPrompt
         | Family::GenericPrompt
         | Family::BtwAnswer
-        | Family::Status => ("esc", 2),
+        | Family::Status
+        | Family::ExportOptions => ("esc", 2),
         Family::Help => ("esc/enter", 2),
     };
     let label_width = label.chars().count();
@@ -2730,6 +2982,9 @@ fn build_inputs(
         // W4: the status dialog's CUSTOM tree (ref dialog-status.tsx
         // is not a DialogSelect).
         DialogKind::Status => Family::Status,
+        // G-487: the export options' CUSTOM form (ref
+        // dialog-export-options.tsx is not a DialogSelect).
+        DialogKind::SessionExport { .. } => Family::ExportOptions,
         _ => Family::Select,
     };
     match family {
@@ -2775,6 +3030,7 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
+            export: Default::default(),
                 plugin_rows: Vec::new(),
             }
         }
@@ -2818,6 +3074,7 @@ fn build_inputs(
             pair_qr: Vec::new(),
             btw_window: Vec::new(),
             btw_styled: Vec::new(),
+            export: Default::default(),
         },
         // G-237: the generic prompt — title/placeholder/description
         // from the kind, the typed value from the entry (the
@@ -2865,6 +3122,7 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
+            export: Default::default(),
             }
         }
         // RE-13: the /btw Answer dialog — the sidecar's markdown
@@ -2924,6 +3182,7 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window,
                 btw_styled,
+                export: Default::default(),
             }
         }
         // The connect prompts carry their title/placeholder/hints
@@ -2965,6 +3224,7 @@ fn build_inputs(
             pair_qr: Vec::new(),
             btw_window: Vec::new(),
             btw_styled: Vec::new(),
+            export: Default::default(),
         },
         Family::Help => {
             let content_width = box_width.saturating_sub(4);
@@ -3017,6 +3277,7 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
+            export: Default::default(),
             }
         }
         Family::PluginRows => {
@@ -3056,6 +3317,7 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
+            export: Default::default(),
             }
         }
         // -- TUI-25: DialogAlert / DialogConfirm --------------------
@@ -3117,6 +3379,7 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
+            export: Default::default(),
             }
         }
         // -- TUI-24: DialogErrorDetails ------------------------------
@@ -3165,6 +3428,7 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
+            export: Default::default(),
             }
         }
         // -- TUI-10: DialogImagePreview ------------------------------
@@ -3217,6 +3481,7 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
+            export: Default::default(),
             }
         }
         // -- F15: DialogPair — the custom (non-select) tree --------
@@ -3280,6 +3545,7 @@ fn build_inputs(
                 pair_qr,
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
+            export: Default::default(),
             }
         }
         // -- W4: DialogStatus — the custom (non-select) tree ------
@@ -3320,6 +3586,47 @@ fn build_inputs(
             pair_qr: Vec::new(),
             btw_window: Vec::new(),
             btw_styled: Vec::new(),
+            export: Default::default(),
+        },
+        // G-487 — the export form rides the SIDECAR's state snapshot
+        // (the store's export cell — the pill focus + the toggles
+        // live there, keyed by the store-owning mount path).
+        Family::ExportOptions => DialogInputs {
+            family,
+            box_width,
+            terminal_width,
+            colors,
+            title: String::new(),
+            placeholder: String::new(),
+            filter: String::new(),
+            options: Vec::new(),
+            flat: Vec::new(),
+            selected: 0,
+            current: None,
+            flatten: false,
+            destructive: false,
+            window: Vec::new(),
+            actions: Vec::new(),
+            footer_hint: None,
+            title_suffix: String::new(),
+            prompt_value: String::new(),
+            hint_lines: Vec::new(),
+            plugin_title: String::new(),
+            plugin_rows: Vec::new(),
+            message: String::new(),
+            confirm_labels: (String::new(), String::new(), true),
+            error_source: String::new(),
+            error_window: Vec::new(),
+            diagnostic: String::new(),
+            preview_title: String::new(),
+            preview_footer: (String::new(), String::new(), String::new()),
+            preview_rows: 0,
+            pair_rows: Vec::new(),
+            pair_split: false,
+            pair_qr: Vec::new(),
+            btw_window: Vec::new(),
+            btw_styled: Vec::new(),
+            export: sidecar.export,
         },
     }
 }

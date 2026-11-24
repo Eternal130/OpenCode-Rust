@@ -136,6 +136,10 @@ pub fn handle_dialog_key(
         | DialogKind::ErrorDetails { .. }
         | DialogKind::Alert { .. }
         | DialogKind::Confirm { .. }
+        // G-487 — DialogExportOptions is a CUSTOM form (not a
+        // DialogSelect): the pill row + the format-scoped toggles +
+        // the Copy/Export buttons; tab/return own the dialog.
+        | DialogKind::SessionExport { .. }
         | DialogKind::Pair => false,
         // G-271④ — the form walk flips with the current field (the
         // textual kinds take the prompt input).
@@ -179,7 +183,6 @@ pub fn handle_dialog_key(
         | DialogKind::IntegrationPending { .. }
         | DialogKind::Settings
         | DialogKind::ForkPicker { .. }
-        | DialogKind::SessionExport { .. }
         | DialogKind::ExportResult { .. }
         // TUI-8/9/TD22: DialogSkill / DialogStash /
         // DialogExperiments are DialogSelects.
@@ -588,6 +591,25 @@ pub fn handle_dialog_key(
         }
     }
 
+    // -- G-487: DialogExportOptions' modal layer
+    // (dialog-export-options.tsx:56-78): `tab` cycles the ACTIVE
+    // control through the format-scoped order, `return` activates it
+    // (format select / toggle flip / confirm); the header's `esc`
+    // clears (the shared close binding upstream).
+    if let DialogKind::SessionExport { session_id } = &entry.kind {
+        if stroke.key == "tab" && !stroke.ctrl && !stroke.alt && !stroke.shift {
+            store.export_options_focus_next();
+            return DialogKeyOutcome::Consumed;
+        }
+        if stroke.key == "return" && !stroke.ctrl && !stroke.alt {
+            if let Some((_action, destination)) = store.export_options_activate_focused() {
+                let format = store.export_options_state().format.as_str().to_owned();
+                store.session_export_submit(session_id, &format, destination);
+            }
+            return DialogKeyOutcome::Consumed;
+        }
+        return DialogKeyOutcome::Consumed;
+    }
     // -- G-237: DialogPrompt's submit (`dialog.prompt.submit`,
     // dialog-prompt.tsx:44-49/59-63 + api.tsx:377-380): return
     // resolves with the textarea's plainText (UNtrimmed), settle
@@ -1002,12 +1024,15 @@ pub fn mount_dialog_layer(
     // the error scroll (this path owns the store). F15: the pair
     // dialog's resource snapshot rides the same sidecar. RE-13: the
     // /btw answer's markdown rows + scroll.
+    // The sidecar assembly (dialog.rs): the export state snapshot
+    // rides along (G-487).
     let sidecar = crate::components::dialog_solid::DialogSidecar {
         preview: store.image_preview_dialog(),
         error_scroll: store.error_details_scroll(),
         pair: store.pair_state(),
         btw_rows: btw_answer_rows(store, &entry.kind, terminal),
         btw_scroll: store.btw_scroll(),
+        export: store.export_options_state(),
     };
     // Select dialogs record their option rows (absolute screen rows,
     // flat-index order); static content records none.
@@ -1075,7 +1100,9 @@ fn option_dialog_records_rows(
         | DialogKind::IntegrationPending { .. }
         | DialogKind::Settings
         | DialogKind::ForkPicker { .. }
-        | DialogKind::SessionExport { .. }
+        // G-487 — the export form is a custom family: no option rows
+        // (the pill/button hit rects arrive with the mouse surface
+        // lane).
         | DialogKind::ExportResult { .. }
         // TUI-8/9/TD22: the three new selects record rows too.
         | DialogKind::Skill
@@ -1107,8 +1134,10 @@ fn option_dialog_records_rows(
         | DialogKind::Confirm { .. }
         // F15: the pair dialog's custom tree records none either.
         // RE-13: the /btw prompt input + Answer markdown dialog.
+        // G-487: the export form's custom tree records none.
         | DialogKind::BtwPrompt
         | DialogKind::BtwAnswer { .. }
+        | DialogKind::SessionExport { .. }
         | DialogKind::Pair => false,
     }
 }
@@ -2100,26 +2129,11 @@ pub fn execute_submission(
             store.session_fork_submit(session_id.as_str(), before.as_deref());
             return crate::components::command_palette::Dispatch::Handled;
         }
-        // G-132 — the export-options form (dialog-export-options.
-        // tsx:44-52's `activate`): the format radio and the
-        // format-scoped toggles flip the store's export state and
-        // RE-RENDER the dialog; the action rows confirm with the
-        // chosen values (the destination mapping: copy → clipboard,
-        // export → file).
-        Some(DialogKind::SessionExport { session_id }) => {
-            if let Some(action) = value.strip_prefix("action:") {
-                let format = store.export_options_state().format.as_str().to_owned();
-                let destination = if action == "copy" { "clipboard" } else { "file" };
-                store.session_export_submit(session_id.as_str(), &format, destination);
-            } else if value.starts_with("format:") || value.starts_with("toggle:") {
-                store.export_options_activate(value);
-                store.replace_dialog(
-                    DialogKind::SessionExport { session_id: session_id.clone() },
-                    DialogSize::Medium,
-                );
-            } else {
-                store.clear_dialogs();
-            }
+        // G-487 — the export form is no longer a select: its keys
+        // own the dialog (the early-exit layer in
+        // [`handle_dialog_key`]); this submit dispatch is inert now.
+        Some(DialogKind::SessionExport { .. }) => {
+            store.clear_dialogs();
             return crate::components::command_palette::Dispatch::Handled;
         }
         // The informational pending view: submits are inert.

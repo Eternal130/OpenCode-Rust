@@ -2542,14 +2542,38 @@ pub struct ExportOptionsState {
     pub thinking: bool,
     pub tools: bool,
     pub sanitize: bool,
+    /// G-487 — the dialog's focused control (`store.active`,
+    /// dialog-export-options.tsx:22,33): the tab cycle's cursor.
+    /// Persisted with the dialog so the pill form re-renders focus.
+    pub active: ExportActive,
 }
 
 impl Default for ExportOptionsState {
     fn default() -> Self {
         // index.tsx:1213 seeds `defaultThinking: true`; tools/sanitize
-        // start true/false (dialog-export-options.tsx:26-29).
-        Self { format: ExportFormat::Markdown, thinking: true, tools: true, sanitize: false }
+        // start true/false (dialog-export-options.tsx:26-29); the
+        // focus starts on the markdown pill (:33).
+        Self {
+            format: ExportFormat::Markdown,
+            thinking: true,
+            tools: true,
+            sanitize: false,
+            active: ExportActive::Markdown,
+        }
     }
+}
+
+/// G-487 — the export dialog's focused control (`Active`,
+/// dialog-export-options.tsx:22).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportActive {
+    Markdown,
+    Json,
+    Thinking,
+    Tools,
+    Sanitize,
+    Copy,
+    Export,
 }
 
 /// G-132 — `ExportFormat` (dialog-export-options.tsx:7).
@@ -9644,26 +9668,84 @@ impl Store {
         *self.export_options.borrow()
     }
 
-    /// G-132 — one form interaction (the dialog's `activate`,
-    /// dialog-export-options.tsx:44-52): the format radio, the three
-    /// toggles.
-    pub fn export_options_activate(&self, control: &str) {
+    /// G-487 — the pill form's tab cycle (`bind: "tab"`,
+    /// dialog-export-options.tsx:62-69): the ACTIVE group order —
+    /// markdown format → [markdown, json, thinking, tools, copy,
+    /// export]; json → [markdown, json, sanitize, copy, export] —
+    /// wrapping around the list.
+    pub fn export_options_focus_next(&self) {
         let mut state = *self.export_options.borrow();
-        match control {
-            "format:markdown" => state.format = ExportFormat::Markdown,
-            "format:json" => state.format = ExportFormat::Json,
-            "toggle:thinking" if state.format == ExportFormat::Markdown => {
-                state.thinking = !state.thinking;
-            }
-            "toggle:tools" if state.format == ExportFormat::Markdown => {
-                state.tools = !state.tools;
-            }
-            "toggle:sanitize" if state.format == ExportFormat::Json => {
-                state.sanitize = !state.sanitize;
-            }
-            _ => {}
-        }
+        let order: &[ExportActive] = if state.format == ExportFormat::Markdown {
+            &[
+                ExportActive::Markdown,
+                ExportActive::Json,
+                ExportActive::Thinking,
+                ExportActive::Tools,
+                ExportActive::Copy,
+                ExportActive::Export,
+            ]
+        } else {
+            &[
+                ExportActive::Markdown,
+                ExportActive::Json,
+                ExportActive::Sanitize,
+                ExportActive::Copy,
+                ExportActive::Export,
+            ]
+        };
+        let at = order.iter().position(|active| *active == state.active).unwrap_or(0);
+        state.active = order[(at + 1) % order.len()];
         *self.export_options.borrow_mut() = state;
+    }
+
+    /// G-487 — the pill form's enter (`activate`,
+    /// dialog-export-options.tsx:45-54): a format pill selects the
+    /// format; a toggle flips; copy/export confirm with the current
+    /// values (the destination mapping: copy → clipboard, export →
+    /// file). Returns the confirm arm when the dialog should submit.
+    pub fn export_options_activate_focused(&self) -> Option<(&'static str, &'static str)> {
+        let mut state = *self.export_options.borrow();
+        match state.active {
+            ExportActive::Markdown => {
+                state.format = ExportFormat::Markdown;
+                *self.export_options.borrow_mut() = state;
+                None
+            }
+            ExportActive::Json => {
+                state.format = ExportFormat::Json;
+                *self.export_options.borrow_mut() = state;
+                None
+            }
+            ExportActive::Thinking if state.format == ExportFormat::Markdown => {
+                state.thinking = !state.thinking;
+                *self.export_options.borrow_mut() = state;
+                None
+            }
+            ExportActive::Tools if state.format == ExportFormat::Markdown => {
+                state.tools = !state.tools;
+                *self.export_options.borrow_mut() = state;
+                None
+            }
+            ExportActive::Sanitize if state.format == ExportFormat::Json => {
+                state.sanitize = !state.sanitize;
+                *self.export_options.borrow_mut() = state;
+                None
+            }
+            ExportActive::Copy => Some(("copy", "clipboard")),
+            ExportActive::Export => Some(("export", "file")),
+            // A toggle whose format group is not mounted (e.g. the
+            // focus was left on "thinking" when the format flipped to
+            // json) stays inert — the ref's Show unmounts the row.
+            _ => None,
+        }
+    }
+
+    /// G-487 — the dialog's fresh mount (`DialogExportOptions.show` →
+    /// the component's local store): every open resets the form to
+    /// the defaults (markdown, thinking/tools on, sanitize off, the
+    /// focus on the markdown pill).
+    pub fn export_options_reset(&self) {
+        *self.export_options.borrow_mut() = ExportOptionsState::default();
     }
 
     /// The export clipboard arm's completion toast (index.tsx:1229).
