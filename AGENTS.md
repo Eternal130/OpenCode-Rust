@@ -2,6 +2,10 @@
 
 One-liner: a full Rust port of opencode v2.0.24 (the TypeScript reference implementation). Absolutely follow the development standards — **the authoritative source is the local private book `docs/GAPS-AND-PITFALLS.md` (git-ignored, not present in a clone; the on-disk path mirrors the repo layout)**; `tools/lane-brief.sh --all` prints its §2.1–2.5 and the quick-reference table verbatim. The public divergence register is the root-level `DIVERGENCES.md`.
 
+## Absolute Principle (owner ruling, 2026-11-24)
+
+**Everything is faithfully ported from the reference — architecture, UI, UX, and all behavior — except (a) this port's supersets and (b) the reference's inherent bugs.** Architecture may differ only where the development language inherently requires it. The experience surface allows **zero gaps**: every behavior must fully match the reference or be a partial superset (e.g. higher framerate, smoother animation) — deferring animation or opt-in features as "later" is not an exemption. Exemptions fall into exactly three classes: ① this port's supersets (including intentional corrections of ref bugs) ② the reference's inherent bugs ③ language/platform-inherent differences (e.g. V8 inspector, workerd embedding). Every exemption cited in `DIVERGENCES.md` must name its class; the re-triage under this ruling lives there.
+
 ## Hard discipline (violations are incidents)
 
 - All local cargo builds/tests go through `tools/dev-gate.sh` (CPU/memory caps + load gate; exit 3 = load refusal, exit 5 = disk refusal — stop immediately, never retry around the gate)
