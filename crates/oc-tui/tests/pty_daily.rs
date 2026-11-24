@@ -2204,6 +2204,29 @@ fn selection_copy() {
             h.sgr_release(40, u16::try_from(y).unwrap_or(26));
             wait_text(h, "Copied to clipboard", Duration::from_secs(5))
                 .map_err(|error| format!("the copy toast never painted: {error}"))?;
+            // T2 (va12) — the untitled toast face (ui/toast.tsx:64-81):
+            // the dismiss `x` shares the message's row right-aligned
+            // inside the rails, and the panel spans THREE rows (pad +
+            // message/affordance + pad) — the pre-va12 port painted a
+            // 2-row face with no affordance cell.
+            let grid = h.grid_now();
+            let toast_row = (0..grid.rows)
+                .find(|&r| grid.row_text(r).contains("Copied to clipboard"))
+                .ok_or("the toast row vanished")?;
+            let text = grid.row_text(toast_row);
+            if !text.contains('x') {
+                return Err(format!("the untitled toast lost its affordance cell: {text:?}"));
+            }
+            let left_rail = text.find('┃').ok_or("the toast's left rail vanished")?;
+            for neighbor_row in [toast_row - 1, toast_row + 1] {
+                let neighbor_text = grid.row_text(neighbor_row);
+                if neighbor_text.chars().nth(left_rail) != Some('┃') {
+                    return Err(format!(
+                        "the toast panel is not 3 rows: row {neighbor_row} misses the rail \
+                         (face: {text:?} / {neighbor_text:?})"
+                    ));
+                }
+            }
             // The clipboard write emitted OSC 52 (the base64 payload
             // follows the `52;c` marker).
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -2220,6 +2243,58 @@ fn selection_copy() {
                 );
                 std::thread::sleep(Duration::from_millis(60));
             }
+            Ok(())
+        },
+    );
+}
+
+/// T1 (va12) — manual mode's right-press copy (app.tsx:1326-1333):
+/// with `terminal.copy = "manual"` a drag-release does NOT copy (the
+/// selection waits), and a RIGHT press over the screen copies the kept
+/// selection with the `Copied to clipboard` toast (Selection.copy's
+/// decline guards: an empty selection keeps the click dead). The
+/// config rides the sandbox's own `cli.json` (per-test path — no
+/// process-env race with the parallel PTY boots).
+#[test]
+fn selection_manual_right_click_copies() {
+    run_daily_test(
+        "tui16-manual-right-click",
+        120,
+        30,
+        |_, sandbox| {
+            let dir = sandbox.join(".config").join("opencode-rust");
+            std::fs::create_dir_all(&dir).expect("config root");
+            std::fs::write(dir.join("cli.json"), r#"{"terminal":{"copy":"manual"}}"#)
+                .expect("manual copy config");
+        },
+        |h| {
+            boot_to_session(h, b"Alpha")?;
+            wait_text(h, "shift+tab agents", Duration::from_secs(10))?;
+            h.write(b"parrot manual copy");
+            wait_grid(
+                h,
+                |g| (20..30).any(|y| g.content_rect(0, y, 120, 1).contains("parrot manual")),
+                Duration::from_secs(5),
+            )?;
+            let y = (20..30)
+                .find(|&row| h.grid_now().row_text(row).contains("parrot manual"))
+                .unwrap_or(26);
+            // The drag resolves but manual mode keeps quiet: no copy,
+            // no toast — the selection is retained for the explicit
+            // copy (selection.ts:44-63).
+            h.sgr_motion(2, u16::try_from(y).unwrap_or(26));
+            h.sgr_press(2, u16::try_from(y).unwrap_or(26));
+            h.sgr_drag(40, u16::try_from(y).unwrap_or(26));
+            h.sgr_release(40, u16::try_from(y).unwrap_or(26));
+            std::thread::sleep(Duration::from_millis(700));
+            if (0..h.grid_now().rows).any(|row| h.grid_now().row_text(row).contains("Copied")) {
+                return Err("manual mode must not copy on release".to_owned());
+            }
+            // The right press copies the kept selection (the root box's
+            // manual-mode onMouseDown).
+            h.sgr_right_press(60, u16::try_from(y).unwrap_or(26));
+            wait_text(h, "Copied to clipboard", Duration::from_secs(5))
+                .map_err(|error| format!("the manual right-click never copied: {error}"))?;
             Ok(())
         },
     );

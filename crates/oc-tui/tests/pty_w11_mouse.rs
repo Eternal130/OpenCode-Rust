@@ -153,8 +153,10 @@ fn visible_markers(h: &HarnessHandle) -> Vec<usize> {
 
 /// G-447 — the live mouse pipeline: the wheel scrolls the transcript,
 /// a real SGR press→drag paints reverse video over exactly the dragged
-/// cells, and the release resolves copy-on-select (highlight clears +
-/// the Copied toast). One scenario, both beta.18 symptom faces.
+/// cells, and the release resolves copy-on-select (the Copied toast +
+/// the highlight RETAINED — va12 T1: copy never clears,
+/// selection.ts:61; the next press drops it). One scenario, both
+/// beta.18 symptom faces.
 #[test]
 fn pty_wheel_and_drag_highlight_pipeline() {
     let _lock = pty_lock();
@@ -290,7 +292,31 @@ fn mouse_scenario(driver: &mut HarnessHandle) -> Result<(), String> {
         if wait_row(driver, "Copied to clipboard", Duration::from_secs(5)).is_none() {
             return Err("copy-on-select never toasted".to_owned());
         }
-        // The highlight clears with the release (the selection ended).
+        // va12 T1 — the release KEEPS the highlight: `copy` never
+        // clears the selection (selection.ts:61 — "Copy never clears
+        // selection, including empty releases") and `finishSelection`
+        // leaves the renderer's `currentSelection` standing
+        // (renderer.ts:5046-5052). This test previously pinned the
+        // release-clears face — an acknowledged divergence the port
+        // has now dropped (ref behavior = retain until the next
+        // press/selection key/escape).
+        let retained = driver.grid_now();
+        let still = inside_cells
+            .iter()
+            .filter(|&&(x, y)| style_at(&retained, x, y) != style_at(&baseline, x, y))
+            .count();
+        if still == 0 {
+            return Err(
+                "the selection highlight vanished with the release — copy must retain it \
+                 (selection.ts:61)"
+                    .to_owned(),
+            );
+        }
+        // The NEXT PLAIN PRESS clears it (startSelection's clear,
+        // renderer.ts:4967): press again on the drag's anchor cell (a
+        // fresh transcript cell, seconds later — no multi-click
+        // window), then release — the highlight drops with the press.
+        driver.sgr_press(u16::try_from(x0).unwrap_or(0), u16::try_from(y0).unwrap_or(0));
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         let cleared = loop {
             let g = driver.grid_now();
@@ -307,8 +333,9 @@ fn mouse_scenario(driver: &mut HarnessHandle) -> Result<(), String> {
             std::thread::sleep(Duration::from_millis(50));
         };
         if !cleared {
-            return Err("the selection highlight never cleared after the release".to_owned());
+            return Err("the kept highlight never cleared on the next press".to_owned());
         }
+        driver.sgr_release(u16::try_from(x0).unwrap_or(0), u16::try_from(y0).unwrap_or(0));
         // And the toast eventually retires.
         if !wait_row_gone(driver, "Copied to clipboard", Duration::from_secs(8)) {
             return Err("the Copied toast never retired".to_owned());

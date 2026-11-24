@@ -1970,6 +1970,13 @@ impl HarnessHandle {
         self.write(format!("\x1b[<0;{};{}M", x + 1, y + 1).as_bytes());
     }
 
+    /// SGR 1006 CTRL+left-button PRESS at 0-based cell `(x, y)` —
+    /// button code 16 = button 0 + the ctrl modifier bit (the SGR
+    /// button-code modifiers: 4 shift / 8 alt / 16 ctrl).
+    pub fn sgr_ctrl_press(&mut self, x: u16, y: u16) {
+        self.write(format!("\x1b[<16;{};{}M", x + 1, y + 1).as_bytes());
+    }
+
     /// SGR 1006 left-button RELEASE at 0-based cell `(x, y)` — the
     /// `onMouseUp` trigger (v2's pointer surfaces act on release).
     pub fn sgr_release(&mut self, x: u16, y: u16) {
