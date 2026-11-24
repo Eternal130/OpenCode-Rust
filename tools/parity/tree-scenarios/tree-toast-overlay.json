@@ -1,43 +1,37 @@
 {
   "$schema": "opentui-diff tree scenario v1",
-  "_meta": {
-    "captured_by": "oc-tui tree_capture (chrome_solid hub walk)",
-    "skipped_kinds": {
-      "text": 16
-    },
-    "source": "session route with a warning toast + action riding the overlay"
-  },
-  "height": 30,
   "name": "tree-toast-overlay",
+  "width": 100,
+  "height": 30,
   "tree": [
     {
       "id": "surface-tabs-strip",
       "kind": "box",
       "rect": {
-        "h": 30,
-        "w": 100,
         "x": 0,
-        "y": 0
+        "y": 0,
+        "w": 100,
+        "h": 30
       }
     },
     {
       "id": "tabs-strip-wrapper",
       "kind": "box",
       "rect": {
-        "h": 1,
-        "w": 100,
         "x": 0,
-        "y": 0
+        "y": 0,
+        "w": 100,
+        "h": 1
       }
     },
     {
       "id": "box-1",
       "kind": "box",
       "rect": {
-        "h": 1,
-        "w": 100,
         "x": 0,
-        "y": 0
+        "y": 0,
+        "w": 100,
+        "h": 1
       },
       "style": {
         "bg": "#0a0a0a"
@@ -47,40 +41,40 @@
       "id": "box-2",
       "kind": "box",
       "rect": {
-        "h": 1,
-        "w": 100,
         "x": 0,
-        "y": 0
+        "y": 0,
+        "w": 100,
+        "h": 1
       }
     },
     {
       "id": "box-3",
       "kind": "box",
       "rect": {
-        "h": 1,
-        "w": 1,
         "x": 0,
-        "y": 0
+        "y": 0,
+        "w": 1,
+        "h": 1
       }
     },
     {
       "id": "box-4",
       "kind": "box",
       "rect": {
-        "h": 1,
-        "w": 32,
         "x": 0,
-        "y": 0
+        "y": 0,
+        "w": 32,
+        "h": 1
       }
     },
     {
       "id": "s1",
       "kind": "box",
       "rect": {
-        "h": 1,
-        "w": 32,
         "x": 0,
-        "y": 0
+        "y": 0,
+        "w": 32,
+        "h": 1
       },
       "style": {
         "bg": "#1e1e1e"
@@ -90,117 +84,117 @@
       "id": "box-5",
       "kind": "box",
       "rect": {
-        "h": 1,
-        "w": 100,
         "x": 0,
-        "y": 0
+        "y": 0,
+        "w": 100,
+        "h": 1
       }
     },
     {
       "id": "box-6",
       "kind": "box",
       "rect": {
-        "h": 1,
-        "w": 32,
         "x": 0,
-        "y": 0
+        "y": 0,
+        "w": 32,
+        "h": 1
       }
     },
     {
       "id": "box-7",
       "kind": "box",
       "rect": {
-        "h": 1,
-        "w": 3,
         "x": 0,
-        "y": 0
+        "y": 0,
+        "w": 3,
+        "h": 1
       }
     },
     {
-      "content": [
-        {
-          "attributes": 1,
-          "fg": "#eeeeee",
-          "text": "Fix the login bug"
-        }
-      ],
       "id": "text-2",
       "kind": "text",
+      "rect": {
+        "x": 3,
+        "y": 0,
+        "w": 29,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "Fix the login bug",
+          "fg": "#eeeeee",
+          "attributes": 1
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 29,
-        "x": 3,
-        "y": 0
       }
     },
     {
       "id": "box-8",
       "kind": "box",
       "rect": {
-        "h": 1,
-        "w": 1,
         "x": 32,
-        "y": 0
+        "y": 0,
+        "w": 1,
+        "h": 1
       }
     },
     {
       "id": "box-9",
       "kind": "box",
       "rect": {
-        "h": 1,
-        "w": 3,
         "x": 32,
-        "y": 0
+        "y": 0,
+        "w": 3,
+        "h": 1
       }
     },
     {
-      "content": [
-        {
-          "bg": "#0a0a0a",
-          "fg": "#808080",
-          "text": " + "
-        }
-      ],
       "id": "text-4",
       "kind": "text",
       "rect": {
-        "h": 1,
-        "w": 3,
         "x": 32,
-        "y": 0
-      }
+        "y": 0,
+        "w": 3,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": " + ",
+          "fg": "#808080",
+          "bg": "#0a0a0a"
+        }
+      ]
     },
     {
       "id": "surface-transcript",
       "kind": "box",
       "rect": {
-        "h": 30,
-        "w": 100,
         "x": 0,
-        "y": 0
+        "y": 0,
+        "w": 100,
+        "h": 30
       }
     },
     {
       "id": "transcript-wrapper",
       "kind": "box",
       "rect": {
-        "h": 21,
-        "w": 100,
         "x": 0,
-        "y": 1
+        "y": 1,
+        "w": 100,
+        "h": 21
       }
     },
     {
       "id": "box-20",
       "kind": "box",
       "rect": {
-        "h": 21,
-        "w": 100,
         "x": 0,
-        "y": 1
+        "y": 1,
+        "w": 100,
+        "h": 21
       },
       "style": {
         "bg": "#0a0a0a"
@@ -210,208 +204,208 @@
       "id": "message_u1_f0",
       "kind": "box",
       "rect": {
-        "h": 3,
-        "w": 96,
         "x": 2,
-        "y": 2
+        "y": 2,
+        "w": 96,
+        "h": 3
       },
       "style": {
         "bg": "#141414"
       }
     },
     {
-      "content": [
-        {
-          "bg": "#141414",
-          "fg": "#5c9cf5",
-          "text": "┃"
-        }
-      ],
       "id": "message_u1_t0_0",
       "kind": "text",
+      "rect": {
+        "x": 2,
+        "y": 2,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "┃",
+          "fg": "#5c9cf5",
+          "bg": "#141414"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 2,
-        "y": 2
       }
     },
     {
-      "content": [
-        {
-          "bg": "#141414",
-          "fg": "#5c9cf5",
-          "text": "┃"
-        }
-      ],
       "id": "message_u1_t1_0",
       "kind": "text",
+      "rect": {
+        "x": 2,
+        "y": 3,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "┃",
+          "fg": "#5c9cf5",
+          "bg": "#141414"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 2,
-        "y": 3
       }
     },
     {
-      "content": [
-        {
-          "bg": "#141414",
-          "fg": "#5c9cf5",
-          "text": "┃"
-        }
-      ],
       "id": "message_u1_t2_0",
       "kind": "text",
+      "rect": {
+        "x": 2,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "┃",
+          "fg": "#5c9cf5",
+          "bg": "#141414"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 2,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#141414",
-          "fg": "#eeeeee",
-          "text": "fix the login bug — 修复登录页的宽字符换行"
-        }
-      ],
       "id": "message_u1_t3_0",
       "kind": "text",
+      "rect": {
+        "x": 5,
+        "y": 3,
+        "w": 42,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "fix the login bug — 修复登录页的宽字符换行",
+          "fg": "#eeeeee",
+          "bg": "#141414"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 42,
-        "x": 5,
-        "y": 3
       }
     },
     {
-      "content": [
-        {
-          "bg": "#0a0a0a",
-          "fg": "#97682c",
-          "text": "+"
-        }
-      ],
       "id": "group_Reasoning_a1_reasoning_0_t0_0",
       "kind": "text",
+      "rect": {
+        "x": 5,
+        "y": 6,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "+",
+          "fg": "#97682c",
+          "bg": "#0a0a0a"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 5,
-        "y": 6
       }
     },
     {
-      "content": [
-        {
-          "bg": "#0a0a0a",
-          "fg": "#97682c",
-          "text": "Thought"
-        }
-      ],
       "id": "group_Reasoning_a1_reasoning_0_t1_0",
       "kind": "text",
+      "rect": {
+        "x": 7,
+        "y": 6,
+        "w": 7,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "Thought",
+          "fg": "#97682c",
+          "bg": "#0a0a0a"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 7,
-        "x": 7,
-        "y": 6
       }
     },
     {
-      "content": [
-        {
-          "bg": "#0a0a0a",
-          "fg": "#eeeeee",
-          "text": "done — the wrap now slices on cluster bounds"
-        }
-      ],
       "id": "part_a1_text_0_t0_0",
       "kind": "text",
+      "rect": {
+        "x": 5,
+        "y": 8,
+        "w": 44,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "done — the wrap now slices on cluster bounds",
+          "fg": "#eeeeee",
+          "bg": "#0a0a0a"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 44,
-        "x": 5,
-        "y": 8
       }
     },
     {
-      "content": [
-        {
-          "bg": "#0a0a0a",
-          "fg": "#5c9cf5",
-          "text": "Build"
-        },
-        {
-          "bg": "#0a0a0a",
-          "fg": "#808080",
-          "text": " · p/m"
-        }
-      ],
       "id": "footer_a1_t0_0",
       "kind": "text",
+      "rect": {
+        "x": 5,
+        "y": 10,
+        "w": 11,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "Build",
+          "fg": "#5c9cf5",
+          "bg": "#0a0a0a"
+        },
+        {
+          "text": " · p/m",
+          "fg": "#808080",
+          "bg": "#0a0a0a"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 11,
-        "x": 5,
-        "y": 10
       }
     },
     {
       "id": "surface-composer",
       "kind": "box",
       "rect": {
-        "h": 30,
-        "w": 100,
         "x": 0,
-        "y": 0
+        "y": 0,
+        "w": 100,
+        "h": 30
       }
     },
     {
       "id": "composer-wrapper",
       "kind": "box",
       "rect": {
-        "h": 7,
-        "w": 96,
         "x": 2,
-        "y": 23
+        "y": 23,
+        "w": 96,
+        "h": 7
       }
     },
     {
       "id": "box-10",
       "kind": "box",
       "rect": {
-        "h": 7,
-        "w": 96,
         "x": 2,
-        "y": 23
+        "y": 23,
+        "w": 96,
+        "h": 7
       },
       "style": {
         "bg": "#0a0a0a"
@@ -421,94 +415,94 @@
       "id": "box-11",
       "kind": "box",
       "rect": {
-        "h": 4,
-        "w": 96,
         "x": 2,
-        "y": 23
+        "y": 23,
+        "w": 96,
+        "h": 4
       }
     },
     {
       "id": "box-12",
       "kind": "box",
       "rect": {
-        "h": 4,
-        "w": 1,
         "x": 2,
-        "y": 23
+        "y": 23,
+        "w": 1,
+        "h": 4
       }
     },
     {
-      "content": [
-        {
-          "fg": "#484848",
-          "text": "┃"
-        }
-      ],
       "id": "text-5",
       "kind": "text",
       "rect": {
-        "h": 1,
-        "w": 1,
         "x": 2,
-        "y": 23
-      }
-    },
-    {
+        "y": 23,
+        "w": 1,
+        "h": 1
+      },
       "content": [
         {
-          "fg": "#484848",
-          "text": "┃"
+          "text": "┃",
+          "fg": "#484848"
         }
-      ],
+      ]
+    },
+    {
       "id": "text-6",
       "kind": "text",
       "rect": {
-        "h": 1,
-        "w": 1,
         "x": 2,
-        "y": 24
-      }
-    },
-    {
+        "y": 24,
+        "w": 1,
+        "h": 1
+      },
       "content": [
         {
-          "fg": "#484848",
-          "text": "┃"
+          "text": "┃",
+          "fg": "#484848"
         }
-      ],
+      ]
+    },
+    {
       "id": "text-7",
       "kind": "text",
       "rect": {
-        "h": 1,
-        "w": 1,
         "x": 2,
-        "y": 25
-      }
-    },
-    {
+        "y": 25,
+        "w": 1,
+        "h": 1
+      },
       "content": [
         {
-          "fg": "#484848",
-          "text": "┃"
+          "text": "┃",
+          "fg": "#484848"
         }
-      ],
+      ]
+    },
+    {
       "id": "text-8",
       "kind": "text",
       "rect": {
-        "h": 1,
-        "w": 1,
         "x": 2,
-        "y": 26
-      }
+        "y": 26,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "┃",
+          "fg": "#484848"
+        }
+      ]
     },
     {
       "id": "box-13",
       "kind": "box",
       "rect": {
-        "h": 4,
-        "w": 95,
         "x": 3,
-        "y": 23
+        "y": 23,
+        "w": 95,
+        "h": 4
       },
       "style": {
         "bg": "#1e1e1e"
@@ -518,1026 +512,1032 @@
       "id": "box-14",
       "kind": "box",
       "rect": {
-        "h": 1,
-        "w": 95,
         "x": 3,
-        "y": 23
+        "y": 23,
+        "w": 95,
+        "h": 1
       }
     },
     {
       "id": "box-15",
       "kind": "box",
       "rect": {
-        "h": 2,
-        "w": 95,
         "x": 3,
-        "y": 24
+        "y": 24,
+        "w": 95,
+        "h": 2
       }
     },
     {
       "id": "box-16",
       "kind": "box",
       "rect": {
-        "h": 1,
-        "w": 95,
         "x": 3,
-        "y": 26
+        "y": 26,
+        "w": 95,
+        "h": 1
       }
     },
     {
-      "content": [
-        {
-          "fg": "#484848",
-          "text": "Build"
-        }
-      ],
       "id": "text-9",
       "kind": "text",
+      "rect": {
+        "x": 5,
+        "y": 26,
+        "w": 5,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "Build",
+          "fg": "#484848"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 5,
-        "x": 5,
-        "y": 26
       }
     },
     {
       "id": "box-17",
       "kind": "box",
       "rect": {
-        "h": 1,
-        "w": 96,
         "x": 2,
-        "y": 27
+        "y": 27,
+        "w": 96,
+        "h": 1
       }
     },
     {
-      "content": [
-        {
-          "fg": "#484848",
-          "text": "╹"
-        }
-      ],
       "id": "text-16",
       "kind": "text",
       "rect": {
-        "h": 1,
-        "w": 1,
         "x": 2,
-        "y": 27
-      }
-    },
-    {
+        "y": 27,
+        "w": 1,
+        "h": 1
+      },
       "content": [
         {
-          "fg": "#1e1e1e",
-          "text": "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀"
+          "text": "╹",
+          "fg": "#484848"
         }
-      ],
+      ]
+    },
+    {
       "id": "text-17",
       "kind": "text",
+      "rect": {
+        "x": 3,
+        "y": 27,
+        "w": 95,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+          "fg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 95,
-        "x": 3,
-        "y": 27
       }
     },
     {
       "id": "box-18",
       "kind": "box",
       "rect": {
-        "h": 1,
-        "w": 96,
         "x": 2,
-        "y": 28
+        "y": 28,
+        "w": 96,
+        "h": 1
       }
     },
     {
-      "content": [
-        {
-          "fg": "#eeeeee",
-          "text": "shift+tab "
-        },
-        {
-          "fg": "#808080",
-          "text": "agents"
-        }
-      ],
       "id": "text-21",
       "kind": "text",
+      "rect": {
+        "x": 65,
+        "y": 28,
+        "w": 16,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "shift+tab ",
+          "fg": "#eeeeee"
+        },
+        {
+          "text": "agents",
+          "fg": "#808080"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 16,
-        "x": 65,
-        "y": 28
       }
     },
     {
-      "content": [
-        {
-          "fg": "#eeeeee",
-          "text": "ctrl+p "
-        },
-        {
-          "fg": "#808080",
-          "text": "commands"
-        }
-      ],
       "id": "text-22",
       "kind": "text",
+      "rect": {
+        "x": 83,
+        "y": 28,
+        "w": 15,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "ctrl+p ",
+          "fg": "#eeeeee"
+        },
+        {
+          "text": "commands",
+          "fg": "#808080"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 15,
-        "x": 83,
-        "y": 28
       }
     },
     {
       "id": "box-19",
       "kind": "box",
       "rect": {
-        "h": 1,
-        "w": 96,
         "x": 2,
-        "y": 29
+        "y": 29,
+        "w": 96,
+        "h": 1
       }
     },
     {
       "id": "surface-toast",
       "kind": "box",
       "rect": {
-        "h": 30,
-        "w": 100,
         "x": 0,
-        "y": 0
+        "y": 0,
+        "w": 100,
+        "h": 30
       }
     },
     {
       "id": "toast-wrapper",
       "kind": "box",
       "rect": {
-        "h": 5,
-        "w": 44,
         "x": 54,
-        "y": 1
+        "y": 1,
+        "w": 44,
+        "h": 5
       }
     },
     {
       "id": "box-21",
       "kind": "box",
       "rect": {
-        "h": 5,
-        "w": 44,
         "x": 54,
-        "y": 1
+        "y": 1,
+        "w": 44,
+        "h": 5
       }
     },
     {
       "id": "toast_fill",
       "kind": "box",
       "rect": {
-        "h": 5,
-        "w": 42,
         "x": 55,
-        "y": 1
+        "y": 1,
+        "w": 42,
+        "h": 5
       },
       "style": {
         "bg": "#1e1e1e"
       }
     },
     {
-      "content": [
-        {
-          "attributes": 1,
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "MCP server failed"
-        }
-      ],
       "id": "toast_title_1",
       "kind": "text",
+      "rect": {
+        "x": 57,
+        "y": 2,
+        "w": 17,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "MCP server failed",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e",
+          "attributes": 1
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 17,
-        "x": 57,
-        "y": 2
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#ffffff",
-          "text": "  "
-        }
-      ],
       "id": "toast_aff_pad",
       "kind": "text",
+      "rect": {
+        "x": 86,
+        "y": 2,
+        "w": 2,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "  ",
+          "fg": "#ffffff",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 2,
-        "x": 86,
-        "y": 2
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#808080",
-          "text": "› Retry"
-        }
-      ],
       "id": "toast_aff_x",
       "kind": "text",
+      "rect": {
+        "x": 88,
+        "y": 2,
+        "w": 7,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "› Retry",
+          "fg": "#808080",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 7,
-        "x": 88,
-        "y": 2
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "c"
-        }
-      ],
       "id": "toast_msg_3_0",
       "kind": "text",
+      "rect": {
+        "x": 57,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "c",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 57,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "o"
-        }
-      ],
       "id": "toast_msg_3_1",
       "kind": "text",
+      "rect": {
+        "x": 58,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "o",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 58,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "n"
-        }
-      ],
       "id": "toast_msg_3_2",
       "kind": "text",
+      "rect": {
+        "x": 59,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "n",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 59,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "t"
-        }
-      ],
       "id": "toast_msg_3_3",
       "kind": "text",
+      "rect": {
+        "x": 60,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "t",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 60,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "e"
-        }
-      ],
       "id": "toast_msg_3_4",
       "kind": "text",
+      "rect": {
+        "x": 61,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "e",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 61,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "x"
-        }
-      ],
       "id": "toast_msg_3_5",
       "kind": "text",
+      "rect": {
+        "x": 62,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "x",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 62,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "t"
-        }
-      ],
       "id": "toast_msg_3_6",
       "kind": "text",
+      "rect": {
+        "x": 63,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "t",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 63,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": " "
-        }
-      ],
       "id": "toast_msg_3_7",
       "kind": "text",
+      "rect": {
+        "x": 64,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": " ",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 64,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "c"
-        }
-      ],
       "id": "toast_msg_3_8",
       "kind": "text",
+      "rect": {
+        "x": 65,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "c",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 65,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "r"
-        }
-      ],
       "id": "toast_msg_3_9",
       "kind": "text",
+      "rect": {
+        "x": 66,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "r",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 66,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "a"
-        }
-      ],
       "id": "toast_msg_3_10",
       "kind": "text",
+      "rect": {
+        "x": 67,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "a",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 67,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "s"
-        }
-      ],
       "id": "toast_msg_3_11",
       "kind": "text",
+      "rect": {
+        "x": 68,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "s",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 68,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "h"
-        }
-      ],
       "id": "toast_msg_3_12",
       "kind": "text",
+      "rect": {
+        "x": 69,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "h",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 69,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "e"
-        }
-      ],
       "id": "toast_msg_3_13",
       "kind": "text",
+      "rect": {
+        "x": 70,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "e",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 70,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "d"
-        }
-      ],
       "id": "toast_msg_3_14",
       "kind": "text",
+      "rect": {
+        "x": 71,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "d",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 71,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": " "
-        }
-      ],
       "id": "toast_msg_3_15",
       "kind": "text",
+      "rect": {
+        "x": 72,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": " ",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 72,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "—"
-        }
-      ],
       "id": "toast_msg_3_16",
       "kind": "text",
+      "rect": {
+        "x": 73,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "—",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 73,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": " "
-        }
-      ],
       "id": "toast_msg_3_17",
       "kind": "text",
+      "rect": {
+        "x": 74,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": " ",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 74,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "r"
-        }
-      ],
       "id": "toast_msg_3_18",
       "kind": "text",
+      "rect": {
+        "x": 75,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "r",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 75,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "e"
-        }
-      ],
       "id": "toast_msg_3_19",
       "kind": "text",
+      "rect": {
+        "x": 76,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "e",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 76,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "t"
-        }
-      ],
       "id": "toast_msg_3_20",
       "kind": "text",
+      "rect": {
+        "x": 77,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "t",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 77,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "r"
-        }
-      ],
       "id": "toast_msg_3_21",
       "kind": "text",
+      "rect": {
+        "x": 78,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "r",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 78,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "y"
-        }
-      ],
       "id": "toast_msg_3_22",
       "kind": "text",
+      "rect": {
+        "x": 79,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "y",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 79,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": " "
-        }
-      ],
       "id": "toast_msg_3_23",
       "kind": "text",
+      "rect": {
+        "x": 80,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": " ",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 80,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "t"
-        }
-      ],
       "id": "toast_msg_3_24",
       "kind": "text",
+      "rect": {
+        "x": 81,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "t",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 81,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "h"
-        }
-      ],
       "id": "toast_msg_3_25",
       "kind": "text",
+      "rect": {
+        "x": 82,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "h",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 82,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "e"
-        }
-      ],
       "id": "toast_msg_3_26",
       "kind": "text",
+      "rect": {
+        "x": 83,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "e",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 83,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": " "
-        }
-      ],
       "id": "toast_msg_3_27",
       "kind": "text",
+      "rect": {
+        "x": 84,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": " ",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 84,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "c"
-        }
-      ],
       "id": "toast_msg_3_28",
       "kind": "text",
+      "rect": {
+        "x": 85,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "c",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 85,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "o"
-        }
-      ],
       "id": "toast_msg_3_29",
       "kind": "text",
+      "rect": {
+        "x": 86,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "o",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 86,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "n"
-        }
-      ],
       "id": "toast_msg_3_30",
       "kind": "text",
+      "rect": {
+        "x": 87,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "n",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 87,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "n"
-        }
-      ],
       "id": "toast_msg_3_31",
       "kind": "text",
+      "rect": {
+        "x": 88,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "n",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 88,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "e"
-        }
-      ],
       "id": "toast_msg_3_32",
       "kind": "text",
+      "rect": {
+        "x": 89,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "e",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 89,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "c"
-        }
-      ],
       "id": "toast_msg_3_33",
       "kind": "text",
+      "rect": {
+        "x": 90,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "c",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 90,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "t"
-        }
-      ],
       "id": "toast_msg_3_34",
       "kind": "text",
+      "rect": {
+        "x": 91,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "t",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 91,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "i"
-        }
-      ],
       "id": "toast_msg_3_35",
       "kind": "text",
+      "rect": {
+        "x": 92,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "i",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 92,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "o"
-        }
-      ],
       "id": "toast_msg_3_36",
       "kind": "text",
+      "rect": {
+        "x": 93,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "o",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 93,
-        "y": 4
       }
     },
     {
-      "content": [
-        {
-          "bg": "#1e1e1e",
-          "fg": "#eeeeee",
-          "text": "n"
-        }
-      ],
       "id": "toast_msg_3_37",
       "kind": "text",
+      "rect": {
+        "x": 94,
+        "y": 4,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "n",
+          "fg": "#eeeeee",
+          "bg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 1,
-        "x": 94,
-        "y": 4
       }
     }
   ],
-  "width": 100
+  "_meta": {
+    "source": "session route with a warning toast + action riding the overlay",
+    "captured_by": "oc-tui tree_capture (chrome_solid hub walk)",
+    "skipped_kinds": {
+      "text": 16
+    }
+  }
 }
