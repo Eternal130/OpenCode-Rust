@@ -701,54 +701,6 @@
    "adjudicated_at": "2026-11-24"
   },
   {
-   "id": "v18-v18a-boot-wide",
-   "scenario_pattern": "v18a",
-   "state_pattern": "boot-wide",
-   "shape": {
-    "kind": "regex",
-    "any_contains": [
-     "(?:mini|anything,|context…|Build)"
-    ]
-   },
-   "classification": "pending-fix",
-   "justification": "ADJUDICATED (controller 2026-11-25): new v18 paired anchor (lane va18 T5) exposing the mini-frontend family — G-489 (composer/statusline top-vs-bottom seating) and G-490 (model display-name + provider/menu group suppression; wordmark channel face). Fix scheduled va23 (mini fidelity lane). Tip-only entry: goes stale when the fix lands. Frame evidence: .test-logs/diff-reports/v18a-boot-wide.txt",
-   "g_ref": "G-489/G-490 (va18 T5 anchor)",
-   "adjudicated_by": "controller",
-   "adjudicated_at": "2026-11-25"
-  },
-  {
-   "id": "v18-v18a-idle-draft-wide",
-   "scenario_pattern": "v18a",
-   "state_pattern": "idle-draft-wide",
-   "shape": {
-    "kind": "regex",
-    "any_contains": [
-     "(?:mini)"
-    ]
-   },
-   "classification": "pending-fix",
-   "justification": "ADJUDICATED (controller 2026-11-25): new v18 paired anchor (lane va18 T5) exposing the mini-frontend family — G-489 (composer/statusline top-vs-bottom seating) and G-490 (model display-name + provider/menu group suppression; wordmark channel face). Fix scheduled va23 (mini fidelity lane). Tip-only entry: goes stale when the fix lands. Frame evidence: .test-logs/diff-reports/v18a-idle-draft-wide.txt",
-   "g_ref": "G-489/G-490 (va18 T5 anchor)",
-   "adjudicated_by": "controller",
-   "adjudicated_at": "2026-11-25"
-  },
-  {
-   "id": "v18-v18b-boot-narrow",
-   "scenario_pattern": "v18b",
-   "state_pattern": "boot-narrow",
-   "shape": {
-    "kind": "regex",
-    "any_contains": [
-     "(?:anything,)"
-    ]
-   },
-   "classification": "pending-fix",
-   "justification": "ADJUDICATED (controller 2026-11-25): new v18 paired anchor (lane va18 T5) exposing the mini-frontend family — G-489 (composer/statusline top-vs-bottom seating) and G-490 (model display-name + provider/menu group suppression; wordmark channel face). Fix scheduled va23 (mini fidelity lane). Tip-only entry: goes stale when the fix lands. Frame evidence: .test-logs/diff-reports/v18b-boot-narrow.txt",
-   "g_ref": "G-489/G-490 (va18 T5 anchor)",
-   "adjudicated_by": "controller",
-   "adjudicated_at": "2026-11-25"
-  },
-  {
    "id": "geom160-home0-timing",
    "scenario_pattern": "geom160",
    "state_pattern": "home0",
@@ -761,6 +713,70 @@
    "classification": "framework-diff",
    "justification": "ADJUDICATED (controller 2026-11-25): mid-capture timing artifact — first export (quiescence []) caught the statusline/footer pre-settle after the G-481 rewrite; targeted re-run of geom160_wide_pair is EXACT at settle (oc-tui .test-logs, lane tag va18-verify, 1/1 PASS 42.9s). Lines: boot paint-order (statusline row) + footer root/spacing normalization asymmetry. Re-open as a real gap only if the shape reproduces at settled quiescence.",
    "g_ref": "timing capture (G-481 rewrite aftermath)",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-25"
+  },
+  {
+   "id": "v18-v18a-boot-wide",
+   "scenario_pattern": "v18a",
+   "state_pattern": "boot-wide",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:mini|anything,|context…|Build|┃)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-25): v18 paired anchor (lane va18 T5) — mini-frontend family G-489 (composer/statusline top-vs-bottom seating) + G-490 (model display-name + provider/menu group suppression + wordmark channel). Fix wave va24 (mini fidelity). Tip-only entry: stale when the fix lands. Evidence: .test-logs/diff-reports/v18a-boot-wide.txt",
+   "g_ref": "G-489/G-490",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-25"
+  },
+  {
+   "id": "v18-v18a-idle-draft-wide",
+   "scenario_pattern": "v18a",
+   "state_pattern": "idle-draft-wide",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:mini|hi|Build)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-25): v18 paired anchor (lane va18 T5) — mini-frontend family G-489 (composer/statusline top-vs-bottom seating) + G-490 (model display-name + provider/menu group suppression + wordmark channel). Fix wave va24 (mini fidelity). Tip-only entry: stale when the fix lands. Evidence: .test-logs/diff-reports/v18a-idle-draft-wide.txt",
+   "g_ref": "G-489/G-490",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-25"
+  },
+  {
+   "id": "v18-v18b-boot-narrow",
+   "scenario_pattern": "v18b",
+   "state_pattern": "boot-narrow",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:anything,|for|commands,|context…|Build|mini|┃)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-25): v18 paired anchor (lane va18 T5) — mini-frontend family G-489 (composer/statusline top-vs-bottom seating) + G-490 (model display-name + provider/menu group suppression + wordmark channel). Fix wave va24 (mini fidelity). Tip-only entry: stale when the fix lands. Evidence: .test-logs/diff-reports/v18b-boot-narrow.txt",
+   "g_ref": "G-489/G-490",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-25"
+  },
+  {
+   "id": "v18-v18b-idle-draft-narrow",
+   "scenario_pattern": "v18b",
+   "state_pattern": "idle-draft-narrow",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:hi|Build|mini)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-25): v18 paired anchor (lane va18 T5) — mini-frontend family G-489 (composer/statusline top-vs-bottom seating) + G-490 (model display-name + provider/menu group suppression + wordmark channel). Fix wave va24 (mini fidelity). Tip-only entry: stale when the fix lands. Evidence: .test-logs/diff-reports/v18b-idle-draft-narrow.txt",
+   "g_ref": "G-489/G-490",
    "adjudicated_by": "controller",
    "adjudicated_at": "2026-11-25"
   }
