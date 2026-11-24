@@ -2020,7 +2020,13 @@ impl App {
     /// motion over an option row — `moveTo`).
     fn move_dialog_selection_to(&mut self, index: usize) {
         let before = self.store.dialogs().last().map_or(usize::MAX, |top| top.select.selected);
-        self.store.update_dialog(|top| top.select.selected = index);
+        // G-493 — the row's `onMouseMove` clears the focused action
+        // before moving (`setFocusedAction(undefined); moveTo(index)`,
+        // dialog-select.tsx:762-768).
+        self.store.update_dialog(|top| {
+            top.select.selected = index;
+            top.select.focused_action = None;
+        });
         if before != index {
             // Pointer motion runs the same `moveTo` → `onMove` path as
             // the keyboard — the theme list previews on it too.

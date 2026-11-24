@@ -729,6 +729,11 @@ impl SelectState {
     /// with no `current` the selection stays put (the effect returns
     /// before any move).
     pub fn set_filter(&mut self, filter: &str, props: &SelectProps, terminal_height: usize) {
+        // G-493 — the filtered() effect (`createEffect(() => {
+        // filtered(); setFocusedAction(undefined) })`,
+        // dialog-select.tsx:207-210): any list change (the filter
+        // recompute) returns the footer focus to the option list.
+        self.focused_action = None;
         let was_empty = self.filter.is_empty();
         filter.clone_into(&mut self.filter);
         if self.filter.is_empty() {
@@ -749,6 +754,9 @@ impl SelectState {
         if props.locked {
             return;
         }
+        // G-493 — every `moveTo` resets the focused action
+        // (dialog-select.tsx:376-377); `move()` routes through it.
+        self.focused_action = None;
         let groups = grouped(props, &self.filter);
         let indices = flat_indices(&groups);
         if indices.is_empty() {
@@ -763,6 +771,9 @@ impl SelectState {
         if props.locked {
             return;
         }
+        // G-493 — home/end run `moveTo` (dialog-select.tsx:488-498),
+        // which resets the focused action (:376-377).
+        self.focused_action = None;
         let groups = grouped(props, &self.filter);
         let indices = flat_indices(&groups);
         if indices.is_empty() {
@@ -780,6 +791,10 @@ impl SelectState {
         if props.locked {
             return;
         }
+        // G-493 — moveSection's jump runs `moveTo` (the alt+arrows,
+        // dialog-select.tsx:367-374) — the focused action resets
+        // (:376-377).
+        self.focused_action = None;
         let groups = grouped(props, &self.filter);
         let indices = flat_indices(&groups);
         if indices.is_empty() {
