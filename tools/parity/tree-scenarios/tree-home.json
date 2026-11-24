@@ -1,351 +1,345 @@
 {
   "$schema": "opentui-diff tree scenario v1",
-  "_meta": {
-    "captured_by": "oc-tui tree_capture (chrome_solid hub walk)",
-    "skipped_kinds": {
-      "text": 14
-    },
-    "source": "fresh boot — the home route (recents skeleton, no session)"
-  },
-  "height": 30,
   "name": "tree-home",
+  "width": 100,
+  "height": 30,
   "tree": [
     {
       "id": "surface-home",
       "kind": "box",
       "rect": {
-        "h": 30,
-        "w": 100,
         "x": 0,
-        "y": 0
+        "y": 0,
+        "w": 100,
+        "h": 30
       }
     },
     {
       "id": "home-wrapper",
       "kind": "box",
       "rect": {
-        "h": 30,
-        "w": 100,
         "x": 0,
-        "y": 0
+        "y": 0,
+        "w": 100,
+        "h": 30
       }
     },
     {
       "id": "box-1",
       "kind": "box",
       "rect": {
-        "h": 30,
-        "w": 100,
         "x": 0,
-        "y": 0
+        "y": 0,
+        "w": 100,
+        "h": 30
       },
       "style": {
         "bg": "#0a0a0a"
       }
     },
     {
-      "content": [
-        {
-          "bg": "#0a0a0a",
-          "fg": "#808080",
-          "text": "                   "
-        }
-      ],
       "id": "text-1",
       "kind": "text",
+      "rect": {
+        "x": 31,
+        "y": 9,
+        "w": 19,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "                   ",
+          "fg": "#808080",
+          "bg": "#0a0a0a"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 19,
-        "x": 31,
-        "y": 9
       }
     },
     {
-      "content": [
-        {
-          "attributes": 1,
-          "bg": "#0a0a0a",
-          "fg": "#eeeeee",
-          "text": "             ▄     "
-        }
-      ],
       "id": "text-2",
       "kind": "text",
+      "rect": {
+        "x": 51,
+        "y": 9,
+        "w": 19,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "             ▄     ",
+          "fg": "#eeeeee",
+          "bg": "#0a0a0a",
+          "attributes": 1
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 19,
-        "x": 51,
-        "y": 9
       }
     },
     {
-      "content": [
-        {
-          "bg": "#0a0a0a",
-          "fg": "#808080",
-          "text": "█▀▀█ █▀▀█ █▀▀█ █▀▀▄"
-        }
-      ],
       "id": "text-3",
       "kind": "text",
+      "rect": {
+        "x": 31,
+        "y": 10,
+        "w": 19,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "█▀▀█ █▀▀█ █▀▀█ █▀▀▄",
+          "fg": "#808080",
+          "bg": "#0a0a0a"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 19,
-        "x": 31,
-        "y": 10
       }
     },
     {
-      "content": [
-        {
-          "attributes": 1,
-          "bg": "#0a0a0a",
-          "fg": "#eeeeee",
-          "text": "█▀▀▀ █▀▀█ █▀▀█ █▀▀█"
-        }
-      ],
       "id": "text-4",
       "kind": "text",
+      "rect": {
+        "x": 51,
+        "y": 10,
+        "w": 19,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "█▀▀▀ █▀▀█ █▀▀█ █▀▀█",
+          "fg": "#eeeeee",
+          "bg": "#0a0a0a",
+          "attributes": 1
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 19,
-        "x": 51,
-        "y": 10
       }
     },
     {
-      "content": [
-        {
-          "bg": "#0a0a0a",
-          "fg": "#808080",
-          "text": "█"
-        },
-        {
-          "bg": "#282828",
-          "fg": "#808080",
-          "text": "  "
-        },
-        {
-          "bg": "#0a0a0a",
-          "fg": "#808080",
-          "text": "█ █"
-        },
-        {
-          "bg": "#282828",
-          "fg": "#808080",
-          "text": "  "
-        },
-        {
-          "bg": "#0a0a0a",
-          "fg": "#808080",
-          "text": "█ █"
-        },
-        {
-          "bg": "#282828",
-          "fg": "#808080",
-          "text": "▀▀▀"
-        },
-        {
-          "bg": "#0a0a0a",
-          "fg": "#808080",
-          "text": " █"
-        },
-        {
-          "bg": "#282828",
-          "fg": "#808080",
-          "text": "  "
-        },
-        {
-          "bg": "#0a0a0a",
-          "fg": "#808080",
-          "text": "█"
-        }
-      ],
       "id": "text-5",
       "kind": "text",
+      "rect": {
+        "x": 31,
+        "y": 11,
+        "w": 19,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "█",
+          "fg": "#808080",
+          "bg": "#0a0a0a"
+        },
+        {
+          "text": "  ",
+          "fg": "#808080",
+          "bg": "#282828"
+        },
+        {
+          "text": "█ █",
+          "fg": "#808080",
+          "bg": "#0a0a0a"
+        },
+        {
+          "text": "  ",
+          "fg": "#808080",
+          "bg": "#282828"
+        },
+        {
+          "text": "█ █",
+          "fg": "#808080",
+          "bg": "#0a0a0a"
+        },
+        {
+          "text": "▀▀▀",
+          "fg": "#808080",
+          "bg": "#282828"
+        },
+        {
+          "text": " █",
+          "fg": "#808080",
+          "bg": "#0a0a0a"
+        },
+        {
+          "text": "  ",
+          "fg": "#808080",
+          "bg": "#282828"
+        },
+        {
+          "text": "█",
+          "fg": "#808080",
+          "bg": "#0a0a0a"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 19,
-        "x": 31,
-        "y": 11
       }
     },
     {
-      "content": [
-        {
-          "attributes": 1,
-          "bg": "#0a0a0a",
-          "fg": "#eeeeee",
-          "text": "█"
-        },
-        {
-          "attributes": 1,
-          "bg": "#434343",
-          "fg": "#eeeeee",
-          "text": "   "
-        },
-        {
-          "attributes": 1,
-          "bg": "#0a0a0a",
-          "fg": "#eeeeee",
-          "text": " █"
-        },
-        {
-          "attributes": 1,
-          "bg": "#434343",
-          "fg": "#eeeeee",
-          "text": "  "
-        },
-        {
-          "attributes": 1,
-          "bg": "#0a0a0a",
-          "fg": "#eeeeee",
-          "text": "█ █"
-        },
-        {
-          "attributes": 1,
-          "bg": "#434343",
-          "fg": "#eeeeee",
-          "text": "  "
-        },
-        {
-          "attributes": 1,
-          "bg": "#0a0a0a",
-          "fg": "#eeeeee",
-          "text": "█ █"
-        },
-        {
-          "attributes": 1,
-          "bg": "#434343",
-          "fg": "#eeeeee",
-          "text": "▀▀▀"
-        }
-      ],
       "id": "text-6",
       "kind": "text",
+      "rect": {
+        "x": 51,
+        "y": 11,
+        "w": 19,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "█",
+          "fg": "#eeeeee",
+          "bg": "#0a0a0a",
+          "attributes": 1
+        },
+        {
+          "text": "   ",
+          "fg": "#eeeeee",
+          "bg": "#434343",
+          "attributes": 1
+        },
+        {
+          "text": " █",
+          "fg": "#eeeeee",
+          "bg": "#0a0a0a",
+          "attributes": 1
+        },
+        {
+          "text": "  ",
+          "fg": "#eeeeee",
+          "bg": "#434343",
+          "attributes": 1
+        },
+        {
+          "text": "█ █",
+          "fg": "#eeeeee",
+          "bg": "#0a0a0a",
+          "attributes": 1
+        },
+        {
+          "text": "  ",
+          "fg": "#eeeeee",
+          "bg": "#434343",
+          "attributes": 1
+        },
+        {
+          "text": "█ █",
+          "fg": "#eeeeee",
+          "bg": "#0a0a0a",
+          "attributes": 1
+        },
+        {
+          "text": "▀▀▀",
+          "fg": "#eeeeee",
+          "bg": "#434343",
+          "attributes": 1
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 19,
-        "x": 51,
-        "y": 11
       }
     },
     {
-      "content": [
-        {
-          "bg": "#0a0a0a",
-          "fg": "#808080",
-          "text": "▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀"
-        },
-        {
-          "bg": "#0a0a0a",
-          "fg": "#282828",
-          "text": "▀▀"
-        },
-        {
-          "bg": "#0a0a0a",
-          "fg": "#808080",
-          "text": "▀"
-        }
-      ],
       "id": "text-7",
       "kind": "text",
+      "rect": {
+        "x": 31,
+        "y": 12,
+        "w": 19,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀",
+          "fg": "#808080",
+          "bg": "#0a0a0a"
+        },
+        {
+          "text": "▀▀",
+          "fg": "#282828",
+          "bg": "#0a0a0a"
+        },
+        {
+          "text": "▀",
+          "fg": "#808080",
+          "bg": "#0a0a0a"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 19,
-        "x": 31,
-        "y": 12
       }
     },
     {
-      "content": [
-        {
-          "attributes": 1,
-          "bg": "#0a0a0a",
-          "fg": "#eeeeee",
-          "text": "▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"
-        }
-      ],
       "id": "text-8",
       "kind": "text",
+      "rect": {
+        "x": 51,
+        "y": 12,
+        "w": 19,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀",
+          "fg": "#eeeeee",
+          "bg": "#0a0a0a",
+          "attributes": 1
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 19,
-        "x": 51,
-        "y": 12
       }
     },
     {
-      "content": [
-        {
-          "fg": "#808080",
-          "text": "2.0.24"
-        }
-      ],
       "id": "text-9",
       "kind": "text",
+      "rect": {
+        "x": 92,
+        "y": 28,
+        "w": 6,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "2.0.24",
+          "fg": "#808080"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 6,
-        "x": 92,
-        "y": 28
       }
     },
     {
       "id": "surface-composer",
       "kind": "box",
       "rect": {
-        "h": 30,
-        "w": 100,
         "x": 0,
-        "y": 0
+        "y": 0,
+        "w": 100,
+        "h": 30
       }
     },
     {
       "id": "composer-wrapper",
       "kind": "box",
       "rect": {
-        "h": 7,
-        "w": 75,
         "x": 13,
-        "y": 14
+        "y": 14,
+        "w": 75,
+        "h": 7
       }
     },
     {
       "id": "box-2",
       "kind": "box",
       "rect": {
-        "h": 7,
-        "w": 75,
         "x": 13,
-        "y": 14
+        "y": 14,
+        "w": 75,
+        "h": 7
       },
       "style": {
         "bg": "#0a0a0a"
@@ -355,104 +349,104 @@
       "id": "box-3",
       "kind": "box",
       "rect": {
-        "h": 1,
-        "w": 75,
         "x": 13,
-        "y": 14
+        "y": 14,
+        "w": 75,
+        "h": 1
       }
     },
     {
       "id": "box-4",
       "kind": "box",
       "rect": {
-        "h": 4,
-        "w": 75,
         "x": 13,
-        "y": 15
+        "y": 15,
+        "w": 75,
+        "h": 4
       }
     },
     {
       "id": "box-5",
       "kind": "box",
       "rect": {
-        "h": 4,
-        "w": 1,
         "x": 13,
-        "y": 15
+        "y": 15,
+        "w": 1,
+        "h": 4
       }
     },
     {
-      "content": [
-        {
-          "fg": "#484848",
-          "text": "┃"
-        }
-      ],
       "id": "text-11",
       "kind": "text",
       "rect": {
-        "h": 1,
-        "w": 1,
         "x": 13,
-        "y": 15
-      }
-    },
-    {
+        "y": 15,
+        "w": 1,
+        "h": 1
+      },
       "content": [
         {
-          "fg": "#484848",
-          "text": "┃"
+          "text": "┃",
+          "fg": "#484848"
         }
-      ],
+      ]
+    },
+    {
       "id": "text-12",
       "kind": "text",
       "rect": {
-        "h": 1,
-        "w": 1,
         "x": 13,
-        "y": 16
-      }
-    },
-    {
+        "y": 16,
+        "w": 1,
+        "h": 1
+      },
       "content": [
         {
-          "fg": "#484848",
-          "text": "┃"
+          "text": "┃",
+          "fg": "#484848"
         }
-      ],
+      ]
+    },
+    {
       "id": "text-13",
       "kind": "text",
       "rect": {
-        "h": 1,
-        "w": 1,
         "x": 13,
-        "y": 17
-      }
-    },
-    {
+        "y": 17,
+        "w": 1,
+        "h": 1
+      },
       "content": [
         {
-          "fg": "#484848",
-          "text": "┃"
+          "text": "┃",
+          "fg": "#484848"
         }
-      ],
+      ]
+    },
+    {
       "id": "text-14",
       "kind": "text",
       "rect": {
-        "h": 1,
-        "w": 1,
         "x": 13,
-        "y": 18
-      }
+        "y": 18,
+        "w": 1,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "┃",
+          "fg": "#484848"
+        }
+      ]
     },
     {
       "id": "box-6",
       "kind": "box",
       "rect": {
-        "h": 4,
-        "w": 74,
         "x": 14,
-        "y": 15
+        "y": 15,
+        "w": 74,
+        "h": 4
       },
       "style": {
         "bg": "#1e1e1e"
@@ -462,171 +456,177 @@
       "id": "box-7",
       "kind": "box",
       "rect": {
-        "h": 1,
-        "w": 74,
         "x": 14,
-        "y": 15
+        "y": 15,
+        "w": 74,
+        "h": 1
       }
     },
     {
       "id": "box-8",
       "kind": "box",
       "rect": {
-        "h": 2,
-        "w": 74,
         "x": 14,
-        "y": 16
+        "y": 16,
+        "w": 74,
+        "h": 2
       }
     },
     {
-      "content": [
-        {
-          "fg": "#808080",
-          "text": "Ask anything… \"Fix a TODO in the codebase\""
-        }
-      ],
       "id": "p",
       "kind": "text",
+      "rect": {
+        "x": 16,
+        "y": 16,
+        "w": 70,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "Ask anything… \"Fix a TODO in the codebase\"",
+          "fg": "#808080"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 70,
-        "x": 16,
-        "y": 16
       }
     },
     {
       "id": "box-9",
       "kind": "box",
       "rect": {
-        "h": 1,
-        "w": 74,
         "x": 14,
-        "y": 18
+        "y": 18,
+        "w": 74,
+        "h": 1
       }
     },
     {
-      "content": [
-        {
-          "fg": "#484848",
-          "text": "Build"
-        }
-      ],
       "id": "text-15",
       "kind": "text",
+      "rect": {
+        "x": 16,
+        "y": 18,
+        "w": 5,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "Build",
+          "fg": "#484848"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 5,
-        "x": 16,
-        "y": 18
       }
     },
     {
       "id": "box-10",
       "kind": "box",
       "rect": {
-        "h": 1,
-        "w": 75,
         "x": 13,
-        "y": 19
+        "y": 19,
+        "w": 75,
+        "h": 1
       }
     },
     {
-      "content": [
-        {
-          "fg": "#484848",
-          "text": "╹"
-        }
-      ],
       "id": "text-22",
       "kind": "text",
       "rect": {
-        "h": 1,
-        "w": 1,
         "x": 13,
-        "y": 19
-      }
-    },
-    {
+        "y": 19,
+        "w": 1,
+        "h": 1
+      },
       "content": [
         {
-          "fg": "#1e1e1e",
-          "text": "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀"
+          "text": "╹",
+          "fg": "#484848"
         }
-      ],
+      ]
+    },
+    {
       "id": "text-23",
       "kind": "text",
+      "rect": {
+        "x": 14,
+        "y": 19,
+        "w": 74,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+          "fg": "#1e1e1e"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 74,
-        "x": 14,
-        "y": 19
       }
     },
     {
       "id": "box-11",
       "kind": "box",
       "rect": {
-        "h": 1,
-        "w": 75,
         "x": 13,
-        "y": 20
+        "y": 20,
+        "w": 75,
+        "h": 1
       }
     },
     {
-      "content": [
-        {
-          "fg": "#eeeeee",
-          "text": "shift+tab "
-        },
-        {
-          "fg": "#808080",
-          "text": "agents"
-        }
-      ],
       "id": "text-27",
       "kind": "text",
+      "rect": {
+        "x": 55,
+        "y": 20,
+        "w": 16,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "shift+tab ",
+          "fg": "#eeeeee"
+        },
+        {
+          "text": "agents",
+          "fg": "#808080"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 16,
-        "x": 55,
-        "y": 20
       }
     },
     {
-      "content": [
-        {
-          "fg": "#eeeeee",
-          "text": "ctrl+p "
-        },
-        {
-          "fg": "#808080",
-          "text": "commands"
-        }
-      ],
       "id": "text-28",
       "kind": "text",
+      "rect": {
+        "x": 73,
+        "y": 20,
+        "w": 15,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "ctrl+p ",
+          "fg": "#eeeeee"
+        },
+        {
+          "text": "commands",
+          "fg": "#808080"
+        }
+      ],
       "options": {
         "wrapMode": "none"
-      },
-      "rect": {
-        "h": 1,
-        "w": 15,
-        "x": 73,
-        "y": 20
       }
     }
   ],
-  "width": 100
+  "_meta": {
+    "source": "fresh boot — the home route (recents skeleton, no session)",
+    "captured_by": "oc-tui tree_capture (chrome_solid hub walk)",
+    "skipped_kinds": {
+      "text": 14
+    }
+  }
 }

@@ -514,10 +514,15 @@ impl App {
     }
 
     /// G-457 — the multi-click count for one left press (the
-    /// renderer's `nextClickBehavior` input): rapid same-cell presses
-    /// (≤500 ms) increment the count — 1 = cell, 2 = word
-    /// (double-click), 3 = line (triple-click), then the cycle
-    /// restarts. Any move past the window/cell resets to 1.
+    /// renderer's `nextClickBehavior` input, renderer.ts:4975-4986):
+    /// rapid presses within 500 ms increment the count — 1 = cell, 2 =
+    /// word (double-click), 3 = line (triple-click), and the ref
+    /// CLAMPS the count at `Math.min(last.count + 1, 3)` (the fourth
+    /// press stays line). `continued` needs the same renderable +
+    /// `max(|dx|, |dy|) <= 1` — the port has no renderable model, so
+    /// the chebyshev<=1 tolerance applies to screen cells (a bounded
+    /// approximation: the ref only counts presses that STARTED a
+    /// selection on a selectable renderable; every press arms here).
     fn next_selection_click(&mut self, col: usize, row: usize) -> u32 {
         // G-457 rework: read the STORE clock — `self.clock`
         // (ManualClock) only advances in unit tests; frozen at 0 in
@@ -526,11 +531,11 @@ impl App {
         // second click became a word-select copy). The store clock
         // is the live path's only advancing time base.
         let now_ms = self.store.clock();
-        let rapid = self
-            .selection_last_press
-            .is_some_and(|(at, x, y)| now_ms.saturating_sub(at) <= 500 && (x, y) == (col, row));
+        let rapid = self.selection_last_press.is_some_and(|(at, x, y)| {
+            now_ms.saturating_sub(at) <= 500 && x.abs_diff(col).max(y.abs_diff(row)) <= 1
+        });
         self.selection_click_count =
-            if rapid { self.selection_click_count.saturating_add(1) } else { 1 };
+            if rapid { (self.selection_click_count + 1).min(3) } else { 1 };
         self.selection_last_press = Some((now_ms, col, row));
         self.selection_click_count
     }
@@ -733,20 +738,21 @@ impl App {
                 // TUI-16 — the drag release resolves the screen
                 // selection: `terminal.copy = "select"` writes the
                 // text with the Copied toast (copyOnSelectRelease,
-                // util/selection.ts:44-60 + app.tsx:546-571); a
-                // resolved drag ALSO suppresses the click beneath it
-                // (the renderer's selection consumes the release).
+                // util/selection.ts:44-60 + app.tsx:546-571). The
+                // ref's up branch (renderer.ts:3721-3732) dispatches
+                // the release to the renderable under the pointer
+                // (isDragging: true) BEFORE `finishSelection`, so the
+                // resolved release does NOT suppress the click beneath
+                // it — the fall-through below mirrors that dispatch.
+                // The selection itself is kept: `copy` never clears
+                // (selection.ts:61) and `finishSelection` leaves
+                // `currentSelection` standing (renderer.ts:5046-5052)
+                // — the next press / selection key / escape drops it.
                 if let Some(resolved) = self.screen_selection.release(self.last_frame.as_ref()) {
                     if self.copy_behavior == crate::config::CopyBehavior::Select {
                         self.copy_selection(resolved);
-                        // Copy-on-select ends the selection with the
-                        // release (the renderer's drag ends; the
-                        // retained selection is MANUAL mode's wait
-                        // for an explicit copy).
-                        self.screen_selection.clear();
                     }
                     self.store.request_redraw();
-                    return;
                 }
                 // G-287③ — the pane resize's captured release
                 // (`finish`, pane-resize.ts:31-39,64-77): the drag
@@ -900,12 +906,22 @@ impl App {
                         self.store.request_redraw();
                     }
                     if inside {
-                        let command = self.store.toast_activate();
-                        self.store.request_redraw();
-                        if let Some(command) = command {
-                            let dispatch = self.dispatcher.dispatch(&self.store, &command, None);
-                            if let Dispatch::ServerPending(reason) = dispatch {
-                                let _ = reason;
+                        // toast.tsx:59-62 — the panel's release
+                        // activation skips while a selection holds
+                        // text (`renderer.getSelection()
+                        // ?.getSelectedText()`): a selection release
+                        // over the panel must not activate it — the
+                        // just-copied toast included (the copy rode
+                        // this same release).
+                        if !self.selection_holds_text() {
+                            let command = self.store.toast_activate();
+                            self.store.request_redraw();
+                            if let Some(command) = command {
+                                let dispatch =
+                                    self.dispatcher.dispatch(&self.store, &command, None);
+                                if let Dispatch::ServerPending(reason) = dispatch {
+                                    let _ = reason;
+                                }
                             }
                         }
                         return;
@@ -1380,14 +1396,48 @@ impl App {
                         crate::store::DialogSize::Medium,
                     );
                     self.store.request_redraw();
+                    // session-tabs.tsx:1674-1675 — the tab's own right
+                    // press stops propagation: the root copy below
+                    // never sees a menu press.
+                    return;
+                }
+                // app.tsx:1326-1333 — the root box's manual-mode right
+                // press copies the selection (preventDefault +
+                // stopPropagation on success). It bubbles AFTER the
+                // child handlers, so a right press on the strip (above)
+                // or into a dialog (early return) never reaches it.
+                // `Selection.copy`'s guards (selection.ts:47/50: an
+                // isStart cell selection, or empty text, declines)
+                // mirror into `resolve()`'s None + the empty-text
+                // early return in `copy_selection`.
+                if self.copy_behavior == crate::config::CopyBehavior::Manual {
+                    if let Some(resolved) = self.screen_selection.resolve(self.last_frame.as_ref())
+                    {
+                        self.copy_selection(resolved);
+                    }
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
-                // TUI-16 — every left press arms a potential screen
-                // selection (the renderer's cell model; the release
-                // only resolves one when the pointer crossed cells).
-                let click_count = self.next_selection_click(col, row);
-                self.screen_selection.press(col, row, click_count);
+                // T1 (renderer.ts:3734-3740) — a ctrl+left press over
+                // an EXISTING selection extends it and the press is
+                // CONSUMED (nothing below sees it: no rail/pane
+                // resize, no strip drag arm — ref `return true`).
+                // Ctrl presses never START a selection
+                // (renderer.ts:3686 excludes them from the start
+                // gate), so without a kept selection the press arms
+                // nothing and falls through to the UI arms below.
+                if mouse.modifiers.contains(crate::input_term::KeyModifiers::CTRL) {
+                    if self.screen_selection.extend(col, row) {
+                        self.store.request_redraw();
+                        return;
+                    }
+                } else {
+                    // TUI-16 — every left press arms a potential screen
+                    // selection (the renderer's cell model; the release
+                    // only resolves one when the pointer crossed cells).
+                    let click_count = self.next_selection_click(col, row);
+                    self.screen_selection.press(col, row, click_count);
+                }
                 // TUI-3 — the rail's handle press arms the resize
                 // (`onMouseDown`, pane-resize.ts:82-97); the boundary
                 // double-click (<300 ms) resets the rail to the
@@ -1687,6 +1737,19 @@ impl App {
         let layout = crate::components::toast::toast_layout(toast, pending, width);
         let rows = layout.rows;
         Some((layout.left, layout.top, layout.panel_width, rows))
+    }
+
+    /// Whether the live selection holds non-empty text — the ref
+    /// component guards' `renderer.getSelection()?.getSelectedText()`
+    /// test (toast.tsx:59-62 gates the panel's release activation; a
+    /// bare-click `isStart` selection resolves to nothing and does
+    /// not gate).
+    fn selection_holds_text(&self) -> bool {
+        let Some(resolved) = self.screen_selection.resolve(self.last_frame.as_ref()) else {
+            return false;
+        };
+        let Some(frame) = self.last_frame.as_ref() else { return false };
+        !crate::selection::selected_text_resolved(frame, &resolved).is_empty()
     }
 
     /// The strip's layout inputs RIGHT NOW: the store tabs (drag-
@@ -13142,6 +13205,19 @@ fn mouse(
     }
 }
 
+/// A mouse event at (`col`, `row`) carrying `modifiers` (the SGR
+/// decoder already parses the button-code modifier bits — T1's
+/// ctrl+extend path).
+#[cfg(test)]
+fn mouse_with(
+    kind: crate::input_term::MouseEventKind,
+    col: u16,
+    row: u16,
+    modifiers: crate::input_term::KeyModifiers,
+) -> crate::input_term::MouseEvent {
+    crate::input_term::MouseEvent { kind, column: col, row, modifiers }
+}
+
 /// beta.8 bug 3 — the tab strip's pointer surface through the pump:
 /// hover arms the lift, `✕` closes, a body click selects, ` + `
 /// navigates home (v2 `session-tabs.tsx:1505-1514`, `1745-1754`,
@@ -16424,4 +16500,166 @@ fn mouse_drag_selection_paints_reverse_video_highlight() {
     let old = &before.cells[10][50];
     let new = &after.cells[10][50];
     assert_eq!((new.fg, new.bg), (old.fg, old.bg), "outside the rect nothing changes");
+}
+
+/// Seed a small transcript on a session route (the selection tests'
+/// common boot).
+#[cfg(test)]
+fn selection_app() -> App {
+    let mut app = App::new((80, 24));
+    app.store.open_tab("s1", Some("Alpha".to_owned()));
+    app.store.navigate(Route::session("s1".to_owned()));
+    app.store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+        "session.step.started",
+        serde_json::json!({
+            "sessionID": "s1",
+            "assistantMessageID": "msg_asst_1",
+            "agent": "build",
+            "model": { "providerID": "anthropic", "id": "claude-sonnet" },
+        }),
+    ))]);
+    app.store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+        "session.text.delta",
+        serde_json::json!({
+            "sessionID": "s1",
+            "assistantMessageID": "msg_asst_1",
+            "ordinal": 0,
+            "delta": "alpha bravo charlie\ngolf hotel india juliet\nmike november oscar",
+        }),
+    ))]);
+    // The run loop publishes every drawn frame as the selection's text
+    // source (app.rs run pump: `app.last_frame = Some(frame.clone())`);
+    // the unit pump replicates it here.
+    app.last_frame = Some(app.frame());
+    app
+}
+
+/// Whether any cell in `rect` renders swapped against `baseline`.
+#[cfg(test)]
+fn any_cell_swapped(
+    baseline: &crate::render::Frame,
+    frame: &crate::render::Frame,
+    rect: crate::selection::SelectionRect,
+) -> bool {
+    for y in rect.y..rect.y + rect.height {
+        for x in rect.x..rect.x + rect.width {
+            let (old, new) = (&baseline.cells[y][x], &frame.cells[y][x]);
+            if new.fg == old.bg && new.bg == old.fg && old.fg != old.bg {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// T1 (va12) — copy-on-select KEEPS the selection (selection.ts:61
+/// `Copy never clears selection`; renderer.ts:5046-5052's
+/// `finishSelection` leaves `currentSelection` standing): the release
+/// copies + toasts but the highlight STAYS; the next plain press
+/// replaces it (startSelection's clear, renderer.ts:4967). The
+/// pre-va12 port cleared on release — a pinned divergence, ref
+/// behavior = retain.
+#[cfg(test)]
+#[test]
+fn selection_release_copies_but_keeps_the_highlight() {
+    use crate::input_term::{MouseButton, MouseEventKind};
+    let mut app = selection_app();
+    let baseline = app.frame();
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 2, 3));
+    app.mouse_event(&mouse(MouseEventKind::Drag(MouseButton::Left), 20, 3));
+    assert!(app.screen_selection.rect().is_some(), "the drag armed");
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 20, 3));
+    // The release copied (toast) — and the selection is KEPT.
+    app.store.toasts().current().expect("the copy toast");
+    assert_eq!(
+        app.store.toasts().current().map(|toast| toast.message.as_str()),
+        Some("Copied to clipboard")
+    );
+    assert!(app.screen_selection.is_active(), "copy never clears the selection (selection.ts:61)");
+    let after = app.frame();
+    assert!(
+        any_cell_swapped(
+            &baseline,
+            &after,
+            crate::selection::SelectionRect { x: 2, y: 3, width: 19, height: 1 }
+        ),
+        "the highlight survives the release"
+    );
+    // The next plain press replaces it: the highlight drops BEFORE the
+    // release (press cleared the kept selection).
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 40, 8));
+    let after = app.frame();
+    assert!(
+        !any_cell_swapped(
+            &baseline,
+            &after,
+            crate::selection::SelectionRect { x: 2, y: 3, width: 19, height: 1 }
+        ),
+        "the next press cleared the kept highlight"
+    );
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 40, 8));
+}
+
+/// T1 (va12) — the ctrl+left press over a kept selection extends it to
+/// the pressed cell (renderer.ts:3734-3740: `isDragging = true;
+/// updateSelection(x, y)`, consumed), and the release re-copies over
+/// the union. A ctrl+press WITHOUT a kept selection starts nothing
+/// (renderer.ts:3686 excludes ctrl from the start gate).
+#[cfg(test)]
+#[test]
+fn ctrl_press_extends_and_recopies() {
+    use crate::input_term::{MouseButton, MouseEventKind};
+    let ctrl = crate::input_term::KeyModifiers::CTRL;
+    let mut app = selection_app();
+    let baseline = app.frame();
+    // Drag-select row 3 cols 2..20, release (copy + keep).
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 2, 3));
+    app.mouse_event(&mouse(MouseEventKind::Drag(MouseButton::Left), 20, 3));
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 20, 3));
+    assert!(app.store.toasts().current().is_some(), "the first release copied");
+    // ctrl+press farther right: the rect extends, still armed.
+    app.mouse_event(&mouse_with(MouseEventKind::Down(MouseButton::Left), 30, 3, ctrl));
+    let rect = app.screen_selection.rect().expect("the extend armed a rect");
+    assert_eq!((rect.x, rect.y, rect.width, rect.height), (2, 3, 29, 1), "anchor kept");
+    // The release re-copies (ref: the up dispatches with isDragging,
+    // the root's copyOnSelectRelease fires) and keeps again.
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 30, 3));
+    assert!(app.screen_selection.is_active(), "the extended selection kept");
+    // A ctrl+press with nothing kept arms nothing and does not
+    // consume: escape first.
+    app.press("escape");
+    assert!(!app.screen_selection.is_active(), "escape cleared");
+    let after = app.frame();
+    let wide = crate::selection::SelectionRect { x: 2, y: 3, width: 29, height: 1 };
+    assert!(!any_cell_swapped(&baseline, &after, wide), "escape cleared the highlight");
+    app.mouse_event(&mouse_with(MouseEventKind::Down(MouseButton::Left), 10, 3, ctrl));
+    assert!(app.screen_selection.rect().is_none(), "ctrl press without a selection starts nothing");
+}
+
+/// T1 (va12) — the multi-click tolerance and cap at the pump level
+/// (renderer.ts:4978-4985): chebyshev<=1 within 500 ms continues the
+/// count (capped at 3), a distance-2 press restarts it.
+#[cfg(test)]
+#[test]
+fn multiclick_tolerance_and_cap() {
+    use crate::input_term::{MouseButton, MouseEventKind};
+    let mut app = selection_app();
+    let press = |app: &mut App, col: u16, row: u16| {
+        app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), col, row));
+        app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), col, row));
+    };
+    press(&mut app, 10, 3);
+    assert_eq!(app.selection_click_count, 1);
+    // Adjacent cell (chebyshev 1): continues.
+    press(&mut app, 11, 4);
+    assert_eq!(app.selection_click_count, 2, "chebyshev<=1 continues the count");
+    press(&mut app, 11, 4);
+    assert_eq!(app.selection_click_count, 3);
+    // The cap: the ref clamps at Math.min(count + 1, 3) — the fourth
+    // press stays line, never cycling back to cell.
+    press(&mut app, 11, 4);
+    assert_eq!(app.selection_click_count, 3, "capped at 3 (renderer.ts:4983)");
+    // Distance 2 restarts.
+    press(&mut app, 13, 4);
+    assert_eq!(app.selection_click_count, 1, "chebyshev 2 restarts the count");
 }
