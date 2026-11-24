@@ -24,13 +24,14 @@ pub enum SelectionBehavior {
     Line,
 }
 
-/// `nextClickBehavior` (renderer.d.ts:617's private helper): the
-/// click-count → behavior cycle. The ref's renderer tracks multi
-/// clicks natively; the canonical model (and the one the port pins)
-/// cycles cell → word → line → cell… on rapid same-cell presses.
+/// `nextClickBehavior` (renderer.ts:4975-4986): the click-count →
+/// behavior mapping. The ref's counter clamps at `Math.min(last.count
+/// + 1, 3)` (renderer.ts:4983) — 1 = cell, 2 = word, 3 = line, and
+/// every press past the third STAYS on line (no cell/word cycle
+/// restart).
 #[must_use]
 pub fn behavior_for_click_count(count: u32) -> SelectionBehavior {
-    match count % 3 {
+    match count {
         1 => SelectionBehavior::Cell,
         2 => SelectionBehavior::Word,
         _ => SelectionBehavior::Line,
@@ -131,6 +132,15 @@ pub struct ScreenSelection {
     /// The release-resolved selection manual mode keeps (the
     /// renderer's painted selection until the next stroke).
     retained_selection: Option<ResolvedSelection>,
+    /// The resolved selection's press origin — the ctrl+click extend's
+    /// anchor. The ref's renderer keeps `currentSelection` (anchor
+    /// included) after `finishSelection` (renderer.ts:5046-5052); only
+    /// `clearSelection` drops it (renderer.ts:4943-4946). A press that
+    /// resolved nothing does NOT keep its origin: the port has no
+    /// selectable-renderable model (every press arms), so retaining
+    /// bare-click origins would let a later ctrl+click extend from an
+    /// arbitrary chrome press — a phantom range the ref never draws.
+    retained_anchor: Option<(usize, usize)>,
 }
 
 impl ScreenSelection {
@@ -146,6 +156,14 @@ impl ScreenSelection {
         self.dragged = false;
         self.retained = false;
         self.behavior = behavior_for_click_count(click_count);
+        // A press REPLACES the kept selection (the ref's
+        // `startSelection` clears the selection state first,
+        // renderer.ts:4967, and a press that skips the start gate
+        // still clears through the dispatch tail's
+        // `clearSelection` — renderer.ts:3807-3814): the old resolved
+        // rect and the ctrl-extend anchor drop with it.
+        self.retained_selection = None;
+        self.retained_anchor = None;
         if self.behavior != SelectionBehavior::Cell {
             // word/line selections arm on the press itself: the
             // expanded anchor endpoint already spans cells (a
@@ -179,15 +197,38 @@ impl ScreenSelection {
     /// only): `Some(resolved)` when a real selection exists. The
     /// state machine resets its drag arm either way; `retained` keeps
     /// the RESOLVED selection queryable for the manual-mode copy
-    /// (ctrl+c/ctrl+y over a kept selection — selection.ts:78-84).
+    /// (ctrl+c/ctrl+y over a kept selection — selection.ts:78-84), and
+    /// `copy` NEVER clears it (selection.ts:61 — the ref's
+    /// `finishSelection` leaves `currentSelection` standing,
+    /// renderer.ts:5046-5052): the resolved press origin stays
+    /// queryable for the ctrl+click extend.
     pub fn release(&mut self, frame: Option<&Frame>) -> Option<ResolvedSelection> {
         let resolved = self.resolve(frame);
+        let origin = self.anchor;
         self.anchor = None;
         self.head = None;
         self.dragged = false;
         self.retained = resolved.is_some();
         self.retained_selection = resolved;
+        self.retained_anchor = if resolved.is_some() { origin } else { None };
         resolved
+    }
+
+    /// The ctrl+left press over an EXISTING selection extends it: the
+    /// focus endpoint moves to the pressed cell (renderer.ts:3734-3740
+    /// — `isDragging = true; updateSelection(x, y)`), the anchor and
+    /// the drag's behavior mode stay the kept selection's. `false`
+    /// when nothing is kept (the press is not consumed: ref falls
+    /// through to the normal dispatch — ctrl presses never START a
+    /// selection, renderer.ts:3686).
+    pub fn extend(&mut self, x: usize, y: usize) -> bool {
+        let Some(anchor) = self.retained_anchor else { return false };
+        self.anchor = Some(anchor);
+        self.head = Some((x, y));
+        self.dragged = true;
+        self.retained = false;
+        self.retained_selection = None;
+        true
     }
 
     /// The current selection resolved against `frame` (drag in flight
@@ -290,6 +331,7 @@ impl ScreenSelection {
         self.dragged = false;
         self.retained = false;
         self.retained_selection = None;
+        self.retained_anchor = None;
     }
 }
 
@@ -533,13 +575,48 @@ mod tests {
         }
     }
 
-    /// G-457 — the click-count cycle (`nextClickBehavior`).
+    /// G-457 — the click-count mapping (`nextClickBehavior`,
+    /// renderer.ts:4983-4985): the ref's counter clamps at
+    /// `Math.min(last.count + 1, 3)` — the FOURTH press stays on line
+    /// (the old port's `count % 3` cycled back to cell, a divergence).
     #[test]
-    fn click_count_cycles_cell_word_line() {
+    fn click_count_caps_at_line() {
         assert_eq!(behavior_for_click_count(1), SelectionBehavior::Cell);
         assert_eq!(behavior_for_click_count(2), SelectionBehavior::Word);
         assert_eq!(behavior_for_click_count(3), SelectionBehavior::Line);
-        assert_eq!(behavior_for_click_count(4), SelectionBehavior::Cell);
+        assert_eq!(behavior_for_click_count(4), SelectionBehavior::Line);
+        assert_eq!(behavior_for_click_count(9), SelectionBehavior::Line);
+    }
+
+    /// ctrl+press over a kept selection extends it (renderer.ts:
+    /// 3734-3740): the kept anchor stays, the focus moves to the
+    /// pressed cell, and the release re-resolves over the union.
+    #[test]
+    fn ctrl_press_extends_the_kept_selection() {
+        let frame = frame_of(&["let a = 1;", "  let b = 2;", ""]);
+        let mut selection = ScreenSelection::default();
+        selection.press(2, 0, 1);
+        selection.drag(6, 0);
+        let resolved = selection.release(Some(&frame)).expect("the drag selection");
+        assert_eq!(resolved.rect, SelectionRect { x: 2, y: 0, width: 5, height: 1 });
+        // The ctrl press extends to row 1; the release resolves the
+        // two-row rect and keeps it (copy never clears,
+        // selection.ts:61).
+        assert!(selection.extend(8, 1), "the kept selection extends");
+        let resolved = selection.release(Some(&frame)).expect("the extended selection");
+        assert_eq!(resolved.rect, SelectionRect { x: 2, y: 0, width: 7, height: 2 });
+        assert!(selection.is_active(), "copy never clears the selection");
+        // A plain press REPLACES it (startSelection's clear,
+        // renderer.ts:4967): the extend dies with it.
+        selection.press(0, 0, 1);
+        assert!(!selection.extend(3, 0), "a press drops the extend anchor");
+        assert_eq!(selection.release(None), None, "a bare press resolves nothing");
+        // clear() drops everything.
+        selection.press(0, 0, 1);
+        selection.drag(3, 0);
+        assert!(selection.release(Some(&frame)).is_some());
+        selection.clear();
+        assert!(!selection.extend(3, 0));
     }
 
     /// G-457 — double-click selects the word: single row, the union
