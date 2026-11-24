@@ -49,9 +49,28 @@ use std::fmt::Write as _; // format_push_string: write! into the existing String
 pub struct UpdateNotice {
     pub kind: UpdateNoticeKind,
     pub version: String,
-    /// `client` (the CLI checker / the notice file) or `server`
-    /// (the SSE event; `remote` = a remotely-connected server).
+    /// `Notice.source` (update-notification.tsx:12): `true` = the
+    /// SSE `installation.*` events (server — the hosting process's
+    /// own updater), `false` = the CLI checker's notice file (the
+    /// `updater.subscribe` client channel).
+    pub server: bool,
+    /// `Notice.remote` — only rides SERVER notices (:12); `true`
+    /// when the hosting server is a remote connection (the banner's
+    /// "remote server update available" variant, home.tsx:139).
     pub remote: bool,
+}
+
+impl UpdateNotice {
+    /// `Notice.source` as the dismissed-history key's prefix
+    /// (`${notice.source}:${notice.version}`, :44).
+    #[must_use]
+    pub const fn source(&self) -> &'static str {
+        if self.server {
+            "server"
+        } else {
+            "client"
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,12 +130,22 @@ impl UpdateNotice {
         if let Some(at) = line.find("update available: v") {
             let rest = &line[at + "update available: v".len()..];
             let version = rest.split(' ').next()?.split(';').next()?.to_owned();
-            return Some(Self { kind: UpdateNoticeKind::Available, version, remote: false });
+            return Some(Self {
+                kind: UpdateNoticeKind::Available,
+                version,
+                server: false,
+                remote: false,
+            });
         }
         if let Some(at) = line.find("update installed (v") {
             let rest = &line[at + "update installed (v".len()..];
             let version = rest.split(')').next()?.to_owned();
-            return Some(Self { kind: UpdateNoticeKind::Installed, version, remote: false });
+            return Some(Self {
+                kind: UpdateNoticeKind::Installed,
+                version,
+                server: false,
+                remote: false,
+            });
         }
         None
     }
@@ -135,26 +164,41 @@ pub fn notice_file_path() -> std::path::PathBuf {
     oc_util::global_roots::resolve().state.join("update-notice.log")
 }
 
-/// The dialog's body rows for one state (dialog-update.tsx's
-/// Switch): the title line + the detail line.
+/// The dialog's body rows for one state: the STATUS HEADER
+/// (`dialog-update.tsx` lines 90-97 — "Updating `OpenCode`" while installing,
+/// "Update available" for available/failed, else "Update") + the
+/// full-sentence body (:106-136).
 #[must_use]
 pub fn dialog_rows(state: &UpdateDialogState) -> (String, String) {
     match state {
-        UpdateDialogState::Checking => ("Checking for updates…".to_owned(), " ".to_owned()),
-        UpdateDialogState::Current => ("opencode is up to date".to_owned(), " ".to_owned()),
-        UpdateDialogState::Available(version) => {
-            ("Update available".to_owned(), format!("v{version} will be installed on confirm"))
+        // :39/:106-107 — the check rides the `check.loading` gate.
+        UpdateDialogState::Checking => ("Update".to_owned(), "Checking for updates…".to_owned()),
+        // :124-125.
+        UpdateDialogState::Current => {
+            ("Update".to_owned(), "OpenCode is already up to date.".to_owned())
         }
+        // :109-112.
+        UpdateDialogState::Available(_) => (
+            "Update available".to_owned(),
+            "An update is available. After installing, you'll be prompted to restart OpenCode."
+                .to_owned(),
+        ),
+        // :92-93 + :114-117.
         UpdateDialogState::Installing(version) => {
-            ("Installing update…".to_owned(), format!("v{version} is being installed"))
+            ("Updating OpenCode".to_owned(), format!("Installing OpenCode {version}…"))
         }
-        UpdateDialogState::Installed(version) => {
-            ("Update installed".to_owned(), format!("restart to use v{version}"))
-        }
-        UpdateDialogState::Failed(message) => ("Update failed".to_owned(), message.clone()),
-        UpdateDialogState::Unavailable(message) => {
-            ("Updates unavailable".to_owned(), message.clone())
-        }
+        // :119-122.
+        UpdateDialogState::Installed(_) => (
+            "Update".to_owned(),
+            "Update successful! A restart is required. Any active sessions will be resumed automatically."
+                .to_owned(),
+        ),
+        // :94-95 — failed keeps the "Update available" header; the
+        // body is the error message painted in the error color
+        // (:132-135 — see the dialog render's error styling).
+        UpdateDialogState::Failed(message) => ("Update available".to_owned(), message.clone()),
+        // :127-130.
+        UpdateDialogState::Unavailable(message) => ("Update".to_owned(), message.clone()),
     }
 }
 
@@ -187,12 +231,24 @@ pub fn dialog_initial_selection(state: &UpdateDialogState) -> usize {
 /// and exits). No store access: a broken store is the crash cause.
 /// G-287⑤ — the ref's structure (error-component.tsx:27-283): the
 /// "`OpenCode` crashed" headline, the error panel, the horizontal
-/// action row (c Copy report / r Restart / q Quit — the port's crash
-/// loop only wires q/escape to exit; the labels still document the
-/// ref's model), the stack section, and the version footer.
+/// action row (c Copy report / r Restart / q Quit — G-478 wires c to
+/// the clipboard copy of the issue report and r to the reset; q /
+/// ctrl+c / escape exit, error-component.tsx:69-101), the stack
+/// section, and the version footer.
 #[must_use]
 pub fn error_component_frame(size: (u16, u16), message: &str) -> Frame {
     error_component_frame_with(size, message, None, "")
+}
+
+/// The crash screen's clipboard outcome (`copyState`,
+/// error-component.tsx:15/48-53) — drives the Copy action's label
+/// (:58) and the footer text (:206-212).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CrashCopyState {
+    #[default]
+    Idle,
+    Copied,
+    Failed,
 }
 
 /// G-287⑤ — [`error_component_frame`] with the stack + version the
@@ -204,6 +260,21 @@ pub fn error_component_frame_with(
     message: &str,
     stack: Option<&str>,
     version: &str,
+) -> Frame {
+    error_component_frame_state(size, message, stack, version, CrashCopyState::Idle)
+}
+
+/// G-478 — the crash frame with the live copy outcome: the Copy
+/// label flips to "✓ Copied"/"Copy failed" (:58) and the footer to
+/// the copied/failed lines (:206-212).
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn error_component_frame_state(
+    size: (u16, u16),
+    message: &str,
+    stack: Option<&str>,
+    version: &str,
+    copy: CrashCopyState,
 ) -> Frame {
     let (width, height) = (usize::from(size.0), usize::from(size.1));
     let mut cells: Vec<Vec<Cell>> = vec![vec![Cell::default(); width.max(1)]; height.max(1)];
@@ -226,8 +297,14 @@ pub fn error_component_frame_with(
     let detail = crate::wrap::take_width(message, width.saturating_sub(4).max(8));
     put(4, &detail);
     // The actions row (the ref's horizontal buttons, focused Copy
-    // report first): the key letters mirror the ref's labels.
-    put(6, "c Copy report   r Restart   q Quit");
+    // report first): the key letters mirror the ref's labels — the
+    // Copy label carries the live outcome (error-component.tsx:58).
+    let copy_label = match copy {
+        CrashCopyState::Idle => "Copy report",
+        CrashCopyState::Copied => "✓ Copied",
+        CrashCopyState::Failed => "Copy failed",
+    };
+    put(6, &format!("c {copy_label}   r Restart   q Quit"));
     // The stack section: the first lines that fit above the footer
     // (the ref scrollboxes the trace; the crash frame is static — a
     // bounded deviation, the panic path paints once).
@@ -237,10 +314,19 @@ pub fn error_component_frame_with(
         put(9 + index, &crate::wrap::take_width(line, width.saturating_sub(4).max(8)));
     }
     if !version.is_empty() && height >= 20 {
+        // G-478 — the footer line carries the copy outcome
+        // (error-component.tsx:206-211).
+        let lead = match copy {
+            CrashCopyState::Copied => "Report copied — paste it into a new GitHub issue.",
+            CrashCopyState::Failed => {
+                "Clipboard write failed. Try again or report the crash manually."
+            }
+            CrashCopyState::Idle => "Copy the report and open a GitHub issue to help us fix this.",
+        };
         put(
             height.saturating_sub(3),
             &crate::wrap::take_width(
-                &format!("Copy the report and open a GitHub issue to help us fix this. OpenCode {version}"),
+                &format!("{lead} OpenCode {version}"),
                 width.saturating_sub(4).max(8),
             ),
         );
@@ -328,6 +414,7 @@ mod tests {
             Some(UpdateNotice {
                 kind: UpdateNoticeKind::Available,
                 version: "2.0.25.beta.1".to_owned(),
+                server: false,
                 remote: false,
             })
         );
@@ -337,6 +424,7 @@ mod tests {
             Some(UpdateNotice {
                 kind: UpdateNoticeKind::Installed,
                 version: "2.0.25.beta.1".to_owned(),
+                server: false,
                 remote: false,
             })
         );
@@ -357,6 +445,7 @@ mod tests {
         let available = UpdateNotice {
             kind: UpdateNoticeKind::Available,
             version: "2.0.25.beta.1".to_owned(),
+            server: false,
             remote: false,
         };
         assert_eq!(available.prefix(), "/update");
@@ -364,12 +453,20 @@ mod tests {
         let installed = UpdateNotice {
             kind: UpdateNoticeKind::Installed,
             version: "2.0.25.beta.1".to_owned(),
+            server: false,
             remote: false,
         };
         assert_eq!(installed.prefix(), "/exit");
         assert_eq!(installed.body(), " restart to use v2.0.25.beta.1");
-        let remote =
-            UpdateNotice { kind: UpdateNoticeKind::Available, version: "9".into(), remote: true };
+        // `remote` only rides SERVER notices (Notice's union shape,
+        // update-notification.tsx:12).
+        let remote = UpdateNotice {
+            kind: UpdateNoticeKind::Available,
+            version: "9".into(),
+            server: true,
+            remote: true,
+        };
+        assert_eq!(remote.source(), "server");
         assert_eq!(remote.body(), "remote server update available");
     }
 
@@ -379,10 +476,32 @@ mod tests {
         assert_eq!(dialog_confirm(&UpdateDialogState::Available("1".into())), Some("Update"));
         assert_eq!(dialog_confirm(&UpdateDialogState::Installed("1".into())), Some("Restart"));
         assert_eq!(dialog_confirm(&UpdateDialogState::Current), None);
-        let (title, _) = dialog_rows(&UpdateDialogState::Checking);
-        assert_eq!(title, "Checking for updates…");
+        // G-478 re-pin — the status header + the full-sentence body
+        // (dialog-update.tsx:90-136): checking/current keep the plain
+        // "Update" header.
+        let (title, body) = dialog_rows(&UpdateDialogState::Checking);
+        assert_eq!(title, "Update");
+        assert_eq!(body, "Checking for updates…");
+        let (_, body) = dialog_rows(&UpdateDialogState::Current);
+        assert_eq!(body, "OpenCode is already up to date.");
+        let (title, body) = dialog_rows(&UpdateDialogState::Available("2.0.25".into()));
+        assert_eq!(title, "Update available");
+        assert_eq!(
+            body,
+            "An update is available. After installing, you'll be prompted to restart OpenCode."
+        );
+        let (title, body) = dialog_rows(&UpdateDialogState::Installing("2.0.25".into()));
+        assert_eq!(title, "Updating OpenCode");
+        assert_eq!(body, "Installing OpenCode 2.0.25…");
+        let (_, body) = dialog_rows(&UpdateDialogState::Installed("2.0.25".into()));
+        assert_eq!(
+            body,
+            "Update successful! A restart is required. Any active sessions will be resumed automatically."
+        );
+        // Failed keeps the "Update available" header; the body is the
+        // error message (error-colored by the dialog render).
         let (title, detail) = dialog_rows(&UpdateDialogState::Failed("dns broke".into()));
-        assert_eq!(title, "Update failed");
+        assert_eq!(title, "Update available");
         assert_eq!(detail, "dns broke");
     }
 
@@ -424,6 +543,36 @@ mod tests {
         // A missing stack shows the ref's placeholder.
         let frame = error_component_frame_with((80, 24), "boom", None, "");
         assert!(frame.text_grid()[9].contains("No stack trace available."));
+    }
+
+    /// G-478 — the crash frame carries the copy outcome: the Copy
+    /// label flips (:58) and the footer swaps to the copied line
+    /// (:206-211).
+    #[test]
+    fn crash_frame_carries_the_copy_state() {
+        let frame = error_component_frame_state(
+            (80, 24),
+            "boom",
+            Some("at app (x.rs:1)"),
+            "2.0.24",
+            CrashCopyState::Copied,
+        );
+        let grid = frame.text_grid();
+        assert!(grid[6].contains("c ✓ Copied"), "the Copy label: {grid:?}");
+        assert!(
+            grid[21].contains("Report copied — paste it into a new GitHub issue."),
+            "the copied footer: {grid:?}"
+        );
+        let frame = error_component_frame_state(
+            (80, 24),
+            "boom",
+            Some("at app (x.rs:1)"),
+            "2.0.24",
+            CrashCopyState::Failed,
+        );
+        let grid = frame.text_grid();
+        assert!(grid[6].contains("c Copy failed"));
+        assert!(grid[21].contains("Clipboard write failed."));
     }
 
     /// G-287⑤ — `buildIssueURL`: the report carries the error + stack

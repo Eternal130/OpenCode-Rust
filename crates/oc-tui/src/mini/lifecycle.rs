@@ -1334,27 +1334,52 @@ impl FooterPane {
                 }
                 // The composer base: rail + transparent textarea with
                 // the live draft, statusline below.
+                // G-481 — the work action groups
+                // (`contextHintCandidates`, footer.view.tsx:456-472):
+                // `queued` (`<leader>q` → "ctrl+x q",
+                // config/keybind.ts:131 + LeaderDefault ctrl+x),
+                // `subagents` (`session.child.first` "down" → "↓",
+                // keymap.tsx:462-468 aliases) and `background`
+                // (`session.background` ctrl+b, :127) — keyed action
+                // rows replacing the merged status text.
                 let running = self
                     .subagent_children
                     .iter()
                     .filter(|child| child.status == crate::mini::transport::SubagentStatus::Running)
                     .count();
-                // G-221 — the statusline details (footer.view.tsx:
-                // 243-248): `N pending` (the `queued.prompts` view)
-                // BEFORE the `N subagents` group, one ` · `-joined
-                // status string.
-                let mut status_detail = String::new();
+                let mut work: Vec<crate::components::footer::prompt_idle::WorkHintState> =
+                    Vec::new();
                 if self.queued_pending > 0 {
-                    status_detail = format!("{} pending", self.queued_pending);
+                    work.push(crate::components::footer::prompt_idle::WorkHintState {
+                        id: "queued",
+                        key: "ctrl+x q".to_owned(),
+                        label: format!("{} pending", self.queued_pending),
+                        expanded: String::new(),
+                    });
                 }
                 if running > 0 {
-                    let subagents =
-                        format!("{running} subagent{}", if running == 1 { "" } else { "s" });
-                    status_detail = if status_detail.is_empty() {
-                        subagents
-                    } else {
-                        format!("{status_detail} · {subagents}")
-                    };
+                    // The mono form spells the arrow (monoShortcut,
+                    // mini/mono.ts:242-249).
+                    let down = if self.mono { "down" } else { "↓" };
+                    work.push(crate::components::footer::prompt_idle::WorkHintState {
+                        id: "subagents",
+                        key: down.to_owned(),
+                        label: format!("{running} sub"),
+                        expanded: format!(
+                            "{running} subagent{}",
+                            if running == 1 { "" } else { "s" }
+                        ),
+                    });
+                    // The port's tracker carries no `background`
+                    // flag — every running child counts as
+                    // foreground (`foregroundSubagents`,
+                    // footer.view.tsx:189).
+                    work.push(crate::components::footer::prompt_idle::WorkHintState {
+                        id: "background",
+                        key: "ctrl+b".to_owned(),
+                        label: "bg".to_owned(),
+                        expanded: "background".to_owned(),
+                    });
                 }
                 let idle = PromptIdleState {
                     agent: self.agent.clone().unwrap_or_else(|| "Build".to_owned()),
@@ -1362,8 +1387,10 @@ impl FooterPane {
                         .model_label
                         .clone()
                         .unwrap_or_else(|| "Default model".to_owned()),
+                    model_variant: self.active_variant.clone().unwrap_or_default(),
                     command_shortcut: "ctrl+p".to_owned(),
-                    status_detail,
+                    status_detail: String::new(),
+                    work,
                     // G-272 — the usage groups (footer.view.tsx:213-
                     // 218, 493-500): `formatContextUsage` + the USD
                     // cost; EMPTY renders nothing.
@@ -1373,6 +1400,17 @@ impl FooterPane {
                         .as_ref()
                         .and_then(|usage| usage.cost.map(|cost| format!("${cost:.2}")))
                         .unwrap_or_default(),
+                    // G-481 — the provider group (`info?.provider`,
+                    // footer.view.tsx:501): the port's model label
+                    // carries the `provider/model` target — the
+                    // prefix feeds the provider group.
+                    provider: self
+                        .model_label
+                        .as_deref()
+                        .and_then(|label| label.split_once('/'))
+                        .map(|(provider, _)| provider.to_owned())
+                        .unwrap_or_default(),
+                    mono: self.mono,
                 };
                 // CONFIG-T4 — the busy statusline (`footer.view.tsx:210`
                 // + `:978-988`): while a turn runs, the status text
@@ -2950,9 +2988,11 @@ mod tests {
         assert!(grid[1].starts_with("Build · gpt-5"), "statusline below");
     }
 
-    /// G-221 — the statusline's `N pending` group (`queued.prompts`,
-    /// footer.view.tsx:246) before the subagents group (:247): the
-    /// counts join into one ` · `-separated status detail.
+    /// G-221/G-481 — the statusline's work action groups
+    /// (`contextHintCandidates`, footer.view.tsx:456-472): the queued
+    /// hint (`<leader>q` → "ctrl+x q", `N pending`) and the
+    /// subagents hint (`session.child.first` "↓", `N sub`) — keyed
+    /// action rows (the merged status text is gone).
     #[test]
     fn queued_pending_renders_in_the_statusline_before_subagents() {
         let mut footer = pane();
@@ -2961,8 +3001,8 @@ mod tests {
         footer.queued_pending = 2;
         let frame = footer.render_frame(60, super::super::FOOTER_HEIGHT);
         let grid = frame.text_grid();
-        assert!(grid[1].contains("2 pending"), "the queued count: {:?}", grid[1]);
-        assert!(!grid[1].contains("subagent"), "no children tracked: {:?}", grid[1]);
+        assert!(grid[1].contains("ctrl+x q 2 pending"), "the queued action: {:?}", grid[1]);
+        assert!(!grid[1].contains("sub"), "no children tracked: {:?}", grid[1]);
         // A running child appends its group AFTER the pending count.
         footer.subagent_children = vec![crate::mini::transport::SubagentChild {
             session_id: "ses_child".into(),
@@ -2974,14 +3014,12 @@ mod tests {
         }];
         let frame = footer.render_frame(60, super::super::FOOTER_HEIGHT);
         let grid = frame.text_grid();
-        assert!(
-            grid[1].contains("2 pending · 1 subagent"),
-            "pending before subagents: {:?}",
-            grid[1]
-        );
-        // An empty queue leaves only the subagent group.
+        let pending_at = grid[1].find("ctrl+x q 2 pending").expect("the queued action");
+        let sub_at = grid[1].find("↓ 1 sub").expect("the subagents action");
+        assert!(pending_at < sub_at, "pending before subagents: {:?}", grid[1]);
+        // An empty queue leaves only the subagents action.
         footer.queued_pending = 0;
         let grid = footer.render_frame(60, super::super::FOOTER_HEIGHT).text_grid();
-        assert!(grid[1].contains("1 subagent") && !grid[1].contains("pending"), "{:?}", grid[1]);
+        assert!(grid[1].contains("↓ 1 sub") && !grid[1].contains("pending"), "{:?}", grid[1]);
     }
 }

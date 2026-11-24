@@ -172,11 +172,16 @@ pub struct App {
     /// Whether the exit command fired (the run loop's teardown gate).
     pub exit_requested: bool,
     /// `ErrorComponent` mode (auditB #9): a caught render panic swapped
-    /// the frame for the crash fallback — every key exits.
+    /// the frame for the crash fallback — q/ctrl+c/escape exit, c
+    /// copies the report, r restarts (G-478, error-component.tsx:
+    /// 69-101).
     pub error_mode: Option<String>,
     /// G-287⑤ — the captured panic stack for the crash screen's
     /// stack section (`ErrorComponent`'s `props.error.stack`).
     pub error_stack: Option<String>,
+    /// G-478 — the crash screen's copy outcome (`copyState`,
+    /// error-component.tsx:15/48-53) driving the Copy label + footer.
+    pub error_copy_state: crate::components::update::CrashCopyState,
     /// G-287⑤ — the version the crash footer shows
     /// (`OpenCode {app.version}`, error-component.tsx:279).
     pub version: String,
@@ -253,6 +258,7 @@ impl App {
             exit_requested: false,
             error_mode: None,
             error_stack: None,
+            error_copy_state: crate::components::update::CrashCopyState::Idle,
             version: env!("CARGO_PKG_VERSION").to_owned(),
             applied_keybinds: Vec::new(),
             plugin_owned: Vec::new(),
@@ -2044,11 +2050,44 @@ impl App {
         self.press_inner(spec);
     }
 
+    /// G-478 — the crash fallback's key handler (the ref's
+    /// `useKeyboard`, error-component.tsx:69-101): q/ctrl+c (and the
+    /// painted escape hint) exit, `c` copies the issue report (:99),
+    /// `r` restarts (`props.reset`, :100).
+    fn error_mode_key(&mut self, spec: &str) {
+        match spec {
+            "q" | "escape" | "ctrl+c" => self.exit_requested = true,
+            "c" => {
+                // `copyReport` (:48-53): the pre-filled issue URL
+                // rides the clipboard; the outcome drives the Copy
+                // label + footer on the next repaint.
+                let url = crate::components::update::build_issue_report(
+                    self.error_mode.as_deref().unwrap_or("render panic"),
+                    self.error_stack.as_deref().unwrap_or("No stack trace available."),
+                    &self.version,
+                );
+                self.error_copy_state = if self.store.clipboard_write(&url).is_ok() {
+                    crate::components::update::CrashCopyState::Copied
+                } else {
+                    crate::components::update::CrashCopyState::Failed
+                };
+            }
+            "r" => {
+                // `props.reset` — the ErrorBoundary reset: leave the
+                // crash state and resume the normal render.
+                self.error_mode = None;
+                self.error_stack = None;
+                self.error_copy_state = crate::components::update::CrashCopyState::Idle;
+            }
+            _ => {}
+        }
+    }
+
     fn press_inner(&mut self, spec: &str) {
-        // ErrorComponent mode: any key exits (the fallback's only
-        // action — v2's ErrorBoundary dismiss).
+        // ErrorComponent mode (auditB #9): a caught render panic
+        // swapped the frame for the crash fallback (G-478's wiring).
         if self.error_mode.is_some() {
-            self.exit_requested = true;
+            self.error_mode_key(spec);
             return;
         }
         // TUI-29 — the console's `copy-selection` binding
@@ -2685,6 +2724,12 @@ impl App {
                         self.store.open_tab(&session_id, Some(value.to_owned()));
                         self.rename_requests.push((session_id, value.to_owned()));
                     }
+                }
+                // G-486 — the accounts view's rename confirm
+                // (`credential.update`, dialog-integration.tsx:225-231).
+                crate::store::DialogKind::IntegrationRename { credential_id } => {
+                    let credential_id = credential_id.clone();
+                    self.store.integration_account_rename_submit(&credential_id, value);
                 }
                 // `DialogWorktreeName`'s enter (`confirm()`): slugify
                 // (empty → generated), fire `worktree.create` — the
@@ -5910,6 +5955,11 @@ pub enum LoopRequest {
     CredentialRemove {
         credential_id: String,
     },
+    /// G-486 — `credential.update` (the accounts view's rename).
+    CredentialUpdate {
+        credential_id: String,
+        label: String,
+    },
     // -- Lane FINAL: the session actions --------------------------------
     /// `session.compact`.
     SessionCompact {
@@ -6158,6 +6208,10 @@ pub enum LoopFetch {
     },
     /// The accounts view's credential ops resolved (remove → refetch).
     CredentialRemoved {
+        result: Result<(), String>,
+    },
+    /// G-486 — the rename's `credential.update` resolved (refetch).
+    CredentialUpdated {
         result: Result<(), String>,
     },
     /// `session.compact` resolved (errors toast).
@@ -6949,6 +7003,21 @@ pub fn spawn_loop_fetcher(
                         let _ = tx.send(LoopFetch::CredentialRemoved { result });
                     });
                 }
+                LoopRequest::CredentialUpdate { credential_id, label } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = client
+                            .credential()
+                            .update(
+                                &credential_id,
+                                &oc_client::types::CredentialUpdateBody { label },
+                            )
+                            .await
+                            .map_err(|error| error.to_string());
+                        let _ = tx.send(LoopFetch::CredentialUpdated { result });
+                    });
+                }
                 // -- Lane FINAL: the session actions -----------------
                 LoopRequest::SessionCompact { session_id, model: _ } => {
                     let client = client.clone();
@@ -7474,6 +7543,12 @@ impl crate::store::IntegrationSink for HttpIntegrationSink {
     fn credential_remove(&self, credential_id: &str) {
         let _ =
             self.tx.send(LoopRequest::CredentialRemove { credential_id: credential_id.to_owned() });
+    }
+    fn credential_update(&self, credential_id: &str, label: &str) {
+        let _ = self.tx.send(LoopRequest::CredentialUpdate {
+            credential_id: credential_id.to_owned(),
+            label: label.to_owned(),
+        });
     }
 }
 
@@ -10636,6 +10711,18 @@ pub async fn run_with_size(
                     // sync on credential events).
                     app.store.integration_sink_list();
                 }
+                // G-486 — the rename resolved: errors toast, the
+                // accounts list refetches (`manageConnections`).
+                LoopFetch::CredentialUpdated { result } => {
+                    if let Err(error) = result {
+                        app.store.toast_show(crate::components::toast::ToastOptions {
+                            message: error,
+                            variant: "error",
+                            ..crate::components::toast::ToastOptions::info("")
+                        });
+                    }
+                    app.store.integration_sink_list();
+                }
                 // -- Lane FINAL: the session actions' results -------
                 LoopFetch::SessionCompactResult { session_id, result } => {
                     if let Err(error) = result {
@@ -10999,12 +11086,14 @@ pub async fn run_with_size(
             let mut frame_links: Vec<crate::render::FrameLinkRect> = Vec::new();
             let mut frame = if let Some(message) = app.error_mode.clone() {
                 // G-287⑤ — the sticky crash frame carries the stack
-                // + version (`ErrorComponent`'s sections).
-                crate::components::update::error_component_frame_with(
+                // + version (`ErrorComponent`'s sections); G-478 —
+                // and the live copy outcome (the Copy label/footer).
+                crate::components::update::error_component_frame_state(
                     app.size,
                     &message,
                     app.error_stack.as_deref(),
                     &app.version,
+                    app.error_copy_state,
                 )
             } else {
                 let frame_result =

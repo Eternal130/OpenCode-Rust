@@ -217,6 +217,11 @@ pub enum DialogKind {
     Update,
     /// `DialogSessionRename`: rename the active session.
     SessionRename { session_id: String },
+    /// G-486 — the accounts view's rename prompt
+    /// (`dialog.integration.rename`, dialog-integration.tsx:211-234):
+    /// "Rename account" prefilled with the credential's label;
+    /// confirm fires `credential.update`.
+    IntegrationRename { credential_id: String },
     /// The plugin manager select (`plugins.list`, lane KM — v2's
     /// `DialogPlugins` approximation): one row per REGISTERED plugin
     /// id; RE-02 models the per-plugin `active` flag (v2's
@@ -2350,6 +2355,9 @@ pub trait IntegrationSink {
     fn cancel(&self, integration_id: &str, attempt_id: &str, kind: &'static str);
     fn credential_activate(&self, credential_id: &str);
     fn credential_remove(&self, credential_id: &str);
+    /// G-486 — `credential.update` (the accounts view's rename,
+    /// dialog-integration.tsx:225-231): PATCH the credential's label.
+    fn credential_update(&self, credential_id: &str, label: &str);
 }
 
 /// The no-op sink (no loop fetcher attached).
@@ -2377,6 +2385,7 @@ impl IntegrationSink for NoIntegrationSink {
     fn cancel(&self, _integration_id: &str, _attempt_id: &str, _kind: &'static str) {}
     fn credential_activate(&self, _credential_id: &str) {}
     fn credential_remove(&self, _credential_id: &str) {}
+    fn credential_update(&self, _credential_id: &str, _label: &str) {}
 }
 
 /// One recorded [`IntegrationSink`] call.
@@ -2412,6 +2421,8 @@ pub enum IntegrationCall {
     },
     Activate(String),
     Remove(String),
+    /// G-486 — the rename's `credential.update` (label PATCH).
+    Update(String, String),
 }
 
 /// The recording sink (tests assert the dialog drove the API).
@@ -2473,6 +2484,11 @@ impl IntegrationSink for RecordingIntegrationSink {
     }
     fn credential_remove(&self, credential_id: &str) {
         self.calls.borrow_mut().push(IntegrationCall::Remove(credential_id.to_owned()));
+    }
+    fn credential_update(&self, credential_id: &str, label: &str) {
+        self.calls
+            .borrow_mut()
+            .push(IntegrationCall::Update(credential_id.to_owned(), label.to_owned()));
     }
 }
 
@@ -6835,18 +6851,29 @@ impl Store {
     }
 
     /// Notify one update notice (v2's `notify`): suppressed when the
-    /// `source:version` key is in the dismissed history; a CLIENT
-    /// notice never displaces a live SERVER one.
+    /// `source:version` key (or, for CLIENT notices, the legacy
+    /// un-prefixed version) is in the dismissed history; a SERVER
+    /// notice never displaces a live CLIENT one
+    /// (update-notification.tsx:43-52).
     pub fn update_notify(&self, notice: crate::components::update::UpdateNotice) {
-        let source = if notice.remote { "server" } else { "client" };
-        let key = format!("{source}:{}", notice.version);
-        if self.update_dismissed.borrow().contains(&key) {
+        let key = format!("{}:{}", notice.source(), notice.version);
+        let legacy = !notice.server;
+        if self
+            .update_dismissed
+            .borrow()
+            .iter()
+            .any(|entry| entry == &key || (legacy && entry == &notice.version))
+        {
             return;
         }
         let current = self.update_notice.get();
         if let Some(current) = &current {
-            if !notice.remote && current.remote {
-                return; // client never displaces server
+            // G-478 — ref update-notification.tsx:49: `if
+            // (notice.source === "server" && current?.source ===
+            // "client") return current` — the SERVER notice loses,
+            // the LIVE CLIENT one stays.
+            if notice.server && !current.server {
+                return;
             }
         }
         self.update_notice.set(Some(notice));
@@ -6876,13 +6903,18 @@ impl Store {
     }
 
     /// Dismiss the banner + record the dismissal (the loop persists
-    /// through its storage handle; the last 100 keys).
+    /// through its storage handle; the LAST 100 keys — ref
+    /// `slice(-100)`, update-notification.tsx:60).
     pub fn update_dismiss(&self) {
         if let Some(current) = self.update_notice.get() {
-            let source = if current.remote { "server" } else { "client" };
             let mut history = self.update_dismissed.borrow_mut();
-            history.push(format!("{source}:{}", current.version));
-            history.truncate(100);
+            history.push(format!("{}:{}", current.source(), current.version));
+            // G-478 — keep the most recent 100 (the ref's
+            // `slice(-100)`), dropping the OLDEST keys.
+            let overflow = history.len().saturating_sub(100);
+            if overflow > 0 {
+                history.drain(..overflow);
+            }
         }
         self.update_notice.set(None);
         self.update_since.set(None);
@@ -9339,6 +9371,40 @@ impl Store {
             self.integration_deleting.set(Some(credential_id.to_owned()));
             false
         }
+    }
+
+    /// G-486 — the accounts view's rename open
+    /// (`dialog.integration.rename`, dialog-integration.tsx:217-224):
+    /// the "Rename account" prompt replaces the view, prefilled with
+    /// the credential's current label.
+    pub fn integration_account_rename_open(&self, credential_id: &str) {
+        let label = match self.integration_list() {
+            IntegrationListState::Loaded(rows) => rows
+                .into_iter()
+                .flat_map(|row| row.accounts)
+                .find(|account| account.id == credential_id)
+                .map(|account| account.label),
+            _ => None,
+        }
+        .unwrap_or_default();
+        self.replace_dialog(
+            DialogKind::IntegrationRename { credential_id: credential_id.to_owned() },
+            DialogSize::Medium,
+        );
+        self.update_dialog(|top| top.value = label);
+    }
+
+    /// G-486 — the rename prompt's confirm (`credential.update`,
+    /// dialog-integration.tsx:225-231): a trimmed NON-empty label
+    /// `PATCH`es the credential; the view refetches through the
+    /// completion event.
+    pub fn integration_account_rename_submit(&self, credential_id: &str, value: &str) {
+        let label = value.trim();
+        if label.is_empty() {
+            return;
+        }
+        self.integration_sink.borrow().credential_update(credential_id, label);
+        self.clear_dialogs();
     }
 
     /// The connect flow's terminal event (`connected`,
@@ -13694,6 +13760,11 @@ impl Store {
                     self.update_notify(crate::components::update::UpdateNotice {
                         kind: crate::components::update::UpdateNoticeKind::Available,
                         version,
+                        // G-478 — the SSE events are `source:
+                        // "server"` notices (update-notification.tsx:
+                        // 122-131); the port has no remote-server
+                        // connection today, so `remote` stays false.
+                        server: true,
                         remote: false,
                     });
                 }
@@ -13703,6 +13774,7 @@ impl Store {
                     self.update_notify(crate::components::update::UpdateNotice {
                         kind: crate::components::update::UpdateNoticeKind::Installed,
                         version,
+                        server: true,
                         remote: false,
                     });
                 }
@@ -18575,9 +18647,10 @@ fn theme_apply_signal_reaches_every_surface_style() {
 fn notice(
     kind: crate::components::update::UpdateNoticeKind,
     version: &str,
+    server: bool,
     remote: bool,
 ) -> crate::components::update::UpdateNotice {
-    crate::components::update::UpdateNotice { kind, version: version.to_owned(), remote }
+    crate::components::update::UpdateNotice { kind, version: version.to_owned(), server, remote }
 }
 
 /// The banner lifecycle: notify → show; dismiss → gone + the key
@@ -18591,6 +18664,7 @@ fn update_notice_lifecycle_and_dismissal_history() {
         crate::components::update::UpdateNoticeKind::Available,
         "2.0.25",
         false,
+        false,
     ));
     assert_eq!(store.update_notice().map(|n| n.version), Some("2.0.25".into()));
     store.update_dismiss();
@@ -18601,32 +18675,71 @@ fn update_notice_lifecycle_and_dismissal_history() {
         crate::components::update::UpdateNoticeKind::Available,
         "2.0.25",
         false,
+        false,
     ));
     assert!(store.update_notice().is_none(), "the dismissed version is suppressed");
+    // The legacy un-prefixed key suppresses a CLIENT notice too
+    // (ref :45 — `notice.source === "client" &&
+    // versions.includes(notice.version)`).
+    store.set_update_dismissed(vec!["2.0.24".to_owned()]);
+    store.update_notify(notice(
+        crate::components::update::UpdateNoticeKind::Available,
+        "2.0.24",
+        false,
+        false,
+    ));
+    assert!(store.update_notice().is_none(), "the legacy un-prefixed key suppresses");
     // …a NEW version shows.
+    store.set_update_dismissed(Vec::new());
     store.update_notify(notice(
         crate::components::update::UpdateNoticeKind::Available,
         "2.0.26",
         false,
+        false,
     ));
     assert_eq!(store.update_notice().map(|n| n.version), Some("2.0.26".into()));
-    // A CLIENT notice never displaces a live SERVER one.
+    // G-478 re-pin — ref update-notification.tsx:49: a SERVER notice
+    // never displaces a live CLIENT one.
     store.update_notify(notice(
         crate::components::update::UpdateNoticeKind::Installed,
         "9.9.9",
         true,
-    ));
-    assert_eq!(store.update_notice().map(|n| n.version), Some("9.9.9".into()));
-    store.update_notify(notice(
-        crate::components::update::UpdateNoticeKind::Available,
-        "1.0.0",
         false,
     ));
     assert_eq!(
         store.update_notice().map(|n| n.version),
-        Some("9.9.9".into()),
-        "client never displaces server"
+        Some("2.0.26".into()),
+        "server never displaces the live client notice"
     );
+    // A CLIENT notice DOES displace a live server one (the client
+    // channel — the CLI checker's own result — wins).
+    store.update_notify(notice(
+        crate::components::update::UpdateNoticeKind::Available,
+        "1.0.0",
+        false,
+        false,
+    ));
+    assert_eq!(store.update_notice().map(|n| n.version), Some("1.0.0".into()));
+}
+
+/// G-478 — the dismissal history keeps the LAST 100 keys (ref
+/// `slice(-100)`, update-notification.tsx:60), dropping the oldest.
+#[test]
+fn update_dismissal_history_keeps_the_last_100() {
+    let store = Store::new(Runtime::new());
+    for index in 0..102 {
+        store.update_notify(notice(
+            crate::components::update::UpdateNoticeKind::Available,
+            &format!("1.0.{index}"),
+            false,
+            false,
+        ));
+        store.update_dismiss();
+    }
+    let history = store.update_dismissed();
+    assert_eq!(history.len(), 100, "capped at 100");
+    assert_eq!(history.first().map(String::as_str), Some("client:1.0.2"), "the oldest dropped");
+    assert_eq!(history.last().map(String::as_str), Some("client:1.0.101"), "the newest kept");
 }
 
 /// The SSE installation events land the banner.
@@ -18657,6 +18770,7 @@ fn update_command_opens_the_dialog_with_actions() {
     store.update_notify(notice(
         crate::components::update::UpdateNoticeKind::Available,
         "2.0.25",
+        false,
         false,
     ));
     store.set_update_dialog(crate::components::update::UpdateDialogState::Available(

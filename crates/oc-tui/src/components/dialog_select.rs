@@ -72,6 +72,20 @@ pub struct SelectOption {
     /// one-glyph leading mark at the row's content start (the failed
     /// row's error-red `x`), `None` = the plain paddingLeft-3 row.
     pub gutter: Option<char>,
+    /// G-478 — the row's paint-time text tone override: the update
+    /// dialog's body rows (the muted full-sentence body,
+    /// dialog-update.tsx:110/:120/:125/:128, and the failed state's
+    /// error-colored message, :132-135). `None` = the default fg
+    /// ladder.
+    pub tone: Option<RowTone>,
+}
+
+/// G-478 — a [`SelectOption`] row's text tone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RowTone {
+    #[default]
+    Muted,
+    Error,
 }
 
 /// `DialogSelectOption.truncateTitle` (dialog-select.tsx:78-79,:
@@ -184,7 +198,26 @@ impl SelectOption {
             shimmer: None,
             details: Vec::new(),
             gutter: None,
+            tone: None,
         }
+    }
+
+    /// G-478 — the row paints its title in `text.muted` (the update
+    /// dialog's non-busy body rows, dialog-update.tsx:110/:120/:125/
+    /// :128).
+    #[must_use]
+    pub fn muted_row(mut self) -> Self {
+        self.tone = Some(RowTone::Muted);
+        self
+    }
+
+    /// G-478 — the row paints its title in
+    /// `text.feedback.error.base` (the update dialog's failed body,
+    /// dialog-update.tsx:132-135).
+    #[must_use]
+    pub fn error_row(mut self) -> Self {
+        self.tone = Some(RowTone::Error);
+        self
     }
 
     /// G-189 — `details` rows under the title (:75, :816-824).
@@ -1217,7 +1250,13 @@ fn paint_option_row(
     } else if current {
         styles.current_fg
     } else {
-        styles.text
+        // G-478 — the tone override wins over the base text fg (the
+        // update dialog's muted / error body rows).
+        match option.tone {
+            Some(RowTone::Muted) => styles.muted,
+            Some(RowTone::Error) => styles.error_fg,
+            None => styles.text,
+        }
     };
     let title_attrs = if selected { BOLD } else { 0 };
 
@@ -1589,7 +1628,11 @@ mod tests {
             if let Some(elapsed) = shimmer {
                 option = option.with_shimmer(elapsed);
             }
-            let props = SelectProps::new("Update opencode", vec![option]).flat(true);
+            // G-478 — the dialog's header is the status line
+            // ("Update"/"Update available"/"Updating OpenCode",
+            // dialog-update.tsx:90-97); the shimmer rides the BODY
+            // option row.
+            let props = SelectProps::new("Update", vec![option]).flat(true);
             render_select(&props, &SelectState::default(), &styles, surface, 80, 20, Some(20))
         };
         // Determinism: the same pinned clock paints byte-equal rows.

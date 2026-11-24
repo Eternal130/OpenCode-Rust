@@ -1288,6 +1288,7 @@ fn remote_installed() {
     app.store.update_notify(UpdateNotice {
         kind: UpdateNoticeKind::Available,
         version: "9.9.9".to_owned(),
+        server: false,
         remote: false,
     });
     let _ = app.frame();
@@ -1308,6 +1309,7 @@ fn remote_installed() {
     app2.store.update_notify(UpdateNotice {
         kind: UpdateNoticeKind::Installed,
         version: "9.9.9".to_owned(),
+        server: false,
         remote: false,
     });
     let _ = app2.frame();
@@ -1326,6 +1328,8 @@ fn remote_installed() {
     app3.store.update_notify(UpdateNotice {
         kind: UpdateNoticeKind::Available,
         version: "9.9.9".to_owned(),
+        // `remote` only rides SERVER notices (update-notification.tsx:12).
+        server: true,
         remote: true,
     });
     let _ = app3.frame();
@@ -1344,6 +1348,7 @@ fn remote_installed() {
     app4.store.update_notify(UpdateNotice {
         kind: UpdateNoticeKind::Installed,
         version: "9.9.9".to_owned(),
+        server: true,
         remote: true,
     });
     let _ = app4.frame();
