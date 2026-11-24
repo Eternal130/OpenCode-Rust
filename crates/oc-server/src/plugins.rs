@@ -372,7 +372,18 @@ pub fn boot(
     if plugins_disabled() {
         return Arc::new(PluginBoot::disabled());
     }
-    let resolution = oc_plugin_host::resolve(ops, None);
+    // G-313 (overturned — ref parity): the boot auto-install leg —
+    // every `not installed` package spec gets ONE install attempt
+    // before the host starts (the ref boots config plugin entries with
+    // `install: true`: context.tsx:298-302 → default.ts:140 → npm.ts
+    // :344-349; this runs inside the caller's `spawn_blocking`, one
+    // conservative timeout per spec).
+    let install_options = oc_plugin_host::InstallOptions {
+        timeout: std::time::Duration::from_secs(120),
+        ..oc_plugin_host::InstallOptions::default()
+    };
+    let resolution =
+        oc_plugin_host::resolve_with_boot_install(ops, None, &install_options);
     for (target, error) in &resolution.failures {
         eprintln!("opencode plugin: {target} failed to resolve: {error}");
     }

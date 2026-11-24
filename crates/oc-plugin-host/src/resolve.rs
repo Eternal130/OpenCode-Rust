@@ -21,6 +21,7 @@
 //! (`github:…`) resolve the same way when `plugin add` installed them
 //! (the cache key is the raw spec), else they fail with the hint.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -212,6 +213,62 @@ pub fn resolve(ops: &[PluginOp], cache_root: Option<PathBuf>) -> Resolution {
     resolution
 }
 
+/// G-313 (overturned 2026-11-24, ref parity) — the BOOT auto-install
+/// leg: resolve offline first; every `is not installed` failure for a
+/// package spec gets ONE install attempt (the ref boots config plugin
+/// entries with `install: true` — packages/tui/src/plugin/context.tsx
+/// :298-302 config entries `{entry, install: true, optional: false}`,
+/// resolvePlugin :657-698 → `packages.prepare(spec, install)` → cli
+/// default.ts:140 `prepare=(spec,install)=>install?npm.add(spec):
+/// npm.resolve(spec)` → util/npm.ts:344-349 `Npm.add` staging reify),
+/// then the op list is re-resolved so a successful install activates
+/// the plugin in the SAME boot. Install failures splice their error
+/// onto the target's failure row (the existing failure surface — the
+/// TUI toast/footer chip and the server's Failed rows — renders them;
+/// other plugins are unaffected). One attempt per spec per call keeps
+/// a retry loop (config-watch re-boots) from hammering the network.
+///
+/// Serial install order follows the failure list; each install is
+/// bounded by [`crate::InstallOptions::timeout`] (the caller picks a
+/// conservative budget — the ref has NO timeout, but an unbounded
+/// stalled clone would hang boot forever).
+pub fn resolve_with_boot_install(
+    ops: &[PluginOp],
+    cache_root: Option<PathBuf>,
+    options: &crate::InstallOptions,
+) -> Resolution {
+    let resolution = resolve(ops, cache_root.clone());
+    if resolution.failures.is_empty() {
+        return resolution;
+    }
+    let mut attempted: BTreeSet<String> = BTreeSet::new();
+    let mut install_errors: Vec<(String, String)> = Vec::new();
+    for (target, error) in resolution.failures.clone() {
+        // Only "not installed" package-spec misses (local-path and
+        // other resolution errors are not installable by npm).
+        if !error.contains("is not installed") || !attempted.insert(target.clone()) {
+            continue;
+        }
+        eprintln!("opencode plugin: {target} not installed; auto-installing (boot)");
+        if let Err(install_error) = crate::install(&target, options) {
+            eprintln!("opencode plugin: boot auto-install of {target} failed: {install_error}");
+            install_errors.push((target, install_error));
+        }
+    }
+    if attempted.is_empty() {
+        return resolution;
+    }
+    let mut second = resolve(ops, cache_root);
+    for (target, install_error) in install_errors {
+        for (failed_target, error) in &mut second.failures {
+            if failed_target == &target && !error.contains("boot auto-install failed") {
+                error.push_str(&format!(" (boot auto-install failed: {install_error})"));
+            }
+        }
+    }
+    second
+}
+
 /// v2 remove matching: the directive id matches the spec, the package
 /// name of the spec, or a local path stem.
 fn remove_matches(target: &str, directive: &str) -> bool {
@@ -286,9 +343,22 @@ fn resolve_one(target: &str, root: &Path) -> Result<ResolvedPlugin, String> {
         });
     }
 
-    // Package spec: the install cache (offline; `plugin add` installs).
+    // Package spec: the install cache (offline; `plugin add` /
+    // the boot auto-install install). Bare git/github URL forms
+    // (`git+https://…`, `github:owner/repo`) have no package name to
+    // key the cache — reject those on the RAW target. (The old guard
+    // tested the SPLIT package name for a "git" prefix, which wrongly
+    // rejected legitimate packages whose name starts with "git" —
+    // e.g. `git-plugin-demo@git+file://…` — after a successful
+    // install of exactly that spec.)
+    if target.starts_with("github:") || target.starts_with("git+") || target.starts_with("git://")
+    {
+        return Err(format!(
+            "plugin {target:?} is not installed; run `opencode plugin add {target}`"
+        ));
+    }
     let (package, requested) = split_spec(target);
-    if package.is_empty() || package.starts_with("github:") || package.starts_with("git") {
+    if package.is_empty() {
         return Err(format!(
             "plugin {target:?} is not installed; run `opencode plugin add {target}`"
         ));

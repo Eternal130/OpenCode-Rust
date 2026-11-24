@@ -130,8 +130,8 @@ pub use registrations::{
     PluginTool, PluginVcsProvider, RegistrationSnapshot,
 };
 pub use resolve::{
-    discover_directory_ops, parse_ops, resolve, PluginOp, PluginSourceKind, Resolution,
-    ResolvedPlugin, PLUGIN_SOURCE_DIRECTORIES,
+    discover_directory_ops, parse_ops, resolve, resolve_with_boot_install, PluginOp,
+    PluginSourceKind, Resolution, ResolvedPlugin, PLUGIN_SOURCE_DIRECTORIES,
 };
 pub use supervisor::{
     HostError, RevisionState, RpcEventPort, StoragePort, StorageScanQuery, SupervisorConfig,

@@ -251,12 +251,22 @@ fn run_installer(dir: &Path, options: &InstallOptions) -> Result<(), String> {
         installer_args(npm, &["install", "--no-save", "--no-audit", "--no-fund"], options.offline)
     };
 
-    let output = Command::new(&program)
-        .args(&args)
-        .current_dir(dir)
-        .env("NPM_CONFIG_FUND", "false")
-        .env("NPM_CONFIG_AUDIT", "false")
-        .output()
+    // Git-sourced dependencies (the `pkg@git+https://…` named-spec
+    // form this path accepts) require a `git` executable on PATH —
+    // check it up front so the failure names the missing tool instead
+    // of surfacing the installer's opaque clone error.
+    let manifest_git_dep = std::fs::read_to_string(dir.join("package.json"))
+        .map(|text| text.contains("git+"))
+        .unwrap_or(false);
+    if manifest_git_dep && !command_available("git") {
+        return Err(
+            "git executable not found on PATH: it is required to install git-sourced plugin \
+             specs (pkg@git+https://…)"
+                .to_owned(),
+        );
+    }
+
+    let output = run_with_timeout(&program, &args, dir, options.timeout)
         .map_err(|error| format!("run {} {:?}: {error}", program.display(), args))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -278,6 +288,74 @@ fn installer_args(program: PathBuf, base: &[&str], offline: bool) -> (PathBuf, V
         args.push("--offline".into());
     }
     (program, args)
+}
+
+/// Whether a program is resolvable on PATH (the git-availability probe).
+fn command_available(program: &str) -> bool {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path).any(|dir| {
+        dir.join(program).is_file()
+            || dir.join(format!("{program}.exe")).is_file()
+    })
+}
+
+/// The installer output (stdout+stderr+status) bounded by a hard
+/// timeout. [`std::process::Command::output`] blocks unboundedly — a
+/// stalled git clone or registry fetch would hang boot — so the child
+/// is spawned and polled; past the deadline the (own) child is killed
+/// and the install fails loudly. `options.timeout` was previously
+/// declared but never enforced (a pre-existing gap this makes real).
+fn run_with_timeout(
+    program: &Path,
+    args: &[String],
+    dir: &Path,
+    timeout: Duration,
+) -> Result<std::process::Output, String> {
+    use std::io::Read as _;
+    let mut child = std::process::Command::new(program)
+        .args(args)
+        .current_dir(dir)
+        .env("NPM_CONFIG_FUND", "false")
+        .env("NPM_CONFIG_AUDIT", "false")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("spawn {} {:?}: {error}", program.display(), args))?;
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut stdout = String::new();
+                let mut stderr = String::new();
+                if let Some(mut pipe) = child.stdout.take() {
+                    let _ = pipe.read_to_string(&mut stdout);
+                }
+                if let Some(mut pipe) = child.stderr.take() {
+                    let _ = pipe.read_to_string(&mut stderr);
+                }
+                return Ok(std::process::Output {
+                    status,
+                    stdout: stdout.into_bytes(),
+                    stderr: stderr.into_bytes(),
+                });
+            }
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    // Our own child: kill it (and its process group is
+                    // unnecessary — the shell shims/bun propagate to
+                    // their own children) and report the timeout.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "timed out after {}s (boot/plugin install deadline)",
+                        timeout.as_secs()
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => return Err(format!("wait {} {:?}: {error}", program.display(), args)),
+        }
+    }
 }
 
 fn verify_and_resolve(dir: &Path, package: &str, version: String) -> Result<Installed, String> {
