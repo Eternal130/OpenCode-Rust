@@ -34,3 +34,4 @@ __pycache__/
 docs/GAPS-AND-PITFALLS.md
 .superpowers/
 tools/diff/realchain/corpus-w5/
+docs/audit/
