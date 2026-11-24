@@ -6858,9 +6858,12 @@ impl Store {
     pub fn update_notify(&self, notice: crate::components::update::UpdateNotice) {
         let key = format!("{}:{}", notice.source(), notice.version);
         let legacy = !notice.server;
-        if self.update_dismissed.borrow().iter().any(|entry| {
-            entry == &key || (legacy && entry == &notice.version)
-        }) {
+        if self
+            .update_dismissed
+            .borrow()
+            .iter()
+            .any(|entry| entry == &key || (legacy && entry == &notice.version))
+        {
             return;
         }
         let current = self.update_notice.get();

@@ -65,7 +65,11 @@ impl UpdateNotice {
     /// (`${notice.source}:${notice.version}`, :44).
     #[must_use]
     pub const fn source(&self) -> &'static str {
-        if self.server { "server" } else { "client" }
+        if self.server {
+            "server"
+        } else {
+            "client"
+        }
     }
 }
 
@@ -126,12 +130,22 @@ impl UpdateNotice {
         if let Some(at) = line.find("update available: v") {
             let rest = &line[at + "update available: v".len()..];
             let version = rest.split(' ').next()?.split(';').next()?.to_owned();
-            return Some(Self { kind: UpdateNoticeKind::Available, version, server: false, remote: false });
+            return Some(Self {
+                kind: UpdateNoticeKind::Available,
+                version,
+                server: false,
+                remote: false,
+            });
         }
         if let Some(at) = line.find("update installed (v") {
             let rest = &line[at + "update installed (v".len()..];
             let version = rest.split(')').next()?.to_owned();
-            return Some(Self { kind: UpdateNoticeKind::Installed, version, server: false, remote: false });
+            return Some(Self {
+                kind: UpdateNoticeKind::Installed,
+                version,
+                server: false,
+                remote: false,
+            });
         }
         None
     }

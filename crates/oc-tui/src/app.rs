@@ -2080,8 +2080,7 @@ impl App {
                     // the crash state and resume the normal render.
                     self.error_mode = None;
                     self.error_stack = None;
-                    self.error_copy_state =
-                        crate::components::update::CrashCopyState::Idle;
+                    self.error_copy_state = crate::components::update::CrashCopyState::Idle;
                 }
                 _ => {}
             }

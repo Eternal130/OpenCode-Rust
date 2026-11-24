@@ -110,8 +110,7 @@ fn identity(input: &StatuslineInput<'_>, cells: usize) -> StatusGroup {
     let model = input.model.as_ref().expect("identity called with a model");
     let ellipsis = if input.mono { "..." } else { "…" };
     // `identity(Infinity)` (footer.width.ts:109) never clips.
-    let text = if cells != usize::MAX
-        && display_width(model.name) > cells + display_width(ellipsis)
+    let text = if cells != usize::MAX && display_width(model.name) > cells + display_width(ellipsis)
     {
         format!("{}{ellipsis}", crate::wrap::take_width(model.name, cells).trim_end())
     } else {
@@ -355,7 +354,8 @@ pub(crate) fn prompt_idle_canvas(
                     None,
                 )),
                 work,
-                context: (!state.context.is_empty()).then_some((state.context.as_str(), state.context.as_str())),
+                context: (!state.context.is_empty())
+                    .then_some((state.context.as_str(), state.context.as_str())),
                 cost: (!state.cost.is_empty()).then_some(state.cost.as_str()),
                 provider: (!state.provider.is_empty()).then_some(state.provider.as_str()),
                 mono: state.mono,
@@ -428,10 +428,7 @@ mod tests {
         );
         let ids: Vec<&str> = groups.iter().map(|item| item.id).collect();
         assert_eq!(ids, vec!["agent", "model", "context", "provider", "cost", "menu"]);
-        assert_eq!(
-            text_of(&groups),
-            "Build · gpt-5 · 18 (18%) · openai · $0.42 · ctrl+p menu"
-        );
+        assert_eq!(text_of(&groups), "Build · gpt-5 · 18 (18%) · openai · $0.42 · ctrl+p menu");
     }
 
     /// G-481 — the staged fit keeps earlier groups at narrower widths
@@ -475,7 +472,12 @@ mod tests {
         let groups = footer_statusline_policy(
             &StatuslineInput {
                 work: vec![
-                    StatusWorkHint { id: "queued", key: "ctrl+x q", label: "2 pending", expanded: None },
+                    StatusWorkHint {
+                        id: "queued",
+                        key: "ctrl+x q",
+                        label: "2 pending",
+                        expanded: None,
+                    },
                     StatusWorkHint {
                         id: "subagents",
                         key: "↓",
@@ -510,7 +512,12 @@ mod tests {
         let groups = footer_statusline_policy(
             &StatuslineInput {
                 work: vec![
-                    StatusWorkHint { id: "queued", key: "ctrl+x q", label: "2 pending", expanded: None },
+                    StatusWorkHint {
+                        id: "queued",
+                        key: "ctrl+x q",
+                        label: "2 pending",
+                        expanded: None,
+                    },
                     StatusWorkHint {
                         id: "subagents",
                         key: "↓",

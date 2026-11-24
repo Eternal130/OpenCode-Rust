@@ -35,11 +35,9 @@ mod realchain_harness;
 use realchain_harness::{
     capture_settled, default_pace, export_grid_diff, lane_lock, normalize_grid,
     ref_lane_skip_reason, ref_service_stop, ref_stage, sandbox, service_start, service_stop,
-    Gateway, LaneGuard, RefStage, Sandbox, TuiProcess, WORDMARK,
+    Gateway, LaneGuard, RefStage, Sandbox, TuiProcess,
 };
 use std::time::Duration;
-
-const MODEL_NEEDLE: &str = "claude";
 
 macro_rules! skip_without_ref_lane {
     () => {
@@ -123,17 +121,13 @@ impl Drop for V18Rig {
     }
 }
 
-/// The rig-health boot gate: BOTH minis paint their statusline (the
-/// agent + model groups) — no content judgment beyond "alive and
-/// booted".
+/// The rig-health boot gate: BOTH minis paint their title bar (the
+/// `oc mini · <tag>` chrome both ends render) — no content judgment
+/// beyond "alive and booted". (The model name cannot serve at narrow
+/// widths: the 8-cell identity stage clips it to `replay/c…`.)
 fn boot_both(rig: &mut V18Rig) -> bool {
-    let rust_settled = rig
-        .rust_tui
-        .wait_for(WORDMARK, 0, Duration::from_secs(30))
-        || wait_screen(&rig.rust_tui, MODEL_NEEDLE, Duration::from_secs(30));
-    let ref_settled =
-        rig.ref_tui.wait_for(WORDMARK, 0, Duration::from_secs(60))
-            || wait_screen(&rig.ref_tui, MODEL_NEEDLE, Duration::from_secs(60));
+    let rust_settled = wait_screen(&rig.rust_tui, "oc mini", Duration::from_secs(30));
+    let ref_settled = wait_screen(&rig.ref_tui, "oc mini", Duration::from_secs(60));
     if !rust_settled || !ref_settled {
         eprintln!(
             "VA18 boot detail rust={rust_settled} ref={ref_settled}; rust screen:\n{}\nref \

@@ -2484,7 +2484,8 @@ mod tests {
             summary: String::new(),
         }]);
         let sink = std::rc::Rc::new(crate::store::RecordingIntegrationSink::default());
-        store.set_integration_sink(std::rc::Rc::clone(&sink) as std::rc::Rc<_>);        store.replace_dialog(
+        store.set_integration_sink(std::rc::Rc::clone(&sink) as std::rc::Rc<_>);
+        store.replace_dialog(
             DialogKind::IntegrationAccounts { integration_id: "github".to_owned() },
             DialogSize::Medium,
         );
