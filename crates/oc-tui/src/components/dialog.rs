@@ -272,7 +272,10 @@ pub fn handle_dialog_key(
     }
 
     // -- the focused input renderable ---------------------------------------
-    if !is_static && !stroke.ctrl && !stroke.alt && stroke.key.chars().count() == 1 {
+    // G-485③ — `renderFilter: false` mounts no input: printables and
+    // backspace never type (the diff source picker,
+    // diff-viewer.tsx:740).
+    if !is_static && props.render_filter && !stroke.ctrl && !stroke.alt && stroke.key.chars().count() == 1 {
         if let Some(ch) = stroke.key.chars().next() {
             let text = if stroke.shift { ch.to_ascii_uppercase() } else { ch };
             store.update_dialog(|top| {
@@ -292,7 +295,7 @@ pub fn handle_dialog_key(
             return DialogKeyOutcome::Consumed;
         }
     }
-    if !is_static && stroke.key == "backspace" && !stroke.ctrl && !stroke.alt && !stroke.shift {
+    if !is_static && props.render_filter && stroke.key == "backspace" && !stroke.ctrl && !stroke.alt && !stroke.shift {
         store.update_dialog(|top| {
             if is_prompt_kind(&top.kind) {
                 top.value.pop();
@@ -1085,7 +1088,8 @@ fn option_dialog_records_rows(
         | DialogKind::ShellOutput { .. }
         | DialogKind::DiffSource
         | DialogKind::DiffBase
-        | DialogKind::DiffHelp
+        // G-485② — DiffHelp is the custom shortcuts tree: no option
+        // rows.
         | DialogKind::Plugins
         | DialogKind::TabMenu { .. }
         | DialogKind::Mcp
@@ -1135,9 +1139,11 @@ fn option_dialog_records_rows(
         // F15: the pair dialog's custom tree records none either.
         // RE-13: the /btw prompt input + Answer markdown dialog.
         // G-487: the export form's custom tree records none.
+        // G-485②: the diff shortcuts' custom tree records none.
         | DialogKind::BtwPrompt
         | DialogKind::BtwAnswer { .. }
         | DialogKind::SessionExport { .. }
+        | DialogKind::DiffHelp
         | DialogKind::Pair => false,
     }
 }

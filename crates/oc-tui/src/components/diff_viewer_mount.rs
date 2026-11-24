@@ -130,6 +130,14 @@ pub fn render_diff_mount(
     height: usize,
 ) -> Frame {
     let live = store.diff_viewer();
+    // G-485④ — the source header rides EVERY body (the `!showFileTree()`
+    // header renders outside the Switch, diff-viewer.tsx:804-844): the
+    // non-loaded arms read it here (0 files never show the tree).
+    let detail = live.source_detail();
+    let header = crate::components::diff_viewer_solid::DiffSourceHeader {
+        label: live.mode.label(),
+        detail: &detail,
+    };
     let (frame, hits) = match &live.phase {
         DiffPhase::Loading => crate::components::diff_viewer_solid::route_frame(
             &crate::components::diff_viewer_solid::DiffBody::Loading,
@@ -137,6 +145,7 @@ pub fn render_diff_mount(
             width,
             height,
             0,
+            header,
         ),
         DiffPhase::Failed(_) => {
             // Two copy variants (:852-860): a base-needing mode that
@@ -150,6 +159,7 @@ pub fn render_diff_mount(
                 width,
                 height,
                 0,
+                header,
             )
         }
         DiffPhase::Unavailable => crate::components::diff_viewer_solid::route_frame(
@@ -158,6 +168,7 @@ pub fn render_diff_mount(
             width,
             height,
             0,
+            header,
         ),
         DiffPhase::Loaded(files) if files.is_empty() => {
             crate::components::diff_viewer_solid::route_frame(
@@ -166,6 +177,7 @@ pub fn render_diff_mount(
                 width,
                 height,
                 0,
+                header,
             )
         }
         DiffPhase::Loaded(_) => {
@@ -190,6 +202,7 @@ pub fn render_diff_mount(
                 width,
                 height,
                 scroll,
+                header,
             )
         }
     };

@@ -252,6 +252,13 @@ enum Family {
     /// Copy/Export buttons. Tab cycles the active control; return
     /// activates it.
     ExportOptions,
+    /// G-485② — `DiffViewerHelpDialog` (diff-viewer.tsx:1098-1192): a
+    /// CUSTOM centered dialog — the bold `Diff shortcuts` header +
+    /// `esc close` chrome, then the key groups (bold header rows,
+    /// `[shortcut@17][label]` rows) over the `gap 1` column, no
+    /// filter row. The lines ride `hint_lines` with a leading
+    /// `\u{1}` marking the group headers.
+    DiffHelp,
 }
 
 /// One rendered row of the scroll window — the same walk the old
@@ -294,6 +301,13 @@ struct DialogInputs {
     /// G-466.3 — the terminal width (the footer's `<60` column-wrap
     /// gate, ui/dialog-select.tsx:838).
     terminal_width: usize,
+    /// G-485③ — `renderFilter` (dialog-select.tsx:33): the filter
+    /// input row stays unmounted while false.
+    render_filter: bool,
+    /// G-485① — the `footer` prop's muted text (dialog-select.tsx:20,
+    /// 835-845): the DiffBase picker's `Remembered until the TUI
+    /// exits` — the footer bar's left content.
+    hint_footer: String,
     colors: DialogColors,
     // -- the select family -------------------------------------------------
     title: String,
@@ -453,15 +467,20 @@ fn content_height(inputs: &DialogInputs) -> usize {
         // gap + window + root gap + [footer] + paddingBottom 1.
         // G-466.3: below 60 cols the left footer box is a COLUMN
         // (ui/dialog-select.tsx:838) — one row per left action.
+        // G-485③: without the filter input the title block is 1 row.
         Family::Select => {
-            let footer_rows = if inputs.actions.is_empty() && inputs.footer_hint.is_none() {
+            let footer_rows = if inputs.actions.is_empty()
+                && inputs.footer_hint.is_none()
+                && inputs.hint_footer.is_empty()
+            {
                 0
             } else if inputs.terminal_width < 60 {
                 inputs.actions.len().max(1)
             } else {
                 1
             };
-            4 + inputs.window.len() + 1 + footer_rows + 1
+            let title_block = if inputs.render_filter { 3 } else { 1 };
+            title_block + 1 + inputs.window.len() + 1 + footer_rows + 1
         }
         // title, gap, input, gap, footer, the footer's paddingBottom.
         // RE-13: the /btw question prompt and the G-29 plugin install
@@ -535,6 +554,10 @@ fn content_height(inputs: &DialogInputs) -> usize {
                 7
             }
         }
+        // G-485② (diff-viewer.tsx:1143-1191): the title row, the
+        // root's gap 1, the group rows (the inter-group blank lines
+        // ride `hint_lines`), the root paddingBottom 1.
+        Family::DiffHelp => inputs.hint_lines.len() + 3,
     }
 }
 
@@ -1080,28 +1103,45 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
     // The filter input: a formfield-background box. No painted
     // cursor — v2's input shows the hardware cursor only (the #8
     // ruling; the row past the typed text stays the input's own bg).
-    let input_box = box_()
-        .height(1.0)
-        .dyn_prop(
-            "backgroundColor",
-            dyn_color(map(inputs.clone(), |i: &DialogInputs| i.colors.formfield_bg)),
-        )
-        .child(text().wrap_mode("none").dyn_prop(
-            "content",
-            dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
-                let width = i.box_width.saturating_sub(8);
-                if i.filter.is_empty() {
-                    styled(vec![chunk(i.placeholder.clone(), i.colors.muted, None, 0)])
-                } else {
-                    let typed = take_width(&i.filter, width);
-                    styled(vec![chunk(typed, i.colors.formfield_fg, None, 0)])
-                }
-            })),
-        ));
+    let build_input_box = move |inputs: &Signal<DialogInputs>| {
+        box_()
+            .height(1.0)
+            .dyn_prop(
+                "backgroundColor",
+                dyn_color(map(inputs.clone(), |i: &DialogInputs| i.colors.formfield_bg)),
+            )
+            .child(text().wrap_mode("none").dyn_prop(
+                "content",
+                dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                    let width = i.box_width.saturating_sub(8);
+                    if i.filter.is_empty() {
+                        styled(vec![chunk(i.placeholder.clone(), i.colors.muted, None, 0)])
+                    } else {
+                        let typed = take_width(&i.filter, width);
+                        styled(vec![chunk(typed, i.colors.formfield_fg, None, 0)])
+                    }
+                })),
+            ))
+    };
+    let inputs_for_input = inputs.clone();
+    let input_gate = show(
+        Rc::new(map(inputs.clone(), |i: &DialogInputs| i.render_filter))
+            as Rc<dyn Reactive<bool>>,
+        move || {
+            vec![box_()
+                .padding_top(1.0)
+                .child(build_input_box(&inputs_for_input))
+                .into_element()]
+        },
+    );
 
     let title_block = box_().padding_left(4.0).padding_right(4.0).children(Children::Static(vec![
         title_row.into_element(),
-        box_().padding_top(1.0).child(input_box).into_element(),
+        // G-485③ — the input block (its paddingTop gap + the row)
+        // unmounts under `renderFilter: false`
+        // (dialog-select.tsx:685-712); mounted as a DYN carrier (the
+        // Show is a children source, not a static element).
+        box_().children_dyn(Rc::new(input_gate)).into_element(),
     ]));
 
     // The scroll area: the flexGrow box wrapping the window For.
@@ -1116,7 +1156,7 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
     let inputs_for_footer = inputs.clone();
     let footer = show(
         Rc::new(map(inputs.clone(), |i: &DialogInputs| {
-            !i.actions.is_empty() || i.footer_hint.is_some()
+            !i.actions.is_empty() || i.footer_hint.is_some() || !i.hint_footer.is_empty()
         })) as Rc<dyn Reactive<bool>>,
         {
             let inputs = inputs_for_footer;
@@ -1215,7 +1255,25 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
                             } else {
                                 "row"
                             })
-                            .children_dyn(actions_for(&inputs))
+                            // G-485① — the `footer` prop's muted text
+                            // rides the left box FIRST
+                            // (dialog-select.tsx:838: `{props.
+                            // footer}<For each={left()}>`).
+                            .children(Children::Static(vec![
+                                text().wrap_mode("none").dyn_prop(
+                                    "content",
+                                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                                        styled(vec![chunk(
+                                            i.hint_footer.clone(),
+                                            i.colors.muted,
+                                            None,
+                                            0,
+                                        )])
+                                    })),
+                                )
+                                .into_element(),
+                                box_().children_dyn(actions_for(&inputs)).into_element(),
+                            ]))
                             .into_element(),
                         right_carrier.into_element(),
                     ]))
@@ -2593,6 +2651,93 @@ fn active_of(format: crate::store::ExportFormat) -> crate::store::ExportActive {
     }
 }
 
+/// G-485② — `DiffViewerHelpDialog` (diff-viewer.tsx:1143-1191): the
+/// bold `Diff shortcuts` title + the `esc close` chrome, then the
+/// group column — bold headers, `[shortcut@17]` base-fg cells with
+/// the muted labels — `gap 1` between the groups (a blank line rides
+/// every hint line after a header), `paddingBottom 1`. The rows
+/// arrive pre-padded through `hint_lines`; a leading `\u{1}` marks a
+/// group header.
+fn diff_help_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder {
+    let title_row = box_().flex_direction("row").justify_content("space-between").children(
+        Children::Static(vec![
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk("Diff shortcuts".to_owned(), i.colors.text, None, 1)])
+                    })),
+                )
+                .into_element(),
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk("esc close".to_owned(), i.colors.muted, None, 0)])
+                    })),
+                )
+                .into_element(),
+        ]),
+    );
+    let lines = ForItemSource {
+        source: map(inputs.clone(), |i: &DialogInputs| {
+            i.hint_lines
+                .iter()
+                .enumerate()
+                .map(|(n, line)| ForItem { key: format!("L{n}"), value: PropValue::Str(line.clone()) })
+                .collect::<Vec<ForItem>>()
+        }),
+    };
+    let line_inputs = inputs.clone();
+    let rows_for = for_list(Rc::new(lines), move |item: &ForItem, _index: usize| {
+        let line = match &item.value {
+            PropValue::Str(line) => line.clone(),
+            _ => String::new(),
+        };
+        let inputs = line_inputs.clone();
+        // A group header (bold, text.base) or a key row: the
+        // 17-wide shortcut column in text.base then the muted label
+        // (the pre-padded line carries both — split by DISPLAY
+        // width, the arrows are multibyte).
+        text()
+            .dyn_prop(
+                "content",
+                dyn_styled(map(inputs, move |i: &DialogInputs| {
+                    if let Some(title) = line.strip_prefix('\u{1}') {
+                        styled(vec![chunk(title.to_owned(), i.colors.text, None, 1)])
+                    } else {
+                        let mut width = 0usize;
+                        let mut split = line.len();
+                        for (at, ch) in line.char_indices() {
+                            if width >= 17 {
+                                split = at;
+                                break;
+                            }
+                            width += if ch.is_ascii() { 1 } else { 2 };
+                        }
+                        let (shortcut, label) = line.split_at(split);
+                        // `label` keeps the row's `gap={2}` leading
+                        // spaces (the column + gap = 19 before the
+                        // label text).
+                        styled(vec![
+                            chunk(shortcut.to_owned(), i.colors.text, None, 0),
+                            chunk(label.to_owned(), i.colors.muted, None, 0),
+                        ])
+                    }
+                })),
+            )
+            .into_element()
+    });
+    box_()
+        .padding_left(2.0)
+        .padding_right(2.0)
+        .padding_bottom(1.0)
+        .children(Children::Static(vec![
+            title_row.into_element(),
+            box_().children_dyn(Rc::new(rows_for)).margin_top(1.0).into_element(),
+        ]))
+}
+
 // ---------------------------------------------------------------------------
 // the mount
 // ---------------------------------------------------------------------------
@@ -2635,6 +2780,7 @@ fn chrome_element(
         Family::BtwAnswer => btw_answer_builder(&family_inputs),
         Family::Status => status_builder(&family_inputs),
         Family::ExportOptions => export_options_builder(&family_inputs),
+        Family::DiffHelp => diff_help_builder(&family_inputs),
     };
     box_()
         .width(width as f32)
@@ -2759,7 +2905,12 @@ pub fn mount_dialog_tree(
         // setCentered(true)`, dialog-image-preview.tsx:24) — the
         // content-height walk pins the box's height first. F15: the
         // pair dialog is centered too (dialog-pair.tsx:19).
-        let centered = matches!(entry.kind, DialogKind::ImagePreview | DialogKind::Pair);
+        // G-485②: the diff shortcuts dialog as well
+        // (diff-viewer.tsx:771's `centered: true`).
+        let centered = matches!(
+            entry.kind,
+            DialogKind::ImagePreview | DialogKind::Pair | DialogKind::DiffHelp
+        );
         let box_y = if centered {
             let inputs_probe = build_inputs(
                 entry,
@@ -2771,7 +2922,10 @@ pub fn mount_dialog_tree(
                 height,
                 sidecar,
             );
-            height.saturating_sub(1 + content_height(&inputs_probe)) / 2
+            // The ref centers via flex `justifyContent: "center"`
+            // (dialog.tsx:48) — taffy hands the odd leftover row to
+            // the TOP half (36-23 → 7 above, 6 below): round up.
+            (height + 1).saturating_sub(1 + content_height(&inputs_probe)) / 2
         } else {
             (height + 2) / 4
         };
@@ -2899,6 +3053,8 @@ fn dialog_chrome_button_hits(
         | Family::Status
         | Family::ExportOptions => ("esc", 2),
         Family::Help => ("esc/enter", 2),
+        // G-485② — the diff shortcuts' close hint.
+        Family::DiffHelp => ("esc close", 2),
     };
     let label_width = label.chars().count();
     let close_x = (box_x + box_width).saturating_sub(pad + label_width);
@@ -2985,6 +3141,9 @@ fn build_inputs(
         // G-487: the export options' CUSTOM form (ref
         // dialog-export-options.tsx is not a DialogSelect).
         DialogKind::SessionExport { .. } => Family::ExportOptions,
+        // G-485② — the diff shortcuts' custom tree (the props arm
+        // feeds the rows through `hints`).
+        DialogKind::DiffHelp => Family::DiffHelp,
         _ => Family::Select,
     };
     match family {
@@ -3031,6 +3190,8 @@ fn build_inputs(
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
             export: Default::default(),
+            render_filter: props.render_filter,
+            hint_footer: props.hints.first().cloned().unwrap_or_default(),
                 plugin_rows: Vec::new(),
             }
         }
@@ -3075,6 +3236,8 @@ fn build_inputs(
             btw_window: Vec::new(),
             btw_styled: Vec::new(),
             export: Default::default(),
+            render_filter: true,
+            hint_footer: String::new(),
         },
         // G-237: the generic prompt — title/placeholder/description
         // from the kind, the typed value from the entry (the
@@ -3123,6 +3286,8 @@ fn build_inputs(
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
             export: Default::default(),
+            render_filter: true,
+            hint_footer: String::new(),
             }
         }
         // RE-13: the /btw Answer dialog — the sidecar's markdown
@@ -3183,6 +3348,8 @@ fn build_inputs(
                 btw_window,
                 btw_styled,
                 export: Default::default(),
+                render_filter: true,
+                hint_footer: String::new(),
             }
         }
         // The connect prompts carry their title/placeholder/hints
@@ -3225,6 +3392,8 @@ fn build_inputs(
             btw_window: Vec::new(),
             btw_styled: Vec::new(),
             export: Default::default(),
+            render_filter: true,
+            hint_footer: String::new(),
         },
         Family::Help => {
             let content_width = box_width.saturating_sub(4);
@@ -3278,6 +3447,8 @@ fn build_inputs(
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
             export: Default::default(),
+            render_filter: true,
+            hint_footer: String::new(),
             }
         }
         Family::PluginRows => {
@@ -3318,6 +3489,8 @@ fn build_inputs(
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
             export: Default::default(),
+            render_filter: true,
+            hint_footer: String::new(),
             }
         }
         // -- TUI-25: DialogAlert / DialogConfirm --------------------
@@ -3380,6 +3553,8 @@ fn build_inputs(
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
             export: Default::default(),
+            render_filter: true,
+            hint_footer: String::new(),
             }
         }
         // -- TUI-24: DialogErrorDetails ------------------------------
@@ -3429,6 +3604,8 @@ fn build_inputs(
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
             export: Default::default(),
+            render_filter: true,
+            hint_footer: String::new(),
             }
         }
         // -- TUI-10: DialogImagePreview ------------------------------
@@ -3482,6 +3659,8 @@ fn build_inputs(
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
             export: Default::default(),
+            render_filter: true,
+            hint_footer: String::new(),
             }
         }
         // -- F15: DialogPair — the custom (non-select) tree --------
@@ -3546,6 +3725,8 @@ fn build_inputs(
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
             export: Default::default(),
+            render_filter: true,
+            hint_footer: String::new(),
             }
         }
         // -- W4: DialogStatus — the custom (non-select) tree ------
@@ -3587,6 +3768,8 @@ fn build_inputs(
             btw_window: Vec::new(),
             btw_styled: Vec::new(),
             export: Default::default(),
+            render_filter: true,
+            hint_footer: String::new(),
         },
         // G-487 — the export form rides the SIDECAR's state snapshot
         // (the store's export cell — the pill focus + the toggles
@@ -3627,6 +3810,49 @@ fn build_inputs(
             btw_window: Vec::new(),
             btw_styled: Vec::new(),
             export: sidecar.export,
+            render_filter: true,
+            hint_footer: String::new(),
+        },
+        // G-485② — the diff shortcuts' rows ride `hints` (the group
+        // headers carry the `\u{1}` marker).
+        Family::DiffHelp => DialogInputs {
+            family,
+            box_width,
+            terminal_width,
+            colors,
+            title: props.title.clone(),
+            placeholder: String::new(),
+            filter: String::new(),
+            options: Vec::new(),
+            flat: Vec::new(),
+            selected: 0,
+            current: None,
+            flatten: false,
+            destructive: false,
+            window: Vec::new(),
+            actions: Vec::new(),
+            footer_hint: None,
+            title_suffix: String::new(),
+            prompt_value: String::new(),
+            hint_lines: props.hints.clone(),
+            plugin_title: String::new(),
+            plugin_rows: Vec::new(),
+            message: String::new(),
+            confirm_labels: (String::new(), String::new(), true),
+            error_source: String::new(),
+            error_window: Vec::new(),
+            diagnostic: String::new(),
+            preview_title: String::new(),
+            preview_footer: (String::new(), String::new(), String::new()),
+            preview_rows: 0,
+            pair_rows: Vec::new(),
+            pair_split: false,
+            pair_qr: Vec::new(),
+            btw_window: Vec::new(),
+            btw_styled: Vec::new(),
+            export: Default::default(),
+            render_filter: true,
+            hint_footer: String::new(),
         },
     }
 }

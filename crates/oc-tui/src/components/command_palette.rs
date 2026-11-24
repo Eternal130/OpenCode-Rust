@@ -679,6 +679,38 @@ fn palette_options_slice(commands: &[&PaletteCommand], store: &Store) -> Vec<Sel
         .collect()
 }
 
+/// G-485② — pad a shortcut display to the 17-wide column plus the
+/// row's `gap={2}` before the label (diff-viewer.tsx:1175-1180).
+fn pad17(shortcut: &str) -> String {
+    const COLUMN: usize = 19;
+    let width = crate::wrap::display_width(shortcut);
+    if width >= COLUMN {
+        format!("{shortcut} ")
+    } else {
+        format!("{}{}", shortcut, " ".repeat(COLUMN - width))
+    }
+}
+
+/// G-485② — the keymap's display aliases (keymap.tsx:465-470):
+/// up→↑, down→↓, pageup→pgup, pagedown→pgdn, delete→del — applied to
+/// a displayed binding's final token.
+fn key_alias_display(display: &str) -> String {
+    let alias = |token: &str| -> String {
+        match token {
+            "up" => "↑".to_owned(),
+            "down" => "↓".to_owned(),
+            "pageup" => "pgup".to_owned(),
+            "pagedown" => "pgdn".to_owned(),
+            "delete" => "del".to_owned(),
+            other => other.to_owned(),
+        }
+    };
+    match display.rsplit_once('+') {
+        Some((mods, token)) => format!("{mods}+{}", alias(token)),
+        None => alias(display),
+    }
+}
+
 /// The full palette props for the current store state: the suggested
 /// section first (a duplicate set under "Suggested") when no filter is
 /// active, then every registry command — `list()` in
@@ -1949,14 +1981,14 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             let mut options = Vec::new();
             for mode in [DiffSource::Branch, DiffSource::Committed, DiffSource::Working] {
                 options.push(
-                    SelectOption::titled(mode.label(), mode.vcs_mode())
+                    SelectOption::titled(format!("{:<11}", mode.label()), mode.vcs_mode())
                         .described(mode.description())
                         .with_search(mode.description().to_owned()),
                 );
             }
             if live.session_id.is_some() {
                 options.push(
-                    SelectOption::titled(DiffSource::Turn.label(), "turn")
+                    SelectOption::titled(format!("{:<11}", DiffSource::Turn.label()), "turn")
                         .described(DiffSource::Turn.description()),
                 );
             }
@@ -1969,15 +2001,25 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                     .selected_diff_base()
                     .or_else(|| live.base.clone())
                     .unwrap_or_else(|| "Choose…".to_owned());
-                options.push(SelectOption::titled("Base", "base").described(current));
+                options.push(
+                    SelectOption::titled(format!("{:<11}", "Base"), "base").described(current),
+                );
             }
+            // G-485③ — `renderFilter={false}` (diff-viewer.tsx:740):
+            // no Search row; the `titleView.padEnd(11)` column rides
+            // the titles (:746-757).
             SelectProps::new("Diff source", options)
                 .flat(true)
+                .without_filter()
                 .with_current(Some(live.mode.vcs_mode().to_owned()))
         }
-        // G-69 — the base branch selector (`DiffBaseDialog`,
-        // diff-viewer.tsx:246-290): one row per `vcs.branch.list`
-        // branch, the current one marked, the ref's footer line.
+        // G-485① — the base branch selector (`DiffBaseDialog`,
+        // diff-viewer.tsx:246-290): title "Base branch", the server
+        // search's placeholder, the `Remembered until the TUI exits`
+        // footer, the "No branches found" empty view; one row per
+        // `vcs.branch.list` branch with the current one marked. The
+        // list arrives from the server (the search re-query lands
+        // with the debounced typing lane).
         DialogKind::DiffBase => {
             let live = store.diff_viewer();
             let current =
@@ -1987,80 +2029,120 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                 .into_iter()
                 .map(|name| SelectOption::titled(&name, name.clone()).with_search(name))
                 .collect::<Vec<_>>();
-            SelectProps::new("Choose a base branch", options)
+            SelectProps::new("Base branch", options)
                 .flat(true)
+                .with_placeholder("Search local and remote branches")
                 .with_current((!current.is_empty()).then_some(current))
                 .with_hints(vec!["Remembered until the TUI exits".to_owned()])
-                .with_empty_texts("No branches", "No branches")
+                .with_empty_texts("No branches found", "No branches found")
         }
         // The diff shortcuts dialog (`DiffViewerHelpDialog`,
         // diff-viewer.tsx:1100-1192): the viewer's key groups with the
         // binding displays (`shortcut()` reads the table's defaults).
         DialogKind::DiffHelp => {
-            let shortcut = |commands: &str| -> String {
-                let shortcuts: Vec<String> = commands
-                    .split('|')
-                    .map(|command| {
-                        crate::keymap::default_table()
-                            .iter()
-                            .find(|def| def.command == command)
-                            .map_or_else(String::new, |def| {
-                                def.defaults
-                                    .split(',')
-                                    .map(str::trim)
-                                    .filter(|spec| !spec.is_empty() && *spec != "none")
-                                    .map(crate::components::dialog::spec_display)
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            })
+            // G-485② — `DiffViewerHelpDialog` (diff-viewer.tsx:
+            // 1098-1192): the three key groups with the shortcut
+            // column; the shortcut shows each command's FIRST
+            // binding (`keymap.shortcuts(id)[0]`), pairs joined
+            // ` / `, with the keymap's display aliases (down→↓,
+            // pageup→pgup, :465-470).
+            let first_binding = |command: &str| -> String {
+                crate::keymap::default_table()
+                    .iter()
+                    .find(|def| def.command == command)
+                    .and_then(|def| {
+                        def.defaults
+                            .split(',')
+                            .map(str::trim)
+                            .find(|spec| !spec.is_empty() && *spec != "none")
+                            .map(crate::components::dialog::spec_display)
                     })
-                    .filter(|text| !text.is_empty())
-                    .collect();
-                if shortcuts.is_empty() {
-                    "unbound".to_owned()
-                } else {
-                    shortcuts.join(" / ")
-                }
+                    .map(|display| key_alias_display(&display))
+                    .unwrap_or_default()
             };
-            let mut options = Vec::new();
-            let mut group = |title: &str, rows: &[(&str, &str)]| {
-                for (commands, label) in rows {
-                    let shortcut_text = shortcut(commands);
-                    let value = format!("help:{}", label.replace('/', "-"));
-                    options.push(
-                        SelectOption::titled(format!("{shortcut_text:<17}{label}"), value)
-                            .categorized(title),
-                    );
-                }
+            // `keymap.shortcuts(id).join(" / ")` — ALL of one
+            // command's bindings (the single-command rows).
+            let all_bindings = |command: &str| -> String {
+                crate::keymap::default_table()
+                    .iter()
+                    .find(|def| def.command == command)
+                    .map(|def| {
+                        def.defaults
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|spec| !spec.is_empty() && *spec != "none")
+                            .map(crate::components::dialog::spec_display)
+                            .map(|display| key_alias_display(&display))
+                            .collect::<Vec<_>>()
+                            .join(" / ")
+                    })
+                    .unwrap_or_default()
+            };
+            // `shortcut(...ids)` — the FIRST binding of each command
+            // joined ` / ` (the paired rows, :1101-1107).
+            let pair = |a: &str, b: &str| format!("{} / {}", first_binding(a), first_binding(b));
+            let mut lines: Vec<String> = Vec::new();
+            // The groups join over the column's `gap 1`
+            // (diff-viewer.tsx:1166) — one blank row between them.
+            let mut groups: Vec<Vec<String>> = Vec::new();
+            let mut group = |title: &str, rows: &[String]| {
+                let mut block = vec![format!("\u{1}{title}")];
+                block.extend(rows.iter().cloned());
+                groups.push(block);
             };
             group(
-                "Files",
+                "Review",
                 &[
-                    ("diff.next_file|diff.previous_file", "Next / previous file"),
-                    ("diff.next_hunk|diff.previous_hunk", "Next / previous hunk"),
-                    ("diff.mark_reviewed", "Mark reviewed"),
+                    format!("{}Next file", pad17(&all_bindings("diff.next_file"))),
+                    format!("{}Previous file", pad17(&all_bindings("diff.previous_file"))),
+                    format!(
+                        "{}Review + collapse / reopen",
+                        pad17(&first_binding("diff.mark_reviewed"))
+                    ),
+                    format!(
+                        "{}Next / previous change",
+                        pad17(&pair("diff.next_hunk", "diff.previous_hunk"))
+                    ),
+                    format!("{}File menu (heading or tree)", pad17("right-click")),
                 ],
             );
             group(
                 "Scroll",
                 &[
-                    ("diff.down|diff.up", "Down / up"),
-                    ("diff.half_page.down|diff.half_page.up", "Half page down / up"),
-                    ("diff.page.down|diff.page.up", "Page down / up"),
-                    ("diff.first|diff.last", "First / last"),
+                    format!("{}Down / up", pad17(&pair("diff.down", "diff.up"))),
+                    format!(
+                        "{}Half page down / up",
+                        pad17(&pair("diff.half_page.down", "diff.half_page.up"))
+                    ),
+                    format!("{}Page down / up", pad17(&pair("diff.page.down", "diff.page.up"))),
+                    format!("{}First / last", pad17(&pair("diff.first", "diff.last"))),
                 ],
             );
             group(
                 "View",
                 &[
-                    ("diff.toggle_view", "Split / unified"),
-                    ("diff.single_patch", "All files / single file"),
-                    ("diff.toggle_file_tree", "Show / hide file tree"),
-                    ("diff.switch_source", "Switch diff source"),
-                    ("diff.close", "Close diff viewer"),
+                    format!("{}Split / unified", pad17(&first_binding("diff.toggle_view"))),
+                    format!(
+                        "{}All files / single file",
+                        pad17(&first_binding("diff.single_patch"))
+                    ),
+                    format!(
+                        "{}Show / hide file tree",
+                        pad17(&first_binding("diff.toggle_file_tree"))
+                    ),
+                    format!("{}Switch diff source", pad17(&first_binding("diff.switch_source"))),
+                    format!("{}Close diff viewer", pad17(&all_bindings("diff.close"))),
                 ],
             );
-            SelectProps::new("Diff shortcuts", options).flat(true)
+            let mut first = true;
+            for block in groups {
+                if !first {
+                    lines.push(String::new());
+                }
+                first = false;
+                lines.extend(block);
+            }
+            SelectProps::new("Diff shortcuts", Vec::new()).with_hints(lines).flat(true)
         }
         // `DialogMessage` (`routes/session/dialog-message.tsx`): the
         // four fixed actions over the clicked user message.
