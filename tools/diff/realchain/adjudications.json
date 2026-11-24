@@ -391,7 +391,7 @@
     ]
    },
    "classification": "pending-fix",
-   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17a-palette-tabenter.txt",
+   "justification": "ADJUDICATED (controller, updated 2026-11-25): post-va18 residual = 3 lines, integrations dialog content faces (cwd abbreviation + account row set/order — G-492, fix va19); Enter-action semantics aligned (G-484 closed).",
    "g_ref": "va17 live-ref verification wave",
    "adjudicated_by": "controller",
    "adjudicated_at": "2026-11-24"
@@ -439,7 +439,7 @@
     ]
    },
    "classification": "pending-fix",
-   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17b-sessions-tabenter.txt",
+   "justification": "ADJUDICATED (controller, updated 2026-11-25): post-va18 residual = 1 line, the muted ' for project' title suffix (G-491, fix va19); the Enter-submit family itself is fixed (G-484 closed).",
    "g_ref": "va17 live-ref verification wave",
    "adjudicated_by": "controller",
    "adjudicated_at": "2026-11-24"
@@ -699,6 +699,70 @@
    "g_ref": "va17 live-ref verification wave",
    "adjudicated_by": "controller",
    "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v18-v18a-boot-wide",
+   "scenario_pattern": "v18a",
+   "state_pattern": "boot-wide",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:mini|anything,|context…|Build)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-25): new v18 paired anchor (lane va18 T5) exposing the mini-frontend family — G-489 (composer/statusline top-vs-bottom seating) and G-490 (model display-name + provider/menu group suppression; wordmark channel face). Fix scheduled va23 (mini fidelity lane). Tip-only entry: goes stale when the fix lands. Frame evidence: .test-logs/diff-reports/v18a-boot-wide.txt",
+   "g_ref": "G-489/G-490 (va18 T5 anchor)",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-25"
+  },
+  {
+   "id": "v18-v18a-idle-draft-wide",
+   "scenario_pattern": "v18a",
+   "state_pattern": "idle-draft-wide",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:mini)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-25): new v18 paired anchor (lane va18 T5) exposing the mini-frontend family — G-489 (composer/statusline top-vs-bottom seating) and G-490 (model display-name + provider/menu group suppression; wordmark channel face). Fix scheduled va23 (mini fidelity lane). Tip-only entry: goes stale when the fix lands. Frame evidence: .test-logs/diff-reports/v18a-idle-draft-wide.txt",
+   "g_ref": "G-489/G-490 (va18 T5 anchor)",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-25"
+  },
+  {
+   "id": "v18-v18b-boot-narrow",
+   "scenario_pattern": "v18b",
+   "state_pattern": "boot-narrow",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:anything,)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-25): new v18 paired anchor (lane va18 T5) exposing the mini-frontend family — G-489 (composer/statusline top-vs-bottom seating) and G-490 (model display-name + provider/menu group suppression; wordmark channel face). Fix scheduled va23 (mini fidelity lane). Tip-only entry: goes stale when the fix lands. Frame evidence: .test-logs/diff-reports/v18b-boot-narrow.txt",
+   "g_ref": "G-489/G-490 (va18 T5 anchor)",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-25"
+  },
+  {
+   "id": "geom160-home0-timing",
+   "scenario_pattern": "geom160",
+   "state_pattern": "home0",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:Build|Replay|Anthropic|shift\\+tab|__ROOT__|\\/tmp\\/op)"
+    ]
+   },
+   "classification": "framework-diff",
+   "justification": "ADJUDICATED (controller 2026-11-25): mid-capture timing artifact — first export (quiescence []) caught the statusline/footer pre-settle after the G-481 rewrite; targeted re-run of geom160_wide_pair is EXACT at settle (oc-tui .test-logs, lane tag va18-verify, 1/1 PASS 42.9s). Lines: boot paint-order (statusline row) + footer root/spacing normalization asymmetry. Re-open as a real gap only if the shape reproduces at settled quiescence.",
+   "g_ref": "timing capture (G-481 rewrite aftermath)",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-25"
   }
  ]
 }
