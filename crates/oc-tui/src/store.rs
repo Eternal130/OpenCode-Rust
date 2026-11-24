@@ -9396,15 +9396,41 @@ impl Store {
 
     /// G-486 — the rename prompt's confirm (`credential.update`,
     /// dialog-integration.tsx:225-231): a trimmed NON-empty label
-    /// `PATCH`es the credential; the view refetches through the
-    /// completion event.
+    /// `PATCH`es the credential. G-494② — the prompt STAYS OPEN until
+    /// the POST settles (the ref's `.then`/`.catch` chain; the old
+    /// immediate `clear_dialogs()` is gone) — success re-renders the
+    /// accounts view, failure keeps the prompt for a retry.
     pub fn integration_account_rename_submit(&self, credential_id: &str, value: &str) {
         let label = value.trim();
         if label.is_empty() {
             return;
         }
         self.integration_sink.borrow().credential_update(credential_id, label);
-        self.clear_dialogs();
+    }
+
+    /// G-494② — the rename POST's settlement: success re-renders the
+    /// manage-connections view (`manageConnections`,
+    /// dialog-integration.tsx:229-230) — the accounts dialog for the
+    /// credential's OWNING integration replaces the prompt; failure
+    /// leaves the prompt open (the caller toasts).
+    pub fn integration_rename_settled(&self, credential_id: &str, ok: bool) {
+        if !ok {
+            return;
+        }
+        let owner = match self.integration_list() {
+            IntegrationListState::Loaded(rows) => rows
+                .into_iter()
+                .find(|row| row.accounts.iter().any(|account| account.id == credential_id))
+                .map(|row| row.id),
+            _ => None,
+        };
+        if let Some(integration_id) = owner {
+            self.integration_deleting.set(None);
+            self.replace_dialog(
+                DialogKind::IntegrationAccounts { integration_id },
+                DialogSize::Medium,
+            );
+        }
     }
 
     /// The connect flow's terminal event (`connected`,
@@ -13703,6 +13729,21 @@ impl Store {
             "session.updated" | "session.renamed" => {
                 let Some(id) = event.string("sessionID") else { return };
                 let title = event.string("title");
+                // G-494① — the rename echo closes the rename prompt
+                // (the ref's POST success arm `.then(() =>
+                // dialog.clear())`, dialog-session-rename.tsx:24): the
+                // port's confirmation seam is this echo, and only a
+                // rename-PENDING session can carry one.
+                let rename_echo = self.title_pending.get().contains_key(&id)
+                    && self.dialogs.get().last().is_some_and(|entry| {
+                        matches!(
+                            &entry.kind,
+                            DialogKind::SessionRename { session_id } if session_id == &id
+                        )
+                    });
+                if rename_echo {
+                    self.clear_dialogs();
+                }
                 // The rename echo projects the new title locally —
                 // rename-pending releases (`generatingTitles`'s
                 // finally + the projection note, context/data.tsx:42).

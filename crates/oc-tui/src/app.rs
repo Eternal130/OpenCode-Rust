@@ -6218,6 +6218,7 @@ pub enum LoopFetch {
     },
     /// G-486 — the rename's `credential.update` resolved (refetch).
     CredentialUpdated {
+        credential_id: String,
         result: Result<(), String>,
     },
     /// `session.compact` resolved (errors toast).
@@ -7021,7 +7022,7 @@ pub fn spawn_loop_fetcher(
                             )
                             .await
                             .map_err(|error| error.to_string());
-                        let _ = tx.send(LoopFetch::CredentialUpdated { result });
+                        let _ = tx.send(LoopFetch::CredentialUpdated { credential_id, result });
                     });
                 }
                 // -- Lane FINAL: the session actions -----------------
@@ -10719,14 +10720,22 @@ pub async fn run_with_size(
                 }
                 // G-486 — the rename resolved: errors toast, the
                 // accounts list refetches (`manageConnections`).
-                LoopFetch::CredentialUpdated { result } => {
-                    if let Err(error) = result {
+                // G-494② — the ref's success arm RE-RENDERS the
+                // manage-connections list
+                // (`.then(() => manageConnections(...))`,
+                // dialog-integration.tsx:229-230): the rename prompt
+                // stays open until this settlement, then the accounts
+                // view returns (the old `clear_dialogs()` closed
+                // everything).
+                LoopFetch::CredentialUpdated { credential_id, result } => {
+                    if let Err(error) = &result {
                         app.store.toast_show(crate::components::toast::ToastOptions {
-                            message: error,
+                            message: error.clone(),
                             variant: "error",
                             ..crate::components::toast::ToastOptions::info("")
                         });
                     }
+                    app.store.integration_rename_settled(&credential_id, result.is_ok());
                     app.store.integration_sink_list();
                 }
                 // -- Lane FINAL: the session actions' results -------
