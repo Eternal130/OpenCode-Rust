@@ -1657,6 +1657,14 @@ pub struct Store {
     /// expand hit, session.rs's mount geometry; `None` while the
     /// prompt mount is replaced or holds no folded paste).
     prompt_text_hit: std::cell::RefCell<Option<PromptTextHit>>,
+    /// G-468① — the selectable-region table the render pass registers
+    /// (one entry per text-bearing surface: transcript scrollbox,
+    /// renderer console strip, composer textarea). The mouse arm gate
+    /// consults it — ref only selectable renderables can START a
+    /// selection (renderer.ts:3684-3699 `canStartSelection`; the
+    /// frame-level port has no per-renderable hit model, so the render
+    /// pass registers the bounded cell rects instead).
+    selectable_regions: std::cell::RefCell<Vec<SelectableRegion>>,
     /// TUI-3: the compact rail's `⌕` search button hover lift
     /// (session-tabs-rail.tsx:24-36 — the pointer layer sets it).
     rail_search_hovered: Cell<bool>,
@@ -3550,6 +3558,34 @@ pub struct PromptTextHit {
     pub inner: usize,
 }
 
+/// G-468① — one registered selectable surface (the bounded port of
+/// ref's per-renderable `selectable` flag + `shouldStartSelection`
+/// bounds check, Renderable.ts:243 / TextBufferRenderable.ts:26 /
+/// EditBufferRenderable.ts:88: only these surfaces' left presses can
+/// START a selection).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectableRegion {
+    pub rect: HitRect,
+    /// The surface family — the multi-click counter's "same
+    /// renderable" gate (renderer.ts:4981 `renderable.num ===
+    /// last.renderableId`) approximates as "same region kind".
+    pub kind: SelectableRegionKind,
+}
+
+/// The selectable surface families (see [`SelectableRegion`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectableRegionKind {
+    /// The session transcript column (the scrollbox's text
+    /// renderables — `<text>` defaults selectable=true).
+    Transcript,
+    /// The renderer console strip (`renderer._console`).
+    Console,
+    /// The composer textarea (`TextareaRenderable extends
+    /// EditBufferRenderable` — selectable=true, shouldStartSelection
+    /// within its bounds, EditBufferRenderable.ts:510-517).
+    ComposerText,
+}
+
 /// The sidebar's wheel-scroll model (auditA #1): the content-slot
 /// offset plus the last render's geometry — the max offset is
 /// `content_height - viewport` (v2's scrollbar clamp), and the
@@ -4262,6 +4298,7 @@ impl Store {
             terminal_suspend_requested: Cell::new(false),
             prompt_paste_compact: Cell::new(true),
             prompt_text_hit: std::cell::RefCell::new(None),
+            selectable_regions: std::cell::RefCell::new(Vec::new()),
             rail_search_hovered: Cell::new(false),
             rail_handle_hot: Cell::new(false),
             rail_width_spring: std::cell::RefCell::new(None),
@@ -6739,6 +6776,34 @@ impl Store {
     #[must_use]
     pub fn prompt_text_hit(&self) -> Option<PromptTextHit> {
         self.prompt_text_hit.borrow().clone()
+    }
+
+    /// G-468① — reset the selectable-region table (each `render_app`
+    /// pass starts from an empty table; the live route's renderers
+    /// re-add their surfaces).
+    pub fn reset_selectable_regions(&self) {
+        self.selectable_regions.borrow_mut().clear();
+    }
+
+    /// G-468① — register one selectable surface (render-pass side
+    /// effect, like `prompt_text_hit`).
+    pub fn add_selectable_region(&self, kind: SelectableRegionKind, rect: HitRect) {
+        self.selectable_regions.borrow_mut().push(SelectableRegion { rect, kind });
+    }
+
+    /// G-468① — the registered surfaces (clone), plus the region kind
+    /// at one cell when it sits inside any of them (the mouse arm
+    /// gate's `canStartSelection` port).
+    #[must_use]
+    pub fn selectable_region_at(&self, x: usize, y: usize) -> Option<SelectableRegionKind> {
+        self.selectable_regions
+            .borrow()
+            .iter()
+            .find(|region| {
+                let rect = &region.rect;
+                x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
+            })
+            .map(|region| region.kind)
     }
 
     // -- attention (bell) ---------------------------------------------------

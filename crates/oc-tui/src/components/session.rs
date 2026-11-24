@@ -940,6 +940,22 @@ pub fn render_session(
         content_top,
         loading,
     );
+    // G-468① — register the transcript column as a selectable
+    // surface (the scrollbox's text renderables — `<text>` defaults
+    // `selectable=true`, the renderer's start gate renderer.ts:
+    // 3684-3699 requires it; the fullscreen panel takeover hides the
+    // session column, so nothing registers then).
+    if !(session_panel.is_some() && panel_fullscreen) {
+        store.add_selectable_region(
+            crate::store::SelectableRegionKind::Transcript,
+            crate::store::HitRect {
+                x: shift,
+                y: content_top,
+                width: column,
+                height: transcript_height,
+            },
+        );
+    }
     let mut frame = paint_placed_with_fills(&[], &[], size, fill);
     // D4.1a: the strip + the queued dock ride the shared tree (the
     // old (0,0)/(inset+shift, …) paste sites) — their pixels land at
@@ -1815,17 +1831,34 @@ fn composer_mount_frame(
     // rows math as `prompt_caret_screen_cell`; recorded only while a
     // folded paste is on screen. `x` is frame-local (the caller adds
     // inset + shift, like the caret cell).
+    let pad = if width >= 44 { 2 } else { 1 };
+    let inner = width.saturating_sub(1 + pad * 2).max(1);
+    let lines = crate::components::composer::render::layout_draft_lines(&composer.draft, inner);
+    let max_height = (height / 3).max(6);
+    let text_rows = (lines.len().max(1) + 1).min(max_height);
+    // G-468① — the SAME rect registers as a selectable surface
+    // (unconditionally — ref's TextareaRenderable extends
+    // EditBufferRenderable with `selectable=true`, and
+    // `shouldStartSelection` is a plain bounds check,
+    // EditBufferRenderable.ts:88/510-517: a left press inside the
+    // textarea's cell rect can start a selection). `x`/`y` take the
+    // caller's absolute offsets (paste_x + inset-equivalent 1+pad;
+    // the mount docks at `height − prompt_height`).
+    store.add_selectable_region(
+        crate::store::SelectableRegionKind::ComposerText,
+        crate::store::HitRect {
+            x: paste_x + 1 + pad,
+            y: height - prompt_height + popup_rows + 1,
+            width: inner,
+            height: text_rows,
+        },
+    );
     let text_hit = (!composer.draft.pasted.is_empty()).then(|| {
-        let pad = if width >= 44 { 2 } else { 1 };
-        let inner = width.saturating_sub(1 + pad * 2).max(1);
-        let lines = crate::components::composer::render::layout_draft_lines(&composer.draft, inner);
-        let max_height = (height / 3).max(6);
-        let rows = (lines.len().max(1) + 1).min(max_height);
         crate::store::PromptTextHit {
             session_id: session_id.to_owned(),
             x: 1 + pad,
             y: height - prompt_height + popup_rows + 1,
-            rows,
+            rows: text_rows,
             inner,
         }
     });

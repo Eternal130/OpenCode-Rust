@@ -90,6 +90,10 @@ pub struct App {
     /// the last left press's (time, cell) and the running count.
     selection_last_press: Option<(u64, usize, usize)>,
     selection_click_count: u32,
+    /// G-468① — the last COUNTED press's selectable surface (the
+    /// multi-click counter's "same renderable" gate,
+    /// renderer.ts:4981 `renderable.num === last.renderableId`).
+    selection_last_region: Option<crate::store::SelectableRegionKind>,
     /// TUI-16 — the last drawn frame (the selection's text source).
     pub last_frame: Option<crate::render::Frame>,
     /// TUI-16 — `terminal.copy` (select/manual).
@@ -210,6 +214,7 @@ impl App {
             screen_selection: crate::selection::ScreenSelection::default(),
             selection_last_press: None,
             selection_click_count: 0,
+            selection_last_region: None,
             last_frame: None,
             copy_behavior: crate::config::CopyBehavior::default(),
             keymap: Keymap::new(),
@@ -518,12 +523,19 @@ impl App {
     /// rapid presses within 500 ms increment the count — 1 = cell, 2 =
     /// word (double-click), 3 = line (triple-click), and the ref
     /// CLAMPS the count at `Math.min(last.count + 1, 3)` (the fourth
-    /// press stays line). `continued` needs the same renderable +
-    /// `max(|dx|, |dy|) <= 1` — the port has no renderable model, so
-    /// the chebyshev<=1 tolerance applies to screen cells (a bounded
-    /// approximation: the ref only counts presses that STARTED a
-    /// selection on a selectable renderable; every press arms here).
-    fn next_selection_click(&mut self, col: usize, row: usize) -> u32 {
+    /// press stays line). G-468①: `nextClickBehavior` runs ONLY for
+    /// presses that STARTED a selection (renderer.ts:3699-3706 calls
+    /// it inside the `canStartSelection` branch), and `continued`
+    /// needs the same renderable — the port gates the count on the
+    /// same selectable surface (the region kind) and RESETS it on
+    /// every non-arming press, so chrome presses never feed the
+    /// counter. `max(|dx|, |dy|) <= 1` applies to screen cells.
+    fn next_selection_click(
+        &mut self,
+        col: usize,
+        row: usize,
+        region: crate::store::SelectableRegionKind,
+    ) -> u32 {
         // G-457 rework: read the STORE clock — `self.clock`
         // (ManualClock) only advances in unit tests; frozen at 0 in
         // the live loop it classified EVERY same-cell press as a
@@ -532,12 +544,35 @@ impl App {
         // is the live path's only advancing time base.
         let now_ms = self.store.clock();
         let rapid = self.selection_last_press.is_some_and(|(at, x, y)| {
-            now_ms.saturating_sub(at) <= 500 && x.abs_diff(col).max(y.abs_diff(row)) <= 1
+            now_ms.saturating_sub(at) <= 500
+                && x.abs_diff(col).max(y.abs_diff(row)) <= 1
+                && self.selection_last_region == Some(region)
         });
         self.selection_click_count =
             if rapid { (self.selection_click_count + 1).min(3) } else { 1 };
         self.selection_last_press = Some((now_ms, col, row));
+        self.selection_last_region = Some(region);
         self.selection_click_count
+    }
+
+    /// G-468① — whether one cell can START a selection (the bounded
+    /// port of the renderer's start gate, renderer.ts:3684-3699
+    /// `canStartSelection`: the hit renderable must be `selectable`
+    /// with `shouldStartSelection` true — Renderable.ts:243 defaults
+    /// `selectable=false`, only the text-bearing renderables opt in
+    /// (TextBufferRenderable.ts:26 / EditBufferRenderable.ts:88 /
+    /// ASCIIFont.ts:30 / EmbeddedTerminal.ts:43). The frame-level
+    /// port has no per-renderable hit model, so the render pass
+    /// registers the text-bearing cell rects (store ::
+    /// selectable_regions: transcript, console, composer textarea);
+    /// a press outside them arms nothing. A modal (dialog stack /
+    /// live permission) owns the screen — its scrim covers the text,
+    /// so nothing is selectable while it shows.
+    fn selection_start_region(&self, col: usize, row: usize) -> Option<crate::store::SelectableRegionKind> {
+        if !self.store.dialogs().is_empty() || self.permission_live() {
+            return None;
+        }
+        self.store.selectable_region_at(col, row)
     }
 
     /// One terminal mouse event (beta.8 bugs 3 + 4). v2's tab strip
@@ -1432,11 +1467,33 @@ impl App {
                         return;
                     }
                 } else {
-                    // TUI-16 — every left press arms a potential screen
-                    // selection (the renderer's cell model; the release
-                    // only resolves one when the pointer crossed cells).
-                    let click_count = self.next_selection_click(col, row);
-                    self.screen_selection.press(col, row, click_count);
+                    // TUI-16 / G-468① — a left press arms a potential
+                    // screen selection ONLY over a selectable surface
+                    // (the render pass's region table — the bounded
+                    // port of renderer.ts:3684-3699's `canStartSelection`
+                    // gate; chrome text renders `selectable={false}`).
+                    match self.selection_start_region(col, row) {
+                        Some(region) => {
+                            let click_count = self.next_selection_click(col, row, region);
+                            self.screen_selection.press(col, row, click_count);
+                        }
+                        None => {
+                            // renderer.ts:3807-3814 — a non-ctrl left
+                            // down that did NOT start a selection clears
+                            // the kept selection at the dispatch tail
+                            // (`clearSelection`), and the multi-click
+                            // history dies with it (nextClickBehavior
+                            // only ever counts arming presses,
+                            // renderer.ts:3699-3706).
+                            self.selection_last_press = None;
+                            self.selection_click_count = 0;
+                            self.selection_last_region = None;
+                            if self.screen_selection.is_active() {
+                                self.screen_selection.clear();
+                                self.store.request_redraw();
+                            }
+                        }
+                    }
                 }
                 // TUI-3 — the rail's handle press arms the resize
                 // (`onMouseDown`, pane-resize.ts:82-97); the boundary
@@ -16677,4 +16734,42 @@ fn multiclick_tolerance_and_cap() {
     // Distance 2 restarts.
     press(&mut app, 13, 4);
     assert_eq!(app.selection_click_count, 1, "chebyshev 2 restarts the count");
+}
+
+/// G-468① — the selectable-scope gate (renderer.ts:3684-3699
+/// `canStartSelection` + Renderable.ts:243's `selectable=false`
+/// default): only the registered text-bearing surfaces (transcript /
+/// console / composer textarea) can START a selection; a chrome press
+/// (the strip row / the composer's border) arms NOTHING, clears a
+/// kept selection at the dispatch tail (renderer.ts:3807-3814) and
+/// resets the multi-click counter (nextClickBehavior only counts
+/// arming presses, renderer.ts:3699-3706).
+#[cfg(test)]
+#[test]
+fn chrome_press_outside_selectable_regions_arms_nothing() {
+    use crate::input_term::{MouseButton, MouseEventKind};
+    let mut app = selection_app();
+    // A transcript drag arms and keeps (copy-on-select retains).
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 2, 3));
+    app.mouse_event(&mouse(MouseEventKind::Drag(MouseButton::Left), 20, 3));
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 20, 3));
+    assert!(app.screen_selection.is_active(), "the transcript drag kept");
+    assert_eq!(app.selection_click_count, 1);
+    // A press on the STRIP row (row 0 — chrome, non-selectable): no
+    // arm, the kept selection clears, the counter resets.
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 10, 0));
+    assert!(
+        !app.screen_selection.is_active(),
+        "the chrome press cleared the kept selection (renderer.ts:3807-3814)"
+    );
+    assert_eq!(app.selection_click_count, 0, "the chrome press reset the count");
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 10, 0));
+    assert!(app.screen_selection.rect().is_none(), "nothing armed");
+    // The composer's left BORDER cell (col 0 of the mount — the ┃
+    // rail is non-selectable chrome) arms nothing either.
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 0, 22));
+    assert!(app.screen_selection.rect().is_none(), "the border press armed nothing");
+    // The transcript is still selectable after the resets.
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 2, 3));
+    assert_eq!(app.selection_click_count, 1, "a fresh transcript press restarts at 1");
 }
