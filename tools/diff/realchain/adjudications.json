@@ -315,6 +315,22 @@
     ]
    },
    "justification": "ADJUDICATED (controller 2026-11-24): normalization-coverage gap, not a render divergence — the ref-side truncated sandbox path (t9w1…-geom160ref) is not re-expanded by ellipsis-path-reexpand (its ellipsis pattern misses this shape) while the rust side normalizes to __ROOT__. Harness normalizer-coverage candidate; re-triage if the raw path ever leaks into a settled export."
+  },
+  {
+   "id": "geom160-home-footer-midstream",
+   "scenario_pattern": "geom160",
+   "state_pattern": "home",
+   "shape": {
+    "kind": "regex",
+    "rust_contains": [
+     "Build · claude-opus-4-7 Replay Anthropic"
+    ]
+   },
+   "classification": "framework-diff",
+   "justification": "ADJUDICATED (controller 2026-11-24): same mid-capture footer paint-ordering family as geom160-home0-footer-midstream (sibling state) — under 5-crate load the rust footer model/replay row paints on the composer border row during capture; the isolated rerun at the SAME tree (cd699c8f) exports EXACT (43.290s, report ts 1795508690). No settled-state face. Re-triage if a settled-state divergence appears.",
+   "g_ref": "va14 closing-gate export 2026-11-24",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
   }
  ]
 }
