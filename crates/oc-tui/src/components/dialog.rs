@@ -1419,6 +1419,7 @@ fn paint_preview_image(
 /// session skeletons) with the dialog overlay composited on top. This
 /// is the frame source the keypress-replay harness compares.
 #[must_use]
+#[allow(clippy::too_many_lines)] // one arm per route + the overlays family's mounts (see below)
 pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u16)) -> Frame {
     let styles = theme.styles();
     let width = usize::from(size.0);

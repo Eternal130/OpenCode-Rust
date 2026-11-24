@@ -281,6 +281,16 @@ struct Shared {
     long_transcript: bool,
 }
 
+/// va15 T4: the open-stream count's drop guard (every exit path from
+/// the /api/event broadcast loop decrements — the `lose_now` snapshot
+/// stays honest).
+struct StreamGuard<'a>(&'a AtomicUsize);
+impl Drop for StreamGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// One SSE frame (the wire's JSON-in-string double encoding).
 fn sse_frame(id: &str, type_: &str, data_json: &str) -> String {
     let event = format!("{{\"id\":\"{id}\",\"type\":\"{type_}\",\"data\":{data_json}}}");
@@ -488,12 +498,6 @@ fn handle(mut socket: std::net::TcpStream, shared: &Shared) {
         // Broadcast loop: write whatever the scripted turn queued, then
         // idle-poll for more (read timeouts are the poll tick — the
         // client's pings drain here; a closed socket ends the loop).
-        struct StreamGuard<'a>(&'a AtomicUsize);
-        impl Drop for StreamGuard<'_> {
-            fn drop(&mut self) {
-                self.0.fetch_sub(1, Ordering::SeqCst);
-            }
-        }
         let _guard = StreamGuard(shared.open_streams.as_ref());
         shared.open_streams.fetch_add(1, Ordering::SeqCst);
         loop {

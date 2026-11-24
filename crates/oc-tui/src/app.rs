@@ -576,7 +576,7 @@ impl App {
     /// ASCIIFont.ts:30 / EmbeddedTerminal.ts:43). The frame-level
     /// port has no per-renderable hit model, so the render pass
     /// registers the text-bearing cell rects (store ::
-    /// selectable_regions: transcript, console, composer textarea);
+    /// `selectable_regions`: transcript, console, composer textarea);
     /// a press outside them arms nothing. A modal (dialog stack /
     /// live permission) owns the screen — its scrim covers the text,
     /// so nothing is selectable while it shows.
@@ -1045,7 +1045,7 @@ impl App {
                         // (session-tabs.tsx:1505-1506). The arm only
                         // reaches the match for surfaces with their own
                         // handlers (✕ / +).
-                        StripHit::Tab(_) => {}
+                        StripHit::Tab(_) | StripHit::Outside => {}
                         StripHit::Close(id) => {
                             if id == crate::components::session_tabs::NEW_SESSION_TAB_ID {
                                 // `tabs.close()` on the promoted slot
@@ -1069,7 +1069,6 @@ impl App {
                             }
                         }
                         StripHit::Add => self.store.navigate(Route::Home),
-                        StripHit::Outside => {}
                     }
                     // opentui re-dispatches hover from the LAST
                     // pointer position whenever a re-layout moves
@@ -1540,26 +1539,23 @@ impl App {
                     // (the render pass's region table — the bounded
                     // port of renderer.ts:3684-3699's `canStartSelection`
                     // gate; chrome text renders `selectable={false}`).
-                    match self.selection_start_region(col, row) {
-                        Some(region) => {
-                            let click_count = self.next_selection_click(col, row, region);
-                            self.screen_selection.press(col, row, click_count);
-                        }
-                        None => {
-                            // renderer.ts:3807-3814 — a non-ctrl left
-                            // down that did NOT start a selection clears
-                            // the kept selection at the dispatch tail
-                            // (`clearSelection`), and the multi-click
-                            // history dies with it (nextClickBehavior
-                            // only ever counts arming presses,
-                            // renderer.ts:3699-3706).
-                            self.selection_last_press = None;
-                            self.selection_click_count = 0;
-                            self.selection_last_region = None;
-                            if self.screen_selection.is_active() {
-                                self.screen_selection.clear();
-                                self.store.request_redraw();
-                            }
+                    if let Some(region) = self.selection_start_region(col, row) {
+                        let click_count = self.next_selection_click(col, row, region);
+                        self.screen_selection.press(col, row, click_count);
+                    } else {
+                        // renderer.ts:3807-3814 — a non-ctrl left
+                        // down that did NOT start a selection clears
+                        // the kept selection at the dispatch tail
+                        // (`clearSelection`), and the multi-click
+                        // history dies with it (nextClickBehavior
+                        // only ever counts arming presses,
+                        // renderer.ts:3699-3706).
+                        self.selection_last_press = None;
+                        self.selection_click_count = 0;
+                        self.selection_last_region = None;
+                        if self.screen_selection.is_active() {
+                            self.screen_selection.clear();
+                            self.store.request_redraw();
                         }
                     }
                 }
