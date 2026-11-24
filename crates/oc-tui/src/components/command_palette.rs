@@ -2982,8 +2982,9 @@ impl CommandDispatcher for StoreDispatcher {
             // G-484 — the model dialog's footer action
             // (`model.dialog.provider`, dialog-model.tsx:144-156):
             // the enter-triggered action replaces the dialog with
-            // the integrations list.
-            "model.dialog.provider" => {
+            // the integrations list (same surface as
+            // `provider.connect`).
+            "model.dialog.provider" | "provider.connect" => {
                 store.integration_dialog_open();
                 Dispatch::Handled
             }
@@ -3150,14 +3151,8 @@ impl CommandDispatcher for StoreDispatcher {
                 Dispatch::Handled
             }
             // -- Lane FINAL: the stub family's real surfaces -----------
-            // `provider.connect` (app.tsx:946-958): DialogIntegration
-            // over the BE-3 host — the list → method → key/code entry
-            // states; on connect the models dialog follows in v2's
-            // onConnected, the port refetches the lists + toasts.
-            "provider.connect" => {
-                store.integration_dialog_open();
-                Dispatch::Handled
-            }
+            // (`provider.connect` shares the `model.dialog.provider`
+            // arm above — both open DialogIntegration.)
             // `open.menu` (app.tsx:763-774): DialogOpen (dialog-open.
             // tsx) — the Sessions recents + the Projects sections in
             // one large select; right-arrow on a project row opens

@@ -165,7 +165,7 @@ pub fn notice_file_path() -> std::path::PathBuf {
 }
 
 /// The dialog's body rows for one state: the STATUS HEADER
-/// (dialog-update.tsx:90-97 — "Updating OpenCode" while installing,
+/// (`dialog-update.tsx` lines 90-97 — "Updating `OpenCode`" while installing,
 /// "Update available" for available/failed, else "Update") + the
 /// full-sentence body (:106-136).
 #[must_use]

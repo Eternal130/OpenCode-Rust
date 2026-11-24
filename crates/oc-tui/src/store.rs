@@ -9396,7 +9396,7 @@ impl Store {
 
     /// G-486 — the rename prompt's confirm (`credential.update`,
     /// dialog-integration.tsx:225-231): a trimmed NON-empty label
-    /// PATCHes the credential; the view refetches through the
+    /// `PATCH`es the credential; the view refetches through the
     /// completion event.
     pub fn integration_account_rename_submit(&self, credential_id: &str, value: &str) {
         let label = value.trim();

@@ -2050,40 +2050,44 @@ impl App {
         self.press_inner(spec);
     }
 
+    /// G-478 — the crash fallback's key handler (the ref's
+    /// `useKeyboard`, error-component.tsx:69-101): q/ctrl+c (and the
+    /// painted escape hint) exit, `c` copies the issue report (:99),
+    /// `r` restarts (`props.reset`, :100).
+    fn error_mode_key(&mut self, spec: &str) {
+        match spec {
+            "q" | "escape" | "ctrl+c" => self.exit_requested = true,
+            "c" => {
+                // `copyReport` (:48-53): the pre-filled issue URL
+                // rides the clipboard; the outcome drives the Copy
+                // label + footer on the next repaint.
+                let url = crate::components::update::build_issue_report(
+                    self.error_mode.as_deref().unwrap_or("render panic"),
+                    self.error_stack.as_deref().unwrap_or("No stack trace available."),
+                    &self.version,
+                );
+                self.error_copy_state = if self.store.clipboard_write(&url).is_ok() {
+                    crate::components::update::CrashCopyState::Copied
+                } else {
+                    crate::components::update::CrashCopyState::Failed
+                };
+            }
+            "r" => {
+                // `props.reset` — the ErrorBoundary reset: leave the
+                // crash state and resume the normal render.
+                self.error_mode = None;
+                self.error_stack = None;
+                self.error_copy_state = crate::components::update::CrashCopyState::Idle;
+            }
+            _ => {}
+        }
+    }
+
     fn press_inner(&mut self, spec: &str) {
         // ErrorComponent mode (auditB #9): a caught render panic
-        // swapped the frame for the crash fallback. G-478 — the
-        // action keys are wired to the ref's keyboard handler
-        // (error-component.tsx:69-101): q/ctrl+c (and the painted
-        // escape hint) exit, c copies the issue report (the `c`
-        // binding, :99), r restarts (`props.reset`, :100).
+        // swapped the frame for the crash fallback (G-478's wiring).
         if self.error_mode.is_some() {
-            match spec {
-                "q" | "escape" | "ctrl+c" => self.exit_requested = true,
-                "c" => {
-                    // `copyReport` (:48-53): the pre-filled issue URL
-                    // rides the clipboard; the outcome drives the
-                    // Copy label + footer on the next repaint.
-                    let url = crate::components::update::build_issue_report(
-                        self.error_mode.as_deref().unwrap_or("render panic"),
-                        self.error_stack.as_deref().unwrap_or("No stack trace available."),
-                        &self.version,
-                    );
-                    self.error_copy_state = if self.store.clipboard_write(&url).is_ok() {
-                        crate::components::update::CrashCopyState::Copied
-                    } else {
-                        crate::components::update::CrashCopyState::Failed
-                    };
-                }
-                "r" => {
-                    // `props.reset` — the ErrorBoundary reset: leave
-                    // the crash state and resume the normal render.
-                    self.error_mode = None;
-                    self.error_stack = None;
-                    self.error_copy_state = crate::components::update::CrashCopyState::Idle;
-                }
-                _ => {}
-            }
+            self.error_mode_key(spec);
             return;
         }
         // TUI-29 — the console's `copy-selection` binding
