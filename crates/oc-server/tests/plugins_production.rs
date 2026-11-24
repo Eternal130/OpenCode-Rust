@@ -278,6 +278,14 @@ async fn flagship_boots_through_the_real_server_and_tui_app_path() {
     )
     .expect("the TUI boots the flagship");
     assert!(booted.ready, "host ready: {:?}", booted.host.start_error());
+    // G-471 — `ready` settles at the initialize handshake; the
+    // flagship's command registrations land with the background load
+    // pass, so the palette read below waits for the pass to settle.
+    assert!(
+        booted.host.wait_ready(std::time::Duration::from_secs(60)),
+        "host load pass: {:?}",
+        booted.host.start_error()
+    );
 
     let store = oc_tui::store::Store::new(oc_tui::reactive::Runtime::new());
     let runtime = oc_tui::plugin_boot::TuiPluginRuntime::new(booted);
