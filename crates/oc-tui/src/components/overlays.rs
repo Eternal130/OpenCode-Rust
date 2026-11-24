@@ -397,7 +397,8 @@ mod tests {
             &styles,
             80,
         );
-        // The toast (top-right rows 1..5, mounted last).
+        // The toast (top-right, mounted last; the untitled face spans
+        // pad + message/affordance + pad rows).
         let toast = crate::components::toast::ToastOptions::info("Order fixture");
         let footer = crate::components::footer::theme::FooterTheme::from_resolved(
             &crate::theme::ThemeState::v2_dark().resolved.tokens,
@@ -418,11 +419,14 @@ mod tests {
         // The toast (mounted LAST — the family's highest seat below
         // the state overlays) lands over the console's blanked rows:
         // the message at the panel's second row, the rails at both
-        // panel rows keeping the console blank's DEFAULT background
+        // panel edges keeping the console blank's DEFAULT background
         // (nothing hand-painted under them).
         assert!(grid[2].contains("Order fixture"), "toast message: {:?}", grid[2]);
-        let rail_row: String = grid[1].chars().skip(59).take(1).collect();
+        let layout = crate::components::toast::toast_layout(&toast, 0, 80);
+        let right = layout.left + layout.panel_width - 1;
+        let rail_row: String = grid[1].chars().skip(layout.left).take(1).collect();
         assert!(rail_row.starts_with('┃'), "toast rail over the console blank: {rail_row:?}");
-        assert!(grid[2].contains('┃'), "toast second rail row: {:?}", grid[2]);
+        let rail_row: String = grid[2].chars().skip(right).take(1).collect();
+        assert!(rail_row.starts_with('┃'), "toast second rail row: {rail_row:?}");
     }
 }
