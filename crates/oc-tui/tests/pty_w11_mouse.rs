@@ -326,7 +326,13 @@ fn mouse_scenario(driver: &mut HarnessHandle) -> Result<(), String> {
         // actually moved the screen. Assertion unchanged: the next
         // press MUST clear the kept highlight.
         let pre_press_digest = driver.grid_digest();
-        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        // 20s deadline (va16 T3, third sighting): post-va15-merge TRY1 hit
+        // 11.5s against the old 8s deadline under serialized external load
+        // — pure load latency, retry/serialized passes green (watchlist
+        // entry, GAPS 2.2#4 w11 press-clear note). Same widening budget
+        // precedent as va10's RL-T5 drive_with_budget 60s. Assertion
+        // unchanged: the next press MUST clear the kept highlight.
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
         let cleared = loop {
             if driver.grid_digest() != pre_press_digest {
                 let g = driver.grid_now();
