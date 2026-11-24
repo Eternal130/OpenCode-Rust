@@ -315,20 +315,33 @@ fn mouse_scenario(driver: &mut HarnessHandle) -> Result<(), String> {
         // fresh transcript cell, seconds later — no multi-click
         // window), then release — the highlight drops with the press.
         driver.sgr_press(u16::try_from(x0).unwrap_or(0), u16::try_from(y0).unwrap_or(0));
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        // va15 T3 hardening — the clear wait is EVENTIZED (two load
+        // flakes pinned this exact window: va12's gate TRY1, va14's
+        // closure TRY2 — "the kept highlight never cleared on the
+        // next press"; isolated runs always green): the O(1) screen
+        // digest (captured BEFORE the press) gates the full-grid
+        // materialization — va10's lesson was that full-grid clone
+        // polling starves the render thread under load, so the
+        // expensive Grid check runs only after the press's repaint
+        // actually moved the screen. Assertion unchanged: the next
+        // press MUST clear the kept highlight.
+        let pre_press_digest = driver.grid_digest();
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
         let cleared = loop {
-            let g = driver.grid_now();
-            let still = inside_cells
-                .iter()
-                .filter(|&&(x, y)| style_at(&g, x, y) != style_at(&baseline, x, y))
-                .count();
-            if still == 0 {
-                break true;
+            if driver.grid_digest() != pre_press_digest {
+                let g = driver.grid_now();
+                let still = inside_cells
+                    .iter()
+                    .filter(|&&(x, y)| style_at(&g, x, y) != style_at(&baseline, x, y))
+                    .count();
+                if still == 0 {
+                    break true;
+                }
             }
             if std::time::Instant::now() > deadline {
                 break false;
             }
-            std::thread::sleep(Duration::from_millis(50));
+            std::thread::sleep(Duration::from_millis(10));
         };
         if !cleared {
             return Err("the kept highlight never cleared on the next press".to_owned());
