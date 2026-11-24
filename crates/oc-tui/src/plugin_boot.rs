@@ -62,6 +62,15 @@ use crate::store::{
 /// in ~2-5 s).
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The per-spec budget for one boot auto-install (G-313 ref parity:
+/// the ref's reconcile awaits `Npm.add` with NO timeout — context.tsx
+/// :298-302/657-698 → npm.ts:344-349; an unbounded stalled git clone
+/// would hang boot forever). 120s bounds a cold GitHub clone + bun
+/// install (the observed superpowers install settles well under it)
+/// while still leaving the boot future responsive to its own
+/// `READY_TIMEOUT` for the registration pass that follows.
+const BOOT_INSTALL_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// The bound on one agent.list fetch before the host boot (the seed's
 /// native agent table).
 const SEED_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -328,7 +337,19 @@ impl TuiPluginRuntime {
         if !ops.iter().any(|op| matches!(op, PluginOp::Add { .. })) {
             return None;
         }
-        let resolution = oc_plugin_host::resolve(&ops, None);
+        // G-313 (overturned — ref parity): every `not installed`
+        // package spec gets ONE auto-install attempt at boot (the ref
+        // config entries carry `install: true` and reconcile BLOCKS on
+        // `Npm.add`; here the install legs run inside this same
+        // boot future — already on `spawn_blocking`, the UI never
+        // freezes — and the plugin only counts as booted once the
+        // install + re-resolve landed, matching the ref's "installed
+        // before activation" semantics).
+        let install_options = oc_plugin_host::InstallOptions {
+            timeout: BOOT_INSTALL_TIMEOUT,
+            ..oc_plugin_host::InstallOptions::default()
+        };
+        let resolution = oc_plugin_host::resolve_with_boot_install(&ops, None, &install_options);
         for (target, error) in &resolution.failures {
             crate::keymap::log_skip(&format!("plugin {target}: {error}"));
         }
