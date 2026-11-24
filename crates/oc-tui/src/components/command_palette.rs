@@ -2979,6 +2979,14 @@ impl CommandDispatcher for StoreDispatcher {
                 }
                 Dispatch::Handled
             }
+            // G-484 — the model dialog's footer action
+            // (`model.dialog.provider`, dialog-model.tsx:144-156):
+            // the enter-triggered action replaces the dialog with
+            // the integrations list.
+            "model.dialog.provider" => {
+                store.integration_dialog_open();
+                Dispatch::Handled
+            }
             "theme.switch" => {
                 store.replace_dialog(DialogKind::ThemeList, DialogSize::Medium);
                 Dispatch::Handled

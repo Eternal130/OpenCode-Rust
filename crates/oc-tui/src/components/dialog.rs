@@ -890,11 +890,25 @@ pub fn handle_dialog_key(
                 // G-484 — ref `submit()` (dialog-select.tsx:421-432):
                 // a FOCUSED footer action wins over the option submit
                 // — `trigger(actionItems()[index])` runs the action's
-                // command (through the dispatcher, the
-                // `CommandSubmitted` seam).
+                // own semantics. The port re-enters the dialog key
+                // layer with the action's binding stroke (the label
+                // carries the keymap default binding), so the
+                // pin/delete/rename wiring answers exactly as the
+                // chord would; an action with no dialog-layer handler
+                // falls back to its command id through the dispatcher
+                // (the `CommandSubmitted` seam).
                 if let Some(action) =
                     state.focused_action.and_then(|index| props.actions.get(index))
                 {
+                    if let Some(bind) = crate::keymap::KeyStroke::parse(&action.label) {
+                        store.update_dialog(|top| top.select.focused_action = None);
+                        return match handle_dialog_key(store, keymap, clock, bind, terminal) {
+                            DialogKeyOutcome::Unhandled => {
+                                DialogKeyOutcome::CommandSubmitted(action.command.to_owned())
+                            }
+                            outcome => outcome,
+                        };
+                    }
                     return DialogKeyOutcome::CommandSubmitted(action.command.to_owned());
                 }
                 return match state.submit(&props) {
@@ -2382,7 +2396,9 @@ mod tests {
             store.top_dialog().unwrap().select.focused_action.is_some(),
             "tab focused a footer action"
         );
-        // enter → the ACTION's command, not the row's navigation.
+        // enter → the ACTION fires with its own semantics (the ctrl+d
+        // two-press ARM: the row's title flips to the confirm text),
+        // not the row's navigation submit.
         let outcome = handle_dialog_key(
             &store,
             &mut keymap,
@@ -2390,10 +2406,18 @@ mod tests {
             crate::keymap::KeyStroke::parse("return").expect("return"),
             (100, 30),
         );
+        assert_eq!(outcome, DialogKeyOutcome::Consumed);
         assert_eq!(
-            outcome,
-            DialogKeyOutcome::CommandSubmitted("session.delete".to_owned()),
-            "the focused action's command rides the submit (tabs enabled hides the pin action — the delete action is first)"
+            store.session_delete_armed().as_deref(),
+            Some("s_rn"),
+            "the focused delete action armed the cursor row (dialog-session-list.tsx:254-262)"
+        );
+        assert!(
+            matches!(
+                store.top_dialog().map(|entry| entry.kind),
+                Some(DialogKind::ServerList { .. })
+            ),
+            "the dialog stays open like the ref's onTrigger"
         );
     }
 
