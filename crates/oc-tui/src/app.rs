@@ -142,6 +142,16 @@ pub struct App {
     /// crossed a slot boundary (`didDrag` — the release persists the
     /// move and SUPPRESSES the click-select, :1505-1514).
     strip_drag: Option<(String, bool)>,
+    /// G-468② — the rail `⌕` search row's press arm
+    /// (session-tabs-rail.tsx:38-48: `pressed` set on the row's left
+    /// mousedown, `search()` only on a release that finds it set).
+    rail_search_pressed: bool,
+    /// G-468② — the dialog backdrop's one-shot swallow
+    /// (ui/dialog.tsx:35-44: the root box's mousedown sets
+    /// `dismiss = !!renderer.getSelection()`; the mouseup skips the
+    /// close once when it armed — a press that started over a live
+    /// selection never dismisses the dialog it released over).
+    dialog_backdrop_dismiss: bool,
     /// TUI-3 — the rail's resize interaction (`createPaneResize`,
     /// ui/pane-resize.ts): `Some(moved)` while a handle press holds
     /// the drag (`moved` once the pointer crossed cells), else None.
@@ -228,6 +238,8 @@ impl App {
             form_replies: Vec::new(),
             form_cancels: Vec::new(),
             strip_drag: None,
+            rail_search_pressed: false,
+            dialog_backdrop_dismiss: false,
             rail_resizing: None,
             rail_boundary_click: None,
             pane_resizing: None,
@@ -832,7 +844,16 @@ impl App {
                         self.submit_dialog_option(index);
                     } else if let Some((x, y, width, height)) = self.store.dialog_frame_rect() {
                         if col < x || row < y || col >= x + width || row >= y + height {
-                            self.store.close_dialog();
+                            // G-468② — the backdrop's one-shot swallow
+                            // (ui/dialog.tsx:35-44): the root box's
+                            // mousedown armed `dismiss` while a selection
+                            // was live; this mouseup skips the close (the
+                            // next one closes — `dismiss` resets).
+                            if self.dialog_backdrop_dismiss {
+                                self.dialog_backdrop_dismiss = false;
+                            } else {
+                                self.store.close_dialog();
+                            }
                         }
                     }
                     self.store.request_redraw();
@@ -988,7 +1009,7 @@ impl App {
                     if drag.is_some() {
                         let preview = self.store.tab_drag_preview();
                         self.store.set_tab_drag_preview(None);
-                        if let (Some((source, _)), Some((_, index))) = (drag, preview) {
+                        if let (Some((source, _)), Some((_, index))) = (drag.clone(), preview) {
                             self.store.move_tab(&source, index);
                             // `release()`: the moved tab selects (the
                             // home pseudo-tab never selects).
@@ -999,15 +1020,28 @@ impl App {
                             return;
                         }
                     }
-                    match hit {
-                        StripHit::Tab(id) => {
-                            // The home pseudo-tab IS the home route —
-                            // selecting it is a stay-put (`NEW_SESSION_TAB`
-                            // has no session to route to).
-                            if id != crate::components::session_tabs::NEW_SESSION_TAB_ID {
-                                self.store.select_tab(&id);
-                            }
+                    // G-468② — `release()`'s `dragging()` guard
+                    // (session-tabs.tsx:1504-1514): the click-select
+                    // fires ONLY when THIS strip press armed a tab,
+                    // and it selects the PRESS-TIME tab (`source` —
+                    // the capture's synthetic up lands on the pressed
+                    // tab, never the release-time hit). A release with
+                    // no strip press selects nothing.
+                    if let Some((source, _)) = drag {
+                        if source != crate::components::session_tabs::NEW_SESSION_TAB_ID {
+                            self.store.select_tab(&source);
                         }
+                        self.refresh_strip_hover(width);
+                        return;
+                    }
+                    match hit {
+                        // G-468② — the `dragging()` guard consumed the
+                        // armed-tab select above; a bare release (no
+                        // strip press) selects nothing
+                        // (session-tabs.tsx:1505-1506). The arm only
+                        // reaches the match for surfaces with their own
+                        // handlers (✕ / +).
+                        StripHit::Tab(_) => {}
                         StripHit::Close(id) => {
                             if id == crate::components::session_tabs::NEW_SESSION_TAB_ID {
                                 // `tabs.close()` on the promoted slot
@@ -1453,6 +1487,36 @@ impl App {
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
+                // G-468② — the dialog backdrop's dismiss capture
+                // (ui/dialog.tsx:35-38): the root box's mousedown arms
+                // `dismiss` while a selection is live; the mouseup then
+                // swallows one close. Runs BEFORE the selection state
+                // changes (the tail clear below).
+                if !self.store.dialogs().is_empty() && self.screen_selection.is_active() {
+                    self.dialog_backdrop_dismiss = true;
+                }
+                // G-468② — the rail `⌕` search row's press arm
+                // (session-tabs-rail.tsx:38-40: the row's own
+                // `onMouseDown` sets `pressed` for a left press).
+                if rail_live
+                    && rail_width.is_some_and(|rail| {
+                        matches!(
+                            crate::components::session_tabs_rail::rail_hit(
+                                &self.rail_views(),
+                                &crate::components::session_tabs_rail::RailGeometry::new(
+                                    self.store.strip_tabs_ordered().len(),
+                                    rail,
+                                ),
+                                col,
+                                row,
+                                self.home_new_tab(),
+                            ),
+                            crate::components::session_tabs_rail::RailHit::Search
+                        )
+                    })
+                {
+                    self.rail_search_pressed = true;
+                }
                 // T1 (renderer.ts:3734-3740) — a ctrl+left press over
                 // an EXISTING selection extends it and the press is
                 // CONSUMED (nothing below sees it: no rail/pane
@@ -1591,6 +1655,9 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                // G-468② — the rail search row's `onMouseDragEnd`
+                // clears the press arm (session-tabs-rail.tsx:47).
+                self.rail_search_pressed = false;
                 // TUI-16 — the drag extends the screen selection
                 // (unless a UI drag — the rail resize or the tab
                 // reorder — owns the pointer).
@@ -3149,15 +3216,21 @@ impl App {
                 self.store.request_redraw();
             }
             crate::components::session_tabs_rail::RailHit::Search => {
-                // `tabs.search ? tabs.search() : keymap.dispatch
+                // G-468② — the `pressed` guard
+                // (session-tabs-rail.tsx:38-48): `search()` fires only
+                // when the row's own left mousedown armed `pressed`
+                // (`tabs.search ? tabs.search() : keymap.dispatch
                 // ("session.list")` — the controller has no search
-                // surface, so the session list mounts
-                // (session-tabs-rail.tsx:26).
-                let dispatch = self.dispatcher.dispatch(&self.store, "session.list", None);
-                if let Dispatch::ServerPending(reason) = dispatch {
-                    let _ = reason;
+                // surface, so the session list mounts,
+                // session-tabs-rail.tsx:26).
+                if self.rail_search_pressed {
+                    self.rail_search_pressed = false;
+                    let dispatch = self.dispatcher.dispatch(&self.store, "session.list", None);
+                    if let Dispatch::ServerPending(reason) = dispatch {
+                        let _ = reason;
+                    }
+                    self.store.request_redraw();
                 }
-                self.store.request_redraw();
             }
             crate::components::session_tabs_rail::RailHit::Handle
             | crate::components::session_tabs_rail::RailHit::Outside => {}
@@ -13318,9 +13391,11 @@ fn mouse_strip_hover_close_select_and_add() {
     assert_eq!(app.store.route(), Route::session("s1".to_owned()));
 
     // A body click selects: s1 is the only tab; open another and
-    // click its body mid-slot.
+    // click its body mid-slot (G-468② — the select rides the strip
+    // press arm, session-tabs.tsx:1505-1506).
     app.store.open_tab("s3", Some("Gamma".to_owned()));
     app.mouse_event(&mouse(MouseEventKind::Moved, 40, 0));
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 40, 0));
     app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 40, 0));
     assert_eq!(app.store.route(), Route::session("s3".to_owned()));
 
@@ -13495,6 +13570,10 @@ fn mouse_home_strip_click_selects_the_restored_tab() {
     app.mouse_event(&mouse(MouseEventKind::Moved, 5, 0));
     assert_eq!(app.store.tabs().hover.as_deref(), Some("r1"));
     // The body release selects: home → the restored session's route.
+    // G-468② — the select needs the strip press arm
+    // (session-tabs.tsx:1505-1506 `release()`'s `dragging()` guard);
+    // a bare release never selects.
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 5, 0));
     app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 5, 0));
     assert_eq!(app.store.route(), Route::session("r1".to_owned()));
     // The ` + ` affordance navigates home from the session — SA-F7's
@@ -13502,12 +13581,19 @@ fn mouse_home_strip_click_selects_the_restored_tab() {
     // is `route.navigate({type:"home", …})` (context/session-tabs.tsx
     // :406-420 — the ref does NOT create a session/tab on the click;
     // the home composer's next submit does). Ours matches.
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 65, 0));
     app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 65, 0));
     assert_eq!(app.store.route(), Route::Home);
     // ...and the second restored tab's body selects from home (tab 2
     // spans x=32..64 on the 32+32 layout).
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 40, 0));
     app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 40, 0));
     assert_eq!(app.store.route(), Route::session("r2".to_owned()));
+    // G-468② — a release with NO strip press selects nothing: hover
+    // the first tab again, release without a press — the route stays.
+    app.mouse_event(&mouse(MouseEventKind::Moved, 5, 0));
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 5, 0));
+    assert_eq!(app.store.route(), Route::session("r2".to_owned()), "a bare release never selects");
 }
 
 /// beta.8 bug 4 — the `+ Thought` disclosure through the pump: a
