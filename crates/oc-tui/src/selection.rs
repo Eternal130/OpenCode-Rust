@@ -25,10 +25,10 @@ pub enum SelectionBehavior {
 }
 
 /// `nextClickBehavior` (renderer.ts:4975-4986): the click-count →
-/// behavior mapping. The ref's counter clamps at `Math.min(last.count
-/// + 1, 3)` (renderer.ts:4983) — 1 = cell, 2 = word, 3 = line, and
-/// every press past the third STAYS on line (no cell/word cycle
-/// restart).
+/// behavior mapping. The ref's counter clamps the running count at 3
+/// (`Math.min(last.count + 1, 3)`, renderer.ts:4983): 1 = cell,
+/// 2 = word, 3 = line, and every press past the third STAYS on line —
+/// there is no cell/word cycle restart.
 #[must_use]
 pub fn behavior_for_click_count(count: u32) -> SelectionBehavior {
     match count {

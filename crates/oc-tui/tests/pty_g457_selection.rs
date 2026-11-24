@@ -238,7 +238,7 @@ fn pty_selection_multiclick_full_chain() {
 }
 
 /// The va12 selection-delta tests' runner (the multiclick chain's
-/// wiring shape: sandbox + FakeLlm wordy transcript + real SGR strokes
+/// wiring shape: sandbox + `FakeLlm` wordy transcript + real SGR strokes
 /// on the PTY master).
 fn run_selection_delta_pty(
     tag: &str,
@@ -341,10 +341,8 @@ fn pty_selection_adjacent_press_continues_the_count() {
         std::thread::sleep(Duration::from_millis(80));
         // Adjacent press (chebyshev 1, inside the same word): count
         // continues to 2 — the word arms on the press itself.
-        driver.sgr_press(
-            u16::try_from(col + 1).unwrap_or(0),
-            u16::try_from(bravo_row).unwrap_or(0),
-        );
+        driver
+            .sgr_press(u16::try_from(col + 1).unwrap_or(0), u16::try_from(bravo_row).unwrap_or(0));
         std::thread::sleep(Duration::from_millis(300));
         let flipped = word_changed(driver, &baseline, bravo_row, "charlie");
         if flipped != "charlie".len() {
@@ -399,7 +397,9 @@ fn pty_selection_ctrl_press_extends_kept_selection() {
             .filter(|&x| style_at(&kept, x, bravo_row) != style_at(&baseline, x, bravo_row))
             .count();
         if kept_flipped == 0 {
-            return Err("the kept highlight vanished after the release (copy must retain)".to_owned());
+            return Err(
+                "the kept highlight vanished after the release (copy must retain)".to_owned()
+            );
         }
         // ctrl+press at col 30: the highlight EXTENDS over 21..30.
         driver.sgr_ctrl_press(30, u16::try_from(bravo_row).unwrap_or(0));

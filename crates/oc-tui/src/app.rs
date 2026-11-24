@@ -16575,18 +16575,14 @@ fn selection_release_copies_but_keeps_the_highlight() {
         app.store.toasts().current().map(|toast| toast.message.as_str()),
         Some("Copied to clipboard")
     );
-    assert!(
-        app.screen_selection.is_active(),
-        "copy never clears the selection (selection.ts:61)"
-    );
+    assert!(app.screen_selection.is_active(), "copy never clears the selection (selection.ts:61)");
     let after = app.frame();
     assert!(
-        any_cell_swapped(&baseline, &after, crate::selection::SelectionRect {
-            x: 2,
-            y: 3,
-            width: 19,
-            height: 1
-        }),
+        any_cell_swapped(
+            &baseline,
+            &after,
+            crate::selection::SelectionRect { x: 2, y: 3, width: 19, height: 1 }
+        ),
         "the highlight survives the release"
     );
     // The next plain press replaces it: the highlight drops BEFORE the
@@ -16594,12 +16590,11 @@ fn selection_release_copies_but_keeps_the_highlight() {
     app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 40, 8));
     let after = app.frame();
     assert!(
-        !any_cell_swapped(&baseline, &after, crate::selection::SelectionRect {
-            x: 2,
-            y: 3,
-            width: 19,
-            height: 1
-        }),
+        !any_cell_swapped(
+            &baseline,
+            &after,
+            crate::selection::SelectionRect { x: 2, y: 3, width: 19, height: 1 }
+        ),
         "the next press cleared the kept highlight"
     );
     app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 40, 8));
@@ -16621,10 +16616,7 @@ fn ctrl_press_extends_and_recopies() {
     app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 2, 3));
     app.mouse_event(&mouse(MouseEventKind::Drag(MouseButton::Left), 20, 3));
     app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 20, 3));
-    assert!(
-        app.store.toasts().current().is_some(),
-        "the first release copied"
-    );
+    assert!(app.store.toasts().current().is_some(), "the first release copied");
     // ctrl+press farther right: the rect extends, still armed.
     app.mouse_event(&mouse_with(MouseEventKind::Down(MouseButton::Left), 30, 3, ctrl));
     let rect = app.screen_selection.rect().expect("the extend armed a rect");
@@ -16639,15 +16631,9 @@ fn ctrl_press_extends_and_recopies() {
     assert!(!app.screen_selection.is_active(), "escape cleared");
     let after = app.frame();
     let wide = crate::selection::SelectionRect { x: 2, y: 3, width: 29, height: 1 };
-    assert!(
-        !any_cell_swapped(&baseline, &after, wide),
-        "escape cleared the highlight"
-    );
+    assert!(!any_cell_swapped(&baseline, &after, wide), "escape cleared the highlight");
     app.mouse_event(&mouse_with(MouseEventKind::Down(MouseButton::Left), 10, 3, ctrl));
-    assert!(
-        app.screen_selection.rect().is_none(),
-        "ctrl press without a selection starts nothing"
-    );
+    assert!(app.screen_selection.rect().is_none(), "ctrl press without a selection starts nothing");
 }
 
 /// T1 (va12) — the multi-click tolerance and cap at the pump level

@@ -306,11 +306,9 @@ fn mouse_scenario(driver: &mut HarnessHandle) -> Result<(), String> {
             .filter(|&&(x, y)| style_at(&retained, x, y) != style_at(&baseline, x, y))
             .count();
         if still == 0 {
-            return Err(
-                "the selection highlight vanished with the release — copy must retain it \
+            return Err("the selection highlight vanished with the release — copy must retain it \
                  (selection.ts:61)"
-                    .to_owned(),
-            );
+                .to_owned());
         }
         // The NEXT PLAIN PRESS clears it (startSelection's clear,
         // renderer.ts:4967): press again on the drag's anchor cell (a

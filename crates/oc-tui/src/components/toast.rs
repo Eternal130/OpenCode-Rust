@@ -323,7 +323,15 @@ pub fn toast_layout(toast: &ToastOptions, pending: usize, term_width: usize) -> 
         let pending_row = (pending > 0).then_some(message_top + message_lines.len() + 1);
         // pad · message… · [margin · more] · pad
         let rows = message_top + message_lines.len() + 1 + 2 * usize::from(pending > 0);
-        ToastLayout { left, top, panel_width, rows, title_lines: Vec::new(), message_lines, pending_row }
+        ToastLayout {
+            left,
+            top,
+            panel_width,
+            rows,
+            title_lines: Vec::new(),
+            message_lines,
+            pending_row,
+        }
     }
 }
 
@@ -496,15 +504,14 @@ mod tests {
         assert_eq!(layout.pending_row, None);
         // A long message wraps inside the row's shrunk text area
         // (minus the affordance run), growing the row count.
-        let long = ToastOptions::info(
-            "the quick brown fox jumps over the lazy dog again and again",
-        );
+        let long =
+            ToastOptions::info("the quick brown fox jumps over the lazy dog again and again");
         let layout = toast_layout(&long, 0, 80);
         assert_eq!(layout.panel_width, 60, "maxWidth clamps the whole box");
         assert!(layout.rows > 3, "a clamped message wraps: {} rows", layout.rows);
         for line in &layout.message_lines {
             assert!(
-                crate::wrap::display_width(line) <= 60 - 6 - 2 - 1,
+                crate::wrap::display_width(line) < 60 - 6 - 2,
                 "the message wraps inside the affordance-shrunk area"
             );
         }
@@ -559,9 +566,9 @@ mod tests {
         );
         let grid = frame.text_grid();
         // Rails on rows 1..3 (pad + content + pad).
-        for row in 1..=3 {
-            assert_eq!(grid[row].chars().nth(50), Some('┃'), "left rail row {row}");
-            assert_eq!(grid[row].chars().nth(77), Some('┃'), "right rail row {row}");
+        for (row, text) in grid.iter().enumerate().skip(1).take(3) {
+            assert_eq!(text.chars().nth(50), Some('┃'), "left rail row {row}");
+            assert_eq!(text.chars().nth(77), Some('┃'), "right rail row {row}");
         }
         // The message row (row 2) carries the message AND the affordance.
         assert!(grid[2].contains("Copied to clipboard"));
