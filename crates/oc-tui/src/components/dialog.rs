@@ -887,6 +887,16 @@ pub fn handle_dialog_key(
         "dialog.select.section.next" => state.move_section(&props, 1),
         "dialog.select.submit" | "dialog.prompt.submit" => {
             if is_select {
+                // G-484 — ref `submit()` (dialog-select.tsx:421-432):
+                // a FOCUSED footer action wins over the option submit
+                // — `trigger(actionItems()[index])` runs the action's
+                // command (through the dispatcher, the
+                // `CommandSubmitted` seam).
+                if let Some(action) =
+                    state.focused_action.and_then(|index| props.actions.get(index))
+                {
+                    return DialogKeyOutcome::CommandSubmitted(action.command.to_owned());
+                }
                 return match state.submit(&props) {
                     Some(option) => DialogKeyOutcome::Submitted(option.value.clone()),
                     None => DialogKeyOutcome::Consumed,
@@ -2331,6 +2341,60 @@ mod tests {
         );
         assert_eq!(outcome, DialogKeyOutcome::Consumed);
         assert!(store.tabs().pinned.is_empty(), "the repeat un-pins");
+    }
+
+    /// G-484 — `submit()` checks the focused footer action FIRST
+    /// (dialog-select.tsx:421-427): enter with a tab-focused action
+    /// runs its command instead of the selected option.
+    #[test]
+    fn enter_triggers_the_focused_footer_action() {
+        let store = Store::new(Runtime::new());
+        store.ingest_all([crate::data::Ingest::Resync {
+            sessions: vec![crate::data::SessionSnapshot {
+                id: "s_rn".into(),
+                title: Some("Row".into()),
+                ..Default::default()
+            }],
+            unread: Vec::new(),
+            messages: Vec::new(),
+            cursors: Vec::new(),
+            permissions: Vec::new(),
+            forms: Vec::new(),
+        }]);
+        store.replace_dialog(
+            DialogKind::ServerList { command: "session.list", title: "Sessions" },
+            DialogSize::Medium,
+        );
+        let mut keymap = Keymap::new();
+        keymap.push_mode("dialog");
+        let clock = crate::keymap::ManualClock::default();
+        // tab focuses the FIRST footer action (the pin/unpin action
+        // when tabs are off).
+        let outcome = handle_dialog_key(
+            &store,
+            &mut keymap,
+            &clock,
+            crate::keymap::KeyStroke::parse("tab").expect("tab"),
+            (100, 30),
+        );
+        assert_eq!(outcome, DialogKeyOutcome::Consumed);
+        assert!(
+            store.top_dialog().unwrap().select.focused_action.is_some(),
+            "tab focused a footer action"
+        );
+        // enter → the ACTION's command, not the row's navigation.
+        let outcome = handle_dialog_key(
+            &store,
+            &mut keymap,
+            &clock,
+            crate::keymap::KeyStroke::parse("return").expect("return"),
+            (100, 30),
+        );
+        assert_eq!(
+            outcome,
+            DialogKeyOutcome::CommandSubmitted("session.delete".to_owned()),
+            "the focused action's command rides the submit (tabs enabled hides the pin action — the delete action is first)"
+        );
     }
 
     /// G-486 — `session.rename` (ctrl+r, dialog-session-list.tsx:
