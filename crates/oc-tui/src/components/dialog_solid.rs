@@ -2661,6 +2661,9 @@ fn build_inputs(
 ) -> DialogInputs {
     let family = match &entry.kind {
         DialogKind::SessionRename { .. } => Family::RenamePrompt,
+        // G-486 — the accounts view's rename prompt shares the
+        // connect-prompt tree (dynamic title + placeholder).
+        DialogKind::IntegrationRename { .. } => Family::ConnectPrompt,
         DialogKind::WorktreeName => Family::WorktreeNamePrompt,
         // RE-13: the /btw pair — the question prompt + the Answer
         // markdown dialog (btw.tsx:64-65, 88-172).

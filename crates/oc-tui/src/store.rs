@@ -217,6 +217,11 @@ pub enum DialogKind {
     Update,
     /// `DialogSessionRename`: rename the active session.
     SessionRename { session_id: String },
+    /// G-486 — the accounts view's rename prompt
+    /// (`dialog.integration.rename`, dialog-integration.tsx:211-234):
+    /// "Rename account" prefilled with the credential's label;
+    /// confirm fires `credential.update`.
+    IntegrationRename { credential_id: String },
     /// The plugin manager select (`plugins.list`, lane KM — v2's
     /// `DialogPlugins` approximation): one row per REGISTERED plugin
     /// id; RE-02 models the per-plugin `active` flag (v2's
@@ -2350,6 +2355,9 @@ pub trait IntegrationSink {
     fn cancel(&self, integration_id: &str, attempt_id: &str, kind: &'static str);
     fn credential_activate(&self, credential_id: &str);
     fn credential_remove(&self, credential_id: &str);
+    /// G-486 — `credential.update` (the accounts view's rename,
+    /// dialog-integration.tsx:225-231): PATCH the credential's label.
+    fn credential_update(&self, credential_id: &str, label: &str);
 }
 
 /// The no-op sink (no loop fetcher attached).
@@ -2377,6 +2385,7 @@ impl IntegrationSink for NoIntegrationSink {
     fn cancel(&self, _integration_id: &str, _attempt_id: &str, _kind: &'static str) {}
     fn credential_activate(&self, _credential_id: &str) {}
     fn credential_remove(&self, _credential_id: &str) {}
+    fn credential_update(&self, _credential_id: &str, _label: &str) {}
 }
 
 /// One recorded [`IntegrationSink`] call.
@@ -2412,6 +2421,8 @@ pub enum IntegrationCall {
     },
     Activate(String),
     Remove(String),
+    /// G-486 — the rename's `credential.update` (label PATCH).
+    Update(String, String),
 }
 
 /// The recording sink (tests assert the dialog drove the API).
@@ -2473,6 +2484,11 @@ impl IntegrationSink for RecordingIntegrationSink {
     }
     fn credential_remove(&self, credential_id: &str) {
         self.calls.borrow_mut().push(IntegrationCall::Remove(credential_id.to_owned()));
+    }
+    fn credential_update(&self, credential_id: &str, label: &str) {
+        self.calls
+            .borrow_mut()
+            .push(IntegrationCall::Update(credential_id.to_owned(), label.to_owned()));
     }
 }
 
@@ -9352,6 +9368,40 @@ impl Store {
             self.integration_deleting.set(Some(credential_id.to_owned()));
             false
         }
+    }
+
+    /// G-486 — the accounts view's rename open
+    /// (`dialog.integration.rename`, dialog-integration.tsx:217-224):
+    /// the "Rename account" prompt replaces the view, prefilled with
+    /// the credential's current label.
+    pub fn integration_account_rename_open(&self, credential_id: &str) {
+        let label = match self.integration_list() {
+            IntegrationListState::Loaded(rows) => rows
+                .into_iter()
+                .flat_map(|row| row.accounts)
+                .find(|account| account.id == credential_id)
+                .map(|account| account.label),
+            _ => None,
+        }
+        .unwrap_or_default();
+        self.replace_dialog(
+            DialogKind::IntegrationRename { credential_id: credential_id.to_owned() },
+            DialogSize::Medium,
+        );
+        self.update_dialog(|top| top.value = label);
+    }
+
+    /// G-486 — the rename prompt's confirm (`credential.update`,
+    /// dialog-integration.tsx:225-231): a trimmed NON-empty label
+    /// PATCHes the credential; the view refetches through the
+    /// completion event.
+    pub fn integration_account_rename_submit(&self, credential_id: &str, value: &str) {
+        let label = value.trim();
+        if label.is_empty() {
+            return;
+        }
+        self.integration_sink.borrow().credential_update(credential_id, label);
+        self.clear_dialogs();
     }
 
     /// The connect flow's terminal event (`connected`,

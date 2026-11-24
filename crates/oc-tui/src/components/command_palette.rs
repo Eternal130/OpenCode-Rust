@@ -1220,6 +1220,15 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             }
             props
         }
+        // G-486 — the accounts view's rename prompt
+        // (dialog-integration.tsx:218-224): "Rename account" with the
+        // "Account name" placeholder, prefilled through the dialog
+        // entry's value.
+        DialogKind::IntegrationRename { .. } => {
+            let mut props = SelectProps::new("Rename account".to_owned(), Vec::new());
+            "Account name".clone_into(&mut props.placeholder);
+            props
+        }
         DialogKind::IntegrationCode { .. } => {
             let title = store
                 .integration_attempt()

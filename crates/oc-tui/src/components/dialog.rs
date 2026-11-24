@@ -104,6 +104,7 @@ pub fn handle_dialog_key(
                 store.integration_form().is_some_and(|state| state.prompt_style())
             }
             DialogKind::SessionRename { .. }
+            | DialogKind::IntegrationRename { .. }
             | DialogKind::WorktreeName
             | DialogKind::IntegrationKey { .. }
             | DialogKind::IntegrationCode { .. }
@@ -123,6 +124,7 @@ pub fn handle_dialog_key(
         // dialog per ref dialog-pair.tsx; no filter, no option rows;
         // only the close bindings act (the modal layer's escape).
         DialogKind::SessionRename { .. }
+        | DialogKind::IntegrationRename { .. }
         | DialogKind::WorktreeName
         | DialogKind::IntegrationKey { .. }
         | DialogKind::IntegrationCode { .. }
@@ -542,6 +544,23 @@ pub fn handle_dialog_key(
             }
             return DialogKeyOutcome::Consumed;
         }
+        // G-486 — `session.rename` (ctrl+r, keybind.ts:122): the
+        // CURSOR row's rename — the prompt replaces the dialog
+        // prefilled with the session's title
+        // (dialog-session-list.tsx:281-286's
+        // `DialogSessionRename.show(dialog, value, title)`).
+        if keymap.stroke_triggers(&stroke, "session.rename") {
+            if let Some(option) = entry.select.submit(&props) {
+                let id = option.value.clone();
+                let title = store.session_title(&id).unwrap_or_default();
+                store.replace_dialog(
+                    DialogKind::SessionRename { session_id: id },
+                    DialogSize::Medium,
+                );
+                store.update_dialog(|top| top.value = title);
+            }
+            return DialogKeyOutcome::Consumed;
+        }
     }
     // -- Lane FINAL: the accounts view's delete action -----------------
     // `dialog.integration.delete` (dialog-integration.tsx:237-258):
@@ -551,6 +570,18 @@ pub fn handle_dialog_key(
             if let Some(option) = entry.select.submit(&props) {
                 if option.value != "add" {
                     store.integration_account_delete(&option.value.clone());
+                }
+            }
+            return DialogKeyOutcome::Consumed;
+        }
+        // G-486 — `dialog.integration.rename` (ctrl+r, keybind.ts:265):
+        // the CURSOR credential row's rename — the "Rename account"
+        // prompt prefilled with its label
+        // (dialog-integration.tsx:211-234).
+        if keymap.stroke_triggers(&stroke, "dialog.integration.rename") {
+            if let Some(option) = entry.select.submit(&props) {
+                if option.value != "add" {
+                    store.integration_account_rename_open(&option.value.clone());
                 }
             }
             return DialogKeyOutcome::Consumed;
@@ -1037,6 +1068,7 @@ fn option_dialog_records_rows(
         }
         DialogKind::Help
         | DialogKind::SessionRename { .. }
+        | DialogKind::IntegrationRename { .. }
         | DialogKind::WorktreeName
         | DialogKind::IntegrationKey { .. }
         | DialogKind::IntegrationCode { .. }
@@ -2299,6 +2331,107 @@ mod tests {
         );
         assert_eq!(outcome, DialogKeyOutcome::Consumed);
         assert!(store.tabs().pinned.is_empty(), "the repeat un-pins");
+    }
+
+    /// G-486 — `session.rename` (ctrl+r, dialog-session-list.tsx:
+    /// 281-286 + keybind.ts:122): the CURSOR row opens the rename
+    /// prompt prefilled with its title.
+    #[test]
+    fn sessions_dialog_ctrl_r_opens_the_rename_prompt_prefilled() {
+        use crate::data::Ingest;
+        let store = Store::new(Runtime::new());
+        store.ingest_all([Ingest::Resync {
+            sessions: vec![crate::data::SessionSnapshot {
+                id: "s_rn".into(),
+                title: Some("Old title".into()),
+                ..Default::default()
+            }],
+            unread: Vec::new(),
+            messages: Vec::new(),
+            cursors: Vec::new(),
+            permissions: Vec::new(),
+            forms: Vec::new(),
+        }]);
+        store.replace_dialog(
+            DialogKind::ServerList { command: "session.list", title: "Sessions" },
+            DialogSize::Medium,
+        );
+        let mut keymap = Keymap::new();
+        keymap.push_mode("dialog");
+        let clock = crate::keymap::ManualClock::default();
+        let outcome = handle_dialog_key(
+            &store,
+            &mut keymap,
+            &clock,
+            crate::keymap::KeyStroke::parse("ctrl+r").expect("ctrl+r"),
+            (100, 30),
+        );
+        assert_eq!(outcome, DialogKeyOutcome::Consumed);
+        let entry = store.top_dialog().unwrap();
+        assert!(
+            matches!(&entry.kind, DialogKind::SessionRename { session_id } if session_id == "s_rn"),
+            "the rename prompt carries the selected row's id"
+        );
+        assert_eq!(entry.value, "Old title", "the prompt prefills the row's title");
+    }
+
+    /// G-486 — `dialog.integration.rename` (ctrl+r,
+    /// dialog-integration.tsx:211-234): the CURSOR credential row
+    /// opens the "Rename account" prompt prefilled with its label;
+    /// the confirm fires `credential.update` through the sink.
+    #[test]
+    fn accounts_dialog_ctrl_r_renames_the_selected_credential() {
+        let store = Store::new(Runtime::new());
+        store.integration_list_loaded(vec![crate::store::IntegrationRow {
+            id: "github".into(),
+            name: "GitHub".into(),
+            category: "Popular",
+            methods: Vec::new(),
+            sign_in_required: false,
+            accounts: vec![crate::store::IntegrationAccount {
+                id: "cred_1".into(),
+                label: "Work".into(),
+                sign_in_required: false,
+            }],
+            summary: String::new(),
+        }]);
+        let sink = std::rc::Rc::new(crate::store::RecordingIntegrationSink::default());
+        store.set_integration_sink(std::rc::Rc::clone(&sink) as std::rc::Rc<_>);        store.replace_dialog(
+            DialogKind::IntegrationAccounts { integration_id: "github".to_owned() },
+            DialogSize::Medium,
+        );
+        let mut keymap = Keymap::new();
+        keymap.push_mode("dialog");
+        let clock = crate::keymap::ManualClock::default();
+        let outcome = handle_dialog_key(
+            &store,
+            &mut keymap,
+            &clock,
+            crate::keymap::KeyStroke::parse("ctrl+r").expect("ctrl+r"),
+            (100, 30),
+        );
+        assert_eq!(outcome, DialogKeyOutcome::Consumed);
+        let entry = store.top_dialog().unwrap();
+        assert!(
+            matches!(
+                &entry.kind,
+                DialogKind::IntegrationRename { credential_id } if credential_id == "cred_1"
+            ),
+            "the rename prompt carries the credential id"
+        );
+        assert_eq!(entry.value, "Work", "the prompt prefills the account's label");
+        // The confirm PATCHes the label through the recording sink.
+        store.integration_account_rename_submit("cred_1", "  Personal  ");
+        assert!(
+            sink.calls.borrow().iter().any(|call| matches!(
+                call,
+                crate::store::IntegrationCall::Update(id, label)
+                    if id == "cred_1" && label == "Personal"
+            )),
+            "credential.update fired with the trimmed label: {:?}",
+            sink.calls.borrow()
+        );
+        assert!(store.top_dialog().is_none(), "the prompt closed on confirm");
     }
 
     /// The modal layer through the pump-shaped path: escape closes,

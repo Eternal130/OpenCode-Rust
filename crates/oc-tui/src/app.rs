@@ -2722,6 +2722,12 @@ impl App {
                         self.rename_requests.push((session_id, value.to_owned()));
                     }
                 }
+                // G-486 — the accounts view's rename confirm
+                // (`credential.update`, dialog-integration.tsx:225-231).
+                crate::store::DialogKind::IntegrationRename { credential_id } => {
+                    let credential_id = credential_id.clone();
+                    self.store.integration_account_rename_submit(&credential_id, value);
+                }
                 // `DialogWorktreeName`'s enter (`confirm()`): slugify
                 // (empty → generated), fire `worktree.create` — the
                 // created directory lands through the event loop
@@ -5946,6 +5952,11 @@ pub enum LoopRequest {
     CredentialRemove {
         credential_id: String,
     },
+    /// G-486 — `credential.update` (the accounts view's rename).
+    CredentialUpdate {
+        credential_id: String,
+        label: String,
+    },
     // -- Lane FINAL: the session actions --------------------------------
     /// `session.compact`.
     SessionCompact {
@@ -6194,6 +6205,10 @@ pub enum LoopFetch {
     },
     /// The accounts view's credential ops resolved (remove → refetch).
     CredentialRemoved {
+        result: Result<(), String>,
+    },
+    /// G-486 — the rename's `credential.update` resolved (refetch).
+    CredentialUpdated {
         result: Result<(), String>,
     },
     /// `session.compact` resolved (errors toast).
@@ -6985,6 +7000,21 @@ pub fn spawn_loop_fetcher(
                         let _ = tx.send(LoopFetch::CredentialRemoved { result });
                     });
                 }
+                LoopRequest::CredentialUpdate { credential_id, label } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = client
+                            .credential()
+                            .update(
+                                &credential_id,
+                                &oc_client::types::CredentialUpdateBody { label },
+                            )
+                            .await
+                            .map_err(|error| error.to_string());
+                        let _ = tx.send(LoopFetch::CredentialUpdated { result });
+                    });
+                }
                 // -- Lane FINAL: the session actions -----------------
                 LoopRequest::SessionCompact { session_id, model: _ } => {
                     let client = client.clone();
@@ -7510,6 +7540,12 @@ impl crate::store::IntegrationSink for HttpIntegrationSink {
     fn credential_remove(&self, credential_id: &str) {
         let _ =
             self.tx.send(LoopRequest::CredentialRemove { credential_id: credential_id.to_owned() });
+    }
+    fn credential_update(&self, credential_id: &str, label: &str) {
+        let _ = self.tx.send(LoopRequest::CredentialUpdate {
+            credential_id: credential_id.to_owned(),
+            label: label.to_owned(),
+        });
     }
 }
 
@@ -10670,6 +10706,18 @@ pub async fn run_with_size(
                     }
                     // The accounts list refetches (v2's integration
                     // sync on credential events).
+                    app.store.integration_sink_list();
+                }
+                // G-486 — the rename resolved: errors toast, the
+                // accounts list refetches (`manageConnections`).
+                LoopFetch::CredentialUpdated { result } => {
+                    if let Err(error) = result {
+                        app.store.toast_show(crate::components::toast::ToastOptions {
+                            message: error,
+                            variant: "error",
+                            ..crate::components::toast::ToastOptions::info("")
+                        });
+                    }
                     app.store.integration_sink_list();
                 }
                 // -- Lane FINAL: the session actions' results -------
