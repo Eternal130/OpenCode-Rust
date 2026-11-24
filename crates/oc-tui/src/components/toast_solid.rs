@@ -160,6 +160,11 @@ fn toast_tree_units(
             );
         }
     } else {
+        // ui/toast.tsx:74-81 — the untitled fallback: the message and
+        // the affordance share the FIRST row (the message flexGrow
+        // pushes the affordance run to the row's right edge); the
+        // wrapped lines ride the rows below (the row's text area
+        // shrinks by the affordance run, toast.rs's wrap width).
         for (index, line) in layout.message_lines.iter().enumerate() {
             units.extend(
                 clip_rail(chrome_cluster_units(
@@ -175,6 +180,29 @@ fn toast_tree_units(
                 .into_iter()
                 .filter(keep),
             );
+        }
+        // The affordance, right-aligned like the title face's run: two
+        // fill-fg pads + the muted run — `x` for a plain toast,
+        // `› {label}` for an action toast (G-424, ui/toast.tsx:34-44).
+        let aff_text = match &toast.action_label {
+            Some(label) => format!("› {label}"),
+            None => "x".to_owned(),
+        };
+        let aff_width = 2 + crate::wrap::display_width(&aff_text);
+        let start = content_right + 1 - aff_width;
+        if !row_covered(1) {
+            units.push(ChromeUnit {
+                key: "toast.aff.pad".to_owned(),
+                left: start,
+                top: 1,
+                body: ChromeBody::Text(vec![ChromeChunk::new("  ", FILL_FG, bg, 0)]),
+            });
+            units.push(ChromeUnit {
+                key: "toast.aff.x".to_owned(),
+                left: start + 2,
+                top: 1,
+                body: ChromeBody::Text(vec![ChromeChunk::new(&aff_text, theme.muted, bg, 0)]),
+            });
         }
     }
     if let Some(more_row) = layout.pending_row {
@@ -235,6 +263,16 @@ fn right_rail_cell(
         for (index, line) in layout.message_lines.iter().enumerate() {
             consider(line, content_x, 1 + index, theme.text, 0);
         }
+        // toast.tsx:74-81 — the affordance rides the FIRST message
+        // row, right-aligned (the pads carry no ink — only the run's
+        // atoms can overhang the rail).
+        let aff_text = match &toast.action_label {
+            Some(label) => format!("› {label}"),
+            None => "x".to_owned(),
+        };
+        let aff_width = 2 + crate::wrap::display_width(&aff_text);
+        let start = layout.panel_width.saturating_sub(4) + 1 - aff_width;
+        consider(&aff_text, start + 2, 1, theme.muted, 0);
     }
     if let Some(more_row) = layout.pending_row {
         consider(&format!("+{pending} more"), content_x, more_row, theme.muted, 0);

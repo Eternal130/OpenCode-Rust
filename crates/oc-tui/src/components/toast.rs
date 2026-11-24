@@ -306,20 +306,24 @@ pub fn toast_layout(toast: &ToastOptions, pending: usize, term_width: usize) -> 
         let rows = message_top + message_lines.len() + 1 + 2 * usize::from(pending > 0);
         ToastLayout { left, top, panel_width, rows, title_lines, message_lines, pending_row }
     } else {
-        // The untitled face keeps its long-pinned bounded shape (the
-        // pre-G-424b painter): the message rides ONE unwrapped row at
-        // the rail's clip — the corpus has no untitled toast whose
-        // message overflows the panel, so the ref's word-wrap face
-        // there is unported surface, not evidenced shape.
-        ToastLayout {
-            left,
-            top,
-            panel_width,
-            rows: 2,
-            title_lines: Vec::new(),
-            message_lines: vec![toast.message.clone()],
-            pending_row: None,
-        }
+        // The untitled face (ui/toast.tsx:74-81's fallback): the
+        // message and the affordance share the row — the message
+        // `flexGrow={1}` pushes the affordance run (marginLeft 2,
+        // flexShrink 0) to the row's right edge, the message wraps in
+        // the remaining text area — and the row count is
+        // content-driven like the title face (padding 1 top/bottom,
+        // toast.tsx:64-71): the pre-va12 port pinned a 2-row,
+        // affordance-less face (unported surface).
+        let message_width = message_width + 2 + aff; // the row: message + marginLeft 2 + affordance
+        let (left, panel_width, top) = toast_geometry(message_width, 0, 0, term_width);
+        // The inner text area: panel minus the two rails and the 2+2 padding.
+        let text_area = panel_width.saturating_sub(6).max(1);
+        let message_lines = toast_wrap(&toast.message, text_area.saturating_sub(2 + aff).max(1));
+        let message_top = 1; // paddingTop 1
+        let pending_row = (pending > 0).then_some(message_top + message_lines.len() + 1);
+        // pad · message… · [margin · more] · pad
+        let rows = message_top + message_lines.len() + 1 + 2 * usize::from(pending > 0);
+        ToastLayout { left, top, panel_width, rows, title_lines: Vec::new(), message_lines, pending_row }
     }
 }
 
@@ -472,6 +476,44 @@ mod tests {
         assert_eq!(layout.pending_row, Some(5));
     }
 
+    /// T2 (va12) — the untitled face is the ref's fallback shape
+    /// (toast.tsx:64-81): the message and the affordance share the
+    /// first content row, the panel width counts the affordance run
+    /// (`message + marginLeft 2 + affordance` intrinsic row), and the
+    /// row count is content-driven — pad + content + pad (3 rows for a
+    /// one-line message; the pre-va12 port pinned 2 rows with no
+    /// affordance cell). A pending queue rides the `+N more` margin
+    /// row like the title face.
+    #[test]
+    fn untitled_face_shares_the_message_row_with_the_affordance() {
+        let toast = ToastOptions::info("Copied to clipboard");
+        let layout = toast_layout(&toast, 0, 80);
+        // Geometry: 19 msg + 2 + 1 aff + 4 padding + 2 rails = 28.
+        assert_eq!(layout.panel_width, 28, "the affordance run widens the panel");
+        assert_eq!((layout.left, layout.top), (50, 1));
+        assert_eq!(layout.message_lines, vec!["Copied to clipboard"]);
+        assert_eq!(layout.rows, 3, "pad + message/affordance row + pad");
+        assert_eq!(layout.pending_row, None);
+        // A long message wraps inside the row's shrunk text area
+        // (minus the affordance run), growing the row count.
+        let long = ToastOptions::info(
+            "the quick brown fox jumps over the lazy dog again and again",
+        );
+        let layout = toast_layout(&long, 0, 80);
+        assert_eq!(layout.panel_width, 60, "maxWidth clamps the whole box");
+        assert!(layout.rows > 3, "a clamped message wraps: {} rows", layout.rows);
+        for line in &layout.message_lines {
+            assert!(
+                crate::wrap::display_width(line) <= 60 - 6 - 2 - 1,
+                "the message wraps inside the affordance-shrunk area"
+            );
+        }
+        // The pending line rides one margin row past the message.
+        let layout = toast_layout(&toast, 2, 80);
+        assert_eq!(layout.rows, 5, "pad + message + margin + more + pad");
+        assert_eq!(layout.pending_row, Some(3));
+    }
+
     #[test]
     fn surface_matches_the_golden_region() {
         let theme_state = crate::theme::ThemeState::v2_dark();
@@ -495,5 +537,39 @@ mod tests {
         assert!(frame.cell(2, 40).attrs & 1 == 1, "title bold");
         assert_eq!(frame.cell(1, 37).fg, crate::render::CellColor::Rgb(86, 182, 194));
         assert_eq!(frame.cell(2, 40).bg, crate::render::CellColor::Rgb(30, 30, 30), "raised high");
+    }
+
+    /// T2 (va12) — the untitled face renders the affordance cell and
+    /// the bottom pad row (ui/toast.tsx:64-81): the `x` shares the
+    /// message's row (right-aligned), the rails span all three rows,
+    /// and the row under the message is blank raised-high padding.
+    #[test]
+    fn untitled_surface_paints_the_affordance_and_bottom_pad() {
+        let theme_state = crate::theme::ThemeState::v2_dark();
+        let footer =
+            crate::components::footer::FooterTheme::from_resolved(&theme_state.resolved.tokens);
+        let toast = ToastOptions::info("Copied to clipboard");
+        let frame = crate::components::toast_solid::toast_over_blank_frame(
+            &toast,
+            0,
+            80,
+            30,
+            &footer,
+            &theme_state.resolved.tokens,
+        );
+        let grid = frame.text_grid();
+        // Rails on rows 1..3 (pad + content + pad).
+        for row in 1..=3 {
+            assert_eq!(grid[row].chars().nth(50), Some('┃'), "left rail row {row}");
+            assert_eq!(grid[row].chars().nth(77), Some('┃'), "right rail row {row}");
+        }
+        // The message row (row 2) carries the message AND the affordance.
+        assert!(grid[2].contains("Copied to clipboard"));
+        assert!(grid[2].contains('x'), "the dismiss affordance shares the message row");
+        // The affordance right-aligns: the `x` lands just inside the
+        // right rail (pads + x = 3 cells ending at content_right).
+        assert_eq!(grid[2].chars().nth(74), Some('x'), "affordance at content_right");
+        // The bottom pad row is blank interior (no message leakage).
+        assert!(!grid[3].contains("Copied"), "row 3 is padding");
     }
 }
