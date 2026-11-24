@@ -858,6 +858,25 @@ fn vt_temporal_startup_loading_pill_fast_boot_settles_clean() {
             .expect("plugin config");
         },
         |harness| {
+            // G-471 扩屏 evidence: sample the pill during the boot
+            // window proper (before any session navigation) — with the
+            // ready gate at the initialize handshake, a healthy boot
+            // typically clears the 500 ms threshold with ZERO pill
+            // frames. Observation-only (no assert): a legitimately
+            // slow seed fetch under load may still transiently show
+            // the pill — correct behavior, pinned by the settle
+            // contract below.
+            let boot_start = harness.now_ms();
+            let mut pill_frames = 0u64;
+            while harness.now_ms() - boot_start < 4_000 {
+                let grid = harness.grid_now();
+                let screen = grid.content_rect(0, 0, grid.cols, grid.rows);
+                if screen.contains("Loading plugins") || screen.contains("Finishing startup") {
+                    pill_frames += 1;
+                }
+                std::thread::sleep(Duration::from_millis(30));
+            }
+            eprintln!("[vt_temporal boot-fast] boot-window pill frames: {pill_frames}");
             boot_to_session(harness)?;
             // Poll until no pill text is on screen — generous bound:
             // even a worst-case transient show unmounts by shown+3 s

@@ -177,6 +177,7 @@ pub struct TuiPluginRuntime {
     surfaced_failures: Rc<RefCell<BTreeSet<(String, String)>>>,
     /// G-471 — late plugin themes (registered during the background
     /// load pass) queued for the App's theme registry.
+    #[allow(clippy::type_complexity)] // the pump-slot idiom (see owned_updates)
     theme_updates: Rc<RefCell<Option<Vec<(String, String)>>>>,
 }
 
@@ -1680,9 +1681,9 @@ impl SdkPort for HttpSdkPort {
                 // `client.config.providers()` view omo reads).
                 let mut providers: serde_json::Map<String, Value> = serde_json::Map::new();
                 for model in &models.data {
-                    let entry = providers
-                        .entry(model.provider_id.clone())
-                        .or_insert_with(|| serde_json::json!({ "id": model.provider_id, "models": {} }));
+                    let entry = providers.entry(model.provider_id.clone()).or_insert_with(
+                        || serde_json::json!({ "id": model.provider_id, "models": {} }),
+                    );
                     if let Some(table) = entry.get_mut("models").and_then(Value::as_object_mut) {
                         table.insert(
                             model.id.clone(),
