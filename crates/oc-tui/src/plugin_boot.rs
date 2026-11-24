@@ -68,7 +68,7 @@ const READY_TIMEOUT: Duration = Duration::from_secs(30);
 /// would hang boot forever). 120s bounds a cold GitHub clone + bun
 /// install (the observed superpowers install settles well under it)
 /// while still leaving the boot future responsive to its own
-/// READY_TIMEOUT for the registration pass that follows.
+/// `READY_TIMEOUT` for the registration pass that follows.
 const BOOT_INSTALL_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The bound on one agent.list fetch before the host boot (the seed's

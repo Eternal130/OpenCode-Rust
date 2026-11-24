@@ -232,6 +232,7 @@ pub fn resolve(ops: &[PluginOp], cache_root: Option<PathBuf>) -> Resolution {
 /// bounded by [`crate::InstallOptions::timeout`] (the caller picks a
 /// conservative budget — the ref has NO timeout, but an unbounded
 /// stalled clone would hang boot forever).
+#[must_use]
 pub fn resolve_with_boot_install(
     ops: &[PluginOp],
     cache_root: Option<PathBuf>,
@@ -262,7 +263,8 @@ pub fn resolve_with_boot_install(
     for (target, install_error) in install_errors {
         for (failed_target, error) in &mut second.failures {
             if failed_target == &target && !error.contains("boot auto-install failed") {
-                error.push_str(&format!(" (boot auto-install failed: {install_error})"));
+                use std::fmt::Write as _;
+                let _ = write!(error, " (boot auto-install failed: {install_error})");
             }
         }
     }

@@ -8,7 +8,7 @@
 //! is unavailable on the box).
 //!
 //! Hermetic otherwise: a tmp sandbox under /tmp/opencode, shims for
-//! `bun install` (the plugin_update_lane pattern), no network, no
+//! `bun install` (the `plugin_update_lane` pattern), no network, no
 //! writes to the user's real `~/.cache/opencode-rust/npm`.
 
 use std::path::{Path, PathBuf};
@@ -19,7 +19,7 @@ fn sandbox(tag: &str) -> PathBuf {
     let dir =
         PathBuf::from(format!("/tmp/opencode/ocph-boot-install-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir.join("shims")).expect("sandbox dir");
+    std::fs::create_dir_all(dir.join("shims")).expect("sandbox dir");
     dir
 }
 
@@ -32,7 +32,7 @@ fn make_executable(path: &Path, body: &str) {
     }
 }
 
-/// A fake `bun` (the plugin_update_lane pattern): `install`
+/// A fake `bun` (the `plugin_update_lane` pattern): `install`
 /// materializes `node_modules/<pkg>` from the `<pkg>@<version>` cache
 /// key two levels up, and logs every invocation for the once-only
 /// assertion.
@@ -282,8 +282,7 @@ fn git_spec_without_git_names_the_missing_tool() {
 
 fn command_on_path(program: &str) -> bool {
     std::env::var_os("PATH")
-        .map(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
-        .unwrap_or(false)
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
 }
 
 fn assert_run(program: &str, args: &[&str], cwd: &Path) {

@@ -256,8 +256,7 @@ fn run_installer(dir: &Path, options: &InstallOptions) -> Result<(), String> {
     // check it up front so the failure names the missing tool instead
     // of surfacing the installer's opaque clone error.
     let manifest_git_dep = std::fs::read_to_string(dir.join("package.json"))
-        .map(|text| text.contains("git+"))
-        .unwrap_or(false);
+        .is_ok_and(|text| text.contains("git+"));
     if manifest_git_dep && !command_available("git") {
         return Err(
             "git executable not found on PATH: it is required to install git-sourced plugin \
