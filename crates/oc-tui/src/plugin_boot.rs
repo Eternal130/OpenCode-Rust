@@ -349,8 +349,7 @@ impl TuiPluginRuntime {
             timeout: BOOT_INSTALL_TIMEOUT,
             ..oc_plugin_host::InstallOptions::default()
         };
-        let resolution =
-            oc_plugin_host::resolve_with_boot_install(&ops, None, &install_options);
+        let resolution = oc_plugin_host::resolve_with_boot_install(&ops, None, &install_options);
         for (target, error) in &resolution.failures {
             crate::keymap::log_skip(&format!("plugin {target}: {error}"));
         }

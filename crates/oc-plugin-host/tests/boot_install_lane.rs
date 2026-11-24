@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 use oc_plugin_host::{resolve_with_boot_install, InstallOptions, PluginOp};
 
 fn sandbox(tag: &str) -> PathBuf {
-    let dir = PathBuf::from(format!("/tmp/opencode/ocph-boot-install-{tag}-{}", std::process::id()));
+    let dir =
+        PathBuf::from(format!("/tmp/opencode/ocph-boot-install-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir.join("shims")).expect("sandbox dir");
     dir
@@ -128,13 +129,15 @@ fn boot_install_local_path_failures_are_not_installed() {
     std::fs::create_dir_all(&root).expect("cache root");
     let shim = dir.join("bun");
     make_executable(&shim, "#!/bin/sh\nexit 0\n");
-    let options =
-        InstallOptions { root: Some(root), bun: Some(shim), ..InstallOptions::default() };
+    let options = InstallOptions { root: Some(root), bun: Some(shim), ..InstallOptions::default() };
 
     // A local spec that does not exist: NOT an "is not installed"
     // miss — the boot leg must not hand it to the installer.
-    let resolution =
-        resolve_with_boot_install(&ops("./no-such-local-plugin"), Some(dir.join("npm-cache")), &options);
+    let resolution = resolve_with_boot_install(
+        &ops("./no-such-local-plugin"),
+        Some(dir.join("npm-cache")),
+        &options,
+    );
     assert_eq!(resolution.failures.len(), 1);
     assert!(
         !resolution.failures[0].1.contains("auto-install"),
@@ -220,11 +223,8 @@ for name, spec in deps.items():
     );
 
     let spec = format!("git-plugin-demo@git+file://{}", repo.display());
-    let options = InstallOptions {
-        root: Some(root.clone()),
-        bun: Some(shim),
-        ..InstallOptions::default()
-    };
+    let options =
+        InstallOptions { root: Some(root.clone()), bun: Some(shim), ..InstallOptions::default() };
 
     let cold = oc_plugin_host::resolve(&ops(&spec), Some(root.clone()));
     assert!(cold.plugins.is_empty(), "cold resolve should miss");
@@ -282,9 +282,7 @@ fn git_spec_without_git_names_the_missing_tool() {
 
 fn command_on_path(program: &str) -> bool {
     std::env::var_os("PATH")
-        .map(|path| {
-            std::env::split_paths(&path).any(|dir| dir.join(program).is_file())
-        })
+        .map(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
         .unwrap_or(false)
 }
 
@@ -296,4 +294,3 @@ fn assert_run(program: &str, args: &[&str], cwd: &Path) {
         .expect("spawn git");
     assert!(status.success(), "{program} {args:?} failed in {}", cwd.display());
 }
-

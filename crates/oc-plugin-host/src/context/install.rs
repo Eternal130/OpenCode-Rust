@@ -293,10 +293,8 @@ fn installer_args(program: PathBuf, base: &[&str], offline: bool) -> (PathBuf, V
 /// Whether a program is resolvable on PATH (the git-availability probe).
 fn command_available(program: &str) -> bool {
     let path = std::env::var_os("PATH").unwrap_or_default();
-    std::env::split_paths(&path).any(|dir| {
-        dir.join(program).is_file()
-            || dir.join(format!("{program}.exe")).is_file()
-    })
+    std::env::split_paths(&path)
+        .any(|dir| dir.join(program).is_file() || dir.join(format!("{program}.exe")).is_file())
 }
 
 /// The installer output (stdout+stderr+status) bounded by a hard

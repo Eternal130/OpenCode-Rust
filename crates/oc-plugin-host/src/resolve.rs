@@ -351,8 +351,7 @@ fn resolve_one(target: &str, root: &Path) -> Result<ResolvedPlugin, String> {
     // rejected legitimate packages whose name starts with "git" —
     // e.g. `git-plugin-demo@git+file://…` — after a successful
     // install of exactly that spec.)
-    if target.starts_with("github:") || target.starts_with("git+") || target.starts_with("git://")
-    {
+    if target.starts_with("github:") || target.starts_with("git+") || target.starts_with("git://") {
         return Err(format!(
             "plugin {target:?} is not installed; run `opencode plugin add {target}`"
         ));

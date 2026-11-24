@@ -18,10 +18,8 @@ use oc_server::boot::{boot_and_serve, BootOptions};
 use oc_server::lifecycle::ServeOptions;
 
 fn sandbox(tag: &str) -> PathBuf {
-    let root = PathBuf::from(format!(
-        "/tmp/opencode/oc-server-boot-install-{tag}-{}",
-        std::process::id()
-    ));
+    let root =
+        PathBuf::from(format!("/tmp/opencode/oc-server-boot-install-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("home")).expect("home");
     std::fs::create_dir_all(root.join("project")).expect("project");

@@ -382,8 +382,7 @@ pub fn boot(
         timeout: std::time::Duration::from_secs(120),
         ..oc_plugin_host::InstallOptions::default()
     };
-    let resolution =
-        oc_plugin_host::resolve_with_boot_install(ops, None, &install_options);
+    let resolution = oc_plugin_host::resolve_with_boot_install(ops, None, &install_options);
     for (target, error) in &resolution.failures {
         eprintln!("opencode plugin: {target} failed to resolve: {error}");
     }
