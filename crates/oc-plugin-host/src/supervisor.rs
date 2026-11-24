@@ -37,7 +37,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::context::{
     Bridge, HostState, PermissionPort, SessionPort, ToolPort, CODEMODE_METHODS, GENERATE_METHODS,
-    SESSION_METHODS,
+    SDK_METHODS, SESSION_METHODS,
 };
 use crate::protocol::{self, Incoming};
 use crate::registrations::{PluginState, PluginStatus, Registrations};
@@ -154,6 +154,10 @@ pub struct SupervisorConfig {
     pub host_state: HostState,
     /// `ctx.session.*` routing target (default: declining port).
     pub session_port: Option<Arc<dyn SessionPort>>,
+    /// `sdk.call` routing target (G-470 — the tui-bridge SDK proxy's
+    /// bounded read face: `agent.list` / `config.providers` over the
+    /// embedder's HTTP client; default: declining port).
+    pub sdk_port: Option<Arc<dyn crate::context::SdkPort>>,
     /// `tools.<name>(input)` routing from Code Mode programs (default:
     /// declining port; the integrator binds the oc-core registry).
     pub tool_port: Option<Arc<dyn ToolPort>>,
@@ -218,6 +222,7 @@ impl Default for SupervisorConfig {
             env: Vec::new(),
             host_state: HostState::default(),
             session_port: None,
+            sdk_port: None,
             tool_port: None,
             entry_options: BTreeMap::new(),
             storage_port: None,
@@ -329,6 +334,11 @@ pub struct Shared {
     /// G-293 ② — entry path → (plugin id, revision fingerprint,
     /// failed-revision) bookkeeping (the reload diff + no-retry rule).
     revisions: Mutex<HashMap<String, RevisionState>>,
+    /// Set once the FIRST `initialize` handshake completed (G-471 —
+    /// [`crate::PluginHost::wait_initialized`]'s condition). The heavy
+    /// entry load pass continues in the background; `ready` below
+    /// settles when it finished.
+    pub initialized: Arc<(Mutex<bool>, Condvar)>,
     /// Set once the first initialize+load pass finished (any plugin
     /// outcome) — [`crate::PluginHost::wait_ready`]'s condition.
     pub ready: Arc<(Mutex<bool>, Condvar)>,
@@ -374,6 +384,7 @@ impl Shared {
             busy_plugins: Mutex::new(HashSet::new()),
             digests: Mutex::new(HashMap::new()),
             revisions: Mutex::new(HashMap::new()),
+            initialized: Arc::new((Mutex::new(false), Condvar::new())),
             ready: Arc::new((Mutex::new(false), Condvar::new())),
             dispatched_events: AtomicU64::new(0),
             dropped_events: AtomicU64::new(0),
@@ -777,6 +788,14 @@ impl Shared {
                 ));
             }
             self.answer_session_async(id, method, params);
+            return None;
+        }
+        // G-470 — the tui-bridge SDK proxy (`sdk.call`): the bounded
+        // read face the TUI companion bridge uses to hydrate its
+        // sidebar (agent.list / config.providers over the embedder's
+        // HTTP client). Async off the reader like the session port.
+        if other == "sdk.call" {
+            self.answer_sdk_async(id, params);
             return None;
         }
         Some(protocol::error_response(id, &format!("unknown host method {other:?}")))
@@ -1303,6 +1322,40 @@ impl Shared {
         let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
         handle.spawn(async move {
             let reply = match port.call(&bridge, &method, &args).await {
+                Ok(value) => protocol::response(id, json!({ "value": value })),
+                Err(message) => protocol::error_response(id, &message),
+            };
+            let _ = outbound.send(reply);
+        });
+    }
+
+    /// The async `sdk.call` path — identical shape to
+    /// [`Shared::answer_session_async`] over the SDK port.
+    fn answer_sdk_async(self: &Arc<Self>, id: u64, params: &Value) {
+        let Some(handle) = self.runtime_handle.clone() else {
+            let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+            let _ = outbound.send(protocol::error_response(id, "plugin host runtime unavailable"));
+            return;
+        };
+        let Some(port) = self.config.sdk_port.clone() else {
+            let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+            let _ = outbound.send(protocol::error_response(
+                id,
+                "sdk.call: no SDK port attached to the plugin host",
+            ));
+            return;
+        };
+        let name = params.get("name").and_then(Value::as_str).unwrap_or_default().to_owned();
+        if !SDK_METHODS.contains(&name.as_str()) {
+            let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+            let _ = outbound
+                .send(protocol::error_response(id, &format!("unknown sdk method {name:?}")));
+            return;
+        }
+        let args = params.get("args").cloned().unwrap_or(Value::Null);
+        let outbound = self.outbound.read().expect("outbound lock poisoned").clone();
+        handle.spawn(async move {
+            let reply = match port.call(&name, &args).await {
                 Ok(value) => protocol::response(id, json!({ "value": value })),
                 Err(message) => protocol::error_response(id, &message),
             };
@@ -2187,8 +2240,9 @@ pub struct Supervisor {
 }
 
 impl Supervisor {
-    /// Spawn the host, run the initial load pass, and start every
-    /// background task. Must be called inside a tokio runtime.
+    /// Spawn the host, run the initialize handshake, and start every
+    /// background task (the entry load pass runs spawned — G-471).
+    /// Must be called inside a tokio runtime.
     pub async fn start(config: SupervisorConfig) -> Result<Arc<Self>, String> {
         let (tap_tx, tap_rx) = mpsc::channel::<TapEvent>(1024);
         let (outbound_tx, outbound_rx) = mpsc::unbounded_channel::<String>();
@@ -2207,6 +2261,7 @@ impl Supervisor {
             busy_plugins: Mutex::new(HashSet::new()),
             digests: Mutex::new(HashMap::new()),
             revisions: Mutex::new(HashMap::new()),
+            initialized: Arc::new((Mutex::new(false), Condvar::new())),
             ready: Arc::new((Mutex::new(false), Condvar::new())),
             dispatched_events: AtomicU64::new(0),
             dropped_events: AtomicU64::new(0),
@@ -2264,16 +2319,23 @@ impl Supervisor {
         // The event dispatch pump (post-ingest tap consumer).
         tokio::spawn(dispatch_pump(Arc::clone(&shared), tap_rx));
 
-        // Initial handshake + load pass.
+        // Initial handshake + load pass. G-471: the boot gate is the
+        // initialize handshake ONLY — the entry loads (the flagship's
+        // big bundle + its `load.tui` companion) run on a spawned
+        // task and settle `ready` when they finish, so a
+        // cache-warm boot never holds the TUI's plugins-ready pill
+        // (the ref's in-process importModule lands <500 ms; the pill
+        // threshold is 500 ms). Failure surfaces are NOT lost: load
+        // failures land in `PluginState::Failed` and the embedder's
+        // post-settle pass (TuiPluginRuntime::finalize_background_
+        // loads) reads them once `wait_ready` would have.
         shared
             .request("initialize", json!({}), config.registration_timeout)
             .await
             .map_err(|error| format!("initialize: {error}"))?;
-        for entry in &config.entries {
-            load_entry(&shared, entry).await;
-        }
-        shared.scan_all().await;
-        mark_ready(&shared);
+        mark_initialized(&shared);
+        let load_entries = shared.config.entries.clone();
+        tokio::spawn(background_load_pass(Arc::clone(&shared), load_entries));
         Ok(supervisor)
     }
 
@@ -2467,6 +2529,30 @@ fn mark_ready(shared: &Arc<Shared>) {
     let mut ready = lock.lock().expect("ready lock poisoned");
     *ready = true;
     condvar.notify_all();
+}
+
+/// G-471 — settle the initialize-handshake gate (the TUI boot's
+/// plugins-ready condition; the heavy load pass keeps running).
+fn mark_initialized(shared: &Arc<Shared>) {
+    let (lock, condvar) = &*shared.initialized;
+    let mut initialized = lock.lock().expect("initialized lock poisoned");
+    *initialized = true;
+    condvar.notify_all();
+}
+
+/// G-471 — the background load pass (entries + digests), ending in
+/// the full `ready` settle. Spawned off both [`Supervisor::start`]
+/// and the supervise loop's restart arm so neither blocks boot on a
+/// heavy entry (the flagship's 2.3 MB bundle + `load.tui` companion).
+/// Failure containment is `load_entry`'s own (a failed/timed-out load
+/// records `PluginState::Failed`; a guest death mid-pass fails the
+/// in-flight requests and the supervise loop's reload re-runs it).
+async fn background_load_pass(shared: Arc<Shared>, entries: Vec<PathBuf>) {
+    for entry in &entries {
+        load_entry(&shared, entry).await;
+    }
+    shared.scan_all().await;
+    mark_ready(&shared);
 }
 
 impl Shared {
@@ -3258,12 +3344,12 @@ async fn supervise_loop(
                         {
                             continue; // died again immediately — loop re-enters wait()
                         }
-                        // Reload every enabled entry.
-                        for entry in shared.loadable_entries() {
-                            load_entry(&shared, &entry).await;
-                        }
-                        let () = shared.scan_all().await;
-                        mark_ready(&shared);
+                        // Reload every enabled entry — G-471: in the
+                        // background like the initial pass (the
+                        // supervise loop re-arms its wait immediately;
+                        // `ready` re-settles when the reload lands).
+                        let reload_entries = shared.loadable_entries();
+                        tokio::spawn(background_load_pass(Arc::clone(&shared), reload_entries));
                         consecutive = 0;
                     }
                     Err(error) => {

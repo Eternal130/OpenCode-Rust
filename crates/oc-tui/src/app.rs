@@ -9549,6 +9549,16 @@ pub async fn run_with_size(
             if let Some(owned) = runtime.take_owned_updates() {
                 app.set_plugin_commands(owned);
             }
+            // G-471 — late plugin themes (registered during the
+            // background load pass) land on the App's theme registry.
+            if let Some(themes) = runtime.take_theme_updates() {
+                app.set_plugin_themes(themes);
+            }
+            // G-471 — adopt the background load pass once it settles
+            // (boot-failure surfaces, slot claims, palette/keymap/
+            // theme projection, the MCP push); a no-op latch until
+            // then and after.
+            runtime.finalize_background_loads(&app.store, &client);
         }
         // Drain ingest.
         let mut models_stale = false;
@@ -9648,7 +9658,12 @@ pub async fn run_with_size(
         // and unmounts per the 3 s hold) while the Reconnecting
         // overlay persists above it. A fast boot still clears the
         // gate well under the pill's 500 ms display threshold (it
-        // never shows); a slow boot shows it, like v2.
+        // never shows); a slow boot shows it, like v2. G-471: the
+        // future now settles at the guest's initialize HANDSHAKE
+        // (`wait_initialized`) — the heavy entry loads continue in
+        // the background (adopted by the per-pump
+        // `finalize_background_loads`), so a cache-warm boot clears
+        // the threshold like the ref's in-process importModule boot.
         if plugins_boot_done && !plugins_ready_fired {
             plugins_ready_fired = true;
             app.store.set_plugins_ready();
