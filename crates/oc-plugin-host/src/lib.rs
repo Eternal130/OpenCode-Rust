@@ -99,7 +99,7 @@ macro_rules! stderrln {
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering as AtomicOrdering;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -119,9 +119,9 @@ pub use context::{
     install::{default_root as install_root, install, InstallOptions, Installed},
     is_mutating_hook,
     update::{collect_stale, global_cache as update_cache, npm_check, update, UpdateCache},
-    Bridge, HostState, IntegrationPort, ModelPort, NoSessionEngine, NoToolEngine, PermissionPort,
-    ProviderPort, ReferencePort, SessionPort, TerminalPort, ToolPort, VcsPort, WebsearchPort,
-    WorktreePort, MUTATING_DISPATCH_TIMEOUT, SESSION_METHODS,
+    Bridge, HostState, IntegrationPort, ModelPort, NoSdkEngine, NoSessionEngine, NoToolEngine,
+    PermissionPort, ProviderPort, ReferencePort, SdkPort, SessionPort, TerminalPort, ToolPort,
+    VcsPort, WebsearchPort, WorktreePort, MUTATING_DISPATCH_TIMEOUT, SDK_METHODS, SESSION_METHODS,
 };
 pub use registrations::{
     PluginAgent, PluginCommand, PluginDialog, PluginGroupRule, PluginHomeAction, PluginHook,
@@ -163,6 +163,9 @@ pub struct PluginHostConfig {
     pub host_state: HostState,
     /// `ctx.session.*` routing target (the session-engine seam).
     pub session_port: Option<Arc<dyn SessionPort>>,
+    /// `sdk.call` routing target (G-470 — the tui-bridge SDK proxy's
+    /// bounded read face over the embedder's HTTP client).
+    pub sdk_port: Option<Arc<dyn SdkPort>>,
     /// `tools.<name>(input)` routing from Code Mode programs (the
     /// oc-core registry seam; wave 4).
     pub tool_port: Option<Arc<dyn ToolPort>>,
@@ -232,6 +235,7 @@ impl Default for PluginHostConfig {
             max_restarts: 8,
             host_state: HostState::default(),
             session_port: None,
+            sdk_port: None,
             tool_port: None,
             storage_port: None,
             permission_port: None,
@@ -537,12 +541,48 @@ impl PluginHost {
     /// never came up (or is disabled).
     #[must_use]
     pub fn wait_ready(&self, timeout: Duration) -> bool {
+        self.wait_flag(timeout, |facade| Arc::clone(&facade.shared.ready))
+    }
+
+    /// G-471 — block until the FIRST `initialize` handshake completed
+    /// (spawn + handshake only; the entry loads keep running in the
+    /// background and later settle [`PluginHost::wait_ready`]). This
+    /// is the TUI boot's plugins-ready gate: a cache-warm boot clears
+    /// it in spawn time, so the `StartupLoading` pill (500 ms display
+    /// threshold) never shows — matching the ref's in-process
+    /// `importModule` boot. `false` = the host never came up (or is
+    /// disabled).
+    #[must_use]
+    pub fn wait_initialized(&self, timeout: Duration) -> bool {
+        self.wait_flag(timeout, |facade| Arc::clone(&facade.shared.initialized))
+    }
+
+    /// G-471 — whether the initial (or restart) load pass finished
+    /// (`wait_ready`'s condition, peeked — the per-pump poll the TUI's
+    /// post-settle finalize uses).
+    #[must_use]
+    pub fn load_pass_settled(&self) -> bool {
+        let Some(facade) = &self.facade else { return false };
+        if facade.start_error.lock().map_or(true, |error| error.is_some()) {
+            return false;
+        }
+        let (lock, _condvar) = &*facade.shared.ready;
+        *lock.lock().expect("ready lock poisoned")
+    }
+
+    /// The shared wait loop behind [`PluginHost::wait_ready`] /
+    /// [`PluginHost::wait_initialized`].
+    fn wait_flag(
+        &self,
+        timeout: Duration,
+        flag: impl Fn(&Facade) -> Arc<(Mutex<bool>, Condvar)>,
+    ) -> bool {
         let Some(facade) = &self.facade else { return false };
         if facade.start_error.lock().map_or(true, |error| error.is_some()) {
             return false;
         }
         let deadline = Instant::now() + timeout;
-        let (lock, condvar) = &*facade.shared.ready;
+        let (lock, condvar) = &*flag(facade);
         let mut ready = lock.lock().expect("ready lock poisoned");
         while !*ready {
             let now = Instant::now();
@@ -1251,6 +1291,7 @@ fn supervisor_config(
         env: std::mem::take(&mut config.env),
         host_state: std::mem::take(&mut config.host_state),
         session_port: config.session_port.take().or_else(|| Some(Arc::new(NoSessionEngine))),
+        sdk_port: config.sdk_port.take().or_else(|| Some(Arc::new(NoSdkEngine))),
         tool_port: config.tool_port.take().or_else(|| Some(Arc::new(NoToolEngine))),
         storage_port: config.storage_port.take(),
         permission_port: config.permission_port.take(),

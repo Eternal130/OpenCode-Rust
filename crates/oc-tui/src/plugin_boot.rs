@@ -47,7 +47,7 @@ use oc_client::Client;
 use oc_plugin_host::registrations::RegistrationSnapshot;
 use oc_plugin_host::{
     Bridge, BroadcastTap, PluginHost, PluginHostConfig, PluginOp, PluginSectionSpec, Resolution,
-    SessionPort, TapEvent, UiRequest,
+    SdkPort, SessionPort, TapEvent, UiRequest,
 };
 
 use crate::data::BusEvent;
@@ -168,6 +168,17 @@ pub struct TuiPluginRuntime {
     /// The last plugin-markdown render-landing version the pump saw
     /// (G-332: a completed off-loop render requests a redraw).
     markdown_rendered: Rc<Cell<u64>>,
+    /// G-471 — whether the background load pass's registrations were
+    /// adopted (the one-shot `finalize_background_loads` latch).
+    load_finalized: Rc<Cell<bool>>,
+    /// The boot-failure pairs already surfaced (G-471 — the attach
+    /// pass runs before the background loads settle, so the finalize
+    /// pass must only toast NEW failures).
+    surfaced_failures: Rc<RefCell<BTreeSet<(String, String)>>>,
+    /// G-471 — late plugin themes (registered during the background
+    /// load pass) queued for the App's theme registry.
+    #[allow(clippy::type_complexity)] // the pump-slot idiom (see owned_updates)
+    theme_updates: Rc<RefCell<Option<Vec<(String, String)>>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +326,9 @@ impl TuiPluginRuntime {
             dynamic_fingerprint: Rc::new(RefCell::new(String::new())),
             route_content_rx: Rc::new(RefCell::new(None)),
             markdown_rendered: Rc::new(Cell::new(0)),
+            load_finalized: Rc::new(Cell::new(false)),
+            surfaced_failures: Rc::new(RefCell::new(BTreeSet::new())),
+            theme_updates: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -368,6 +382,7 @@ impl TuiPluginRuntime {
         let config = PluginHostConfig {
             host_state,
             session_port: Some(Arc::new(HttpSessionPort { client: client.clone() })),
+            sdk_port: Some(Arc::new(HttpSdkPort { client: client.clone() })),
             ..PluginHostConfig::default()
         };
         let host = Arc::new(PluginHost::detect().start_detached_with(config, &entries));
@@ -375,7 +390,16 @@ impl TuiPluginRuntime {
             // bunman already logged the graceful-disable reason.
             return Some(BootedPluginHost { host, resolution, ready: false });
         }
-        let ready = host.wait_ready(READY_TIMEOUT);
+        // G-471 — the plugins-ready gate is the initialize handshake
+        // ONLY (`wait_initialized`): the entry loads (omo-slim's big
+        // bundle + its `load.tui` companion) settle in the background
+        // and the per-pump `finalize_background_loads` adopts their
+        // registrations once `load_pass_settled()` flips — so a
+        // cache-warm boot clears the StartupLoading pill's 500 ms
+        // threshold like the ref's in-process boot. A slow/stuck
+        // initialize still trips the 30 s bound and lands in the
+        // failure log below.
+        let ready = host.wait_initialized(READY_TIMEOUT);
         if !ready {
             crate::keymap::log_skip(&format!(
                 "plugin host did not come up: {:?}",
@@ -421,15 +445,23 @@ impl TuiPluginRuntime {
         // option table (the ref's failed `plugins.list()` entries,
         // context.tsx:460-484 → plugins.tsx:54-76).
         store.set_plugin_boot_failures(failures.clone());
-        for (target, _error) in &failures {
-            store.toast_show(crate::components::toast::ToastOptions {
-                title: Some(format!("Plugin failed: {target}")),
-                message: "Run /plugins to view details.".to_owned(),
-                variant: "error",
-                action_label: Some("Open plugins".to_owned()),
-                action_command: Some("plugins.list".to_owned()),
-                ..crate::components::toast::ToastOptions::info("")
-            });
+        // G-471 — toast dedup: attach surfaces the pass's failures
+        // before the background loads settle, and the finalize pass
+        // surfaces the guest-load failures; only NEW (target, error)
+        // pairs raise the ref's toast (the chip/dialog tables above
+        // always reflect the full current set).
+        let mut surfaced = self.surfaced_failures.borrow_mut();
+        for (target, error) in &failures {
+            if surfaced.insert((target.clone(), error.clone())) {
+                store.toast_show(crate::components::toast::ToastOptions {
+                    title: Some(format!("Plugin failed: {target}")),
+                    message: "Run /plugins to view details.".to_owned(),
+                    variant: "error",
+                    action_label: Some("Open plugins".to_owned()),
+                    action_command: Some("plugins.list".to_owned()),
+                    ..crate::components::toast::ToastOptions::info("")
+                });
+            }
         }
     }
 
@@ -486,6 +518,58 @@ impl TuiPluginRuntime {
         *self.dynamic_fingerprint.borrow_mut() = dynamic_fingerprint(&owned, &snapshot);
         project_palette(store, &snapshot);
         PluginProjection { owned, themes: projection.themes }
+    }
+
+    /// G-471 — adopt the background load pass's registrations, once
+    /// the pass settled (`host.load_pass_settled()`). The attach pass
+    /// ran at the initialize handshake, so everything the entries
+    /// registered after that moment lands HERE: the boot-failure
+    /// surfaces (guest load failures — async, never lost), the slot
+    /// claims (omo-slim's sidebar registers `sidebar_content` during
+    /// `load.tui`; its 1 s refresh timer then keeps the sections
+    /// current through the ordinary per-pump drain), the palette/
+    /// keymap projection, plugin themes, and the MCP push. One-shot
+    /// (the `load_finalized` latch); a host-disabled or never-settled
+    /// pass leaves it armed and the pump retries next frame.
+    pub fn finalize_background_loads(&self, store: &Store, client: &Client) -> bool {
+        if self.load_finalized.get() {
+            return true;
+        }
+        let host = &self.booted.host;
+        if !host.enabled() || !host.load_pass_settled() {
+            return false;
+        }
+        self.load_finalized.set(true);
+        // The failure surfaces first (the async boot-failure face —
+        // B2-fix's contract, now landing after ready instead of
+        // blocking it).
+        self.surface_boot_failures(store);
+        // Then the attach-pass projection, re-run over the settled
+        // snapshot: claims, palette rows, owned chords, themes.
+        self.materialize_slot_claims(store);
+        let snapshot = host.registrations();
+        self.install_markdown_renderers(&snapshot);
+        let projection = project_registrations(store, &snapshot);
+        let owned = Self::owned_keymap_entries(&snapshot);
+        *self.dynamic_fingerprint.borrow_mut() = dynamic_fingerprint(&owned, &snapshot);
+        project_palette(store, &snapshot);
+        if !owned.is_empty() {
+            *self.owned_updates.borrow_mut() = Some(owned);
+        }
+        if !projection.themes.is_empty() {
+            *self.theme_updates.borrow_mut() = Some(projection.themes);
+        }
+        // PLUG-D33: the plugin-declared MCP servers push now too.
+        self.start_mcp_sync(client);
+        true
+    }
+
+    /// G-471 — the late plugin themes queued by
+    /// [`Self::finalize_background_loads`] (the App applies them onto
+    /// the theme registry).
+    #[must_use]
+    pub fn take_theme_updates(&self) -> Option<Vec<(String, String)>> {
+        self.theme_updates.borrow_mut().take()
     }
 
     #[allow(clippy::too_many_lines)] // monolithic 1:1 ref port; helper split deferred
@@ -1541,6 +1625,81 @@ fn dynamic_fingerprint(owned: &[OwnedCommandDef], snapshot: &RegistrationSnapsho
 /// like the composer's `session.prompt` POST.
 pub struct HttpSessionPort {
     client: Client,
+}
+
+/// G-470 — the `sdk.call` port: the BOUNDED SDK read face the
+/// tui-bridge client proxy serves (host.js `load.tui` →
+/// `sdk.call` → here → the app's own server over oc-client).
+/// Exactly the two surfaces omo-slim's sidebar hydration calls
+/// (dist/tui.js: `fetchRemoteAgentModels` → `client.agent.list`,
+/// `fetchModelOptions` → `client.config.providers`); widening the
+/// face is an owner decision (G-28 boundary).
+///
+/// Response shapes are omo-slim's expected ones:
+/// * `agent.list` → the wire `AgentListResponse` verbatim
+///   (`{data: [{id, name, model: {providerID, id}, …}]}` —
+///   `unwrapAgentList` + `remoteModelId` read exactly those);
+/// * `config.providers` → synthesized from `model.list` grouped by
+///   provider into the v2 client's `{data: {providers: [{id,
+///   models: {modelId: {name, …}}}]}}` (`fetchModelOptions` reads
+///   `res.data.providers[].models` — the ref SDK composes that view
+///   server-side; here the port groups the flat model table).
+pub struct HttpSdkPort {
+    client: Client,
+}
+
+#[async_trait]
+impl SdkPort for HttpSdkPort {
+    async fn call(&self, method: &str, args: &Value) -> Result<Value, String> {
+        match method {
+            "agent.list" => {
+                let directory = args
+                    .get("location")
+                    .and_then(|location| location.get("directory"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let response = self
+                    .client
+                    .agent()
+                    .list(&oc_client::types::AgentListQuery {
+                        location: directory.map(|directory| oc_client::types::QueryLocation {
+                            directory: Some(directory),
+                        }),
+                    })
+                    .await
+                    .map_err(|error| error.to_string())?;
+                serde_json::to_value(&response).map_err(|error| error.to_string())
+            }
+            "config.providers" => {
+                let models = self
+                    .client
+                    .model()
+                    .list(&oc_client::types::ModelListQuery { location: None })
+                    .await
+                    .map_err(|error| error.to_string())?;
+                // Group the flat model table per provider (the v2
+                // `client.config.providers()` view omo reads).
+                let mut providers: serde_json::Map<String, Value> = serde_json::Map::new();
+                for model in &models.data {
+                    let entry = providers.entry(model.provider_id.clone()).or_insert_with(
+                        || serde_json::json!({ "id": model.provider_id, "models": {} }),
+                    );
+                    if let Some(table) = entry.get_mut("models").and_then(Value::as_object_mut) {
+                        table.insert(
+                            model.id.clone(),
+                            serde_json::json!({
+                                "name": model.name,
+                            }),
+                        );
+                    }
+                }
+                Ok(serde_json::json!({
+                    "data": { "providers": Value::Array(providers.into_values().collect()) }
+                }))
+            }
+            other => Err(format!("sdk.{other}: unsupported on the TUI SDK port")),
+        }
+    }
 }
 
 #[async_trait]

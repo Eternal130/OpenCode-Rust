@@ -570,6 +570,16 @@ fn w13_omo_sections_at_trigger_width_pair() {
         rust_booted && ref_booted,
         "OMO precondition RED: boot rust/rust={rust_booted}/{ref_booted}"
     );
+    // G-471 anchor (export-only, W12 no-judgment): on a plugin-
+    // configured boot the settled home frames carry NO StartupLoading
+    // pill on either end (the ready gate is the initialize handshake;
+    // a cache-warm boot clears the 500 ms display threshold). The
+    // in-boot visibility window is VT-covered (vt_temporal); this
+    // anchors the settled realchain frames.
+    let pill_needles = ["Loading plugins", "Finishing startup"];
+    let count_pills = |screen: &str| -> u64 {
+        pill_needles.iter().map(|needle| screen.matches(needle).count() as u64).sum()
+    };
     // Plugin load is async — settle past the wordmark.
     settle(8);
     let home_ref = normalize(&ref_tui.screen_text());
@@ -577,6 +587,27 @@ fn w13_omo_sections_at_trigger_width_pair() {
     dump_grid("w13-omo-home-ref", &home_ref);
     dump_grid("w13-omo-home-rust", &home_rust);
     export_grid_diff("w13-omo", "home", &home_ref, &home_rust);
+    export_survey(
+        "w13-omo",
+        "home-no-pill",
+        &[
+            ("rust settled-home pill cells (G-471, expect 0)", 0, count_pills(&home_rust)),
+            ("ref settled-home pill cells (G-471, expect 0)", 0, count_pills(&home_ref)),
+        ],
+        None,
+    );
+    // G-470 anchor (export-only): the HYDRATED home state — the
+    // sidebar's remote model hydration (agent.list → agent→model
+    // rows, config.providers → model display names, both proxied
+    // through the tui-bridge SDK port on the rust end) lands after
+    // the plugin's 1 s render timer; a second settle past the first
+    // export captures the post-hydration sidebar rows.
+    settle(8);
+    let hydrated_ref = normalize(&ref_tui.screen_text());
+    let hydrated_rust = normalize(&rust_tui.screen_text());
+    dump_grid("w13-omo-home-hydrated-ref", &hydrated_ref);
+    dump_grid("w13-omo-home-hydrated-rust", &hydrated_rust);
+    export_grid_diff("w13-omo", "home-hydrated", &hydrated_ref, &hydrated_rust);
 
     // Session state: one reply, then export the footer again.
     // W13 finding (exported, not asserted): with the real plugins

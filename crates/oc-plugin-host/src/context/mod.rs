@@ -222,6 +222,33 @@ pub const SESSION_METHODS: &[&str] = &[
     "switchModel",
 ];
 
+/// The `sdk.call` guest-facing allowlist (G-470 — the tui-bridge SDK
+/// proxy's BOUNDED read face; widening it is an owner decision, not a
+/// lane liberty). Exactly the surfaces oh-my-opencode-slim's sidebar
+/// hydration reads: `agent.list` (agent→model mapping,
+/// fetchRemoteAgentModels) and `config.providers` (model display
+/// names, fetchModelOptions/fetchModelNameMap).
+pub const SDK_METHODS: &[&str] = &["agent.list", "config.providers"];
+
+/// `sdk.call` routing target (G-470): the bounded SDK read face the
+/// TUI companion bridge (`host.js` `load.tui`) proxies to the app's
+/// own server over the embedder's HTTP client. `Err` rejects inside
+/// the guest (the plugin treats it as "no data").
+#[async_trait]
+pub trait SdkPort: Send + Sync {
+    async fn call(&self, method: &str, args: &Value) -> Result<Value, String>;
+}
+
+/// The declining default: every call errors with a clear message.
+pub struct NoSdkEngine;
+
+#[async_trait]
+impl SdkPort for NoSdkEngine {
+    async fn call(&self, method: &str, _args: &Value) -> Result<Value, String> {
+        Err(format!("sdk.{method}: no SDK port attached to the plugin host"))
+    }
+}
+
 /// The Code Mode bridge methods (`codemode.*`) — the same
 /// async-off-the-reader routing the session methods use (deadlock rule
 /// 1), applied to `tools.<path>(input)` calls from inside an `execute`

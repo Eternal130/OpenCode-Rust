@@ -4002,17 +4002,34 @@ async function handleLoadTui({ entry, options }) {
   const record = { id: pluginId, entry: abs, dispose: null, subscriptions: [], commands: new Map() };
   plugins.set(pluginId, record);
 
-  const clientStub = new Proxy(
-    {},
-    {
-      get(_target, prop) {
-        if (prop === "then" || prop === "catch" || prop === "finally") return undefined;
-        // Every SDK surface degrades to a rejecting promise (the
-        // sidebar's remote hydration treats failures as "no data").
-        return () => Promise.reject(new Error(`tui-bridge client stub: ${String(prop)} unavailable`));
-      },
+  // G-470 — the client bridge: the BOUNDED read face omo-slim's
+  // sidebar hydration actually calls (grep of dist/tui.js):
+  //   client.agent.list({location:{directory}})  (fetchRemoteAgentModels, v2 arm)
+  //   client.config.providers()                   (fetchModelOptions → fetchModelNameMap)
+  // Both proxy to the app's own server over the embedder's HTTP
+  // client (`sdk.call` host method → the SdkPort the TUI binds).
+  // Everything else keeps the rejecting-stub degradation — widening
+  // the face is an owner decision (G-28 boundary).
+  const sdkCall = (name, args) =>
+    hostRequest("sdk.call", { pluginId, name, args: args ?? {} }).then((result) =>
+      result && typeof result === "object" && "value" in result ? result.value : result,
+    );
+  const clientBridge = {
+    agent: { list: (query) => sdkCall("agent.list", query ?? {}) },
+    config: { providers: () => sdkCall("config.providers") },
+    // NOTE: `app.agents` (the v1 arm) is deliberately absent so
+    // fetchRemoteAgentModels takes the v2 `agent.list` path.
+  };
+  const clientStub = new Proxy(clientBridge, {
+    get(target, prop) {
+      if (prop === "then" || prop === "catch" || prop === "finally") return undefined;
+      if (prop in target) return target[prop];
+      // Every other SDK surface degrades to a rejecting promise (the
+      // sidebar's remote hydration treats failures as "no data").
+      return () =>
+        Promise.reject(new Error(`tui-bridge client stub: ${String(prop)} unavailable`));
     },
-  );
+  });
   const disposeLifecycle = [];
   const api = {
     app: { version: domainBase.appVersion },

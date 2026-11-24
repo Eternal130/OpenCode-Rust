@@ -300,7 +300,10 @@ mod tests {
             "the 3 s hold keeps the pill with the finishing copy"
         );
         assert_eq!(store.startup_loading_text(3_500), None, "hold expires");
-        // A ready-before-showing boot never shows the pill.
+        // A ready-before-showing boot never shows the pill. (G-471:
+        // this is now the COMMON path — the ready gate is the guest's
+        // initialize handshake, so a cache-warm boot settles ready in
+        // spawn time, under the 500 ms threshold.)
         let fresh = Store::new(Runtime::new());
         fresh.set_plugins_ready();
         assert_eq!(fresh.startup_loading_text(10_000), None);
