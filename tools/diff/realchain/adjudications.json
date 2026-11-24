@@ -331,6 +331,374 @@
    "g_ref": "va14 closing-gate export 2026-11-24",
    "adjudicated_by": "controller",
    "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17a-palette-end",
+   "scenario_pattern": "v17a",
+   "state_pattern": "palette-end",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:Nemotron|/…/open)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17a-palette-end.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17a-palette-home",
+   "scenario_pattern": "v17a",
+   "state_pattern": "palette-home",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:Nemotron|/…/open)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17a-palette-home.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17a-palette-tab",
+   "scenario_pattern": "v17a",
+   "state_pattern": "palette-tab",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:Nemotron|/…/open)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17a-palette-tab.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17a-palette-tabenter",
+   "scenario_pattern": "v17a",
+   "state_pattern": "palette-tabenter",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:Connect|Search|█▀▀█|Popular|OpenCode|OpenAI|GitHub|Anthropic|Google|Buil|Services|/…/open|50X|Abacus)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17a-palette-tabenter.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17b-sessions-ctrlr",
+   "scenario_pattern": "v17b",
+   "state_pattern": "sessions-ctrlr",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:Rename|Sandbox|enter|delete)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17b-sessions-ctrlr.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17b-sessions-tab",
+   "scenario_pattern": "v17b",
+   "state_pattern": "sessions-tab",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:Sessions)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17b-sessions-tab.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17b-sessions-tabenter",
+   "scenario_pattern": "v17b",
+   "state_pattern": "sessions-tabenter",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:Sessions|Search|Today|Press|delete)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17b-sessions-tabenter.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17b-sessions",
+   "scenario_pattern": "v17b",
+   "state_pattern": "sessions",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:Sessions)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17b-sessions.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17b-tabmenu",
+   "scenario_pattern": "v17b",
+   "state_pattern": "tabmenu",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:session|Rename|Copy|Close)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17b-tabmenu.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17c-export-enter",
+   "scenario_pattern": "v17c",
+   "state_pattern": "export-enter",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:Export|Sanitize|JSON|Copy|Include)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17c-export-enter.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17c-export-open",
+   "scenario_pattern": "v17c",
+   "state_pattern": "export-open",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:Export|Include|JSON|Copy)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17c-export-open.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17c-export-tab",
+   "scenario_pattern": "v17c",
+   "state_pattern": "export-tab",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:Export|Include|JSON|Copy)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17c-export-tab.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17d-diff-base-data",
+   "scenario_pattern": "v17d",
+   "state_pattern": "diff-base-data",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:Base|changes|Search|branches|master|Remembered)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17d-diff-base-data.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17d-diff-base-empty",
+   "scenario_pattern": "v17d",
+   "state_pattern": "diff-base-empty",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:Base|changes|Search|branches|Remembered)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17d-diff-base-empty.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17d-diff-help",
+   "scenario_pattern": "v17d",
+   "state_pattern": "diff-help",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:Base|changes|Diff|Review|alt\\+↓|alt\\+↑|Next|right\\-click|Scroll|Down|ctrl\\+d|pgdn|shift\\+g|pagedown,|View|Split|files|Show|Switch|escape)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17d-diff-help.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17d-diff-route-empty",
+   "scenario_pattern": "v17d",
+   "state_pattern": "diff-route-empty",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:Base|changes)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17d-diff-route-empty.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17d-diff-route-git",
+   "scenario_pattern": "v17d",
+   "state_pattern": "diff-route-git",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:Base|changes)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17d-diff-route-git.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17d-diff-source-git",
+   "scenario_pattern": "v17d",
+   "state_pattern": "diff-source-git",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:Base|changes|Branch|Committed|Uncommitted)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17d-diff-source-git.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17d-diff-source",
+   "scenario_pattern": "v17d",
+   "state_pattern": "diff-source",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:Base|changes|Branch|Committed|Uncommitted)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17d-diff-source.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17e-tooldialog",
+   "scenario_pattern": "v17e",
+   "state_pattern": "tooldialog",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:Running|cargo|Compiling|Finished)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17e-tooldialog.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17f-mention-complete",
+   "scenario_pattern": "v17f",
+   "state_pattern": "mention-complete",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:▀▀▀▀|bdir/dup\\.txt|adir/dup\\.txt)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17f-mention-complete.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17f-mention-dedup",
+   "scenario_pattern": "v17f",
+   "state_pattern": "mention-dedup",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:@bdir/dup\\.txt)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17f-mention-dedup.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
+  },
+  {
+   "id": "v17-v17f-mention-second-arrow",
+   "scenario_pattern": "v17f",
+   "state_pattern": "mention-second-arrow",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:▀▀▀▀|bdir/dup\\.txt|adir/dup\\.txt|@bdir/dup\\.txt)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-24): live-ref paired export by lane va17 — a confirmed known divergence registered as G-48x (component-audit wave, fix scheduled P1/P2). Not accepted as permanent: the entry goes stale (tip-only) when the fix lands; re-triage if the shape survives the fix wave. Frame evidence: .test-logs/diff-reports/v17f-mention-second-arrow.txt",
+   "g_ref": "va17 live-ref verification wave",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-24"
   }
  ]
 }
