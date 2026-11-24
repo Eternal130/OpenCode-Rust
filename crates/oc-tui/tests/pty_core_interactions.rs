@@ -543,9 +543,7 @@ fn handle(mut socket: std::net::TcpStream, shared: &Shared) {
         // One-shot: close exactly the streams open NOW (each closing
         // stream consumes a unit); streams opened later — the recovery
         // stream past the two armed header drops — survive.
-        shared
-            .lose_now
-            .store(shared.open_streams.load(Ordering::SeqCst), Ordering::SeqCst);
+        shared.lose_now.store(shared.open_streams.load(Ordering::SeqCst), Ordering::SeqCst);
         let _ = socket.write_all(b"HTTP/1.1 204 No Content\r\nconnection: close\r\n\r\n");
         return;
     }
@@ -1216,9 +1214,8 @@ fn pty_engine_cycle_type_worddelete_undo_leader_escape() {
 fn trigger_loss(url: &str) {
     let addr = url.trim_start_matches("http://");
     if let Ok(mut socket) = std::net::TcpStream::connect(addr) {
-        let _ = socket.write_all(
-            b"GET /api/__test/lose HTTP/1.1\r\nhost: test\r\nconnection: close\r\n\r\n",
-        );
+        let _ = socket
+            .write_all(b"GET /api/__test/lose HTTP/1.1\r\nhost: test\r\nconnection: close\r\n\r\n");
         let mut sink = [0u8; 128];
         let _ = socket.read(&mut sink);
     }

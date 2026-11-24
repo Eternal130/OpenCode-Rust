@@ -1853,14 +1853,12 @@ fn composer_mount_frame(
             height: text_rows,
         },
     );
-    let text_hit = (!composer.draft.pasted.is_empty()).then(|| {
-        crate::store::PromptTextHit {
-            session_id: session_id.to_owned(),
-            x: 1 + pad,
-            y: height - prompt_height + popup_rows + 1,
-            rows: text_rows,
-            inner,
-        }
+    let text_hit = (!composer.draft.pasted.is_empty()).then(|| crate::store::PromptTextHit {
+        session_id: session_id.to_owned(),
+        x: 1 + pad,
+        y: height - prompt_height + popup_rows + 1,
+        rows: text_rows,
+        inner,
     });
     (frame, prompt_height, mount_height, caret_screen, text_hit)
 }

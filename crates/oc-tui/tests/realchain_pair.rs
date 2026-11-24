@@ -1306,12 +1306,14 @@ fn p5_selection_copy_toast_pair() {
         p5_drag_select(tui, x, y, 8);
         wait_toast(tui)
     };
-    let rust_toast = rust_anchor.is_some_and(|(x, y)| select_until_toast(&mut rig.rust_tui, x + 2, y));
+    let rust_toast =
+        rust_anchor.is_some_and(|(x, y)| select_until_toast(&mut rig.rust_tui, x + 2, y));
     std::thread::sleep(Duration::from_millis(300));
     let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
     // REF-side scenario-content sanity ONLY (W12: the ref toast is the
     // rig's proof the stroke selected + released over selectable text).
-    let ref_toasted = ref_anchor.is_some_and(|(x, y)| select_until_toast(&mut rig.ref_tui, x + 2, y));
+    let ref_toasted =
+        ref_anchor.is_some_and(|(x, y)| select_until_toast(&mut rig.ref_tui, x + 2, y));
     std::thread::sleep(Duration::from_millis(300));
     let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
     // Diagnostic ONLY (no assertion — W12): whether the rust side ever

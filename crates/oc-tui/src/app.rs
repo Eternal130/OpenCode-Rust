@@ -580,7 +580,11 @@ impl App {
     /// a press outside them arms nothing. A modal (dialog stack /
     /// live permission) owns the screen — its scrim covers the text,
     /// so nothing is selectable while it shows.
-    fn selection_start_region(&self, col: usize, row: usize) -> Option<crate::store::SelectableRegionKind> {
+    fn selection_start_region(
+        &self,
+        col: usize,
+        row: usize,
+    ) -> Option<crate::store::SelectableRegionKind> {
         if !self.store.dialogs().is_empty() || self.permission_live() {
             return None;
         }

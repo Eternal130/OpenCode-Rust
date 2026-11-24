@@ -1554,8 +1554,11 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
     // mount uses — `console_units`, at (0,0) sized
     // `(width, min(CONSOLE_ROWS, lines+2))`).
     if store.console_open() {
-        let (console_w, console_rows, _) =
-            crate::components::console_solid::console_units(&store.console_lines(), &styles, size.0);
+        let (console_w, console_rows, _) = crate::components::console_solid::console_units(
+            &store.console_lines(),
+            &styles,
+            size.0,
+        );
         store.add_selectable_region(
             crate::store::SelectableRegionKind::Console,
             crate::store::HitRect { x: 0, y: 0, width: console_w, height: console_rows },
