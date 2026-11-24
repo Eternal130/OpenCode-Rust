@@ -90,6 +90,10 @@ pub struct App {
     /// the last left press's (time, cell) and the running count.
     selection_last_press: Option<(u64, usize, usize)>,
     selection_click_count: u32,
+    /// G-468① — the last COUNTED press's selectable surface (the
+    /// multi-click counter's "same renderable" gate,
+    /// renderer.ts:4981 `renderable.num === last.renderableId`).
+    selection_last_region: Option<crate::store::SelectableRegionKind>,
     /// TUI-16 — the last drawn frame (the selection's text source).
     pub last_frame: Option<crate::render::Frame>,
     /// TUI-16 — `terminal.copy` (select/manual).
@@ -138,6 +142,16 @@ pub struct App {
     /// crossed a slot boundary (`didDrag` — the release persists the
     /// move and SUPPRESSES the click-select, :1505-1514).
     strip_drag: Option<(String, bool)>,
+    /// G-468② — the rail `⌕` search row's press arm
+    /// (session-tabs-rail.tsx:38-48: `pressed` set on the row's left
+    /// mousedown, `search()` only on a release that finds it set).
+    rail_search_pressed: bool,
+    /// G-468② — the dialog backdrop's one-shot swallow
+    /// (ui/dialog.tsx:35-44: the root box's mousedown sets
+    /// `dismiss = !!renderer.getSelection()`; the mouseup skips the
+    /// close once when it armed — a press that started over a live
+    /// selection never dismisses the dialog it released over).
+    dialog_backdrop_dismiss: bool,
     /// TUI-3 — the rail's resize interaction (`createPaneResize`,
     /// ui/pane-resize.ts): `Some(moved)` while a handle press holds
     /// the drag (`moved` once the pointer crossed cells), else None.
@@ -210,6 +224,7 @@ impl App {
             screen_selection: crate::selection::ScreenSelection::default(),
             selection_last_press: None,
             selection_click_count: 0,
+            selection_last_region: None,
             last_frame: None,
             copy_behavior: crate::config::CopyBehavior::default(),
             keymap: Keymap::new(),
@@ -223,6 +238,8 @@ impl App {
             form_replies: Vec::new(),
             form_cancels: Vec::new(),
             strip_drag: None,
+            rail_search_pressed: false,
+            dialog_backdrop_dismiss: false,
             rail_resizing: None,
             rail_boundary_click: None,
             pane_resizing: None,
@@ -518,12 +535,19 @@ impl App {
     /// rapid presses within 500 ms increment the count — 1 = cell, 2 =
     /// word (double-click), 3 = line (triple-click), and the ref
     /// CLAMPS the count at `Math.min(last.count + 1, 3)` (the fourth
-    /// press stays line). `continued` needs the same renderable +
-    /// `max(|dx|, |dy|) <= 1` — the port has no renderable model, so
-    /// the chebyshev<=1 tolerance applies to screen cells (a bounded
-    /// approximation: the ref only counts presses that STARTED a
-    /// selection on a selectable renderable; every press arms here).
-    fn next_selection_click(&mut self, col: usize, row: usize) -> u32 {
+    /// press stays line). G-468①: `nextClickBehavior` runs ONLY for
+    /// presses that STARTED a selection (renderer.ts:3699-3706 calls
+    /// it inside the `canStartSelection` branch), and `continued`
+    /// needs the same renderable — the port gates the count on the
+    /// same selectable surface (the region kind) and RESETS it on
+    /// every non-arming press, so chrome presses never feed the
+    /// counter. `max(|dx|, |dy|) <= 1` applies to screen cells.
+    fn next_selection_click(
+        &mut self,
+        col: usize,
+        row: usize,
+        region: crate::store::SelectableRegionKind,
+    ) -> u32 {
         // G-457 rework: read the STORE clock — `self.clock`
         // (ManualClock) only advances in unit tests; frozen at 0 in
         // the live loop it classified EVERY same-cell press as a
@@ -532,12 +556,39 @@ impl App {
         // is the live path's only advancing time base.
         let now_ms = self.store.clock();
         let rapid = self.selection_last_press.is_some_and(|(at, x, y)| {
-            now_ms.saturating_sub(at) <= 500 && x.abs_diff(col).max(y.abs_diff(row)) <= 1
+            now_ms.saturating_sub(at) <= 500
+                && x.abs_diff(col).max(y.abs_diff(row)) <= 1
+                && self.selection_last_region == Some(region)
         });
         self.selection_click_count =
             if rapid { (self.selection_click_count + 1).min(3) } else { 1 };
         self.selection_last_press = Some((now_ms, col, row));
+        self.selection_last_region = Some(region);
         self.selection_click_count
+    }
+
+    /// G-468① — whether one cell can START a selection (the bounded
+    /// port of the renderer's start gate, renderer.ts:3684-3699
+    /// `canStartSelection`: the hit renderable must be `selectable`
+    /// with `shouldStartSelection` true — Renderable.ts:243 defaults
+    /// `selectable=false`, only the text-bearing renderables opt in
+    /// (TextBufferRenderable.ts:26 / EditBufferRenderable.ts:88 /
+    /// ASCIIFont.ts:30 / EmbeddedTerminal.ts:43). The frame-level
+    /// port has no per-renderable hit model, so the render pass
+    /// registers the text-bearing cell rects (store ::
+    /// `selectable_regions`: transcript, console, composer textarea);
+    /// a press outside them arms nothing. A modal (dialog stack /
+    /// live permission) owns the screen — its scrim covers the text,
+    /// so nothing is selectable while it shows.
+    fn selection_start_region(
+        &self,
+        col: usize,
+        row: usize,
+    ) -> Option<crate::store::SelectableRegionKind> {
+        if !self.store.dialogs().is_empty() || self.permission_live() {
+            return None;
+        }
+        self.store.selectable_region_at(col, row)
     }
 
     /// One terminal mouse event (beta.8 bugs 3 + 4). v2's tab strip
@@ -797,7 +848,16 @@ impl App {
                         self.submit_dialog_option(index);
                     } else if let Some((x, y, width, height)) = self.store.dialog_frame_rect() {
                         if col < x || row < y || col >= x + width || row >= y + height {
-                            self.store.close_dialog();
+                            // G-468② — the backdrop's one-shot swallow
+                            // (ui/dialog.tsx:35-44): the root box's
+                            // mousedown armed `dismiss` while a selection
+                            // was live; this mouseup skips the close (the
+                            // next one closes — `dismiss` resets).
+                            if self.dialog_backdrop_dismiss {
+                                self.dialog_backdrop_dismiss = false;
+                            } else {
+                                self.store.close_dialog();
+                            }
                         }
                     }
                     self.store.request_redraw();
@@ -953,7 +1013,7 @@ impl App {
                     if drag.is_some() {
                         let preview = self.store.tab_drag_preview();
                         self.store.set_tab_drag_preview(None);
-                        if let (Some((source, _)), Some((_, index))) = (drag, preview) {
+                        if let (Some((source, _)), Some((_, index))) = (drag.clone(), preview) {
                             self.store.move_tab(&source, index);
                             // `release()`: the moved tab selects (the
                             // home pseudo-tab never selects).
@@ -964,15 +1024,28 @@ impl App {
                             return;
                         }
                     }
-                    match hit {
-                        StripHit::Tab(id) => {
-                            // The home pseudo-tab IS the home route —
-                            // selecting it is a stay-put (`NEW_SESSION_TAB`
-                            // has no session to route to).
-                            if id != crate::components::session_tabs::NEW_SESSION_TAB_ID {
-                                self.store.select_tab(&id);
-                            }
+                    // G-468② — `release()`'s `dragging()` guard
+                    // (session-tabs.tsx:1504-1514): the click-select
+                    // fires ONLY when THIS strip press armed a tab,
+                    // and it selects the PRESS-TIME tab (`source` —
+                    // the capture's synthetic up lands on the pressed
+                    // tab, never the release-time hit). A release with
+                    // no strip press selects nothing.
+                    if let Some((source, _)) = drag {
+                        if source != crate::components::session_tabs::NEW_SESSION_TAB_ID {
+                            self.store.select_tab(&source);
                         }
+                        self.refresh_strip_hover(width);
+                        return;
+                    }
+                    match hit {
+                        // G-468② — the `dragging()` guard consumed the
+                        // armed-tab select above; a bare release (no
+                        // strip press) selects nothing
+                        // (session-tabs.tsx:1505-1506). The arm only
+                        // reaches the match for surfaces with their own
+                        // handlers (✕ / +).
+                        StripHit::Tab(_) | StripHit::Outside => {}
                         StripHit::Close(id) => {
                             if id == crate::components::session_tabs::NEW_SESSION_TAB_ID {
                                 // `tabs.close()` on the promoted slot
@@ -996,7 +1069,6 @@ impl App {
                             }
                         }
                         StripHit::Add => self.store.navigate(Route::Home),
-                        StripHit::Outside => {}
                     }
                     // opentui re-dispatches hover from the LAST
                     // pointer position whenever a re-layout moves
@@ -1418,6 +1490,36 @@ impl App {
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
+                // G-468② — the dialog backdrop's dismiss capture
+                // (ui/dialog.tsx:35-38): the root box's mousedown arms
+                // `dismiss` while a selection is live; the mouseup then
+                // swallows one close. Runs BEFORE the selection state
+                // changes (the tail clear below).
+                if !self.store.dialogs().is_empty() && self.screen_selection.is_active() {
+                    self.dialog_backdrop_dismiss = true;
+                }
+                // G-468② — the rail `⌕` search row's press arm
+                // (session-tabs-rail.tsx:38-40: the row's own
+                // `onMouseDown` sets `pressed` for a left press).
+                if rail_live
+                    && rail_width.is_some_and(|rail| {
+                        matches!(
+                            crate::components::session_tabs_rail::rail_hit(
+                                &self.rail_views(),
+                                &crate::components::session_tabs_rail::RailGeometry::new(
+                                    self.store.strip_tabs_ordered().len(),
+                                    rail,
+                                ),
+                                col,
+                                row,
+                                self.home_new_tab(),
+                            ),
+                            crate::components::session_tabs_rail::RailHit::Search
+                        )
+                    })
+                {
+                    self.rail_search_pressed = true;
+                }
                 // T1 (renderer.ts:3734-3740) — a ctrl+left press over
                 // an EXISTING selection extends it and the press is
                 // CONSUMED (nothing below sees it: no rail/pane
@@ -1432,11 +1534,30 @@ impl App {
                         return;
                     }
                 } else {
-                    // TUI-16 — every left press arms a potential screen
-                    // selection (the renderer's cell model; the release
-                    // only resolves one when the pointer crossed cells).
-                    let click_count = self.next_selection_click(col, row);
-                    self.screen_selection.press(col, row, click_count);
+                    // TUI-16 / G-468① — a left press arms a potential
+                    // screen selection ONLY over a selectable surface
+                    // (the render pass's region table — the bounded
+                    // port of renderer.ts:3684-3699's `canStartSelection`
+                    // gate; chrome text renders `selectable={false}`).
+                    if let Some(region) = self.selection_start_region(col, row) {
+                        let click_count = self.next_selection_click(col, row, region);
+                        self.screen_selection.press(col, row, click_count);
+                    } else {
+                        // renderer.ts:3807-3814 — a non-ctrl left
+                        // down that did NOT start a selection clears
+                        // the kept selection at the dispatch tail
+                        // (`clearSelection`), and the multi-click
+                        // history dies with it (nextClickBehavior
+                        // only ever counts arming presses,
+                        // renderer.ts:3699-3706).
+                        self.selection_last_press = None;
+                        self.selection_click_count = 0;
+                        self.selection_last_region = None;
+                        if self.screen_selection.is_active() {
+                            self.screen_selection.clear();
+                            self.store.request_redraw();
+                        }
+                    }
                 }
                 // TUI-3 — the rail's handle press arms the resize
                 // (`onMouseDown`, pane-resize.ts:82-97); the boundary
@@ -1534,6 +1655,9 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                // G-468② — the rail search row's `onMouseDragEnd`
+                // clears the press arm (session-tabs-rail.tsx:47).
+                self.rail_search_pressed = false;
                 // TUI-16 — the drag extends the screen selection
                 // (unless a UI drag — the rail resize or the tab
                 // reorder — owns the pointer).
@@ -3092,15 +3216,21 @@ impl App {
                 self.store.request_redraw();
             }
             crate::components::session_tabs_rail::RailHit::Search => {
-                // `tabs.search ? tabs.search() : keymap.dispatch
+                // G-468② — the `pressed` guard
+                // (session-tabs-rail.tsx:38-48): `search()` fires only
+                // when the row's own left mousedown armed `pressed`
+                // (`tabs.search ? tabs.search() : keymap.dispatch
                 // ("session.list")` — the controller has no search
-                // surface, so the session list mounts
-                // (session-tabs-rail.tsx:26).
-                let dispatch = self.dispatcher.dispatch(&self.store, "session.list", None);
-                if let Dispatch::ServerPending(reason) = dispatch {
-                    let _ = reason;
+                // surface, so the session list mounts,
+                // session-tabs-rail.tsx:26).
+                if self.rail_search_pressed {
+                    self.rail_search_pressed = false;
+                    let dispatch = self.dispatcher.dispatch(&self.store, "session.list", None);
+                    if let Dispatch::ServerPending(reason) = dispatch {
+                        let _ = reason;
+                    }
+                    self.store.request_redraw();
                 }
-                self.store.request_redraw();
             }
             crate::components::session_tabs_rail::RailHit::Handle
             | crate::components::session_tabs_rail::RailHit::Outside => {}
@@ -13261,9 +13391,11 @@ fn mouse_strip_hover_close_select_and_add() {
     assert_eq!(app.store.route(), Route::session("s1".to_owned()));
 
     // A body click selects: s1 is the only tab; open another and
-    // click its body mid-slot.
+    // click its body mid-slot (G-468② — the select rides the strip
+    // press arm, session-tabs.tsx:1505-1506).
     app.store.open_tab("s3", Some("Gamma".to_owned()));
     app.mouse_event(&mouse(MouseEventKind::Moved, 40, 0));
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 40, 0));
     app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 40, 0));
     assert_eq!(app.store.route(), Route::session("s3".to_owned()));
 
@@ -13438,6 +13570,10 @@ fn mouse_home_strip_click_selects_the_restored_tab() {
     app.mouse_event(&mouse(MouseEventKind::Moved, 5, 0));
     assert_eq!(app.store.tabs().hover.as_deref(), Some("r1"));
     // The body release selects: home → the restored session's route.
+    // G-468② — the select needs the strip press arm
+    // (session-tabs.tsx:1505-1506 `release()`'s `dragging()` guard);
+    // a bare release never selects.
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 5, 0));
     app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 5, 0));
     assert_eq!(app.store.route(), Route::session("r1".to_owned()));
     // The ` + ` affordance navigates home from the session — SA-F7's
@@ -13445,12 +13581,19 @@ fn mouse_home_strip_click_selects_the_restored_tab() {
     // is `route.navigate({type:"home", …})` (context/session-tabs.tsx
     // :406-420 — the ref does NOT create a session/tab on the click;
     // the home composer's next submit does). Ours matches.
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 65, 0));
     app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 65, 0));
     assert_eq!(app.store.route(), Route::Home);
     // ...and the second restored tab's body selects from home (tab 2
     // spans x=32..64 on the 32+32 layout).
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 40, 0));
     app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 40, 0));
     assert_eq!(app.store.route(), Route::session("r2".to_owned()));
+    // G-468② — a release with NO strip press selects nothing: hover
+    // the first tab again, release without a press — the route stays.
+    app.mouse_event(&mouse(MouseEventKind::Moved, 5, 0));
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 5, 0));
+    assert_eq!(app.store.route(), Route::session("r2".to_owned()), "a bare release never selects");
 }
 
 /// beta.8 bug 4 — the `+ Thought` disclosure through the pump: a
@@ -16677,4 +16820,42 @@ fn multiclick_tolerance_and_cap() {
     // Distance 2 restarts.
     press(&mut app, 13, 4);
     assert_eq!(app.selection_click_count, 1, "chebyshev 2 restarts the count");
+}
+
+/// G-468① — the selectable-scope gate (renderer.ts:3684-3699
+/// `canStartSelection` + Renderable.ts:243's `selectable=false`
+/// default): only the registered text-bearing surfaces (transcript /
+/// console / composer textarea) can START a selection; a chrome press
+/// (the strip row / the composer's border) arms NOTHING, clears a
+/// kept selection at the dispatch tail (renderer.ts:3807-3814) and
+/// resets the multi-click counter (nextClickBehavior only counts
+/// arming presses, renderer.ts:3699-3706).
+#[cfg(test)]
+#[test]
+fn chrome_press_outside_selectable_regions_arms_nothing() {
+    use crate::input_term::{MouseButton, MouseEventKind};
+    let mut app = selection_app();
+    // A transcript drag arms and keeps (copy-on-select retains).
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 2, 3));
+    app.mouse_event(&mouse(MouseEventKind::Drag(MouseButton::Left), 20, 3));
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 20, 3));
+    assert!(app.screen_selection.is_active(), "the transcript drag kept");
+    assert_eq!(app.selection_click_count, 1);
+    // A press on the STRIP row (row 0 — chrome, non-selectable): no
+    // arm, the kept selection clears, the counter resets.
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 10, 0));
+    assert!(
+        !app.screen_selection.is_active(),
+        "the chrome press cleared the kept selection (renderer.ts:3807-3814)"
+    );
+    assert_eq!(app.selection_click_count, 0, "the chrome press reset the count");
+    app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 10, 0));
+    assert!(app.screen_selection.rect().is_none(), "nothing armed");
+    // The composer's left BORDER cell (col 0 of the mount — the ┃
+    // rail is non-selectable chrome) arms nothing either.
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 0, 22));
+    assert!(app.screen_selection.rect().is_none(), "the border press armed nothing");
+    // The transcript is still selectable after the resets.
+    app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 2, 3));
+    assert_eq!(app.selection_click_count, 1, "a fresh transcript press restarts at 1");
 }

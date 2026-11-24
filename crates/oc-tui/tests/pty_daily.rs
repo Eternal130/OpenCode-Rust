@@ -2196,10 +2196,13 @@ fn selection_copy() {
             if (0..h.grid_now().rows).any(|row| h.grid_now().row_text(row).contains("Copied")) {
                 return Err("a bare click must not copy".to_owned());
             }
-            // The crossing drag: press before the text, drag past it,
-            // release — the copy lands.
-            h.sgr_motion(2, u16::try_from(y).unwrap_or(26));
-            h.sgr_press(2, u16::try_from(y).unwrap_or(26));
+            // The crossing drag: press inside the textarea's bounds
+            // (G-468① — the composer's border/rail cells are NOT
+            // selectable chrome, EditBufferRenderable.ts:510-517's
+            // bounds check; the old x=2 border press no longer arms),
+            // drag past the text, release — the copy lands.
+            h.sgr_motion(6, u16::try_from(y).unwrap_or(26));
+            h.sgr_press(6, u16::try_from(y).unwrap_or(26));
             h.sgr_drag(40, u16::try_from(y).unwrap_or(26));
             h.sgr_release(40, u16::try_from(y).unwrap_or(26));
             wait_text(h, "Copied to clipboard", Duration::from_secs(5))
@@ -2281,9 +2284,11 @@ fn selection_manual_right_click_copies() {
                 .unwrap_or(26);
             // The drag resolves but manual mode keeps quiet: no copy,
             // no toast — the selection is retained for the explicit
-            // copy (selection.ts:44-63).
-            h.sgr_motion(2, u16::try_from(y).unwrap_or(26));
-            h.sgr_press(2, u16::try_from(y).unwrap_or(26));
+            // copy (selection.ts:44-63). G-468①: the press sits
+            // INSIDE the textarea's bounds (the composer's border
+            // cells are non-selectable chrome).
+            h.sgr_motion(6, u16::try_from(y).unwrap_or(26));
+            h.sgr_press(6, u16::try_from(y).unwrap_or(26));
             h.sgr_drag(40, u16::try_from(y).unwrap_or(26));
             h.sgr_release(40, u16::try_from(y).unwrap_or(26));
             std::thread::sleep(Duration::from_millis(700));

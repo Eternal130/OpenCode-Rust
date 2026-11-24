@@ -307,3 +307,28 @@ add aarch64-unknown-linux-gnu aarch64-apple-darwin` + `cargo check
 scripts may fail on cross targets before reaching oc-tui — the oc-tui
 check itself is what matters; the release matrix remains the final
 gate).
+
+## va15 round — w11 press-clear wait eventized; RL-T5 fixed for good (2026-11-24)
+
+1. **w11 `pty_wheel_and_drag_highlight_pipeline`** (two TRY1 reds:
+   va12's gate, va14's closure — "the kept highlight never cleared on
+   the next press", isolated always green): the clear wait polled a
+   full-grid clone every 50 ms; va10's lesson says that starves the
+   render thread under load. Now the O(1) screen digest (captured
+   before the press) gates the Grid materialization; deadline 5 s →
+   8 s for load margin. Assertions unchanged. 4× green post-fix.
+
+2. **RL-T5 fixed for good (the va10 budget raise superseded).**
+   `pty_reconnecting_overlay` now triggers the scripted loss through an
+   EXPLICIT handshake: the fake server exposes `/api/__test/lose`; the
+   driver pokes it only after the boot painted (wordmark + settle) —
+   the pre-fix shape armed counters before the boot and let the
+   stream's first idle tick blind-fire the loss, so the loss window
+   drifted with boot timing and the outer budget had to absorb it
+   (va13's red at exactly 60.026 s = the budget boundary). The loss is
+   one-shot (each closing stream consumes one unit of the
+   open-stream-count snapshot, so the recovery stream survives — the
+   first cut's sticky flag closed every future stream forever; the x10
+   shakeout's 40 s boundary reds pinned it). Budget 60 s → 40 s
+   (historical 25.5 s + margin). Assertions unchanged; 10× --exact
+   green at ~5 s each (was ~60 s worst case).

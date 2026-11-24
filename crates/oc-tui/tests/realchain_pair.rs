@@ -1216,3 +1216,115 @@ fn geom160_wide_pair() {
     skip_without_ref_lane!();
     geom_probe("geom160", "geom160", 160, 40);
 }
+
+// ===========================================================================
+// va15 T5 — the selection→copy-toast pair (G-469 leftover, the
+// "fix-lane anchors its own face" rule's first execution item): a
+// drag-select over the transcript reply → release → copy-on-select
+// (`terminal.copy = "select"`, the non-win32 default) paints the
+// UNTITLED toast face (`Copied to clipboard` — ui/toast.tsx:64-81's
+// no-title shape). EXPORT ONLY (W12/2.2#11): the in-test assertions
+// are rig-health class exclusively — both ends' reply settles, the REF
+// side shows its copy toast (scenario-content sanity), both TUIs alive
+// at capture. The rust side's toast face rides the exported diff
+// (.test-logs/diff-reports/p5sel-selectcopy.*) and the controller's
+// adjudication registry; a known export conflict would be flagged
+// needs-controller.
+// ===========================================================================
+
+/// The needle's (col, row) on one end's CURRENT grid (the drag anchor —
+/// each end's own wrap keeps the stroke inside its own selectable
+/// transcript region; SGR wire coords are 1-based).
+fn p5_find(tui: &TuiProcess, needle: &str) -> Option<(usize, usize)> {
+    for (row, line) in tui.screen_text().lines().enumerate() {
+        if let Some(at) = line.find(needle) {
+            let col = line[..at].chars().count();
+            return Some((col, row));
+        }
+    }
+    None
+}
+
+fn p5_drag_select(tui: &mut TuiProcess, x: usize, y: usize, span: usize) {
+    let press = format!("\x1b[<0;{};{}M", x + 1, y + 1);
+    let drag = format!("\x1b[<32;{};{}M", x + 1 + span, y + 1);
+    let release = format!("\x1b[<0;{};{}m", x + 1 + span, y + 1);
+    tui.write(press.as_bytes());
+    std::thread::sleep(Duration::from_millis(150));
+    tui.write(drag.as_bytes());
+    std::thread::sleep(Duration::from_millis(250));
+    tui.write(release.as_bytes());
+}
+
+#[test]
+fn p5_selection_copy_toast_pair() {
+    skip_without_ref_lane!();
+    let mut rig = pair_rig("p5sel", COLS);
+    boot_both(&mut rig);
+    let rust_from = rig.rust_tui.raw_len();
+    let ref_from = rig.ref_tui.raw_len();
+    rig.write_both(b"hello\r");
+    let rust_replied = rig.rust_tui.wait_for(REPLY_NEEDLE, rust_from, Duration::from_secs(30));
+    let ref_replied = rig.ref_tui.wait_for(REPLY_NEEDLE, ref_from, Duration::from_secs(60));
+    settle(2);
+    // Each end drags over ITS OWN reply row (the anchor cell sits a
+    // couple of cells inside the needle so the press lands on text, not
+    // a rail; the span crosses cells — a real crossing drag).
+    let rust_anchor = p5_find(&rig.rust_tui, "REALCHAIN-REPLAY-OK");
+    let ref_anchor = p5_find(&rig.ref_tui, "REALCHAIN-REPLAY-OK");
+    // Each end waits for ITS OWN copy toast, then captures immediately
+    // (the toast TTL is 5 s — a shared settle beat raced the rust
+    // face's retirement and the first cut's export lost it; the waits
+    // are TIMING ONLY: the rust side's face is never judged in-test,
+    // its presence rides the exported diff).
+    // Each end waits for ITS OWN copy toast (one bounded RETRY of the
+    // stroke — the ref's first stroke lands unreliably under PTY
+    // timing; a repeated press at the same anchor at worst re-selects
+    // word/line, still a copy), then captures immediately (the toast
+    // TTL is 5 s — a quiescence-settled capture outlives the face, so
+    // the grid is read DIRECTLY at the face-present moment; no
+    // capture_settled, hence no quiescence marks for this state). The
+    // waits are TIMING ONLY: the rust side's face is never judged
+    // in-test, its presence rides the exported diff.
+    let wait_toast = |tui: &TuiProcess| -> bool {
+        let deadline = Instant::now() + Duration::from_secs(6);
+        loop {
+            if tui.screen_text().contains("Copied to clipboard") {
+                return true;
+            }
+            if Instant::now() > deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    let select_until_toast = |tui: &mut TuiProcess, x: usize, y: usize| -> bool {
+        p5_drag_select(tui, x, y, 8);
+        if wait_toast(tui) {
+            return true;
+        }
+        p5_drag_select(tui, x, y, 8);
+        wait_toast(tui)
+    };
+    let rust_toast =
+        rust_anchor.is_some_and(|(x, y)| select_until_toast(&mut rig.rust_tui, x + 2, y));
+    std::thread::sleep(Duration::from_millis(300));
+    let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
+    // REF-side scenario-content sanity ONLY (W12: the ref toast is the
+    // rig's proof the stroke selected + released over selectable text).
+    let ref_toasted =
+        ref_anchor.is_some_and(|(x, y)| select_until_toast(&mut rig.ref_tui, x + 2, y));
+    std::thread::sleep(Duration::from_millis(300));
+    let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
+    // Diagnostic ONLY (no assertion — W12): whether the rust side ever
+    // painted the toast (distinguishes "never copied" from capture
+    // timing).
+    eprintln!("P5SEL diagnostic: the rust copy toast painted = {rust_toast}");
+    dump_grid("p5sel-selectcopy-ref", &ref_grid);
+    dump_grid("p5sel-selectcopy-rust", &rust_grid);
+    export_grid_diff("p5sel", "selectcopy", &ref_grid, &rust_grid);
+    drop(rig);
+    assert!(rust_replied && ref_replied, "P5SEL RED (rig): reply did not settle");
+    assert!(rust_anchor.is_some(), "P5SEL RED (rig): the rust reply needle left the grid");
+    assert!(ref_toasted, "P5SEL RED (ref-side sanity): the ref copy toast never painted");
+}

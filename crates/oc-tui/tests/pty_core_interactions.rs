@@ -262,12 +262,33 @@ struct Shared {
     /// mid-run LOSS after a first successful connect (the overlay's
     /// new arm condition).
     sse_close_open: Arc<AtomicUsize>,
+    /// va15 T4 (RL-T5 alternative): the EXPLICIT loss trigger — set by
+    /// the test's `/api/__test/lose` control endpoint after the boot
+    /// painted (an explicit handshake), so the mid-run loss starts at
+    /// a deterministic point instead of the first idle tick's
+    /// blind-fire. The value snapshots the CURRENTLY-OPEN stream count
+    /// and each closing stream consumes one — one-shot, so the
+    /// RECOVERY stream (after the two armed header drops) survives.
+    lose_now: Arc<AtomicUsize>,
+    /// The live open-event-stream count (the `lose_now` snapshot's
+    /// source; a drop guard keeps it honest on every exit path).
+    open_streams: Arc<AtomicUsize>,
     /// The SSE broadcast channel: whatever lands here is written on
     /// EVERY open /api/event stream (the scripted turn).
     broadcast: Arc<Mutex<std::collections::VecDeque<String>>>,
     /// Long-transcript mode: /`api/session/ses_live/message` serves a
     /// 20-turn fixture.
     long_transcript: bool,
+}
+
+/// va15 T4: the open-stream count's drop guard (every exit path from
+/// the /api/event broadcast loop decrements — the `lose_now` snapshot
+/// stays honest).
+struct StreamGuard<'a>(&'a AtomicUsize);
+impl Drop for StreamGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// One SSE frame (the wire's JSON-in-string double encoding).
@@ -394,6 +415,8 @@ fn spawn_scripted_server(long_transcript: bool) -> (String, Arc<Shared>) {
         model_posts: Arc::new(AtomicUsize::new(0)),
         sse_drops: Arc::new(AtomicUsize::new(0)),
         sse_close_open: Arc::new(AtomicUsize::new(0)),
+        lose_now: Arc::new(AtomicUsize::new(0)),
+        open_streams: Arc::new(AtomicUsize::new(0)),
         broadcast,
         long_transcript,
     });
@@ -475,6 +498,8 @@ fn handle(mut socket: std::net::TcpStream, shared: &Shared) {
         // Broadcast loop: write whatever the scripted turn queued, then
         // idle-poll for more (read timeouts are the poll tick — the
         // client's pings drain here; a closed socket ends the loop).
+        let _guard = StreamGuard(shared.open_streams.as_ref());
+        shared.open_streams.fetch_add(1, Ordering::SeqCst);
         loop {
             while let Some(frame) = shared.broadcast.lock().expect("broadcast").pop_front() {
                 if socket.write_all(frame.as_bytes()).is_err() {
@@ -491,6 +516,14 @@ fn handle(mut socket: std::net::TcpStream, shared: &Shared) {
                         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                     ) =>
                 {
+                    // va15 T4: the explicit loss trigger — each closing
+                    // stream consumes one unit of the snapshot (≤50 ms
+                    // after the test's poke), so the loss is one-shot
+                    // and the recovery stream survives.
+                    if shared.lose_now.load(Ordering::SeqCst) > 0 {
+                        shared.lose_now.fetch_sub(1, Ordering::SeqCst);
+                        return;
+                    }
                     // W6 symptom ①: a scripted mid-run stream loss (see
                     // `sse_close_open`) — one stream per increment.
                     if shared.sse_close_open.load(Ordering::SeqCst) > 0 {
@@ -502,6 +535,21 @@ fn handle(mut socket: std::net::TcpStream, shared: &Shared) {
                 Err(_) => return,
             }
         }
+    }
+
+    // va15 T4 (RL-T5 alternative): the test's EXPLICIT loss trigger —
+    // the driver pokes this only AFTER the boot painted (wordmark), so
+    // the loss starts at a deterministic point (no first-idle-tick
+    // blind-fire). Arms the two header drops and closes every open
+    // stream on their next poll.
+    if !is_post && path == "/api/__test/lose" {
+        shared.sse_drops.store(2, Ordering::SeqCst);
+        // One-shot: close exactly the streams open NOW (each closing
+        // stream consumes a unit); streams opened later — the recovery
+        // stream past the two armed header drops — survive.
+        shared.lose_now.store(shared.open_streams.load(Ordering::SeqCst), Ordering::SeqCst);
+        let _ = socket.write_all(b"HTTP/1.1 204 No Content\r\nconnection: close\r\n\r\n");
+        return;
     }
 
     let json = |body: String| {
@@ -1164,6 +1212,19 @@ fn pty_engine_cycle_type_worddelete_undo_leader_escape() {
     });
 }
 
+/// va15 T4 (RL-T5 alternative): poke the scripted server's explicit
+/// loss endpoint (see [`spawn_scripted_server`]) — closes every open
+/// event stream and arms the two header drops.
+fn trigger_loss(url: &str) {
+    let addr = url.trim_start_matches("http://");
+    if let Ok(mut socket) = std::net::TcpStream::connect(addr) {
+        let _ = socket
+            .write_all(b"GET /api/__test/lose HTTP/1.1\r\nhost: test\r\nconnection: close\r\n\r\n");
+        let mut sink = [0u8; 128];
+        let _ = socket.read(&mut sink);
+    }
+}
+
 /// SURF-2 (auditB #2): the Reconnecting overlay — a scripted server
 /// loss (three dropped SSE streams) paints "Connection lost…" over the
 /// dimmed frame after the 1 s retry threshold, and clears when the
@@ -1173,34 +1234,35 @@ fn pty_reconnecting_overlay_on_loss_and_recovery() {
     let sandbox = sandbox_env("reconnect");
     let _ = sandbox;
     let (url, shared) = spawn_scripted_server(false);
+    let _ = shared;
     // W6 symptom ①: the overlay arms only AFTER a first successful connect
     // (the never-connected boot stays clean — ref gates the daemon's
     // health before the TUI mounts and its managed copy never reads
-    // "Connection lost…"). So the FIRST stream completes (the boot
-    // connects, handshake + open), then the open stream is killed and
-    // the next two reconnect attempts die at the headers — a genuine
-    // LOSS: the overlay anchors at the last transition and shows after
-    // the 1 s retry threshold; the 4th stream recovers.
-    shared.sse_drops.store(2, Ordering::SeqCst);
-    shared.sse_close_open.store(1, Ordering::SeqCst);
-    // RL-T5 fix: the test's internal wait bands (5 s boot + 20 s overlay
-    // + 20 s managed-copy + 30 s recovery quiesce + teardown) sum past
-    // the historical 25 s outer cap — under 4-way load the run loop
-    // could be killed while a legit paint was still in flight, surfacing
-    // as "the Reconnecting overlay appeared after the retry threshold".
-    // The outer budget is harness plumbing (not an assertion): raise it
-    // to cover the sum with headroom.
-    drive_with_budget(&url, Duration::from_secs(60), move |boot, mut writer| {
+    // "Connection lost…").
+    //
+    // va15 T4 (RL-T5 alternative fix): the scripted loss fires through
+    // an EXPLICIT handshake — the driver waits for the boot to paint
+    // (wordmark + settle), then pokes the fake server's
+    // `/api/__test/lose` control endpoint. The pre-fix shape armed the
+    // counters before the boot and let the stream's FIRST idle tick
+    // blind-fire the loss, so the loss window drifted with the boot's
+    // timing and the outer budget had to absorb it (60 s — va13's
+    // closure-gate red landed at exactly 60.026 s, the budget
+    // boundary). With the trigger deterministic the budget returns to
+    // the historical 25.5 s + margin. Assertions unchanged.
+    let loss_url = url.clone();
+    drive_with_budget(&url, Duration::from_secs(40), move |boot, mut writer| {
         let probe = || Boot { output: Arc::clone(&boot.output) };
         assert!(
             wait_for_after(&probe(), "█▀▀█".as_bytes(), 0, Duration::from_secs(5)),
             "the home wordmark rendered"
         );
         // Boot connected cleanly (no overlay during the never-connected
-        // window — the W6 symptom ① face): the armed losses fire now (the
-        // open stream closes on its next idle tick, the next two
-        // attempts die at the headers).
+        // window — the W6 symptom ① face): settle, then trigger the
+        // loss EXPLICITLY (the open stream closes ≤50 ms later, the
+        // next two reconnect attempts die at the headers).
         std::thread::sleep(Duration::from_millis(500));
+        trigger_loss(&loss_url);
         assert!(
             wait_for_after(&probe(), b"Connection lost", 0, Duration::from_secs(20),),
             "the Reconnecting overlay appeared after the retry threshold"

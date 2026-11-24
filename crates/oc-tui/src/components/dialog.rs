@@ -1419,10 +1419,19 @@ fn paint_preview_image(
 /// session skeletons) with the dialog overlay composited on top. This
 /// is the frame source the keypress-replay harness compares.
 #[must_use]
+#[allow(clippy::too_many_lines)] // one arm per route + the overlays family's mounts (see below)
 pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u16)) -> Frame {
     let styles = theme.styles();
     let width = usize::from(size.0);
     let height = usize::from(size.1);
+    // G-468① — the selectable-region table rebuilds every pass: the
+    // route renderers (session: transcript + composer textarea) and
+    // the console overlay below re-add their surfaces; routes with no
+    // text-bearing surface (home / plugin / diff / stats — chrome
+    // text renders `selectable={false}`) leave it empty, so no left
+    // press there can START a selection (renderer.ts:3684-3699's
+    // `canStartSelection` gate).
+    store.reset_selectable_regions();
     let devtools = store.devtools_state();
     let devtools_rows = usize::from(devtools.enabled && devtools.visible);
     let content_height = height.saturating_sub(devtools_rows).max(1);
@@ -1541,6 +1550,21 @@ pub fn render_app(store: &Store, theme: &crate::theme::ThemeState, size: (u16, u
         usize::from(size.1),
     );
     crate::components::overlays::mount_overlays_family(store, &styles, width, height);
+    // G-468① — the renderer console strip registers as a selectable
+    // surface (ref's console text; the same geometry the overlay
+    // mount uses — `console_units`, at (0,0) sized
+    // `(width, min(CONSOLE_ROWS, lines+2))`).
+    if store.console_open() {
+        let (console_w, console_rows, _) = crate::components::console_solid::console_units(
+            &store.console_lines(),
+            &styles,
+            size.0,
+        );
+        store.add_selectable_region(
+            crate::store::SelectableRegionKind::Console,
+            crate::store::HitRect { x: 0, y: 0, width: console_w, height: console_rows },
+        );
+    }
     crate::components::chrome_solid::composite_chrome_tree(&mut frame);
     if let Some(layer) = dialog_layer {
         layer.paint(&mut frame, store, theme, size);
