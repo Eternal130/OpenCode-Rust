@@ -1807,16 +1807,22 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             SelectProps::new(format!("MCP server: {name}"), options).flat(true)
         }
         // Lane TAIL `DialogUpdate` (`/update`, dialog-update.tsx):
-        // the live state row (title + detail) + the Skip/Update/
-        // Restart actions; enter confirms.
+        // the status HEADER row (the dialog's title, :90-97) + the
+        // full-sentence body row + the Skip/Update/Restart actions;
+        // enter confirms.
         DialogKind::Update => {
             let state = store.update_dialog_state();
-            let (title, detail) = crate::components::update::dialog_rows(&state);
+            let (header, body) = crate::components::update::dialog_rows(&state);
+            // G-478 — the failed body paints in the error color
+            // (`text.feedback.error.base`, dialog-update.tsx:132-135).
+            let failed =
+                matches!(state, crate::components::update::UpdateDialogState::Failed(_));
             // RE-04 — the busy states render the `<Spinner shimmer>`
-            // row (dialog-update.tsx:107/115): the 80 ms braille
-            // glyph + the label swept by the shimmer-text mask
-            // (spinner.tsx:45 — the glyph table advances with the
-            // store clock; a frozen clock pins both).
+            // row around the BODY text (dialog-update.tsx:107/115):
+            // the 80 ms braille glyph + the label swept by the
+            // shimmer-text mask (spinner.tsx:45 — the glyph table
+            // advances with the store clock; a frozen clock pins
+            // both).
             // G-430 face 3 — ref `Spinner` (spinner.tsx:26-31):
             // animations off renders the static `⋯ {children}`
             // fallback — no glyph, no shimmer sweep.
@@ -1826,26 +1832,34 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                     | crate::components::update::UpdateDialogState::Installing(_)
             );
             let animations = store.animations_enabled();
-            let title = if busy && animations {
+            let body = if busy && animations {
                 format!(
-                    "{} {title}",
+                    "{} {body}",
                     crate::components::message::rows::spinner_frame(store.clock())
                 )
             } else if busy {
-                format!("⋯ {title}")
+                format!("⋯ {body}")
             } else {
-                title
+                body
             };
-            let mut row = SelectOption::titled(title, detail).muted_placeholder();
+            let mut row = SelectOption::titled(body, "state");
+            if failed {
+                row = row.error_row();
+            } else if !busy {
+                // The non-busy body is the ref's muted `text.muted`
+                // span (:110/:120/:125/:128).
+                row = row.muted_row();
+            }
             if busy && animations {
                 row = row.with_shimmer(store.clock());
             }
             let mut options = vec![row];
-            options.push(SelectOption::titled("Skip this version", "skip"));
+            // The skip action's label is "Skip" (dialog-update.tsx:55).
+            options.push(SelectOption::titled("Skip", "skip"));
             if let Some(confirm) = crate::components::update::dialog_confirm(&state) {
                 options.push(SelectOption::titled(confirm, "confirm"));
             }
-            SelectProps::new("Update opencode", options).flat(true)
+            SelectProps::new(header, options).flat(true)
         }
         // SURF-2 `DialogStatus` (`/status`, dialog-status.tsx:29-56):
         // the count line + per-server bullet rows, or the empty

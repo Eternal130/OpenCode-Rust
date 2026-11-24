@@ -3355,6 +3355,7 @@ mod d22_tests {
                 shimmer: None,
                 details: Vec::new(),
                 gutter: None,
+                tone: None,
             }],
         );
         let sidecar = DialogSidecar::default();
