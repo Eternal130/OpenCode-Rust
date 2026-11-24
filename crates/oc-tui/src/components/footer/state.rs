@@ -34,6 +34,12 @@ pub enum PromptRoute {
     /// `subagent` arm: one child's detail transcript over the
     /// composer).
     Subagent,
+    /// G-482 — the subagent MENU (`FooterPromptRoute`'s
+    /// `subagent-menu` arm, footer.view.tsx:307-313): the searchable
+    /// child list `session.child.first` opens FIRST (`Select
+    /// subagent`, footer.command.tsx:863-944); a row's enter routes
+    /// into the inspector.
+    SubagentMenu,
     /// G-272 — the queued-prompts menu (`session.queued_prompts`,
     /// `<leader>q` / the palette's "View pending prompts" —
     /// footer.view.tsx:315-318, footer.ts:754).
@@ -175,6 +181,7 @@ impl FooterMachine {
                 PromptRoute::Variant => FooterMode::Variant,
                 PromptRoute::Settings => FooterMode::Settings,
                 PromptRoute::Subagent => FooterMode::Subagent,
+                PromptRoute::SubagentMenu => FooterMode::SubagentMenu,
                 PromptRoute::QueuedMenu => FooterMode::QueuedMenu,
             },
             FooterView::Permission { .. } => FooterMode::Permission,
@@ -197,6 +204,8 @@ pub enum FooterMode {
     /// TUI-17 — the mini subagent inspector (the session-route footer
     /// never routes here; the mini pane renders it directly).
     Subagent,
+    /// G-482 — the mini subagent menu (mini-only route).
+    SubagentMenu,
     /// G-272 — the mini queued-prompts menu (mini-only route).
     QueuedMenu,
 }
@@ -1296,6 +1305,9 @@ pub fn form_reply(state: &FormBodyState, request: &FormRequest) -> Option<FormRe
 pub const PANEL_LIST_ROWS: usize = 10;
 pub const PANEL_FRAME_ROWS: usize = 6;
 pub const RUN_COMMAND_PANEL_ROWS: usize = PANEL_LIST_ROWS + PANEL_FRAME_ROWS;
+/// G-482 — `SUBAGENT_LIST_ROWS` (footer.command.tsx:86): the subagent
+/// and queued menus' list limit (vs the command panel's 10).
+pub const SUBAGENT_LIST_ROWS: usize = 12;
 
 // -- select controller (`ui/select-controller.ts`) ----------------------------
 
