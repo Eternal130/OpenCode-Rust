@@ -180,7 +180,7 @@ jobs:
       # payload is stripped binaries (incompressible) and upload is
       # network-bound; the zip wrapper uses compression-level 0 for the same
       # reason (level-6 zlib was pure CPU waste on ~4.4 GiB).
-      - name: Pack target dir (zstd tar: exec bits + mtimes + ~3.5x smaller)
+      - name: Pack target dir (zstd tar — exec bits + mtimes + ~3.5x smaller)
         # 19.1 GiB raw -> ~5-6 GiB zstd: the 21-minute artifact download
         # of 45623332552 was the pipeline's second-longest stage. zstd -3
         # with all threads compresses 19 GiB in ~2 min; the zip wrapper
