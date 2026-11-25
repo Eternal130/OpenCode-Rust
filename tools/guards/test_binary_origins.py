@@ -10,8 +10,13 @@ protocol step ("confirm the compile origin before running realchain from
 main") is forgettable — this guard automates it.
 
 Rule: any executable under target/debug (and target/debug/deps) that embeds a
-`.worktrees/<name>` path whose directory no longer exists is a violation.
-Binaries embedding worktree paths that still resolve (e.g. a live lane) pass.
+FUNCTIONAL `.worktrees/<name>/...` path (name followed by a slash — the
+fixture/manifest path shapes that ENOENT at runtime) whose worktree no longer
+exists is a violation. Trailing-slash discriminator (2026-11-25): main-compiled
+binaries may carry `.worktrees/<name>` DWARF comp_dir relics WITHOUT a trailing
+slash (string-table separators) — those pass; a green post-merge gate is the
+functional proof. Binaries embedding worktree paths that still resolve (e.g. a
+live lane) pass.
 
 Usage: python3 tools/guards/test_binary_origins.py [--target-dir DIR]
 Exit 0 = clean; 1 = violations; 2 = usage error. Stdlib only.
@@ -25,7 +30,7 @@ import sys
 from pathlib import Path
 
 DEFAULT_TARGET = Path(__file__).resolve().parents[2] / "target"
-PATTERN = re.compile(rb"\.worktrees/([A-Za-z0-9._-]+)")
+PATTERN = re.compile(rb"\.worktrees/([A-Za-z0-9._-]+)/")
 
 
 def repo_root() -> Path:
