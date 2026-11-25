@@ -649,9 +649,14 @@ fn title_chunks(inputs: &DialogInputs, paint: &RowPaint, index: usize) -> Styled
     // Stage 2 — the clip column is absolute (the row content edge
     // less the footer reservation); the chunk walk counts cells from
     // the title's start at box column 4, so the budget is the clip
-    // less that offset.
-    let clip =
-        title_clip_end(inputs.box_width, footer_text(inputs, index).as_deref()).saturating_sub(4);
+    // less that offset. G-488 — the tab menu's rows are NOT select
+    // rows: `paddingLeft 1` + title + `paddingRight 1`
+    // (session-tabs.tsx:460-462), no marker column, no footer.
+    let clip = if inputs.family == Family::Menu {
+        inputs.box_width.saturating_sub(2).saturating_sub(1)
+    } else {
+        title_clip_end(inputs.box_width, footer_text(inputs, index).as_deref()).saturating_sub(4)
+    };
     let attrs = u32::from(paint.bold);
     let mut chunks: Vec<TextChunk> = Vec::new();
     let mut used = 0usize;
@@ -1244,37 +1249,46 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
                     .flex_shrink(0.0)
                     .margin_top(1.0)
                     .children(Children::Static(vec![
-                        box_()
-                            // G-466.3 — the left footer box stacks as
-                            // a COLUMN below 60 cols
-                            // (`flexDirection={dimensions().width <
-                            // 60 ? "column" : "row"}`, gap 0,
-                            // ui/dialog-select.tsx:838).
-                            .flex_direction(if inputs.get().terminal_width < 60 {
-                                "column"
-                            } else {
-                                "row"
-                            })
+                        if inputs.get().hint_footer.is_empty() {
+                            // The original shape: the actions as the
+                            // left box's DIRECT dyn children (a wrapper
+                            // box would stack them — column flow).
+                            box_()
+                                .flex_direction(if inputs.get().terminal_width < 60 {
+                                    "column"
+                                } else {
+                                    "row"
+                                })
+                                .children_dyn(actions_for(&inputs))
+                                .into_element()
+                        } else {
                             // G-485① — the `footer` prop's muted text
                             // rides the left box FIRST
                             // (dialog-select.tsx:838: `{props.
                             // footer}<For each={left()}>`).
-                            .children(Children::Static(vec![
-                                text().wrap_mode("none").dyn_prop(
-                                    "content",
-                                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
-                                        styled(vec![chunk(
-                                            i.hint_footer.clone(),
-                                            i.colors.muted,
-                                            None,
-                                            0,
-                                        )])
-                                    })),
-                                )
-                                .into_element(),
-                                box_().children_dyn(actions_for(&inputs)).into_element(),
-                            ]))
-                            .into_element(),
+                            box_()
+                                .flex_direction(if inputs.get().terminal_width < 60 {
+                                    "column"
+                                } else {
+                                    "row"
+                                })
+                                .children(Children::Static(vec![
+                                    text().wrap_mode("none").dyn_prop(
+                                        "content",
+                                        dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                                            styled(vec![chunk(
+                                                i.hint_footer.clone(),
+                                                i.colors.muted,
+                                                None,
+                                                0,
+                                            )])
+                                        })),
+                                    )
+                                    .into_element(),
+                                    box_().children_dyn(actions_for(&inputs)).into_element(),
+                                ]))
+                                .into_element()
+                        },
                         right_carrier.into_element(),
                     ]))
                     .into_element()]

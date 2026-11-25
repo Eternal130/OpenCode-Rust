@@ -724,32 +724,95 @@ fn key_alias_display(display: &str) -> String {
 #[must_use]
 /// G-465 — the session picker's current project name
 /// (`currentProjectName`, dialog-session-list.tsx:134-140): the
-/// picker location's owning project, named via
-/// `projectName` (configured name else the canonical basename).
-/// `None` when no location/project resolves (the `Show` gate hides
-/// the suffix).
+/// picker location's owning project, named via `projectName`
+/// (configured name else the canonical basename). `None` when no
+/// location/project resolves (the `Show` gate hides the suffix).
+/// G-491 — the resolution chain now walks the ref's data path: the
+/// SESSION's own `projectID` (the session record, `data.session.get`)
+/// or the boot location info's project (`data.location.default()` →
+/// `location.get`), then the REGISTRY row by id (`data.project.get`)
+/// — the registry itself boots loaded (`project.sync`,
+/// client/solid/data.ts:625). The prefix scan stays as a fallback
+/// for pre-info windows.
 fn picker_project_name(store: &Store) -> Option<String> {
-    let directory = match store.route() {
+    // The picker location (dialog-session-list.tsx:46-49): the routed
+    // session's location, else the default location.
+    let (directory, project_id): (Option<String>, Option<String>) = match store.route() {
         crate::store::Route::Session { session_id, .. } => store
             .session_history()
             .into_iter()
             .find(|session| session.id == session_id)
-            .and_then(|session| session.directory),
-        crate::store::Route::Home => store.home_location(),
+            .map(|session| (session.directory.clone(), session.project_id.clone())),
+        crate::store::Route::Home => store
+            .location_info()
+            .map(|info| (Some(info.directory), Some(info.project_id))),
     }
-    .or_else(|| std::env::current_dir().ok().map(|path| path.display().to_string()));
-    let directory = directory?;
-    if let crate::store::ListState::Loaded(projects) = store.project_list() {
-        let owned = projects.into_iter().find(|project| {
-            project.canonical == directory
-                || directory.starts_with(&format!("{}/", project.canonical))
-        });
-        if let Some(project) = owned {
+    .unwrap_or((None, None));
+    let registry = match store.project_list() {
+        crate::store::ListState::Loaded(projects) => Some(projects),
+        loading => {
+            if std::env::var("OC_TUI_DEBUG_VA19").is_ok() {
+                eprintln!(
+                    "[tui] G-491 picker suffix: project registry not loaded ({})",
+                    match loading {
+                        crate::store::ListState::Loading => "loading",
+                        _ => "failed",
+                    }
+                );
+            }
+            None
+        }
+    };
+    // The registry row by the location's project id (`data.project.
+    // get(current.project.id)`).
+    if let (Some(projects), Some(project_id)) = (&registry, &project_id) {
+        if let Some(project) = projects.iter().find(|project| &project.id == project_id) {
             return Some(crate::components::dialog_open::project_name(
                 project.name.as_deref(),
                 &project.canonical,
             ));
         }
+    }
+    // The canonical-prefix scan (the pre-G-491 behavior — a
+    // partial-superset fallback for a not-yet-landed info).
+    if let Some(directory) = directory.as_deref() {
+        if let Some(projects) = &registry {
+            if let Some(project) = projects.iter().find(|project| {
+                project.canonical == directory
+                    || directory.starts_with(&format!("{}/", project.canonical))
+            }) {
+                return Some(crate::components::dialog_open::project_name(
+                    project.name.as_deref(),
+                    &project.canonical,
+                ));
+            }
+        }
+    }
+    // The location info's OWN project (`location.get`'s
+    // `project.canonical`) — the server already resolved the owning
+    // project when the info landed; `projectName`'s basename fallback
+    // covers a registry that has not (yet) listed the row (the ref's
+    // registry names the same canonical — `projectName(undefined)`
+    // would hide, but the info's canonical is the same resolution the
+    // registry row would carry). Scoped to the info's OWN directory:
+    // a session living elsewhere keeps the ref's hidden suffix (its
+    // location was never synced).
+    if let Some(info) = store.location_info() {
+        let same_directory = directory.as_deref() == Some(info.directory.as_str());
+        if same_directory {
+            return Some(crate::components::dialog_open::project_name(
+                None,
+                &info.project_canonical,
+            ));
+        }
+    }
+    if std::env::var("OC_TUI_DEBUG_VA19").is_ok() {
+        let line = format!(
+            "[tui] G-491 suffix dir={directory:?} pid={project_id:?} info={} registry={}\n",
+            store.location_info().is_some(),
+            matches!(store.project_list(), crate::store::ListState::Loaded(_)),
+        );
+        let _ = std::fs::write("/tmp/opencode/va19-suffix-trace.log", line);
     }
     None
 }
@@ -4517,6 +4580,52 @@ mod tests {
         assert_eq!(command_of_value(&first.value), "model.list");
         assert!(props.flat);
         assert_eq!(props.filter_threshold, Some(0.7));
+    }
+
+    /// G-491 — the sessions suffix's resolution chain
+    /// (`currentProjectName`, dialog-session-list.tsx:134-140): the
+    /// location info's project id onto the REGISTRY row (the ref's
+    /// `data.location.syncInfo` + `project.sync` boot pair), and the
+    /// session route's own `projectID`.
+    #[test]
+    fn sessions_suffix_resolves_via_location_info_and_registry() {
+        use crate::store::{LocationInfoSnapshot, Route};
+        let store = Store::new(Runtime::new());
+        // Nothing loaded: no suffix.
+        store.navigate(Route::Home);
+        assert_eq!(picker_project_name(&store), None);
+        // The boot pair lands: the location info + the registry — the
+        // HOME route names through them.
+        store.set_location_info(LocationInfoSnapshot {
+            directory: "/tmp/proj".to_owned(),
+            project_id: "prj_1".to_owned(),
+            project_directory: "/tmp/proj".to_owned(),
+            project_canonical: "/tmp/worktrees/main".to_owned(),
+        });
+        assert_eq!(picker_project_name(&store), None, "no registry yet");
+        store.project_list_loaded(vec![crate::components::dialog_open::ProjectRow {
+            id: "prj_1".to_owned(),
+            name: Some("Configured name".to_owned()),
+            canonical: "/tmp/worktrees/main".to_owned(),
+            vcs: false,
+        }]);
+        assert_eq!(picker_project_name(&store).as_deref(), Some("Configured name"));
+        // The session route: the SESSION's own project id wins.
+        store.ingest_all([crate::data::Ingest::Resync {
+            sessions: vec![crate::data::SessionSnapshot {
+                id: "ses_x".to_owned(),
+                directory: Some("/tmp/other".to_owned()),
+                project_id: Some("prj_none".to_owned()),
+                ..crate::data::SessionSnapshot::default()
+            }],
+            unread: Vec::new(),
+            messages: Vec::new(),
+            cursors: Vec::new(),
+            permissions: Vec::new(),
+            forms: Vec::new(),
+        }]);
+        store.navigate(Route::Session { session_id: "ses_x".to_owned(), prompt: None });
+        assert_eq!(picker_project_name(&store), None, "an unknown project id hides the suffix");
     }
 
     /// RD-17 — searching the palette yields the per-setting rows

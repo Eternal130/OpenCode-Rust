@@ -2161,6 +2161,13 @@ pub struct Store {
     /// G-69 — `vcs.branch.list`'s loaded rows (the base selector's
     /// options; fetched through [`BranchListSink`] at dialog open).
     diff_branches: RefCell<Option<Vec<String>>>,
+    /// G-491 — the server-reported location info
+    /// (`data.location.syncInfo` → `location.get`, client/solid/
+    /// data.ts:1858-1869): the boot location's directory + its
+    /// PROJECT (id, directory, canonical) — the sessions suffix's
+    /// resolution chain (`currentProjectName`,
+    /// dialog-session-list.tsx:134-140).
+    location_info: RefCell<Option<crate::store::LocationInfoSnapshot>>,
     /// G-69 — the branch-list fetch seam (the loop fetcher's
     /// `vcs.branch.list` worker; tests record).
     branch_list_sink: std::cell::RefCell<Rc<dyn BranchListSink>>,
@@ -2529,6 +2536,30 @@ impl ProjectSink for RecordingProjectSink {
 
 // -- Lane FINAL: the dead session-command seam (compact / export /
 // remove / background / fork / undo's revert.stage) + location.reload -
+
+/// G-491 — the server-reported location snapshot
+/// (`location.get`'s `Location.PublicInfo`): the boot directory plus
+/// its owning project (the sessions dialog's ` for {project}` suffix
+/// resolves through it, dialog-session-list.tsx:134-140).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocationInfoSnapshot {
+    pub directory: String,
+    pub project_id: String,
+    pub project_directory: String,
+    pub project_canonical: String,
+}
+
+impl LocationInfoSnapshot {
+    #[must_use]
+    pub fn from_public(info: &oc_client::types::LocationPublicInfo) -> Self {
+        Self {
+            directory: info.directory.clone(),
+            project_id: info.project.id.clone(),
+            project_directory: info.project.directory.clone(),
+            project_canonical: info.project.canonical.clone(),
+        }
+    }
+}
 
 /// The session-action API seam (v2's `client.api.*` calls behind the
 /// session command table, routes/session/index.tsx:945-1254 +
@@ -4427,6 +4458,7 @@ impl Store {
             diff_bases: RefCell::new(std::collections::HashMap::new()),
             diff_directory: RefCell::new(String::new()),
             diff_branches: RefCell::new(None),
+            location_info: RefCell::new(None),
             branch_list_sink: std::cell::RefCell::new(Rc::new(NoBranchListSink)),
             stats_sink: std::cell::RefCell::new(Rc::new(NoStatsSink)),
             open_url_sink: std::cell::RefCell::new(None),
@@ -10216,6 +10248,20 @@ impl Store {
     /// `vcs.branch.list`'s rows landing (the HTTP worker's reply).
     pub fn set_diff_branches(&self, branches: Vec<String>) {
         *self.diff_branches.borrow_mut() = Some(branches);
+    }
+
+    /// G-491 — the server-reported location info landed (the boot
+    /// `location.get`): the default location's project resolution.
+    pub fn set_location_info(&self, info: LocationInfoSnapshot) {
+        *self.location_info.borrow_mut() = Some(info);
+        self.request_redraw();
+    }
+
+    /// The server-reported location info (`None` until the boot
+    /// fetch lands).
+    #[must_use]
+    pub fn location_info(&self) -> Option<LocationInfoSnapshot> {
+        self.location_info.borrow().clone()
     }
 
     /// The base selector's options (empty until the list loads).

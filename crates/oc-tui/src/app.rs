@@ -5962,6 +5962,11 @@ pub enum LoopRequest {
     CredentialActivate {
         credential_id: String,
     },
+    /// G-491 — the boot `location.get` (the ref's
+    /// `data.location.syncInfo`, client/solid/data.ts:1858-1869).
+    LocationInfo {
+        directory: String,
+    },
     CredentialRemove {
         credential_id: String,
     },
@@ -6114,6 +6119,11 @@ pub enum LoopFetch {
     /// TUI-5 (lane-tui2): the `project.list` result (the Open menu's
     /// Projects section).
     ProjectList(Result<Vec<crate::components::dialog_open::ProjectRow>, String>),
+    /// G-491 — the boot `location.get` result (the default location's
+    /// project resolution).
+    LocationInfo {
+        result: Result<oc_client::types::LocationPublicInfo, String>,
+    },
     // -- TUI-4: the terminal registry + the attach stream's events --
     TerminalListed {
         session_id: String,
@@ -7000,6 +7010,28 @@ pub fn spawn_loop_fetcher(
                         if let Err(error) = client.credential().activate(&credential_id).await {
                             crate::keymap::log_skip(&format!("credential activate: {error}"));
                         }
+                    });
+                }
+                // G-491 — the boot `location.get`
+                // (`data.location.syncInfo`, client/solid/data.ts:
+                // 1858-1869): the default location's directory + its
+                // owning project. Failures stay silent (the ref's
+                // sync errors surface through the location context's
+                // error signal — a later lane).
+                LoopRequest::LocationInfo { directory } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = client
+                            .location()
+                            .get(&oc_client::types::LocationGetQuery {
+                                location: Some(oc_client::types::QueryLocation {
+                                    directory: Some(directory),
+                                }),
+                            })
+                            .await
+                            .map_err(|error| error.to_string());
+                        let _ = tx.send(LoopFetch::LocationInfo { result });
                     });
                 }
                 LoopRequest::CredentialRemove { credential_id } => {
@@ -9240,6 +9272,13 @@ pub async fn run_with_size(
     // for the launch cwd at boot (the label paints once it resolves).
     if !directory.is_empty() {
         let _ = loop_fetch_tx.send(LoopRequest::LocationVcs(directory.clone()));
+        // G-491 — the ref's boot chain (client/solid/data.ts:
+        // 616-625): `location.get` for the default location +
+        // `project.sync()` — the sessions suffix resolves the owning
+        // project through them (`currentProjectName`,
+        // dialog-session-list.tsx:134-140), not the cwd prefix scan.
+        let _ = loop_fetch_tx.send(LoopRequest::LocationInfo { directory: directory.clone() });
+        let _ = loop_fetch_tx.send(LoopRequest::ProjectList);
     }
     // Lane/chrome #6: v2 picks the home placeholder at RANDOM per boot
     // (`randomIndex` on the Prompt mount, prompt/index.tsx:103-106 +
@@ -10537,6 +10576,24 @@ pub async fn run_with_size(
                     Ok(rows) => app.store.project_list_loaded(rows),
                     Err(error) => app.store.project_list_failed(error),
                 },
+                // G-491 — the boot location info landed: the default
+                // location's project resolution (the sessions suffix's
+                // `currentProjectName` chain) + the footer location's
+                // server-reported directory (the ref's
+                // `footerLocation` = `data.location.default()`,
+                // prompt/index.tsx:1603-1619 — the vcs lookup keys off
+                // the SERVER's view of the directory, not the process
+                // cwd).
+                LoopFetch::LocationInfo { result } => {
+                    if let Ok(info) = result {
+                        let snapshot = crate::store::LocationInfoSnapshot::from_public(&info);
+                        if info.directory != directory {
+                            let _ = loop_fetch_tx
+                                .send(LoopRequest::LocationVcs(info.directory.clone()));
+                        }
+                        app.store.set_location_info(snapshot);
+                    }
+                }
                 // -- TUI-4: the terminal registry + pane stream ------
                 LoopFetch::TerminalCapability(available) => {
                     app.store.set_terminal_available(available);
