@@ -303,11 +303,7 @@ pub fn mount_startup_loading_solid(
     if width < 4 || height < 2 {
         return;
     }
-    let spinner = if animations {
-        spinner_frame(elapsed_ms).to_string()
-    } else {
-        "⋯".to_owned()
-    };
+    let spinner = if animations { spinner_frame(elapsed_ms).to_string() } else { "⋯".to_owned() };
     let label = format!("{spinner} {text}");
     let pill_width = label.chars().count() + 2;
     let left = width.saturating_sub(pill_width) / 2;
@@ -354,11 +350,7 @@ pub fn mount_migration_solid(
     if width < 6 || height < 4 {
         return;
     }
-    let spinner = if animations {
-        spinner_frame(elapsed_ms).to_string()
-    } else {
-        "⋯".to_owned()
-    };
+    let spinner = if animations { spinner_frame(elapsed_ms).to_string() } else { "⋯".to_owned() };
     let content = format!("{spinner} {}{}", progress.label, progress_count(progress));
     let box_width = content.chars().count() + 1 + 2 + 2;
     let left = width.saturating_sub(box_width + 2);

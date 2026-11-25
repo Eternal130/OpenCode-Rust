@@ -1,5 +1,5 @@
 //! G-478 anchor debt (va20 T8) — the update DIALOG's mounted faces,
-//! vt-level. The wire-event rig drive (be1_lane's
+//! vt-level. The wire-event rig drive (`be1_lane`'s
 //! `installation.update-available`/`installation.updated` forms) is
 //! NOT reachable from this lane's write domain: the paired rigs'
 //! installation events would need a gateway-side publish hook
@@ -89,10 +89,7 @@ fn vt_update_dialog_walks_the_state_machine_faces() {
             std::thread::sleep(Duration::from_millis(300));
             driver.write(b"\r");
             if !wait_for_grid(&driver, "An update is available", Duration::from_secs(5)) {
-                return Err(format!(
-                    "the Available face never rendered: {}",
-                    screen_text(&driver)
-                ));
+                return Err(format!("the Available face never rendered: {}", screen_text(&driver)));
             }
             let available = screen_text(&driver);
             if !available.contains("Update available") {
@@ -112,8 +109,11 @@ fn vt_update_dialog_walks_the_state_machine_faces() {
             // notice file) flips the face: Installing → Installed.
             std::fs::write(notice_file(), format!("{AVAILABLE_LINE}\n{INSTALLED_LINE}\n"))
                 .map_err(|e| format!("write installed notice: {e}"))?;
-            if !wait_for_grid(&driver, "Update successful! A restart is required.", Duration::from_secs(5))
-            {
+            if !wait_for_grid(
+                &driver,
+                "Update successful! A restart is required.",
+                Duration::from_secs(5),
+            ) {
                 return Err("the Installed face never rendered".to_owned());
             }
             let installed = screen_text(&driver);
@@ -134,10 +134,7 @@ fn vt_update_dialog_walks_the_state_machine_faces() {
         std::thread::sleep(Duration::from_millis(50));
     }
     let outcome = result_slot.lock().expect("slot").take();
-    assert!(
-        matches!(&outcome, Some(Ok(()))),
-        "update dialog walk RED: {outcome:?}"
-    );
+    assert!(matches!(&outcome, Some(Ok(()))), "update dialog walk RED: {outcome:?}");
 }
 
 /// Poll the settled GRID for a needle (the per-glyph chrome surfaces

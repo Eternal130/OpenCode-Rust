@@ -363,5 +363,4 @@ mod tests {
             "no braille glyph while gated: {row}"
         );
     }
-
 }

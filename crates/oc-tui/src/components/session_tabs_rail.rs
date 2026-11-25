@@ -448,7 +448,8 @@ fn rail_paint_walk(
                 if let Some(track) = inputs.tracks.get(id) {
                     let opacity = track.dissolve_opacity(inputs.clock_ms);
                     if opacity > 0.0 {
-                        label = inputs.indicator.unread_marker.glyph().to_owned();
+                        label.clear();
+                        label.push_str(inputs.indicator.unread_marker.glyph());
                         let flash = (1.0 - (opacity - 0.8).abs() / 0.2).max(0.0);
                         let hue = if track.dissolve_error { styles.error } else { styles.accent };
                         let brightened = tint(
@@ -492,10 +493,8 @@ fn rail_paint_walk(
             // The indicator: right-aligned in numberWidth, one pad
             // cell, the title from x = numberWidth + 1.
             // G-479 — the number ignition level from the track.
-            let ignition = inputs
-                .tracks
-                .get(id)
-                .map_or(0.0, |track| track.ignition_level(inputs.clock_ms));
+            let ignition =
+                inputs.tracks.get(id).map_or(0.0, |track| track.ignition_level(inputs.clock_ms));
             let number_fg = number_color(styles, view.status, selected, hovered, bg, ignition);
             placed.push(Placed {
                 x: number_width.saturating_sub(1),
@@ -653,14 +652,14 @@ fn number_color(
     } else {
         idle_number(styles)
     };
-    let color = if !selected {
-        base
-    } else {
+    let color = if selected {
         let pulse = rgb(bg);
         let text = rgb(styles.text.fg.unwrap_or(DEFAULT_FOREGROUND));
         let inner = tint(text, pulse, 0.25);
         let (r, g, b) = tint(rgb(base), inner, 1.0);
         crate::style::Color::Rgb(r, g, b)
+    } else {
+        base
     };
     if ignition <= 0.0 {
         return color;
@@ -799,7 +798,7 @@ mod tests {
             };
             let geometry = RailGeometry::new(1, 6);
             let (frame, _) = vertical_rail_solid_frames(&inputs, &geometry, 10, &styles());
-            frame.text_grid()[3].to_owned()
+            frame.text_grid()[3].clone()
         };
         assert!(marker_row(100, None).contains('A'), "no track: the idle title glyph");
         assert!(marker_row(140, Some(tracks.clone())).contains('•'), "the marker dissolves");

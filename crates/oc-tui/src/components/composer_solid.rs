@@ -375,18 +375,12 @@ fn preview_strip(view: &PromptView, frame_height: usize, colors: &ComposerColors
                 .map(|row| {
                     let chunks = row
                         .iter()
-                        .map(|cell| {
-                            TextChunk {
-                                text: cell.glyph.to_string(),
-                                fg: Some(Rgba::from_ints(
-                                    cell.fg[0], cell.fg[1], cell.fg[2], 255,
-                                )),
-                                bg: Some(Rgba::from_ints(
-                                    cell.bg[0], cell.bg[1], cell.bg[2], 255,
-                                )),
-                                attributes: 0,
-                                link: None,
-                            }
+                        .map(|cell| TextChunk {
+                            text: cell.glyph.to_string(),
+                            fg: Some(Rgba::from_ints(cell.fg[0], cell.fg[1], cell.fg[2], 255)),
+                            bg: Some(Rgba::from_ints(cell.bg[0], cell.bg[1], cell.bg[2], 255)),
+                            attributes: 0,
+                            link: None,
                         })
                         .collect();
                     styled(chunks)
@@ -574,7 +568,8 @@ fn shape(view: &PromptView, width: usize, height: usize, theme: &ThemeState) -> 
     };
 
     // The footer row's plan (ONE source of truth with the old path).
-    let plan = footer_plan(view, width);    let location_fg = if view.footer.location_hovered { colors.text_base } else { colors.muted };
+    let plan = footer_plan(view, width);
+    let location_fg = if view.footer.location_hovered { colors.text_base } else { colors.muted };
     let footer_location = one(plan.location.clone(), location_fg);
     let footer_interrupt = match plan.interrupt_x {
         Some(_) => styled(vec![
@@ -812,6 +807,10 @@ fn popup_row_element(
 /// geometry keys the mount via `content_h`); a decode failure leaves
 /// the thumb EMPTY — the centered muted `No preview` text rides the
 /// same box (the ref's onError fallback).
+// One JSX element per section (the thumbs' boxes + the more cell +
+// the pad row — prompt/index.tsx:1676-1741's mount), mirroring the
+// composer mount's own allowance.
+#[allow(clippy::too_many_lines)]
 fn preview_strip_element(inputs: &Signal<ComposerInputs>, geo: &ComposerInputs) -> Element {
     let thumb_w = geo.preview_thumb_w as f32;
     let thumb_h = geo.preview_thumb_h as f32;
@@ -853,7 +852,7 @@ fn preview_strip_element(inputs: &Signal<ComposerInputs>, geo: &ComposerInputs) 
             .dyn_prop(
                 "content",
                 dyn_styled(map(fallback_inputs, move |i: &ComposerInputs| {
-                    if i.preview_thumbs.get(index).is_some_and(|thumb| thumb.is_none()) {
+                    if i.preview_thumbs.get(index).is_some_and(Option::is_none) {
                         // Center the 11-wide label in the thumb box.
                         let lead = i.preview_thumb_w.saturating_sub(11) / 2;
                         one(format!("{}No preview", " ".repeat(lead)), i.colors.muted)
@@ -1533,10 +1532,7 @@ mod tests {
     /// The tiny 4x2 PNG fixture (the R-07 strip's own corpus).
     const TINY_PNG: &[u8] = include_bytes!("../../tests/fixtures/r07-tiny-4x2.png");
 
-    fn preview_view<'a>(
-        owned: &'a PromptDraft,
-        previews: Vec<String>,
-    ) -> PromptView<'a> {
+    fn preview_view(owned: &PromptDraft, previews: Vec<String>) -> PromptView<'_> {
         PromptView {
             draft: owned,
             placeholder: String::new(),
@@ -1560,12 +1556,9 @@ mod tests {
     fn preview_strip_mounts_thumbs_and_more_cell() {
         let theme = ThemeState::v2_dark();
         let owned = draft("hello");
-        let uri = format!(
-            "data:image/png;base64,{}",
-            crate::clipboard::base64_encode::encode(TINY_PNG)
-        );
-        let previews: Vec<String> =
-            std::iter::repeat(uri.clone()).take(5).collect();
+        let uri =
+            format!("data:image/png;base64,{}", crate::clipboard::base64_encode::encode(TINY_PNG));
+        let previews: Vec<String> = std::iter::repeat_n(uri.clone(), 5).collect();
         let view = preview_view(&owned, previews.clone());
         let frame = render_prompt_frame_dispatch(&view, 80, 30, &theme);
         let grid = frame.text_grid();
@@ -1573,19 +1566,13 @@ mod tests {
         // = 12; the strip rows 1..6 (pad row 0), the pad row 7, the
         // textarea from row 8.
         let strip: String = grid[1].chars().take(40).collect();
-        assert!(
-            strip.chars().any(|ch| ch != ' '),
-            "thumb row 1 carries block glyphs: {strip:?}"
-        );
+        assert!(strip.chars().any(|ch| ch != ' '), "thumb row 1 carries block glyphs: {strip:?}");
         assert!(grid[1].contains("+2 more"), "the more cell: {:?}", grid[1]);
         // The bare view (no previews): the textarea stays at the top —
         // the same frame as without the field.
         let bare = preview_view(&owned, Vec::new());
         let bare_frame = render_prompt_frame_dispatch(&bare, 80, 30, &theme);
-        assert_eq!(
-            bare_frame.text_grid()[1],
-            frame_with_previews_disabled_row(&theme, &owned)
-        );
+        assert_eq!(bare_frame.text_grid()[1], frame_with_previews_disabled_row(&theme, &owned));
     }
 
     /// The bare-frame reference row (the placeholder row at the box's
@@ -1607,11 +1594,7 @@ mod tests {
         let grid = frame.text_grid();
         // The fallback centers in the thumb box (absolute top = h/2 =
         // 3 → frame row 4, the strip starting at row 1).
-        assert!(
-            grid[4].contains("No preview"),
-            "the fallback label centers: {:?}",
-            grid[4]
-        );
+        assert!(grid[4].contains("No preview"), "the fallback label centers: {:?}", grid[4]);
     }
 
     /// The hit rects: one per visible thumb + the `+N more` cell, in
@@ -1627,7 +1610,6 @@ mod tests {
         assert_eq!(hits[2], (39, 43, 12, 6, 2), "thumb 2");
         assert_eq!(hits[3], (52, 43, 8, 6, 3), "the more cell opens at index 3");
         // No previews: no rects.
-        assert!(prompt_preview_hit_rects(&[], 24, 2, 80, 10, 40).is_empty());
+        assert!(prompt_preview_hit_rects(&[], 24, 2, 80, 10, 40).is_empty(), "no previews");
     }
 }
-

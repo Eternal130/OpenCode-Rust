@@ -577,7 +577,8 @@ pub(crate) fn blocks_thumbnail(
     bytes: &[u8],
     max_cols: usize,
     max_rows: usize,
-) -> Option<Vec<Vec<crate::image_view::BlockCell>>> {    let image = crate::image_codec::decode_png(bytes)?;
+) -> Option<Vec<Vec<crate::image_view::BlockCell>>> {
+    let image = crate::image_codec::decode_png(bytes)?;
     let (cols, rows) = crate::image_view::fit_cells(image.width, image.height, max_cols, max_rows);
     Some(crate::image_view::blocks_cells(&image, cols, rows))
 }

@@ -185,11 +185,9 @@ impl Marquee {
     /// The clock of the cycle's end (the reset tick) — delay + (cycle−1)
     /// intervals, the k = cycle−1 tick of `setInterval`.
     fn reset_ms(&self) -> u64 {
-        self.entered_ms
-            .saturating_add(MARQUEE_DELAY)
-            .saturating_add(
-                u64::try_from(self.cycle_width.saturating_sub(1)).unwrap_or(0) * MARQUEE_INTERVAL,
-            )
+        self.entered_ms.saturating_add(MARQUEE_DELAY).saturating_add(
+            u64::try_from(self.cycle_width.saturating_sub(1)).unwrap_or(0) * MARQUEE_INTERVAL,
+        )
     }
 
     /// The leading fade (`leading.animate({opacity: 1})` as the scroll
@@ -329,15 +327,12 @@ mod tests {
         // NFD ü (u + U+0308), the flag (two regional indicators) and
         // the ZWJ family written with explicit escapes — the cluster
         // seams under test are exactly the joining codepoints.
-        let title = "\u{1F1FA}\u{1F1F8}u\u{0308}\u{1F9D1}\u{200D}\u{1F4BB} title that overflows the width";
+        let title =
+            "\u{1F1FA}\u{1F1F8}u\u{0308}\u{1F9D1}\u{200D}\u{1F4BB} title that overflows the width";
         let width = 10;
         assert!(marquee_overflows(title, width));
         assert_eq!(display_width("\u{1F1FA}\u{1F1F8}"), 2, "the flag is one 2-cell cluster");
-        assert_eq!(
-            display_width("u\u{0308}"),
-            1,
-            "NFD ü (u + U+0308) is one 1-cell cluster"
-        );
+        assert_eq!(display_width("u\u{0308}"), 1, "NFD ü (u + U+0308) is one 1-cell cluster");
         assert_eq!(
             display_width("\u{1F9D1}\u{200D}\u{1F4BB}"),
             2,
@@ -378,10 +373,7 @@ mod tests {
                 first != '\u{0308}' && first != '\u{200D}' && first != '\u{1F1F8}',
                 "offset {offset}: {window:?} starts mid-cluster"
             );
-            assert!(
-                display_width(&window) <= width,
-                "offset {offset}: {window:?} over the window"
-            );
+            assert!(display_width(&window) <= width, "offset {offset}: {window:?} over the window");
         }
         // The window starting mid-cluster snaps forward to the NEXT
         // cluster boundary (cursor 1 = inside the flag → starts at ü).
@@ -476,7 +468,8 @@ mod tests {
             let next = marquee.offset(now);
             if next == 0 {
                 assert_eq!(
-                    offset, cycle - 1,
+                    offset,
+                    cycle - 1,
                     "the reset tick steps from the LAST window back to 0"
                 );
             } else {

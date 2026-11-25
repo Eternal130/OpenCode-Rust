@@ -708,9 +708,7 @@ fn vt_temporal_busy_strip_spinner_paints_interactive_token() {
         other => panic!("text token must be RGB, got {other:?}"),
     };
     let interactive = theme_interactive();
-    let on_ramp = |got: u8, from: u8, to: u8| {
-        got >= from.min(to) && got <= from.max(to)
-    };
+    let on_ramp = |got: u8, from: u8, to: u8| got >= from.min(to) && got <= from.max(to);
     assert!(
         on_ramp(r, interactive.0, text.0)
             && on_ramp(g, interactive.1, text.1)

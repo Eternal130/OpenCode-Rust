@@ -837,8 +837,12 @@ mod tests {
     fn parses_prompt_image_preview_defaulting_off() {
         assert!(!TuiConfig::default().prompt_image_preview);
         assert!(!TuiConfig::parse("{}", None).prompt_image_preview);
-        assert!(!TuiConfig::parse(r#"{"prompt": {"image_preview": false}}"#, None).prompt_image_preview);
-        assert!(TuiConfig::parse(r#"{"prompt": {"image_preview": true}}"#, None).prompt_image_preview);
+        assert!(
+            !TuiConfig::parse(r#"{"prompt": {"image_preview": false}}"#, None).prompt_image_preview
+        );
+        assert!(
+            TuiConfig::parse(r#"{"prompt": {"image_preview": true}}"#, None).prompt_image_preview
+        );
         // from_info: absent → false, explicit Some(true) → true.
         let info = oc_core::cli_config::Info::default();
         assert!(!TuiConfig::from_info(&info, None).prompt_image_preview);
@@ -851,7 +855,6 @@ mod tests {
         };
         assert!(TuiConfig::from_info(&info, None).prompt_image_preview);
     }
-
 }
 
 #[cfg(test)]

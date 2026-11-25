@@ -1573,8 +1573,7 @@ pub fn ref_stage(sandbox: &Sandbox) -> RefStage {
             std::path::Path::new("/root/.cache/opencode-rust/bin/rg"),
         ] {
             if host_rg.is_file() {
-                std::fs::copy(host_rg, &staged_rg)
-                    .unwrap_or_else(|e| panic!("stage rg: {e}"));
+                std::fs::copy(host_rg, &staged_rg).unwrap_or_else(|e| panic!("stage rg: {e}"));
                 set_exec_bit(&staged_rg);
                 staged = true;
                 break;

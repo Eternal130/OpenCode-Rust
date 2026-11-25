@@ -364,6 +364,7 @@ impl TabPulseTrack {
     /// (`status.unread && !pending`), `pending` = busy or attention
     /// (a pending indicator jumps the dissolve to 0 instead of
     /// animating).
+    #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
     pub fn sync(
         &mut self,
         runs: bool,
@@ -414,9 +415,8 @@ impl TabPulseTrack {
         // G-479 — the indicator dissolve: unread jumps to 1, pending
         // jumps to 0, and the falling edge (unread → false, not
         // pending) animates 1 → 0 over 180 ms.
-        if unread {
-            self.dissolve_since = None;
-        } else if pending {
+        if unread || pending {
+            // unread jumps to 1; pending (busy/attention) jumps to 0.
             self.dissolve_since = None;
         } else if self.unread_live {
             self.dissolve_since = Some(now);
@@ -457,8 +457,9 @@ impl TabPulseTrack {
     }
 
     /// G-479 — the running sweep's level under the number cell (the
-    /// TabPulse `onLevel` report: `max(intensityAt(1, fronts…)) ×
-    /// running`; the ref quantizes to 1/32 to damp signal noise —
+    /// `TabPulse` `onLevel` report: the max of `intensityAt(1, …)`
+    /// over both fronts × running; the ref quantizes to 1/32 to damp
+    /// signal noise —
     /// the deterministic read keeps the raw value).
     #[must_use]
     pub fn sweep_level_at_number(&self, width: usize, now: u64) -> f64 {
@@ -467,7 +468,8 @@ impl TabPulseTrack {
             return 0.0;
         }
         let (front_a, front_b) = self.fronts(width, now);
-        intensity_at(1, front_a, RUN_HEAD, RUN_TAIL).max(intensity_at(1, front_b, RUN_HEAD, RUN_TAIL))
+        intensity_at(1, front_a, RUN_HEAD, RUN_TAIL)
+            .max(intensity_at(1, front_b, RUN_HEAD, RUN_TAIL))
             * running
     }
 
@@ -848,7 +850,7 @@ mod tests {
 
     /// The edge flash (tab-pulse.tsx:42-45 + `setActive`/
     /// `setPromptPulse`): a runs flip starts the 800 ms attackDecay at
-    /// scale 1; a `pulse++` RESTARTS it at PROMPT_FLASH_SCALE=2; a
+    /// scale 1; a `pulse++` RESTARTS it at `PROMPT_FLASH_SCALE` = 2; a
     /// flip mid-flash does not re-stamp (`start()` no-ops); the first
     /// sync (mount) records state without firing. The attackDecay
     /// rises over the leading 10% (peak at +80 ms) then decays to 0

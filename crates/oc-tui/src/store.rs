@@ -1480,6 +1480,11 @@ fn apply_session_move(row: &mut crate::data::SessionSnapshot, moved: &SessionMov
     }
 }
 
+/// G-483 — one prompt preview hit rect: `(x, y, w, h, index)` in
+/// screen coordinates (the release opens the preview at `index`,
+/// prompt/index.tsx:1697-1703/1728-1733).
+type PromptImageHits = Vec<(usize, usize, usize, usize, usize)>;
+
 pub struct Store {
     /// Reactive runtime owning the graph (pump via `run_effects`).
     pub runtime: Runtime,
@@ -2222,7 +2227,7 @@ pub struct Store {
     /// thumb + the `+N more` cell): `(x, y, w, h, index)` in SCREEN
     /// coordinates — the release opens the image preview at `index`
     /// (prompt/index.tsx:1697-1703/1728-1733).
-    prompt_image_hits: RefCell<Vec<(usize, usize, usize, usize, usize)>>,
+    prompt_image_hits: RefCell<PromptImageHits>,
     /// SURF-2 the MCP toggle seam (mcp.connect/disconnect).
     mcp_toggle_sink: std::cell::RefCell<Rc<dyn McpToggleSink>>,
     /// RE-02: the plugin enable/disable seam (`plugins.toggle`).
@@ -4759,6 +4764,7 @@ impl Store {
     /// registry, and `unread` (the indicator's memo:
     /// `status.unread && !pending`) + `pending` (busy or attention)
     /// drive the dissolve stamps.
+    #[allow(clippy::fn_params_excessive_bools)]
     #[must_use]
     pub fn tab_pulse_track(
         &self,
@@ -5277,7 +5283,7 @@ impl Store {
 
     /// G-483 — record the prompt preview strip's hit rects (screen
     /// coordinates; the session/home mounts compute them).
-    pub fn set_prompt_image_hits(&self, hits: Vec<(usize, usize, usize, usize, usize)>) {
+    pub fn set_prompt_image_hits(&self, hits: PromptImageHits) {
         *self.prompt_image_hits.borrow_mut() = hits;
     }
 
@@ -7079,6 +7085,7 @@ impl Store {
     /// pinned the selection at open only, so a Checking→Available flip
     /// left the focus on Skip and the confirm Enter dismissed instead
     /// of installing.
+    #[allow(clippy::needless_pass_by_value)] // callers pass owned constructed states
     pub fn set_update_dialog(&self, state: crate::components::update::UpdateDialogState) {
         self.update_dialog.set(state.clone());
         if matches!(self.top_dialog(), Some(entry) if entry.kind == DialogKind::Update) {
@@ -14448,12 +14455,7 @@ impl Store {
                     // rings the tab's edge flash + number ignition.
                     let root = self.session_root(&session);
                     let active = self.tabs.get().active(&self.route.get());
-                    let in_tabs = self
-                        .tabs
-                        .get()
-                        .tabs
-                        .iter()
-                        .any(|tab| tab.session_id == root);
+                    let in_tabs = self.tabs.get().tabs.iter().any(|tab| tab.session_id == root);
                     if active.as_deref() != Some(root.as_str()) && in_tabs {
                         let mut pulses = self.prompt_pulses.borrow_mut();
                         *pulses.entry(root).or_insert(0) += 1;

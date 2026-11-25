@@ -40,7 +40,9 @@ pub fn mount_state_overlays(store: &Store, styles: &ThemeStyles, width: usize, h
         );
     }
     if let Some(progress) = store.migration_progress() {
-        super::overlays_solid::mount_migration_solid(styles, &progress, now, width, height, animations);
+        super::overlays_solid::mount_migration_solid(
+            styles, &progress, now, width, height, animations,
+        );
     }
 }
 

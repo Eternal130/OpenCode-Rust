@@ -1,12 +1,12 @@
 //! va20 (T9) — the fix surfaces' paired anchors (export-only): the
 //! scenarios the lane's five fixes own, run on the same pair topology
-//! as realchain_pair (the replay gateway + sandboxed BOTH ends). The
+//! as `realchain_pair` (the replay gateway + sandboxed BOTH ends). The
 //! lane prompt's fallback clause applies to the frame-level animation
 //! faces: marquee/grapheme windows, the tab-pulse envelopes, the
 //! spinner's static fallback and the reconnecting five-row box are
 //! export-anchored at the OBSERVABLE settled states here (or pinned
 //! at unit/vt level with the fixes themselves — see marquee.rs,
-//! tab_pulse.rs, overlays.rs, composer_solid.rs tests); the exports
+//! `tab_pulse.rs`, `overlays.rs`, `composer_solid.rs` tests); the exports
 //! land in `.test-logs/diff-reports/` for controller adjudication.
 //!
 //! * `v20-reconnecting5` — G-477: both ends' servers stop, the
@@ -102,17 +102,18 @@ fn boot_both(rig: &V20Rig) {
 }
 
 /// Patch a JSON key into one end's TUI config (read + merge + write).
-fn patch_tui_config(path: &std::path::Path, merge: serde_json::Value) {
-    let mut config: serde_json::Value =
-        std::fs::read_to_string(path).ok().and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_else(|| serde_json::json!({}));
+fn patch_tui_config(path: &std::path::Path, merge: &serde_json::Value) {
+    let mut config: serde_json::Value = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
     if let (Some(base), Some(extra)) = (config.as_object_mut(), merge.as_object()) {
         for (key, value) in extra {
             base.insert(key.clone(), value.clone());
         }
     }
     std::fs::write(path, serde_json::to_string_pretty(&config).unwrap())
-        .unwrap_or_else(|e| panic!("patch config {path:?}: {e}"));
+        .unwrap_or_else(|e| panic!("patch config {}: {e}", path.display()));
 }
 
 // ---------------------------------------------------------------------------
@@ -139,9 +140,8 @@ fn v20_reconnecting_five_row_pair() {
     service_stop(&rig.rust);
     // Poll each end for its overlay face; capture the grid THE MOMENT
     // it shows (the ref's managed respawn clears it seconds later).
-    let overlay_text = |screen: &str| {
-        screen.contains("Connection lost") || screen.contains("Restarting service")
-    };
+    let overlay_text =
+        |screen: &str| screen.contains("Connection lost") || screen.contains("Restarting service");
     let mut rust_grid: Option<String> = None;
     let mut ref_grid: Option<String> = None;
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
@@ -202,14 +202,9 @@ fn v20_prompt_preview_strip_pair() {
     // G-483 — the strip's gate, ON for both ends (the ref reads the
     // config document's prompt.image_preview; the port's TuiConfig
     // the same key).
-    patch_tui_config(
-        &rust.config_path(),
-        serde_json::json!({ "prompt": { "image_preview": true } }),
-    );
-    patch_tui_config(
-        &refbox.root.join("xdg-config/opencode/opencode.json"),
-        serde_json::json!({ "prompt": { "image_preview": true } }),
-    );
+    let preview_key = serde_json::json!({ "prompt": { "image_preview": true } });
+    patch_tui_config(&rust.config_path(), &preview_key);
+    patch_tui_config(&refbox.root.join("xdg-config/opencode/opencode.json"), &preview_key);
     // The pasted local image: the tiny 4x2 PNG fixture in each
     // sandbox's own project.
     let png = include_bytes!("fixtures/r07-tiny-4x2.png");
@@ -222,8 +217,7 @@ fn v20_prompt_preview_strip_pair() {
     let _ = server.url;
     let rust_tui = TuiProcess::spawn(&rust, COLS, ROWS);
     let ref_tui = ref_tui_spawn(&refbox, &stage, COLS, ROWS);
-    let mut rig =
-        V20Rig { _lane: lane, _gateway: gateway, rust, refbox, stage, rust_tui, ref_tui };
+    let mut rig = V20Rig { _lane: lane, _gateway: gateway, rust, refbox, stage, rust_tui, ref_tui };
     boot_both(&rig);
     // The bracketed paste of the local image path (each end its own
     // sandbox path — the normalizer redacts both roots).

@@ -234,8 +234,8 @@ pub fn mount_live_rail(
         let selected = Some(view.tab.session_id.as_str()) == active_id.as_deref();
         let pending = view.status.busy || view.status.attention.is_some();
         let unread_memo = view.status.unread.is_some() && !pending;
-        let complete = view.status.unread == Some(crate::store::Unread::Activity)
-            && !view.status.busy;
+        let complete =
+            view.status.unread == Some(crate::store::Unread::Activity) && !view.status.busy;
         tracks.insert(
             view.tab.session_id.clone(),
             store.tab_pulse_track(
