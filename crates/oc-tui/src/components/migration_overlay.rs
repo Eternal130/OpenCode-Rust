@@ -301,6 +301,7 @@ mod tests {
                 store.clock(),
                 frame.width,
                 frame.height,
+                true,
             );
             crate::components::chrome_solid::composite_chrome_tree(&mut frame);
         }
@@ -324,9 +325,43 @@ mod tests {
                 store.clock(),
                 frame.width,
                 frame.height,
+                true,
             );
             crate::components::chrome_solid::composite_chrome_tree(&mut frame);
         }
         assert!(!frame.text_grid().join("\n").contains("Migrating sessions"));
     }
+    /// G-480 — animations off renders the migration glyph's static
+    /// `⋯ {label}{count}` fallback (spinner.tsx:28-29): no braille
+    /// glyph at any clock.
+    #[test]
+    fn overlay_static_fallback_when_animations_off() {
+        let styles = crate::theme::ThemeState::v2_dark().styles();
+        let store = Store::new(Runtime::new());
+        let progress = MigrationProgress {
+            label: "Migrating sessions".to_owned(),
+            numerator: Some(2),
+            denominator: Some(5),
+        };
+        store.set_migration_progress(Some(progress));
+        let mut frame = frame_with(60, 12);
+        if let Some(progress) = store.migration_progress() {
+            crate::components::overlays_solid::mount_migration_solid(
+                &styles,
+                &progress,
+                10_000,
+                frame.width,
+                frame.height,
+                false,
+            );
+            crate::components::chrome_solid::composite_chrome_tree(&mut frame);
+        }
+        let row = frame.text_grid()[2].clone();
+        assert!(row.contains("⋯ Migrating sessions 2/5"), "static glyph: {row}");
+        assert!(
+            !row.chars().any(|ch| ('\u{2800}'..='\u{28FF}').contains(&ch)),
+            "no braille glyph while gated: {row}"
+        );
+    }
+
 }

@@ -30,11 +30,17 @@ use crate::theme::ThemeStyles;
 /// frame-tail z, the ref's zIndex 5000-over-3000).
 pub fn mount_state_overlays(store: &Store, styles: &ThemeStyles, width: usize, height: usize) {
     let now = store.clock();
+    // G-480 — the `config.animations ?? true` gate every Spinner
+    // carries (spinner.tsx:28-29): off renders the static `⋯ {label}`
+    // fallback instead of the braille frames.
+    let animations = store.animations_enabled();
     if let Some(text) = store.startup_loading_text(now) {
-        super::overlays_solid::mount_startup_loading_solid(styles, text, now, width, height);
+        super::overlays_solid::mount_startup_loading_solid(
+            styles, text, now, width, height, animations,
+        );
     }
     if let Some(progress) = store.migration_progress() {
-        super::overlays_solid::mount_migration_solid(styles, &progress, now, width, height);
+        super::overlays_solid::mount_migration_solid(styles, &progress, now, width, height, animations);
     }
 }
 
@@ -408,11 +414,36 @@ mod tests {
             0,
             40,
             10,
+            true,
         );
         crate::components::chrome_solid::composite_chrome_tree(&mut frame);
         let row = frame.text_grid()[8].clone();
         assert!(row.contains("Loading plugins…"), "pill row: {row}");
         assert!(frame.text_grid()[9].trim().is_empty(), "bottom=1 leaves the last row");
+    }
+
+    /// G-480 — animations off renders the pill's static `⋯ {label}`
+    /// fallback (spinner.tsx:28-29): no braille glyph at any clock.
+    #[test]
+    fn startup_pill_static_fallback_when_animations_off() {
+        let styles = crate::theme::ThemeState::v2_dark().styles();
+        let mut frame = frame_with(40, 10);
+        crate::components::overlays_solid::mount_startup_loading_solid(
+            &styles,
+            "Loading plugins…",
+            10_000,
+            40,
+            10,
+            false,
+        );
+        crate::components::chrome_solid::composite_chrome_tree(&mut frame);
+        let row = frame.text_grid()[8].clone();
+        assert!(row.contains("⋯ Loading plugins…"), "static glyph: {row}");
+        // No braille frame glyph at any clock (the U+2800 block).
+        assert!(
+            !row.chars().any(|ch| ('\u{2800}'..='\u{28FF}').contains(&ch)),
+            "no braille glyph while gated: {row}"
+        );
     }
 
     /// D2.2 overlays lane — the family's seating order is today's

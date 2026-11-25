@@ -289,17 +289,25 @@ pub fn reconnecting_over_frame(
 /// The `StartupLoading` pill at `bottom=1` — a family wrapper at
 /// skeleton index 9: ONE opaque chunk row, so the tree fully covers
 /// the pill's rect (the old painter's row write).
+/// G-480 (va20): the pill's glyph is a `<Spinner>{label}</Spinner>`
+/// (startup-loading.tsx) — animations off renders the static
+/// `⋯ {label}` fallback (spinner.tsx:28-29), no braille frame.
 pub fn mount_startup_loading_solid(
     styles: &ThemeStyles,
     text: &str,
     elapsed_ms: u64,
     width: usize,
     height: usize,
+    animations: bool,
 ) {
     if width < 4 || height < 2 {
         return;
     }
-    let spinner = spinner_frame(elapsed_ms);
+    let spinner = if animations {
+        spinner_frame(elapsed_ms).to_string()
+    } else {
+        "⋯".to_owned()
+    };
     let label = format!("{spinner} {text}");
     let pill_width = label.chars().count() + 2;
     let left = width.saturating_sub(pill_width) / 2;
@@ -332,17 +340,25 @@ pub fn mount_startup_loading_solid(
 
 /// The migration widget — a family wrapper at skeleton index 10:
 /// three opaque raised rows fully cover the box's rect.
+/// G-480 (va20): the glyph is a `<Spinner>{label}{count}</Spinner>`
+/// — animations off renders the static `⋯ {label}` fallback
+/// (spinner.tsx:28-29), no braille frame.
 pub fn mount_migration_solid(
     styles: &ThemeStyles,
     progress: &MigrationProgress,
     elapsed_ms: u64,
     width: usize,
     height: usize,
+    animations: bool,
 ) {
     if width < 6 || height < 4 {
         return;
     }
-    let spinner = spinner_frame(elapsed_ms);
+    let spinner = if animations {
+        spinner_frame(elapsed_ms).to_string()
+    } else {
+        "⋯".to_owned()
+    };
     let content = format!("{spinner} {}{}", progress.label, progress_count(progress));
     let box_width = content.chars().count() + 1 + 2 + 2;
     let left = width.saturating_sub(box_width + 2);
