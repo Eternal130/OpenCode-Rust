@@ -136,6 +136,10 @@ pub fn handle_dialog_key(
         | DialogKind::ErrorDetails { .. }
         | DialogKind::Alert { .. }
         | DialogKind::Confirm { .. }
+        // G-487 — DialogExportOptions is a CUSTOM form (not a
+        // DialogSelect): the pill row + the format-scoped toggles +
+        // the Copy/Export buttons; tab/return own the dialog.
+        | DialogKind::SessionExport { .. }
         | DialogKind::Pair => false,
         // G-271④ — the form walk flips with the current field (the
         // textual kinds take the prompt input).
@@ -179,7 +183,6 @@ pub fn handle_dialog_key(
         | DialogKind::IntegrationPending { .. }
         | DialogKind::Settings
         | DialogKind::ForkPicker { .. }
-        | DialogKind::SessionExport { .. }
         | DialogKind::ExportResult { .. }
         // TUI-8/9/TD22: DialogSkill / DialogStash /
         // DialogExperiments are DialogSelects.
@@ -269,7 +272,15 @@ pub fn handle_dialog_key(
     }
 
     // -- the focused input renderable ---------------------------------------
-    if !is_static && !stroke.ctrl && !stroke.alt && stroke.key.chars().count() == 1 {
+    // G-485③ — `renderFilter: false` mounts no input: printables and
+    // backspace never type (the diff source picker,
+    // diff-viewer.tsx:740).
+    if !is_static
+        && props.render_filter
+        && !stroke.ctrl
+        && !stroke.alt
+        && stroke.key.chars().count() == 1
+    {
         if let Some(ch) = stroke.key.chars().next() {
             let text = if stroke.shift { ch.to_ascii_uppercase() } else { ch };
             store.update_dialog(|top| {
@@ -289,7 +300,13 @@ pub fn handle_dialog_key(
             return DialogKeyOutcome::Consumed;
         }
     }
-    if !is_static && stroke.key == "backspace" && !stroke.ctrl && !stroke.alt && !stroke.shift {
+    if !is_static
+        && props.render_filter
+        && stroke.key == "backspace"
+        && !stroke.ctrl
+        && !stroke.alt
+        && !stroke.shift
+    {
         store.update_dialog(|top| {
             if is_prompt_kind(&top.kind) {
                 top.value.pop();
@@ -588,6 +605,25 @@ pub fn handle_dialog_key(
         }
     }
 
+    // -- G-487: DialogExportOptions' modal layer
+    // (dialog-export-options.tsx:56-78): `tab` cycles the ACTIVE
+    // control through the format-scoped order, `return` activates it
+    // (format select / toggle flip / confirm); the header's `esc`
+    // clears (the shared close binding upstream).
+    if let DialogKind::SessionExport { session_id } = &entry.kind {
+        if stroke.key == "tab" && !stroke.ctrl && !stroke.alt && !stroke.shift {
+            store.export_options_focus_next();
+            return DialogKeyOutcome::Consumed;
+        }
+        if stroke.key == "return" && !stroke.ctrl && !stroke.alt {
+            if let Some((_action, destination)) = store.export_options_activate_focused() {
+                let format = store.export_options_state().format.as_str().to_owned();
+                store.session_export_submit(session_id, &format, destination);
+            }
+            return DialogKeyOutcome::Consumed;
+        }
+        return DialogKeyOutcome::Consumed;
+    }
     // -- G-237: DialogPrompt's submit (`dialog.prompt.submit`,
     // dialog-prompt.tsx:44-49/59-63 + api.tsx:377-380): return
     // resolves with the textarea's plainText (UNtrimmed), settle
@@ -1002,12 +1038,15 @@ pub fn mount_dialog_layer(
     // the error scroll (this path owns the store). F15: the pair
     // dialog's resource snapshot rides the same sidecar. RE-13: the
     // /btw answer's markdown rows + scroll.
+    // The sidecar assembly (dialog.rs): the export state snapshot
+    // rides along (G-487).
     let sidecar = crate::components::dialog_solid::DialogSidecar {
         preview: store.image_preview_dialog(),
         error_scroll: store.error_details_scroll(),
         pair: store.pair_state(),
         btw_rows: btw_answer_rows(store, &entry.kind, terminal),
         btw_scroll: store.btw_scroll(),
+        export: store.export_options_state(),
     };
     // Select dialogs record their option rows (absolute screen rows,
     // flat-index order); static content records none.
@@ -1060,7 +1099,8 @@ fn option_dialog_records_rows(
         | DialogKind::ShellOutput { .. }
         | DialogKind::DiffSource
         | DialogKind::DiffBase
-        | DialogKind::DiffHelp
+        // G-485② — DiffHelp is the custom shortcuts tree: no option
+        // rows.
         | DialogKind::Plugins
         | DialogKind::TabMenu { .. }
         | DialogKind::Mcp
@@ -1075,7 +1115,9 @@ fn option_dialog_records_rows(
         | DialogKind::IntegrationPending { .. }
         | DialogKind::Settings
         | DialogKind::ForkPicker { .. }
-        | DialogKind::SessionExport { .. }
+        // G-487 — the export form is a custom family: no option rows
+        // (the pill/button hit rects arrive with the mouse surface
+        // lane).
         | DialogKind::ExportResult { .. }
         // TUI-8/9/TD22: the three new selects record rows too.
         | DialogKind::Skill
@@ -1107,8 +1149,12 @@ fn option_dialog_records_rows(
         | DialogKind::Confirm { .. }
         // F15: the pair dialog's custom tree records none either.
         // RE-13: the /btw prompt input + Answer markdown dialog.
+        // G-487: the export form's custom tree records none.
+        // G-485②: the diff shortcuts' custom tree records none.
         | DialogKind::BtwPrompt
         | DialogKind::BtwAnswer { .. }
+        | DialogKind::SessionExport { .. }
+        | DialogKind::DiffHelp
         | DialogKind::Pair => false,
     }
 }
@@ -1813,12 +1859,15 @@ pub fn execute_submission(
             }
             return crate::components::command_palette::Dispatch::Handled;
         }
+        // G-485② — the DiffHelp tree closes on esc like the other
+        // centered message families (the dialog's own `onCancel`).
         Some(
             DialogKind::DiffHelp
             | DialogKind::Status
             | DialogKind::Pair
             | DialogKind::Debug
-            | DialogKind::ExportResult { .. },
+            | DialogKind::ExportResult { .. }
+            | DialogKind::SessionExport { .. },
         ) => {
             store.clear_dialogs();
             return crate::components::command_palette::Dispatch::Handled;
@@ -2100,28 +2149,10 @@ pub fn execute_submission(
             store.session_fork_submit(session_id.as_str(), before.as_deref());
             return crate::components::command_palette::Dispatch::Handled;
         }
-        // G-132 — the export-options form (dialog-export-options.
-        // tsx:44-52's `activate`): the format radio and the
-        // format-scoped toggles flip the store's export state and
-        // RE-RENDER the dialog; the action rows confirm with the
-        // chosen values (the destination mapping: copy → clipboard,
-        // export → file).
-        Some(DialogKind::SessionExport { session_id }) => {
-            if let Some(action) = value.strip_prefix("action:") {
-                let format = store.export_options_state().format.as_str().to_owned();
-                let destination = if action == "copy" { "clipboard" } else { "file" };
-                store.session_export_submit(session_id.as_str(), &format, destination);
-            } else if value.starts_with("format:") || value.starts_with("toggle:") {
-                store.export_options_activate(value);
-                store.replace_dialog(
-                    DialogKind::SessionExport { session_id: session_id.clone() },
-                    DialogSize::Medium,
-                );
-            } else {
-                store.clear_dialogs();
-            }
-            return crate::components::command_palette::Dispatch::Handled;
-        }
+        // G-487 — the export form is no longer a select: its keys
+        // own the dialog (the early-exit layer in
+        // [`handle_dialog_key`]); its submit dispatch is inert now —
+        // merged into the DiffHelp/Status clear-dialogs arm above.
         // The informational pending view: submits are inert.
         Some(DialogKind::IntegrationPending { .. }) => {
             return crate::components::command_palette::Dispatch::Handled;
@@ -2510,6 +2541,9 @@ mod tests {
         );
         assert_eq!(entry.value, "Work", "the prompt prefills the account's label");
         // The confirm PATCHes the label through the recording sink.
+        // G-494② re-pin: the prompt STAYS OPEN until the POST settles
+        // (dialog-integration.tsx:229-230 — the old immediate close is
+        // gone); success then re-renders the accounts view.
         store.integration_account_rename_submit("cred_1", "  Personal  ");
         assert!(
             sink.calls.borrow().iter().any(|call| matches!(
@@ -2520,7 +2554,21 @@ mod tests {
             "credential.update fired with the trimmed label: {:?}",
             sink.calls.borrow()
         );
-        assert!(store.top_dialog().is_none(), "the prompt closed on confirm");
+        assert!(
+            matches!(
+                &store.top_dialog().expect("prompt still open").kind,
+                DialogKind::IntegrationRename { credential_id } if credential_id == "cred_1"
+            ),
+            "the prompt stays open pending the POST"
+        );
+        store.integration_rename_settled("cred_1", true);
+        assert!(
+            matches!(
+                &store.top_dialog().expect("accounts re-rendered").kind,
+                DialogKind::IntegrationAccounts { integration_id } if integration_id == "github"
+            ),
+            "success re-renders the accounts view (manageConnections)"
+        );
     }
 
     /// The modal layer through the pump-shaped path: escape closes,

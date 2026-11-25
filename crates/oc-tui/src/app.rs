@@ -2020,7 +2020,13 @@ impl App {
     /// motion over an option row — `moveTo`).
     fn move_dialog_selection_to(&mut self, index: usize) {
         let before = self.store.dialogs().last().map_or(usize::MAX, |top| top.select.selected);
-        self.store.update_dialog(|top| top.select.selected = index);
+        // G-493 — the row's `onMouseMove` clears the focused action
+        // before moving (`setFocusedAction(undefined); moveTo(index)`,
+        // dialog-select.tsx:762-768).
+        self.store.update_dialog(|top| {
+            top.select.selected = index;
+            top.select.focused_action = None;
+        });
         if before != index {
             // Pointer motion runs the same `moveTo` → `onMove` path as
             // the keyboard — the theme list previews on it too.
@@ -3914,8 +3920,12 @@ fn footer_panel_canvas(
 
     match route {
         // G-272 — QueuedMenu is the mini-only queued-prompts menu
-        // (the session-route footer never routes here).
-        PromptRoute::Composer | PromptRoute::Subagent | PromptRoute::QueuedMenu => None,
+        // (the session-route footer never routes here). G-482 —
+        // SubagentMenu is mini-only too.
+        PromptRoute::Composer
+        | PromptRoute::Subagent
+        | PromptRoute::SubagentMenu
+        | PromptRoute::QueuedMenu => None,
         PromptRoute::Model => Some(model_panel_canvas(
             &store.server_lists(),
             session_selection
@@ -5952,6 +5962,11 @@ pub enum LoopRequest {
     CredentialActivate {
         credential_id: String,
     },
+    /// G-491 — the boot `location.get` (the ref's
+    /// `data.location.syncInfo`, client/solid/data.ts:1858-1869).
+    LocationInfo {
+        directory: String,
+    },
     CredentialRemove {
         credential_id: String,
     },
@@ -6104,6 +6119,11 @@ pub enum LoopFetch {
     /// TUI-5 (lane-tui2): the `project.list` result (the Open menu's
     /// Projects section).
     ProjectList(Result<Vec<crate::components::dialog_open::ProjectRow>, String>),
+    /// G-491 — the boot `location.get` result (the default location's
+    /// project resolution).
+    LocationInfo {
+        result: Result<oc_client::types::LocationPublicInfo, String>,
+    },
     // -- TUI-4: the terminal registry + the attach stream's events --
     TerminalListed {
         session_id: String,
@@ -6212,6 +6232,7 @@ pub enum LoopFetch {
     },
     /// G-486 — the rename's `credential.update` resolved (refetch).
     CredentialUpdated {
+        credential_id: String,
         result: Result<(), String>,
     },
     /// `session.compact` resolved (errors toast).
@@ -6991,6 +7012,28 @@ pub fn spawn_loop_fetcher(
                         }
                     });
                 }
+                // G-491 — the boot `location.get`
+                // (`data.location.syncInfo`, client/solid/data.ts:
+                // 1858-1869): the default location's directory + its
+                // owning project. Failures stay silent (the ref's
+                // sync errors surface through the location context's
+                // error signal — a later lane).
+                LoopRequest::LocationInfo { directory } => {
+                    let client = client.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let result = client
+                            .location()
+                            .get(&oc_client::types::LocationGetQuery {
+                                location: Some(oc_client::types::QueryLocation {
+                                    directory: Some(directory),
+                                }),
+                            })
+                            .await
+                            .map_err(|error| error.to_string());
+                        let _ = tx.send(LoopFetch::LocationInfo { result });
+                    });
+                }
                 LoopRequest::CredentialRemove { credential_id } => {
                     let client = client.clone();
                     let tx = tx.clone();
@@ -7015,7 +7058,7 @@ pub fn spawn_loop_fetcher(
                             )
                             .await
                             .map_err(|error| error.to_string());
-                        let _ = tx.send(LoopFetch::CredentialUpdated { result });
+                        let _ = tx.send(LoopFetch::CredentialUpdated { credential_id, result });
                     });
                 }
                 // -- Lane FINAL: the session actions -----------------
@@ -9229,6 +9272,13 @@ pub async fn run_with_size(
     // for the launch cwd at boot (the label paints once it resolves).
     if !directory.is_empty() {
         let _ = loop_fetch_tx.send(LoopRequest::LocationVcs(directory.clone()));
+        // G-491 — the ref's boot chain (client/solid/data.ts:
+        // 616-625): `location.get` for the default location +
+        // `project.sync()` — the sessions suffix resolves the owning
+        // project through them (`currentProjectName`,
+        // dialog-session-list.tsx:134-140), not the cwd prefix scan.
+        let _ = loop_fetch_tx.send(LoopRequest::LocationInfo { directory: directory.clone() });
+        let _ = loop_fetch_tx.send(LoopRequest::ProjectList);
     }
     // Lane/chrome #6: v2 picks the home placeholder at RANDOM per boot
     // (`randomIndex` on the Prompt mount, prompt/index.tsx:103-106 +
@@ -10526,6 +10576,24 @@ pub async fn run_with_size(
                     Ok(rows) => app.store.project_list_loaded(rows),
                     Err(error) => app.store.project_list_failed(error),
                 },
+                // G-491 — the boot location info landed: the default
+                // location's project resolution (the sessions suffix's
+                // `currentProjectName` chain) + the footer location's
+                // server-reported directory (the ref's
+                // `footerLocation` = `data.location.default()`,
+                // prompt/index.tsx:1603-1619 — the vcs lookup keys off
+                // the SERVER's view of the directory, not the process
+                // cwd).
+                LoopFetch::LocationInfo { result } => {
+                    if let Ok(info) = result {
+                        let snapshot = crate::store::LocationInfoSnapshot::from_public(&info);
+                        if info.directory != directory {
+                            let _ = loop_fetch_tx
+                                .send(LoopRequest::LocationVcs(info.directory.clone()));
+                        }
+                        app.store.set_location_info(snapshot);
+                    }
+                }
                 // -- TUI-4: the terminal registry + pane stream ------
                 LoopFetch::TerminalCapability(available) => {
                     app.store.set_terminal_available(available);
@@ -10713,14 +10781,22 @@ pub async fn run_with_size(
                 }
                 // G-486 — the rename resolved: errors toast, the
                 // accounts list refetches (`manageConnections`).
-                LoopFetch::CredentialUpdated { result } => {
-                    if let Err(error) = result {
+                // G-494② — the ref's success arm RE-RENDERS the
+                // manage-connections list
+                // (`.then(() => manageConnections(...))`,
+                // dialog-integration.tsx:229-230): the rename prompt
+                // stays open until this settlement, then the accounts
+                // view returns (the old `clear_dialogs()` closed
+                // everything).
+                LoopFetch::CredentialUpdated { credential_id, result } => {
+                    if let Err(error) = &result {
                         app.store.toast_show(crate::components::toast::ToastOptions {
-                            message: error,
+                            message: error.clone(),
                             variant: "error",
                             ..crate::components::toast::ToastOptions::info("")
                         });
                     }
+                    app.store.integration_rename_settled(&credential_id, result.is_ok());
                     app.store.integration_sink_list();
                 }
                 // -- Lane FINAL: the session actions' results -------

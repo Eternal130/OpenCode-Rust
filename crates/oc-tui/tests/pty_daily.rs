@@ -2040,10 +2040,13 @@ fn run_mini_test<T: Send + 'static>(
 
 /// TUI-17: the mini footer tracks the parent's children (the live
 /// `parentID` discovery + the child's own event fold), the statusline
-/// carries `2 subagents`, `down` opens the 14-row inspector on the
-/// newest running child (glyph + title + transcript + hints), `tab`
-/// cycles (`1 of 2` / `tab next 1/2`), ctrl+c interrupts the INSPECTED
-/// child server-side, and esc returns to the composer.
+/// carries `2 subagents`, `down` opens the searchable subagent MENU
+/// (G-482 — footer.view.tsx:307-313) whose enter routes the 14-row
+/// inspector on the first listed running child (glyph + title +
+/// transcript + hints), `tab` cycles (`2 of 2`), ctrl+c interrupts the
+/// INSPECTED child server-side, and esc returns to the composer
+/// WITHOUT a stale-row ghost (the ref's
+/// `clearStaleSplitSurfaceRows` shrink transition).
 #[test]
 fn mini_subagent_footer() {
     let interrupt_slot: SharedPosts = Arc::new(Mutex::new(None));
@@ -2079,14 +2082,33 @@ fn mini_subagent_footer() {
                 Duration::from_secs(10),
             )
             .map_err(|error| format!("the subagent count never painted: {error}"))?;
-            // `down` (session.child.first) opens the inspector on the
-            // newest RUNNING child (kid_b).
+            // G-482 — `down` (session.child.first) opens the searchable
+            // subagent MENU first (footer.view.tsx:307-313, 592-602);
+            // the active tab lists the RUNNING children only
+            // (footer.command.tsx:872-895).
             h.write(b"\x1b[B");
+            wait_grid(
+                h,
+                |g| {
+                    (0..g.rows).any(|row| g.row_text(row).contains("Select subagent"))
+                        && (0..g.rows).any(|row| g.row_text(row).contains("tab show inactive"))
+                        && (0..g.rows).any(|row| g.row_text(row).contains("Check the parsers"))
+                        && (0..g.rows).any(|row| g.row_text(row).contains("Second look"))
+                },
+                Duration::from_secs(5),
+            )
+            .map_err(|error| format!("the subagent menu never painted: {error}"))?;
+            // Enter opens the inspector on the menu's FIRST row — the
+            // first RUNNING child in tracker order (kid_a; `openTab`,
+            // footer.view.tsx:342-345 — the menu selection starts at
+            // the top).
+            h.write(b"\r");
             let grid = wait_grid(
                 h,
                 |g| {
-                    (0..g.rows).any(|row| g.row_text(row).contains("Second look"))
+                    (0..g.rows).any(|row| g.row_text(row).contains("Check the parsers"))
                         && (0..g.rows).any(|row| g.row_text(row).contains("ctrl+c interrupt"))
+                        && (0..g.rows).any(|row| g.row_text(row).contains("Working on it"))
                 },
                 Duration::from_secs(5),
             )
@@ -2100,23 +2122,19 @@ fn mini_subagent_footer() {
                 (0..grid.rows).any(|row| grid.row_text(row).contains("ctrl+c interrupt")),
                 "the interrupt hint paints"
             );
-            // tab cycles to the first child (kid_a) — the count +
-            // cycle hints appear, and its folded text lists.
+            // tab cycles to the second child (kid_b) — the count
+            // control (`2 of 2`) appears.
             h.write(b"\t");
-            // The cycle lands on the first child — the count control
-            // (`1 of 2`; the hint-row forms only when the header
-            // controls do not fit) + its folded transcript row.
             wait_grid(
                 h,
                 |g| {
-                    (0..g.rows).any(|row| g.row_text(row).contains("Check the parsers"))
-                        && (0..g.rows).any(|row| g.row_text(row).contains("1 of 2"))
-                        && (0..g.rows).any(|row| g.row_text(row).contains("Working on it"))
+                    (0..g.rows).any(|row| g.row_text(row).contains("Second look"))
+                        && (0..g.rows).any(|row| g.row_text(row).contains("2 of 2"))
                 },
                 Duration::from_secs(5),
             )
-            .map_err(|error| format!("the cycle never landed on the first child: {error}"))?;
-            // ctrl+c interrupts the INSPECTED child (kid_a).
+            .map_err(|error| format!("the cycle never landed on the second child: {error}"))?;
+            // ctrl+c interrupts the INSPECTED child (kid_b).
             h.write(b"\x03");
             let deadline = std::time::Instant::now() + Duration::from_secs(8);
             loop {
@@ -2126,7 +2144,7 @@ fn mini_subagent_footer() {
                     .as_ref()
                     .map(|arc| arc.lock().expect("posts").clone())
                     .unwrap_or_default();
-                if posts.iter().any(|post| post.contains("/api/session/ses_kid_a/interrupt")) {
+                if posts.iter().any(|post| post.contains("/api/session/ses_kid_b/interrupt")) {
                     break;
                 }
                 assert!(
@@ -2136,6 +2154,10 @@ fn mini_subagent_footer() {
                 std::thread::sleep(Duration::from_millis(100));
             }
             // esc returns to the composer (the statusline count back).
+            // G-482 companion — the shrink transition clears the
+            // vacated inspector rows (the ref's
+            // `clearStaleSplitSurfaceRows`), so the inspector's title
+            // must be GONE, not just painted over.
             h.write(b"\x1b");
             wait_grid(
                 h,

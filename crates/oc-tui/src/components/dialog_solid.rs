@@ -89,7 +89,7 @@ use crate::components::dialog_select::{
     DialogStyles, SelectOption, SelectProps, SelectState,
 };
 use crate::render::Frame;
-use crate::store::{DialogEntry, DialogKind, PluginDialogContent};
+use crate::store::{DialogEntry, DialogKind, ExportOptionsState, PluginDialogContent};
 use crate::theme::ThemeState;
 use crate::wrap::{display_width, take_width};
 
@@ -119,6 +119,13 @@ struct DialogColors {
     /// `text.feedback.error.base` — the pair dialog's failed-load
     /// header (dialog-pair.tsx:121).
     error_fg: Rgb,
+    /// G-487 — the export form's pill/button tokens
+    /// (dialog-export-options.tsx:100-268).
+    formfield_selected_bg: Rgb,
+    formfield_base_bg: Rgb,
+    raised_high_bg: Rgb,
+    action_base_bg: Rgb,
+    action_base_fg: Rgb,
 }
 
 impl DialogColors {
@@ -145,6 +152,11 @@ impl DialogColors {
             destructive_fg: rgb(styles.destructive_fg),
             destructive_bg: rgb(styles.destructive_bg),
             error_fg: rgb(styles.error_fg),
+            formfield_selected_bg: rgb(styles.formfield_selected_bg),
+            formfield_base_bg: rgb(styles.formfield_base_bg),
+            raised_high_bg: rgb(styles.raised_high_bg),
+            action_base_bg: rgb(styles.action_base_bg),
+            action_base_fg: rgb(styles.action_base_fg),
         }
     }
 }
@@ -233,6 +245,20 @@ enum Family {
     /// (or the muted-branch "No MCP servers" fallback), `gap 1`,
     /// `paddingBottom 1`. No filter input.
     Status,
+    /// G-487 — `ui/dialog-export-options.tsx`: a CUSTOM form, never a
+    /// `DialogSelect` — the bold `Export session` header + `esc`
+    /// chrome, the `Export as: ◉ Markdown ○ JSON` pill row, the
+    /// format-scoped `[x]` toggles, and the right-justified
+    /// Copy/Export buttons. Tab cycles the active control; return
+    /// activates it.
+    ExportOptions,
+    /// G-485② — `DiffViewerHelpDialog` (diff-viewer.tsx:1098-1192): a
+    /// CUSTOM centered dialog — the bold `Diff shortcuts` header +
+    /// `esc close` chrome, then the key groups (bold header rows,
+    /// `[shortcut@17][label]` rows) over the `gap 1` column, no
+    /// filter row. The lines ride `hint_lines` with a leading
+    /// `\u{1}` marking the group headers.
+    DiffHelp,
 }
 
 /// One rendered row of the scroll window — the same walk the old
@@ -269,12 +295,23 @@ impl WindowRow {
 
 /// One frame's dialog snapshot — the ONLY input the tree reads.
 #[derive(Clone)]
+// The bool set mirrors the ref's per-family prop bag (renderFilter,
+// flat, destructive, pair_split …) — collapsing them into enums would
+// diverge from the 1:1 prop mapping.
+#[allow(clippy::struct_excessive_bools)]
 struct DialogInputs {
     family: Family,
     box_width: usize,
     /// G-466.3 — the terminal width (the footer's `<60` column-wrap
     /// gate, ui/dialog-select.tsx:838).
     terminal_width: usize,
+    /// G-485③ — `renderFilter` (dialog-select.tsx:33): the filter
+    /// input row stays unmounted while false.
+    render_filter: bool,
+    /// G-485① — the `footer` prop's muted text (dialog-select.tsx:20,
+    /// 835-845): the `DiffBase` picker's `Remembered until the TUI
+    /// exits` — the footer bar's left content.
+    hint_footer: String,
     colors: DialogColors,
     // -- the select family -------------------------------------------------
     title: String,
@@ -345,6 +382,9 @@ struct DialogInputs {
     /// For identity) and the styled rows (the markdown paint).
     btw_window: Vec<String>,
     btw_styled: Vec<StyledText>,
+    /// G-487 — the export form's live state (the store's
+    /// `ExportOptionsState` snapshot: format + focus + toggles).
+    export: crate::store::ExportOptionsState,
 }
 
 /// TUI-10/24 + F15: the custom families' store-side sidecar — the
@@ -366,6 +406,8 @@ pub struct DialogSidecar {
     /// scroll offset.
     pub btw_rows: Vec<StyledText>,
     pub btw_scroll: usize,
+    /// G-487 — the export form's state snapshot.
+    pub export: crate::store::ExportOptionsState,
 }
 
 /// The windowed rows — the old renderer's walk (`render_select`),
@@ -429,15 +471,20 @@ fn content_height(inputs: &DialogInputs) -> usize {
         // gap + window + root gap + [footer] + paddingBottom 1.
         // G-466.3: below 60 cols the left footer box is a COLUMN
         // (ui/dialog-select.tsx:838) — one row per left action.
+        // G-485③: without the filter input the title block is 1 row.
         Family::Select => {
-            let footer_rows = if inputs.actions.is_empty() && inputs.footer_hint.is_none() {
+            let footer_rows = if inputs.actions.is_empty()
+                && inputs.footer_hint.is_none()
+                && inputs.hint_footer.is_empty()
+            {
                 0
             } else if inputs.terminal_width < 60 {
                 inputs.actions.len().max(1)
             } else {
                 1
             };
-            4 + inputs.window.len() + 1 + footer_rows + 1
+            let title_block = if inputs.render_filter { 3 } else { 1 };
+            title_block + 1 + inputs.window.len() + 1 + footer_rows + 1
         }
         // title, gap, input, gap, footer, the footer's paddingBottom.
         // RE-13: the /btw question prompt and the G-29 plugin install
@@ -495,9 +542,24 @@ fn content_height(inputs: &DialogInputs) -> usize {
         // root's gap 1, the markdown window, gap, the action footer,
         // the root paddingBottom 1.
         Family::BtwAnswer => inputs.btw_window.len() + 5,
-        // W4 (dialog-status.tsx:22-61): the `Status` title row, the
-        // root's gap 1, the status rows, the root paddingBottom 1.
-        Family::Status => inputs.hint_lines.len() + 3,
+        // W4 (dialog-status.tsx:22-61) + G-485② (diff-viewer.tsx:
+        // 1143-1191): the title row, the root's gap 1, the rows
+        // (status rows / the shortcut-group rows — the inter-group
+        // blank lines ride `hint_lines`), the root paddingBottom 1.
+        Family::Status | Family::DiffHelp => inputs.hint_lines.len() + 3,
+        // G-487 (dialog-export-options.tsx:85-270): the root's gap 1
+        // separates all four children — title, pill row, the
+        // format-scoped toggle rows (2 markdown / 1 json), and the
+        // Copy/Export button row with its paddingBottom 1:
+        // markdown = 5 rows + 3 gaps + 1 pad = 10; json = 4 + 2 + 1
+        // = 7.
+        Family::ExportOptions => {
+            if inputs.export.format == crate::store::ExportFormat::Markdown {
+                10
+            } else {
+                7
+            }
+        }
     }
 }
 
@@ -589,9 +651,15 @@ fn title_chunks(inputs: &DialogInputs, paint: &RowPaint, index: usize) -> Styled
     // Stage 2 — the clip column is absolute (the row content edge
     // less the footer reservation); the chunk walk counts cells from
     // the title's start at box column 4, so the budget is the clip
-    // less that offset.
-    let clip =
-        title_clip_end(inputs.box_width, footer_text(inputs, index).as_deref()).saturating_sub(4);
+    // less that offset. G-488 — the tab menu's rows are NOT select
+    // rows: `paddingLeft 1` + title + `paddingRight 1`
+    // (session-tabs.tsx:460-462), no marker column, no footer — the
+    // budget is the box width less the two padding columns.
+    let clip = if inputs.family == Family::Menu {
+        inputs.box_width.saturating_sub(2)
+    } else {
+        title_clip_end(inputs.box_width, footer_text(inputs, index).as_deref()).saturating_sub(4)
+    };
     let attrs = u32::from(paint.bold);
     let mut chunks: Vec<TextChunk> = Vec::new();
     let mut used = 0usize;
@@ -701,6 +769,9 @@ fn gutter_text_element(
         )
 }
 
+// G-487 — one row per select-family row shape (the marker/title/
+// description/footer budget walk), mirrored span for span.
+#[allow(clippy::too_many_lines)]
 fn option_element(inputs: &Signal<DialogInputs>, index: usize) -> Element {
     let paint_at = move |inputs: &DialogInputs| row_paint(inputs, index);
     let gutter_text = gutter_text_element(inputs, index);
@@ -767,12 +838,37 @@ fn option_element(inputs: &Signal<DialogInputs>, index: usize) -> Element {
 
     box_()
         .flex_direction("row")
-        .margin_left(1.0)
-        .margin_right(1.0)
-        .padding_right(3.0)
+        // G-488 — the tab menu's rows are NOT select rows: the ref's
+        // menu row is `paddingLeft 1` + title + `paddingRight 1`
+        // straight inside the scrollbox (session-tabs.tsx:460-462) —
+        // no scrollbox side pads, no 3-wide select marker column.
+        .dyn_prop(
+            "marginLeft",
+            dyn_num(map(inputs.clone(), |i: &DialogInputs| usize::from(i.family != Family::Menu))),
+        )
+        .dyn_prop(
+            "marginRight",
+            dyn_num(map(inputs.clone(), |i: &DialogInputs| usize::from(i.family != Family::Menu))),
+        )
+        .dyn_prop(
+            "paddingRight",
+            dyn_num(map(
+                inputs.clone(),
+                |i: &DialogInputs| {
+                    if i.family == Family::Menu {
+                        1
+                    } else {
+                        3
+                    }
+                },
+            )),
+        )
         .dyn_prop(
             "paddingLeft",
             dyn_num(map(inputs.clone(), move |i: &DialogInputs| {
+                if i.family == Family::Menu {
+                    return 1;
+                }
                 paint_at(i).map_or(
                     3,
                     |paint| {
@@ -1017,28 +1113,41 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
     // The filter input: a formfield-background box. No painted
     // cursor — v2's input shows the hardware cursor only (the #8
     // ruling; the row past the typed text stays the input's own bg).
-    let input_box = box_()
-        .height(1.0)
-        .dyn_prop(
-            "backgroundColor",
-            dyn_color(map(inputs.clone(), |i: &DialogInputs| i.colors.formfield_bg)),
-        )
-        .child(text().wrap_mode("none").dyn_prop(
-            "content",
-            dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
-                let width = i.box_width.saturating_sub(8);
-                if i.filter.is_empty() {
-                    styled(vec![chunk(i.placeholder.clone(), i.colors.muted, None, 0)])
-                } else {
-                    let typed = take_width(&i.filter, width);
-                    styled(vec![chunk(typed, i.colors.formfield_fg, None, 0)])
-                }
-            })),
-        ));
+    let build_input_box = move |inputs: &Signal<DialogInputs>| {
+        box_()
+            .height(1.0)
+            .dyn_prop(
+                "backgroundColor",
+                dyn_color(map(inputs.clone(), |i: &DialogInputs| i.colors.formfield_bg)),
+            )
+            .child(text().wrap_mode("none").dyn_prop(
+                "content",
+                dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                    let width = i.box_width.saturating_sub(8);
+                    if i.filter.is_empty() {
+                        styled(vec![chunk(i.placeholder.clone(), i.colors.muted, None, 0)])
+                    } else {
+                        let typed = take_width(&i.filter, width);
+                        styled(vec![chunk(typed, i.colors.formfield_fg, None, 0)])
+                    }
+                })),
+            ))
+    };
+    let inputs_for_input = inputs.clone();
+    let input_gate = show(
+        Rc::new(map(inputs.clone(), |i: &DialogInputs| i.render_filter)) as Rc<dyn Reactive<bool>>,
+        move || {
+            vec![box_().padding_top(1.0).child(build_input_box(&inputs_for_input)).into_element()]
+        },
+    );
 
     let title_block = box_().padding_left(4.0).padding_right(4.0).children(Children::Static(vec![
         title_row.into_element(),
-        box_().padding_top(1.0).child(input_box).into_element(),
+        // G-485③ — the input block (its paddingTop gap + the row)
+        // unmounts under `renderFilter: false`
+        // (dialog-select.tsx:685-712); mounted as a DYN carrier (the
+        // Show is a children source, not a static element).
+        box_().children_dyn(Rc::new(input_gate)).into_element(),
     ]));
 
     // The scroll area: the flexGrow box wrapping the window For.
@@ -1053,7 +1162,7 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
     let inputs_for_footer = inputs.clone();
     let footer = show(
         Rc::new(map(inputs.clone(), |i: &DialogInputs| {
-            !i.actions.is_empty() || i.footer_hint.is_some()
+            !i.actions.is_empty() || i.footer_hint.is_some() || !i.hint_footer.is_empty()
         })) as Rc<dyn Reactive<bool>>,
         {
             let inputs = inputs_for_footer;
@@ -1141,19 +1250,48 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
                     .flex_shrink(0.0)
                     .margin_top(1.0)
                     .children(Children::Static(vec![
-                        box_()
-                            // G-466.3 — the left footer box stacks as
-                            // a COLUMN below 60 cols
-                            // (`flexDirection={dimensions().width <
-                            // 60 ? "column" : "row"}`, gap 0,
-                            // ui/dialog-select.tsx:838).
-                            .flex_direction(if inputs.get().terminal_width < 60 {
-                                "column"
-                            } else {
-                                "row"
-                            })
-                            .children_dyn(actions_for(&inputs))
-                            .into_element(),
+                        if inputs.get().hint_footer.is_empty() {
+                            // The original shape: the actions as the
+                            // left box's DIRECT dyn children (a wrapper
+                            // box would stack them — column flow).
+                            box_()
+                                .flex_direction(if inputs.get().terminal_width < 60 {
+                                    "column"
+                                } else {
+                                    "row"
+                                })
+                                .children_dyn(actions_for(&inputs))
+                                .into_element()
+                        } else {
+                            // G-485① — the `footer` prop's muted text
+                            // rides the left box FIRST
+                            // (dialog-select.tsx:838: `{props.
+                            // footer}<For each={left()}>`).
+                            box_()
+                                .flex_direction(if inputs.get().terminal_width < 60 {
+                                    "column"
+                                } else {
+                                    "row"
+                                })
+                                .children(Children::Static(vec![
+                                    text()
+                                        .wrap_mode("none")
+                                        .dyn_prop(
+                                            "content",
+                                            dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                                                styled(vec![chunk(
+                                                    i.hint_footer.clone(),
+                                                    i.colors.muted,
+                                                    None,
+                                                    0,
+                                                )])
+                                            })),
+                                        )
+                                        .into_element(),
+                                    box_().children_dyn(actions_for(&inputs)).into_element(),
+                                ]))
+                                .into_element()
+                        },
                         right_carrier.into_element(),
                     ]))
                     .into_element()]
@@ -2317,6 +2455,306 @@ fn status_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
     ))
 }
 
+/// G-487 — `DialogExportOptions` (dialog-export-options.tsx:85-270):
+/// the custom export form — the bold `Export session` header + `esc`
+/// chrome, the `Export as:` pill row (the focused pill carries the
+/// formfield focused pair, the selected format the selected pair, the
+/// rest the base pair), the format-scoped `[x]`/`[ ]` toggles, and
+/// the right-justified Copy/Export buttons (Copy on raised.high,
+/// Export on action.primary with its focused state while active).
+// G-487 — the whole dialog-export-options.tsx component in one
+// builder (title + pill row + format-scoped toggles + buttons),
+// mirrored span for span.
+#[allow(clippy::too_many_lines)]
+fn export_options_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder {
+    use crate::store::{ExportActive, ExportFormat};
+    let title_row = box_().flex_direction("row").justify_content("space-between").children(
+        Children::Static(vec![
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk("Export session".to_owned(), i.colors.text, None, 1)])
+                    })),
+                )
+                .into_element(),
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk("esc".to_owned(), i.colors.muted, None, 0)])
+                    })),
+                )
+                .into_element(),
+        ]),
+    );
+    // One pill: `◉ Markdown` / `○ JSON` (:98-125) — paddingLeft 1,
+    // paddingRight 1, the radio glyph prefixed to the label.
+    let pill = |inputs: &Signal<DialogInputs>, format: ExportFormat, label: &str| {
+        let label = label.to_owned();
+        box_()
+            .padding_left(1.0)
+            .padding_right(1.0)
+            .dyn_prop(
+                "backgroundColor",
+                dyn_color(map(inputs.clone(), move |i: &DialogInputs| {
+                    let active = i.export.active == active_of(format);
+                    if active {
+                        i.colors.formfield_bg
+                    } else if i.export.format == format {
+                        i.colors.formfield_selected_bg
+                    } else {
+                        i.colors.formfield_base_bg
+                    }
+                })),
+            )
+            .child(text().dyn_prop(
+                "content",
+                dyn_styled(map(inputs.clone(), move |i: &DialogInputs| {
+                    let active = i.export.active == active_of(format);
+                    let fg = if active {
+                        i.colors.formfield_fg
+                    } else if i.export.format == format {
+                        i.colors.current_fg
+                    } else {
+                        i.colors.formfield_base_fg
+                    };
+                    let radio = if i.export.format == format { "◉" } else { "○" };
+                    styled(vec![chunk(format!("{radio} {label}"), fg, None, 0)])
+                })),
+            ))
+    };
+    let pill_row = box_().flex_direction("row").children(Children::Static(vec![
+        text()
+            .dyn_prop(
+                "content",
+                dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                    styled(vec![chunk("Export as:".to_owned(), i.colors.text, None, 0)])
+                })),
+            )
+            .into_element(),
+        pill(inputs, ExportFormat::Markdown, "Markdown").margin_left(1.0).into_element(),
+        pill(inputs, ExportFormat::Json, "JSON").margin_left(1.0).into_element(),
+    ]));
+    // One `[x] Include thinking`-style toggle row (:128-204 markdown,
+    // :206-245 json).
+    let toggle = |inputs: &Signal<DialogInputs>, active_kind: ExportActive, label: &str| {
+        let label = label.to_owned();
+        box_()
+            .flex_direction("row")
+            .dyn_prop(
+                "backgroundColor",
+                dyn_color(map(inputs.clone(), move |i: &DialogInputs| {
+                    if i.export.active == active_kind {
+                        i.colors.formfield_bg
+                    } else {
+                        i.colors.surface
+                    }
+                })),
+            )
+            .child(text().dyn_prop(
+                "content",
+                dyn_styled(map(inputs.clone(), move |i: &DialogInputs| {
+                    let on = match active_kind {
+                        ExportActive::Thinking => i.export.thinking,
+                        ExportActive::Tools => i.export.tools,
+                        ExportActive::Sanitize => i.export.sanitize,
+                        _ => false,
+                    };
+                    let fg = if i.export.active == active_kind {
+                        i.colors.formfield_fg
+                    } else if on {
+                        i.colors.current_fg
+                    } else {
+                        i.colors.formfield_base_fg
+                    };
+                    let mark = if on { "[x]" } else { "[ ]" };
+                    styled(vec![chunk(format!("{mark} {label}"), fg, None, 0)])
+                })),
+            ))
+    };
+    // The Copy / Export buttons (:246-269) — padding 4, right
+    // justified, gap 1, the row's paddingBottom 1.
+    let copy_button = box_()
+        .padding_left(4.0)
+        .padding_right(4.0)
+        .dyn_prop(
+            "backgroundColor",
+            dyn_color(map(inputs.clone(), |i: &DialogInputs| i.colors.raised_high_bg)),
+        )
+        .child(text().dyn_prop(
+            "content",
+            dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                styled(vec![chunk("Copy".to_owned(), i.colors.text, None, 0)])
+            })),
+        ));
+    let export_button = box_()
+        .padding_left(4.0)
+        .padding_right(4.0)
+        .dyn_prop(
+            "backgroundColor",
+            dyn_color(map(inputs.clone(), |i: &DialogInputs| {
+                if i.export.active == ExportActive::Export {
+                    i.colors.selected_bg
+                } else {
+                    i.colors.action_base_bg
+                }
+            })),
+        )
+        .child(text().dyn_prop(
+            "content",
+            dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                if i.export.active == ExportActive::Export {
+                    styled(vec![chunk("Export".to_owned(), i.colors.selected_fg, None, 0)])
+                } else {
+                    styled(vec![chunk("Export".to_owned(), i.colors.action_base_fg, None, 0)])
+                }
+            })),
+        ));
+    let button_row =
+        box_().flex_direction("row").justify_content("flex-end").padding_bottom(1.0).children(
+            Children::Static(vec![
+                copy_button.into_element(),
+                export_button.margin_left(1.0).into_element(),
+            ]),
+        );
+    // The format-scoped toggle group mounts per the current format
+    // (the Show swap rebuilds the rows — the builders are not Clone).
+    let inputs_md = inputs.clone();
+    let toggles_markdown = show(
+        Rc::new(map(inputs.clone(), |i: &DialogInputs| i.export.format == ExportFormat::Markdown))
+            as Rc<dyn Reactive<bool>>,
+        move || {
+            vec![
+                toggle(&inputs_md, ExportActive::Thinking, "Include thinking").into_element(),
+                // The two toggles are ROOT siblings in the tsx
+                // (:128-204) — the root's gap 1 separates them.
+                toggle(&inputs_md, ExportActive::Tools, "Include tools")
+                    .margin_top(1.0)
+                    .into_element(),
+            ]
+        },
+    );
+    let inputs_js = inputs.clone();
+    let toggles_json = show(
+        Rc::new(map(inputs.clone(), |i: &DialogInputs| i.export.format == ExportFormat::Json))
+            as Rc<dyn Reactive<bool>>,
+        move || {
+            vec![toggle(&inputs_js, ExportActive::Sanitize, "Sanitize sensitive data")
+                .into_element()]
+        },
+    );
+    let children: Vec<Element> = vec![
+        title_row.into_element(),
+        pill_row.margin_top(1.0).into_element(),
+        // One box PER format group (a builder carries a single dyn
+        // children slot — two children_dyn calls would clobber); the
+        // root's gap 1 rides each child's margin (the hidden group's
+        // box still takes its gap slot only while mounted — the Show
+        // unmounts the whole box).
+        box_().children_dyn(Rc::new(toggles_markdown)).margin_top(1.0).into_element(),
+        box_().children_dyn(Rc::new(toggles_json)).margin_top(1.0).into_element(),
+        button_row.margin_top(1.0).into_element(),
+    ];
+    box_().padding_left(2.0).padding_right(2.0).children(Children::Static(children))
+}
+
+/// The pill focus enum of a format (dialog-export-options.tsx:22).
+fn active_of(format: crate::store::ExportFormat) -> crate::store::ExportActive {
+    match format {
+        crate::store::ExportFormat::Markdown => crate::store::ExportActive::Markdown,
+        crate::store::ExportFormat::Json => crate::store::ExportActive::Json,
+    }
+}
+
+/// G-485② — `DiffViewerHelpDialog` (diff-viewer.tsx:1143-1191): the
+/// bold `Diff shortcuts` title + the `esc close` chrome, then the
+/// group column — bold headers, `[shortcut@17]` base-fg cells with
+/// the muted labels — `gap 1` between the groups (a blank line rides
+/// every hint line after a header), `paddingBottom 1`. The rows
+/// arrive pre-padded through `hint_lines`; a leading `\u{1}` marks a
+/// group header.
+fn diff_help_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder {
+    let title_row = box_().flex_direction("row").justify_content("space-between").children(
+        Children::Static(vec![
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk("Diff shortcuts".to_owned(), i.colors.text, None, 1)])
+                    })),
+                )
+                .into_element(),
+            text()
+                .dyn_prop(
+                    "content",
+                    dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                        styled(vec![chunk("esc close".to_owned(), i.colors.muted, None, 0)])
+                    })),
+                )
+                .into_element(),
+        ]),
+    );
+    let lines = ForItemSource {
+        source: map(inputs.clone(), |i: &DialogInputs| {
+            i.hint_lines
+                .iter()
+                .enumerate()
+                .map(|(n, line)| ForItem {
+                    key: format!("L{n}"),
+                    value: PropValue::Str(line.clone()),
+                })
+                .collect::<Vec<ForItem>>()
+        }),
+    };
+    let line_inputs = inputs.clone();
+    let rows_for = for_list(Rc::new(lines), move |item: &ForItem, _index: usize| {
+        let line = match &item.value {
+            PropValue::Str(line) => line.clone(),
+            _ => String::new(),
+        };
+        let inputs = line_inputs.clone();
+        // A group header (bold, text.base) or a key row: the
+        // 17-wide shortcut column in text.base then the muted label
+        // (the pre-padded line carries both — split by DISPLAY
+        // width, the arrows are multibyte).
+        text()
+            .dyn_prop(
+                "content",
+                dyn_styled(map(inputs, move |i: &DialogInputs| {
+                    if let Some(title) = line.strip_prefix('\u{1}') {
+                        styled(vec![chunk(title.to_owned(), i.colors.text, None, 1)])
+                    } else {
+                        let mut width = 0usize;
+                        let mut split = line.len();
+                        for (at, ch) in line.char_indices() {
+                            if width >= 17 {
+                                split = at;
+                                break;
+                            }
+                            width += if ch.is_ascii() { 1 } else { 2 };
+                        }
+                        let (shortcut, label) = line.split_at(split);
+                        // `label` keeps the row's `gap={2}` leading
+                        // spaces (the column + gap = 19 before the
+                        // label text).
+                        styled(vec![
+                            chunk(shortcut.to_owned(), i.colors.text, None, 0),
+                            chunk(label.to_owned(), i.colors.muted, None, 0),
+                        ])
+                    }
+                })),
+            )
+            .into_element()
+    });
+    box_().padding_left(2.0).padding_right(2.0).padding_bottom(1.0).children(Children::Static(
+        vec![
+            title_row.into_element(),
+            box_().children_dyn(Rc::new(rows_for)).margin_top(1.0).into_element(),
+        ],
+    ))
+}
+
 // ---------------------------------------------------------------------------
 // the mount
 // ---------------------------------------------------------------------------
@@ -2358,6 +2796,8 @@ fn chrome_element(
         Family::GenericPrompt => generic_prompt_builder(&family_inputs),
         Family::BtwAnswer => btw_answer_builder(&family_inputs),
         Family::Status => status_builder(&family_inputs),
+        Family::ExportOptions => export_options_builder(&family_inputs),
+        Family::DiffHelp => diff_help_builder(&family_inputs),
     };
     box_()
         .width(width as f32)
@@ -2461,10 +2901,13 @@ pub fn mount_dialog_tree(
             .map(|option| crate::wrap::display_width(&option.title).min(50) + 2)
             .max()
             .unwrap_or(0);
-        // The option rows reuse the select's marker column (title
-        // starts 4 cells in), so the box adds that padding over
-        // v2's 1-left scrollbox rows — registered approximation.
-        let menu_width = width.min(longest.max(20) + 6);
+        // G-488 — the ref's `width()` is exactly `min(term, max(20,
+        // max(min(50, len+2))))` (session-tabs.tsx:424-426) and its
+        // rows are `paddingLeft 1` + title + `paddingRight 1`
+        // (:460-462) — the previous +6/4-cell marker column (a
+        // registered approximation) is gone: the menu rows are NOT
+        // select rows.
+        let menu_width = width.min(longest.max(20));
         let menu_height = (props.options.len()).min(height).max(1) + 1;
         let DialogKind::TabMenu { x, y, .. } = &entry.kind else {
             unreachable!("the TabMenu guard")
@@ -2479,7 +2922,12 @@ pub fn mount_dialog_tree(
         // setCentered(true)`, dialog-image-preview.tsx:24) — the
         // content-height walk pins the box's height first. F15: the
         // pair dialog is centered too (dialog-pair.tsx:19).
-        let centered = matches!(entry.kind, DialogKind::ImagePreview | DialogKind::Pair);
+        // G-485②: the diff shortcuts dialog as well
+        // (diff-viewer.tsx:771's `centered: true`).
+        let centered = matches!(
+            entry.kind,
+            DialogKind::ImagePreview | DialogKind::Pair | DialogKind::DiffHelp
+        );
         let box_y = if centered {
             let inputs_probe = build_inputs(
                 entry,
@@ -2491,7 +2939,10 @@ pub fn mount_dialog_tree(
                 height,
                 sidecar,
             );
-            height.saturating_sub(1 + content_height(&inputs_probe)) / 2
+            // The ref centers via flex `justifyContent: "center"`
+            // (dialog.tsx:48) — taffy hands the odd leftover row to
+            // the TOP half (36-23 → 7 above, 6 below): round up.
+            (height + 1).saturating_sub(1 + content_height(&inputs_probe)) / 2
         } else {
             (height + 2) / 4
         };
@@ -2616,8 +3067,11 @@ fn dialog_chrome_button_hits(
         | Family::PluginInstallPrompt
         | Family::GenericPrompt
         | Family::BtwAnswer
-        | Family::Status => ("esc", 2),
+        | Family::Status
+        | Family::ExportOptions => ("esc", 2),
         Family::Help => ("esc/enter", 2),
+        // G-485② — the diff shortcuts' close hint.
+        Family::DiffHelp => ("esc close", 2),
     };
     let label_width = label.chars().count();
     let close_x = (box_x + box_width).saturating_sub(pad + label_width);
@@ -2701,6 +3155,12 @@ fn build_inputs(
         // W4: the status dialog's CUSTOM tree (ref dialog-status.tsx
         // is not a DialogSelect).
         DialogKind::Status => Family::Status,
+        // G-487: the export options' CUSTOM form (ref
+        // dialog-export-options.tsx is not a DialogSelect).
+        DialogKind::SessionExport { .. } => Family::ExportOptions,
+        // G-485② — the diff shortcuts' custom tree (the props arm
+        // feeds the rows through `hints`).
+        DialogKind::DiffHelp => Family::DiffHelp,
         _ => Family::Select,
     };
     match family {
@@ -2746,6 +3206,9 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
+                export: ExportOptionsState::default(),
+                render_filter: props.render_filter,
+                hint_footer: props.hints.first().cloned().unwrap_or_default(),
                 plugin_rows: Vec::new(),
             }
         }
@@ -2789,6 +3252,9 @@ fn build_inputs(
             pair_qr: Vec::new(),
             btw_window: Vec::new(),
             btw_styled: Vec::new(),
+            export: ExportOptionsState::default(),
+            render_filter: true,
+            hint_footer: String::new(),
         },
         // G-237: the generic prompt — title/placeholder/description
         // from the kind, the typed value from the entry (the
@@ -2836,6 +3302,9 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
+                export: ExportOptionsState::default(),
+                render_filter: true,
+                hint_footer: String::new(),
             }
         }
         // RE-13: the /btw Answer dialog — the sidecar's markdown
@@ -2895,6 +3364,9 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window,
                 btw_styled,
+                export: ExportOptionsState::default(),
+                render_filter: true,
+                hint_footer: String::new(),
             }
         }
         // The connect prompts carry their title/placeholder/hints
@@ -2936,6 +3408,9 @@ fn build_inputs(
             pair_qr: Vec::new(),
             btw_window: Vec::new(),
             btw_styled: Vec::new(),
+            export: ExportOptionsState::default(),
+            render_filter: true,
+            hint_footer: String::new(),
         },
         Family::Help => {
             let content_width = box_width.saturating_sub(4);
@@ -2988,6 +3463,9 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
+                export: ExportOptionsState::default(),
+                render_filter: true,
+                hint_footer: String::new(),
             }
         }
         Family::PluginRows => {
@@ -3027,6 +3505,9 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
+                export: ExportOptionsState::default(),
+                render_filter: true,
+                hint_footer: String::new(),
             }
         }
         // -- TUI-25: DialogAlert / DialogConfirm --------------------
@@ -3088,6 +3569,9 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
+                export: ExportOptionsState::default(),
+                render_filter: true,
+                hint_footer: String::new(),
             }
         }
         // -- TUI-24: DialogErrorDetails ------------------------------
@@ -3136,6 +3620,9 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
+                export: ExportOptionsState::default(),
+                render_filter: true,
+                hint_footer: String::new(),
             }
         }
         // -- TUI-10: DialogImagePreview ------------------------------
@@ -3188,6 +3675,9 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
+                export: ExportOptionsState::default(),
+                render_filter: true,
+                hint_footer: String::new(),
             }
         }
         // -- F15: DialogPair — the custom (non-select) tree --------
@@ -3251,6 +3741,9 @@ fn build_inputs(
                 pair_qr,
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
+                export: ExportOptionsState::default(),
+                render_filter: true,
+                hint_footer: String::new(),
             }
         }
         // -- W4: DialogStatus — the custom (non-select) tree ------
@@ -3291,6 +3784,92 @@ fn build_inputs(
             pair_qr: Vec::new(),
             btw_window: Vec::new(),
             btw_styled: Vec::new(),
+            export: ExportOptionsState::default(),
+            render_filter: true,
+            hint_footer: String::new(),
+        },
+        // G-487 — the export form rides the SIDECAR's state snapshot
+        // (the store's export cell — the pill focus + the toggles
+        // live there, keyed by the store-owning mount path).
+        Family::ExportOptions => DialogInputs {
+            family,
+            box_width,
+            terminal_width,
+            colors,
+            title: String::new(),
+            placeholder: String::new(),
+            filter: String::new(),
+            options: Vec::new(),
+            flat: Vec::new(),
+            selected: 0,
+            current: None,
+            flatten: false,
+            destructive: false,
+            window: Vec::new(),
+            actions: Vec::new(),
+            footer_hint: None,
+            title_suffix: String::new(),
+            prompt_value: String::new(),
+            hint_lines: Vec::new(),
+            plugin_title: String::new(),
+            plugin_rows: Vec::new(),
+            message: String::new(),
+            confirm_labels: (String::new(), String::new(), true),
+            error_source: String::new(),
+            error_window: Vec::new(),
+            diagnostic: String::new(),
+            preview_title: String::new(),
+            preview_footer: (String::new(), String::new(), String::new()),
+            preview_rows: 0,
+            pair_rows: Vec::new(),
+            pair_split: false,
+            pair_qr: Vec::new(),
+            btw_window: Vec::new(),
+            btw_styled: Vec::new(),
+            export: sidecar.export,
+            render_filter: true,
+            hint_footer: String::new(),
+        },
+        // G-485② — the diff shortcuts' rows ride `hints` (the group
+        // headers carry the `\u{1}` marker).
+        Family::DiffHelp => DialogInputs {
+            family,
+            box_width,
+            terminal_width,
+            colors,
+            title: props.title.clone(),
+            placeholder: String::new(),
+            filter: String::new(),
+            options: Vec::new(),
+            flat: Vec::new(),
+            selected: 0,
+            current: None,
+            flatten: false,
+            destructive: false,
+            window: Vec::new(),
+            actions: Vec::new(),
+            footer_hint: None,
+            title_suffix: String::new(),
+            prompt_value: String::new(),
+            hint_lines: props.hints.clone(),
+            plugin_title: String::new(),
+            plugin_rows: Vec::new(),
+            message: String::new(),
+            confirm_labels: (String::new(), String::new(), true),
+            error_source: String::new(),
+            error_window: Vec::new(),
+            diagnostic: String::new(),
+            preview_title: String::new(),
+            preview_footer: (String::new(), String::new(), String::new()),
+            preview_rows: 0,
+            pair_rows: Vec::new(),
+            pair_split: false,
+            pair_qr: Vec::new(),
+            btw_window: Vec::new(),
+            btw_styled: Vec::new(),
+            export: ExportOptionsState::default(),
+            render_filter: true,
+            hint_footer: String::new(),
         },
     }
 }

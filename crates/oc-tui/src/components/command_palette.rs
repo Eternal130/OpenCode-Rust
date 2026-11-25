@@ -679,6 +679,38 @@ fn palette_options_slice(commands: &[&PaletteCommand], store: &Store) -> Vec<Sel
         .collect()
 }
 
+/// G-485② — pad a shortcut display to the 17-wide column plus the
+/// row's `gap={2}` before the label (diff-viewer.tsx:1175-1180).
+fn pad17(shortcut: &str) -> String {
+    const COLUMN: usize = 19;
+    let width = crate::wrap::display_width(shortcut);
+    if width >= COLUMN {
+        format!("{shortcut} ")
+    } else {
+        format!("{}{}", shortcut, " ".repeat(COLUMN - width))
+    }
+}
+
+/// G-485② — the keymap's display aliases (keymap.tsx:465-470):
+/// up→↑, down→↓, pageup→pgup, pagedown→pgdn, delete→del — applied to
+/// a displayed binding's final token.
+fn key_alias_display(display: &str) -> String {
+    let alias = |token: &str| -> String {
+        match token {
+            "up" => "↑".to_owned(),
+            "down" => "↓".to_owned(),
+            "pageup" => "pgup".to_owned(),
+            "pagedown" => "pgdn".to_owned(),
+            "delete" => "del".to_owned(),
+            other => other.to_owned(),
+        }
+    };
+    match display.rsplit_once('+') {
+        Some((mods, token)) => format!("{mods}+{}", alias(token)),
+        None => alias(display),
+    }
+}
+
 /// The full palette props for the current store state: the suggested
 /// section first (a duplicate set under "Suggested") when no filter is
 /// active, then every registry command — `list()` in
@@ -692,32 +724,95 @@ fn palette_options_slice(commands: &[&PaletteCommand], store: &Store) -> Vec<Sel
 #[must_use]
 /// G-465 — the session picker's current project name
 /// (`currentProjectName`, dialog-session-list.tsx:134-140): the
-/// picker location's owning project, named via
-/// `projectName` (configured name else the canonical basename).
-/// `None` when no location/project resolves (the `Show` gate hides
-/// the suffix).
+/// picker location's owning project, named via `projectName`
+/// (configured name else the canonical basename). `None` when no
+/// location/project resolves (the `Show` gate hides the suffix).
+/// G-491 — the resolution chain now walks the ref's data path: the
+/// SESSION's own `projectID` (the session record, `data.session.get`)
+/// or the boot location info's project (`data.location.default()` →
+/// `location.get`), then the REGISTRY row by id (`data.project.get`)
+/// — the registry itself boots loaded (`project.sync`,
+/// client/solid/data.ts:625). The prefix scan stays as a fallback
+/// for pre-info windows.
 fn picker_project_name(store: &Store) -> Option<String> {
-    let directory = match store.route() {
+    // The picker location (dialog-session-list.tsx:46-49): the routed
+    // session's location, else the default location.
+    let (directory, project_id): (Option<String>, Option<String>) = match store.route() {
         crate::store::Route::Session { session_id, .. } => store
             .session_history()
             .into_iter()
             .find(|session| session.id == session_id)
-            .and_then(|session| session.directory),
-        crate::store::Route::Home => store.home_location(),
+            .map(|session| (session.directory.clone(), session.project_id.clone())),
+        crate::store::Route::Home => {
+            store.location_info().map(|info| (Some(info.directory), Some(info.project_id)))
+        }
     }
-    .or_else(|| std::env::current_dir().ok().map(|path| path.display().to_string()));
-    let directory = directory?;
-    if let crate::store::ListState::Loaded(projects) = store.project_list() {
-        let owned = projects.into_iter().find(|project| {
-            project.canonical == directory
-                || directory.starts_with(&format!("{}/", project.canonical))
-        });
-        if let Some(project) = owned {
+    .unwrap_or((None, None));
+    let registry = match store.project_list() {
+        crate::store::ListState::Loaded(projects) => Some(projects),
+        loading => {
+            if std::env::var("OC_TUI_DEBUG_VA19").is_ok() {
+                eprintln!(
+                    "[tui] G-491 picker suffix: project registry not loaded ({})",
+                    match loading {
+                        crate::store::ListState::Loading => "loading",
+                        _ => "failed",
+                    }
+                );
+            }
+            None
+        }
+    };
+    // The registry row by the location's project id (`data.project.
+    // get(current.project.id)`).
+    if let (Some(projects), Some(project_id)) = (&registry, &project_id) {
+        if let Some(project) = projects.iter().find(|project| &project.id == project_id) {
             return Some(crate::components::dialog_open::project_name(
                 project.name.as_deref(),
                 &project.canonical,
             ));
         }
+    }
+    // The canonical-prefix scan (the pre-G-491 behavior — a
+    // partial-superset fallback for a not-yet-landed info).
+    if let Some(directory) = directory.as_deref() {
+        if let Some(projects) = &registry {
+            if let Some(project) = projects.iter().find(|project| {
+                project.canonical == directory
+                    || directory.starts_with(&format!("{}/", project.canonical))
+            }) {
+                return Some(crate::components::dialog_open::project_name(
+                    project.name.as_deref(),
+                    &project.canonical,
+                ));
+            }
+        }
+    }
+    // The location info's OWN project (`location.get`'s
+    // `project.canonical`) — the server already resolved the owning
+    // project when the info landed; `projectName`'s basename fallback
+    // covers a registry that has not (yet) listed the row (the ref's
+    // registry names the same canonical — `projectName(undefined)`
+    // would hide, but the info's canonical is the same resolution the
+    // registry row would carry). Scoped to the info's OWN directory:
+    // a session living elsewhere keeps the ref's hidden suffix (its
+    // location was never synced).
+    if let Some(info) = store.location_info() {
+        let same_directory = directory.as_deref() == Some(info.directory.as_str());
+        if same_directory {
+            return Some(crate::components::dialog_open::project_name(
+                None,
+                &info.project_canonical,
+            ));
+        }
+    }
+    if std::env::var("OC_TUI_DEBUG_VA19").is_ok() {
+        let line = format!(
+            "[tui] G-491 suffix dir={directory:?} pid={project_id:?} info={} registry={}\n",
+            store.location_info().is_some(),
+            matches!(store.project_list(), crate::store::ListState::Loaded(_)),
+        );
+        let _ = std::fs::write("/tmp/opencode/va19-suffix-trace.log", line);
     }
     None
 }
@@ -1396,54 +1491,12 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             }
             SelectProps::new("Fork session", options)
         }
-        // G-132 — `DialogExportOptions` (dialog-export-options.tsx:
-        // 25-31 + 44-52) as the select-form: the format radio, the
-        // format-scoped toggles ([x]/[ ] rows), and the Copy/Export
-        // actions. Toggling/radio submits FLIP the store's
-        // `export_options` state and re-render the dialog; the action
-        // rows submit the export with the chosen values (the old
-        // four static destination rows are gone).
-        DialogKind::SessionExport { .. } => {
-            let options = store.export_options_state();
-            let markdown = options.format.as_str() == "markdown";
-            let mut rows = vec![
-                SelectOption::titled(
-                    format!("{} Markdown", if markdown { "◉" } else { "○" }),
-                    "format:markdown",
-                ),
-                SelectOption::titled(
-                    format!("{} JSON", if markdown { "○" } else { "◉" }),
-                    "format:json",
-                ),
-            ];
-            if markdown {
-                rows.push(
-                    SelectOption::titled(
-                        format!("{} Include thinking", checked(options.thinking)),
-                        "toggle:thinking",
-                    )
-                    .described("markdown only"),
-                );
-                rows.push(
-                    SelectOption::titled(
-                        format!("{} Include tools", checked(options.tools)),
-                        "toggle:tools",
-                    )
-                    .described("markdown only"),
-                );
-            } else {
-                rows.push(
-                    SelectOption::titled(
-                        format!("{} Sanitize sensitive data", checked(options.sanitize)),
-                        "toggle:sanitize",
-                    )
-                    .described("json only"),
-                );
-            }
-            rows.push(SelectOption::titled("Copy to clipboard", "action:copy"));
-            rows.push(SelectOption::titled("Export to file", "action:export"));
-            SelectProps::new("Export session", rows)
-        }
+        // G-487 — `DialogExportOptions` (dialog-export-options.tsx:
+        // 24-34) is a CUSTOM form now: the pill row + the
+        // format-scoped toggles + the Copy/Export buttons render
+        // through the ExportOptions family (the sidecar carries the
+        // state); the props arm only seeds the chrome's title.
+        DialogKind::SessionExport { .. } => SelectProps::new("Export session", Vec::new()),
         // `DialogExportResult` (dialog-export-result.tsx:5-27): the
         // written path row; return/esc closes.
         DialogKind::ExportResult { path } => {
@@ -1991,14 +2044,14 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
             let mut options = Vec::new();
             for mode in [DiffSource::Branch, DiffSource::Committed, DiffSource::Working] {
                 options.push(
-                    SelectOption::titled(mode.label(), mode.vcs_mode())
+                    SelectOption::titled(format!("{:<11}", mode.label()), mode.vcs_mode())
                         .described(mode.description())
                         .with_search(mode.description().to_owned()),
                 );
             }
             if live.session_id.is_some() {
                 options.push(
-                    SelectOption::titled(DiffSource::Turn.label(), "turn")
+                    SelectOption::titled(format!("{:<11}", DiffSource::Turn.label()), "turn")
                         .described(DiffSource::Turn.description()),
                 );
             }
@@ -2011,15 +2064,25 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                     .selected_diff_base()
                     .or_else(|| live.base.clone())
                     .unwrap_or_else(|| "Choose…".to_owned());
-                options.push(SelectOption::titled("Base", "base").described(current));
+                options.push(
+                    SelectOption::titled(format!("{:<11}", "Base"), "base").described(current),
+                );
             }
+            // G-485③ — `renderFilter={false}` (diff-viewer.tsx:740):
+            // no Search row; the `titleView.padEnd(11)` column rides
+            // the titles (:746-757).
             SelectProps::new("Diff source", options)
                 .flat(true)
+                .without_filter()
                 .with_current(Some(live.mode.vcs_mode().to_owned()))
         }
-        // G-69 — the base branch selector (`DiffBaseDialog`,
-        // diff-viewer.tsx:246-290): one row per `vcs.branch.list`
-        // branch, the current one marked, the ref's footer line.
+        // G-485① — the base branch selector (`DiffBaseDialog`,
+        // diff-viewer.tsx:246-290): title "Base branch", the server
+        // search's placeholder, the `Remembered until the TUI exits`
+        // footer, the "No branches found" empty view; one row per
+        // `vcs.branch.list` branch with the current one marked. The
+        // list arrives from the server (the search re-query lands
+        // with the debounced typing lane).
         DialogKind::DiffBase => {
             let live = store.diff_viewer();
             let current =
@@ -2029,80 +2092,120 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                 .into_iter()
                 .map(|name| SelectOption::titled(&name, name.clone()).with_search(name))
                 .collect::<Vec<_>>();
-            SelectProps::new("Choose a base branch", options)
+            SelectProps::new("Base branch", options)
                 .flat(true)
+                .with_placeholder("Search local and remote branches")
                 .with_current((!current.is_empty()).then_some(current))
                 .with_hints(vec!["Remembered until the TUI exits".to_owned()])
-                .with_empty_texts("No branches", "No branches")
+                .with_empty_texts("No branches found", "No branches found")
         }
         // The diff shortcuts dialog (`DiffViewerHelpDialog`,
         // diff-viewer.tsx:1100-1192): the viewer's key groups with the
         // binding displays (`shortcut()` reads the table's defaults).
         DialogKind::DiffHelp => {
-            let shortcut = |commands: &str| -> String {
-                let shortcuts: Vec<String> = commands
-                    .split('|')
-                    .map(|command| {
-                        crate::keymap::default_table()
-                            .iter()
-                            .find(|def| def.command == command)
-                            .map_or_else(String::new, |def| {
-                                def.defaults
-                                    .split(',')
-                                    .map(str::trim)
-                                    .filter(|spec| !spec.is_empty() && *spec != "none")
-                                    .map(crate::components::dialog::spec_display)
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            })
+            // G-485② — `DiffViewerHelpDialog` (diff-viewer.tsx:
+            // 1098-1192): the three key groups with the shortcut
+            // column; the shortcut shows each command's FIRST
+            // binding (`keymap.shortcuts(id)[0]`), pairs joined
+            // ` / `, with the keymap's display aliases (down→↓,
+            // pageup→pgup, :465-470).
+            let first_binding = |command: &str| -> String {
+                crate::keymap::default_table()
+                    .iter()
+                    .find(|def| def.command == command)
+                    .and_then(|def| {
+                        def.defaults
+                            .split(',')
+                            .map(str::trim)
+                            .find(|spec| !spec.is_empty() && *spec != "none")
+                            .map(crate::components::dialog::spec_display)
                     })
-                    .filter(|text| !text.is_empty())
-                    .collect();
-                if shortcuts.is_empty() {
-                    "unbound".to_owned()
-                } else {
-                    shortcuts.join(" / ")
-                }
+                    .map(|display| key_alias_display(&display))
+                    .unwrap_or_default()
             };
-            let mut options = Vec::new();
-            let mut group = |title: &str, rows: &[(&str, &str)]| {
-                for (commands, label) in rows {
-                    let shortcut_text = shortcut(commands);
-                    let value = format!("help:{}", label.replace('/', "-"));
-                    options.push(
-                        SelectOption::titled(format!("{shortcut_text:<17}{label}"), value)
-                            .categorized(title),
-                    );
-                }
+            // `keymap.shortcuts(id).join(" / ")` — ALL of one
+            // command's bindings (the single-command rows).
+            let all_bindings = |command: &str| -> String {
+                crate::keymap::default_table()
+                    .iter()
+                    .find(|def| def.command == command)
+                    .map(|def| {
+                        def.defaults
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|spec| !spec.is_empty() && *spec != "none")
+                            .map(crate::components::dialog::spec_display)
+                            .map(|display| key_alias_display(&display))
+                            .collect::<Vec<_>>()
+                            .join(" / ")
+                    })
+                    .unwrap_or_default()
+            };
+            // `shortcut(...ids)` — the FIRST binding of each command
+            // joined ` / ` (the paired rows, :1101-1107).
+            let pair = |a: &str, b: &str| format!("{} / {}", first_binding(a), first_binding(b));
+            let mut lines: Vec<String> = Vec::new();
+            // The groups join over the column's `gap 1`
+            // (diff-viewer.tsx:1166) — one blank row between them.
+            let mut groups: Vec<Vec<String>> = Vec::new();
+            let mut group = |title: &str, rows: &[String]| {
+                let mut block = vec![format!("\u{1}{title}")];
+                block.extend(rows.iter().cloned());
+                groups.push(block);
             };
             group(
-                "Files",
+                "Review",
                 &[
-                    ("diff.next_file|diff.previous_file", "Next / previous file"),
-                    ("diff.next_hunk|diff.previous_hunk", "Next / previous hunk"),
-                    ("diff.mark_reviewed", "Mark reviewed"),
+                    format!("{}Next file", pad17(&all_bindings("diff.next_file"))),
+                    format!("{}Previous file", pad17(&all_bindings("diff.previous_file"))),
+                    format!(
+                        "{}Review + collapse / reopen",
+                        pad17(&first_binding("diff.mark_reviewed"))
+                    ),
+                    format!(
+                        "{}Next / previous change",
+                        pad17(&pair("diff.next_hunk", "diff.previous_hunk"))
+                    ),
+                    format!("{}File menu (heading or tree)", pad17("right-click")),
                 ],
             );
             group(
                 "Scroll",
                 &[
-                    ("diff.down|diff.up", "Down / up"),
-                    ("diff.half_page.down|diff.half_page.up", "Half page down / up"),
-                    ("diff.page.down|diff.page.up", "Page down / up"),
-                    ("diff.first|diff.last", "First / last"),
+                    format!("{}Down / up", pad17(&pair("diff.down", "diff.up"))),
+                    format!(
+                        "{}Half page down / up",
+                        pad17(&pair("diff.half_page.down", "diff.half_page.up"))
+                    ),
+                    format!("{}Page down / up", pad17(&pair("diff.page.down", "diff.page.up"))),
+                    format!("{}First / last", pad17(&pair("diff.first", "diff.last"))),
                 ],
             );
             group(
                 "View",
                 &[
-                    ("diff.toggle_view", "Split / unified"),
-                    ("diff.single_patch", "All files / single file"),
-                    ("diff.toggle_file_tree", "Show / hide file tree"),
-                    ("diff.switch_source", "Switch diff source"),
-                    ("diff.close", "Close diff viewer"),
+                    format!("{}Split / unified", pad17(&first_binding("diff.toggle_view"))),
+                    format!(
+                        "{}All files / single file",
+                        pad17(&first_binding("diff.single_patch"))
+                    ),
+                    format!(
+                        "{}Show / hide file tree",
+                        pad17(&first_binding("diff.toggle_file_tree"))
+                    ),
+                    format!("{}Switch diff source", pad17(&first_binding("diff.switch_source"))),
+                    format!("{}Close diff viewer", pad17(&all_bindings("diff.close"))),
                 ],
             );
-            SelectProps::new("Diff shortcuts", options).flat(true)
+            let mut first = true;
+            for block in groups {
+                if !first {
+                    lines.push(String::new());
+                }
+                first = false;
+                lines.extend(block);
+            }
+            SelectProps::new("Diff shortcuts", Vec::new()).with_hints(lines).flat(true)
         }
         // `DialogMessage` (`routes/session/dialog-message.tsx`): the
         // four fixed actions over the clicked user message.
@@ -2509,16 +2612,6 @@ fn active_selection(store: &Store) -> crate::store::SessionSelection {
 }
 
 /// A muted status row (loading/error) — the placeholder surface.
-/// G-132 — the toggle row's checkbox (`[x]`/`[ ]`,
-/// dialog-export-options.tsx:135/159/183).
-fn checked(on: bool) -> &'static str {
-    if on {
-        "[x]"
-    } else {
-        "[ ]"
-    }
-}
-
 fn status_option(text: &str) -> SelectOption {
     SelectOption::titled(text, "status").muted_placeholder()
 }
@@ -3243,6 +3336,10 @@ impl CommandDispatcher for StoreDispatcher {
                 let Route::Session { session_id, .. } = store.route() else {
                     return Dispatch::Handled;
                 };
+                // G-487 — the form's fresh mount: the component's
+                // local store resets on every `DialogExportOptions.
+                // show` (dialog-export-options.tsx:28-34).
+                store.export_options_reset();
                 store.replace_dialog(
                     DialogKind::SessionExport { session_id: session_id.clone() },
                     DialogSize::Medium,
@@ -4484,6 +4581,57 @@ mod tests {
         assert_eq!(props.filter_threshold, Some(0.7));
     }
 
+    /// G-491 — the sessions suffix's resolution chain
+    /// (`currentProjectName`, dialog-session-list.tsx:134-140): the
+    /// location info's project id onto the REGISTRY row (the ref's
+    /// `data.location.syncInfo` + `project.sync` boot pair), and the
+    /// session route's own `projectID`.
+    #[test]
+    fn sessions_suffix_resolves_via_location_info_and_registry() {
+        use crate::store::{LocationInfoSnapshot, Route};
+        let store = Store::new(Runtime::new());
+        // Nothing loaded: no suffix.
+        store.navigate(Route::Home);
+        assert_eq!(picker_project_name(&store), None);
+        // The boot pair lands: the location info + the registry — the
+        // HOME route names through them.
+        store.set_location_info(LocationInfoSnapshot {
+            directory: "/tmp/proj".to_owned(),
+            project_id: "prj_1".to_owned(),
+            project_directory: "/tmp/proj".to_owned(),
+            project_canonical: "/tmp/worktrees/main".to_owned(),
+        });
+        // Before the registry lands, the info's OWN project resolves
+        // through `projectName`'s basename fallback (`location.get`
+        // already resolved the owning project's canonical).
+        assert_eq!(picker_project_name(&store).as_deref(), Some("main"));
+        store.project_list_loaded(vec![crate::components::dialog_open::ProjectRow {
+            id: "prj_1".to_owned(),
+            name: Some("Configured name".to_owned()),
+            canonical: "/tmp/worktrees/main".to_owned(),
+            vcs: false,
+        }]);
+        // The REGISTRY row by id wins (the configured name, not the
+        // basename fallback).
+        assert_eq!(picker_project_name(&store).as_deref(), Some("Configured name"));
+        // The session route: the SESSION's own project id wins.
+        store.ingest_all([crate::data::Ingest::Resync {
+            sessions: vec![crate::data::SessionSnapshot {
+                id: "ses_x".to_owned(),
+                directory: Some("/tmp/other".to_owned()),
+                project_id: Some("prj_none".to_owned()),
+                ..crate::data::SessionSnapshot::default()
+            }],
+            unread: Vec::new(),
+            messages: Vec::new(),
+            cursors: Vec::new(),
+            permissions: Vec::new(),
+            forms: Vec::new(),
+        }]);
+        store.navigate(Route::Session { session_id: "ses_x".to_owned(), prompt: None });
+        assert_eq!(picker_project_name(&store), None, "an unknown project id hides the suffix");
+    }
+
     /// RD-17 — searching the palette yields the per-setting rows
     /// (`settingOptions`, command-palette.tsx:36-45): "theme" surfaces
     /// the theme row with its keywords search text, the setting's
@@ -5564,7 +5712,10 @@ mod tests {
         );
 
         // export → the options form → toggles flip + the action
-        // submits (G-132).
+        // submits (G-132; G-487 re-pin: the form is a custom modal —
+        // `tab` cycles the format-scoped ACTIVE control, `return`
+        // activates it, dialog-export-options.tsx:56-78 — the legacy
+        // select-submission strings no longer reach it).
         dispatcher.dispatch(&store, "session.export", None);
         assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::SessionExport { .. }));
         // The default form: markdown, thinking ON (index.tsx:1213),
@@ -5572,29 +5723,40 @@ mod tests {
         let options = store.export_options_state();
         assert_eq!(options.format.as_str(), "markdown");
         assert!(options.thinking && options.tools && !options.sanitize);
-        // Flipping thinking + choosing JSON re-renders the form.
-        let submit = crate::components::dialog::execute_submission(
-            &store,
-            &mut dispatcher,
-            "toggle:thinking",
-        );
-        assert_eq!(submit, Dispatch::Handled);
+        let mut keymap = crate::keymap::Keymap::new();
+        keymap.push_mode("dialog");
+        let clock = crate::keymap::ManualClock::default();
+        let press = |store: &Store, keymap: &mut crate::keymap::Keymap, key: &str| {
+            let outcome = crate::components::dialog::handle_dialog_key(
+                store,
+                keymap,
+                &clock,
+                crate::keymap::KeyStroke::parse(key).expect(key),
+                (100, 30),
+            );
+            assert_eq!(outcome, crate::components::dialog::DialogKeyOutcome::Consumed);
+        };
+        // md → json → thinking: flip the toggle off.
+        for key in ["tab", "tab", "return"] {
+            press(&store, &mut keymap, key);
+        }
         assert!(!store.export_options_state().thinking);
-        let submit =
-            crate::components::dialog::execute_submission(&store, &mut dispatcher, "format:json");
-        assert_eq!(submit, Dispatch::Handled);
+        // thinking → tools → copy → export → md → json: select JSON.
+        for key in ["tab", "tab", "tab", "tab", "tab", "return"] {
+            press(&store, &mut keymap, key);
+        }
         assert_eq!(store.export_options_state().format.as_str(), "json");
-        let submit = crate::components::dialog::execute_submission(
-            &store,
-            &mut dispatcher,
-            "toggle:sanitize",
-        );
-        assert_eq!(submit, Dispatch::Handled);
+        // json → sanitize: flip it on.
+        for key in ["tab", "return"] {
+            press(&store, &mut keymap, key);
+        }
         assert!(store.export_options_state().sanitize);
-        // The action row exports with the chosen values.
-        let submit =
-            crate::components::dialog::execute_submission(&store, &mut dispatcher, "action:export");
-        assert_eq!(submit, Dispatch::Handled);
+        // sanitize → copy → export: the confirm arm submits with the
+        // chosen values.
+        for key in ["tab", "tab", "return"] {
+            press(&store, &mut keymap, key);
+        }
+        assert!(store.top_dialog().is_none(), "the form closed on export");
         assert_eq!(
             actions.calls.borrow().last(),
             Some(&crate::store::SessionActionCall::Export {

@@ -387,6 +387,11 @@ pub struct SelectProps {
     /// a muted run painted directly after the bold title (the
     /// Sessions dialog's ` for {currentProjectName()}`).
     pub title_suffix: Option<String>,
+    /// G-485③ — v2's `renderFilter` (dialog-select.tsx:33,685-712):
+    /// `false` unmounts the filter input row entirely (the diff
+    /// source picker, diff-viewer.tsx:740) — no Search row, and
+    /// printables never type.
+    pub render_filter: bool,
 }
 
 impl SelectProps {
@@ -409,12 +414,21 @@ impl SelectProps {
             locked: false,
             footer_hint: None,
             title_suffix: None,
+            render_filter: true,
         }
     }
 
     #[must_use]
     pub fn with_current(mut self, current: Option<String>) -> Self {
         self.current = current;
+        self
+    }
+
+    /// G-485③ — `renderFilter: false` (dialog-select.tsx:33): no
+    /// filter row mounts.
+    #[must_use]
+    pub fn without_filter(mut self) -> Self {
+        self.render_filter = false;
         self
     }
 
@@ -658,9 +672,10 @@ pub fn viewport_height(rows: usize, terminal_height: usize) -> usize {
 /// The DIALOG-CONTENT row of each flat option (the mouse surface,
 /// `dialog-select.tsx:757-775`: pointer motion over an option row
 /// moves the selection; a release submits it). Content layout: row 0
-/// title, row 1 gap, row 2 filter, row 3 gap, then the scroll window
-/// — an option's row is `4 + (content_row - scroll)` when the window
-/// shows it, `None` when scrolled away.
+/// title, row 1 gap, rows 2-3 the filter block (G-485③: absent when
+/// `renderFilter` is false), then the scroll window — an option's row
+/// is `content_top + (content_row - scroll)` when the window shows
+/// it, `None` when scrolled away.
 #[must_use]
 pub fn option_dialog_rows(
     props: &SelectProps,
@@ -671,11 +686,12 @@ pub fn option_dialog_rows(
     let indices = flat_indices(&groups);
     let rows_total = content_rows(&groups, &props.options);
     let viewport = viewport_height(rows_total, terminal_height);
+    let content_top = if props.render_filter { 4 } else { 2 };
     (0..indices.len())
         .map(|flat| {
             let content_row = row_of_index(&groups, &props.options, flat);
             if content_row >= state.scroll && content_row < state.scroll + viewport {
-                Some(4 + (content_row - state.scroll))
+                Some(content_top + (content_row - state.scroll))
             } else {
                 None
             }
@@ -729,6 +745,11 @@ impl SelectState {
     /// with no `current` the selection stays put (the effect returns
     /// before any move).
     pub fn set_filter(&mut self, filter: &str, props: &SelectProps, terminal_height: usize) {
+        // G-493 — the filtered() effect (`createEffect(() => {
+        // filtered(); setFocusedAction(undefined) })`,
+        // dialog-select.tsx:207-210): any list change (the filter
+        // recompute) returns the footer focus to the option list.
+        self.focused_action = None;
         let was_empty = self.filter.is_empty();
         filter.clone_into(&mut self.filter);
         if self.filter.is_empty() {
@@ -749,6 +770,9 @@ impl SelectState {
         if props.locked {
             return;
         }
+        // G-493 — every `moveTo` resets the focused action
+        // (dialog-select.tsx:376-377); `move()` routes through it.
+        self.focused_action = None;
         let groups = grouped(props, &self.filter);
         let indices = flat_indices(&groups);
         if indices.is_empty() {
@@ -763,6 +787,9 @@ impl SelectState {
         if props.locked {
             return;
         }
+        // G-493 — home/end run `moveTo` (dialog-select.tsx:488-498),
+        // which resets the focused action (:376-377).
+        self.focused_action = None;
         let groups = grouped(props, &self.filter);
         let indices = flat_indices(&groups);
         if indices.is_empty() {
@@ -780,6 +807,10 @@ impl SelectState {
         if props.locked {
             return;
         }
+        // G-493 — moveSection's jump runs `moveTo` (the alt+arrows,
+        // dialog-select.tsx:367-374) — the focused action resets
+        // (:376-377).
+        self.focused_action = None;
         let groups = grouped(props, &self.filter);
         let indices = flat_indices(&groups);
         if indices.is_empty() {
@@ -952,6 +983,17 @@ pub struct DialogStyles {
     /// `text.feedback.error.base` — the pair dialog's failed-load
     /// header (dialog-pair.tsx:121).
     pub error_fg: Color,
+    /// G-487 — `background.formfield.selected` (the export pill's
+    /// selected-but-not-focused state).
+    pub formfield_selected_bg: Color,
+    /// G-487 — `background.formfield.base` (the unfocused pill).
+    pub formfield_base_bg: Color,
+    /// G-487 — `background.raised.high` (the export Copy button).
+    pub raised_high_bg: Color,
+    /// G-487 — `background.action.primary.base` (the Export button).
+    pub action_base_bg: Color,
+    /// G-487 — `text.action.primary.base`.
+    pub action_base_fg: Color,
 }
 
 impl DialogStyles {
@@ -974,6 +1016,11 @@ impl DialogStyles {
             destructive_fg: color(tokens.text.action.destructive.focused),
             destructive_bg: color(tokens.background.action.destructive.focused),
             error_fg: color(tokens.text.feedback.error.base),
+            formfield_selected_bg: color(tokens.background.formfield.selected),
+            formfield_base_bg: color(tokens.background.formfield.base),
+            raised_high_bg: color(tokens.background.raised.high),
+            action_base_bg: color(tokens.background.action.primary.base),
+            action_base_fg: color(tokens.text.action.primary.base),
         }
     }
 }
@@ -1150,23 +1197,26 @@ pub fn render_select(
     rows.push(Row::blank(width, default, surface_bg).cells);
 
     // Filter input row: [pad 4][input bg formfield (width-8)][pad 4].
-    let mut input = Row::blank(width, default, surface_bg);
-    let input_width = width.saturating_sub(8);
-    for slot in input.cells.iter_mut().skip(4).take(input_width) {
-        *slot = cell(' ', 0, default, styles.formfield_bg);
-    }
-    if state.filter.is_empty() {
-        input.text(4, &props.placeholder, styles.muted, styles.formfield_bg, 0);
-    } else {
-        // No painted cursor: v2's input shows the hardware cursor
-        // only — past the typed text the row stays default-fg over
-        // the formfield bg (the #8 ruling's raw-ANSI mirror).
-        input.text(4, &state.filter, styles.formfield_fg, styles.formfield_bg, 0);
-    }
-    rows.push(input.cells);
+    // G-485③ — `renderFilter: false` unmounts the row (and its gap).
+    if props.render_filter {
+        let mut input = Row::blank(width, default, surface_bg);
+        let input_width = width.saturating_sub(8);
+        for slot in input.cells.iter_mut().skip(4).take(input_width) {
+            *slot = cell(' ', 0, default, styles.formfield_bg);
+        }
+        if state.filter.is_empty() {
+            input.text(4, &props.placeholder, styles.muted, styles.formfield_bg, 0);
+        } else {
+            // No painted cursor: v2's input shows the hardware cursor
+            // only — past the typed text the row stays default-fg over
+            // the formfield bg (the #8 ruling's raw-ANSI mirror).
+            input.text(4, &state.filter, styles.formfield_fg, styles.formfield_bg, 0);
+        }
+        rows.push(input.cells);
 
-    // gap 1
-    rows.push(Row::blank(width, default, surface_bg).cells);
+        // gap 1
+        rows.push(Row::blank(width, default, surface_bg).cells);
+    }
 
     // Scroll region: the viewport rows, stretched under fill_height
     // (the standalone flexGrow mount).
@@ -1182,10 +1232,15 @@ pub fn render_select(
     // gap 1 (before the footer actions / the empty fallback box)
     rows.push(Row::blank(width, default, surface_bg).cells);
 
-    // Footer actions: [pad 4][title][ label][gap 2]…
-    if !props.actions.is_empty() {
+    // Footer actions: [pad 4][footer prop muted][title][ label][gap 2]…
+    if !props.actions.is_empty() || !props.hints.is_empty() {
         let mut footer = Row::blank(width, default, surface_bg);
         let mut at = 4usize;
+        // G-485① — the `footer` prop's muted text first
+        // (dialog-select.tsx:838).
+        if let Some(hint) = props.hints.first() {
+            at = footer.text(at, hint, styles.muted, surface_bg, 0);
+        }
         for (action_i, action) in props.actions.iter().enumerate() {
             // G-189 — the focused action paints in the focused pair
             // (`actionFocused()`, dialog-select.tsx:600-621).

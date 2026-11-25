@@ -67,6 +67,7 @@
 #![allow(clippy::cast_possible_truncation)] // terminal dims sit far below u16
 #![allow(clippy::match_same_arms)] // the key/vocabulary arms mirror the reference 1:1
 
+use std::fmt::Write as _;
 use std::io::Write as _;
 use std::time::{Duration, Instant};
 
@@ -193,6 +194,10 @@ fn flip_show_hide(current: &str) -> &str {
 
 /// The footer state machine + per-view key handling (the pure half of
 /// `RunFooter`, `mini/footer.ts`).
+// The bool set tracks the ref's footer signal flags one-to-one
+// (menu-open, subagent-list-closed, …) — enum-izing them would
+// diverge from the signal mapping.
+#[allow(clippy::struct_excessive_bools)]
 pub struct FooterPane {
     pub machine: FooterMachine,
     theme: crate::components::footer::FooterTheme,
@@ -239,6 +244,11 @@ pub struct FooterPane {
     subagent_selected: Option<String>,
     /// The detail scroll (rows from the bottom, sticky-bottom).
     subagent_scroll: usize,
+    /// G-482 — the subagent menu's active/inactive tab toggle
+    /// (`RunSubagentSelectBody`'s `active` signal,
+    /// footer.command.tsx:872): true lists RUNNING children, false
+    /// the settled ones.
+    subagent_menu_active: bool,
     /// G-221 — the server inbox's pending-prompt count (the
     /// `queued.prompts` view — the statusline's `N pending` group,
     /// `footer.view.tsx:246`).
@@ -344,6 +354,7 @@ impl FooterPane {
             subagent_children: Vec::new(),
             subagent_selected: None,
             subagent_scroll: 0,
+            subagent_menu_active: true,
             queued_pending: 0,
             queued_prompts: Vec::new(),
             usage: None,
@@ -664,24 +675,16 @@ impl FooterPane {
             FooterKey::CtrlX => self.leader_armed = true,
             FooterKey::Up => effects.push(FooterEffect::HistoryUp),
             FooterKey::Down => {
-                // TUI-17 — `session.child.first` over tracked
-                // children: the inspector opens on the newest running
-                // child (footer.view.tsx:312's subagent route via the
-                // statusline detail).
+                // G-482 — `session.child.first` (footer.view.tsx:
+                // 592-602) runs `openSubagentMenu` (:307-313): the
+                // route opens the searchable child LIST
+                // (`subagent-menu`), never the inspector directly —
+                // the inspector is a row's `onSelect` away
+                // (`openTab`, :342-345). No children: history-down.
                 if self.subagent_children.is_empty() {
                     effects.push(FooterEffect::HistoryDown);
                 } else {
-                    self.machine.route = crate::components::footer::PromptRoute::Subagent;
-                    self.subagent_selected = self
-                        .subagent_children
-                        .iter()
-                        .rev()
-                        .find(|child| {
-                            child.status == crate::mini::transport::SubagentStatus::Running
-                        })
-                        .or_else(|| self.subagent_children.last())
-                        .map(|child| child.session_id.clone());
-                    self.subagent_scroll = 0;
+                    self.open_panel(crate::components::footer::PromptRoute::SubagentMenu);
                 }
             }
         }
@@ -694,6 +697,29 @@ impl FooterPane {
         self.machine.open_route(route);
         self.panel = PanelState::default();
         self.leader_armed = false;
+    }
+
+    /// G-482 — the empty-list closes (footer.view.tsx:653-663 for the
+    /// menu route, :640-651 for a gone inspector child): run after the
+    /// tracked children snapshot changes — the menu collapses when
+    /// the set empties, the inspector when its inspected child is
+    /// gone. Callers: the runtime's fold.
+    pub fn subagent_list_closed(&mut self) {
+        if self.subagent_children.is_empty() {
+            if self.machine.route == crate::components::footer::PromptRoute::SubagentMenu {
+                self.machine.close_panel();
+                self.panel = PanelState::default();
+            }
+        } else if self.machine.route == crate::components::footer::PromptRoute::Subagent {
+            let still_tracked = self.subagent_selected.as_deref().is_some_and(|id| {
+                self.subagent_children.iter().any(|child| child.session_id == id)
+            });
+            if self.subagent_selected.is_some() && !still_tracked {
+                self.machine.close_panel();
+                self.subagent_selected = None;
+                self.subagent_scroll = 0;
+            }
+        }
     }
 
     /// The open panel's UNFILTERED entry list (`RunCommandMenuBody.
@@ -749,6 +775,59 @@ impl FooterPane {
             crate::components::footer::PromptRoute::Settings => {
                 crate::components::footer::state::settings_entries(&self.settings_summary)
             }
+            // G-482 — the subagent menu's rows
+            // (`RunSubagentSelectBody.entries`,
+            // footer.command.tsx:873-895): the ACTIVE tab lists the
+            // running children, the inactive one the settled rows;
+            // title = description → title → label with the label as
+            // the description whenever it is not the title; the
+            // status footer (`subagentStatusLabel`, :116-130) with
+            // its tone; the session id as the payload.
+            crate::components::footer::PromptRoute::SubagentMenu => self
+                .subagent_children
+                .iter()
+                .filter(|child| {
+                    let running = child.status == crate::mini::transport::SubagentStatus::Running;
+                    running == self.subagent_menu_active
+                })
+                .map(|child| {
+                    let title = if !child.description.is_empty() {
+                        child.description.clone()
+                    } else if child.title.is_empty() {
+                        child.label.clone()
+                    } else {
+                        child.title.clone()
+                    };
+                    let footer = match child.status {
+                        crate::mini::transport::SubagentStatus::Completed => "done",
+                        crate::mini::transport::SubagentStatus::Cancelled => "cancelled",
+                        crate::mini::transport::SubagentStatus::Error => "error",
+                        crate::mini::transport::SubagentStatus::Running => "running",
+                    };
+                    let footer_tone = match child.status {
+                        crate::mini::transport::SubagentStatus::Running => {
+                            Some(crate::components::footer::state::FooterTone::Running)
+                        }
+                        crate::mini::transport::SubagentStatus::Error => {
+                            Some(crate::components::footer::state::FooterTone::Error)
+                        }
+                        crate::mini::transport::SubagentStatus::Completed => {
+                            Some(crate::components::footer::state::FooterTone::Success)
+                        }
+                        crate::mini::transport::SubagentStatus::Cancelled => None,
+                    };
+                    let is_label_title = title == child.label;
+                    FooterMenuItem {
+                        display: title,
+                        description: (!is_label_title).then(|| child.label.clone()),
+                        footer: Some(footer.to_owned()),
+                        footer_tone,
+                        value: Some(child.session_id.clone()),
+                        current: self.subagent_selected.as_deref() == Some(&child.session_id),
+                        ..FooterMenuItem::default()
+                    }
+                })
+                .collect(),
             crate::components::footer::PromptRoute::Composer
             | crate::components::footer::PromptRoute::Subagent => Vec::new(),
         };
@@ -784,6 +863,13 @@ impl FooterPane {
         // ctrl+d/ctrl+u like ctrl+u's query-clear in the command
         // panel.
         let queued_route = self.machine.route == crate::components::footer::PromptRoute::QueuedMenu;
+        // G-482 — the subagent menu's route keys
+        // (`RunSubagentSelectBody`'s controller, footer.command.tsx:
+        // 896-910): tab toggles the active/inactive tab (the `onKey`
+        // hook runs BEFORE the close-on-first-up arm), and `up` at
+        // row 0 CLOSES the panel (`closeOnFirstUp: true`, :196-200).
+        let subagent_menu_route =
+            self.machine.route == crate::components::footer::PromptRoute::SubagentMenu;
         match key {
             FooterKey::Escape | FooterKey::CtrlC => {
                 // closePanel → the composer (footer.view.tsx:320-322).
@@ -791,7 +877,15 @@ impl FooterPane {
                 self.panel = PanelState::default();
             }
             FooterKey::Up => {
-                self.panel.selected = move_selection_clamp(self.panel.selected, count, -1);
+                // G-482 — `closeOnFirstUp` (footer.command.tsx:196-
+                // 200): the subagent menu closes on an up at the
+                // FIRST row (the panel opens from the composer below).
+                if subagent_menu_route && self.panel.selected == 0 {
+                    self.machine.close_panel();
+                    self.panel = PanelState::default();
+                } else {
+                    self.panel.selected = move_selection_clamp(self.panel.selected, count, -1);
+                }
             }
             FooterKey::Down => {
                 self.panel.selected = move_selection_clamp(self.panel.selected, count, 1);
@@ -864,13 +958,17 @@ impl FooterPane {
                     }
                 }
             }
-            FooterKey::Tab
-            | FooterKey::PageUp
-            | FooterKey::PageDown
-            | FooterKey::CtrlT
-            | FooterKey::CtrlP
-            | FooterKey::CtrlB
-            | FooterKey::CtrlF => {}
+            FooterKey::Tab | FooterKey::PageUp | FooterKey::PageDown => {
+                // G-482 — the subagent menu's tab toggles the
+                // active/inactive list (`onKey`, footer.command.tsx:
+                // 903-908): `setActive(v => !v)` — the selection
+                // index stays (the menu's `reset()` fires on QUERY
+                // changes only, :166-169).
+                if subagent_menu_route && key == FooterKey::Tab {
+                    self.subagent_menu_active = !self.subagent_menu_active;
+                }
+            }
+            FooterKey::CtrlT | FooterKey::CtrlP | FooterKey::CtrlB | FooterKey::CtrlF => {}
             // G-272 — the leader chord arms from an open panel too
             // (the queued menu's undo/delete chords complete here).
             FooterKey::CtrlX => self.leader_armed = true,
@@ -963,6 +1061,18 @@ impl FooterPane {
         entry: &crate::components::footer::state::FooterMenuItem,
     ) -> Vec<FooterEffect> {
         match self.machine.route {
+            // G-482 — the subagent menu's rows (`onSelect`,
+            // footer.command.tsx:900 → `openTab`,
+            // footer.view.tsx:342-345): the picked child routes the
+            // inspector (`subagent` + `onSubagentSelect`).
+            crate::components::footer::PromptRoute::SubagentMenu => {
+                if let Some(session_id) = entry.value.clone() {
+                    self.machine.route = crate::components::footer::PromptRoute::Subagent;
+                    self.subagent_selected = Some(session_id);
+                    self.subagent_scroll = 0;
+                }
+                return Vec::new();
+            }
             // G-272 — the agent panel's rows (`onAgentSelect`): the
             // picked id becomes the next turn's agent.
             crate::components::footer::PromptRoute::Agent => {
@@ -1012,18 +1122,11 @@ impl FooterPane {
                 }
             }
             "View subagents" => {
+                // G-482 — the command row runs `openSubagentMenu`
+                // (footer.view.tsx:835): the LIST route, like the
+                // down key.
                 if !self.subagent_children.is_empty() {
-                    self.machine.route = crate::components::footer::PromptRoute::Subagent;
-                    self.subagent_selected = self
-                        .subagent_children
-                        .iter()
-                        .rev()
-                        .find(|child| {
-                            child.status == crate::mini::transport::SubagentStatus::Running
-                        })
-                        .or_else(|| self.subagent_children.last())
-                        .map(|child| child.session_id.clone());
-                    self.subagent_scroll = 0;
+                    self.open_panel(crate::components::footer::PromptRoute::SubagentMenu);
                 }
             }
             "Variant cycle" => return vec![FooterEffect::CycleVariant],
@@ -1089,6 +1192,22 @@ impl FooterPane {
                 true,
                 "No settings found",
             ),
+            // G-482 — `RunSubagentSelectBody`'s shell
+            // (footer.command.tsx:912-942): the `tab show
+            // {active|inactive}` hint flips with the toggle.
+            crate::components::footer::PromptRoute::SubagentMenu => (
+                "Select subagent",
+                true,
+                Some(if self.subagent_menu_active {
+                    "tab show inactive"
+                } else {
+                    "tab show active"
+                }),
+                false,
+                true,
+                false,
+                "No subagents found",
+            ),
             _ => ("Pending prompts", true, None, false, true, false, "No pending prompts"),
         };
         let all = self.panel_all_entries();
@@ -1096,7 +1215,16 @@ impl FooterPane {
             all.iter().filter(|item| fuzzy_matches(item, &self.panel.query)).cloned().collect();
         let menu = FooterMenuState { selected: self.panel.selected, offset: 0 };
         let mut canvas = Canvas::new(width, height);
-        let layout = footer_panel_layout(height.max(3), PANEL_LIST_ROWS);
+        // G-482 — the subagent menu's list limit is
+        // SUBAGENT_LIST_ROWS (12), not the command panel's 10
+        // (footer.command.tsx:898).
+        let list_limit = match route {
+            crate::components::footer::PromptRoute::SubagentMenu => {
+                crate::components::footer::state::SUBAGENT_LIST_ROWS
+            }
+            _ => PANEL_LIST_ROWS,
+        };
+        let layout = footer_panel_layout(height.max(3), list_limit);
         render_panel_shell(
             &mut canvas,
             0,
@@ -1214,6 +1342,21 @@ impl FooterPane {
                     }
                     crate::components::footer::PromptRoute::QueuedMenu => {
                         1 + self.queued_prompts.len().max(1)
+                    }
+                    // G-482 — the subagent menu's own height arm
+                    // (`route === "queued-menu" || route ===
+                    // "subagent-menu" ? 1 + this.subagentMenuRows`,
+                    // footer.ts:754-755): the rows the controller
+                    // reports (`menu.rows() + layout().frame`,
+                    // footer.command.tsx:182-184) — the visible
+                    // window over the FILTERED list plus the frame.
+                    crate::components::footer::PromptRoute::SubagentMenu => {
+                        let layout = crate::components::footer::panel::footer_panel_layout(
+                            term_height,
+                            crate::components::footer::state::SUBAGENT_LIST_ROWS,
+                        );
+                        let count = self.panel_entries().len();
+                        1 + count.min(layout.limit).max(1) + layout.frame
                     }
                     route if route.is_panel() => {
                         let layout = crate::components::footer::panel::footer_panel_layout(
@@ -2223,10 +2366,32 @@ impl Lifecycle {
             .ok()
             .is_none_or(|height| height != self.solid.renderer.footer_height());
         if height_changed {
+            // The ref's shrink transition — `clearStaleSplitSurfaceRows`
+            // (opentui core 0.5.14 renderer, :8810-8831): every row the
+            // PREVIOUS band covered that the next band does NOT gets
+            // `CUP(line,1)` + `EL` before the new frame paints (the
+            // engine's apply_screen_mode docs leave the terminal-
+            // transition half to the live embedder — this is it). The
+            // G-482 menu route exposed the gap: the pane's grow/shrink
+            // cycles (composer → menu → inspector → composer) left the
+            // vacated inspector rows on screen.
+            let previous_height = self.solid.renderer.footer_height() as usize;
             self.solid
                 .renderer
                 .set_footer_height(u32::try_from(band_height).unwrap_or(4))
                 .map_err(|error| error.to_string())?;
+            if band_height < previous_height && self.height > 0 {
+                let terminal_bottom = self.height;
+                let previous_start = terminal_bottom + 1 - previous_height.min(terminal_bottom);
+                let next_start = terminal_bottom + 1 - band_height;
+                let mut clear = String::new();
+                for line in previous_start..next_start {
+                    let _ = write!(clear, "\x1b[{line};1H\x1b[2K");
+                }
+                if !clear.is_empty() {
+                    self.write_raw(clear.as_bytes())?;
+                }
+            }
         }
         if forced && !height_changed {
             // A scrollback write scrolled the screen under an intact
@@ -2938,6 +3103,79 @@ mod tests {
             let _ = footer.press(FooterKey::Printable(ch));
         }
         assert_eq!(footer.press(FooterKey::Enter), vec![FooterEffect::Close]);
+    }
+
+    /// G-482 — `session.child.first` (down) opens the searchable
+    /// child LIST first (footer.view.tsx:307-313, 592-602): the
+    /// active tab lists running children, tab flips to the settled
+    /// ones, a row's enter routes the inspector, up at row 0 closes,
+    /// and an emptied tracker collapses the panel
+    /// (footer.command.tsx:863-944 + footer.view.tsx:653-663).
+    #[test]
+    fn down_opens_the_subagent_menu_then_the_inspector() {
+        use crate::components::footer::PromptRoute;
+        use crate::mini::transport::{SubagentChild, SubagentStatus};
+        let mut footer = pane();
+        // No children: history-down.
+        assert_eq!(footer.press(FooterKey::Down), vec![FooterEffect::HistoryDown]);
+        footer.subagent_children = vec![
+            SubagentChild {
+                session_id: "ses_a".into(),
+                label: "Subagent".into(),
+                title: "Check the parsers".into(),
+                description: String::new(),
+                status: SubagentStatus::Running,
+                commits: Vec::new(),
+            },
+            SubagentChild {
+                session_id: "ses_b".into(),
+                label: "Plan".into(),
+                title: String::new(),
+                description: String::new(),
+                status: SubagentStatus::Completed,
+                commits: Vec::new(),
+            },
+        ];
+        let _ = footer.press(FooterKey::Down);
+        assert_eq!(footer.machine.route, PromptRoute::SubagentMenu, "the menu route opens");
+        // The ACTIVE tab lists the running child only; the title is
+        // description → title → label.
+        let entries = footer.panel_entries();
+        assert_eq!(entries.len(), 1, "running only: {entries:?}");
+        assert_eq!(entries[0].display, "Check the parsers");
+        assert_eq!(entries[0].footer.as_deref(), Some("running"));
+        assert_eq!(entries[0].value.as_deref(), Some("ses_a"));
+        // The panel's body carries the shell title + the tab hint.
+        let frame = footer.render_frame(80, footer.pane_height(30));
+        let text = frame.text_grid().join("\n");
+        assert!(text.contains("Select subagent"), "the title: {text}");
+        assert!(text.contains("tab show inactive"), "the hint: {text}");
+        // Tab flips to the settled list.
+        let _ = footer.press(FooterKey::Tab);
+        let entries = footer.panel_entries();
+        assert_eq!(entries.len(), 1, "settled only: {entries:?}");
+        assert_eq!(entries[0].display, "Plan");
+        assert_eq!(entries[0].footer.as_deref(), Some("done"));
+        // Enter routes the inspector on the picked child.
+        let _ = footer.press(FooterKey::Enter);
+        assert_eq!(footer.machine.route, PromptRoute::Subagent);
+        assert_eq!(footer.subagent_selected.as_deref(), Some("ses_b"));
+        // The inspector body renders over the grown pane.
+        let frame = footer.render_frame(80, footer.pane_height(30));
+        let text = frame.text_grid().join("\n");
+        assert!(text.contains("Plan"), "the inspector title: {text}");
+        // Esc returns to the composer; the menu's up-at-0 closes.
+        let _ = footer.press(FooterKey::Escape);
+        assert_eq!(footer.machine.route, PromptRoute::Composer);
+        let _ = footer.press(FooterKey::Down);
+        assert_eq!(footer.machine.route, PromptRoute::SubagentMenu);
+        let _ = footer.press(FooterKey::Up);
+        assert_eq!(footer.machine.route, PromptRoute::Composer, "closeOnFirstUp");
+        // An emptied tracker closes the open menu.
+        let _ = footer.press(FooterKey::Down);
+        footer.subagent_children.clear();
+        footer.subagent_list_closed();
+        assert_eq!(footer.machine.route, PromptRoute::Composer);
     }
 
     /// G-272 — the usage groups on the statusline

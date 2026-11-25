@@ -1035,6 +1035,12 @@ impl Runtime {
             let subagent_fold = self.subagents.fold(&event);
             if subagent_fold.changed {
                 self.lifecycle.pane.subagent_children = self.subagents.children();
+                // G-482 — the empty-list closes (footer.view.tsx:
+                // 653-663 for the menu route, :640-651 for a gone
+                // inspector child): the panel collapses back to the
+                // composer when the tracked set empties / loses the
+                // inspected child.
+                self.lifecycle.pane.subagent_list_closed();
             }
             match self.transport.fold(&event) {
                 Fold::Ignored => {}

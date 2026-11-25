@@ -605,6 +605,32 @@ impl Gateway {
         )
     }
 
+    /// va19 — the subagent-menu anchor's turn-anchored gateway with an
+    /// EXPLICIT pace (the child turn must stream slowly enough to open
+    /// the footer menu while the subagent RUNS; `spawn_turn` pins
+    /// instant for the toolloop grids).
+    #[must_use]
+    pub fn spawn_turn_paced(
+        tag: &str,
+        tool_corpus: &[PathBuf],
+        bootstrap: Option<(&Path, &Path)>,
+        pace: &str,
+    ) -> Gateway {
+        let seed = bootstrap.map(|(record, turns)| (record.to_path_buf(), turns.to_path_buf()));
+        let (record_dir, seed_turns) = match seed {
+            Some((record, turns)) => (Some(record), Some(turns)),
+            None => (None, None),
+        };
+        Gateway::spawn_ext(
+            tag,
+            tool_corpus,
+            record_dir.as_deref(),
+            seed_turns.as_deref(),
+            pace,
+            "turn",
+        )
+    }
+
     fn spawn_ext(
         tag: &str,
         extra_corpus: &[PathBuf],
@@ -924,6 +950,32 @@ impl TuiProcess {
     pub fn write(&mut self, bytes: &[u8]) {
         self.master.write_all(bytes).expect("write keys");
         self.master.flush().expect("flush keys");
+    }
+
+    /// va19 — answer the mini frontend's `CSI 6n` cursor probe (the
+    /// mini's footer viewport docks at the probed row; a pty with no
+    /// answering terminal behind it breaks the rust mini's layout —
+    /// the transcript collapses to a narrow column). Replies at the
+    /// bottom row, mirroring the pty harness's prober.
+    pub fn arm_cursor_probe_answers(&self, rows: u16) {
+        let mut master = self.master.try_clone().expect("clone master");
+        let raw = Arc::clone(&self.raw);
+        std::thread::spawn(move || {
+            let reply = format!("\x1b[{rows};1R").into_bytes();
+            let mut answered = 0usize;
+            loop {
+                std::thread::sleep(Duration::from_millis(20));
+                let asked = {
+                    let raw = raw.lock().expect("raw");
+                    raw.windows(4).filter(|window| window == b"\x1b[6n").count()
+                };
+                for _ in answered..asked {
+                    let _ = master.write_all(&reply);
+                    let _ = master.flush();
+                }
+                answered = answered.max(asked);
+            }
+        });
     }
 
     #[must_use]
@@ -1737,6 +1789,22 @@ pub fn ref_tui_spawn(sandbox: &Sandbox, stage: &RefStage, cols: u16, rows: u16) 
     // va8: belt-and-braces ref-daemon reaper (see `spawn_ref_supervisor`)
     // — armed at TUI spawn so an abnormal test death cannot strand the
     // self-spawned detached ref daemon at PPID=1.
+    spawn_ref_supervisor(sandbox, stage);
+    TuiProcess::spawn_command(command, cols, rows)
+}
+
+/// Spawn the ref MINI frontend (`opencode mini`) on its own PTY —
+/// va19's subagent-menu anchor: the footer menu/inspector are the
+/// mini footer's surfaces (footer.command.tsx), not the full TUI's.
+/// `PWD` is pinned to the sandbox project: the mini's
+/// `localDirectory` chdir (mini.ts:201-209) prefers `$PWD`, and the
+/// inherited test-runner PWD would drag the session into the
+/// worktree.
+#[must_use]
+pub fn ref_mini_spawn(sandbox: &Sandbox, stage: &RefStage, cols: u16, rows: u16) -> TuiProcess {
+    let mut command = sandbox.command_ref(stage, &stage.bun);
+    command.arg(&stage.entry).arg("mini");
+    command.env("PWD", stage.project.display().to_string());
     spawn_ref_supervisor(sandbox, stage);
     TuiProcess::spawn_command(command, cols, rows)
 }

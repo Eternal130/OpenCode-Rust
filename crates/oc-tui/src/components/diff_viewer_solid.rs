@@ -387,13 +387,33 @@ pub(crate) enum DiffBody<'a> {
     Loaded { files: &'a [DiffFile], state: &'a DiffViewerState, options: &'a DiffViewerOptions<'a> },
 }
 
+/// G-485④ — the source header row's inputs (the non-loaded bodies
+/// carry them; the loaded arm reads its `options`): `DIFF_SOURCES[
+/// mode].label` + `sourceDetail`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DiffSourceHeader<'a> {
+    pub label: &'a str,
+    pub detail: &'a str,
+}
+
 struct Built {
     content: Element,
     hits: Vec<DiffImageHit>,
     key: String,
 }
 
-fn body_line(styles: &ThemeStyles, width: usize, height: usize, text: &str, error: bool) -> Built {
+/// G-485④ — a non-loaded body: the source header row (the `!showFileTree()`
+/// header, diff-viewer.tsx:804-844 — bold label, the muted ` · {detail}`,
+/// the review count `0/0`, the compact help `?` at the top-right corner)
+/// over the padded status line (`<box flexGrow={1} padding={2}>`).
+fn body_line(
+    styles: &ThemeStyles,
+    width: usize,
+    height: usize,
+    text: &str,
+    error: bool,
+    header: DiffSourceHeader<'_>,
+) -> Built {
     let bg = rgba(styles.background).unwrap_or(Rgba::rgb(0, 0, 0));
     let fg = if error {
         rgba(styles.error).unwrap_or(Rgba::rgb(255, 0, 0))
@@ -401,22 +421,64 @@ fn body_line(styles: &ThemeStyles, width: usize, height: usize, text: &str, erro
         rgba(styles.text_muted.fg.unwrap_or(styles.text.fg.unwrap_or(Color::Reset)))
             .unwrap_or(Rgba::rgb(255, 255, 255))
     };
+    let fg_base = default_fg(styles);
+    let fg_muted = rgba(styles.text_muted.fg.unwrap_or(Color::Reset)).unwrap_or(fg_base);
+    let width = width.max(1);
+    // The header row (paddingLeft/Right 2, gap 1): the label at x 2, the
+    // detail right after, the `n/m` count ending at width-2, the
+    // `?` in the last column (the absolute compact HelpShortcut).
+    let label_x = 2usize;
+    let detail_x = label_x + crate::wrap::display_width(header.label);
+    let count = "0/0";
+    let count_x = width.saturating_sub(2 + count.len());
+    let help_x = width.saturating_sub(1);
+    let mut rows = vec![
+        text_at(
+            "diff-source",
+            label_x,
+            0,
+            vec![bold_chunk(
+                header.label,
+                rgba(styles.action_secondary).or(Some(fg_base)),
+                Some(bg),
+            )],
+        ),
+        text_at("diff-review-count", count_x, 0, vec![chunk(count, Some(fg_muted), Some(bg))]),
+        text_at("diff-help", help_x, 0, vec![chunk("?", Some(fg_base), Some(bg))]),
+        text_at(
+            "diff-body",
+            2,
+            // The status box's `padding={2}` under the header row
+            // (diff-viewer.tsx:845-872): the text lands 3 rows down.
+            3,
+            vec![chunk(text, Some(fg), Some(bg))],
+        ),
+    ];
+    // The ` · {sourceDetail}` text only while a detail exists
+    // (diff-viewer.tsx:834-838's Show gate).
+    if !header.detail.is_empty() {
+        rows.push(text_at(
+            "diff-source-detail",
+            detail_x,
+            0,
+            vec![chunk(format!(" · {}", header.detail), Some(fg_muted), Some(bg))],
+        ));
+    }
     let content = box_()
         .key("diff-root")
         .position("absolute")
         .left(0.0)
         .top(0.0)
-        .width(width.max(1) as f32)
+        .width(width as f32)
         .height(height.max(1) as f32)
         .background_color(rgba_hex(bg))
-        .children(Children::Static(vec![text_at(
-            "diff-body",
-            2,
-            2,
-            vec![chunk(text, Some(fg), Some(bg))],
-        )]))
+        .children(Children::Static(rows))
         .into_element();
-    Built { content, hits: Vec::new(), key: format!("diff-body@{width}x{height}:{text}") }
+    Built {
+        content,
+        hits: Vec::new(),
+        key: format!("diff-body@{width}x{height}:{text}:{}:{}", header.label, header.detail),
+    }
 }
 
 fn default_fg(styles: &ThemeStyles) -> Rgba {
@@ -955,9 +1017,12 @@ fn build(
     width: usize,
     height: usize,
     scroll: usize,
+    header: DiffSourceHeader<'_>,
 ) -> Built {
     match body {
-        DiffBody::Loading => body_line(styles, width, height, "Loading diff…", false),
+        DiffBody::Loading => {
+            body_line(styles, width, height, "Loading diff…", false, header)
+        }
         DiffBody::Failed { needs_base } => body_line(
             styles,
             width,
@@ -968,6 +1033,7 @@ fn build(
                 "Could not load diff. Reopen the diff viewer to try again."
             },
             true,
+            header,
         ),
         DiffBody::Unavailable => body_line(
             styles,
@@ -975,8 +1041,9 @@ fn build(
             height,
             "Committed comparison unavailable without base metadata. Choose a base branch from Diff source.",
             false,
+            header,
         ),
-        DiffBody::Empty => body_line(styles, width, height, "No changes to show", false),
+        DiffBody::Empty => body_line(styles, width, height, "No changes to show", false, header),
         DiffBody::Loaded { files, state, options } => {
             build_loaded(files, state, options, styles, width, height, scroll)
         }
@@ -991,11 +1058,12 @@ pub(crate) fn mount_diff_route(
     width: usize,
     height: usize,
     scroll: usize,
+    header: DiffSourceHeader<'_>,
 ) -> Vec<DiffImageHit> {
     register_diff_element(styles);
     let width = width.max(1);
     let height = height.max(1);
-    let built = build(body, styles, width, height, scroll);
+    let built = build(body, styles, width, height, scroll, header);
     let rebuild = !family_wrapper_live("diff")
         || DIFF_KEY.with_borrow(|slot| slot.as_deref() != Some(built.key.as_str()));
     let (content, content_key) = if rebuild {
@@ -1033,8 +1101,14 @@ pub(crate) fn twin_loaded(
 ) -> (Frame, Vec<DiffImageHit>) {
     reset_hub();
     DIFF_KEY.with_borrow_mut(|slot| *slot = None);
-    let hits =
-        mount_diff_route(&DiffBody::Loaded { files, state, options }, styles, width, height, 0);
+    let hits = mount_diff_route(
+        &DiffBody::Loaded { files, state, options },
+        styles,
+        width,
+        height,
+        0,
+        DiffSourceHeader { label: options.source_label, detail: options.source_detail },
+    );
     let mut frame = blank_frame(width.max(1), height.max(1));
     composite_chrome_tree(&mut frame);
     (frame, hits)
@@ -1048,8 +1122,9 @@ pub(crate) fn route_frame(
     width: usize,
     height: usize,
     scroll: usize,
+    header: DiffSourceHeader<'_>,
 ) -> (Frame, Vec<DiffImageHit>) {
-    let hits = mount_diff_route(body, styles, width, height, scroll);
+    let hits = mount_diff_route(body, styles, width, height, scroll, header);
     let mut frame = blank_frame(width.max(1), height.max(1));
     composite_chrome_tree(&mut frame);
     (frame, hits)
