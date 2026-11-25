@@ -148,28 +148,58 @@ jobs:
         # are kept so consumers do zero recompilation.
         run: rm -rf target/debug/incremental target/release/incremental
 
+      # CI-02 (2026-11-25): consumers only RUN binaries — rlib/rmeta are
+      # needed solely if cargo relinks, which zero-compile fingerprints
+      # prevent. Dropping them shrinks the artifact (faster upload AND
+      # downloads). Fail-loud if a fingerprint ever goes stale: the relink
+      # needs a missing rlib and the job reds instead of silently paying
+      # a 10-minute recompile (the 2026-11-25 finding: 388 units rebuilt
+      # per consumer because .fingerprint/ never shipped).
+      - name: Prune link inputs (rlib/rmeta) — consumers run, never relink
+        run: find target/debug/deps -maxdepth 1 \( -name '*.rlib' -o -name '*.rmeta' \) -delete
+
       - uses: actions/upload-artifact@v4
         with:
           name: build-target
           path: target/
           retention-days: 1
-          include-hidden-files: false
+          # CI-01 (2026-11-25, the critical fix): hidden files/dirs MUST
+          # ship — target/debug/.fingerprint/ and .rustc_info.json are the
+          # freshness state; with them absent every consumer judged all
+          # 388 units stale and recompiled the entire workspace+dep chain
+          # (~10 min per job; the "zero compilation" design was inert).
+          include-hidden-files: true
 
+  # CI-03 (2026-11-25): the serialized PTY family was a 25-minute single
+  # job — 76% of its pure test time is pty_fuzz (312s) + vt_hover (270s).
+  # Shard across three SEPARATE runners (the va9/va10 PTY_LANE_SHARDS
+  # rejection was same-host contention; isolated VMs do not share that).
+  # Each shard still runs its tests serialized (profile pty).
   pty-integration:
-    name: nextest (pty, serialized)
+    name: nextest (pty, ${{ matrix.shard }})
     needs: build-archive
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: fuzz
+            filter: 'test(pty_fuzz)'
+          - shard: hover
+            filter: 'test(vt_hover) or test(vt_temporal)'
+          - shard: daily
+            filter: 'test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions) or test(pty_d3) or binary(pty_daily) or binary(pty_form) or binary(pty_permission) or binary(pty_session_panel)'
     steps:
       - uses: actions/checkout@v4
 
       # ubuntu-26.04 runners (20261101 image) ship ~21GB of preinstalled
-      # toolchains we never use; the multi-GB target artifact (~10GB
-      # unpacked) plus workspace growth exhausted the runner disk
-      # (System.IO.IOException: No space left on device - the nextest
-      # jobs died before writing logs). Reclaim the four big preinstalled
-      # trees BEFORE unpacking the artifact; runners are ephemeral
-      # single-use VMs, so privileged removal is the platform convention.
+      # toolchains we never use; the multi-GB target artifact plus
+      # workspace growth exhausted the runner disk (System.IO.IOException:
+      # No space left on device - the nextest jobs died before writing
+      # logs). Reclaim the four big preinstalled trees BEFORE unpacking
+      # the artifact; runners are ephemeral single-use VMs, so privileged
+      # removal is the platform convention.
       - name: Reclaim runner disk (before artifact download)
         run: |
           set -eu
@@ -193,7 +223,7 @@ jobs:
           tool: cargo-nextest@0.9.148
 
       - name: Run PTY integration suites (serialized + retries)
-        run: cargo nextest run --workspace --locked --profile pty -E 'test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions) or test(pty_fuzz) or test(vt_hover) or test(vt_temporal) or test(pty_d3) or binary(pty_daily) or binary(pty_form) or binary(pty_permission) or binary(pty_session_panel)'
+        run: cargo nextest run --workspace --locked --profile pty -E '${{ matrix.filter }}'
         env:
           # Job-level: CI nextest ignores profile.default.env (see test job note)
           OPENCODE_DISABLE_BUN_DOWNLOAD: "1"
