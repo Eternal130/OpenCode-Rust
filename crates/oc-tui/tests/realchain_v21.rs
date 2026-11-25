@@ -575,8 +575,15 @@ fn v21_toast_session_action_pair() {
     let mut rig = v21_rig("v21-toast", "v21-toast");
     boot_both(&mut rig);
     exchange(&mut rig);
-    let toasts =
-        rig.wait_both_screens("v21 background", Duration::from_secs(30), Duration::from_secs(60));
+    let toasts = rig.wait_both_screens(
+        "v21 background",
+        // Rig health windows are generous: under the full-crate gate
+        // the rigs share the box with the plugin-host bun-spawning
+        // families, and a starved guest's crash/restart reload lands
+        // the plugin (and its t+20 s timer) well after the exchange.
+        Duration::from_secs(120),
+        Duration::from_secs(120),
+    );
     assert!(
         toasts,
         "V21 toast RED: the sessionID toast never showed; \
