@@ -2010,6 +2010,85 @@ function makeCtx(pluginId, options) {
           limit: Number.isFinite(scan.limit) ? scan.limit : null,
         });
       },
+      store(key, options) {
+        const bare = String(key ?? "");
+        if (!bare) throw new TypeError("Invalid storage segment: (empty)");
+        const initial = options?.initial;
+        if (!initial || typeof initial !== "object" || Array.isArray(initial)) {
+          throw new TypeError("Storage values must be JSON-compatible objects");
+        }
+        const live = structuredClone(initial);
+        // The in-process serialization chain (the ref's Flock window;
+        // the port's OS flock guards the cross-process write).
+        let chain = Promise.resolve();
+        // The eventual durable hydrate: replaces the live object's
+        // contents in place once the kv read answers (reads before it
+        // lands see `initial` — the documented bounded deviation).
+        chain = chain.then(async () => {
+          try {
+            const durable = await hostRequest("storage.get", { pluginId, key: bare });
+            const value = durable && typeof durable === "object" && durable.value !== null
+              ? durable.value
+              : null;
+            if (value && typeof value === "object" && !Array.isArray(value)) {
+              replaceInPlace(live, value);
+            }
+          } catch {
+            // A failed hydrate leaves the initial value standing (the
+            // ref's load() falls back the same way).
+          }
+        });
+        const update = (mutation) => {
+          if (typeof mutation !== "function") {
+            throw new TypeError("store update requires a mutation function");
+          }
+          const operation = chain.then(async () => {
+            let base;
+            try {
+              const durable = await hostRequest("storage.get", { pluginId, key: bare });
+              base = durable && typeof durable === "object" && durable.value !== null
+                ? durable.value
+                : null;
+            } catch {
+              base = null;
+            }
+            const draft =
+              base && typeof base === "object" && !Array.isArray(base)
+                ? structuredClone(base)
+                : structuredClone(initial);
+            mutation(draft);
+            await hostRequest("storage.set", { pluginId, key: bare, value: draft });
+            replaceInPlace(live, draft);
+          });
+          chain = operation.then(
+            () => undefined,
+            () => undefined,
+          );
+          return operation;
+        };
+        return [live, update];
+      },
+      memory(key, options) {
+        const namespaced = `plugin.${pluginId}.${String(key ?? "")}`;
+        const existing = memoryEntries.get(namespaced);
+        if (existing) return existing;
+        const initial = options?.initial;
+        if (!initial || typeof initial !== "object" || Array.isArray(initial)) {
+          throw new TypeError("Storage values must be objects");
+        }
+        const live = structuredClone(initial);
+        const mutate = (mutation) => {
+          if (typeof mutation !== "function") {
+            throw new TypeError("memory mutation requires a function");
+          }
+          const draft = structuredClone(live);
+          mutation(draft);
+          replaceInPlace(live, draft);
+        };
+        const entry = [live, mutate];
+        memoryEntries.set(namespaced, entry);
+        return entry;
+      },
     },
 
     // -- registration-time sync bridge (wave 1) -------------------------------
@@ -4362,7 +4441,23 @@ async function handleLoadTui({ entry, options }) {
         return registerMarkdownRenderer(pluginId, language, render);
       },
     },
-    kv: { get: async () => undefined, set: async () => {} },
+    // G-475 — the v1-bridge kv face routes through the real storage
+    // port now (the embedder binds the local-file StoragePort; the
+    // old no-op stub meant plugin state could never persist).
+    kv: {
+      async get(key) {
+        const result = await hostRequest("storage.get", {
+          pluginId,
+          key: String(key ?? ""),
+        }).catch(() => null);
+        return result && typeof result === "object" && result.value !== null
+          ? result.value
+          : undefined;
+      },
+      async set(key, value) {
+        await hostRequest("storage.set", { pluginId, key: String(key ?? ""), value: value ?? null });
+      },
+    },
 
     ui: {
       toast: () => {},
