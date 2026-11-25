@@ -114,6 +114,19 @@ jobs:
       - name: Prepare scratch dir
         run: mkdir -p /tmp/opencode
 
+      # CI-05 (2026-11-25, run 45623332552 forensics): cargo's path
+      # freshness compares recorded source mtimes — a fresh checkout is
+      # ALWAYS newer than the shipped fingerprints, so every consumer
+      # rebuilt all 386 units (~11 min) even with the tar round-trip.
+      # Pin source mtimes to the epoch on BOTH sides (build + consumers)
+      # so recorded == current and the walk goes green. Registry sources
+      # are extracted per-runner: fetch first, then normalize them too.
+      - name: Normalize source mtimes (epoch — freshness is mtime-based)
+        run: |
+          cargo fetch --locked
+          find ~/.cargo/registry/src -type f -exec touch -d @0 {} + 2>/dev/null || true
+          find . -path ./target -prune -o -type f -exec touch -d @0 {} +
+
       # Build ALL test binaries once and ship the whole target dir.
       # (nextest ARCHIVE mode is incompatible with this suite: tests bake
       # env!("CARGO_BIN_EXE_*") build-time ABSOLUTE paths, which break when
@@ -167,13 +180,17 @@ jobs:
       # payload is stripped binaries (incompressible) and upload is
       # network-bound; the zip wrapper uses compression-level 0 for the same
       # reason (level-6 zlib was pure CPU waste on ~4.4 GiB).
-      - name: Pack target dir (tar preserves exec bits + mtimes)
-        run: tar -cf target.tar -C . target
+      - name: Pack target dir (zstd tar: exec bits + mtimes + ~3.5x smaller)
+        # 19.1 GiB raw -> ~5-6 GiB zstd: the 21-minute artifact download
+        # of 45623332552 was the pipeline's second-longest stage. zstd -3
+        # with all threads compresses 19 GiB in ~2 min; the zip wrapper
+        # stays at level 0 (the payload is already zstd-compressed).
+        run: tar -I 'zstd -3 -T0' -cf target.tar.zst -C . target
 
       - uses: actions/upload-artifact@v4
         with:
           name: build-target
-          path: target.tar
+          path: target.tar.zst
           retention-days: 1
           compression-level: 0
 
@@ -214,14 +231,20 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghcup /usr/local/.ghcup || true
           df -h / | tee "$RUNNER_TEMP/df-after.txt"
 
-      - name: Download build artifact (single tar)
+      - name: Normalize source mtimes (epoch — mirrors the build job)
+        run: |
+          cargo fetch --locked
+          find ~/.cargo/registry/src -type f -exec touch -d @0 {} + 2>/dev/null || true
+          find . -path ./target -prune -o -type f -exec touch -d @0 {} +
+
+      - name: Download build artifact (zstd tar)
         uses: actions/download-artifact@v4
         with:
           name: build-target
           path: .
 
-      - name: Extract the target dir (tar preserves exec bits + mtimes)
-        run: tar -xf target.tar
+      - name: Extract the target dir (zstd tar preserves exec bits + mtimes)
+        run: tar -I zstd -xf target.tar.zst
 
       - name: Prepare scratch dir
         run: mkdir -p /tmp/opencode
@@ -261,14 +284,20 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghcup /usr/local/.ghcup || true
           df -h / | tee "$RUNNER_TEMP/df-after.txt"
 
-      - name: Download build artifact (single tar)
+      - name: Normalize source mtimes (epoch — mirrors the build job)
+        run: |
+          cargo fetch --locked
+          find ~/.cargo/registry/src -type f -exec touch -d @0 {} + 2>/dev/null || true
+          find . -path ./target -prune -o -type f -exec touch -d @0 {} +
+
+      - name: Download build artifact (zstd tar)
         uses: actions/download-artifact@v4
         with:
           name: build-target
           path: .
 
-      - name: Extract the target dir (tar preserves exec bits + mtimes)
-        run: tar -xf target.tar
+      - name: Extract the target dir (zstd tar preserves exec bits + mtimes)
+        run: tar -I zstd -xf target.tar.zst
 
       # Tests stage scratch sandboxes under /tmp/opencode (PIDs-unique
       # names). The dev box pre-creates it; runners do not.
@@ -353,14 +382,20 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghcup /usr/local/.ghcup || true
           df -h / | tee "$RUNNER_TEMP/df-after.txt"
 
-      - name: Download build artifact (single tar)
+      - name: Normalize source mtimes (epoch — mirrors the build job)
+        run: |
+          cargo fetch --locked
+          find ~/.cargo/registry/src -type f -exec touch -d @0 {} + 2>/dev/null || true
+          find . -path ./target -prune -o -type f -exec touch -d @0 {} +
+
+      - name: Download build artifact (zstd tar)
         uses: actions/download-artifact@v4
         with:
           name: build-target
           path: .
 
-      - name: Extract the target dir (tar preserves exec bits + mtimes)
-        run: tar -xf target.tar
+      - name: Extract the target dir (zstd tar preserves exec bits + mtimes)
+        run: tar -I zstd -xf target.tar.zst
 
       - uses: taiki-e/install-action@v2
         with:
