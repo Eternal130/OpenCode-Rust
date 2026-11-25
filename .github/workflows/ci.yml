@@ -158,17 +158,24 @@ jobs:
       - name: Prune link inputs (rlib/rmeta) — consumers run, never relink
         run: find target/debug/deps -maxdepth 1 \( -name '*.rlib' -o -name '*.rmeta' \) -delete
 
+      # CI-04 (2026-11-25, run 45618695055 forensics): zip artifacts LOSE
+      # the executable bit — with fingerprints shipped the consumer's cargo
+      # marked the build script fresh and invoked the downloaded
+      # build-script-build, which failed "never executed" (no +x). Zip also
+      # cannot be trusted for mtime. A tar round-trip preserves BOTH, so the
+      # zero-compile design finally holds. Plain tar (no compression): the
+      # payload is stripped binaries (incompressible) and upload is
+      # network-bound; the zip wrapper uses compression-level 0 for the same
+      # reason (level-6 zlib was pure CPU waste on ~4.4 GiB).
+      - name: Pack target dir (tar preserves exec bits + mtimes)
+        run: tar -cf target.tar -C . target
+
       - uses: actions/upload-artifact@v4
         with:
           name: build-target
-          path: target/
+          path: target.tar
           retention-days: 1
-          # CI-01 (2026-11-25, the critical fix): hidden files/dirs MUST
-          # ship — target/debug/.fingerprint/ and .rustc_info.json are the
-          # freshness state; with them absent every consumer judged all
-          # 388 units stale and recompiled the entire workspace+dep chain
-          # (~10 min per job; the "zero compilation" design was inert).
-          include-hidden-files: true
+          compression-level: 0
 
   # CI-03 (2026-11-25): the serialized PTY family was a 25-minute single
   # job — 76% of its pure test time is pty_fuzz (312s) + vt_hover (270s).
@@ -207,10 +214,14 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghcup /usr/local/.ghcup || true
           df -h / | tee "$RUNNER_TEMP/df-after.txt"
 
-      - uses: actions/download-artifact@v4
+      - name: Download build artifact (single tar)
+        uses: actions/download-artifact@v4
         with:
           name: build-target
-          path: target
+          path: .
+
+      - name: Extract the target dir (tar preserves exec bits + mtimes)
+        run: tar -xf target.tar
 
       - name: Prepare scratch dir
         run: mkdir -p /tmp/opencode
@@ -250,10 +261,14 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghcup /usr/local/.ghcup || true
           df -h / | tee "$RUNNER_TEMP/df-after.txt"
 
-      - uses: actions/download-artifact@v4
+      - name: Download build artifact (single tar)
+        uses: actions/download-artifact@v4
         with:
           name: build-target
-          path: target
+          path: .
+
+      - name: Extract the target dir (tar preserves exec bits + mtimes)
+        run: tar -xf target.tar
 
       # Tests stage scratch sandboxes under /tmp/opencode (PIDs-unique
       # names). The dev box pre-creates it; runners do not.
@@ -338,10 +353,14 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghcup /usr/local/.ghcup || true
           df -h / | tee "$RUNNER_TEMP/df-after.txt"
 
-      - uses: actions/download-artifact@v4
+      - name: Download build artifact (single tar)
+        uses: actions/download-artifact@v4
         with:
           name: build-target
-          path: target
+          path: .
+
+      - name: Extract the target dir (tar preserves exec bits + mtimes)
+        run: tar -xf target.tar
 
       - uses: taiki-e/install-action@v2
         with:
