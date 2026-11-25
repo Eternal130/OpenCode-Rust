@@ -1196,9 +1196,6 @@ pub fn render_select(
     // gap 1
     rows.push(Row::blank(width, default, surface_bg).cells);
 
-    // gap 1
-    rows.push(Row::blank(width, default, surface_bg).cells);
-
     // Filter input row: [pad 4][input bg formfield (width-8)][pad 4].
     // G-485③ — `renderFilter: false` unmounts the row (and its gap).
     if props.render_filter {

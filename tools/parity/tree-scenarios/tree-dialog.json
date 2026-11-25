@@ -685,7 +685,7 @@
         "x": 20,
         "y": 8,
         "w": 60,
-        "h": 8
+        "h": 9
       }
     },
     {
@@ -695,7 +695,7 @@
         "x": 20,
         "y": 8,
         "w": 60,
-        "h": 8
+        "h": 9
       },
       "style": {
         "bg": "#141414"
@@ -708,7 +708,7 @@
         "x": 20,
         "y": 9,
         "w": 60,
-        "h": 6
+        "h": 8
       }
     },
     {
@@ -737,12 +737,12 @@
       "rect": {
         "x": 24,
         "y": 9,
-        "w": 20,
+        "w": 11,
         "h": 1
       },
       "content": [
         {
-          "text": "Choose a base branch",
+          "text": "Base branch",
           "fg": "#eeeeee",
           "attributes": 1
         }
@@ -779,6 +779,16 @@
       "kind": "box",
       "rect": {
         "x": 24,
+        "y": 10,
+        "w": 52,
+        "h": 2
+      }
+    },
+    {
+      "id": "box-27",
+      "kind": "box",
+      "rect": {
+        "x": 24,
         "y": 11,
         "w": 52,
         "h": 1
@@ -798,22 +808,12 @@
       },
       "content": [
         {
-          "text": "Search",
+          "text": "Search local and remote branches",
           "fg": "#808080"
         }
       ],
       "options": {
         "wrapMode": "none"
-      }
-    },
-    {
-      "id": "box-27",
-      "kind": "box",
-      "rect": {
-        "x": 20,
-        "y": 13,
-        "w": 60,
-        "h": 1
       }
     },
     {
@@ -827,7 +827,17 @@
       }
     },
     {
-      "id": "e_No_branches",
+      "id": "box-29",
+      "kind": "box",
+      "rect": {
+        "x": 20,
+        "y": 13,
+        "w": 60,
+        "h": 1
+      }
+    },
+    {
+      "id": "e_No_branches_found",
       "kind": "box",
       "rect": {
         "x": 20,
@@ -847,18 +857,77 @@
       },
       "content": [
         {
-          "text": "No branches",
+          "text": "No branches found",
           "fg": "#808080"
         }
       ]
     },
     {
-      "id": "box-29",
+      "id": "box-30",
       "kind": "box",
       "rect": {
         "x": 20,
         "y": 14,
         "w": 60,
+        "h": 2
+      }
+    },
+    {
+      "id": "box-31",
+      "kind": "box",
+      "rect": {
+        "x": 20,
+        "y": 15,
+        "w": 60,
+        "h": 1
+      }
+    },
+    {
+      "id": "box-32",
+      "kind": "box",
+      "rect": {
+        "x": 24,
+        "y": 15,
+        "w": 30,
+        "h": 1
+      }
+    },
+    {
+      "id": "text-31",
+      "kind": "text",
+      "rect": {
+        "x": 24,
+        "y": 15,
+        "w": 30,
+        "h": 1
+      },
+      "content": [
+        {
+          "text": "Remembered until the TUI exits",
+          "fg": "#808080"
+        }
+      ],
+      "options": {
+        "wrapMode": "none"
+      }
+    },
+    {
+      "id": "box-33",
+      "kind": "box",
+      "rect": {
+        "x": 54,
+        "y": 15,
+        "w": 1,
+        "h": 1
+      }
+    },
+    {
+      "id": "box-34",
+      "kind": "box",
+      "rect": {
+        "x": 78,
+        "y": 15,
+        "w": 1,
         "h": 1
       }
     }
