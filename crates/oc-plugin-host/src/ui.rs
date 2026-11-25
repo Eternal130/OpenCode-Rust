@@ -47,6 +47,12 @@ pub struct PluginDialogSpec {
     /// through the native dialog pipeline; submit dispatches the
     /// option's value).
     pub options: Vec<PluginDialogOption>,
+    /// `ctx.ui.dialog.show/set` presentation fields (api.tsx:329-341
+    /// — G-475): the active dialog's `size` (`medium`|`large`|
+    /// `xlarge`) and `centered` flag. `None`/`false` keep the native
+    /// defaults (the ref's `dialog.setSize/setCentered`).
+    pub size: Option<String>,
+    pub centered: bool,
 }
 
 impl PluginDialogSpec {
@@ -73,7 +79,7 @@ impl PluginDialogSpec {
                         .iter()
                         .filter(|option| {
                             option.get("title").and_then(Value::as_str).is_some()
-                                && option.get("value").and_then(Value::as_str).is_some()
+                                && option.get("value").is_some()
                         })
                         .map(|option| PluginDialogOption {
                             title: option
@@ -81,11 +87,17 @@ impl PluginDialogSpec {
                                 .and_then(Value::as_str)
                                 .unwrap_or_default()
                                 .to_owned(),
+                            // The ref's select values are arbitrary
+                            // JSON; the native select dialog keys on
+                            // strings — non-strings serialize to their
+                            // JSON text (bounded projection, G-475).
                             value: option
                                 .get("value")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default()
-                                .to_owned(),
+                                .map(|value| match value {
+                                    Value::String(text) => text.clone(),
+                                    other => other.to_string(),
+                                })
+                                .unwrap_or_default(),
                             description: option
                                 .get("description")
                                 .and_then(Value::as_str)
@@ -95,6 +107,12 @@ impl PluginDialogSpec {
                         .collect()
                 })
                 .unwrap_or_default(),
+            size: value
+                .get("size")
+                .and_then(Value::as_str)
+                .filter(|size| matches!(*size, "medium" | "large" | "xlarge"))
+                .map(str::to_owned),
+            centered: value.get("centered").and_then(Value::as_bool).unwrap_or(false),
         }
     }
 }
@@ -140,15 +158,21 @@ impl PluginSectionSpec {
 /// One runtime plugin → TUI UI request (drained between frames).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiRequest {
-    /// `ctx.ui.toast.show({title?, message, variant?, duration?})` —
-    /// the TUI reduces it through the existing `tui.toast.show` event
-    /// path (the toast queue).
+    /// `ctx.ui.toast.show({title?, message, variant?, duration?,
+    /// sessionID?})` — the TUI reduces it through the existing
+    /// `tui.toast.show` event path (the toast queue). G-475: the
+    /// sessionID arm (api.tsx:108-131) crosses raw — the REDUCER
+    /// decides plain-vs-action (it owns the route + the session
+    /// table; the guest cannot).
     Toast {
         plugin_id: String,
         title: Option<String>,
         message: String,
         variant: String,
         duration_ms: u64,
+        /// `options.sessionID` (api.tsx:277 — when this session's
+        /// family is not open, the toast offers to open it).
+        session_id: Option<String>,
     },
     /// `ctx.ui.sidebar.setSection({title, rows})` — one section per
     /// plugin (latest wins); `removeSection` sends empty rows. The
@@ -167,6 +191,11 @@ pub enum UiRequest {
     /// {sessionID})` from a plugin row's activate handler — beta.13
     /// bug 2's plugin-world path).
     NavigateToSession { session_id: String },
+    /// G-475 bug2 — `ctx.ui.router.navigate({type: "home"})`
+    /// (api.tsx:219-225 → host.route.navigate(destination), the
+    /// Destination union's home arm — route.tsx:7-12). The port's
+    /// bridge arm was missing entirely.
+    NavigateHome,
     /// `ctx.ui.footer.setHint({text})` — one hint segment per plugin
     /// (latest wins; empty text removes it).
     FooterHint { plugin_id: String, text: String },
@@ -226,6 +255,151 @@ pub enum UiRequest {
     /// owning plugin's panel closes), fire-and-forget like the toast
     /// queue arm.
     PanelClose { plugin_id: String },
+    /// G-475 — `ctx.ui.dialog.show(render, onClose?)` (api.tsx:334-336
+    /// → dialog.replace): the guest flattened the JSX render into the
+    /// native spec; the TUI opens it. `request_id` settles the guest's
+    /// `onClose` (any close → `null`, the deferred-reply seam
+    /// alert/confirm/prompt already use).
+    DialogShow { request_id: u64, plugin_id: String, spec: PluginDialogSpec },
+    /// G-475 — `ctx.ui.dialog.set({size?, centered?})`
+    /// (api.tsx:337-340 → setSize/setCentered): mutates the ACTIVE
+    /// dialog's presentation.
+    DialogSet { plugin_id: String, size: Option<String>, centered: bool },
+    /// G-475 — `ctx.ui.dialog.clear()` (api.tsx:341-343 →
+    /// dialog.clear): closes the active dialog.
+    DialogClear { plugin_id: String },
+    /// G-475 — `ctx.ui.dialog.select(options)` (api.tsx:387-427):
+    /// the promise resolves the selected option's value (any close →
+    /// null) through the deferred-reply seam. The search arm is the
+    /// native filter (the guest's `search(query, options)` closure
+    /// cannot cross per-keystroke — bounded projection). The actions
+    /// ride as [`PluginSelectAction`] rows; triggering one asks the
+    /// guest back through `dialog.action` (the `click_sidebar_row`
+    /// pattern) and does NOT close the dialog.
+    DialogSelect {
+        request_id: u64,
+        plugin_id: String,
+        title: String,
+        placeholder: Option<String>,
+        options: Vec<PluginDialogOption>,
+        current: Option<String>,
+        actions: Vec<PluginSelectAction>,
+    },
+    /// G-475 — `ctx.ui.tabs.{open,focus,move,close}` (api.tsx:245-281
+    /// → host.sessionTabs.*): the tab mutations, answered by the
+    /// store's own tab seams (`open_tab`/`select_tab`/`move_tab`/
+    /// `close_tab`).
+    TabsOp { plugin_id: String, op: TabsOpKind, session_id: Option<String>, index: usize },
+    /// G-475 — `ctx.ui.model.variant.set(variant)` (api.tsx:288-296 →
+    /// host.local.model.variant.set): selects a variant of the
+    /// current model (`None` = the model default).
+    ModelVariantSet { plugin_id: String, variant: Option<String> },
+}
+
+/// The `ctx.ui.tabs` mutation shapes (api.tsx:245-281).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabsOpKind {
+    /// `tabs.open(sessionID)` — open without focusing.
+    Open,
+    /// `tabs.focus(sessionID)` — open + focus.
+    Focus,
+    /// `tabs.move(sessionID, index)`.
+    Move,
+    /// `tabs.close(sessionID?)` — the active tab when omitted.
+    Close,
+}
+
+/// One footer action of a plugin select dialog (api.tsx:407-417's
+/// `DialogSelectAction` projection: the trigger routes back through
+/// the guest's `dialog.action` dispatch).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginSelectAction {
+    /// The keybinding that triggers the action (e.g. "ctrl+d").
+    pub bind: String,
+    /// The row title.
+    pub title: String,
+    /// `left` | `right` (the footer side; default left).
+    pub side: String,
+    /// `true` when the action needs a selected option
+    /// (`selection: "required"`); `"none"` actions set this false.
+    pub selection_required: bool,
+}
+
+/// Parse the guest's `ui.dialog.select` payload into the native
+/// select spec (title/placeholder/options/current/actions — the
+/// same bounded decoding [`PluginDialogSpec::from_json`] applies to
+/// option rows).
+#[must_use]
+pub fn parse_select_spec(
+    value: &Value,
+) -> (String, Option<String>, Vec<PluginDialogOption>, Option<String>, Vec<PluginSelectAction>) {
+    let title = value.get("title").and_then(Value::as_str).unwrap_or_default().to_owned();
+    let placeholder = value
+        .get("placeholder")
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
+        .map(str::to_owned);
+    let options: Vec<PluginDialogOption> = value
+        .get("options")
+        .and_then(Value::as_array)
+        .map(|options| {
+            options
+                .iter()
+                .filter(|option| {
+                    option.get("title").and_then(Value::as_str).is_some()
+                        && option.get("value").is_some()
+                })
+                .map(|option| PluginDialogOption {
+                    title: option
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    value: option
+                        .get("value")
+                        .map(|value| match value {
+                            Value::String(text) => text.clone(),
+                            other => other.to_string(),
+                        })
+                        .unwrap_or_default(),
+                    description: option
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let current = value.get("current").map(|value| match value {
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    });
+    let actions: Vec<PluginSelectAction> = value
+        .get("actions")
+        .and_then(Value::as_array)
+        .map(|actions| {
+            actions
+                .iter()
+                .filter(|action| {
+                    action.get("bind").and_then(Value::as_str).is_some_and(|bind| !bind.is_empty())
+                        && action.get("title").and_then(Value::as_str).is_some()
+                })
+                .map(|action| PluginSelectAction {
+                    bind: action.get("bind").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                    title: action
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    side: action.get("side").and_then(Value::as_str).unwrap_or("left").to_owned(),
+                    selection_required: action.get("selection").and_then(Value::as_str)
+                        != Some("none"),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    (title, placeholder, options, current, actions)
 }
 
 impl UiRequest {
@@ -242,8 +416,14 @@ impl UiRequest {
             | UiRequest::Confirm { plugin_id, .. }
             | UiRequest::Prompt { plugin_id, .. }
             | UiRequest::PanelOpen { plugin_id, .. }
-            | UiRequest::PanelClose { plugin_id } => plugin_id,
-            UiRequest::NavigateToSession { .. } => "",
+            | UiRequest::PanelClose { plugin_id }
+            | UiRequest::DialogShow { plugin_id, .. }
+            | UiRequest::DialogSet { plugin_id, .. }
+            | UiRequest::DialogClear { plugin_id }
+            | UiRequest::DialogSelect { plugin_id, .. }
+            | UiRequest::TabsOp { plugin_id, .. }
+            | UiRequest::ModelVariantSet { plugin_id, .. } => plugin_id,
+            UiRequest::NavigateToSession { .. } | UiRequest::NavigateHome => "",
         }
     }
 }

@@ -137,7 +137,10 @@ pub use supervisor::{
     HostError, RevisionState, RpcEventPort, StoragePort, StorageScanQuery, SupervisorConfig,
 };
 pub use tap::{BroadcastTap, TapEvent};
-pub use ui::{PluginDialogOption, PluginDialogSpec, PluginSectionSpec, UiRequest};
+pub use ui::{
+    parse_select_spec, PluginDialogOption, PluginDialogSpec, PluginSectionSpec, PluginSelectAction,
+    TabsOpKind, UiRequest,
+};
 
 /// The embedded guest script (materialized into the sandbox at start).
 const HOST_JS: &str = include_str!("host/host.js");
@@ -1031,6 +1034,25 @@ impl PluginHost {
         facade.shared.notify_tui_theme(view);
     }
 
+    /// G-475 — push the live session-tabs view to the guest (the
+    /// `tui.tabs` notification): `{enabled, tabs: [{sessionID, title?,
+    /// active, busy, attention, unread?}]}` (api.tsx:245-281's
+    /// `host.sessionTabs.*` bounded projection — the reads are
+    /// reactive in the ref, host-pushed snapshots here).
+    pub fn notify_tui_tabs(&self, view: serde_json::Value) {
+        let Some(facade) = &self.facade else { return };
+        facade.shared.notify_guest("tui.tabs", view);
+    }
+
+    /// G-475 — push the live model-selection view to the guest (the
+    /// `tui.model` notification): `{current: {providerID, modelID,
+    /// variant?} | null, variants: [ids]}` (api.tsx:282-296's
+    /// `host.local.model` bounded projection).
+    pub fn notify_tui_model(&self, view: serde_json::Value) {
+        let Some(facade) = &self.facade else { return };
+        facade.shared.notify_guest("tui.model", view);
+    }
+
     /// Push the sidebar's layout budget (`tui.layout` — SA-F5: the
     /// guest flattener's row-layout width; the native painter's cell
     /// span for plugin sections).
@@ -1066,6 +1088,35 @@ impl PluginHost {
             .block_on(facade.shared.request(
                 "slot.click",
                 json!({ "pluginId": plugin_id, "row": row }),
+                timeout,
+            ))
+            .map_err(|error| error.to_string())?;
+        Ok(result.get("ok").and_then(Value::as_bool).unwrap_or(false))
+    }
+
+    /// G-475 — trigger one plugin select-dialog footer action
+    /// (api.tsx:407-417): the guest invokes the action's `onTrigger`
+    /// (with the selected option's value when the action requires a
+    /// selection). Bounded by `timeout` like every guest callback.
+    pub fn trigger_dialog_action(
+        &self,
+        plugin_id: &str,
+        request_id: u64,
+        action: usize,
+        value: Option<&str>,
+        timeout: Duration,
+    ) -> Result<bool, String> {
+        let Some(facade) = &self.facade else { return Err("plugin subsystem disabled".into()) };
+        let Some(runtime) = &facade.runtime else { return Err("plugin host unavailable".into()) };
+        let result = runtime
+            .block_on(facade.shared.request(
+                "dialog.action",
+                json!({
+                    "pluginId": plugin_id,
+                    "requestId": request_id,
+                    "action": action,
+                    "value": value,
+                }),
                 timeout,
             ))
             .map_err(|error| error.to_string())?;

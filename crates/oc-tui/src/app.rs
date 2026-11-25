@@ -998,14 +998,28 @@ impl App {
                         // just-copied toast included (the copy rode
                         // this same release).
                         if !self.selection_holds_text() {
-                            let command = self.store.toast_activate();
+                            let activation = self.store.toast_activate();
                             self.store.request_redraw();
-                            if let Some(command) = command {
-                                let dispatch =
-                                    self.dispatcher.dispatch(&self.store, &command, None);
-                                if let Dispatch::ServerPending(reason) = dispatch {
-                                    let _ = reason;
+                            match activation {
+                                Some(crate::components::toast::ToastActivation::Command(
+                                    command,
+                                )) => {
+                                    let dispatch =
+                                        self.dispatcher.dispatch(&self.store, &command, None);
+                                    if let Dispatch::ServerPending(reason) = dispatch {
+                                        let _ = reason;
+                                    }
                                 }
+                                // G-475 — the sessionID arm's `Open`
+                                // action (api.tsx:126-130: `run: () =>
+                                // host.route.navigate({type:"session",
+                                // sessionID})`).
+                                Some(crate::components::toast::ToastActivation::Session(
+                                    session,
+                                )) => {
+                                    self.store.navigate(crate::store::Route::session(session));
+                                }
+                                None => {}
                             }
                         }
                         return;
@@ -2684,6 +2698,12 @@ impl App {
             // TUI-25: the alert/confirm pill resolved to a dot command
             // — run it through the palette dispatcher after the close.
             crate::components::dialog::DialogKeyOutcome::CommandSubmitted(command) => {
+                // G-475 — a plugin select dialog's footer action: the
+                // synthetic command id stages the guest `dialog.action`
+                // trigger (never a palette dispatch).
+                if self.store.take_plugin_select_action(&command).is_some() {
+                    return;
+                }
                 let _ = self.dispatcher.dispatch(&self.store, &command, None);
             }
             _ => {}
@@ -5707,6 +5727,7 @@ pub fn apply_send_failure(store: &Store, event: PromptSinkEvent) {
         duration_ms: crate::components::toast::TOAST_DEFAULT_DURATION_MS,
         action_label: None,
         action_command: None,
+        action_session: None,
         // The F11 modal surface (keystrokes swallow until dismissed).
         modal: true,
     });
@@ -10120,6 +10141,7 @@ pub async fn run_with_size(
                         duration_ms: 10_000,
                         action_label: None,
                         action_command: None,
+                        action_session: None,
                         modal: false,
                     });
                 }
@@ -10150,6 +10172,7 @@ pub async fn run_with_size(
                         duration_ms: crate::components::toast::TOAST_DEFAULT_DURATION_MS,
                         action_label: None,
                         action_command: None,
+                        action_session: None,
                         modal: false,
                     });
                 }
@@ -14988,6 +15011,7 @@ mod core_interaction_tests {
             duration_ms: crate::components::toast::TOAST_DEFAULT_DURATION_MS,
             action_label: None,
             action_command: None,
+            action_session: None,
             modal: true,
         });
         assert!(app.error_toast_live(), "the error panel is up");

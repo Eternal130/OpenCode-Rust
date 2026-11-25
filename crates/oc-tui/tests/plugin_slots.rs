@@ -79,19 +79,24 @@ impl PluginDialogSource for HostDialogSource {
                     description: option.description,
                 })
                 .collect(),
+            placeholder: None,
         })
     }
 }
 
 /// The host → TUI UI-request conversion (the app layer's glue).
+#[allow(clippy::too_many_lines)] // one arm per UI request (G-475 grew the table)
 fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
     match request {
-        UiRequest::Toast { title, message, variant, duration_ms, .. } => PluginUiEvent::Toast {
-            title: title.clone(),
-            message: message.clone(),
-            variant: variant.clone(),
-            duration_ms: *duration_ms,
-        },
+        UiRequest::Toast { title, message, variant, duration_ms, session_id, .. } => {
+            PluginUiEvent::Toast {
+                title: title.clone(),
+                message: message.clone(),
+                variant: variant.clone(),
+                duration_ms: *duration_ms,
+                session_id: session_id.clone(),
+            }
+        }
         UiRequest::SidebarSection { title, rows, clickable, .. } => PluginUiEvent::SidebarSection {
             title: title.clone(),
             rows: rows.clone(),
@@ -141,6 +146,7 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
             content: PluginDialogContent {
                 title: spec.title.clone(),
                 rows: spec.rows.clone(),
+                placeholder: None,
                 options: spec
                     .options
                     .iter()
@@ -152,6 +158,62 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                     .collect(),
             },
         },
+        // G-475: the new faces are not driven by this test's fixture —
+        // route them through the production converter's semantics by
+        // falling back (the fixtures below never emit them).
+        UiRequest::NavigateHome => PluginUiEvent::NavigateHome,
+        UiRequest::DialogShow { request_id, spec, .. } => PluginUiEvent::DialogShow {
+            request_id: *request_id,
+            content: PluginDialogContent {
+                title: spec.title.clone(),
+                rows: spec.rows.clone(),
+                placeholder: None,
+                options: spec
+                    .options
+                    .iter()
+                    .map(|option| PluginDialogOption {
+                        title: option.title.clone(),
+                        value: option.value.clone(),
+                        description: option.description.clone(),
+                    })
+                    .collect(),
+            },
+            size: spec.size.clone(),
+            centered: spec.centered,
+        },
+        UiRequest::DialogSet { size, centered, .. } => {
+            PluginUiEvent::DialogSet { size: size.clone(), centered: *centered }
+        }
+        UiRequest::DialogClear { .. } => PluginUiEvent::DialogClear,
+        UiRequest::DialogSelect {
+            request_id,
+            title,
+            placeholder,
+            options,
+            current,
+            actions,
+            ..
+        } => PluginUiEvent::DialogSelect {
+            request_id: *request_id,
+            title: title.clone(),
+            placeholder: placeholder.clone(),
+            options: options
+                .iter()
+                .map(|option| PluginDialogOption {
+                    title: option.title.clone(),
+                    value: option.value.clone(),
+                    description: option.description.clone(),
+                })
+                .collect(),
+            current: current.clone(),
+            actions: actions.clone(),
+        },
+        UiRequest::TabsOp { op, session_id, index, .. } => {
+            PluginUiEvent::TabsOp { op: *op, session_id: session_id.clone(), index: *index }
+        }
+        UiRequest::ModelVariantSet { variant, .. } => {
+            PluginUiEvent::ModelVariantSet { variant: variant.clone() }
+        }
     }
 }
 

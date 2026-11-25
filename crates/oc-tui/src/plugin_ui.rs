@@ -20,45 +20,60 @@ pub enum PluginUiEvent {
         message: String,
         variant: String,
         duration_ms: u64,
+        /// G-475 — the sessionID arm (api.tsx:108-131): `None` = a
+        /// plain toast; `Some` lets the reducer decide plain-vs-action
+        /// (it owns the route + session tables).
+        session_id: Option<String>,
     },
     /// One sidebar section per plugin (empty title + empty rows
     /// removes it). `clickable` marks rows carrying the plugin's own
     /// `onMouseUp` (the v2 TUI-plugin surface).
-    SidebarSection {
-        title: String,
-        rows: Vec<String>,
-        clickable: Vec<bool>,
-    },
+    SidebarSection { title: String, rows: Vec<String>, clickable: Vec<bool> },
     /// A plugin's navigation ask (`route.navigate("session",
     /// {sessionID})` from a plugin row's activate handler — beta.13
     /// bug 2's plugin-world path).
-    NavigateToSession {
-        session_id: String,
-    },
+    NavigateToSession { session_id: String },
+    /// G-475 bug2 — `ctx.ui.router.navigate({type: "home"})`
+    /// (api.tsx:219-225): the home arm.
+    NavigateHome,
     /// A plugin-route navigation ask (`ctx.ui.router.navigate(
     /// {type:"plugin", name, data?})` — api.tsx:211-224): the
     /// registered page becomes the visible screen (content
     /// materializes through the host's bounded `route.render`).
-    NavigateToPluginRoute {
-        name: String,
-        data: Option<serde_json::Value>,
-    },
+    NavigateToPluginRoute { name: String, data: Option<serde_json::Value> },
     /// One footer hint segment per plugin (empty text removes it).
-    FooterHint {
-        text: String,
-    },
+    FooterHint { text: String },
     /// A fully-built dialog open (renders natively from `content`).
-    DialogOpen {
+    DialogOpen { content: PluginDialogContent },
+    /// G-475 — `ctx.ui.dialog.show(render, onClose?)` (api.tsx:334-336):
+    /// the flattened content + the presentation; `request_id` settles
+    /// the guest's `onClose` on any close.
+    DialogShow {
+        request_id: u64,
         content: PluginDialogContent,
+        size: Option<String>,
+        centered: bool,
+    },
+    /// G-475 — `ctx.ui.dialog.set({size?, centered?})`
+    /// (api.tsx:337-340): the ACTIVE dialog's presentation.
+    DialogSet { size: Option<String>, centered: bool },
+    /// G-475 — `ctx.ui.dialog.clear()` (api.tsx:341-343).
+    DialogClear,
+    /// G-475 — `ctx.ui.dialog.select(options)` (api.tsx:387-427): the
+    /// value promise settles through `request_id`; the actions render
+    /// as footer rows (their triggers stage the guest dispatch).
+    DialogSelect {
+        request_id: u64,
+        title: String,
+        placeholder: Option<String>,
+        options: Vec<PluginDialogOption>,
+        current: Option<String>,
+        actions: Vec<oc_plugin_host::PluginSelectAction>,
     },
     /// TUI-25: `ctx.ui.alert({title, message})` — the generic alert
     /// opens natively; `request_id` settles the guest's promise
     /// (confirm or any close → null) through the plugin pump.
-    Alert {
-        request_id: u64,
-        title: String,
-        message: String,
-    },
+    Alert { request_id: u64, title: String, message: String },
     /// TUI-25: `ctx.ui.confirm({title, message, label?})` — resolves
     /// true/false (the active pill) or null (an unresolved close).
     Confirm {
@@ -82,14 +97,15 @@ pub enum PluginUiEvent {
     /// session panel opens on the current session route; the guest's
     /// deferred promise resolves with the route-check boolean
     /// (`request_id` rides the same resolution queue as the dialogs).
-    PanelOpen {
-        request_id: u64,
-        name: String,
-        fullscreen: bool,
-    },
+    PanelOpen { request_id: u64, name: String, fullscreen: bool },
     /// G-239/G-331: `ctx.ui.panel.close()` — the owner-scoped release
     /// (only the requesting plugin's panel closes).
     PanelClose,
+    /// G-475 — `ctx.ui.tabs.{open,focus,move,close}` (api.tsx:245-281
+    /// → host.sessionTabs.*): the store's tab seams answer.
+    TabsOp { op: oc_plugin_host::TabsOpKind, session_id: Option<String>, index: usize },
+    /// G-475 — `ctx.ui.model.variant.set(variant)` (api.tsx:288-296).
+    ModelVariantSet { variant: Option<String> },
 }
 
 impl PluginUiEvent {
@@ -100,14 +116,16 @@ impl PluginUiEvent {
             message: message.into(),
             variant: "info".to_owned(),
             duration_ms: crate::components::toast::TOAST_DEFAULT_DURATION_MS,
+            session_id: None,
         }
     }
 }
 
 /// Apply one UI event to the store (the pump's per-drain step).
+#[allow(clippy::too_many_lines)] // one arm per UI request (G-475 grew the table)
 pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
     match event {
-        PluginUiEvent::Toast { title, message, variant, duration_ms } => {
+        PluginUiEvent::Toast { title, message, variant, duration_ms, session_id } => {
             // The same reducer the server event path uses. The empty
             // event id deliberately skips replay dedup — these are
             // synthesized one-shots, never replayed frames.
@@ -118,6 +136,11 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
             data.insert("message".into(), serde_json::Value::String(message.clone()));
             data.insert("variant".into(), serde_json::Value::String(variant.clone()));
             data.insert("duration".into(), serde_json::Value::from(*duration_ms));
+            // G-475 — the sessionID arm crosses raw (the reducer owns
+            // the route/session tables and decides plain-vs-action).
+            if let Some(session) = session_id {
+                data.insert("sessionID".into(), serde_json::Value::String(session.clone()));
+            }
             store.ingest_all([crate::data::Ingest::Event(BusEvent::new(
                 "tui.toast.show",
                 serde_json::Value::Object(data),
@@ -148,6 +171,10 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
         PluginUiEvent::NavigateToSession { session_id } => {
             store.navigate(crate::store::Route::session(session_id.clone()));
         }
+        // G-475 bug2 — the router navigate home arm (api.tsx:219-225).
+        PluginUiEvent::NavigateHome => {
+            store.navigate(crate::store::Route::Home);
+        }
         PluginUiEvent::NavigateToPluginRoute { name, data } => {
             store.open_plugin_route(plugin_id, name, data.clone());
         }
@@ -168,7 +195,65 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
                             description: option.description.clone(),
                         })
                         .collect(),
+
+                    placeholder: None,
                 },
+            );
+        }
+        // G-475 — the dialog.show face: the flattened content opens
+        // natively; the request_id settles the guest's onClose on any
+        // close (the deferred-reply seam).
+        PluginUiEvent::DialogShow { request_id, content, size, centered } => {
+            store.open_plugin_dialog_show(
+                plugin_id,
+                PluginDialogContent {
+                    title: content.title.clone(),
+                    rows: content.rows.clone(),
+                    options: content
+                        .options
+                        .iter()
+                        .map(|option| PluginDialogOption {
+                            title: option.title.clone(),
+                            value: option.value.clone(),
+                            description: option.description.clone(),
+                        })
+                        .collect(),
+
+                    placeholder: None,
+                },
+                *request_id,
+                size.as_deref(),
+                *centered,
+            );
+        }
+        // G-475 — dialog.set: the ACTIVE dialog's presentation.
+        PluginUiEvent::DialogSet { size, centered } => {
+            store.set_plugin_dialog_presentation(size.as_deref(), *centered);
+        }
+        // G-475 — dialog.clear: closes the active dialog (the close
+        // semantics settle any live request ids).
+        PluginUiEvent::DialogClear => {
+            store.pop_dialog();
+        }
+        // G-475 — the dialog.select face: the native select over the
+        // projected options; the value promise settles on submit /
+        // any close; the actions ride as the footer rows.
+        PluginUiEvent::DialogSelect {
+            request_id,
+            title,
+            placeholder,
+            options,
+            current,
+            actions,
+        } => {
+            store.open_plugin_select(
+                plugin_id,
+                *request_id,
+                title,
+                placeholder.as_deref(),
+                options,
+                current.as_deref(),
+                actions,
             );
         }
         // TUI-25: the generic alert/confirm tones open through the
@@ -213,6 +298,51 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
         PluginUiEvent::PanelClose => {
             store.release_session_panel(plugin_id);
         }
+        // G-475 — the tab mutations (api.tsx:245-281): the store's
+        // own tab seams (open/select/move/close), gated exactly like
+        // the ref (disabled tabs → no-op; the guest already answered
+        // `false` from the pushed view).
+        PluginUiEvent::TabsOp { op, session_id, index } => {
+            if !store.tabs_enabled() {
+                return;
+            }
+            match op {
+                oc_plugin_host::TabsOpKind::Open => {
+                    if let Some(session) = session_id {
+                        store.open_tab(session, None);
+                    }
+                }
+                oc_plugin_host::TabsOpKind::Focus => {
+                    if let Some(session) = session_id {
+                        store.open_tab(session, None);
+                        store.select_tab(session);
+                    }
+                }
+                oc_plugin_host::TabsOpKind::Move => {
+                    if let Some(session) = session_id {
+                        let target = store.session_root(session);
+                        store.move_tab(&target, *index);
+                    }
+                }
+                oc_plugin_host::TabsOpKind::Close => {
+                    let target = session_id.clone().or_else(|| store.tabs().active(&store.route()));
+                    if let Some(target) = target {
+                        store.close_tab(Some(&target));
+                    }
+                }
+            }
+        }
+        // G-475 — the model variant selection (api.tsx:288-296): the
+        // composer-key routing follows the ref's local model seam.
+        PluginUiEvent::ModelVariantSet { variant } => {
+            let key = match store.route() {
+                crate::store::Route::Session { session_id, .. } => session_id,
+                crate::store::Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
+            };
+            if store.selection_for(&key).model.is_some() {
+                store.set_current_model_variant(variant.as_deref());
+            }
+        }
     }
 }
 
@@ -232,6 +362,7 @@ mod tests {
                 message: "switched".into(),
                 variant: "success".into(),
                 duration_ms: 9000,
+                session_id: None,
             },
         );
         let toasts = store.toasts();
@@ -302,6 +433,8 @@ mod tests {
                     title: "About".into(),
                     rows: vec!["v3.0.3".into()],
                     options: vec![],
+
+                    placeholder: None,
                 },
             },
         );

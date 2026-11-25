@@ -193,6 +193,7 @@ fn states() -> Vec<StateSpec> {
                     duration_ms: 6000,
                     action_label: Some("Retry".to_owned()),
                     action_command: Some("mcp.list".to_owned()),
+                    action_session: None,
                     modal: false,
                 });
             }),
@@ -242,6 +243,7 @@ fn states() -> Vec<StateSpec> {
                     duration_ms: 4000,
                     action_label: None,
                     action_command: None,
+                    action_session: None,
                     modal: false,
                 });
                 store.set_devtools_enabled(true);

@@ -2924,10 +2924,13 @@ pub fn mount_dialog_tree(
         // pair dialog is centered too (dialog-pair.tsx:19).
         // G-485②: the diff shortcuts dialog as well
         // (diff-viewer.tsx:771's `centered: true`).
-        let centered = matches!(
-            entry.kind,
-            DialogKind::ImagePreview | DialogKind::Pair | DialogKind::DiffHelp
-        );
+        // G-475: a plugin dialog's `ctx.ui.dialog.set({centered})`
+        // flag joins them (api.tsx:337-340).
+        let centered = entry.centered
+            || matches!(
+                entry.kind,
+                DialogKind::ImagePreview | DialogKind::Pair | DialogKind::DiffHelp
+            );
         let box_y = if centered {
             let inputs_probe = build_inputs(
                 entry,
@@ -3910,6 +3913,7 @@ mod d22_tests {
         DialogEntry {
             kind: DialogKind::CommandPalette,
             size: DialogSize::Medium,
+            centered: false,
             select: crate::components::dialog_select::SelectState::default(),
             value: String::new(),
             theme_initial: None,

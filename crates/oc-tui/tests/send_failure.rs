@@ -253,6 +253,7 @@ fn toast_options_shape_matches_the_error_variant() {
         duration_ms: oc_tui::components::toast::TOAST_DEFAULT_DURATION_MS,
         action_label: None,
         action_command: None,
+        action_session: None,
         modal: false,
     };
     assert_eq!(options.variant, "error");

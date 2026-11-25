@@ -635,6 +635,7 @@ mod golden_tests {
         let mut entry = DialogEntry {
             kind: DialogKind::Worktrees,
             size: DialogSize::Xlarge,
+            centered: false,
             select: crate::components::dialog_select::SelectState::default(),
             value: String::new(),
             theme_initial: None,
@@ -650,6 +651,7 @@ mod golden_tests {
         let entry = DialogEntry {
             kind: DialogKind::WorktreeName,
             size: DialogSize::Medium,
+            centered: false,
             select: crate::components::dialog_select::SelectState::default(),
             value: "feat".to_owned(),
             theme_initial: None,

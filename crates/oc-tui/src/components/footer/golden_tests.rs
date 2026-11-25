@@ -320,6 +320,7 @@ fn toast_over_session_matches_the_full_frame() {
         duration_ms: 60_000,
         action_label: None,
         action_command: None,
+        action_session: None,
         modal: false,
     };
     let theme_state = crate::theme::ThemeState::v2_dark();

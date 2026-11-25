@@ -150,7 +150,7 @@ pub fn handle_dialog_key(
         // pass through, only the close bindings act); the rest — the
         // palette, theme list, server lists, worktrees, the
         // queued-prompts manager (v2's DialogSelect) — are selects.
-        DialogKind::Plugin { id } => {
+        DialogKind::Plugin { id, .. } => {
             store.plugin_dialog_content(id).is_some_and(|content| content.is_select())
         }
         DialogKind::CommandPalette
@@ -936,6 +936,17 @@ pub fn handle_dialog_key(
                 if let Some(action) =
                     state.focused_action.and_then(|index| props.actions.get(index))
                 {
+                    // G-475 — a plugin select dialog's footer action
+                    // routes back to the GUEST (`dialog.action`), not
+                    // a palette command: the synthetic command id
+                    // stages the trigger (triggering does NOT close
+                    // the dialog — api.tsx:390-391).
+                    if let Some(plugin_command) =
+                        store.plugin_select_action_command(state.focused_action.unwrap_or(0))
+                    {
+                        store.update_dialog(|top| top.select.focused_action = None);
+                        return DialogKeyOutcome::CommandSubmitted(plugin_command);
+                    }
                     if let Some(bind) = crate::keymap::KeyStroke::parse(&action.label) {
                         store.update_dialog(|top| top.select.focused_action = None);
                         return match handle_dialog_key(store, keymap, clock, bind, terminal) {
@@ -1031,7 +1042,7 @@ pub fn mount_dialog_layer(
     }
     let props = select_props_for_entry(&entry, store);
     let plugin = match &entry.kind {
-        DialogKind::Plugin { id } => store.plugin_dialog_content(id),
+        DialogKind::Plugin { id, .. } => store.plugin_dialog_content(id),
         _ => None,
     };
     // TUI-10/24: the custom families' sidecar — the preview state +
@@ -1699,6 +1710,18 @@ pub fn execute_submission(
     // values are registry names); server-list rows route by the
     // picker's own command (model/agent/session selections).
     match store.top_dialog().map(|entry| entry.kind) {
+        // G-475 — a `ctx.ui.dialog.select` submit resolves the
+        // OPTION's value through the deferred seam (api.tsx:387-427:
+        // `done(option.value)` + clear) — no palette dispatch, the
+        // dialog closes.
+        Some(DialogKind::Plugin { request_id: Some(request_id), .. }) => {
+            store.enqueue_ui_dialog_resolution(
+                request_id,
+                serde_json::Value::String(value.to_owned()),
+            );
+            store.clear_dialogs();
+            return crate::components::command_palette::Dispatch::Handled;
+        }
         // The update dialog's actions (`dialog-update.tsx`'s buttons):
         // skip dismisses + closes; confirm runs Update (the loop's
         // install spawn) or Restart (exit) per the live state. The
@@ -2952,6 +2975,8 @@ mod tests {
                 title: "About omos".into(),
                 rows: vec!["version 3.0.3".into(), "preset: zhipuai".into()],
                 options: vec![],
+
+                placeholder: None,
             },
         );
         let mut frame = blank_base(80, 24);
@@ -3008,6 +3033,8 @@ mod tests {
                         description: String::new(),
                     },
                 ],
+
+                placeholder: None,
             },
         );
         let mut frame = blank_base(80, 24);
@@ -3055,6 +3082,8 @@ mod tests {
                     title: "Switch preset".into(),
                     rows: vec!["materialized".into()],
                     options: vec![],
+
+                    placeholder: None,
                 })
             }
         }

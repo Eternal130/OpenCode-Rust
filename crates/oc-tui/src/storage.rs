@@ -478,6 +478,44 @@ impl ChannelStorage {
         path
     }
 
+    /// G-475 — validate one storage segment publicly (the plugin
+    /// storage port's preflight: an invalid plugin/key pair errors
+    /// like the ref's `segment()` `TypeError` instead of silently
+    /// landing in an `invalid`-named file).
+    #[must_use]
+    pub fn valid_segment(value: &str) -> bool {
+        segment(value).is_ok()
+    }
+
+    /// G-475 — remove one key's file (idempotent; the plugin storage
+    /// port's `storage.remove`).
+    pub fn remove(&self, key: &str) -> Result<(), String> {
+        let path = self.path_for(key);
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!("storage remove: {error}")),
+        }
+    }
+
+    /// G-475 — the plugin-port scan face: every key that exists on
+    /// disk (bare names, no `.json`), sorted (the scan cursor's
+    /// ordering). Unreadable directories degrade to empty.
+    #[must_use]
+    pub fn keys(&self) -> Vec<String> {
+        let mut keys: Vec<String> = std::fs::read_dir(&self.directory)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                name.strip_suffix(".json").map(str::to_owned)
+            })
+            .collect();
+        keys.sort();
+        keys
+    }
+
     /// Read one key; `None` when absent or unparseable (v2's `load()`
     /// falls back to `options.initial` on any read/parse error).
     #[must_use]

@@ -930,7 +930,7 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
         | DialogKind::ErrorDetails { .. }
         | DialogKind::Alert { .. }
         | DialogKind::Confirm { .. } => SelectProps::new("", Vec::new()),
-        DialogKind::Plugin { id } => {
+        DialogKind::Plugin { id, request_id } => {
             // The delegation payload: plugin-supplied options at open
             // time. Rows-only content returns empty props (the dialog
             // renders its static rows; keys pass through except the
@@ -950,7 +950,29 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                             built
                         })
                         .collect();
-                    SelectProps::new(content.title, options).flat(true).threshold(0.7)
+                    let mut props = SelectProps::new(content.title, options).flat(true).threshold(0.7);
+                    // G-475 — the select face's placeholder + the
+                    // footer action rows (their triggers stage the
+                    // guest `dialog.action` dispatch through the
+                    // synthetic command ids).
+                    if let Some(placeholder) = &content.placeholder {
+                        props.placeholder.clone_from(placeholder);
+                    }
+                    if let Some(request_id) = request_id {
+                        if let Some(actions) = store.plugin_select_actions_for(*request_id) {
+                            props.actions = actions
+                                .into_iter()
+                                .map(|action| {
+                                    SelectAction::new(
+                                        action.command,
+                                        action.title,
+                                        action.bind,
+                                    )
+                                })
+                                .collect();
+                        }
+                    }
+                    props
                 }
                 _ => SelectProps::new("", Vec::new()),
             }
