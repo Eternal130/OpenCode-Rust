@@ -373,6 +373,34 @@ mod tests {
         assert_eq!(toast.duration_ms, 9000);
     }
 
+    /// G-475 — the sessionID arm: a toast for a session whose family is
+    /// NOT the open route offers `Open` (the action navigates there);
+    /// the open family keeps the plain toast.
+    #[test]
+    fn toast_session_id_arm_offers_open_for_background_sessions() {
+        let store = Store::new(Runtime::new());
+        // Home route: every session is background → the action arm.
+        apply_plugin_ui(
+            &store,
+            "v21",
+            &PluginUiEvent::Toast {
+                title: None,
+                message: "background work".into(),
+                variant: "info".into(),
+                duration_ms: 600_000,
+                session_id: Some("ses_bg".into()),
+            },
+        );
+        let queue = store.toasts();
+        let toast = queue.current().expect("the toast shows");
+        assert_eq!(toast.action_label.as_deref(), Some("Open"), "the affordance");
+        assert_eq!(toast.action_session.as_deref(), Some("ses_bg"));
+        // The activation carries the session target (api.tsx:126-130's
+        // `run: navigate` — the app layer runs it through navigate).
+        let activation = store.toast_activate().expect("an activation");
+        assert_eq!(activation, crate::components::toast::ToastActivation::Session("ses_bg".into()));
+    }
+
     #[test]
     fn sidebar_and_hint_upsert_per_plugin() {
         let store = Store::new(Runtime::new());

@@ -2116,12 +2116,16 @@ fn tabs_view(store: &Store) -> Value {
 
 /// G-475 — the `tui.model` view (api.tsx:282-296's bounded
 /// projection): `{current: {providerID, modelID, variant?} | null,
-/// variants: [ids]}` (local.tsx's model selection face).
+/// variants: [ids]}` (local.tsx's model selection face). The current
+/// read uses the EFFECTIVE model (the route's selection, falling
+/// back to the session's resolved model — the same value the
+/// composer's status line shows).
 fn model_view(store: &Store) -> Value {
-    let current = match store.route() {
-        crate::store::Route::Session { session_id, .. } => store.selection_for(&session_id).model,
-        crate::store::Route::Home => store.selection_for(crate::app::HOME_PROMPT_KEY).model,
+    let key = match store.route() {
+        crate::store::Route::Session { session_id, .. } => session_id,
+        crate::store::Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
     };
+    let current = store.effective_model(&key);
     let current = current.map(|model| {
         let mut value = serde_json::json!({
             "providerID": model.provider_id,

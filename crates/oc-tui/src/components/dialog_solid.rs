@@ -198,6 +198,13 @@ enum Family {
     Help,
     /// The delegation payload's rows-only shape.
     PluginRows,
+    /// G-475 — the v2 `dialog.show` face (api.tsx
+    /// `createDialogApi.show`): the flattened render mounts RAW as
+    /// the ref `Dialog`'s children (ui/dialog.tsx:70-73 — the
+    /// paddingTop-1 box, no title block, no `esc` chrome, no side
+    /// padding). Distinct from the legacy `ui.dialog.open` payload
+    /// ([`Family::PluginRows`], which carries its own title row).
+    PluginShow,
     /// The tab context menu (lane KM — `TabContextMenu`'s scrollbox,
     /// session-tabs.tsx:449-534): a rows-only column — no title
     /// block, no filter input, no footer.
@@ -504,6 +511,10 @@ fn content_height(inputs: &DialogInputs) -> usize {
         Family::Help => inputs.hint_lines.len() + 6,
         // title, gap, rows, root paddingBottom.
         Family::PluginRows => inputs.plugin_rows.len() + 3,
+        // G-475 — the v2 dialog.show: the RAW children (the ref
+        // box's own paddingTop 1 is the chrome's pad — no title
+        // block, no gap, no root pad).
+        Family::PluginShow => inputs.plugin_rows.len(),
         // rows only (the menu's scrollbox).
         Family::Menu => inputs.window.len(),
         // TUI-25 (dialog-alert.tsx:37-57): title, gap, message + its
@@ -1766,6 +1777,44 @@ fn plugin_rows_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementB
     ]))
 }
 
+/// G-475 — the v2 `dialog.show` family (api.tsx's `dialogApi.show` →
+/// the ref `Dialog`'s children, ui/dialog.tsx:70-73): the flattened
+/// render rows mount RAW under the chrome's paddingTop 1 — no title
+/// row, no `esc` chrome, no side padding (the legacy
+/// [`plugin_rows_builder`] chrome belongs to `ui.dialog.open` only).
+fn plugin_show_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder {
+    let rows = ForItemSource {
+        source: map(inputs.clone(), |i: &DialogInputs| {
+            i.plugin_rows
+                .iter()
+                .enumerate()
+                .map(|(n, line)| ForItem {
+                    key: format!("R{n}"),
+                    value: PropValue::Str(line.clone()),
+                })
+                .collect::<Vec<ForItem>>()
+        }),
+    };
+    let row_inputs = inputs.clone();
+    let rows_for = for_list(Rc::new(rows), move |item: &ForItem, _index: usize| {
+        let line = match &item.value {
+            PropValue::Str(line) => line.clone(),
+            _ => String::new(),
+        };
+        let inputs = row_inputs.clone();
+        text()
+            .dyn_prop(
+                "content",
+                dyn_styled(map(inputs, move |i: &DialogInputs| {
+                    let text = take_width(&line, i.box_width.max(1));
+                    styled(vec![chunk(text, i.colors.muted, None, 0)])
+                })),
+            )
+            .into_element()
+    });
+    box_().children_dyn(Rc::new(rows_for))
+}
+
 // ---------------------------------------------------------------------------
 // TUI-25: the alert / confirm trees (ui/dialog-alert.tsx /
 // ui/dialog-confirm.tsx)
@@ -2780,6 +2829,7 @@ fn chrome_element(
         Family::ConnectPrompt => connect_prompt_builder(&family_inputs),
         Family::Help => help_builder(&family_inputs),
         Family::PluginRows => plugin_rows_builder(&family_inputs),
+        Family::PluginShow => plugin_show_builder(&family_inputs),
         Family::Menu => menu_builder(&family_inputs),
         Family::Alert => alert_builder(&family_inputs),
         Family::Confirm => confirm_builder(&family_inputs),
@@ -3050,8 +3100,10 @@ fn dialog_chrome_button_hits(
         return hits;
     }
     // The tab menu has no chrome buttons (v2's menu carries none —
-    // backdrop/escape/right-press close it).
-    if matches!(inputs.family, Family::Menu) {
+    // backdrop/escape/right-press close it). G-475: the v2
+    // dialog.show face mounts RAW children (no title row, no `esc`
+    // label — the ref Dialog adds none).
+    if matches!(inputs.family, Family::Menu | Family::PluginShow) {
         return hits;
     }
     let title_row = box_y + 1;
@@ -3075,6 +3127,9 @@ fn dialog_chrome_button_hits(
         Family::Help => ("esc/enter", 2),
         // G-485② — the diff shortcuts' close hint.
         Family::DiffHelp => ("esc close", 2),
+        // G-475 — unreachable (the early return above); the arm keeps
+        // the match total.
+        Family::PluginShow => ("esc", 2),
     };
     let label_width = label.chars().count();
     let close_x = (box_x + box_width).saturating_sub(pad + label_width);
@@ -3144,6 +3199,11 @@ fn build_inputs(
         DialogKind::IntegrationForm { .. } if props.options.is_empty() => Family::ConnectPrompt,
         DialogKind::Help => Family::Help,
         DialogKind::TabMenu { .. } => Family::Menu,
+        DialogKind::Plugin { request_id: Some(_), .. }
+            if plugin.is_some_and(|content| !content.is_select()) =>
+        {
+            Family::PluginShow
+        }
         DialogKind::Plugin { .. } if plugin.is_some_and(|content| !content.is_select()) => {
             Family::PluginRows
         }
@@ -3471,7 +3531,7 @@ fn build_inputs(
                 hint_footer: String::new(),
             }
         }
-        Family::PluginRows => {
+        Family::PluginRows | Family::PluginShow => {
             let content = plugin.cloned().unwrap_or_default();
             DialogInputs {
                 family,
@@ -3955,6 +4015,46 @@ mod d22_tests {
         let mut fresh = crate::components::chrome_solid::blank_frame(80, 24);
         crate::components::chrome_solid::composite_chrome_tree(&mut fresh);
         assert!(!fresh.text_grid().join("\n").contains("Commands"));
+        crate::components::chrome_solid::reset_hub();
+    }
+
+    /// G-475 — the v2 `dialog.show` family: the RAW rows mount under
+    /// the chrome's pad at the box's content origin (no title/esc
+    /// chrome, no side padding), the box height = 1 + rows.
+    #[test]
+    fn plugin_show_family_renders_raw_rows() {
+        crate::components::chrome_solid::reset_hub();
+        let theme = crate::theme::ThemeState::v2_dark();
+        let store = crate::store::Store::new(crate::reactive::Runtime::new());
+        store.open_plugin_dialog_show(
+            "v21.dialog.tui",
+            crate::store::PluginDialogContent {
+                title: String::new(),
+                rows: vec!["v21 dialog body".to_owned()],
+                options: Vec::new(),
+                placeholder: None,
+            },
+            7,
+            Some("large"),
+            false,
+        );
+        let entry = store.dialogs().last().expect("the show entry").clone();
+        let plugin = store.plugin_dialog_content(match &entry.kind {
+            DialogKind::Plugin { id, .. } => id,
+            _ => unreachable!(),
+        });
+        let props = crate::components::dialog_select::SelectProps::new("Commands", Vec::new());
+        let sidecar = DialogSidecar::default();
+        let seat = mount_dialog_tree(&entry, &props, plugin.as_ref(), &theme, (120, 36), &sidecar);
+        // The ref's geometry (ui/dialog.tsx): width 88 for large,
+        // paddingTop height/4 = 9, box height 1 + 1 row = 2.
+        assert_eq!(seat.rect, (16, 9, 88, 2));
+        let mut frame = crate::components::chrome_solid::blank_frame(120, 36);
+        crate::components::chrome_solid::composite_chrome_tree(&mut frame);
+        let grid = frame.text_grid().join("\n");
+        assert!(grid.contains("v21 dialog body"), "the raw row renders");
+        // No esc chrome: the row is the ONLY text the dialog paints.
+        assert!(!grid.contains("esc"), "the v2 dialog.show carries no esc chrome");
         crate::components::chrome_solid::reset_hub();
     }
 }

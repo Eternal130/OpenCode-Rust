@@ -2381,18 +2381,24 @@ function makeCtx(pluginId, options) {
           await hostRequest("ui.dialog.open", { pluginId, spec: spec ?? {} });
         },
         /** G-475 — `dialog.show(render, onClose?)` (api.tsx:334-336):
-         *  the render function runs NOW, the JSX tree flattens to the
-         *  native dialog spec (the page contract: first line = title);
-         *  `onClose` settles through the deferred seam when the TUI
-         *  closes the dialog (any close → null). */
+         *  the render function runs NOW and its tree flattens to the
+         *  dialog's BODY lines — the ref mounts the render RAW as the
+         *  Dialog's children (ui/dialog.tsx:70-73: the paddingTop-1
+         *  box, no title block), so the whole tree's text lines are
+         *  the rows (the first-line-as-title split is the SIDEBAR
+         *  section's contract, not the dialog's). `onClose` settles
+         *  through the deferred seam when the TUI closes the dialog
+         *  (any close → null). */
         show(render, onClose) {
           if (typeof render !== "function") {
             throw new Error("ui.dialog.show requires a render function");
           }
-          const { section } = flattenRenderTree(render(), tuiSidebarContentWidth, false);
+          const lines = treeLines(render(), tuiSidebarContentWidth)
+            .map((line) => line.replace(/\s+$/, ""))
+            .filter((line) => line.trim() !== "");
           const request = hostRequest("ui.dialog.show", {
             pluginId,
-            spec: { title: section.title, rows: section.rows },
+            spec: { title: "", rows: lines },
           });
           if (typeof onClose === "function") {
             request.then(
@@ -4013,15 +4019,27 @@ let tuiSidebarContentWidth = 38;
  *  (sibling node_modules; `solid-js` stays the real package when the
  *  install carries it, else the minimal signal shim). */
 function ensureOpentuiShims(packageRoot) {
-  // The package root's PARENT is the install's node_modules (the
-  // hoisted deps' dir — where bare imports from dist/ resolve).
-  const nm = require("node:path").dirname(packageRoot);
+  // G-475: the shims land in the package root's OWN `node_modules/` —
+  // the first link of the bare-import resolution chain from any file
+  // under the package (the old `dirname(packageRoot)` target was off
+  // the chain entirely, so a package WITHOUT the real deps never
+  // resolved its shims; for a config drop-in fixture it also
+  // polluted the discovery dir with sibling `@opentui`/`solid-js`
+  // entries). Writes are best-effort: a read-only tree (the payload
+  // registry) or a real dependency already present skips — the shims
+  // are fallbacks, never load-bearing.
+  const nm = require("node:path").join(packageRoot, "node_modules");
   const write = (name, files) => {
     const dir = require("node:path").join(nm, name);
     if (require("node:fs").existsSync(require("node:path").join(dir, "package.json"))) return;
-    require("node:fs").mkdirSync(dir, { recursive: true });
-    for (const [file, body] of Object.entries(files)) {
-      require("node:fs").writeFileSync(require("node:path").join(dir, file), body);
+    try {
+      require("node:fs").mkdirSync(dir, { recursive: true });
+      for (const [file, body] of Object.entries(files)) {
+        require("node:fs").writeFileSync(require("node:path").join(dir, file), body);
+      }
+    } catch {
+      // Unwritable package tree: the plugin's own real dependencies
+      // must cover the imports (the registry payload does).
     }
   };
   write("@opentui/core", {
