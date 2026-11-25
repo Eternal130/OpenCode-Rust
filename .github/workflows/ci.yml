@@ -114,84 +114,35 @@ jobs:
       - name: Prepare scratch dir
         run: mkdir -p /tmp/opencode
 
-      # CI-05 (2026-11-25, run 45623332552 forensics): cargo's path
-      # freshness compares recorded source mtimes — a fresh checkout is
-      # ALWAYS newer than the shipped fingerprints, so every consumer
-      # rebuilt all 386 units (~11 min) even with the tar round-trip.
-      # Pin source mtimes to the epoch on BOTH sides (build + consumers)
-      # so recorded == current and the walk goes green. Registry sources
-      # are extracted per-runner: fetch first, then normalize them too.
-      - name: Normalize source mtimes (epoch — freshness is mtime-based)
-        run: |
-          cargo fetch --locked
-          find ~/.cargo/registry/src -type f -exec touch -d @0 {} + 2>/dev/null || true
-          find . -path ./target -prune -o -type f -exec touch -d @0 {} +
-
-      # Build ALL test binaries once and ship the whole target dir.
-      # (nextest ARCHIVE mode is incompatible with this suite: tests bake
-      # env!("CARGO_BIN_EXE_*") build-time ABSOLUTE paths, which break when
-      # archives extract elsewhere. A same-path target dir preserves every
-      # spawn/compile-time-path semantic with ZERO test changes.)
-      # debuginfo stripped on CI (env profile override — panic locations
-      # unaffected, #[track_caller] is compiled in).
-      - name: Build workspace test binaries (debug)
-        run: cargo nextest run --workspace --locked --no-run
-
-      # Channel 9 real-chain T9 lane (realchain_t9): the harness drives
-      # the PRODUCTION binary on a PTY — nextest --no-run builds test
-      # binaries only, so build the bin into the shared target/ artifact
-      # too. The unstripped debug binary is ~1.2 GiB; the harness runs
-      # it as a black-box subprocess (no symbol needs), so strip keeps
-      # the shared artifact growth bounded. CI dependencies otherwise:
-      # python3 (runner stock), the committed synthetic corpora
-      # (in-repo), loopback + PTY (harness allocates its own). The
-      # ref-side PAIR lane skips in CI (ref_lane_skip_reason: no
-      # the pinned ref source, no pinned bun).
-      - name: Build the opencode-rust binary (realchain T9 lane)
-        run: |
-          cargo build --locked -p oc-cli --bin opencode-rust
-          strip target/debug/opencode-rust
-
-      # (release build REMOVED 2026-10-19: a 20-min opt-level-3 chain that
-      # cache eviction kept re-cold-starting. frame_budget now runs in
-      # debug with a calibrated ceiling — regressions show in both.)
-
-      - name: Prune non-relocatable artifacts
-        # incremental dirs are machine-specific and huge; fingerprints
-        # are kept so consumers do zero recompilation.
-        run: rm -rf target/debug/incremental target/release/incremental
-
-      # CI-02 (2026-11-25): consumers only RUN binaries — rlib/rmeta are
-      # needed solely if cargo relinks, which zero-compile fingerprints
-      # prevent. Dropping them shrinks the artifact (faster upload AND
-      # downloads). Fail-loud if a fingerprint ever goes stale: the relink
-      # needs a missing rlib and the job reds instead of silently paying
-      # a 10-minute recompile (the 2026-11-25 finding: 388 units rebuilt
-      # per consumer because .fingerprint/ never shipped).
-      - name: Prune link inputs (rlib/rmeta) — consumers run, never relink
-        run: find target/debug/deps -maxdepth 1 \( -name '*.rlib' -o -name '*.rmeta' \) -delete
-
-      # CI-04 (2026-11-25, run 45618695055 forensics): zip artifacts LOSE
-      # the executable bit — with fingerprints shipped the consumer's cargo
-      # marked the build script fresh and invoked the downloaded
-      # build-script-build, which failed "never executed" (no +x). Zip also
-      # cannot be trusted for mtime. A tar round-trip preserves BOTH, so the
-      # zero-compile design finally holds. Plain tar (no compression): the
-      # payload is stripped binaries (incompressible) and upload is
-      # network-bound; the zip wrapper uses compression-level 0 for the same
-      # reason (level-6 zlib was pure CPU waste on ~4.4 GiB).
-      - name: Pack target dir (zstd tar — exec bits + mtimes + ~3.5x smaller)
-        # 19.1 GiB raw -> ~5-6 GiB zstd: the 21-minute artifact download
-        # of 45623332552 was the pipeline's second-longest stage. zstd -3
-        # with all threads compresses 19 GiB in ~2 min; the zip wrapper
-        # stays at level 0 (the payload is already zstd-compressed).
-        run: tar -I 'zstd -3 -T0' -cf target.tar.zst -C . target
+      # CI-06 (2026-11-25, iteration 4 — the definitive single-compile
+      # mechanism). Three attempts to ship the target dir and let the
+      # consumers' cargo judge it fresh all failed: the v4 zip drops
+      # hidden fingerprint dirs; the zip drops exec bits; and mtime
+      # parity cannot survive transit (run 45635029683: mtime-normalized
+      # on both sides, frame-budget STILL rebuilt 307 units). nextest
+      # ARCHIVES are immune by construction — `cargo nextest run
+      # --archive-file` never touches cargo's build or freshness
+      # machinery. The archive embeds the test binaries, the non-test
+      # bins tests spawn via env!("CARGO_BIN_EXE_*") (opencode-rust,
+      # oc-server, oc-pty), build-script outputs, and the cargo+binary
+      # metadata. The OLD "archive mode breaks CARGO_BIN_EXE absolute
+      # paths" rejection was wrong for a same-path checkout: consumers
+      # pass `--extract-to . --workspace-remap .`, which lands every
+      # binary back at the exact baked path. Proven 2026-11-25 locally:
+      # empty target dir, archive-only, mini_pty PASS in 1.8s, zero
+      # compilation. debuginfo stays off via CARGO_PROFILE_DEV_DEBUG=0
+      # (panic locations unaffected — #[track_caller] is compiled in);
+      # the realchain T9 harness's opencode-rust bin rides the archive
+      # as a test-target dependency.
+      - name: Build and archive all test binaries (debug)
+        run: cargo nextest archive --workspace --locked --archive-file nextest.tar.zst
 
       - uses: actions/upload-artifact@v4
         with:
           name: build-target
-          path: target.tar.zst
+          path: nextest.tar.zst
           retention-days: 1
+          # the archive is already zstd — the zip wrapper must not re-compress
           compression-level: 0
 
   # CI-03 (2026-11-25): the serialized PTY family was a 25-minute single
@@ -231,20 +182,13 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghcup /usr/local/.ghcup || true
           df -h / | tee "$RUNNER_TEMP/df-after.txt"
 
-      - name: Normalize source mtimes (epoch — mirrors the build job)
-        run: |
-          cargo fetch --locked
-          find ~/.cargo/registry/src -type f -exec touch -d @0 {} + 2>/dev/null || true
-          find . -path ./target -prune -o -type f -exec touch -d @0 {} +
-
-      - name: Download build artifact (zstd tar)
+      # CI-06: nextest extracts the archive itself (--extract-to .) —
+      # no tar step, no cargo, no freshness walk, no exec-bit hazards.
+      - name: Download build artifact (nextest archive)
         uses: actions/download-artifact@v4
         with:
           name: build-target
           path: .
-
-      - name: Extract the target dir (zstd tar preserves exec bits + mtimes)
-        run: tar -I zstd -xf target.tar.zst
 
       - name: Prepare scratch dir
         run: mkdir -p /tmp/opencode
@@ -257,7 +201,7 @@ jobs:
           tool: cargo-nextest@0.9.148
 
       - name: Run PTY integration suites (serialized + retries)
-        run: cargo nextest run --workspace --locked --profile pty -E '${{ matrix.filter }}'
+        run: cargo nextest run --archive-file nextest.tar.zst --extract-to . --extract-overwrite --workspace-remap . --profile pty -E '${{ matrix.filter }}'
         env:
           # Job-level: CI nextest ignores profile.default.env (see test job note)
           OPENCODE_DISABLE_BUN_DOWNLOAD: "1"
@@ -284,20 +228,13 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghcup /usr/local/.ghcup || true
           df -h / | tee "$RUNNER_TEMP/df-after.txt"
 
-      - name: Normalize source mtimes (epoch — mirrors the build job)
-        run: |
-          cargo fetch --locked
-          find ~/.cargo/registry/src -type f -exec touch -d @0 {} + 2>/dev/null || true
-          find . -path ./target -prune -o -type f -exec touch -d @0 {} +
-
-      - name: Download build artifact (zstd tar)
+      # CI-06: nextest extracts the archive itself (--extract-to .) —
+      # no tar step, no cargo, no freshness walk, no exec-bit hazards.
+      - name: Download build artifact (nextest archive)
         uses: actions/download-artifact@v4
         with:
           name: build-target
           path: .
-
-      - name: Extract the target dir (zstd tar preserves exec bits + mtimes)
-        run: tar -I zstd -xf target.tar.zst
 
       # Tests stage scratch sandboxes under /tmp/opencode (PIDs-unique
       # names). The dev box pre-creates it; runners do not.
@@ -330,7 +267,7 @@ jobs:
         # warns "ignoring unknown configuration key: profile.default.env"
         # (.config/nextest.toml) — the profile env table does not apply
         # on runners, so enforce it here.
-        run: cargo nextest run --workspace --locked --no-fail-fast --retries 2 -E 'not (test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions) or test(pty_fuzz) or test(vt_hover) or test(vt_temporal) or test(pty_d3) or binary(pty_daily) or binary(pty_form) or binary(pty_permission) or binary(pty_session_panel))'
+        run: cargo nextest run --archive-file nextest.tar.zst --extract-to . --extract-overwrite --workspace-remap . --no-fail-fast --retries 2 -E 'not (test(mini_pty) or test(pty_boot) or test(pty_tabs) or test(pty_interactions) or test(pty_fuzz) or test(vt_hover) or test(vt_temporal) or test(pty_d3) or binary(pty_daily) or binary(pty_form) or binary(pty_permission) or binary(pty_session_panel))'
         # Channel 9 realchain_t9 rides THIS job (its tests match no pty
         # exclusion pattern; the harness self-serializes via its
         # cross-process lane lock and drives its own PTYs). The ref-side
@@ -382,20 +319,13 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghcup /usr/local/.ghcup || true
           df -h / | tee "$RUNNER_TEMP/df-after.txt"
 
-      - name: Normalize source mtimes (epoch — mirrors the build job)
-        run: |
-          cargo fetch --locked
-          find ~/.cargo/registry/src -type f -exec touch -d @0 {} + 2>/dev/null || true
-          find . -path ./target -prune -o -type f -exec touch -d @0 {} +
-
-      - name: Download build artifact (zstd tar)
+      # CI-06: nextest extracts the archive itself (--extract-to .) —
+      # no tar step, no cargo, no freshness walk, no exec-bit hazards.
+      - name: Download build artifact (nextest archive)
         uses: actions/download-artifact@v4
         with:
           name: build-target
           path: .
-
-      - name: Extract the target dir (zstd tar preserves exec bits + mtimes)
-        run: tar -I zstd -xf target.tar.zst
 
       - uses: taiki-e/install-action@v2
         with:
@@ -410,7 +340,7 @@ jobs:
         # nominal 40ms budget targets; combined with the ~2x slower
         # shared 2-core runners that is scale 4. Local release runs
         # stay strict. See frame_budget_tests.rs::frame_budget_ms.
-        run: cargo nextest run -p oc-tui --locked -E 'test(frame_budget)'
+        run: cargo nextest run --archive-file nextest.tar.zst --extract-to . --extract-overwrite --workspace-remap . -E 'test(frame_budget)'
         env:
           OC_FRAME_BUDGET_SCALE: "4"
           OPENCODE_DISABLE_BUN_DOWNLOAD: "1"
