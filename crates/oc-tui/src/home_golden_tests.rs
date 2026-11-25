@@ -40,6 +40,8 @@ fn view(draft: &PromptDraft) -> HomeView<'_> {
         rail: None,
         caret: None,
         selection: None,
+        image_previews: Vec::new(),
+        terminal_height: 24,
         update: None,
         update_clock_ms: 0,
         update_since_ms: None,

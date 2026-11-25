@@ -67,6 +67,8 @@ fn harness_view<'a>(
         rail: None,
         caret: None,
         selection: None,
+        image_previews: Vec::new(),
+        terminal_height: 24,
     }
 }
 

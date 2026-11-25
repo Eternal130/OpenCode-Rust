@@ -220,6 +220,12 @@ pub struct HomeView<'a> {
     /// byte-exact). The home composer's prompt mount inverts the
     /// selected cells exactly like the session route's.
     pub selection: Option<std::ops::Range<usize>>,
+    /// G-483 — the prompt input's inline preview strip's images
+    /// (deduplicated data URIs; empty = no strip, the
+    /// `prompt.image_preview` gate folds into the list).
+    pub image_previews: Vec<String>,
+    /// The terminal's row count (the strip's thumb height).
+    pub terminal_height: usize,
     /// The update-notification banner (auditB #10, home.tsx:125-175):
     /// `(prefix, body, remote)` — `None` in every golden state (the
     /// notice is live-only).
@@ -543,6 +549,10 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
         caret: Some(composer.caret()),
         // G-66 — the active selection (the editing engine's anchor).
         selection: composer.edit.selection(),
+        // G-483 — the prompt input's inline preview strip (the
+        // composer draft's deduplicated image attachments).
+        image_previews: store.prompt_image_previews(crate::app::HOME_PROMPT_KEY),
+        terminal_height: usize::from(size.1),
         // Lane TAIL (auditB #10): the update banner (home.tsx:125 —
         // between the logo and the prompt; the golden fixture carries
         // no notice).
@@ -604,6 +614,17 @@ pub fn render_home(store: &Store, theme: &crate::theme::ThemeStyles, size: (u16,
     // The chips render ONLY on the footer row of a shown footer.
     let plan = plan_home(&view, usize::from(sub_size.0), usize::from(sub_size.1));
     let shift = usize::from(strip_shows);
+    // G-483 — the prompt preview strip's hit rects (the composer
+    // mounted at the plan's paste origin + the origin shift; the
+    // prompt box's top = 1 + the popup rows, home_solid's mount).
+    store.set_prompt_image_hits(crate::components::composer_solid::prompt_preview_hit_rects(
+        &view.image_previews,
+        view.terminal_height,
+        1 + plan.popup_rows,
+        plan.prompt_width,
+        rail_shift + plan.paste.0,
+        usize::from(strip_shows) + plan.paste.1,
+    ));
     let chip = |extent: Option<(usize, usize)>| {
         extent.map(|(x, width)| crate::store::HitRect {
             x,

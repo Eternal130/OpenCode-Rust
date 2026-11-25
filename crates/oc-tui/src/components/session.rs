@@ -1802,6 +1802,10 @@ fn composer_mount_frame(
         rail,
         caret: None,
         selection: composer.edit.selection(),
+        // G-483 — the prompt input's inline preview strip (the
+        // composer draft's deduplicated image attachments).
+        image_previews: store.prompt_image_previews(session_id),
+        terminal_height: height,
     };
     // #33 — the location label's hit rect (the footer row sits one
     // row above the frame bottom now — F3's bottom pad keeps the last
@@ -1846,6 +1850,16 @@ fn composer_mount_frame(
         paste_x,
         height - prompt_height,
     );
+    // G-483 — the preview strip's hit rects (the same mount geometry
+    // the composer pasted at; the release opens the preview dialog).
+    store.set_prompt_image_hits(crate::components::composer_solid::prompt_preview_hit_rects(
+        &view.image_previews,
+        height,
+        view.top,
+        width,
+        paste_x,
+        height - prompt_height,
+    ));
     let frame = Frame { cells: Vec::new(), width: 0, height: 0, clusters: None };
     // NEW-S1a: the caret's screen cell — the mount pastes at
     // (inset, height - prompt_height); the helper's y already includes

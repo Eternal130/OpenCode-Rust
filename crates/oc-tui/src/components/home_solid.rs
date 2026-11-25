@@ -577,6 +577,8 @@ pub fn mount_solid_home_view(
         rail: view.rail,
         caret: None,
         selection: view.selection.clone(),
+        image_previews: view.image_previews.clone(),
+        terminal_height: view.terminal_height,
     };
     // D2.2: the home prompt rides the shared tree (the composer
     // family wrapper at the OLD paste site — `plan.paste`, the
@@ -789,6 +791,8 @@ mod tests {
             rail: None,
             caret: scenario.caret,
             selection: None,
+            image_previews: Vec::new(),
+            terminal_height: 24,
         }
     }
 

@@ -423,6 +423,9 @@ impl App {
         self.remerge_keybinds();
         // R-07: the transcript image strip's gate (`session.image_preview`).
         self.store.set_image_preview(config.session_image_preview);
+        // G-483 — the prompt input's inline preview strip gate
+        // (`prompt.image_preview`, default off).
+        self.store.set_prompt_image_preview(config.prompt_image_preview);
         // RD-06: the paste-summary fold's gate (`prompt.paste`).
         self.store.set_prompt_paste(config.prompt_paste_compact);
         // CONFIG-T3 — the session.* display keys (index.tsx:229-241):
@@ -866,6 +869,21 @@ impl App {
                             }
                         }
                     }
+                    self.store.request_redraw();
+                    return;
+                }
+                // G-483 — a release inside a prompt preview thumb (or
+                // the `+N more` cell) opens the image preview dialog at
+                // that index (prompt/index.tsx:1697-1703/1728-1733's
+                // `onMouseUp` → `openImagePreview(index)`).
+                if let Some(hit) = self.store.prompt_image_hit_at(col, row) {
+                    let images = self
+                        .store
+                        .prompt_image_previews(&self.prompt_key())
+                        .into_iter()
+                        .map(|uri| crate::store::ImagePreviewItem { uri, mention: None })
+                        .collect::<Vec<_>>();
+                    self.store.open_image_preview(images, hit);
                     self.store.request_redraw();
                     return;
                 }
