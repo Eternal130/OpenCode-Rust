@@ -242,6 +242,13 @@ pub struct RailInputs<'a> {
     /// G-143 — the indicator config (`tabs.indicators` + the ref's
     /// spinner/unreadMarker defaults).
     pub indicator: crate::components::session_tabs::IndicatorConfig,
+    /// G-479 — per-tab pulse transition stamps (the number ignition +
+    /// the indicator dissolve read from these + the clock; empty on
+    /// the golden path → static resting levels).
+    pub tracks: std::collections::HashMap<String, crate::components::tab_pulse::TabPulseTrack>,
+    /// G-479 — the store clock the envelopes read (frozen on the
+    /// golden path).
+    pub clock_ms: u64,
 }
 
 fn rgb(color: crate::style::Color) -> (u8, u8, u8) {
@@ -424,12 +431,36 @@ fn rail_paint_walk(
                     .position(|tab| tab.tab.session_id == view.tab.session_id)
                     .unwrap_or(0),
             );
-            let label = compact_indicator_label(view, inputs.indicator, &number);
-            let fg = if selected {
+            let mut label = compact_indicator_label(view, inputs.indicator, &number);
+            // G-479 — the indicator dissolve (`TabIndicator`'s fade,
+            // session-tabs.tsx:161-172): while dissolving the label
+            // STAYS the unread marker and the color fades toward the
+            // background with the mid-boost flash (0 while selected —
+            // `if (props.numbers || props.selected) return props.color`).
+            let mut fg = if selected {
                 styles.text.fg.unwrap_or(DEFAULT_FOREGROUND)
             } else {
                 styles.text_muted.fg.unwrap_or(DEFAULT_FOREGROUND)
             };
+            let pending = view.status.busy || view.status.attention.is_some();
+            let unread_memo = view.status.unread.is_some() && !pending;
+            if !selected && !unread_memo {
+                if let Some(track) = inputs.tracks.get(id) {
+                    let opacity = track.dissolve_opacity(inputs.clock_ms);
+                    if opacity > 0.0 {
+                        label = inputs.indicator.unread_marker.glyph().to_owned();
+                        let flash = (1.0 - (opacity - 0.8).abs() / 0.2).max(0.0);
+                        let hue = if track.dissolve_error { styles.error } else { styles.accent };
+                        let brightened = tint(
+                            rgb(hue),
+                            rgb(styles.text.fg.unwrap_or(DEFAULT_FOREGROUND)),
+                            flash * 0.3,
+                        );
+                        let (r, g, b) = tint(rgb(bg), brightened, (opacity / 0.8).min(1.0));
+                        fg = crate::style::Color::Rgb(r, g, b);
+                    }
+                }
+            }
             let mut style = crate::style::Style::new().fg(fg).bg(bg);
             if selected {
                 style = style.add_modifier(crate::style::Modifier::BOLD);
@@ -460,7 +491,12 @@ fn rail_paint_walk(
             });
             // The indicator: right-aligned in numberWidth, one pad
             // cell, the title from x = numberWidth + 1.
-            let number_fg = number_color(styles, view.status, selected, hovered, bg);
+            // G-479 — the number ignition level from the track.
+            let ignition = inputs
+                .tracks
+                .get(id)
+                .map_or(0.0, |track| track.ignition_level(inputs.clock_ms));
+            let number_fg = number_color(styles, view.status, selected, hovered, bg, ignition);
             placed.push(Placed {
                 x: number_width.saturating_sub(1),
                 y: row,
@@ -599,12 +635,17 @@ fn rail_paint_walk(
 /// envelopes are 0): selected blends toward `text.base` over the
 /// pulse background; idle is the formfield tint
 /// (session-tabs.tsx:795-803).
+/// G-479 (va20): the number ignition (`tint(color, text.base,
+/// ignition)`, session-tabs.tsx:1631-1643) rides on top — the 0.85
+/// jump tweening to 0 over 0.7 s; the sweep-level term is 0 here
+/// (the rail's rendered subset carries no live sweep report).
 fn number_color(
     styles: &ThemeStyles,
     status: TabStatus,
     selected: bool,
     hovered: bool,
     bg: crate::style::Color,
+    ignition: f64,
 ) -> crate::style::Color {
     let _ = status;
     let base = if hovered && !selected {
@@ -612,13 +653,20 @@ fn number_color(
     } else {
         idle_number(styles)
     };
-    if !selected {
-        return base;
+    let color = if !selected {
+        base
+    } else {
+        let pulse = rgb(bg);
+        let text = rgb(styles.text.fg.unwrap_or(DEFAULT_FOREGROUND));
+        let inner = tint(text, pulse, 0.25);
+        let (r, g, b) = tint(rgb(base), inner, 1.0);
+        crate::style::Color::Rgb(r, g, b)
+    };
+    if ignition <= 0.0 {
+        return color;
     }
-    let pulse = rgb(bg);
     let text = rgb(styles.text.fg.unwrap_or(DEFAULT_FOREGROUND));
-    let inner = tint(text, pulse, 0.25);
-    let (r, g, b) = tint(rgb(base), inner, 1.0);
+    let (r, g, b) = tint(rgb(color), text, ignition.clamp(0.0, 1.0));
     crate::style::Color::Rgb(r, g, b)
 }
 
@@ -690,6 +738,72 @@ mod tests {
             status: TabStatus { unread: Some(Unread::Activity), ..TabStatus::EMPTY },
             detail: Some("project ⎇ main".to_owned()),
         }
+    }
+
+    /// G-479 — the rail arm's number ignition (the strip arm's twin):
+    /// the ordinal's fg lifts toward `text.base` at the 0.85 jump and
+    /// is plain again once the 700 ms tween ends (a sweep-zero
+    /// clock).
+    #[test]
+    fn rail_number_ignition_lifts_the_ordinal() {
+        let tabs = [view("a", "Alpha")];
+        // Arm with pulses=1 (no mount edges), then pulse++ at t=1.
+        let mut track = crate::components::tab_pulse::TabPulseTrack::default();
+        track.sync(false, true, false, 1, false, false, 0);
+        track.sync(false, true, false, 2, false, false, 1);
+        let tracks = std::collections::HashMap::from([("a".to_owned(), track)]);
+        let ignition_frame = |clock: u64| {
+            let inputs = RailInputs {
+                tabs: &tabs,
+                active: None,
+                tracks: tracks.clone(),
+                clock_ms: clock,
+                ..RailInputs::default()
+            };
+            let geometry = RailGeometry::new(1, 42);
+            let (frame, _) = vertical_rail_solid_frames(&inputs, &geometry, 12, &styles());
+            frame.cell(1, 1)
+        };
+        let plain_frame = || {
+            let inputs = RailInputs { tabs: &tabs, ..RailInputs::default() };
+            let geometry = RailGeometry::new(1, 42);
+            let (frame, _) = vertical_rail_solid_frames(&inputs, &geometry, 12, &styles());
+            frame.cell(1, 1)
+        };
+        assert_eq!(ignition_frame(1).ch, '1', "the ordinal paints");
+        assert_ne!(ignition_frame(1).fg, plain_frame().fg, "the pulse++ lifts the ordinal");
+        assert_eq!(ignition_frame(1_700).fg, plain_frame().fg, "plain past the tween");
+    }
+
+    /// G-479 — the compact rail's indicator dissolve: after the
+    /// unread clears the marker STAYS for the 180 ms fade, sinking
+    /// toward the row background; without a track it is gone at once.
+    #[test]
+    fn rail_compact_indicator_dissolve_holds_the_marker() {
+        let tabs = [TabView {
+            tab: SessionTab { session_id: "a".to_owned(), title: Some("Alpha".to_owned()) },
+            status: TabStatus::EMPTY,
+            detail: None,
+        }];
+        let mut track = crate::components::tab_pulse::TabPulseTrack::default();
+        track.sync(false, false, false, 0, false, false, 0);
+        track.sync(false, false, false, 0, true, false, 0);
+        track.sync(false, false, false, 0, false, false, 100);
+        let tracks = std::collections::HashMap::from([("a".to_owned(), track)]);
+        let marker_row = |clock: u64, tracks: Option<_>| {
+            let inputs = RailInputs {
+                tabs: &tabs,
+                tracks: tracks.unwrap_or_default(),
+                clock_ms: clock,
+                ..RailInputs::default()
+            };
+            let geometry = RailGeometry::new(1, 6);
+            let (frame, _) = vertical_rail_solid_frames(&inputs, &geometry, 10, &styles());
+            frame.text_grid()[3].to_owned()
+        };
+        assert!(marker_row(100, None).contains('A'), "no track: the idle title glyph");
+        assert!(marker_row(140, Some(tracks.clone())).contains('•'), "the marker dissolves");
+        assert!(!marker_row(300, Some(tracks)).contains('•'), "gone past 180 ms");
     }
 
     fn styles() -> ThemeStyles {

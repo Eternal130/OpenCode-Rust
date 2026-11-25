@@ -104,6 +104,12 @@ pub fn mount_live_tabs_bar(
                     .then_some(Attention::Permission),
             };
             let complete = status.unread == Some(crate::store::Unread::Activity) && !status.busy;
+            // G-479 — the indicator's `unread` memo (`status.unread &&
+            // !pending`, session-tabs.tsx:152) and the `pending` gate
+            // (`busy || attention`, :151) feed the dissolve stamps;
+            // the prompt-pulse counter reads inside the track sync.
+            let pending = status.busy || status.attention.is_some();
+            let unread_memo = status.unread.is_some() && !pending;
             tracks.insert(
                 tab.session_id.clone(),
                 store.tab_pulse_track(
@@ -111,6 +117,8 @@ pub fn mount_live_tabs_bar(
                     status.runs(),
                     status.glows(selected),
                     complete,
+                    unread_memo,
+                    pending,
                 ),
             );
             TabView {
@@ -218,6 +226,29 @@ pub fn mount_live_rail(
         .collect();
     let tooltip =
         tabs.hover.as_deref().and_then(|id| views.iter().find(|view| view.tab.session_id == id));
+    // G-479 — the rail arm carries the pulse counts too (the strip
+    // arm's twin sync): the tracks + clock ride the inputs so the
+    // number ignition + indicator dissolve envelopes read live.
+    let mut tracks = std::collections::HashMap::new();
+    for view in &views {
+        let selected = Some(view.tab.session_id.as_str()) == active_id.as_deref();
+        let pending = view.status.busy || view.status.attention.is_some();
+        let unread_memo = view.status.unread.is_some() && !pending;
+        let complete = view.status.unread == Some(crate::store::Unread::Activity)
+            && !view.status.busy;
+        tracks.insert(
+            view.tab.session_id.clone(),
+            store.tab_pulse_track(
+                &view.tab.session_id,
+                view.status.runs(),
+                view.status.glows(selected),
+                complete,
+                unread_memo,
+                pending,
+            ),
+        );
+    }
+    let clock_ms = store.clock();
     let inputs = crate::components::session_tabs_rail::RailInputs {
         tabs: &views,
         active: active_id.as_deref(),
@@ -228,6 +259,8 @@ pub fn mount_live_rail(
         handle_hot: store.rail_handle_hot(),
         tooltip,
         indicator: store.tabs_indicator_config(),
+        tracks,
+        clock_ms,
     };
     let geometry = crate::components::session_tabs_rail::RailGeometry::new(views.len(), width);
     crate::components::session_tabs_rail_solid::mount_vertical_rail_solid(

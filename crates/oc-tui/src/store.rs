@@ -2209,6 +2209,11 @@ pub struct Store {
     /// `TabPulseTrack::sync` at status flips; the render derives every
     /// envelope level from these + the clock, stateless per frame).
     tab_pulses: RefCell<HashMap<String, crate::components::tab_pulse::TabPulseTrack>>,
+    /// G-479 — the per-session prompt-pulse counter
+    /// (`promptPulses`, context/session-tabs.tsx:80/310-315: one per
+    /// `session.inbox.enqueued` USER item on a non-current, open-tab
+    /// session — the edge flash + number ignition's trigger).
+    prompt_pulses: RefCell<HashMap<String, u64>>,
     /// SURF-2 the MCP toggle seam (mcp.connect/disconnect).
     mcp_toggle_sink: std::cell::RefCell<Rc<dyn McpToggleSink>>,
     /// RE-02: the plugin enable/disable seam (`plugins.toggle`).
@@ -4475,6 +4480,7 @@ impl Store {
             pair_refresh_sink: std::cell::RefCell::new(None),
             config_sink: std::cell::RefCell::new(Rc::new(NoConfigSink)),
             tab_pulses: RefCell::new(HashMap::new()),
+            prompt_pulses: RefCell::new(HashMap::new()),
             theme_mode_pref: RefCell::new(None),
             system_mode: Cell::new(oc_theme::types::Mode::Dark),
             interrupt_sink: std::cell::RefCell::new(Rc::new(RecordingInterruptSink::default())),
@@ -4738,6 +4744,10 @@ impl Store {
     /// Sync one tab's pulse transition stamps against its live status
     /// (`TabPulseTrack::sync` — stamps only on flips, at the store
     /// clock) and return the track for the strip's envelope read.
+    /// G-479 (va20): the prompt-pulse counter reads from the store's
+    /// registry, and `unread` (the indicator's memo:
+    /// `status.unread && !pending`) + `pending` (busy or attention)
+    /// drive the dissolve stamps.
     #[must_use]
     pub fn tab_pulse_track(
         &self,
@@ -4745,11 +4755,14 @@ impl Store {
         runs: bool,
         glow: bool,
         complete: bool,
+        unread: bool,
+        pending: bool,
     ) -> crate::components::tab_pulse::TabPulseTrack {
         let now = self.clock();
+        let prompt_pulses = self.prompt_pulses.borrow().get(session_id).copied().unwrap_or(0);
         let mut pulses = self.tab_pulses.borrow_mut();
         let track = pulses.entry(session_id.to_owned()).or_default();
-        track.sync(runs, glow, complete, now);
+        track.sync(runs, glow, complete, prompt_pulses, unread, pending, now);
         *track
     }
 
@@ -14343,6 +14356,22 @@ impl Store {
                 }
                 let Some(item) = event.data.get("item") else { return };
                 if item.get("type").and_then(Value::as_str) == Some("user") {
+                    // G-479 — the prompt-pulse counter (`promptPulses`,
+                    // context/session-tabs.tsx:309-316): a USER item
+                    // on a root-mapped, NON-current, open-tab session
+                    // rings the tab's edge flash + number ignition.
+                    let root = self.session_root(&session);
+                    let active = self.tabs.get().active(&self.route.get());
+                    let in_tabs = self
+                        .tabs
+                        .get()
+                        .tabs
+                        .iter()
+                        .any(|tab| tab.session_id == root);
+                    if active.as_deref() != Some(root.as_str()) && in_tabs {
+                        let mut pulses = self.prompt_pulses.borrow_mut();
+                        *pulses.entry(root).or_insert(0) += 1;
+                    }
                     let id = event.string("inboxID").unwrap_or_else(|| event.id.clone());
                     let text = item
                         .pointer("/payload/text")

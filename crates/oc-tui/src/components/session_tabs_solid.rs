@@ -247,6 +247,7 @@ fn pulse_read(
             track.glow_level(now)
         },
         completion: track.completion(now),
+        flash: track.edge_flash(now),
     }
 }
 
@@ -257,6 +258,10 @@ struct PulseRead {
     fronts: (f64, f64),
     glow_level: f64,
     completion: f64,
+    /// G-479 — the edge flash's opacity (0.1-scale attackDecay); the
+    /// ignition/dissolve consumers read their envelopes straight off
+    /// the track in `indicator_chunks`.
+    flash: f64,
 }
 
 thread_local! {
@@ -550,6 +555,16 @@ fn indicator_chunks(inputs: &StripInputs, key: &str) -> StyledText {
     let number = crate::components::session_tabs::session_tab_number_label(
         inputs.tabs.iter().position(|tab| tab.tab.session_id == key).unwrap_or(0),
     );
+    // G-479 — the pulse track's envelopes (the golden path has no
+    // track: every envelope reads 0, the static face unchanged).
+    let track = inputs.tracks.get(key).copied();
+    let now = inputs.clock_ms;
+    let pending = view.status.busy || view.status.attention.is_some();
+    let unread_memo = view.status.unread.is_some() && !pending;
+    let dissolve = track.map_or(0.0, |t| t.dissolve_opacity(now));
+    // `fading` (`TabIndicator`'s `!status.unread && opacity > 0`):
+    // the raw unread is gone, not pending, the marker still visible.
+    let fading = !view.status.unread.is_some() && !pending && dissolve > 0.0;
     let glyph: String = if view.status.runs() {
         if inputs.indicator.numbers {
             number
@@ -561,11 +576,18 @@ fn indicator_chunks(inputs: &StripInputs, key: &str) -> StyledText {
             .to_string()
         }
     } else {
-        let label = view.status.indicator_label_with(inputs.indicator, &number);
-        if label.is_empty() {
-            return StyledText::new(Vec::new());
+        // The label keeps the unread marker while dissolving
+        // (`if (props.status.unread || fading()) return
+        // TAB_UNREAD_MARKERS[…]`, session-tabs.tsx:179-184).
+        if fading {
+            inputs.indicator.unread_marker.glyph().to_owned()
+        } else {
+            let label = view.status.indicator_label_with(inputs.indicator, &number);
+            if label.is_empty() {
+                return StyledText::new(Vec::new());
+            }
+            label
         }
-        label
     };
     // v2's spinner color (`TabIndicator`'s `<spinner … color={props.color}>`,
     // session-tabs.tsx:200): the caller's color resolves through
@@ -574,13 +596,45 @@ fn indicator_chunks(inputs: &StripInputs, key: &str) -> StyledText {
     // `theme.hue.interactive[200]`, NOT text.base; `tabFeedbackColor`
     // still wins for unread-error/attention (`!`/`?` rows,
     // session-tabs.tsx:127-131).
-    let fg = if view.status.unread.is_some() || view.status.attention.is_some() {
+    let selected = inputs.active.as_deref() == Some(key);
+    let mut fg = if view.status.unread.is_some() || view.status.attention.is_some() {
         glow_hue(view.status, &inputs.colors)
     } else if view.status.runs() {
         inputs.colors.interactive
     } else {
         inputs.colors.text
     };
+    if fading && !(inputs.indicator.numbers || selected) {
+        // G-479 — the dissolve tint (session-tabs.tsx:165-171):
+        // brighten through the mid-boost flash (`1 − |opacity −
+        // 0.8|/0.2`) then sink toward the tab background
+        // (`min(1, opacity/0.8)`).
+        let flash = (1.0 - (dissolve - 0.8).abs() / 0.2).max(0.0);
+        let error = track.is_some_and(|t| t.dissolve_error);
+        let hue = if error { inputs.colors.error } else { inputs.colors.accent };
+        let brightened = tint(hue, inputs.colors.text, flash * 0.3);
+        let bg = tab_paint(inputs, &inputs.layout(), key)
+            .map_or(inputs.colors.background, |paint| paint.bg);
+        fg = tint(bg, brightened, (dissolve / 0.8).min(1.0));
+    } else if let Some(track) = track {
+        // G-479 — the number ignition (`numberColor`'s
+        // `tint(color, text.base, max(ignition, 0.15 · sweepLevel))`,
+        // session-tabs.tsx:1631-1643) — NOT on the unreadColor arm
+        // (the ref's `color()` returns it before numberColor's lift).
+        if !unread_memo {
+            let layout = inputs.layout();
+            let width = layout
+                .tabs
+                .iter()
+                .position(|tab| tab.session_id == key)
+                .map(|index| layout.widths[index])
+                .unwrap_or(1);
+            let lift = track.ignition_level(now).max(0.15 * track.sweep_level_at_number(width, now));
+            if lift > 0.0 {
+                fg = tint(fg, inputs.colors.text, lift);
+            }
+        }
+    }
     // G-426④/G-457 — the indicator glyph's attributes. The ref's LIVE
     // spinner (`<spinner frames interval color>`, session-tabs.tsx:
     // 197-199) renders through opentui-spinner's `drawChar` — fg color
@@ -731,15 +785,23 @@ fn tab_element(inputs: &Signal<StripInputs>, key: &str) -> Element {
         };
         let levels = pulse_read(i, &pulse_key, view, paint.selected, paint.width);
         let pulse_color = tint(paint.bg, i.colors.text, 0.45);
+        // G-479 — the edge flash (the horizontal strip's TabPulse mount
+        // carries NO flashTail, so the wash is uniform over the row;
+        // flashColor = tint(background, text.base, 0.65),
+        // session-tabs.tsx:1577-1578 + tab-pulse.tsx:42-45).
+        let flash = levels.flash;
+        let flash_color = tint(paint.bg, i.colors.text, 0.65);
         match paint.glow {
-            None if !view.status.runs() => Vec::new(),
+            None if !view.status.runs() && flash <= 0.0 => Vec::new(),
             None => {
                 // The busy sweep (TabPulse `active`): the band crosses
                 // left-to-right each 2.8 s cycle, second pass trailing
-                // half a cycle behind (fronts, tab-pulse.tsx:404-417).
+                // half a cycle behind (fronts, tab-pulse.tsx:404-417);
+                // the flash stage blends after the sweep
+                // (blendTabPulseColor's stage order).
                 (0..paint.width)
                     .map(|cell| {
-                        let color = if levels.running <= 0.0 {
+                        let mut color = if levels.running <= 0.0 {
                             paint.bg
                         } else {
                             sweep_cell_bg(
@@ -750,6 +812,9 @@ fn tab_element(inputs: &Signal<StripInputs>, key: &str) -> Element {
                                 levels.fronts,
                             )
                         };
+                        if flash > 0.0 {
+                            color = tint(color, flash_color, flash);
+                        }
                         box_()
                             .width(1.0)
                             .height(1.0)
@@ -760,7 +825,8 @@ fn tab_element(inputs: &Signal<StripInputs>, key: &str) -> Element {
                     .collect()
             }
             // The resting glow (level rides the ignition/release
-            // envelope; the resolve flash washes over it).
+            // envelope; the flash washes over it, the resolve flash
+            // over that).
             Some(glow) => {
                 let glow_level = levels.glow_level.max(0.0);
                 let completion = levels.completion;
@@ -774,6 +840,9 @@ fn tab_element(inputs: &Signal<StripInputs>, key: &str) -> Element {
                             GLOW_TAIL,
                             glow_level,
                         );
+                        if flash > 0.0 {
+                            color = tint(color, flash_color, flash);
+                        }
                         if completion > 0.0 {
                             color = tint(color, i.colors.accent, completion);
                         }
@@ -1610,16 +1679,189 @@ mod tests {
         );
     }
 
+    /// G-479 — the prompt-pulse edge flash (a `pulse++` restart at
+    /// scale 2): the tab's own background row washes toward
+    /// `tint(bg, text, 0.65)` at 0.1·2 opacity, uniform across the
+    /// row (the horizontal mount carries no flashTail), decaying to
+    /// the flat background at 800 ms.
+    #[test]
+    fn prompt_flash_washes_the_tab_row() {
+        let styles = theme();
+        let colors = StripColors::of(&styles);
+        let tabs = vec![view("idle", "Plain", TabStatus::EMPTY)];
+        let paint = |clock: u64, tracks: &std::collections::HashMap<
+            String,
+            crate::components::tab_pulse::TabPulseTrack,
+        >| {
+            paint_solid_bar_clock(
+                &tabs,
+                None,
+                false,
+                80,
+                &styles,
+                None,
+                None,
+                false,
+                None,
+                clock,
+                tracks.clone(),
+                crate::components::session_tabs::IndicatorConfig::default(),
+                false,
+            )
+        };
+        // The pulse++ stamp at 0 (scale 2): peak at +80 ms.
+        let mut track = crate::components::tab_pulse::TabPulseTrack::default();
+        track.sync(false, false, false, 0, false, false, 0);
+        track.sync(false, false, false, 1, false, false, 0);
+        let tracks = std::collections::HashMap::from([("idle".to_owned(), track)]);
+        let flat = paint(900, &std::collections::HashMap::new());
+        let flashed = paint(80, &tracks);
+        let expected = crate::components::tab_pulse::tint(
+            colors.background,
+            crate::components::tab_pulse::tint(colors.background, colors.text, 0.65),
+            0.2,
+        );
+        assert_eq!(
+            flashed.cell(0, 10).bg,
+            CellColor::Rgb(expected.0, expected.1, expected.2),
+            "the flash washes the row at 0.1 × scale 2"
+        );
+        // Decayed: byte-identical to the no-track flat row.
+        let decayed = paint(80 + 800, &tracks);
+        assert_eq!(decayed.cell(0, 10).bg, flat.cell(0, 10).bg, "flat after 800 ms");
+    }
+
+    /// G-479 — the number ignition: a busy tab's spinner glyph (the
+    /// `numberColor` runs arm, `activeNumber`) lifts toward
+    /// `text.base` at the 0.85 jump and falls back over 700 ms.
+    #[test]
+    fn number_ignition_lifts_the_indicator_glyph() {
+        let styles = theme();
+        let colors = StripColors::of(&styles);
+        let tabs = vec![view("busy", "Working", TabStatus { busy: true, ..TabStatus::EMPTY })];
+        let paint = |clock: u64, tracks: &std::collections::HashMap<
+            String,
+            crate::components::tab_pulse::TabPulseTrack,
+        >| {
+            paint_solid_bar_clock(
+                &tabs,
+                None,
+                false,
+                80,
+                &styles,
+                None,
+                None,
+                false,
+                None,
+                clock,
+                tracks.clone(),
+                crate::components::session_tabs::IndicatorConfig::default(),
+                false,
+            )
+        };
+        // The busy flip itself triggers the ignition: arm first, then
+        // flip runs at 0 (the stamp).
+        let mut track = crate::components::tab_pulse::TabPulseTrack::default();
+        track.sync(false, false, false, 0, false, false, 0);
+        track.sync(true, false, false, 0, false, false, 0);
+        let tracks = std::collections::HashMap::from([("busy".to_owned(), track)]);
+        let glyph_cell = |frame: &crate::render::Frame| {
+            frame.cells[0]
+                .iter()
+                .find(|cell| cell.ch != ' ' && cell.ch != 'W')
+                .expect("spinner glyph")
+                .clone()
+        };
+        let resting = glyph_cell(&paint(2_000, &std::collections::HashMap::new()));
+        assert_eq!(resting.fg, CellColor::Rgb(colors.interactive.0, colors.interactive.1, colors.interactive.2));
+        let ignited = glyph_cell(&paint(0, &tracks));
+        let lifted = crate::components::tab_pulse::tint(colors.interactive, colors.text, 0.85);
+        assert_eq!(
+            ignited.fg,
+            CellColor::Rgb(lifted.0, lifted.1, lifted.2),
+            "the 0.85 jump at the stamp"
+        );
+        // Past the 700 ms tween, at a sweep-zero clock (the sweep's
+        // 0.15 term is its own face — cell 1 is far from both fronts
+        // at 7000 ms), the glyph is plain again.
+        let faded = glyph_cell(&paint(7_000, &tracks));
+        assert_eq!(faded.fg, resting.fg, "plain after the 700 ms tween");
+    }
+
+    /// G-479 — the indicator dissolve: after the unread clears the
+    /// marker glyph STAYS visible for the 180 ms fade (no track: the
+    /// glyph vanishes immediately) and its color sinks toward the tab
+    /// background.
+    #[test]
+    fn indicator_dissolve_holds_the_marker_and_fades() {
+        let styles = theme();
+        let colors = StripColors::of(&styles);
+        let tabs = vec![view("was_unread", "Plain", TabStatus::EMPTY)];
+        let paint = |clock: u64, tracks: &std::collections::HashMap<
+            String,
+            crate::components::tab_pulse::TabPulseTrack,
+        >| {
+            paint_solid_bar_clock(
+                &tabs,
+                None,
+                false,
+                80,
+                &styles,
+                None,
+                None,
+                false,
+                None,
+                clock,
+                tracks.clone(),
+                crate::components::session_tabs::IndicatorConfig::default(),
+                false,
+            )
+        };
+        // unread on at 0, cleared (not pending) at 100 → the stamp.
+        let mut track = crate::components::tab_pulse::TabPulseTrack::default();
+        track.sync(false, false, false, 0, false, false, 0);
+        track.sync(false, false, false, 0, true, false, 0);
+        track.sync(false, false, false, 0, false, false, 100);
+        let tracks = std::collections::HashMap::from([("was_unread".to_owned(), track)]);
+        // Without a track the idle indicator slot carries no marker
+        // (the title still paints, of course).
+        let plain = paint(100, &std::collections::HashMap::new());
+        assert!(plain.cells[0].iter().all(|cell| cell.ch != '•'), "no marker without a track");
+        // Dissolving at 100+40 (elapsed 40 → opacity 7/9): the marker
+        // shows.
+        let frame = paint(140, &tracks);
+        assert!(
+            frame.cells[0].iter().any(|cell| cell.ch == '•'),
+            "the marker stays visible while dissolving"
+        );
+        let marker = frame.cells[0].iter().find(|cell| cell.ch == '•').expect("marker").clone();
+        // The color: the accent brightened through the mid-boost
+        // (flash 8/9 × 0.3) sinking toward the background
+        // (min(1, (7/9)/0.8) = 35/36).
+        let opacity: f64 = 7.0 / 9.0;
+        let flash = (1.0 - (opacity - 0.8).abs() / 0.2).max(0.0);
+        let brightened = crate::components::tab_pulse::tint(colors.accent, colors.text, flash * 0.3);
+        let alpha = (opacity / 0.8).min(1.0);
+        let expected = crate::components::tab_pulse::tint(colors.background, brightened, alpha);
+        assert_eq!(
+            marker.fg,
+            CellColor::Rgb(expected.0, expected.1, expected.2),
+            "the dissolve color at opacity {opacity}"
+        );
+        // Past the 180 ms the glyph is gone.
+        let done = paint(100 + 180, &tracks);
+        assert!(done.cells[0].iter().all(|cell| cell.ch != '•'), "the marker dissolved away");
+    }
+
     /// The busy sweep (the `TabPulse` active phase): the band's tint crosses
     /// cells left-to-right across the cycle — cell N lights while the
     /// front passes, then returns to the flat background.
     #[test]
-    fn busy_sweep_band_crosses_cells() {
-        let styles = theme();
+    fn busy_sweep_band_crosses_cells() {        let styles = theme();
         let colors = StripColors::of(&styles);
         let tabs = vec![view("busy", "Working", TabStatus { busy: true, ..TabStatus::EMPTY })];
         let mut track = crate::components::tab_pulse::TabPulseTrack::default();
-        track.sync(true, false, false, 0);
+        track.sync(true, false, false, 0, false, false, 0);
         let tracks = std::collections::HashMap::from([("busy".to_owned(), track)]);
         // One full-width tab (no plus): width 80.
         let flat = CellColor::Rgb(colors.background.0, colors.background.1, colors.background.2);
@@ -1740,7 +1982,7 @@ mod tests {
         let mut tracks = std::collections::HashMap::new();
         for index in 0..12 {
             let mut track = crate::components::tab_pulse::TabPulseTrack::default();
-            track.sync(true, false, false, 0);
+            track.sync(true, false, false, 0, false, false, 0);
             tracks.insert(format!("s{index}"), track);
         }
         let mut per_step: Vec<std::time::Duration> = vec![std::time::Duration::MAX; 60];

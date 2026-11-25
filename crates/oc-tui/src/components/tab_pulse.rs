@@ -167,6 +167,32 @@ pub const GLOW_RELEASE_ATTACK: f64 = 0.12;
 pub const GLOW_RELEASE_PEAK: f64 = 1.25;
 /// `GLOW_FADE_OUT` — the drain window inside the release (ms).
 pub const GLOW_FADE_OUT_MS: u64 = 200;
+/// `EDGE_FLASH_*` (tab-pulse.tsx:42-45) — the prompt-pulse flash: an
+/// 800 ms attackDecay one-shot at 0.1 opacity.
+pub const EDGE_FLASH_DURATION: u64 = 800;
+pub const EDGE_FLASH_ATTACK: f64 = 0.1;
+pub const EDGE_FLASH_OPACITY: f64 = 0.1;
+/// `PROMPT_FLASH_SCALE` — the flash's restart scale on a `pulse++`
+/// (`setPromptPulse` → `edgeFlash.restart(2)`).
+pub const PROMPT_FLASH_SCALE: f64 = 2.0;
+/// `flashTail` — the rail arms' spatial-falloff prop
+/// (session-tabs.tsx:992/1018/1039/1125; the horizontal strip's own
+/// mount passes NO tail, so its flash is uniform).
+pub const FLASH_TAIL: f64 = 8.0;
+/// `createNumberIgnition` (session-tabs.tsx:215-230): a 0.7 s tween
+/// from the 0.85 jump down to 0.
+pub const IGNITION_DURATION_MS: u64 = 700;
+pub const IGNITION_JUMP: f64 = 0.85;
+/// `TabIndicator`'s fade (session-tabs.tsx:161-172): the unread
+/// marker's 180 ms dissolve (tween).
+pub const DISSOLVE_DURATION_MS: u64 = 180;
+
+/// `tabFlashIntensity(index, tail)` (tab-pulse.tsx:91-92) — the
+/// flash's spatial falloff, the glow's own `glowIntensityAt`.
+#[must_use]
+pub fn tab_flash_intensity(index: usize, tail: f64) -> f64 {
+    glow_intensity_at(index, tail)
+}
 
 /// `intensityAt(index, front, head, tail)` (tab-pulse.tsx:66-69): the
 /// sweep band's spatial profile — a `head`-wide smootherstep ramp
@@ -288,6 +314,36 @@ pub struct TabPulseTrack {
     pub glow_off_since: Option<u64>,
     /// When the completion flash fired.
     pub completion_since: Option<u64>,
+    /// G-479 — the per-session prompt-pulse counter
+    /// (`promptPulses`, context/session-tabs.tsx:80/310-315: one per
+    /// `session.inbox.enqueued` user item on a non-current tab).
+    pub prompt_pulses: u64,
+    /// G-479 — the edge flash's origin and scale: a runs flip starts
+    /// it at scale 1 (`setActive` → `edgeFlash.start()`), a `pulse++`
+    /// restarts it at [`PROMPT_FLASH_SCALE`] (`setPromptPulse` →
+    /// `edgeFlash.restart(2)`); a restart mid-flight re-stamps.
+    pub flash_since: Option<(u64, f64)>,
+    /// G-479 — the number ignition's origin (`createNumberIgnition`:
+    /// jump 0.85 then tween to 0 over 0.7 s — retriggered by a runs
+    /// flip OR a `pulse++`, session-tabs.tsx:215-230).
+    pub ignition_since: Option<u64>,
+    /// G-479 — the unread marker's dissolve origin: stamped when the
+    /// indicator's `unread` memo falls (not while pending — busy or
+    /// attention jumps the fade straight to 0,
+    /// session-tabs.tsx:161-172).
+    pub dissolve_since: Option<u64>,
+    /// G-479 — the dissolve's latched hue was the error unread (the
+    /// ref latches the last `unreadColor`, `TabIndicator`'s memo).
+    pub dissolve_error: bool,
+    /// The last synced `unread` memo (the dissolve stamps only on the
+    /// falling edge).
+    unread_live: bool,
+    /// G-479 — false until the first sync: the ref's per-tab
+    /// components CONSTRUCT with the current status (no mount flash —
+    /// `createNumberIgnition` seeds `wasRunning`/`promptPulse`, the
+    /// `PulseState` constructor does not fire the edge flash), so the
+    /// first sync records state without firing the edges.
+    armed: bool,
 }
 
 impl TabPulseTrack {
@@ -301,8 +357,25 @@ impl TabPulseTrack {
     /// `sweep_clock` clamped at the constant fade tail: the sweep
     /// band froze while the spinner glyph marched on (the
     /// busy-pulse pressure regression).
-    pub fn sync(&mut self, runs: bool, glow: bool, complete: bool, now: u64) {
-        if runs != self.active_since.is_some() || (runs && self.idle_since.is_some()) {
+    ///
+    /// G-479 (va20): `prompt_pulses` is the tab's counter (the flash
+    /// restarts at [`PROMPT_FLASH_SCALE`] on a change and the number
+    /// ignition retriggers), `unread` is the indicator's memo
+    /// (`status.unread && !pending`), `pending` = busy or attention
+    /// (a pending indicator jumps the dissolve to 0 instead of
+    /// animating).
+    pub fn sync(
+        &mut self,
+        runs: bool,
+        glow: bool,
+        complete: bool,
+        prompt_pulses: u64,
+        unread: bool,
+        pending: bool,
+        now: u64,
+    ) {
+        let was_runs = self.active_since.is_some();
+        if runs != was_runs || (runs && self.idle_since.is_some()) {
             if runs {
                 self.active_since = Some(now);
                 self.idle_since = None;
@@ -322,6 +395,80 @@ impl TabPulseTrack {
         if complete && self.completion_since.is_none() {
             self.completion_since = Some(now);
         }
+        // G-479 — the edge flash: a runs flip STARTS it at scale 1
+        // (start() no-ops while one is already running — a flip
+        // mid-flash does not re-stamp); a pulse++ RESTARTS it at
+        // scale 2. Either edge also retriggers the number ignition.
+        // The FIRST sync only records state (the ref constructs its
+        // per-tab components with the live status — no mount flash).
+        let runs_flipped = self.armed && runs != was_runs;
+        let pulses_changed = self.armed && prompt_pulses != self.prompt_pulses;
+        if runs_flipped || pulses_changed {
+            self.ignition_since = Some(now);
+        }
+        if pulses_changed {
+            self.flash_since = Some((now, PROMPT_FLASH_SCALE));
+        } else if runs_flipped && self.flash_since.is_none() {
+            self.flash_since = Some((now, 1.0));
+        }
+        // G-479 — the indicator dissolve: unread jumps to 1, pending
+        // jumps to 0, and the falling edge (unread → false, not
+        // pending) animates 1 → 0 over 180 ms.
+        if unread {
+            self.dissolve_since = None;
+        } else if pending {
+            self.dissolve_since = None;
+        } else if self.unread_live {
+            self.dissolve_since = Some(now);
+        }
+        self.unread_live = unread;
+        self.prompt_pulses = prompt_pulses;
+        self.armed = true;
+    }
+
+    /// G-479 — the edge flash's opacity: the 800 ms attackDecay
+    /// one-shot × [`EDGE_FLASH_OPACITY`], scaled by 1 (a runs flip)
+    /// or [`PROMPT_FLASH_SCALE`] (a pulse++). 0 once it decays away.
+    #[must_use]
+    pub fn edge_flash(&self, now: u64) -> f64 {
+        let Some((since, scale)) = self.flash_since else { return 0.0 };
+        let progress = clamp01(elapsed(now, since) as f64 / EDGE_FLASH_DURATION as f64);
+        EDGE_FLASH_OPACITY * scale * attack_decay(progress, EDGE_FLASH_ATTACK, 1.0, 0.0)
+    }
+
+    /// G-479 — the number ignition's level: the 0.85 jump tweened
+    /// linearly down to 0 over 0.7 s (a fresh trigger re-stamps, so
+    /// the tween restarts from 0.85).
+    #[must_use]
+    pub fn ignition_level(&self, now: u64) -> f64 {
+        let Some(since) = self.ignition_since else { return 0.0 };
+        let progress = clamp01(elapsed(now, since) as f64 / IGNITION_DURATION_MS as f64);
+        IGNITION_JUMP * (1.0 - progress)
+    }
+
+    /// G-479 — the unread marker's dissolve opacity: 1 → 0 linearly
+    /// over 180 ms from the stamp (0 with no stamp). The mid-boost
+    /// (`1 − |opacity − 0.8| / 0.2`) is the consumer's to derive.
+    #[must_use]
+    pub fn dissolve_opacity(&self, now: u64) -> f64 {
+        let Some(since) = self.dissolve_since else { return 0.0 };
+        let progress = clamp01(elapsed(now, since) as f64 / DISSOLVE_DURATION_MS as f64);
+        1.0 - progress
+    }
+
+    /// G-479 — the running sweep's level under the number cell (the
+    /// TabPulse `onLevel` report: `max(intensityAt(1, fronts…)) ×
+    /// running`; the ref quantizes to 1/32 to damp signal noise —
+    /// the deterministic read keeps the raw value).
+    #[must_use]
+    pub fn sweep_level_at_number(&self, width: usize, now: u64) -> f64 {
+        let running = self.running(now);
+        if running <= 0.0 {
+            return 0.0;
+        }
+        let (front_a, front_b) = self.fronts(width, now);
+        intensity_at(1, front_a, RUN_HEAD, RUN_TAIL).max(intensity_at(1, front_b, RUN_HEAD, RUN_TAIL))
+            * running
     }
 
     /// The run envelope's level: attack over [`RUN_ATTACK`] to sustain
@@ -613,12 +760,12 @@ mod tests {
     fn run_envelope_attacks_sustains_and_releases() {
         let mut track = TabPulseTrack::default();
         assert_eq!(track.running(0), 0.0, "silent before the first busy");
-        track.sync(true, false, false, 0);
+        track.sync(true, false, false, 0, false, false, 0);
         assert_eq!(track.running(0), 0.0, "attack origin at the stamp");
         assert!((track.running(225) - 0.5).abs() < 1e-9, "attack midpoint");
         assert!((track.running(450) - 1.0).abs() < 1e-9, "sustain after the attack");
         assert!((track.running(5_000) - 1.0).abs() < 1e-9, "sustains while busy");
-        track.sync(false, false, false, 5_000);
+        track.sync(false, false, false, 0, false, false, 5_000);
         assert!((track.running(5_250) - 0.5).abs() < 1e-9, "release midpoint");
         assert_eq!(track.running(5_500), 0.0, "silent after the release");
         // The sweep clock stops when the release completes.
@@ -661,10 +808,10 @@ mod tests {
     fn glow_envelope_ignites_and_releases() {
         let mut track = TabPulseTrack::default();
         assert_eq!(track.glow_level(0), 0.0, "no glow before ignition");
-        track.sync(false, true, false, 0);
+        track.sync(false, true, false, 0, false, false, 0);
         assert!((track.glow_level(180) - 1.5).abs() < 1e-9, "ignition peak at 30% of 600 ms");
         assert!((track.glow_level(601) - 1.0).abs() < 1e-6, "settled to sustain");
-        track.sync(false, false, false, 1_000);
+        track.sync(false, false, false, 0, false, false, 1_000);
         assert_eq!(track.glow_level(1_000), 1.0, "note-off held at the drain's origin");
         assert!((track.glow_level(1_100) - 0.5).abs() < 1e-9, "halfway through the drain");
         assert!(track.glow_release_swell(1_100) > 1.0, "the swell rides above rest");
@@ -676,10 +823,10 @@ mod tests {
     #[test]
     fn completion_flash_fires_when_the_turn_resolves() {
         let mut track = TabPulseTrack::default();
-        track.sync(true, false, false, 0);
-        track.sync(false, false, false, 4_000);
+        track.sync(true, false, false, 0, false, false, 0);
+        track.sync(false, false, false, 0, false, false, 4_000);
         assert_eq!(track.completion(4_000), 0.0, "idle without a completion yet");
-        track.sync(false, false, true, 4_100);
+        track.sync(false, false, true, 0, false, false, 4_100);
         assert!(track.completion(4_244) > 0.17, "near the 0.18 peak");
         assert_eq!(track.completion(5_400), 0.0, "decays away");
     }
@@ -695,5 +842,101 @@ mod tests {
         let both = blend_tab_pulse_color(bg, glow, run, run, run, 0.5, 0.5, 0.0, 0.0);
         assert_eq!(both, tint(only_glow, run, 0.5));
         assert_eq!(blend_tab_pulse_color(bg, glow, run, run, run, 0.0, 0.0, 0.0, 0.0), bg);
+    }
+
+    // -- G-479: the three unported envelope consumers (va20) ------------
+
+    /// The edge flash (tab-pulse.tsx:42-45 + `setActive`/
+    /// `setPromptPulse`): a runs flip starts the 800 ms attackDecay at
+    /// scale 1; a `pulse++` RESTARTS it at PROMPT_FLASH_SCALE=2; a
+    /// flip mid-flash does not re-stamp (`start()` no-ops); the first
+    /// sync (mount) records state without firing. The attackDecay
+    /// rises over the leading 10% (peak at +80 ms) then decays to 0
+    /// at 800 ms.
+    #[test]
+    fn edge_flash_starts_on_flips_and_restarts_on_pulses() {
+        let mut track = TabPulseTrack::default();
+        // Mount while busy: NO flash (the ref constructs with the live
+        // status — the run envelope attacks, the flash does not).
+        track.sync(true, false, false, 0, false, false, 0);
+        assert_eq!(track.edge_flash(80), 0.0, "no mount flash");
+        // A pulse++ restarts at scale 2: peak 0.2 opacity at +80 ms.
+        track.sync(true, false, false, 1, false, false, 100);
+        assert_eq!(track.edge_flash(100), 0.0, "origin at the stamp");
+        assert!((track.edge_flash(180) - 0.2).abs() < 1e-12, "scale-2 peak (0.1 × 2)");
+        assert!((track.edge_flash(500) - 0.2 * (1.0 - smootherstep(4.0 / 9.0))).abs() < 1e-12);
+        assert_eq!(track.edge_flash(100 + EDGE_FLASH_DURATION), 0.0, "decays away");
+        // A runs flip mid-flash does not re-stamp (scale stays 2).
+        track.sync(false, false, false, 1, false, false, 200);
+        assert!(
+            (track.edge_flash(300) - 0.2 * (1.0 - smootherstep((0.25 - 0.1) / 0.9))).abs() < 1e-12,
+            "the running flash is not restarted by the flip"
+        );
+        // A fresh flip with no flash running starts scale 1 (0.1 peak).
+        let mut idle = TabPulseTrack::default();
+        idle.sync(false, false, false, 0, false, false, 0);
+        idle.sync(true, false, false, 0, false, false, 1_000);
+        assert_eq!(idle.edge_flash(1_000), 0.0, "origin at the stamp");
+        assert!((idle.edge_flash(1_080) - 0.1).abs() < 1e-12, "scale-1 peak at a runs flip");
+    }
+
+    /// The number ignition (`createNumberIgnition`,
+    /// session-tabs.tsx:215-230): 0.85 → 0 linearly over 700 ms,
+    /// retriggered by a runs flip OR a pulse++, never at mount.
+    #[test]
+    fn number_ignition_jumps_and_falls_linearly() {
+        let mut track = TabPulseTrack::default();
+        track.sync(true, false, false, 0, false, false, 0);
+        assert_eq!(track.ignition_level(0), 0.0, "no mount ignition");
+        track.sync(true, false, false, 1, false, false, 200);
+        assert_eq!(track.ignition_level(200), IGNITION_JUMP, "jump at the trigger");
+        assert!((track.ignition_level(200 + 350) - IGNITION_JUMP / 2.0).abs() < 1e-9, "midpoint");
+        assert_eq!(track.ignition_level(200 + IGNITION_DURATION_MS), 0.0, "faded out");
+        // The runs flip retriggers too.
+        track.sync(false, false, false, 1, false, false, 1_000);
+        assert_eq!(track.ignition_level(1_000), IGNITION_JUMP, "retriggered by the runs flip");
+        assert_eq!(track.ignition_level(1_000 + 50), IGNITION_JUMP * (1.0 - 50.0 / 700.0));
+    }
+
+    /// The indicator dissolve (`TabIndicator`'s fade,
+    /// session-tabs.tsx:161-172): unread jumps to 1 (no animation),
+    /// the falling edge animates 1 → 0 over 180 ms, and pending (busy
+    /// or attention) clears instantly.
+    #[test]
+    fn indicator_dissolve_falls_over_180ms_and_skips_pending() {
+        let mut track = TabPulseTrack::default();
+        track.sync(false, false, false, 0, false, false, 0);
+        track.sync(false, false, false, 0, true, false, 100);
+        assert_eq!(track.dissolve_since, None, "unread jumps to 1 — no dissolve");
+        // Busy (pending) while unread set: the memo falls, the fade
+        // jumps to 0.
+        track.sync(false, false, false, 0, false, true, 200);
+        assert_eq!(track.dissolve_since, None, "pending clears instantly");
+        // Unread returns, then clears while NOT pending: the dissolve.
+        track.sync(false, false, false, 0, true, false, 300);
+        track.sync(false, false, false, 0, false, false, 400);
+        assert_eq!(track.dissolve_since, Some(400), "the falling edge stamps");
+        assert_eq!(track.dissolve_opacity(400), 1.0, "starts at full");
+        assert!((track.dissolve_opacity(400 + 90) - 0.5).abs() < 1e-9, "linear midpoint");
+        assert_eq!(track.dissolve_opacity(400 + DISSOLVE_DURATION_MS), 0.0, "dissolved");
+        // The consumer's mid-boost peaks at opacity 0.8 (float-noise
+        // tolerant at the shoulders).
+        let boost = |opacity: f64| (1.0 - (opacity - 0.8).abs() / 0.2).max(0.0);
+        assert!(boost(1.0) < 1e-12);
+        assert_eq!(boost(0.8), 1.0);
+        assert!(boost(0.6) < 1e-12);
+    }
+
+    /// `tabFlashIntensity` (tab-pulse.tsx:91-92) is the glow's own
+    /// spatial falloff — the flash tail clamps exactly like
+    /// [`unread_glow_intensity`].
+    #[test]
+    fn tab_flash_intensity_is_the_glow_falloff() {
+        assert_eq!(tab_flash_intensity(0, FLASH_TAIL), 1.0);
+        assert_eq!(tab_flash_intensity(1, FLASH_TAIL), 1.0);
+        assert_eq!(tab_flash_intensity(9, FLASH_TAIL), glow_intensity_at(9, FLASH_TAIL));
+        // The width clamp the renderers apply (min(tail, max(1, w−2))).
+        let clamped = pulse_tail(FLASH_TAIL, 8);
+        assert_eq!(tab_flash_intensity(7, clamped), glow_intensity_at(7, clamped));
     }
 }
