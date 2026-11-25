@@ -999,6 +999,7 @@ fn frame_budget_overlay_chrome_solid() {
             u64::try_from(frame * 80).unwrap_or(0),
             WIDTH,
             HEIGHT,
+            true,
         );
         crate::components::overlays_solid::mount_startup_loading_solid(
             &styles,
@@ -1006,6 +1007,7 @@ fn frame_budget_overlay_chrome_solid() {
             u64::try_from(frame * 80).unwrap_or(0),
             WIDTH,
             HEIGHT,
+            true,
         );
         crate::components::chrome_solid::composite_chrome_tree(&mut composited);
         let elapsed = start.elapsed().as_millis();

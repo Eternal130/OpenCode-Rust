@@ -307,21 +307,153 @@ struct ComposerInputs {
     top: usize,
     /// The popup's reserved height (rows above `top`).
     popup_h: usize,
-    /// 1 pad row + textarea rows + 1 metadata row.
+    /// 1 pad row + preview strip rows + textarea rows + 1 metadata row.
     content_h: usize,
     frame_height: usize,
     pad: usize,
     textarea_rows: usize,
+    // -- G-483: the prompt input's inline preview strip --------------------
+    /// The strip's shaped thumbs (empty = no strip): each thumb is
+    /// its rows of pre-shaped block-glyph chunks (None = the decode
+    /// failed — the centered muted `No preview` fallback).
+    preview_thumbs: Vec<Option<Vec<StyledText>>>,
+    /// The `+N more` label (the thumbs past the three visible).
+    preview_more: Option<String>,
+    /// One thumb's cell size (`w = h · 2`).
+    preview_thumb_w: usize,
+    preview_thumb_h: usize,
+}
+
+/// The G-483 preview strip's shaped state (prompt/index.tsx:
+/// 1676-1741): ≤3 visible thumbs (`No preview` when the bytes do not
+/// decode) + the `+N more` cell, thumb boxes `h × 2h` with `gap 1`
+/// and a 1-row pad under them — the strip's total height.
+#[derive(Debug, Clone, Default)]
+struct PreviewStrip {
+    thumbs: Vec<Option<Vec<StyledText>>>,
+    more: Option<String>,
+    thumb_w: usize,
+    thumb_h: usize,
+}
+
+impl PreviewStrip {
+    fn height(&self) -> usize {
+        if self.thumbs.is_empty() {
+            return 0;
+        }
+        self.thumb_h + 1
+    }
+}
+
+/// The thumb height (`max(4, min(8, floor(terminal height / 4)))`,
+/// prompt/index.tsx:397).
+fn preview_thumb_height(terminal_height: usize) -> usize {
+    (terminal_height / 4).clamp(4, 8)
+}
+
+/// Shape the strip: decode each visible URI's payload and quantize to
+/// the blocks fallback (the composer tree is cell-based — the
+/// transcript strip's own thumb path, `blocks_thumbnail`); a decode
+/// failure renders the centered muted `No preview` (the ref's onError
+/// fallback, prompt/index.tsx:1706-1711).
+fn preview_strip(view: &PromptView, frame_height: usize, colors: &ComposerColors) -> PreviewStrip {
+    let _ = frame_height;
+    if view.image_previews.is_empty() {
+        return PreviewStrip::default();
+    }
+    let thumb_h = preview_thumb_height(view.terminal_height);
+    let thumb_w = thumb_h * 2;
+    let visible = view.image_previews.len().min(3);
+    let more = (view.image_previews.len() > visible)
+        .then(|| format!("+{} more", view.image_previews.len() - visible));
+    let mut thumbs = Vec::with_capacity(visible);
+    for uri in view.image_previews.iter().take(visible) {
+        let bytes = decode_data_uri_image(uri).unwrap_or_default();
+        let cells = crate::components::message::rows::blocks_thumbnail(&bytes, thumb_w, thumb_h);
+        let thumb = cells.map(|rows| {
+            rows.iter()
+                .map(|row| {
+                    let chunks = row
+                        .iter()
+                        .map(|cell| TextChunk {
+                            text: cell.glyph.to_string(),
+                            fg: Some(Rgba::from_ints(cell.fg[0], cell.fg[1], cell.fg[2], 255)),
+                            bg: Some(Rgba::from_ints(cell.bg[0], cell.bg[1], cell.bg[2], 255)),
+                            attributes: 0,
+                            link: None,
+                        })
+                        .collect();
+                    styled(chunks)
+                })
+                .collect()
+        });
+        thumbs.push(thumb);
+    }
+    let _ = colors;
+    PreviewStrip { thumbs, more, thumb_w, thumb_h }
+}
+
+/// Decode a `data:image/*;base64,…` URI to its bytes (the
+/// attachment payload's decode — `clipboard::base64_decode`, the
+/// transcript strip's own `decode_png_payload` sibling).
+fn decode_data_uri_image(uri: &str) -> Option<Vec<u8>> {
+    let payload = uri.split(',').nth(1)?;
+    crate::clipboard::base64_decode(payload)
+}
+
+/// G-483 — the preview strip's hit rects in SCREEN coordinates: one
+/// per visible thumb (index = its position) + the `+N more` cell
+/// (index = the first hidden position), the release opening the
+/// image preview there (prompt/index.tsx:1697-1703/1728-1733). `top`
+/// is the composer BOX's frame-relative row (the popup rows above
+/// it); the thumbs start one pad row below the box top.
+#[must_use]
+pub fn prompt_preview_hit_rects(
+    image_previews: &[String],
+    terminal_height: usize,
+    top: usize,
+    width: usize,
+    mount_left: usize,
+    mount_top: usize,
+) -> Vec<(usize, usize, usize, usize, usize)> {
+    if image_previews.is_empty() {
+        return Vec::new();
+    }
+    let pad = if width >= 44 { 2 } else { 1 };
+    let thumb_h = preview_thumb_height(terminal_height);
+    let thumb_w = thumb_h * 2;
+    let row = mount_top + top + 1; // the box's pad row above the strip
+    let mut x = mount_left + 1 + pad; // the rail column + the box's pad
+    let visible = image_previews.len().min(3);
+    let mut hits = Vec::with_capacity(visible + 1);
+    for index in 0..visible {
+        hits.push((x, row, thumb_w, thumb_h, index));
+        x += thumb_w + 1; // the ref's gap={1}
+    }
+    if image_previews.len() > visible {
+        hits.push((x, row, 8, thumb_h, visible));
+    }
+    hits
 }
 
 /// The mount key — every geometry input the tree bakes in at build
 /// time. A typing-induced wrap (`content_h` change), the popup
 /// opening (`top`/`popup_h`), a resize, or a theme swap rebuilds the
 /// mount; the hot frames (same shape, new text) patch in place.
-type MountKey = (usize, usize, usize, usize, usize, ComposerColors);
+/// G-483: the preview strip's thumb count rides the key too (the
+/// strip's row bakes its thumb boxes).
+type MountKey = (usize, usize, usize, usize, usize, usize, ComposerColors);
 
 fn mount_key(i: &ComposerInputs) -> MountKey {
-    (i.width, i.top, i.popup_h, i.content_h, i.frame_height, i.colors)
+    (
+        i.width,
+        i.top,
+        i.popup_h,
+        i.content_h,
+        i.frame_height,
+        i.preview_thumbs.len() + usize::from(i.preview_more.is_some()),
+        i.colors,
+    )
 }
 
 /// The textarea row chunks: one chunk per span — chips bold in the
@@ -370,7 +502,12 @@ fn shape(view: &PromptView, width: usize, height: usize, theme: &ThemeState) -> 
     let lines = layout_draft_lines(view.draft, inner);
     let max_height = (height / 3).max(6);
     let textarea_rows = (lines.len().max(1) + 1).min(max_height);
-    let content_h = 1 + textarea_rows + 1;
+    // G-483 — the prompt input's inline preview strip
+    // (prompt/index.tsx:1676-1741): `max(4, min(8, h / 4))`-tall
+    // thumbs (w = h · 2), ≤3 visible + `+N more` (w 8), a gap row of
+    // 1 under them — riding INSIDE the prompt box above the textarea.
+    let preview_strip = preview_strip(view, height, &colors);
+    let content_h = 1 + preview_strip.height() + textarea_rows + 1;
 
     // The textarea: the placeholder (truncated to inner − 2, the
     // caret column reserve) or the wrapped lines.
@@ -589,6 +726,10 @@ fn shape(view: &PromptView, width: usize, height: usize, theme: &ThemeState) -> 
         frame_height: height,
         pad,
         textarea_rows,
+        preview_thumbs: preview_strip.thumbs,
+        preview_more: preview_strip.more,
+        preview_thumb_w: preview_strip.thumb_w,
+        preview_thumb_h: preview_strip.thumb_h,
     }
 }
 
@@ -657,6 +798,129 @@ fn popup_row_element(
         .flex_shrink(0.0)
         .flex_direction("row")
         .children(Children::Static(vec![border_text(), interior.into_element(), border_text()]))
+        .into_element()
+}
+
+/// The G-483 preview strip element — the row of thumb boxes + the
+/// `+N more` cell + the bottom pad row (prompt/index.tsx:1676-1741).
+/// Thumb content patches in place through the inputs signal (the
+/// geometry keys the mount via `content_h`); a decode failure leaves
+/// the thumb EMPTY — the centered muted `No preview` text rides the
+/// same box (the ref's onError fallback).
+// One JSX element per section (the thumbs' boxes + the more cell +
+// the pad row — prompt/index.tsx:1676-1741's mount), mirroring the
+// composer mount's own allowance.
+#[allow(clippy::too_many_lines)]
+fn preview_strip_element(inputs: &Signal<ComposerInputs>, geo: &ComposerInputs) -> Element {
+    let thumb_w = geo.preview_thumb_w as f32;
+    let thumb_h = geo.preview_thumb_h as f32;
+    let thumb_count = geo.preview_thumbs.len().max(usize::from(geo.preview_more.is_some()));
+    let mut row_children: Vec<Element> = Vec::new();
+    for index in 0..thumb_count {
+        // One thumb: a fixed `w × h` box whose rows are dyn content
+        // over the signal; `marginRight 1` is the ref's `gap={1}`.
+        let row_inputs = inputs.clone();
+        let thumb_rows = (0..geo.preview_thumb_h)
+            .map(|row| {
+                let row_inputs = row_inputs.clone();
+                text()
+                    .wrap_mode("none")
+                    .flex_shrink(0.0)
+                    .dyn_prop(
+                        "content",
+                        dyn_styled(map(row_inputs, move |i: &ComposerInputs| {
+                            i.preview_thumbs
+                                .get(index)
+                                .and_then(|thumb| thumb.as_ref())
+                                .and_then(|rows| rows.get(row))
+                                .cloned()
+                                .unwrap_or_else(|| styled(Vec::new()))
+                        })),
+                    )
+                    .into_element()
+            })
+            .collect::<Vec<Element>>();
+        // The `No preview` fallback: centered muted text (absolute,
+        // over the blank rows — the ref's onError fallback).
+        let fallback_inputs = inputs.clone();
+        let fallback = text()
+            .position("absolute")
+            .top((geo.preview_thumb_h as f32 / 2.0).floor())
+            .left(0.0)
+            .width(thumb_w)
+            .flex_shrink(0.0)
+            .dyn_prop(
+                "content",
+                dyn_styled(map(fallback_inputs, move |i: &ComposerInputs| {
+                    if i.preview_thumbs.get(index).is_some_and(Option::is_none) {
+                        // Center the 11-wide label in the thumb box.
+                        let lead = i.preview_thumb_w.saturating_sub(11) / 2;
+                        one(format!("{}No preview", " ".repeat(lead)), i.colors.muted)
+                    } else {
+                        styled(Vec::new())
+                    }
+                })),
+            )
+            .into_element();
+        let thumb = box_()
+            .width(thumb_w)
+            .height(thumb_h)
+            .flex_shrink(1.0)
+            .flex_basis(thumb_w)
+            .margin_right(1.0)
+            .position("relative")
+            .children(Children::Static({
+                let mut kids = thumb_rows;
+                kids.push(fallback);
+                kids
+            }))
+            .into_element();
+        row_children.push(thumb);
+    }
+    // The `+N more` cell (w 8, centered muted).
+    if geo.preview_more.is_some() {
+        let more_inputs = inputs.clone();
+        let more_text = text()
+            .width(8.0)
+            .flex_shrink(1.0)
+            .flex_basis(8.0)
+            .dyn_prop(
+                "content",
+                dyn_styled(map(more_inputs, move |i: &ComposerInputs| {
+                    i.preview_more
+                        .clone()
+                        .map_or_else(|| styled(Vec::new()), |more| one(more, i.colors.muted))
+                })),
+            )
+            .into_element();
+        let more_box = box_()
+            .width(8.0)
+            .height(thumb_h)
+            .flex_shrink(1.0)
+            .flex_basis(8.0)
+            .align_items("center")
+            .justify_content("center")
+            .children(Children::Static(vec![more_text]))
+            .into_element();
+        row_children.push(more_box);
+    }
+    box_()
+        .width("100%")
+        .height((geo.preview_thumb_h + 1) as f32)
+        .flex_shrink(0.0)
+        .flex_direction("column")
+        .children(Children::Static(vec![
+            box_()
+                .width("100%")
+                .height(thumb_h)
+                .flex_shrink(0.0)
+                .flex_direction("row")
+                .justify_content("flex-start")
+                .children(Children::Static(row_children))
+                .into_element(),
+            // paddingBottom 1.
+            box_().height(1.0).flex_shrink(0.0).into_element(),
+        ]))
         .into_element()
 }
 
@@ -771,30 +1035,43 @@ fn composer_element(inputs: &Signal<ComposerInputs>, geo: &ComposerInputs) -> El
         .flex_grow(1.0)
         .flex_direction("column")
         .background_color(hex(colors.prompt_bg))
-        .children(Children::Static(vec![
-            // paddingTop 1 (the pad row).
-            box_().height(1.0).into_element(),
+        .children(Children::Static({
+            let mut column: Vec<Element> = vec![
+                // paddingTop 1 (the pad row).
+                box_().height(1.0).into_element(),
+            ];
+            // G-483 — the inline preview strip (prompt/index.tsx:
+            // 1676-1741): a row of ≤3 thumb boxes (`h × 2h`, gap 1)
+            // + the `+N more` cell (w 8), a 1-row pad under them.
+            if geo.preview_thumb_h > 0 {
+                column.push(preview_strip_element(inputs, geo));
+            }
             // The textarea box: paddingLeft/Right = pad, one row per
             // wrapped line (+1 cursor row under the last — blank).
-            box_()
-                .height(geo.textarea_rows as f32)
-                .flex_direction("column")
-                .padding_left(geo.pad as f32)
-                .padding_right(geo.pad as f32)
-                .children_dyn(Rc::new(lines))
-                .into_element(),
+            column.push(
+                box_()
+                    .height(geo.textarea_rows as f32)
+                    .flex_direction("column")
+                    .padding_left(geo.pad as f32)
+                    .padding_right(geo.pad as f32)
+                    .children_dyn(Rc::new(lines))
+                    .into_element(),
+            );
             // The metadata pad row: up to six absolutely positioned
             // segments (the separator cells stay the fill's white —
             // the footer 2-gap rule, same trap).
-            box_()
-                .height(1.0)
-                .position("relative")
-                .children(Children::Static(
-                    // 7 = the full ladder (agent auto · model provider · variant).
-                    (0..7).map(|index| metadata_text(index).into_element()).collect(),
-                ))
-                .into_element(),
-        ]));
+            column.push(
+                box_()
+                    .height(1.0)
+                    .position("relative")
+                    .children(Children::Static(
+                        // 7 = the full ladder (agent auto · model provider · variant).
+                        (0..7).map(|index| metadata_text(index).into_element()).collect(),
+                    ))
+                    .into_element(),
+            );
+            column
+        }));
     children.push(
         box_()
             .height(geo.content_h as f32)
@@ -1055,6 +1332,8 @@ mod tests {
             rail: None,
             caret: None,
             selection,
+            image_previews: Vec::new(),
+            terminal_height: 24,
         };
         let plain = render_prompt_frame_dispatch(&view(None), 80, 8, &theme);
         let selected = render_prompt_frame_dispatch(&view(Some(0..5)), 80, 8, &theme);
@@ -1098,6 +1377,8 @@ mod tests {
                 rail: None,
                 caret: None,
                 selection: None,
+                image_previews: Vec::new(),
+                terminal_height: 24,
             };
             render_prompt_frame_dispatch(&view, 80, 8, &theme)
         };
@@ -1129,6 +1410,8 @@ mod tests {
             rail: None,
             caret: None,
             selection: None,
+            image_previews: Vec::new(),
+            terminal_height: 24,
         };
         let mut first: Option<Frame> = None;
         for width in [80usize, 40, 120, 80] {
@@ -1164,6 +1447,8 @@ mod tests {
                 rail: None,
                 caret: None,
                 selection: None,
+                image_previews: Vec::new(),
+                terminal_height: 24,
             };
             composer_mount(&view, 80, 8, &theme, 2, 16);
         };
@@ -1220,6 +1505,8 @@ mod tests {
             rail: None,
             caret: None,
             selection: None,
+            image_previews: Vec::new(),
+            terminal_height: 24,
         };
         let frame = render_prompt_frame_dispatch(&view, 40, 10, &theme);
         // The popup rows sit above the box (top = 4): rows 2 and 3.
@@ -1239,5 +1526,90 @@ mod tests {
         let second = grid[3].clone();
         assert!(second.contains("/short"), "short row intact: {second:?}");
         assert!(second.contains("fits"), "short description intact: {second:?}");
+    }
+    // -- G-483: the prompt input's inline preview strip -------------------
+
+    /// The tiny 4x2 PNG fixture (the R-07 strip's own corpus).
+    const TINY_PNG: &[u8] = include_bytes!("../../tests/fixtures/r07-tiny-4x2.png");
+
+    fn preview_view(owned: &PromptDraft, previews: Vec<String>) -> PromptView<'_> {
+        PromptView {
+            draft: owned,
+            placeholder: String::new(),
+            autocomplete: None,
+            footer: FooterHints::default(),
+            metadata: MetadataLine::default(),
+            terminal_width: 80,
+            top: 0,
+            rail: None,
+            caret: None,
+            selection: None,
+            image_previews: previews,
+            terminal_height: 24,
+        }
+    }
+
+    /// The strip mounts above the textarea: ≤3 thumbs (the blocks
+    /// fallback renders the decoded PNG as glyphs — non-space cells),
+    /// the `+N more` cell for the overflow, and the 1-row pad under.
+    #[test]
+    fn preview_strip_mounts_thumbs_and_more_cell() {
+        let theme = ThemeState::v2_dark();
+        let owned = draft("hello");
+        let uri =
+            format!("data:image/png;base64,{}", crate::clipboard::base64_encode::encode(TINY_PNG));
+        let previews: Vec<String> = std::iter::repeat_n(uri.clone(), 5).collect();
+        let view = preview_view(&owned, previews.clone());
+        let frame = render_prompt_frame_dispatch(&view, 80, 30, &theme);
+        let grid = frame.text_grid();
+        // terminal_height 24 → thumb_h = clamp(24/4, 4, 8) = 6, thumb_w
+        // = 12; the strip rows 1..6 (pad row 0), the pad row 7, the
+        // textarea from row 8.
+        let strip: String = grid[1].chars().take(40).collect();
+        assert!(strip.chars().any(|ch| ch != ' '), "thumb row 1 carries block glyphs: {strip:?}");
+        assert!(grid[1].contains("+2 more"), "the more cell: {:?}", grid[1]);
+        // The bare view (no previews): the textarea stays at the top —
+        // the same frame as without the field.
+        let bare = preview_view(&owned, Vec::new());
+        let bare_frame = render_prompt_frame_dispatch(&bare, 80, 30, &theme);
+        assert_eq!(bare_frame.text_grid()[1], frame_with_previews_disabled_row(&theme, &owned));
+    }
+
+    /// The bare-frame reference row (the placeholder row at the box's
+    /// top) — the strip OFF keeps the historical layout.
+    fn frame_with_previews_disabled_row(theme: &ThemeState, owned: &PromptDraft) -> String {
+        let view = preview_view(owned, Vec::new());
+        render_prompt_frame_dispatch(&view, 80, 30, theme).text_grid()[1].clone()
+    }
+
+    /// A payload that does not decode renders the centered muted `No
+    /// preview` fallback (the ref's onError arm).
+    #[test]
+    fn preview_strip_no_preview_fallback() {
+        let theme = ThemeState::v2_dark();
+        let owned = draft("hi");
+        let uri = "data:image/png;base64,AAAA".to_owned();
+        let view = preview_view(&owned, vec![uri]);
+        let frame = render_prompt_frame_dispatch(&view, 80, 30, &theme);
+        let grid = frame.text_grid();
+        // The fallback centers in the thumb box (absolute top = h/2 =
+        // 3 → frame row 4, the strip starting at row 1).
+        assert!(grid[4].contains("No preview"), "the fallback label centers: {:?}", grid[4]);
+    }
+
+    /// The hit rects: one per visible thumb + the `+N more` cell, in
+    /// screen coordinates off the mount site.
+    #[test]
+    fn preview_hit_rects_cover_thumbs_and_more() {
+        let previews: Vec<String> = (0..5).map(|i| format!("data:image/png;base64,{i}")).collect();
+        let hits = prompt_preview_hit_rects(&previews, 24, 2, 80, 10, 40);
+        assert_eq!(hits.len(), 4, "3 thumbs + the more cell");
+        // thumb_h 6, thumb_w 12; x starts at 10 + 1 + 2 = 13.
+        assert_eq!(hits[0], (13, 43, 12, 6, 0), "thumb 0 (pad row + top)");
+        assert_eq!(hits[1], (26, 43, 12, 6, 1), "thumb 1 (gap 1)");
+        assert_eq!(hits[2], (39, 43, 12, 6, 2), "thumb 2");
+        assert_eq!(hits[3], (52, 43, 8, 6, 3), "the more cell opens at index 3");
+        // No previews: no rects.
+        assert!(prompt_preview_hit_rects(&[], 24, 2, 80, 10, 40).is_empty(), "no previews");
     }
 }

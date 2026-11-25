@@ -104,6 +104,12 @@ pub fn mount_live_tabs_bar(
                     .then_some(Attention::Permission),
             };
             let complete = status.unread == Some(crate::store::Unread::Activity) && !status.busy;
+            // G-479 — the indicator's `unread` memo (`status.unread &&
+            // !pending`, session-tabs.tsx:152) and the `pending` gate
+            // (`busy || attention`, :151) feed the dissolve stamps;
+            // the prompt-pulse counter reads inside the track sync.
+            let pending = status.busy || status.attention.is_some();
+            let unread_memo = status.unread.is_some() && !pending;
             tracks.insert(
                 tab.session_id.clone(),
                 store.tab_pulse_track(
@@ -111,6 +117,8 @@ pub fn mount_live_tabs_bar(
                     status.runs(),
                     status.glows(selected),
                     complete,
+                    unread_memo,
+                    pending,
                 ),
             );
             TabView {
@@ -218,6 +226,29 @@ pub fn mount_live_rail(
         .collect();
     let tooltip =
         tabs.hover.as_deref().and_then(|id| views.iter().find(|view| view.tab.session_id == id));
+    // G-479 — the rail arm carries the pulse counts too (the strip
+    // arm's twin sync): the tracks + clock ride the inputs so the
+    // number ignition + indicator dissolve envelopes read live.
+    let mut tracks = std::collections::HashMap::new();
+    for view in &views {
+        let selected = Some(view.tab.session_id.as_str()) == active_id.as_deref();
+        let pending = view.status.busy || view.status.attention.is_some();
+        let unread_memo = view.status.unread.is_some() && !pending;
+        let complete =
+            view.status.unread == Some(crate::store::Unread::Activity) && !view.status.busy;
+        tracks.insert(
+            view.tab.session_id.clone(),
+            store.tab_pulse_track(
+                &view.tab.session_id,
+                view.status.runs(),
+                view.status.glows(selected),
+                complete,
+                unread_memo,
+                pending,
+            ),
+        );
+    }
+    let clock_ms = store.clock();
     let inputs = crate::components::session_tabs_rail::RailInputs {
         tabs: &views,
         active: active_id.as_deref(),
@@ -228,6 +259,8 @@ pub fn mount_live_rail(
         handle_hot: store.rail_handle_hot(),
         tooltip,
         indicator: store.tabs_indicator_config(),
+        tracks,
+        clock_ms,
     };
     let geometry = crate::components::session_tabs_rail::RailGeometry::new(views.len(), width);
     crate::components::session_tabs_rail_solid::mount_vertical_rail_solid(
@@ -1769,6 +1802,10 @@ fn composer_mount_frame(
         rail,
         caret: None,
         selection: composer.edit.selection(),
+        // G-483 — the prompt input's inline preview strip (the
+        // composer draft's deduplicated image attachments).
+        image_previews: store.prompt_image_previews(session_id),
+        terminal_height: height,
     };
     // #33 — the location label's hit rect (the footer row sits one
     // row above the frame bottom now — F3's bottom pad keeps the last
@@ -1813,6 +1850,16 @@ fn composer_mount_frame(
         paste_x,
         height - prompt_height,
     );
+    // G-483 — the preview strip's hit rects (the same mount geometry
+    // the composer pasted at; the release opens the preview dialog).
+    store.set_prompt_image_hits(crate::components::composer_solid::prompt_preview_hit_rects(
+        &view.image_previews,
+        height,
+        view.top,
+        width,
+        paste_x,
+        height - prompt_height,
+    ));
     let frame = Frame { cells: Vec::new(), width: 0, height: 0, clusters: None };
     // NEW-S1a: the caret's screen cell — the mount pastes at
     // (inset, height - prompt_height); the helper's y already includes

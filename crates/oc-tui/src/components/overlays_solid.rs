@@ -119,16 +119,19 @@ fn spinner_frame(elapsed_ms: u64) -> char {
 }
 
 /// The reconnecting box's absolute geometry (reconnecting.tsx:8-39):
-/// the 48-wide centered box clamped to `width·9/10` (min 3), the
-/// copy row's tail past the clamped right edge keeps the DIMMED
-/// background (the old paste loop never reached it).
+/// the 48-wide centered box clamped to `width·9/10` (min 3), FIVE
+/// rows tall (G-477: paddingTop 1 + headline + `gap={1}` row + copy +
+/// paddingBottom 1 — the port's old 4-row box pasted the copy
+/// directly under the headline), the copy row's tail past the clamped
+/// right edge keeps the DIMMED background (the old paste loop never
+/// reached it).
 #[must_use]
 pub(crate) fn reconnecting_geometry(width: usize, height: usize) -> (usize, usize, usize, usize) {
     let box_width = 48.min(width.saturating_mul(9) / 10).max(3);
     let left = width.saturating_sub(box_width) / 2;
-    let top = height.saturating_sub(4) / 2;
+    let top = height.saturating_sub(5) / 2;
     let w = box_width.min(width.saturating_sub(left));
-    let h = 4.min(height.saturating_sub(top));
+    let h = 5.min(height.saturating_sub(top));
     (left, top, w, h)
 }
 
@@ -173,7 +176,10 @@ pub(crate) fn mount_reconnecting_solid(
     // The headline + copy runs, clipped to the box interior (the
     // narrow-frame tail chars stay a post-seam paint: the old paste
     // loop clipped them out and the follow-up walk re-inked them over
-    // the dimmed base).
+    // the dimmed base). G-477: the box is the ref's five rows — pad,
+    // headline, `gap={1}` row, copy, pad — so the copy sits at
+    // `top + 3` with an empty raised row between it and the headline
+    // (reconnecting.tsx:18-37).
     // G-430 face 4 — ref (reconnecting.tsx:31 + spinner.tsx:26-31):
     // the headline is `<Spinner>{label}</Spinner>`; animations off
     // renders the static `⋯ {label}` fallback (no braille glyph).
@@ -195,7 +201,7 @@ pub(crate) fn mount_reconnecting_solid(
     units.extend(chrome_run_units(
         "recon.copy",
         left + 2,
-        top + 2,
+        top + 3,
         &copy_clipped,
         fg_muted,
         raised,
@@ -251,7 +257,9 @@ pub(crate) fn paint_reconnecting_tail(
     for (offset, ch) in copy.chars().enumerate() {
         let col = copy_start + offset;
         if col >= edge && col < width {
-            if let Some(cell) = frame.cells.get_mut(top + 2).and_then(|line| line.get_mut(col)) {
+            // G-477: the copy row is the box's fourth row (pad,
+            // headline, gap, copy, pad).
+            if let Some(cell) = frame.cells.get_mut(top + 3).and_then(|line| line.get_mut(col)) {
                 cell.ch = ch;
                 cell.fg = fg_muted;
             }
@@ -281,17 +289,21 @@ pub fn reconnecting_over_frame(
 /// The `StartupLoading` pill at `bottom=1` — a family wrapper at
 /// skeleton index 9: ONE opaque chunk row, so the tree fully covers
 /// the pill's rect (the old painter's row write).
+/// G-480 (va20): the pill's glyph is a `<Spinner>{label}</Spinner>`
+/// (startup-loading.tsx) — animations off renders the static
+/// `⋯ {label}` fallback (spinner.tsx:28-29), no braille frame.
 pub fn mount_startup_loading_solid(
     styles: &ThemeStyles,
     text: &str,
     elapsed_ms: u64,
     width: usize,
     height: usize,
+    animations: bool,
 ) {
     if width < 4 || height < 2 {
         return;
     }
-    let spinner = spinner_frame(elapsed_ms);
+    let spinner = if animations { spinner_frame(elapsed_ms).to_string() } else { "⋯".to_owned() };
     let label = format!("{spinner} {text}");
     let pill_width = label.chars().count() + 2;
     let left = width.saturating_sub(pill_width) / 2;
@@ -324,17 +336,21 @@ pub fn mount_startup_loading_solid(
 
 /// The migration widget — a family wrapper at skeleton index 10:
 /// three opaque raised rows fully cover the box's rect.
+/// G-480 (va20): the glyph is a `<Spinner>{label}{count}</Spinner>`
+/// — animations off renders the static `⋯ {label}` fallback
+/// (spinner.tsx:28-29), no braille frame.
 pub fn mount_migration_solid(
     styles: &ThemeStyles,
     progress: &MigrationProgress,
     elapsed_ms: u64,
     width: usize,
     height: usize,
+    animations: bool,
 ) {
     if width < 6 || height < 4 {
         return;
     }
-    let spinner = spinner_frame(elapsed_ms);
+    let spinner = if animations { spinner_frame(elapsed_ms).to_string() } else { "⋯".to_owned() };
     let content = format!("{spinner} {}{}", progress.label, progress_count(progress));
     let box_width = content.chars().count() + 1 + 2 + 2;
     let left = width.saturating_sub(box_width + 2);

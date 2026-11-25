@@ -30,11 +30,19 @@ use crate::theme::ThemeStyles;
 /// frame-tail z, the ref's zIndex 5000-over-3000).
 pub fn mount_state_overlays(store: &Store, styles: &ThemeStyles, width: usize, height: usize) {
     let now = store.clock();
+    // G-480 — the `config.animations ?? true` gate every Spinner
+    // carries (spinner.tsx:28-29): off renders the static `⋯ {label}`
+    // fallback instead of the braille frames.
+    let animations = store.animations_enabled();
     if let Some(text) = store.startup_loading_text(now) {
-        super::overlays_solid::mount_startup_loading_solid(styles, text, now, width, height);
+        super::overlays_solid::mount_startup_loading_solid(
+            styles, text, now, width, height, animations,
+        );
     }
     if let Some(progress) = store.migration_progress() {
-        super::overlays_solid::mount_migration_solid(styles, &progress, now, width, height);
+        super::overlays_solid::mount_migration_solid(
+            styles, &progress, now, width, height, animations,
+        );
     }
 }
 
@@ -163,6 +171,37 @@ mod tests {
         let text = frame.text_grid().join("\n");
         assert!(text.contains("Connection lost…"), "headline: {text}");
         assert!(text.contains("Reconnecting to the server automatically."), "copy: {text}");
+    }
+
+    /// G-477 — the box is the ref's FIVE rows (reconnecting.tsx:18-37:
+    /// paddingTop 1 + headline + `gap={1}` + copy + paddingBottom 1 —
+    /// the old 4-row port pasted the copy directly under the
+    /// headline). 60×12 centers the 5-row box at top 3: pad (3),
+    /// headline (4), empty raised gap row (5), copy (6), pad (7) — the
+    /// raised background spans all five, and the rows outside the box
+    /// keep the dimmed scrim color.
+    #[test]
+    fn reconnecting_box_is_five_rows_with_a_gap_row() {
+        let styles = crate::theme::ThemeState::v2_dark().styles();
+        let mut frame = frame_with(60, 12);
+        super::super::overlays_solid::reconnecting_over_frame(&mut frame, &styles, 0, true, false);
+        let raised = CellColor::from(styles.background_raised);
+        let dimmed = CellColor::Rgb(82, 82, 82);
+        let rows = frame.text_grid();
+        assert_eq!(rows[3].trim(), "", "padTop row");
+        assert!(rows[4].contains("Connection lost…"), "headline row");
+        assert_eq!(rows[5].trim(), "", "the gap row is empty");
+        assert!(rows[6].contains("Reconnecting to the server automatically."), "copy row");
+        assert_eq!(rows[7].trim(), "", "padBottom row");
+        // The raised background covers the five rows (probe column 30 —
+        // the box's centered interior), nothing above/below.
+        for y in 3..8 {
+            assert_eq!(frame.cell(y, 30).bg, raised, "raised interior at row {y}");
+        }
+        assert_eq!(frame.cell(2, 30).bg, dimmed, "above the box stays dimmed");
+        assert_eq!(frame.cell(8, 30).bg, dimmed, "below the box stays dimmed");
+        // The geometry helper agrees.
+        assert_eq!(super::super::overlays_solid::reconnecting_geometry(60, 12).3, 5);
     }
 
     /// G-439 — the managed arm (`client.restart !== undefined`,
@@ -377,11 +416,36 @@ mod tests {
             0,
             40,
             10,
+            true,
         );
         crate::components::chrome_solid::composite_chrome_tree(&mut frame);
         let row = frame.text_grid()[8].clone();
         assert!(row.contains("Loading plugins…"), "pill row: {row}");
         assert!(frame.text_grid()[9].trim().is_empty(), "bottom=1 leaves the last row");
+    }
+
+    /// G-480 — animations off renders the pill's static `⋯ {label}`
+    /// fallback (spinner.tsx:28-29): no braille glyph at any clock.
+    #[test]
+    fn startup_pill_static_fallback_when_animations_off() {
+        let styles = crate::theme::ThemeState::v2_dark().styles();
+        let mut frame = frame_with(40, 10);
+        crate::components::overlays_solid::mount_startup_loading_solid(
+            &styles,
+            "Loading plugins…",
+            10_000,
+            40,
+            10,
+            false,
+        );
+        crate::components::chrome_solid::composite_chrome_tree(&mut frame);
+        let row = frame.text_grid()[8].clone();
+        assert!(row.contains("⋯ Loading plugins…"), "static glyph: {row}");
+        // No braille frame glyph at any clock (the U+2800 block).
+        assert!(
+            !row.chars().any(|ch| ('\u{2800}'..='\u{28FF}').contains(&ch)),
+            "no braille glyph while gated: {row}"
+        );
     }
 
     /// D2.2 overlays lane — the family's seating order is today's

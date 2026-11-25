@@ -1480,6 +1480,11 @@ fn apply_session_move(row: &mut crate::data::SessionSnapshot, moved: &SessionMov
     }
 }
 
+/// G-483 — one prompt preview hit rect: `(x, y, w, h, index)` in
+/// screen coordinates (the release opens the preview at `index`,
+/// prompt/index.tsx:1697-1703/1728-1733).
+type PromptImageHits = Vec<(usize, usize, usize, usize, usize)>;
+
 pub struct Store {
     /// Reactive runtime owning the graph (pump via `run_effects`).
     pub runtime: Runtime,
@@ -1827,6 +1832,10 @@ pub struct Store {
     /// gate — off unless the config turns it on (v2's falsy default,
     /// config/index.tsx:164 + session/index.tsx:2459).
     image_preview: Cell<bool>,
+    /// `prompt.image_preview` (G-483, ref config/index.tsx:144-146):
+    /// the prompt input's inline preview strip's gate — off unless
+    /// the config turns it on (prompt/index.tsx:1676's falsy check).
+    prompt_image_preview: Cell<bool>,
     /// The terminal capability snapshot (R-07/D3-4b): the opentui probe
     /// owns detection (kitty graphics + DA1 sixel + cell-px resolution);
     /// `protocol="auto"` resolves against it in `image_view`.
@@ -2209,6 +2218,16 @@ pub struct Store {
     /// `TabPulseTrack::sync` at status flips; the render derives every
     /// envelope level from these + the clock, stateless per frame).
     tab_pulses: RefCell<HashMap<String, crate::components::tab_pulse::TabPulseTrack>>,
+    /// G-479 — the per-session prompt-pulse counter
+    /// (`promptPulses`, context/session-tabs.tsx:80/310-315: one per
+    /// `session.inbox.enqueued` USER item on a non-current, open-tab
+    /// session — the edge flash + number ignition's trigger).
+    prompt_pulses: RefCell<HashMap<String, u64>>,
+    /// G-483 — the prompt preview strip's hit rects (one per visible
+    /// thumb + the `+N more` cell): `(x, y, w, h, index)` in SCREEN
+    /// coordinates — the release opens the image preview at `index`
+    /// (prompt/index.tsx:1697-1703/1728-1733).
+    prompt_image_hits: RefCell<PromptImageHits>,
     /// SURF-2 the MCP toggle seam (mcp.connect/disconnect).
     mcp_toggle_sink: std::cell::RefCell<Rc<dyn McpToggleSink>>,
     /// RE-02: the plugin enable/disable seam (`plugins.toggle`).
@@ -4390,6 +4409,7 @@ impl Store {
             redraw_requests,
             _redraw_effect: redraw_effect,
             image_preview: Cell::new(false),
+            prompt_image_preview: Cell::new(false),
             graphics_capabilities: std::cell::RefCell::new(None),
             hyperlinks_supported: std::cell::Cell::new(false),
             frame_images: std::cell::RefCell::new(Vec::new()),
@@ -4470,11 +4490,13 @@ impl Store {
             update_dialog,
             update_dismissed: RefCell::new(Vec::new()),
             home_update_hit: RefCell::new(None),
+            prompt_image_hits: RefCell::new(Vec::new()),
             mcp_toggle_sink: std::cell::RefCell::new(Rc::new(NoMcpToggleSink)),
             plugin_toggle_sink: std::cell::RefCell::new(Rc::new(NoPluginToggleSink)),
             pair_refresh_sink: std::cell::RefCell::new(None),
             config_sink: std::cell::RefCell::new(Rc::new(NoConfigSink)),
             tab_pulses: RefCell::new(HashMap::new()),
+            prompt_pulses: RefCell::new(HashMap::new()),
             theme_mode_pref: RefCell::new(None),
             system_mode: Cell::new(oc_theme::types::Mode::Dark),
             interrupt_sink: std::cell::RefCell::new(Rc::new(RecordingInterruptSink::default())),
@@ -4738,6 +4760,11 @@ impl Store {
     /// Sync one tab's pulse transition stamps against its live status
     /// (`TabPulseTrack::sync` — stamps only on flips, at the store
     /// clock) and return the track for the strip's envelope read.
+    /// G-479 (va20): the prompt-pulse counter reads from the store's
+    /// registry, and `unread` (the indicator's memo:
+    /// `status.unread && !pending`) + `pending` (busy or attention)
+    /// drive the dissolve stamps.
+    #[allow(clippy::fn_params_excessive_bools)]
     #[must_use]
     pub fn tab_pulse_track(
         &self,
@@ -4745,11 +4772,14 @@ impl Store {
         runs: bool,
         glow: bool,
         complete: bool,
+        unread: bool,
+        pending: bool,
     ) -> crate::components::tab_pulse::TabPulseTrack {
         let now = self.clock();
+        let prompt_pulses = self.prompt_pulses.borrow().get(session_id).copied().unwrap_or(0);
         let mut pulses = self.tab_pulses.borrow_mut();
         let track = pulses.entry(session_id.to_owned()).or_default();
-        track.sync(runs, glow, complete, now);
+        track.sync(runs, glow, complete, prompt_pulses, unread, pending, now);
         *track
     }
 
@@ -5167,6 +5197,54 @@ impl Store {
         self.image_preview.get()
     }
 
+    /// `prompt.image_preview` (G-483): set from the loaded config
+    /// (`App::apply_config`); default off.
+    pub fn set_prompt_image_preview(&self, enabled: bool) {
+        self.prompt_image_preview.set(enabled);
+    }
+
+    #[must_use]
+    pub fn prompt_image_preview(&self) -> bool {
+        self.prompt_image_preview.get()
+    }
+
+    /// G-483 — the prompt input's inline preview strip's images
+    /// (`deduplicatePromptImages(store.prompt.files)` filtered to
+    /// `data:image/*`, prompt/index.tsx:393-395): the composer
+    /// draft's image attachments as data URIs, deduplicated by
+    /// identity (`(name, mention, uri)` — the ref's
+    /// `JSON.stringify([name, description, mention.text])` + payload
+    /// key, prompt/attachment.ts:40-50; mentionless files pass
+    /// through). EMPTY while the config gate is off.
+    #[must_use]
+    pub fn prompt_image_previews(&self, session_id: &str) -> Vec<String> {
+        if !self.prompt_image_preview.get() {
+            return Vec::new();
+        }
+        let composer = self.composer(session_id);
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for file in &composer.draft.files {
+            let Some(payload) = &file.payload else { continue };
+            if !payload.mime.starts_with("image/") {
+                continue;
+            }
+            let uri = payload.to_data_uri();
+            match &file.mention {
+                Some(mention) => {
+                    let key = (file.name.clone(), mention.clone(), uri.clone());
+                    if seen.insert(key) {
+                        out.push(uri);
+                    }
+                }
+                // No mention text: the identity fn returns undefined —
+                // the file is always kept.
+                None => out.push(uri),
+            }
+        }
+        out
+    }
+
     /// The terminal capability snapshot (R-07/D3-4b): the run loop's
     /// capability event writes it; tests inject `None`/fixtures.
     pub fn set_graphics_capabilities(
@@ -5201,6 +5279,23 @@ impl Store {
     /// after drawing the cell grid (and replaces it next frame).
     pub fn set_frame_images(&self, images: Vec<crate::image_view::ImagePlacement>) {
         *self.frame_images.borrow_mut() = images;
+    }
+
+    /// G-483 — record the prompt preview strip's hit rects (screen
+    /// coordinates; the session/home mounts compute them).
+    pub fn set_prompt_image_hits(&self, hits: PromptImageHits) {
+        *self.prompt_image_hits.borrow_mut() = hits;
+    }
+
+    /// G-483 — the preview thumb (or `+N more` cell) under a release,
+    /// as the dialog's initial index.
+    #[must_use]
+    pub fn prompt_image_hit_at(&self, col: usize, row: usize) -> Option<usize> {
+        self.prompt_image_hits
+            .borrow()
+            .iter()
+            .find(|(x, y, w, h, _)| col >= *x && col < *x + *w && row >= *y && row < *y + *h)
+            .map(|(_, _, _, _, index)| *index)
     }
 
     #[must_use]
@@ -6984,8 +7079,19 @@ impl Store {
 
     /// Set the update dialog's live state (the check/install
     /// transitions).
+    /// va20 T8 — the ref's focus effect (dialog-update.tsx:65: a state
+    /// transition re-seats the active button — the confirm row APPEARS
+    /// with Available/Installed, the busy states carry none): the port
+    /// pinned the selection at open only, so a Checking→Available flip
+    /// left the focus on Skip and the confirm Enter dismissed instead
+    /// of installing.
+    #[allow(clippy::needless_pass_by_value)] // callers pass owned constructed states
     pub fn set_update_dialog(&self, state: crate::components::update::UpdateDialogState) {
-        self.update_dialog.set(state);
+        self.update_dialog.set(state.clone());
+        if matches!(self.top_dialog(), Some(entry) if entry.kind == DialogKind::Update) {
+            let selected = crate::components::update::dialog_initial_selection(&state);
+            self.update_dialog(|top| top.select.selected = selected);
+        }
     }
 
     /// Take the bell request (the run loop writes `\x07` once).
@@ -14343,6 +14449,17 @@ impl Store {
                 }
                 let Some(item) = event.data.get("item") else { return };
                 if item.get("type").and_then(Value::as_str) == Some("user") {
+                    // G-479 — the prompt-pulse counter (`promptPulses`,
+                    // context/session-tabs.tsx:309-316): a USER item
+                    // on a root-mapped, NON-current, open-tab session
+                    // rings the tab's edge flash + number ignition.
+                    let root = self.session_root(&session);
+                    let active = self.tabs.get().active(&self.route.get());
+                    let in_tabs = self.tabs.get().tabs.iter().any(|tab| tab.session_id == root);
+                    if active.as_deref() != Some(root.as_str()) && in_tabs {
+                        let mut pulses = self.prompt_pulses.borrow_mut();
+                        *pulses.entry(root).or_insert(0) += 1;
+                    }
                     let id = event.string("inboxID").unwrap_or_else(|| event.id.clone());
                     let text = item
                         .pointer("/payload/text")

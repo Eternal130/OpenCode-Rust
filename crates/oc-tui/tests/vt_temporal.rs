@@ -693,8 +693,30 @@ fn vt_temporal_busy_strip_spinner_paints_interactive_token() {
     let g = ((fg >> 8) & 0xff) as u8;
     let b = (fg & 0xff) as u8;
     // The exact token: ThemeStyles.interactive = hue.interactive[200]
-    // of the boot theme (v2 opencode, dark).
-    assert_eq!((r, g, b), theme_interactive(), "the busy spinner paints hue.interactive[200]");
+    // of the boot theme (v2 opencode, dark) — LIFTED toward text.base
+    // while the number-ignition window (G-479: the busy flip's 0.85
+    // jump tweening to 0 over 700 ms) or the sweep's 0.15 term is
+    // live (the ref's numberColor, session-tabs.tsx:1631-1643 — the
+    // spinner glyph rides the same lift). The first glyph the poll
+    // catches lands inside that window, so the color sits ON the
+    // interactive→text ramp rather than at the exact resting token.
+    // (Re-pin, va20: the pre-G-479 port had no ignition, so the exact
+    // token was always right.)
+    let styles = oc_tui::theme::ThemeState::v2_dark().styles();
+    let text = match styles.text.fg {
+        Some(oc_tui::style::Color::Rgb(r, g, b)) => (r, g, b),
+        other => panic!("text token must be RGB, got {other:?}"),
+    };
+    let interactive = theme_interactive();
+    let on_ramp = |got: u8, from: u8, to: u8| got >= from.min(to) && got <= from.max(to);
+    assert!(
+        on_ramp(r, interactive.0, text.0)
+            && on_ramp(g, interactive.1, text.1)
+            && on_ramp(b, interactive.2, text.2),
+        "the busy spinner paints the hue.interactive[200] token (lifted toward \
+         text.base while the ignition/sweep window is live): got ({r}, {g}, {b}), \
+         ramp {interactive:?} → {text:?}"
+    );
 }
 
 /// The resolved constant of the v2 opencode dark theme's

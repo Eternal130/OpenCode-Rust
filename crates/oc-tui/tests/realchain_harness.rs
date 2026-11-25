@@ -1555,6 +1555,38 @@ pub fn ref_stage(sandbox: &Sandbox) -> RefStage {
         .expect("write opencode wrapper");
     set_exec_bit(&wrapper);
 
+    // va20 (T6, from realchain_va17's v17f inline block): the ref
+    // server's `client.api.file.find` (the @-file popup's search)
+    // backs onto ripgrep — the ref server resolves `rg` from PATH
+    // (any version; the system binary short-circuits the pinned
+    // download) — so the host rg binary is staged next to the staged
+    // bun (this dir is FIRST on the ref PATH). Idempotent (staged rg
+    // survives re-stages); a fully-missing probe is NON-fatal here —
+    // the scenarios that need the search assert the staged binary
+    // themselves.
+    let staged_rg = bin_dir.join("rg");
+    if !staged_rg.exists() {
+        let mut staged = false;
+        for host_rg in [
+            "/root/.local/share/opencode/bin/rg".as_ref(),
+            std::path::Path::new("/root/.cache/opencode/bin/rg"),
+            std::path::Path::new("/root/.cache/opencode-rust/bin/rg"),
+        ] {
+            if host_rg.is_file() {
+                std::fs::copy(host_rg, &staged_rg).unwrap_or_else(|e| panic!("stage rg: {e}"));
+                set_exec_bit(&staged_rg);
+                staged = true;
+                break;
+            }
+        }
+        if !staged {
+            eprintln!(
+                "ref_stage: no host rg found (searched the opencode bin caches) — \
+                 @-file search scenarios will fail their staged-rg assertions"
+            );
+        }
+    }
+
     let project = sandbox.root.join("project");
     std::fs::create_dir_all(&project).expect("ref project dir");
     std::fs::write(project.join("README.md"), "# t9 ref sandbox project\n").expect("project file");

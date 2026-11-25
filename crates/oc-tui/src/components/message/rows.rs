@@ -570,7 +570,10 @@ fn paint_placeholder_box(
 /// Decode + quantize a thumbnail's PNG into block cells, aspect-
 /// fit inside `max_cols × max_rows` (`None` when the payload does
 /// not decode — the "No preview" fallback's condition).
-fn blocks_thumbnail(
+/// The blocks-fallback thumbnail (`blocks_thumbnail`, shared with the
+/// composer's prompt preview strip, G-483): decode + aspect-fit +
+/// quantize to block cells.
+pub(crate) fn blocks_thumbnail(
     bytes: &[u8],
     max_cols: usize,
     max_rows: usize,

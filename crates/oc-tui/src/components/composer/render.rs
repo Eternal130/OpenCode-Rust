@@ -299,6 +299,15 @@ pub struct PromptView<'a> {
     /// `selectionBg`/`selectionFg` (prompt/index.tsx never passes
     /// them, opentui defaults them to undefined).
     pub selection: Option<std::ops::Range<usize>>,
+    /// G-483 — the prompt input's inline preview strip
+    /// (prompt/index.tsx:1676-1741, gated by `prompt.image_preview`
+    /// — the gate folds into the list, so empty = no strip): the
+    /// DEDUPLICATED image attachment data URIs (the strip slices the
+    /// first three + counts `+N more`).
+    pub image_previews: Vec<String>,
+    /// The terminal's row count — the strip's thumb height =
+    /// `max(4, min(8, h / 4))` (prompt/index.tsx:397).
+    pub terminal_height: usize,
 }
 
 /// The composer cursor's blink period (`input.cursor.blinking`'s
@@ -1100,6 +1109,8 @@ mod tests {
             rail: None,
             caret,
             selection: None,
+            image_previews: Vec::new(),
+            terminal_height: 24,
         };
         let with = crate::components::composer_solid::render_prompt_frame_dispatch(
             &view(Some(2)),
@@ -1142,6 +1153,8 @@ mod tests {
             rail,
             caret: None,
             selection: None,
+            image_previews: Vec::new(),
+            terminal_height: 24,
         };
         let gray = crate::components::composer_solid::render_prompt_frame_dispatch(
             &view(None),
@@ -1234,6 +1247,8 @@ mod tests {
             rail: Some(CellColor::from(ThemeState::v2_dark().styles().agent_colors[0])),
             caret: None,
             selection: None,
+            image_previews: Vec::new(),
+            terminal_height: 24,
         };
         crate::components::composer_solid::render_prompt_frame_dispatch(
             &view,
@@ -1403,6 +1418,8 @@ mod tests {
             rail: None,
             caret: None,
             selection: None,
+            image_previews: Vec::new(),
+            terminal_height: 24,
         };
         let frame = crate::components::composer_solid::render_prompt_frame_dispatch(
             &view,
@@ -1457,6 +1474,8 @@ mod tests {
             rail: None,
             caret: None,
             selection: None,
+            image_previews: Vec::new(),
+            terminal_height: 24,
         };
         let frame =
             crate::components::composer_solid::render_prompt_frame_dispatch(&view, 80, 8, &theme);

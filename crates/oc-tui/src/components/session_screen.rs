@@ -253,6 +253,8 @@ pub fn session_composer_frame(
         rail: None,
         caret: None,
         selection: None,
+        image_previews: Vec::new(),
+        terminal_height: 24,
     };
     crate::components::composer_solid::render_prompt_frame_dispatch(
         &view,

@@ -154,6 +154,10 @@ pub struct TuiConfig {
     /// tool-result images in the transcript (default off — v2's falsy
     /// check at session/index.tsx:2459).
     pub session_image_preview: bool,
+    /// `prompt.image_preview` (G-483, ref config/index.tsx:144-146):
+    /// show image attachment previews above the prompt input
+    /// (default off — the falsy check at prompt/index.tsx:1676).
+    pub prompt_image_preview: bool,
     /// The `tabs` section (open-tabs model): enabled defaults ON
     /// (mode "auto", `HERDR_ENV=1` turns it off), scope defaults cwd.
     pub tabs: TabsConfig,
@@ -234,6 +238,7 @@ impl Default for TuiConfig {
             leader_timeout_ms: None,
             attention: AttentionConfig::default(),
             session_image_preview: false,
+            prompt_image_preview: false,
             session_permissions: None,
             session_thinking: false,
             session_verbosity: None,
@@ -320,6 +325,9 @@ impl TuiConfig {
         });
         let session_image_preview =
             info.session.as_ref().and_then(|session| session.image_preview).unwrap_or(false);
+        // G-483 — `prompt.image_preview` (PromptInfo's field, default off).
+        let prompt_image_preview =
+            info.prompt.as_ref().and_then(|prompt| prompt.image_preview).unwrap_or(false);
         let tabs = TabsConfig {
             enabled: {
                 let section = info.tabs.as_ref();
@@ -377,6 +385,7 @@ impl TuiConfig {
             leader_timeout_ms,
             attention,
             session_image_preview,
+            prompt_image_preview,
             tabs,
             session_sidebar,
             mouse,
@@ -464,6 +473,9 @@ impl TuiConfig {
         let attention = attention_from_json(value.get("attention"));
         let session_image_preview =
             value.pointer("/session/image_preview").and_then(Value::as_bool).unwrap_or(false);
+        // G-483 — `prompt.image_preview`, default off.
+        let prompt_image_preview =
+            value.pointer("/prompt/image_preview").and_then(Value::as_bool).unwrap_or(false);
         let tabs = TabsConfig::resolve(value.get("tabs"));
         let session_sidebar = match value.pointer("/session/sidebar").and_then(Value::as_str) {
             Some("hide") => crate::components::sidebar::SidebarMode::Hide,
@@ -491,6 +503,7 @@ impl TuiConfig {
             leader_timeout_ms,
             attention,
             session_image_preview,
+            prompt_image_preview,
             tabs,
             session_sidebar,
             mouse,
@@ -816,6 +829,31 @@ mod tests {
         // An unknown scope falls back to cwd (v2's schema enum).
         let config = TuiConfig::parse(r#"{ "tabs": { "scope": "everywhere" } }"#, None);
         assert_eq!(config.tabs.scope, TabsScope::Cwd);
+    }
+    /// G-483 — `prompt.image_preview` defaults OFF on every decode
+    /// path (the falsy check at prompt/index.tsx:1676); an explicit
+    /// true survives.
+    #[test]
+    fn parses_prompt_image_preview_defaulting_off() {
+        assert!(!TuiConfig::default().prompt_image_preview);
+        assert!(!TuiConfig::parse("{}", None).prompt_image_preview);
+        assert!(
+            !TuiConfig::parse(r#"{"prompt": {"image_preview": false}}"#, None).prompt_image_preview
+        );
+        assert!(
+            TuiConfig::parse(r#"{"prompt": {"image_preview": true}}"#, None).prompt_image_preview
+        );
+        // from_info: absent → false, explicit Some(true) → true.
+        let info = oc_core::cli_config::Info::default();
+        assert!(!TuiConfig::from_info(&info, None).prompt_image_preview);
+        let info = oc_core::cli_config::Info {
+            prompt: Some(oc_core::cli_config::PromptInfo {
+                image_preview: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(TuiConfig::from_info(&info, None).prompt_image_preview);
     }
 }
 
