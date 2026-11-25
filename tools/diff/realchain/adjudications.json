@@ -779,6 +779,86 @@
    "g_ref": "G-489/G-490",
    "adjudicated_by": "controller",
    "adjudicated_at": "2026-11-25"
+  },
+  {
+   "id": "v19-v19sub-done",
+   "scenario_pattern": "v19sub",
+   "state_pattern": "done",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:AIN|mini|PLA|hello|K|REALCHAIN\\-REPLAY\\-OK|sub|Build|nt|rou|nd\\-|p|omp|let|ed\\.|┃)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-25): v19sub paired exports retained as anchor-wave (va25) evidence — the realchain test is #[ignore]d by controller ruling (rig cannot drive a running child session: mini localDirectory chdir, ref CSI 6n probe viewport corruption, 3-col transcript layout — lane forensics in the va19 report); G-482's fix itself is landed and unit-anchored (mini_subagent_footer). Deferred face: va25.",
+   "g_ref": "va19 T9 anchor downgrade",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-25"
+  },
+  {
+   "id": "v19-v19sub-inspector-mid",
+   "scenario_pattern": "v19sub",
+   "state_pattern": "inspector-mid",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:mini|hello|┃|Check|subagent|Review|does\\.)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-25): v19sub paired exports retained as anchor-wave (va25) evidence — the realchain test is #[ignore]d by controller ruling (rig cannot drive a running child session: mini localDirectory chdir, ref CSI 6n probe viewport corruption, 3-col transcript layout — lane forensics in the va19 report); G-482's fix itself is landed and unit-anchored (mini_subagent_footer). Deferred face: va25.",
+   "g_ref": "va19 T9 anchor downgrade",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-25"
+  },
+  {
+   "id": "v19-v19sub-inspector-settled",
+   "scenario_pattern": "v19sub",
+   "state_pattern": "inspector-settled",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:AIN|mini|PLA|hello|K|REALCHAIN\\-REPLAY\\-OK|sub|Build|nt|rou|Check|tri|subagent|Review|let|Parser|┃|nd|err|or|rec|ove|ry\\.|No|de|fec|ts|fou|nd\\.)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-25): v19sub paired exports retained as anchor-wave (va25) evidence — the realchain test is #[ignore]d by controller ruling (rig cannot drive a running child session: mini localDirectory chdir, ref CSI 6n probe viewport corruption, 3-col transcript layout — lane forensics in the va19 report); G-482's fix itself is landed and unit-anchored (mini_subagent_footer). Deferred face: va25.",
+   "g_ref": "va19 T9 anchor downgrade",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-25"
+  },
+  {
+   "id": "v19-v19sub-menu",
+   "scenario_pattern": "v19sub",
+   "state_pattern": "menu",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:mini|hello|Select|Search|Check|▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-25): v19sub paired exports retained as anchor-wave (va25) evidence — the realchain test is #[ignore]d by controller ruling (rig cannot drive a running child session: mini localDirectory chdir, ref CSI 6n probe viewport corruption, 3-col transcript layout — lane forensics in the va19 report); G-482's fix itself is landed and unit-anchored (mini_subagent_footer). Deferred face: va25.",
+   "g_ref": "va19 T9 anchor downgrade",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-25"
+  },
+  {
+   "id": "v19-v19sub-running",
+   "scenario_pattern": "v19sub",
+   "state_pattern": "running",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:mini|hello|┃|interrupt|subagent)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-25): v19sub paired exports retained as anchor-wave (va25) evidence — the realchain test is #[ignore]d by controller ruling (rig cannot drive a running child session: mini localDirectory chdir, ref CSI 6n probe viewport corruption, 3-col transcript layout — lane forensics in the va19 report); G-482's fix itself is landed and unit-anchored (mini_subagent_footer). Deferred face: va25.",
+   "g_ref": "va19 T9 anchor downgrade",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-25"
   }
  ]
 }
