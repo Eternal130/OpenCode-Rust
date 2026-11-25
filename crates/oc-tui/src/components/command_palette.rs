@@ -4601,13 +4601,18 @@ mod tests {
             project_directory: "/tmp/proj".to_owned(),
             project_canonical: "/tmp/worktrees/main".to_owned(),
         });
-        assert_eq!(picker_project_name(&store), None, "no registry yet");
+        // Before the registry lands, the info's OWN project resolves
+        // through `projectName`'s basename fallback (`location.get`
+        // already resolved the owning project's canonical).
+        assert_eq!(picker_project_name(&store).as_deref(), Some("main"));
         store.project_list_loaded(vec![crate::components::dialog_open::ProjectRow {
             id: "prj_1".to_owned(),
             name: Some("Configured name".to_owned()),
             canonical: "/tmp/worktrees/main".to_owned(),
             vcs: false,
         }]);
+        // The REGISTRY row by id wins (the configured name, not the
+        // basename fallback).
         assert_eq!(picker_project_name(&store).as_deref(), Some("Configured name"));
         // The session route: the SESSION's own project id wins.
         store.ingest_all([crate::data::Ingest::Resync {
@@ -5707,7 +5712,10 @@ mod tests {
         );
 
         // export → the options form → toggles flip + the action
-        // submits (G-132).
+        // submits (G-132; G-487 re-pin: the form is a custom modal —
+        // `tab` cycles the format-scoped ACTIVE control, `return`
+        // activates it, dialog-export-options.tsx:56-78 — the legacy
+        // select-submission strings no longer reach it).
         dispatcher.dispatch(&store, "session.export", None);
         assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::SessionExport { .. }));
         // The default form: markdown, thinking ON (index.tsx:1213),
@@ -5715,29 +5723,40 @@ mod tests {
         let options = store.export_options_state();
         assert_eq!(options.format.as_str(), "markdown");
         assert!(options.thinking && options.tools && !options.sanitize);
-        // Flipping thinking + choosing JSON re-renders the form.
-        let submit = crate::components::dialog::execute_submission(
-            &store,
-            &mut dispatcher,
-            "toggle:thinking",
-        );
-        assert_eq!(submit, Dispatch::Handled);
+        let mut keymap = crate::keymap::Keymap::new();
+        keymap.push_mode("dialog");
+        let clock = crate::keymap::ManualClock::default();
+        let press = |store: &Store, keymap: &mut crate::keymap::Keymap, key: &str| {
+            let outcome = crate::components::dialog::handle_dialog_key(
+                store,
+                keymap,
+                &clock,
+                crate::keymap::KeyStroke::parse(key).expect(key),
+                (100, 30),
+            );
+            assert_eq!(outcome, crate::components::dialog::DialogKeyOutcome::Consumed);
+        };
+        // md → json → thinking: flip the toggle off.
+        for key in ["tab", "tab", "return"] {
+            press(&store, &mut keymap, key);
+        }
         assert!(!store.export_options_state().thinking);
-        let submit =
-            crate::components::dialog::execute_submission(&store, &mut dispatcher, "format:json");
-        assert_eq!(submit, Dispatch::Handled);
+        // thinking → tools → copy → export → md → json: select JSON.
+        for key in ["tab", "tab", "tab", "tab", "tab", "return"] {
+            press(&store, &mut keymap, key);
+        }
         assert_eq!(store.export_options_state().format.as_str(), "json");
-        let submit = crate::components::dialog::execute_submission(
-            &store,
-            &mut dispatcher,
-            "toggle:sanitize",
-        );
-        assert_eq!(submit, Dispatch::Handled);
+        // json → sanitize: flip it on.
+        for key in ["tab", "return"] {
+            press(&store, &mut keymap, key);
+        }
         assert!(store.export_options_state().sanitize);
-        // The action row exports with the chosen values.
-        let submit =
-            crate::components::dialog::execute_submission(&store, &mut dispatcher, "action:export");
-        assert_eq!(submit, Dispatch::Handled);
+        // sanitize → copy → export: the confirm arm submits with the
+        // chosen values.
+        for key in ["tab", "tab", "return"] {
+            press(&store, &mut keymap, key);
+        }
+        assert!(store.top_dialog().is_none(), "the form closed on export");
         assert_eq!(
             actions.calls.borrow().last(),
             Some(&crate::store::SessionActionCall::Export {

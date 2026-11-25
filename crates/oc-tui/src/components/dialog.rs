@@ -2541,6 +2541,9 @@ mod tests {
         );
         assert_eq!(entry.value, "Work", "the prompt prefills the account's label");
         // The confirm PATCHes the label through the recording sink.
+        // G-494② re-pin: the prompt STAYS OPEN until the POST settles
+        // (dialog-integration.tsx:229-230 — the old immediate close is
+        // gone); success then re-renders the accounts view.
         store.integration_account_rename_submit("cred_1", "  Personal  ");
         assert!(
             sink.calls.borrow().iter().any(|call| matches!(
@@ -2551,7 +2554,21 @@ mod tests {
             "credential.update fired with the trimmed label: {:?}",
             sink.calls.borrow()
         );
-        assert!(store.top_dialog().is_none(), "the prompt closed on confirm");
+        assert!(
+            matches!(
+                &store.top_dialog().expect("prompt still open").kind,
+                DialogKind::IntegrationRename { credential_id } if credential_id == "cred_1"
+            ),
+            "the prompt stays open pending the POST"
+        );
+        store.integration_rename_settled("cred_1", true);
+        assert!(
+            matches!(
+                &store.top_dialog().expect("accounts re-rendered").kind,
+                DialogKind::IntegrationAccounts { integration_id } if integration_id == "github"
+            ),
+            "success re-renders the accounts view (manageConnections)"
+        );
     }
 
     /// The modal layer through the pump-shaped path: escape closes,

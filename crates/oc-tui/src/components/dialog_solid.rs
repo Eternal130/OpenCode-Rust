@@ -653,9 +653,10 @@ fn title_chunks(inputs: &DialogInputs, paint: &RowPaint, index: usize) -> Styled
     // the title's start at box column 4, so the budget is the clip
     // less that offset. G-488 — the tab menu's rows are NOT select
     // rows: `paddingLeft 1` + title + `paddingRight 1`
-    // (session-tabs.tsx:460-462), no marker column, no footer.
+    // (session-tabs.tsx:460-462), no marker column, no footer — the
+    // budget is the box width less the two padding columns.
     let clip = if inputs.family == Family::Menu {
-        inputs.box_width.saturating_sub(2).saturating_sub(1)
+        inputs.box_width.saturating_sub(2)
     } else {
         title_clip_end(inputs.box_width, footer_text(inputs, index).as_deref()).saturating_sub(4)
     };
