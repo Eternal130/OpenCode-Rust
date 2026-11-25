@@ -236,6 +236,21 @@ jobs:
           name: build-target
           path: .
 
+      # CI-07 (2026-11-25, run 45640264719): the realchain freshness guard
+      # (realchain_harness.rs:174) asserts every workspace source is older
+      # than the spawned production binary — locally that holds by build
+      # order, but the archived binary carries the BUILD job's mtime while
+      # this checkout's sources are minutes newer (the old pipeline masked
+      # this: consumers recompiled, restamping the binary). Pin exactly the
+      # files the guard reads to the epoch: causally true (the archive was
+      # built from this very commit in this run) and the guard keeps full
+      # force locally. Only this job needs it — the pty/frame consumers
+      # spawn the binary without the guard (proven green, same run).
+      - name: Age sources below the archived binary (realchain guard)
+        run: |
+          find crates -type f \( -name '*.rs' -o -name 'Cargo.toml' \) -exec touch -d @0 {} +
+          touch -d @0 Cargo.toml Cargo.lock
+
       # Tests stage scratch sandboxes under /tmp/opencode (PIDs-unique
       # names). The dev box pre-creates it; runners do not.
       - name: Prepare scratch dir
