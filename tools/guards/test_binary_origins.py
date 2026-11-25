@@ -76,7 +76,7 @@ def main() -> int:
             continue
         scanned += 1
         if GRAMMAR_META.search(blob):
-            blob = GRAMMAR_META.sub(b".worktrees/gone/third_party/tree-sitter", blob)
+            blob = GRAMMAR_META.sub(b"third_party/tree-sitter", blob)
         for match in set(PATTERN.findall(blob)):
             name = match.decode("utf-8", "replace")
             if not (root / ".worktrees" / name).is_dir():
