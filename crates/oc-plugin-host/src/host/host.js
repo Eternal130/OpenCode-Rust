@@ -2010,85 +2010,6 @@ function makeCtx(pluginId, options) {
           limit: Number.isFinite(scan.limit) ? scan.limit : null,
         });
       },
-      store(key, options) {
-        const bare = String(key ?? "");
-        if (!bare) throw new TypeError("Invalid storage segment: (empty)");
-        const initial = options?.initial;
-        if (!initial || typeof initial !== "object" || Array.isArray(initial)) {
-          throw new TypeError("Storage values must be JSON-compatible objects");
-        }
-        const live = structuredClone(initial);
-        // The in-process serialization chain (the ref's Flock window;
-        // the port's OS flock guards the cross-process write).
-        let chain = Promise.resolve();
-        // The eventual durable hydrate: replaces the live object's
-        // contents in place once the kv read answers (reads before it
-        // lands see `initial` — the documented bounded deviation).
-        chain = chain.then(async () => {
-          try {
-            const durable = await hostRequest("storage.get", { pluginId, key: bare });
-            const value = durable && typeof durable === "object" && durable.value !== null
-              ? durable.value
-              : null;
-            if (value && typeof value === "object" && !Array.isArray(value)) {
-              replaceInPlace(live, value);
-            }
-          } catch {
-            // A failed hydrate leaves the initial value standing (the
-            // ref's load() falls back the same way).
-          }
-        });
-        const update = (mutation) => {
-          if (typeof mutation !== "function") {
-            throw new TypeError("store update requires a mutation function");
-          }
-          const operation = chain.then(async () => {
-            let base;
-            try {
-              const durable = await hostRequest("storage.get", { pluginId, key: bare });
-              base = durable && typeof durable === "object" && durable.value !== null
-                ? durable.value
-                : null;
-            } catch {
-              base = null;
-            }
-            const draft =
-              base && typeof base === "object" && !Array.isArray(base)
-                ? structuredClone(base)
-                : structuredClone(initial);
-            mutation(draft);
-            await hostRequest("storage.set", { pluginId, key: bare, value: draft });
-            replaceInPlace(live, draft);
-          });
-          chain = operation.then(
-            () => undefined,
-            () => undefined,
-          );
-          return operation;
-        };
-        return [live, update];
-      },
-      memory(key, options) {
-        const namespaced = `plugin.${pluginId}.${String(key ?? "")}`;
-        const existing = memoryEntries.get(namespaced);
-        if (existing) return existing;
-        const initial = options?.initial;
-        if (!initial || typeof initial !== "object" || Array.isArray(initial)) {
-          throw new TypeError("Storage values must be objects");
-        }
-        const live = structuredClone(initial);
-        const mutate = (mutation) => {
-          if (typeof mutation !== "function") {
-            throw new TypeError("memory mutation requires a function");
-          }
-          const draft = structuredClone(live);
-          mutation(draft);
-          replaceInPlace(live, draft);
-        };
-        const entry = [live, mutate];
-        memoryEntries.set(namespaced, entry);
-        return entry;
-      },
     },
 
     // -- registration-time sync bridge (wave 1) -------------------------------
@@ -4297,38 +4218,45 @@ async function handleLoadTui({ entry, options }) {
   ensureOpentuiShims(packageRoot);
   const mod = await import(`file://${abs}`);
   const def = mod.default;
-  // G-475 — the DUAL-SHAPE activation (owner ruling 2026-11-24): the
-  // v2 `{id, setup}` contract classifies FIRST (the same pipeline
-  // `load` uses — makeCtx + registrations, host.js:2545-2553); the
-  // legacy `tui(api)` face is the port's own v1-bridge superset and
-  // stays as the fallback. The ref itself has NO `default.tui` face
-  // (grep 0) — every ref v2 TUI plugin is `{id, setup}`.
-  const shape = classify(def);
-  if (shape.kind === "v2") {
-    const id = shape.id;
-    const record = { id, entry: abs, dispose: null, subscriptions: [], commands: new Map() };
-    plugins.set(id, record);
-    const loadOptions =
-      options && typeof options === "object" && !Array.isArray(options) ? options : {};
-    const ctx = makeCtx(id, loadOptions);
-    const maybeDispose = await shape.setup(ctx);
-    if (
-      typeof maybeDispose === "function" ||
-      (maybeDispose && typeof maybeDispose.dispose === "function")
-    ) {
-      record.dispose =
-        typeof maybeDispose === "function" ? maybeDispose : maybeDispose.dispose;
+  // G-475 — the DUAL-SHAPE activation (owner ruling 2026-11-24). The
+  // legacy `tui(api)` face (the port's own v1-bridge superset — the
+  // ref itself has NO `default.tui` face, grep 0) keeps priority when
+  // present: combined packages (omo-slim's tui entry exports BOTH
+  // `tui` and `setup` — the SERVER-side `load` already ran the v2
+  // setup for the server entry) drive the sidebar through the bridge.
+  // A tui entry WITHOUT the `tui()` face classifies v2-first: the
+  // `{id, setup}` contract runs the same pipeline `load` uses
+  // (makeCtx + registrations, host.js:2545-2553) — ref v2-only TUI
+  // plugins (opencode.notifications' shape) load in the bridge.
+  const hasTuiFace = def && typeof def === "object" && typeof def.tui === "function";
+  if (!hasTuiFace) {
+    const shape = classify(def);
+    if (shape.kind === "v2") {
+      const id = shape.id;
+      const record = { id, entry: abs, dispose: null, subscriptions: [], commands: new Map() };
+      plugins.set(id, record);
+      const loadOptions =
+        options && typeof options === "object" && !Array.isArray(options) ? options : {};
+      const ctx = makeCtx(id, loadOptions);
+      const maybeDispose = await shape.setup(ctx);
+      if (
+        typeof maybeDispose === "function" ||
+        (maybeDispose && typeof maybeDispose.dispose === "function")
+      ) {
+        record.dispose =
+          typeof maybeDispose === "function" ? maybeDispose : maybeDispose.dispose;
+      }
+      return { ok: true, pluginId: id, skipped: null, sidebar: sidebarSlots.has(id) };
     }
-    return { ok: true, pluginId: id, skipped: null, sidebar: sidebarSlots.has(id) };
-  }
-  if (shape.kind === "effect") {
-    const id = shape.id;
-    plugins.set(id, { id, entry: abs, dispose: null, subscriptions: [], commands: new Map() });
-    notify("log", {
-      level: "info",
-      message: `${id}: effect contract not runnable in this host wave; loaded inert`,
-    });
-    return { ok: true, pluginId: id, skipped: "effect", sidebar: false };
+    if (shape.kind === "effect") {
+      const id = shape.id;
+      plugins.set(id, { id, entry: abs, dispose: null, subscriptions: [], commands: new Map() });
+      notify("log", {
+        level: "info",
+        message: `${id}: effect contract not runnable in this host wave; loaded inert`,
+      });
+      return { ok: true, pluginId: id, skipped: "effect", sidebar: false };
+    }
   }
   if (!def || typeof def !== "object" || typeof def.tui !== "function") {
     throw new Error(`${entry}: default export has no tui(api) entry`);
@@ -4434,23 +4362,8 @@ async function handleLoadTui({ entry, options }) {
         return registerMarkdownRenderer(pluginId, language, render);
       },
     },
-    // G-475 — the v1-bridge kv face routes through the real storage
-    // port now (the embedder binds the local-file StoragePort; the
-    // old no-op stub meant plugin state could never persist).
-    kv: {
-      async get(key) {
-        const result = await hostRequest("storage.get", {
-          pluginId,
-          key: String(key ?? ""),
-        }).catch(() => null);
-        return result && typeof result === "object" && result.value !== null
-          ? result.value
-          : undefined;
-      },
-      async set(key, value) {
-        await hostRequest("storage.set", { pluginId, key: String(key ?? ""), value: value ?? null });
-      },
-    },
+    kv: { get: async () => undefined, set: async () => {} },
+
     ui: {
       toast: () => {},
       dialog: { open: () => {}, close: () => {}, alert: () => {}, confirm: () => {} },
