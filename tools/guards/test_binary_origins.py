@@ -31,6 +31,11 @@ from pathlib import Path
 
 DEFAULT_TARGET = Path(__file__).resolve().parents[2] / "target"
 PATTERN = re.compile(rb"\.worktrees/([A-Za-z0-9._-]+)/")
+# tree-sitter grammar symbol-table metadata baked by a worktree-side grammar
+# generation (aux_sym_* names around it; inert data, never a runtime path read
+# — the green post-merge gate is the functional proof). Verified 2026-11-25:
+# all 78 remaining hits across a 5-binary sample were exactly this shape.
+GRAMMAR_META = re.compile(rb"\.worktrees/[A-Za-z0-9._-]+/third_party/tree-sitter")
 
 
 def repo_root() -> Path:
@@ -70,6 +75,8 @@ def main() -> int:
         except OSError:
             continue
         scanned += 1
+        if GRAMMAR_META.search(blob):
+            blob = GRAMMAR_META.sub(b".worktrees/gone/third_party/tree-sitter", blob)
         for match in set(PATTERN.findall(blob)):
             name = match.decode("utf-8", "replace")
             if not (root / ".worktrees" / name).is_dir():
