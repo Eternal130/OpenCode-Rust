@@ -634,10 +634,11 @@ fn v17f_mention_dedup_pair() {
     // ref's file index builds at boot and refreshes every 10s), and
     // the ref's `client.api.file.find` backs onto ripgrep — the ref
     // server resolves `rg` from PATH (any version; the system binary
-    // short-circuits the pinned download) — so the host rg binary is
-    // staged into the ref sandbox's staged bin dir (first on the ref
-    // PATH). Without it the ref popup renders its
-    // "Could not search files" error face (va17 round 1 evidence).
+    // short-circuits the pinned download) — `ref_stage` stages the
+    // host rg into the ref sandbox's staged bin dir (FIRST on the
+    // ref PATH, permanent since va20 T6). Without it the ref popup
+    // renders its "Could not search files" error face (va17 round 1
+    // evidence).
     let lane = lane_lock();
     let gateway = Gateway::spawn_paced("v17f", None, &default_pace());
     let rust = sandbox("v17f", gateway.port);
@@ -651,22 +652,14 @@ fn v17f_mention_dedup_pair() {
     rust.write_config(&[], "replay/claude-opus-4-7");
     refbox.write_ref_config(&[], "replay/claude-opus-4-7");
     let stage = ref_stage(&refbox);
-    // Stage the host ripgrep next to the staged bun (env_ref puts
-    // that dir FIRST on the ref PATH).
-    let staged_rg = stage.bun.parent().expect("bin dir").join("rg");
-    let mut rg_staged = false;
-    for host_rg in [
-        "/root/.local/share/opencode/bin/rg".as_ref(),
-        std::path::Path::new("/root/.cache/opencode/bin/rg"),
-        std::path::Path::new("/root/.cache/opencode-rust/bin/rg"),
-    ] {
-        if host_rg.is_file() {
-            std::fs::copy(host_rg, &staged_rg).expect("stage rg");
-            make_executable(&staged_rg);
-            rg_staged = true;
-            break;
-        }
-    }
+    // va20 (T6): the rg staging is now PERMANENT in `ref_stage` (all
+    // lanes) — this rig only asserts the staged binary exists (the
+    // @-file popup's search needs it; the "Could not search files"
+    // error face was va17 round 1's evidence).
+    assert!(
+        stage.bun.parent().expect("bin dir").join("rg").is_file(),
+        "V17F rig: the staged rg is missing (ref_stage found no host rg)"
+    );
     ref_service_stop(&refbox, &stage);
     let server = service_start(&rust);
     let _ = server.url;
@@ -702,10 +695,8 @@ fn v17f_mention_dedup_pair() {
     drop(rig);
     // Ref-side scenario sanity ONLY (W12): a ref whose @ completion
     // never listed the seeded pair is a rig break, never a pass.
-    assert!(
-        rg_staged,
-        "V17F rig RED: no host ripgrep binary found to stage for the ref file search"
-    );
+    // (The rg staging itself is ref_stage's job since T6 — this rig
+    // asserted the staged binary up front.)
     assert!(
         ref_listed,
         "V17F RED (ref-side rig sanity): the ref @ completion never listed dup.txt"
@@ -714,9 +705,5 @@ fn v17f_mention_dedup_pair() {
     export_grid_diff("v17f", "mention-dedup", &ref_grid, &rust_grid);
 }
 
-fn make_executable(path: &std::path::Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let mut perms = std::fs::metadata(path).expect("staged file").permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(path, perms).expect("chmod staged file");
-}
+// (make_executable was removed with T6: the rg staging moved into
+// ref_stage, which owns its exec bit — no other user remained.)
