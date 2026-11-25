@@ -2612,7 +2612,6 @@ fn active_selection(store: &Store) -> crate::store::SessionSelection {
 }
 
 /// A muted status row (loading/error) — the placeholder surface.
-
 fn status_option(text: &str) -> SelectOption {
     SelectOption::titled(text, "status").muted_placeholder()
 }

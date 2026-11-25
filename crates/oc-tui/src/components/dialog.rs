@@ -1859,12 +1859,15 @@ pub fn execute_submission(
             }
             return crate::components::command_palette::Dispatch::Handled;
         }
+        // G-485② — the DiffHelp tree closes on esc like the other
+        // centered message families (the dialog's own `onCancel`).
         Some(
             DialogKind::DiffHelp
             | DialogKind::Status
             | DialogKind::Pair
             | DialogKind::Debug
-            | DialogKind::ExportResult { .. },
+            | DialogKind::ExportResult { .. }
+            | DialogKind::SessionExport { .. },
         ) => {
             store.clear_dialogs();
             return crate::components::command_palette::Dispatch::Handled;
@@ -2148,11 +2151,8 @@ pub fn execute_submission(
         }
         // G-487 — the export form is no longer a select: its keys
         // own the dialog (the early-exit layer in
-        // [`handle_dialog_key`]); this submit dispatch is inert now.
-        Some(DialogKind::SessionExport { .. }) => {
-            store.clear_dialogs();
-            return crate::components::command_palette::Dispatch::Handled;
-        }
+        // [`handle_dialog_key`]); its submit dispatch is inert now —
+        // merged into the DiffHelp/Status clear-dialogs arm above.
         // The informational pending view: submits are inert.
         Some(DialogKind::IntegrationPending { .. }) => {
             return crate::components::command_palette::Dispatch::Handled;

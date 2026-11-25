@@ -1236,7 +1236,7 @@ pub fn render_select(
     rows.push(Row::blank(width, default, surface_bg).cells);
 
     // Footer actions: [pad 4][footer prop muted][title][ label][gap 2]…
-    if !props.actions.is_empty() || props.hints.first().is_some() {
+    if !props.actions.is_empty() || !props.hints.is_empty() {
         let mut footer = Row::blank(width, default, surface_bg);
         let mut at = 4usize;
         // G-485① — the `footer` prop's muted text first

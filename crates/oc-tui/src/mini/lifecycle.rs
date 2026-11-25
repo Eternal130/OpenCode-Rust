@@ -67,6 +67,7 @@
 #![allow(clippy::cast_possible_truncation)] // terminal dims sit far below u16
 #![allow(clippy::match_same_arms)] // the key/vocabulary arms mirror the reference 1:1
 
+use std::fmt::Write as _;
 use std::io::Write as _;
 use std::time::{Duration, Instant};
 
@@ -193,6 +194,10 @@ fn flip_show_hide(current: &str) -> &str {
 
 /// The footer state machine + per-view key handling (the pure half of
 /// `RunFooter`, `mini/footer.ts`).
+// The bool set tracks the ref's footer signal flags one-to-one
+// (menu-open, subagent-list-closed, …) — enum-izing them would
+// diverge from the signal mapping.
+#[allow(clippy::struct_excessive_bools)]
 pub struct FooterPane {
     pub machine: FooterMachine,
     theme: crate::components::footer::FooterTheme,
@@ -2381,7 +2386,7 @@ impl Lifecycle {
                 let next_start = terminal_bottom + 1 - band_height;
                 let mut clear = String::new();
                 for line in previous_start..next_start {
-                    clear.push_str(&format!("\x1b[{line};1H\x1b[2K"));
+                    let _ = write!(clear, "\x1b[{line};1H\x1b[2K");
                 }
                 if !clear.is_empty() {
                     self.write_raw(clear.as_bytes())?;

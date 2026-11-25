@@ -216,8 +216,8 @@ fn sub_rig(tag: &str) -> SubRig {
     let pace = "synthetic:ttft=2500:tps=8";
     let rust_gateway = Gateway::spawn_turn_paced(tag, &[], Some((&record_rust, &seeds)), pace);
     let ref_gateway = Gateway::spawn_turn_paced(tag, &[], Some((&record_ref, &seeds)), pace);
-    let mut rust = sandbox(tag, rust_gateway.port);
-    let mut refbox = sandbox(&format!("{tag}ref"), ref_gateway.port);
+    let rust = sandbox(tag, rust_gateway.port);
+    let refbox = sandbox(&format!("{tag}ref"), ref_gateway.port);
     rust.write_config(&[], "replay/claude-opus-4-7");
     refbox.write_ref_config(&[], "replay/claude-opus-4-7");
     allow_tools(&rust, false);

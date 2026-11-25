@@ -89,7 +89,7 @@ use crate::components::dialog_select::{
     DialogStyles, SelectOption, SelectProps, SelectState,
 };
 use crate::render::Frame;
-use crate::store::{DialogEntry, DialogKind, PluginDialogContent};
+use crate::store::{DialogEntry, DialogKind, ExportOptionsState, PluginDialogContent};
 use crate::theme::ThemeState;
 use crate::wrap::{display_width, take_width};
 
@@ -295,6 +295,10 @@ impl WindowRow {
 
 /// One frame's dialog snapshot — the ONLY input the tree reads.
 #[derive(Clone)]
+// The bool set mirrors the ref's per-family prop bag (renderFilter,
+// flat, destructive, pair_split …) — collapsing them into enums would
+// diverge from the 1:1 prop mapping.
+#[allow(clippy::struct_excessive_bools)]
 struct DialogInputs {
     family: Family,
     box_width: usize,
@@ -305,7 +309,7 @@ struct DialogInputs {
     /// input row stays unmounted while false.
     render_filter: bool,
     /// G-485① — the `footer` prop's muted text (dialog-select.tsx:20,
-    /// 835-845): the DiffBase picker's `Remembered until the TUI
+    /// 835-845): the `DiffBase` picker's `Remembered until the TUI
     /// exits` — the footer bar's left content.
     hint_footer: String,
     colors: DialogColors,
@@ -538,9 +542,11 @@ fn content_height(inputs: &DialogInputs) -> usize {
         // root's gap 1, the markdown window, gap, the action footer,
         // the root paddingBottom 1.
         Family::BtwAnswer => inputs.btw_window.len() + 5,
-        // W4 (dialog-status.tsx:22-61): the `Status` title row, the
-        // root's gap 1, the status rows, the root paddingBottom 1.
-        Family::Status => inputs.hint_lines.len() + 3,
+        // W4 (dialog-status.tsx:22-61) + G-485② (diff-viewer.tsx:
+        // 1143-1191): the title row, the root's gap 1, the rows
+        // (status rows / the shortcut-group rows — the inter-group
+        // blank lines ride `hint_lines`), the root paddingBottom 1.
+        Family::Status | Family::DiffHelp => inputs.hint_lines.len() + 3,
         // G-487 (dialog-export-options.tsx:85-270): the root's gap 1
         // separates all four children — title, pill row, the
         // format-scoped toggle rows (2 markdown / 1 json), and the
@@ -554,10 +560,6 @@ fn content_height(inputs: &DialogInputs) -> usize {
                 7
             }
         }
-        // G-485② (diff-viewer.tsx:1143-1191): the title row, the
-        // root's gap 1, the group rows (the inter-group blank lines
-        // ride `hint_lines`), the root paddingBottom 1.
-        Family::DiffHelp => inputs.hint_lines.len() + 3,
     }
 }
 
@@ -766,6 +768,9 @@ fn gutter_text_element(
         )
 }
 
+// G-487 — one row per select-family row shape (the marker/title/
+// description/footer budget walk), mirrored span for span.
+#[allow(clippy::too_many_lines)]
 fn option_element(inputs: &Signal<DialogInputs>, index: usize) -> Element {
     let paint_at = move |inputs: &DialogInputs| row_paint(inputs, index);
     let gutter_text = gutter_text_element(inputs, index);
@@ -2456,6 +2461,10 @@ fn status_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
 /// rest the base pair), the format-scoped `[x]`/`[ ]` toggles, and
 /// the right-justified Copy/Export buttons (Copy on raised.high,
 /// Export on action.primary with its focused state while active).
+// G-487 — the whole dialog-export-options.tsx component in one
+// builder (title + pill row + format-scoped toggles + buttons),
+// mirrored span for span.
+#[allow(clippy::too_many_lines)]
 fn export_options_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder {
     use crate::store::{ExportActive, ExportFormat};
     let title_row = box_().flex_direction("row").justify_content("space-between").children(
@@ -2523,8 +2532,8 @@ fn export_options_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::Eleme
                 })),
             )
             .into_element(),
-        pill(&inputs, ExportFormat::Markdown, "Markdown").margin_left(1.0).into_element(),
-        pill(&inputs, ExportFormat::Json, "JSON").margin_left(1.0).into_element(),
+        pill(inputs, ExportFormat::Markdown, "Markdown").margin_left(1.0).into_element(),
+        pill(inputs, ExportFormat::Json, "JSON").margin_left(1.0).into_element(),
     ]));
     // One `[x] Include thinking`-style toggle row (:128-204 markdown,
     // :206-245 json).
@@ -3196,7 +3205,7 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
-                export: Default::default(),
+                export: ExportOptionsState::default(),
                 render_filter: props.render_filter,
                 hint_footer: props.hints.first().cloned().unwrap_or_default(),
                 plugin_rows: Vec::new(),
@@ -3242,7 +3251,7 @@ fn build_inputs(
             pair_qr: Vec::new(),
             btw_window: Vec::new(),
             btw_styled: Vec::new(),
-            export: Default::default(),
+            export: ExportOptionsState::default(),
             render_filter: true,
             hint_footer: String::new(),
         },
@@ -3292,7 +3301,7 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
-                export: Default::default(),
+                export: ExportOptionsState::default(),
                 render_filter: true,
                 hint_footer: String::new(),
             }
@@ -3354,7 +3363,7 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window,
                 btw_styled,
-                export: Default::default(),
+                export: ExportOptionsState::default(),
                 render_filter: true,
                 hint_footer: String::new(),
             }
@@ -3398,7 +3407,7 @@ fn build_inputs(
             pair_qr: Vec::new(),
             btw_window: Vec::new(),
             btw_styled: Vec::new(),
-            export: Default::default(),
+            export: ExportOptionsState::default(),
             render_filter: true,
             hint_footer: String::new(),
         },
@@ -3453,7 +3462,7 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
-                export: Default::default(),
+                export: ExportOptionsState::default(),
                 render_filter: true,
                 hint_footer: String::new(),
             }
@@ -3495,7 +3504,7 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
-                export: Default::default(),
+                export: ExportOptionsState::default(),
                 render_filter: true,
                 hint_footer: String::new(),
             }
@@ -3559,7 +3568,7 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
-                export: Default::default(),
+                export: ExportOptionsState::default(),
                 render_filter: true,
                 hint_footer: String::new(),
             }
@@ -3610,7 +3619,7 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
-                export: Default::default(),
+                export: ExportOptionsState::default(),
                 render_filter: true,
                 hint_footer: String::new(),
             }
@@ -3665,7 +3674,7 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
-                export: Default::default(),
+                export: ExportOptionsState::default(),
                 render_filter: true,
                 hint_footer: String::new(),
             }
@@ -3731,7 +3740,7 @@ fn build_inputs(
                 pair_qr,
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
-                export: Default::default(),
+                export: ExportOptionsState::default(),
                 render_filter: true,
                 hint_footer: String::new(),
             }
@@ -3774,7 +3783,7 @@ fn build_inputs(
             pair_qr: Vec::new(),
             btw_window: Vec::new(),
             btw_styled: Vec::new(),
-            export: Default::default(),
+            export: ExportOptionsState::default(),
             render_filter: true,
             hint_footer: String::new(),
         },
@@ -3857,7 +3866,7 @@ fn build_inputs(
             pair_qr: Vec::new(),
             btw_window: Vec::new(),
             btw_styled: Vec::new(),
-            export: Default::default(),
+            export: ExportOptionsState::default(),
             render_filter: true,
             hint_footer: String::new(),
         },
