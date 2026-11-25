@@ -505,9 +505,9 @@ pub fn render_transcript(
             place(cell, key, &mut measured, &mut y);
         }
         // G-140② — the debug turn-usage summary
-        // (`TurnTokenUsage`, index.tsx:1588-1676): after the TURN's
-        // final footer (the next row belongs to a new user turn or
-        // the transcript ends), `debug.turn_tokens` renders the
+        // (`TurnTokenUsage`, routes/session/index.tsx:1588-1676): after
+        // the TURN's final footer (the next row belongs to a new user
+        // turn or the transcript ends), `debug.turn_tokens` renders the
         // collapsed `+ Tokens: N steps …` row. Bounded deviation:
         // the expanded per-step table (click-to-open, the reuse-bust
         // warning tint, the verbose tool-call list) stays unported —
