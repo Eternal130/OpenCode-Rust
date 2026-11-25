@@ -859,6 +859,38 @@
    "g_ref": "va19 T9 anchor downgrade",
    "adjudicated_by": "controller",
    "adjudicated_at": "2026-11-25"
+  },
+  {
+   "id": "w13-perm-always-timing",
+   "scenario_pattern": "w13-perm-always",
+   "state_pattern": "*",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:__MS__|__SECS__)"
+    ]
+   },
+   "classification": "framework-diff",
+   "justification": "ADJUDICATED (controller 2026-11-25): capture skew across the 1s duration-unit boundary — first export (post-va20 battery re-export) showed ref __MS__ vs rust __SECS__; targeted re-run of w13_perm_always_pair is EXACT at settle (13.6s PASS, tree d718f00a). Re-open as a real gap only if the shape reproduces at settled quiescence.",
+   "g_ref": "timing capture (duration unit boundary)",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-25"
+  },
+  {
+   "id": "v20-reconnecting5",
+   "scenario_pattern": "v20-reconnecting5",
+   "state_pattern": "*",
+   "shape": {
+    "kind": "regex",
+    "any_contains": [
+     "(?:▀▀▀▀|Restarting|Your|Ask)"
+    ]
+   },
+   "classification": "pending-fix",
+   "justification": "ADJUDICATED (controller 2026-11-25): settled-state stable one-row seat delta — the port's 5-row reconnecting box sits one row higher than ref (spinner/copy/composer-merge rows offset by 1); spinner-phase lines ride the same capture. Registered as G-500, fix wave va22. Frame evidence: .test-logs/diff-reports/v20-reconnecting5-loss-settled.txt",
+   "g_ref": "G-500 (G-477 residue)",
+   "adjudicated_by": "controller",
+   "adjudicated_at": "2026-11-25"
   }
  ]
 }
