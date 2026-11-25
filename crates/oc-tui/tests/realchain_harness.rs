@@ -621,7 +621,14 @@ impl Gateway {
             Some((record, turns)) => (Some(record), Some(turns)),
             None => (None, None),
         };
-        Gateway::spawn_ext(tag, tool_corpus, record_dir.as_deref(), seed_turns.as_deref(), pace, "turn")
+        Gateway::spawn_ext(
+            tag,
+            tool_corpus,
+            record_dir.as_deref(),
+            seed_turns.as_deref(),
+            pace,
+            "turn",
+        )
     }
 
     fn spawn_ext(

@@ -706,12 +706,9 @@ impl FooterPane {
                 self.panel = PanelState::default();
             }
         } else if self.machine.route == crate::components::footer::PromptRoute::Subagent {
-            let still_tracked = self
-                .subagent_selected
-                .as_deref()
-                .is_some_and(|id| {
-                    self.subagent_children.iter().any(|child| child.session_id == id)
-                });
+            let still_tracked = self.subagent_selected.as_deref().is_some_and(|id| {
+                self.subagent_children.iter().any(|child| child.session_id == id)
+            });
             if self.subagent_selected.is_some() && !still_tracked {
                 self.machine.close_panel();
                 self.subagent_selected = None;
@@ -723,7 +720,8 @@ impl FooterPane {
     /// The open panel's UNFILTERED entry list (`RunCommandMenuBody.
     /// entries` / the picker bodies' builders).
     #[must_use]
-    pub fn panel_all_entries(&self) -> Vec<crate::components::footer::state::FooterMenuItem> {        use crate::components::footer::state::{
+    pub fn panel_all_entries(&self) -> Vec<crate::components::footer::state::FooterMenuItem> {
+        use crate::components::footer::state::{
             agent_entries, command_menu_entries, model_entries, variant_entries, FooterMenuItem,
         };
         let running = self
@@ -784,8 +782,7 @@ impl FooterPane {
                 .subagent_children
                 .iter()
                 .filter(|child| {
-                    let running =
-                        child.status == crate::mini::transport::SubagentStatus::Running;
+                    let running = child.status == crate::mini::transport::SubagentStatus::Running;
                     running == self.subagent_menu_active
                 })
                 .map(|child| {
@@ -956,9 +953,7 @@ impl FooterPane {
                     }
                 }
             }
-            FooterKey::Tab
-            | FooterKey::PageUp
-            | FooterKey::PageDown => {
+            FooterKey::Tab | FooterKey::PageUp | FooterKey::PageDown => {
                 // G-482 — the subagent menu's tab toggles the
                 // active/inactive list (`onKey`, footer.command.tsx:
                 // 903-908): `setActive(v => !v)` — the selection
@@ -968,10 +963,7 @@ impl FooterPane {
                     self.subagent_menu_active = !self.subagent_menu_active;
                 }
             }
-            FooterKey::CtrlT
-            | FooterKey::CtrlP
-            | FooterKey::CtrlB
-            | FooterKey::CtrlF => {}
+            FooterKey::CtrlT | FooterKey::CtrlP | FooterKey::CtrlB | FooterKey::CtrlF => {}
             // G-272 — the leader chord arms from an open panel too
             // (the queued menu's undo/delete chords complete here).
             FooterKey::CtrlX => self.leader_armed = true,

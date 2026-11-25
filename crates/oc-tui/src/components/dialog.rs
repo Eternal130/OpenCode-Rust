@@ -275,7 +275,12 @@ pub fn handle_dialog_key(
     // G-485③ — `renderFilter: false` mounts no input: printables and
     // backspace never type (the diff source picker,
     // diff-viewer.tsx:740).
-    if !is_static && props.render_filter && !stroke.ctrl && !stroke.alt && stroke.key.chars().count() == 1 {
+    if !is_static
+        && props.render_filter
+        && !stroke.ctrl
+        && !stroke.alt
+        && stroke.key.chars().count() == 1
+    {
         if let Some(ch) = stroke.key.chars().next() {
             let text = if stroke.shift { ch.to_ascii_uppercase() } else { ch };
             store.update_dialog(|top| {
@@ -295,7 +300,13 @@ pub fn handle_dialog_key(
             return DialogKeyOutcome::Consumed;
         }
     }
-    if !is_static && props.render_filter && stroke.key == "backspace" && !stroke.ctrl && !stroke.alt && !stroke.shift {
+    if !is_static
+        && props.render_filter
+        && stroke.key == "backspace"
+        && !stroke.ctrl
+        && !stroke.alt
+        && !stroke.shift
+    {
         store.update_dialog(|top| {
             if is_prompt_kind(&top.kind) {
                 top.value.pop();

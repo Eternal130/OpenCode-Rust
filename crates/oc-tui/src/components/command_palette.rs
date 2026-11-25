@@ -743,9 +743,9 @@ fn picker_project_name(store: &Store) -> Option<String> {
             .into_iter()
             .find(|session| session.id == session_id)
             .map(|session| (session.directory.clone(), session.project_id.clone())),
-        crate::store::Route::Home => store
-            .location_info()
-            .map(|info| (Some(info.directory), Some(info.project_id))),
+        crate::store::Route::Home => {
+            store.location_info().map(|info| (Some(info.directory), Some(info.project_id)))
+        }
     }
     .unwrap_or((None, None));
     let registry = match store.project_list() {

@@ -838,25 +838,24 @@ fn option_element(inputs: &Signal<DialogInputs>, index: usize) -> Element {
         // no scrollbox side pads, no 3-wide select marker column.
         .dyn_prop(
             "marginLeft",
-            dyn_num(map(inputs.clone(), |i: &DialogInputs| {
-                usize::from(i.family != Family::Menu)
-            })),
+            dyn_num(map(inputs.clone(), |i: &DialogInputs| usize::from(i.family != Family::Menu))),
         )
         .dyn_prop(
             "marginRight",
-            dyn_num(map(inputs.clone(), |i: &DialogInputs| {
-                usize::from(i.family != Family::Menu)
-            })),
+            dyn_num(map(inputs.clone(), |i: &DialogInputs| usize::from(i.family != Family::Menu))),
         )
         .dyn_prop(
             "paddingRight",
-            dyn_num(map(inputs.clone(), |i: &DialogInputs| {
-                if i.family == Family::Menu {
-                    1
-                } else {
-                    3
-                }
-            })),
+            dyn_num(map(
+                inputs.clone(),
+                |i: &DialogInputs| {
+                    if i.family == Family::Menu {
+                        1
+                    } else {
+                        3
+                    }
+                },
+            )),
         )
         .dyn_prop(
             "paddingLeft",
@@ -1130,13 +1129,9 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
     };
     let inputs_for_input = inputs.clone();
     let input_gate = show(
-        Rc::new(map(inputs.clone(), |i: &DialogInputs| i.render_filter))
-            as Rc<dyn Reactive<bool>>,
+        Rc::new(map(inputs.clone(), |i: &DialogInputs| i.render_filter)) as Rc<dyn Reactive<bool>>,
         move || {
-            vec![box_()
-                .padding_top(1.0)
-                .child(build_input_box(&inputs_for_input))
-                .into_element()]
+            vec![box_().padding_top(1.0).child(build_input_box(&inputs_for_input)).into_element()]
         },
     );
 
@@ -1273,18 +1268,20 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
                                     "row"
                                 })
                                 .children(Children::Static(vec![
-                                    text().wrap_mode("none").dyn_prop(
-                                        "content",
-                                        dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
-                                            styled(vec![chunk(
-                                                i.hint_footer.clone(),
-                                                i.colors.muted,
-                                                None,
-                                                0,
-                                            )])
-                                        })),
-                                    )
-                                    .into_element(),
+                                    text()
+                                        .wrap_mode("none")
+                                        .dyn_prop(
+                                            "content",
+                                            dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
+                                                styled(vec![chunk(
+                                                    i.hint_footer.clone(),
+                                                    i.colors.muted,
+                                                    None,
+                                                    0,
+                                                )])
+                                            })),
+                                        )
+                                        .into_element(),
                                     box_().children_dyn(actions_for(&inputs)).into_element(),
                                 ]))
                                 .into_element()
@@ -2526,9 +2523,7 @@ fn export_options_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::Eleme
                 })),
             )
             .into_element(),
-        pill(&inputs, ExportFormat::Markdown, "Markdown")
-            .margin_left(1.0)
-            .into_element(),
+        pill(&inputs, ExportFormat::Markdown, "Markdown").margin_left(1.0).into_element(),
         pill(&inputs, ExportFormat::Json, "JSON").margin_left(1.0).into_element(),
     ]));
     // One `[x] Include thinking`-style toggle row (:128-204 markdown,
@@ -2606,21 +2601,19 @@ fn export_options_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::Eleme
                 }
             })),
         ));
-    let button_row = box_()
-        .flex_direction("row")
-        .justify_content("flex-end")
-        .padding_bottom(1.0)
-        .children(Children::Static(vec![
-            copy_button.into_element(),
-            export_button.margin_left(1.0).into_element(),
-        ]));
+    let button_row =
+        box_().flex_direction("row").justify_content("flex-end").padding_bottom(1.0).children(
+            Children::Static(vec![
+                copy_button.into_element(),
+                export_button.margin_left(1.0).into_element(),
+            ]),
+        );
     // The format-scoped toggle group mounts per the current format
     // (the Show swap rebuilds the rows — the builders are not Clone).
     let inputs_md = inputs.clone();
     let toggles_markdown = show(
-        Rc::new(map(inputs.clone(), |i: &DialogInputs| {
-            i.export.format == ExportFormat::Markdown
-        })) as Rc<dyn Reactive<bool>>,
+        Rc::new(map(inputs.clone(), |i: &DialogInputs| i.export.format == ExportFormat::Markdown))
+            as Rc<dyn Reactive<bool>>,
         move || {
             vec![
                 toggle(&inputs_md, ExportActive::Thinking, "Include thinking").into_element(),
@@ -2634,9 +2627,8 @@ fn export_options_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::Eleme
     );
     let inputs_js = inputs.clone();
     let toggles_json = show(
-        Rc::new(map(inputs.clone(), |i: &DialogInputs| {
-            i.export.format == ExportFormat::Json
-        })) as Rc<dyn Reactive<bool>>,
+        Rc::new(map(inputs.clone(), |i: &DialogInputs| i.export.format == ExportFormat::Json))
+            as Rc<dyn Reactive<bool>>,
         move || {
             vec![toggle(&inputs_js, ExportActive::Sanitize, "Sanitize sensitive data")
                 .into_element()]
@@ -2698,7 +2690,10 @@ fn diff_help_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBui
             i.hint_lines
                 .iter()
                 .enumerate()
-                .map(|(n, line)| ForItem { key: format!("L{n}"), value: PropValue::Str(line.clone()) })
+                .map(|(n, line)| ForItem {
+                    key: format!("L{n}"),
+                    value: PropValue::Str(line.clone()),
+                })
                 .collect::<Vec<ForItem>>()
         }),
     };
@@ -2742,14 +2737,12 @@ fn diff_help_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBui
             )
             .into_element()
     });
-    box_()
-        .padding_left(2.0)
-        .padding_right(2.0)
-        .padding_bottom(1.0)
-        .children(Children::Static(vec![
+    box_().padding_left(2.0).padding_right(2.0).padding_bottom(1.0).children(Children::Static(
+        vec![
             title_row.into_element(),
             box_().children_dyn(Rc::new(rows_for)).margin_top(1.0).into_element(),
-        ]))
+        ],
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -3203,9 +3196,9 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
-            export: Default::default(),
-            render_filter: props.render_filter,
-            hint_footer: props.hints.first().cloned().unwrap_or_default(),
+                export: Default::default(),
+                render_filter: props.render_filter,
+                hint_footer: props.hints.first().cloned().unwrap_or_default(),
                 plugin_rows: Vec::new(),
             }
         }
@@ -3299,9 +3292,9 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
-            export: Default::default(),
-            render_filter: true,
-            hint_footer: String::new(),
+                export: Default::default(),
+                render_filter: true,
+                hint_footer: String::new(),
             }
         }
         // RE-13: the /btw Answer dialog — the sidecar's markdown
@@ -3460,9 +3453,9 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
-            export: Default::default(),
-            render_filter: true,
-            hint_footer: String::new(),
+                export: Default::default(),
+                render_filter: true,
+                hint_footer: String::new(),
             }
         }
         Family::PluginRows => {
@@ -3502,9 +3495,9 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
-            export: Default::default(),
-            render_filter: true,
-            hint_footer: String::new(),
+                export: Default::default(),
+                render_filter: true,
+                hint_footer: String::new(),
             }
         }
         // -- TUI-25: DialogAlert / DialogConfirm --------------------
@@ -3566,9 +3559,9 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
-            export: Default::default(),
-            render_filter: true,
-            hint_footer: String::new(),
+                export: Default::default(),
+                render_filter: true,
+                hint_footer: String::new(),
             }
         }
         // -- TUI-24: DialogErrorDetails ------------------------------
@@ -3617,9 +3610,9 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
-            export: Default::default(),
-            render_filter: true,
-            hint_footer: String::new(),
+                export: Default::default(),
+                render_filter: true,
+                hint_footer: String::new(),
             }
         }
         // -- TUI-10: DialogImagePreview ------------------------------
@@ -3672,9 +3665,9 @@ fn build_inputs(
                 pair_qr: Vec::new(),
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
-            export: Default::default(),
-            render_filter: true,
-            hint_footer: String::new(),
+                export: Default::default(),
+                render_filter: true,
+                hint_footer: String::new(),
             }
         }
         // -- F15: DialogPair — the custom (non-select) tree --------
@@ -3738,9 +3731,9 @@ fn build_inputs(
                 pair_qr,
                 btw_window: Vec::new(),
                 btw_styled: Vec::new(),
-            export: Default::default(),
-            render_filter: true,
-            hint_footer: String::new(),
+                export: Default::default(),
+                render_filter: true,
+                hint_footer: String::new(),
             }
         }
         // -- W4: DialogStatus — the custom (non-select) tree ------

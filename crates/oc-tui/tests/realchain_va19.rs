@@ -214,8 +214,7 @@ fn sub_rig(tag: &str) -> SubRig {
     // chunking); the T9_PACE override is deliberately ignored (the
     // anchor needs the window, like the toolloop lane pins instant).
     let pace = "synthetic:ttft=2500:tps=8";
-    let rust_gateway =
-        Gateway::spawn_turn_paced(tag, &[], Some((&record_rust, &seeds)), pace);
+    let rust_gateway = Gateway::spawn_turn_paced(tag, &[], Some((&record_rust, &seeds)), pace);
     let ref_gateway = Gateway::spawn_turn_paced(tag, &[], Some((&record_ref, &seeds)), pace);
     let mut rust = sandbox(tag, rust_gateway.port);
     let mut refbox = sandbox(&format!("{tag}ref"), ref_gateway.port);
