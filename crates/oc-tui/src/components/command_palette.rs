@@ -3478,8 +3478,13 @@ impl CommandDispatcher for StoreDispatcher {
                 Dispatch::Handled
             }
             // `/update` (update.check — dialog-update.tsx): the check
-            // starts on open (the dialog's `createResource`).
-            "update.check" => {
+            // starts on open (the dialog's `createResource`). va20 T8:
+            // the SLASH form dispatches `opencode.update` (the slash
+            // table's id, v2's app command — `slash: { name: "update"
+            // }` → `updater.open("manual")`, app.tsx:977-986); the arm
+            // was MISSING (the slash ran as a silent no-op — the vt
+            // update-dialog anchor caught it).
+            "update.check" | "opencode.update" => {
                 store.set_update_dialog(crate::components::update::UpdateDialogState::Checking);
                 store.replace_dialog(DialogKind::Update, DialogSize::Medium);
                 Dispatch::Handled

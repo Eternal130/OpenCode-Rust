@@ -7073,8 +7073,18 @@ impl Store {
 
     /// Set the update dialog's live state (the check/install
     /// transitions).
+    /// va20 T8 — the ref's focus effect (dialog-update.tsx:65: a state
+    /// transition re-seats the active button — the confirm row APPEARS
+    /// with Available/Installed, the busy states carry none): the port
+    /// pinned the selection at open only, so a Checking→Available flip
+    /// left the focus on Skip and the confirm Enter dismissed instead
+    /// of installing.
     pub fn set_update_dialog(&self, state: crate::components::update::UpdateDialogState) {
-        self.update_dialog.set(state);
+        self.update_dialog.set(state.clone());
+        if matches!(self.top_dialog(), Some(entry) if entry.kind == DialogKind::Update) {
+            let selected = crate::components::update::dialog_initial_selection(&state);
+            self.update_dialog(|top| top.select.selected = selected);
+        }
     }
 
     /// Take the bell request (the run loop writes `\x07` once).

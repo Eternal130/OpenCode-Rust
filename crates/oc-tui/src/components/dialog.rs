@@ -1701,10 +1701,15 @@ pub fn execute_submission(
     match store.top_dialog().map(|entry| entry.kind) {
         // The update dialog's actions (`dialog-update.tsx`'s buttons):
         // skip dismisses + closes; confirm runs Update (the loop's
-        // install spawn) or Restart (exit) per the live state.
+        // install spawn) or Restart (exit) per the live state. The
+        // dialog STAYS MOUNTED through the busy faces (va20 T8 — the
+        // ref's state machine renders inside the dialog: `apply`
+        // transitions to Installing while the dialog stays open,
+        // dialog-update.tsx:69-71/107-115; the port cleared it with
+        // the palette's generic onSelect convention, so the
+        // Installing/Installed faces never showed live).
         Some(DialogKind::Update) => {
             let action = value.to_owned();
-            store.clear_dialogs();
             if action == "confirm" {
                 match store.update_dialog_state() {
                     crate::components::update::UpdateDialogState::Available(version) => {
@@ -1722,15 +1727,18 @@ pub fn execute_submission(
                         );
                     }
                     crate::components::update::UpdateDialogState::Installed(_) => {
+                        store.clear_dialogs();
                         return crate::components::command_palette::Dispatch::ServerPending(
                             "update.restart",
                         );
                     }
                     _ => {}
                 }
-            } else {
-                store.update_dismiss();
+                // Busy states swallow the submit (no confirm row).
+                return crate::components::command_palette::Dispatch::Handled;
             }
+            store.clear_dialogs();
+            store.update_dismiss();
             return crate::components::command_palette::Dispatch::Handled;
         }
         // RD-17 — a palette setting row's activation (`onSelect`,
