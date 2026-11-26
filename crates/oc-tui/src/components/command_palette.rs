@@ -577,11 +577,10 @@ pub fn palette_title(entry: &PaletteCommand, store: &Store) -> String {
     }
     if entry.command == "session.verbosity.cycle" {
         let level = store.session_verbosity();
-        let mut chars = level.chars();
-        let titlecased = match chars.next() {
-            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-            None => String::new(),
-        };
+        // G-528-family — `Locale.titlecase(verbosity())` (index.tsx:
+        // 1064-1067): the shared \b\w form (the G-523 closure flagged
+        // this first-char local for the next audit).
+        let titlecased = crate::components::message::titlecase(&level);
         return format!("Verbosity: {titlecased}");
     }
     // G-227 — the toggle labels read the CURRENT value through the

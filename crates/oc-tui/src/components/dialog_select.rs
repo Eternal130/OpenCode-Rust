@@ -1809,6 +1809,33 @@ mod tests {
         assert_eq!(groups[0].indices, vec![1], "fuzzy match on the title");
     }
 
+    /// G-534 — the plugin select's NO-threshold filter: a weak
+    /// category-only gapped hit (combined score in (0, 0.7)) survives
+    /// (api.tsx:392-422 passes no `filterThreshold` → fuzzysort's
+    /// default `threshold: 0` → `NEGATIVE_INFINITY`, dialog-select.
+    /// tsx:196-201) — the palette's OWN 0.7 face (command-palette.
+    /// tsx:64) drops the same row.
+    #[test]
+    fn g534_no_threshold_keeps_weak_category_only_matches() {
+        let build = || {
+            vec![
+                SelectOption::titled("Alpha", "alpha").categorized("probe-xray"),
+                SelectOption::titled("Beta", "beta").categorized("quiet-zone"),
+            ]
+        };
+        // "pxy" against "probe-xray": p(0) … x(6) … y(8) — a gapped
+        // category-only hit (the title key scores nothing).
+        let props = SelectProps::new("G534", build());
+        let groups = grouped(&props, "pxy");
+        let matched: Vec<usize> = groups.iter().flat_map(|group| group.indices.clone()).collect();
+        assert_eq!(matched, vec![0], "the weak category-only hit survives with no threshold");
+        // The 0.7 face drops the same row (the pre-fix port's shape).
+        let props = SelectProps::new("G534", build()).threshold(0.7);
+        let groups = grouped(&props, "pxy");
+        let matched: Vec<usize> = groups.iter().flat_map(|group| group.indices.clone()).collect();
+        assert!(matched.is_empty(), "the 0.7 threshold drops the weak hit");
+    }
+
     #[test]
     fn empty_states_render_per_filter_presence() {
         let props = SelectProps::new("Items", vec![]);

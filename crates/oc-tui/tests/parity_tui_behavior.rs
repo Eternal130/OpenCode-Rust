@@ -465,6 +465,147 @@ fn ui_dialog_prompt_cursor_model() {
     );
 }
 
+/// G-532 — the prompt's full edit-binding table (index.bun.js:
+/// 8760-8825 + keybind.ts:206-243): the line deletes (ctrl+u/ctrl+k),
+/// the word deletes (ctrl+w/alt+backspace backward, alt+d forward),
+/// the forward delete (ctrl+d), the char-move aliases (ctrl+f/ctrl+b),
+/// the word moves (alt+b/alt+f/alt+left/alt+right), and the newline
+/// arms (ctrl+j / shift+return — the value goes MULTI-LINE, the
+/// height-1 viewport follows the caret's line, and the submit carries
+/// the newline in the settled value like the ref's `plainText`).
+#[test]
+fn ui_dialog_prompt_edit_table() {
+    let store = Store::new(Runtime::new());
+    store.open_prompt("Edit", "", Some("p"), "one two three", Some(61), None);
+
+    // ctrl+u at the END deletes the whole line (deleteToLineStart).
+    assert_eq!(dialog_layer(&store, "ctrl+u"), DialogKeyOutcome::Consumed);
+    let entry = store.top_dialog().expect("open");
+    assert_eq!(entry.value, "", "delete-to-line-start from the end");
+    assert_eq!(entry.prompt_cursor(), 0);
+
+    // Type two words; ctrl+w deletes the word before the caret.
+    for ch in "alpha beta".chars() {
+        dialog_layer(&store, &ch.to_string());
+    }
+    assert_eq!(dialog_layer(&store, "ctrl+w"), DialogKeyOutcome::Consumed);
+    assert_eq!(store.top_dialog().expect("open").value, "alpha ");
+
+    // alt+backspace — the same word-backward delete (:8784).
+    assert_eq!(dialog_layer(&store, "alt+backspace"), DialogKeyOutcome::Consumed);
+    assert_eq!(store.top_dialog().expect("open").value, "", "alt+backspace ate the word");
+
+    // Type again; the caret sits mid-word, alt+d deletes the word
+    // FORWARD (:8785).
+    for ch in "abc def".chars() {
+        dialog_layer(&store, &ch.to_string());
+    }
+    // caret at end: left ×2 → inside "def"; alt+d removes "ef".
+    dialog_layer(&store, "left");
+    dialog_layer(&store, "left");
+    assert_eq!(dialog_layer(&store, "alt+d"), DialogKeyOutcome::Consumed);
+    assert_eq!(store.top_dialog().expect("open").value, "abc d", "delete-word-forward");
+
+    // ctrl+d — the forward delete at the caret (:8793).
+    dialog_layer(&store, "end");
+    assert_eq!(dialog_layer(&store, "ctrl+d"), DialogKeyOutcome::Consumed);
+    assert_eq!(store.top_dialog().expect("open").value, "abc d", "forward delete at the end is a no-op");
+    dialog_layer(&store, "home");
+    assert_eq!(dialog_layer(&store, "ctrl+d"), DialogKeyOutcome::Consumed);
+    assert_eq!(store.top_dialog().expect("open").value, "bc d", "the forward delete removes 'a'");
+
+    // ctrl+b / ctrl+f — the char-move aliases (:8781-8782).
+    dialog_layer(&store, "ctrl+b");
+    dialog_layer(&store, "ctrl+b");
+    assert_eq!(store.top_dialog().expect("open").prompt_cursor(), 2, "ctrl+b moved left");
+    dialog_layer(&store, "ctrl+f");
+    assert_eq!(store.top_dialog().expect("open").prompt_cursor(), 3, "ctrl+f moved right");
+
+    // alt+b / alt+f — the word moves (:8806/8805).
+    assert_eq!(dialog_layer(&store, "alt+b"), DialogKeyOutcome::Consumed);
+    assert_eq!(store.top_dialog().expect("open").prompt_cursor(), 0, "alt+b to the line start");
+    assert_eq!(dialog_layer(&store, "alt+f"), DialogKeyOutcome::Consumed);
+    assert_eq!(store.top_dialog().expect("open").prompt_cursor(), 2, "alt+f to the next word start");
+
+    // The newline arm (ctrl+j — keybind.ts:207): the value goes
+    // multi-line; the caret moves onto the new (empty) line; ctrl+k
+    // on the caret's line deletes to ITS end (not the whole buffer);
+    // the height-1 viewport follows the caret's line.
+    assert_eq!(dialog_layer(&store, "ctrl+j"), DialogKeyOutcome::Consumed);
+    let entry = store.top_dialog().expect("open");
+    assert_eq!(entry.value, "bc \nd", "the newline arm inserted a line break");
+    assert_eq!(entry.prompt_caret_line(), 1, "the caret sits on the second line");
+    assert_eq!(entry.prompt_cursor(), 4);
+    assert_eq!(
+        entry.prompt_visible_line(),
+        ("d".to_owned(), 0),
+        "the height-1 viewport reads the caret's line"
+    );
+    // ctrl+k deletes to the caret's LINE end — the first line keeps
+    // its text.
+    assert_eq!(dialog_layer(&store, "ctrl+k"), DialogKeyOutcome::Consumed);
+    assert_eq!(store.top_dialog().expect("open").value, "bc \n", "delete-to-line-end on line 1");
+
+    // The submitted value carries the newline (plainText).
+    assert_eq!(dialog_layer(&store, "return"), DialogKeyOutcome::Consumed);
+    assert_eq!(
+        store.take_ui_dialog_resolutions(),
+        vec![(61, serde_json::Value::String("bc \n".to_owned()))],
+        "the multi-line value settles intact"
+    );
+}
+
+/// G-532 — the InputRenderable face (WorktreeName,
+/// dialog-worktree-name.tsx:8-9): `newLine()` returns false
+/// (index.bun.js:9112-9114) — the newline arms are no-ops there.
+#[test]
+fn ui_dialog_worktree_prompt_rejects_newlines() {
+    let store = Store::new(Runtime::new());
+    store.open_dialog(DialogKind::WorktreeName, DialogSize::Medium);
+    // Seed the value through the printable arm.
+    for ch in "wt".chars() {
+        assert_eq!(dialog_layer(&store, &ch.to_string()), DialogKeyOutcome::Consumed);
+    }
+    assert_eq!(dialog_layer(&store, "ctrl+j"), DialogKeyOutcome::Consumed);
+    assert_eq!(store.top_dialog().expect("open").value, "wt", "the newline arm is a no-op");
+    assert_eq!(dialog_layer(&store, "shift+return"), DialogKeyOutcome::Consumed);
+    assert_eq!(store.top_dialog().expect("open").value, "wt", "shift+return too");
+}
+
+/// G-533 — a terminal paste while a prompt dialog holds focus lands in
+/// the PROMPT's value at the caret (the ref's focused-renderable
+/// pasteHandler → insertText, index.bun.js:8928-8930 — newlines kept
+/// for the TextareaRenderable faces); the composer's draft never sees
+/// it. The WorktreeName face (InputRenderable) strips the newlines
+/// (:9116).
+#[test]
+fn ui_dialog_prompt_takes_the_terminal_paste() {
+    let store = Store::new(Runtime::new());
+    store.open_prompt("Edit", "", Some("p"), "seed", Some(71), None);
+    // Move the caret mid-text: the paste inserts AT it.
+    dialog_layer(&store, "left");
+    dialog_layer(&store, "left");
+    assert!(store.paste_into_prompt_dialog("pasted \nmulti"));
+    let entry = store.top_dialog().expect("open");
+    assert_eq!(entry.value, "sepasted \nmultied", "the paste inserted at the caret");
+    assert_eq!(entry.prompt_caret_line(), 1, "the caret moved onto the pasted line");
+    // The composer's draft stayed empty (the paste never reached it).
+    assert!(store.composer("home").draft.text.is_empty());
+
+    // The WorktreeName face strips the newlines (:9116).
+    store.open_dialog(DialogKind::WorktreeName, DialogSize::Medium);
+    for ch in "wt".chars() {
+        dialog_layer(&store, &ch.to_string());
+    }
+    assert!(store.paste_into_prompt_dialog("a\nb"));
+    assert_eq!(store.top_dialog().expect("open").value, "wtab", "the InputRenderable face strips newlines");
+
+    // No prompt dialog open → the paste routes to the composer (the
+    // caller's fallback).
+    store.close_dialog();
+    assert!(!store.paste_into_prompt_dialog("anything"));
+}
+
 /// G-524 — a NO-search plugin select stays GROUPED under a typed
 /// query: the ref's select arm passes no `flat` prop (api.tsx:392-402)
 /// so `props.flat && filter.length > 0` is `undefined && …` = false
@@ -1602,5 +1743,100 @@ fn dialogerrordet_diff_image_inline_preview() {
     assert!(
         text.chars().any(|ch| "▀▄█▌▐▘▝▖▗▚▞▙▛▜▟".contains(ch)),
         "the preview's blocks pixels painted"
+    );
+}
+
+/// G-531 — the plugin tab ops' open/focus rooting + the append-only
+/// open (session-tabs.tsx:397-405 / :393-396): `open(child)` roots to
+/// the family ROOT's tab (no child-keyed tab, NO navigation — the
+/// early-return when the tab exists); `open` of a not-open session
+/// appends its tab without moving the route; `focus(child)` navigates
+/// to the ROOT.
+#[test]
+fn plugin_tabs_open_focus_root_and_append_only() {
+    use oc_tui::data::BusEvent;
+    use oc_tui::plugin_ui::{apply_plugin_ui, PluginUiEvent};
+    use oc_plugin_host::TabsOpKind;
+
+    let store = Store::new(Runtime::new());
+    // The family: root s1 + child c1 (the session index's parentID
+    // link) + an unrelated session s2.
+    store.ingest_all([
+        Ingest::Event(BusEvent::new(
+            "session.created",
+            serde_json::json!({ "sessionID": "s1", "title": "Root" }),
+        )),
+        Ingest::Event(BusEvent::new(
+            "session.created",
+            serde_json::json!({ "sessionID": "c1", "parentID": "s1", "title": "Child" }),
+        )),
+        Ingest::Event(BusEvent::new(
+            "session.created",
+            serde_json::json!({ "sessionID": "s2", "title": "Other" }),
+        )),
+    ]);
+    // Route onto the root (the route effect opened its tab).
+    store.navigate(oc_tui::store::Route::session("s1".to_owned()));
+    assert!(store.tabs().tabs.iter().any(|tab| tab.session_id == "s1"));
+
+    // open(child): the child ROOTS to the root's tab — the strip gains
+    // no child-keyed tab and the route does NOT move (the ref's
+    // append-only open + early-return, session-tabs.tsx:397-405).
+    apply_plugin_ui(
+        &store,
+        "v21e",
+        &PluginUiEvent::TabsOp {
+            op: TabsOpKind::Open,
+            session_id: Some("c1".to_owned()),
+            index: 0,
+        },
+    );
+    assert_eq!(
+        store.route(),
+        oc_tui::store::Route::session("s1".to_owned()),
+        "open is append-only — no navigation"
+    );
+    assert!(
+        !store.tabs().tabs.iter().any(|tab| tab.session_id == "c1"),
+        "no child-keyed tab opened"
+    );
+
+    // open(non-current, not open): the tab appends; the route STILL
+    // stays (the ref's open never navigates).
+    apply_plugin_ui(
+        &store,
+        "v21e",
+        &PluginUiEvent::TabsOp {
+            op: TabsOpKind::Open,
+            session_id: Some("s2".to_owned()),
+            index: 0,
+        },
+    );
+    assert!(
+        store.tabs().tabs.iter().any(|tab| tab.session_id == "s2"),
+        "the s2 tab appended"
+    );
+    assert_eq!(
+        store.route(),
+        oc_tui::store::Route::session("s1".to_owned()),
+        "open(any) still does not navigate"
+    );
+
+    // focus(child) from Home: navigates to the ROOT (the ref's select,
+    // session-tabs.tsx:393-396 — never the child itself).
+    store.navigate(oc_tui::store::Route::Home);
+    apply_plugin_ui(
+        &store,
+        "v21e",
+        &PluginUiEvent::TabsOp {
+            op: TabsOpKind::Focus,
+            session_id: Some("c1".to_owned()),
+            index: 0,
+        },
+    );
+    assert_eq!(
+        store.route(),
+        oc_tui::store::Route::session("s1".to_owned()),
+        "focus(child) navigates to the root"
     );
 }

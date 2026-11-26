@@ -2922,4 +2922,115 @@ mod tests {
             "a called part is no longer streaming"
         );
     }
+
+    // -- G-529: the tracker's four label-update sites -------------------
+
+    fn tracker_child(tracker: &SubagentTracker, id: &str) -> SubagentChild {
+        tracker
+            .children()
+            .into_iter()
+            .find(|child| child.session_id == id)
+            .unwrap_or_else(|| panic!("the child {id} is tracked"))
+    }
+
+    /// G-529 — the applyMeta site (stream-v2.subagent.ts:286 via the
+    /// live tool path :992): the parent's subagent tool input's agent
+    /// updates the label UNCONDITIONALLY (the \b\w titlecase).
+    #[test]
+    fn tracker_applymeta_updates_the_label_from_the_tool_input() {
+        let mut tracker = SubagentTracker::new("parent");
+        tracker.fold(&event(
+            "session.tool.called",
+            &json!({
+                "sessionID": "parent",
+                "metadata": { "sessionID": "child_1" },
+                "input": { "agent": "code-review", "description": "check it" },
+            }),
+        ));
+        let child = tracker_child(&tracker, "child_1");
+        assert_eq!(child.label, "Code-Review", "the applyMeta site's \\b\\w titlecase");
+        assert_eq!(child.description, "check it");
+        // A second applyMeta with a DIFFERENT agent replaces the label
+        // (the unconditional :286 shape).
+        tracker.fold(&event(
+            "session.tool.success",
+            &json!({
+                "sessionID": "parent",
+                "metadata": { "sessionID": "child_1" },
+                "input": { "agent": "plan" },
+            }),
+        ));
+        assert_eq!(tracker_child(&tracker, "child_1").label, "Plan");
+    }
+
+    /// G-529 — the discovery site (:599): `session.created`'s agent
+    /// updates the label unconditionally.
+    #[test]
+    fn tracker_discovery_updates_the_label_from_the_created_record() {
+        let mut tracker = SubagentTracker::new("parent");
+        tracker.fold(&event(
+            "session.created",
+            &json!({ "sessionID": "child_2", "parentID": "parent", "agent": "build", "title": "T" }),
+        ));
+        assert_eq!(tracker_child(&tracker, "child_2").label, "Build");
+    }
+
+    /// G-529 — the step.started site (:679): the label updates ONLY
+    /// while it is still the fallback.
+    #[test]
+    fn tracker_step_started_updates_only_the_fallback_label() {
+        let mut tracker = SubagentTracker::new("parent");
+        tracker.fold(&event(
+            "session.created",
+            &json!({ "sessionID": "child_3", "parentID": "parent", "title": "T" }),
+        ));
+        assert_eq!(tracker_child(&tracker, "child_3").label, "Subagent", "the seeded fallback");
+        tracker.fold(&event(
+            "session.step.started",
+            &json!({ "sessionID": "child_3", "agent": "verify" }),
+        ));
+        assert_eq!(tracker_child(&tracker, "child_3").label, "Verify", "the guarded update lands");
+        // A step.started with a different agent does NOT replace a
+        // non-fallback label (the :679 guard).
+        tracker.fold(&event(
+            "session.step.started",
+            &json!({ "sessionID": "child_3", "agent": "other" }),
+        ));
+        assert_eq!(tracker_child(&tracker, "child_3").label, "Verify", "the guard holds");
+    }
+
+    /// G-529 — the hydrate sites: the mainTool walk (the projected
+    /// tool part's input — unconditional, :946→:286) and the family
+    /// index row (:1061 — fallback-guarded, and the title only FILLS
+    /// an empty one, :1062).
+    #[test]
+    fn tracker_hydrate_walks_update_labels_and_fill_titles() {
+        let mut tracker = SubagentTracker::new("parent");
+        // mainTool — the replayed tool part.
+        let fold = tracker.fold_tool_part(&json!({
+            "type": "tool",
+            "state": {
+                "metadata": { "sessionID": "child_4" },
+                "input": { "agent": "refactor", "description": "desc" },
+            },
+        }));
+        assert!(fold.changed);
+        assert_eq!(tracker_child(&tracker, "child_4").label, "Refactor");
+        // The family row — a fallback-guarded label + a title fill.
+        let fold = tracker.fold_family_row(&json!({
+            "id": "child_5", "parentID": "parent", "agent": "plan", "title": "The family title",
+        }));
+        assert!(fold.changed);
+        let child = tracker_child(&tracker, "child_5");
+        assert_eq!(child.label, "Plan");
+        assert_eq!(child.title, "The family title");
+        // A later family row only fills an EMPTY title (:1062) and
+        // never replaces a landed label (:1061's guard).
+        tracker.fold_family_row(&json!({
+            "id": "child_5", "parentID": "parent", "agent": "other", "title": "New",
+        }));
+        let child = tracker_child(&tracker, "child_5");
+        assert_eq!(child.label, "Plan");
+        assert_eq!(child.title, "The family title");
+    }
 }

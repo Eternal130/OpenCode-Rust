@@ -19231,6 +19231,87 @@ mod tests {
 
     // -- fix-wave E2: the subagent surfaces (#40/#44/#45/#46) -------------
 
+    /// G-528(d) — the subagents-tab picker's `agentMatch` arm
+    /// (subagents-tab.tsx:46-54): the `@(\w+) subagent` title match
+    /// decides the label (the captured word, \b\w-titlecased — only
+    /// when the session record knows no agent) and the title (the
+    /// match STRIPPED, trimmed, falling back to the whole title when
+    /// the strip empties it).
+    #[test]
+    fn picker_agent_match_arm_titles_and_labels() {
+        let store = Store::new(Runtime::new());
+        store.ingest_all([
+            Ingest::Event(BusEvent::new(
+                "session.created",
+                serde_json::json!({
+                    "sessionID": "c_match", "parentID": "s1",
+                    "title": "@code-review subagent check the fixture"
+                }),
+            )),
+            Ingest::Event(BusEvent::new(
+                "session.created",
+                serde_json::json!({
+                    "sessionID": "c_agent", "parentID": "s1",
+                    "agent": "verify", "title": "@plan subagent second arm"
+                }),
+            )),
+            Ingest::Event(BusEvent::new(
+                "session.created",
+                serde_json::json!({
+                    "sessionID": "c_bare", "parentID": "s1",
+                    "title": "no marker here"
+                }),
+            )),
+        ]);
+        // The picker's default filter is the ACTIVE set — flip to the
+        // completed set (subagents-tab.tsx:62's `filter.active`).
+        let mut picker = store.picker();
+        picker.filter_active = false;
+        store.set_picker(picker);
+        let entries = store.picker_entries("s1");
+        let entry = |id: &str| {
+            entries
+                .iter()
+                .find(|entry| entry.session_id == id)
+                .unwrap_or_else(|| panic!("the {id} entry"))
+        };
+        // The match arm: the label is the captured word titlecased
+        // ("code-review" → "Code-Review"), the title strips the match.
+        let matched = entry("c_match");
+        assert_eq!(matched.agent, "Code-Review");
+        assert_eq!(matched.title, "check the fixture");
+        // A known session agent WINS over the match (subagents-tab
+        // .tsx:49-53's precedence) — but the title still strips.
+        let known = entry("c_agent");
+        assert_eq!(known.agent, "Verify");
+        assert_eq!(known.title, "second arm");
+        // No match, no agent: the fallback label + the whole title.
+        let bare = entry("c_bare");
+        assert_eq!(bare.agent, "Subagent");
+        assert_eq!(bare.title, "no marker here");
+    }
+
+    /// G-528(d) — the strip-empty fallback: a title that IS only the
+    /// match keeps the full title (`title.replace(...).trim() ||
+    /// title`, subagents-tab.tsx:54).
+    #[test]
+    fn picker_agent_match_strip_empty_keeps_the_title() {
+        let store = Store::new(Runtime::new());
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "session.created",
+            serde_json::json!({
+                "sessionID": "c_only", "parentID": "s1",
+                "title": "@build subagent"
+            }),
+        ))]);
+        let mut picker = store.picker();
+        picker.filter_active = false;
+        store.set_picker(picker);
+        let entries = store.picker_entries("s1");
+        assert_eq!(entries[0].agent, "Build");
+        assert_eq!(entries[0].title, "@build subagent", "the strip emptied — the full title stands");
+    }
+
     /// The live tool-state reducers (v2 client data.ts:919-980): the
     /// part moves streaming → running (parsed input) → completed
     /// (metadata from the progress snapshot) off the `session.tool.*`
