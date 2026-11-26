@@ -16363,6 +16363,68 @@ mod tests {
     use crate::components::message::model::{Part, PartTime, ToolState, ToolStatus};
     use crate::data::SessionSnapshot;
 
+    /// G-506 — `dialog.show` REPLACES (api.tsx:334-336 →
+    /// dialog.replace, dialog.tsx:170-189): show#2 while #1 is open
+    /// fires #1's close semantics — the removed entry's request id
+    /// settles (the guest's onClose) and the stack holds exactly the
+    /// new entry.
+    #[test]
+    fn plugin_dialog_show_replace_settles_the_removed_request() {
+        let store = Store::new(Runtime::new());
+        let content = PluginDialogContent {
+            title: String::new(),
+            rows: vec!["one".to_owned()],
+            options: Vec::new(),
+            placeholder: None,
+        };
+        store.open_plugin_dialog_show("p.tui", content.clone(), 1, None, false);
+        assert_eq!(store.dialogs().len(), 1);
+        store.open_plugin_dialog_show("p.tui", content, 2, Some("large"), true);
+        assert_eq!(store.dialogs().len(), 1, "the replace leaves exactly one entry");
+        let settled = store.take_ui_dialog_resolutions();
+        assert_eq!(
+            settled,
+            vec![(1, serde_json::Value::Null)],
+            "the replaced-away show's request settles null (the guest onClose)"
+        );
+        // The surviving entry carries #2's request id + presentation.
+        let top = store.top_dialog().expect("the new entry");
+        assert!(matches!(
+            &top.kind,
+            DialogKind::Plugin { request_id: Some(2), .. }
+        ));
+        assert_eq!(top.size, DialogSize::Large);
+        assert!(top.centered);
+    }
+
+    /// G-505 — `dialog.clear()` (api.tsx:341-343 → dialog.tsx:159-169):
+    /// EVERY stack entry's close semantics run — each request id
+    /// settles, the stack empties.
+    #[test]
+    fn plugin_dialog_clear_settles_every_request() {
+        let store = Store::new(Runtime::new());
+        store.open_alert("t", "m", Some(41), None);
+        let content = PluginDialogContent {
+            title: String::new(),
+            rows: vec!["x".to_owned()],
+            options: Vec::new(),
+            placeholder: None,
+        };
+        // The alert was REPLACED by the show (its own settle) — then
+        // clear settles the show's id too.
+        store.open_plugin_dialog_show("p.tui", content, 42, None, false);
+        let replaced = store.take_ui_dialog_resolutions();
+        assert_eq!(replaced, vec![(41, serde_json::Value::Null)]);
+        store.clear_dialogs();
+        assert!(store.dialogs().is_empty(), "the stack empties");
+        let settled = store.take_ui_dialog_resolutions();
+        assert_eq!(
+            settled,
+            vec![(42, serde_json::Value::Null)],
+            "clear() settles the live show's request (the guest onClose)"
+        );
+    }
+
     /// G-442 (W9 root cause) — the session-open `message.sync` fetch
     /// races a fast tool turn: the page is serialized server-side
     /// while the tool runs, and lands client-side AFTER the live
