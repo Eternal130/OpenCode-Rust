@@ -8911,6 +8911,20 @@ impl Store {
         if self.session_running(session_id) {
             return true;
         }
+        for member in self.session_family_ids(session_id) {
+            if !self.pending_inbox(&member).is_empty() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// The session's family ids from the ROOT (`sessionFamily` —
+    /// context/session-tabs.tsx:126-130's `family`): the root plus
+    /// every descendant. Shared by `session_busy` (G-475) and the
+    /// per-tab attention projection (G-511).
+    #[must_use]
+    fn session_family_ids(&self, session_id: &str) -> Vec<String> {
         let index = self.session_index.borrow();
         let mut children: std::collections::HashMap<&str, Vec<&str>> =
             std::collections::HashMap::new();
@@ -8922,15 +8936,54 @@ impl Store {
         // The family walk from the ROOT (sessionFamily), like
         // `footer_live_counts`.
         let mut stack = vec![index.root_of(session_id)];
+        let mut family = Vec::new();
         while let Some(id) = stack.pop() {
-            if !self.pending_inbox(&id).is_empty() {
-                return true;
-            }
             if let Some(group) = children.get(id.as_str()) {
                 stack.extend(group.iter().map(|id| (*id).to_owned()));
             }
+            family.push(id);
         }
-        false
+        family
+    }
+
+    /// G-511 — `status().attention` (context/session-tabs.tsx:164-168):
+    /// per-tab, computed from the session FAMILY's pending lists —
+    /// a pending permission answers `"permission"`, else a pending
+    /// form answers `"question"`, else `None` (the ref's `false`).
+    /// `ctx.ui.tabs.list()` wraps this in `Boolean()` (api.tsx:254)
+    /// for its exported row; the discriminator keeps the two arms
+    /// distinguishable for the tab strip's own consumption.
+    #[must_use]
+    pub fn session_attention(&self, session_id: &str) -> Option<&'static str> {
+        let footer = self.footer();
+        let family = self.session_family_ids(session_id);
+        if footer
+            .permissions
+            .iter()
+            .any(|request| family.contains(&request.session_id))
+        {
+            return Some("permission");
+        }
+        if footer.forms.iter().any(|request| family.contains(&request.session_id)) {
+            return Some("question");
+        }
+        None
+    }
+
+    /// G-511 — `status().promptPulse` (context/session-tabs.tsx:163:
+    /// `promptPulses()[session] ?? 0`): the per-session pulse counter
+    /// (G-479's `session.inbox.enqueued` user-item on a non-current,
+    /// open-tab session).
+    #[must_use]
+    pub fn session_prompt_pulse(&self, session_id: &str) -> u64 {
+        self.prompt_pulses.borrow().get(session_id).copied().unwrap_or(0)
+    }
+
+    /// G-511 — `status().renaming` (context/session-tabs.tsx:175:
+    /// `data.session.title.pending(session)`).
+    #[must_use]
+    pub fn session_renaming(&self, session_id: &str) -> bool {
+        self.title_pending_since(session_id).is_some()
     }
 
     /// Whether the session's turn is RUNNING (the interrupt gate, v2's
@@ -11332,6 +11385,17 @@ impl Store {
             value: String::new(),
             theme_initial,
         };
+        self.replace_dialog_entry(entry);
+    }
+
+    /// G-506 — `dialog.replace` with a prebuilt entry (dialog.tsx:
+    /// 170-189): every open dialog's close semantics run (the theme
+    /// revert + the plugin request settles), then the new entry
+    /// becomes the only one. The v2 `dialog.show`/`dialog.select`
+    /// arms route through here (api.tsx:334-336/392-394 →
+    /// `dialog.replace`) — the ref dialog store exposes no push API
+    /// at all.
+    fn replace_dialog_entry(&self, entry: DialogEntry) {
         let removed = self.dialogs.update(|stack| std::mem::replace(stack, vec![entry]));
         for entry in &removed {
             self.revert_unconfirmed_theme_dialog(entry);
@@ -12463,6 +12527,9 @@ impl Store {
     /// the fully-flattened content opens natively; `request_id` rides
     /// the deferred seam (any close settles the guest's `onClose`);
     /// the presentation (`size`/`centered`) applies to the entry.
+    /// G-506: show REPLACES the stack (dialog.tsx:170-189 — every
+    /// removed entry's close semantics run, the stack := [one entry]);
+    /// the ref dialog store exposes no push API.
     pub fn open_plugin_dialog_show(
         &self,
         plugin_id: &str,
@@ -12492,25 +12559,24 @@ impl Store {
             value: String::new(),
             theme_initial,
         };
-        self.dialogs.update(|stack| stack.push(entry));
-        self.dialog_opened_strip_hover_reset();
-        self.focus_dialog_current();
+        self.replace_dialog_entry(entry);
     }
 
     /// G-475 — `ctx.ui.dialog.set({size?, centered?})` (api.tsx:337-340
     /// → `dialog.setSize/setCentered`): mutate the ACTIVE dialog's
-    /// presentation.
+    /// presentation. G-508: the ref's `dialog.setSize(options.size ??
+    /// "medium")` — an ABSENT (or unknown) size always RESETS to
+    /// medium (dialogWidth 60, dialog.tsx:14-18); the supervisor's
+    /// non-{medium,large,xlarge} → None filter crosses as the absent
+    /// arm and lands on the same reset.
     pub fn set_plugin_dialog_presentation(&self, size: Option<&str>, centered: bool) {
         let size = match size {
-            Some("large") => Some(DialogSize::Large),
-            Some("xlarge") => Some(DialogSize::Xlarge),
-            Some("medium") => Some(DialogSize::default()),
-            _ => None,
+            Some("large") => DialogSize::Large,
+            Some("xlarge") => DialogSize::Xlarge,
+            _ => DialogSize::default(),
         };
         self.update_dialog(|top| {
-            if let Some(size) = size {
-                top.size = size;
-            }
+            top.size = size;
             top.centered = centered;
         });
         self.request_redraw();
@@ -12551,7 +12617,11 @@ impl Store {
             .enumerate()
             .map(|(index, action)| PluginSelectActionEntry {
                 plugin_id: plugin_id.to_owned(),
-                bind: action.bind.clone(),
+                // G-512 — bind-less actions carry an empty label (the
+                // ref's visibleActions filter keeps them off the
+                // footer and out of the tab-focus cycle, exactly like
+                // dialog-select.tsx:168-173).
+                bind: action.bind.clone().unwrap_or_default(),
                 title: action.title.clone(),
                 side_right: action.side == "right",
                 selection_required: action.selection_required,
@@ -12578,9 +12648,10 @@ impl Store {
             value: String::new(),
             theme_initial,
         };
-        self.dialogs.update(|stack| stack.push(entry));
-        self.dialog_opened_strip_hover_reset();
-        self.focus_dialog_current();
+        // G-506: select rides `api.show` → `dialog.replace`
+        // (api.tsx:392-394 → dialog.tsx:170-189) — the stack becomes
+        // exactly this entry, every removed entry's request settles.
+        self.replace_dialog_entry(entry);
     }
 
     /// G-475 — the live plugin select actions for one request id (the

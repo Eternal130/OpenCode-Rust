@@ -230,10 +230,13 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
         PluginUiEvent::DialogSet { size, centered } => {
             store.set_plugin_dialog_presentation(size.as_deref(), *centered);
         }
-        // G-475 — dialog.clear: closes the active dialog (the close
-        // semantics settle any live request ids).
+        // G-505 — dialog.clear (api.tsx:341-343 → dialog.tsx:159-169):
+        // EVERY stack entry's close semantics run (onClose fires for
+        // each — here: the theme revert + the plugin request settle),
+        // the stack empties, and size/centered reset with it. The
+        // port's faithful `clear_dialogs()` seam.
         PluginUiEvent::DialogClear => {
-            store.pop_dialog();
+            store.clear_dialogs();
         }
         // G-475 — the dialog.select face: the native select over the
         // projected options; the value promise settles on submit /

@@ -480,13 +480,18 @@ fn content_height(inputs: &DialogInputs) -> usize {
         // (ui/dialog-select.tsx:838) — one row per left action.
         // G-485③: without the filter input the title block is 1 row.
         Family::Select => {
-            let footer_rows = if inputs.actions.is_empty()
+            // G-512 — the visible (label-carrying) actions own the
+            // footer bar (visibleActions, dialog-select.tsx:168-173):
+            // a bind-less plugin action renders no row.
+            let visible_actions =
+                inputs.actions.iter().filter(|(_, label, _, _)| !label.is_empty()).count();
+            let footer_rows = if visible_actions == 0
                 && inputs.footer_hint.is_none()
                 && inputs.hint_footer.is_empty()
             {
                 0
             } else if inputs.terminal_width < 60 {
-                inputs.actions.len().max(1)
+                visible_actions.max(1)
             } else {
                 1
             };
@@ -969,8 +974,13 @@ fn window_for(inputs: &Signal<DialogInputs>) -> Rc<dyn opentui_solid::DynChildre
 fn actions_for(inputs: &Signal<DialogInputs>) -> Rc<dyn opentui_solid::DynChildren> {
     let source = ForItemSource {
         source: map(inputs.clone(), |i: &DialogInputs| {
+            // G-512 — the visible actions only (visibleActions,
+            // dialog-select.tsx:168-173 `.filter((item) => item.label)`):
+            // a bind-less plugin action carries an empty label and
+            // renders no footer row.
             i.actions
                 .iter()
+                .filter(|(_, label, _, _)| !label.is_empty())
                 .map(|(title, _label, _hint, _gap)| ForItem {
                     key: title.clone(),
                     value: PropValue::Str(title.clone()),
@@ -1173,7 +1183,11 @@ fn select_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilde
     let inputs_for_footer = inputs.clone();
     let footer = show(
         Rc::new(map(inputs.clone(), |i: &DialogInputs| {
-            !i.actions.is_empty() || i.footer_hint.is_some() || !i.hint_footer.is_empty()
+            // G-512 — the visible (label-carrying) actions gate the
+            // bar (visibleActions, dialog-select.tsx:168-173).
+            i.actions.iter().any(|(_, label, _, _)| !label.is_empty())
+                || i.footer_hint.is_some()
+                || !i.hint_footer.is_empty()
         })) as Rc<dyn Reactive<bool>>,
         {
             let inputs = inputs_for_footer;
@@ -1782,6 +1796,10 @@ fn plugin_rows_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementB
 /// render rows mount RAW under the chrome's paddingTop 1 — no title
 /// row, no `esc` chrome, no side padding (the legacy
 /// [`plugin_rows_builder`] chrome belongs to `ui.dialog.open` only).
+/// G-510: blank rows render and overlong rows arrive PRE-WRAPPED at
+/// the box width ([`build_inputs`] word-wraps the show family —
+/// the ref's default wrap grows the box); the `take_width` here is
+/// a defensive no-op on already-fitting rows.
 fn plugin_show_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::ElementBuilder {
     let rows = ForItemSource {
         source: map(inputs.clone(), |i: &DialogInputs| {
@@ -3534,6 +3552,22 @@ fn build_inputs(
         }
         Family::PluginRows | Family::PluginShow => {
             let content = plugin.cloned().unwrap_or_default();
+            // G-510 — the `dialog.show` family mounts its rows like
+            // the ref's raw Dialog children (ui/dialog.tsx:56-70):
+            // blank rows render (a taller box) and an overlong row
+            // WRAPS at the box width with the default word wrap
+            // (dialogWidth(size) = 60 medium) growing the box — the
+            // hard clip is the legacy `ui.dialog.open` family's
+            // contract only.
+            let plugin_rows = if matches!(family, Family::PluginShow) {
+                content
+                    .rows
+                    .iter()
+                    .flat_map(|line| crate::wrap::wrap_label(line, box_width.max(1)))
+                    .collect::<Vec<String>>()
+            } else {
+                content.rows
+            };
             DialogInputs {
                 family,
                 box_width,
@@ -3555,7 +3589,7 @@ fn build_inputs(
                 prompt_value: String::new(),
                 hint_lines: Vec::new(),
                 plugin_title: content.title,
-                plugin_rows: content.rows,
+                plugin_rows,
                 message: String::new(),
                 confirm_labels: (String::new(), String::new(), true),
                 error_source: String::new(),
