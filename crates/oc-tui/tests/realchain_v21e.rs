@@ -240,7 +240,11 @@ const FIXTURES: &[(&str, &str)] = &[
       ctx.ui.dialog
         .select({
           title: "v21e search",
-          search: async (query, options) =>
+          // NB: the ref's search callback is SYNCHRONOUS
+          // (context.ts:386-389 returns the rows, never a promise —
+          // an async callback crashes the ref's filtered() memo at
+          // dialog-select.tsx:185 `.filter` on the promise).
+          search: (query, options) =>
             options.filter((option) =>
               option.title.toLowerCase().includes(String(query ?? "").toLowerCase()),
             ),
@@ -438,8 +442,9 @@ fn v21e_prompt_edit_table_pair() {
     rig.write_both(b"\x15");
     settle(2);
     capture_pair(&rig, "ed", "prompt-ctrl-u");
-    // CTRL+a (line 0 home) + CTRL+k — delete-to-line-end trims the
-    // first line from the caret.
+    // CTRL+a (the caret's line home — line 1, now empty) + left×3
+    // (crossing onto line 0's end) + CTRL+k — delete-to-line-end trims
+    // line 0 from the caret.
     rig.write_both(b"\x01");
     settle(1);
     rig.write_both(b"\x1b[D\x1b[D\x1b[D");
@@ -548,7 +553,10 @@ const TABS_FIXTURE: &str = r#"export default {
     };
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     (async () => {
-      const parts = ["datalist=" + (ctx.data && ctx.data.session ? "1" : "0")];
+      // NB: the open arm rides FIRST in the toast's parts so the
+      // rig's needle ("v21e tabs open-child=") matches; the datalist
+      // evidence follows (the export carries the seam).
+      const parts = [];
       let family = null;
       for (let i = 0; i < 180 && !family; i++) {
         const sessions = await list();
@@ -577,6 +585,7 @@ const TABS_FIXTURE: &str = r#"export default {
           parts.push("open-child-err");
         }
       }
+      parts.push("datalist=" + (ctx.data && ctx.data.session ? "1" : "0"));
       ctx.ui.toast.show({
         title: "v21e tabs " + parts.join(" "),
         message: "",
