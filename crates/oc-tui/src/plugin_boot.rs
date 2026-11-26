@@ -1436,8 +1436,8 @@ impl PluginDialogSource for HostDialogSource {
                 .collect(),
 
             placeholder: None,
-                    current: None,
-                })
+            current: None,
+        })
     }
 }
 

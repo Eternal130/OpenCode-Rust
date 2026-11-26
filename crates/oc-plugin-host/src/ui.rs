@@ -325,14 +325,8 @@ pub enum TabsOpKind {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TuiRouteView {
     Home,
-    Session {
-        session_id: String,
-    },
-    Plugin {
-        plugin_id: String,
-        name: String,
-        data: Option<Value>,
-    },
+    Session { session_id: String },
+    Plugin { plugin_id: String, name: String, data: Option<Value> },
 }
 
 impl TuiRouteView {

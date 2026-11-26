@@ -8969,11 +8969,7 @@ impl Store {
     pub fn session_attention(&self, session_id: &str) -> Option<&'static str> {
         let footer = self.footer();
         let family = self.session_family_ids(session_id);
-        if footer
-            .permissions
-            .iter()
-            .any(|request| family.contains(&request.session_id))
-        {
+        if footer.permissions.iter().any(|request| family.contains(&request.session_id)) {
             return Some("permission");
         }
         if footer.forms.iter().any(|request| family.contains(&request.session_id)) {
@@ -16403,10 +16399,7 @@ mod tests {
         );
         // The surviving entry carries #2's request id + presentation.
         let top = store.top_dialog().expect("the new entry");
-        assert!(matches!(
-            &top.kind,
-            DialogKind::Plugin { request_id: Some(2), .. }
-        ));
+        assert!(matches!(&top.kind, DialogKind::Plugin { request_id: Some(2), .. }));
         assert_eq!(top.size, DialogSize::Large);
         assert!(top.centered);
     }

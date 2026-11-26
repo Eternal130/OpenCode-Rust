@@ -928,20 +928,31 @@ impl SelectState {
         if props.locked {
             return;
         }
-        let visible: Vec<usize> =
-            props.actions.iter().enumerate().filter(|(_, a)| !a.label.is_empty()).map(|(i, _)| i).collect();
+        let visible: Vec<usize> = props
+            .actions
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| !a.label.is_empty())
+            .map(|(i, _)| i)
+            .collect();
         if visible.is_empty() {
             return;
         }
         self.focused_action = match self.focused_action {
-            None => Some(if direction >= 0 { visible[0] } else { *visible.last().expect("non-empty") }),
+            None => {
+                Some(if direction >= 0 { visible[0] } else { *visible.last().expect("non-empty") })
+            }
             Some(index) => {
                 let at = visible.iter().position(|visible| *visible == index);
                 let next = match at {
                     None => {
                         // A stale index (the action set changed under
                         // the focus): re-enter at the near end.
-                        if direction >= 0 { visible[0] } else { *visible.last().expect("non-empty") }
+                        if direction >= 0 {
+                            visible[0]
+                        } else {
+                            *visible.last().expect("non-empty")
+                        }
                     }
                     Some(at) => {
                         let next = at as i64 + direction;
