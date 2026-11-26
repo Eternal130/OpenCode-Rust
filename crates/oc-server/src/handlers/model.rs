@@ -1495,11 +1495,13 @@ mod tests {
         // The ref's probed entry (fresh boot): activation flipped
         // enabled, the public apiKey, the models-dev integrationID.
         assert_eq!(zen["id"], json!("opencode"));
-        assert_eq!(zen["name"], json!("OpenCode Zen"));
+        assert_eq!(zen["name"], json!("OpenCode"));
+        // G-516: the live 2026-11-26 generation renamed the provider display
+        // name and moved the keyless endpoint to inference/openai.
         assert_eq!(zen["activation"], json!("enabled"));
         assert_eq!(zen["integrationID"], json!("opencode"));
         assert_eq!(zen["settings"]["apiKey"], json!("public"));
-        assert_eq!(zen["settings"]["baseURL"], json!("https://opencode.ai/zen/v1"));
+        assert_eq!(zen["settings"]["baseURL"], json!("https://opencode.ai/inference/openai/v1"));
         let object = zen.as_object().expect("entry object");
         let expected_keys = ["id", "name", "activation", "integrationID", "package", "settings"];
         assert_eq!(object.len(), expected_keys.len(), "exact ref key set: {object:?}");
@@ -1628,7 +1630,7 @@ mod tests {
             "package falls back to the provider's"
         );
         assert_eq!(data["settings"]["apiKey"], json!("public"));
-        assert_eq!(data["settings"]["baseURL"], json!("https://opencode.ai/zen/v1"));
+        assert_eq!(data["settings"]["baseURL"], json!("https://opencode.ai/inference/openai/v1"));
         assert_eq!(data["settings"]["provider"], json!("opencode"));
     }
 }

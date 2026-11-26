@@ -955,8 +955,9 @@ impl SelectState {
                         }
                     }
                     Some(at) => {
-                        let next = at as i64 + direction;
-                        if next < 0 || next >= visible.len() as i64 {
+                        let next = i64::try_from(at).unwrap_or(i64::MAX) + direction;
+                        let len = i64::try_from(visible.len()).unwrap_or(i64::MAX);
+                        if next < 0 || next >= len {
                             self.focused_action = None;
                             return;
                         }
