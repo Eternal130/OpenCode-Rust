@@ -401,7 +401,7 @@ fn ui_dialog_prompt() {
     assert!(text.contains("from the guest"), "the guest description:\n{text}");
 }
 
-/// G-527 — the prompt cursor model (the ref's TextareaRenderable
+/// G-527 — the prompt cursor model (the ref's `TextareaRenderable`
 /// default bindings, index.bun.js:8760-8822/8890-8919): the seeded
 /// caret sits at the value END (gotoLineEnd), arrows move it
 /// mid-text (moveCursorLeft/Right, gotoLineHome/End + the ctrl+a/e

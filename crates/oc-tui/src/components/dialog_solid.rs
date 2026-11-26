@@ -181,7 +181,7 @@ fn styled(chunks: Vec<TextChunk>) -> StyledText {
 /// the caret: `[before-window] [cursor cell] [after-tail]`, all
 /// clipped to `width` cells starting at the viewport's `offset`
 /// (0 = the head window the rename/install faces use; the
-/// GenericPrompt face feeds the cursor-following tail offset — the
+/// `GenericPrompt` face feeds the cursor-following tail offset — the
 /// ref's `ensure_cursor_visible` horizontal arm). The char UNDER
 /// the caret renders inverted (a terminal block cursor keeps the
 /// glyph); at the value END the cursor cell is the trailing blank —
@@ -395,6 +395,10 @@ struct DialogInputs {
     /// G-527 — the prompt cursor (char index; the entry's resolved
     /// `prompt_cursor()`).
     prompt_cursor: usize,
+    /// G-527 — the prompt viewport's cell offset (the entry's
+    /// resolved `prompt_viewport_offset()` — the stateful band
+    /// clamp).
+    prompt_viewport: usize,
     // -- help ---------------------------------------------------------------
     hint_lines: Vec<String>,
     // -- plugin rows ---------------------------------------------------------
@@ -1687,32 +1691,20 @@ fn generic_prompt_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::Eleme
             if i.prompt_value.is_empty() {
                 styled(vec![chunk(i.placeholder.clone(), i.colors.muted, None, 0)])
             } else {
-                // The ref's textarea viewport (upstream
-                // `ensure_cursor_visible`'s horizontal arm, wrapMode
-                // none): margin_cols = min(max(1, floor(W*0.2)),
-                // (W-1)/2) (the 0.2 default scroll margin); when
-                // cursor_col + margin_cols >= W the viewport scrolls
-                // to cursor_col + margin_cols - W + 1. G-527 — the
-                // viewport follows the CURSOR (moveCursorLeft/Right
-                // / gotoLineHome/End move it mid-text; typing inserts
-                // at it; the pre-va21d model tracked the value END
-                // with cursor≡end). The block cursor rides the caret
-                // column: `[before][inverted cell][after]`.
-                let cursor_col = {
-                    let cursor = i.prompt_cursor.min(i.prompt_value.chars().count());
-                    let byte = i
-                        .prompt_value
-                        .char_indices()
-                        .nth(cursor)
-                        .map_or(i.prompt_value.len(), |(byte, _)| byte);
-                    display_width(&i.prompt_value[..byte])
-                };
-                let margin_cols = (width / 5).max(1).min(width.saturating_sub(1) / 2);
-                let offset_x = if cursor_col + margin_cols >= width {
-                    cursor_col + margin_cols - width + 1
-                } else {
-                    0
-                };
+                // The ref's textarea viewport: G-527 — a STATEFUL
+                // band clamp (`ensureCursorVisible`'s wrap-none
+                // column branch, editor-view.zig:208-263 /
+                // opentui-core input.rs:1455-1473): the offset only
+                // moves when the caret enters a margin band
+                // (`margin = max(1, floor(W*0.2))` clamped to
+                // `(W-1)/2`) — moving the caret back INSIDE the
+                // window keeps the old offset (the pre-va21d
+                // stateless recompute scrolled back where the ref
+                // stays; the seeded end view — the v21c anchor — is
+                // the band-from-0 right arm either way). The resolved
+                // offset rides the inputs; the block cursor rides
+                // the caret column: `[before][inverted cell][after]`.
+                let offset_x = i.prompt_viewport;
                 styled(prompt_input_chunks(
                     &i.prompt_value,
                     i.prompt_cursor,
@@ -3381,6 +3373,7 @@ fn build_inputs(
                 title_suffix: props.title_suffix.clone().unwrap_or_default(),
                 prompt_value: String::new(),
                 prompt_cursor: 0,
+                prompt_viewport: 0,
                 hint_lines: Vec::new(),
                 plugin_title: String::new(),
                 message: String::new(),
@@ -3427,6 +3420,7 @@ fn build_inputs(
             title_suffix: String::new(),
             prompt_value: entry.value.clone(),
             prompt_cursor: entry.prompt_cursor(),
+            prompt_viewport: entry.prompt_viewport_offset(box_width.saturating_sub(4)),
             hint_lines: Vec::new(),
             plugin_title: String::new(),
             plugin_rows: Vec::new(),
@@ -3478,6 +3472,7 @@ fn build_inputs(
                 title_suffix: String::new(),
                 prompt_value: entry.value.clone(),
                 prompt_cursor: entry.prompt_cursor(),
+                prompt_viewport: entry.prompt_viewport_offset(box_width.saturating_sub(4)),
                 hint_lines: if description.is_empty() {
                     Vec::new()
                 } else {
@@ -3545,6 +3540,7 @@ fn build_inputs(
                 title_suffix: String::new(),
                 prompt_value: String::new(),
                 prompt_cursor: 0,
+                prompt_viewport: 0,
                 hint_lines: Vec::new(),
                 plugin_title: "/btw".to_owned(),
                 plugin_rows: Vec::new(),
@@ -3590,6 +3586,7 @@ fn build_inputs(
             title_suffix: String::new(),
             prompt_value: entry.value.clone(),
             prompt_cursor: entry.prompt_cursor(),
+            prompt_viewport: entry.prompt_viewport_offset(box_width.saturating_sub(4)),
             hint_lines: props.hints.clone(),
             plugin_title: String::new(),
             plugin_rows: Vec::new(),
@@ -3646,6 +3643,7 @@ fn build_inputs(
                 title_suffix: String::new(),
                 prompt_value: String::new(),
                 prompt_cursor: 0,
+                prompt_viewport: 0,
                 hint_lines: crate::wrap::wrap_label(&hint, content_width.max(1)),
                 plugin_title: String::new(),
                 plugin_rows: Vec::new(),
@@ -3705,6 +3703,7 @@ fn build_inputs(
                 title_suffix: String::new(),
                 prompt_value: String::new(),
                 prompt_cursor: 0,
+                prompt_viewport: 0,
                 hint_lines: Vec::new(),
                 plugin_title: content.title,
                 plugin_rows,
@@ -3778,6 +3777,7 @@ fn build_inputs(
                 title_suffix: String::new(),
                 prompt_value: String::new(),
                 prompt_cursor: 0,
+                prompt_viewport: 0,
                 hint_lines: Vec::new(),
                 plugin_title,
                 plugin_rows: Vec::new(),
@@ -3830,6 +3830,7 @@ fn build_inputs(
                 title_suffix: String::new(),
                 prompt_value: String::new(),
                 prompt_cursor: 0,
+                prompt_viewport: 0,
                 hint_lines: Vec::new(),
                 plugin_title: title.clone(),
                 plugin_rows: Vec::new(),
@@ -3886,6 +3887,7 @@ fn build_inputs(
                 title_suffix: String::new(),
                 prompt_value: String::new(),
                 prompt_cursor: 0,
+                prompt_viewport: 0,
                 hint_lines: Vec::new(),
                 plugin_title: String::new(),
                 plugin_rows: Vec::new(),
@@ -3953,6 +3955,7 @@ fn build_inputs(
                 title_suffix: String::new(),
                 prompt_value: String::new(),
                 prompt_cursor: 0,
+                prompt_viewport: 0,
                 hint_lines: Vec::new(),
                 plugin_title: String::new(),
                 plugin_rows: Vec::new(),
@@ -3995,6 +3998,7 @@ fn build_inputs(
             title_suffix: String::new(),
             prompt_value: String::new(),
             prompt_cursor: 0,
+            prompt_viewport: 0,
             // The status rows ride the hints (the props layer derives
             // them — see the `DialogKind::Status` props arm).
             hint_lines: props.hints.clone(),
@@ -4040,6 +4044,7 @@ fn build_inputs(
             title_suffix: String::new(),
             prompt_value: String::new(),
             prompt_cursor: 0,
+            prompt_viewport: 0,
             hint_lines: Vec::new(),
             plugin_title: String::new(),
             plugin_rows: Vec::new(),
@@ -4082,6 +4087,7 @@ fn build_inputs(
             title_suffix: String::new(),
             prompt_value: String::new(),
             prompt_cursor: 0,
+            prompt_viewport: 0,
             hint_lines: props.hints.clone(),
             plugin_title: String::new(),
             plugin_rows: Vec::new(),
@@ -4128,6 +4134,7 @@ mod d22_tests {
             select: crate::components::dialog_select::SelectState::default(),
             value: String::new(),
             prompt_cursor: None,
+            prompt_viewport: None,
             theme_initial: None,
         }
     }
@@ -4268,10 +4275,12 @@ mod d22_tests {
                 .map(|chunk| (chunk.text.clone(), chunk.bg.is_some()))
                 .collect::<Vec<_>>()
         };
-        // Mid-text: [he][l inverted][llo].
+        // Mid-text: [he][l inverted][lo] — the caret sits before the
+        // third char, so the inverted cell is that char and the tail
+        // is the remainder.
         assert_eq!(
             shape("hello", 2, 0, 20),
-            vec![("he".to_owned(), false), ("l".to_owned(), true), ("llo".to_owned(), false)],
+            vec![("he".to_owned(), false), ("l".to_owned(), true), ("lo".to_owned(), false)],
             "the caret over the third char inverts exactly that cell"
         );
         // At the END (the seeded view): [hello][trailing cell] —
@@ -4306,8 +4315,8 @@ mod d22_tests {
         );
     }
 
-    /// G-527 — the GenericPrompt viewport follows the CURSOR: the
-    /// offset math (ensure_cursor_visible's horizontal arm) keys on
+    /// G-527 — the `GenericPrompt` viewport follows the CURSOR: the
+    /// offset math (`ensure_cursor_visible`'s horizontal arm) keys on
     /// the caret's column, so `home` on a long value rewinds the
     /// window to the HEAD while the seeded end view keeps the TAIL
     /// (the v21c prompt-open shape).
@@ -4317,32 +4326,64 @@ mod d22_tests {
         let theme = crate::theme::ThemeState::v2_dark();
         let store = crate::store::Store::new(crate::reactive::Runtime::new());
         // 71 chars > the 56-cell window (medium box 60 - 4 padding).
-        let value: String = "0123456789".repeat(7).chars().take(71).collect();
+        let value: String = "0123456789".repeat(8).chars().take(71).collect();
         store.open_prompt("T", "", Some("p"), &value, Some(3), None);
-        let input_row = |store: &crate::store::Store, cursor: Option<usize>| {
-            store.update_dialog(|top| top.prompt_cursor = cursor);
+        // The key layer drives the caret (the stateful viewport rides
+        // the entry — the same path the app's keypress pump takes).
+        let key = |store: &crate::store::Store, name: &str| {
+            let mut keymap = crate::keymap::Keymap::new();
+            keymap.push_mode("dialog");
+            let clock = crate::keymap::ManualClock::default();
+            let stroke = crate::keymap::KeyStroke::parse(name).expect("a parseable stroke");
+            crate::components::dialog::handle_dialog_key(
+                store,
+                &mut keymap,
+                &clock,
+                stroke,
+                (120, 36),
+            )
+        };
+        let input_row = |store: &crate::store::Store| {
             let entry = store.dialogs().last().expect("the prompt entry").clone();
-            assert_eq!(entry.prompt_cursor(), cursor.unwrap_or(71));
             let props = crate::components::dialog_select::SelectProps::new("C", Vec::new());
             let sidecar = DialogSidecar::default();
             let _seat = mount_dialog_tree(&entry, &props, None, &theme, (120, 36), &sidecar);
             let mut frame = crate::components::chrome_solid::blank_frame(120, 36);
             crate::components::chrome_solid::composite_chrome_tree(&mut frame);
             let grid = frame.text_grid();
-            // The input row: the row after the title (the
-            // no-description prompt seats input at title+gap).
-            let title_row = grid.iter().position(|row| row.contains("T")).expect("the title");
-            grid[title_row + 1].trim().to_owned()
+            // The input row: the no-description prompt seats the
+            // input one margin row BELOW the title (title, gap,
+            // input — dialog-prompt.tsx:99/113's gap 1).
+            let title_row = grid.iter().position(|row| row.contains('T')).expect("the title");
+            grid[title_row + 2].trim().to_owned()
         };
-        // Seeded (cursor at END): the tail window — the row starts
-        // deep into the value (offset 71 + margin 11 - 56 + 1 = 27;
-        // cell 27 of the repeated digits is '7').
-        let seeded = input_row(&store, None);
+        // Seeded (cursor at END, no keys yet): the mount's band from
+        // offset 0 — the right arm scrolls to the TAIL (offset
+        // 71 + margin 11 - 56 + 1 = 27; cell 27 of the repeated
+        // digits is '7' — the v21c prompt-open shape).
+        let seeded = input_row(&store);
         assert!(seeded.starts_with('7'), "the seeded end view shows the value's tail: {seeded}");
-        // HOME rewinds the cursor (and the window with it) — the
-        // head of the value is visible again.
-        let homed = input_row(&store, Some(0));
+        // HOME through the key layer: the left band rewinds the
+        // viewport — the head of the value is visible again.
+        key(&store, "home");
+        let homed = input_row(&store);
         assert!(homed.starts_with("0123456789"), "home rewinds the viewport: {homed}");
+        // END: the right band scrolls back to the tail.
+        key(&store, "end");
+        let ended = input_row(&store);
+        assert!(ended.starts_with('7'), "end returns to the tail window: {ended}");
+        // left×3 — the caret lands at 68, INSIDE the window
+        // [27, 83): the STATEFUL band clamp keeps the offset (the
+        // ref never scrolls back while the caret stays inside; a
+        // stateless recompute would show cell 24 — '2').
+        for _ in 0..3 {
+            key(&store, "left");
+        }
+        let lefted = input_row(&store);
+        assert!(
+            lefted.starts_with('7'),
+            "the viewport keeps the offset while the caret stays inside the window: {lefted}"
+        );
         crate::components::chrome_solid::reset_hub();
     }
 }

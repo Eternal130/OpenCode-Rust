@@ -499,9 +499,19 @@ pub struct DialogEntry {
     /// value write resets to it (the worktree slug's
     /// `input.gotoLineEnd()`, dialog-worktree-name.tsx:21). The
     /// keypress pump moves it (moveCursorLeft/Right,
-    /// gotoLineHome/End — the TextareaRenderable default bindings,
+    /// gotoLineHome/End — the `TextareaRenderable` default bindings,
     /// index.bun.js:8890-8919).
     pub prompt_cursor: Option<usize>,
+    /// G-527 — the prompt viewport's cell offset
+    /// (`ensure_cursor_visible`'s wrap-none column branch,
+    /// editor-view.zig:208-263 — opentui-core input.rs:1455-1473): a
+    /// STATEFUL clamp — the viewport only moves when the caret
+    /// enters a margin band, so moving the caret back INSIDE the
+    /// window keeps the old offset (a stateless recompute scrolled
+    /// back where the ref stays). `None` = not yet materialized (the
+    /// band from offset 0 — the mount paint's computation with the
+    /// seeded caret); every wholesale value write re-seeds it.
+    pub prompt_viewport: Option<usize>,
     /// The live-preview contract of `dialog-theme-list.tsx`: the theme
     /// name captured when the `ThemeList` dialog opened (`const initial =
     /// themes.selected`). `Some` while the dialog is open and
@@ -546,6 +556,61 @@ impl DialogEntry {
         let byte = char_boundary(&self.value, cursor - 1);
         self.value.remove(byte);
         self.prompt_cursor = Some(cursor - 1);
+    }
+
+    /// G-527 — the caret's CELL column (display width of the value's
+    /// prefix before the cursor).
+    fn prompt_cursor_col(&self) -> usize {
+        let cursor = self.prompt_cursor();
+        let byte = char_boundary(&self.value, cursor);
+        crate::wrap::display_width(&self.value[..byte])
+    }
+
+    /// G-527 — materialize the viewport BEFORE the first edit (the
+    /// ref's mount paint: the band from offset 0 with the seeded
+    /// caret). A no-op once materialized.
+    pub fn prompt_materialize_viewport(&mut self, width: usize) {
+        if self.prompt_viewport.is_none() {
+            let cursor_col = self.prompt_cursor_col();
+            self.prompt_viewport = Some(band_offset(0, cursor_col, width));
+        }
+    }
+
+    /// G-527 — re-band the viewport after a caret/value edit
+    /// (`ensureCursorVisible`): scroll left/right only when the
+    /// caret entered a margin band, else keep the offset. Idempotent.
+    pub fn prompt_band_viewport(&mut self, width: usize) {
+        let vp = self.prompt_viewport.unwrap_or(0);
+        let cursor_col = self.prompt_cursor_col();
+        self.prompt_viewport = Some(band_offset(vp, cursor_col, width));
+    }
+
+    /// G-527 — the RESOLVED viewport offset for rendering: the stored
+    /// offset re-banded against the current caret (idempotent), with
+    /// the unmaterialized case reading as the mount paint (band from
+    /// offset 0).
+    #[must_use]
+    pub fn prompt_viewport_offset(&self, width: usize) -> usize {
+        let vp = self.prompt_viewport.unwrap_or(0);
+        band_offset(vp, self.prompt_cursor_col(), width)
+    }
+}
+
+/// G-527 — `ensureCursorVisible`'s wrap-none column branch
+/// (editor-view.zig:208-263 via opentui-core input.rs:1455-1473):
+/// `margin_cols = max(1, floor(W*0.2))` clamped to `(W-1)/2`; the
+/// viewport scrolls only when the caret column enters a margin band.
+fn band_offset(vp: usize, cursor_col: usize, width: usize) -> usize {
+    if width == 0 {
+        return vp;
+    }
+    let margin_cols = (width / 5).max(1).min(width.saturating_sub(1) / 2);
+    if cursor_col < vp + margin_cols {
+        cursor_col.saturating_sub(margin_cols)
+    } else if cursor_col >= vp + width - margin_cols {
+        cursor_col + margin_cols - width + 1
+    } else {
+        vp
     }
 }
 
@@ -9445,6 +9510,7 @@ impl Store {
                 top.value = initial;
                 // G-527 — the seeded rename value: cursor at the end.
                 top.prompt_cursor = None;
+                top.prompt_viewport = None;
             });
         } else {
             self.update_dialog(|top| {
@@ -9770,6 +9836,7 @@ impl Store {
             top.value = label;
             // G-527 — the seeded rename value: cursor at the end.
             top.prompt_cursor = None;
+            top.prompt_viewport = None;
         });
     }
 
@@ -11419,6 +11486,7 @@ impl Store {
             select: SelectState::default(),
             value: String::new(),
             prompt_cursor: None,
+            prompt_viewport: None,
             theme_initial,
         };
         self.dialogs.update(|stack| stack.push(entry));
@@ -11457,6 +11525,7 @@ impl Store {
             select,
             value: String::new(),
             prompt_cursor: None,
+            prompt_viewport: None,
             theme_initial,
         };
         self.dialogs.update(|stack| stack.push(entry));
@@ -11488,6 +11557,7 @@ impl Store {
             select,
             value: String::new(),
             prompt_cursor: None,
+            prompt_viewport: None,
             theme_initial,
         };
         self.replace_dialog_entry(entry);
@@ -12194,8 +12264,10 @@ impl Store {
             self.update_dialog(|top| {
                 top.value = value.to_string();
                 // G-527 — the seeded initialValue: cursor at the
-                // end (gotoLineEnd, dialog-prompt.tsx:79).
+                // end (gotoLineEnd, dialog-prompt.tsx:79); the
+                // viewport re-materializes from the new seed.
                 top.prompt_cursor = None;
+                top.prompt_viewport = None;
             });
         }
         self.request_redraw();
@@ -12673,6 +12745,7 @@ impl Store {
             select: SelectState::default(),
             value: String::new(),
             prompt_cursor: None,
+            prompt_viewport: None,
             theme_initial,
         };
         self.replace_dialog_entry(entry);
@@ -12769,6 +12842,7 @@ impl Store {
             select,
             value: String::new(),
             prompt_cursor: None,
+            prompt_viewport: None,
             theme_initial,
         };
         // G-506: select rides `api.show` → `dialog.replace`

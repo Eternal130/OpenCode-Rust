@@ -6,7 +6,7 @@
 //! title, the footer right-aligned), the NO-description prompt box
 //! (G-526: the height-6 chrome), the prompt's cursor-aware input
 //! (G-527: home/end window moves + mid-text insert + backspace — the
-//! ref's TextareaRenderable default bindings), the hyphenated
+//! ref's `TextareaRenderable` default bindings), the hyphenated
 //! confirm-label pills (G-523: `\b\w` titlecase), and the R26
 //! un-anchored `ctx.ui.tabs.move/close` with a CHILD session id (the
 //! va21c child-id rooting).
@@ -436,65 +436,68 @@ fn v21d_prompt_cursor_pair() {
 // the plugin polls for the settled child, opens the root tab, moves
 // with the child id, closes with the child id, and toasts the three
 // returns — the toast + the rendered tab strip ride the export.
-// ==========================================================================
+// =========================================================================
 
 const TABS_FIXTURE: &str = r#"export default {
   id: "v21d.tabs.tui",
   async setup(ctx) {
-    const list = () => {
+    // The session discovery rides the DUAL path (the ref's synced
+    // `ctx.data.session.list()` when present, else the RPC mirror
+    // `ctx.session.list()` — the port's ctx has no `data` member):
+    // the child's parentID IS the family root for the seeded
+    // subagent turn.
+    const list = async () => {
       try {
         const raw =
           ctx.data && ctx.data.session && typeof ctx.data.session.list === "function"
             ? ctx.data.session.list()
-            : null;
-        return Array.isArray(raw) ? raw : [];
+            : await ctx.session.list();
+        return Array.isArray(raw) ? raw : raw && Array.isArray(raw.data) ? raw.data : [];
       } catch {
         return [];
       }
     };
-    const status = (id) => {
-      try {
-        return ctx.data.session.status(id);
-      } catch {
-        return "idle";
-      }
-    };
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     (async () => {
-      // The settled child: a session with parentID whose family (the
-      // child + its root) is idle — the turn completed on both ends.
+      // The child session (a subagent with parentID).
       let family = null;
       for (let i = 0; i < 180 && !family; i++) {
-        const sessions = list();
+        const sessions = await list();
         const child = sessions.find(
           (session) => session && typeof session.id === "string" && session.parentID,
         );
         if (child) {
-          let root = child.id;
-          try {
-            root = ctx.data.session.root(child.id);
-          } catch {}
-          if (status(child.id) === "idle" && status(root) === "idle") {
-            family = { child: child.id, root };
-          }
+          family = { child: child.id, root: String(child.parentID) };
+        } else {
+          await sleep(1000);
         }
-        await sleep(1000);
       }
       const parts = [];
       if (!family) {
         parts.push("nochild");
       } else {
+        // The dwell: the turn completes (parent→child→parent) before
+        // the tab ops run — both ends act on the settled family, and
+        // the capture rides the post-turn state (the pace is
+        // deterministic per engine).
+        await sleep(45000);
         try {
-          parts.push("open=" + ctx.ui.tabs.open(family.child));
+          parts.push("open=" + ctx.ui.tabs.open(family.root));
         } catch {
           parts.push("open-err");
         }
         await sleep(3000);
+        // The REGISTERED face: move with the CHILD id (the ref roots
+        // it — api.tsx:267-273 `host.data.session.root`; the port's
+        // pushed child→root map, G-519-lead) moves the ROOT's tab.
         try {
           parts.push("move=" + ctx.ui.tabs.move(family.child, 0));
         } catch {
           parts.push("move-err");
         }
+        // close with the CHILD id: the membership check finds no tab
+        // with the child's sessionID → false, no close (both ends —
+        // the ref roots only move, api.tsx:274-280).
         try {
           parts.push("close=" + ctx.ui.tabs.close(family.child));
         } catch {
@@ -597,10 +600,11 @@ fn v21d_tabs_child_id_pair() {
     // toolloop/va19 rigs use): the parent spawns the foreground
     // child, the child replies, the parent confirms.
     rig.write_both(b"hello\r");
-    // The plugin's poll fires once the family settles; the SUCCESS
-    // shape of the toast carries `open=` (a rig-health needle — a
-    // replay failure lands `nochild` and never matches).
-    let ok = rig.wait_both_screens("v21d tabs open=", 150);
+    // The plugin polls for the child, dwells past the turn, then runs
+    // the tab ops — the SUCCESS shape of the toast carries `open=` (a
+    // rig-health needle — a replay failure lands `nochild` and never
+    // matches).
+    let ok = rig.wait_both_screens("v21d tabs open=", 240);
     assert!(
         ok,
         "V21D tabs RED: the plugin never reported the tabs arm; \

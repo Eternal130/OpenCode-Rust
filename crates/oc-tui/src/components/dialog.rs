@@ -93,6 +93,11 @@ pub fn handle_dialog_key(
 ) -> DialogKeyOutcome {
     let Some(entry) = store.top_dialog() else { return DialogKeyOutcome::Unhandled };
     let props = select_props_for_entry(&entry, store);
+    // G-527 — the prompt viewport's cell width (the same math the
+    // mount uses: `entry.size.width()` clamped to the terminal, minus
+    // the box's 2+2 horizontal padding) — the band clamp's input.
+    let prompt_width =
+        entry.size.width().min(usize::from(terminal.0).saturating_sub(2)).saturating_sub(4);
     // The prompt-style inputs (not selects): rename, worktree-name,
     // the integration key/code entry.
     let is_prompt_kind = |kind: &DialogKind| {
@@ -262,8 +267,9 @@ pub fn handle_dialog_key(
                 if is_prompt_kind(&top.kind) {
                     top.value.clear();
                     // G-527 — the wholesale clear resets the cursor
-                    // (end of the empty value).
+                    // (end of the empty value) and the viewport.
                     top.prompt_cursor = None;
+                    top.prompt_viewport = None;
                 } else {
                     top.select.set_filter("", &props, usize::from(terminal.1));
                 }
@@ -289,9 +295,14 @@ pub fn handle_dialog_key(
             store.update_dialog(|top| {
                 if is_prompt_kind(&top.kind) {
                     // G-527 — printables INSERT at the cursor (the
-                    // TextareaRenderable edit model), not append: the
-                    // cursor advances past the inserted char.
+                    // `TextareaRenderable` edit model), not append:
+                    // the cursor advances past the inserted char, and
+                    // the viewport re-bands
+                    // (`ensureCursorVisible` — materialize the
+                    // pre-edit state first: the ref's mount paint).
+                    top.prompt_materialize_viewport(prompt_width);
                     top.prompt_insert_char(text);
+                    top.prompt_band_viewport(prompt_width);
                 } else {
                     let mut filter = std::mem::take(&mut top.select.filter);
                     filter.push(text);
@@ -317,8 +328,10 @@ pub fn handle_dialog_key(
             if is_prompt_kind(&top.kind) {
                 // G-527 — backspace deletes the char BEFORE the
                 // cursor (`deleteCharBackward`, index.bun.js:8913) —
-                // at column 0 a no-op.
+                // at column 0 a no-op; the viewport re-bands.
+                top.prompt_materialize_viewport(prompt_width);
                 top.prompt_backspace();
+                top.prompt_band_viewport(prompt_width);
             } else if !top.select.filter.is_empty() {
                 let mut filter = std::mem::take(&mut top.select.filter);
                 filter.pop();
@@ -356,7 +369,15 @@ pub fn handle_dialog_key(
                 _ => None,
             };
         if let Some(move_to) = mover {
-            store.update_dialog(|top| top.prompt_move_cursor(move_to(top)));
+            store.update_dialog(|top| {
+                // G-527 — the viewport follows the caret through the
+                // STATEFUL band clamp (editor-view.zig:208-263): it
+                // only moves when the caret enters a margin band —
+                // moving back INSIDE the window keeps the offset.
+                top.prompt_materialize_viewport(prompt_width);
+                top.prompt_move_cursor(move_to(top));
+                top.prompt_band_viewport(prompt_width);
+            });
             return DialogKeyOutcome::Consumed;
         }
     }
@@ -521,8 +542,10 @@ pub fn handle_dialog_key(
                     top.value.chars().map(|ch| u64::from(ch as u32)).fold(0u64, u64::wrapping_add);
                 top.value = crate::components::dialog_worktrees::generate_slug(seed);
                 // G-527 — the programmatic set moves the caret to
-                // the END (gotoLineEnd).
+                // the END (gotoLineEnd); the viewport re-materializes
+                // from the new seed.
                 top.prompt_cursor = None;
+                top.prompt_viewport = None;
             });
             return DialogKeyOutcome::Consumed;
         }
@@ -622,8 +645,10 @@ pub fn handle_dialog_key(
                 store.update_dialog(|top| {
                     top.value = title;
                     // G-527 — the prefilled rename value: the fresh
-                    // DialogPrompt's textarea seeds at the END.
+                    // DialogPrompt's textarea seeds at the END; the
+                    // viewport re-materializes from the new seed.
                     top.prompt_cursor = None;
+                    top.prompt_viewport = None;
                 });
             }
             return DialogKeyOutcome::Consumed;

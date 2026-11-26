@@ -2236,11 +2236,16 @@ mod tests {
                 .with_footer("prod")
         };
         let styles = styles();
+        // The option row (located by its title — the GROUPED face
+        // seats it under a category header, the has_search FLAT face
+        // at the window's first row).
         let row_of = |props: &SelectProps, state: &SelectState| {
             let view = render_select(props, state, &styles, Color::Rgb(10, 10, 10), 60, 20, None);
-            // One category group: window row 0 = the header, row 1 =
-            // the option.
-            view.rows[5].iter().map(|cell| cell.ch).collect::<String>()
+            view.rows
+                .iter()
+                .find(|row| row.iter().any(|cell| cell.ch == 'D'))
+                .map(|row| row.iter().map(|cell| cell.ch).collect::<String>())
+                .unwrap_or_default()
         };
         // The grouped face: `Deploy ships it` + `prod` right-aligned
         // (the footer reserves the row's tail; the title run clips

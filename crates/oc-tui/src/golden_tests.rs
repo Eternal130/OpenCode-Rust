@@ -583,6 +583,7 @@ fn command_palette_frame(width: u16, height: u16) -> Frame {
         select: SelectState::default(),
         value: String::new(),
         prompt_cursor: None,
+        prompt_viewport: None,
         theme_initial: None,
     };
     // Empty app base: renderer default fg over the theme base bg.
