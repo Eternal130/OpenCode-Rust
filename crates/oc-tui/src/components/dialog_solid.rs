@@ -3123,13 +3123,14 @@ fn dialog_chrome_button_hits(
         | Family::GenericPrompt
         | Family::BtwAnswer
         | Family::Status
+        // G-475 — unreachable (the early return above keeps the v2
+        // dialog.show out of the chrome-button walk); the arm keeps
+        // the match total.
+        | Family::PluginShow
         | Family::ExportOptions => ("esc", 2),
         Family::Help => ("esc/enter", 2),
         // G-485② — the diff shortcuts' close hint.
         Family::DiffHelp => ("esc close", 2),
-        // G-475 — unreachable (the early return above); the arm keeps
-        // the match total.
-        Family::PluginShow => ("esc", 2),
     };
     let label_width = label.chars().count();
     let close_x = (box_x + box_width).saturating_sub(pad + label_width);

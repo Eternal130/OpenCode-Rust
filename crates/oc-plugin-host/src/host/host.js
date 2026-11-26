@@ -4019,23 +4019,48 @@ let tuiSidebarContentWidth = 38;
  *  (sibling node_modules; `solid-js` stays the real package when the
  *  install carries it, else the minimal signal shim). */
 function ensureOpentuiShims(packageRoot) {
-  // G-475: the shims land in the package root's OWN `node_modules/` —
-  // the first link of the bare-import resolution chain from any file
-  // under the package (the old `dirname(packageRoot)` target was off
-  // the chain entirely, so a package WITHOUT the real deps never
-  // resolved its shims; for a config drop-in fixture it also
-  // polluted the discovery dir with sibling `@opentui`/`solid-js`
-  // entries). Writes are best-effort: a read-only tree (the payload
-  // registry) or a real dependency already present skips — the shims
-  // are fallbacks, never load-bearing.
-  const nm = require("node:path").join(packageRoot, "node_modules");
+  // G-475: the shims land in the nearest node_modules ON the import
+  // chain that ALREADY EXISTS. Bun's resolver caches a directory
+  // listing's existence: a node_modules CREATED mid-process (the
+  // package's own, when the parent is not one) stays INVISIBLE to
+  // the ESM linker (the negative cache — the v21 fixtures rely on
+  // the RIG staging theirs before boot; this write is the best-effort
+  // fallback). When the parent IS the real node_modules (the hoisted
+  // payload layout: `<sandbox>/plugins/node_modules/<pkg>`), the
+  // write lands THERE — visible immediately — next to the package's
+  // real dependencies. The `resolves` guard keeps the shims
+  // fallbacks: a name the package already resolves (the REAL
+  // solid-js staged by the pty rig) is never shadowed. Writes are
+  // best-effort (read-only trees skip).
+  const path = require("node:path");
+  const parent = path.dirname(packageRoot);
+  const nm = path.basename(parent) === "node_modules"
+    ? parent
+    : path.join(packageRoot, "node_modules");
+  const resolves = (name) => {
+    // A FILESYSTEM walk, never Bun.resolveSync: a failed resolveSync
+    // probe caches the negative resolution, and the ESM import of
+    // the shim name then fails even after the shim lands (the
+    // resolver's negative cache — pty_sidebar's regression). Walking
+    // the chain's directories has no resolver side effect.
+    let dir = packageRoot;
+    for (;;) {
+      if (require("node:fs").existsSync(path.join(dir, "node_modules", name, "package.json"))) {
+        return true;
+      }
+      const up = path.dirname(dir);
+      if (up === dir) return false;
+      dir = up;
+    }
+  };
   const write = (name, files) => {
-    const dir = require("node:path").join(nm, name);
-    if (require("node:fs").existsSync(require("node:path").join(dir, "package.json"))) return;
+    const dir = path.join(nm, name);
+    if (require("node:fs").existsSync(path.join(dir, "package.json"))) return;
+    if (resolves(name)) return;
     try {
       require("node:fs").mkdirSync(dir, { recursive: true });
       for (const [file, body] of Object.entries(files)) {
-        require("node:fs").writeFileSync(require("node:path").join(dir, file), body);
+        require("node:fs").writeFileSync(path.join(dir, file), body);
       }
     } catch {
       // Unwritable package tree: the plugin's own real dependencies

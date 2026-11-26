@@ -444,8 +444,7 @@ fn v21_rig_cols(tag: &str, fixture: &str, cols: u16) -> V21Rig {
     let tui_js = FIXTURES
         .iter()
         .find(|(name, _)| *name == fixture)
-        .map(|(_, js)| *js)
-        .unwrap_or_else(|| panic!("unknown v21 fixture {fixture}"));
+        .map_or_else(|| panic!("unknown v21 fixture {fixture}"), |(_, js)| *js);
     // The port side stages the @opentui/solid shim (Bun's resolver
     // caches the node_modules state at process start); the ref
     // resolves @opentui/solid through its runtime-plugin-support.
