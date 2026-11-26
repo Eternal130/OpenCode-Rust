@@ -19,6 +19,16 @@
 //! staged into BOTH sandboxes' real drop-in discovery roots (the same
 //! staging contract `realchain_v21d.rs` documents).
 //!
+//! WORKTREE BINARY (va21e lesson): `worktree_root()` redirects
+//! `.worktrees/<n>` to the MAIN checkout (fix `61404143`), so without
+//! `CARGO_TARGET_DIR` the rig spawns the MAIN checkout's binary —
+//! silently testing pre-lane code (the freshness guard walks the main
+//! checkout's sources too, so it cannot catch this). Run the anchors
+//! from a worktree with the lane's own target dir:
+//! `tools/dev-gate.sh 'CARGO_TARGET_DIR=<worktree>/target cargo
+//! nextest run -p oc-tui --locked …'` after
+//! `cargo build -p oc-cli --bin opencode-rust --locked` in it.
+//!
 //! PACING: same as v21d — the two ends boot at different speeds, so
 //! every rig-captured transition is toast-marked (the needle waits
 //! complete at the SLOWER end) and the settle gaps absorb the boot
@@ -593,8 +603,13 @@ const TABS_FIXTURE: &str = r#"export default {
       });
       if (family) {
         // A settle gap between the two ops so the captures separate
-        // the open state from the focus state.
-        await sleep(8000);
+        // the open state from the focus state — sized AGAINST the
+        // pair rig's boot skew: the rig's capture of the open state
+        // waits for BOTH engines' toast-1, and the ref's toast-1 can
+        // trail the rust's by tens of seconds; a gap shorter than
+        // that skew lets the rust side reach toast-2 before the
+        // open-child capture (the v21e first-run shape).
+        await sleep(30000);
         const parts2 = [];
         // G-531 — focus(child): the ref navigates to the ROOT
         // (`route.navigate({type: "session", sessionID: root(id)})`,
@@ -719,7 +734,7 @@ fn v21e_tabs_open_focus_pair() {
     // The focus arm lands ~8 s later (the fixture's gap) — the route
     // moves to the ROOT on the ref (the pre-fix port moved to the
     // child).
-    let ok = rig.wait_both_screens("v21e tabs2 focus-child=", 60);
+    let ok = rig.wait_both_screens("v21e tabs2 focus-child=", 90);
     assert!(
         ok,
         "V21E tabs RED: the plugin never reported the focus arm; \

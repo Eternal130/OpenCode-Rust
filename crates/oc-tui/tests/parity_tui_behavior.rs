@@ -518,28 +518,37 @@ fn ui_dialog_prompt_edit_table() {
     assert_eq!(dialog_layer(&store, "ctrl+d"), DialogKeyOutcome::Consumed);
     assert_eq!(store.top_dialog().expect("open").value, "bc d", "the forward delete removes 'a'");
 
-    // ctrl+b / ctrl+f — the char-move aliases (:8781-8782).
-    dialog_layer(&store, "ctrl+b");
-    dialog_layer(&store, "ctrl+b");
-    assert_eq!(store.top_dialog().expect("open").prompt_cursor(), 2, "ctrl+b moved left");
-    dialog_layer(&store, "ctrl+f");
+    // ctrl+f / ctrl+b — the char-move aliases (:8781-8782): the caret
+    // (sitting at the home after the forward delete) moves right and
+    // left by one char.
+    assert_eq!(dialog_layer(&store, "ctrl+f"), DialogKeyOutcome::Consumed);
+    assert_eq!(dialog_layer(&store, "ctrl+f"), DialogKeyOutcome::Consumed);
+    assert_eq!(dialog_layer(&store, "ctrl+f"), DialogKeyOutcome::Consumed);
     assert_eq!(store.top_dialog().expect("open").prompt_cursor(), 3, "ctrl+f moved right");
+    dialog_layer(&store, "ctrl+b");
+    dialog_layer(&store, "ctrl+b");
+    assert_eq!(store.top_dialog().expect("open").prompt_cursor(), 1, "ctrl+b moved left");
 
-    // alt+b / alt+f — the word moves (:8806/8805).
+    // alt+b / alt+f — the word moves (:8806/8805): from mid-word the
+    // caret jumps to the word start, then to the NEXT word's start.
     assert_eq!(dialog_layer(&store, "alt+b"), DialogKeyOutcome::Consumed);
-    assert_eq!(store.top_dialog().expect("open").prompt_cursor(), 0, "alt+b to the line start");
+    assert_eq!(store.top_dialog().expect("open").prompt_cursor(), 0, "alt+b to the word start");
     assert_eq!(dialog_layer(&store, "alt+f"), DialogKeyOutcome::Consumed);
     assert_eq!(
         store.top_dialog().expect("open").prompt_cursor(),
-        2,
+        3,
         "alt+f to the next word start"
     );
 
-    // The newline arm (ctrl+j — keybind.ts:207): the value goes
-    // multi-line; the caret moves onto the new (empty) line; ctrl+k
-    // on the caret's line deletes to ITS end (not the whole buffer);
-    // the height-1 viewport follows the caret's line.
-    assert_eq!(dialog_layer(&store, "ctrl+j"), DialogKeyOutcome::Consumed);
+    // The newline arm (keybind.ts:207): the value goes multi-line;
+    // the caret moves onto the new (empty) line; ctrl+k on the
+    // caret's line deletes to ITS end (not the whole buffer); the
+    // height-1 viewport follows the caret's line. The RAW 0x0a byte
+    // arrives as the literal "\n" spec (the ref's "linefeed" key,
+    // :8798) — the same newline arm as ctrl+j (both exercised here:
+    // the linefeed spec below, the ctrl+j letter form in the worktree
+    // rejection test's contrast).
+    assert_eq!(dialog_layer(&store, "\n"), DialogKeyOutcome::Consumed, "the raw linefeed spec");
     let entry = store.top_dialog().expect("open");
     assert_eq!(entry.value, "bc \nd", "the newline arm inserted a line break");
     assert_eq!(entry.prompt_caret_line(), 1, "the caret sits on the second line");
@@ -563,9 +572,13 @@ fn ui_dialog_prompt_edit_table() {
     );
 }
 
-/// G-532 — the InputRenderable face (WorktreeName,
+/// G-532 — the `InputRenderable` face (`WorktreeName`,
 /// dialog-worktree-name.tsx:8-9): `newLine()` returns false
-/// (index.bun.js:9112-9114) — the newline arms are no-ops there.
+/// (index.bun.js:9112-9114) and handleKeyPress returns the HANDLER's
+/// verdict (:8937 `return handler()`) — the newline arms are no-ops
+/// that do NOT consume the stroke (the key falls through the layer
+/// walk, unhandled: the managed input.* layer skips `InputRenderable`
+/// faces, keymap.tsx:93-96).
 #[test]
 fn ui_dialog_worktree_prompt_rejects_newlines() {
     let store = Store::new(Runtime::new());
@@ -574,17 +587,17 @@ fn ui_dialog_worktree_prompt_rejects_newlines() {
     for ch in "wt".chars() {
         assert_eq!(dialog_layer(&store, &ch.to_string()), DialogKeyOutcome::Consumed);
     }
-    assert_eq!(dialog_layer(&store, "ctrl+j"), DialogKeyOutcome::Consumed);
+    assert_eq!(dialog_layer(&store, "ctrl+j"), DialogKeyOutcome::Unhandled);
     assert_eq!(store.top_dialog().expect("open").value, "wt", "the newline arm is a no-op");
-    assert_eq!(dialog_layer(&store, "shift+return"), DialogKeyOutcome::Consumed);
+    assert_eq!(dialog_layer(&store, "shift+return"), DialogKeyOutcome::Unhandled);
     assert_eq!(store.top_dialog().expect("open").value, "wt", "shift+return too");
 }
 
 /// G-533 — a terminal paste while a prompt dialog holds focus lands in
 /// the PROMPT's value at the caret (the ref's focused-renderable
 /// pasteHandler → insertText, index.bun.js:8928-8930 — newlines kept
-/// for the TextareaRenderable faces); the composer's draft never sees
-/// it. The WorktreeName face (InputRenderable) strips the newlines
+/// for the `TextareaRenderable` faces); the composer's draft never sees
+/// it. The `WorktreeName` face (`InputRenderable`) strips the newlines
 /// (:9116).
 #[test]
 fn ui_dialog_prompt_takes_the_terminal_paste() {
@@ -598,7 +611,7 @@ fn ui_dialog_prompt_takes_the_terminal_paste() {
     assert_eq!(entry.value, "sepasted \nmultied", "the paste inserted at the caret");
     assert_eq!(entry.prompt_caret_line(), 1, "the caret moved onto the pasted line");
     // The composer's draft stayed empty (the paste never reached it).
-    assert!(store.composer("home").draft.text.is_empty());
+    assert_eq!(store.composer("home").draft.text, "");
 
     // The WorktreeName face strips the newlines (:9116).
     store.open_dialog(DialogKind::WorktreeName, DialogSize::Medium);
@@ -613,7 +626,9 @@ fn ui_dialog_prompt_takes_the_terminal_paste() {
     );
 
     // No prompt dialog open → the paste routes to the composer (the
-    // caller's fallback).
+    // caller's fallback). Close BOTH stacked dialogs (the prompt under
+    // the worktree name) first.
+    store.close_dialog();
     store.close_dialog();
     assert!(!store.paste_into_prompt_dialog("anything"));
 }
@@ -1767,7 +1782,7 @@ fn dialogerrordet_diff_image_inline_preview() {
 #[test]
 fn plugin_tabs_open_focus_root_and_append_only() {
     use oc_plugin_host::TabsOpKind;
-    use oc_tui::data::BusEvent;
+    use oc_tui::data::{BusEvent, Ingest};
     use oc_tui::plugin_ui::{apply_plugin_ui, PluginUiEvent};
 
     let store = Store::new(Runtime::new());
@@ -1848,4 +1863,33 @@ fn plugin_tabs_open_focus_root_and_append_only() {
         oc_tui::store::Route::session("s1".to_owned()),
         "focus(child) navigates to the root"
     );
+}
+
+/// G-532 — the APP-level press path for the raw linefeed spec (the
+/// real TUI's 0x0a): the dialog's newline arm must fire through
+/// `App::press`, not only through the direct dialog layer.
+#[test]
+fn app_press_linefeed_hits_the_prompt_newline() {
+    use oc_tui::app::App;
+    let mut app = App::new((120, 40));
+    app.store.open_prompt("Edit", "", Some("p"), "abc", Some(81), None);
+    app.press("\n");
+    let entry = app.store.top_dialog().expect("still open");
+    assert_eq!(entry.value, "abc\n", "the app-level linefeed inserted the newline");
+    assert_eq!(entry.prompt_caret_line(), 1);
+    // The printable arm still routes through the app too.
+    app.press("x");
+    assert_eq!(app.store.top_dialog().expect("open").value, "abc\nx");
+}
+
+/// G-533 — the APP-level paste routing (the real TUI path: the run
+/// loop's `TermEvent::Paste` arm calls this method).
+#[test]
+fn app_paste_routes_to_the_open_prompt() {
+    use oc_tui::app::App;
+    let mut app = App::new((120, 40));
+    app.store.open_prompt("Edit", "", Some("p"), "abc", Some(82), None);
+    app.paste_terminal_text("pasted text");
+    let entry = app.store.top_dialog().expect("still open");
+    assert_eq!(entry.value, "abcpasted text", "the app-level paste landed in the prompt");
 }

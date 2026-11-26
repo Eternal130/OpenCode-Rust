@@ -624,11 +624,16 @@ pub struct SelectGroup {
     pub indices: Vec<usize>,
 }
 
-/// Group the filtered indices by category in first-appearance order
-/// (`groupBy`); a `flat` select under an active filter yields one
-/// headerless group; G-522 — a `has_search` select is flat from the
-/// EMPTY query too (dialog-select.tsx:212/215
-/// `props.search !== undefined` → `[["", filtered()]]`).
+/// Group the filtered indices by category (`groupBy` + `entries`,
+/// dialog-select.tsx:216-221): remeda's `groupBy` collects ALL
+/// same-key options into ONE group — non-adjacent interleaves MERGE
+/// (the pre-fix walk only merged ADJACENT runs, splitting
+/// `A(cat) B(other) A2(cat)` into two `cat` groups where the ref
+/// keeps one) — with the keys in first-appearance order; a `flat`
+/// select under an active filter yields one headerless group; G-522
+/// — a `has_search` select is flat from the EMPTY query too
+/// (dialog-select.tsx:212/215 `props.search !== undefined` →
+/// `[["", filtered()]]`).
 #[must_use]
 pub fn grouped(props: &SelectProps, filter: &str) -> Vec<SelectGroup> {
     let indices = filter_indices(props, filter);
@@ -638,9 +643,9 @@ pub fn grouped(props: &SelectProps, filter: &str) -> Vec<SelectGroup> {
     let mut groups: Vec<SelectGroup> = Vec::new();
     for index in indices {
         let category = props.options[index].category.clone();
-        match groups.last_mut() {
-            Some(group) if group.category == category => group.indices.push(index),
-            _ => groups.push(SelectGroup { category, indices: vec![index] }),
+        match groups.iter_mut().find(|group| group.category == category) {
+            Some(group) => group.indices.push(index),
+            None => groups.push(SelectGroup { category, indices: vec![index] }),
         }
     }
     groups
@@ -2357,4 +2362,44 @@ fn section_jump_on_flat_list_lands_on_the_edges() {
     assert_eq!(state.selected, 0);
     state.move_section(&props, -1);
     assert_eq!(state.selected, 0);
+}
+
+/// G-534 companion — remeda `groupBy` MERGES non-adjacent same-
+/// category options into ONE group (dialog-select.tsx:216-221): the
+/// interleaved `A(cat) B(other) A2(cat)` registry keeps ONE `cat`
+/// header with both options in filtered order (the pre-fix walk
+/// split them into two groups — and the solid tree's keyed `For`
+/// then rendered the duplicate `h:{category}` header early, leaving
+/// the last option header-less).
+#[test]
+fn interleaved_categories_merge_into_one_group() {
+    let options = vec![
+        SelectOption::titled("Alpha", "alpha").categorized("probe-xray"),
+        SelectOption::titled("Beta", "beta").categorized("quiet-zone"),
+        SelectOption::titled("Gamma", "gamma").categorized("probe-xray"),
+    ];
+    let props = SelectProps::new("v21e weak", options);
+    let groups = grouped(&props, "");
+    assert_eq!(groups.len(), 2, "the two categories, merged");
+    assert_eq!(groups[0].category.as_deref(), Some("probe-xray"));
+    assert_eq!(groups[0].indices, vec![0, 2], "Alpha AND Gamma under one header");
+    assert_eq!(groups[1].category.as_deref(), Some("quiet-zone"));
+    assert_eq!(groups[1].indices, vec![1]);
+    assert_eq!(content_rows(&groups, &props.options), 6, "2 headers + 1 pad + 3 options");
+    // The painted walk: header, Alpha, Gamma, pad, header, Beta.
+    let state = SelectState::default();
+    let styles = DialogStyles::from_theme(&crate::theme::ThemeState::v2_dark());
+    let view = render_select(&props, &state, &styles, Color::Rgb(10, 10, 10), 120, 40, Some(60));
+    let texts: Vec<String> =
+        view.rows.iter().map(|row| row.iter().map(|cell| cell.ch).collect::<String>()).collect();
+    let joined = texts.join("\n");
+    let alpha = joined.find("Alpha").expect("Alpha row");
+    let gamma = joined.find("Gamma").expect("Gamma row");
+    let quiet = joined.find("quiet-zone").expect("quiet-zone header");
+    let beta = joined.find("Beta").expect("Beta row");
+    assert!(
+        alpha < gamma && gamma < quiet && beta > quiet,
+        "one merged probe-xray group, then quiet-zone"
+    );
+    assert_eq!(joined.matches("probe-xray").count(), 1, "exactly ONE probe-xray header");
 }

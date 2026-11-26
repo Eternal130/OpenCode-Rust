@@ -1481,9 +1481,7 @@ fn connect_prompt_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::Eleme
         "content",
         dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
             let width = i.box_width.saturating_sub(4);
-            if !i.prompt_has_value {
-                styled(vec![chunk(i.placeholder.clone(), i.colors.muted, None, 0)])
-            } else {
+            if i.prompt_has_value {
                 // G-527 — the block cursor rides the caret (the
                 // head-window take; at the value END this is the
                 // pre-G-527 trailing cell, so the seeded view never
@@ -1497,6 +1495,8 @@ fn connect_prompt_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::Eleme
                     i.colors.surface,
                     i.colors.text,
                 ))
+            } else {
+                styled(vec![chunk(i.placeholder.clone(), i.colors.muted, None, 0)])
             }
         })),
     );
@@ -1592,9 +1592,7 @@ fn prompt_builder_titled(
         "content",
         dyn_styled(map(inputs.clone(), move |i: &DialogInputs| {
             let width = i.box_width.saturating_sub(4);
-            if !i.prompt_has_value {
-                styled(vec![chunk(placeholder.to_owned(), i.colors.muted, None, 0)])
-            } else {
+            if i.prompt_has_value {
                 let cursor_bg = if worktree { i.colors.formfield_base_fg } else { i.colors.text };
                 // G-527 — the block cursor rides the caret (the
                 // head-window take; at the value END this is the
@@ -1609,6 +1607,8 @@ fn prompt_builder_titled(
                     i.colors.surface,
                     cursor_bg,
                 ))
+            } else {
+                styled(vec![chunk(placeholder.to_owned(), i.colors.muted, None, 0)])
             }
         })),
     );
@@ -1694,9 +1694,7 @@ fn generic_prompt_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::Eleme
         "content",
         dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
             let width = i.box_width.saturating_sub(4);
-            if !i.prompt_has_value {
-                styled(vec![chunk(i.placeholder.clone(), i.colors.muted, None, 0)])
-            } else {
+            if i.prompt_has_value {
                 // The ref's textarea viewport: G-527 — a STATEFUL
                 // band clamp (`ensureCursorVisible`'s wrap-none
                 // column branch, editor-view.zig:208-263 /
@@ -1720,6 +1718,8 @@ fn generic_prompt_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::Eleme
                     i.colors.surface,
                     i.colors.text,
                 ))
+            } else {
+                styled(vec![chunk(i.placeholder.clone(), i.colors.muted, None, 0)])
             }
         })),
     );

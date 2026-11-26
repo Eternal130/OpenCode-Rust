@@ -333,7 +333,7 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
                 // open_session_tab's in-place update).
                 oc_plugin_host::TabsOpKind::Open => {
                     if let Some(session) = session_id {
-                        let root = store.session_root(&session);
+                        let root = store.session_root(session);
                         store.open_tab(&root, None);
                     }
                 }
@@ -342,7 +342,7 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
                 // effect opens the root's tab when it is not open.
                 oc_plugin_host::TabsOpKind::Focus => {
                     if let Some(session) = session_id {
-                        let root = store.session_root(&session);
+                        let root = store.session_root(session);
                         store.select_tab(&root);
                     }
                 }

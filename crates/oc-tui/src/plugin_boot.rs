@@ -2222,7 +2222,10 @@ fn model_view(store: &Store) -> Value {
 /// held at the TUI boundary — the guest answers empty arrays; the
 /// pending/message/permission/form sub-members are not pushed (the
 /// store's per-session caches are not exposed at this boundary).
-fn data_view(store: &Store) -> Value {
+/// G-530 — the sessions/status/pending view slice (context.ts:63-140
+/// `data.session`): the projected rows plus the running-status map and
+/// the pending sub-member (the TUI's inbox mirror, TUI-TD07).
+fn session_view(store: &Store) -> (Value, Value, Value) {
     let sessions: Vec<Value> = store
         .session_rows()
         .into_iter()
@@ -2270,8 +2273,14 @@ fn data_view(store: &Store) -> Value {
             (id, Value::Array(rows))
         })
         .collect();
-    let agents: Vec<Value> = store
-        .server_lists()
+    (Value::Array(sessions), Value::Object(status), Value::Object(pending))
+}
+
+/// G-530 — the inventory view slice (`data.agent/model/provider/
+/// skill/reference`): the server lists' bounded projections.
+fn inventory_view(store: &Store) -> (Value, Value, Value, Value, Value) {
+    let lists = store.server_lists();
+    let agents: Vec<Value> = lists
         .agents
         .rows()
         .map(|rows| {
@@ -2288,8 +2297,7 @@ fn data_view(store: &Store) -> Value {
                 .collect()
         })
         .unwrap_or_default();
-    let models: Vec<Value> = store
-        .server_lists()
+    let models: Vec<Value> = lists
         .models
         .rows()
         .map(|rows| {
@@ -2304,14 +2312,12 @@ fn data_view(store: &Store) -> Value {
                 .collect()
         })
         .unwrap_or_default();
-    let providers: Vec<Value> = store
-        .server_lists()
+    let providers: Vec<Value> = lists
         .providers
         .iter()
         .map(|provider| serde_json::json!({ "id": provider.id, "name": provider.name }))
         .collect();
-    let skills: Vec<Value> = store
-        .server_lists()
+    let skills: Vec<Value> = lists
         .skills
         .rows()
         .map(|rows| {
@@ -2326,8 +2332,7 @@ fn data_view(store: &Store) -> Value {
                 .collect()
         })
         .unwrap_or_default();
-    let references: Vec<Value> = store
-        .server_lists()
+    let references: Vec<Value> = lists
         .references
         .iter()
         .map(|reference| {
@@ -2339,6 +2344,18 @@ fn data_view(store: &Store) -> Value {
             })
         })
         .collect();
+    (
+        Value::Array(agents),
+        Value::Array(models),
+        Value::Array(providers),
+        Value::Array(skills),
+        Value::Array(references),
+    )
+}
+
+fn data_view(store: &Store) -> Value {
+    let (sessions, status, pending) = session_view(store);
+    let (agents, models, providers, skills, references) = inventory_view(store);
     serde_json::json!({
         "sessions": sessions,
         "status": status,

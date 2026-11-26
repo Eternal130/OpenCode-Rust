@@ -552,7 +552,7 @@ impl DialogEntry {
     }
 
     /// G-527 — the caret's CELL column. G-532: the value can carry
-    /// embedded newlines (the ref's TextareaRenderable newline arms —
+    /// embedded newlines (the ref's `TextareaRenderable` newline arms —
     /// the buffer is 2D); the caret's column is WITHIN-LINE (chars
     /// since the last `\n` before the caret, display width of that
     /// prefix — the ref's `cursor.col`, edit-buffer.zig's within-line
@@ -611,8 +611,8 @@ impl DialogEntry {
 
     /// G-533 — insert pasted text AT the caret (the ref's
     /// `handlePaste` → `insertText`, index.bun.js:8928-8930): the
-    /// caller owns the newline policy (the TextareaRenderable faces
-    /// keep them, the InputRenderable face strips them first).
+    /// caller owns the newline policy (the `TextareaRenderable` faces
+    /// keep them, the `InputRenderable` face strips them first).
     pub fn prompt_insert_text(&mut self, text: &str) {
         use oc_tui_core::text_edit::EditCore;
         if text.is_empty() {
@@ -11753,8 +11753,8 @@ impl Store {
     /// when one holds focus: the ref's paste dispatch lands on the
     /// FOCUSED renderable (`handlePaste` → `insertText`,
     /// index.bun.js:8928-8930 — ANSI stripped; newlines NOT stripped
-    /// for the TextareaRenderable prompt faces, only the
-    /// InputRenderable WorktreeName strips them, :9116). `false` when
+    /// for the `TextareaRenderable` prompt faces, only the
+    /// `InputRenderable` `WorktreeName` strips them, :9116). `false` when
     /// no prompt-kind dialog is open (the caller falls back to the
     /// composer).
     pub fn paste_into_prompt_dialog(&self, text: &str) -> bool {
@@ -16983,7 +16983,7 @@ mod tests {
         let store = Store::new(Runtime::new());
         for id in ids {
             store.open_tab(id, None);
-            store.select_tab(&id);
+            store.select_tab(id);
         }
         store
     }
@@ -19237,7 +19237,9 @@ mod tests {
     /// decides the label (the captured word, \b\w-titlecased — only
     /// when the session record knows no agent) and the title (the
     /// match STRIPPED, trimmed, falling back to the whole title when
-    /// the strip empties it).
+    /// the strip empties it). NB: JS `\w` is `[A-Za-z0-9_]` — a
+    /// HYPHENATED agent word never matches (the regex needs ` subagent`
+    /// directly after the word run).
     #[test]
     fn picker_agent_match_arm_titles_and_labels() {
         let store = Store::new(Runtime::new());
@@ -19246,7 +19248,7 @@ mod tests {
                 "session.created",
                 serde_json::json!({
                     "sessionID": "c_match", "parentID": "s1",
-                    "title": "@code-review subagent check the fixture"
+                    "title": "@codereview subagent check the fixture"
                 }),
             )),
             Ingest::Event(BusEvent::new(
@@ -19263,6 +19265,13 @@ mod tests {
                     "title": "no marker here"
                 }),
             )),
+            Ingest::Event(BusEvent::new(
+                "session.created",
+                serde_json::json!({
+                    "sessionID": "c_hyphen", "parentID": "s1",
+                    "title": "@code-review subagent hyphens are not word chars"
+                }),
+            )),
         ]);
         // The picker's default filter is the ACTIVE set — flip to the
         // completed set (subagents-tab.tsx:62's `filter.active`).
@@ -19277,9 +19286,9 @@ mod tests {
                 .unwrap_or_else(|| panic!("the {id} entry"))
         };
         // The match arm: the label is the captured word titlecased
-        // ("code-review" → "Code-Review"), the title strips the match.
+        // ("codereview" → "Codereview"), the title strips the match.
         let matched = entry("c_match");
-        assert_eq!(matched.agent, "Code-Review");
+        assert_eq!(matched.agent, "Codereview");
         assert_eq!(matched.title, "check the fixture");
         // A known session agent WINS over the match (subagents-tab
         // .tsx:49-53's precedence) — but the title still strips.
@@ -19290,6 +19299,11 @@ mod tests {
         let bare = entry("c_bare");
         assert_eq!(bare.agent, "Subagent");
         assert_eq!(bare.title, "no marker here");
+        // A HYPHEN in the word breaks the ref's `\w+` (JS `\w` has no
+        // '-') — no match: the fallback label + the whole title.
+        let hyphen = entry("c_hyphen");
+        assert_eq!(hyphen.agent, "Subagent");
+        assert_eq!(hyphen.title, "@code-review subagent hyphens are not word chars");
     }
 
     /// G-528(d) — the strip-empty fallback: a title that IS only the

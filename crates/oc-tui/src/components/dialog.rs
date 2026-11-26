@@ -78,9 +78,9 @@ fn session_search_typed_hook(store: &Store) {
 }
 
 /// G-532 — map one stroke onto the ref's dialog-prompt edit table
-/// (the TextareaRenderable default bindings, index.bun.js:8760-8825,
-/// + the keymap's `input.*` layer, keybind.ts:206-243): `None` = not
-/// a prompt edit key (falls through to the modal walk). Selection
+/// (the `TextareaRenderable` default bindings, index.bun.js:8760-8825,
+/// plus the keymap's `input.*` layer, keybind.ts:206-243): `None` =
+/// not a prompt edit key (falls through to the modal walk). Selection
 /// arms (shift-modified motions, ctrl+shift+a/e, select-all) stay
 /// unported — the dialog's prompt model carries no selection anchor.
 fn prompt_edit_command(
@@ -114,29 +114,24 @@ fn prompt_edit_command(
         // ctrl+w / ctrl+backspace / alt+backspace — deleteWordBackward
         // (:8783-8784, keybind.ts:240). shift+backspace is the plain
         // backspace action (:8792).
-        ("w", true, false, false) => Cmd::DeleteWordBackward,
-        ("backspace", true, false, false) => Cmd::DeleteWordBackward,
-        ("backspace", false, true, false) => Cmd::DeleteWordBackward,
+        ("w" | "backspace", true, false, false) | ("backspace", false, true, false) => {
+            Cmd::DeleteWordBackward
+        }
         ("backspace", false, false, true) => Cmd::Backspace,
         // alt+d / alt+delete / ctrl+delete — deleteWordForward
         // (:8785-8787, keybind.ts:239).
-        ("d", false, true, false) => Cmd::DeleteWordForward,
-        ("delete", false, true, false) => Cmd::DeleteWordForward,
-        ("delete", true, false, false) => Cmd::DeleteWordForward,
+        ("d" | "delete", false, true, false) | ("delete", true, false, false) => {
+            Cmd::DeleteWordForward
+        }
         // ctrl+d / delete / shift+delete — deleteChar forward
         // (:8793-8795, keybind.ts:232).
-        ("d", true, false, false) => Cmd::Delete,
-        ("delete", false, false, _) => Cmd::Delete,
+        ("d", true, false, false) | ("delete", false, false, _) => Cmd::Delete,
         // ctrl+shift+d — deleteLine (:8788, keybind.ts:228).
         ("d", true, false, true) => Cmd::DeleteLine,
         // Word moves — ctrl+left/right, alt+left/right, alt+b/f
         // (:8805-8810, keybind.ts:235-236).
-        ("left", true, false, false) => Cmd::WordBackward,
-        ("left", false, true, false) => Cmd::WordBackward,
-        ("b", false, true, false) => Cmd::WordBackward,
-        ("right", true, false, false) => Cmd::WordForward,
-        ("right", false, true, false) => Cmd::WordForward,
-        ("f", false, true, false) => Cmd::WordForward,
+        ("left", true, false, false) | ("left" | "b", false, true, false) => Cmd::WordBackward,
+        ("right", true, false, false) | ("right" | "f", false, true, false) => Cmd::WordForward,
         // The newline arms — input.newline "shift+return,ctrl+return,
         // alt+return,ctrl+j" (keybind.ts:207; the default table's
         // :8796-8798 return/kpenter/linefeed arms are overridden by

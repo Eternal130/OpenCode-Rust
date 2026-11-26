@@ -1872,41 +1872,8 @@ impl SubagentTracker {
         else {
             return fold;
         };
-        match event_type.as_str() {
-            // G-529 — the step.started site (stream-v2.subagent.
-            // ts:677-683): `if (child.label === FALLBACK_LABEL &&
-            // event.data.agent) child.label = Locale.titlecase(...)`
-            // — the FALLBACK-GUARDED update (a label that already
-            // landed from applyMeta/discovery wins).
-            "session.step.started" => {
-                if self.set_label(&session_id, &text_field(&data, "agent"), true) {
-                    fold.changed = true;
-                }
-            }
-            "session.execution.started" | "session.execution.resumed" => {
-                self.slots[index].child.status = SubagentStatus::Running;
-                fold.changed = true;
-            }
-            "session.execution.succeeded" => {
-                self.slots[index].child.status = SubagentStatus::Completed;
-                fold.changed = true;
-            }
-            "session.execution.failed" => {
-                self.slots[index].child.status = SubagentStatus::Error;
-                fold.changed = true;
-            }
-            "session.execution.interrupted" => {
-                self.slots[index].child.status = SubagentStatus::Cancelled;
-                fold.changed = true;
-            }
-            "session.updated" | "session.renamed" => {
-                let title = text_field(&data, "title");
-                if !title.is_empty() && self.slots[index].child.title != title {
-                    self.slots[index].child.title = title;
-                    fold.changed = true;
-                }
-            }
-            _ => {}
+        if self.fold_child_state(index, &session_id, &event_type, &data) {
+            fold.changed = true;
         }
         // The transcript fold (the same switch as the parent).
         let slot = &mut self.slots[index];
@@ -1942,6 +1909,57 @@ impl SubagentTracker {
             | Fold::SessionTitle(_) => {}
         }
         fold
+    }
+
+    /// The per-child state switch of [`Self::fold`] — the child's
+    /// status transitions, the title refresh, and the G-529 label
+    /// site (stream-v2.subagent.ts:660-690). Returns whether anything
+    /// changed.
+    fn fold_child_state(
+        &mut self,
+        index: usize,
+        session_id: &str,
+        event_type: &str,
+        data: &Value,
+    ) -> bool {
+        let mut changed = false;
+        match event_type {
+            // G-529 — the step.started site (stream-v2.subagent.
+            // ts:677-683): `if (child.label === FALLBACK_LABEL &&
+            // event.data.agent) child.label = Locale.titlecase(...)`
+            // — the FALLBACK-GUARDED update (a label that already
+            // landed from applyMeta/discovery wins).
+            "session.step.started" => {
+                if self.set_label(session_id, &text_field(data, "agent"), true) {
+                    changed = true;
+                }
+            }
+            "session.execution.started" | "session.execution.resumed" => {
+                self.slots[index].child.status = SubagentStatus::Running;
+                changed = true;
+            }
+            "session.execution.succeeded" => {
+                self.slots[index].child.status = SubagentStatus::Completed;
+                changed = true;
+            }
+            "session.execution.failed" => {
+                self.slots[index].child.status = SubagentStatus::Error;
+                changed = true;
+            }
+            "session.execution.interrupted" => {
+                self.slots[index].child.status = SubagentStatus::Cancelled;
+                changed = true;
+            }
+            "session.updated" | "session.renamed" => {
+                let title = text_field(data, "title");
+                if !title.is_empty() && self.slots[index].child.title != title {
+                    self.slots[index].child.title = title;
+                    changed = true;
+                }
+            }
+            _ => {}
+        }
+        changed
     }
 
     /// `admitChild`: insert-or-refresh one child; `false` when the
