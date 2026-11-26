@@ -141,7 +141,8 @@ async fn kilo_non_matching_baseurl_injects_nothing() {
 #[tokio::test]
 async fn nvidia_gets_billing_origin_default() {
     // nvidia.ts:10-17 — catalog api https://integrate.api.nvidia.com/v1,
-    // no user header → default "OpenCode".
+    // no user header → default "OpenCode". G-516: the pinned model rides
+    // this generation's catalog ("baai/bge-m3" left the live tree).
     let connections = multi_connection(&[(
         "nvidia",
         ModelConnection {
@@ -151,7 +152,7 @@ async fn nvidia_gets_billing_origin_default() {
             ..ModelConnection::default()
         },
     )]);
-    let resolved = resolve(None, connections, "nvidia", "baai/bge-m3");
+    let resolved = resolve(None, connections, "nvidia", "openai/gpt-oss-20b");
     assert_header(&resolved, "HTTP-Referer", Some("https://opencode.ai/"));
     assert_header(&resolved, "X-Title", Some("opencode"));
     assert_header(&resolved, "X-BILLING-INVOKE-ORIGIN", Some("OpenCode"));

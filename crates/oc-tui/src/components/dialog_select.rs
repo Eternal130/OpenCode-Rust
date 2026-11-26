@@ -919,23 +919,40 @@ impl SelectState {
     /// first (forward) or last (backward) action; stepping past
     /// either end returns the focus to the option list (`undefined`).
     /// `locked` freezes the cycle (:435).
+    /// G-512 — the cycle runs over the VISIBLE actions only
+    /// (`actionItems()`, dialog-select.tsx:174-177/168-173): a
+    /// label-less (bind-less plugin) action is never focusable,
+    /// matching the ref — the focused index stays in the full
+    /// `props.actions` index space (the trigger's command lookup).
     pub fn move_action(&mut self, props: &SelectProps, direction: i64) {
         if props.locked {
             return;
         }
-        let total = props.actions.len();
-        if total == 0 {
+        let visible: Vec<usize> =
+            props.actions.iter().enumerate().filter(|(_, a)| !a.label.is_empty()).map(|(i, _)| i).collect();
+        if visible.is_empty() {
             return;
         }
         self.focused_action = match self.focused_action {
-            None => Some(if direction >= 0 { 0 } else { total - 1 }),
+            None => Some(if direction >= 0 { visible[0] } else { *visible.last().expect("non-empty") }),
             Some(index) => {
-                let next = i64::try_from(index).unwrap_or(0) + direction;
-                if next < 0 || usize::try_from(next).unwrap_or(usize::MAX) >= total {
-                    None
-                } else {
-                    Some(usize::try_from(next).unwrap_or(0))
-                }
+                let at = visible.iter().position(|visible| *visible == index);
+                let next = match at {
+                    None => {
+                        // A stale index (the action set changed under
+                        // the focus): re-enter at the near end.
+                        if direction >= 0 { visible[0] } else { *visible.last().expect("non-empty") }
+                    }
+                    Some(at) => {
+                        let next = at as i64 + direction;
+                        if next < 0 || next >= visible.len() as i64 {
+                            self.focused_action = None;
+                            return;
+                        }
+                        visible[usize::try_from(next).unwrap_or(0)]
+                    }
+                };
+                Some(next)
             }
         };
     }
@@ -1233,7 +1250,12 @@ pub fn render_select(
     rows.push(Row::blank(width, default, surface_bg).cells);
 
     // Footer actions: [pad 4][footer prop muted][title][ label][gap 2]…
-    if !props.actions.is_empty() || !props.hints.is_empty() {
+    // G-512 — only the VISIBLE actions render (visibleActions,
+    // dialog-select.tsx:168-173: `.filter((item) => item.label)`) —
+    // a bind-less plugin action carries an empty label and drops.
+    let visible_actions: Vec<&SelectAction> =
+        props.actions.iter().filter(|action| !action.label.is_empty()).collect();
+    if !visible_actions.is_empty() || !props.hints.is_empty() {
         let mut footer = Row::blank(width, default, surface_bg);
         let mut at = 4usize;
         // G-485① — the `footer` prop's muted text first
@@ -1242,6 +1264,9 @@ pub fn render_select(
             at = footer.text(at, hint, styles.muted, surface_bg, 0);
         }
         for (action_i, action) in props.actions.iter().enumerate() {
+            if action.label.is_empty() {
+                continue;
+            }
             // G-189 — the focused action paints in the focused pair
             // (`actionFocused()`, dialog-select.tsx:600-621).
             let (title_fg, label_fg, title_attrs) = if state.focused_action == Some(action_i) {

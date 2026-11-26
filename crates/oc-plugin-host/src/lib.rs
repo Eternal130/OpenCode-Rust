@@ -139,7 +139,7 @@ pub use supervisor::{
 pub use tap::{BroadcastTap, TapEvent};
 pub use ui::{
     parse_select_spec, PluginDialogOption, PluginDialogSpec, PluginSectionSpec, PluginSelectAction,
-    TabsOpKind, UiRequest,
+    TabsOpKind, TuiRouteView, UiRequest,
 };
 
 /// The embedded guest script (materialized into the sandbox at start).
@@ -999,10 +999,13 @@ impl PluginHost {
 
     /// Push the TUI's live route to the guest (the v2 TUI-plugin
     /// surface — the flagship sidebar's render reads the visible
-    /// session at every materialize; `None` is home).
-    pub fn notify_tui_route(&self, session: Option<&str>) {
+    /// session at every materialize). G-513: the REF Route shape
+    /// (plugin/tui/context.ts:142-152) — home / session / an open
+    /// plugin route page — `ctx.ui.router.current()` returns it
+    /// verbatim (api.tsx:226-228).
+    pub fn notify_tui_route(&self, route: &TuiRouteView) {
         let Some(facade) = &self.facade else { return };
-        facade.shared.notify_tui_route(session);
+        facade.shared.notify_tui_route(route);
     }
 
     /// G-239/G-331 — push the live session-panel state to the guest

@@ -2977,6 +2977,7 @@ mod tests {
                 options: vec![],
 
                 placeholder: None,
+                current: None,
             },
         );
         let mut frame = blank_base(80, 24);
@@ -3026,15 +3027,17 @@ mod tests {
                         title: "zhipuai".into(),
                         value: "preset.zhipuai".into(),
                         description: "own/glm".into(),
+                        category: None,
                     },
                     crate::store::PluginDialogOption {
                         title: "openai".into(),
                         value: "preset.openai".into(),
                         description: String::new(),
+                        category: None,
                     },
                 ],
-
                 placeholder: None,
+                current: None,
             },
         );
         let mut frame = blank_base(80, 24);
@@ -3042,9 +3045,10 @@ mod tests {
         let rows = frame.text_grid();
         assert!(rows[7].contains("Switch preset"), "the title: {:?}", rows[7]);
         assert!(rows[9].contains("Search"), "the filter input: {:?}", rows[9]);
-        assert!(rows[11].contains("Plugin"), "the category group: {:?}", rows[11]);
-        assert!(rows[12].contains("zhipuai"), "option 1: {:?}", rows[12]);
-        assert!(rows[13].contains("openai"), "option 2: {:?}", rows[13]);
+        // G-512 — the options render FLAT (the option's own category
+        // groups rows; None renders no header — dialog-select.tsx:218).
+        assert!(rows[11].contains("zhipuai"), "option 1: {:?}", rows[11]);
+        assert!(rows[12].contains("openai"), "option 2: {:?}", rows[12]);
 
         // Typing filters; submit returns the option's value.
         let mut keymap = Keymap::new();
@@ -3084,6 +3088,7 @@ mod tests {
                     options: vec![],
 
                     placeholder: None,
+                    current: None,
                 })
             }
         }

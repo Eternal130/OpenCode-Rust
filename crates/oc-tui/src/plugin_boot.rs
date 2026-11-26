@@ -47,7 +47,7 @@ use oc_client::Client;
 use oc_plugin_host::registrations::RegistrationSnapshot;
 use oc_plugin_host::{
     Bridge, BroadcastTap, PluginHost, PluginHostConfig, PluginOp, PluginSectionSpec, Resolution,
-    SdkPort, SessionPort, TapEvent, UiRequest,
+    SdkPort, SessionPort, TapEvent, TuiRouteView, UiRequest,
 };
 
 use crate::data::BusEvent;
@@ -121,11 +121,12 @@ pub struct TuiPluginRuntime {
     /// The active-session cell the palette sink reads (the run loop
     /// refreshes it each pump).
     pub current_session: Rc<RefCell<Option<String>>>,
-    /// The last route pushed to the guest (the v2 TUI-plugin surface
-    /// — change-gated `tui.route` notifications). The outer Option is
-    /// "nothing pushed yet"; the inner is "home vs session".
-    #[allow(clippy::option_option)]
-    pushed_route: Rc<RefCell<Option<Option<String>>>>,
+    /// The last route view pushed to the guest (the v2 TUI-plugin
+    /// surface — change-gated `tui.route` notifications). G-513: the
+    /// REF Route shape (context.ts:142-152) including the plugin
+    /// arm; the inner `None` was "nothing pushed yet" before the
+    /// typed view took over.
+    pushed_route: Rc<RefCell<Option<TuiRouteView>>>,
     /// The last theme fingerprint pushed (name + mode).
     pushed_theme: Rc<RefCell<Option<(String, bool)>>>,
     /// Whether the sidebar layout budget was pushed once (SA-F5: the
@@ -989,14 +990,28 @@ impl TuiPluginRuntime {
     #[allow(clippy::too_many_lines)] // one sequential drain over the slot/notification sources
     pub fn drain_ui_requests(&self, store: &Store) {
         if self.booted.host.enabled() {
-            let route_session = match store.route() {
-                crate::store::Route::Session { session_id, .. } => Some(session_id),
-                crate::store::Route::Home => None,
+            // G-513 — the REF Route shape (context.ts:142-152): an
+            // open plugin route page answers the plugin arm
+            // (`{type:"plugin", id, name, data?}`), else the session
+            // arm, else home. `ctx.ui.router.current()` returns this
+            // view verbatim (api.tsx:226-228 `host.route.data`).
+            let route_view = match store.plugin_route_page() {
+                Some(page) => TuiRouteView::Plugin {
+                    plugin_id: page.plugin_id.clone(),
+                    name: page.name.clone(),
+                    data: page.data.clone(),
+                },
+                None => match store.route() {
+                    crate::store::Route::Session { session_id, .. } => {
+                        TuiRouteView::Session { session_id }
+                    }
+                    crate::store::Route::Home => TuiRouteView::Home,
+                },
             };
-            let changed = { *self.pushed_route.borrow() != Some(route_session.clone()) };
+            let changed = { *self.pushed_route.borrow() != Some(route_view.clone()) };
             if changed {
-                *self.pushed_route.borrow_mut() = Some(route_session.clone());
-                self.booted.host.notify_tui_route(route_session.as_deref());
+                *self.pushed_route.borrow_mut() = Some(route_view.clone());
+                self.booted.host.notify_tui_route(&route_view);
             }
             // G-239/G-331 — the live panel state push (`tui.panel`,
             // the `tui.route` mirror): the target triple + the
@@ -1416,11 +1431,13 @@ impl PluginDialogSource for HostDialogSource {
                     title: option.title,
                     value: option.value,
                     description: option.description,
+                    category: None,
                 })
                 .collect(),
 
             placeholder: None,
-        })
+                    current: None,
+                })
     }
 }
 
@@ -1497,10 +1514,11 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                         title: option.title.clone(),
                         value: option.value.clone(),
                         description: option.description.clone(),
+                        category: option.category.clone(),
                     })
                     .collect(),
-
                 placeholder: None,
+                current: None,
             },
         },
         // G-475 — the dialog.show face (the flattened content + the
@@ -1517,10 +1535,11 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                         title: option.title.clone(),
                         value: option.value.clone(),
                         description: option.description.clone(),
+                        category: option.category.clone(),
                     })
                     .collect(),
-
                 placeholder: None,
+                current: None,
             },
             size: spec.size.clone(),
             centered: spec.centered,
@@ -1549,6 +1568,7 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                     title: option.title.clone(),
                     value: option.value.clone(),
                     description: option.description.clone(),
+                    category: option.category.clone(),
                 })
                 .collect(),
             current: current.clone(),
@@ -2075,8 +2095,13 @@ fn hex_color(color: crate::style::Color) -> String {
 
 /// G-475 — the `tui.tabs` view (api.tsx:245-281's bounded projection):
 /// `{enabled, tabs: [{sessionID, title?, active, busy, attention,
-/// unread?}]}` (session-tabs.tsx's list face; the ref's reactive
-/// reads become this change-gated push).
+/// unread?, promptPulse, renaming}]}` (session-tabs.tsx's list face;
+/// the ref's reactive reads become this change-gated push).
+/// G-511 — `attention` is PER-TAB from the session family's pending
+/// lists (session-tabs.tsx:164-168's permission→"permission" /
+/// form→"question" discriminator), exported as the api.tsx:254
+/// `Boolean(status.attention)` row shape; `promptPulse` (session-
+/// tabs.tsx:163) and `renaming` (:175) ride the `...status` spread.
 fn tabs_view(store: &Store) -> Value {
     let enabled = store.tabs_enabled();
     let tabs = store.strip_tabs_ordered();
@@ -2084,14 +2109,12 @@ fn tabs_view(store: &Store) -> Value {
         crate::store::Route::Session { session_id, .. } => Some(store.session_root(&session_id)),
         crate::store::Route::Home => None,
     };
-    let permission_live =
-        matches!(store.footer().view, crate::components::footer::FooterView::Permission { .. });
     let rows: Vec<Value> = tabs
         .iter()
         .map(|tab| {
             let busy = store.session_busy(&tab.session_id);
             let selected = Some(tab.session_id.as_str()) == active.as_deref();
-            let attention = (permission_live && selected).then_some("permission");
+            let attention = store.session_attention(&tab.session_id);
             let unread = store.tabs().unread.get(&tab.session_id).map(|unread| match unread {
                 crate::store::Unread::Activity => "activity",
                 crate::store::Unread::Error => "error",
@@ -2100,7 +2123,11 @@ fn tabs_view(store: &Store) -> Value {
                 "sessionID": tab.session_id,
                 "active": selected,
                 "busy": busy,
-                "attention": attention,
+                // api.tsx:254 — the exported row wraps the status
+                // discriminator in Boolean().
+                "attention": attention.is_some(),
+                "promptPulse": store.session_prompt_pulse(&tab.session_id),
+                "renaming": store.session_renaming(&tab.session_id),
             });
             if let Some(unread) = unread {
                 row["unread"] = serde_json::Value::String(unread.to_owned());

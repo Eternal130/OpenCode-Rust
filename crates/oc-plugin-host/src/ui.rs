@@ -16,7 +16,7 @@
 //!   [`crate::registrations::Registrations`] and carried by the
 //!   [`crate::RegistrationSnapshot`], exactly like commands/themes.
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 /// The plugin toast default duration (the TUI's `tui.toast.show`
 /// default, mirrored so the queue carries a resolved value).
@@ -32,6 +32,9 @@ pub struct PluginDialogOption {
     pub value: String,
     /// Optional trailing description.
     pub description: String,
+    /// G-512 — the option's own `category` (context.ts:360): the ref
+    /// groups rows by it; a category-less option renders flat.
+    pub category: Option<String>,
 }
 
 /// The dialog content structure a plugin supplies at open time (the
@@ -103,6 +106,11 @@ impl PluginDialogSpec {
                                 .and_then(Value::as_str)
                                 .unwrap_or_default()
                                 .to_owned(),
+                            category: option
+                                .get("category")
+                                .and_then(Value::as_str)
+                                .filter(|category| !category.is_empty())
+                                .map(str::to_owned),
                         })
                         .collect()
                 })
@@ -309,13 +317,53 @@ pub enum TabsOpKind {
     Close,
 }
 
+/// G-513 — the live route view pushed to the guest (`tui.route`):
+/// the REF's `Route` shape (plugin/tui/context.ts:142-152) — home,
+/// session (`sessionID`), or an open plugin route page
+/// (`id`/`name`/`data?`). `ctx.ui.router.current()` returns it
+/// verbatim (api.tsx:226-228 `host.route.data`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum TuiRouteView {
+    Home,
+    Session {
+        session_id: String,
+    },
+    Plugin {
+        plugin_id: String,
+        name: String,
+        data: Option<Value>,
+    },
+}
+
+impl TuiRouteView {
+    /// The `tui.route` notification params (the wire shape the guest
+    /// builds its `router.current()` view from).
+    #[must_use]
+    pub fn notification_params(&self) -> Value {
+        match self {
+            Self::Home => json!({ "type": "home" }),
+            Self::Session { session_id } => json!({ "type": "session", "sessionID": session_id }),
+            Self::Plugin { plugin_id, name, data } => json!({
+                "type": "plugin",
+                "id": plugin_id,
+                "name": name,
+                "data": data.clone().unwrap_or(Value::Null),
+            }),
+        }
+    }
+}
+
 /// One footer action of a plugin select dialog (api.tsx:407-417's
 /// `DialogSelectAction` projection: the trigger routes back through
 /// the guest's `dialog.action` dispatch).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginSelectAction {
     /// The keybinding that triggers the action (e.g. "ctrl+d").
-    pub bind: String,
+    /// G-512: bind-less actions cross (the ref's `shownActions`
+    /// keeps them, dialog-select.tsx:154-155 — they carry no footer
+    /// label, so `visibleActions`'s label filter drops the row and
+    /// they stay untriggerable, exactly like the ref).
+    pub bind: Option<String>,
     /// The row title.
     pub title: String,
     /// `left` | `right` (the footer side; default left).
@@ -367,6 +415,11 @@ pub fn parse_select_spec(
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_owned(),
+                    category: option
+                        .get("category")
+                        .and_then(Value::as_str)
+                        .filter(|category| !category.is_empty())
+                        .map(str::to_owned),
                 })
                 .collect()
         })
@@ -381,12 +434,16 @@ pub fn parse_select_spec(
         .map(|actions| {
             actions
                 .iter()
-                .filter(|action| {
-                    action.get("bind").and_then(Value::as_str).is_some_and(|bind| !bind.is_empty())
-                        && action.get("title").and_then(Value::as_str).is_some()
-                })
+                // G-512 — bind-less actions cross (the ref's
+                // shownActions keeps them; the title is the only
+                // required field); only title-less rows drop.
+                .filter(|action| action.get("title").and_then(Value::as_str).is_some())
                 .map(|action| PluginSelectAction {
-                    bind: action.get("bind").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                    bind: action
+                        .get("bind")
+                        .and_then(Value::as_str)
+                        .filter(|bind| !bind.is_empty())
+                        .map(str::to_owned),
                     title: action
                         .get("title")
                         .and_then(Value::as_str)

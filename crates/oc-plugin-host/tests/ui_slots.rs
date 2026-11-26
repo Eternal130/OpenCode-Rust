@@ -91,11 +91,13 @@ fn tui_slots_register_and_queue_end_to_end() {
                     title: "First".into(),
                     value: "slots.open".into(),
                     description: "the palette command".into(),
+                    category: None,
                 },
                 PluginDialogOption {
                     title: "Second".into(),
                     value: "slots.other".into(),
                     description: String::new(),
+                    category: None,
                 },
             ],
             size: None,

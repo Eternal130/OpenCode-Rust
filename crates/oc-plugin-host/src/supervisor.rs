@@ -3016,13 +3016,12 @@ impl Shared {
 
     /// Push the TUI's live route to the guest (the `tui.route`
     /// notification — the flagship sidebar's render reads it at every
-    /// materialize; `None` is the home route).
-    pub fn notify_tui_route(&self, session: Option<&str>) {
-        let params = match session {
-            Some(session) => json!({ "sessionID": session }),
-            None => json!({ "sessionID": null }),
-        };
-        self.send_notification("tui.route", params);
+    /// materialize). G-513: the typed [`TuiRouteView`] carries the
+    /// REF Route shape (plugin/tui/context.ts:142-152) including the
+    /// plugin-route arm — `ctx.ui.router.current()` returns the same
+    /// object guest-side (api.tsx:226-228 `host.route.data`).
+    pub fn notify_tui_route(&self, route: &crate::TuiRouteView) {
+        self.send_notification("tui.route", route.notification_params());
     }
 
     /// G-239/G-331 — push the live session-panel state to the guest

@@ -941,9 +941,18 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                         .options
                         .iter()
                         .map(|option| {
-                            let mut built =
-                                SelectOption::titled(option.title.clone(), option.value.clone())
-                                    .categorized("Plugin");
+                            // G-512 — the option's OWN category groups
+                            // the row (context.ts:360; the ref's
+                            // category-less options render flat —
+                            // dialog-select.tsx:218 `x.category ?? ""`
+                            // paints no header for the "" group).
+                            let mut built = SelectOption::titled(
+                                option.title.clone(),
+                                option.value.clone(),
+                            );
+                            if let Some(category) = &option.category {
+                                built = built.categorized(category.clone());
+                            }
                             if !option.description.is_empty() {
                                 built = built.with_footer(option.description.clone());
                             }
@@ -951,6 +960,13 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                         })
                         .collect();
                     let mut props = SelectProps::new(content.title, options).flat(true).threshold(0.7);
+                    // G-512 — the spec's `current` freezes into the
+                    // content at open: the `●` marker rides the row
+                    // whose value equals it (dialog-select.tsx:757/
+                    // 875-879), independent of the moving selection.
+                    if content.current.is_some() {
+                        props = props.with_current(content.current.clone());
+                    }
                     // G-475 — the select face's placeholder + the
                     // footer action rows (their triggers stage the
                     // guest `dialog.action` dispatch through the

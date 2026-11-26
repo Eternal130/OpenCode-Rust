@@ -1100,6 +1100,49 @@ function makeCtx(pluginId, options) {
     return result && typeof result === "object" && "value" in result ? result.value : result;
   };
 
+  // G-507 — the dialog-member alert/confirm/prompt faces (the ref
+  // Dialog interface, context.ts:394-405 + api.tsx:344-386). The
+  // TUI-25/G-237 host-request seams are hoisted here so BOTH the
+  // `ctx.ui.dialog.*` members (the ref shape) and the legacy
+  // `ctx.ui.*` aliases (this port's own superset compat — the
+  // misplaced pre-G-507 placement, kept so existing port-shaped
+  // plugins keep working) share one implementation.
+  const dialogAlert = (options) => {
+    const opts = options ?? {};
+    return hostRequest("ui.alert", {
+      pluginId,
+      title: String(opts.title ?? ""),
+      message: String(opts.message ?? ""),
+    }).then(dialogResult);
+  };
+  const dialogConfirm = (options) => {
+    const opts = options ?? {};
+    const label = opts.label ?? {};
+    return hostRequest("ui.confirm", {
+      pluginId,
+      title: String(opts.title ?? ""),
+      message: String(opts.message ?? ""),
+      label: {
+        confirm: typeof label.confirm === "string" ? label.confirm : null,
+        cancel: typeof label.cancel === "string" ? label.cancel : null,
+      },
+    }).then(dialogResult);
+  };
+  // G-237 (v2 api.tsx:367-386): the generic text-input prompt —
+  // resolves the typed string on submit, null on dismiss; the
+  // optional fields cross as null (the TUI applies the ref's
+  // placeholder default "Enter text").
+  const dialogPrompt = (options) => {
+    const opts = options ?? {};
+    return hostRequest("ui.prompt", {
+      pluginId,
+      title: String(opts.title ?? ""),
+      description: typeof opts.description === "string" ? opts.description : null,
+      placeholder: typeof opts.placeholder === "string" ? opts.placeholder : null,
+      value: typeof opts.value === "string" ? opts.value : null,
+    }).then(dialogResult);
+  };
+
   const ctx = {
     plugin: {
       id: pluginId,
@@ -2259,22 +2302,39 @@ function makeCtx(pluginId, options) {
           notify("tui.tabs.op", { pluginId, op: "focus", sessionID: String(sessionID ?? "") });
           return true;
         },
+        // G-509 — `move(sessionID, index)` (api.tsx:267-273): the
+        // membership check answers the return value — `false` when
+        // the target tab is not open. The ref roots the argument
+        // (`host.data.session.root`) before matching; the pushed
+        // view carries ROOT tab rows, so the guest matches the raw
+        // id (the child-id edge is the push view's bounded
+        // projection — the TUI-side op still roots before moving).
         move(sessionID, index) {
           if (!tuiTabsView.enabled) return false;
+          const target = String(sessionID ?? "");
+          if (!tuiTabsView.tabs.some((tab) => tab.sessionID === target)) return false;
           notify("tui.tabs.op", {
             pluginId,
             op: "move",
-            sessionID: String(sessionID ?? ""),
+            sessionID: target,
             index: Number.isFinite(index) ? Math.max(0, Math.floor(index)) : 0,
           });
           return true;
         },
+        // G-509 — `close(sessionID?)` (api.tsx:274-280): the active
+        // tab when omitted; `false` when no tab matched (an empty
+        // tab list / an unknown id both answer false).
         close(sessionID) {
           if (!tuiTabsView.enabled) return false;
+          const target =
+            sessionID === undefined || sessionID === null
+              ? (tuiTabsView.tabs.find((tab) => tab.active) ?? {}).sessionID
+              : String(sessionID);
+          if (!target || !tuiTabsView.tabs.some((tab) => tab.sessionID === target)) return false;
           notify("tui.tabs.op", {
             pluginId,
             op: "close",
-            sessionID: typeof sessionID === "string" && sessionID ? sessionID : null,
+            sessionID: target,
           });
           return true;
         },
@@ -2304,41 +2364,16 @@ function makeCtx(pluginId, options) {
       },
       // TUI-25 (v2 api.tsx:344-366): the promise resolves when the
       // host answers — the TUI's dialog confirm / any close.
-      alert(options) {
-        const opts = options ?? {};
-        return hostRequest("ui.alert", {
-          pluginId,
-          title: String(opts.title ?? ""),
-          message: String(opts.message ?? ""),
-        }).then(dialogResult)
-      },
-      confirm(options) {
-        const opts = options ?? {};
-        const label = opts.label ?? {};
-        return hostRequest("ui.confirm", {
-          pluginId,
-          title: String(opts.title ?? ""),
-          message: String(opts.message ?? ""),
-          label: {
-            confirm: typeof label.confirm === "string" ? label.confirm : null,
-            cancel: typeof label.cancel === "string" ? label.cancel : null,
-          },
-        }).then(dialogResult)
-      },
-      // G-237 (v2 api.tsx:367-386): the generic text-input prompt —
-      // resolves the typed string on submit, null on dismiss; the
-      // optional fields cross as null (the TUI applies the ref's
-      // placeholder default "Enter text").
-      prompt(options) {
-        const opts = options ?? {};
-        return hostRequest("ui.prompt", {
-          pluginId,
-          title: String(opts.title ?? ""),
-          description: typeof opts.description === "string" ? opts.description : null,
-          placeholder: typeof opts.placeholder === "string" ? opts.placeholder : null,
-          value: typeof opts.value === "string" ? opts.value : null,
-        }).then(dialogResult)
-      },
+      // G-507: legacy placement kept as the port's own superset
+      // compat alias — the REF shape is `ctx.ui.dialog.alert`
+      // (context.ts:394-405); the shared implementation lives on
+      // the dialog member.
+      alert: dialogAlert,
+      // v2 api.tsx:350-365 — same Dialog-member face, legacy alias.
+      confirm: dialogConfirm,
+      // G-237 (v2 api.tsx:367-386) — same Dialog-member face, legacy
+      // alias.
+      prompt: dialogPrompt,
       sidebar: {
         async setSection(section) {
           const spec = section ?? {};
@@ -2359,6 +2394,15 @@ function makeCtx(pluginId, options) {
         },
       },
       dialog: {
+        // G-507 — the Dialog interface's alert/confirm/prompt
+        // (context.ts:394-405, api.tsx:344-386): all three ride the
+        // same host-request seams as the legacy ctx.ui.* aliases
+        // (this port's pre-G-507 placement — kept for superset
+        // compat; a ref-shaped plugin calling ctx.ui.dialog.alert
+        // now works).
+        alert: dialogAlert,
+        confirm: dialogConfirm,
+        prompt: dialogPrompt,
         /** Register an open-time content builder (registration-time
          *  native coverage; the host qualifies the id per plugin). */
         async register(spec) {
@@ -2388,14 +2432,20 @@ function makeCtx(pluginId, options) {
          *  the rows (the first-line-as-title split is the SIDEBAR
          *  section's contract, not the dialog's). `onClose` settles
          *  through the deferred seam when the TUI closes the dialog
-         *  (any close → null). */
+         *  (any close → null).
+         *  G-510: the row budget is the dialog's own width —
+         *  `dialogWidth("medium")` = 60 (dialog.tsx:14-18; show
+         *  always replaces at the medium size, api.tsx:334-336) —
+         *  NOT the sidebar's 38; blank tree rows survive (the ref
+         *  mounts them raw — a taller dialog); overlong rows wrap
+         *  TUI-side (the default word wrap grows the box) instead of
+         *  clipping. */
         show(render, onClose) {
           if (typeof render !== "function") {
             throw new Error("ui.dialog.show requires a render function");
           }
-          const lines = treeLines(render(), tuiSidebarContentWidth)
-            .map((line) => line.replace(/\s+$/, ""))
-            .filter((line) => line.trim() !== "");
+          const lines = treeLines(render(), 60)
+            .map((line) => line.replace(/\s+$/, ""));
           const request = hostRequest("ui.dialog.show", {
             pluginId,
             spec: { title: "", rows: lines },
@@ -2428,7 +2478,17 @@ function makeCtx(pluginId, options) {
          *  their JSON text and resolve back as strings), the search
          *  arm degrades to the native filter, and the actions'
          *  `onTrigger` runs guest-side when the TUI dispatches
-         *  `dialog.action` (triggering does NOT close the dialog). */
+         *  `dialog.action` (triggering does NOT close the dialog).
+         *  G-512: disabled options drop from the list
+         *  (dialog-select.tsx:184-191 `x.disabled !== true` — the
+         *  same filter the ref's search arm applies, api.tsx:402-405).
+         *  `hidden` is NOT filtered: the ref's api mapping
+         *  (api.tsx:407-417) never forwards the field to
+         *  DialogSelect — a plugin action's `hidden` flag is inert
+         *  on the ref (the live v21b export pins it: the
+         *  hidden-flagged action renders). Bind-less actions CROSS
+         *  with a null bind — the TUI's visibleActions filter keeps
+         *  them off the footer and untriggerable, matching the ref. */
         async select(options) {
           const opts = options ?? {};
           const list = Array.isArray(opts.options) ? opts.options : [];
@@ -2446,20 +2506,26 @@ function makeCtx(pluginId, options) {
                 placeholder: typeof opts.placeholder === "string" ? opts.placeholder : null,
                 current: "current" in opts ? opts.current : null,
                 options: list
-                  .filter((option) => option && typeof option.title === "string" && "value" in option)
+                  .filter(
+                    (option) =>
+                      option &&
+                      typeof option.title === "string" &&
+                      "value" in option &&
+                      option.disabled !== true,
+                  )
                   .map((option) => ({
                     title: option.title,
                     value: option.value,
                     description: typeof option.description === "string" ? option.description : "",
+                    category:
+                      typeof option.category === "string" && option.category ? option.category : null,
                   })),
-                actions: actions
-                  .filter((action) => action && typeof action.bind === "string" && action.bind)
-                  .map((action) => ({
-                    bind: action.bind,
-                    title: String(action.title ?? ""),
-                    side: action.side === "right" ? "right" : "left",
-                    selection: action.selection === "none" ? "none" : "required",
-                  })),
+                actions: actions.map((action) => ({
+                  bind: typeof action.bind === "string" && action.bind ? action.bind : null,
+                  title: String(action.title ?? ""),
+                  side: action.side === "right" ? "right" : "left",
+                  selection: action.selection === "none" ? "none" : "required",
+                })),
               },
             },
             (id) => {
@@ -3977,8 +4043,13 @@ function slotClaimCounter(pluginId) {
   slotClaimCounters.set(pluginId, next);
   return next - 1;
 }
-/** The host-pushed current route ({type:"session",sessionID}|{name:"home"}). */
-let tuiRoute = { name: "home" };
+/** The host-pushed current route — G-513: the REF `Route` shape
+ * (plugin/tui/context.ts:142-152): {type:"home"} |
+ * {type:"session", sessionID} | {type:"plugin", id, name, data?}.
+ * `ctx.ui.router.current()` returns it verbatim (api.tsx:226-228
+ * `host.route.data`); the legacy v1 sidebar face reads it through
+ * `resolveRouteSessionId`-style type/name dual parsing. */
+let tuiRoute = { type: "home" };
 
 /** G-239/G-331: the host-pushed session-panel view (`tui.panel`,
  *  the `tui.route` mirror) — `{pluginId, name, sessionID}` or null
@@ -4892,13 +4963,28 @@ async function handleLine(line) {
     return;
   }
   if (message.method === "tui.route") {
-    // Host-pushed current route (the TUI's live session): the
-    // sidebar render reads it at every materialize.
-    const sessionID = message.params?.sessionID;
-    tuiRoute =
-      typeof sessionID === "string" && sessionID
-        ? { name: "session", params: { sessionID } }
-        : { name: "home" };
+    // Host-pushed current route (the TUI's live view — G-513: the REF
+    // Route shape, context.ts:142-152): the session arm, the plugin
+    // route page arm, or home. The sidebar render reads it at every
+    // materialize; `ctx.ui.router.current()` returns it verbatim.
+    const params = message.params ?? {};
+    if (params.type === "session" && typeof params.sessionID === "string" && params.sessionID) {
+      tuiRoute = { type: "session", sessionID: params.sessionID };
+    } else if (
+      params.type === "plugin" &&
+      typeof params.id === "string" &&
+      params.id &&
+      typeof params.name === "string"
+    ) {
+      tuiRoute = {
+        type: "plugin",
+        id: params.id,
+        name: params.name,
+        ...(params.data && typeof params.data === "object" ? { data: params.data } : {}),
+      };
+    } else {
+      tuiRoute = { type: "home" };
+    }
     return;
   }
   if (message.method === "tui.panel") {
