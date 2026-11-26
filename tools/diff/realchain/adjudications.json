@@ -904,6 +904,58 @@
       },
       "classification": "framework-diff",
       "justification": "ADJUDICATED (controller 2026-11-26): capture skew across the 1s duration-unit boundary — the post-va21 merge-gate export showed ref __MS__ vs rust __SECS__ on the settled footer; targeted re-run of w13_perm_once_pair at c9411950 is TRY2 PASS 13.663s (retry-passes, same signature as w13-perm-always-timing). Re-open as a real gap only if the shape reproduces at settled quiescence."
+    },
+    {
+      "id": "v21b-router-toast-wrapwidth",
+      "scenario_pattern": "v21b-router",
+      "state_pattern": "*",
+      "shape": {
+        "kind": "regex",
+        "any_contains": [
+          "(?:hasSessionID|hasData|v21b\\.router\\.tui)"
+        ]
+      },
+      "classification": "pending-fix",
+      "justification": "ADJUDICATED (controller 2026-11-26): the route-shape JSON text matches on both ends (G-513 closed, v21b-router anchors); the residual rows are the toast panel's wrap-width with long content → G-517 (wave va22a). Frame evidence: .test-logs/diff-reports/v21b-router-*.txt"
+    },
+    {
+      "id": "v21b-show-set-large-reflow",
+      "scenario_pattern": "v21b-show",
+      "state_pattern": "set-large",
+      "shape": {
+        "kind": "regex",
+        "any_contains": [
+          "v21b two left"
+        ]
+      },
+      "classification": "pending-fix",
+      "justification": "ADJUDICATED (controller 2026-11-26): the one-shot flatten's baked 60-padding vs the ref's live 88 re-flow after dialog.set({size:'large'}) → G-518 (wave va22a). Frame evidence: .test-logs/diff-reports/v21b-show-set-large.txt"
+    },
+    {
+      "id": "v21b-tabs-model-values-g515",
+      "scenario_pattern": "v21b-tabs-model",
+      "state_pattern": "values",
+      "shape": {
+        "kind": "regex",
+        "any_contains": [
+          "(?:variants=\\[|setBad=false)"
+        ]
+      },
+      "classification": "pending-fix",
+      "justification": "ADJUDICATED (controller 2026-11-26): the exported model-member values row — the ref lists the 5 effort variants while the port lists none (variant persistence/pref surface) = the OPEN G-515 (wave va22c); this anchor is G-515's paired evidence. Frame evidence: .test-logs/diff-reports/v21b-tabs-model-values.txt"
+    },
+    {
+      "id": "v21b-tabs-model-location-elide",
+      "scenario_pattern": "v21b-tabs-model",
+      "state_pattern": "close-noactive",
+      "shape": {
+        "kind": "substring",
+        "any_contains": [
+          "__ROOT__…/project"
+        ]
+      },
+      "classification": "pending-fix",
+      "justification": "ADJUDICATED (controller 2026-11-26): the footer location label's elision face (ref tail-elides the root prefix, the port renders the raw cwd) — the G-496 footer-location-source family (wave va22b). Frame evidence: .test-logs/diff-reports/v21b-tabs-model-close-noactive.txt"
     }
   ]
 }
