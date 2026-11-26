@@ -278,9 +278,13 @@ pub enum UiRequest {
     DialogClear { plugin_id: String },
     /// G-475 — `ctx.ui.dialog.select(options)` (api.tsx:387-427):
     /// the promise resolves the selected option's value (any close →
-    /// null) through the deferred-reply seam. The search arm is the
+    /// the wire's null → `undefined` at the guest boundary, G-519)
+    /// through the deferred-reply seam. The search arm is the
     /// native filter (the guest's `search(query, options)` closure
-    /// cannot cross per-keystroke — bounded projection). The actions
+    /// cannot cross per-keystroke — bounded projection); G-522 —
+    /// `has_search` carries the marker so the list renders FLAT from
+    /// the empty query with the category as the row footer
+    /// (dialog-select.tsx:212/803). The actions
     /// ride as [`PluginSelectAction`] rows; triggering one asks the
     /// guest back through `dialog.action` (the `click_sidebar_row`
     /// pattern) and does NOT close the dialog.
@@ -292,6 +296,10 @@ pub enum UiRequest {
         options: Vec<PluginDialogOption>,
         current: Option<String>,
         actions: Vec<PluginSelectAction>,
+        /// G-522 — the guest passed a `search` fn (the closure itself
+        /// cannot cross; the flag reproduces the ref's
+        /// `props.search !== undefined` flatten semantics).
+        has_search: bool,
     },
     /// G-475 — `ctx.ui.tabs.{open,focus,move,close}` (api.tsx:245-281
     /// → host.sessionTabs.*): the tab mutations, answered by the
@@ -368,13 +376,14 @@ pub struct PluginSelectAction {
 }
 
 /// Parse the guest's `ui.dialog.select` payload into the native
-/// select spec (title/placeholder/options/current/actions — the
-/// same bounded decoding [`PluginDialogSpec::from_json`] applies to
-/// option rows).
+/// select spec (title/placeholder/options/current/actions + the
+/// G-522 hasSearch marker — the same bounded decoding
+/// [`PluginDialogSpec::from_json`] applies to option rows).
 #[must_use]
 pub fn parse_select_spec(
     value: &Value,
-) -> (String, Option<String>, Vec<PluginDialogOption>, Option<String>, Vec<PluginSelectAction>) {
+) -> (String, Option<String>, Vec<PluginDialogOption>, Option<String>, Vec<PluginSelectAction>, bool)
+{
     let title = value.get("title").and_then(Value::as_str).unwrap_or_default().to_owned();
     let placeholder = value
         .get("placeholder")
@@ -450,7 +459,10 @@ pub fn parse_select_spec(
                 .collect()
         })
         .unwrap_or_default();
-    (title, placeholder, options, current, actions)
+    // G-522 — the hasSearch marker (host.js sends a boolean; the
+    // search fn itself cannot cross).
+    let has_search = value.get("hasSearch").and_then(Value::as_bool).unwrap_or(false);
+    (title, placeholder, options, current, actions, has_search)
 }
 
 impl UiRequest {

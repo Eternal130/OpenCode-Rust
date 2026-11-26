@@ -62,6 +62,8 @@ pub enum PluginUiEvent {
     /// G-475 — `ctx.ui.dialog.select(options)` (api.tsx:387-427): the
     /// value promise settles through `request_id`; the actions render
     /// as footer rows (their triggers stage the guest dispatch).
+    /// G-522 — `has_search` carries the guest's search marker (the
+    /// flat-from-empty-query + category-footer shape).
     DialogSelect {
         request_id: u64,
         title: String,
@@ -69,6 +71,7 @@ pub enum PluginUiEvent {
         options: Vec<PluginDialogOption>,
         current: Option<String>,
         actions: Vec<oc_plugin_host::PluginSelectAction>,
+        has_search: bool,
     },
     /// TUI-25: `ctx.ui.alert({title, message})` — the generic alert
     /// opens natively; `request_id` settles the guest's promise
@@ -198,6 +201,7 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
                         .collect(),
                     placeholder: None,
                     current: None,
+                    has_search: false,
                 },
             );
         }
@@ -222,6 +226,7 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
                         .collect(),
                     placeholder: None,
                     current: None,
+                    has_search: false,
                 },
                 *request_id,
                 size.as_deref(),
@@ -242,7 +247,8 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
         }
         // G-475 — the dialog.select face: the native select over the
         // projected options; the value promise settles on submit /
-        // any close; the actions ride as the footer rows.
+        // any close; the actions ride as the footer rows. G-522 — the
+        // search marker forces the flat shape + category footer.
         PluginUiEvent::DialogSelect {
             request_id,
             title,
@@ -250,6 +256,7 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
             options,
             current,
             actions,
+            has_search,
         } => {
             store.open_plugin_select(
                 plugin_id,
@@ -259,6 +266,7 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
                 options,
                 current.as_deref(),
                 actions,
+                *has_search,
             );
         }
         // TUI-25: the generic alert/confirm tones open through the
@@ -280,13 +288,17 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
             );
         }
         // G-237: the generic prompt opens natively; the typed value /
-        // null settles the guest's promise through the same
-        // `request_id` queue.
+        // the close's null settle the guest's promise through the
+        // same `request_id` queue (G-519: the guest boundary maps the
+        // null to `undefined`).
         PluginUiEvent::Prompt { request_id, title, description, placeholder, value } => {
             store.open_prompt(
                 title,
                 description.as_deref().unwrap_or(""),
-                placeholder.as_deref().unwrap_or(""),
+                // G-521 — the null/"" split survives the wire intact:
+                // absent → None (the "Enter text" default), an
+                // explicit "" → Some("") (no placeholder text).
+                placeholder.as_deref(),
                 value.as_deref().unwrap_or(""),
                 Some(*request_id),
                 None,
@@ -469,6 +481,7 @@ mod tests {
 
                     placeholder: None,
                     current: None,
+                    has_search: false,
                 },
             },
         );

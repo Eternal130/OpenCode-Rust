@@ -1437,6 +1437,7 @@ impl PluginDialogSource for HostDialogSource {
 
             placeholder: None,
             current: None,
+            has_search: false,
         })
     }
 }
@@ -1519,6 +1520,7 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                     .collect(),
                 placeholder: None,
                 current: None,
+                has_search: false,
             },
         },
         // G-475 — the dialog.show face (the flattened content + the
@@ -1540,6 +1542,7 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                     .collect(),
                 placeholder: None,
                 current: None,
+                has_search: false,
             },
             size: spec.size.clone(),
             centered: spec.centered,
@@ -1549,7 +1552,7 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
         }
         UiRequest::DialogClear { .. } => PluginUiEvent::DialogClear,
         // G-475 — the dialog.select face (the value promise + the
-        // footer-action rows).
+        // footer-action rows; G-522 — the search marker).
         UiRequest::DialogSelect {
             request_id,
             title,
@@ -1557,6 +1560,7 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
             options,
             current,
             actions,
+            has_search,
             ..
         } => PluginUiEvent::DialogSelect {
             request_id: *request_id,
@@ -1573,6 +1577,7 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                 .collect(),
             current: current.clone(),
             actions: actions.clone(),
+            has_search: *has_search,
         },
         // G-475 — the tabs/model mutation arms.
         UiRequest::TabsOp { op, session_id, index, .. } => {
@@ -2138,7 +2143,18 @@ fn tabs_view(store: &Store) -> Value {
             row
         })
         .collect();
-    serde_json::json!({ "enabled": enabled, "tabs": rows })
+    // G-519-lead — the child→root map (api.tsx:269-271's rooting:
+    // `host.data.session.root(sessionID)` before the membership
+    // check): every known child session points at its family root so
+    // `tabs.move(childId, i)` matches the ROOT row and moves like the
+    // ref. Roots themselves are absent (the guest falls back to the
+    // raw id — rooting is the identity there).
+    let roots: serde_json::Map<String, Value> = store
+        .session_root_map()
+        .into_iter()
+        .map(|(child, root)| (child, serde_json::Value::String(root)))
+        .collect();
+    serde_json::json!({ "enabled": enabled, "tabs": rows, "roots": roots })
 }
 
 /// G-475 — the `tui.model` view (api.tsx:282-296's bounded

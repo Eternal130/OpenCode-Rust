@@ -1429,6 +1429,12 @@ pub struct PluginDialogContent {
     /// freezes the spec's `current` here (the preselect ALSO focuses
     /// the row via the entry's select state).
     pub current: Option<String>,
+    /// G-522 — the guest's `dialog.select({search})` marker (the
+    /// closure itself cannot cross): the select renders FLAT from
+    /// the empty query — one headerless group, the category as the
+    /// per-row footer (dialog-select.tsx:212/803
+    /// `props.search !== undefined`).
+    pub has_search: bool,
 }
 
 impl PluginDialogContent {
@@ -12062,16 +12068,20 @@ impl Store {
 
     /// G-237: open the generic prompt (`ui/dialog-prompt.tsx` — the
     /// plugin surface's `ctx.ui.prompt`, api.tsx:367-386). `value`
-    /// seeds the input (`initialValue`), an empty `placeholder`
-    /// falls back to the ref's "Enter text"; `request_id` rides the
-    /// `ctx.ui.prompt` promise (submit → the typed string, any close
-    /// → null); `submit_command` runs through the palette dispatcher
-    /// after a native submit.
+    /// seeds the input (`initialValue`); `placeholder` is `Option` —
+    /// G-521: the ref's `props.placeholder ?? "Enter text"`
+    /// (dialog-prompt.tsx:123) substitutes the default ONLY for a
+    /// nullish placeholder, so an explicit `""` crosses as empty (no
+    /// placeholder text at all) while `None` shows "Enter text";
+    /// `request_id` rides the `ctx.ui.prompt` promise (submit → the
+    /// typed string, any close → the wire's null → `undefined` at the
+    /// guest boundary, G-519); `submit_command` runs through the
+    /// palette dispatcher after a native submit.
     pub fn open_prompt(
         &self,
         title: &str,
         description: &str,
-        placeholder: &str,
+        placeholder: Option<&str>,
         value: &str,
         request_id: Option<u64>,
         submit_command: Option<String>,
@@ -12080,8 +12090,7 @@ impl Store {
             DialogKind::Prompt {
                 title: title.to_owned(),
                 description: description.to_owned(),
-                placeholder: if placeholder.is_empty() { "Enter text" } else { placeholder }
-                    .to_owned(),
+                placeholder: placeholder.unwrap_or("Enter text").to_owned(),
                 request_id,
                 submit_command,
             },
@@ -12118,8 +12127,10 @@ impl Store {
 
     /// The settle-once semantics of a CLOSING alert/confirm (`settle`
     /// in api.tsx:318-325 — close and confirm both settle, the first
-    /// wins; an unresolved close is `null` for confirm, `null` for
-    /// alert too since `onConfirm`/`onClose` are the same `done`).
+    /// wins; an unresolved close settles `undefined` on the ref —
+    /// the wire value here is Null, which protocol.rs renders as
+    /// `{"ok":true}` and host.js's `dialogSettled` maps back to
+    /// `undefined` at the guest boundary, G-519).
     fn resolve_closing_ui_dialog(&self, kind: &DialogKind, result: serde_json::Value) {
         let request_id = match kind {
             // G-475 — the plugin arms join the settle-once set: the
@@ -12593,9 +12604,12 @@ impl Store {
     /// G-475 — `ctx.ui.dialog.select(options)` (api.tsx:387-427): the
     /// native select dialog over the projected options; the value
     /// promise settles through `request_id` (submit → the option's
-    /// value, any close → null). The actions render as footer rows —
+    /// value, any close → the wire's null → `undefined` at the guest
+    /// boundary, G-519). The actions render as footer rows —
     /// triggering one stages the guest dispatch (see
     /// [`Self::take_plugin_select_action`]) and does NOT close.
+    /// G-522 — `has_search` freezes the spec's search marker into the
+    /// content (flat from the empty query + the category footer).
     #[allow(clippy::too_many_arguments)] // the ref's props tuple
     pub fn open_plugin_select(
         &self,
@@ -12606,6 +12620,7 @@ impl Store {
         options: &[PluginDialogOption],
         current: Option<&str>,
         actions: &[oc_plugin_host::ui::PluginSelectAction],
+        has_search: bool,
     ) {
         let id = format!("plugin:{plugin_id}:select:{request_id}");
         let content = PluginDialogContent {
@@ -12614,6 +12629,7 @@ impl Store {
             options: options.to_vec(),
             placeholder: placeholder.map(str::to_owned),
             current: current.map(str::to_owned),
+            has_search,
         };
         self.plugin_dialogs.update(|dialogs| {
             dialogs.insert(id.clone(), content);
@@ -13176,6 +13192,29 @@ impl Store {
     #[must_use]
     pub fn session_root(&self, session_id: &str) -> String {
         self.session_index.borrow().root_of(session_id)
+    }
+
+    /// G-519-lead (tabs.move child rooting, api.tsx:269-271): every
+    /// known CHILD session mapped to its family root — the pushed
+    /// `tui.tabs` view carries it so the guest's `tabs.move` can root
+    /// a child id BEFORE the membership check (the ref's
+    /// `host.data.session.root`). Root rows themselves are absent
+    /// (rooting is the identity there — the guest falls back to the
+    /// raw id).
+    #[must_use]
+    pub fn session_root_map(&self) -> Vec<(String, String)> {
+        let index = self.session_index.borrow();
+        let mut pairs: Vec<(String, String)> = index
+            .ids()
+            .into_iter()
+            .map(|id| {
+                let root = index.root_of(id);
+                (id.to_owned(), root)
+            })
+            .filter(|(id, root)| id != root)
+            .collect();
+        pairs.sort();
+        pairs
     }
 
     /// The picker panel's mount condition (v2
@@ -16386,6 +16425,7 @@ mod tests {
             options: Vec::new(),
             placeholder: None,
             current: None,
+            has_search: false,
         };
         store.open_plugin_dialog_show("p.tui", content.clone(), 1, None, false);
         assert_eq!(store.dialogs().len(), 1);
@@ -16417,6 +16457,7 @@ mod tests {
             options: Vec::new(),
             placeholder: None,
             current: None,
+            has_search: false,
         };
         // The alert was REPLACED by the show (its own settle) — then
         // clear settles the show's id too.

@@ -2126,13 +2126,16 @@ fn answer_ui_dialog(shared: &Shared, id: u64, method: &str, params: &Value) -> O
         }
         // G-475 — `ctx.ui.dialog.select(options)` (api.tsx:387-427):
         // the promise resolves the selected option's value (any close
-        // → null). The actions cross as native rows; their triggers
-        // route back through the `dialog.action` guest dispatch.
+        // → the wire's null → `undefined` guest-side, G-519). The
+        // actions cross as native rows; their triggers route back
+        // through the `dialog.action` guest dispatch. G-522 — the
+        // hasSearch marker rides the spec (the closure itself cannot
+        // cross).
         "ui.dialog.select" => {
             let Some(spec) = params.get("spec") else {
                 return Some(protocol::error_response(id, "ui.dialog.select requires a spec"));
             };
-            let (title, placeholder, options, current, actions) =
+            let (title, placeholder, options, current, actions, has_search) =
                 crate::ui::parse_select_spec(spec);
             UiRequest::DialogSelect {
                 request_id: id,
@@ -2142,6 +2145,7 @@ fn answer_ui_dialog(shared: &Shared, id: u64, method: &str, params: &Value) -> O
                 options,
                 current,
                 actions,
+                has_search,
             }
         }
         other => {

@@ -15,7 +15,7 @@
 //! only); judgment belongs to the controller's adjudication registry.
 //! The fixtures are self-contained `.js` v2 `{id, setup}` TUI plugins
 //! staged into BOTH sandboxes' real drop-in discovery roots (the same
-//! staging contract realchain_v21.rs documents).
+//! staging contract `realchain_v21.rs` documents).
 //!
 //! PACING: the two ends boot at different speeds (the ref's bun boot
 //! trails the rust binary by tens of seconds under the gate), and each
@@ -102,7 +102,7 @@ fn settle(secs: u64) {
 }
 
 /// The `@opentui/solid` host shim staged by the RIG (the same record
-/// shapes realchain_v21.rs stages — see its notes on Bun's resolver
+/// shapes `realchain_v21.rs` stages — see its notes on Bun's resolver
 /// caching; `setProp` joins the pair for the show fixture's layout
 /// cues).
 fn stage_opentui_shim(fixture: &std::path::Path) {
@@ -141,7 +141,7 @@ export function insert(parent, child) {
 }
 
 /// Stage one v21b fixture plugin into a sandbox's config drop-in (the
-/// same staging contract as realchain_v21.rs — each side stages into
+/// same staging contract as `realchain_v21.rs` — each side stages into
 /// its OWN discovery root).
 fn stage_fixture(sandbox: &Sandbox, app_dir: &str, name: &str, tui_js: &str, shims: bool) {
     let plugins = sandbox.root.join("xdg-config").join(app_dir).join("plugins");

@@ -82,6 +82,7 @@ impl PluginDialogSource for HostDialogSource {
                 .collect(),
             placeholder: None,
             current: None,
+            has_search: false,
         })
     }
 }
@@ -150,6 +151,7 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                 rows: spec.rows.clone(),
                 placeholder: None,
                 current: None,
+                has_search: false,
                 options: spec
                     .options
                     .iter()
@@ -173,6 +175,7 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                 rows: spec.rows.clone(),
                 placeholder: None,
                 current: None,
+                has_search: false,
                 options: spec
                     .options
                     .iter()
@@ -198,6 +201,7 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
             options,
             current,
             actions,
+            has_search,
             ..
         } => PluginUiEvent::DialogSelect {
             request_id: *request_id,
@@ -214,6 +218,7 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                 .collect(),
             current: current.clone(),
             actions: actions.clone(),
+            has_search: *has_search,
         },
         UiRequest::TabsOp { op, session_id, index, .. } => {
             PluginUiEvent::TabsOp { op: *op, session_id: session_id.clone(), index: *index }

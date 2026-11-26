@@ -1,7 +1,9 @@
 // G-237 — the ctx.ui.prompt fixture: each `tui.poke` round opens one
 // prompt; the host resolves the first with a typed value and dismisses
-// the second (null). The resolved values land as JSON markers in the
-// injected sandbox.
+// the second (undefined on the guest boundary, G-519 — JSON.stringify
+// of undefined is not a string, so the marker falls back to the bare
+// word). The resolved values land as JSON markers in the injected
+// sandbox.
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -20,7 +22,7 @@ export default {
         placeholder: "preset name",
         value: "seed-value",
       });
-      writeFileSync(marker(`prompt-${round}.json`), JSON.stringify(value));
+      writeFileSync(marker(`prompt-${round}.json`), JSON.stringify(value) ?? "undefined");
     });
   },
 };

@@ -350,6 +350,14 @@ pub struct SelectProps {
     pub actions: Vec<SelectAction>,
     /// `flat`: group headers collapse while filtering (the palette).
     pub flat: bool,
+    /// G-522 — the plugin select's `search` marker
+    /// (dialog-select.tsx:212 `props.search !== undefined`): the list
+    /// is ALWAYS flat — one headerless group, the row footer falls
+    /// back to the category (:803 `searchFooter ?? category ??
+    /// footer`). The search closure itself cannot cross (the native
+    /// filter degrades in its place — the declared bounded
+    /// projection); this flag carries only the SHAPE.
+    pub has_search: bool,
     /// Normalized fuzzy threshold (the palette's `0.7`).
     pub filter_threshold: Option<f64>,
     /// SE-F4 (E12): the session list's filter semantics — the ref's
@@ -404,6 +412,7 @@ impl SelectProps {
             current: None,
             actions: Vec::new(),
             flat: false,
+            has_search: false,
             filter_threshold: None,
             substring_filter: false,
             skip_filter: false,
@@ -617,11 +626,13 @@ pub struct SelectGroup {
 
 /// Group the filtered indices by category in first-appearance order
 /// (`groupBy`); a `flat` select under an active filter yields one
-/// headerless group.
+/// headerless group; G-522 — a `has_search` select is flat from the
+/// EMPTY query too (dialog-select.tsx:212/215
+/// `props.search !== undefined` → `[["", filtered()]]`).
 #[must_use]
 pub fn grouped(props: &SelectProps, filter: &str) -> Vec<SelectGroup> {
     let indices = filter_indices(props, filter);
-    if props.flat && !filter.is_empty() {
+    if props.has_search || (props.flat && !filter.is_empty()) {
         return vec![SelectGroup { category: None, indices }];
     }
     let mut groups: Vec<SelectGroup> = Vec::new();
@@ -1129,7 +1140,9 @@ pub fn render_select(
     let rows_total = content_rows(&groups, &props.options);
     let viewport = viewport_height(rows_total, terminal_height);
     let filtering = !state.filter.is_empty();
-    let flatten_mode = props.flat && filtering;
+    // G-522 — the search marker flattens from the empty query (the
+    // row footer follows at paint_option_row's flatten_mode arm).
+    let flatten_mode = props.has_search || (props.flat && filtering);
     let visible = |row: usize| row >= state.scroll && row < state.scroll + viewport;
 
     // -- scroll window (content-row space) ---------------------------------

@@ -960,6 +960,14 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                         })
                         .collect();
                     let mut props = SelectProps::new(content.title, options).flat(true).threshold(0.7);
+                    // G-522 — the spec's search marker: flat from the
+                    // EMPTY query (one headerless group) + the
+                    // category as the row footer
+                    // (dialog-select.tsx:212/803's
+                    // `props.search !== undefined` arm).
+                    if content.has_search {
+                        props.has_search = true;
+                    }
                     // G-512 — the spec's `current` freezes into the
                     // content at open: the `●` marker rides the row
                     // whose value equals it (dialog-select.tsx:757/
