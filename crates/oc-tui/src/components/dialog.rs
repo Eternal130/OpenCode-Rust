@@ -77,6 +77,83 @@ fn session_search_typed_hook(store: &Store) {
     }
 }
 
+/// G-532 — map one stroke onto the ref's dialog-prompt edit table
+/// (the `TextareaRenderable` default bindings, index.bun.js:8760-8825,
+/// plus the keymap's `input.*` layer, keybind.ts:206-243): `None` =
+/// not a prompt edit key (falls through to the modal walk). Selection
+/// arms (shift-modified motions, ctrl+shift+a/e, select-all) stay
+/// unported — the dialog's prompt model carries no selection anchor.
+fn prompt_edit_command(
+    stroke: &KeyStroke,
+    accepts_newline: bool,
+) -> Option<oc_tui_core::text_edit::EditCommand> {
+    use oc_tui_core::text_edit::EditCommand as Cmd;
+    if stroke.super_key {
+        return None;
+    }
+    let command = match (stroke.key.as_str(), stroke.ctrl, stroke.alt, stroke.shift) {
+        // left/right — moveCursorLeft/Right (+ the ctrl+b/f aliases,
+        // input.move.left/right: "left,ctrl+b" / "right,ctrl+f").
+        ("left", false, false, false) | ("b", true, false, false) => Cmd::MoveLeft,
+        ("right", false, false, false) | ("f", true, false, false) => Cmd::MoveRight,
+        // home/end — gotoBufferHome/End (single line: 0 / the end).
+        ("home", false, false, false) => Cmd::BufferHome,
+        ("end", false, false, false) => Cmd::BufferEnd,
+        // ctrl+a / ctrl+e — gotoLineHome/End.
+        ("a", true, false, false) => Cmd::LineHome,
+        ("e", true, false, false) => Cmd::LineEnd,
+        // alt+a / alt+e — the visual-line home/end (input.visual.
+        // line.home/end, keybind.ts:220-221; wrap-none height-1: the
+        // caret's own line home/end).
+        ("a", false, true, false) => Cmd::VisualLineHome,
+        ("e", false, true, false) => Cmd::VisualLineEnd,
+        // ctrl+u / ctrl+k — deleteToLineStart/End (:8790/8789,
+        // keybind.ts:230/229).
+        ("u", true, false, false) => Cmd::DeleteToLineStart,
+        ("k", true, false, false) => Cmd::DeleteToLineEnd,
+        // ctrl+w / ctrl+backspace / alt+backspace — deleteWordBackward
+        // (:8783-8784, keybind.ts:240). shift+backspace is the plain
+        // backspace action (:8792).
+        ("w" | "backspace", true, false, false) | ("backspace", false, true, false) => {
+            Cmd::DeleteWordBackward
+        }
+        ("backspace", false, false, true) => Cmd::Backspace,
+        // alt+d / alt+delete / ctrl+delete — deleteWordForward
+        // (:8785-8787, keybind.ts:239).
+        ("d" | "delete", false, true, false) | ("delete", true, false, false) => {
+            Cmd::DeleteWordForward
+        }
+        // ctrl+d / delete / shift+delete — deleteChar forward
+        // (:8793-8795, keybind.ts:232).
+        ("d", true, false, false) | ("delete", false, false, _) => Cmd::Delete,
+        // ctrl+shift+d — deleteLine (:8788, keybind.ts:228).
+        ("d", true, false, true) => Cmd::DeleteLine,
+        // Word moves — ctrl+left/right, alt+left/right, alt+b/f
+        // (:8805-8810, keybind.ts:235-236).
+        ("left", true, false, false) | ("left" | "b", false, true, false) => Cmd::WordBackward,
+        ("right", true, false, false) | ("right" | "f", false, true, false) => Cmd::WordForward,
+        // The newline arms — input.newline "shift+return,ctrl+return,
+        // alt+return,ctrl+j" (keybind.ts:207; the default table's
+        // :8796-8798 return/kpenter/linefeed arms are overridden by
+        // the modal dialog.prompt.submit layer for the PLAIN return).
+        // A raw 0x0a arrives as the literal single-char "\n" spec on
+        // the port (crossterm's raw-mode Char('\n')) — the ref's
+        // "linefeed" key, the same newline action (:8798).
+        // The InputRenderable face (WorktreeName) rejects them
+        // (index.bun.js:9112-9114 `newLine() { return false }`).
+        ("return", false, false, true)
+        | ("return", true, false, false)
+        | ("return", false, true, false)
+            if accepts_newline =>
+        {
+            Cmd::Newline
+        }
+        ("j", true, false, false) | ("\n", false, false, false) if accepts_newline => Cmd::Newline,
+        _ => return None,
+    };
+    Some(command)
+}
+
 /// The modal key layer (`ui/dialog.tsx` + the select's dialog
 /// commands): route one stroke while a dialog holds focus.
 // The modal layer is inherently a key-by-key walk (escape → ctrl+c →
@@ -288,6 +365,7 @@ pub fn handle_dialog_key(
         && props.render_filter
         && !stroke.ctrl
         && !stroke.alt
+        && stroke.key != "\n"
         && stroke.key.chars().count() == 1
     {
         if let Some(ch) = stroke.key.chars().next() {
@@ -343,41 +421,45 @@ pub fn handle_dialog_key(
         return DialogKeyOutcome::Consumed;
     }
 
-    // -- G-527: the prompt cursor movement ---------------------------------
-    // The ref's focused textarea default bindings
-    // (index.bun.js:8760-8822 + 8890-8919): left/right are
-    // moveCursorLeft/Right, home/end gotoBufferHome/End (on the
-    // single-line prompt that is column 0 / the value end), ctrl+a /
-    // ctrl+e the line-home/line-end aliases. Every prompt face is a
-    // TextareaRenderable/InputRenderable in the ref
-    // (dialog-prompt.tsx:115, dialog-session-rename.tsx:13,
-    // dialog-worktree-name.tsx:9, dialog-integration.tsx:219), so
-    // the movement applies to ALL prompt kinds — placed BEFORE the
-    // keymap dispatch so `dialog.select.home`/`end` (keybind table)
-    // never swallow the caret jumps, and before the Prompt arm's
-    // catch-all Consumed.
-    if !is_static && props.render_filter && is_prompt_kind(&entry.kind) && !stroke.alt {
-        let mover: Option<fn(&DialogEntry) -> usize> =
-            match (stroke.key.as_str(), stroke.ctrl, stroke.shift) {
-                ("left", false, false) => Some(|top| top.prompt_cursor().saturating_sub(1)),
-                ("right", false, false) => Some(|top| top.prompt_cursor().saturating_add(1)),
-                ("home", false, false) => Some(|_| 0),
-                ("end", false, false) => Some(|top| top.value.chars().count()),
-                // ctrl+a / ctrl+e — gotoLineHome/End (single line: 0/end).
-                ("a", true, false) => Some(|_| 0),
-                ("e", true, false) => Some(|top| top.value.chars().count()),
-                _ => None,
-            };
-        if let Some(move_to) = mover {
+    // -- G-527/G-532: the prompt edit arms ---------------------------------
+    // The ref's focused textarea bindings — the default table
+    // (index.bun.js:8760-8825, Textarea.ts:58-128) + the keymap's
+    // managed-textarea layer (context/keymap.tsx:92-135 binding the
+    // input.* family, config/keybind.ts:206-243): left/right/home/end
+    // + ctrl+a/e, ctrl+f/ctrl+b char moves, ctrl+u/k line deletes,
+    // ctrl+w/ctrl+backspace/alt+backspace word-backward deletes,
+    // alt+d/alt+delete/ctrl+delete word-forward deletes, ctrl+d and
+    // delete forward deletes, ctrl+left/right + alt+b/f + alt+left/
+    // right word moves, alt+a/e visual-line home/end, and the newline
+    // arms (shift+return/ctrl+return/alt+return/ctrl+j — keybind.ts:
+    // 207; the plain `return` stays the dialog's submit, the modal
+    // `dialog.prompt.submit` layer's priority-1 win). Every command
+    // routes through the SAME engine the composer uses
+    // (opentui-core input.rs:748-819 via EditCore — the port's exact
+    // word/delete semantics; G-532 closed the first-char subset).
+    // Every prompt face is a TextareaRenderable/InputRenderable in
+    // the ref (dialog-prompt.tsx:115, dialog-session-rename.tsx:13,
+    // dialog-worktree-name.tsx:9, dialog-integration.tsx:219), so the
+    // arms apply to ALL prompt kinds — placed BEFORE the keymap
+    // dispatch so `dialog.select.home`/`end` (keybind table) never
+    // swallow the caret jumps, and before the Prompt arm's catch-all
+    // Consumed. The WorktreeName face is an InputRenderable
+    // (dialog-worktree-name.tsx:8-9): `newLine()` returns false
+    // (index.bun.js:9112-9114) — its newline arm is a NO-OP.
+    if !is_static && props.render_filter && is_prompt_kind(&entry.kind) {
+        let accepts_newline = !matches!(entry.kind, DialogKind::WorktreeName);
+        if let Some(command) = prompt_edit_command(&stroke, accepts_newline) {
             store.update_dialog(|top| {
                 // G-527 — the viewport follows the caret through the
                 // STATEFUL band clamp (editor-view.zig:208-263): it
                 // only moves when the caret enters a margin band —
                 // moving back INSIDE the window keeps the offset.
                 top.prompt_materialize_viewport(prompt_width);
-                top.prompt_move_cursor(move_to(top));
+                top.prompt_apply_edit(command);
                 top.prompt_band_viewport(prompt_width);
             });
+            session_search_typed_hook(store);
+            store.preview_theme_filter();
             return DialogKeyOutcome::Consumed;
         }
     }
@@ -2683,6 +2765,7 @@ mod tests {
     fn dialog_key_layer_routes_moves_and_input() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("S1".to_owned()));
+        store.select_tab("s1");
         store.replace_dialog(DialogKind::CommandPalette, DialogSize::Medium);
         let mut keymap = Keymap::new();
         keymap.push_mode("dialog");
@@ -2812,6 +2895,7 @@ mod tests {
         let theme = crate::theme::ThemeState::v2_dark();
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Parity fake says hello.".to_owned()));
+        store.select_tab("s1");
         store.replace_dialog(
             DialogKind::SessionRename { session_id: "s1".to_owned() },
             DialogSize::Medium,
@@ -2930,6 +3014,7 @@ mod tests {
         let theme = crate::theme::ThemeState::v2_dark();
         let store = Store::new(Runtime::new());
         store.open_tab("s1", None);
+        store.select_tab("s1");
         store.replace_dialog(DialogKind::Help, DialogSize::Medium);
         let mut frame = blank_base(80, 24);
         render_overlay(&mut frame, &store, &theme, (80, 24));
@@ -3225,6 +3310,7 @@ mod btw_tests {
         let theme = crate::theme::ThemeState::v2_dark();
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("S1".to_owned()));
+        store.select_tab("s1");
         store.btw_ask("s1", "what did we do?");
         store.btw_answer("what did we do?", "You **ported** /btw.\n\n- one-shot answer");
         let mut frame = blank_base(100, 30);
@@ -3244,6 +3330,7 @@ mod btw_tests {
     fn btw_answer_dialog_scrolls_and_copies() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("S1".to_owned()));
+        store.select_tab("s1");
         let answer = (0..40).map(|n| format!("line {n}")).collect::<Vec<_>>().join("\n\n");
         store.btw_ask("s1", "q");
         store.btw_answer("q", &answer);

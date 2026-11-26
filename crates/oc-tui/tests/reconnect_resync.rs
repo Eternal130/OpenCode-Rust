@@ -97,6 +97,7 @@ fn resync(
 fn permission_form_resync() {
     let store = Store::new(Runtime::new());
     store.open_tab("ses_1", None);
+    store.select_tab("ses_1");
     // Pre-disconnect live state: an older pending ask for ses_1.
     store.ingest_all([Ingest::Event(BusEvent::new(
         "permission.asked",
@@ -140,6 +141,7 @@ fn permission_form_resync() {
 fn blockers_for_unfetched_sessions_survive() {
     let store = Store::new(Runtime::new());
     store.open_tab("ses_1", None);
+    store.select_tab("ses_1");
     store.ingest_all([
         Ingest::Event(BusEvent::new(
             "permission.asked",
@@ -178,6 +180,7 @@ fn blockers_for_unfetched_sessions_survive() {
 fn form_only_resync_blocks_footer() {
     let store = Store::new(Runtime::new());
     store.open_tab("ses_1", None);
+    store.select_tab("ses_1");
     store.ingest_all([resync(
         vec![snapshot("ses_1", None)],
         Vec::new(),
@@ -199,6 +202,7 @@ fn form_only_resync_blocks_footer() {
 fn session_children_resync() {
     let store = Store::new(Runtime::new());
     store.open_tab("ses_root", None);
+    store.select_tab("ses_root");
     // Offline: the subagent branch was created server-side; the TUI
     // never saw the events. The snapshot carries the parent links.
     store.ingest_all([resync(
@@ -239,6 +243,7 @@ fn message_tail_resync() {
     use oc_tui::components::message::model::{Message, UserFile};
     let store = Store::new(Runtime::new());
     store.open_tab("ses_1", None);
+    store.select_tab("ses_1");
     let offline_message = Message::User {
         id: "msg_offline".into(),
         text: "typed while the TUI was offline".into(),
@@ -269,7 +274,9 @@ fn message_tail_resync() {
 fn session_not_found_closes_tab() {
     let store = Store::new(Runtime::new());
     store.open_tab("ses_gone", Some("Gone".into()));
+    store.select_tab("ses_gone");
     store.open_tab("ses_kept", Some("Kept".into()));
+    store.select_tab("ses_kept");
     assert_eq!(store.tabs().tabs.len(), 2);
 
     // The snapshot carries only the surviving session.
@@ -286,6 +293,7 @@ fn session_not_found_closes_tab() {
 fn session_not_found_toasts_on_active_route() {
     let store = Store::new(Runtime::new());
     store.open_tab("ses_active", None);
+    store.select_tab("ses_active");
     assert!(matches!(store.route(), Route::Session { .. }));
     store.ingest_all([resync(Vec::new(), Vec::new(), Vec::new())]);
     let toasts = store.toasts();

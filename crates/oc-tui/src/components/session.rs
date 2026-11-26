@@ -23,36 +23,6 @@ use crate::render::{paint_placed_with_fills, Frame};
 use crate::store::{ListState, SessionTab, Store};
 use crate::style::Style;
 
-/// The agent label for the composer's statusline hint: the server
-/// agent list's display name, else the raw id titlecased (the
-/// footer-prompt-idle golden's "Build" shape).
-fn statusline_agent_label(store: &Store, agent: &str) -> String {
-    if let Some(rows) = store.server_lists().agents.rows() {
-        if let Some(found) = rows.iter().find(|row| row.id == agent) {
-            return found.name.clone();
-        }
-    }
-    let mut chars = agent.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
-    }
-}
-
-/// The composer statusline inputs for one session key: the staged
-/// agent · model selection (v2's persistent model hint — the
-/// footer-prompt-idle statusline). The model falls back through the
-/// resolution chain (F8: the footer shows what a submit WOULD commit,
-/// `currentSelection` — local.tsx:225-236 — never an empty "unset").
-#[must_use]
-pub fn composer_statusline(store: &Store, session_id: &str) -> (String, String) {
-    let selection = store.selection_for(session_id);
-    let agent =
-        selection.agent.map(|agent| statusline_agent_label(store, &agent)).unwrap_or_default();
-    let model = store.effective_model(session_id).map(|model| model.model_id).unwrap_or_default();
-    (agent, model)
-}
-
 /// The horizontal tabs strip over the store's tab list (the live mount
 /// of `component/session-tabs.tsx` — active pill, unread `•` on
 /// inactive tabs, permission `!` on the active tab, the ` + `
@@ -2114,6 +2084,7 @@ mod tests {
         use crate::data::Ingest;
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Bug hunt".to_owned()));
+        store.select_tab("s1");
         // `session.tps` (CONFIG-T3, index.tsx:1892): the tok/s span is
         // config-gated (default OFF) — arm it for the span assertion.
         store.set_session_tps(true);
@@ -2178,6 +2149,7 @@ mod tests {
         use crate::data::Ingest;
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Bug hunt".to_owned()));
+        store.select_tab("s1");
         let mut started = crate::data::BusEvent::new(
             "session.step.started",
             serde_json::json!({
@@ -2230,6 +2202,7 @@ mod tests {
     fn session_frame_docks_the_composer_under_the_transcript() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Bug hunt".to_owned()));
+        store.select_tab("s1");
         let theme = crate::theme::ThemeState::v2_dark();
         let frame = session_frame(&store, "s1", &theme.styles(), (40, 12));
         let grid = frame.text_grid().join("");
@@ -2262,7 +2235,9 @@ mod tests {
     fn session_frame_mounts_the_live_tabs_strip() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Alpha notes".to_owned()));
+        store.select_tab("s1");
         store.open_tab("s2", Some("Beta second".to_owned()));
+        store.select_tab("s2");
         store.set_unread("s2", Some(crate::store::Unread::Activity));
         let theme = crate::theme::ThemeState::v2_dark();
         let frame = session_frame(&store, "s1", &theme.styles(), (80, 24));
@@ -2305,6 +2280,7 @@ mod tests {
             serde_json::json!({ "sessionID": "s1", "title": "Parity fake says hello." }),
         ))]);
         store.open_tab("s1", None);
+        store.select_tab("s1");
         let theme = crate::theme::ThemeState::v2_dark();
         let frame = session_frame(&store, "s1", &theme.styles(), (80, 24));
         let strip = &frame.text_grid()[0];
@@ -2330,6 +2306,7 @@ mod tests {
             "s1",
             Some(crate::components::session_tabs::NEW_SESSION_TAB_TITLE.to_owned()),
         );
+        store.select_tab("s1");
         assert_eq!(
             store.display_title(&store.tabs().tabs[0]),
             Some("New session".to_owned()),
@@ -2359,6 +2336,7 @@ mod tests {
         use crate::data::Ingest;
         let store = Store::new(Runtime::new());
         store.open_tab("s1", None);
+        store.select_tab("s1");
         let theme = crate::theme::ThemeState::v2_dark();
         let strip = session_frame(&store, "s1", &theme.styles(), (80, 24)).text_grid()[0].clone();
         assert!(strip.contains("Untitled session"), "placeholder until titled: {strip}");
@@ -2381,6 +2359,7 @@ mod tests {
         let long_title =
             "A very long generated session title that cannot fit the strip width at all";
         store.open_tab("s1", Some(long_title.to_owned()));
+        store.select_tab("s1");
         let theme = crate::theme::ThemeState::v2_dark();
         for width in [40usize, 80, 120] {
             let frame =
@@ -2406,6 +2385,7 @@ mod tests {
     fn session_frame_hides_the_strip_when_tabs_disabled() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Alpha notes".to_owned()));
+        store.select_tab("s1");
         store.set_tabs_enabled(false);
         let theme = crate::theme::ThemeState::v2_dark();
         let frame = session_frame(&store, "s1", &theme.styles(), (80, 24));
@@ -2423,6 +2403,7 @@ mod tests {
     fn session_composer_carries_the_model_hint() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Bug hunt".to_owned()));
+        store.select_tab("s1");
         store.select_model(
             "s1",
             &crate::store::ModelSelection {
@@ -2504,7 +2485,9 @@ mod tests {
         store.set_messages("s_long", long);
         store.set_messages("s_short", turn(0));
         store.open_tab("s_long", Some("Long".to_owned()));
+        store.select_tab("s_long");
         store.open_tab("s_short", Some("Short".to_owned()));
+        store.select_tab("s_short");
 
         let theme = crate::theme::ThemeState::v2_dark().styles();
         let size = (80, 24);
@@ -2554,6 +2537,7 @@ mod tests {
     fn wide_session_docks_the_sidebar_and_shrinks_the_transcript() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Bug hunt".to_owned()));
+        store.select_tab("s1");
         let theme = crate::theme::ThemeState::v2_dark();
         let frame = session_frame(&store, "s1", &theme.styles(), (160, 30));
         let grid = frame.text_grid();
@@ -2590,6 +2574,7 @@ mod tests {
     fn narrow_session_renders_without_the_sidebar() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Bug hunt".to_owned()));
+        store.select_tab("s1");
         let theme = crate::theme::ThemeState::v2_dark();
         let frame = session_frame(&store, "s1", &theme.styles(), (80, 24));
         let grid = frame.text_grid();
@@ -2609,6 +2594,7 @@ mod tests {
     fn prompt_footer_slot_rows_reach_the_composer_footer() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", None);
+        store.select_tab("s1");
         store.set_plugin_slot_section(
             "prompt.footer",
             &crate::components::sidebar::SidebarSection {
@@ -2631,6 +2617,7 @@ mod tests {
     fn running_spinner_static_fallback_when_animations_off() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", None);
+        store.select_tab("s1");
         store.ingest_all([Ingest::Event(crate::data::BusEvent::new(
             "session.execution.started",
             serde_json::json!({ "sessionID": "s1" }),
@@ -2654,6 +2641,7 @@ mod tests {
     fn btw_pending_static_fallback_when_animations_off() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", None);
+        store.select_tab("s1");
         store.btw_ask("s1", "side question?");
         store.set_animations_enabled(false);
         let composer = store.composer("s1");
@@ -2683,6 +2671,7 @@ mod tests {
     fn btw_pending_spinner_rides_the_composer_footer_status() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", None);
+        store.select_tab("s1");
         let composer = store.composer("s1");
 
         let idle = composer_footer_hints(&store, "s1", &composer, "");
@@ -2740,6 +2729,7 @@ mod tests {
     fn manual_toggle_at_narrow_width_overlays_the_pane() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Bug hunt".to_owned()));
+        store.select_tab("s1");
         store.set_terminal_size((80, 24));
         store.toggle_sidebar();
         assert!(store.sidebar_shown("s1", 80));
@@ -2759,6 +2749,7 @@ mod tests {
     fn plugin_sidebar_sections_render_in_the_live_pane() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Bug hunt".to_owned()));
+        store.select_tab("s1");
         store.set_plugin_sidebar_section(&crate::components::sidebar::SidebarSection {
             clickable: vec![],
             plugin_id: "tuislots".into(),
@@ -2831,6 +2822,7 @@ mod tests {
     fn subagent_session_never_shows_the_sidebar() {
         let store = Store::new(Runtime::new());
         store.open_tab("sub", None);
+        store.select_tab("sub");
         store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
             "session.created",
             serde_json::json!({ "sessionID": "sub", "parentID": "parent" }),
@@ -2851,6 +2843,7 @@ mod tests {
     fn connected_provider_hides_the_onboarding_card() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Bug hunt".to_owned()));
+        store.select_tab("s1");
         let theme = crate::theme::ThemeState::v2_dark();
         let before = session_frame(&store, "s1", &theme.styles(), (160, 30));
         assert!(
@@ -2873,6 +2866,7 @@ mod tests {
     fn restored_dismissal_hides_the_onboarding_card() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Bug hunt".to_owned()));
+        store.select_tab("s1");
         store.restore_sidebar_onboarding(true);
         let theme = crate::theme::ThemeState::v2_dark();
         let frame = session_frame(&store, "s1", &theme.styles(), (160, 30));

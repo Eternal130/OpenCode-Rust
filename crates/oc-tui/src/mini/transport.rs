@@ -1639,7 +1639,11 @@ pub enum SubagentStatus {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubagentChild {
     pub session_id: String,
-    /// `Locale.titlecase(agent)` — "Subagent" until a title lands.
+    /// `Locale.titlecase(agent)` — "Subagent" (the fallback) until one
+    /// of the four update sites lands the agent name (G-529:
+    /// stream-v2.subagent.ts:286 applyMeta / :599 discovery /
+    /// :679 step.started / :1061 family refresh — the shared \b\w
+    /// titlecase, guarded on the fallback at :679/:1061).
     pub label: String,
     /// `session.renamed`/`session.updated` titles.
     pub title: String,
@@ -1654,7 +1658,7 @@ const SUBAGENT_FALLBACK_LABEL: &str = "Subagent";
 
 /// `FAMILY_LIST_LIMIT` (stream-v2.subagent.ts): the tracked-children
 /// bound.
-const FAMILY_LIST_LIMIT: usize = 50;
+pub const FAMILY_LIST_LIMIT: usize = 50;
 
 /// The detail transcript's row cap (the child's `frames` bound —
 /// `CHILD_FRAME_LIMIT`, stream-v2.subagent.ts:15): the newest 80
@@ -1691,6 +1695,98 @@ impl SubagentTracker {
         Self { parent: parent.to_owned(), slots: Vec::new() }
     }
 
+    /// G-529 — `child.label = Locale.titlecase(agent)`
+    /// (stream-v2.subagent.ts:286/599/679/1061 — the four update
+    /// sites): the label updates from the agent name with the shared
+    /// \b\w titlecase. `only_if_fallback` carries the :679/:1061
+    /// guards (step.started / the family refresh only replace the
+    /// FALLBACK label); :286/:599 (applyMeta/discovery) update
+    /// unconditionally. Returns whether the label changed.
+    fn set_label(&mut self, session_id: &str, agent: &str, only_if_fallback: bool) -> bool {
+        if agent.is_empty() {
+            return false;
+        }
+        let Some(slot) = self.slots.iter_mut().find(|slot| slot.child.session_id == session_id)
+        else {
+            return false;
+        };
+        let next = crate::components::message::titlecase(agent);
+        if only_if_fallback && slot.child.label != SUBAGENT_FALLBACK_LABEL {
+            return false;
+        }
+        if slot.child.label == next {
+            return false;
+        }
+        slot.child.label = next;
+        true
+    }
+
+    /// G-529 — the hydrate walk's `mainTool` arm
+    /// (stream-v2.subagent.ts:939-953): one PROJECTED subagent tool
+    /// part (the replayed message's `state.input`/`state.metadata`)
+    /// → `admitChild` + `applyMeta` — the label/description from the
+    /// tool INPUT, the child id from the tool METADATA. The label
+    /// update is the UNCONDITIONAL applyMeta site (:286).
+    pub fn fold_tool_part(&mut self, part: &Value) -> SubagentFold {
+        let mut fold = SubagentFold::default();
+        let child_id = part
+            .pointer("/state/metadata/sessionID")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        if child_id.is_empty() || child_id == self.parent {
+            return fold;
+        }
+        let agent = part
+            .pointer("/state/input/agent")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let description = part
+            .pointer("/state/input/description")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        if self.admit(&child_id, String::new(), description) {
+            fold.admitted = true;
+            fold.changed = true;
+        }
+        if self.set_label(&child_id, &agent, false) {
+            fold.changed = true;
+        }
+        fold
+    }
+
+    /// G-529 — the hydrate family index (:1044-1065): one
+    /// `session.list({parentID})` row → `admitChild` + the
+    /// FALLBACK-GUARDED label from the row's `agent` (:1061) + the
+    /// title (only when the child has none, `if (!child.title)`).
+    pub fn fold_family_row(&mut self, row: &Value) -> SubagentFold {
+        let mut fold = SubagentFold::default();
+        let id = row.get("id").and_then(Value::as_str).unwrap_or_default().to_owned();
+        if id.is_empty() || id == self.parent {
+            return fold;
+        }
+        let agent = row.get("agent").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let title = row.get("title").and_then(Value::as_str).unwrap_or_default().to_owned();
+        if self.admit(&id, String::new(), String::new()) {
+            fold.admitted = true;
+            fold.changed = true;
+        }
+        // `if (!child.title) child.title = session.title` (:1062) — the
+        // family row only FILLS an empty title, never replaces one.
+        if let Some(slot) = self.slots.iter_mut().find(|slot| slot.child.session_id == id) {
+            if slot.child.title.is_empty() && !title.is_empty() {
+                slot.child.title = title;
+                fold.changed = true;
+            }
+        }
+        if self.set_label(&id, &agent, true) {
+            fold.changed = true;
+        }
+        fold
+    }
+
     /// The tracked children (discovery order — the footer's tab
     /// order).
     #[must_use]
@@ -1716,6 +1812,13 @@ impl SubagentTracker {
             let id = session_id.clone();
             if self.admit(&id, text_field(&data, "title"), String::new()) {
                 fold.admitted = true;
+                fold.changed = true;
+            }
+            // G-529 — the DISCOVERY site (stream-v2.subagent.ts:599
+            // `if (item.agent) child.label = Locale.titlecase(item.
+            // agent)`): the created record's agent updates the label
+            // UNCONDITIONALLY.
+            if self.set_label(&id, &text_field(&data, "agent"), false) {
                 fold.changed = true;
             }
             return fold;
@@ -1745,6 +1848,18 @@ impl SubagentTracker {
                     fold.admitted = true;
                     fold.changed = true;
                 }
+                // G-529 — the applyMeta site (stream-v2.subagent.
+                // ts:286, reached from the live tool path :992 with
+                // the pending tool INPUT): the input's agent updates
+                // the label UNCONDITIONALLY.
+                let agent = data
+                    .pointer("/input/agent")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                if self.set_label(&child_id, &agent, false) {
+                    fold.changed = true;
+                }
             }
         }
 
@@ -1757,31 +1872,8 @@ impl SubagentTracker {
         else {
             return fold;
         };
-        match event_type.as_str() {
-            "session.execution.started" | "session.execution.resumed" => {
-                self.slots[index].child.status = SubagentStatus::Running;
-                fold.changed = true;
-            }
-            "session.execution.succeeded" => {
-                self.slots[index].child.status = SubagentStatus::Completed;
-                fold.changed = true;
-            }
-            "session.execution.failed" => {
-                self.slots[index].child.status = SubagentStatus::Error;
-                fold.changed = true;
-            }
-            "session.execution.interrupted" => {
-                self.slots[index].child.status = SubagentStatus::Cancelled;
-                fold.changed = true;
-            }
-            "session.updated" | "session.renamed" => {
-                let title = text_field(&data, "title");
-                if !title.is_empty() && self.slots[index].child.title != title {
-                    self.slots[index].child.title = title;
-                    fold.changed = true;
-                }
-            }
-            _ => {}
+        if self.fold_child_state(index, &session_id, &event_type, &data) {
+            fold.changed = true;
         }
         // The transcript fold (the same switch as the parent).
         let slot = &mut self.slots[index];
@@ -1817,6 +1909,57 @@ impl SubagentTracker {
             | Fold::SessionTitle(_) => {}
         }
         fold
+    }
+
+    /// The per-child state switch of [`Self::fold`] — the child's
+    /// status transitions, the title refresh, and the G-529 label
+    /// site (stream-v2.subagent.ts:660-690). Returns whether anything
+    /// changed.
+    fn fold_child_state(
+        &mut self,
+        index: usize,
+        session_id: &str,
+        event_type: &str,
+        data: &Value,
+    ) -> bool {
+        let mut changed = false;
+        match event_type {
+            // G-529 — the step.started site (stream-v2.subagent.
+            // ts:677-683): `if (child.label === FALLBACK_LABEL &&
+            // event.data.agent) child.label = Locale.titlecase(...)`
+            // — the FALLBACK-GUARDED update (a label that already
+            // landed from applyMeta/discovery wins).
+            "session.step.started" => {
+                if self.set_label(session_id, &text_field(data, "agent"), true) {
+                    changed = true;
+                }
+            }
+            "session.execution.started" | "session.execution.resumed" => {
+                self.slots[index].child.status = SubagentStatus::Running;
+                changed = true;
+            }
+            "session.execution.succeeded" => {
+                self.slots[index].child.status = SubagentStatus::Completed;
+                changed = true;
+            }
+            "session.execution.failed" => {
+                self.slots[index].child.status = SubagentStatus::Error;
+                changed = true;
+            }
+            "session.execution.interrupted" => {
+                self.slots[index].child.status = SubagentStatus::Cancelled;
+                changed = true;
+            }
+            "session.updated" | "session.renamed" => {
+                let title = text_field(data, "title");
+                if !title.is_empty() && self.slots[index].child.title != title {
+                    self.slots[index].child.title = title;
+                    changed = true;
+                }
+            }
+            _ => {}
+        }
+        changed
     }
 
     /// `admitChild`: insert-or-refresh one child; `false` when the
@@ -2796,5 +2939,116 @@ mod tests {
             Fold::Ignored,
             "a called part is no longer streaming"
         );
+    }
+
+    // -- G-529: the tracker's four label-update sites -------------------
+
+    fn tracker_child(tracker: &SubagentTracker, id: &str) -> SubagentChild {
+        tracker
+            .children()
+            .into_iter()
+            .find(|child| child.session_id == id)
+            .unwrap_or_else(|| panic!("the child {id} is tracked"))
+    }
+
+    /// G-529 — the applyMeta site (stream-v2.subagent.ts:286 via the
+    /// live tool path :992): the parent's subagent tool input's agent
+    /// updates the label UNCONDITIONALLY (the \b\w titlecase).
+    #[test]
+    fn tracker_applymeta_updates_the_label_from_the_tool_input() {
+        let mut tracker = SubagentTracker::new("parent");
+        tracker.fold(&event(
+            "session.tool.called",
+            &json!({
+                "sessionID": "parent",
+                "metadata": { "sessionID": "child_1" },
+                "input": { "agent": "code-review", "description": "check it" },
+            }),
+        ));
+        let child = tracker_child(&tracker, "child_1");
+        assert_eq!(child.label, "Code-Review", "the applyMeta site's \\b\\w titlecase");
+        assert_eq!(child.description, "check it");
+        // A second applyMeta with a DIFFERENT agent replaces the label
+        // (the unconditional :286 shape).
+        tracker.fold(&event(
+            "session.tool.success",
+            &json!({
+                "sessionID": "parent",
+                "metadata": { "sessionID": "child_1" },
+                "input": { "agent": "plan" },
+            }),
+        ));
+        assert_eq!(tracker_child(&tracker, "child_1").label, "Plan");
+    }
+
+    /// G-529 — the discovery site (:599): `session.created`'s agent
+    /// updates the label unconditionally.
+    #[test]
+    fn tracker_discovery_updates_the_label_from_the_created_record() {
+        let mut tracker = SubagentTracker::new("parent");
+        tracker.fold(&event(
+            "session.created",
+            &json!({ "sessionID": "child_2", "parentID": "parent", "agent": "build", "title": "T" }),
+        ));
+        assert_eq!(tracker_child(&tracker, "child_2").label, "Build");
+    }
+
+    /// G-529 — the step.started site (:679): the label updates ONLY
+    /// while it is still the fallback.
+    #[test]
+    fn tracker_step_started_updates_only_the_fallback_label() {
+        let mut tracker = SubagentTracker::new("parent");
+        tracker.fold(&event(
+            "session.created",
+            &json!({ "sessionID": "child_3", "parentID": "parent", "title": "T" }),
+        ));
+        assert_eq!(tracker_child(&tracker, "child_3").label, "Subagent", "the seeded fallback");
+        tracker.fold(&event(
+            "session.step.started",
+            &json!({ "sessionID": "child_3", "agent": "verify" }),
+        ));
+        assert_eq!(tracker_child(&tracker, "child_3").label, "Verify", "the guarded update lands");
+        // A step.started with a different agent does NOT replace a
+        // non-fallback label (the :679 guard).
+        tracker.fold(&event(
+            "session.step.started",
+            &json!({ "sessionID": "child_3", "agent": "other" }),
+        ));
+        assert_eq!(tracker_child(&tracker, "child_3").label, "Verify", "the guard holds");
+    }
+
+    /// G-529 — the hydrate sites: the mainTool walk (the projected
+    /// tool part's input — unconditional, :946→:286) and the family
+    /// index row (:1061 — fallback-guarded, and the title only FILLS
+    /// an empty one, :1062).
+    #[test]
+    fn tracker_hydrate_walks_update_labels_and_fill_titles() {
+        let mut tracker = SubagentTracker::new("parent");
+        // mainTool — the replayed tool part.
+        let fold = tracker.fold_tool_part(&json!({
+            "type": "tool",
+            "state": {
+                "metadata": { "sessionID": "child_4" },
+                "input": { "agent": "refactor", "description": "desc" },
+            },
+        }));
+        assert!(fold.changed);
+        assert_eq!(tracker_child(&tracker, "child_4").label, "Refactor");
+        // The family row — a fallback-guarded label + a title fill.
+        let fold = tracker.fold_family_row(&json!({
+            "id": "child_5", "parentID": "parent", "agent": "plan", "title": "The family title",
+        }));
+        assert!(fold.changed);
+        let child = tracker_child(&tracker, "child_5");
+        assert_eq!(child.label, "Plan");
+        assert_eq!(child.title, "The family title");
+        // A later family row only fills an EMPTY title (:1062) and
+        // never replaces a landed label (:1061's guard).
+        tracker.fold_family_row(&json!({
+            "id": "child_5", "parentID": "parent", "agent": "other", "title": "New",
+        }));
+        let child = tracker_child(&tracker, "child_5");
+        assert_eq!(child.label, "Plan");
+        assert_eq!(child.title, "The family title");
     }
 }

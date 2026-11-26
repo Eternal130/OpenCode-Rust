@@ -379,7 +379,10 @@ pub fn permission_presentation(request: &PermissionRequest) -> PermissionPresent
             let description = value("description").filter(|s| !s.is_empty());
             PermissionPresentation {
                 icon: "#",
-                title: format!("{} Subagent", titlecase(&agent)),
+                // G-528(a) — `Locale.titlecase(agent)` (util/permission.
+                // ts:80): the shared \b\w form (message::model), not a
+                // first-char local ("code-review" → "Code-Review").
+                title: format!("{} Subagent", crate::components::message::titlecase(&agent)),
                 lines: match description {
                     Some(description) => vec![format!("◉ {description}")],
                     None => Vec::new(),
@@ -454,14 +457,6 @@ pub fn permission_presentation(request: &PermissionRequest) -> PermissionPresent
             title: format!("Call tool {other}"),
             lines: vec![format!("Tool: {other}")],
         },
-    }
-}
-
-fn titlecase(value: &str) -> String {
-    let mut chars = value.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
     }
 }
 

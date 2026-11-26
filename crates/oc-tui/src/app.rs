@@ -502,6 +502,19 @@ impl App {
         // surface: record it as a redacted `paste:` token or the first
         // real paste silently produces an unreplayable recording.
         oc_util::recorder::paste(text);
+        // G-533 — the focused renderable owns the paste: an OPEN
+        // prompt-kind dialog's textarea takes the text AT its caret
+        // (the ref's `handlePaste` → `insertText`, chunk-bun
+        // j2z63cdy.js:539-547 → index.bun.js:8928-8930 — newlines NOT
+        // stripped for the TextareaRenderable faces, only the
+        // InputRenderable WorktreeName strips them, :9116). Only a
+        // paste with NO prompt dialog open lands in the composer
+        // (`pasteInputText`) — the pre-G-533 port fed the composer
+        // unconditionally and the prompt's value never saw the text.
+        if self.store.paste_into_prompt_dialog(text) {
+            self.keymap.clear_pending();
+            return;
+        }
         let key = self.prompt_key();
         let mut composer = self.store.composer(&key);
         composer.paste_resolved(
@@ -10226,6 +10239,12 @@ pub async fn run_with_size(
                     Some(crate::components::session_tabs::NEW_SESSION_TAB_TITLE.to_owned())
                 });
                 app.store.open_tab(&session_id, title);
+                // G-531 — the home submission's explicit navigation
+                // (the ref's `route.navigate({type: "session",
+                // sessionID})`, prompt/index.tsx:1388-1391): `open_tab`
+                // is append-only now; the route effect inside navigate
+                // finds the tab already open (title from the create).
+                app.store.select_tab(&session_id);
                 let staged = app.store.selection_for(HOME_PROMPT_KEY);
                 if let Some(model) = &staged.model {
                     app.store.select_model(&session_id, model);
@@ -12632,6 +12651,7 @@ mod tests {
     fn config_animations_key_reaches_the_store_gate() {
         let mut app = App::new((100, 30));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
 
         // Boot default (no animations key): the gate stays true.
         let boot = crate::config::TuiConfig::parse(r#"{ "mouse": true }"#, None);
@@ -12662,6 +12682,7 @@ mod tests {
     fn config_applies_theme_and_keybinds_and_reloads() {
         let mut app = App::new((100, 30));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
 
         // Boot config: a custom-ish theme pick + a ctrl+q exit override.
         let boot = crate::config::TuiConfig::parse(
@@ -12682,6 +12703,7 @@ mod tests {
         // Reload: a new binding table replaces the old one wholesale.
         let mut app = App::new((100, 30));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
         let reloaded = crate::config::TuiConfig::parse(
             r#"{ "theme": { "name": "bogus", "mode": "light" }, "keybinds": { "app.exit": "ctrl+q" } }"#,
             None,
@@ -12700,6 +12722,7 @@ mod tests {
         // into the live keymap without a pump restart.
         let mut app = App::new((100, 30));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
         app.press("ctrl+x");
         app.press("p");
         assert_eq!(app.store.dialogs().len(), 0, "leader+p unbound (pending, then p typed)");
@@ -12802,6 +12825,7 @@ mod tests {
     fn footer_model_panel_renders_live_data() {
         let app = App::new((100, 30));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
         app.store.open_footer_route(crate::components::footer::PromptRoute::Model);
         let loading = app.frame_text();
         assert!(loading.contains("Models loading"), "loading state: {loading}");
@@ -12868,6 +12892,7 @@ mod tests {
         store.set_clipboard_sink(clipboard_dyn);
         let mut app = App::with_store(store, (100, 30));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
         app.store.set_messages(
             "s1",
             vec![Message::Assistant {
@@ -12932,6 +12957,7 @@ mod tests {
         };
         let mut app = App::new((100, 30));
         app.store.open_tab("ses_1", None);
+        app.store.select_tab("ses_1");
         ask_permission(&app.store, &request);
         app.press("enter");
         assert_eq!(app.permission_replies.len(), 1, "one recorded reply");
@@ -12946,6 +12972,7 @@ mod tests {
     fn leader_e_requests_the_external_editor() {
         let mut app = App::new((100, 30));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
         assert!(!app.store.take_editor_request());
         app.press("ctrl+x");
         app.press("e");
@@ -13055,6 +13082,7 @@ mod tests {
         store.set_selection_sink(sink_dyn);
         let mut app = App::with_store(store, (100, 30));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
         app.store.set_models(
             crate::store::ListState::Loaded(vec![crate::store::ServerModel {
                 provider_id: "anthropic".into(),
@@ -13193,6 +13221,7 @@ mod tests {
     fn at_mention_lists_reference_sources_between_skills_and_agents() {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
         app.store.set_agents(crate::store::ListState::Loaded(vec![crate::store::ServerAgent {
             id: "build".to_owned(),
             mode: "subagent".to_owned(),
@@ -13262,6 +13291,7 @@ mod tests {
     fn at_mention_completion_records_structured_parts_end_to_end() {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
         app.store.set_agents(crate::store::ListState::Loaded(vec![crate::store::ServerAgent {
             id: "build".to_owned(),
             name: "build".to_owned(),
@@ -13420,6 +13450,7 @@ mod tests {
 fn slash_palette_opens_accepts_and_restores_the_popup_state() {
     let mut app = App::new((80, 24));
     app.store.open_tab("s1", Some("S".to_owned()));
+    app.store.select_tab("s1");
     app.press("/");
     let composer = app.store.composer("s1");
     let visible = composer.autocomplete.visible;
@@ -13478,6 +13509,7 @@ fn slash_palette_opens_accepts_and_restores_the_popup_state() {
 fn slash_builtins_execute_and_unknown_words_submit() {
     let mut app = App::new((80, 24));
     app.store.open_tab("s1", Some("S".to_owned()));
+    app.store.select_tab("s1");
 
     // /help → the DialogHelp dialog (help.show → dialog.replace).
     for spec in ["/", "h", "e", "l", "p"] {
@@ -13600,6 +13632,7 @@ fn mouse_strip_hover_close_select_and_add() {
     // click its body mid-slot (G-468② — the select rides the strip
     // press arm, session-tabs.tsx:1505-1506).
     app.store.open_tab("s3", Some("Gamma".to_owned()));
+    app.store.select_tab("s3");
     app.mouse_event(&mouse(MouseEventKind::Moved, 40, 0));
     app.mouse_event(&mouse(MouseEventKind::Down(MouseButton::Left), 40, 0));
     app.mouse_event(&mouse(MouseEventKind::Up(MouseButton::Left), 40, 0));
@@ -13841,6 +13874,7 @@ fn mouse_release_toggles_the_thought_disclosure() {
         ],
     );
     app.store.open_tab("s1", Some("Thoughts".to_owned()));
+    app.store.select_tab("s1");
 
     // Collapsed: the header row, no body.
     let collapsed = app.frame_text();
@@ -13937,6 +13971,7 @@ fn thought_toggle_hit_zone_is_tight_to_the_glyphs() {
         ],
     );
     app.store.open_tab("s1", Some("Thoughts".to_owned()));
+    app.store.select_tab("s1");
     let _ = app.frame(); // the render pass records the hit rows
     let hit = app
         .store
@@ -14076,6 +14111,7 @@ fn user_message_release_opens_message_actions() {
         ],
     );
     app.store.open_tab("s1", Some("Edit me".to_owned()));
+    app.store.select_tab("s1");
     let _ = app.frame(); // the render pass records the hit rows
     let hits = app.store.transcript_hit_rows();
     let user_hit = hits
@@ -14382,6 +14418,7 @@ mod core_interaction_tests {
     fn escape_interrupts_a_running_turn_after_two_presses() {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
         let sink = std::rc::Rc::new(RecordingInterruptSink::default());
         app.store.set_interrupt_sink(sink.clone());
 
@@ -14425,6 +14462,7 @@ mod core_interaction_tests {
     fn boot_snapshot_rearms_a_running_session() {
         let app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
 
         // No snapshot, no event: idle (the documented pre-snapshot
         // behavior — running is never derived from message shape).
@@ -14444,6 +14482,7 @@ mod core_interaction_tests {
         // still lists it.
         let app2 = App::new((80, 24));
         app2.store.open_tab("s1", Some("S".to_owned()));
+        app2.store.select_tab("s1");
         app2.store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
             "session.execution.started",
             serde_json::json!({ "sessionID": "s1" }),
@@ -14474,6 +14513,7 @@ mod core_interaction_tests {
     fn running_turn_shows_the_interrupt_hint_in_the_footer() {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
         let idle = app.frame_text();
         assert!(!idle.contains("esc interrupt"), "idle hides the hint: {idle}");
         streaming_session(&app.store, "s1");
@@ -14493,6 +14533,7 @@ mod core_interaction_tests {
         use crate::components::message::rows::SPINNER_FRAMES;
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
         streaming_session(&app.store, "s1");
         // Frozen at 0: frame 0 everywhere, and no other phase leaks in.
         let frozen = app.frame_text();
@@ -14529,6 +14570,7 @@ mod core_interaction_tests {
     fn same_store_and_clock_render_byte_identical_frames() {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
         streaming_session(&app.store, "s1");
         app.store.push_dialog(crate::store::DialogKind::Debug);
         app.advance_clock(240);
@@ -14545,6 +14587,7 @@ mod core_interaction_tests {
     fn scroll_keys_move_the_transcript_and_restick_at_bottom() {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("Long".to_owned()));
+        app.store.select_tab("s1");
         // A transcript much taller than the viewport: 20 turns.
         let mut messages = Vec::new();
         for index in 0..20 {
@@ -14608,6 +14651,7 @@ mod core_interaction_tests {
     fn leader_return_queues_and_the_queue_drains_serially() {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
         let sink = std::rc::Rc::new(crate::components::composer::RecordingPromptSink::default());
         app.store.set_prompt_sink(sink.clone());
 
@@ -14681,6 +14725,7 @@ mod core_interaction_tests {
     fn empty_enter_steers_the_queued_head() {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
         let sink = std::rc::Rc::new(crate::components::composer::RecordingPromptSink::default());
         app.store.set_prompt_sink(sink.clone());
         let inbox = std::rc::Rc::new(crate::store::RecordingInboxSink::default());
@@ -14716,6 +14761,7 @@ mod core_interaction_tests {
     fn leader_q_opens_the_queue_manager_and_ctrl_d_deletes() {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
         app.store.queue_prompt("s1", "first queued", &[]);
         app.store.queue_prompt("s1", "second queued", &[]);
         app.press("ctrl+x");
@@ -14748,6 +14794,7 @@ mod core_interaction_tests {
     fn leader_chord_expires_on_store_clock_only() {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
         app.press("ctrl+x");
         // ONLY the store clock advances — the production shape (the
         // pump ticks `store.advance_clock(system_now_ms)`; the manual
@@ -14770,6 +14817,7 @@ mod core_interaction_tests {
     fn leader_q_with_live_queue_never_exits() {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
         app.store.queue_prompt("s1", "queued", &[]);
         app.press("ctrl+x");
         app.press("q");
@@ -14786,6 +14834,7 @@ mod core_interaction_tests {
     fn queued_prompt_undo_refills_the_composer() {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
         let inbox = std::rc::Rc::new(crate::store::RecordingInboxSink::default());
         app.store.set_inbox_sink(inbox.clone());
         app.store.queue_prompt("s1", "first queued", &[]);
@@ -14819,6 +14868,7 @@ mod core_interaction_tests {
     fn unqueueable_drafts_warn() {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
         streaming_session(&app.store, "s1");
         for key in ["/", "h", "e", "l", "p"] {
             app.press(key);
@@ -14836,6 +14886,7 @@ mod core_interaction_tests {
     fn shift_tab_cycles_agents_visibly() {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
         app.store.set_agents(crate::store::ListState::Loaded(vec![
             crate::store::ServerAgent {
                 id: "build".into(),
@@ -14880,6 +14931,7 @@ mod core_interaction_tests {
     fn f2_cycles_recent_models_visibly() {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
         app.store.set_models(
             crate::store::ListState::Loaded(vec![
                 crate::store::ServerModel {
@@ -14938,6 +14990,7 @@ mod core_interaction_tests {
     fn input_commands_edit_the_draft_with_selection_and_undo() {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
         for key in ["h", "e", "l", "l", "o", " ", "w", "o", "r", "l", "d"] {
             app.press(key);
         }
@@ -15001,6 +15054,7 @@ mod core_interaction_tests {
     fn error_toast_consumes_keys_until_dismissed() {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("S".to_owned()));
+        app.store.select_tab("s1");
 
         // The failure surface: an error toast (the "Session failed"
         // panel class).
@@ -15052,6 +15106,7 @@ mod core_interaction_tests {
     fn escape_closes_the_overlay_sidebar_back_to_the_composer() {
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("Bug hunt".to_owned()));
+        app.store.select_tab("s1");
 
         // <leader>b at 80 cols: the manual overlay — the sidebar shows
         // over the TRANSLUCID scrim (rgba(0,0,0,70) — lane TAIL's
@@ -15087,6 +15142,7 @@ mod core_interaction_tests {
     fn escape_does_not_close_the_wide_docked_sidebar() {
         let mut app = App::new((160, 24));
         app.store.open_tab("s1", Some("Bug hunt".to_owned()));
+        app.store.select_tab("s1");
         // 160 cols: auto mode already docks the pane.
         assert!(app.store.sidebar_shown("s1", 160), "the wide pane docks");
         app.press("escape");
@@ -15127,6 +15183,7 @@ mod core_interaction_tests {
             ],
         );
         app.store.open_tab("s1", Some("Thoughts".to_owned()));
+        app.store.select_tab("s1");
         // The footer location label (its hit rect's source): v2's
         // `{cwd}:{branch}` — empty label ⇒ no rect.
         app.store.set_footer_location("/w:main:feature".to_owned());
@@ -15228,6 +15285,7 @@ mod core_interaction_tests {
         use crate::input_term::MouseEventKind;
         let mut app = App::new((80, 24));
         app.store.open_tab("s1", Some("Long".to_owned()));
+        app.store.select_tab("s1");
         let mut messages = Vec::new();
         for index in 0..20 {
             messages.push(Message::User {
@@ -15711,6 +15769,7 @@ mod core_interaction_tests {
             ],
         );
         app.store.open_tab("s1", Some("Explore".to_owned()));
+        app.store.select_tab("s1");
         let frame = app.frame_text();
         assert!(frame.contains("Explored"), "the exploration header renders: {frame}");
         let hit = app
@@ -15917,6 +15976,7 @@ mod core_interaction_tests {
 fn history_loading_paints_the_jump_slot_label() {
     let app = App::new((120, 24));
     app.store.open_tab("s1", Some("S".to_owned()));
+    app.store.select_tab("s1");
     app.store.set_history_loading("s1", true);
     let frame = app.frame_text();
     assert!(
@@ -16161,6 +16221,7 @@ fn subagent_row_navigates_to_the_child_session() {
         ],
     );
     app.store.open_tab("s1", Some("Parent".to_owned()));
+    app.store.select_tab("s1");
     let _ = app.frame();
     let hit = app
         .store
@@ -16326,6 +16387,7 @@ fn tool_row_arms_follow_the_v2_table() {
         ],
     );
     app.store.open_tab("s1", Some("Tools".to_owned()));
+    app.store.select_tab("s1");
     let _ = app.frame();
     let hits = app.store.transcript_hit_rows();
     assert!(
@@ -16457,6 +16519,7 @@ fn markdown_link_click_opens_the_url() {
         ],
     );
     app.store.open_tab("s1", Some("Links".to_owned()));
+    app.store.select_tab("s1");
     let opened = Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
     let recorder = Rc::clone(&opened);
     app.store.set_open_url_sink(Some(Rc::new(move |url: String| {
@@ -16496,6 +16559,7 @@ fn toast_pointer_surface_pauses_and_activates() {
     use crate::input_term::{MouseButton, MouseEventKind};
     let mut app = App::new((80, 24));
     app.store.open_tab("s1", Some("T".to_owned()));
+    app.store.select_tab("s1");
     app.store.toast_show(
         crate::components::toast::ToastOptions {
             title: Some("MCP server failed: broken".to_owned()),

@@ -1175,6 +1175,192 @@ function makeCtx(pluginId, options) {
     // for option-less plugins).
     options: options && typeof options === "object" && !Array.isArray(options) ? options : {},
 
+    // -- G-530: ctx.data (api.tsx:160 `data: host.data` →
+    //    context.ts:63-140's Data) --------------------------------------
+    // The ref's Data is a live read cache over the TUI data layer;
+    // the port's bounded projection is the host-pushed `tui.data`
+    // snapshot (the tui.tabs/tui.model precedent — reactive reads
+    // become change-gated pushes). session.list/get/root/family/
+    // status/pending.list compute over the pushed rows synchronously
+    // (the v21d fixture's `ctx.data.session.list()` shape).
+    // Bounded-projection limits, documented per member:
+    // `cost`/`message`/`permission`/`form` and `project`/`shell` are
+    // not held at the TUI host boundary (no store-owned cache for
+    // them reaches the guest — sync/invalidate are view-push no-ops,
+    // the list reads return undefined/[]); the
+    // command/integration/mcp collections answer empty arrays for the
+    // same reason. `on`/`listen` ride the SAME event subscription
+    // seam as ctx.event (hostRequest "event.subscribe" with the type
+    // filter).
+    data: {
+      on: (type, handler) => {
+        const types = typeof type === "string" ? [type] : Array.isArray(type) ? type : null;
+        const entry = { types, handler: typeof handler === "function" ? handler : null, queue: null };
+        subscriptions.push(entry);
+        hostRequest("event.subscribe", { pluginId, types }).catch((error) => {
+          notify("log", { pluginId, level: "error", message: `event.subscribe failed: ${errText(error)}` });
+        });
+        return () => {
+          const at = subscriptions.indexOf(entry);
+          if (at >= 0) subscriptions.splice(at, 1);
+        };
+      },
+      listen: (handler) => {
+        if (typeof handler !== "function") return () => {};
+        const entry = { types: null, handler, queue: null };
+        subscriptions.push(entry);
+        hostRequest("event.subscribe", { pluginId, types: null }).catch((error) => {
+          notify("log", { pluginId, level: "error", message: `event.subscribe failed: ${errText(error)}` });
+        });
+        return () => {
+          const at = subscriptions.indexOf(entry);
+          if (at >= 0) subscriptions.splice(at, 1);
+        };
+      },
+      session: {
+        list() {
+          return tuiDataView.sessions.map((row) => ({ ...row }));
+        },
+        get(sessionID) {
+          const id = String(sessionID ?? "");
+          const row = tuiDataView.sessions.find((item) => item && item.id === id);
+          return row ? { ...row } : undefined;
+        },
+        root(sessionID) {
+          // `root()` walks parentID links to the topmost KNOWN
+          // ancestor (the ref's data-layer walk): an unknown id is
+          // its own root.
+          const id = String(sessionID ?? "");
+          let current = id;
+          for (let depth = 0; depth < 8; depth++) {
+            const row = tuiDataView.sessions.find((item) => item && item.id === current);
+            const parent = row && typeof row.parentID === "string" ? row.parentID : undefined;
+            if (!parent || parent === current) return current;
+            current = parent;
+          }
+          return current;
+        },
+        family(sessionID) {
+          // The family: the root + every session whose parent chain
+          // passes through the argument (the ref's
+          // `data.session.family`).
+          const root = this.root(sessionID);
+          const members = [root];
+          for (const row of tuiDataView.sessions) {
+            if (!row || row.id === root) continue;
+            let current = row.id;
+            for (let depth = 0; depth < 8 && current; depth++) {
+              const parent =
+                tuiDataView.sessions.find((item) => item && item.id === current)?.parentID;
+              if (typeof parent !== "string" || parent === current) break;
+              if (parent === root) {
+                members.push(row.id);
+                break;
+              }
+              current = parent;
+            }
+          }
+          return members;
+        },
+        cost() {
+          return 0;
+        },
+        status(sessionID) {
+          const id = String(sessionID ?? "");
+          return tuiDataView.status && tuiDataView.status[id] === "running" ? "running" : "idle";
+        },
+        pending: {
+          list(sessionID) {
+            const id = String(sessionID ?? "");
+            const rows = tuiDataView.pending && tuiDataView.pending[id];
+            return Array.isArray(rows) ? rows.map((row) => ({ ...row })) : [];
+          },
+          async sync() {},
+          invalidate() {},
+        },
+        sync: async () => {},
+        invalidate() {},
+        message: {
+          list() {
+            return undefined;
+          },
+          get() {
+            return undefined;
+          },
+          async sync() {},
+          invalidate() {},
+        },
+        permission: {
+          list() {
+            return undefined;
+          },
+          async sync() {},
+          invalidate() {},
+        },
+        form: {
+          list() {
+            return undefined;
+          },
+          async sync() {},
+          invalidate() {},
+          async reply() {},
+          async cancel() {},
+        },
+      },
+      project: {
+        list() {
+          return [];
+        },
+        get() {
+          return undefined;
+        },
+        async sync() {},
+        invalidate() {},
+        permission: {
+          list() {
+            return undefined;
+          },
+          async sync() {},
+          invalidate() {},
+        },
+      },
+      shell: {
+        list() {
+          return [];
+        },
+        get() {
+          return undefined;
+        },
+        async sync() {},
+        invalidate() {},
+      },
+      location: {
+        default() {
+          return { directory: domainBase.directory, project: { id: domainBase.project.id } };
+        },
+        async sync() {},
+        invalidate() {},
+        vcs: {
+          info() {
+            return undefined;
+          },
+          async sync() {},
+          invalidate() {},
+        },
+        agent: tuiDataCollection("agents"),
+        command: tuiDataCollection("commands"),
+        integration: tuiDataCollection("integrations"),
+        mcp: {
+          server: tuiDataCollection("mcpServers"),
+          resource: tuiDataCollection("mcpResources"),
+        },
+        model: tuiDataCollection("models"),
+        provider: tuiDataCollection("providers"),
+        reference: tuiDataCollection("references"),
+        skill: tuiDataCollection("skills"),
+      },
+    },
+
     // -- agent (REQUIRED by the flagship: setup bails without
     //    agent.transform) ------------------------------------------------
     agent: {
@@ -2304,14 +2490,27 @@ function makeCtx(pluginId, options) {
         list() {
           return tuiTabsView.tabs.map((tab) => ({ ...tab }));
         },
+        // G-531 — `open` (api.tsx:257-261 → session-tabs.tsx:397-405):
+        // the ref ROOTS the id first (`const session = root(
+        // sessionID)`) and the open is APPEND-ONLY — no navigation
+        // (the ref's early-return when the tab exists; the TUI-side
+        // op also roots, double-safe like move).
         open(sessionID) {
           if (!tuiTabsView.enabled) return false;
-          notify("tui.tabs.op", { pluginId, op: "open", sessionID: String(sessionID ?? "") });
+          const raw = String(sessionID ?? "");
+          const target = tuiTabsView.roots[raw] ?? raw;
+          notify("tui.tabs.op", { pluginId, op: "open", sessionID: target });
           return true;
         },
+        // G-531 — `focus` (api.tsx:262-266 → session-tabs.tsx:393-396
+        // `select`): the ref navigates to the ROOT
+        // (`route.navigate({type: "session", sessionID: root(
+        // sessionID)})`) — a child id focuses its family ROOT's tab.
         focus(sessionID) {
           if (!tuiTabsView.enabled) return false;
-          notify("tui.tabs.op", { pluginId, op: "focus", sessionID: String(sessionID ?? "") });
+          const raw = String(sessionID ?? "");
+          const target = tuiTabsView.roots[raw] ?? raw;
+          notify("tui.tabs.op", { pluginId, op: "focus", sessionID: target });
           return true;
         },
         // G-509 — `move(sessionID, index)` (api.tsx:267-273): the
@@ -4084,6 +4283,46 @@ let tuiPanel = null;
  *  `host.data.session.root` (api.tsx:269-271). */
 let tuiTabsView = { enabled: false, tabs: [], roots: {} };
 
+/** G-530: the host-pushed data view (`tui.data`) — `{sessions,
+ *  status, agents, models, providers, skills, references}`; the
+ *  `ctx.data` member reads it (the ref's live `host.data` cache as
+ *  a change-gated push). */
+let tuiDataView = {
+  sessions: [],
+  status: {},
+  pending: {},
+  agents: [],
+  models: [],
+  providers: [],
+  skills: [],
+  references: [],
+  commands: [],
+  integrations: [],
+  mcpServers: [],
+  mcpResources: [],
+};
+
+/** G-530 — one `LocationCollection` face over the pushed data view
+ *  (`list`/`get` synchronous, `sync`/`invalidate` view-push no-ops —
+ *  the bounded projection: the TUI pushes the rows, an explicit
+ *  guest sync has no seam). */
+function tuiDataCollection(key) {
+  return {
+    list() {
+      const rows = tuiDataView[key];
+      return Array.isArray(rows) ? rows.map((row) => ({ ...row })) : [];
+    },
+    get(id) {
+      const rows = tuiDataView[key];
+      const want = String(id ?? "");
+      const row = Array.isArray(rows) ? rows.find((item) => item && item.id === want) : undefined;
+      return row ? { ...row } : undefined;
+    },
+    async sync() {},
+    invalidate() {},
+  };
+}
+
 /** G-475: the host-pushed model-selection view (`tui.model`) —
  *  `{current, variants}`; `ctx.ui.model.current()/variant.list()`
  *  read it. */
@@ -5067,6 +5306,26 @@ async function handleLine(line) {
             }
           : null,
       variants: Array.isArray(view.variants) ? view.variants.filter((v) => typeof v === "string") : [],
+    };
+    return;
+  }
+  if (message.method === "tui.data") {
+    // G-530: host-pushed data view — the `ctx.data` member reads it
+    // (the ref's live `host.data` cache as a change-gated push).
+    const view = message.params ?? {};
+    tuiDataView = {
+      sessions: Array.isArray(view.sessions) ? view.sessions : [],
+      status: view.status && typeof view.status === "object" && !Array.isArray(view.status) ? view.status : {},
+      pending: view.pending && typeof view.pending === "object" && !Array.isArray(view.pending) ? view.pending : {},
+      agents: Array.isArray(view.agents) ? view.agents : [],
+      models: Array.isArray(view.models) ? view.models : [],
+      providers: Array.isArray(view.providers) ? view.providers : [],
+      skills: Array.isArray(view.skills) ? view.skills : [],
+      references: Array.isArray(view.references) ? view.references : [],
+      commands: Array.isArray(view.commands) ? view.commands : [],
+      integrations: Array.isArray(view.integrations) ? view.integrations : [],
+      mcpServers: Array.isArray(view.mcpServers) ? view.mcpServers : [],
+      mcpResources: Array.isArray(view.mcpResources) ? view.mcpResources : [],
     };
     return;
   }

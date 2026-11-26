@@ -150,20 +150,14 @@ pub fn snap_patch(meta: &Value) -> ToolSnapshot {
 #[must_use]
 pub fn snap_task(input: &Value) -> ToolSnapshot {
     let agent = str_field(input, "agent");
-    let kind = title_case(if agent.is_empty() { "general" } else { &agent });
+    // G-528(b) — `Locale.titlecase` (tool.ts:602): the shared \b\w
+    // form (message::model), not a first-char local.
+    let kind =
+        crate::components::message::titlecase(if agent.is_empty() { "general" } else { &agent });
     let description = str_field(input, "description");
     ToolSnapshot::Task {
         title: format!("# {kind} Subagent"),
         rows: if description.is_empty() { Vec::new() } else { vec![description] },
-    }
-}
-
-/// `Locale.titlecase` (the mono subset: first letter upper).
-fn title_case(value: &str) -> String {
-    let mut chars = value.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
     }
 }
 

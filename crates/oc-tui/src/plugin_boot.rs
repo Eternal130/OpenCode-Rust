@@ -154,6 +154,9 @@ pub struct TuiPluginRuntime {
     /// G-475 — the last model-selection view pushed (the JSON
     /// fingerprint; a change re-notifies `tui.model`).
     pushed_model: Rc<RefCell<Option<String>>>,
+    /// G-530 — the last data view pushed (the JSON fingerprint; a
+    /// change re-notifies `tui.data`).
+    pushed_data: Rc<RefCell<Option<String>>>,
 
     /// The MCP server names already pushed into the server's real
     /// registry (PLUG-D33: `registrations.mcps` → `experimental.
@@ -329,6 +332,7 @@ impl TuiPluginRuntime {
             pushed_panel: Rc::new(RefCell::new(None)),
             pushed_tabs: Rc::new(RefCell::new(None)),
             pushed_model: Rc::new(RefCell::new(None)),
+            pushed_data: Rc::new(RefCell::new(None)),
             pushed_mcps: Rc::new(RefCell::new(BTreeSet::new())),
             mcp_rows_rx: Rc::new(RefCell::new(None)),
             owned_updates: Rc::new(RefCell::new(None)),
@@ -1087,6 +1091,24 @@ impl TuiPluginRuntime {
                 if *self.pushed_model.borrow() != Some(fingerprint.clone()) {
                     *self.pushed_model.borrow_mut() = Some(fingerprint);
                     self.booted.host.notify_tui_model(view);
+                }
+            }
+            // G-530 — the data view (`ctx.data`'s source — the ref's
+            // `host.data` live read cache, context.ts:63-140's Data,
+            // api.tsx:160 `data: host.data`): the session sub-member
+            // (list/get/root/family/status over the live session
+            // index) + the collections the TUI data layer holds
+            // (agent/model/provider/reference/skill — the server
+            // lists). Bounded projection: command/integration/mcp
+            // rows are not held at the TUI boundary (no store-owned
+            // list) — the guest answers empty arrays there (the
+            // documented limit rides the guest member's comment).
+            {
+                let view = data_view(store);
+                let fingerprint = view.to_string();
+                if *self.pushed_data.borrow() != Some(fingerprint.clone()) {
+                    *self.pushed_data.borrow_mut() = Some(fingerprint);
+                    self.booted.host.notify_tui_data(view);
                 }
             }
             // SA-F5: the sidebar's row budget — the guest flattener
@@ -2186,6 +2208,163 @@ fn model_view(store: &Store) -> Value {
     serde_json::json!({
         "current": current,
         "variants": store.current_model_variants(),
+    })
+}
+
+/// G-530 — the `tui.data` view: the ref's `host.data` live read cache
+/// (context.ts:63-140's Data interface, api.tsx:160 `data: host.data`)
+/// as a host-pushed snapshot. Session sub-member: `sessions` (the
+/// live index rows — `list`/`get`/`root`/`family` compute over them
+/// guest-side) + `status` (the running map, `data.session.status`).
+/// Collections: the TUI data layer's server lists (agent/model/
+/// provider/reference/skill). Bounded projection limits (documented
+/// at the guest member): `command`/`integration`/`mcp` rows are not
+/// held at the TUI boundary — the guest answers empty arrays; the
+/// pending/message/permission/form sub-members are not pushed (the
+/// store's per-session caches are not exposed at this boundary).
+/// G-530 — the sessions/status/pending view slice (context.ts:63-140
+/// `data.session`): the projected rows plus the running-status map and
+/// the pending sub-member (the TUI's inbox mirror, TUI-TD07).
+fn session_view(store: &Store) -> (Value, Value, Value) {
+    let sessions: Vec<Value> = store
+        .session_rows()
+        .into_iter()
+        .map(|(id, info, running)| {
+            let mut row = serde_json::json!({ "id": id });
+            if let Some(title) = info.title {
+                row["title"] = serde_json::Value::String(title);
+            }
+            if let Some(parent) = info.parent_id {
+                row["parentID"] = serde_json::Value::String(parent);
+            }
+            if let Some(agent) = info.agent {
+                row["agent"] = serde_json::Value::String(agent);
+            }
+            if let Some(created) = info.created {
+                row["timeCreated"] = serde_json::json!({ "created": created });
+            }
+            let _ = running;
+            row
+        })
+        .collect();
+    let status: serde_json::Map<String, Value> = store
+        .session_rows()
+        .into_iter()
+        .filter(|(_, _, running)| *running)
+        .map(|(id, _, _)| (id, serde_json::Value::String("running".to_owned())))
+        .collect();
+    // G-530 — the pending sub-member (`data.session.pending.list`):
+    // the TUI's inbox mirror (TUI-TD07) projected per session.
+    let pending: serde_json::Map<String, Value> = store
+        .session_rows()
+        .into_iter()
+        .map(|(id, _, _)| {
+            let rows: Vec<Value> = store
+                .pending_inbox(&id)
+                .into_iter()
+                .map(|item| {
+                    let mut row = serde_json::json!({ "id": item.id, "text": item.text });
+                    if let Some(delivery) = item.delivery {
+                        row["delivery"] = serde_json::Value::String(delivery);
+                    }
+                    row
+                })
+                .collect();
+            (id, Value::Array(rows))
+        })
+        .collect();
+    (Value::Array(sessions), Value::Object(status), Value::Object(pending))
+}
+
+/// G-530 — the inventory view slice (`data.agent/model/provider/
+/// skill/reference`): the server lists' bounded projections.
+fn inventory_view(store: &Store) -> (Value, Value, Value, Value, Value) {
+    let lists = store.server_lists();
+    let agents: Vec<Value> = lists
+        .agents
+        .rows()
+        .map(|rows| {
+            rows.iter()
+                .map(|agent| {
+                    serde_json::json!({
+                        "id": agent.id,
+                        "name": agent.name,
+                        "description": agent.description,
+                        "mode": agent.mode,
+                        "hidden": agent.hidden,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let models: Vec<Value> = lists
+        .models
+        .rows()
+        .map(|rows| {
+            rows.iter()
+                .map(|model| {
+                    serde_json::json!({
+                        "id": model.id,
+                        "providerID": model.provider_id,
+                        "name": model.name,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let providers: Vec<Value> = lists
+        .providers
+        .iter()
+        .map(|provider| serde_json::json!({ "id": provider.id, "name": provider.name }))
+        .collect();
+    let skills: Vec<Value> = lists
+        .skills
+        .rows()
+        .map(|rows| {
+            rows.iter()
+                .map(|skill| {
+                    serde_json::json!({
+                        "id": skill.id,
+                        "name": skill.name,
+                        "description": skill.description,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let references: Vec<Value> = lists
+        .references
+        .iter()
+        .map(|reference| {
+            serde_json::json!({
+                "id": reference.name,
+                "name": reference.name,
+                "detail": reference.detail,
+                "hidden": reference.hidden,
+            })
+        })
+        .collect();
+    (
+        Value::Array(agents),
+        Value::Array(models),
+        Value::Array(providers),
+        Value::Array(skills),
+        Value::Array(references),
+    )
+}
+
+fn data_view(store: &Store) -> Value {
+    let (sessions, status, pending) = session_view(store);
+    let (agents, models, providers, skills, references) = inventory_view(store);
+    serde_json::json!({
+        "sessions": sessions,
+        "status": status,
+        "pending": pending,
+        "agents": agents,
+        "models": models,
+        "providers": providers,
+        "skills": skills,
+        "references": references,
     })
 }
 

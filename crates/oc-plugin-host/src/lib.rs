@@ -1056,6 +1056,17 @@ impl PluginHost {
         facade.shared.notify_guest("tui.model", view);
     }
 
+    /// G-530 — push the live data view to the guest (the `tui.data`
+    /// notification): `{sessions: [...], status: {...}, agents: [...],
+    /// providers/models/skills/references: [...]}` — the ref's
+    /// `host.data` live read cache (context.ts:63-140's Data) as a
+    /// change-gated host-pushed snapshot (the tui.tabs/tui.model
+    /// precedent — the ref's reactive reads become pushes here).
+    pub fn notify_tui_data(&self, view: serde_json::Value) {
+        let Some(facade) = &self.facade else { return };
+        facade.shared.notify_guest("tui.data", view);
+    }
+
     /// Push the sidebar's layout budget (`tui.layout` — SA-F5: the
     /// guest flattener's row-layout width; the native painter's cell
     /// span for plugin sections).

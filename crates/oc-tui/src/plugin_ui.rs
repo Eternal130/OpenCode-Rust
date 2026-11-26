@@ -326,15 +326,24 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
                 return;
             }
             match op {
+                // G-531 — `open` (session-tabs.tsx:397-405): ROOT the id
+                // (double-safe with the guest-side rooting) and APPEND
+                // the root's tab — NO navigation (the ref's open is
+                // append-only; the early-return when the tab exists is
+                // open_session_tab's in-place update).
                 oc_plugin_host::TabsOpKind::Open => {
                     if let Some(session) = session_id {
-                        store.open_tab(session, None);
+                        let root = store.session_root(session);
+                        store.open_tab(&root, None);
                     }
                 }
+                // G-531 — `focus` (session-tabs.tsx:393-396 `select`):
+                // ROOT the id and NAVIGATE to the root — the route
+                // effect opens the root's tab when it is not open.
                 oc_plugin_host::TabsOpKind::Focus => {
                     if let Some(session) = session_id {
-                        store.open_tab(session, None);
-                        store.select_tab(session);
+                        let root = store.session_root(session);
+                        store.select_tab(&root);
                     }
                 }
                 oc_plugin_host::TabsOpKind::Move => {

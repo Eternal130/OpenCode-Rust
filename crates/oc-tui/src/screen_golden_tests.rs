@@ -438,6 +438,7 @@ fn session_error_part_matches_text_grid_and_ansi() {
     let store = Store::new(Runtime::new());
     store.set_theme(theme());
     store.open_tab("ses_err", Some("Error session".to_owned()));
+    store.select_tab("ses_err");
     store.set_messages(
         "ses_err",
         vec![
@@ -481,6 +482,7 @@ fn session_slash_palette_matches_text_grid_and_ansi() {
     let store = Store::new(Runtime::new());
     store.set_theme(theme());
     store.open_tab("ses_pal", Some("Palette session".to_owned()));
+    store.select_tab("ses_pal");
     // Agents loaded → the rail resolves to the build agent's blue.
     store.set_agents(crate::store::ListState::Loaded(vec![crate::store::ServerAgent {
         id: "build".into(),
@@ -518,6 +520,7 @@ fn session_sidebar_live_matches_text_grid_and_ansi() {
         let store = Store::new(Runtime::new());
         store.set_theme(theme());
         store.open_tab("ses_side", Some("Sidebar session".to_owned()));
+        store.select_tab("ses_side");
         store.set_messages(
             "ses_side",
             vec![

@@ -529,13 +529,6 @@ impl DialogEntry {
         self.prompt_cursor.unwrap_or(self.value.chars().count()).min(self.value.chars().count())
     }
 
-    /// G-527 — move the cursor to `target` (char index, clamped into
-    /// `[0, len]` — `moveCursorLeft/Right`'s bounds).
-    pub fn prompt_move_cursor(&mut self, target: usize) {
-        let len = self.value.chars().count();
-        self.prompt_cursor = Some(target.min(len));
-    }
-
     /// G-527 — insert one char AT the cursor (the ref's `insertText`
     /// at `cursorOffset`, index.bun.js:9126-9134): the cursor advances
     /// past it.
@@ -558,12 +551,79 @@ impl DialogEntry {
         self.prompt_cursor = Some(cursor - 1);
     }
 
-    /// G-527 — the caret's CELL column (display width of the value's
-    /// prefix before the cursor).
+    /// G-527 — the caret's CELL column. G-532: the value can carry
+    /// embedded newlines (the ref's `TextareaRenderable` newline arms —
+    /// the buffer is 2D); the caret's column is WITHIN-LINE (chars
+    /// since the last `\n` before the caret, display width of that
+    /// prefix — the ref's `cursor.col`, edit-buffer.zig's within-line
+    /// coordinate; the height-1 viewport shows the caret's line and
+    /// bands horizontally against this column).
     fn prompt_cursor_col(&self) -> usize {
         let cursor = self.prompt_cursor();
         let byte = char_boundary(&self.value, cursor);
-        crate::wrap::display_width(&self.value[..byte])
+        let line_start = self.value[..byte].rfind('\n').map_or(0, |pos| pos + 1);
+        crate::wrap::display_width(&self.value[line_start..byte])
+    }
+
+    /// G-532 — the caret's LINE index (the `\n` count before the
+    /// caret). The height-1 textarea's vertical viewport always
+    /// equals the caret's line (`ensureCursorVisible` with height 1:
+    /// `margin_lines = 0` → any divergence snaps `vp.y` to the caret
+    /// line, editor-view.zig:215-237) — the render shows THIS line.
+    #[must_use]
+    pub fn prompt_caret_line(&self) -> usize {
+        let cursor = self.prompt_cursor();
+        let byte = char_boundary(&self.value, cursor);
+        self.value[..byte].matches('\n').count()
+    }
+
+    /// G-532 — the caret's line and the cursor's CHAR position within
+    /// it (the render's prompt row = this line, `prompt_input_chunks`
+    /// slices it with the horizontal viewport).
+    #[must_use]
+    pub fn prompt_visible_line(&self) -> (String, usize) {
+        let cursor = self.prompt_cursor();
+        let byte = char_boundary(&self.value, cursor);
+        let before = &self.value[..byte];
+        let line_start = before.rfind('\n').map_or(0, |pos| pos + 1);
+        let line_end = self.value[byte..].find('\n').map_or(self.value.len(), |off| byte + off);
+        let line = self.value[line_start..line_end].to_owned();
+        let cursor_in_line = self.value[line_start..byte].chars().count();
+        (line, cursor_in_line)
+    }
+
+    /// G-532 — apply one engine edit command (the composer's
+    /// `EditCore` — opentui-core's full binding-table semantics:
+    /// word boundaries, line deletes, newline insertions, char moves
+    /// across line boundaries). The value/cursor round-trip through
+    /// the real buffer so the dialog prompt shares the composer's
+    /// exact edit model (input.rs:748-819's table — the dialog face
+    /// was the G-532 subset).
+    pub fn prompt_apply_edit(&mut self, command: oc_tui_core::text_edit::EditCommand) {
+        use oc_tui_core::text_edit::EditCore;
+        let mut edit = EditCore::fresh();
+        edit.set_text(&self.value);
+        edit.set_caret(self.prompt_cursor());
+        let _ = edit.apply_tracked(command);
+        self.value = edit.text();
+        self.prompt_cursor = Some(edit.caret());
+    }
+
+    /// G-533 — insert pasted text AT the caret (the ref's
+    /// `handlePaste` → `insertText`, index.bun.js:8928-8930): the
+    /// caller owns the newline policy (the `TextareaRenderable` faces
+    /// keep them, the `InputRenderable` face strips them first).
+    pub fn prompt_insert_text(&mut self, text: &str) {
+        use oc_tui_core::text_edit::EditCore;
+        if text.is_empty() {
+            return;
+        }
+        let mut edit = EditCore::fresh();
+        edit.set_text(&self.value);
+        edit.set_caret(self.prompt_cursor());
+        let _ = edit.insert_tracked(text);
+        self.value = edit.text();
+        self.prompt_cursor = Some(edit.caret());
     }
 
     /// G-527 — materialize the viewport BEFORE the first edit (the
@@ -7571,11 +7631,15 @@ impl Store {
 
     // -- tabs ---------------------------------------------------------------
 
-    /// Open (or update) a tab and navigate to it
-    /// (`context/session-tabs.tsx` `open()` + the route effect).
-    /// With tabs disabled the navigation still runs (v2's `open()` is
-    /// a no-op but callers navigate separately; sessions stay
-    /// reachable with no strip).
+    /// Open (or update) a tab — APPEND-ONLY (G-531: the ref's `open()`,
+    /// context/session-tabs.tsx:397-405): roots nothing (the callers
+    /// own their ids), navigates NOWHERE, records NO history (the
+    /// route effect inside [`Self::navigate`] owns both — navigation
+    /// ADDS the tab when it is not open, `session-tabs.tsx:180-203`).
+    /// Callers that want the session visible navigate explicitly (the
+    /// fork/home-submit seams do; the plugin `open` never does).
+    /// With tabs disabled the append is skipped (v2's `open()` checks
+    /// `enabled()` first).
     pub fn open_tab(&self, session_id: &str, title: Option<String>) {
         if self.tabs_enabled.get() {
             self.tabs.update(|state| {
@@ -7583,10 +7647,8 @@ impl Store {
                     std::mem::take(&mut state.tabs),
                     SessionTab { session_id: session_id.to_owned(), title },
                 );
-                state.history = model::record_tab_history(&state.history, session_id);
             });
         }
-        self.navigate(Route::session(session_id.to_owned()));
     }
 
     /// Restore the persisted tab list on boot (v2's
@@ -11687,6 +11749,52 @@ impl Store {
         });
     }
 
+    /// G-533 — route a terminal paste into the OPEN prompt dialog
+    /// when one holds focus: the ref's paste dispatch lands on the
+    /// FOCUSED renderable (`handlePaste` → `insertText`,
+    /// index.bun.js:8928-8930 — ANSI stripped; newlines NOT stripped
+    /// for the `TextareaRenderable` prompt faces, only the
+    /// `InputRenderable` `WorktreeName` strips them, :9116). `false` when
+    /// no prompt-kind dialog is open (the caller falls back to the
+    /// composer).
+    pub fn paste_into_prompt_dialog(&self, text: &str) -> bool {
+        let Some(top) = self.top_dialog() else { return false };
+        let prompt_kind = match &top.kind {
+            DialogKind::SessionRename { .. }
+            | DialogKind::IntegrationRename { .. }
+            | DialogKind::WorktreeName
+            | DialogKind::IntegrationKey { .. }
+            | DialogKind::IntegrationCode { .. }
+            | DialogKind::BtwPrompt
+            | DialogKind::PluginInstall
+            | DialogKind::Prompt { .. } => true,
+            DialogKind::IntegrationForm { .. } => {
+                self.integration_form().is_some_and(|state| state.prompt_style())
+            }
+            _ => false,
+        };
+        if !prompt_kind {
+            return false;
+        }
+        let sanitized = crate::attention::strip_ansi(text);
+        let sanitized = if matches!(top.kind, DialogKind::WorktreeName) {
+            sanitized.replace(['\n', '\r'], "")
+        } else {
+            sanitized
+        };
+        let prompt_width = top
+            .size
+            .width()
+            .min(usize::from(self.terminal_size().0).saturating_sub(2))
+            .saturating_sub(4);
+        self.update_dialog(|entry| {
+            entry.prompt_materialize_viewport(prompt_width);
+            entry.prompt_insert_text(&sanitized);
+            entry.prompt_band_viewport(prompt_width);
+        });
+        true
+    }
+
     /// The top dialog entry, if any.
     #[must_use]
     pub fn top_dialog(&self) -> Option<DialogEntry> {
@@ -13356,6 +13464,22 @@ impl Store {
     #[must_use]
     pub fn session_is_subagent(&self, session_id: &str) -> bool {
         self.session_index.borrow().is_subagent(session_id)
+    }
+
+    /// G-530 — the `tui.data` view's session rows (the ref's live
+    /// `data.session` cache projection): every known session (the
+    /// live index, id-sorted) with its `SessionInfo` fields + the
+    /// running flag (`data.session.status`).
+    #[must_use]
+    pub fn session_rows(&self) -> Vec<(String, crate::notifications_plugin::SessionInfo, bool)> {
+        let index = self.session_index.borrow();
+        index
+            .ids()
+            .into_iter()
+            .map(|id| {
+                (id.to_owned(), index.get(id).cloned().unwrap_or_default(), index.is_running(id))
+            })
+            .collect()
     }
 
     /// The family root of the routed session (`session-tabs.tsx`'s
@@ -16145,10 +16269,39 @@ fn picker_family_walk(
                 + if last { "└─ " } else { "├─ " }
         };
         let info = index.get(id).cloned().unwrap_or_default();
+        // G-528(d) — the subagents-tab entry (subagents-tab.tsx:44-58):
+        // the `@(\w+) subagent` title match decides BOTH the agent
+        // label (the match's word titlecased — only when the session
+        // record knows no agent) and the title (the match STRIPPED,
+        // trimmed, falling back to the full title when the strip
+        // empties it). `JS \w` = `[A-Za-z0-9_]`; the match is
+        // case-sensitive (no `i` flag) and replaces the FIRST
+        // occurrence only.
+        let title = info.title.clone().unwrap_or_else(|| picker_fallback_title(&info));
+        let agent_match = picker_agent_match(&title);
+        let agent = match info.agent.as_deref().filter(|agent| !agent.is_empty()) {
+            Some(agent) => crate::components::message::titlecase(agent),
+            None => match agent_match.as_deref() {
+                Some(word) => crate::components::message::titlecase(word),
+                None => "Subagent".to_owned(),
+            },
+        };
+        let title = match agent_match.as_deref() {
+            Some(word) => {
+                let stripped =
+                    title.replacen(&format!("@{word} subagent"), "", 1).trim().to_owned();
+                if stripped.is_empty() {
+                    title
+                } else {
+                    stripped
+                }
+            }
+            None => title,
+        };
         out.push(PickerEntry {
             session_id: (*id).to_owned(),
-            agent: info.agent.as_deref().map_or_else(|| "Subagent".to_owned(), picker_titlecase),
-            title: info.title.clone().unwrap_or_else(|| picker_fallback_title(&info)),
+            agent,
+            title,
             running: index.is_running(id),
             current: *id == route,
             prefix,
@@ -16160,13 +16313,27 @@ fn picker_family_walk(
     }
 }
 
-/// `Locale.titlecase` for the entry's agent label.
-fn picker_titlecase(value: &str) -> String {
-    let mut chars = value.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
+/// G-528(d) — the `@(\w+) subagent` title match
+/// (subagents-tab.tsx:46 `title.match(/@(\w+) subagent/)`): the
+/// captured word (ASCII `[A-Za-z0-9_]+` — JS `\w`), case-sensitive.
+/// `None` when the title carries no such occurrence.
+fn picker_agent_match(title: &str) -> Option<String> {
+    let bytes = title.as_bytes();
+    let mut at = 0;
+    while let Some(found) = title[at..].find('@') {
+        let start = at + found;
+        // The capture: the maximal ASCII word run directly after '@'.
+        let mut end = start + 1;
+        while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+            end += 1;
+        }
+        // The literal ` subagent` (case-sensitive) must follow the word.
+        if end > start + 1 && title[end..].starts_with(" subagent") {
+            return Some(title[start + 1..end].to_owned());
+        }
+        at = start + 1;
     }
+    None
 }
 
 /// `withTimestampedFallback` (session-title-fallback.ts:18-21): the
@@ -16816,6 +16983,7 @@ mod tests {
         let store = Store::new(Runtime::new());
         for id in ids {
             store.open_tab(id, None);
+            store.select_tab(id);
         }
         store
     }
@@ -18156,6 +18324,7 @@ mod tests {
         let sink_dyn: std::rc::Rc<dyn crate::store::SelectionSink> = sink.clone();
         store.set_selection_sink(sink_dyn);
         store.open_tab("s1", None);
+        store.select_tab("s1");
         store.select_model(
             "s1",
             &ModelSelection {
@@ -18991,6 +19160,7 @@ mod tests {
     fn sidebar_visibility_matches_the_reference() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", None);
+        store.select_tab("s1");
         assert!(!store.sidebar_shown("s1", 80), "auto below the breakpoint");
         assert!(!store.sidebar_shown("s1", 120), "strictly greater than 120");
         assert!(store.sidebar_shown("s1", 121), "auto above the breakpoint");
@@ -19023,6 +19193,7 @@ mod tests {
     fn toggle_writes_the_mode_and_manual_flag() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", None);
+        store.select_tab("s1");
         store.set_terminal_size((160, 24));
         // Default sink (no config service): the write never lands —
         // the open flag still flips, the resolved mode does not, so
@@ -19060,6 +19231,104 @@ mod tests {
     }
 
     // -- fix-wave E2: the subagent surfaces (#40/#44/#45/#46) -------------
+
+    /// G-528(d) — the subagents-tab picker's `agentMatch` arm
+    /// (subagents-tab.tsx:46-54): the `@(\w+) subagent` title match
+    /// decides the label (the captured word, \b\w-titlecased — only
+    /// when the session record knows no agent) and the title (the
+    /// match STRIPPED, trimmed, falling back to the whole title when
+    /// the strip empties it). NB: JS `\w` is `[A-Za-z0-9_]` — a
+    /// HYPHENATED agent word never matches (the regex needs ` subagent`
+    /// directly after the word run).
+    #[test]
+    fn picker_agent_match_arm_titles_and_labels() {
+        let store = Store::new(Runtime::new());
+        store.ingest_all([
+            Ingest::Event(BusEvent::new(
+                "session.created",
+                serde_json::json!({
+                    "sessionID": "c_match", "parentID": "s1",
+                    "title": "@codereview subagent check the fixture"
+                }),
+            )),
+            Ingest::Event(BusEvent::new(
+                "session.created",
+                serde_json::json!({
+                    "sessionID": "c_agent", "parentID": "s1",
+                    "agent": "verify", "title": "@plan subagent second arm"
+                }),
+            )),
+            Ingest::Event(BusEvent::new(
+                "session.created",
+                serde_json::json!({
+                    "sessionID": "c_bare", "parentID": "s1",
+                    "title": "no marker here"
+                }),
+            )),
+            Ingest::Event(BusEvent::new(
+                "session.created",
+                serde_json::json!({
+                    "sessionID": "c_hyphen", "parentID": "s1",
+                    "title": "@code-review subagent hyphens are not word chars"
+                }),
+            )),
+        ]);
+        // The picker's default filter is the ACTIVE set — flip to the
+        // completed set (subagents-tab.tsx:62's `filter.active`).
+        let mut picker = store.picker();
+        picker.filter_active = false;
+        store.set_picker(picker);
+        let entries = store.picker_entries("s1");
+        let entry = |id: &str| {
+            entries
+                .iter()
+                .find(|entry| entry.session_id == id)
+                .unwrap_or_else(|| panic!("the {id} entry"))
+        };
+        // The match arm: the label is the captured word titlecased
+        // ("codereview" → "Codereview"), the title strips the match.
+        let matched = entry("c_match");
+        assert_eq!(matched.agent, "Codereview");
+        assert_eq!(matched.title, "check the fixture");
+        // A known session agent WINS over the match (subagents-tab
+        // .tsx:49-53's precedence) — but the title still strips.
+        let known = entry("c_agent");
+        assert_eq!(known.agent, "Verify");
+        assert_eq!(known.title, "second arm");
+        // No match, no agent: the fallback label + the whole title.
+        let bare = entry("c_bare");
+        assert_eq!(bare.agent, "Subagent");
+        assert_eq!(bare.title, "no marker here");
+        // A HYPHEN in the word breaks the ref's `\w+` (JS `\w` has no
+        // '-') — no match: the fallback label + the whole title.
+        let hyphen = entry("c_hyphen");
+        assert_eq!(hyphen.agent, "Subagent");
+        assert_eq!(hyphen.title, "@code-review subagent hyphens are not word chars");
+    }
+
+    /// G-528(d) — the strip-empty fallback: a title that IS only the
+    /// match keeps the full title (`title.replace(...).trim() ||
+    /// title`, subagents-tab.tsx:54).
+    #[test]
+    fn picker_agent_match_strip_empty_keeps_the_title() {
+        let store = Store::new(Runtime::new());
+        store.ingest_all([Ingest::Event(BusEvent::new(
+            "session.created",
+            serde_json::json!({
+                "sessionID": "c_only", "parentID": "s1",
+                "title": "@build subagent"
+            }),
+        ))]);
+        let mut picker = store.picker();
+        picker.filter_active = false;
+        store.set_picker(picker);
+        let entries = store.picker_entries("s1");
+        assert_eq!(entries[0].agent, "Build");
+        assert_eq!(
+            entries[0].title, "@build subagent",
+            "the strip emptied — the full title stands"
+        );
+    }
 
     /// The live tool-state reducers (v2 client data.ts:919-980): the
     /// part moves streaming → running (parsed input) → completed
@@ -19494,6 +19763,7 @@ mod tests {
         use crate::components::command_palette::CommandDispatcher as _;
         let store = Store::new(Runtime::new());
         store.open_tab("s1", None);
+        store.select_tab("s1");
         store.set_terminal_size((160, 24));
         let mut dispatcher = crate::components::command_palette::StoreDispatcher;
         assert_eq!(
@@ -19782,6 +20052,7 @@ fn update_dialog_focuses_the_confirm_button() {
 fn six_wire_classes_project_from_events() {
     let store = Store::new(Runtime::new());
     store.open_tab("s1", None);
+    store.select_tab("s1");
     let events = [
         BusEvent::new(
             "message.updated",
@@ -19881,6 +20152,7 @@ fn queue_two(store: &Store) {
 fn inbox_mirror_tracks_delivery_changes_and_cancels() {
     let store = Store::new(Runtime::new());
     store.open_tab("s1", None);
+    store.select_tab("s1");
     let sink = std::rc::Rc::new(RecordingInboxSink::default());
     store.set_inbox_sink(sink.clone());
     queue_two(&store);
@@ -19929,6 +20201,7 @@ fn inbox_mirror_tracks_delivery_changes_and_cancels() {
 fn undo_returns_the_payload_and_cancels() {
     let store = Store::new(Runtime::new());
     store.open_tab("s1", None);
+    store.select_tab("s1");
     let sink = std::rc::Rc::new(RecordingInboxSink::default());
     store.set_inbox_sink(sink.clone());
     store.queue_prompt("s1", "refill me", &["data:image/png;base64,AAA".to_owned()]);
@@ -19978,6 +20251,7 @@ fn wheel_step_consumes_live_scroll_config() {
 fn navigation_pins_the_boundary_target() {
     let store = Store::new(Runtime::new());
     store.open_tab("s1", None);
+    store.select_tab("s1");
     store.set_messages(
         "s1",
         vec![
@@ -20047,6 +20321,7 @@ fn navigation_pins_the_boundary_target() {
 fn first_jumps_backfills_and_reveals_walk_up() {
     let store = Store::new(Runtime::new());
     store.open_tab("s1", None);
+    store.select_tab("s1");
     let sink = std::rc::Rc::new(RecordingTranscriptSink::default());
     store.set_transcript_sink(sink.clone());
     store.set_transcript_metrics(
@@ -20100,6 +20375,7 @@ fn first_jumps_backfills_and_reveals_walk_up() {
 fn parent_route_resolves_through_the_registry() {
     let store = Store::new(Runtime::new());
     store.open_tab("root", None);
+    store.select_tab("root");
     // The resync path seeds the family links (session.list rows).
     store.ingest_all([Ingest::Resync {
         sessions: vec![
@@ -21166,13 +21442,17 @@ mod g368_title_tests {
         store.navigate(Route::session("s1"));
         assert_eq!(store.terminal_title(), "OpenCode", "root fallback collapses");
         store.open_tab("s1", Some("Child session - 2026-11-11T10:00:00.123Z".to_owned()));
+        store.select_tab("s1");
         assert_eq!(store.terminal_title(), "OpenCode", "child fallback collapses");
         store.open_tab("s1", Some("My session".to_owned()));
+        store.select_tab("s1");
         assert_eq!(store.terminal_title(), "OC | My session");
         // Near-miss shapes stay real titles.
         store.open_tab("s1", Some("New session - not-a-timestamp".to_owned()));
+        store.select_tab("s1");
         assert_eq!(store.terminal_title(), "OC | New session - not-a-timestamp");
         store.open_tab("s1", Some("New session - 2026-11-11T10:00:00.00Z".to_owned()));
+        store.select_tab("s1");
         assert_eq!(store.terminal_title(), "OC | New session - 2026-11-11T10:00:00.00Z");
     }
 

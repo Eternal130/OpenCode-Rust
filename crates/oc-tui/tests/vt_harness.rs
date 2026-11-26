@@ -2461,6 +2461,7 @@ mod fake_llm_contract_tests {
         // false (busy = pending ∨ running; no pending, not running).
         let store = oc_tui::store::Store::new(oc_tui::reactive::Runtime::new());
         store.open_tab("ses_alpha", None);
+        store.select_tab("ses_alpha");
         store.ingest_all([oc_tui::data::Ingest::Event(oc_tui::data::BusEvent::new(
             "session.inbox.enqueued",
             serde_json::json!({

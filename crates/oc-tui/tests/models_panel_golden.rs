@@ -16,6 +16,7 @@ use oc_tui::theme::ThemeState;
 fn store_with_models(connected: bool) -> Store {
     let store = Store::new(oc_tui::reactive::Runtime::new());
     store.open_tab("s1", None);
+    store.select_tab("s1");
     store.set_models(
         ListState::Loaded(vec![
             ServerModel {

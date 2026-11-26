@@ -889,6 +889,7 @@ mod surf2_toggle_tests {
         // The sidebar toggle writes session.sidebar (route-gated).
         store.set_terminal_size((160, 40));
         store.open_tab("s1", None);
+        store.select_tab("s1");
         store.toggle_sidebar();
         assert_eq!(
             store.sidebar_mode(),
