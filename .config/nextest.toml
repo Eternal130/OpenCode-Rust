@@ -108,3 +108,15 @@ retries = 2
 # spawn-contention flake class only appears under 4-way parallel load.
 [profile.pty]
 test-threads = 1
+
+# 合并门 profile（2026-11-26 owner 裁定：锚族移交 CI）——
+# 三 crate 合并门不再重放成对锚族：每波修锚同 lane 只增不减，门 21m→31m 的
+# 增量全是锚自时间（va21d 门 1861s 里锚族 ~87%；lane 终局门已在 worktree
+# 跑过全部锚并导出 EXACT）。锚回归由 push 后 CI test job 覆盖（nextest
+# archive 零编译、全量含锚 12m + 裁决册 adjudicate rc=0 双保险，20 分钟内
+# 抓到任何回归）。门保留：常规全量 + realchain 电池五目标（t9/pair/
+# toolloop/w13/g454，T9_LANE_SHARDS 分片）+ harness。
+# SOP：每波新锚 target 合并时，把 binary(realchain_v<new>) 追加进枚举——
+# 漏加的后果=门多跑一族（变慢但不漏检），永不误跳过电池。
+[profile.merge]
+default-filter = 'not(binary(realchain_va17) or binary(realchain_va18) or binary(realchain_va19) or binary(realchain_va20) or binary(realchain_v21) or binary(realchain_v21b) or binary(realchain_v21c) or binary(realchain_v21d))'
