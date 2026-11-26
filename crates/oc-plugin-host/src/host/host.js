@@ -2481,17 +2481,19 @@ function makeCtx(pluginId, options) {
          *  `dialog.action` (triggering does NOT close the dialog).
          *  G-512: disabled options drop from the list
          *  (dialog-select.tsx:184-191 `x.disabled !== true` — the
-         *  same filter the ref's search arm applies, api.tsx:402-405)
-         *  and `hidden: true` actions drop (shownActions,
-         *  dialog-select.tsx:154-155); bind-less actions CROSS with
-         *  a null bind — the TUI's visibleActions filter keeps them
-         *  off the footer and untriggerable, matching the ref. */
+         *  same filter the ref's search arm applies, api.tsx:402-405).
+         *  `hidden` is NOT filtered: the ref's api mapping
+         *  (api.tsx:407-417) never forwards the field to
+         *  DialogSelect — a plugin action's `hidden` flag is inert
+         *  on the ref (the live v21b export pins it: the
+         *  hidden-flagged action renders). Bind-less actions CROSS
+         *  with a null bind — the TUI's visibleActions filter keeps
+         *  them off the footer and untriggerable, matching the ref. */
         async select(options) {
           const opts = options ?? {};
           const list = Array.isArray(opts.options) ? opts.options : [];
-          const rawActions = Array.isArray(opts.actions) ? opts.actions : [];
-          const shownActions = rawActions.filter((action) => action && action.hidden !== true);
-          const triggers = shownActions.map((action) =>
+          const actions = Array.isArray(opts.actions) ? opts.actions : [];
+          const triggers = actions.map((action) =>
             typeof action?.onTrigger === "function" ? action.onTrigger : null,
           );
           let requestKey = null;
@@ -2515,8 +2517,10 @@ function makeCtx(pluginId, options) {
                     title: option.title,
                     value: option.value,
                     description: typeof option.description === "string" ? option.description : "",
+                    category:
+                      typeof option.category === "string" && option.category ? option.category : null,
                   })),
-                actions: shownActions.map((action) => ({
+                actions: actions.map((action) => ({
                   bind: typeof action.bind === "string" && action.bind ? action.bind : null,
                   title: String(action.title ?? ""),
                   side: action.side === "right" ? "right" : "left",

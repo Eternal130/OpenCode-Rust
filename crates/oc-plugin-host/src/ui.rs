@@ -32,6 +32,9 @@ pub struct PluginDialogOption {
     pub value: String,
     /// Optional trailing description.
     pub description: String,
+    /// G-512 — the option's own `category` (context.ts:360): the ref
+    /// groups rows by it; a category-less option renders flat.
+    pub category: Option<String>,
 }
 
 /// The dialog content structure a plugin supplies at open time (the
@@ -103,6 +106,11 @@ impl PluginDialogSpec {
                                 .and_then(Value::as_str)
                                 .unwrap_or_default()
                                 .to_owned(),
+                            category: option
+                                .get("category")
+                                .and_then(Value::as_str)
+                                .filter(|category| !category.is_empty())
+                                .map(str::to_owned),
                         })
                         .collect()
                 })
@@ -407,6 +415,11 @@ pub fn parse_select_spec(
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_owned(),
+                    category: option
+                        .get("category")
+                        .and_then(Value::as_str)
+                        .filter(|category| !category.is_empty())
+                        .map(str::to_owned),
                 })
                 .collect()
         })

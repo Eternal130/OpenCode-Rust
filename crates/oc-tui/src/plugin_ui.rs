@@ -193,10 +193,11 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
                             title: option.title.clone(),
                             value: option.value.clone(),
                             description: option.description.clone(),
+                            category: option.category.clone(),
                         })
                         .collect(),
-
                     placeholder: None,
+                    current: None,
                 },
             );
         }
@@ -216,10 +217,11 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
                             title: option.title.clone(),
                             value: option.value.clone(),
                             description: option.description.clone(),
+                            category: option.category.clone(),
                         })
                         .collect(),
-
                     placeholder: None,
+                    current: None,
                 },
                 *request_id,
                 size.as_deref(),
@@ -466,6 +468,7 @@ mod tests {
                     options: vec![],
 
                     placeholder: None,
+                    current: None,
                 },
             },
         );

@@ -4068,11 +4068,15 @@ mod d22_tests {
                 rows: vec!["v21 dialog body".to_owned()],
                 options: Vec::new(),
                 placeholder: None,
+                current: None,
             },
             7,
             Some("large"),
             false,
         );
+        // G-508 — `dialog.set` on the open show dialog: an explicit
+        // size mutates the entry (88); an ABSENT size RESETS to the
+        // medium 60 (api.tsx:337-340 `options.size ?? "medium"`).
         let entry = store.dialogs().last().expect("the show entry").clone();
         let plugin = store.plugin_dialog_content(match &entry.kind {
             DialogKind::Plugin { id, .. } => id,
@@ -4084,6 +4088,17 @@ mod d22_tests {
         // The ref's geometry (ui/dialog.tsx): width 88 for large,
         // paddingTop height/4 = 9, box height 1 + 1 row = 2.
         assert_eq!(seat.rect, (16, 9, 88, 2));
+        // set({size:"large"}) — the entry widens.
+        store.set_plugin_dialog_presentation(Some("large"), false);
+        let entry = store.dialogs().last().expect("the show entry").clone();
+        let seat = mount_dialog_tree(&entry, &props, plugin.as_ref(), &theme, (120, 36), &sidecar);
+        assert_eq!(seat.rect.2, 88, "the explicit large set applies");
+        // set({centered:true}) with an ABSENT size — the medium reset.
+        store.set_plugin_dialog_presentation(None, true);
+        let entry = store.dialogs().last().expect("the show entry").clone();
+        let seat = mount_dialog_tree(&entry, &props, plugin.as_ref(), &theme, (120, 36), &sidecar);
+        assert_eq!(seat.rect.2, 60, "the absent size resets to medium (G-508)");
+        assert!(entry.centered);
         let mut frame = crate::components::chrome_solid::blank_frame(120, 36);
         crate::components::chrome_solid::composite_chrome_tree(&mut frame);
         let grid = frame.text_grid().join("\n");

@@ -1431,11 +1431,13 @@ impl PluginDialogSource for HostDialogSource {
                     title: option.title,
                     value: option.value,
                     description: option.description,
+                    category: None,
                 })
                 .collect(),
 
             placeholder: None,
-        })
+                    current: None,
+                })
     }
 }
 
@@ -1512,10 +1514,11 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                         title: option.title.clone(),
                         value: option.value.clone(),
                         description: option.description.clone(),
+                        category: option.category.clone(),
                     })
                     .collect(),
-
                 placeholder: None,
+                current: None,
             },
         },
         // G-475 — the dialog.show face (the flattened content + the
@@ -1532,10 +1535,11 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                         title: option.title.clone(),
                         value: option.value.clone(),
                         description: option.description.clone(),
+                        category: option.category.clone(),
                     })
                     .collect(),
-
                 placeholder: None,
+                current: None,
             },
             size: spec.size.clone(),
             centered: spec.centered,
@@ -1564,6 +1568,7 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                     title: option.title.clone(),
                     value: option.value.clone(),
                     description: option.description.clone(),
+                    category: option.category.clone(),
                 })
                 .collect(),
             current: current.clone(),

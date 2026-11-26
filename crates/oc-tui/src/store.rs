@@ -1398,6 +1398,12 @@ pub struct PluginDialogOption {
     pub title: String,
     pub value: String,
     pub description: String,
+    /// G-512 — the option's own `category` (context.ts:360's
+    /// `DialogSelectOption.category`): the ref groups by it and a
+    /// category-less option renders FLAT (dialog-select.tsx:218
+    /// `x.category ?? ""` — the "" group paints no header). The port's
+    /// former fixed "Plugin" header was a superset artifact.
+    pub category: Option<String>,
 }
 
 /// The content structure a plugin dialog renders natively from (the
@@ -1417,6 +1423,12 @@ pub struct PluginDialogContent {
     /// `ctx.ui.dialog.select` spec's `placeholder`; `None` keeps the
     /// native "Search").
     pub placeholder: Option<String>,
+    /// G-512 — the select dialog's `current` marker value (the `●`
+    /// row marker, dialog-select.tsx:757/875-879: `isDeepEqual(option
+    /// .value, props.current)`); `None` = no marker. The select arm
+    /// freezes the spec's `current` here (the preselect ALSO focuses
+    /// the row via the entry's select state).
+    pub current: Option<String>,
 }
 
 impl PluginDialogContent {
@@ -12605,6 +12617,7 @@ impl Store {
             rows: Vec::new(),
             options: options.to_vec(),
             placeholder: placeholder.map(str::to_owned),
+            current: current.map(str::to_owned),
         };
         self.plugin_dialogs.update(|dialogs| {
             dialogs.insert(id.clone(), content);
@@ -16376,6 +16389,7 @@ mod tests {
             rows: vec!["one".to_owned()],
             options: Vec::new(),
             placeholder: None,
+            current: None,
         };
         store.open_plugin_dialog_show("p.tui", content.clone(), 1, None, false);
         assert_eq!(store.dialogs().len(), 1);
@@ -16409,6 +16423,7 @@ mod tests {
             rows: vec!["x".to_owned()],
             options: Vec::new(),
             placeholder: None,
+            current: None,
         };
         // The alert was REPLACED by the show (its own settle) — then
         // clear settles the show's id too.

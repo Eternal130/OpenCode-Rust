@@ -77,9 +77,11 @@ impl PluginDialogSource for HostDialogSource {
                     title: option.title,
                     value: option.value,
                     description: option.description,
+                    category: option.category,
                 })
                 .collect(),
             placeholder: None,
+            current: None,
         })
     }
 }
@@ -147,6 +149,7 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                 title: spec.title.clone(),
                 rows: spec.rows.clone(),
                 placeholder: None,
+                current: None,
                 options: spec
                     .options
                     .iter()
@@ -154,6 +157,7 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                         title: option.title.clone(),
                         value: option.value.clone(),
                         description: option.description.clone(),
+                        category: option.category.clone(),
                     })
                     .collect(),
             },
@@ -168,6 +172,7 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                 title: spec.title.clone(),
                 rows: spec.rows.clone(),
                 placeholder: None,
+                current: None,
                 options: spec
                     .options
                     .iter()
@@ -175,6 +180,7 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                         title: option.title.clone(),
                         value: option.value.clone(),
                         description: option.description.clone(),
+                        category: option.category.clone(),
                     })
                     .collect(),
             },
@@ -203,6 +209,7 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                     title: option.title.clone(),
                     value: option.value.clone(),
                     description: option.description.clone(),
+                    category: option.category.clone(),
                 })
                 .collect(),
             current: current.clone(),

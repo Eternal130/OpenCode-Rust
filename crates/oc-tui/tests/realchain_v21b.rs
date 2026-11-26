@@ -16,6 +16,14 @@
 //! The fixtures are self-contained `.js` v2 `{id, setup}` TUI plugins
 //! staged into BOTH sandboxes' real drop-in discovery roots (the same
 //! staging contract realchain_v21.rs documents).
+//!
+//! PACING: the two ends boot at different speeds (the ref's bun boot
+//! trails the rust binary by tens of seconds under the gate), and each
+//! fixture's timers run from ITS OWN activation — so every state
+//! transition that the rig must capture fires a TOAST marker (the
+//! needle waits complete at the SLOWER end) and the inter-transition
+//! gaps (45 s) absorb the boot skew: the capture window (~2-4 s after
+//! the needle) always lands inside the same state on both ends.
 
 #[path = "realchain_harness.rs"]
 mod realchain_harness;
@@ -74,20 +82,18 @@ impl V21BRig {
     /// Rig-health needle wait (the observed needle only settles the
     /// capture; the face's judgment rides the export).
     fn wait_both_screens(&self, needle: &str, secs: u64) -> bool {
-        let rust = self.rust_tui.screen_text().contains(needle);
-        let deadline = std::time::Instant::now() + Duration::from_secs(secs);
-        let mut rust_ok = rust;
-        while !rust_ok && std::time::Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(100));
-            rust_ok = self.rust_tui.screen_text().contains(needle);
+        for tui in [&self.rust_tui, &self.ref_tui] {
+            let deadline = std::time::Instant::now() + Duration::from_secs(secs);
+            let mut ok = tui.screen_text().contains(needle);
+            while !ok && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(100));
+                ok = tui.screen_text().contains(needle);
+            }
+            if !ok {
+                return false;
+            }
         }
-        let deadline = std::time::Instant::now() + Duration::from_secs(secs);
-        let mut ref_ok = self.ref_tui.screen_text().contains(needle);
-        while !ref_ok && std::time::Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(100));
-            ref_ok = self.ref_tui.screen_text().contains(needle);
-        }
-        rust_ok && ref_ok
+        true
     }
 }
 
@@ -144,7 +150,8 @@ fn stage_fixture(sandbox: &Sandbox, app_dir: &str, name: &str, tui_js: &str, shi
     std::fs::write(
         dir.join("package.json"),
         format!(
-            "{{\n  \"name\": \"{name}\",\n  \"version\": \"1.0.0\",\n  \"main\": \"server.js\",\
+            "{{\n  \"name\": \"{name}\",\n  \"version\": \"1.0.0\",\
+             \n  \"main\": \"server.js\",\
              \n  \"type\": \"module\",\
              \n  \"exports\": {{ \"./tui\": \"./tui.js\" }}\n}}\n"
         ),
@@ -186,9 +193,8 @@ fn stage_fixture(sandbox: &Sandbox, app_dir: &str, name: &str, tui_js: &str, shi
 
 // The five fixtures. Session-dependent arms poll for the session's
 // existence instead of racing fixed timers (the exchange's latency
-// varies under the gate); the dialog-lifecycle timers are fixed with
-// generous gaps so the rig's state captures never straddle a
-// transition.
+// varies under the gate); every rig-captured transition fires a toast
+// marker and the 45 s inter-transition gaps absorb the boot skew.
 const FIXTURES: &[(&str, &str)] = &[
     // 1 — dialog.select: the current preselect ("beta"), a disabled
     // option, and the actions arm (bind-less + bound + hidden). The
@@ -264,6 +270,7 @@ const FIXTURES: &[(&str, &str)] = &[
     // set centered-only (the absent size resets to medium), clear
     // (#2's onClose). The body carries the G-510 shapes: a
     // space-between header row, a blank row, and a long wrapping row.
+    // Every transition fires its toast marker (the rig's needles).
     (
         "v21b-show",
         r#"import { createElement, insert, setProp } from "@opentui/solid";
@@ -313,16 +320,18 @@ export default {
         log.push("close2");
         report("close2");
       });
-    }, 22000);
+    }, 51000);
     setTimeout(() => {
       ctx.ui.dialog.set({ size: "large" });
-    }, 40000);
+      report("large");
+    }, 96000);
     setTimeout(() => {
       ctx.ui.dialog.set({ centered: true });
-    }, 56000);
+      report("centered");
+    }, 141000);
     setTimeout(() => {
       ctx.ui.dialog.clear();
-    }, 76000);
+    }, 186000);
     return () => {};
   },
 };
@@ -337,8 +346,12 @@ export default {
         r#"export default {
   id: "v21b.toast.tui",
   async setup(ctx) {
-    const waitSession = async () => {
-      for (let i = 0; i < 50; i++) {
+    const waitSessionRoute = async () => {
+      // The plain (same-family) arm needs the session ROUTE open —
+      // the toast reducer decides plain-vs-action from the live
+      // route, and the session's list appearance can beat the
+      // navigation by a beat (a race, not a divergence).
+      for (let i = 0; i < 60; i++) {
         try {
           const raw =
             ctx.data && ctx.data.session && typeof ctx.data.session.list === "function"
@@ -350,14 +363,15 @@ export default {
               ? raw.data
               : [];
           const target = sessions.find((session) => session && typeof session.id === "string");
-          if (target) return target;
+          const route = ctx.ui.router.current();
+          if (target && route && route.type === "session") return target;
         } catch {}
         await new Promise((resolve) => setTimeout(resolve, 1500));
       }
       return null;
     };
     (async () => {
-      const target = await waitSession();
+      const target = await waitSessionRoute();
       if (!target) {
         ctx.ui.toast.show({ title: "v21b toast", message: "no sessions", duration: 600000 });
         return;
@@ -367,7 +381,7 @@ export default {
         message: "v21b plain same-family",
         duration: 600000,
       });
-      await new Promise((resolve) => setTimeout(resolve, 8000));
+      await new Promise((resolve) => setTimeout(resolve, 40000));
       try {
         ctx.ui.router.navigate({ type: "home" });
       } catch {}
@@ -394,7 +408,7 @@ export default {
   id: "v21b.tabs.tui",
   async setup(ctx) {
     const waitSession = async () => {
-      for (let i = 0; i < 50; i++) {
+      for (let i = 0; i < 60; i++) {
         try {
           const raw =
             ctx.data && ctx.data.session && typeof ctx.data.session.list === "function"
@@ -453,7 +467,7 @@ export default {
         message: parts.join(" ; "),
         duration: 600000,
       });
-      await new Promise((resolve) => setTimeout(resolve, 9000));
+      await new Promise((resolve) => setTimeout(resolve, 40000));
       try {
         ctx.ui.router.navigate({ type: "home" });
       } catch {}
@@ -493,7 +507,7 @@ export default {
         hasData: !!(route && "data" in route),
       });
     const waitSession = async () => {
-      for (let i = 0; i < 50; i++) {
+      for (let i = 0; i < 60; i++) {
         try {
           const raw =
             ctx.data && ctx.data.session && typeof ctx.data.session.list === "function"
@@ -530,7 +544,7 @@ export default {
         message: current,
         duration: 600000,
       });
-      await new Promise((resolve) => setTimeout(resolve, 9000));
+      await new Promise((resolve) => setTimeout(resolve, 40000));
       try {
         ctx.ui.router.navigate({ type: "plugin", name: "v21b-route", data: { k: 1 } });
       } catch {}
@@ -625,19 +639,43 @@ fn capture_pair(rig: &V21BRig, scenario: &str, state: &str) {
     export_grid_diff(&format!("v21b-{scenario}"), state, &ref_grid, &rust_grid);
 }
 
+/// Needle + capture: the toast marker completes at the SLOWER end;
+/// the capture rides ~1 s behind (inside the 45 s state window on
+/// both ends).
+fn marker_state(rig: &V21BRig, scenario: &str, state: &str, needle: &str, window: u64) {
+    let ok = rig.wait_both_screens(needle, window);
+    assert!(
+        ok,
+        "V21B {scenario} RED: the {state} marker ({needle}) never showed; \
+         rust screen:\n{}\nref screen:\n{}",
+        rig.rust_tui.screen_text(),
+        rig.ref_tui.screen_text()
+    );
+    settle(1);
+    capture_pair(rig, scenario, state);
+}
+
 // ===========================================================================
 // Anchor 1 — dialog.select: the t+6 s select opens (current preselect
 // "beta", the disabled option, the actions footer); tab moves the
 // footer focus; enter with a focused action TRIGGERS it without
-// closing; esc closes and the promise settles. No content needles on
-// the post-key states — the arms ride the export.
+// closing; esc closes and the promise settles. The open-state needle
+// is rig health; the post-key arms ride the export.
 // ===========================================================================
 #[test]
 fn v21b_select_arms_pair() {
     skip_without_ref_lane!();
     let mut rig = v21b_rig("v21b-select", "v21b-select");
     boot_both(&mut rig);
-    settle(7);
+    let open = rig.wait_both_screens("v21b select", 60);
+    assert!(
+        open,
+        "V21B select RED: the select dialog never opened; \
+         rust screen:\n{}\nref screen:\n{}",
+        rig.rust_tui.screen_text(),
+        rig.ref_tui.screen_text()
+    );
+    settle(1);
     capture_pair(&rig, "select", "open");
     // Tab: the footer-action focus cycle (the ref's actionItems skips
     // the bind-less entry; the footer row set rides the export).
@@ -659,64 +697,31 @@ fn v21b_select_arms_pair() {
 // ===========================================================================
 // Anchor 2 — dialog.show lifecycle: show#1 opens at t+6 s (the blank
 // row + the space-between header + the wrapping long row — G-510's
-// sub-semantics); show#2 replaces it at t+22 s (#1's onClose fires —
-// the toast); set({size:"large"}) at t+40 s; set({centered:true}) at
-// t+56 s (the ABSENT size resets to medium — G-508); clear() at t+76 s
-// (#2's onClose fires). The body-state needles are rig health only.
+// sub-semantics); show#2 replaces it at t+51 s (#1's onClose fires —
+// the close1 toast); set({size:"large"}) at t+96 s (the large toast);
+// set({centered:true}) at t+141 s (the ABSENT size resets to medium —
+// G-508; the centered toast); clear() at t+186 s (#2's onClose — the
+// close2 toast). Every transition is toast-marked; the needle waits
+// absorb the boot skew.
 // ===========================================================================
 #[test]
 fn v21b_show_lifecycle_pair() {
     skip_without_ref_lane!();
     let mut rig = v21b_rig("v21b-show", "v21b-show");
     boot_both(&mut rig);
-    let one = rig.wait_both_screens("v21b one left", 40);
-    assert!(
-        one,
-        "V21B show RED: dialog #1 never opened; \
-         rust screen:\n{}\nref screen:\n{}",
-        rig.rust_tui.screen_text(),
-        rig.ref_tui.screen_text()
-    );
-    settle(1);
-    capture_pair(&rig, "show", "one-open");
-    // t+22 s: show #2 replaces #1 (#1's onClose fires on BOTH ends).
-    let replaced = rig.wait_both_screens("v21b show close1", 60);
-    assert!(
-        replaced,
-        "V21B show RED: the replacement's onClose never fired; \
-         rust screen:\n{}\nref screen:\n{}",
-        rig.rust_tui.screen_text(),
-        rig.ref_tui.screen_text()
-    );
-    settle(1);
-    capture_pair(&rig, "show", "two-replaced");
-    // t+40 s: the large presentation (fixed gap — no needle for the
-    // width; the frames carry it).
-    settle(17);
-    capture_pair(&rig, "show", "set-large");
-    // t+56 s: centered with an ABSENT size — the medium reset.
-    settle(16);
-    capture_pair(&rig, "show", "set-centered-reset");
-    // t+76 s: clear() closes everything (#2's onClose fires).
-    let cleared = rig.wait_both_screens("v21b show close2", 60);
-    assert!(
-        cleared,
-        "V21B show RED: clear()'s onClose never fired; \
-         rust screen:\n{}\nref screen:\n{}",
-        rig.rust_tui.screen_text(),
-        rig.ref_tui.screen_text()
-    );
-    settle(1);
-    capture_pair(&rig, "show", "cleared");
+    marker_state(&rig, "show", "one-open", "v21b one left", 60);
+    marker_state(&rig, "show", "two-replaced", "v21b show close1", 90);
+    marker_state(&rig, "show", "set-large", "v21b show large", 90);
+    marker_state(&rig, "show", "set-centered-reset", "v21b show centered", 90);
+    marker_state(&rig, "show", "cleared", "v21b show close2", 90);
     drop(rig);
 }
 
 // ===========================================================================
 // Anchor 3 — toast arms: the same-family plain toast (no title —
-// polled after the exchange), the home navigation, and the
-// background-family toast (the title falls back to the session's
-// title + the Open action). The plain toast's face is rig health; the
-// arms ride the export.
+// polled after the exchange), the home navigation (40 s later), and
+// the background-family toast (5 s after that — the title falls back
+// to the session's title + the Open action).
 // ===========================================================================
 #[test]
 fn v21b_toast_session_fallback_pair() {
@@ -724,37 +729,16 @@ fn v21b_toast_session_fallback_pair() {
     let mut rig = v21b_rig("v21b-toast", "v21b-toast");
     boot_both(&mut rig);
     exchange(&mut rig);
-    let plain = rig.wait_both_screens("v21b plain same-family", 120);
-    assert!(
-        plain,
-        "V21B toast RED: the plain toast never showed; \
-         rust screen:\n{}\nref screen:\n{}",
-        rig.rust_tui.screen_text(),
-        rig.ref_tui.screen_text()
-    );
-    settle(1);
-    capture_pair(&rig, "toast", "plain-arm");
-    // The home navigation (8 s after the toast) + the fallback toast
-    // (5 s after that).
-    let fallback = rig.wait_both_screens("v21b background fallback", 120);
-    assert!(
-        fallback,
-        "V21B toast RED: the fallback toast never showed; \
-         rust screen:\n{}\nref screen:\n{}",
-        rig.rust_tui.screen_text(),
-        rig.ref_tui.screen_text()
-    );
-    settle(1);
-    capture_pair(&rig, "toast", "fallback-arm");
+    marker_state(&rig, "toast", "plain-arm", "v21b plain same-family", 150);
+    marker_state(&rig, "toast", "fallback-arm", "v21b background fallback", 120);
     drop(rig);
 }
 
 // ===========================================================================
 // Anchor 4 — tabs + model: after the exchange, the tab row's members +
 // the move/close membership returns + the variant validation returns
-// (one toast), then the home navigation and the close() with NO
-// active tab (a second toast). The toast faces are rig health; the
-// values ride the export.
+// (the values toast), then the home navigation (40 s later) and the
+// close() with NO active tab (the close-noactive toast).
 // ===========================================================================
 #[test]
 fn v21b_tabs_model_values_pair() {
@@ -762,36 +746,15 @@ fn v21b_tabs_model_values_pair() {
     let mut rig = v21b_rig("v21b-tabs-model", "v21b-tabs-model");
     boot_both(&mut rig);
     exchange(&mut rig);
-    let shown = rig.wait_both_screens("v21b tabs+model", 150);
-    assert!(
-        shown,
-        "V21B tabs RED: the tabs+model toast never showed; \
-         rust screen:\n{}\nref screen:\n{}",
-        rig.rust_tui.screen_text(),
-        rig.ref_tui.screen_text()
-    );
-    settle(1);
-    capture_pair(&rig, "tabs-model", "values");
-    // The home navigation (9 s after the values toast) + the
-    // no-active-tab close (5 s after that).
-    let closed = rig.wait_both_screens("v21b close-noactive", 120);
-    assert!(
-        closed,
-        "V21B tabs RED: the close-noactive toast never showed; \
-         rust screen:\n{}\nref screen:\n{}",
-        rig.rust_tui.screen_text(),
-        rig.ref_tui.screen_text()
-    );
-    settle(1);
-    capture_pair(&rig, "tabs-model", "close-noactive");
+    marker_state(&rig, "tabs-model", "values", "v21b tabs+model", 150);
+    marker_state(&rig, "tabs-model", "close-noactive", "v21b close-noactive", 120);
     drop(rig);
 }
 
 // ===========================================================================
 // Anchor 5 — router.current shape: the session arm once the session
-// exists (after the exchange), then the plugin arm after navigating
-// to the plugin's own registered route. The toast faces are rig
-// health; the shapes ride the export.
+// exists (after the exchange), then the plugin route navigation
+// (40 s later) + the plugin arm's toast (4 s after that).
 // ===========================================================================
 #[test]
 fn v21b_router_current_shape_pair() {
@@ -799,27 +762,7 @@ fn v21b_router_current_shape_pair() {
     let mut rig = v21b_rig("v21b-router", "v21b-router");
     boot_both(&mut rig);
     exchange(&mut rig);
-    let session = rig.wait_both_screens("v21b router session", 150);
-    assert!(
-        session,
-        "V21B router RED: the session-shape toast never showed; \
-         rust screen:\n{}\nref screen:\n{}",
-        rig.rust_tui.screen_text(),
-        rig.ref_tui.screen_text()
-    );
-    settle(1);
-    capture_pair(&rig, "router", "session-arm");
-    // The plugin-route navigation (9 s after the session toast) + the
-    // plugin arm's toast (4 s after that).
-    let plugin = rig.wait_both_screens("v21b router plugin", 120);
-    assert!(
-        plugin,
-        "V21B router RED: the plugin-arm toast never showed; \
-         rust screen:\n{}\nref screen:\n{}",
-        rig.rust_tui.screen_text(),
-        rig.ref_tui.screen_text()
-    );
-    settle(1);
-    capture_pair(&rig, "router", "plugin-arm");
+    marker_state(&rig, "router", "session-arm", "v21b router session", 150);
+    marker_state(&rig, "router", "plugin-arm", "v21b router plugin", 120);
     drop(rig);
 }
