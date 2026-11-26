@@ -661,12 +661,12 @@ mod tests {
     #[test]
     fn provider_catalog_parse_counts() {
         let catalog = Catalog::embedded();
-        // Pinned parity counts from the committed snapshot (224 providers —
+        // Pinned parity counts from the committed snapshot (324 providers —
         // G-258 drops the azure-cognitive-services/google-vertex-anthropic
-        // aliases; G-434 re-syncs the snapshot to the ref tree's current
-        // generation: 8380 models after the alias/profile drops).
-        assert_eq!(catalog.provider_count(), 224);
-        assert_eq!(catalog.model_count(), 8380);
+        // aliases; the G-516 re-sync pins the live 2026-11-26 models.dev
+        // generation: 324 providers / 10097 models after the alias drops).
+        assert_eq!(catalog.provider_count(), 324);
+        assert_eq!(catalog.model_count(), 10097);
     }
 
     /// G-258 — the models-dev plugin's two-level snapshot filter
@@ -770,6 +770,13 @@ mod tests {
     #[test]
     fn provider_catalog_prompt_cache_key_providers() {
         let catalog = Catalog::embedded();
+        // G-516: the live 2026-11-26 generation dropped the `llama`
+        // provider (folded into ollama-cloud); the REF's
+        // prompt-cache-key list still names it (its `models.list`
+        // transform no-ops on an absent provider) — so the list stays
+        // faithful and the snapshot-existence check skips the
+        // generation-absent id.
+        let absent: Vec<&str> = vec!["llama"];
         for id in [
             "abliteration-ai",
             "aihubmix",
@@ -784,6 +791,10 @@ mod tests {
             "upstage",
             "venice",
         ] {
+            if absent.contains(&id) {
+                assert!(catalog.provider(id).is_none(), "{id} absent in this generation");
+                continue;
+            }
             let provider = catalog.provider(id).unwrap_or_else(|| panic!("{id} in snapshot"));
             assert!(
                 provider.models.iter().all(|model| model
@@ -870,21 +881,24 @@ mod tests {
             );
         }
         // The pinned free set from the committed snapshot (v2's rig
-        // listing): 10 models, newest first (G-434 re-sync: the ref
-        // tree's generation no longer carries "Exo Free").
+        // listing): 11 models, newest first (G-516 re-sync to the live
+        // 2026-11-26 generation: Seaglass/Tidepool/Hy4/Iceman/Flint/
+        // DeepSeek V4.1/Super VL/Beam join the head; the older free
+        // tier falls off the 11-row window).
         let names: Vec<&str> = pairs.iter().map(|(_, model)| model.name.as_str()).collect();
         assert_eq!(
             names,
             vec![
-                "Fledge Alpha Free",
-                "Ling 3.1 Flash Free",
-                "LongCat 2.5 Preview Free",
-                "Space Bunny Free",
+                "Seaglass Alpha Free",
+                "Tidepool Alpha Free",
+                "Hy4 flash Free",
+                "Iceman Free",
+                "Flint 40B Free",
+                "DeepSeek V4.1 Flash Free",
+                "Nemotron 3.5 Super VL Free",
+                "Beam Free",
                 "MiMo-V2.6-Flash Free",
-                "Muse Spark 1.3 Free",
-                "Ling 3.0 Flash Fin Free",
                 "Nemotron 3.5 Lightning Free",
-                "Nemotron 3 Ultra Free",
                 "Big Pickle",
             ]
         );
@@ -995,13 +1009,17 @@ mod tests {
         assert!(model.capabilities.input.contains(&"text".to_string()));
         assert_eq!(model.limit.context, 200_000);
         assert_eq!(model.limit.output, 64_000);
-        assert_eq!(model.status, Status::Active);
+        // G-516: the live 2026-11-26 generation deprecates
+        // claude-opus-4-5 (superseded by the 4-6/4-7/4-8/5 line).
+        assert_eq!(model.status, Status::Deprecated);
         assert!(model.enabled);
         assert!(!model.cost.is_empty());
         assert!(model.time.released.0 > 0.0);
-        // effort variants present (opus 4.5 → manual thinking budgets)
+        // effort variants present (G-516 generation: the live tree's
+        // opus 4.5 reasoning options add the toggle off arm —
+        // ["none", "low", "medium", "high"])
         let ids: Vec<&str> = model.variants.iter().map(|v| v.id.as_str()).collect();
-        assert_eq!(ids, vec!["low", "medium", "high"]);
+        assert_eq!(ids, vec!["none", "low", "medium", "high"]);
     }
 
     #[test]
@@ -1055,7 +1073,8 @@ mod tests {
 
     #[test]
     fn provider_catalog_experimental_mode_models() {
-        // 105 mode entries exist; find one and check the derived id/name.
+        // G-516 re-sync: the live 2026-11-26 generation derives 185
+        // mode entries; find one and check the derived id/name.
         let catalog = Catalog::embedded();
         let modes = catalog
             .providers()
@@ -1063,7 +1082,7 @@ mod tests {
             .flat_map(|snapshot| snapshot.models.iter().map(move |m| (snapshot, m)))
             .filter(|(_, model)| model.id.as_str() != model.model_id.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(modes.len(), 105, "mode entries derived as separate models");
+        assert_eq!(modes.len(), 185, "mode entries derived as separate models");
         let (_, first) = modes.first().expect("at least one mode model");
         assert!(first.id.as_str().contains('-'));
         assert!(first.name.contains(' '));
