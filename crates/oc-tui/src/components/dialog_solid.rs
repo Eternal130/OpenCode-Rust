@@ -91,7 +91,7 @@ use crate::components::dialog_select::{
 use crate::render::Frame;
 use crate::store::{DialogEntry, DialogKind, ExportOptionsState, PluginDialogContent};
 use crate::theme::ThemeState;
-use crate::wrap::{display_width, take_width};
+use crate::wrap::{display_width, take_width, take_width_window};
 
 // ---------------------------------------------------------------------------
 // theme colors (pre-hexed once per sync)
@@ -507,7 +507,9 @@ fn content_height(inputs: &DialogInputs) -> usize {
         | Family::BtwPrompt
         | Family::PluginInstallPrompt => 6,
         // G-237 (dialog-prompt.tsx:98-145): title, gap, description
-        // rows, gap, input, gap, footer, the footer's pad.
+        // rows, gap, input, gap, footer, the footer's pad. The rows
+        // are the PRE-WRAPPED description (the ref's `<text>` wraps
+        // at the box content width).
         Family::GenericPrompt => inputs.hint_lines.len() + 7,
         // title, gap, input, gap, hints, gap, footer, pad.
         Family::ConnectPrompt => inputs.hint_lines.len() + 8,
@@ -632,6 +634,9 @@ fn row_paint(inputs: &DialogInputs, index: usize) -> Option<RowPaint> {
 /// footer (`Option.footer`).
 fn footer_text(inputs: &DialogInputs, index: usize) -> Option<String> {
     let option = inputs.options.get(index)?;
+    // G-522 — `flatten` covers the search marker too (the flat shape
+    // from the EMPTY query; the category rides the row footer,
+    // dialog-select.tsx:803).
     let footer = if inputs.flatten {
         option
             .search_footer
@@ -1609,7 +1614,23 @@ fn generic_prompt_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::Eleme
             if i.prompt_value.is_empty() {
                 styled(vec![chunk(i.placeholder.clone(), i.colors.muted, None, 0)])
             } else {
-                let typed = take_width(&i.prompt_value, width);
+                // The ref's textarea viewport (dialog-prompt.tsx:79
+                // `gotoLineEnd` — the cursor rides the END; upstream
+                // `ensure_cursor_visible`'s horizontal arm, wrapMode
+                // none): margin_cols = min(max(1, floor(W*0.2)),
+                // (W-1)/2) (the 0.2 default scroll margin); when
+                // cursor_col + margin_cols >= W the viewport scrolls
+                // to cursor_col + margin_cols - W + 1 — the visible
+                // window is the TAIL (the pre-fix head take clipped
+                // the seeded value's end).
+                let cursor_col = display_width(&i.prompt_value);
+                let margin_cols = (width / 5).max(1).min(width.saturating_sub(1) / 2);
+                let offset_x = if cursor_col + margin_cols >= width {
+                    cursor_col + margin_cols - width + 1
+                } else {
+                    0
+                };
+                let typed = take_width_window(&i.prompt_value, offset_x, width);
                 let end = display_width(&typed);
                 let mut chunks = vec![chunk(typed, i.colors.formfield_base_fg, None, 0)];
                 if end < width {
@@ -3260,7 +3281,7 @@ fn build_inputs(
                 flat,
                 selected: entry.select.selected,
                 current: props.current.clone(),
-                flatten: props.flat && !entry.select.filter.is_empty(),
+                flatten: props.has_search || (props.flat && !entry.select.filter.is_empty()),
                 destructive: props.destructive,
                 window,
                 actions: props
@@ -3339,8 +3360,12 @@ fn build_inputs(
             hint_footer: String::new(),
         },
         // G-237: the generic prompt — title/placeholder/description
-        // from the kind, the typed value from the entry (the
-        // description is one muted row above the input).
+        // from the kind, the typed value from the entry. The
+        // description PRE-WRAPS at the box content width
+        // (dialog-prompt.tsx:113-114 — the ref's `<text>` wraps; the
+        // port's text pipeline renders the same rows, but the height
+        // model counts `hint_lines`, so the wrap must happen HERE —
+        // the pre-fix single row clipped the overflow rows).
         Family::GenericPrompt => {
             let DialogKind::Prompt { title, description, placeholder, .. } = &entry.kind else {
                 unreachable!("the GenericPrompt family guard")
@@ -3367,7 +3392,7 @@ fn build_inputs(
                 hint_lines: if description.is_empty() {
                     Vec::new()
                 } else {
-                    vec![description.clone()]
+                    crate::wrap::wrap_label(description, box_width.saturating_sub(4).max(1))
                 },
                 plugin_title: String::new(),
                 plugin_rows: Vec::new(),

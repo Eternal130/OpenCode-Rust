@@ -522,6 +522,32 @@ pub fn take_width(text: &str, width: usize) -> String {
     out
 }
 
+/// The `width`-cell window of `text` starting at cell `skip` — the
+/// horizontal-scroll viewport of a `wrapMode="none"` textarea
+/// (upstream `EditorView.ensure_cursor_visible`: `offset_x` skips the
+/// first cells, the visible run is `[offset_x, offset_x + width)`).
+/// Atoms straddling the `skip` boundary are clipped (the viewport
+/// slices at cell granularity); the window never ends inside a
+/// cluster.
+#[must_use]
+pub fn take_width_window(text: &str, skip: usize, width: usize) -> String {
+    let mut skipped = 0usize;
+    let mut used = 0usize;
+    let mut out = String::new();
+    for atom in flatten(text, PaintStyle::new()) {
+        if skipped < skip {
+            skipped += atom.width;
+            continue;
+        }
+        if used + atom.width > width {
+            break;
+        }
+        used += atom.width;
+        out.push_str(&atom.text);
+    }
+    out
+}
+
 /// Wrap `label` into lines of at most `width` display cells (the
 /// plain-leaf case of [`wrap_atoms`], joined back to strings).
 #[must_use]
