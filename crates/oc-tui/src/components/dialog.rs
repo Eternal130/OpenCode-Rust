@@ -2978,6 +2978,7 @@ mod tests {
 
                 placeholder: None,
                 current: None,
+                has_search: false,
             },
         );
         let mut frame = blank_base(80, 24);
@@ -3038,6 +3039,7 @@ mod tests {
                 ],
                 placeholder: None,
                 current: None,
+                has_search: false,
             },
         );
         let mut frame = blank_base(80, 24);
@@ -3089,6 +3091,7 @@ mod tests {
 
                     placeholder: None,
                     current: None,
+                    has_search: false,
                 })
             }
         }

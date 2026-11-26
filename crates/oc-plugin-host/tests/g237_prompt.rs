@@ -3,7 +3,9 @@
 //! carries the guest's jsonrpc id (the promise's settle key) plus the
 //! ref's option fields (api.tsx:367-386 → `DialogPromptOptions`,
 //! context.ts:348-353). The embedder's `resolve_ui_request` settles
-//! the promise — the typed string on submit, null on dismiss.
+//! the promise — the typed string on submit, `undefined` on dismiss
+//! (G-519: the ref's `Promise<string | undefined>`; the wire's null
+//! crosses as `{"ok": true}` and host.js maps it back to undefined).
 
 mod common;
 
@@ -67,7 +69,8 @@ fn g237_prompt_resolves_typed_value_and_null_on_dismiss() {
         "the guest promise resolved with the typed value"
     );
 
-    // Round 2: the dismissed prompt settles null (any unresolved close).
+    // Round 2: the dismissed prompt settles undefined (G-519 — the
+    // ref's unresolved close is `done(undefined)`, never null).
     assert!(host
         .tap()
         .publish(oc_plugin_host::TapEvent::new("tui.poke", serde_json::json!({ "round": 2 }))));
@@ -80,8 +83,8 @@ fn g237_prompt_resolves_typed_value_and_null_on_dismiss() {
     host.resolve_ui_request(request_id, serde_json::Value::Null);
     assert!(
         common::wait_for(Duration::from_secs(10), || {
-            common::read(&sandbox.join("prompt-2.json")) == "null"
+            common::read(&sandbox.join("prompt-2.json")) == "undefined"
         }),
-        "the dismissed prompt resolved null"
+        "the dismissed prompt resolved undefined"
     );
 }

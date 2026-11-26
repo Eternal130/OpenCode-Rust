@@ -3625,8 +3625,16 @@ fn build_inputs(
                     title.clone(),
                     message.clone(),
                     (
-                        titlecase(ccancel(cancel_label)),
-                        titlecase(cconfirm(confirm_label)),
+                        // G-520 — `Locale.titlecase` is WORD-boundary
+                        // (util/locale.ts:3-5 `/\b\w/g`): the same
+                        // implementation the agent labels use
+                        // (message/model.rs:1102). G-521 — an EXPLICIT
+                        // empty label stays empty (the ref's
+                        // `props.label?.[key] ?? key` only substitutes
+                        // null/undefined; the null boundary already
+                        // ran in plugin_ui.rs).
+                        message_model_titlecase(cancel_label),
+                        message_model_titlecase(confirm_label),
                         *active_confirm,
                     ),
                 ),
@@ -3972,31 +3980,14 @@ fn build_inputs(
     }
 }
 
-/// `Locale.titlecase` (util/locale.ts) — the first character upper.
-fn titlecase(label: String) -> String {
-    let mut chars = label.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => label,
-    }
-}
-
-/// The cancel pill's default ("cancel" when the caller passed "").
-fn ccancel(label: &str) -> String {
-    if label.is_empty() {
-        "cancel".to_owned()
-    } else {
-        label.to_owned()
-    }
-}
-
-/// The confirm pill's default ("confirm" when the caller passed "").
-fn cconfirm(label: &str) -> String {
-    if label.is_empty() {
-        "confirm".to_owned()
-    } else {
-        label.to_owned()
-    }
+/// G-521 — the confirm/cancel pill label: the ref's
+/// `Locale.titlecase(props.label?.[key] ?? key)` word-boundary
+/// titlecase (util/locale.ts:3-5) — the shared implementation
+/// (message/model.rs:1102) re-exported here; the null→key default ran
+/// at the plugin_ui crossing, so an explicit "" stays "" (an empty
+/// pill, dialog-confirm.tsx:85).
+fn message_model_titlecase(label: &str) -> String {
+    crate::components::message::model::titlecase(label)
 }
 
 #[cfg(test)]
@@ -4069,6 +4060,7 @@ mod d22_tests {
                 options: Vec::new(),
                 placeholder: None,
                 current: None,
+                has_search: false,
             },
             7,
             Some("large"),

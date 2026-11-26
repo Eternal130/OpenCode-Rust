@@ -297,7 +297,7 @@ fn ui_dialog_prompt() {
     store.open_prompt(
         "Name the preset",
         "One-line description",
-        "preset name",
+        Some("preset name"),
         "default-x",
         Some(31),
         None,
@@ -329,13 +329,16 @@ fn ui_dialog_prompt() {
         "submit resolves the typed value once"
     );
 
-    // The placeholder: an empty value shows the explicit placeholder;
-    // an absent one falls back to the ref's "Enter text".
-    store.open_prompt("Plain", "", "type here", "", Some(32), None);
+    // The placeholder: an explicit string shows verbatim; an explicit
+    // EMPTY string shows nothing at all (G-521 — `""` is not nullish
+    // on the ref, dialog-prompt.tsx:123 `props.placeholder ??
+    // "Enter text"`); only an ABSENT one falls back to the ref's
+    // "Enter text".
+    store.open_prompt("Plain", "", Some("type here"), "", Some(32), None);
     let text = frame_text(&store);
     assert!(text.contains("type here"), "the explicit placeholder:\n{text}");
     assert!(!text.contains("Enter text"), "no default while explicit:\n{text}");
-    store.open_prompt("Plain", "", "", "", Some(33), None);
+    store.open_prompt("Plain", "", Some(""), "", Some(33), None);
     // (The 32-prompt was REPLACED by the open above — dialog.replace
     // settles the replaced prompt unresolved; drain it here so the
     // later asserts stay exact.)
@@ -345,17 +348,30 @@ fn ui_dialog_prompt() {
         "dialog.replace settles the replaced prompt unresolved"
     );
     let text = frame_text(&store);
+    assert!(
+        !text.contains("Enter text"),
+        "an explicit empty placeholder renders nothing (G-521):\n{text}"
+    );
+    // The ABSENT placeholder shows the ref's default.
+    store.open_prompt("Plain", "", None, "", Some(34), None);
+    assert_eq!(
+        store.take_ui_dialog_resolutions(),
+        vec![(33, serde_json::Value::Null)],
+        "dialog.replace settles the replaced empty-placeholder prompt unresolved"
+    );
+    let text = frame_text(&store);
     assert!(text.contains("Enter text"), "the ref's default placeholder:\n{text}");
 
-    // Escape settles null (onClose → done(undefined)).
+    // Escape settles null on the wire (onClose → done(undefined) on
+    // the ref; host.js maps the wire null to undefined, G-519).
     let outcome = dialog_layer(&store, "escape");
     assert_eq!(outcome, DialogKeyOutcome::Closed);
     assert!(store.top_dialog().is_none());
-    assert_eq!(store.take_ui_dialog_resolutions(), vec![(33, serde_json::Value::Null)]);
+    assert_eq!(store.take_ui_dialog_resolutions(), vec![(34, serde_json::Value::Null)]);
 
     // A submit command rides the outcome after the close (the same
     // contract as alert/confirm).
-    store.open_prompt("Go", "", "", "", None, Some("preset.apply".into()));
+    store.open_prompt("Go", "", None, "", None, Some("preset.apply".into()));
     let outcome = dialog_layer(&store, "return");
     assert_eq!(outcome, DialogKeyOutcome::CommandSubmitted("preset.apply".into()));
     assert!(store.take_ui_dialog_resolutions().is_empty(), "no request id → no resolution");

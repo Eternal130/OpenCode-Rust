@@ -156,10 +156,12 @@ function errText(error) {
   return String(error);
 }
 
-// The deferred ctx.ui dialog promises settle `null` on an unresolved
-// close (api.tsx:318-325's `settle`); the wire renders a null result
-// as {"ok": true} (protocol.rs) — unwrap it back so the guest surface
-// keeps the ref's Promise<… | null> shape.
+// The deferred ctx.ui dialog promises settle `undefined` on an
+// unresolved close (api.tsx:318-325's `settle` firing `done(undefined)`
+// — context.ts:401-404's `Promise<… | undefined>`); the wire renders a
+// null result as {"ok": true} (protocol.rs) — unwrap it back so the
+// guest boundary keeps the ref's null-vs-undefined split, then each
+// face maps null → undefined (the select face's pattern, below).
 function dialogResult(reply) {
   if (
     reply !== null &&
@@ -170,6 +172,15 @@ function dialogResult(reply) {
     return null;
   }
   return reply;
+}
+
+// G-519 — one null → undefined mapping per face (the ref settles
+// `undefined` on every unresolved close, api.tsx:363/383 — the port's
+// alert/confirm/prompt settled `null`); the select face already did
+// exactly this at its own settle seam.
+function dialogSettled(reply) {
+  const value = dialogResult(reply);
+  return value === null ? undefined : value;
 }
 
 // G-475 — `ctx.ui.format.path` (util/path-format.ts:3-10): abbreviate
@@ -1113,7 +1124,7 @@ function makeCtx(pluginId, options) {
       pluginId,
       title: String(opts.title ?? ""),
       message: String(opts.message ?? ""),
-    }).then(dialogResult);
+    }).then(dialogSettled);
   };
   const dialogConfirm = (options) => {
     const opts = options ?? {};
@@ -1126,11 +1137,12 @@ function makeCtx(pluginId, options) {
         confirm: typeof label.confirm === "string" ? label.confirm : null,
         cancel: typeof label.cancel === "string" ? label.cancel : null,
       },
-    }).then(dialogResult);
+    }).then(dialogSettled);
   };
   // G-237 (v2 api.tsx:367-386): the generic text-input prompt —
-  // resolves the typed string on submit, null on dismiss; the
-  // optional fields cross as null (the TUI applies the ref's
+  // resolves the typed string on submit, `undefined` on dismiss
+  // (G-519: the ref's `Promise<string | undefined>`, context.ts:403);
+  // the optional fields cross as null (the TUI applies the ref's
   // placeholder default "Enter text").
   const dialogPrompt = (options) => {
     const opts = options ?? {};
@@ -1140,7 +1152,7 @@ function makeCtx(pluginId, options) {
       description: typeof opts.description === "string" ? opts.description : null,
       placeholder: typeof opts.placeholder === "string" ? opts.placeholder : null,
       value: typeof opts.value === "string" ? opts.value : null,
-    }).then(dialogResult);
+    }).then(dialogSettled);
   };
 
   const ctx = {
@@ -2304,14 +2316,15 @@ function makeCtx(pluginId, options) {
         },
         // G-509 — `move(sessionID, index)` (api.tsx:267-273): the
         // membership check answers the return value — `false` when
-        // the target tab is not open. The ref roots the argument
-        // (`host.data.session.root`) before matching; the pushed
-        // view carries ROOT tab rows, so the guest matches the raw
-        // id (the child-id edge is the push view's bounded
-        // projection — the TUI-side op still roots before moving).
+        // the target tab is not open. The ref ROOTS the argument
+        // first (`host.data.session.root`, api.tsx:269) before
+        // matching the ROOT tab rows; G-519-lead — the pushed view
+        // carries the child→root map, so a child id roots here too
+        // (the TUI-side op also roots before moving, double-safe).
         move(sessionID, index) {
           if (!tuiTabsView.enabled) return false;
-          const target = String(sessionID ?? "");
+          const raw = String(sessionID ?? "");
+          const target = tuiTabsView.roots[raw] ?? raw;
           if (!tuiTabsView.tabs.some((tab) => tab.sessionID === target)) return false;
           notify("tui.tabs.op", {
             pluginId,
@@ -2479,6 +2492,11 @@ function makeCtx(pluginId, options) {
          *  arm degrades to the native filter, and the actions'
          *  `onTrigger` runs guest-side when the TUI dispatches
          *  `dialog.action` (triggering does NOT close the dialog).
+         *  G-522: a `search` fn crosses as a hasSearch MARKER (no
+         *  closure) — the select renders FLAT from the empty query
+         *  with the category as the row footer
+         *  (dialog-select.tsx:212/803, `props.search !== undefined`),
+         *  closing the shape half of the search degradation.
          *  G-512: disabled options drop from the list
          *  (dialog-select.tsx:184-191 `x.disabled !== true` — the
          *  same filter the ref's search arm applies, api.tsx:402-405).
@@ -2505,6 +2523,7 @@ function makeCtx(pluginId, options) {
                 title: String(opts.title ?? ""),
                 placeholder: typeof opts.placeholder === "string" ? opts.placeholder : null,
                 current: "current" in opts ? opts.current : null,
+                hasSearch: typeof opts.search === "function",
                 options: list
                   .filter(
                     (option) =>
@@ -4058,8 +4077,11 @@ let tuiRoute = { type: "home" };
 let tuiPanel = null;
 
 /** G-475: the host-pushed session-tabs view (`tui.tabs`) —
- *  `{enabled, tabs}`; `ctx.ui.tabs.enabled()/list()` read it. */
-let tuiTabsView = { enabled: false, tabs: [] };
+ *  `{enabled, tabs, roots}`; `ctx.ui.tabs.enabled()/list()` read it.
+ *  `roots` (G-519-lead) is the child→root map the pushed view
+ *  carries so `move()` can root a child id like the ref's
+ *  `host.data.session.root` (api.tsx:269-271). */
+let tuiTabsView = { enabled: false, tabs: [], roots: {} };
 
 /** G-475: the host-pushed model-selection view (`tui.model`) —
  *  `{current, variants}`; `ctx.ui.model.current()/variant.list()`
@@ -5022,6 +5044,11 @@ async function handleLine(line) {
     tuiTabsView = {
       enabled: view.enabled === true,
       tabs: Array.isArray(view.tabs) ? view.tabs : [],
+      // G-519-lead — the child→root map (string→string only).
+      roots:
+        view.roots && typeof view.roots === "object" && !Array.isArray(view.roots)
+          ? view.roots
+          : {},
     };
     return;
   }
