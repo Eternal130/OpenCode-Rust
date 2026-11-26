@@ -32,6 +32,12 @@ pub struct PluginDialogOption {
     pub value: String,
     /// Optional trailing description.
     pub description: String,
+    /// G-525 — the option's own `footer` (context.ts:359): a DISTINCT
+    /// field from `description` — the ref renders the description
+    /// INLINE after the title (dialog-select.tsx:899-903) and the
+    /// footer right-aligned (:905-919); `{...option}` forwards both
+    /// (api.tsx:397).
+    pub footer: String,
     /// G-512 — the option's own `category` (context.ts:360): the ref
     /// groups rows by it; a category-less option renders flat.
     pub category: Option<String>,
@@ -60,9 +66,9 @@ pub struct PluginDialogSpec {
 
 impl PluginDialogSpec {
     /// Parse the guest's JSON shape
-    /// (`{title, rows: [..], options: [{title, value, description?}]}`).
-    /// Unknown shapes degrade to an empty spec (contained, like every
-    /// registration surface).
+    /// (`{title, rows: [..], options: [{title, value, description?,
+    /// footer?, category?}]}`). Unknown shapes degrade to an empty
+    /// spec (contained, like every registration surface).
     #[must_use]
     pub fn from_json(value: &Value) -> Self {
         let str_field =
@@ -103,6 +109,13 @@ impl PluginDialogSpec {
                                 .unwrap_or_default(),
                             description: option
                                 .get("description")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_owned(),
+                            // G-525 — the distinct footer field crosses
+                            // (context.ts:359 → api.tsx:397 `{...option}`).
+                            footer: option
+                                .get("footer")
                                 .and_then(Value::as_str)
                                 .unwrap_or_default()
                                 .to_owned(),
@@ -415,6 +428,13 @@ pub fn parse_select_spec(
                         .unwrap_or_default(),
                     description: option
                         .get("description")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    // G-525 — the distinct footer field crosses
+                    // (context.ts:359 → api.tsx:397 `{...option}`).
+                    footer: option
+                        .get("footer")
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_owned(),

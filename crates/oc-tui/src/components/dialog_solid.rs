@@ -177,6 +177,50 @@ fn styled(chunks: Vec<TextChunk>) -> StyledText {
     StyledText::new(chunks)
 }
 
+/// G-527 — the prompt input row's chunks with the BLOCK CURSOR at
+/// the caret: `[before-window] [cursor cell] [after-tail]`, all
+/// clipped to `width` cells starting at the viewport's `offset`
+/// (0 = the head window the rename/install faces use; the
+/// GenericPrompt face feeds the cursor-following tail offset — the
+/// ref's `ensure_cursor_visible` horizontal arm). The char UNDER
+/// the caret renders inverted (a terminal block cursor keeps the
+/// glyph); at the value END the cursor cell is the trailing blank —
+/// byte-identical to the pre-G-527 rendering, so the seeded
+/// initial view (the ref's `gotoLineEnd`, dialog-prompt.tsx:79)
+/// never moves.
+fn prompt_input_chunks(
+    value: &str,
+    cursor: usize,
+    offset: usize,
+    width: usize,
+    fg: Rgb,
+    surface: Rgb,
+    text: Rgb,
+) -> Vec<TextChunk> {
+    let cursor = cursor.min(value.chars().count());
+    let byte = value.char_indices().nth(cursor).map_or(value.len(), |(byte, _)| byte);
+    let (before, after) = value.split_at(byte);
+    let head = take_width_window(before, offset, width);
+    let head_end = display_width(&head);
+    let mut chunks = Vec::new();
+    if !head.is_empty() {
+        chunks.push(chunk(head, fg, None, 0));
+    }
+    if head_end < width {
+        let mut tail_iter = after.chars();
+        let under = match tail_iter.next() {
+            Some(ch) => ch.to_string(),
+            None => " ".to_owned(),
+        };
+        chunks.push(chunk(under, surface, Some(text), 0));
+        let tail = take_width_window(tail_iter.as_str(), 0, width - head_end - 1);
+        if !tail.is_empty() {
+            chunks.push(chunk(tail, fg, None, 0));
+        }
+    }
+    chunks
+}
+
 // ---------------------------------------------------------------------------
 // inputs (the store → view bridge)
 // ---------------------------------------------------------------------------
@@ -348,6 +392,9 @@ struct DialogInputs {
     title_suffix: String,
     // -- the prompt family -------------------------------------------------
     prompt_value: String,
+    /// G-527 — the prompt cursor (char index; the entry's resolved
+    /// `prompt_cursor()`).
+    prompt_cursor: usize,
     // -- help ---------------------------------------------------------------
     hint_lines: Vec<String>,
     // -- plugin rows ---------------------------------------------------------
@@ -509,8 +556,14 @@ fn content_height(inputs: &DialogInputs) -> usize {
         // G-237 (dialog-prompt.tsx:98-145): title, gap, description
         // rows, gap, input, gap, footer, the footer's pad. The rows
         // are the PRE-WRAPPED description (the ref's `<text>` wraps
-        // at the box content width).
-        Family::GenericPrompt => inputs.hint_lines.len() + 7,
+        // at the box content width). G-526 — an ABSENT/empty
+        // description mounts NO node at all (api.tsx:374
+        // `description={options.description ? … : undefined}` →
+        // dialog-prompt.tsx:113's `gap={1}` box has ONE child): the
+        // description slot AND its gap drop — height 6, not 7.
+        Family::GenericPrompt => {
+            inputs.hint_lines.len() + 7 - usize::from(inputs.hint_lines.is_empty())
+        }
         // title, gap, input, gap, hints, gap, footer, pad.
         Family::ConnectPrompt => inputs.hint_lines.len() + 8,
         // title, gap, wrapped lines, hint paddingBottom, root gap,
@@ -1421,13 +1474,19 @@ fn connect_prompt_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::Eleme
             if i.prompt_value.is_empty() {
                 styled(vec![chunk(i.placeholder.clone(), i.colors.muted, None, 0)])
             } else {
-                let typed = take_width(&i.prompt_value, width);
-                let end = display_width(&typed);
-                let mut chunks = vec![chunk(typed, i.colors.formfield_base_fg, None, 0)];
-                if end < width {
-                    chunks.push(chunk(" ".to_owned(), i.colors.surface, Some(i.colors.text), 0));
-                }
-                styled(chunks)
+                // G-527 — the block cursor rides the caret (the
+                // head-window take; at the value END this is the
+                // pre-G-527 trailing cell, so the seeded view never
+                // moves).
+                styled(prompt_input_chunks(
+                    &i.prompt_value,
+                    i.prompt_cursor,
+                    0,
+                    width,
+                    i.colors.formfield_base_fg,
+                    i.colors.surface,
+                    i.colors.text,
+                ))
             }
         })),
     );
@@ -1527,13 +1586,19 @@ fn prompt_builder_titled(
                 styled(vec![chunk(placeholder.to_owned(), i.colors.muted, None, 0)])
             } else {
                 let cursor_bg = if worktree { i.colors.formfield_base_fg } else { i.colors.text };
-                let typed = take_width(&i.prompt_value, width);
-                let end = display_width(&typed);
-                let mut chunks = vec![chunk(typed, i.colors.formfield_base_fg, None, 0)];
-                if end < width {
-                    chunks.push(chunk(" ".to_owned(), i.colors.surface, Some(cursor_bg), 0));
-                }
-                styled(chunks)
+                // G-527 — the block cursor rides the caret (the
+                // head-window take; at the value END this is the
+                // pre-G-527 trailing cell, so the seeded view never
+                // moves).
+                styled(prompt_input_chunks(
+                    &i.prompt_value,
+                    i.prompt_cursor,
+                    0,
+                    width,
+                    i.colors.formfield_base_fg,
+                    i.colors.surface,
+                    cursor_bg,
+                ))
             }
         })),
     );
@@ -1605,6 +1670,14 @@ fn generic_prompt_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::Eleme
             .into_element()
     });
     let description_box = box_().children_dyn(std::rc::Rc::new(description));
+    // G-526 — the description node mounts ONLY when the kind carries
+    // one (api.tsx:374: absent/"" → `undefined` → no child in
+    // dialog-prompt.tsx:113's `gap={1}` box): an empty box plus its
+    // `margin_top(1)` painted one blank row and sat the input/footer
+    // one row lower than the ref. Build-time decision, like the
+    // title-suffix wrapper (the flip always changes the mount key's
+    // height component: 6 ↔ hint+7).
+    let has_description = !inputs.get().hint_lines.is_empty();
     // The input row: placeholder muted / typed value in
     // text.formfield.base with the block cursor.
     let input = text().wrap_mode("none").dyn_prop(
@@ -1614,38 +1687,51 @@ fn generic_prompt_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::Eleme
             if i.prompt_value.is_empty() {
                 styled(vec![chunk(i.placeholder.clone(), i.colors.muted, None, 0)])
             } else {
-                // The ref's textarea viewport (dialog-prompt.tsx:79
-                // `gotoLineEnd` — the cursor rides the END; upstream
+                // The ref's textarea viewport (upstream
                 // `ensure_cursor_visible`'s horizontal arm, wrapMode
                 // none): margin_cols = min(max(1, floor(W*0.2)),
                 // (W-1)/2) (the 0.2 default scroll margin); when
                 // cursor_col + margin_cols >= W the viewport scrolls
-                // to cursor_col + margin_cols - W + 1 — the visible
-                // window is the TAIL (the pre-fix head take clipped
-                // the seeded value's end).
-                let cursor_col = display_width(&i.prompt_value);
+                // to cursor_col + margin_cols - W + 1. G-527 — the
+                // viewport follows the CURSOR (moveCursorLeft/Right
+                // / gotoLineHome/End move it mid-text; typing inserts
+                // at it; the pre-va21d model tracked the value END
+                // with cursor≡end). The block cursor rides the caret
+                // column: `[before][inverted cell][after]`.
+                let cursor_col = {
+                    let cursor = i.prompt_cursor.min(i.prompt_value.chars().count());
+                    let byte = i
+                        .prompt_value
+                        .char_indices()
+                        .nth(cursor)
+                        .map_or(i.prompt_value.len(), |(byte, _)| byte);
+                    display_width(&i.prompt_value[..byte])
+                };
                 let margin_cols = (width / 5).max(1).min(width.saturating_sub(1) / 2);
                 let offset_x = if cursor_col + margin_cols >= width {
                     cursor_col + margin_cols - width + 1
                 } else {
                     0
                 };
-                let typed = take_width_window(&i.prompt_value, offset_x, width);
-                let end = display_width(&typed);
-                let mut chunks = vec![chunk(typed, i.colors.formfield_base_fg, None, 0)];
-                if end < width {
-                    chunks.push(chunk(" ".to_owned(), i.colors.surface, Some(i.colors.text), 0));
-                }
-                styled(chunks)
+                styled(prompt_input_chunks(
+                    &i.prompt_value,
+                    i.prompt_cursor,
+                    offset_x,
+                    width,
+                    i.colors.formfield_base_fg,
+                    i.colors.surface,
+                    i.colors.text,
+                ))
             }
         })),
     );
-    box_().padding_left(2.0).padding_right(2.0).children(Children::Static(vec![
-        title_row.into_element(),
-        description_box.margin_top(1.0).into_element(),
-        input.margin_top(1.0).into_element(),
-        prompt_footer_element(inputs, false).margin_top(1.0).into_element(),
-    ]))
+    let mut children = vec![title_row.into_element()];
+    if has_description {
+        children.push(description_box.margin_top(1.0).into_element());
+    }
+    children.push(input.margin_top(1.0).into_element());
+    children.push(prompt_footer_element(inputs, false).margin_top(1.0).into_element());
+    box_().padding_left(2.0).padding_right(2.0).children(Children::Static(children))
 }
 
 // ---------------------------------------------------------------------------
@@ -3294,6 +3380,7 @@ fn build_inputs(
                 footer_hint: props.footer_hint.clone(),
                 title_suffix: props.title_suffix.clone().unwrap_or_default(),
                 prompt_value: String::new(),
+                prompt_cursor: 0,
                 hint_lines: Vec::new(),
                 plugin_title: String::new(),
                 message: String::new(),
@@ -3339,6 +3426,7 @@ fn build_inputs(
             footer_hint: None,
             title_suffix: String::new(),
             prompt_value: entry.value.clone(),
+            prompt_cursor: entry.prompt_cursor(),
             hint_lines: Vec::new(),
             plugin_title: String::new(),
             plugin_rows: Vec::new(),
@@ -3389,6 +3477,7 @@ fn build_inputs(
                 footer_hint: None,
                 title_suffix: String::new(),
                 prompt_value: entry.value.clone(),
+                prompt_cursor: entry.prompt_cursor(),
                 hint_lines: if description.is_empty() {
                     Vec::new()
                 } else {
@@ -3455,6 +3544,7 @@ fn build_inputs(
                 footer_hint: None,
                 title_suffix: String::new(),
                 prompt_value: String::new(),
+                prompt_cursor: 0,
                 hint_lines: Vec::new(),
                 plugin_title: "/btw".to_owned(),
                 plugin_rows: Vec::new(),
@@ -3499,6 +3589,7 @@ fn build_inputs(
             footer_hint: None,
             title_suffix: String::new(),
             prompt_value: entry.value.clone(),
+            prompt_cursor: entry.prompt_cursor(),
             hint_lines: props.hints.clone(),
             plugin_title: String::new(),
             plugin_rows: Vec::new(),
@@ -3554,6 +3645,7 @@ fn build_inputs(
                 footer_hint: None,
                 title_suffix: String::new(),
                 prompt_value: String::new(),
+                prompt_cursor: 0,
                 hint_lines: crate::wrap::wrap_label(&hint, content_width.max(1)),
                 plugin_title: String::new(),
                 plugin_rows: Vec::new(),
@@ -3612,6 +3704,7 @@ fn build_inputs(
                 footer_hint: None,
                 title_suffix: String::new(),
                 prompt_value: String::new(),
+                prompt_cursor: 0,
                 hint_lines: Vec::new(),
                 plugin_title: content.title,
                 plugin_rows,
@@ -3684,6 +3777,7 @@ fn build_inputs(
                 footer_hint: None,
                 title_suffix: String::new(),
                 prompt_value: String::new(),
+                prompt_cursor: 0,
                 hint_lines: Vec::new(),
                 plugin_title,
                 plugin_rows: Vec::new(),
@@ -3735,6 +3829,7 @@ fn build_inputs(
                 footer_hint: None,
                 title_suffix: String::new(),
                 prompt_value: String::new(),
+                prompt_cursor: 0,
                 hint_lines: Vec::new(),
                 plugin_title: title.clone(),
                 plugin_rows: Vec::new(),
@@ -3790,6 +3885,7 @@ fn build_inputs(
                 footer_hint: None,
                 title_suffix: String::new(),
                 prompt_value: String::new(),
+                prompt_cursor: 0,
                 hint_lines: Vec::new(),
                 plugin_title: String::new(),
                 plugin_rows: Vec::new(),
@@ -3856,6 +3952,7 @@ fn build_inputs(
                 footer_hint: None,
                 title_suffix: String::new(),
                 prompt_value: String::new(),
+                prompt_cursor: 0,
                 hint_lines: Vec::new(),
                 plugin_title: String::new(),
                 plugin_rows: Vec::new(),
@@ -3897,6 +3994,7 @@ fn build_inputs(
             footer_hint: None,
             title_suffix: String::new(),
             prompt_value: String::new(),
+            prompt_cursor: 0,
             // The status rows ride the hints (the props layer derives
             // them — see the `DialogKind::Status` props arm).
             hint_lines: props.hints.clone(),
@@ -3941,6 +4039,7 @@ fn build_inputs(
             footer_hint: None,
             title_suffix: String::new(),
             prompt_value: String::new(),
+            prompt_cursor: 0,
             hint_lines: Vec::new(),
             plugin_title: String::new(),
             plugin_rows: Vec::new(),
@@ -3982,6 +4081,7 @@ fn build_inputs(
             footer_hint: None,
             title_suffix: String::new(),
             prompt_value: String::new(),
+            prompt_cursor: 0,
             hint_lines: props.hints.clone(),
             plugin_title: String::new(),
             plugin_rows: Vec::new(),
@@ -4027,6 +4127,7 @@ mod d22_tests {
             centered: false,
             select: crate::components::dialog_select::SelectState::default(),
             value: String::new(),
+            prompt_cursor: None,
             theme_initial: None,
         }
     }
@@ -4122,6 +4223,126 @@ mod d22_tests {
         assert!(grid.contains("v21 dialog body"), "the raw row renders");
         // No esc chrome: the row is the ONLY text the dialog paints.
         assert!(!grid.contains("esc"), "the v2 dialog.show carries no esc chrome");
+        crate::components::chrome_solid::reset_hub();
+    }
+
+    /// G-526 — the plugin prompt WITHOUT a description mounts no
+    /// description node (api.tsx:374 `description={options.description
+    /// ? … : undefined}` → dialog-prompt.tsx:113's `gap={1}` box has
+    /// ONE child): the box is height 6 (chrome pad 1 + 6), not 7 —
+    /// the input/footer ride one row higher, exactly the ref.
+    #[test]
+    fn generic_prompt_without_description_drops_the_description_slot() {
+        crate::components::chrome_solid::reset_hub();
+        let theme = crate::theme::ThemeState::v2_dark();
+        let store = crate::store::Store::new(crate::reactive::Runtime::new());
+        let props = crate::components::dialog_select::SelectProps::new("Commands", Vec::new());
+        let sidecar = DialogSidecar::default();
+        let seat_of = |store: &crate::store::Store| {
+            let entry = store.dialogs().last().expect("the prompt entry").clone();
+            mount_dialog_tree(&entry, &props, None, &theme, (120, 36), &sidecar)
+        };
+        // No description: 1 (chrome pad) + 6.
+        store.open_prompt("T", "", Some("p"), "", Some(1), None);
+        let seat = seat_of(&store);
+        assert_eq!(seat.rect.3, 7, "the no-description prompt box: 1 + 6 rows");
+        // One description row: 1 + (1 + 7) — the slot AND its gap.
+        store.open_prompt("T", "one row", Some("p"), "", Some(2), None);
+        let seat = seat_of(&store);
+        assert_eq!(seat.rect.3, 9, "the one-row description prompt box: 1 + 1 + 7 rows");
+        crate::components::chrome_solid::reset_hub();
+    }
+
+    /// G-527 — the block cursor rides the caret: `[before] [inverted
+    /// cell] [after]`, and at the value END the sequence degenerates
+    /// to the pre-G-527 trailing cell (the seeded `gotoLineEnd` view
+    /// never moves).
+    #[test]
+    fn prompt_input_chunks_ride_the_caret() {
+        let fg: Rgb = (200, 200, 200);
+        let surface: Rgb = (20, 20, 20);
+        let text: Rgb = (240, 240, 240);
+        let shape = |value: &str, cursor: usize, offset: usize, width: usize| {
+            prompt_input_chunks(value, cursor, offset, width, fg, surface, text)
+                .iter()
+                .map(|chunk| (chunk.text.clone(), chunk.bg.is_some()))
+                .collect::<Vec<_>>()
+        };
+        // Mid-text: [he][l inverted][llo].
+        assert_eq!(
+            shape("hello", 2, 0, 20),
+            vec![("he".to_owned(), false), ("l".to_owned(), true), ("llo".to_owned(), false)],
+            "the caret over the third char inverts exactly that cell"
+        );
+        // At the END (the seeded view): [hello][trailing cell] —
+        // byte-identical to the pre-G-527 rendering.
+        assert_eq!(
+            shape("hello", 5, 0, 20),
+            vec![("hello".to_owned(), false), (" ".to_owned(), true)]
+        );
+        // At 0 (home): [h inverted][ello].
+        assert_eq!(
+            shape("hello", 0, 0, 20),
+            vec![("h".to_owned(), true), ("ello".to_owned(), false)]
+        );
+        // Past the END clamps to the end.
+        assert_eq!(
+            shape("hello", 9, 0, 20),
+            vec![("hello".to_owned(), false), (" ".to_owned(), true)]
+        );
+        // The viewport offset windows the before-part: the tail
+        // window at offset 3 shows `lo` before the caret-at-5 cell.
+        assert_eq!(
+            shape("hello", 5, 3, 20),
+            vec![("lo".to_owned(), false), (" ".to_owned(), true)]
+        );
+        // The cursor cell clips off the window's right edge: the
+        // head fills the width and no block/tail render.
+        assert_eq!(shape("hello!", 6, 0, 5), vec![("hello".to_owned(), false)]);
+        // A wide char under the caret covers both its cells.
+        assert_eq!(
+            shape("h界llo", 1, 0, 20),
+            vec![("h".to_owned(), false), ("界".to_owned(), true), ("llo".to_owned(), false)]
+        );
+    }
+
+    /// G-527 — the GenericPrompt viewport follows the CURSOR: the
+    /// offset math (ensure_cursor_visible's horizontal arm) keys on
+    /// the caret's column, so `home` on a long value rewinds the
+    /// window to the HEAD while the seeded end view keeps the TAIL
+    /// (the v21c prompt-open shape).
+    #[test]
+    fn generic_prompt_window_follows_the_cursor() {
+        crate::components::chrome_solid::reset_hub();
+        let theme = crate::theme::ThemeState::v2_dark();
+        let store = crate::store::Store::new(crate::reactive::Runtime::new());
+        // 71 chars > the 56-cell window (medium box 60 - 4 padding).
+        let value: String = "0123456789".repeat(7).chars().take(71).collect();
+        store.open_prompt("T", "", Some("p"), &value, Some(3), None);
+        let input_row = |store: &crate::store::Store, cursor: Option<usize>| {
+            store.update_dialog(|top| top.prompt_cursor = cursor);
+            let entry = store.dialogs().last().expect("the prompt entry").clone();
+            assert_eq!(entry.prompt_cursor(), cursor.unwrap_or(71));
+            let props = crate::components::dialog_select::SelectProps::new("C", Vec::new());
+            let sidecar = DialogSidecar::default();
+            let _seat = mount_dialog_tree(&entry, &props, None, &theme, (120, 36), &sidecar);
+            let mut frame = crate::components::chrome_solid::blank_frame(120, 36);
+            crate::components::chrome_solid::composite_chrome_tree(&mut frame);
+            let grid = frame.text_grid();
+            // The input row: the row after the title (the
+            // no-description prompt seats input at title+gap).
+            let title_row = grid.iter().position(|row| row.contains("T")).expect("the title");
+            grid[title_row + 1].trim().to_owned()
+        };
+        // Seeded (cursor at END): the tail window — the row starts
+        // deep into the value (offset 71 + margin 11 - 56 + 1 = 27;
+        // cell 27 of the repeated digits is '7').
+        let seeded = input_row(&store, None);
+        assert!(seeded.starts_with('7'), "the seeded end view shows the value's tail: {seeded}");
+        // HOME rewinds the cursor (and the window with it) — the
+        // head of the value is visible again.
+        let homed = input_row(&store, Some(0));
+        assert!(homed.starts_with("0123456789"), "home rewinds the viewport: {homed}");
         crate::components::chrome_solid::reset_hub();
     }
 }

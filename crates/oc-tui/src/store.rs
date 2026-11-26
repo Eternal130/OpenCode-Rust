@@ -491,12 +491,68 @@ pub struct DialogEntry {
     pub select: SelectState,
     /// Prompt input value for prompt-style kinds (rename).
     pub value: String,
+    /// G-527 — the prompt cursor (CHAR index into `value`). `None` =
+    /// at the END: every ref prompt face seeds its textarea that way
+    /// (`TextareaRenderable` initialValue → `InputRenderable`'s
+    /// `cursorOffset = initialValue.length`, index.bun.js:9109;
+    /// dialog-prompt.tsx:79 `gotoLineEnd()`), and every wholesale
+    /// value write resets to it (the worktree slug's
+    /// `input.gotoLineEnd()`, dialog-worktree-name.tsx:21). The
+    /// keypress pump moves it (moveCursorLeft/Right,
+    /// gotoLineHome/End — the TextareaRenderable default bindings,
+    /// index.bun.js:8890-8919).
+    pub prompt_cursor: Option<usize>,
     /// The live-preview contract of `dialog-theme-list.tsx`: the theme
     /// name captured when the `ThemeList` dialog opened (`const initial =
     /// themes.selected`). `Some` while the dialog is open and
     /// UNCONFIRMED — moves/filters preview through it, an unconfirmed
     /// close reverts to it, a submit clears it (`confirmed = true`).
     pub theme_initial: Option<String>,
+}
+
+impl DialogEntry {
+    /// G-527 — the resolved prompt cursor (char index, clamped into
+    /// `[0, len]`; `None` reads as the value END — the seeded
+    /// `gotoLineEnd` invariant).
+    #[must_use]
+    pub fn prompt_cursor(&self) -> usize {
+        self.prompt_cursor.unwrap_or(self.value.chars().count()).min(self.value.chars().count())
+    }
+
+    /// G-527 — move the cursor to `target` (char index, clamped into
+    /// `[0, len]` — `moveCursorLeft/Right`'s bounds).
+    pub fn prompt_move_cursor(&mut self, target: usize) {
+        let len = self.value.chars().count();
+        self.prompt_cursor = Some(target.min(len));
+    }
+
+    /// G-527 — insert one char AT the cursor (the ref's `insertText`
+    /// at `cursorOffset`, index.bun.js:9126-9134): the cursor advances
+    /// past it.
+    pub fn prompt_insert_char(&mut self, ch: char) {
+        let cursor = self.prompt_cursor();
+        let byte = char_boundary(&self.value, cursor);
+        self.value.insert(byte, ch);
+        self.prompt_cursor = Some(cursor + 1);
+    }
+
+    /// G-527 — delete the char BEFORE the cursor
+    /// (`deleteCharBackward`): at column 0 nothing happens.
+    pub fn prompt_backspace(&mut self) {
+        let cursor = self.prompt_cursor();
+        if cursor == 0 {
+            return;
+        }
+        let byte = char_boundary(&self.value, cursor - 1);
+        self.value.remove(byte);
+        self.prompt_cursor = Some(cursor - 1);
+    }
+}
+
+/// The byte offset of `char_index` (a char-boundary walk; the index
+/// is already clamped by the callers).
+fn char_boundary(value: &str, char_index: usize) -> usize {
+    value.char_indices().nth(char_index).map_or(value.len(), |(byte, _)| byte)
 }
 
 /// TUI-9: one stashed prompt (`prompt/stash.tsx`'s `StashEntry` —
@@ -1398,6 +1454,12 @@ pub struct PluginDialogOption {
     pub title: String,
     pub value: String,
     pub description: String,
+    /// G-525 — the option's own `footer` (context.ts:359): a DISTINCT
+    /// field from `description` — the ref renders the description
+    /// INLINE after the title (dialog-select.tsx:899-903) and the
+    /// footer right-aligned (:905-919); `{...option}` forwards both
+    /// (api.tsx:397).
+    pub footer: String,
     /// G-512 — the option's own `category` (context.ts:360's
     /// `DialogSelectOption.category`): the ref groups by it and a
     /// category-less option renders FLAT (dialog-select.tsx:218
@@ -9315,7 +9377,12 @@ impl Store {
                     },
                     DialogSize::Medium,
                 );
-                self.update_dialog(|top| top.value.clear());
+                self.update_dialog(|top| {
+                    top.value.clear();
+                    // G-527 — a wholesale value write resets the
+                    // cursor to the END (gotoLineEnd).
+                    top.prompt_cursor = None;
+                });
             }
             "oauth" => {
                 if !method.form.is_empty() {
@@ -9376,9 +9443,16 @@ impl Store {
         if let Some(initial) = initial {
             self.update_dialog(move |top| {
                 top.value = initial;
+                // G-527 — the seeded rename value: cursor at the end.
+                top.prompt_cursor = None;
             });
         } else {
-            self.update_dialog(|top| top.value.clear());
+            self.update_dialog(|top| {
+                top.value.clear();
+                // G-527 — a wholesale value write resets the
+                // cursor to the END (gotoLineEnd).
+                top.prompt_cursor = None;
+            });
         }
     }
 
@@ -9415,7 +9489,12 @@ impl Store {
                 },
                 DialogSize::Medium,
             );
-            self.update_dialog(|top| top.value.clear());
+            self.update_dialog(|top| {
+                top.value.clear();
+                // G-527 — a wholesale value write resets the
+                // cursor to the END (gotoLineEnd).
+                top.prompt_cursor = None;
+            });
         }
     }
 
@@ -9617,7 +9696,12 @@ impl Store {
                 DialogKind::IntegrationCode { integration_id: id },
                 DialogSize::Medium,
             );
-            self.update_dialog(|top| top.value.clear());
+            self.update_dialog(|top| {
+                top.value.clear();
+                // G-527 — a wholesale value write resets the
+                // cursor to the END (gotoLineEnd).
+                top.prompt_cursor = None;
+            });
         } else {
             self.replace_dialog(
                 DialogKind::IntegrationPending { integration_id: id },
@@ -9682,7 +9766,11 @@ impl Store {
             DialogKind::IntegrationRename { credential_id: credential_id.to_owned() },
             DialogSize::Medium,
         );
-        self.update_dialog(|top| top.value = label);
+        self.update_dialog(|top| {
+            top.value = label;
+            // G-527 — the seeded rename value: cursor at the end.
+            top.prompt_cursor = None;
+        });
     }
 
     /// G-486 — the rename prompt's confirm (`credential.update`,
@@ -11330,6 +11418,7 @@ impl Store {
             centered: false,
             select: SelectState::default(),
             value: String::new(),
+            prompt_cursor: None,
             theme_initial,
         };
         self.dialogs.update(|stack| stack.push(entry));
@@ -11367,6 +11456,7 @@ impl Store {
             centered: false,
             select,
             value: String::new(),
+            prompt_cursor: None,
             theme_initial,
         };
         self.dialogs.update(|stack| stack.push(entry));
@@ -11397,6 +11487,7 @@ impl Store {
             centered: false,
             select,
             value: String::new(),
+            prompt_cursor: None,
             theme_initial,
         };
         self.replace_dialog_entry(entry);
@@ -12100,7 +12191,12 @@ impl Store {
         // the cursor sits after the seeded text.
         if !value.is_empty() {
             // `value` is `&str`; `clone_from` needs `&String`.
-            self.update_dialog(|top| top.value = value.to_string());
+            self.update_dialog(|top| {
+                top.value = value.to_string();
+                // G-527 — the seeded initialValue: cursor at the
+                // end (gotoLineEnd, dialog-prompt.tsx:79).
+                top.prompt_cursor = None;
+            });
         }
         self.request_redraw();
     }
@@ -12576,6 +12672,7 @@ impl Store {
             centered,
             select: SelectState::default(),
             value: String::new(),
+            prompt_cursor: None,
             theme_initial,
         };
         self.replace_dialog_entry(entry);
@@ -12671,6 +12768,7 @@ impl Store {
             centered: false,
             select,
             value: String::new(),
+            prompt_cursor: None,
             theme_initial,
         };
         // G-506: select rides `api.show` → `dialog.replace`

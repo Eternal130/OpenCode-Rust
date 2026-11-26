@@ -77,6 +77,7 @@ impl PluginDialogSource for HostDialogSource {
                     title: option.title,
                     value: option.value,
                     description: option.description,
+                    footer: option.footer,
                     category: option.category,
                 })
                 .collect(),
@@ -159,6 +160,7 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                         title: option.title.clone(),
                         value: option.value.clone(),
                         description: option.description.clone(),
+                        footer: option.footer.clone(),
                         category: option.category.clone(),
                     })
                     .collect(),
@@ -183,6 +185,7 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                         title: option.title.clone(),
                         value: option.value.clone(),
                         description: option.description.clone(),
+                        footer: option.footer.clone(),
                         category: option.category.clone(),
                     })
                     .collect(),
@@ -213,6 +216,7 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                     title: option.title.clone(),
                     value: option.value.clone(),
                     description: option.description.clone(),
+                    footer: option.footer.clone(),
                     category: option.category.clone(),
                 })
                 .collect(),

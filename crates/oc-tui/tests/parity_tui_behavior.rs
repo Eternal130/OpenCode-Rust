@@ -401,6 +401,163 @@ fn ui_dialog_prompt() {
     assert!(text.contains("from the guest"), "the guest description:\n{text}");
 }
 
+/// G-527 — the prompt cursor model (the ref's TextareaRenderable
+/// default bindings, index.bun.js:8760-8822/8890-8919): the seeded
+/// caret sits at the value END (gotoLineEnd), arrows move it
+/// mid-text (moveCursorLeft/Right, gotoLineHome/End + the ctrl+a/e
+/// aliases), printables INSERT at the caret, backspace deletes
+/// BEFORE it (a no-op at column 0), and return submits the edited
+/// value.
+#[test]
+fn ui_dialog_prompt_cursor_model() {
+    let store = Store::new(Runtime::new());
+    store.open_prompt("Edit", "", Some("p"), "abcdef", Some(51), None);
+
+    // The seeded caret sits at the END: typing appends.
+    assert_eq!(dialog_layer(&store, "q"), DialogKeyOutcome::Consumed);
+    let entry = store.top_dialog().expect("still open");
+    assert_eq!(entry.value, "abcdefq", "the seeded end caret appends");
+    assert_eq!(entry.prompt_cursor(), 7);
+
+    // left ×2 → the caret before the 'f'; typing INSERTS there
+    // (mid-text, not append).
+    dialog_layer(&store, "left");
+    dialog_layer(&store, "left");
+    assert_eq!(store.top_dialog().expect("open").prompt_cursor(), 5);
+    assert_eq!(dialog_layer(&store, "z"), DialogKeyOutcome::Consumed);
+    assert_eq!(
+        store.top_dialog().expect("open").value,
+        "abcdezfq",
+        "the printable inserts at the caret"
+    );
+    assert_eq!(store.top_dialog().expect("open").prompt_cursor(), 6);
+
+    // home → 0; ctrl+e → the end (gotoLineEnd); ctrl+a → 0.
+    assert_eq!(dialog_layer(&store, "home"), DialogKeyOutcome::Consumed);
+    assert_eq!(store.top_dialog().expect("open").prompt_cursor(), 0);
+    assert_eq!(dialog_layer(&store, "ctrl+e"), DialogKeyOutcome::Consumed);
+    assert_eq!(store.top_dialog().expect("open").prompt_cursor(), 8);
+    assert_eq!(dialog_layer(&store, "ctrl+a"), DialogKeyOutcome::Consumed);
+    assert_eq!(store.top_dialog().expect("open").prompt_cursor(), 0);
+
+    // Backspace at column 0 is a no-op (deleteCharBackward).
+    assert_eq!(dialog_layer(&store, "backspace"), DialogKeyOutcome::Consumed);
+    assert_eq!(store.top_dialog().expect("open").value, "abcdezfq");
+
+    // end → past the 'q'; backspace deletes it.
+    assert_eq!(dialog_layer(&store, "end"), DialogKeyOutcome::Consumed);
+    assert_eq!(dialog_layer(&store, "backspace"), DialogKeyOutcome::Consumed);
+    let entry = store.top_dialog().expect("open");
+    assert_eq!(entry.value, "abcdezf");
+    assert_eq!(entry.prompt_cursor(), 7);
+
+    // The movement strokes never leak past the dialog layer.
+    assert_eq!(dialog_layer(&store, "left"), DialogKeyOutcome::Consumed);
+    assert_eq!(dialog_layer(&store, "right"), DialogKeyOutcome::Consumed);
+
+    // Return resolves the mid-text-edited value.
+    assert_eq!(dialog_layer(&store, "return"), DialogKeyOutcome::Consumed);
+    assert!(store.top_dialog().is_none(), "api.clear() ran on submit");
+    assert_eq!(
+        store.take_ui_dialog_resolutions(),
+        vec![(51, serde_json::Value::String("abcdezf".to_owned()))],
+        "submit resolves the cursor-edited value"
+    );
+}
+
+/// G-524 — a NO-search plugin select stays GROUPED under a typed
+/// query: the ref's select arm passes no `flat` prop (api.tsx:392-402)
+/// so `props.flat && filter.length > 0` is `undefined && …` = false
+/// (dialog-select.tsx:212) — the categorized list keeps its headers
+/// under the local fuzzy filter.
+#[test]
+fn plugin_select_typed_query_stays_grouped() {
+    let store = Store::new(Runtime::new());
+    oc_tui::plugin_ui::apply_plugin_ui(
+        &store,
+        "g524",
+        &oc_tui::plugin_ui::PluginUiEvent::DialogSelect {
+            request_id: 60,
+            title: "G524".to_owned(),
+            placeholder: None,
+            options: vec![
+                oc_tui::store::PluginDialogOption {
+                    title: "Alpha".into(),
+                    value: "alpha".into(),
+                    description: String::new(),
+                    footer: String::new(),
+                    category: Some("Cat One".into()),
+                },
+                oc_tui::store::PluginDialogOption {
+                    title: "Gamma".into(),
+                    value: "gamma".into(),
+                    description: String::new(),
+                    footer: String::new(),
+                    category: Some("Cat Two".into()),
+                },
+            ],
+            current: None,
+            actions: vec![],
+            has_search: false,
+        },
+    );
+    // Type "gam" — the fuzzy filter narrows to Gamma and the CATEGORY
+    // HEADER persists (the pre-G-524 unconditional flat(true)
+    // rendered the filtered rows headerless).
+    for key in ["g", "a", "m"] {
+        assert_eq!(dialog_layer(&store, key), DialogKeyOutcome::Consumed);
+    }
+    let text = frame_text(&store);
+    assert!(text.contains("Cat Two"), "the group header persists under the typed query:\n{text}");
+    assert!(text.contains("Gamma"), "the fuzzy-matched row:\n{text}");
+}
+
+/// G-525 — the plugin option's `description` and `footer` are
+/// DISTINCT fields (context.ts:355-362; api.tsx:397 `{...option}`
+/// forwards both): the description renders INLINE after the title
+/// (dialog-select.tsx:899-903), the footer right-aligned (:905-919).
+#[test]
+fn plugin_select_description_inline_footer_right() {
+    let store = Store::new(Runtime::new());
+    oc_tui::plugin_ui::apply_plugin_ui(
+        &store,
+        "g525",
+        &oc_tui::plugin_ui::PluginUiEvent::DialogSelect {
+            request_id: 61,
+            title: "G525".to_owned(),
+            placeholder: None,
+            options: vec![oc_tui::store::PluginDialogOption {
+                title: "Deploy".into(),
+                value: "deploy".into(),
+                description: "ships it".into(),
+                footer: "prod".into(),
+                category: Some("Ops".into()),
+            }],
+            current: None,
+            actions: vec![],
+            has_search: false,
+        },
+    );
+    let text = frame_text(&store);
+    assert!(
+        text.contains("Deploy ships it"),
+        "the description rides INLINE after the title:\n{text}"
+    );
+    assert!(text.contains("prod"), "the footer field crosses and renders:\n{text}");
+}
+
+/// G-523 — the confirm pills run `Locale.titlecase`'s `\b\w`
+/// boundaries (util/locale.ts:3-5): a hyphenated label capitalizes
+/// every segment.
+#[test]
+fn confirm_pills_titlecase_hyphenated_labels() {
+    let store = Store::new(Runtime::new());
+    store.open_confirm("t", "m", "merge-dry-run", "never-mind", None, None, None);
+    let text = frame_text(&store);
+    assert!(text.contains("Merge-Dry-Run"), "the hyphenated confirm pill:\n{text}");
+    assert!(text.contains("Never-Mind"), "the hyphenated cancel pill:\n{text}");
+}
+
 /// TUI-TD22: `DialogExperiments` — v2.0.24's EMPTY table renders "No
 /// experiments available"; the toggle writes `experimental.<id>`
 /// through the config sink (proven with an injected row, the port's

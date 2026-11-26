@@ -638,6 +638,7 @@ mod golden_tests {
             centered: false,
             select: crate::components::dialog_select::SelectState::default(),
             value: String::new(),
+            prompt_cursor: None,
             theme_initial: None,
         };
         entry.select.focus_current(&props);
@@ -654,6 +655,7 @@ mod golden_tests {
             centered: false,
             select: crate::components::dialog_select::SelectState::default(),
             value: "feat".to_owned(),
+            prompt_cursor: None,
             theme_initial: None,
         };
         let props = crate::components::dialog_select::SelectProps::new("", Vec::new());
