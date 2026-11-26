@@ -382,10 +382,7 @@ pub fn permission_presentation(request: &PermissionRequest) -> PermissionPresent
                 // G-528(a) — `Locale.titlecase(agent)` (util/permission.
                 // ts:80): the shared \b\w form (message::model), not a
                 // first-char local ("code-review" → "Code-Review").
-                title: format!(
-                    "{} Subagent",
-                    crate::components::message::titlecase(&agent)
-                ),
+                title: format!("{} Subagent", crate::components::message::titlecase(&agent)),
                 lines: match description {
                     Some(description) => vec![format!("◉ {description}")],
                     None => Vec::new(),

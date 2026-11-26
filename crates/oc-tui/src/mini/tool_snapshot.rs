@@ -152,9 +152,8 @@ pub fn snap_task(input: &Value) -> ToolSnapshot {
     let agent = str_field(input, "agent");
     // G-528(b) — `Locale.titlecase` (tool.ts:602): the shared \b\w
     // form (message::model), not a first-char local.
-    let kind = crate::components::message::titlecase(
-        if agent.is_empty() { "general" } else { &agent },
-    );
+    let kind =
+        crate::components::message::titlecase(if agent.is_empty() { "general" } else { &agent });
     let description = str_field(input, "description");
     ToolSnapshot::Task {
         title: format!("# {kind} Subagent"),

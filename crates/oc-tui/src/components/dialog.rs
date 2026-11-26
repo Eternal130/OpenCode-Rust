@@ -146,8 +146,13 @@ fn prompt_edit_command(
         // "linefeed" key, the same newline action (:8798).
         // The InputRenderable face (WorktreeName) rejects them
         // (index.bun.js:9112-9114 `newLine() { return false }`).
-        ("return", false, false, true) | ("return", true, false, false)
-        | ("return", false, true, false) if accepts_newline => Cmd::Newline,
+        ("return", false, false, true)
+        | ("return", true, false, false)
+        | ("return", false, true, false)
+            if accepts_newline =>
+        {
+            Cmd::Newline
+        }
         ("j", true, false, false) | ("\n", false, false, false) if accepts_newline => Cmd::Newline,
         _ => return None,
     };

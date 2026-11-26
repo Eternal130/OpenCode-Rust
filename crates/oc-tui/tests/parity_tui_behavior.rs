@@ -509,7 +509,11 @@ fn ui_dialog_prompt_edit_table() {
     // ctrl+d — the forward delete at the caret (:8793).
     dialog_layer(&store, "end");
     assert_eq!(dialog_layer(&store, "ctrl+d"), DialogKeyOutcome::Consumed);
-    assert_eq!(store.top_dialog().expect("open").value, "abc d", "forward delete at the end is a no-op");
+    assert_eq!(
+        store.top_dialog().expect("open").value,
+        "abc d",
+        "forward delete at the end is a no-op"
+    );
     dialog_layer(&store, "home");
     assert_eq!(dialog_layer(&store, "ctrl+d"), DialogKeyOutcome::Consumed);
     assert_eq!(store.top_dialog().expect("open").value, "bc d", "the forward delete removes 'a'");
@@ -525,7 +529,11 @@ fn ui_dialog_prompt_edit_table() {
     assert_eq!(dialog_layer(&store, "alt+b"), DialogKeyOutcome::Consumed);
     assert_eq!(store.top_dialog().expect("open").prompt_cursor(), 0, "alt+b to the line start");
     assert_eq!(dialog_layer(&store, "alt+f"), DialogKeyOutcome::Consumed);
-    assert_eq!(store.top_dialog().expect("open").prompt_cursor(), 2, "alt+f to the next word start");
+    assert_eq!(
+        store.top_dialog().expect("open").prompt_cursor(),
+        2,
+        "alt+f to the next word start"
+    );
 
     // The newline arm (ctrl+j — keybind.ts:207): the value goes
     // multi-line; the caret moves onto the new (empty) line; ctrl+k
@@ -598,7 +606,11 @@ fn ui_dialog_prompt_takes_the_terminal_paste() {
         dialog_layer(&store, &ch.to_string());
     }
     assert!(store.paste_into_prompt_dialog("a\nb"));
-    assert_eq!(store.top_dialog().expect("open").value, "wtab", "the InputRenderable face strips newlines");
+    assert_eq!(
+        store.top_dialog().expect("open").value,
+        "wtab",
+        "the InputRenderable face strips newlines"
+    );
 
     // No prompt dialog open → the paste routes to the composer (the
     // caller's fallback).
@@ -1754,9 +1766,9 @@ fn dialogerrordet_diff_image_inline_preview() {
 /// to the ROOT.
 #[test]
 fn plugin_tabs_open_focus_root_and_append_only() {
+    use oc_plugin_host::TabsOpKind;
     use oc_tui::data::BusEvent;
     use oc_tui::plugin_ui::{apply_plugin_ui, PluginUiEvent};
-    use oc_plugin_host::TabsOpKind;
 
     let store = Store::new(Runtime::new());
     // The family: root s1 + child c1 (the session index's parentID
@@ -1812,10 +1824,7 @@ fn plugin_tabs_open_focus_root_and_append_only() {
             index: 0,
         },
     );
-    assert!(
-        store.tabs().tabs.iter().any(|tab| tab.session_id == "s2"),
-        "the s2 tab appended"
-    );
+    assert!(store.tabs().tabs.iter().any(|tab| tab.session_id == "s2"), "the s2 tab appended");
     assert_eq!(
         store.route(),
         oc_tui::store::Route::session("s1".to_owned()),

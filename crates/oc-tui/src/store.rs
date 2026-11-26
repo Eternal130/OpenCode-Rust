@@ -11768,7 +11768,9 @@ impl Store {
             | DialogKind::BtwPrompt
             | DialogKind::PluginInstall
             | DialogKind::Prompt { .. } => true,
-            DialogKind::IntegrationForm { .. } => self.integration_form().is_some_and(|state| state.prompt_style()),
+            DialogKind::IntegrationForm { .. } => {
+                self.integration_form().is_some_and(|state| state.prompt_style())
+            }
             _ => false,
         };
         if !prompt_kind {
@@ -13469,19 +13471,13 @@ impl Store {
     /// live index, id-sorted) with its `SessionInfo` fields + the
     /// running flag (`data.session.status`).
     #[must_use]
-    pub fn session_rows(
-        &self,
-    ) -> Vec<(String, crate::notifications_plugin::SessionInfo, bool)> {
+    pub fn session_rows(&self) -> Vec<(String, crate::notifications_plugin::SessionInfo, bool)> {
         let index = self.session_index.borrow();
         index
             .ids()
             .into_iter()
             .map(|id| {
-                (
-                    id.to_owned(),
-                    index.get(id).cloned().unwrap_or_default(),
-                    index.is_running(id),
-                )
+                (id.to_owned(), index.get(id).cloned().unwrap_or_default(), index.is_running(id))
             })
             .collect()
     }
@@ -16292,8 +16288,13 @@ fn picker_family_walk(
         };
         let title = match agent_match.as_deref() {
             Some(word) => {
-                let stripped = title.replacen(&format!("@{word} subagent"), "", 1).trim().to_owned();
-                if stripped.is_empty() { title } else { stripped }
+                let stripped =
+                    title.replacen(&format!("@{word} subagent"), "", 1).trim().to_owned();
+                if stripped.is_empty() {
+                    title
+                } else {
+                    stripped
+                }
             }
             None => title,
         };
@@ -19309,7 +19310,10 @@ mod tests {
         store.set_picker(picker);
         let entries = store.picker_entries("s1");
         assert_eq!(entries[0].agent, "Build");
-        assert_eq!(entries[0].title, "@build subagent", "the strip emptied — the full title stands");
+        assert_eq!(
+            entries[0].title, "@build subagent",
+            "the strip emptied — the full title stands"
+        );
     }
 
     /// The live tool-state reducers (v2 client data.ts:919-980): the
