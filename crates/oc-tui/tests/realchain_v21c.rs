@@ -15,7 +15,7 @@
 //! only); judgment belongs to the controller's adjudication registry.
 //! The fixtures are self-contained `.js` v2 `{id, setup}` TUI plugins
 //! staged into BOTH sandboxes' real drop-in discovery roots (the same
-//! staging contract realchain_v21b.rs documents).
+//! staging contract `realchain_v21b.rs` documents).
 //!
 //! PACING: same as v21b — the two ends boot at different speeds and
 //! each fixture's timers run from ITS OWN activation, so every
@@ -99,7 +99,7 @@ fn settle(secs: u64) {
 }
 
 /// Stage one v21c fixture plugin into a sandbox's config drop-in (the
-/// same staging contract as realchain_v21b.rs — each side stages into
+/// same staging contract as `realchain_v21b.rs` — each side stages into
 /// its OWN discovery root; no `@opentui/solid` import needed here, so
 /// no host shim).
 fn stage_fixture(sandbox: &Sandbox, app_dir: &str, name: &str, tui_js: &str) {

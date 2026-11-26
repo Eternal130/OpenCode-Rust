@@ -4009,7 +4009,7 @@ fn build_inputs(
 /// `Locale.titlecase(props.label?.[key] ?? key)` word-boundary
 /// titlecase (util/locale.ts:3-5) — the shared implementation
 /// (message/model.rs:1102) re-exported here; the null→key default ran
-/// at the plugin_ui crossing, so an explicit "" stays "" (an empty
+/// at the plugin-ui crossing, so an explicit "" stays "" (an empty
 /// pill, dialog-confirm.tsx:85).
 fn message_model_titlecase(label: &str) -> String {
     crate::components::message::model::titlecase(label)

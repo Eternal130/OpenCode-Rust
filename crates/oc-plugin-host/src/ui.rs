@@ -382,14 +382,8 @@ pub struct PluginSelectAction {
 #[must_use]
 pub fn parse_select_spec(
     value: &Value,
-) -> (
-    String,
-    Option<String>,
-    Vec<PluginDialogOption>,
-    Option<String>,
-    Vec<PluginSelectAction>,
-    bool,
-) {
+) -> (String, Option<String>, Vec<PluginDialogOption>, Option<String>, Vec<PluginSelectAction>, bool)
+{
     let title = value.get("title").and_then(Value::as_str).unwrap_or_default().to_owned();
     let placeholder = value
         .get("placeholder")
