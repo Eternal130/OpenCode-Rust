@@ -3112,69 +3112,102 @@ mod tests {
     /// admitted Running settles unless the metadata says running AND
     /// the active map lists it; the metadata `status` guard mirrors
     /// `childSessionID` (:184-190 — anything but running/completed
-    /// carries no `found`).
+    /// carries no `found`). The arm only fires on a child still
+    /// Running (the ref's `if (child.status === "running")` — a
+    /// settled child never re-escalates), so each case rides its own
+    /// child.
     #[test]
     fn tracker_tool_part_metadata_status_arm() {
+        let empty: std::collections::BTreeMap<String, Value> =
+            std::collections::BTreeMap::new();
+        let active: std::collections::BTreeMap<String, Value> =
+            [("child_6".to_owned(), Value::Bool(true))].into_iter().collect();
+        // (a) metadata "completed" → settles (the map is irrelevant).
         let mut tracker = SubagentTracker::new("parent");
-        let part = |status: Option<&str>| {
-            json!({
+        tracker.fold_tool_part(
+            &json!({
                 "type": "tool",
                 "state": {
-                    "metadata": {
-                        "sessionID": "child_6",
-                        "status": status,
-                    },
+                    "metadata": { "sessionID": "child_6", "status": "completed" },
                     "input": { "agent": "verify", "description": "d" },
                 },
-            })
-        };
-        // metadata "completed" → settles regardless of the map.
-        tracker.fold_tool_part(&part(Some("completed")), None);
+            }),
+            Some(&active),
+        );
         assert_eq!(
             tracker_child(&tracker, "child_6").status,
             SubagentStatus::Completed,
             "the completed metadata settles the child"
         );
-        // metadata "running" + in the active map → stays running.
-        let active: std::collections::BTreeMap<String, Value> =
-            [("child_6".to_owned(), Value::Bool(true))].into_iter().collect();
-        tracker.fold_tool_part(&part(Some("running")), Some(&active));
+        // A settled child never re-escalates (the ref's
+        // `if (child.status === "running")` guard at :948): a LATER
+        // running-metadata part leaves the settled status alone.
+        tracker.fold_tool_part(
+            &json!({
+                "type": "tool",
+                "state": {
+                    "metadata": { "sessionID": "child_6", "status": "running" },
+                    "input": { "agent": "verify", "description": "d" },
+                },
+            }),
+            Some(&active),
+        );
+        assert_eq!(
+            tracker_child(&tracker, "child_6").status,
+            SubagentStatus::Completed,
+            "the arm only fires on a still-running child"
+        );
+        // (b) metadata "running" + in the active map → stays running.
+        let mut tracker = SubagentTracker::new("parent");
+        tracker.fold_tool_part(
+            &json!({
+                "type": "tool",
+                "state": {
+                    "metadata": { "sessionID": "child_6", "status": "running" },
+                    "input": { "agent": "verify", "description": "d" },
+                },
+            }),
+            Some(&active),
+        );
         assert_eq!(
             tracker_child(&tracker, "child_6").status,
             SubagentStatus::Running,
             "running metadata in the active map stays running"
         );
-        // metadata "running" + NOT in the map → settles.
-        let empty: std::collections::BTreeMap<String, Value> =
-            std::collections::BTreeMap::new();
-        tracker.fold_tool_part(&part(Some("running")), Some(&empty));
-        assert_eq!(
-            tracker_child(&tracker, "child_6").status,
-            SubagentStatus::Completed,
-            "running metadata outside the active map settles"
-        );
-        // No metadata status at all → the arm never fires (the
-        // pre-G-536 admit default stays).
-        tracker.fold_tool_part(&part(None), None);
-        assert_eq!(
-            tracker_child(&tracker, "child_6").status,
-            SubagentStatus::Completed,
-            "a status-less part leaves the status alone"
-        );
-        // A status-less ADMIT starts Running (the admit default) —
-        // the closing pass is what settles it.
+        // (c) metadata "running" + NOT in the map (empty map) →
+        // settles.
+        let mut tracker = SubagentTracker::new("parent");
         tracker.fold_tool_part(
             &json!({
                 "type": "tool",
                 "state": {
-                    "metadata": { "sessionID": "child_7" },
+                    "metadata": { "sessionID": "child_6", "status": "running" },
                     "input": { "agent": "verify", "description": "d" },
                 },
             }),
             Some(&empty),
         );
         assert_eq!(
-            tracker_child(&tracker, "child_7").status,
+            tracker_child(&tracker, "child_6").status,
+            SubagentStatus::Completed,
+            "running metadata outside the active map settles"
+        );
+        // (d) No metadata status at all → the arm never fires (the
+        // pre-G-536 admit default stays Running — the closing pass is
+        // what settles it).
+        let mut tracker = SubagentTracker::new("parent");
+        tracker.fold_tool_part(
+            &json!({
+                "type": "tool",
+                "state": {
+                    "metadata": { "sessionID": "child_6" },
+                    "input": { "agent": "verify", "description": "d" },
+                },
+            }),
+            Some(&empty),
+        );
+        assert_eq!(
+            tracker_child(&tracker, "child_6").status,
             SubagentStatus::Running,
             "the status-less admit defaults to Running"
         );

@@ -178,57 +178,34 @@ fn prompt_edit_command(
     Some(command)
 }
 
-/// The modal key layer (`ui/dialog.tsx` + the select's dialog
-/// commands): route one stroke while a dialog holds focus.
-// The modal layer is inherently a key-by-key walk (escape → ctrl+c →
-// input → per-kind actions → the select commands); the R-05 worktree
-// actions pushed it past the lint budget.
-#[allow(clippy::cast_possible_wrap)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
-#[allow(clippy::too_many_lines)]
-pub fn handle_dialog_key(
-    store: &Store,
-    keymap: &mut Keymap,
-    clock: &dyn Clock,
-    stroke: KeyStroke,
-    terminal: (u16, u16),
-) -> DialogKeyOutcome {
-    let Some(entry) = store.top_dialog() else { return DialogKeyOutcome::Unhandled };
-    let props = select_props_for_entry(&entry, store);
-    // G-527 — the prompt viewport's cell width (the same math the
-    // mount uses: `entry.size.width()` clamped to the terminal, minus
-    // the box's 2+2 horizontal padding) — the band clamp's input.
-    let prompt_width =
-        entry.size.width().min(usize::from(terminal.0).saturating_sub(2)).saturating_sub(4);
-    // The prompt-style inputs (not selects): rename, worktree-name,
-    // the integration key/code entry.
-    let is_prompt_kind = |kind: &DialogKind| {
-        match kind {
-            // G-271④ — the form walk's dialog flips per field: the
-            // textual kinds (and the custom arm) take the prompt
-            // input, the rest the select pipeline.
-            DialogKind::IntegrationForm { .. } => {
-                store.integration_form().is_some_and(|state| state.prompt_style())
-            }
-            DialogKind::SessionRename { .. }
-            | DialogKind::IntegrationRename { .. }
-            | DialogKind::WorktreeName
-            | DialogKind::IntegrationKey { .. }
-            | DialogKind::IntegrationCode { .. }
-            | DialogKind::BtwPrompt
-            | DialogKind::PluginInstall
-            | DialogKind::Prompt { .. } => true,
-            _ => false,
+/// The prompt-style dialog kinds (not selects): rename, worktree-name,
+/// the integration key/code entry — the G-271④ form walk's dialog
+/// flips per field (the textual kinds take the prompt input).
+fn prompt_style_kind(store: &Store, kind: &DialogKind) -> bool {
+    match kind {
+        DialogKind::IntegrationForm { .. } => {
+            store.integration_form().is_some_and(|state| state.prompt_style())
         }
-    };
-    let is_select = match &entry.kind {
-        // The rename + worktree-name dialogs + the connect-flow
-        // key/code prompts are the prompt-style inputs (not selects).
-        // The prompt-style inputs + TUI-10/24/25's custom-key
-        // families (image preview, error details, alert, confirm)
-        // take per-kind actions, not the select pipeline. F15 fix
-        // round: the pair dialog joins them — a CUSTOM (static)
-        // dialog per ref dialog-pair.tsx; no filter, no option rows;
-        // only the close bindings act (the modal layer's escape).
+        DialogKind::SessionRename { .. }
+        | DialogKind::IntegrationRename { .. }
+        | DialogKind::WorktreeName
+        | DialogKind::IntegrationKey { .. }
+        | DialogKind::IntegrationCode { .. }
+        | DialogKind::BtwPrompt
+        | DialogKind::PluginInstall
+        | DialogKind::Prompt { .. } => true,
+        _ => false,
+    }
+}
+
+/// The select-pipeline dialog kinds (the typing/filter walk's gate —
+/// the prompt-style inputs and the custom-key families take their own
+/// arms). G-487: DialogExportOptions is a CUSTOM form; F15: the pair
+/// dialog is custom-static. A rows-only plugin dialog is static (like
+/// help); the rest — the palette, theme list, server lists, worktrees,
+/// the queued-prompts manager (v2's DialogSelect) — are selects.
+fn select_pipeline_kind(store: &Store, kind: &DialogKind) -> bool {
+    match kind {
         DialogKind::SessionRename { .. }
         | DialogKind::IntegrationRename { .. }
         | DialogKind::WorktreeName
@@ -242,20 +219,11 @@ pub fn handle_dialog_key(
         | DialogKind::ErrorDetails { .. }
         | DialogKind::Alert { .. }
         | DialogKind::Confirm { .. }
-        // G-487 — DialogExportOptions is a CUSTOM form (not a
-        // DialogSelect): the pill row + the format-scoped toggles +
-        // the Copy/Export buttons; tab/return own the dialog.
         | DialogKind::SessionExport { .. }
         | DialogKind::Pair => false,
-        // G-271④ — the form walk flips with the current field (the
-        // textual kinds take the prompt input).
         DialogKind::IntegrationForm { .. } => {
             !store.integration_form().is_some_and(|state| state.prompt_style())
         }
-        // A rows-only plugin dialog is static (like help: printables
-        // pass through, only the close bindings act); the rest — the
-        // palette, theme list, server lists, worktrees, the
-        // queued-prompts manager (v2's DialogSelect) — are selects.
         DialogKind::Plugin { id, .. } => {
             store.plugin_dialog_content(id).is_some_and(|content| content.is_select())
         }
@@ -290,16 +258,85 @@ pub fn handle_dialog_key(
         | DialogKind::Settings
         | DialogKind::ForkPicker { .. }
         | DialogKind::ExportResult { .. }
-        // TUI-8/9/TD22: DialogSkill / DialogStash /
-        // DialogExperiments are DialogSelects.
         | DialogKind::Skill
         | DialogKind::Stash
         | DialogKind::Experiments
-        // TUI-5 (lane-tui2): DialogOpen + its worktrees view are
-        // DialogSelects (dialog-open.tsx's DialogSelect mounts).
         | DialogKind::Open
         | DialogKind::OpenWorktrees { .. } => true,
-    };
+    }
+}
+
+/// G-538 — route a terminal paste into the FOCUSED select's filter
+/// (the ref's paste-to-focused-renderable: a DialogSelect focuses its
+/// filter `<input>` — an `InputRenderable`, dialog-select.tsx:699-707
+/// `setTimeout(() => r.focus(), 1)` — whose `handlePaste` inserts the
+/// ANSI + newline-stripped text, index.bun.js:9115-9119; the list
+/// re-filters through the same `setFilter` typing runs). `false` when
+/// no select-with-input holds focus: the prompt kinds took the paste
+/// already (the caller's `paste_into_prompt_dialog`), a static dialog
+/// (help, rows-only plugins) mounts no input, and `renderFilter:
+/// false` (G-485③, the diff source picker) mounts none either — the
+/// caller falls back to the composer behind the modal.
+pub fn paste_into_dialog_select(store: &Store, text: &str, terminal: (u16, u16)) -> bool {
+    let Some(entry) = store.top_dialog() else { return false };
+    if prompt_style_kind(store, &entry.kind) {
+        return false;
+    }
+    let props = select_props_for_entry(&entry, store);
+    let is_static = matches!(entry.kind, DialogKind::Help)
+        || !select_pipeline_kind(store, &entry.kind);
+    if is_static || !props.render_filter {
+        return false;
+    }
+    let sanitized = crate::attention::strip_ansi(text).replace(['\n', '\r'], "");
+    if sanitized.is_empty() {
+        return false;
+    }
+    let height = usize::from(terminal.1);
+    let mut filter = String::new();
+    store.update_dialog(|top| {
+        filter = std::mem::take(&mut top.select.filter);
+        filter.push_str(&sanitized);
+        top.select.set_filter(&filter, &props, height);
+    });
+    // G-271⑤ — the sessions dialog's filter feeds the debounced server
+    // search (`setFilter` + `setSearch`, dialog-session-list.tsx:
+    // 213-216 — the same hook typing runs).
+    if matches!(
+        store.top_dialog().map(|entry| entry.kind),
+        Some(DialogKind::ServerList { command: "session.list", .. })
+    ) {
+        store.session_search_typed(&filter);
+    }
+    store.preview_theme_filter();
+    true
+}
+
+/// The modal key layer (`ui/dialog.tsx` + the select's dialog
+/// commands): route one stroke while a dialog holds focus.
+// The modal layer is inherently a key-by-key walk (escape → ctrl+c →
+// input → per-kind actions → the select commands); the R-05 worktree
+// actions pushed it past the lint budget.
+#[allow(clippy::cast_possible_wrap)] // rendering geometry/size math: values are terminal-bounded; the ref computes in JS number space
+#[allow(clippy::too_many_lines)]
+pub fn handle_dialog_key(
+    store: &Store,
+    keymap: &mut Keymap,
+    clock: &dyn Clock,
+    stroke: KeyStroke,
+    terminal: (u16, u16),
+) -> DialogKeyOutcome {
+    let Some(entry) = store.top_dialog() else { return DialogKeyOutcome::Unhandled };
+    let props = select_props_for_entry(&entry, store);
+    // G-527 — the prompt viewport's cell width (the same math the
+    // mount uses: `entry.size.width()` clamped to the terminal, minus
+    // the box's 2+2 horizontal padding) — the band clamp's input.
+    let prompt_width =
+        entry.size.width().min(usize::from(terminal.0).saturating_sub(2)).saturating_sub(4);
+    // The prompt-style inputs (not selects): rename, worktree-name,
+    // the integration key/code entry.
+    let is_prompt_kind = |kind: &DialogKind| prompt_style_kind(store, kind);
+    let is_select = select_pipeline_kind(store, &entry.kind);
     let is_help = matches!(entry.kind, DialogKind::Help);
     let is_static = is_help
         || !is_select
@@ -385,10 +422,16 @@ pub fn handle_dialog_key(
     // G-485③ — `renderFilter: false` mounts no input: printables and
     // backspace never type (the diff source picker,
     // diff-viewer.tsx:740).
+    // G-537 — the printable gate mirrors handleKeyPress's insert arm
+    // (index.bun.js:8941 `!key.ctrl && !key.meta && !key.super &&
+    // !key.hyper`): a super-modified single char is NOT typed — it
+    // falls through to the renderable's binding table (super+z =
+    // the undo arm).
     if !is_static
         && props.render_filter
         && !stroke.ctrl
         && !stroke.alt
+        && !stroke.super_key
         && stroke.key != "\n"
         && stroke.key.chars().count() == 1
     {
@@ -425,6 +468,7 @@ pub fn handle_dialog_key(
         && !stroke.ctrl
         && !stroke.alt
         && !stroke.shift
+        && !stroke.super_key
     {
         store.update_dialog(|top| {
             if is_prompt_kind(&top.kind) {

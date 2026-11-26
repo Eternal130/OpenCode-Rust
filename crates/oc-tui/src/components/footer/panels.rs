@@ -19,9 +19,10 @@ use super::theme::FooterTheme;
 use crate::render::Frame;
 
 pub use super::state::{
-    agent_entries, apply_mini_setting_change, command_menu_entries, fuzzy_matches,
-    match_mini_verbosity, model_entries, resolve_mini_settings, reveal_current, settings_entries,
-    variant_entries, verbosity_change, verbosity_label, MiniSettingChange, MiniSettings, RunAgent,
+    agent_entries, apply_mini_setting_change, command_menu_entries, current_agent_label,
+    fuzzy_matches, match_mini_verbosity, model_entries, resolve_mini_settings, reveal_current,
+    settings_entries, variant_entries, verbosity_change, verbosity_label, MiniSettingChange,
+    MiniSettings, RunAgent,
     RunModel, RunProvider, WORK_SPINNERS,
 };
 
@@ -363,6 +364,47 @@ mod tests {
         assert_eq!(displays, vec!["build", "review"]);
         assert_eq!(entries[1].footer.as_deref(), Some("current"));
         assert_eq!(entries[0].description.as_deref(), Some("Build software"));
+    }
+
+    /// G-535 — `currentAgent()`'s label face (footer.ts:275-280 over
+    /// resolveRunAgent, :111-115): the resolved selectable agent's
+    /// NAME; an unresolvable id titlecases (`Locale.titlecase`); no
+    /// id + a catalog → the FIRST selectable agent's name (the
+    /// default config's "Build"); no id + an empty catalog →
+    /// "Default". Subagent/hidden rows never resolve.
+    #[test]
+    fn current_agent_label_resolution_chain() {
+        let agents = agents();
+        assert_eq!(
+            current_agent_label(&agents, Some("review")),
+            "Review",
+            "a resolvable id → the agent's NAME"
+        );
+        assert_eq!(
+            current_agent_label(&agents, Some("code-review")),
+            "Code-Review",
+            "an unresolvable id → the \\b\\w titlecase of the id"
+        );
+        assert_eq!(
+            current_agent_label(&agents, None),
+            "Build",
+            "no id → the first selectable agent's name (selectable.at(0))"
+        );
+        assert_eq!(
+            current_agent_label(&agents, Some("explore")),
+            "Explore",
+            "a subagent-mode id never resolves → the titlecase fallback"
+        );
+        assert_eq!(
+            current_agent_label(&agents, Some("secret")),
+            "Secret",
+            "a hidden id never resolves → the titlecase fallback"
+        );
+        assert_eq!(
+            current_agent_label(&[], None),
+            "Default",
+            "no id + an empty catalog → Default"
+        );
     }
 
     #[test]

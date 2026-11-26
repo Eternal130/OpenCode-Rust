@@ -87,7 +87,13 @@ impl SessionIndex {
                     info.title = event.string("title").or_else(|| info.title.take());
                     info.parent_id = event.string("parentID").or_else(|| info.parent_id.take());
                     info.agent = event.string("agent").or_else(|| info.agent.take());
-                    info.created = info.created.or(event.created);
+                    info.created = info
+                        .created
+                        .or(event
+                            .data
+                            .pointer("/info/time/created")
+                            .and_then(serde_json::Value::as_u64))
+                        .or(event.created);
                     // G-539 — a fresh session's `time.updated` equals
                     // its creation time (the wire's info.time, or the
                     // envelope's created when the event carries no

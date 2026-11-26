@@ -2563,4 +2563,60 @@ mod tests {
             agents.iter().filter_map(|agent| agent.get("id").and_then(Value::as_str)).collect();
         assert_eq!(ids, ["build", "general", "compaction", "title"]);
     }
+
+    /// G-539 — the ctx.data held rows' SHAPES align with the ref's
+    /// documented Data contract: session rows carry
+    /// `time: { created, updated }` (schema session.ts:551-556, the
+    /// ref's synced rows data.ts:1337-1339 — never a `timeCreated`
+    /// member), and pending rows carry the `SessionInboxInfo` shape
+    /// (types.ts:2205-2212): `{ id, sessionID, time: { created },
+    /// type, payload, delivery }` with the text under `payload.text`
+    /// (never a top-level `text` member).
+    #[test]
+    fn g539_session_view_row_shapes() {
+        let store = crate::store::Store::new(crate::reactive::Runtime::new());
+        // One session observed through the event index: created with
+        // an info payload carrying both times, then updated.
+        store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+            "session.created",
+            json!({
+                "sessionID": "ses_g539",
+                "title": "G539",
+                "info": { "time": { "created": 1000, "updated": 2000 } },
+            }),
+        ))]);
+        store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
+            "session.updated",
+            json!({ "sessionID": "ses_g539", "info": { "time": { "updated": 3000 } } }),
+        ))]);
+        // A pending row: the optimistic queue admit.
+        store.queue_prompt("ses_g539", "the queued text", &[]);
+
+        let (sessions, _status, pending) = session_view(&store);
+        let row = &sessions[0];
+        assert_eq!(row["id"], json!("ses_g539"));
+        assert_eq!(
+            row["time"],
+            json!({ "created": 1000, "updated": 3000 }),
+            "the session row carries time.{{created, updated}} — the update event's \
+             time wins, no `timeCreated` member: {row}"
+        );
+        assert!(row.get("timeCreated").is_none(), "the ref has no timeCreated member");
+
+        let pending_rows = pending["ses_g539"].as_array().expect("the pending map");
+        let pending_row = &pending_rows[0];
+        assert_eq!(pending_row["sessionID"], json!("ses_g539"), "the row's own session");
+        assert_eq!(pending_row["type"], json!("user"), "the TUI mirror holds user rows");
+        assert_eq!(
+            pending_row["payload"]["text"],
+            json!("the queued text"),
+            "the text rides payload.text"
+        );
+        assert_eq!(pending_row["delivery"], json!("queue"));
+        assert!(
+            pending_row["time"]["created"].is_u64(),
+            "the optimistic admit stamps time.created (Date.now(), data.ts:1563)"
+        );
+        assert!(pending_row.get("text").is_none(), "no top-level text member in the ref shape");
+    }
 }

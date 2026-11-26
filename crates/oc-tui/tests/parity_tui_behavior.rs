@@ -633,6 +633,172 @@ fn ui_dialog_prompt_takes_the_terminal_paste() {
     assert!(!store.paste_into_prompt_dialog("anything"));
 }
 
+/// G-537 — the prompt's up/down LINE moves + the undo/redo arms
+/// (index.bun.js:8763-8764 up/down → move-up/move-down; :8801-8804
+/// ctrl+-/super+z undo, ctrl+./super+shift+z redo; keybind.ts:210-211,
+/// :233-234): over a seeded MULTI-LINE value the up/down arms are the
+/// only line-navigation (the pre-fix port fell through to
+/// `dialog.select.prev` which no-ops on an empty list), and
+/// ctrl+u → ctrl+- → ctrl+. → super+z walk the dialog's snapshot
+/// history (delete, restore, re-delete, restore again).
+#[test]
+fn ui_dialog_prompt_line_moves_and_undo_redo() {
+    let store = Store::new(Runtime::new());
+    store.open_prompt("Edit", "", Some("p"), "alpha line\nbeta line", Some(61), None);
+
+    // The seeded caret sits at the END (line 1). UP climbs to line 0;
+    // DOWN returns to line 1.
+    assert_eq!(store.top_dialog().expect("open").prompt_caret_line(), 1, "the seed's end caret");
+    assert_eq!(dialog_layer(&store, "up"), DialogKeyOutcome::Consumed);
+    assert_eq!(store.top_dialog().expect("open").prompt_caret_line(), 0, "up climbed a line");
+    assert_eq!(
+        store.top_dialog().expect("open").prompt_visible_line().0,
+        "alpha line",
+        "the viewport follows the caret's line"
+    );
+    assert_eq!(dialog_layer(&store, "down"), DialogKeyOutcome::Consumed);
+    assert_eq!(store.top_dialog().expect("open").prompt_caret_line(), 1, "down returned");
+
+    // ctrl+u deletes the caret's line; ctrl+- (input.undo) restores
+    // it; ctrl+. (input.redo) re-deletes; super+z (the super undo
+    // arm) restores again.
+    assert_eq!(dialog_layer(&store, "ctrl+u"), DialogKeyOutcome::Consumed);
+    assert_eq!(
+        store.top_dialog().expect("open").value,
+        "alpha line\n",
+        "delete-to-line-start emptied line 1"
+    );
+    assert_eq!(dialog_layer(&store, "ctrl+-"), DialogKeyOutcome::Consumed);
+    assert_eq!(
+        store.top_dialog().expect("open").value,
+        "alpha line\nbeta line",
+        "undo restored the line"
+    );
+    assert_eq!(dialog_layer(&store, "ctrl+."), DialogKeyOutcome::Consumed);
+    assert_eq!(
+        store.top_dialog().expect("open").value,
+        "alpha line\n",
+        "redo re-deleted the line"
+    );
+    assert_eq!(dialog_layer(&store, "super+z"), DialogKeyOutcome::Consumed);
+    assert_eq!(
+        store.top_dialog().expect("open").value,
+        "alpha line\nbeta line",
+        "the super+z undo arm restored the line again"
+    );
+    // super+shift+z — the redo arm.
+    assert_eq!(dialog_layer(&store, "super+shift+z"), DialogKeyOutcome::Consumed);
+    assert_eq!(
+        store.top_dialog().expect("open").value,
+        "alpha line\n",
+        "the super+shift+z redo arm re-deleted"
+    );
+
+    // The typing history rides the same stacks: type, undo restores,
+    // and an empty-stack undo is a consumed no-op.
+    assert_eq!(dialog_layer(&store, "end"), DialogKeyOutcome::Consumed);
+    dialog_layer(&store, "z");
+    assert_eq!(
+        store.top_dialog().expect("open").value,
+        "alpha line\nz",
+        "the typed char"
+    );
+    assert_eq!(dialog_layer(&store, "super+z"), DialogKeyOutcome::Consumed);
+    assert_eq!(
+        store.top_dialog().expect("open").value,
+        "alpha line\n",
+        "undo removed the typed char"
+    );
+    // Drain the stack: repeated undo pops to the ORIGINAL seed.
+    for _ in 0..8 {
+        dialog_layer(&store, "ctrl+-");
+    }
+    assert_eq!(
+        store.top_dialog().expect("open").value,
+        "alpha line\nbeta line",
+        "the undo stack bottomed out at the seed"
+    );
+
+    // The wholesale value write resets the history (v2's `setText`
+    // clears the rope history — undo never restores across an
+    // external replace).
+    store.update_dialog(|top| top.set_prompt_value("reset value".to_owned()));
+    assert_eq!(store.top_dialog().expect("open").value, "reset value");
+    assert_eq!(dialog_layer(&store, "ctrl+-"), DialogKeyOutcome::Consumed);
+    assert_eq!(
+        store.top_dialog().expect("open").value,
+        "reset value",
+        "undo has nothing after a wholesale write"
+    );
+}
+
+/// G-538 — a terminal paste while a SELECT dialog holds focus lands in
+/// the select's FILTER (the ref's focused `InputRenderable`,
+/// dialog-select.tsx:699-707 `setTimeout(() => r.focus(), 1)` →
+/// handlePaste's ANSI+newline-stripped insert, index.bun.js:9115-9119):
+/// the list re-filters, the composer behind the modal never sees the
+/// text. A `renderFilter: false` dialog mounts no input — the paste
+/// falls through to the composer.
+#[test]
+fn ui_select_takes_the_terminal_paste() {
+    use oc_tui::app::App;
+
+    let mut app = App::new((80, 24));
+    oc_tui::plugin_ui::apply_plugin_ui(
+        &app.store,
+        "g538",
+        &oc_tui::plugin_ui::PluginUiEvent::DialogSelect {
+            request_id: 61,
+            title: "G538".to_owned(),
+            placeholder: None,
+            options: vec![
+                oc_tui::store::PluginDialogOption {
+                    title: "Theme Light".into(),
+                    value: "theme-light".into(),
+                    description: String::new(),
+                    footer: String::new(),
+                    category: Some("Palette".into()),
+                },
+                oc_tui::store::PluginDialogOption {
+                    title: "Terminal".into(),
+                    value: "terminal".into(),
+                    description: String::new(),
+                    footer: String::new(),
+                    category: Some("Palette".into()),
+                },
+            ],
+            current: None,
+            actions: vec![],
+            has_search: false,
+        },
+    );
+    // The paste: an ANSI run + an embedded newline — both stripped
+    // before the filter insert; the list re-filters.
+    app.paste_terminal_text("\x1b[31mthe\x1b[0m\n");
+    let entry = app.store.top_dialog().expect("open");
+    assert_eq!(entry.select.filter, "the", "the paste landed in the filter, sanitized");
+    let composer = app.store.composer(oc_tui::app::HOME_PROMPT_KEY);
+    assert_eq!(
+        composer.draft.text, "",
+        "the composer behind the modal never saw the paste"
+    );
+    // A second paste APPENDS (the InputRenderable's caret-at-end
+    // model — the port's typing face).
+    app.paste_terminal_text("me");
+    assert_eq!(app.store.top_dialog().expect("open").select.filter, "theme");
+
+    // A `renderFilter: false` dialog mounts no input (G-485③): the
+    // paste falls through to the composer.
+    app.store.close_dialog();
+    app.store.open_dialog(DialogKind::Help, DialogSize::Large);
+    app.paste_terminal_text("composer text");
+    let composer = app.store.composer(oc_tui::app::HOME_PROMPT_KEY);
+    assert_eq!(
+        composer.draft.text, "composer text",
+        "a filterless dialog's paste falls through to the composer"
+    );
+}
+
 /// G-524 — a NO-search plugin select stays GROUPED under a typed
 /// query: the ref's select arm passes no `flat` prop (api.tsx:392-402)
 /// so `props.flat && filter.length > 0` is `undefined && …` = false
