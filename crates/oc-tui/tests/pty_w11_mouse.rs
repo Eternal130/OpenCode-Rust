@@ -332,7 +332,16 @@ fn mouse_scenario(driver: &mut HarnessHandle) -> Result<(), String> {
         // entry, GAPS 2.2#4 w11 press-clear note). Same widening budget
         // precedent as va10's RL-T5 drive_with_budget 60s. Assertion
         // unchanged: the next press MUST clear the kept highlight.
-        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        // 40s deadline (2026-11-26 fourth sighting, CI run 45825001675):
+        // the post-va21d CI showed TRY 3×FAIL at a flat 23.7s (the 20s
+        // window + overhead) on the 2-core runner under 4-way parallel
+        // load — while the SAME tree passes serialized in 8.6s
+        // (`.test-logs/oc-tui-20261126-*-ci-red-w11-serialized.log`) and
+        // locally TRY2-passes. Pure parallel-load latency, not a
+        // regression: the press's repaint occasionally lands past the
+        // window under contention. Same widening budget precedent as
+        // va16 T3 (8s→20s on the third sighting). Assertion unchanged.
+        let deadline = std::time::Instant::now() + Duration::from_secs(40);
         let cleared = loop {
             if driver.grid_digest() != pre_press_digest {
                 let g = driver.grid_now();
