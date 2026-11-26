@@ -196,6 +196,7 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
                             title: option.title.clone(),
                             value: option.value.clone(),
                             description: option.description.clone(),
+                            footer: option.footer.clone(),
                             category: option.category.clone(),
                         })
                         .collect(),
@@ -221,6 +222,7 @@ pub fn apply_plugin_ui(store: &Store, plugin_id: &str, event: &PluginUiEvent) {
                             title: option.title.clone(),
                             value: option.value.clone(),
                             description: option.description.clone(),
+                            footer: option.footer.clone(),
                             category: option.category.clone(),
                         })
                         .collect(),

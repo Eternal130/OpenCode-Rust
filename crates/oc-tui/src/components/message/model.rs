@@ -1097,21 +1097,27 @@ fn message_created(message: &Message) -> u64 {
     message.created()
 }
 
-/// `Locale.titlecase`: uppercase the first letter of every word.
+/// `Locale.titlecase` (util/locale.ts:3-5): `str.replace(/\b\w/g, c
+/// => c.toUpperCase())` — a word char preceded by ANY non-word char
+/// (or the string start) uppercases, not just after whitespace.
+/// JS `\w` is ASCII-only (`[A-Za-z0-9_]`): non-ASCII letters are `\W`
+/// — they never uppercase themselves, but they DO open a boundary for
+/// the next ASCII letter (G-523 — the pre-va21d port reset the
+/// boundary only after `is_whitespace`; hyphenated confirm labels
+/// like "merge-dry-run" stayed "Merge-dry-run" where the ref renders
+/// "Merge-Dry-Run").
 #[must_use]
 pub fn titlecase(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    let mut boundary = true;
+    let mut prev_is_word = false;
     for ch in text.chars() {
-        if ch.is_whitespace() {
-            boundary = true;
-            out.push(ch);
-        } else if boundary {
-            out.extend(ch.to_uppercase());
-            boundary = false;
+        let is_word = ch.is_ascii_alphanumeric() || ch == '_';
+        if is_word && !prev_is_word {
+            out.push(ch.to_ascii_uppercase());
         } else {
             out.push(ch);
         }
+        prev_is_word = is_word;
     }
     out
 }
@@ -1575,6 +1581,23 @@ mod tests {
     fn titlecase_uppercases_word_starts() {
         assert_eq!(titlecase("build"), "Build");
         assert_eq!(titlecase("plan b"), "Plan B");
+        // G-523 re-pin (va21d): the boundary is `\b\w` (any non-word
+        // char, not just whitespace — util/locale.ts:3-5). The old
+        // whitespace-only vectors ("build"/"plan b") are unchanged;
+        // these pin the ref's actual class:
+        // - hyphenated confirm labels capitalize each segment;
+        // - leading punctuation still leaves the boundary open;
+        // - JS `\w` is ASCII-only — a non-ASCII letter never
+        //   uppercases itself but opens a boundary for the next
+        //   ASCII letter.
+        assert_eq!(titlecase("merge-dry-run"), "Merge-Dry-Run");
+        assert_eq!(titlecase("!hello"), "!Hello");
+        assert_eq!(titlecase("café latte"), "Café Latte");
+        assert_eq!(titlecase("ñandú"), "ñAndú");
+        // Underscore and digits are `\w` — they CLOSE the boundary
+        // (a letter after a digit stays lowercase).
+        assert_eq!(titlecase("a1b"), "A1b");
+        assert_eq!(titlecase("snake_case"), "Snake_case");
     }
 
     /// G-188 — `partitionPending` (grouping/session.ts:163-176): the

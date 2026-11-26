@@ -2219,6 +2219,65 @@ mod tests {
         let painted: String = (4..62).map(|col| view.rows[4][col].ch).collect();
         assert_eq!(painted, stage1.chars().take(58).collect::<String>());
     }
+
+    /// G-525 — `description` and `footer` are DISTINCT option fields
+    /// (context.ts:355-362; api.tsx:397 `{...option}` forwards both):
+    /// the description renders INLINE after the title
+    /// (dialog-select.tsx:899-903), the footer right-aligned
+    /// (:905-919). Under `has_search`+category the flatten arm swaps
+    /// the FOOTER to the category — the inline description stays
+    /// (the register's observable: `Deploy ships it …Ops`).
+    #[test]
+    fn description_inline_and_footer_right_aligned_are_distinct_fields() {
+        let make_option = || {
+            SelectOption::titled("Deploy", "deploy")
+                .described("ships it")
+                .categorized("Ops")
+                .with_footer("prod")
+        };
+        let styles = styles();
+        // The option row (located by its title — the GROUPED face
+        // seats it under a category header, the has_search FLAT face
+        // at the window's first row).
+        let row_of = |props: &SelectProps, state: &SelectState| {
+            let view = render_select(props, state, &styles, Color::Rgb(10, 10, 10), 60, 20, None);
+            view.rows
+                .iter()
+                .find(|row| row.iter().any(|cell| cell.ch == 'D'))
+                .map(|row| row.iter().map(|cell| cell.ch).collect::<String>())
+                .unwrap_or_default()
+        };
+        // The grouped face: `Deploy ships it` + `prod` right-aligned
+        // (the footer reserves the row's tail; the title run clips
+        // before it).
+        let props = SelectProps::new("Ops", vec![make_option()]);
+        let row = row_of(&props, &SelectState::default());
+        assert!(row.contains("Deploy ships it"), "inline description: {row}");
+        let end = row.trim_end().len();
+        assert!(row[..end].ends_with("prod"), "the footer right-aligned at the row tail: {row}");
+
+        // The G-525 observable — has_search + category: the flatten
+        // arm's footer is the CATEGORY (dialog-select.tsx:803
+        // `searchFooter ?? category ?? footer`), the description
+        // stays inline.
+        let mut props = SelectProps::new("Ops", vec![make_option()]);
+        props.has_search = true;
+        let row = row_of(&props, &SelectState::default());
+        assert!(row.contains("Deploy ships it"), "the description survives has_search: {row}");
+        let end = row.trim_end().len();
+        assert!(row[..end].ends_with("Ops"), "the category rides the flatten footer arm: {row}");
+
+        // The ref's group-key suppression (dialog-select.tsx:808):
+        // a description EQUAL to the group key renders no inline
+        // copy.
+        let option = SelectOption::titled("Deploy", "deploy").described("Ops").categorized("Ops");
+        let props = SelectProps::new("Ops", vec![option]);
+        let row = row_of(&props, &SelectState::default());
+        assert!(
+            !row.contains("Deploy Ops"),
+            "the description == category renders no inline copy: {row}"
+        );
+    }
 }
 
 // -- G-131 ---------------------------------------------------------

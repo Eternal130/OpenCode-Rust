@@ -953,13 +953,37 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                             if let Some(category) = &option.category {
                                 built = built.categorized(category.clone());
                             }
+                            // G-525 — description and footer are
+                            // DISTINCT fields (context.ts:355-362;
+                            // api.tsx:397 `{...option}` forwards both):
+                            // the description renders INLINE after the
+                            // title (dialog-select.tsx:899-903; the
+                            // paint arm already suppressed the inline
+                            // copy when it equals the GROUP key, :808),
+                            // the `footer` right-aligned (:905-919) —
+                            // the pre-va21d port folded the description
+                            // into the footer slot, losing it under
+                            // has_search+category.
                             if !option.description.is_empty() {
-                                built = built.with_footer(option.description.clone());
+                                built = built.described(option.description.clone());
+                            }
+                            if !option.footer.is_empty() {
+                                built = built.with_footer(option.footer.clone());
                             }
                             built
                         })
                         .collect();
-                    let mut props = SelectProps::new(content.title, options).flat(true).threshold(0.7);
+                    // G-524 — NO `flat` prop: the ref's select arm
+                    // (api.tsx:392-402) never passes one, so a typed
+                    // query on a NO-search select stays GROUPED under
+                    // the local fuzzy filter
+                    // (dialog-select.tsx:212 `props.flat && …` with
+                    // `props.flat === undefined` = false; the rows
+                    // keep their category headers and the option's
+                    // OWN footer — none set → no footer). Only the
+                    // G-522 `hasSearch` marker flattens (from the
+                    // empty query).
+                    let mut props = SelectProps::new(content.title, options).threshold(0.7);
                     // G-522 — the spec's search marker: flat from the
                     // EMPTY query (one headerless group) + the
                     // category as the row footer

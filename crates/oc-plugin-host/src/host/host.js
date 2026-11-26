@@ -2536,6 +2536,7 @@ function makeCtx(pluginId, options) {
                     title: option.title,
                     value: option.value,
                     description: typeof option.description === "string" ? option.description : "",
+                    footer: typeof option.footer === "string" ? option.footer : "",
                     category:
                       typeof option.category === "string" && option.category ? option.category : null,
                   })),
