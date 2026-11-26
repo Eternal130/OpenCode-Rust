@@ -725,6 +725,9 @@ impl Shared {
             // -- wave 3: the TUI slot bridge (registration entries +
             //    the runtime UI-request queue; answered inline).
             "ui.toast.show" | "ui.sidebar.section" | "ui.footer.hint" | "ui.dialog.open"
+            // -- G-475: `ctx.ui.dialog.set/clear` — fire-and-forget on
+            //    the queue.
+            | "ui.dialog.set" | "ui.dialog.clear"
             // -- G-239/G-331: `ctx.ui.panel.close()` — owner-scoped
             //    release, fire-and-forget on the queue.
             | "ui.panel.close" => {
@@ -737,7 +740,11 @@ impl Shared {
             // -- G-239/G-331: `ctx.ui.panel.open` rides the same
             //    deferred seam (the route-check boolean resolves
             //    after the TUI applies the open).
-            "ui.alert" | "ui.confirm" | "ui.prompt" | "ui.panel.open" => {
+            // -- G-475: `ctx.ui.dialog.show` (the onClose settle) and
+            //    `ctx.ui.dialog.select` (the value promise) ride it
+            //    too.
+            "ui.alert" | "ui.confirm" | "ui.prompt" | "ui.panel.open" | "ui.dialog.show"
+            | "ui.dialog.select" => {
                 answer_ui_dialog(self, id, method, params)
             }
             // -- the v2 TUI-plugin slot surface (beta.13 bug 1): the
@@ -1419,6 +1426,64 @@ impl Shared {
                         .push_back(UiRequest::NavigateToSession { session_id: session.to_owned() });
                 }
             }
+            // G-475 bug2 — `ctx.ui.router.navigate({type: "home"})`
+            // (api.tsx:219-225): the home arm the bridge was missing.
+            "tui.route.home" => {
+                self.ui_requests
+                    .lock()
+                    .expect("ui request queue poisoned")
+                    .push_back(UiRequest::NavigateHome);
+            }
+            // G-475 — `ctx.ui.tabs.{open,focus,move,close}` mutations
+            // (api.tsx:245-281): the store's own tab seams answer.
+            "tui.tabs.op" => {
+                let op = match params.get("op").and_then(Value::as_str).unwrap_or_default() {
+                    "open" => crate::ui::TabsOpKind::Open,
+                    "focus" => crate::ui::TabsOpKind::Focus,
+                    "move" => crate::ui::TabsOpKind::Move,
+                    "close" => crate::ui::TabsOpKind::Close,
+                    _ => return,
+                };
+                self.ui_requests.lock().expect("ui request queue poisoned").push_back(
+                    UiRequest::TabsOp {
+                        plugin_id: params
+                            .get("pluginId")
+                            .and_then(Value::as_str)
+                            .unwrap_or("?")
+                            .to_owned(),
+                        op,
+                        session_id: params
+                            .get("sessionID")
+                            .and_then(Value::as_str)
+                            .filter(|session| !session.is_empty())
+                            .map(str::to_owned),
+                        index: params
+                            .get("index")
+                            .and_then(|index| {
+                                index.as_u64().and_then(|index| usize::try_from(index).ok())
+                            })
+                            .unwrap_or(0),
+                    },
+                );
+            }
+            // G-475 — `ctx.ui.model.variant.set(variant)`
+            // (api.tsx:288-296).
+            "tui.model.variant.set" => {
+                self.ui_requests.lock().expect("ui request queue poisoned").push_back(
+                    UiRequest::ModelVariantSet {
+                        plugin_id: params
+                            .get("pluginId")
+                            .and_then(Value::as_str)
+                            .unwrap_or("?")
+                            .to_owned(),
+                        variant: params
+                            .get("variant")
+                            .and_then(Value::as_str)
+                            .filter(|variant| !variant.is_empty())
+                            .map(str::to_owned),
+                    },
+                );
+            }
             // The plugin-route navigation ask (`ctx.ui.router.navigate(
             // {type: "plugin", name, data?})`, api.tsx:211-224): the
             // plugin's registered page becomes the visible screen.
@@ -1947,6 +2012,14 @@ fn answer_ui_runtime(shared: &Shared, id: u64, method: &str, params: &Value) -> 
                     .get("duration")
                     .and_then(Value::as_u64)
                     .unwrap_or(crate::ui::DEFAULT_TOAST_DURATION_MS),
+                // G-475 — the sessionID arm crosses raw (the reducer
+                // owns the route/session table and decides
+                // plain-vs-action).
+                session_id: params
+                    .get("sessionID")
+                    .and_then(Value::as_str)
+                    .filter(|session| !session.is_empty())
+                    .map(str::to_owned),
                 plugin_id,
             }
         }
@@ -1977,6 +2050,19 @@ fn answer_ui_runtime(shared: &Shared, id: u64, method: &str, params: &Value) -> 
         // G-239/G-331: the owner-scoped close (context.ts:504-505 —
         // "Other plugins' panels are unaffected").
         "ui.panel.close" => UiRequest::PanelClose { plugin_id },
+        // G-475 — `ctx.ui.dialog.set({size?, centered?})`: mutates the
+        // ACTIVE dialog's presentation (fire-and-forget on the queue).
+        "ui.dialog.set" => UiRequest::DialogSet {
+            size: params
+                .get("size")
+                .and_then(Value::as_str)
+                .filter(|size| matches!(*size, "medium" | "large" | "xlarge"))
+                .map(str::to_owned),
+            centered: params.get("centered").and_then(Value::as_bool).unwrap_or(false),
+            plugin_id,
+        },
+        // G-475 — `ctx.ui.dialog.clear()`: closes the active dialog.
+        "ui.dialog.clear" => UiRequest::DialogClear { plugin_id },
         other => return protocol::error_response(id, &format!("unknown ui method {other:?}")),
     };
     shared.ui_requests.lock().expect("ui request queue poisoned").push_back(request);
@@ -2025,6 +2111,39 @@ fn answer_ui_dialog(shared: &Shared, id: u64, method: &str, params: &Value) -> O
             name: params.get("name").and_then(Value::as_str).unwrap_or_default().to_owned(),
             fullscreen: params.get("presentation").and_then(Value::as_str) == Some("fullscreen"),
         },
+        // G-475 — `ctx.ui.dialog.show(render, onClose?)`
+        // (api.tsx:334-336): the flattened spec crossed; the settle
+        // (any close → null) rides the deferred seam.
+        "ui.dialog.show" => {
+            let Some(spec) = params.get("spec") else {
+                return Some(protocol::error_response(id, "ui.dialog.show requires a spec"));
+            };
+            UiRequest::DialogShow {
+                request_id: id,
+                plugin_id,
+                spec: crate::ui::PluginDialogSpec::from_json(spec),
+            }
+        }
+        // G-475 — `ctx.ui.dialog.select(options)` (api.tsx:387-427):
+        // the promise resolves the selected option's value (any close
+        // → null). The actions cross as native rows; their triggers
+        // route back through the `dialog.action` guest dispatch.
+        "ui.dialog.select" => {
+            let Some(spec) = params.get("spec") else {
+                return Some(protocol::error_response(id, "ui.dialog.select requires a spec"));
+            };
+            let (title, placeholder, options, current, actions) =
+                crate::ui::parse_select_spec(spec);
+            UiRequest::DialogSelect {
+                request_id: id,
+                plugin_id,
+                title,
+                placeholder,
+                options,
+                current,
+                actions,
+            }
+        }
         other => {
             return Some(protocol::error_response(id, &format!("unknown ui method {other:?}")));
         }
@@ -2120,20 +2239,23 @@ fn answer_ui_registration(shared: &Shared, id: u64, method: &str, params: &Value
             protocol::response(id, Value::Null)
         }
         // The plugin route registration (`ctx.ui.router.register`,
-        // api.tsx:204-212). A duplicate name from ANOTHER plugin is
-        // rejected with the ref's error (`Route already registered`).
+        // api.tsx:204-212). G-475 bug1 — the ref's registry is scoped
+        // PER PLUGIN (context.tsx:165
+        // `Boolean(store.registrations[id]?.routes[name])`) and a
+        // SAME-plugin duplicate THROWS (`Route already registered`,
+        // api.tsx:212); the port silently overwrote. The flat
+        // name-keyed registry keeps rejecting cross-plugin duplicates
+        // too (the ref's per-id records cannot express two owners of
+        // one name in this host's native registry — bounded
+        // deviation, the navigation carries the plugin id either
+        // way).
         "ui.router.register" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
             if name.is_empty() {
                 return protocol::error_response(id, "ui.router.register requires a name");
             }
-            if let Some(existing) = registrations.routes.get(name) {
-                if existing.plugin_id != plugin_id {
-                    return protocol::error_response(
-                        id,
-                        &format!("Route already registered: {name}"),
-                    );
-                }
+            if registrations.routes.contains_key(name) {
+                return protocol::error_response(id, &format!("Route already registered: {name}"));
             }
             registrations.routes.insert(
                 name.to_owned(),
@@ -2948,6 +3070,14 @@ impl Shared {
             "tui.layout",
             json!({ "sidebarContentWidth": sidebar_content_width }),
         );
+    }
+
+    /// G-475 — the generic host-pushed state notification (the
+    /// `tui.tabs` / `tui.model` views): the facade's bounded
+    /// projections of the ref's reactive reads, change-gated by the
+    /// embedder.
+    pub fn notify_guest(&self, method: &str, params: Value) {
+        self.send_notification(method, params);
     }
 
     fn send_notification(&self, method: &str, params: Value) {

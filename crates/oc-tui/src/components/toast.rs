@@ -22,12 +22,28 @@ pub struct ToastOptions {
     /// app.tsx:534/541, plugin/context.tsx:484/559); `activate()`
     /// fires it through the palette dispatcher.
     pub action_command: Option<String>,
+    /// G-475 — the sessionID arm's action target (api.tsx:108-131: a
+    /// toast for a session whose family is NOT open offers `Open` —
+    /// `action.run` navigates there). `activate()` fires it through
+    /// [`crate::store::Store::toast_activate`]'s session arm.
+    pub action_session: Option<String>,
     /// The F11 modal gate: `true` only for the "Session failed" /
     /// "Failed to send prompt" surfaces whose keystroke-swallowing
     /// the F11 lane pinned. Every other toast (v2's rule,
     /// ui/toast.tsx) NEVER blocks typing — the lane KM MCP-failure
     /// toasts ride the non-modal path.
     pub modal: bool,
+}
+
+/// G-475 — what the toast activation runs: a palette command (the
+/// G-424-family toasts) or a session navigation (the sessionID arm's
+/// `Open` action).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToastActivation {
+    /// The dot command (dispatched through the palette).
+    Command(String),
+    /// Navigate to the session (route.navigate `{type:"session"}`).
+    Session(String),
 }
 
 impl ToastOptions {
@@ -40,6 +56,7 @@ impl ToastOptions {
             duration_ms: 5000,
             action_label: None,
             action_command: None,
+            action_session: None,
             modal: false,
         }
     }
@@ -354,6 +371,7 @@ mod tests {
             duration_ms: 60_000,
             action_label: None,
             action_command: None,
+            action_session: None,
             modal: false,
         }
     }
@@ -454,6 +472,7 @@ mod tests {
             variant: "error",
             action_label: Some("Open plugins".to_owned()),
             action_command: None,
+            action_session: None,
             ..ToastOptions::info("")
         };
         let layout = toast_layout(&toast, 0, 80);

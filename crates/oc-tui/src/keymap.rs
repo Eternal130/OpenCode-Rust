@@ -49,6 +49,7 @@ pub fn config_error_toast(reason: &str) -> Option<crate::components::toast::Toas
             duration_ms: crate::components::toast::TOAST_DEFAULT_DURATION_MS,
             action_label: None,
             action_command: None,
+            action_session: None,
             modal: false,
         });
     }
@@ -63,6 +64,7 @@ pub fn config_error_toast(reason: &str) -> Option<crate::components::toast::Toas
         duration_ms: crate::components::toast::TOAST_DEFAULT_DURATION_MS,
         action_label: None,
         action_command: None,
+        action_session: None,
         modal: false,
     })
 }

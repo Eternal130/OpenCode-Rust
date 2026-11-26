@@ -53,7 +53,7 @@ fn tui_slots_register_and_queue_end_to_end() {
     assert!(requests.len() >= 4, "toast + section + hint + dialog: {requests:?}");
     assert!(matches!(
         &requests[0],
-        UiRequest::Toast { plugin_id, title, message, variant, duration_ms }
+        UiRequest::Toast { plugin_id, title, message, variant, duration_ms, session_id: None }
             if plugin_id == "tuislots"
                 && title.as_deref() == Some("Slots")
                 && message == "poked by the fixture"
@@ -98,6 +98,8 @@ fn tui_slots_register_and_queue_end_to_end() {
                     description: String::new(),
                 },
             ],
+            size: None,
+            centered: false,
         }
     );
     // The RAW local id resolves too (exactly one provider owns it).

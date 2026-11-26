@@ -147,6 +147,12 @@ pub struct TuiPluginRuntime {
     /// reactive in the ref's Slot input) AND re-pushes the `tui.panel`
     /// view (`ctx.ui.panel.current()`'s source). `None` = closed.
     pushed_panel: Rc<RefCell<Option<PanelFingerprint>>>,
+    /// G-475 — the last session-tabs view pushed (the JSON
+    /// fingerprint; a change re-notifies `tui.tabs`).
+    pushed_tabs: Rc<RefCell<Option<String>>>,
+    /// G-475 — the last model-selection view pushed (the JSON
+    /// fingerprint; a change re-notifies `tui.model`).
+    pushed_model: Rc<RefCell<Option<String>>>,
 
     /// The MCP server names already pushed into the server's real
     /// registry (PLUG-D33: `registrations.mcps` → `experimental.
@@ -320,6 +326,8 @@ impl TuiPluginRuntime {
             sidebar_claim_keys: Rc::new(RefCell::new(BTreeMap::new())),
             slot_session: Rc::new(RefCell::new(None)),
             pushed_panel: Rc::new(RefCell::new(None)),
+            pushed_tabs: Rc::new(RefCell::new(None)),
+            pushed_model: Rc::new(RefCell::new(None)),
             pushed_mcps: Rc::new(RefCell::new(BTreeSet::new())),
             mcp_rows_rx: Rc::new(RefCell::new(None)),
             owned_updates: Rc::new(RefCell::new(None)),
@@ -379,10 +387,25 @@ impl TuiPluginRuntime {
             agents,
             mcps: std::collections::BTreeMap::default(),
         };
+        // G-475 — the local-file StoragePort (the R17 ruling): ref TUI
+        // storage is guest-local file semantics over the byte-faithful
+        // channel storage, NOT the server DbStoragePort. The kv RPCs
+        // (`ctx.storage.*`, the v1-bridge kv face, and the
+        // `storage.store` snapshot/mutate arm) persist under
+        // `<state>/<channel>/tui/plugin.<id>.<key>.json`.
+        let storage_port = crate::plugin_storage::PluginFileStorage::open_default()
+            .ok()
+            .map(|port| Arc::new(port) as Arc<dyn oc_plugin_host::supervisor::StoragePort>);
+        if storage_port.is_none() {
+            crate::keymap::log_skip(
+                "plugin storage unavailable: state root unwritable (kv degrades to errors)",
+            );
+        }
         let config = PluginHostConfig {
             host_state,
             session_port: Some(Arc::new(HttpSessionPort { client: client.clone() })),
             sdk_port: Some(Arc::new(HttpSdkPort { client: client.clone() })),
+            storage_port,
             ..PluginHostConfig::default()
         };
         let host = Arc::new(PluginHost::detect().start_detached_with(config, &entries));
@@ -612,10 +635,17 @@ impl TuiPluginRuntime {
             store.composer(&composer_key).mode == crate::components::composer::ComposerMode::Shell;
         let slot_props = |path: &str| -> serde_json::Value {
             if path.starts_with("prompt.footer") {
+                // G-475 — `showDetails` (prompt/index.tsx:1589:
+                // `store.interrupt === 0 || dimensions().width >= 80`):
+                // the real armed-interrupt state for the composer's
+                // session + the terminal width (the old hardcoded
+                // `false` hid the details rows from every claim).
+                let interrupt_armed =
+                    session.as_deref().is_some_and(|session| store.interrupt_armed(session));
                 serde_json::json!({
                     "sessionID": session,
                     "mode": if shell { "shell" } else { "normal" },
-                    "showDetails": false,
+                    "showDetails": !interrupt_armed || usize::from(store.terminal_size().0) >= 80,
                 })
             } else if path == "sidebar.footer" {
                 serde_json::json!({ "sessionID": session })
@@ -1021,6 +1051,29 @@ impl TuiPluginRuntime {
                         .map_or_else(|| "#888888".into(), hex_color),
                 }));
             }
+            // G-475 — the session-tabs view (`ctx.ui.tabs.enabled()/
+            // .list()`'s source — api.tsx:245-281's bounded
+            // projection): the open tabs with their live status, the
+            // active flag over the route, change-gated.
+            {
+                let view = tabs_view(store);
+                let fingerprint = view.to_string();
+                if *self.pushed_tabs.borrow() != Some(fingerprint.clone()) {
+                    *self.pushed_tabs.borrow_mut() = Some(fingerprint);
+                    self.booted.host.notify_tui_tabs(view);
+                }
+            }
+            // G-475 — the model-selection view (`ctx.ui.model.current()/
+            // variant.list()`'s source — api.tsx:282-296's bounded
+            // projection).
+            {
+                let view = model_view(store);
+                let fingerprint = view.to_string();
+                if *self.pushed_model.borrow() != Some(fingerprint.clone()) {
+                    *self.pushed_model.borrow_mut() = Some(fingerprint);
+                    self.booted.host.notify_tui_model(view);
+                }
+            }
             // SA-F5: the sidebar's row budget — the guest flattener
             // lays the plugin's space-between/flex rows out against
             // the painter's actual cell span (pushed once; the width
@@ -1080,6 +1133,26 @@ impl TuiPluginRuntime {
         // them; the guest promises now settle).
         for (request_id, result) in store.take_ui_dialog_resolutions() {
             self.booted.host.resolve_ui_request(request_id, result);
+        }
+        // G-475 — the staged `dialog.action` triggers: the plugin
+        // select dialogs' footer actions route back into the guest
+        // (bounded by the host's dispatch timeout; a failed trigger is
+        // contained — the dialog stays open exactly like the ref's
+        // in-process callback errors).
+        for (plugin_id, request_id, action, value) in store.take_plugin_dialog_action_requests() {
+            let host = Arc::clone(&self.booted.host);
+            let _ = offload_bounded(Duration::from_secs(5), move || {
+                host.trigger_dialog_action(
+                    &plugin_id,
+                    request_id,
+                    action,
+                    value.as_deref(),
+                    Duration::from_secs(4),
+                )
+            })
+            .map_err(|error| {
+                crate::keymap::log_skip(&format!("dialog.action trigger failed: {error:?}"));
+            });
         }
         // PLUG-TUI-SLOT's pump steps: a freshly navigated plugin route
         // materializes its content (bounded), finished materializations
@@ -1345,19 +1418,25 @@ impl PluginDialogSource for HostDialogSource {
                     description: option.description,
                 })
                 .collect(),
+
+            placeholder: None,
         })
     }
 }
 
 /// The host → TUI UI-request conversion (the app layer's glue).
+#[allow(clippy::too_many_lines)] // one arm per UI request (G-475 grew the table)
 fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
     match request {
-        UiRequest::Toast { title, message, variant, duration_ms, .. } => PluginUiEvent::Toast {
-            title: title.clone(),
-            message: message.clone(),
-            variant: variant.clone(),
-            duration_ms: *duration_ms,
-        },
+        UiRequest::Toast { title, message, variant, duration_ms, session_id, .. } => {
+            PluginUiEvent::Toast {
+                title: title.clone(),
+                message: message.clone(),
+                variant: variant.clone(),
+                duration_ms: *duration_ms,
+                session_id: session_id.clone(),
+            }
+        }
         UiRequest::SidebarSection { title, rows, clickable, .. } => PluginUiEvent::SidebarSection {
             title: title.clone(),
             rows: rows.clone(),
@@ -1366,6 +1445,8 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
         UiRequest::NavigateToSession { session_id } => {
             PluginUiEvent::NavigateToSession { session_id: session_id.clone() }
         }
+        // G-475 bug2 — the router navigate home arm.
+        UiRequest::NavigateHome => PluginUiEvent::NavigateHome,
         UiRequest::FooterHint { text, .. } => PluginUiEvent::FooterHint { text: text.clone() },
         // TUI-25: the deferred alert/confirm requests (the guest's
         // request id settles its promise through the pump).
@@ -1418,8 +1499,68 @@ fn to_ui_event(request: &UiRequest) -> PluginUiEvent {
                         description: option.description.clone(),
                     })
                     .collect(),
+
+                placeholder: None,
             },
         },
+        // G-475 — the dialog.show face (the flattened content + the
+        // presentation; the request_id settles the guest's onClose).
+        UiRequest::DialogShow { request_id, spec, .. } => PluginUiEvent::DialogShow {
+            request_id: *request_id,
+            content: PluginDialogContent {
+                title: spec.title.clone(),
+                rows: spec.rows.clone(),
+                options: spec
+                    .options
+                    .iter()
+                    .map(|option| PluginDialogOption {
+                        title: option.title.clone(),
+                        value: option.value.clone(),
+                        description: option.description.clone(),
+                    })
+                    .collect(),
+
+                placeholder: None,
+            },
+            size: spec.size.clone(),
+            centered: spec.centered,
+        },
+        UiRequest::DialogSet { size, centered, .. } => {
+            PluginUiEvent::DialogSet { size: size.clone(), centered: *centered }
+        }
+        UiRequest::DialogClear { .. } => PluginUiEvent::DialogClear,
+        // G-475 — the dialog.select face (the value promise + the
+        // footer-action rows).
+        UiRequest::DialogSelect {
+            request_id,
+            title,
+            placeholder,
+            options,
+            current,
+            actions,
+            ..
+        } => PluginUiEvent::DialogSelect {
+            request_id: *request_id,
+            title: title.clone(),
+            placeholder: placeholder.clone(),
+            options: options
+                .iter()
+                .map(|option| PluginDialogOption {
+                    title: option.title.clone(),
+                    value: option.value.clone(),
+                    description: option.description.clone(),
+                })
+                .collect(),
+            current: current.clone(),
+            actions: actions.clone(),
+        },
+        // G-475 — the tabs/model mutation arms.
+        UiRequest::TabsOp { op, session_id, index, .. } => {
+            PluginUiEvent::TabsOp { op: *op, session_id: session_id.clone(), index: *index }
+        }
+        UiRequest::ModelVariantSet { variant, .. } => {
+            PluginUiEvent::ModelVariantSet { variant: variant.clone() }
+        }
     }
 }
 
@@ -1930,6 +2071,75 @@ fn hex_color(color: crate::style::Color) -> String {
         crate::style::Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
         _ => "#888888".to_owned(),
     }
+}
+
+/// G-475 — the `tui.tabs` view (api.tsx:245-281's bounded projection):
+/// `{enabled, tabs: [{sessionID, title?, active, busy, attention,
+/// unread?}]}` (session-tabs.tsx's list face; the ref's reactive
+/// reads become this change-gated push).
+fn tabs_view(store: &Store) -> Value {
+    let enabled = store.tabs_enabled();
+    let tabs = store.strip_tabs_ordered();
+    let active = match store.route() {
+        crate::store::Route::Session { session_id, .. } => Some(store.session_root(&session_id)),
+        crate::store::Route::Home => None,
+    };
+    let permission_live =
+        matches!(store.footer().view, crate::components::footer::FooterView::Permission { .. });
+    let rows: Vec<Value> = tabs
+        .iter()
+        .map(|tab| {
+            let busy = store.session_busy(&tab.session_id);
+            let selected = Some(tab.session_id.as_str()) == active.as_deref();
+            let attention = (permission_live && selected).then_some("permission");
+            let unread = store.tabs().unread.get(&tab.session_id).map(|unread| match unread {
+                crate::store::Unread::Activity => "activity",
+                crate::store::Unread::Error => "error",
+            });
+            let mut row = serde_json::json!({
+                "sessionID": tab.session_id,
+                "active": selected,
+                "busy": busy,
+                "attention": attention,
+            });
+            if let Some(unread) = unread {
+                row["unread"] = serde_json::Value::String(unread.to_owned());
+            }
+            if let Some(title) = store.display_title(tab) {
+                row["title"] = serde_json::Value::String(title);
+            }
+            row
+        })
+        .collect();
+    serde_json::json!({ "enabled": enabled, "tabs": rows })
+}
+
+/// G-475 — the `tui.model` view (api.tsx:282-296's bounded
+/// projection): `{current: {providerID, modelID, variant?} | null,
+/// variants: [ids]}` (local.tsx's model selection face). The current
+/// read uses the EFFECTIVE model (the route's selection, falling
+/// back to the session's resolved model — the same value the
+/// composer's status line shows).
+fn model_view(store: &Store) -> Value {
+    let key = match store.route() {
+        crate::store::Route::Session { session_id, .. } => session_id,
+        crate::store::Route::Home => crate::app::HOME_PROMPT_KEY.to_owned(),
+    };
+    let current = store.effective_model(&key);
+    let current = current.map(|model| {
+        let mut value = serde_json::json!({
+            "providerID": model.provider_id,
+            "modelID": model.model_id,
+        });
+        if let Some(variant) = model.variant {
+            value["variant"] = serde_json::Value::String(variant);
+        }
+        value
+    });
+    serde_json::json!({
+        "current": current,
+        "variants": store.current_model_variants(),
+    })
 }
 
 #[cfg(test)]

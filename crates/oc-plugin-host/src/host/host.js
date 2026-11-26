@@ -127,7 +127,7 @@ function checkValueLimits(value) {
   }
 }
 
-function hostRequest(method, params) {
+function hostRequest(method, params, onId) {
   return new Promise((resolve, reject) => {
     // MAX_PENDING_PROMISES (interpreter/limits.ts:11, enforced at
     // promises.ts:45-49): a bridge request is the guest's unit of
@@ -142,6 +142,10 @@ function hostRequest(method, params) {
       return;
     }
     const id = nextGuestId++;
+    // G-475: the caller may need its own request id BEFORE the reply
+    // lands (dialog.select stashes its action triggers under it so a
+    // `dialog.action` dispatch arriving mid-dialog finds them).
+    if (typeof onId === "function") onId(id);
     pendingGuest.set(id, { resolve, reject });
     send({ jsonrpc: "2.0", id, method, params });
   });
@@ -166,6 +170,21 @@ function dialogResult(reply) {
     return null;
   }
   return reply;
+}
+
+// G-475 — `ctx.ui.format.path` (util/path-format.ts:3-10): abbreviate
+// the home prefix to `~`. The home directory is resolved once (the
+// guest process shares the TUI's user).
+let homeDirectory;
+function abbreviateHome(input) {
+  if (!homeDirectory) homeDirectory = require("node:os").homedir();
+  const home = homeDirectory;
+  if (!home) return input;
+  const posix = require("node:path").posix;
+  const relative = posix.relative(home, input);
+  if (!relative) return "~";
+  if (relative === ".." || relative.startsWith("../") || posix.isAbsolute(relative)) return input;
+  return "~/" + relative;
 }
 
 // The async halves of the pipe-death detection: Bun surfaces some
@@ -1959,7 +1978,18 @@ function makeCtx(pluginId, options) {
       },
     },
 
-    // -- storage (plugin-ID-scoped durable KV) --------------------------------
+    // -- storage (plugin-ID-scoped durable KV) --------------------------
+    // G-475: the raw kv face above routes to the embedder's StoragePort
+    // (the TUI binds the local-file port — ref TUI storage semantics,
+    // NOT the server DbStoragePort). The two v2 TUI arms below
+    // (api.tsx:200-202 / context.ts:31-53) project the ref's reactive
+    // Store onto the bridge: `store` = a live object + a read-modify-
+    // write `update` over the durable kv RPC (bounded projection — the
+    // ref's Solid store is reactive and its initial load synchronous;
+    // here the first hydrate lands a tick after `store()` returns and
+    // every `update` re-reads the durable value under the entry's own
+    // in-process serialization chain); `memory` = the module Map the
+    // ref memoizes above consumer lifecycles (no RPC).
     storage: {
       async get(key) {
         const result = await hostRequest("storage.get", { pluginId, key: String(key ?? "") });
@@ -1979,6 +2009,85 @@ function makeCtx(pluginId, options) {
           after: typeof scan.after === "string" ? scan.after : null,
           limit: Number.isFinite(scan.limit) ? scan.limit : null,
         });
+      },
+      store(key, options) {
+        const bare = String(key ?? "");
+        if (!bare) throw new TypeError("Invalid storage segment: (empty)");
+        const initial = options?.initial;
+        if (!initial || typeof initial !== "object" || Array.isArray(initial)) {
+          throw new TypeError("Storage values must be JSON-compatible objects");
+        }
+        const live = structuredClone(initial);
+        // The in-process serialization chain (the ref's Flock window;
+        // the port's OS flock guards the cross-process write).
+        let chain = Promise.resolve();
+        // The eventual durable hydrate: replaces the live object's
+        // contents in place once the kv read answers (reads before it
+        // lands see `initial` — the documented bounded deviation).
+        chain = chain.then(async () => {
+          try {
+            const durable = await hostRequest("storage.get", { pluginId, key: bare });
+            const value = durable && typeof durable === "object" && durable.value !== null
+              ? durable.value
+              : null;
+            if (value && typeof value === "object" && !Array.isArray(value)) {
+              replaceInPlace(live, value);
+            }
+          } catch {
+            // A failed hydrate leaves the initial value standing (the
+            // ref's load() falls back the same way).
+          }
+        });
+        const update = (mutation) => {
+          if (typeof mutation !== "function") {
+            throw new TypeError("store update requires a mutation function");
+          }
+          const operation = chain.then(async () => {
+            let base;
+            try {
+              const durable = await hostRequest("storage.get", { pluginId, key: bare });
+              base = durable && typeof durable === "object" && durable.value !== null
+                ? durable.value
+                : null;
+            } catch {
+              base = null;
+            }
+            const draft =
+              base && typeof base === "object" && !Array.isArray(base)
+                ? structuredClone(base)
+                : structuredClone(initial);
+            mutation(draft);
+            await hostRequest("storage.set", { pluginId, key: bare, value: draft });
+            replaceInPlace(live, draft);
+          });
+          chain = operation.then(
+            () => undefined,
+            () => undefined,
+          );
+          return operation;
+        };
+        return [live, update];
+      },
+      memory(key, options) {
+        const namespaced = `plugin.${pluginId}.${String(key ?? "")}`;
+        const existing = memoryEntries.get(namespaced);
+        if (existing) return existing;
+        const initial = options?.initial;
+        if (!initial || typeof initial !== "object" || Array.isArray(initial)) {
+          throw new TypeError("Storage values must be objects");
+        }
+        const live = structuredClone(initial);
+        const mutate = (mutation) => {
+          if (typeof mutation !== "function") {
+            throw new TypeError("memory mutation requires a function");
+          }
+          const draft = structuredClone(live);
+          mutation(draft);
+          replaceInPlace(live, draft);
+        };
+        const entry = [live, mutate];
+        memoryEntries.set(namespaced, entry);
+        return entry;
       },
     },
 
@@ -2113,9 +2222,84 @@ function makeCtx(pluginId, options) {
             message: String(opts.message ?? ""),
             variant: typeof opts.variant === "string" ? opts.variant : "info",
             duration: Number.isFinite(opts.duration) ? opts.duration : null,
+            // G-475 — the sessionID arm (api.tsx:108-131/277): the raw
+            // id crosses; the TUI's reducer owns the route + session
+            // tables and decides plain vs action toast.
+            sessionID: typeof opts.sessionID === "string" && opts.sessionID ? opts.sessionID : null,
           }).catch((error) => {
             notify("log", { pluginId, level: "error", message: `toast.show failed: ${errText(error)}` });
           });
+        },
+      },
+      // G-475 — `ctx.ui.format.path` (api.tsx:207-209 →
+      // abbreviateHome, util/path-format.ts:3-10): `~`-abbreviate the
+      // value against the home directory.
+      format: {
+        path(value) {
+          return abbreviateHome(String(value ?? ""));
+        },
+      },
+      // G-475 — `ctx.ui.tabs` (api.tsx:245-281 → host.sessionTabs):
+      // reads over the host-pushed `tui.tabs` view; mutations as
+      // `ui.tabs.op` UI requests (the store's own tab seams answer).
+      tabs: {
+        enabled() {
+          return tuiTabsView.enabled;
+        },
+        list() {
+          return tuiTabsView.tabs.map((tab) => ({ ...tab }));
+        },
+        open(sessionID) {
+          if (!tuiTabsView.enabled) return false;
+          notify("tui.tabs.op", { pluginId, op: "open", sessionID: String(sessionID ?? "") });
+          return true;
+        },
+        focus(sessionID) {
+          if (!tuiTabsView.enabled) return false;
+          notify("tui.tabs.op", { pluginId, op: "focus", sessionID: String(sessionID ?? "") });
+          return true;
+        },
+        move(sessionID, index) {
+          if (!tuiTabsView.enabled) return false;
+          notify("tui.tabs.op", {
+            pluginId,
+            op: "move",
+            sessionID: String(sessionID ?? ""),
+            index: Number.isFinite(index) ? Math.max(0, Math.floor(index)) : 0,
+          });
+          return true;
+        },
+        close(sessionID) {
+          if (!tuiTabsView.enabled) return false;
+          notify("tui.tabs.op", {
+            pluginId,
+            op: "close",
+            sessionID: typeof sessionID === "string" && sessionID ? sessionID : null,
+          });
+          return true;
+        },
+      },
+      // G-475 — `ctx.ui.model` (api.tsx:282-296 → host.local.model):
+      // reads over the host-pushed `tui.model` view; `variant.set` as
+      // a `ui.model.variant.set` UI request.
+      model: {
+        current() {
+          const current = tuiModelView.current;
+          return current ? { ...current } : undefined;
+        },
+        variant: {
+          list() {
+            return [...tuiModelView.variants];
+          },
+          set(variant) {
+            if (!tuiModelView.current) return false;
+            if (variant !== undefined && !tuiModelView.variants.includes(variant)) return false;
+            notify("tui.model.variant.set", {
+              pluginId,
+              variant: typeof variant === "string" ? variant : null,
+            });
+            return true;
+          },
         },
       },
       // TUI-25 (v2 api.tsx:344-366): the promise resolves when the
@@ -2196,6 +2380,99 @@ function makeCtx(pluginId, options) {
         async open(spec) {
           await hostRequest("ui.dialog.open", { pluginId, spec: spec ?? {} });
         },
+        /** G-475 — `dialog.show(render, onClose?)` (api.tsx:334-336):
+         *  the render function runs NOW and its tree flattens to the
+         *  dialog's BODY lines — the ref mounts the render RAW as the
+         *  Dialog's children (ui/dialog.tsx:70-73: the paddingTop-1
+         *  box, no title block), so the whole tree's text lines are
+         *  the rows (the first-line-as-title split is the SIDEBAR
+         *  section's contract, not the dialog's). `onClose` settles
+         *  through the deferred seam when the TUI closes the dialog
+         *  (any close → null). */
+        show(render, onClose) {
+          if (typeof render !== "function") {
+            throw new Error("ui.dialog.show requires a render function");
+          }
+          const lines = treeLines(render(), tuiSidebarContentWidth)
+            .map((line) => line.replace(/\s+$/, ""))
+            .filter((line) => line.trim() !== "");
+          const request = hostRequest("ui.dialog.show", {
+            pluginId,
+            spec: { title: "", rows: lines },
+          });
+          if (typeof onClose === "function") {
+            request.then(
+              () => onClose(),
+              () => {},
+            );
+          }
+        },
+        /** G-475 — `dialog.set(options)` (api.tsx:337-340): the ACTIVE
+         *  dialog's presentation (`size`/`centered`). */
+        async set(options) {
+          const opts = options ?? {};
+          await hostRequest("ui.dialog.set", {
+            pluginId,
+            size: typeof opts.size === "string" ? opts.size : null,
+            centered: opts.centered === true,
+          });
+        },
+        /** G-475 — `dialog.clear()` (api.tsx:341-343). */
+        async clear() {
+          await hostRequest("ui.dialog.clear", { pluginId });
+        },
+        /** G-475 — `dialog.select(options)` (api.tsx:387-427): the
+         *  promise resolves the selected option's value (any close →
+         *  undefined). Bounded projections: values cross as strings
+         *  (the native select keys on them; non-strings arrive as
+         *  their JSON text and resolve back as strings), the search
+         *  arm degrades to the native filter, and the actions'
+         *  `onTrigger` runs guest-side when the TUI dispatches
+         *  `dialog.action` (triggering does NOT close the dialog). */
+        async select(options) {
+          const opts = options ?? {};
+          const list = Array.isArray(opts.options) ? opts.options : [];
+          const actions = Array.isArray(opts.actions) ? opts.actions : [];
+          const triggers = actions.map((action) =>
+            typeof action?.onTrigger === "function" ? action.onTrigger : null,
+          );
+          let requestKey = null;
+          const reply = await hostRequest(
+            "ui.dialog.select",
+            {
+              pluginId,
+              spec: {
+                title: String(opts.title ?? ""),
+                placeholder: typeof opts.placeholder === "string" ? opts.placeholder : null,
+                current: "current" in opts ? opts.current : null,
+                options: list
+                  .filter((option) => option && typeof option.title === "string" && "value" in option)
+                  .map((option) => ({
+                    title: option.title,
+                    value: option.value,
+                    description: typeof option.description === "string" ? option.description : "",
+                  })),
+                actions: actions
+                  .filter((action) => action && typeof action.bind === "string" && action.bind)
+                  .map((action) => ({
+                    bind: action.bind,
+                    title: String(action.title ?? ""),
+                    side: action.side === "right" ? "right" : "left",
+                    selection: action.selection === "none" ? "none" : "required",
+                  })),
+              },
+            },
+            (id) => {
+              if (triggers.some((fn) => typeof fn === "function")) {
+                requestKey = `${pluginId}:${id}`;
+                dialogActions.set(requestKey, triggers);
+              }
+            },
+          );
+          if (requestKey) dialogActions.delete(requestKey);
+          const value = dialogResult(reply);
+          return value === null ? undefined : value;
+        },
       },
       grouping: {
         /** {tool} exact match or {toolPrefix} prefix match → header. */
@@ -2250,7 +2527,10 @@ function makeCtx(pluginId, options) {
         };
       },
       router: {
-        /** api.tsx:204-212 — register a named plugin page. */
+        /** api.tsx:204-212 — register a named plugin page. G-475 bug1:
+         *  a same-plugin duplicate THROWS (the ref's per-plugin
+         *  registry, context.tsx:165 `has` — the port silently
+         *  overwrote before). */
         async register(page) {
           const name = String(page?.name ?? "");
           if (!name) throw new Error("router.register requires a name");
@@ -2258,15 +2538,27 @@ function makeCtx(pluginId, options) {
             throw new Error("router.register requires a render function");
           }
           if (!pluginRoutes.has(pluginId)) pluginRoutes.set(pluginId, new Map());
+          if (pluginRoutes.get(pluginId).has(name)) {
+            throw new Error(`Route already registered: ${name}`);
+          }
           pluginRoutes.get(pluginId).set(name, page.render);
-          await hostRequest("ui.router.register", { pluginId, name });
+          try {
+            await hostRequest("ui.router.register", { pluginId, name });
+          } catch (error) {
+            // The host is authoritative for duplicates too — unwind the
+            // guest-side stash when it rejects.
+            pluginRoutes.get(pluginId)?.delete(name);
+            throw error;
+          }
           return () => {
             pluginRoutes.get(pluginId)?.delete(name);
           };
         },
         /** api.tsx:211-224 — `{type:"plugin", name, data?}` targets
          *  this plugin's registered page (the ref attributes the id);
-         *  session targets reuse the bridge's navigation ask. */
+         *  session targets reuse the bridge's navigation ask;
+         *  `{type:"home"}` is the Destination union's home arm
+         *  (G-475 bug2 — the arm was missing). */
         navigate(destination) {
           const target = destination ?? {};
           if (target.type === "plugin") {
@@ -2282,6 +2574,10 @@ function makeCtx(pluginId, options) {
               sessionID: typeof target.sessionID === "string" ? target.sessionID : null,
               name: "session",
             });
+            return;
+          }
+          if (target.type === "home") {
+            notify("tui.route.home", {});
             return;
           }
           if (typeof target.sessionID === "string") {
@@ -3656,6 +3952,26 @@ const keymapRuns = new Map();
  * the slotClaims lifecycle (snapshot/reinstate/retire/unload). */
 const markdownRenderers = new Map();
 
+/** G-475: `plugin.<id>.<key>` -> [liveValue, mutate] — the
+ * `ctx.storage.memory` memo table (the ref's `memories` Map above
+ * consumer lifecycles; survives hot reloads because the host module
+ * outlives plugin generations). */
+const memoryEntries = new Map();
+
+/** G-475: `${pluginId}:${requestId}` -> [onTrigger|null] — the live
+ * `ctx.ui.dialog.select` action triggers (the TUI dispatches
+ * `dialog.action` mid-dialog; the promise's settle clears the row). */
+const dialogActions = new Map();
+
+/** G-475: replace one live object's contents in place (top-level
+ * keys) — the bounded projection of the ref's solid `reconcile`/`produce`
+ * mutation landing: object identity is preserved for holders of the
+ * live reference, field reads observe the new state. */
+function replaceInPlace(target, source) {
+  for (const key of Object.keys(target)) delete target[key];
+  Object.assign(target, source);
+}
+
 function slotClaimCounter(pluginId) {
   const next = (slotClaimCounters.get(pluginId) ?? 0) + 1;
   slotClaimCounters.set(pluginId, next);
@@ -3669,6 +3985,15 @@ let tuiRoute = { name: "home" };
  *  while no panel is open. `ctx.ui.panel.current()` reads it
  *  (plugin-filtered). */
 let tuiPanel = null;
+
+/** G-475: the host-pushed session-tabs view (`tui.tabs`) —
+ *  `{enabled, tabs}`; `ctx.ui.tabs.enabled()/list()` read it. */
+let tuiTabsView = { enabled: false, tabs: [] };
+
+/** G-475: the host-pushed model-selection view (`tui.model`) —
+ *  `{current, variants}`; `ctx.ui.model.current()/variant.list()`
+ *  read it. */
+let tuiModelView = { current: null, variants: [] };
 
 // PLUG-D07: the host pushes the LATEST activated location (the one-guest
 // approximation of v2's per-instance hosts); every live ctx object's
@@ -3694,15 +4019,52 @@ let tuiSidebarContentWidth = 38;
  *  (sibling node_modules; `solid-js` stays the real package when the
  *  install carries it, else the minimal signal shim). */
 function ensureOpentuiShims(packageRoot) {
-  // The package root's PARENT is the install's node_modules (the
-  // hoisted deps' dir — where bare imports from dist/ resolve).
-  const nm = require("node:path").dirname(packageRoot);
+  // G-475: the shims land in the nearest node_modules ON the import
+  // chain that ALREADY EXISTS. Bun's resolver caches a directory
+  // listing's existence: a node_modules CREATED mid-process (the
+  // package's own, when the parent is not one) stays INVISIBLE to
+  // the ESM linker (the negative cache — the v21 fixtures rely on
+  // the RIG staging theirs before boot; this write is the best-effort
+  // fallback). When the parent IS the real node_modules (the hoisted
+  // payload layout: `<sandbox>/plugins/node_modules/<pkg>`), the
+  // write lands THERE — visible immediately — next to the package's
+  // real dependencies. The `resolves` guard keeps the shims
+  // fallbacks: a name the package already resolves (the REAL
+  // solid-js staged by the pty rig) is never shadowed. Writes are
+  // best-effort (read-only trees skip).
+  const path = require("node:path");
+  const parent = path.dirname(packageRoot);
+  const nm = path.basename(parent) === "node_modules"
+    ? parent
+    : path.join(packageRoot, "node_modules");
+  const resolves = (name) => {
+    // A FILESYSTEM walk, never Bun.resolveSync: a failed resolveSync
+    // probe caches the negative resolution, and the ESM import of
+    // the shim name then fails even after the shim lands (the
+    // resolver's negative cache — pty_sidebar's regression). Walking
+    // the chain's directories has no resolver side effect.
+    let dir = packageRoot;
+    for (;;) {
+      if (require("node:fs").existsSync(path.join(dir, "node_modules", name, "package.json"))) {
+        return true;
+      }
+      const up = path.dirname(dir);
+      if (up === dir) return false;
+      dir = up;
+    }
+  };
   const write = (name, files) => {
-    const dir = require("node:path").join(nm, name);
-    if (require("node:fs").existsSync(require("node:path").join(dir, "package.json"))) return;
-    require("node:fs").mkdirSync(dir, { recursive: true });
-    for (const [file, body] of Object.entries(files)) {
-      require("node:fs").writeFileSync(require("node:path").join(dir, file), body);
+    const dir = path.join(nm, name);
+    if (require("node:fs").existsSync(path.join(dir, "package.json"))) return;
+    if (resolves(name)) return;
+    try {
+      require("node:fs").mkdirSync(dir, { recursive: true });
+      for (const [file, body] of Object.entries(files)) {
+        require("node:fs").writeFileSync(path.join(dir, file), body);
+      }
+    } catch {
+      // Unwritable package tree: the plugin's own real dependencies
+      // must cover the imports (the registry payload does).
     }
   };
   write("@opentui/core", {
@@ -3978,6 +4340,46 @@ async function handleLoadTui({ entry, options }) {
   ensureOpentuiShims(packageRoot);
   const mod = await import(`file://${abs}`);
   const def = mod.default;
+  // G-475 — the DUAL-SHAPE activation (owner ruling 2026-11-24). The
+  // legacy `tui(api)` face (the port's own v1-bridge superset — the
+  // ref itself has NO `default.tui` face, grep 0) keeps priority when
+  // present: combined packages (omo-slim's tui entry exports BOTH
+  // `tui` and `setup` — the SERVER-side `load` already ran the v2
+  // setup for the server entry) drive the sidebar through the bridge.
+  // A tui entry WITHOUT the `tui()` face classifies v2-first: the
+  // `{id, setup}` contract runs the same pipeline `load` uses
+  // (makeCtx + registrations, host.js:2545-2553) — ref v2-only TUI
+  // plugins (opencode.notifications' shape) load in the bridge.
+  const hasTuiFace = def && typeof def === "object" && typeof def.tui === "function";
+  if (!hasTuiFace) {
+    const shape = classify(def);
+    if (shape.kind === "v2") {
+      const id = shape.id;
+      const record = { id, entry: abs, dispose: null, subscriptions: [], commands: new Map() };
+      plugins.set(id, record);
+      const loadOptions =
+        options && typeof options === "object" && !Array.isArray(options) ? options : {};
+      const ctx = makeCtx(id, loadOptions);
+      const maybeDispose = await shape.setup(ctx);
+      if (
+        typeof maybeDispose === "function" ||
+        (maybeDispose && typeof maybeDispose.dispose === "function")
+      ) {
+        record.dispose =
+          typeof maybeDispose === "function" ? maybeDispose : maybeDispose.dispose;
+      }
+      return { ok: true, pluginId: id, skipped: null, sidebar: sidebarSlots.has(id) };
+    }
+    if (shape.kind === "effect") {
+      const id = shape.id;
+      plugins.set(id, { id, entry: abs, dispose: null, subscriptions: [], commands: new Map() });
+      notify("log", {
+        level: "info",
+        message: `${id}: effect contract not runnable in this host wave; loaded inert`,
+      });
+      return { ok: true, pluginId: id, skipped: "effect", sidebar: false };
+    }
+  }
   if (!def || typeof def !== "object" || typeof def.tui !== "function") {
     throw new Error(`${entry}: default export has no tui(api) entry`);
   }
@@ -4082,7 +4484,24 @@ async function handleLoadTui({ entry, options }) {
         return registerMarkdownRenderer(pluginId, language, render);
       },
     },
-    kv: { get: async () => undefined, set: async () => {} },
+    // G-475 — the v1-bridge kv face routes through the real storage
+    // port now (the embedder binds the local-file StoragePort; the
+    // old no-op stub meant plugin state could never persist).
+    kv: {
+      async get(key) {
+        const result = await hostRequest("storage.get", {
+          pluginId,
+          key: String(key ?? ""),
+        }).catch(() => null);
+        return result && typeof result === "object" && result.value !== null
+          ? result.value
+          : undefined;
+      },
+      async set(key, value) {
+        await hostRequest("storage.set", { pluginId, key: String(key ?? ""), value: value ?? null });
+      },
+    },
+
     ui: {
       toast: () => {},
       dialog: { open: () => {}, close: () => {}, alert: () => {}, confirm: () => {} },
@@ -4336,6 +4755,18 @@ async function handleRouteRender({ pluginId, name, data }) {
   return section;
 }
 
+/** `dialog.action` — run one live select dialog's action trigger
+ *  (api.tsx:407-417: the TUI dispatches the footer action; the value
+ *  is the selected option's, or null for `selection: "none"` arms).
+ *  Triggering does NOT close the dialog (the ref's contract). */
+async function handleDialogAction({ pluginId, requestId, action, value }) {
+  const triggers = dialogActions.get(`${pluginId}:${Number(requestId)}`);
+  const trigger = triggers?.[Number(action)];
+  if (typeof trigger !== "function") return { ok: false };
+  await trigger(value === null || value === undefined ? undefined : value);
+  return { ok: true };
+}
+
 /** `keymap.command.run` — run one keymap-layer command's `run`
  *  (api.tsx:179-199; the TUI dispatches a resolved bind back). */
 async function handleKeymapRun({ pluginId, id }) {
@@ -4403,6 +4834,7 @@ const METHODS = {
   "route.render": handleRouteRender,
   "keymap.command.run": handleKeymapRun,
   "markdown.render": handleMarkdownRender,
+  "dialog.action": handleDialogAction,
   scan: async ({ entry }) => ({ digests: await scanDigests(entry) }),
 };
 
@@ -4493,6 +4925,34 @@ async function handleLine(line) {
       borderActive: typeof view.borderActive === "string" ? view.borderActive : tuiThemeView.borderActive,
       text: typeof view.text === "string" ? view.text : tuiThemeView.text,
       textMuted: typeof view.textMuted === "string" ? view.textMuted : tuiThemeView.textMuted,
+    };
+    return;
+  }
+  if (message.method === "tui.tabs") {
+    // G-475: host-pushed session-tabs view — `ctx.ui.tabs.enabled()`
+    // / `.list()` read it (the ref's reactive host.sessionTabs reads
+    // become change-gated pushes here).
+    const view = message.params ?? {};
+    tuiTabsView = {
+      enabled: view.enabled === true,
+      tabs: Array.isArray(view.tabs) ? view.tabs : [],
+    };
+    return;
+  }
+  if (message.method === "tui.model") {
+    // G-475: host-pushed model-selection view — `ctx.ui.model.current()`
+    // / `.variant.list()` read it.
+    const view = message.params ?? {};
+    tuiModelView = {
+      current:
+        view.current && typeof view.current === "object"
+          ? {
+              providerID: typeof view.current.providerID === "string" ? view.current.providerID : "",
+              modelID: typeof view.current.modelID === "string" ? view.current.modelID : "",
+              variant: typeof view.current.variant === "string" ? view.current.variant : undefined,
+            }
+          : null,
+      variants: Array.isArray(view.variants) ? view.variants.filter((v) => typeof v === "string") : [],
     };
     return;
   }

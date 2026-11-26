@@ -280,8 +280,11 @@ pub enum DialogKind {
     /// seam): the content was materialized at OPEN time through
     /// [`PluginDialogSource`] (or arrived fully-built on a
     /// `ui.dialog.open` request) and renders natively — the id keys
-    /// the store's [`PluginDialogContent`].
-    Plugin { id: String },
+    /// the store's [`PluginDialogContent`]. G-475: `request_id` rides
+    /// the deferred seam for `ctx.ui.dialog.show` (the onClose
+    /// settle) and `ctx.ui.dialog.select` (the value promise) —
+    /// `None` for the plain `ui.dialog.open` deliveries.
+    Plugin { id: String, request_id: Option<u64> },
     /// The queued-prompts manager (`session.queued_prompts`,
     /// `<leader>q` — v2's `DialogSelect` "Queued prompts",
     /// index.tsx:627-675): enter steers the selected prompt, ctrl+d
@@ -479,6 +482,11 @@ pub enum DialogKind {
 pub struct DialogEntry {
     pub kind: DialogKind,
     pub size: DialogSize,
+    /// G-475 — the dialog's `centered` presentation flag
+    /// (`ctx.ui.dialog.set({centered})`, api.tsx:337-340 → the ref's
+    /// `dialog.setCentered`): vertically centers the box (the
+    /// ImagePreview/Pair geometry) instead of the `height/4` seat.
+    pub centered: bool,
     /// Picker state (filter/selection/scroll) for select-style kinds.
     pub select: SelectState,
     /// Prompt input value for prompt-style kinds (rename).
@@ -571,6 +579,14 @@ pub struct DialogsLaneState {
     /// request id, the settle value); the plugin pump drains it back
     /// into the host (`resolve_ui_request`).
     pub ui_dialog_resolutions: Vec<(u64, serde_json::Value)>,
+    /// G-475 — the live `ctx.ui.dialog.select` action tables, keyed
+    /// by the select's guest request id (cleared when the dialog
+    /// settles).
+    pub plugin_select_actions: std::collections::HashMap<u64, Vec<PluginSelectActionEntry>>,
+    /// G-475 — the staged `dialog.action` triggers — (plugin id,
+    /// request id, action index, the selected value); the plugin pump
+    /// drains them into the host's bounded guest dispatch.
+    pub plugin_dialog_action_requests: Vec<(String, u64, usize, Option<String>)>,
     /// TUI-23: the boot config's settings display values.
     pub settings: SettingsSnapshot,
     /// TUI-24: the error-details body's scroll offset.
@@ -1397,6 +1413,10 @@ pub struct PluginDialogContent {
     /// When non-empty the dialog is a select (the native pipeline:
     /// filter/move/submit; submit dispatches the option's value).
     pub options: Vec<PluginDialogOption>,
+    /// G-475 — the select dialog's filter placeholder override (the
+    /// `ctx.ui.dialog.select` spec's `placeholder`; `None` keeps the
+    /// native "Search").
+    pub placeholder: Option<String>,
 }
 
 impl PluginDialogContent {
@@ -1415,6 +1435,30 @@ impl PluginDialogContent {
 pub trait PluginDialogSource {
     /// The dialog id (`plugin:local` qualified or raw local id).
     fn content(&self, id: &str) -> Option<PluginDialogContent>;
+}
+
+/// G-475 — one `ctx.ui.dialog.select` footer action (api.tsx:407-417's
+/// `DialogSelectAction` projection): the trigger stages the guest
+/// dispatch, rendering as a select footer row with its bind label.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginSelectActionEntry {
+    /// The owning plugin (the `dialog.action` dispatch target).
+    pub plugin_id: String,
+    /// The trigger binding (displayed as the footer label).
+    pub bind: String,
+    /// The action's row title.
+    pub title: String,
+    /// `true` for a `side: "right"` footer row.
+    pub side_right: bool,
+    /// `selection: "required"` (the default) — the trigger carries the
+    /// selected option's value; `"none"` actions trigger without one.
+    pub selection_required: bool,
+    /// The synthetic command id (`plugin.dialog.action:{request}:
+    /// {index}` — a process-lifetime string created ONCE per select
+    /// open; [`crate::components::dialog_select::SelectAction`]'s
+    /// command field is `&'static`, so the id is leaked at open — one
+    /// bounded leak per action per open, never per frame).
+    pub command: &'static str,
 }
 
 /// The no-op source (no plugin host attached).
@@ -5169,12 +5213,19 @@ impl Store {
     /// `toast.activate()` (ui/toast.tsx:170-175 — lane KM): dismiss +
     /// hand the action's dispatch target back to the caller (the
     /// pump runs it through the palette dispatcher; `None` = no
-    /// action, the dismiss stands).
+    /// action, the dismiss stands). G-475: the sessionID arm's
+    /// `Open` action activates as a session navigation.
     #[must_use]
-    pub fn toast_activate(&self) -> Option<String> {
-        let command = self.toasts.get().current().and_then(|toast| toast.action_command.clone());
+    pub fn toast_activate(&self) -> Option<crate::components::toast::ToastActivation> {
+        let activation = self.toasts.get().current().and_then(|toast| {
+            if let Some(session) = &toast.action_session {
+                Some(crate::components::toast::ToastActivation::Session(session.clone()))
+            } else {
+                toast.action_command.clone().map(crate::components::toast::ToastActivation::Command)
+            }
+        });
         self.toasts.update(super::components::toast::ToastQueue::dismiss);
-        command
+        activation
     }
 
     // -- prompt (composer, wave 2) ---------------------------------------------
@@ -5994,6 +6045,7 @@ impl Store {
                 duration_ms: crate::components::toast::TOAST_DEFAULT_DURATION_MS,
                 action_label: None,
                 action_command: None,
+                action_session: None,
                 modal: false,
             });
         }
@@ -8948,6 +9000,16 @@ impl Store {
         InterruptStep::Fired
     }
 
+    /// G-475 — `store.interrupt !== 0` for the composer's slot input
+    /// (prompt/index.tsx:1589's `showDetails: store.interrupt === 0 ||
+    /// dimensions().width >= 80`): the armed interrupt window for the
+    /// key's session.
+    #[must_use]
+    pub fn interrupt_armed(&self, session_id: &str) -> bool {
+        let state = self.interrupts.get();
+        state.get(session_id).copied().unwrap_or_default().count > 0
+    }
+
     /// Clear the arm (the turn ended — the hint row collapses).
     pub fn interrupt_clear(&self, session_id: &str) {
         self.interrupts.update(|state| {
@@ -11198,6 +11260,7 @@ impl Store {
         let entry = DialogEntry {
             kind,
             size: DialogSize::default(),
+            centered: false,
             select: SelectState::default(),
             value: String::new(),
             theme_initial,
@@ -11231,7 +11294,14 @@ impl Store {
         } else {
             SelectState::default()
         };
-        let entry = DialogEntry { kind, size, select, value: String::new(), theme_initial };
+        let entry = DialogEntry {
+            kind,
+            size,
+            centered: false,
+            select,
+            value: String::new(),
+            theme_initial,
+        };
         self.dialogs.update(|stack| stack.push(entry));
         self.dialog_opened_strip_hover_reset();
         self.focus_dialog_current();
@@ -11254,7 +11324,14 @@ impl Store {
         } else {
             SelectState::default()
         };
-        let entry = DialogEntry { kind, size, select, value: String::new(), theme_initial };
+        let entry = DialogEntry {
+            kind,
+            size,
+            centered: false,
+            select,
+            value: String::new(),
+            theme_initial,
+        };
         let removed = self.dialogs.update(|stack| std::mem::replace(stack, vec![entry]));
         for entry in &removed {
             self.revert_unconfirmed_theme_dialog(entry);
@@ -11973,12 +12050,21 @@ impl Store {
     /// alert too since `onConfirm`/`onClose` are the same `done`).
     fn resolve_closing_ui_dialog(&self, kind: &DialogKind, result: serde_json::Value) {
         let request_id = match kind {
+            // G-475 — the plugin arms join the settle-once set: the
+            // dialog.show onClose (null = any close) and the
+            // dialog.select promise (null = an unresolved close; the
+            // submit resolves the value BEFORE the close lands
+            // through `execute_submission`).
             DialogKind::Alert { request_id, .. }
             | DialogKind::Confirm { request_id, .. }
-            | DialogKind::Prompt { request_id, .. } => *request_id,
+            | DialogKind::Prompt { request_id, .. }
+            | DialogKind::Plugin { request_id, .. } => *request_id,
             _ => None,
         };
         if let Some(id) = request_id {
+            // G-475 — a settled select retires its action table (the
+            // guest-side row cleared when the promise resolved).
+            self.lane_dialogs.borrow_mut().plugin_select_actions.remove(&id);
             self.enqueue_ui_dialog_resolution(id, result);
         }
     }
@@ -12352,7 +12438,10 @@ impl Store {
         self.plugin_dialogs.update(|dialogs| {
             dialogs.insert(id.to_owned(), content);
         });
-        self.open_dialog(DialogKind::Plugin { id: id.to_owned() }, DialogSize::default());
+        self.open_dialog(
+            DialogKind::Plugin { id: id.to_owned(), request_id: None },
+            DialogSize::default(),
+        );
     }
 
     /// Open a plugin dialog by id: materialize at open (the source),
@@ -12363,8 +12452,214 @@ impl Store {
         self.plugin_dialogs.update(|dialogs| {
             dialogs.insert(id.to_owned(), content);
         });
-        self.open_dialog(DialogKind::Plugin { id: id.to_owned() }, DialogSize::default());
+        self.open_dialog(
+            DialogKind::Plugin { id: id.to_owned(), request_id: None },
+            DialogSize::default(),
+        );
         true
+    }
+
+    /// G-475 — `ctx.ui.dialog.show(render, onClose?)` (api.tsx:334-336):
+    /// the fully-flattened content opens natively; `request_id` rides
+    /// the deferred seam (any close settles the guest's `onClose`);
+    /// the presentation (`size`/`centered`) applies to the entry.
+    pub fn open_plugin_dialog_show(
+        &self,
+        plugin_id: &str,
+        content: PluginDialogContent,
+        request_id: u64,
+        size: Option<&str>,
+        centered: bool,
+    ) {
+        let id = format!("plugin:{plugin_id}:show");
+        self.plugin_dialogs.update(|dialogs| {
+            dialogs.insert(id.clone(), content);
+        });
+        let size = match size {
+            Some("large") => DialogSize::Large,
+            Some("xlarge") => DialogSize::Xlarge,
+            _ => DialogSize::default(),
+        };
+        let theme_initial = self.theme_dialog_initial(&DialogKind::Plugin {
+            id: id.clone(),
+            request_id: Some(request_id),
+        });
+        let entry = DialogEntry {
+            kind: DialogKind::Plugin { id, request_id: Some(request_id) },
+            size,
+            centered,
+            select: SelectState::default(),
+            value: String::new(),
+            theme_initial,
+        };
+        self.dialogs.update(|stack| stack.push(entry));
+        self.dialog_opened_strip_hover_reset();
+        self.focus_dialog_current();
+    }
+
+    /// G-475 — `ctx.ui.dialog.set({size?, centered?})` (api.tsx:337-340
+    /// → `dialog.setSize/setCentered`): mutate the ACTIVE dialog's
+    /// presentation.
+    pub fn set_plugin_dialog_presentation(&self, size: Option<&str>, centered: bool) {
+        let size = match size {
+            Some("large") => Some(DialogSize::Large),
+            Some("xlarge") => Some(DialogSize::Xlarge),
+            Some("medium") => Some(DialogSize::default()),
+            _ => None,
+        };
+        self.update_dialog(|top| {
+            if let Some(size) = size {
+                top.size = size;
+            }
+            top.centered = centered;
+        });
+        self.request_redraw();
+    }
+
+    /// G-475 — `ctx.ui.dialog.select(options)` (api.tsx:387-427): the
+    /// native select dialog over the projected options; the value
+    /// promise settles through `request_id` (submit → the option's
+    /// value, any close → null). The actions render as footer rows —
+    /// triggering one stages the guest dispatch (see
+    /// [`Self::take_plugin_select_action`]) and does NOT close.
+    #[allow(clippy::too_many_arguments)] // the ref's props tuple
+    pub fn open_plugin_select(
+        &self,
+        plugin_id: &str,
+        request_id: u64,
+        title: &str,
+        placeholder: Option<&str>,
+        options: &[PluginDialogOption],
+        current: Option<&str>,
+        actions: &[oc_plugin_host::ui::PluginSelectAction],
+    ) {
+        let id = format!("plugin:{plugin_id}:select:{request_id}");
+        let content = PluginDialogContent {
+            title: title.to_owned(),
+            rows: Vec::new(),
+            options: options.to_vec(),
+            placeholder: placeholder.map(str::to_owned),
+        };
+        self.plugin_dialogs.update(|dialogs| {
+            dialogs.insert(id.clone(), content);
+        });
+        // The live action table (the props arm + the trigger staging
+        // read it); the synthetic command ids leak ONCE per open (the
+        // select action's command field is `&'static`).
+        let entries: Vec<PluginSelectActionEntry> = actions
+            .iter()
+            .enumerate()
+            .map(|(index, action)| PluginSelectActionEntry {
+                plugin_id: plugin_id.to_owned(),
+                bind: action.bind.clone(),
+                title: action.title.clone(),
+                side_right: action.side == "right",
+                selection_required: action.selection_required,
+                command: Box::leak(
+                    format!("plugin.dialog.action:{request_id}:{index}").into_boxed_str(),
+                ),
+            })
+            .collect();
+        self.lane_dialogs.borrow_mut().plugin_select_actions.insert(request_id, entries);
+        let theme_initial = self.theme_dialog_initial(&DialogKind::Plugin {
+            id: id.clone(),
+            request_id: Some(request_id),
+        });
+        let mut select = SelectState::default();
+        if let Some(current) = current {
+            select.selected =
+                options.iter().position(|option| option.value == current).unwrap_or(0);
+        }
+        let entry = DialogEntry {
+            kind: DialogKind::Plugin { id, request_id: Some(request_id) },
+            size: DialogSize::default(),
+            centered: false,
+            select,
+            value: String::new(),
+            theme_initial,
+        };
+        self.dialogs.update(|stack| stack.push(entry));
+        self.dialog_opened_strip_hover_reset();
+        self.focus_dialog_current();
+    }
+
+    /// G-475 — the live plugin select actions for one request id (the
+    /// props arm's footer rows; `None` when no live select carries
+    /// it).
+    #[must_use]
+    pub fn plugin_select_actions_for(
+        &self,
+        request_id: u64,
+    ) -> Option<Vec<PluginSelectActionEntry>> {
+        self.lane_dialogs.borrow().plugin_select_actions.get(&request_id).cloned()
+    }
+
+    /// G-475 — the live plugin select actions for the CURRENT top
+    /// dialog.
+    #[must_use]
+    pub fn plugin_select_actions(&self) -> Option<(u64, Vec<PluginSelectActionEntry>)> {
+        let top = self.top_dialog()?;
+        let DialogKind::Plugin { request_id: Some(id), .. } = &top.kind else { return None };
+        let id = *id;
+        let actions = self.lane_dialogs.borrow().plugin_select_actions.get(&id)?.clone();
+        Some((id, actions))
+    }
+
+    /// G-475 — the dialog key layer's action interception: the
+    /// focused footer action of a live plugin select maps to its
+    /// synthetic command id (`plugin.dialog.action:{request}:{index}`)
+    /// instead of a palette dispatch.
+    #[must_use]
+    pub fn plugin_select_action_command(&self, action_index: usize) -> Option<String> {
+        let (request_id, actions) = self.plugin_select_actions()?;
+        actions
+            .get(action_index)
+            .map(|_| format!("plugin.dialog.action:{request_id}:{action_index}"))
+    }
+
+    /// G-475 — the app's `CommandSubmitted` hook: a plugin select
+    /// action's synthetic command stages the guest trigger (with the
+    /// selected option's value for `selection: "required"` arms)
+    /// instead of a palette dispatch. `None` = not a plugin action.
+    pub fn take_plugin_select_action(
+        &self,
+        command: &str,
+    ) -> Option<(String, u64, usize, Option<String>)> {
+        let rest = command.strip_prefix("plugin.dialog.action:")?;
+        let (request_id, index) = rest.split_once(':')?;
+        let request_id: u64 = request_id.parse().ok()?;
+        let index: usize = index.parse().ok()?;
+        let entry = {
+            let lane = self.lane_dialogs.borrow_mut();
+            lane.plugin_select_actions.get(&request_id)?.get(index)?.clone()
+        };
+        // The selected option's value (None while none selected / the
+        // `selection: "none"` arm).
+        let value = self
+            .top_dialog()
+            .and_then(|top| match &top.kind {
+                DialogKind::Plugin { id, request_id: Some(open) } if *open == request_id => {
+                    let selected = top.select.selected;
+                    self.plugin_dialog_content(id)
+                        .and_then(|content| content.options.get(selected).cloned())
+                }
+                _ => None,
+            })
+            .filter(|_| entry.selection_required)
+            .map(|option| option.value);
+        self.lane_dialogs.borrow_mut().plugin_dialog_action_requests.push((
+            entry.plugin_id.clone(),
+            request_id,
+            index,
+            value.clone(),
+        ));
+        Some((entry.plugin_id, request_id, index, value))
+    }
+
+    /// G-475 — the plugin pump's drain: the staged `dialog.action`
+    /// triggers (the host's bounded guest dispatch).
+    pub fn take_plugin_dialog_action_requests(&self) -> Vec<(String, u64, usize, Option<String>)> {
+        std::mem::take(&mut self.lane_dialogs.borrow_mut().plugin_dialog_action_requests)
     }
 
     /// Upsert one plugin's sidebar section (latest wins; an empty
@@ -13625,6 +13920,7 @@ impl Store {
                         duration_ms: crate::components::toast::TOAST_DEFAULT_DURATION_MS,
                         action_label: None,
                         action_command: None,
+                        action_session: None,
                         // The F11 modal surface (keystrokes swallow
                         // until dismissed).
                         modal: true,
@@ -13890,6 +14186,7 @@ impl Store {
                         duration_ms: 5000,
                         action_label: None,
                         action_command: None,
+                        action_session: None,
                         modal: false,
                     });
                 }
@@ -14376,15 +14673,42 @@ impl Store {
                     .get("duration")
                     .and_then(serde_json::Value::as_u64)
                     .unwrap_or(crate::components::toast::TOAST_DEFAULT_DURATION_MS);
-                self.toast_show(ToastOptions {
+                // G-475 — the sessionID arm (api.tsx:108-131): the
+                // toast targets a session; when its family is NOT the
+                // open route's, the toast offers `Open` (the action
+                // navigates there) and the title falls back to the
+                // session's own. The store owns the route + session
+                // tables, so the REDUCER decides (the guest cannot).
+                let session_id = event
+                    .data
+                    .get("sessionID")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|session| !session.is_empty())
+                    .map(str::to_owned);
+                let mut options = ToastOptions {
                     title,
                     message,
                     variant,
                     duration_ms: duration,
                     action_label: None,
                     action_command: None,
+                    action_session: None,
                     modal: false,
-                });
+                };
+                if let Some(session_id) = session_id {
+                    let route_root = match self.route.get() {
+                        Route::Session { session_id, .. } => Some(self.session_root(&session_id)),
+                        Route::Home => None,
+                    };
+                    if route_root.as_deref() != Some(self.session_root(&session_id).as_str()) {
+                        options.action_label = Some("Open".to_owned());
+                        options.action_session = Some(session_id.clone());
+                        if options.title.is_none() {
+                            options.title = self.session_title(&session_id);
+                        }
+                    }
+                }
+                self.toast_show(options);
             }
             // G-21 — `tui.command.execute` (ref app.tsx:1253-1256):
             // `keymap.dispatch(evt.data.command)`. The store cannot

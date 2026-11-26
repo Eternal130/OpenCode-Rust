@@ -579,6 +579,7 @@ fn command_palette_frame(width: u16, height: u16) -> Frame {
     let entry = DialogEntry {
         kind: DialogKind::CommandPalette,
         size: DialogSize::Medium,
+        centered: false,
         select: SelectState::default(),
         value: String::new(),
         theme_initial: None,
