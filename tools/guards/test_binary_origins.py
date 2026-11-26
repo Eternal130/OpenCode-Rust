@@ -30,7 +30,21 @@ import sys
 from pathlib import Path
 
 DEFAULT_TARGET = Path(__file__).resolve().parents[2] / "target"
-PATTERN = re.compile(rb"\.worktrees/([A-Za-z0-9._-]+)/")
+# 2026-11-26 (4th revision, R26): the bare `.worktrees/<name>/` substring
+# FALSE-POSITIVED on fresh main-compiled binaries — oc-tui's worktree-dialog
+# TESTS bake fixture literals like `/home/u/.worktrees/feat-a/redo/...`
+# (assertion messages + fixture paths) into the test binary as string
+# constants; a fresh rebuild re-embeds them and the guard re-flagged the
+# same "violation" after every deletion/clean (the va21b/va21c-era
+# recurring flag was exactly this). Real compile-time embeds (the ENOENT
+# trap this guard exists for) are env!("CARGO_MANIFEST_DIR")-derived
+# ABSOLUTE paths: <repo-root>/.worktrees/<name>/... — so require the
+# repo-root prefix; synthetic fixtures (/home/u/, /src/, repo-relative)
+# never carry it.
+PATTERN = re.compile(
+    re.escape((Path(__file__).resolve().parents[2]).as_posix().encode())
+    + rb"/\.worktrees/([A-Za-z0-9._-]+)/"
+)
 # tree-sitter grammar symbol-table metadata baked by a worktree-side grammar
 # generation (aux_sym_* names around it; inert data, never a runtime path read
 # — the green post-merge gate is the functional proof). Verified 2026-11-25:
