@@ -2458,7 +2458,14 @@ async fn copilot_resolver_binds_route_from_credential() {
         crate::provider_catalog::catalog::Catalog::parse(&catalog_text).expect("catalog"),
     );
     let copilot = catalog.provider("github-copilot").expect("copilot in catalog");
-    let model_id = copilot.models.first().expect("copilot has models").id.0.clone();
+    // G-516: the live generation's BTreeMap-first model is a claude (the
+    // per-model `@ai-sdk/anthropic` override → the copilot-messages escape
+    // lane); the chat lane pins a provider-package model explicitly.
+    let model_id = "kimi-k3".to_string();
+    assert!(
+        copilot.models.iter().any(|model| model.id.as_str() == model_id),
+        "kimi-k3 present in this generation"
+    );
     let transport: oc_ai::route::SharedTransport =
         std::sync::Arc::new(oc_ai::route::transport::reqwest_transport::ReqwestTransport::new());
     let resolver = CatalogModelResolver::new(

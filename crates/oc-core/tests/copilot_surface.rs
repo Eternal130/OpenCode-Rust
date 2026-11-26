@@ -244,8 +244,11 @@ async fn static_catalog_serves_without_sync() {
         None,
     );
     let session = session_row();
+    // G-516: the pinned chat-lane model of this generation (kimi-k3 —
+    // no per-model provider override → the provider package → the
+    // copilot-chat route); "gpt-5.4" left the live catalog.
     resolver
-        .resolve_selected(&session, &model_ref("github-copilot", "gpt-5.4"))
+        .resolve_selected(&session, &model_ref("github-copilot", "kimi-k3"))
         .expect("the static catalog still binds copilot");
 
     // The hidden alias is disabled in the merged listing even when the
