@@ -512,12 +512,38 @@ pub struct DialogEntry {
     /// band from offset 0 — the mount paint's computation with the
     /// seeded caret); every wholesale value write re-seeds it.
     pub prompt_viewport: Option<usize>,
+    /// G-537 — the prompt's undo/redo history (the
+    /// `TextareaRenderable`'s rope snapshots, index.bun.js:8801-8804's
+    /// undo/redo actions + autoStoreUndo): one (value, cursor)
+    /// snapshot per MUTATING edit; undo restores the last snapshot
+    /// onto the redo stack, redo re-applies. A wholesale value write
+    /// resets it (v2's `setText` clears the rope history).
+    pub prompt_history: DialogPromptHistory,
     /// The live-preview contract of `dialog-theme-list.tsx`: the theme
     /// name captured when the `ThemeList` dialog opened (`const initial =
     /// themes.selected`). `Some` while the dialog is open and
     /// UNCONFIRMED — moves/filters preview through it, an unconfirmed
     /// close reverts to it, a submit clears it (`confirmed = true`).
     pub theme_initial: Option<String>,
+}
+
+/// G-537 — the dialog prompt's undo/redo stacks (the ref's per-
+/// textarea rope history; the dialog's per-command fresh `EditCore`
+/// discards it, so the stacks ARE the history). Snapshot = the
+/// PRE-EDIT (value, cursor) pair — the rope restores text + cursor.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DialogPromptHistory {
+    undo: Vec<(String, usize)>,
+    redo: Vec<(String, usize)>,
+}
+
+impl DialogPromptHistory {
+    /// autoStoreUndo: record the PRE-EDIT state; a new edit discards
+    /// the redo branch.
+    fn push(&mut self, value: &str, cursor: usize) {
+        self.undo.push((value.to_owned(), cursor));
+        self.redo.clear();
+    }
 }
 
 impl DialogEntry {
@@ -533,6 +559,8 @@ impl DialogEntry {
     /// at `cursorOffset`, index.bun.js:9126-9134): the cursor advances
     /// past it.
     pub fn prompt_insert_char(&mut self, ch: char) {
+        // G-537 — autoStoreUndo: the pre-edit state snapshots first.
+        self.prompt_history.push(&self.value, self.prompt_cursor());
         let cursor = self.prompt_cursor();
         let byte = char_boundary(&self.value, cursor);
         self.value.insert(byte, ch);
@@ -546,6 +574,10 @@ impl DialogEntry {
         if cursor == 0 {
             return;
         }
+        // G-537 — autoStoreUndo: the pre-edit state snapshots first
+        // (only for a REAL deletion — the column-0 no-op stores
+        // nothing).
+        self.prompt_history.push(&self.value, cursor);
         let byte = char_boundary(&self.value, cursor - 1);
         self.value.remove(byte);
         self.prompt_cursor = Some(cursor - 1);
@@ -599,31 +631,79 @@ impl DialogEntry {
     /// the real buffer so the dialog prompt shares the composer's
     /// exact edit model (input.rs:748-819's table — the dialog face
     /// was the G-532 subset).
+    /// G-537 — the MUTATING commands push a pre-edit snapshot onto
+    /// the history stacks (the engine's `SnapshotKind::Pushed`
+    /// report); Undo/Redo run on the STACKS (the per-command fresh
+    /// core has no rope history to pop).
     pub fn prompt_apply_edit(&mut self, command: oc_tui_core::text_edit::EditCommand) {
-        use oc_tui_core::text_edit::EditCore;
-        let mut edit = EditCore::fresh();
-        edit.set_text(&self.value);
-        edit.set_caret(self.prompt_cursor());
-        let _ = edit.apply_tracked(command);
-        self.value = edit.text();
-        self.prompt_cursor = Some(edit.caret());
+        use oc_tui_core::text_edit::{EditCommand, EditCore, EditOutcome, SnapshotKind};
+        match command {
+            EditCommand::Undo => {
+                // `undo()`: restore the last snapshot onto the redo
+                // stack; an empty stack is a no-op.
+                if let Some((value, cursor)) = self.prompt_history.undo.pop() {
+                    self.prompt_history
+                        .redo
+                        .push((self.value.clone(), self.prompt_cursor()));
+                    self.value = value;
+                    self.prompt_cursor = Some(cursor);
+                }
+            }
+            EditCommand::Redo => {
+                // `redo()`: re-apply the last undone snapshot onto the
+                // undo stack; an empty stack is a no-op.
+                if let Some((value, cursor)) = self.prompt_history.redo.pop() {
+                    self.prompt_history
+                        .undo
+                        .push((self.value.clone(), self.prompt_cursor()));
+                    self.value = value;
+                    self.prompt_cursor = Some(cursor);
+                }
+            }
+            command => {
+                let mut edit = EditCore::fresh();
+                edit.set_text(&self.value);
+                edit.set_caret(self.prompt_cursor());
+                if let EditOutcome::Applied { snapshot: SnapshotKind::Pushed, .. } =
+                    edit.apply_tracked(command)
+                {
+                    self.prompt_history.push(&self.value, self.prompt_cursor());
+                }
+                self.value = edit.text();
+                self.prompt_cursor = Some(edit.caret());
+            }
+        }
     }
 
     /// G-533 — insert pasted text AT the caret (the ref's
     /// `handlePaste` → `insertText`, index.bun.js:8928-8930): the
     /// caller owns the newline policy (the `TextareaRenderable` faces
     /// keep them, the `InputRenderable` face strips them first).
+    /// G-537 — the paste pushes a pre-edit snapshot (autoStoreUndo).
     pub fn prompt_insert_text(&mut self, text: &str) {
         use oc_tui_core::text_edit::EditCore;
         if text.is_empty() {
             return;
         }
+        self.prompt_history.push(&self.value, self.prompt_cursor());
         let mut edit = EditCore::fresh();
         edit.set_text(&self.value);
         edit.set_caret(self.prompt_cursor());
         let _ = edit.insert_tracked(text);
         self.value = edit.text();
         self.prompt_cursor = Some(edit.caret());
+    }
+
+    /// G-537 — a wholesale value write (v2's `setText`): the history
+    /// resets (undo never restores across an external replace — the
+    /// engine's `set_text` contract, text_edit.rs:911-921) and the
+    /// caret/viewport re-seed at the end.
+    pub fn set_prompt_value(&mut self, value: String) {
+        self.value = value;
+        self.prompt_cursor = None;
+        self.prompt_viewport = None;
+        self.prompt_history.undo.clear();
+        self.prompt_history.redo.clear();
     }
 
     /// G-527 — materialize the viewport BEFORE the first edit (the
@@ -4006,6 +4086,12 @@ pub struct InboxItem {
     /// `payload.files` (resolved attachments) — the undo refill's
     /// composer payload (data-URI strings).
     pub files: Vec<String>,
+    /// G-539 — `time.created` (SessionInboxInfo.time, types.ts:2208):
+    /// the admit's timestamp — the wire item's own time on the SSE
+    /// echo (the durable row replaces the optimistic guess,
+    /// data.ts:370-383), `Date.now()` on the optimistic admits
+    /// (data.ts:1563).
+    pub created: Option<u64>,
 }
 
 /// TUI-TD07 — the inbox mutation API seam (v2's [`mutatePending`],
@@ -5688,6 +5774,7 @@ impl Store {
                 delivery: Some("steer".to_owned()),
                 text: draft.text.clone(),
                 files: Vec::new(),
+                created: Some(created),
             },
         );
         self.project_message(
@@ -5736,6 +5823,9 @@ impl Store {
                     delivery: Some(prompt.delivery.clone().unwrap_or_else(|| "steer".to_owned())),
                     text: prompt.text.clone(),
                     files: Vec::new(),
+                    // G-539 — the optimistic admit's `Date.now()`
+                    // (data.ts:1563).
+                    created: Some(self.clock()),
                 },
             );
             self.project_message(
@@ -11072,6 +11162,9 @@ impl Store {
                 delivery: Some("queue".to_owned()),
                 text: text.to_owned(),
                 files: files.to_vec(),
+                // G-539 — the optimistic admit's `Date.now()`
+                // (data.ts:1563).
+                created: Some(self.clock()),
             },
         );
         let prompt = crate::components::composer::SubmittedPrompt {
@@ -11549,6 +11642,7 @@ impl Store {
             value: String::new(),
             prompt_cursor: None,
             prompt_viewport: None,
+            prompt_history: Default::default(),
             theme_initial,
         };
         self.dialogs.update(|stack| stack.push(entry));
@@ -11588,6 +11682,7 @@ impl Store {
             value: String::new(),
             prompt_cursor: None,
             prompt_viewport: None,
+            prompt_history: Default::default(),
             theme_initial,
         };
         self.dialogs.update(|stack| stack.push(entry));
@@ -11620,6 +11715,7 @@ impl Store {
             value: String::new(),
             prompt_cursor: None,
             prompt_viewport: None,
+            prompt_history: Default::default(),
             theme_initial,
         };
         self.replace_dialog_entry(entry);
@@ -12854,6 +12950,7 @@ impl Store {
             value: String::new(),
             prompt_cursor: None,
             prompt_viewport: None,
+            prompt_history: Default::default(),
             theme_initial,
         };
         self.replace_dialog_entry(entry);
@@ -12951,6 +13048,7 @@ impl Store {
             value: String::new(),
             prompt_cursor: None,
             prompt_viewport: None,
+            prompt_history: Default::default(),
             theme_initial,
         };
         // G-506: select rides `api.show` → `dialog.replace`
@@ -14415,6 +14513,16 @@ impl Store {
                         if let Some(parent) = &session.parent_id {
                             info.parent_id = Some(parent.clone());
                         }
+                        // G-539 — the wire rows' `time.created/updated`
+                        // (the server's authoritative values — the
+                        // ctx.data session rows carry both, data.ts:
+                        // 1337-1339 over schema session.ts:551-556).
+                        if let Some(created) = session.time_created {
+                            info.created = Some(created as u64);
+                        }
+                        if let Some(updated) = session.time_updated {
+                            info.updated = Some(updated as u64);
+                        }
                     }
                 }
                 self.tabs.update(|state| {
@@ -15211,6 +15319,15 @@ impl Store {
                     // file payloads mirror into the registry the queue
                     // dock + pending-steer markers read.
                     let delivery = item.get("delivery").and_then(Value::as_str).map(str::to_owned);
+                    // G-539 — the wire item's `time.created` (the
+                    // durable row's own time — the echo replaces the
+                    // optimistic admit's guess, data.ts:370-383's
+                    // "durable payload and times replace the client's
+                    // guess").
+                    let inbox_created = item
+                        .pointer("/time/created")
+                        .and_then(Value::as_u64)
+                        .or(event.created);
                     let files = item
                         .pointer("/payload/files")
                         .and_then(Value::as_array)
@@ -15227,7 +15344,13 @@ impl Store {
                         .unwrap_or_default();
                     self.admit_inbox_item(
                         &session,
-                        InboxItem { id: id.clone(), delivery, text: text.to_owned(), files },
+                        InboxItem {
+                            id: id.clone(),
+                            delivery,
+                            text: text.to_owned(),
+                            files,
+                            created: inbox_created,
+                        },
                     );
                     // `event.created` is epoch SECONDS on this event —
                     // match the transcript's ms convention loosely (the

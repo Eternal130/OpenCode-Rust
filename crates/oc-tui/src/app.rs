@@ -515,6 +515,45 @@ impl App {
             self.keymap.clear_pending();
             return;
         }
+        // G-538 — a SELECT dialog's focused filter owns the paste the
+        // same way: the ref's DialogSelect focuses its filter
+        // `<input>` (an InputRenderable, dialog-select.tsx:699-707
+        // `setTimeout(() => r.focus(), 1)`) and
+        // `InputRenderable.handlePaste` inserts the ANSI+newline-
+        // STRIPPED text into it (index.bun.js:9115-9119) — the list
+        // re-filters. The pre-G-538 port fell through to the composer
+        // BEHIND the modal. `renderFilter: false` dialogs (G-485③)
+        // mount no input — no paste target — the paste falls through.
+        if let Some(entry) = self.store.top_dialog() {
+            let props = crate::components::command_palette::select_props_for_entry(
+                &entry,
+                &self.store,
+            );
+            if props.render_filter {
+                let sanitized = crate::attention::strip_ansi(text).replace(['\n', '\r'], "");
+                if !sanitized.is_empty() {
+                    let height = usize::from(self.store.terminal_size().1);
+                    let mut filter = String::new();
+                    self.store.update_dialog(|top| {
+                        filter = std::mem::take(&mut top.select.filter);
+                        filter.push_str(&sanitized);
+                        top.select.set_filter(&filter, &props, height);
+                    });
+                    // G-271⑤ — the sessions dialog's filter feeds the
+                    // debounced server search (the same
+                    // `session_search_typed` hook typing runs).
+                    if matches!(
+                        self.store.top_dialog().map(|entry| entry.kind),
+                        Some(crate::store::DialogKind::ServerList { command: "session.list", .. })
+                    ) {
+                        self.store.session_search_typed(&filter);
+                    }
+                    self.store.preview_theme_filter();
+                }
+                self.keymap.clear_pending();
+                return;
+            }
+        }
         let key = self.prompt_key();
         let mut composer = self.store.composer(&key);
         composer.paste_resolved(

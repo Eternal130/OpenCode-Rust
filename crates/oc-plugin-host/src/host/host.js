@@ -1245,6 +1245,15 @@ function makeCtx(pluginId, options) {
           // passes through the argument (the ref's
           // `data.session.family`).
           const root = this.root(sessionID);
+          // G-539 — the ref's `store.session.family[resolveRoot(id)]
+          // ?? []` (data.ts:1360): an UNKNOWN id's root was never
+          // REGISTERED into the family index (registerSession,
+          // data.ts:519-538, runs only for synced sessions) → []. A
+          // KNOWN root seeds itself (:534-535 pushes the root into
+          // its own family) — the pre-fix port seeded [root]
+          // unconditionally, so family(unknown) answered [id].
+          const known = tuiDataView.sessions.some((item) => item && item.id === root);
+          if (!known) return [];
           const members = [root];
           for (const row of tuiDataView.sessions) {
             if (!row || row.id === root) continue;

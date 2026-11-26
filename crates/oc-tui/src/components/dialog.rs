@@ -77,7 +77,7 @@ fn session_search_typed_hook(store: &Store) {
     }
 }
 
-/// G-532 — map one stroke onto the ref's dialog-prompt edit table
+/// G-532/G-537 — map one stroke onto the ref's dialog-prompt edit table
 /// (the `TextareaRenderable` default bindings, index.bun.js:8760-8825,
 /// plus the keymap's `input.*` layer, keybind.ts:206-243): `None` =
 /// not a prompt edit key (falls through to the modal walk). Selection
@@ -88,10 +88,22 @@ fn prompt_edit_command(
     accepts_newline: bool,
 ) -> Option<oc_tui_core::text_edit::EditCommand> {
     use oc_tui_core::text_edit::EditCommand as Cmd;
-    if stroke.super_key {
-        return None;
-    }
     let command = match (stroke.key.as_str(), stroke.ctrl, stroke.alt, stroke.shift) {
+        // G-537 — the super arms FIRST (:8803-8804, keybind.ts:233-
+        // 234): super+z undo, super+shift+z redo. Every OTHER
+        // super-modified stroke in the default table (the
+        // visual-line/buffer moves :8816-8823, select-all :8824)
+        // stays unported — the guard below drops them.
+        ("z", false, false, false) if stroke.super_key => Cmd::Undo,
+        ("z", false, false, true) if stroke.super_key => Cmd::Redo,
+        _ if stroke.super_key => return None,
+        // G-537 — up/down move the caret between LINES (:8763-8764,
+        // input.move.up/down, keybind.ts:210-211): with G-532's
+        // multi-line values these are the only line-navigation arms
+        // (they previously fell through to `dialog.select.prev/next`
+        // which no-ops on a prompt's empty list).
+        ("up", false, false, false) => Cmd::MoveUp,
+        ("down", false, false, false) => Cmd::MoveDown,
         // left/right — moveCursorLeft/Right (+ the ctrl+b/f aliases,
         // input.move.left/right: "left,ctrl+b" / "right,ctrl+f").
         ("left", false, false, false) | ("b", true, false, false) => Cmd::MoveLeft,
@@ -111,6 +123,18 @@ fn prompt_edit_command(
         // keybind.ts:230/229).
         ("u", true, false, false) => Cmd::DeleteToLineStart,
         ("k", true, false, false) => Cmd::DeleteToLineEnd,
+        // G-537 — ctrl+- / ctrl+. undo/redo (:8801-8802, input.undo
+        // "ctrl+-,super+z" / input.redo "ctrl+.,super+shift+z",
+        // keybind.ts:233-234). NB the ctrl+z member of input.undo is
+        // WIN32-ONLY (config/index.tsx:288-296 prepends it when
+        // terminalSuspend is off — linux resolves terminalSuspend
+        // TRUE, app.tsx:208, so ctrl+z stays terminal.suspend there;
+        // the port's terminal_suspend_rebind mirrors the rule,
+        // keymap/table.rs:417-449).
+        ("-", true, false, false) => Cmd::Undo,
+        (".", true, false, false) => Cmd::Redo,
+        #[cfg(windows)]
+        ("z", true, false, false) => Cmd::Undo,
         // ctrl+w / ctrl+backspace / alt+backspace — deleteWordBackward
         // (:8783-8784, keybind.ts:240). shift+backspace is the plain
         // backspace action (:8792).
@@ -622,12 +646,9 @@ pub fn handle_dialog_key(
             store.update_dialog(|top| {
                 let seed =
                     top.value.chars().map(|ch| u64::from(ch as u32)).fold(0u64, u64::wrapping_add);
-                top.value = crate::components::dialog_worktrees::generate_slug(seed);
-                // G-527 — the programmatic set moves the caret to
-                // the END (gotoLineEnd); the viewport re-materializes
-                // from the new seed.
-                top.prompt_cursor = None;
-                top.prompt_viewport = None;
+                // G-537 — the wholesale write resets the history
+                // (v2's `setText` clears the rope history).
+                top.set_prompt_value(crate::components::dialog_worktrees::generate_slug(seed));
             });
             return DialogKeyOutcome::Consumed;
         }

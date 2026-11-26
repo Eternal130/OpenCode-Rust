@@ -1525,7 +1525,16 @@ impl FooterPane {
                     });
                 }
                 let idle = PromptIdleState {
-                    agent: self.agent.clone().unwrap_or_else(|| "Build".to_owned()),
+                    // G-535 — the statusline's agent group reads
+                    // `currentAgent()`'s label (footer.view.tsx:242
+                    // `agent ${props.currentAgent()}` over footer.ts:
+                    // 275-280): the resolved agent NAME — the raw id
+                    // only feeds the panel rows and the session
+                    // factory (`pane.agent`).
+                    agent: crate::components::footer::state::current_agent_label(
+                        &self.agents,
+                        self.agent.as_deref(),
+                    ),
                     model_label: self
                         .model_label
                         .clone()

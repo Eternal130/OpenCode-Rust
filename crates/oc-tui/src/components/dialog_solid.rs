@@ -4165,6 +4165,7 @@ mod d22_tests {
             value: String::new(),
             prompt_cursor: None,
             prompt_viewport: None,
+            prompt_history: Default::default(),
             theme_initial: None,
         }
     }

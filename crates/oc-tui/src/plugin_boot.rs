@@ -2240,8 +2240,23 @@ fn session_view(store: &Store) -> (Value, Value, Value) {
             if let Some(agent) = info.agent {
                 row["agent"] = serde_json::Value::String(agent);
             }
-            if let Some(created) = info.created {
-                row["timeCreated"] = serde_json::json!({ "created": created });
+            // G-539 — `time: { created, updated }` (the ref's synced
+            // SessionInfo rows, schema session.ts:551-556, data.ts:
+            // 1337-1339): the pre-fix port pushed a `timeCreated`
+            // member that exists nowhere in the ref — renamed, with
+            // `updated` added from the session index. Both members
+            // ride only when the index knows them.
+            {
+                let mut time = serde_json::Map::new();
+                if let Some(created) = info.created {
+                    time.insert("created".to_owned(), serde_json::json!(created));
+                }
+                if let Some(updated) = info.updated {
+                    time.insert("updated".to_owned(), serde_json::json!(updated));
+                }
+                if !time.is_empty() {
+                    row["time"] = Value::Object(time);
+                }
             }
             let _ = running;
             row
@@ -2255,6 +2270,11 @@ fn session_view(store: &Store) -> (Value, Value, Value) {
         .collect();
     // G-530 — the pending sub-member (`data.session.pending.list`):
     // the TUI's inbox mirror (TUI-TD07) projected per session.
+    // G-539 — the rows carry the ref's `SessionInboxInfo` shape
+    // (types.ts:2205-2212): `{ id, sessionID, time: { created },
+    // type, payload, delivery }` — `payload.text` for the text (the
+    // pre-fix port pushed a top-level `text` member that exists
+    // nowhere in the ref).
     let pending: serde_json::Map<String, Value> = store
         .session_rows()
         .into_iter()
@@ -2263,7 +2283,15 @@ fn session_view(store: &Store) -> (Value, Value, Value) {
                 .pending_inbox(&id)
                 .into_iter()
                 .map(|item| {
-                    let mut row = serde_json::json!({ "id": item.id, "text": item.text });
+                    let mut row = serde_json::json!({
+                        "id": item.id,
+                        "sessionID": id,
+                        "type": "user",
+                        "payload": { "text": item.text },
+                    });
+                    if let Some(created) = item.created {
+                        row["time"] = serde_json::json!({ "created": created });
+                    }
                     if let Some(delivery) = item.delivery {
                         row["delivery"] = serde_json::Value::String(delivery);
                     }
