@@ -425,7 +425,9 @@ fn tui_slots_end_to_end() {
     oc_tui::components::dialog::render_overlay(&mut frame, &store, &theme, (80, 24));
     let rows = frame.text_grid();
     assert!(rows[7].contains("Slot picker"), "materialized title: {:?}", rows[7]);
-    assert!(rows[12].contains("First"), "materialized option 1: {:?}", rows[12]);
+    // G-512 — the options render FLAT (no fixed category header):
+    // "First" sits directly under the filter row.
+    assert!(rows[11].contains("First"), "materialized option 1: {:?}", rows[11]);
 
     // Submit selects the option's value → the palette dispatcher's
     // plugin arm executes guest-side (marker file).
