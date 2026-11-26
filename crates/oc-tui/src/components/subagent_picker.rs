@@ -463,6 +463,7 @@ mod tests {
     fn shell_and_terminals_tabs_paint_plain_rows_and_their_hints() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("Root".to_owned()));
+        store.select_tab("s1");
         store.ingest_all([crate::data::Ingest::Event(crate::data::BusEvent::new(
             "shell.created",
             serde_json::json!({

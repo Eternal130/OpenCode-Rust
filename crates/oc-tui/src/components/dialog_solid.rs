@@ -391,13 +391,19 @@ struct DialogInputs {
     /// bold title (the Sessions dialog's ` for {project}`).
     title_suffix: String,
     // -- the prompt family -------------------------------------------------
+    /// G-532 — the CARET'S LINE (the height-1 textarea's vertical
+    /// viewport always shows the caret's line; the value can carry
+    /// embedded newlines — the newline arms insert them).
     prompt_value: String,
-    /// G-527 — the prompt cursor (char index; the entry's resolved
-    /// `prompt_cursor()`).
+    /// G-532 — the WHOLE value's non-emptiness (the placeholder only
+    /// shows when the whole buffer is empty — an empty caret line of
+    /// a multi-line value renders a blank row, not the placeholder).
+    prompt_has_value: bool,
+    /// G-532 — the cursor's CHAR position within the caret's line.
     prompt_cursor: usize,
-    /// G-527 — the prompt viewport's cell offset (the entry's
-    /// resolved `prompt_viewport_offset()` — the stateful band
-    /// clamp).
+    /// G-527/G-532 — the prompt viewport's WITHIN-LINE cell offset
+    /// (the entry's resolved `prompt_viewport_offset()` — the stateful
+    /// band clamp against the caret's within-line column).
     prompt_viewport: usize,
     // -- help ---------------------------------------------------------------
     hint_lines: Vec<String>,
@@ -1475,7 +1481,7 @@ fn connect_prompt_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::Eleme
         "content",
         dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
             let width = i.box_width.saturating_sub(4);
-            if i.prompt_value.is_empty() {
+            if !i.prompt_has_value {
                 styled(vec![chunk(i.placeholder.clone(), i.colors.muted, None, 0)])
             } else {
                 // G-527 — the block cursor rides the caret (the
@@ -1586,7 +1592,7 @@ fn prompt_builder_titled(
         "content",
         dyn_styled(map(inputs.clone(), move |i: &DialogInputs| {
             let width = i.box_width.saturating_sub(4);
-            if i.prompt_value.is_empty() {
+            if !i.prompt_has_value {
                 styled(vec![chunk(placeholder.to_owned(), i.colors.muted, None, 0)])
             } else {
                 let cursor_bg = if worktree { i.colors.formfield_base_fg } else { i.colors.text };
@@ -1688,7 +1694,7 @@ fn generic_prompt_builder(inputs: &Signal<DialogInputs>) -> opentui_solid::Eleme
         "content",
         dyn_styled(map(inputs.clone(), |i: &DialogInputs| {
             let width = i.box_width.saturating_sub(4);
-            if i.prompt_value.is_empty() {
+            if !i.prompt_has_value {
                 styled(vec![chunk(i.placeholder.clone(), i.colors.muted, None, 0)])
             } else {
                 // The ref's textarea viewport: G-527 — a STATEFUL
@@ -3372,6 +3378,7 @@ fn build_inputs(
                 footer_hint: props.footer_hint.clone(),
                 title_suffix: props.title_suffix.clone().unwrap_or_default(),
                 prompt_value: String::new(),
+                prompt_has_value: false,
                 prompt_cursor: 0,
                 prompt_viewport: 0,
                 hint_lines: Vec::new(),
@@ -3400,7 +3407,10 @@ fn build_inputs(
         Family::RenamePrompt
         | Family::WorktreeNamePrompt
         | Family::BtwPrompt
-        | Family::PluginInstallPrompt => DialogInputs {
+        | Family::PluginInstallPrompt => {
+            // G-532 — the caret's line (the height-1 viewport).
+            let (line, cursor_in_line) = entry.prompt_visible_line();
+            DialogInputs {
             family,
             box_width,
             terminal_width,
@@ -3418,8 +3428,9 @@ fn build_inputs(
             actions: Vec::new(),
             footer_hint: None,
             title_suffix: String::new(),
-            prompt_value: entry.value.clone(),
-            prompt_cursor: entry.prompt_cursor(),
+            prompt_value: line,
+            prompt_has_value: !entry.value.is_empty(),
+            prompt_cursor: cursor_in_line,
             prompt_viewport: entry.prompt_viewport_offset(box_width.saturating_sub(4)),
             hint_lines: Vec::new(),
             plugin_title: String::new(),
@@ -3440,6 +3451,7 @@ fn build_inputs(
             export: ExportOptionsState::default(),
             render_filter: true,
             hint_footer: String::new(),
+            }
         },
         // G-237: the generic prompt — title/placeholder/description
         // from the kind, the typed value from the entry. The
@@ -3452,6 +3464,8 @@ fn build_inputs(
             let DialogKind::Prompt { title, description, placeholder, .. } = &entry.kind else {
                 unreachable!("the GenericPrompt family guard")
             };
+            // G-532 — the caret's line (the height-1 viewport).
+            let (line, cursor_in_line) = entry.prompt_visible_line();
             DialogInputs {
                 family,
                 box_width,
@@ -3470,8 +3484,9 @@ fn build_inputs(
                 actions: Vec::new(),
                 footer_hint: None,
                 title_suffix: String::new(),
-                prompt_value: entry.value.clone(),
-                prompt_cursor: entry.prompt_cursor(),
+                prompt_value: line,
+                prompt_has_value: !entry.value.is_empty(),
+                prompt_cursor: cursor_in_line,
                 prompt_viewport: entry.prompt_viewport_offset(box_width.saturating_sub(4)),
                 hint_lines: if description.is_empty() {
                     Vec::new()
@@ -3539,6 +3554,7 @@ fn build_inputs(
                 footer_hint: None,
                 title_suffix: String::new(),
                 prompt_value: String::new(),
+                prompt_has_value: false,
                 prompt_cursor: 0,
                 prompt_viewport: 0,
                 hint_lines: Vec::new(),
@@ -3566,7 +3582,10 @@ fn build_inputs(
         // through the props (OAuthCode's description block holds the
         // attempt's URL + instructions, dialog-integration.tsx:
         // 719-725; the inline error rides the same rows).
-        Family::ConnectPrompt => DialogInputs {
+        Family::ConnectPrompt => {
+            // G-532 — the caret's line (the height-1 viewport).
+            let (line, cursor_in_line) = entry.prompt_visible_line();
+            DialogInputs {
             family,
             box_width,
             terminal_width,
@@ -3584,8 +3603,9 @@ fn build_inputs(
             actions: Vec::new(),
             footer_hint: None,
             title_suffix: String::new(),
-            prompt_value: entry.value.clone(),
-            prompt_cursor: entry.prompt_cursor(),
+            prompt_value: line,
+            prompt_has_value: !entry.value.is_empty(),
+            prompt_cursor: cursor_in_line,
             prompt_viewport: entry.prompt_viewport_offset(box_width.saturating_sub(4)),
             hint_lines: props.hints.clone(),
             plugin_title: String::new(),
@@ -3606,6 +3626,7 @@ fn build_inputs(
             export: ExportOptionsState::default(),
             render_filter: true,
             hint_footer: String::new(),
+            }
         },
         Family::Help => {
             let content_width = box_width.saturating_sub(4);
@@ -3642,6 +3663,7 @@ fn build_inputs(
                 footer_hint: None,
                 title_suffix: String::new(),
                 prompt_value: String::new(),
+                prompt_has_value: false,
                 prompt_cursor: 0,
                 prompt_viewport: 0,
                 hint_lines: crate::wrap::wrap_label(&hint, content_width.max(1)),
@@ -3702,6 +3724,7 @@ fn build_inputs(
                 footer_hint: None,
                 title_suffix: String::new(),
                 prompt_value: String::new(),
+                prompt_has_value: false,
                 prompt_cursor: 0,
                 prompt_viewport: 0,
                 hint_lines: Vec::new(),
@@ -3776,6 +3799,7 @@ fn build_inputs(
                 footer_hint: None,
                 title_suffix: String::new(),
                 prompt_value: String::new(),
+                prompt_has_value: false,
                 prompt_cursor: 0,
                 prompt_viewport: 0,
                 hint_lines: Vec::new(),
@@ -3829,6 +3853,7 @@ fn build_inputs(
                 footer_hint: None,
                 title_suffix: String::new(),
                 prompt_value: String::new(),
+                prompt_has_value: false,
                 prompt_cursor: 0,
                 prompt_viewport: 0,
                 hint_lines: Vec::new(),
@@ -3886,6 +3911,7 @@ fn build_inputs(
                 footer_hint: None,
                 title_suffix: String::new(),
                 prompt_value: String::new(),
+                prompt_has_value: false,
                 prompt_cursor: 0,
                 prompt_viewport: 0,
                 hint_lines: Vec::new(),
@@ -3954,6 +3980,7 @@ fn build_inputs(
                 footer_hint: None,
                 title_suffix: String::new(),
                 prompt_value: String::new(),
+                prompt_has_value: false,
                 prompt_cursor: 0,
                 prompt_viewport: 0,
                 hint_lines: Vec::new(),
@@ -3997,6 +4024,7 @@ fn build_inputs(
             footer_hint: None,
             title_suffix: String::new(),
             prompt_value: String::new(),
+            prompt_has_value: false,
             prompt_cursor: 0,
             prompt_viewport: 0,
             // The status rows ride the hints (the props layer derives
@@ -4043,6 +4071,7 @@ fn build_inputs(
             footer_hint: None,
             title_suffix: String::new(),
             prompt_value: String::new(),
+            prompt_has_value: false,
             prompt_cursor: 0,
             prompt_viewport: 0,
             hint_lines: Vec::new(),
@@ -4086,6 +4115,7 @@ fn build_inputs(
             footer_hint: None,
             title_suffix: String::new(),
             prompt_value: String::new(),
+            prompt_has_value: false,
             prompt_cursor: 0,
             prompt_viewport: 0,
             hint_lines: props.hints.clone(),

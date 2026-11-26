@@ -200,6 +200,7 @@ fn strip_frame_budget_body() {
     let store = Store::new(Runtime::new());
     for index in 0..12 {
         store.open_tab(&format!("s{index}"), Some(format!("Session {index} title")));
+        store.select_tab(&format!("s{index}"));
         if index % 3 == 0 {
             store.set_unread(&format!("s{index}"), Some(Unread::Activity));
         }
@@ -419,6 +420,7 @@ fn theme_switch_frame_budget_body() {
     let store = Store::new(Runtime::new());
     for index in 0..4 {
         store.open_tab(&format!("s{index}"), Some(format!("Session {index}")));
+        store.select_tab(&format!("s{index}"));
         if index % 2 == 0 {
             store.set_unread(&format!("s{index}"), Some(Unread::Activity));
         }
@@ -469,6 +471,7 @@ fn dialog_frame_budget_body() {
     let store = Store::new(Runtime::new());
     for index in 0..4 {
         store.open_tab(&format!("s{index}"), Some(format!("Session {index}")));
+        store.select_tab(&format!("s{index}"));
         if index % 2 == 0 {
             store.set_unread(&format!("s{index}"), Some(Unread::Activity));
         }
@@ -785,6 +788,7 @@ fn engine_keystroke_budget_body() {
 
     let store = Store::new(Runtime::new());
     store.open_tab("s1", Some("bench".to_owned()));
+    store.select_tab("s1");
     // Seed a long mixed draft (the worst case: wide clusters + wraps).
     let seed = "混合 text with 中文 clusters and latin words ".repeat(48);
     {

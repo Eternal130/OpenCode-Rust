@@ -107,7 +107,10 @@ pub fn run_script(script: &ReplayScript, size: (u16, u16)) -> Result<(), String>
     let mut pump = App::new(size);
     arm_scenario(&script.id, &mut pump, 0);
     if script.id != "permission-once-always-deny" {
+        // G-531 — open_tab is append-only; the rig routes explicitly
+        // (the session-scoped commands need the session route).
         pump.store.open_tab("ses_test", Some("Test session".to_owned()));
+        pump.store.select_tab("ses_test");
     }
     for (index, step) in script.steps.iter().enumerate() {
         if index > 0 {
@@ -279,6 +282,7 @@ mod tests {
     fn palette_open_filter_execute_flow() {
         let mut pump = App::new((100, 30));
         pump.store.open_tab("ses_test", Some("Test session".to_owned()));
+        pump.store.select_tab("ses_test");
         pump.press("ctrl+p");
         assert_eq!(pump.store.dialogs().len(), 1);
         assert_eq!(pump.store.focus(), Focus::Dialog);
@@ -314,6 +318,7 @@ mod tests {
     fn ctrl_c_clears_then_exits() {
         let mut pump = App::new((100, 30));
         pump.store.open_tab("s1", Some("S".to_owned()));
+        pump.store.select_tab("s1");
         for key in ["a", "b"] {
             pump.press(key);
         }
@@ -443,6 +448,7 @@ mod tests {
     fn composer_types_submits_and_walks_history() {
         let mut pump = App::new((100, 30));
         pump.store.open_tab("s1", Some("S".to_owned()));
+        pump.store.select_tab("s1");
         for key in ["h", "i"] {
             pump.press(key);
         }

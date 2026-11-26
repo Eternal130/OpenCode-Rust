@@ -983,7 +983,16 @@ pub fn select_props_for(kind: &DialogKind, store: &Store) -> SelectProps {
                     // OWN footer — none set → no footer). Only the
                     // G-522 `hasSearch` marker flattens (from the
                     // empty query).
-                    let mut props = SelectProps::new(content.title, options).threshold(0.7);
+                    // G-534 — NO `threshold`: the plugin select passes
+                    // no `filterThreshold` (api.tsx:392-422), so
+                    // dialog-select.tsx:196-201's `threshold:
+                    // props.filterThreshold` is undefined → fuzzysort's
+                    // default `threshold: 0` → NEGATIVE_INFINITY — no
+                    // cutoff, every weak fuzzy match (a combined score
+                    // in (0, 0.7)) renders. The 0.7 cutoff stays on the
+                    // ref's OWN threshold faces (command-palette.tsx:
+                    // 64, dialog-config.tsx:390).
+                    let mut props = SelectProps::new(content.title, options);
                     // G-522 — the spec's search marker: flat from the
                     // EMPTY query (one headerless group) + the
                     // category as the row footer
@@ -4535,6 +4544,7 @@ mod tests {
         // session.timeline — the user-message rows newest-first
         // (dialog-timeline.tsx:21-39).
         store.open_tab("s1", None);
+        store.select_tab("s1");
         store.ingest_all([crate::data::Ingest::MessagesSnapshot {
             session_id: "s1".to_owned(),
             messages: vec![
@@ -4609,6 +4619,7 @@ mod tests {
     fn models_dialog_cursor_rests_on_row_zero() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", None);
+        store.select_tab("s1");
         store.set_models(
             ListState::Loaded(vec![
                 model("opencode", "grok", "Grok", false, false),
@@ -4976,6 +4987,7 @@ mod tests {
         use crate::data::{Ingest, SessionSnapshot};
         let store = Store::new(Runtime::new());
         store.open_tab("s_open", Some("Open tab".to_owned()));
+        store.select_tab("s_open");
         store.ingest_all([Ingest::Resync {
             sessions: vec![
                 SessionSnapshot {
@@ -5026,6 +5038,7 @@ mod tests {
     fn model_list_props_cover_loaded_loading_and_error_states() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", None);
+        store.select_tab("s1");
 
         // Loading: one muted status row.
         let props = model_list_props(&store, "Select model");
@@ -5246,6 +5259,7 @@ mod tests {
     fn agent_list_props_filter_and_mark_current() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", None);
+        store.select_tab("s1");
         store.set_agents(ListState::Loaded(vec![
             agent("build", "all", false),
             agent("explore", "subagent", false),
@@ -5272,6 +5286,7 @@ mod tests {
         let sink_dyn: std::rc::Rc<dyn crate::store::SelectionSink> = sink.clone();
         store.set_selection_sink(sink_dyn);
         store.open_tab("s1", None);
+        store.select_tab("s1");
 
         // Model on the session route: state + sink.
         assert_eq!(
@@ -5333,6 +5348,7 @@ mod tests {
         let clipboard_dyn: std::rc::Rc<dyn crate::clipboard::ClipboardSink> = clipboard.clone();
         store.set_clipboard_sink(clipboard_dyn);
         store.open_tab("s1", None);
+        store.select_tab("s1");
 
         // No assistant messages yet.
         copy_message_to_clipboard(&store);
@@ -5423,6 +5439,7 @@ mod tests {
     fn session_new_inherits_the_current_selection() {
         let store = Store::new(Runtime::new());
         store.open_tab("s1", Some("S".to_owned()));
+        store.select_tab("s1");
         store.select_model(
             "s1",
             &ModelSelection {
@@ -6439,6 +6456,7 @@ mod tests {
         // Session route, NO argument: the fallback question prompt
         // (btw.tsx:64-65 — ctx.ui.dialog.prompt's title/placeholder).
         store.open_tab("s1", Some("S1".to_owned()));
+        store.select_tab("s1");
         assert!(matches!(store.route(), Route::Session { .. }));
         assert_eq!(dispatcher.dispatch(&store, "session.aside", None), Dispatch::Handled);
         assert!(matches!(store.top_dialog().unwrap().kind, DialogKind::BtwPrompt));
@@ -6520,6 +6538,7 @@ fn stats_open_dispatch_mounts_page_and_fetches() {
     // Off a session route: the page mounts over it and the fetch
     // carries the year range (from = local Jan 1, tools none).
     store.open_tab("s1", Some("S1".to_owned()));
+    store.select_tab("s1");
     assert!(matches!(store.route(), Route::Session { .. }));
     assert_eq!(dispatcher.dispatch(&store, "stats.open", None), Dispatch::Handled);
     assert!(store.stats_page_open());

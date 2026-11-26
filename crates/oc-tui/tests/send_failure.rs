@@ -108,6 +108,7 @@ async fn send_failure_renders_the_error_toast_and_restores_the_draft() {
     // the FRAME (not stderr) and the draft returned to the composer.
     let store = Store::new(Runtime::new());
     store.open_tab("ses_500", None);
+    store.select_tab("ses_500");
     apply_send_failure(
         &store,
         PromptSinkEvent::SendFailed {
@@ -132,6 +133,7 @@ async fn send_failure_renders_the_error_toast_and_restores_the_draft() {
     // the user typed something new keeps the NEW draft.
     let store = Store::new(Runtime::new());
     store.open_tab("ses_500", None);
+    store.select_tab("ses_500");
     let mut composer = store.composer("ses_500");
     composer.set(oc_tui::components::composer::PromptDraft {
         text: "new thought".into(),
@@ -161,6 +163,7 @@ async fn send_failure_renders_the_error_toast_and_restores_the_draft() {
 async fn send_failure_retracts_only_the_admitted_row() {
     let store = Store::new(Runtime::new());
     store.open_tab("ses_500", None);
+    store.select_tab("ses_500");
 
     // The optimistic admission (forward_submission's shape): a
     // client-minted id under the composer key, plus a server-echoed

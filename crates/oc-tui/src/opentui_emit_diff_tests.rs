@@ -108,6 +108,7 @@ fn replay_corpus_emission_is_pinned() {
         let mut pump = crate::app::App::new((100, 30));
         if script.id != "permission-once-always-deny" {
             pump.store.open_tab("ses_test", Some("Test session".to_owned()));
+            pump.store.select_tab("ses_test");
         }
         for (index, step) in script.steps.iter().enumerate() {
             crate::replay::arm_scenario(&script.id, &mut pump, index);
@@ -479,6 +480,7 @@ fn transcript_openlink_rows_drive_osc8_under_the_probe_gate() {
         }],
     );
     app.store.open_tab("s1", Some("Links".to_owned()));
+    app.store.select_tab("s1");
     let frame = app.frame();
     let rows = app.store.transcript_hit_rows();
     let links: Vec<FrameLinkRect> = rows

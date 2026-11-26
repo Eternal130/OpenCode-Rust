@@ -829,6 +829,7 @@ fn scroll_anchor_restore() {
 
     let store = Store::new(Runtime::new());
     store.open_tab("s1", None);
+    store.select_tab("s1");
     store.set_transcript_metrics(
         "s1",
         TranscriptMetrics { viewport: 10, content_height: 100, rows: 60 },
@@ -1194,15 +1195,18 @@ fn osc_app() {
 
     // An untitled session keeps the plain wordmark.
     store.open_tab("s1", None);
+    store.select_tab("s1");
     assert_eq!(store.terminal_title(), "OpenCode");
 
     // A titled session: `OC | {title}`.
     store.open_tab("s1", Some("Fix login".to_owned()));
+    store.select_tab("s1");
     assert_eq!(store.terminal_title(), "OC | Fix login");
 
     // The 40-char truncation (37 + `…`).
     let long = "x".repeat(50);
     store.open_tab("s1", Some(long.clone()));
+    store.select_tab("s1");
     let title = store.terminal_title();
     assert!(title.starts_with("OC | "));
     assert_eq!(title.chars().count(), "OC | ".chars().count() + 38, "37 x's + …");
@@ -1373,6 +1377,7 @@ fn queuedpromptdo_jump_to_latest() {
 
     let mut app = App::new((100, 30));
     app.store.open_tab("s1", None);
+    app.store.select_tab("s1");
     // A queued prompt renders the dock row above the composer.
     app.store.queue_prompt("s1", "next up", &[]);
     assert!(!app.store.queued_prompts("s1").is_empty(), "the queue admitted the prompt");
@@ -1398,6 +1403,7 @@ fn queuedpromptdo_jump_to_latest() {
     // rect releases toBottom (sticky again).
     let mut app2 = App::new((100, 30));
     app2.store.open_tab("s2", None);
+    app2.store.select_tab("s2");
     // A transcript taller than the viewport (a multi-line user turn).
     let long_text = (0..40).map(|index| format!("line {index}")).collect::<Vec<_>>().join("\n");
     app2.store.ingest_all([oc_tui::data::Ingest::MessagesSnapshot {

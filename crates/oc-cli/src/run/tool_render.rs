@@ -283,7 +283,16 @@ pub fn tool_inline_info(
         }
         "subagent" => {
             let agent = text(dict_field(input, "agent"));
-            let kind = titlecase(&agent);
+            // G-528(c) — `Locale.titlecase(p.input.agent || "unknown")`
+            // (mini/tool.ts:427): the shared \b\w form (oc-tui's
+            // message::model titlecase — the same shared function the
+            // TUI faces use), with the empty agent falling back to
+            // "unknown" BEFORE the titlecase (the ref's `||`).
+            let kind = if agent.is_empty() {
+                oc_tui::components::message::titlecase("unknown")
+            } else {
+                oc_tui::components::message::titlecase(&agent)
+            };
             let description = text(dict_field(input, "description"));
             let icon = match status {
                 "error" => "✗",
@@ -474,14 +483,6 @@ pub fn tool_inline_info(
                 body: None,
             }
         }
-    }
-}
-
-fn titlecase(value: &str) -> String {
-    let mut chars = value.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => "Unknown".to_owned(),
     }
 }
 

@@ -353,6 +353,11 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
     // `hydrate(attempt, {render: true})` before `apply`, transport.ts:
     // 955-991).
     let mut transport = TransportState::new(&session_id);
+    // TUI-17 — the subagent tracker exists BEFORE the boot replay so
+    // the hydrate's mainTool walk + family index feed it (G-529's
+    // :1061/:946 sites — the ref's `hydrate(next)` admits children
+    // from the projected messages AND `session.list({parentID})`).
+    let mut subagents = super::transport::SubagentTracker::new(&session_id);
     let mut shown = false;
     if input.target.resume && input.replay {
         replay_history(
@@ -361,9 +366,15 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
             &session_id,
             input.replay_limit,
             &mut transport,
+            &mut subagents,
             &settings,
         )
         .await;
+        // G-529 — the hydrate may have admitted children/labels: sync
+        // the pane snapshot once after the walk (the live pump's
+        // per-event sync).
+        lifecycle.pane.subagent_children = subagents.children();
+        lifecycle.pane.subagent_list_closed();
         shown = true;
     } else if input.target.resume {
         // G-272 — the hydrate's blocker sweep runs on EVERY connect
@@ -437,7 +448,7 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
         settings,
         turn_agent: input.target.agent.clone(),
         turn_model: boot_model,
-        subagents: super::transport::SubagentTracker::new(&session_id),
+        subagents,
         preferences,
         directory: input.target.directory.clone(),
         replay_limit: input.replay_limit,
@@ -483,9 +494,15 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
                 &runtime.session_id.clone(),
                 runtime.replay_limit,
                 &mut runtime.transport,
+                &mut runtime.subagents,
                 &runtime.settings,
             )
             .await;
+            // G-529 — the replayed hydrate re-admits children (the
+            // ref's hydrate runs the same walk on every reconnect);
+            // sync the pane snapshot once after the walk.
+            runtime.lifecycle.pane.subagent_children = runtime.subagents.children();
+            runtime.lifecycle.pane.subagent_list_closed();
             // G-272 — every (re)connect refreshes the catalogs
             // (`void refreshCatalog(attempt)` after hydrate,
             // transport.ts:1517).
@@ -1362,6 +1379,7 @@ async fn replay_history(
     session_id: &str,
     limit: Option<usize>,
     transport: &mut TransportState,
+    subagents: &mut super::transport::SubagentTracker,
     settings: &MiniSettings,
 ) {
     let query = oc_client::types::SessionMessageListQuery {
@@ -1374,8 +1392,59 @@ async fn replay_history(
     messages.reverse();
     for (index, message) in messages.iter().enumerate() {
         let Ok(value) = serde_json::to_value(message) else { continue };
+        // G-529 — the hydrate's `mainTool` walk (stream-v2.subagent.
+        // ts:1038-1043): every PROJECTED subagent tool part admits its
+        // child + applies the tool input's agent/description (the
+        // UNCONDITIONAL :286 site). Runs BEFORE the commit projection
+        // so a same-event snapshot stays coherent.
+        if value.get("role").and_then(Value::as_str) == Some("assistant") {
+            if let Some(parts) = value.get("parts").and_then(Value::as_array) {
+                for part in parts {
+                    if part.get("type").and_then(Value::as_str) == Some("tool") {
+                        subagents.fold_tool_part(part);
+                    }
+                }
+            }
+        }
         for commit in replay_message_commits(&value, index, transport, settings) {
             lifecycle.append(commit);
+        }
+    }
+    // G-529 — the hydrate's family index (stream-v2.subagent.
+    // ts:1044-1065): `session.list({parentID: owner})` rows admit
+    // historical subagents beyond the projected message window, the
+    // label update FALLBACK-GUARDED (:1061). The BFS walks owners
+    // level by level bounded by the tracked-children limit — the
+    // ref's `queue`/`visited` shape.
+    {
+        let mut queue = std::collections::VecDeque::from([session_id.to_owned()]);
+        let mut visited = std::collections::HashSet::from([session_id.to_owned()]);
+        while let Some(owner) = queue.pop_front() {
+            if subagents.children().len() >= super::transport::FAMILY_LIST_LIMIT {
+                break;
+            }
+            let family_query = oc_client::types::SessionListQuery {
+                parent_id: Some(owner.clone()),
+                limit: Some(
+                    (super::transport::FAMILY_LIST_LIMIT - subagents.children().len()).to_string(),
+                ),
+                order: Some(oc_client::types::SessionListQueryOrder::Desc),
+                ..Default::default()
+            };
+            let Ok(family) = client.session().list(&family_query).await else { continue };
+            for row in &family.data {
+                let Ok(row) = serde_json::to_value(row) else { continue };
+                let id = row.get("id").and_then(Value::as_str).unwrap_or_default().to_owned();
+                if id.is_empty() || visited.contains(&id) {
+                    continue;
+                }
+                visited.insert(id.clone());
+                subagents.fold_family_row(&row);
+                if subagents.children().len() >= super::transport::FAMILY_LIST_LIMIT {
+                    break;
+                }
+                queue.push_back(id);
+            }
         }
     }
     // G-221 — the hydrate's inbox seed (`client.session.inbox.list`,
