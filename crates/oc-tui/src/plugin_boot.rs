@@ -2250,6 +2250,26 @@ fn data_view(store: &Store) -> Value {
         .filter(|(_, _, running)| *running)
         .map(|(id, _, _)| (id, serde_json::Value::String("running".to_owned())))
         .collect();
+    // G-530 — the pending sub-member (`data.session.pending.list`):
+    // the TUI's inbox mirror (TUI-TD07) projected per session.
+    let pending: serde_json::Map<String, Value> = store
+        .session_rows()
+        .into_iter()
+        .map(|(id, _, _)| {
+            let rows: Vec<Value> = store
+                .pending_inbox(&id)
+                .into_iter()
+                .map(|item| {
+                    let mut row = serde_json::json!({ "id": item.id, "text": item.text });
+                    if let Some(delivery) = item.delivery {
+                        row["delivery"] = serde_json::Value::String(delivery);
+                    }
+                    row
+                })
+                .collect();
+            (id, Value::Array(rows))
+        })
+        .collect();
     let agents: Vec<Value> = store
         .server_lists()
         .agents
@@ -2322,6 +2342,7 @@ fn data_view(store: &Store) -> Value {
     serde_json::json!({
         "sessions": sessions,
         "status": status,
+        "pending": pending,
         "agents": agents,
         "models": models,
         "providers": providers,

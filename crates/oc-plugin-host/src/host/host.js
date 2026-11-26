@@ -1181,16 +1181,17 @@ function makeCtx(pluginId, options) {
     // the port's bounded projection is the host-pushed `tui.data`
     // snapshot (the tui.tabs/tui.model precedent — reactive reads
     // become change-gated pushes). session.list/get/root/family/
-    // status compute over the pushed rows synchronously (the v21d
-    // fixture's `ctx.data.session.list()` shape). Bounded-projection
-    // limits, documented per member: `cost`/`message`/`permission`/
-    // `form`/`pending` and `project`/`shell` are not held at the TUI
-    // host boundary (no store-owned cache for them reaches the guest
-    // — sync/invalidate are view-push no-ops, the list reads return
-    // undefined/[]); the command/integration/mcp collections answer
-    // empty arrays for the same reason. `on`/`listen` ride the SAME
-    // event subscription seam as ctx.event (hostRequest
-    // "event.subscribe" with the type filter).
+    // status/pending.list compute over the pushed rows synchronously
+    // (the v21d fixture's `ctx.data.session.list()` shape).
+    // Bounded-projection limits, documented per member:
+    // `cost`/`message`/`permission`/`form` and `project`/`shell` are
+    // not held at the TUI host boundary (no store-owned cache for
+    // them reaches the guest — sync/invalidate are view-push no-ops,
+    // the list reads return undefined/[]); the
+    // command/integration/mcp collections answer empty arrays for the
+    // same reason. `on`/`listen` ride the SAME event subscription
+    // seam as ctx.event (hostRequest "event.subscribe" with the type
+    // filter).
     data: {
       on: (type, handler) => {
         const types = typeof type === "string" ? [type] : Array.isArray(type) ? type : null;
@@ -1269,8 +1270,10 @@ function makeCtx(pluginId, options) {
           return tuiDataView.status && tuiDataView.status[id] === "running" ? "running" : "idle";
         },
         pending: {
-          list() {
-            return [];
+          list(sessionID) {
+            const id = String(sessionID ?? "");
+            const rows = tuiDataView.pending && tuiDataView.pending[id];
+            return Array.isArray(rows) ? rows.map((row) => ({ ...row })) : [];
           },
           async sync() {},
           invalidate() {},
@@ -4287,6 +4290,7 @@ let tuiTabsView = { enabled: false, tabs: [], roots: {} };
 let tuiDataView = {
   sessions: [],
   status: {},
+  pending: {},
   agents: [],
   models: [],
   providers: [],
@@ -5312,6 +5316,7 @@ async function handleLine(line) {
     tuiDataView = {
       sessions: Array.isArray(view.sessions) ? view.sessions : [],
       status: view.status && typeof view.status === "object" && !Array.isArray(view.status) ? view.status : {},
+      pending: view.pending && typeof view.pending === "object" && !Array.isArray(view.pending) ? view.pending : {},
       agents: Array.isArray(view.agents) ? view.agents : [],
       models: Array.isArray(view.models) ? view.models : [],
       providers: Array.isArray(view.providers) ? view.providers : [],
