@@ -202,7 +202,34 @@ fn wait_both_screen(
             ok
         });
         let ref_leg = scope.spawn(move || {
+            let leg_start_raw = ref_tui.raw_len();
             let ok = ref_tui.wait_for_screen(&needle_a, Duration::from_secs(ref_secs));
+            if !ok {
+                // TEMPORARY slowF diagnostics: the wedged-ref forensics —
+                // raw growth + screen head + the raw tail + the
+                // alt-screen-exit marker at the window's end.
+                let raw_now = {
+                    let guard = ref_tui.raw.lock().expect("raw");
+                    guard.clone()
+                };
+                let tail = &raw_now[raw_now.len().saturating_sub(400)..];
+                let leave_alt = raw_now
+                    .windows(6)
+                    .rev()
+                    .any(|w| w == b"\x1b[?1049l");
+                slowf_note_tagged(
+                    tag_ref,
+                    t0_ref,
+                    &format!(
+                        "LEG FAILED (ref) raw_len={} ({} at start) leave_alt={leave_alt} \
+                         screen_head={:?} raw_tail={:?}",
+                        raw_now.len(),
+                        leg_start_raw,
+                        ref_tui.screen_text().lines().take(3).collect::<Vec<_>>(),
+                        tail
+                    ),
+                );
+            }
             slowf_note_tagged(
                 tag_ref,
                 t0_ref,
@@ -390,18 +417,30 @@ fn boot_both(rig: &mut PairRig) {
         rig.rust_tui.screen_text(),
         rig.ref_tui.screen_text()
     );
-    // slowF (2026-11-28): the post-wordmark `settle(3)` retired — the
-    // beat was carrying TWO duties: (a) the settled-capture stability
-    // (now owned by the grid-stability arm) and (b) the COMPOSER
-    // MOUNT — the ref end's composer mounts up to ~2 s AFTER the
-    // wordmark, and keystrokes typed into the gap are LOST (round 1's
-    // evidence: p1's ref leg never received the turn — 60 s window
-    // burned, RED; the rust end mounts with the wordmark and replied
-    // fine). Duty (b) is now needle-gated: the composer placeholder's
-    // stable "Ask anything" prefix on BOTH ends (screen-based; the
-    // suggestion tail is Math.random — the prefix is not). Every
-    // converted export re-verified byte-identical (the lane report's
-    // before/after table).
+    // slowF (2026-11-28): the composer-mount needle is kept (free — it
+    // fires with the wordmark's own render) and the settle(3) beat is
+    // RESTORED after trying to retire it. The retirement attempt
+    // exposed a real boot-input race in the REF app (the lane's
+    // forensics, `.test-logs/slowf-notes.txt` + the LEG FAILED
+    // diagnostics): the first PROMPT submit typed at wordmark+0 wedges
+    // the ref ~50% under 2-rig concurrency — the screen goes blank,
+    // the raw stream shows the app alive and re-rendering the home
+    // composer, NO session is created (the gateway log carries the
+    // rust's turn request but never the ref's), and the reply wait
+    // burns its full 60 s window (p1/p2/p3 all reproduced; the
+    // serialized runs pass — the race is contention-dependent). The
+    // keystrokes themselves are NOT lost in general: the dialog chord
+    // typed at the same instant never wedges — it is the first
+    // SUBMIT's session-create path that races the app's post-paint
+    // init. No screen-visible signal discriminates: the raw-stream
+    // tails at submit time are byte-identical between the passing and
+    // wedged legs (full UI, footer path row, version pill, cursor
+    // show, sync-end all painted). The 3 s beat (wordmark+3, the
+    // historical form — never a flake in weeks of gates) is therefore
+    // KEPT as the blind gate for that window, with the needle above
+    // keeping the composer-mount precondition explicit. REPORTED for
+    // the controller as a ref-side finding (test code cannot fix the
+    // ref); the export face is unchanged from the baseline.
     let (rust_ask, ref_ask) = wait_both_screen(&rig.rust_tui, &rig.ref_tui, "Ask anything", 10, 15);
     assert!(
         rust_ask && ref_ask,
@@ -410,6 +449,7 @@ fn boot_both(rig: &mut PairRig) {
         rig.rust_tui.screen_text(),
         rig.ref_tui.screen_text()
     );
+    settle(3);
 }
 
 // ---------------------------------------------------------------------------

@@ -492,8 +492,12 @@ fn perm_boot(rig: &mut PermRig) {
         rust_booted && ref_booted,
         "PERM precondition RED: booted rust={rust_booted} ref={ref_booted}"
     );
-    // slowF: the post-boot settle(2) retired — the ask-dialog needle
-    // below is the next state's gate (verified byte-identical).
+    // slowF: the post-boot settle(2) RESTORED (the pair lane's
+    // forensics apply here identically — the ref's FIRST PROMPT submit
+    // typed at wordmark+0 wedges the app ~50% under rig concurrency;
+    // the 2 s beat is the historical never-flaked form; see
+    // realchain_pair.rs boot_both for the full evidence).
+    settle(2);
 }
 
 /// Wait for the ask dialog on BOTH ends (the header is the shared
@@ -727,6 +731,10 @@ fn w13_omo_sections_at_trigger_width_pair() {
             t_orch.elapsed().as_secs_f64()
         ));
     }
+    // slowF: a 2 s beat after the plugin face — the prompt below must
+    // clear the ref's first-submit boot-race window (the pair lane's
+    // forensics; wordmark+2+2 covers the pair lane's settle(3) form).
+    settle(2);
     phase("settle8_A_done");
     let home_ref = normalize(&ref_tui.screen_text());
     let home_rust = normalize(&rust_tui.screen_text());
@@ -870,8 +878,10 @@ fn g_scenario(suffix: &str, prompt: &str) {
         rust_booted && ref_booted,
         "G-{suffix} precondition RED: boot {rust_booted}/{ref_booted}"
     );
-    // slowF: the post-wordmark settle(2) retired — the turn-end and
-    // title needles below gate the state (verified byte-identical).
+    // slowF: the post-wordmark settle(2) KEPT (retiring it exposes the
+    // ref's first-submit boot race — the pair lane's forensics; the
+    // prompt must not be typed at wordmark+0).
+    settle(2);
     phase("settle2_done");
     rust_tui.write(format!("{prompt}\r").as_bytes());
     ref_tui.write(format!("{prompt}\r").as_bytes());
