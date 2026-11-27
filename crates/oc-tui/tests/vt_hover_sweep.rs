@@ -200,6 +200,86 @@ fn latency_report() -> String {
     )
 }
 
+// ---- slowD lane instrumentation: per-phase probe budget -------------------
+//
+// Per-PROCESS counters (nextest = one process per test, so these are
+// per-test): where a probe's wall goes — phase 1 (the response
+// window: motion → first diff or window close) vs phase 2 (the
+// neutral-corner clear + its watch), split by verdict. The sweep's
+// budget model (validated against the solo baseline 2026-11-28):
+// an inert probe ≈ RESPONSE_WINDOW + LATE_WATCH + poll overshoot
+// ≈ 37 ms, an observed probe ≈ paint latency + STABLE + CLEAR_QUIET.
+static PROBE_STATS: Mutex<ProbeStats> = Mutex::new(ProbeStats::EMPTY);
+
+#[derive(Default)]
+struct ProbeStats {
+    probes: u64,
+    probe_ms: u128,
+    inert: u64,
+    inert_ms: u128,
+    phase1_ms: u128,
+    phase2_ms: u128,
+    observed: u64,
+    observed_ms: u128,
+    retries: u64,
+}
+
+impl ProbeStats {
+    /// A const initializer (statics cannot call `Default::default`).
+    const EMPTY: Self = Self {
+        probes: 0,
+        probe_ms: 0,
+        inert: 0,
+        inert_ms: 0,
+        phase1_ms: 0,
+        phase2_ms: 0,
+        observed: 0,
+        observed_ms: 0,
+        retries: 0,
+    };
+}
+
+/// Record one probe's phase split (slowD instrumentation).
+fn note_probe(inert: bool, phase1: Duration, phase2: Duration) {
+    let mut sink = PROBE_STATS.lock().expect("probe stats");
+    sink.probes += 1;
+    let total = phase1.as_millis() + phase2.as_millis();
+    sink.probe_ms += total;
+    sink.phase1_ms += phase1.as_millis();
+    sink.phase2_ms += phase2.as_millis();
+    if inert {
+        sink.inert += 1;
+        sink.inert_ms += total;
+    } else {
+        sink.observed += 1;
+        sink.observed_ms += total;
+    }
+}
+
+/// One line: the per-test probe budget (mean ms per class).
+fn probe_stats_line() -> String {
+    let sink = PROBE_STATS.lock().expect("probe stats");
+    let mean = |n: u64, ms: u128| {
+        if n == 0 {
+            "n=0".to_owned()
+        } else {
+            #[allow(clippy::cast_precision_loss)] // bounded magnitudes
+            let mean_ms = (ms / u128::from(n.max(1))) as f64;
+            format!("n={n} mu={mean_ms:.1}ms")
+        }
+    };
+    format!(
+        "probes={} total={}ms | inert {} (p1={}ms p2={}ms) | obs {} | retries={}",
+        sink.probes,
+        sink.probe_ms,
+        mean(sink.inert, sink.inert_ms),
+        sink.phase1_ms,
+        sink.phase2_ms,
+        mean(sink.observed, sink.observed_ms),
+        sink.retries,
+    )
+}
+
 /// The neutral clear cell: the trailing end of the PROBE'S OWN row —
 /// a no-op on every swept view (strip trailing cells past the '+'
 /// affordance and all off-strip cells are inert), and it keeps the
@@ -322,6 +402,7 @@ fn probe_hover(
         ));
         break;
     }
+    let phase1_done = std::time::Instant::now();
     // Phase 2: neutral corner, back to the known baseline. An
     // observed probe only needs one quiet baseline span; an
     // unobserved one keeps watching for a late paint for
@@ -372,7 +453,9 @@ fn probe_hover(
             break;
         }
     }
-    observed.unwrap_or(Response::NoChange)
+    let verdict = observed.unwrap_or(Response::NoChange);
+    note_probe(verdict == Response::NoChange, phase1_done.duration_since(sent), phase1_done.elapsed());
+    verdict
 }
 
 /// Targeted probes of the `" + "` affordance's EXACT columns: the
@@ -414,6 +497,7 @@ fn sweep_band(
             let mut response =
                 probe_hover(harness, x as u16, y as u16, baseline, volatile, baseline_digest);
             if y == 0 && response == Response::NoChange && x % stride == 0 {
+                PROBE_STATS.lock().expect("probe stats").retries += 1;
                 response =
                     probe_hover(harness, x as u16, y as u16, baseline, volatile, baseline_digest);
             }
@@ -452,20 +536,27 @@ fn sweep_band(
 /// open BOTH history sessions as tabs (short + long-truncating
 /// title), settle the 2-tab session view.
 fn boot_to_two_tabs(harness: &mut HarnessHandle) -> Result<(), String> {
+    let mark = |h: &HarnessHandle, label: &str| {
+        eprintln!("[slowD mark {label}] {}ms", h.now_ms());
+    };
     if !harness.wait_for(WORDMARK, Duration::from_secs(8)) {
         return Err("the home wordmark never rendered".to_owned());
     }
+    mark(harness, "wordmark");
     open_first_session(harness, b"Alpha")?;
     if !harness.wait_for(b"Alpha", Duration::from_secs(5)) {
         return Err("the first tab's title never painted".to_owned());
     }
+    mark(harness, "tab1");
     std::thread::sleep(Duration::from_millis(400));
     open_second_session(harness, b"Long Session Title")?;
     // The long title truncates in the strip — match on its head.
     if !harness.wait_for(b"Long Session", Duration::from_secs(5)) {
         return Err("the second (long-titled) tab never painted".to_owned());
     }
+    mark(harness, "tab2");
     std::thread::sleep(Duration::from_millis(500));
+    mark(harness, "settle");
     Ok(())
 }
 
@@ -484,18 +575,27 @@ fn run_sweep_test(
     let _sandbox = sandbox_env(tag);
     let fake = FakeLlm::spawn(standard_sessions());
     let harness = LiveHarness::attach(cols, rows);
-    let result_slot: Arc<Mutex<Option<Result<SweepOutcome, String>>>> = Arc::new(Mutex::new(None));
+    // slowD instrumentation: the slot carries the driver's phase split
+    // (drive wall, exit-chord wall) alongside the outcome.
+    let result_slot: Arc<Mutex<Option<(Result<SweepOutcome, String>, Duration, Duration)>>> =
+        Arc::new(Mutex::new(None));
     let slot = Arc::clone(&result_slot);
     let ack_from = harness.handle().raw_len();
     let mut driver = harness.handle();
     std::thread::spawn(move || {
+        let drive_start = std::time::Instant::now();
         let outcome = drive(&mut driver);
+        let drive_wall = drive_start.elapsed();
         // ALWAYS leave the exit chord so the run loop terminates even
         // on driver error (the ack is verified below).
+        let chord_start = std::time::Instant::now();
         vt_harness::exit_chord(&mut driver);
-        *slot.lock().expect("slot") = Some(outcome);
+        let chord_wall = chord_start.elapsed();
+        *slot.lock().expect("slot") = Some((outcome, drive_wall, chord_wall));
     });
+    let run_tui_start = std::time::Instant::now();
     run_tui(&fake.url, cols, rows, Duration::from_secs(120));
+    let run_tui_wall = run_tui_start.elapsed();
     fake.stop();
     // The driver writes its result AFTER the exit chord — the app may
     // tear down (and unblock run_tui) a beat before the slot lands.
@@ -503,19 +603,30 @@ fn run_sweep_test(
     while result_slot.lock().expect("slot").is_none() && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
-    let swept = match result_slot.lock().expect("slot").take() {
-        Some(Ok(outcome)) => outcome,
-        Some(Err(error)) => panic!("driver failed: {error}"),
+    let (swept, drive_wall, chord_wall) = match result_slot.lock().expect("slot").take() {
+        Some((Ok(outcome), drive_wall, chord_wall)) => (outcome, drive_wall, chord_wall),
+        Some((Err(error), _, _)) => panic!("driver failed: {error}"),
         None => panic!("the driver thread never reported (deadlock?)"),
     };
+    let ack_start = std::time::Instant::now();
+    let acked = harness.handle().wait_for_after(
+        vt_harness::ALT_SCREEN_LEAVE,
+        ack_from,
+        Duration::from_secs(5),
+    );
+    let ack_wall = ack_start.elapsed();
+    eprintln!(
+        "[slowD budget {tag}] drive={}ms (chord={}ms) run_tui={}ms ack={}ms | {}",
+        drive_wall.as_millis(),
+        chord_wall.as_millis(),
+        run_tui_wall.as_millis(),
+        ack_wall.as_millis(),
+        probe_stats_line(),
+    );
     // The app must have been alive through the whole sweep: the exit
     // chord's teardown arrived AFTER the sweep finished.
     assert!(
-        harness.handle().wait_for_after(
-            vt_harness::ALT_SCREEN_LEAVE,
-            ack_from,
-            Duration::from_secs(5)
-        ),
+        acked,
         "the exit teardown never arrived — the app died before the sweep completed: {}",
         swept.sweep.summary()
     );
@@ -555,6 +666,7 @@ fn home_band(y0: usize, y1: usize) -> SweepOutcome {
         }
         std::thread::sleep(Duration::from_millis(200));
         let (baseline, volatile) = harness.capture_baseline();
+        eprintln!("[slowD mark baseline] {}ms", harness.now_ms());
         let baseline_digest = harness.grid_digest();
         if baseline.is_blank() {
             return Err("the settled home screen is blank".to_owned());
@@ -705,6 +817,7 @@ fn session_band(y0: usize, y1: usize) -> SweepOutcome {
     let outcome = run_sweep_test(&tag, 80, 24, move |harness| {
         boot_to_two_tabs(harness)?;
         let (baseline, volatile) = harness.capture_baseline();
+        eprintln!("[slowD mark baseline] {}ms", harness.now_ms());
         let baseline_digest = harness.grid_digest();
         if baseline.is_blank() {
             return Err("the settled session screen is blank".to_owned());
@@ -737,6 +850,7 @@ fn session_band_160(y0: usize, y1: usize) -> SweepOutcome {
     let outcome = run_sweep_test(&tag, 160, 50, move |harness| {
         boot_to_two_tabs(harness)?;
         let (baseline, volatile) = harness.capture_baseline();
+        eprintln!("[slowD mark baseline] {}ms", harness.now_ms());
         let baseline_digest = harness.grid_digest();
         if baseline.is_blank() {
             return Err("the settled session screen is blank".to_owned());
