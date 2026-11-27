@@ -222,7 +222,12 @@ const FIXTURES: &[(&str, &str)] = &[
               .then((value) => {
                 report("confirm " + String(value));
               });
-          }, 4000);
+          // 2026-11-27 re-widened 4s->20s: the arm counts from EACH
+          // end's own promise-resolve, and the ref's dialog-close lags
+          // the rust's by >2.5s — with the marker capture (~1.5s) the
+          // 4s gap let the rust leg's next phase open INSIDE the
+          // esc/enter state captures (torn exports; v21b's class).
+          }, 20000);
         });
     }, 6000);
     return () => {};

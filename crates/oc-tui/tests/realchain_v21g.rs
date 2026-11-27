@@ -257,7 +257,12 @@ const ED_FIXTURE: &str = r#"export default {
               .then((value) => {
                 report("sel " + String(value));
               });
-          }, 4000);
+          // 2026-11-27 re-widened 4s->20s: the arm counts from EACH
+          // end's own promise-resolve, and the ref's dialog-close lags
+          // the rust's by >2.5s — with the marker capture (~1.5s) the
+          // 4s gap let the rust leg's next phase open INSIDE the
+          // esc/enter state captures (torn exports; v21b's class).
+          }, 20000);
         });
     }, 6000);
     return () => {};
@@ -374,7 +379,7 @@ fn v21g_prompt_band_pair() {
     settle(1);
     rig.capture_pair("ed", "prompt-esc");
     // The chained select (the companion's chain — no absolute timer).
-    let select = rig.wait_both_screens("v21f paste", 30);
+    let select = rig.wait_both_screens("v21f paste", 60); // 2026-11-27: 30->60 for the 20s chained arm
     assert!(
         select,
         "V21G band RED: the chained select never opened; rust screen:\n{}\nref screen:\n{}",

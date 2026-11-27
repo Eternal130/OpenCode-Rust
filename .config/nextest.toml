@@ -119,4 +119,4 @@ test-threads = 1
 # SOP：每波新锚 target 合并时，把 binary(realchain_v<new>) 追加进枚举——
 # 漏加的后果=门多跑一族（变慢但不漏检），永不误跳过电池。
 [profile.merge]
-default-filter = 'not(binary(realchain_va17) or binary(realchain_va18) or binary(realchain_va19) or binary(realchain_va20) or binary(realchain_v21) or binary(realchain_v21b) or binary(realchain_v21c) or binary(realchain_v21d) or binary(realchain_v21e) or binary(realchain_v21f))'
+default-filter = 'not(binary(realchain_va17) or binary(realchain_va18) or binary(realchain_va19) or binary(realchain_va20) or binary(realchain_v21) or binary(realchain_v21b) or binary(realchain_v21c) or binary(realchain_v21d) or binary(realchain_v21e) or binary(realchain_v21f) or binary(realchain_v21g))'

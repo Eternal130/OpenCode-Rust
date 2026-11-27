@@ -982,6 +982,38 @@
       },
       "classification": "pending-fix",
       "justification": "ADJUDICATED (controller 2026-11-27): the va21f new anchors' first-round corpus (86 rows across 10 states) - a MIXED bag pending R29 decomposition: (a) the version pill vlocal vs v2.0.24 (the version-pill normalizer exists for the v17 family but is not applied on the v21f scenarios - a harness normalization gap); (b) the REALCHAIN-REPLAY-OK marker renders VERTICALLY on the rust side (4 chars/row - the narrow-width wrap face, the G-517 toast-wrap family's next instance); (c) the footer's provider label ('Replay Anthropic' vs 'replay/claude-opus-4-7'), the missing '38 (0%)' context counter, and the __MS__ escape (the timings normalizer missing the rust footer arm); (d) the prompt echo glyph '> ' vs the ref's \\u203a and a one-row offset in the echo block. R29 must split these into register entries (real gaps) vs normalizer extensions (framework). Frame evidence: .test-logs/diff-reports/v21f-*.txt"
+    },
+    {
+      "id": "v21g-rs-g489-g490-residuals",
+      "scenario_pattern": "v21g-rs",
+      "state_pattern": "*",
+      "shape": {
+        "kind": "regex",
+        "any_contains": [
+          "(?:replay/|Replay Anthropic|Build|┃|ctrl\\+p|agent|Search|▀)"
+        ]
+      },
+      "classification": "pending-fix",
+      "justification": "ADJUDICATED (controller 2026-11-27): va21g's resume/subagent anchor (the va19sub two-phase re-export) — every residual row is the registered mini-frontend family: G-490 (the model group 'replay/claude-opus-4-7' vs 'claude-opus-4-7', the provider group 'replay' vs 'Replay Anthropic', the ctrl+p menu arm) + G-489 (the composer/statusline dock seating rows 33/34 vs the ref's 10/12). The G-543 user-echo row, the G-544 resume-model row and the G-315 version-pill leg are CLOSED (the lane's normalizer + seam fixes; the states' remaining rows are only the two registered families). Tip-only entry: stale when the va23 fix lands. Evidence: .test-logs/diff-reports/v21g-rs-*.txt The resume-menu offset rows (the 'Search' menu row and the wordmark block row at different row indices on the two ends) are the same G-489 seating family.",
+      "g_ref": "G-489/G-490",
+      "adjudicated_by": "controller",
+      "adjudicated_at": "2026-11-27"
+    },
+    {
+      "id": "v21g-nt-g489-g490-residuals",
+      "scenario_pattern": "v21g-nt",
+      "state_pattern": "*",
+      "shape": {
+        "kind": "regex",
+        "any_contains": [
+          "(?:agent|Ask anything|┃|replay|Build|ctrl\\+p)"
+        ]
+      },
+      "classification": "pending-fix",
+      "justification": "ADJUDICATED (controller 2026-11-27): va21g's footer-notice anchor — G-545 CLOSED (the notice renders and expires exactly on the 3s window: notice-live shows it, notice-cleared drops it, no scrollback row); the residual rows are the registered G-489 dock seating + G-490 model/provider label arms on the statusline's row 34 vs the ref's footer rows. Tip-only entry: stale when the va23 fix lands. Evidence: .test-logs/diff-reports/v21g-nt-*.txt",
+      "g_ref": "G-489/G-490",
+      "adjudicated_by": "controller",
+      "adjudicated_at": "2026-11-27"
     }
   ]
 }

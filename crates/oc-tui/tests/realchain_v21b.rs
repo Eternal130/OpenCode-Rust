@@ -334,18 +334,18 @@ export default {
         log.push("close2");
         report("close2");
       });
-    }, 18000);
+    }, 31000);
     setTimeout(() => {
       ctx.ui.dialog.set({ size: "large" });
       report("large");
-    }, 30000);
+    }, 56000);
     setTimeout(() => {
       ctx.ui.dialog.set({ centered: true });
       report("centered");
-    }, 42000);
+    }, 81000);
     setTimeout(() => {
       ctx.ui.dialog.clear();
-    }, 54000);
+    }, 106000);
     return () => {};
   },
 };
@@ -399,7 +399,10 @@ export default {
       // off the previous toast's dwell (the rig's marker captures
       // complete ~1 s after the needle) — the old 40 s/5 s absolute
       // gaps were dead dwell.
-      await new Promise((resolve) => setTimeout(resolve, 4000));
+      // 2026-11-27 re-widened 4s->20s: the pre-navigate dwell must cover
+      // the REF leg's needle+capture latency (the 4s cut produced torn
+      // values/plain-arm exports — the capture straddled the navigate).
+      await new Promise((resolve) => setTimeout(resolve, 20000));
       try {
         ctx.ui.router.navigate({ type: "home" });
       } catch {}
@@ -488,7 +491,10 @@ export default {
       // va21g (the slow-audit addendum): the phases CHAIN off the
       // previous toast's dwell — the old 40 s/5 s gaps were dead
       // dwell.
-      await new Promise((resolve) => setTimeout(resolve, 4000));
+      // 2026-11-27 re-widened 4s->20s: the pre-navigate dwell must cover
+      // the REF leg's needle+capture latency (the 4s cut produced torn
+      // values/plain-arm exports — the capture straddled the navigate).
+      await new Promise((resolve) => setTimeout(resolve, 20000));
       try {
         ctx.ui.router.navigate({ type: "home" });
       } catch {}
