@@ -645,10 +645,8 @@ fn v21f_agent_summary_pair() {
 //   * esc closes the menu; the settled frame exports again.
 // ===========================================================================
 
-const SUB_DONE_NEEDLE: &[u8] = b"round-trip completed";
-
-/// The rig-diagnostic helpers (the session-list probe between the
-/// resume phases): a URL-safe path encode and a payload preview.
+/// The rig-diagnostic helpers (the session-list probe after the
+/// resume pair boots): a URL-safe path encode and a payload preview.
 fn urlencoding_encode(text: &str) -> String {
     let mut out = String::new();
     for byte in text.bytes() {
@@ -669,10 +667,6 @@ fn server_url_port(url: &str) -> String {
 }
 
 fn truncate_diag(text: &str) -> String {
-    let mut seen = 0usize;
-    let cut = text.char_indices().nth(600).map_or(text.len(), |(at, _)| at);
-    seen = cut;
-    let _ = seen;
     text.chars().take(600).collect()
 }
 
@@ -787,22 +781,6 @@ fn v21f_resume_subagents_pair() {
     rust_tui.write(b"\x03\x03");
     ref_tui.write(b"\x03\x03");
     settle(3);
-    // Rig diagnostic (the resume's --continue must find the session):
-    // the rust server's session list at the project directory.
-    {
-        let query = format!(
-            "http://127.0.0.1:{}/api/session?directory={}&parentID=null&limit=50&order=desc",
-            server_url_port(&server.url),
-            urlencoding_encode(&rust.project.display().to_string())
-        );
-        if let Some((status, payload)) =
-            realchain_harness::http_get(&query, server.password.as_deref())
-        {
-            eprintln!("V21F diag: session list http {status}: {}", truncate_diag(&payload));
-        } else {
-            eprintln!("V21F diag: the session list query failed (server down?)");
-        }
-    }
     rust_tui.shutdown(Duration::from_secs(10));
     ref_tui.shutdown(Duration::from_secs(10));
 
@@ -823,47 +801,24 @@ fn v21f_resume_subagents_pair() {
     let ref_boot = ref_tui.wait_for(b"oc mini", 0, Duration::from_secs(60));
     let rust_replayed = V21FRig::wait_squashed(&rust_tui, "round-tripcompleted", 60);
     let ref_replayed = V21FRig::wait_squashed(&ref_tui, "round-tripcompleted", 90);
-    // Rig diagnostic: the session list AFTER the resume pair booted
-    // (a second row = the resume created a fresh session instead of
-    // attaching the first). Plus the two replay-feed endpoints the
-    // mini's hydrate hits (message list + the G-536 active map).
+    // Rig diagnostic (log-only, stderr — never the PTY/exports): the
+    // rust server's session list after the resume booted — a SECOND
+    // row would mean the resume created a fresh session instead of
+    // attaching the first (the rig-health forensics for G-541-class
+    // failures).
     {
-        let base = format!("http://127.0.0.1:{}", server_url_port(&server.url));
         let query = format!(
-            "{base}/api/session?directory={}&parentID=null&limit=50&order=desc",
+            "http://127.0.0.1:{}/api/session?directory={}&parentID=null&limit=50&order=desc",
+            server_url_port(&server.url),
             urlencoding_encode(&rust.project.display().to_string())
         );
         if let Some((status, payload)) =
             realchain_harness::http_get(&query, server.password.as_deref())
         {
-            eprintln!("V21F diag2: post-boot session list http {status}: {}", truncate_diag(&payload));
-        }
-        if let Some((status, payload)) =
-            realchain_harness::http_get(&format!("{base}/api/session/active"), server.password.as_deref())
-        {
-            eprintln!("V21F diag3: active map http {status}: {}", truncate_diag(&payload));
-        }
-        // The replay's message walk: the session's message list.
-        if let Some((status, payload)) =
-            realchain_harness::http_get(&query, server.password.as_deref())
-        {
-            if let Ok(doc) = serde_json::from_str::<serde_json::Value>(&payload) {
-                if let Some(id) = doc.pointer("/data/0/id").and_then(|v| v.as_str()) {
-                    let msg_query = format!(
-                        "{base}/api/session/{id}/message?limit=200&order=desc"
-                    );
-                    if let Some((mstatus, mpayload)) = realchain_harness::http_get(
-                        &msg_query,
-                        server.password.as_deref(),
-                    ) {
-                        eprintln!(
-                            "V21F diag4: message list http {mstatus} ({} bytes): {}",
-                            mpayload.len(),
-                            truncate_diag(&mpayload)
-                        );
-                    }
-                }
-            }
+            eprintln!(
+                "V21F diag: post-boot session list http {status}: {}",
+                truncate_diag(&payload)
+            );
         }
     }
     assert!(
