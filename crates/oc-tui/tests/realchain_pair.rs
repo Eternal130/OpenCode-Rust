@@ -45,7 +45,7 @@
 mod realchain_harness;
 
 use realchain_harness::{
-    capture_settled, corpus_dir, corpus_ref_dir, default_pace, dump_grid, export_grid_diff,
+    capture_settled_pair, corpus_dir, corpus_ref_dir, default_pace, dump_grid, export_grid_diff,
     export_survey, http_get, http_post, lane_lock, normalize_grid, plugin_lane_skip_reason,
     ref_lane_skip_reason, ref_root, ref_service_stop, ref_stage, ref_tui_spawn, sandbox,
     service_start, service_stop, stage_plugins, worktree_dir, Gateway, LaneGuard, RefStage,
@@ -119,17 +119,186 @@ fn wait_both(
     ref_from: usize,
     ref_secs: u64,
 ) -> (bool, bool) {
+    // TEMPORARY slowF instrumentation (per-wait evidence table).
+    let needle_text = String::from_utf8_lossy(needle).into_owned();
+    let needle_a = needle_text.clone();
+    let leg_tag = SLOWF_TAG.with(|t| t.borrow().clone());
+    let leg_t0: Option<Instant> = SLOWF_T0.with(|t| *t.borrow());
+    let tag_ref = &leg_tag;
+    let t0_ref = &leg_t0;
+    let rust_started = Instant::now();
+    let ref_started = Instant::now();
     std::thread::scope(|scope| {
-        let rust_leg = scope
-            .spawn(move || rust_tui.wait_for(needle, rust_from, Duration::from_secs(rust_secs)));
-        let ref_leg =
-            scope.spawn(move || ref_tui.wait_for(needle, ref_from, Duration::from_secs(ref_secs)));
+        let rust_leg = scope.spawn(move || {
+            let ok = rust_tui.wait_for(needle, rust_from, Duration::from_secs(rust_secs));
+            slowf_note_tagged(
+                tag_ref,
+                t0_ref,
+                &format!(
+                    "wait_both RUST needle={needle_text:?} window={rust_secs}s took={:.3}s ok={ok}",
+                    rust_started.elapsed().as_secs_f64()
+                ),
+            );
+            ok
+        });
+        let ref_leg = scope.spawn(move || {
+            let ok = ref_tui.wait_for(needle, ref_from, Duration::from_secs(ref_secs));
+            slowf_note_tagged(
+                tag_ref,
+                t0_ref,
+                &format!(
+                    "wait_both REF needle={needle_a:?} window={ref_secs}s took={:.3}s ok={ok}",
+                    ref_started.elapsed().as_secs_f64()
+                ),
+            );
+            ok
+        });
         (rust_leg.join().unwrap_or(false), ref_leg.join().unwrap_or(false))
     })
 }
 
 fn settle(secs: u64) {
+    if secs > 0 {
+        slowf_note(&format!("settle({secs}s)"));
+    }
     std::thread::sleep(Duration::from_secs(secs));
+}
+
+/// slowF (2026-11-28, the battery pair family): the SCREEN-waiting
+/// twin of `wait_both` — both ends' PARSED grids poll concurrently.
+/// The old two-line serial form (rust's `wait_for_screen` completing
+/// before the ref leg even started) doubled every screen wait's
+/// wall-clock; the legs are independent PTYs, so they overlap.
+/// Screen-based (not raw-stream) because a paced stream renders
+/// chunk-by-chunk with cursor positioning between chunks — the W9 s3
+/// hardening class: the contiguous byte run never appears in the raw
+/// stream even though the settled grid carries it.
+fn wait_both_screen(
+    rust_tui: &TuiProcess,
+    ref_tui: &TuiProcess,
+    needle: &str,
+    rust_secs: u64,
+    ref_secs: u64,
+) -> (bool, bool) {
+    let leg_tag = SLOWF_TAG.with(|t| t.borrow().clone());
+    let leg_t0: Option<Instant> = SLOWF_T0.with(|t| *t.borrow());
+    let needle_a = needle.to_owned();
+    let tag_ref = &leg_tag;
+    let t0_ref = &leg_t0;
+    let rust_started = Instant::now();
+    let ref_started = Instant::now();
+    std::thread::scope(|scope| {
+        let rust_leg = scope.spawn(move || {
+            let ok = rust_tui.wait_for_screen(needle, Duration::from_secs(rust_secs));
+            slowf_note_tagged(
+                tag_ref,
+                t0_ref,
+                &format!(
+                    "wait_both_screen RUST needle={needle:?} window={rust_secs}s \
+                     took={:.3}s ok={ok}",
+                    rust_started.elapsed().as_secs_f64()
+                ),
+            );
+            ok
+        });
+        let ref_leg = scope.spawn(move || {
+            let ok = ref_tui.wait_for_screen(&needle_a, Duration::from_secs(ref_secs));
+            slowf_note_tagged(
+                tag_ref,
+                t0_ref,
+                &format!(
+                    "wait_both_screen REF needle={needle_a:?} window={ref_secs}s \
+                     took={:.3}s ok={ok}",
+                    ref_started.elapsed().as_secs_f64()
+                ),
+            );
+            ok
+        });
+        (rust_leg.join().unwrap_or(false), ref_leg.join().unwrap_or(false))
+    })
+}
+
+// ---------------------------------------------------------------------------
+// TEMPORARY slowF lane instrumentation (the per-wait evidence tables for
+// the settle audit; stripped before the final commit). Notes go to stderr
+// AND `.test-logs/slowf-notes.txt` (nextest hides captured output on
+// PASS, the file is the readable copy).
+// ---------------------------------------------------------------------------
+thread_local! {
+    static SLOWF_TAG: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+    static SLOWF_T0: std::cell::RefCell<Option<Instant>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn slowf_arm(tag: &str) {
+    SLOWF_TAG.with(|t| *t.borrow_mut() = Some(tag.to_owned()));
+    SLOWF_T0.with(|t| *t.borrow_mut() = Some(Instant::now()));
+    slowf_note("ARM");
+}
+
+/// TEMPORARY slowF instrumentation: note with an EXPLICIT tag + t0
+/// (the wait_both scope legs run on their own threads — the
+/// thread-locals do not cross the thread boundary).
+fn slowf_note_tagged(tag: &Option<String>, t0: &Option<Instant>, what: &str) {
+    let elapsed = t0.map_or(0.0, |t| t.elapsed().as_secs_f64());
+    let line = format!("[slowF {} +{elapsed:.3}s] {what}\n", tag.as_deref().unwrap_or("-"));
+    eprint!("{line}");
+    let dir = worktree_dir(".test-logs");
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("slowf-notes.txt"))
+    {
+        use std::io::Write as _;
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
+fn slowf_note(what: &str) {
+    let elapsed =
+        SLOWF_T0.with(|t| t.borrow().map_or(0.0, |t0| t0.elapsed().as_secs_f64()));
+    let line = SLOWF_TAG.with(|t| {
+        format!("[slowF {} +{elapsed:.3}s] {what}\n", t.borrow().as_deref().unwrap_or("-"))
+    });
+    eprint!("{line}");
+    let dir = worktree_dir(".test-logs");
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("slowf-notes.txt"))
+    {
+        use std::io::Write as _;
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
+/// slowF (2026-11-28, the battery pair family): the PAIR-CONCURRENT
+/// settled capture — both ends' captures run as scope legs (the slowE
+/// harness API, the remarks replayed in the serial annotation order),
+/// then both grids normalize on the calling thread. The serial
+/// two-capture form spent 2× the 2.5 s grid-stability window; the
+/// legs are independent PTYs/processes, so they overlap. Acceptance:
+/// every converted export re-verified BYTE-IDENTICAL (grids +
+/// divergence rows) against the serial form's baseline.
+fn cap_pair_tuis(
+    rig: &PairRig,
+    rust_tui: &TuiProcess,
+    ref_tui: &TuiProcess,
+) -> (String, String) {
+    let started = Instant::now();
+    let (ref_grid, rust_grid) = capture_settled_pair(ref_tui, rust_tui);
+    slowf_note(&format!(
+        "capture_settled_pair took={:.3}s",
+        started.elapsed().as_secs_f64()
+    ));
+    (rig.normalize(&ref_grid), rig.normalize(&rust_grid))
+}
+
+fn cap_pair(rig: &PairRig) -> (String, String) {
+    cap_pair_tuis(rig, &rig.rust_tui, &rig.ref_tui)
 }
 
 fn pair_rig(tag: &str, cols: u16) -> PairRig {
@@ -141,12 +310,18 @@ fn pair_rig(tag: &str, cols: u16) -> PairRig {
 /// miss-seeding (`seed_misses` = long-transcript scenarios whose later
 /// turns are strict misses the standard seed answers deterministically).
 fn pair_rig_ext(tag: &str, cols: u16, pace: &str, plugins: bool, seed_misses: bool) -> PairRig {
+    slowf_arm(&format!("pair-{tag}"));
+    let t = Instant::now();
+    let phase = |what: &str| {
+        slowf_note(&format!("{what} (+{:.3}s)", t.elapsed().as_secs_f64()));
+    };
     let lane = lane_lock();
     let gateway = Gateway::spawn_paced(
         tag,
         seed_misses.then(|| worktree_dir("tools/diff/realchain/corpus-w5")).as_deref(),
         pace,
     );
+    phase("gateway_up");
     // Rust sandbox: <tag>; ref sandbox: <tag>ref (the gateway redacts
     // BOTH roots to __SANDBOX__ so request hashes stay cross-run stable).
     let rust = sandbox(tag, gateway.port);
@@ -166,12 +341,16 @@ fn pair_rig_ext(tag: &str, cols: u16, pace: &str, plugins: bool, seed_misses: bo
         refbox.write_ref_config(&[], "replay/claude-opus-4-7");
     }
     let stage = ref_stage(&refbox);
+    phase("ref_staged");
     // Defensive pre-clean: a previous run's ref daemon on this sandbox's
     // fixed port would wedge its own `ensure`.
     ref_service_stop(&refbox, &stage);
     let server = service_start(&rust);
+    phase("rust_daemon_up");
     let rust_tui = TuiProcess::spawn(&rust, cols, ROWS);
+    phase("rust_tui_spawned");
     let ref_tui = ref_tui_spawn(&refbox, &stage, cols, ROWS);
+    phase("ref_tui_spawned");
     PairRig {
         _lane: lane,
         gateway,
@@ -187,16 +366,23 @@ fn pair_rig_ext(tag: &str, cols: u16, pace: &str, plugins: bool, seed_misses: bo
 
 impl Drop for PairRig {
     fn drop(&mut self) {
+        slowf_note("PairRig drop: rust_tui shutdown");
         self.rust_tui.shutdown(Duration::from_secs(10));
+        slowf_note("PairRig drop: ref_tui shutdown");
         self.ref_tui.shutdown(Duration::from_secs(10));
+        slowf_note("PairRig drop: ref_service_stop");
         ref_service_stop(&self.refbox, &self.stage);
+        slowf_note("PairRig drop: service_stop");
         service_stop(&self.rust);
+        slowf_note("PairRig drop: done");
     }
 }
 
 fn boot_both(rig: &mut PairRig) {
+    slowf_note("boot_both: waiting WORDMARK");
     let (rust_settled, ref_settled) =
         wait_both(&rig.rust_tui, &rig.ref_tui, WORDMARK, 0, 30, 0, 60);
+    slowf_note("boot_both: WORDMARK waits done");
     assert!(
         rust_settled && ref_settled,
         "PAIR precondition RED: rust settled={rust_settled}, ref settled={ref_settled}; \
@@ -204,7 +390,26 @@ fn boot_both(rig: &mut PairRig) {
         rig.rust_tui.screen_text(),
         rig.ref_tui.screen_text()
     );
-    settle(3);
+    // slowF (2026-11-28): the post-wordmark `settle(3)` retired — the
+    // beat was carrying TWO duties: (a) the settled-capture stability
+    // (now owned by the grid-stability arm) and (b) the COMPOSER
+    // MOUNT — the ref end's composer mounts up to ~2 s AFTER the
+    // wordmark, and keystrokes typed into the gap are LOST (round 1's
+    // evidence: p1's ref leg never received the turn — 60 s window
+    // burned, RED; the rust end mounts with the wordmark and replied
+    // fine). Duty (b) is now needle-gated: the composer placeholder's
+    // stable "Ask anything" prefix on BOTH ends (screen-based; the
+    // suggestion tail is Math.random — the prefix is not). Every
+    // converted export re-verified byte-identical (the lane report's
+    // before/after table).
+    let (rust_ask, ref_ask) = wait_both_screen(&rig.rust_tui, &rig.ref_tui, "Ask anything", 10, 15);
+    assert!(
+        rust_ask && ref_ask,
+        "PAIR precondition RED: composer never mounted rust={rust_ask} ref={ref_ask}; \
+         rust screen:\n{}\nref screen:\n{}",
+        rig.rust_tui.screen_text(),
+        rig.ref_tui.screen_text()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -217,8 +422,7 @@ fn s1_boot_grid_pair() {
     skip_without_ref_lane!();
     let mut rig = pair_rig("s1", COLS);
     boot_both(&mut rig);
-    let ref_grid = rig.normalize(&capture_settled(&rig.ref_tui));
-    let rust_grid = rig.normalize(&capture_settled(&rig.rust_tui));
+    let (ref_grid, rust_grid) = cap_pair(&rig);
     drop(rig);
     // W12/2.2#12: no content adjudication in-test — the pair exports.
     export_grid_diff("s1", "boot", &ref_grid, &rust_grid);
@@ -242,7 +446,30 @@ fn s2_reply_grid_pair() {
     // Both titles should ALSO settle to the distinct seed text.
     let (rust_title, ref_title) =
         wait_both(&rig.rust_tui, &rig.ref_tui, TITLE_TEXT.as_bytes(), rust_from, 20, ref_from, 30);
-    settle(3);
+    // slowF: the post-title settle(3) retired — the state's remaining
+    // determinable change is the tab strip's dirty-marker BULLET (the
+    // "•" head of row 1): the ref end clears it ~1-3 s after the title
+    // lands (the session sync; the rust clears with the title). The
+    // baseline's 3 s beat covered it; round 1's cut caught the ref
+    // mid-clear (a false 1-row export). Needle-ized as a
+    // DISAPPEARANCE wait (bounded 5 s) — the bullet's absence on both
+    // ends is the state's settled face.
+    {
+        let t_bullet = Instant::now();
+        let bullet_gone = |tui: &TuiProcess| {
+            tui.screen_text().lines().next().is_none_or(|l| !l.contains('•'))
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !(bullet_gone(&rig.rust_tui) && bullet_gone(&rig.ref_tui))
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        slowf_note(&format!(
+            "s2 bullet-clear poll took={:.3}s",
+            t_bullet.elapsed().as_secs_f64()
+        ));
+    }
     let ref_raw = rig.ref_tui.screen_text();
     let rust_raw = rig.rust_tui.screen_text();
     // G-433 CLOSED (gwave-1): the port's model listing now seeds
@@ -292,6 +519,10 @@ fn s3_palette_grid_pair() {
     // FILTERS the list down to it on both ends — a row-exact content
     // assertion that sidesteps the G-434 catalog-vintage free tier
     // (asserted separately below for presence).
+    // slowF: the palette-open gate is the unfiltered list's default
+    // model row on BOTH ends (the s3 shape — fired at t+0 in the
+    // baseline) — the dot poll and the filter typing that follow both
+    // sit behind it.
     rig.write_both(b"\x18m");
     let (rust_open, ref_open) =
         wait_both(&rig.rust_tui, &rig.ref_tui, b"claude-opus-4-7", 0, 20, 0, 30);
@@ -308,20 +539,41 @@ fn s3_palette_grid_pair() {
     // 4/4 locally while the settled dumps always had the dot).
     let dot_grid = |tui: &TuiProcess| tui.screen_text().contains("● claude-opus-4-7");
     let wait_grid = |tui: &TuiProcess, secs: u64| -> bool {
+        let started = Instant::now();
         let deadline = Instant::now() + Duration::from_secs(secs);
         while Instant::now() < deadline {
             if dot_grid(tui) {
+                slowf_note(&format!(
+                    "s3 dot wait window={secs}s took={:.3}s ok=true",
+                    started.elapsed().as_secs_f64()
+                ));
                 return true;
             }
             std::thread::sleep(Duration::from_millis(100));
         }
+        slowf_note(&format!(
+            "s3 dot wait window={secs}s took={:.3}s ok=false",
+            started.elapsed().as_secs_f64()
+        ));
         false
     };
-    let rust_dot = wait_grid(&rig.rust_tui, 15);
-    let ref_dot = wait_grid(&rig.ref_tui, 25);
-    settle(2);
-    let ref_grid = rig.normalize(&capture_settled(&rig.ref_tui));
-    let rust_grid = rig.normalize(&capture_settled(&rig.rust_tui));
+    let rust_dot;
+    let ref_dot;
+    {
+        // slowF: the two serial dot polls (rust 15 s window, then ref
+        // 25 s) run CONCURRENTLY — independent screens, no ordering.
+        let rust_leg_tui = &rig.rust_tui;
+        let ref_leg_tui = &rig.ref_tui;
+        (rust_dot, ref_dot) = std::thread::scope(|scope| {
+            let rust_leg = scope.spawn(move || wait_grid(rust_leg_tui, 15));
+            let ref_leg = scope.spawn(move || wait_grid(ref_leg_tui, 25));
+            (rust_leg.join().unwrap_or(false), ref_leg.join().unwrap_or(false))
+        });
+    }
+    // slowF: the post-dot settle(2) retired — the dot needle is the
+    // palette's last determinable face; the settled capture's
+    // grid-stability arm is the gate (verified byte-identical).
+    let (ref_grid, rust_grid) = cap_pair(&rig);
     dump_grid("s3-palette-ref", &ref_grid);
     dump_grid("s3-palette-rust", &rust_grid);
     drop(rig);
@@ -362,7 +614,8 @@ fn s4_restart_session_grid_pair() {
     rig.write_both(b"hello\r");
     let (rust_replied, ref_replied) =
         wait_both(&rig.rust_tui, &rig.ref_tui, REPLY_NEEDLE, rust_from, 30, ref_from, 60);
-    settle(2);
+    // slowF: the pre-restart settle(2) retired — the reply needle gates
+    // the restart, and the shutdown path owns its own wait.
     // Restart BOTH TUIs against the SAME sandboxes/servers.
     rig.rust_tui.shutdown(Duration::from_secs(10));
     rig.ref_tui.shutdown(Duration::from_secs(10));
@@ -371,9 +624,11 @@ fn s4_restart_session_grid_pair() {
     let (rust_settled, ref_settled) = wait_both(&rust_tui, &ref_tui, WORDMARK, 0, 30, 0, 60);
     // The session tab carries the (seeded) title on both ends.
     let (rust_tab, ref_tab) = wait_both(&rust_tui, &ref_tui, TITLE_TEXT.as_bytes(), 0, 20, 0, 30);
-    std::thread::sleep(Duration::from_secs(3));
-    let ref_grid = rig.normalize(&capture_settled(&ref_tui));
-    let rust_grid = rig.normalize(&capture_settled(&rust_tui));
+    // slowF: the post-restart sleep(3) retired — the tab-title needle
+    // is the state's last determinable face (the restart-boot wordmark
+    // landed before it); the settled capture's grid-stability arm is
+    // the gate. Verified byte-identical (the s4-restart export).
+    let (ref_grid, rust_grid) = cap_pair_tuis(&rig, &rust_tui, &ref_tui);
     rust_tui.shutdown(Duration::from_secs(10));
     ref_tui.shutdown(Duration::from_secs(10));
     drop(rig);
@@ -407,9 +662,11 @@ fn s5_sidebar_grid_pair() {
     // Condition-wait the needle BEFORE capturing (settle class): the
     // block paints with the settle, not with the reply text.
     let (_, _) = wait_both(&rig.rust_tui, &rig.ref_tui, b"Context", 0, 30, 0, 30);
-    settle(3);
-    let ref_grid = rig.normalize(&capture_settled(&rig.ref_tui));
-    let rust_grid = rig.normalize(&capture_settled(&rig.rust_tui));
+    // slowF: the post-Context settle(3) retired — the Context needle is
+    // the sidebar's determinable face (the reply landed before it);
+    // the settled capture's grid-stability arm is the gate (verified
+    // byte-identical, the s5-sidebar export).
+    let (ref_grid, rust_grid) = cap_pair(&rig);
     dump_grid("s5-sidebar-ref", &ref_grid);
     dump_grid("s5-sidebar-rust", &rust_grid);
     drop(rig);
@@ -453,13 +710,25 @@ fn s6_hot_reload_palette_grid_pair() {
     )
     .unwrap_or((0, String::new()));
     // Ref: its native watcher picks the change up (no reload endpoint
-    // on the ref server); give it a beat.
-    std::thread::sleep(Duration::from_secs(3));
+    // on the ref server). slowF: the fixed 3 s beat retired — the ref
+    // TUI's store re-syncs on the config.updated inventory event (the
+    // G-437 invalidate+sync chain, data.ts:1204-1210/1253-1257) and
+    // the palette's filtered list is derived state, so the listing
+    // wait's 30 s window below is the event gate (the beat only
+    // pre-warmed it). Verified: the export is byte-identical and the
+    // ref listing fires fast (the baseline's ref leg took 0.05 s
+    // WITH the beat; without it the reactive re-render covers the
+    // watcher latency).
     // Same as S3: open the palette and FILTER to the new model — the
     // unfiltered viewport's top is the catalog-vintage free tier
     // (G-434), so the configured model rows are reached via search.
+    // slowF: the fixed 500 ms palette-open beat is now the s3 gate —
+    // the unfiltered palette listing the DEFAULT model row
+    // ("claude-opus-4-7") on BOTH ends proves the dialog mounted
+    // before the filter text is typed (typing into a not-yet-open
+    // palette would send the filter to the composer instead).
     rig.write_both(b"\x18m");
-    std::thread::sleep(Duration::from_millis(500));
+    let (_, _) = wait_both(&rig.rust_tui, &rig.ref_tui, b"claude-opus-4-7", 0, 10, 0, 20);
     rig.write_both(b"claude-sonnet-4-6");
     // G-437 CLOSED (gwave-1): the TUI re-syncs the model/provider
     // lists on the `model.updated`/`provider.updated`/
@@ -467,12 +736,18 @@ fn s6_hot_reload_palette_grid_pair() {
     // ref's data.ts:1204-1210/1253-1257 invalidate+sync chain) — the
     // palette reflects the hot-added model on BOTH ends; the rows
     // compare exactly (mask_model retired).
-    // Settle-class wait (quiescence before capture); the rust listing
-    // outcome rides the exported diff.
-    let (_, ref_open) = wait_both(&rig.rust_tui, &rig.ref_tui, b"claude-sonnet-4-6", 0, 10, 0, 30);
-    settle(2);
-    let ref_grid = rig.normalize(&capture_settled(&rig.ref_tui));
-    let rust_grid = rig.normalize(&capture_settled(&rig.rust_tui));
+    // slowF: the listing wait is now SCREEN-based on BOTH legs (the
+    // W9 s3 hardening class) and runs CONCURRENTLY — the old rust leg
+    // was a RAW-stream wait whose needle can never appear there (the
+    // palette paints the dot cell and the label cells as separate
+    // writes with cursor jumps between them), so it burned its FULL
+    // 10 s window (the baseline's `took=10.0s ok=false` row) while
+    // the settled grid carried the model all along.
+    let (_, ref_open) =
+        wait_both_screen(&rig.rust_tui, &rig.ref_tui, "claude-sonnet-4-6", 10, 30);
+    // slowF: the post-listing settle(2) retired — the settled capture's
+    // grid-stability arm is the gate (verified byte-identical).
+    let (ref_grid, rust_grid) = cap_pair(&rig);
     dump_grid("s6-hotreload-ref", &ref_grid);
     dump_grid("s6-hotreload-rust", &rust_grid);
     // Rust-side outcome parity at the server level (the API reflects
@@ -582,11 +857,13 @@ fn p1_slow_ttft_state_pair() {
     let busy_ref = rig.normalize(&ref_busy);
     let busy_rust = rig.normalize(&rust_busy);
     export_grid_diff("p1", "busy", &busy_ref, &busy_rust);
-    let rust_replied = rig.rust_tui.wait_for_screen(&needle_text, Duration::from_secs(30));
-    let ref_replied = rig.ref_tui.wait_for_screen(&needle_text, Duration::from_secs(60));
-    settle(3);
-    let ref_grid = rig.normalize(&capture_settled(&rig.ref_tui));
-    let rust_grid = rig.normalize(&capture_settled(&rig.rust_tui));
+    // slowF: the two serial `wait_for_screen` legs run CONCURRENTLY now
+    // (the 30 s rust window used to gate the ref leg's start).
+    let (rust_replied, ref_replied) = wait_both_screen(&rig.rust_tui, &rig.ref_tui, &needle_text, 30, 60);
+    // slowF: the post-reply settle(3) retired — the settled capture's
+    // grid-stability arm (2.5 s certified) is the gate the beat
+    // approximated (verified byte-identical in the lane report).
+    let (ref_grid, rust_grid) = cap_pair(&rig);
     dump_grid("p1-settled-ref", &ref_grid);
     dump_grid("p1-settled-rust", &rust_grid);
     drop(rig);
@@ -620,11 +897,15 @@ fn p2_slow_tps_stream_pair() {
     let mid_ref = rig.normalize(&ref_mid);
     let mid_rust = rig.normalize(&rust_mid);
     export_grid_diff("p2", "mid", &mid_ref, &mid_rust);
-    let rust_replied = rig.rust_tui.wait_for_screen(needle_text, Duration::from_secs(30));
-    let ref_replied = rig.ref_tui.wait_for_screen(needle_text, Duration::from_secs(60));
-    settle(3);
-    let ref_grid = rig.normalize(&capture_settled(&rig.ref_tui));
-    let rust_grid = rig.normalize(&capture_settled(&rig.rust_tui));
+    // slowF: the two serial `wait_for_screen` legs run CONCURRENTLY now
+    // (the paced stream completes on both ends around the same
+    // instant; the serial form made the ref leg wait out the rust
+    // leg's window first).
+    let (rust_replied, ref_replied) = wait_both_screen(&rig.rust_tui, &rig.ref_tui, needle_text, 30, 60);
+    // slowF: the post-stream settle(3) retired — the settled capture's
+    // grid-stability arm is the gate (the mid-stream 2.4 s dwell above
+    // is the PACED face and stays).
+    let (ref_grid, rust_grid) = cap_pair(&rig);
     dump_grid("p2-settled-ref", &ref_grid);
     dump_grid("p2-settled-rust", &rust_grid);
     drop(rig);
@@ -649,9 +930,15 @@ fn p3_stream_interrupt_pair() {
     // interrupt. Ref's prompt arms on the first ESC and interrupts on
     // the second ("again to interrupt"); the port mirrors that — so
     // send the double chord to BOTH.
-    let rust_streaming = rig.rust_tui.wait_for_screen("REALCH", Duration::from_secs(30));
-    let ref_streaming = rig.ref_tui.wait_for_screen("REALCH", Duration::from_secs(60));
+    // slowF: the two serial `wait_for_screen` legs run CONCURRENTLY
+    // now (same wait_both_screen form as p1/p2).
+    let (rust_streaming, ref_streaming) =
+        wait_both_screen(&rig.rust_tui, &rig.ref_tui, "REALCH", 30, 60);
     rig.write_both(b"\x1b");
+    // slowB/va21g ESC-chain lesson: back-to-back LONE ESCs coalesce
+    // into alt-escape combos on one or both ends (slowB's false-EXACT
+    // dialog lesson) — the 300 ms gap between the arming ESC and the
+    // interrupt ESC is REQUIRED, do not tighten.
     std::thread::sleep(Duration::from_millis(300));
     rig.write_both(b"\x1b");
     // The full needle must NOT complete on either end (the stream was
@@ -659,13 +946,19 @@ fn p3_stream_interrupt_pair() {
     // W12/2.2#12: absence-of-content is a content judgment — exported
     // as a survey (expected completed-needle count 0 on both ends),
     // adjudicated against the registry, not asserted in-test.
-    std::thread::sleep(Duration::from_millis(1500));
+    // slowF: 1500 ms -> 500 ms — the tps=3 tier's in-flight chunk
+    // delay is <=333 ms (one straggler); 500 ms covers it with margin
+    // and the interrupt aborts the gateway's schedule (client
+    // disconnect), so chunks do not keep arriving. Verified: the
+    // survey's observed counts hold (byte-identical export).
+    std::thread::sleep(Duration::from_millis(500));
     let count_needle = |tui: &TuiProcess| -> u64 {
         tui.screen_text().matches("REALCHAIN-REPLAY-OK").count() as u64
     };
     let rust_cut_count = count_needle(&rig.rust_tui);
     let ref_cut_count = count_needle(&rig.ref_tui);
-    settle(4);
+    // slowF: the post-cut settle(4) retired — the capture's
+    // grid-stability arm is the gate (verified byte-identical).
     // Forensics (symptom triage): the settled assistant messages from
     // the rust server — does the interrupted message carry the ref's
     // `error.message === "Step interrupted"` shape?
@@ -685,8 +978,7 @@ fn p3_stream_interrupt_pair() {
         .unwrap_or_default();
         eprintln!("P3 rust messages ({sid}): {}", &messages[..messages.len().min(3000)]);
     }
-    let ref_grid = rig.normalize(&capture_settled(&rig.ref_tui));
-    let rust_grid = rig.normalize(&capture_settled(&rig.rust_tui));
+    let (ref_grid, rust_grid) = cap_pair(&rig);
     dump_grid("p3-interrupt-ref", &ref_grid);
     dump_grid("p3-interrupt-rust", &rust_grid);
     drop(rig);
@@ -718,13 +1010,24 @@ impl TuiProcess {
 
     /// Polling screen wait.
     fn wait_for_screen(&self, needle: &str, timeout: Duration) -> bool {
+        let started = Instant::now();
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             if self.screen_has(needle) {
+                slowf_note(&format!(
+                    "wait_for_screen({needle:?}) window={:.0}s took={:.3}s ok=true",
+                    timeout.as_secs_f64(),
+                    started.elapsed().as_secs_f64()
+                ));
                 return true;
             }
             std::thread::sleep(Duration::from_millis(100));
         }
+        slowf_note(&format!(
+            "wait_for_screen({needle:?}) window={:.0}s took={:.3}s ok=false",
+            timeout.as_secs_f64(),
+            started.elapsed().as_secs_f64()
+        ));
         false
     }
 }
@@ -788,8 +1091,7 @@ fn t9_7_plugin_sidebar_pair() {
     let (status, body) =
         http_get(&format!("{}/api/plugin", rig.rust_server_url), rig.rust_password.as_deref())
             .unwrap_or((0, String::new()));
-    let ref_grid = rig.normalize(&capture_settled(&rig.ref_tui));
-    let rust_grid = rig.normalize(&capture_settled(&rig.rust_tui));
+    let (ref_grid, rust_grid) = cap_pair(&rig);
     dump_grid("t9-7-plugin-ref", &ref_grid);
     dump_grid("t9-7-plugin-rust", &rust_grid);
     let stats = rig.gateway.stats();
@@ -825,8 +1127,7 @@ fn p4_sidebar_deep_compare_pair() {
     let mut rig = pair_rig_ext("p4", 160, "instant", false, true);
     boot_both(&mut rig);
     // State A: empty session (sidebar region docked at 160 cols).
-    let a_ref = rig.normalize(&capture_settled(&rig.ref_tui));
-    let a_rust = rig.normalize(&capture_settled(&rig.rust_tui));
+    let (a_ref, a_rust) = cap_pair(&rig);
     dump_grid("p4-empty-ref", &a_ref);
     dump_grid("p4-empty-rust", &a_rust);
     // M-1: export immediately after the state's normalize calls so the
@@ -839,9 +1140,10 @@ fn p4_sidebar_deep_compare_pair() {
     let (rust_replied, ref_replied) =
         wait_both(&rig.rust_tui, &rig.ref_tui, REPLY_NEEDLE, rust_from, 30, ref_from, 60);
     let _ = rig.ref_tui.wait_for(TITLE_TEXT.as_bytes(), ref_from, Duration::from_secs(30));
-    settle(3);
-    let b_ref = rig.normalize(&capture_settled(&rig.ref_tui));
-    let b_rust = rig.normalize(&capture_settled(&rig.rust_tui));
+    // slowF: the post-title settle(3) retired — the title needle is the
+    // state's last determinable face; the settled capture's
+    // grid-stability arm is the gate (verified byte-identical).
+    let (b_ref, b_rust) = cap_pair(&rig);
     dump_grid("p4-reply-ref", &b_ref);
     dump_grid("p4-reply-rust", &b_rust);
     export_grid_diff("p4", "reply", &b_ref, &b_rust);
@@ -859,9 +1161,10 @@ fn p4_sidebar_deep_compare_pair() {
             "P4 RED: long-transcript turn {turn} did not settle rust={rust_ok} ref={ref_ok}"
         );
     }
-    settle(3);
-    let c_ref = rig.normalize(&capture_settled(&rig.ref_tui));
-    let c_rust = rig.normalize(&capture_settled(&rig.rust_tui));
+    // slowF: the post-transcript settle(3) retired — the last turn's
+    // reply needle gates the state; the settled capture's
+    // grid-stability arm is the gate (verified byte-identical).
+    let (c_ref, c_rust) = cap_pair(&rig);
     dump_grid("p4-long-ref", &c_ref);
     dump_grid("p4-long-rust", &c_rust);
     export_grid_diff("p4", "long", &c_ref, &c_rust);
@@ -882,8 +1185,7 @@ fn p4b_sidebar_120_pair() {
     skip_without_ref_lane!();
     let mut rig = pair_rig_ext("p4b", COLS, "instant", false, true);
     boot_both(&mut rig);
-    let a_ref = rig.normalize(&capture_settled(&rig.ref_tui));
-    let a_rust = rig.normalize(&capture_settled(&rig.rust_tui));
+    let (a_ref, a_rust) = cap_pair(&rig);
     dump_grid("p4b-empty-ref", &a_ref);
     dump_grid("p4b-empty-rust", &a_rust);
     export_grid_diff("p4b", "empty", &a_ref, &a_rust);
@@ -892,9 +1194,10 @@ fn p4b_sidebar_120_pair() {
     rig.write_both(b"hello\r");
     let (rust_replied, ref_replied) =
         wait_both(&rig.rust_tui, &rig.ref_tui, REPLY_NEEDLE, rust_from, 30, ref_from, 60);
-    settle(3);
-    let b_ref = rig.normalize(&capture_settled(&rig.ref_tui));
-    let b_rust = rig.normalize(&capture_settled(&rig.rust_tui));
+    // slowF: the post-reply settle(3) retired — the reply needle gates
+    // the state; the settled capture's grid-stability arm is the gate
+    // (verified byte-identical).
+    let (b_ref, b_rust) = cap_pair(&rig);
     dump_grid("p4b-reply-ref", &b_ref);
     dump_grid("p4b-reply-rust", &b_rust);
     export_grid_diff("p4b", "reply", &b_ref, &b_rust);
@@ -1082,13 +1385,36 @@ fn geom_seed_sessions(url: &str, password: Option<&str>, project: &std::path::Pa
     }
 }
 
+/// slowF: the GeomRig twin of [`cap_pair`] — both ends' settled
+/// captures run as scope legs (the optional TUI handles resolved
+/// first), then both grids normalize.
+fn cap_pair_geom(rig: &GeomRig) -> (String, String) {
+    let started = Instant::now();
+    let (ref_grid, rust_grid) = capture_settled_pair(
+        rig.ref_tui.as_ref().expect("ref tui"),
+        rig.rust_tui.as_ref().expect("rust tui"),
+    );
+    slowf_note(&format!(
+        "capture_settled_pair(geom) took={:.3}s",
+        started.elapsed().as_secs_f64()
+    ));
+    (rig.normalize(&ref_grid), rig.normalize(&rust_grid))
+}
+
 /// One geometry leg: seed, probed boot, three exported states.
 fn geom_probe(tag: &str, scenario: &str, cols: u16, rows: u16) {
+    slowf_arm(&format!("geom-{tag}"));
+    let t = Instant::now();
+    let phase = |what: &str| {
+        slowf_note(&format!("{what} (+{:.3}s)", t.elapsed().as_secs_f64()));
+    };
     let mut rig = geom_rig(tag, cols, rows);
+    phase("rig_up");
     // Boot 1: start the daemons (the ref server self-spawns on TUI
     // boot; wait for its registration to carry the password — va3's
     // first run 401'd reading it any other way).
     rig.spawn_tuis();
+    phase("boot1_tuis_spawned");
     // State home0 — first-boot PRE-SEED home (controller ruling
     // 2026-11-23): the empty-project boot home carries the wordmark on
     // both ends at 40x12 (va3 boot1 grids), so G-466.2 (ref two-line
@@ -1096,60 +1422,111 @@ fn geom_probe(tag: &str, scenario: &str, cols: u16, rows: u16) {
     // regularized tripwire until fixed. The post-seed boot-2 home can
     // settle into a wordmark-less composer layout (observed va4 first
     // round), which is why the pre-seed capture exists — do NOT paper
-    // over the shape with a normalization. CAPTURE EARLY: fixed 5s
-    // after spawn, BEFORE the API/registration waits — the boot hero
-    // wordmark is cleared ~8-10s after spawn on BOTH ends, and cold
-    // ref registration alone can burn past that window (va4 rounds
-    // 1-3 lost the state exactly this way; the va3 repro kept it only
-    // because its capture preceded the slow waits).
-    settle(5);
+    // over the shape with a normalization.
+    //
+    // slowF (2026-11-28): the fixed 5 s pre-capture settle retired —
+    // the capture below polls for the boot face itself (the hero
+    // paints ~2-5 s after spawn and clears ~8-10 s; polling from t+0
+    // catches it in-window either way). At <=16 cols the wordmark hero
+    // STRUCTURALLY cannot fit (va3 grid evidence: both ends degrade
+    // to the composer face), and the old hero poll burned its FULL
+    // 30 s window per end on that leg (the geom10 baseline: 60 s of
+    // pure timeout, `took=30.0s hero=false` x2 in the per-wait
+    // table) — the narrow leg polls the "Ask" composer face instead
+    // (the same needle the boot-2 state-A gate uses at that width).
     assert!(rig.alive(), "GEOM rig RED: a TUI died before state home0");
+    let boot1_needle: &str = if cols <= 16 { "Ask" } else { "█▀▀█" };
+    // slowF: the <=16-col leg takes a 2 s beat AFTER the "Ask" face —
+    // the composer's BOTTOM row (the truncated suggestion row under
+    // "Ask a") paints ~1-3 s later; the old full-timeout capture had
+    // it settled, and round 1's beatless cut exported the ref row
+    // blank (a false 1-row diff). The >=40 legs need no beat (the
+    // hero is the face; its lifecycle covers the paint).
+    let narrow_beat = cols <= 16;
     // CAPTURE-WITH-RETRY: the boot hero paints a few seconds AFTER
     // spawn AND flickers on the wire (va4 diag rounds: the screen
     // carries the wordmark at one screen_text() call, hero-less at the
     // next microseconds later, back again after; fixed marks and
     // condition-then-capture both lose it) — so the capture retries
-    // until the CAPTURED GRID itself carries the hero on each end
+    // until the CAPTURED GRID itself carries the boot face on each end
     // (bounded 30s; the whatever-state-at-timeout exports as-is, no
     // content assertion — the G-466.2 diff rides the export either
     // way). This is a settle-class condition wait, the same license
     // as s3's selection-dot poll.
-    let capture_with_hero = |tui: Option<&TuiProcess>| -> String {
+    let capture_boot_face = |tui: Option<&TuiProcess>| -> String {
+        let started = Instant::now();
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             let grid = tui.expect("tui").screen_text();
-            if grid.contains("█▀▀█") || Instant::now() > deadline {
+            if grid.contains(boot1_needle) || Instant::now() > deadline {
+                if narrow_beat {
+                    settle(2);
+                    let settled = tui.expect("tui").screen_text();
+                    slowf_note(&format!(
+                        "capture_boot_face({boot1_needle:?}) took={:.3}s hit={} (narrow beat)",
+                        started.elapsed().as_secs_f64(),
+                        settled.contains(boot1_needle)
+                    ));
+                    return settled;
+                }
+                slowf_note(&format!(
+                    "capture_boot_face({boot1_needle:?}) took={:.3}s hit={}",
+                    started.elapsed().as_secs_f64(),
+                    grid.contains(boot1_needle)
+                ));
                 return grid;
             }
             std::thread::sleep(Duration::from_millis(100));
         }
     };
-    let h0_ref = rig.normalize(&capture_with_hero(rig.ref_tui.as_ref()));
-    let h0_rust = rig.normalize(&capture_with_hero(rig.rust_tui.as_ref()));
+    let h0_ref = rig.normalize(&capture_boot_face(rig.ref_tui.as_ref()));
+    let h0_rust = rig.normalize(&capture_boot_face(rig.rust_tui.as_ref()));
+    phase("home0_captured");
     dump_grid(&format!("{scenario}-home0-ref"), &h0_ref);
     dump_grid(&format!("{scenario}-home0-rust"), &h0_rust);
     export_grid_diff(scenario, "home0", &h0_ref, &h0_rust);
+    let t_api = Instant::now();
     assert!(
         geom_wait_api(&rig.rust_url, rig.rust_password.as_deref()),
         "GEOM rig RED: rust API never came up"
     );
+    slowf_note(&format!(
+        "geom_wait_api(rust) took={:.3}s",
+        t_api.elapsed().as_secs_f64()
+    ));
+    let t_reg = Instant::now();
     let deadline = Instant::now() + Duration::from_secs(120);
     while rig.refbox.ref_registration().get("password").is_none() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(500));
     }
+    slowf_note(&format!(
+        "ref registration poll took={:.3}s",
+        t_reg.elapsed().as_secs_f64()
+    ));
     rig.ref_password =
         rig.refbox.ref_registration().get("password").and_then(|v| v.as_str()).map(str::to_owned);
+    let t_ref_api = Instant::now();
     assert!(
         geom_wait_api(&rig.ref_url, rig.ref_password.as_deref()),
         "GEOM rig RED: ref API never came up (password read: {})",
         rig.ref_password.is_some()
     );
+    slowf_note(&format!(
+        "geom_wait_api(ref) took={:.3}s",
+        t_ref_api.elapsed().as_secs_f64()
+    ));
     geom_seed_sessions(&rig.rust_url, rig.rust_password.as_deref(), &rig.rust.project);
     geom_seed_sessions(&rig.ref_url, rig.ref_password.as_deref(), &rig.refbox.project);
+    phase("sessions_seeded");
     rig.stop_tuis();
-    settle(2);
+    phase("boot1_tuis_stopped");
+    // slowF: the fixed 2 s inter-boot settle retired — the TUIs are
+    // already stopped (the daemons keep serving; the supervisors own
+    // the reaping), and the boot-2 face poll below is the condition
+    // the beat was approximating.
     // Boot 2: the probed boot, with the seeded history.
     rig.spawn_tuis();
+    phase("boot2_tuis_spawned");
     // State A — home. Rig health (settle class): condition-wait each
     // end's boot face — the hero wordmark at >=40 cols paints a few
     // seconds after spawn and persists (G-466.2's stage; fixed marks
@@ -1160,11 +1537,16 @@ fn geom_probe(tag: &str, scenario: &str, cols: u16, rows: u16) {
     let needle_text: &str = if cols <= 16 { "Ask" } else { "█▀▀█" };
     let face =
         |t: Option<&TuiProcess>| t.as_ref().is_some_and(|t| t.screen_text().contains(needle_text));
+    let t_face = Instant::now();
     let deadline = Instant::now() + Duration::from_secs(30);
     while !(face(rig.rust_tui.as_ref()) && face(rig.ref_tui.as_ref())) && Instant::now() < deadline
     {
         std::thread::sleep(Duration::from_millis(250));
     }
+    slowf_note(&format!(
+        "boot2 face({needle_text:?}) poll took={:.3}s",
+        t_face.elapsed().as_secs_f64()
+    ));
     let rust_a = face(rig.rust_tui.as_ref());
     let ref_a = face(rig.ref_tui.as_ref());
     assert!(rig.alive(), "GEOM rig RED: a TUI died before state A");
@@ -1184,28 +1566,80 @@ fn geom_probe(tag: &str, scenario: &str, cols: u16, rows: u16) {
     let ref_needle: &[u8] = if cols <= 16 { b"S" } else { b"Alpha" };
     let ref_b_from = rig.ref_tui.as_ref().map(TuiProcess::raw_len).unwrap_or(0);
     rig.write_both(b"\x18l");
+    let t_dialog = Instant::now();
     let ref_b_alpha = rig.ref_tui.as_ref().expect("ref tui").wait_for(
         ref_needle,
         ref_b_from,
         Duration::from_secs(10),
     );
-    settle(2);
+    slowf_note(&format!(
+        "dialog ref wait_for({:?}) took={:.3}s ok={ref_b_alpha}",
+        String::from_utf8_lossy(ref_needle),
+        t_dialog.elapsed().as_secs_f64()
+    ));
+    if cols > 16 {
+        // slowF: the rust dialog's MOUNT is needle-gated on the shared
+        // header face ("Sessions for project" — the G-466 zero-row
+        // viewport means the rust dialog's ROWS cannot be the needle;
+        // the header renders on both ends), replacing the fixed 2 s
+        // beat. The 10x6 leg keeps the beat: the header truncates to
+        // single glyphs there.
+        let t_mount = Instant::now();
+        let mounted = |t: Option<&TuiProcess>| {
+            t.as_ref().is_some_and(|t| t.screen_text().contains("Sessions for"))
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !(mounted(rig.rust_tui.as_ref()) && mounted(rig.ref_tui.as_ref()))
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        slowf_note(&format!(
+            "dialog mount poll took={:.3}s",
+            t_mount.elapsed().as_secs_f64()
+        ));
+    } else {
+        settle(2);
+    }
     assert!(rig.alive(), "GEOM rig RED: a TUI died before state B");
-    let b_ref = rig.normalize(&capture_settled(rig.ref_tui.as_ref().expect("ref tui")));
-    let b_rust = rig.normalize(&capture_settled(rig.rust_tui.as_ref().expect("rust tui")));
+    let (b_ref, b_rust) = cap_pair_geom(&rig);
     dump_grid(&format!("{scenario}-dialog-ref"), &b_ref);
     dump_grid(&format!("{scenario}-dialog-rust"), &b_rust);
     export_grid_diff(scenario, "dialog", &b_ref, &b_rust);
     // State C — Enter (dialog action on the selected row).
     rig.write_both(b"\r");
-    settle(3);
+    if cols > 16 {
+        // slowF: the post-enter wait is the dialog's DISAPPEARANCE (the
+        // "Sessions for" header leaves the grid when the dialog closes
+        // and the home-with-session returns — the two-phase
+        // event-gated form; both ends share the header face),
+        // replacing the fixed 3 s beat. The 10x6 leg keeps the beat
+        // (glyph-degraded faces, no needle-safe row).
+        let t_close = Instant::now();
+        let closed = |t: Option<&TuiProcess>| {
+            !t.as_ref().is_some_and(|t| t.screen_text().contains("Sessions for"))
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !(closed(rig.rust_tui.as_ref()) && closed(rig.ref_tui.as_ref()))
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        slowf_note(&format!(
+            "dialog close poll took={:.3}s",
+            t_close.elapsed().as_secs_f64()
+        ));
+    } else {
+        settle(3);
+    }
     assert!(rig.alive(), "GEOM rig RED: a TUI died before state C");
-    let c_ref = rig.normalize(&capture_settled(rig.ref_tui.as_ref().expect("ref tui")));
-    let c_rust = rig.normalize(&capture_settled(rig.rust_tui.as_ref().expect("rust tui")));
+    let (c_ref, c_rust) = cap_pair_geom(&rig);
     dump_grid(&format!("{scenario}-enter-ref"), &c_ref);
     dump_grid(&format!("{scenario}-enter-rust"), &c_rust);
     export_grid_diff(scenario, "enter", &c_ref, &c_rust);
+    slowf_note("geom: dropping rig");
     drop(rig);
+    slowf_note("geom: rig dropped");
     assert!(
         rust_a && ref_a,
         "GEOM RED (rig): probed boot settle needle (wordmark / Ask) rust={rust_a} ref={ref_a}"
@@ -1220,6 +1654,192 @@ fn geom_probe(tag: &str, scenario: &str, cols: u16, rows: u16) {
 fn geom10_narrow_extreme_pair() {
     skip_without_ref_lane!();
     geom_probe("geom10", "geom10", 10, 6);
+}
+
+// ---------------------------------------------------------------------------
+// TEMPORARY slowF probe (env-gated — NEVER part of the battery): the
+// geometry family's resize-vs-respawn evaluation. The acceptance bar is
+// ABSOLUTE: a resized app's captured state must be BYTE-IDENTICAL to the
+// fresh-boot state at the same geometry; any divergence = NO-GO (the
+// boots stay). Stripped (or promoted, with the 8-family protocol
+// re-verification) before the final commit.
+// ---------------------------------------------------------------------------
+
+/// The boot part of `geom_probe` up to state A (home): fresh rig, boot 1
+/// (daemons up), API/registration waits, session seeding, boot 2, the
+/// face needle, the immediate capture. Returns (ref, rust) normalized
+/// grids.
+fn geom_fresh_state_a(tag: &str, cols: u16, rows: u16) -> (String, String) {
+    slowf_arm(&format!("fresh-{tag}"));
+    let mut rig = geom_rig(tag, cols, rows);
+    rig.spawn_tuis();
+    assert!(rig.alive(), "probe RED: a TUI died (boot 1, {tag})");
+    // The same width-dependent boot-face poll as geom_probe (the hero
+    // cannot fit at <=16 cols; the "Ask" composer face is that leg's
+    // boot face, plus the narrow 2 s beat for the bottom row).
+    let boot1_needle: &str = if cols <= 16 { "Ask" } else { "█▀▀█" };
+    let narrow_beat = cols <= 16;
+    let drain = |tui: Option<&TuiProcess>| -> String {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let grid = tui.expect("tui").screen_text();
+            if grid.contains(boot1_needle) || Instant::now() > deadline {
+                if narrow_beat {
+                    settle(2);
+                    return tui.expect("tui").screen_text();
+                }
+                return grid;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    let _ = drain(rig.ref_tui.as_ref());
+    let _ = drain(rig.rust_tui.as_ref());
+    assert!(
+        geom_wait_api(&rig.rust_url, rig.rust_password.as_deref()),
+        "probe RED: rust API never came up ({tag})"
+    );
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while rig.refbox.ref_registration().get("password").is_none() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    rig.ref_password =
+        rig.refbox.ref_registration().get("password").and_then(|v| v.as_str()).map(str::to_owned);
+    assert!(
+        geom_wait_api(&rig.ref_url, rig.ref_password.as_deref()),
+        "probe RED: ref API never came up ({tag})"
+    );
+    geom_seed_sessions(&rig.rust_url, rig.rust_password.as_deref(), &rig.rust.project);
+    geom_seed_sessions(&rig.ref_url, rig.ref_password.as_deref(), &rig.refbox.project);
+    rig.stop_tuis();
+    settle(2);
+    rig.spawn_tuis();
+    let (a_ref, a_rust) = geom_state_a_capture(&mut rig, cols);
+    drop(rig);
+    (a_ref, a_rust)
+}
+
+/// State A's face needle + immediate capture (shared by the fresh
+/// reference legs and the resize probe).
+fn geom_state_a_capture(rig: &mut GeomRig, cols: u16) -> (String, String) {
+    let needle_text: &str = if cols <= 16 { "Ask" } else { "█▀▀█" };
+    let face = |t: Option<&TuiProcess>| {
+        t.as_ref().is_some_and(|t| t.screen_text().contains(needle_text))
+    };
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !(face(rig.rust_tui.as_ref()) && face(rig.ref_tui.as_ref())) && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    let ref_grid = rig.normalize(&rig.ref_tui.as_ref().expect("ref tui").screen_text());
+    let rust_grid = rig.normalize(&rig.rust_tui.as_ref().expect("rust tui").screen_text());
+    (ref_grid, rust_grid)
+}
+
+/// Resize both ends, wait out the post-resize repaint, capture state A
+/// at the new geometry (the same face-needle discipline).
+fn geom_resize_capture(rig: &mut GeomRig, cols: u16, rows: u16) -> (String, String) {
+    let t0 = Instant::now();
+    rig.rust_tui.as_mut().expect("rust tui").resize(cols, rows);
+    rig.ref_tui.as_mut().expect("ref tui").resize(cols, rows);
+    let (a_ref, a_rust) = geom_state_a_capture(rig, cols);
+    slowf_note(&format!(
+        "resize->{cols}x{rows} face+capture took={:.3}s",
+        t0.elapsed().as_secs_f64()
+    ));
+    (a_ref, a_rust)
+}
+
+#[test]
+fn slowf_geom_resize_probe() {
+    skip_without_ref_lane!();
+    if std::env::var("OC_SLOWF_GEOM_PROBE").is_err() {
+        eprintln!("slowf_geom_resize_probe: skipped (OC_SLOWF_GEOM_PROBE unset)");
+        return;
+    }
+    // Fresh reference state A per geometry.
+    let (f160_ref, f160_rust) = geom_fresh_state_a("sf-p160", 160, 40);
+    let (f40_ref, f40_rust) = geom_fresh_state_a("sf-p40", 40, 12);
+    let (f10_ref, f10_rust) = geom_fresh_state_a("sf-p10", 10, 6);
+    // The resize rig: the full geom40 boot path (boot 1 at 40x12, seed,
+    // boot 2), its own state A at 40, then resize to each geometry.
+    slowf_arm("resize-rig");
+    let mut rig = geom_rig("sf-rz", 40, 12);
+    rig.spawn_tuis();
+    assert!(rig.alive(), "probe RED: a TUI died (resize rig boot 1)");
+    let drain = |tui: Option<&TuiProcess>| -> String {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let grid = tui.expect("tui").screen_text();
+            if grid.contains("█▀▀█") || Instant::now() > deadline {
+                return grid;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    let _ = drain(rig.ref_tui.as_ref());
+    let _ = drain(rig.rust_tui.as_ref());
+    assert!(
+        geom_wait_api(&rig.rust_url, rig.rust_password.as_deref()),
+        "probe RED: rust API never came up (resize rig)"
+    );
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while rig.refbox.ref_registration().get("password").is_none() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    rig.ref_password =
+        rig.refbox.ref_registration().get("password").and_then(|v| v.as_str()).map(str::to_owned);
+    assert!(
+        geom_wait_api(&rig.ref_url, rig.ref_password.as_deref()),
+        "probe RED: ref API never came up (resize rig)"
+    );
+    geom_seed_sessions(&rig.rust_url, rig.rust_password.as_deref(), &rig.rust.project);
+    geom_seed_sessions(&rig.ref_url, rig.ref_password.as_deref(), &rig.refbox.project);
+    rig.stop_tuis();
+    settle(2);
+    rig.spawn_tuis();
+    // Sanity first: this rig's own 40x12 state A vs the fresh 40x12
+    // reference (a divergence here means the COMPARISON baseline itself
+    // is unstable, not the resize).
+    let (rz40_ref, rz40_rust) = geom_state_a_capture(&mut rig, 40);
+    dump_grid("sf-rz40-native-ref", &rz40_ref);
+    dump_grid("sf-rz40-native-rust", &rz40_rust);
+    let report = |label: &str, fresh: &str, resized: &str| {
+        let same = fresh == resized;
+        let first_diff = fresh
+            .lines()
+            .zip(resized.lines())
+            .enumerate()
+            .find(|(_i, (a, b))| a != b)
+            .map(|(i, (a, b))| format!("  line {}: fresh={a:?} resized={b:?}", i + 1))
+            .unwrap_or_else(|| "  (length or tail difference)".to_owned());
+        slowf_note(&format!(
+            "RESIZE VERDICT {label}: byte_identical={same}{}",
+            if same { String::new() } else { format!("\n{first_diff}") }
+        ));
+        eprintln!("[slowF probe] {label}: byte_identical={same}");
+    };
+    report("40x12 native-vs-fresh REF", &f40_ref, &rz40_ref);
+    report("40x12 native-vs-fresh RUST", &f40_rust, &rz40_rust);
+    // Resize 40x12 -> 160x40.
+    let (rz160_ref, rz160_rust) = geom_resize_capture(&mut rig, 160, 40);
+    dump_grid("sf-rz160-ref", &rz160_ref);
+    dump_grid("sf-rz160-rust", &rz160_rust);
+    report("160x40 resized-vs-fresh REF", &f160_ref, &rz160_ref);
+    report("160x40 resized-vs-fresh RUST", &f160_rust, &rz160_rust);
+    // Resize 160x40 -> 10x6.
+    let (rz10_ref, rz10_rust) = geom_resize_capture(&mut rig, 10, 6);
+    dump_grid("sf-rz10-ref", &rz10_ref);
+    dump_grid("sf-rz10-rust", &rz10_rust);
+    report("10x6 resized-vs-fresh REF", &f10_ref, &rz10_ref);
+    report("10x6 resized-vs-fresh RUST", &f10_rust, &rz10_rust);
+    // Resize back to 40x12 (hysteresis).
+    let (rz40b_ref, rz40b_rust) = geom_resize_capture(&mut rig, 40, 12);
+    dump_grid("sf-rz40-back-ref", &rz40b_ref);
+    dump_grid("sf-rz40-back-rust", &rz40b_rust);
+    report("40x12 round-trip-vs-fresh REF", &f40_ref, &rz40b_ref);
+    report("40x12 round-trip-vs-fresh RUST", &f40_rust, &rz40b_rust);
+    drop(rig);
 }
 
 #[test]
@@ -1283,7 +1903,10 @@ fn p5_selection_copy_toast_pair() {
     rig.write_both(b"hello\r");
     let (rust_replied, ref_replied) =
         wait_both(&rig.rust_tui, &rig.ref_tui, REPLY_NEEDLE, rust_from, 30, ref_from, 60);
-    settle(2);
+    // slowF: the post-reply settle(2) retired — the reply needle gates
+    // the drag anchor lookup (the needle is ON the grid the moment the
+    // anchor is computed); the toast waits that follow own their
+    // timing. Verified byte-identical (the p5sel-selectcopy export).
     // Each end drags over ITS OWN reply row (the anchor cell sits a
     // couple of cells inside the needle so the press lands on text, not
     // a rail; the span crosses cells — a real crossing drag).
@@ -1304,12 +1927,21 @@ fn p5_selection_copy_toast_pair() {
     // waits are TIMING ONLY: the rust side's face is never judged
     // in-test, its presence rides the exported diff.
     let wait_toast = |tui: &TuiProcess| -> bool {
+        let started = Instant::now();
         let deadline = Instant::now() + Duration::from_secs(6);
         loop {
             if tui.screen_text().contains("Copied to clipboard") {
+                slowf_note(&format!(
+                    "p5 wait_toast took={:.3}s ok=true",
+                    started.elapsed().as_secs_f64()
+                ));
                 return true;
             }
             if Instant::now() > deadline {
+                slowf_note(&format!(
+                    "p5 wait_toast took={:.3}s ok=false",
+                    started.elapsed().as_secs_f64()
+                ));
                 return false;
             }
             std::thread::sleep(Duration::from_millis(100));

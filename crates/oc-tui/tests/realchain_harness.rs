@@ -952,6 +952,19 @@ impl TuiProcess {
         self.master.flush().expect("flush keys");
     }
 
+    /// slowF geometry evaluation — resize the PTY: TIOCSWINSZ on the
+    /// master (the kernel delivers SIGWINCH to the slave's foreground
+    /// process group — the app) and the vt grid tracker follows the
+    /// new geometry. Additive-only: no existing family calls this.
+    pub fn resize(&mut self, cols: u16, rows: u16) {
+        unsafe {
+            let winsize =
+                libc::winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
+            libc::ioctl(self.master.as_raw_fd(), libc::TIOCSWINSZ, &winsize);
+        }
+        self.vt.lock().expect("vt").set_size(rows, cols);
+    }
+
     /// va19 — answer the mini frontend's `CSI 6n` cursor probe (the
     /// mini's footer viewport docks at the probed row; a pty with no
     /// answering terminal behind it breaks the rust mini's layout —
