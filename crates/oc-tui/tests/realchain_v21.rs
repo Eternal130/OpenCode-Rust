@@ -313,6 +313,12 @@ export default {
     };
     (async () => {
       const target = await waitSession();
+      // The dwell BEFORE the navigate: the session row appears the
+      // moment the exchange's POST admits the prompt — navigating
+      // home at that instant hides the ref's session transcript
+      // before the reply's needle lands (the exchange assert fires).
+      // 6 s covers the reply's settle at the rig's instant pace.
+      await new Promise((resolve) => setTimeout(resolve, 6000));
       try {
         ctx.ui.router.navigate({ type: "home" });
       } catch {}
