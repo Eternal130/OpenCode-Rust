@@ -79,18 +79,27 @@ impl V21CRig {
     /// Rig-health needle wait (the observed needle only settles the
     /// capture; the face's judgment rides the export).
     fn wait_both_screens(&self, needle: &str, secs: u64) -> bool {
-        for tui in [&self.rust_tui, &self.ref_tui] {
-            let deadline = std::time::Instant::now() + Duration::from_secs(secs);
-            let mut ok = tui.screen_text().contains(needle);
-            while !ok && std::time::Instant::now() < deadline {
-                std::thread::sleep(Duration::from_millis(100));
-                ok = tui.screen_text().contains(needle);
-            }
-            if !ok {
-                return false;
-            }
-        }
-        true
+        // 2026-11-27 slow-audit fix A (restored after fix C): wait BOTH
+        // ends CONCURRENTLY — the fixture's phase timeline is now CHAINED
+        // (each phase arms after the previous promise settles, fix C), so
+        // the wait no longer carries any implicit alignment duty.
+        std::thread::scope(|scope| {
+            let legs: Vec<_> = [&self.rust_tui, &self.ref_tui]
+                .into_iter()
+                .map(|tui| {
+                    scope.spawn(move || {
+                        let deadline = std::time::Instant::now() + Duration::from_secs(secs);
+                        let mut ok = tui.screen_text().contains(needle);
+                        while !ok && std::time::Instant::now() < deadline {
+                            std::thread::sleep(Duration::from_millis(100));
+                            ok = tui.screen_text().contains(needle);
+                        }
+                        ok
+                    })
+                })
+                .collect();
+            legs.into_iter().all(|leg| leg.join().unwrap_or(false))
+        })
     }
 }
 
@@ -214,6 +223,16 @@ const FIXTURES: &[(&str, &str)] = &[
   setup(ctx) {
     const report = (tag) =>
       ctx.ui.toast.show({ title: "v21c sel " + tag, message: "", duration: 600000 });
+    // 2026-11-27 slow-audit fix C: the three select phases used ABSOLUTE
+    // wall-clock delays (t+6s / t+141s / t+231s) and only ever passed
+    // because the rig's SERIAL wait's ref-leg latency happened to cover
+    // the gaps (the marker window of 90s < the 134s gap to t+141s —
+    // a flaky landmine: any ref speedup turned it red, and the concurrent
+    // wait exposed it immediately). The timeline is now CHAINED: each
+    // phase arms 2s after the PREVIOUS phase's promise settles (the esc
+    // confirmation the rig's marker already needles) — explicit
+    // synchronization, no absolute clock races, ~215s of dead dwell
+    // eliminated.
     setTimeout(() => {
       ctx.ui.dialog
         .select({
@@ -231,9 +250,7 @@ const FIXTURES: &[(&str, &str)] = &[
         })
         .then((value) => {
           report("search " + String(value));
-        });
-    }, 6000);
-    setTimeout(() => {
+          setTimeout(() => {
       ctx.ui.dialog
         .select({
           title: "v21c grouped",
@@ -245,21 +262,23 @@ const FIXTURES: &[(&str, &str)] = &[
         })
         .then((value) => {
           report("grouped " + String(value));
+          setTimeout(() => {
+            ctx.ui.dialog
+              .select({
+                title: "v21c plain",
+                options: [
+                  { title: "Plain One", value: "plain1" },
+                  { title: "Plain Two", value: "plain2" },
+                ],
+              })
+              .then((value) => {
+                report("plain " + String(value));
+              });
+          }, 2000);
         });
-    }, 141000);
-    setTimeout(() => {
-      ctx.ui.dialog
-        .select({
-          title: "v21c plain",
-          options: [
-            { title: "Plain One", value: "plain1" },
-            { title: "Plain Two", value: "plain2" },
-          ],
-        })
-        .then((value) => {
-          report("plain " + String(value));
+    }, 2000);
         });
-    }, 231000);
+    }, 6000);
     return () => {};
   },
 };

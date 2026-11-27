@@ -82,18 +82,26 @@ impl V21BRig {
     /// Rig-health needle wait (the observed needle only settles the
     /// capture; the face's judgment rides the export).
     fn wait_both_screens(&self, needle: &str, secs: u64) -> bool {
-        for tui in [&self.rust_tui, &self.ref_tui] {
-            let deadline = std::time::Instant::now() + Duration::from_secs(secs);
-            let mut ok = tui.screen_text().contains(needle);
-            while !ok && std::time::Instant::now() < deadline {
-                std::thread::sleep(Duration::from_millis(100));
-                ok = tui.screen_text().contains(needle);
-            }
-            if !ok {
-                return false;
-            }
-        }
-        true
+        // 2026-11-27 slow-audit fix A: wait BOTH ends CONCURRENTLY (the
+        // serial for-loop doubled the wall-clock per state — the ref leg
+        // only started after the rust leg's needle landed).
+        std::thread::scope(|scope| {
+            let legs: Vec<_> = [&self.rust_tui, &self.ref_tui]
+                .into_iter()
+                .map(|tui| {
+                    scope.spawn(move || {
+                        let deadline = std::time::Instant::now() + Duration::from_secs(secs);
+                        let mut ok = tui.screen_text().contains(needle);
+                        while !ok && std::time::Instant::now() < deadline {
+                            std::thread::sleep(Duration::from_millis(100));
+                            ok = tui.screen_text().contains(needle);
+                        }
+                        ok
+                    })
+                })
+                .collect();
+            legs.into_iter().all(|leg| leg.join().unwrap_or(false))
+        })
     }
 }
 
@@ -381,7 +389,11 @@ export default {
         message: "v21b plain same-family",
         duration: 600000,
       });
-      await new Promise((resolve) => setTimeout(resolve, 40000));
+      // 2026-11-27 slow-audit fix B: the 40s hold was pure padding (the toast's
+      // display is already needle-confirmed on BOTH ends; duration 600000
+      // means nothing expires during the hold) — 5s covers the pre-navigate
+      // quiescence the hold was actually buying.
+      await new Promise((resolve) => setTimeout(resolve, 5000));
       try {
         ctx.ui.router.navigate({ type: "home" });
       } catch {}
@@ -467,7 +479,11 @@ export default {
         message: parts.join(" ; "),
         duration: 600000,
       });
-      await new Promise((resolve) => setTimeout(resolve, 40000));
+      // 2026-11-27 slow-audit fix B: the 40s hold was pure padding (the toast's
+      // display is already needle-confirmed on BOTH ends; duration 600000
+      // means nothing expires during the hold) — 5s covers the pre-navigate
+      // quiescence the hold was actually buying.
+      await new Promise((resolve) => setTimeout(resolve, 5000));
       try {
         ctx.ui.router.navigate({ type: "home" });
       } catch {}
@@ -544,7 +560,11 @@ export default {
         message: current,
         duration: 600000,
       });
-      await new Promise((resolve) => setTimeout(resolve, 40000));
+      // 2026-11-27 slow-audit fix B: the 40s hold was pure padding (the toast's
+      // display is already needle-confirmed on BOTH ends; duration 600000
+      // means nothing expires during the hold) — 5s covers the pre-navigate
+      // quiescence the hold was actually buying.
+      await new Promise((resolve) => setTimeout(resolve, 5000));
       try {
         ctx.ui.router.navigate({ type: "plugin", name: "v21b-route", data: { k: 1 } });
       } catch {}
