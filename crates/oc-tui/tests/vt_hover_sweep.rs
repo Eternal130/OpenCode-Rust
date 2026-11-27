@@ -479,7 +479,11 @@ fn probe_hover(
         }
     }
     let verdict = observed.unwrap_or(Response::NoChange);
-    note_probe(verdict == Response::NoChange, phase1_done.duration_since(sent), phase1_done.elapsed());
+    note_probe(
+        verdict == Response::NoChange,
+        phase1_done.duration_since(sent),
+        phase1_done.elapsed(),
+    );
     verdict
 }
 
