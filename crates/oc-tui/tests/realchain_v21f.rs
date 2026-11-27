@@ -863,8 +863,8 @@ fn capture_pair_state(
 fn resume_menu_states(
     rust: &Sandbox,
     refbox: &Sandbox,
-    rust_tui: &TuiProcess,
-    ref_tui: &TuiProcess,
+    rust_tui: &mut TuiProcess,
+    ref_tui: &mut TuiProcess,
 ) {
     rust_tui.write(b"\x1b[B");
     ref_tui.write(b"\x1b[B");
