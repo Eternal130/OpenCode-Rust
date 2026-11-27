@@ -22,6 +22,17 @@
 //! ASSERT the main turn reaches the gateway (requests ≥ 2: title +
 //! main). The reply body itself is replay-corpus business (a strict
 //! miss is fine — arrival is the contract here).
+//!
+//! Timing contract (2026-11-27 slowC dwell audit — every wait is
+//! event-gated, no fixed padding): the plugin-load gate waits on the
+//! daemon's `/api/plugin` table (the load replies carry the hook
+//! registrations the discriminator needs — an early send would carry
+//! the plugin-less request shape and false-hit the plain corpus); the
+//! reply wait is gated by gateway ARRIVAL (a served strict miss can
+//! never render the reply needle, so its window ends at the observed
+//! miss — the RED shape, where the turn never arrives, keeps the full
+//! 60 s window); the failed turn's modal error toast is dismissed
+//! through its own escape key before teardown so the exit chord lands.
 
 #![allow(
     clippy::doc_markdown,
@@ -46,22 +57,94 @@ fn settle(secs: u64) {
     std::thread::sleep(Duration::from_secs(secs));
 }
 
-// TEMPORARY slowC lane instrumentation (per-wait breakdown; stripped
-// before commit).
-fn phase(t0: &Instant, tag: &str, what: &str) {
-    eprintln!("[slowC] {tag} +{:.3}s {what}", t0.elapsed().as_secs_f64());
+/// Wait until the daemon's plugin table (`GET /api/plugin`) reports
+/// every staged spec LOADED: pre-load, an entry's `id` falls back to
+/// the versioned config target (`pkg@ver`); once the guest's `load`
+/// reply lands, it becomes the bare plugin id the guest reported
+/// (supervisor.rs `load_entry` — the reply that also carries the hook
+/// registrations). Replaces the old fixed 8 s settle: the wait fires
+/// in one poll on a healthy boot (the daemon starts loading plugins
+/// ~2 s before the TUI's wordmark) and can never fire EARLY — a
+/// slower boot polls until the loads actually land, bounded by `cap`
+/// (the old padding as the worst case). `false` = the cap elapsed.
+fn wait_plugins_loaded(
+    server: &realchain_harness::ManagedServer,
+    specs: &[String],
+    cap: Duration,
+) -> bool {
+    let bare: Vec<String> = specs
+        .iter()
+        .map(|spec| spec.rsplit_once('@').map_or(spec.clone(), |(pkg, _)| pkg.to_owned()))
+        .collect();
+    let deadline = Instant::now() + cap;
+    while Instant::now() < deadline {
+        let (status, body) =
+            http_get(&format!("{}/api/plugin", server.url), server.password.as_deref())
+                .unwrap_or((0, String::new()));
+        let loaded = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|value| {
+                value.get("data").and_then(|data| data.as_array()).map(|rows| {
+                    rows.iter()
+                        .filter_map(|row| row.get("id").and_then(serde_json::Value::as_str))
+                        .map(str::to_owned)
+                        .collect::<Vec<String>>()
+                })
+            })
+            .is_some_and(|ids| bare.iter().all(|want| ids.contains(want)));
+        if status == 200 && loaded {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    false
+}
+
+/// The reply wait, gated by ARRIVAL: poll the needle, but stop once
+/// the gateway has SERVED the main turn a strict miss (requests ≥ 2
+/// with misses ≥ 1 — the gateway counts `requests` at serve time as
+/// hits + misses). A missed turn gets a 404 and can never render
+/// `REALCHAIN-REPLAY-OK`, so the rest of the window is pure dwell;
+/// the G-454 RED shape (the turn never ARRIVES: requests stays below
+/// 2) keeps the full window. The 2 s grace after the observed miss
+/// covers the title-missed/main-hit pairing (the reply would still
+/// stream and land inside the grace) — in this rig the title call
+/// rides the shared corpus and always hits.
+fn wait_reply_or_missed(
+    tui: &TuiProcess,
+    gateway: &Gateway,
+    from: usize,
+    window: Duration,
+) -> bool {
+    const NEEDLE: &[u8] = b"REALCHAIN-REPLAY-OK";
+    let deadline = Instant::now() + window;
+    loop {
+        let remain = deadline.saturating_duration_since(Instant::now());
+        if remain.is_zero() {
+            return false;
+        }
+        if tui.wait_for(NEEDLE, from, remain.min(Duration::from_millis(250))) {
+            return true;
+        }
+        let stats = gateway.stats();
+        let requests =
+            stats.get("requests").and_then(serde_json::Value::as_u64).unwrap_or_default();
+        let misses = stats.get("misses").and_then(serde_json::Value::as_u64).unwrap_or_default();
+        if requests >= 2 && misses >= 1 {
+            let grace =
+                deadline.saturating_duration_since(Instant::now()).min(Duration::from_secs(2));
+            return tui.wait_for(NEEDLE, from, grace);
+        }
+    }
 }
 
 /// One discriminator/regression run: boot with the staged plugin set,
 /// send `hello`, and return (replied, gateway requests, specs).
 fn run(tag: &str, only: Option<&str>, writable: bool) -> (bool, u64, Vec<String>) {
-    let t0 = Instant::now();
     let logs = worktree_dir(".test-logs");
     let gateway = Gateway::spawn_paced(&format!("g454-{tag}"), None, &default_pace());
-    phase(&t0, tag, "gateway_ready");
     let rust = sandbox(&format!("g454-{tag}"), gateway.port);
     let specs = stage_plugins_g454(&rust, false, only, writable);
-    phase(&t0, tag, "staged_plugins");
     // A PLUGIN_SPECS rename (or a filtered-out registry name) would
     // stage NOTHING and still boot plugin-less — an empty-staging
     // hollow green. The single-select cases must stage exactly one.
@@ -73,73 +156,52 @@ fn run(tag: &str, only: Option<&str>, writable: bool) -> (bool, u64, Vec<String>
     let spec_refs: Vec<&str> = specs.iter().map(String::as_str).collect();
     rust.write_config_ext(&[], "replay/claude-opus-4-7", &spec_refs);
     let server = service_start(&rust);
-    phase(&t0, tag, "daemon_up");
     let mut rust_tui = TuiProcess::spawn(&rust, 96, ROWS);
-    phase(&t0, tag, "tui_spawned");
     let booted = rust_tui.wait_for(WORDMARK, 0, Duration::from_secs(30));
     assert!(booted, "G454 {tag}: rust TUI never booted");
-    phase(&t0, tag, "wordmark");
-    // Plugin load is async — settle past the wordmark.
-    settle(8);
-    phase(&t0, tag, "settle8_done");
-    // TEMPORARY slowC probe: when did the daemon's plugin table
-    // actually report the staged plugins loaded (id resolves from the
-    // versioned target to the bare plugin id)?
-    {
-        let bare: Vec<String> = specs
-            .iter()
-            .map(|spec| spec.rsplit_once('@').map_or(spec.clone(), |(pkg, _)| pkg.to_owned()))
-            .collect();
-        let probe_start = Instant::now();
-        let mut loaded_at: Option<Duration> = None;
-        while probe_start.elapsed() < Duration::from_secs(10) {
-            let (status, body) =
-                http_get(&format!("{}/api/plugin", server.url), server.password.as_deref())
-                    .unwrap_or((0, String::new()));
-            let ids: Vec<String> = serde_json::from_str::<serde_json::Value>(&body)
-                .ok()
-                .and_then(|value| {
-                    value.get("data").and_then(|data| data.as_array()).map(|rows| {
-                        rows.iter()
-                            .filter_map(|row| row.get("id").and_then(|id| id.as_str()))
-                            .map(str::to_owned)
-                            .collect()
-                    })
-                })
-                .unwrap_or_default();
-            if status == 200 && bare.iter().all(|want| ids.contains(want)) {
-                loaded_at = Some(probe_start.elapsed());
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(200));
-        }
-        eprintln!("[slowC] {tag} plugin_table_loaded={:?} (since settle8_done)", loaded_at);
-    }
+    // Plugin load is async — the load replies (and their hook
+    // registrations) must land before the send, or the main turn
+    // would carry the plugin-less request shape and false-hit the
+    // plain corpus. Wait on the daemon's plugin table (bounded by
+    // the old 8 s padding) instead of sleeping past it.
+    let _plugins_ready = wait_plugins_loaded(&server, &specs, Duration::from_secs(8));
+    // Ordering floor for the load-reply → dispatch settle.
+    settle(1);
     let home = rust_tui.screen_text();
     dump_grid(&format!("g454-{tag}-home"), &home);
     let from = rust_tui.raw_len();
     let sent_at = Instant::now();
     rust_tui.write(b"hello\r");
-    phase(&t0, tag, "sent_hello");
-    let replied = rust_tui.wait_for(b"REALCHAIN-REPLAY-OK", from, Duration::from_secs(60));
-    phase(&t0, tag, &format!("needle_wait_done replied={replied}"));
-    settle(4);
-    phase(&t0, tag, "settle4_done");
+    let replied = wait_reply_or_missed(&rust_tui, &gateway, from, Duration::from_secs(60));
+    settle(1);
     let session = rust_tui.screen_text();
     dump_grid(&format!("g454-{tag}-session"), &session);
+    // The failed turn raises a MODAL "Session failed" error toast (the
+    // F11 lane: keystrokes swallow until dismissed — escape or ctrl+c
+    // are its dismiss keys, app.rs `error_toast_live`). A chord sent
+    // while it is up gets consumed, the exit never lands, and the
+    // teardown burns its whole grace before the kill. Dismiss the
+    // toast through its own key face (bounded; a no-op when no toast
+    // is up — the pass/replied cases exit instantly).
+    {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while Instant::now() < deadline {
+            if !rust_tui.screen_text().contains("Session failed") {
+                break;
+            }
+            rust_tui.write(b"\x1b");
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
     let stats = format!("{}", gateway.stats());
     let requests = serde_json::from_str::<serde_json::Value>(&stats)
         .ok()
         .and_then(|value| value.get("requests").and_then(serde_json::Value::as_u64))
         .unwrap_or_default();
-    phase(&t0, tag, "stats_fetched");
     let _ = server.url;
     rust_tui.shutdown(Duration::from_secs(10));
-    phase(&t0, tag, "tui_down");
     service_stop(&rust);
-    phase(&t0, tag, "service_stopped");
     drop(gateway);
-    phase(&t0, tag, "gateway_dropped");
     let _ = std::fs::write(
         logs.join(format!("g454-{tag}-verdict.txt")),
         format!(
