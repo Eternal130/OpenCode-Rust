@@ -615,6 +615,26 @@ fn wait_squashed(tui: &TuiProcess, needle: &str, secs: u64) -> bool {
     ok
 }
 
+/// The settled corpus capture for the resume pair (both ends
+/// normalized over their sandbox roots, exported to diff-reports).
+fn capture_rs_pair(
+    rust: &Sandbox,
+    refbox: &Sandbox,
+    rust_tui: &TuiProcess,
+    ref_tui: &TuiProcess,
+    state: &str,
+) {
+    let roots =
+        [refbox.root.to_string_lossy().into_owned(), rust.root.to_string_lossy().into_owned()];
+    let refs: Vec<&str> = roots.iter().map(String::as_str).collect();
+    let normalize = |grid: &str| normalize_grid(grid, &refs);
+    let ref_grid = normalize(&capture_settled(ref_tui));
+    let rust_grid = normalize(&capture_settled(rust_tui));
+    dump_grid(&format!("v21g-rs-{state}-ref"), &ref_grid);
+    dump_grid(&format!("v21g-rs-{state}-rust"), &rust_grid);
+    export_grid_diff("v21g-rs", state, &ref_grid, &rust_grid);
+}
+
 #[test]
 fn v21g_resume_pair() {
     skip_without_ref_lane!();
@@ -646,22 +666,6 @@ fn v21g_resume_pair() {
     let server = service_start(&rust);
     let _ = server.url;
 
-    let capture = |rust: &Sandbox,
-                   refbox: &Sandbox,
-                   rust_tui: &TuiProcess,
-                   ref_tui: &TuiProcess,
-                   state: &str| {
-        let roots =
-            [refbox.root.to_string_lossy().into_owned(), rust.root.to_string_lossy().into_owned()];
-        let refs: Vec<&str> = roots.iter().map(String::as_str).collect();
-        let normalize = |grid: &str| normalize_grid(grid, &refs);
-        let ref_grid = normalize(&capture_settled(ref_tui));
-        let rust_grid = normalize(&capture_settled(rust_tui));
-        dump_grid(&format!("v21g-rs-{state}-ref"), &ref_grid);
-        dump_grid(&format!("v21g-rs-{state}-rust"), &rust_grid);
-        export_grid_diff("v21g-rs", state, &ref_grid, &rust_grid);
-    };
-
     // Phase 1 — the first mini pair runs the subagent round-trip (the
     // streamed reply's chunks continue ONE row — G-540's face).
     let mut rust_command = rust.command(&realchain_harness::opencode_bin_pub());
@@ -692,7 +696,7 @@ fn v21g_resume_pair() {
         ref_tui.screen_text()
     );
     settle(3);
-    capture(&rust, &refbox, &rust_tui, &ref_tui, "first-turn-settled");
+    capture_rs_pair(&rust, &refbox, &rust_tui, &ref_tui, "first-turn-settled");
     // The first pair EXITS (the two-press chord); the SERVERS stay up.
     rust_tui.write(b"\x03\x03");
     ref_tui.write(b"\x03\x03");
@@ -722,17 +726,17 @@ fn v21g_resume_pair() {
         ref_tui.screen_text()
     );
     settle(5);
-    capture(&rust, &refbox, &rust_tui, &ref_tui, "resume-settled");
+    capture_rs_pair(&rust, &refbox, &rust_tui, &ref_tui, "resume-settled");
     // The menu face states: `down` opens the subagent menu; esc
     // closes it.
     rust_tui.write(b"\x1b[B");
     ref_tui.write(b"\x1b[B");
     settle(2);
-    capture(&rust, &refbox, &rust_tui, &ref_tui, "resume-menu");
+    capture_rs_pair(&rust, &refbox, &rust_tui, &ref_tui, "resume-menu");
     rust_tui.write(b"\x1b");
     ref_tui.write(b"\x1b");
     settle(2);
-    capture(&rust, &refbox, &rust_tui, &ref_tui, "resume-menu-esc");
+    capture_rs_pair(&rust, &refbox, &rust_tui, &ref_tui, "resume-menu-esc");
     rust_tui.shutdown(Duration::from_secs(10));
     ref_tui.shutdown(Duration::from_secs(10));
     ref_service_stop(&refbox, &stage);

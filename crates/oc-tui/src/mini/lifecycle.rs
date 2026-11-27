@@ -280,7 +280,7 @@ pub struct FooterPane {
     /// settings panel's entry state (the runtime's gates stay
     /// authoritative).
     pub settings_summary: crate::components::footer::state::MiniSettings,
-    /// G-545 — the footer's transient notice (the FooterState's
+    /// G-545 — the footer's transient notice (the `FooterState`'s
     /// `notice`, footer.ts:249): `setNotice` (footer.ts:713-722)
     /// patches it, the statusline shows it (`if (notice()) return
     /// notice()`, footer.view.tsx:415 — the notice wins over the
@@ -2486,7 +2486,7 @@ impl Lifecycle {
             // trailing newline closes the final row.
             let leading = usize::from(batch.start_on_new_line && engine_tail > 0);
             let start_column = if batch.start_on_new_line { 0 } else { start_tail };
-            let widths = self.pending_row_widths(&batch);
+            let widths = Self::pending_row_widths(&batch);
             let first_width = widths.first().copied().unwrap_or(0);
             let wraps =
                 if first_width > 0 { (start_column + first_width - 1) / width.max(1) } else { 0 };
@@ -2520,7 +2520,7 @@ impl Lifecycle {
     /// The batch's row display widths (the PAINTED cells — the raw-mode
     /// CR terminator excluded, the trailing blanks KEPT: they are
     /// painted content on a continuing row).
-    fn pending_row_widths(&self, batch: &PendingRows) -> Vec<usize> {
+    fn pending_row_widths(batch: &PendingRows) -> Vec<usize> {
         let texts: Vec<String> = match &batch.rows {
             PendingRowsKind::Plain(rows) => rows.clone(),
             PendingRowsKind::Styled(rows) | PendingRowsKind::EntryStyled(rows) => rows

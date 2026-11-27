@@ -1147,36 +1147,14 @@ impl Runtime {
                         self.shown = true;
                         self.lifecycle.append(commit);
                     }
-                    let percent = model.as_ref().and_then(|model| {
-                        let limit = self.context_limits.get(model).copied().unwrap_or(0);
-                        if limit == 0 {
-                            return None;
-                        }
-                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                        let ratio = (tokens as f64 / limit as f64) * 100.0;
-                        Some((ratio + 0.5) as u32)
-                    });
-                    self.lifecycle.pane.usage =
-                        Some(super::lifecycle::UsageInfo { tokens, percent, cost });
+                    self.apply_usage_patch(model.as_ref(), tokens, cost);
                 }
                 Fold::Idle => {}
                 // G-272 — `session.step.ended`'s usage patch
                 // (transport.ts:1361-1381): the statusline's context/
                 // cost groups (footer.view.tsx:213-218, 493-500).
                 Fold::Usage { model, tokens, cost } => {
-                    let percent = model.as_ref().and_then(|model| {
-                        let limit = self.context_limits.get(model).copied().unwrap_or(0);
-                        if limit == 0 {
-                            return None;
-                        }
-                        // `Math.round((total / limit) * 100)`
-                        // (transport.ts:1376).
-                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                        let ratio = (tokens as f64 / limit as f64) * 100.0;
-                        Some((ratio + 0.5) as u32)
-                    });
-                    self.lifecycle.pane.usage =
-                        Some(super::lifecycle::UsageInfo { tokens, percent, cost });
+                    self.apply_usage_patch(model.as_ref(), tokens, cost);
                 }
                 // G-272 — the ROOT session's rename
                 // (`input.onSessionTitle`, transport.ts:1036-1039 →
@@ -1388,8 +1366,8 @@ impl Runtime {
             // transport's pending (`mergePending`, :620-630) so the
             // `session.inbox.delivered` event renders the user row
             // (the promoted fast path renders immediately).
-            Ok(info) if !info.is_null() => match self.transport.merge_pending(&info) {
-                Fold::Commits(commits) => {
+            Ok(info) if !info.is_null() => {
+                if let Fold::Commits(commits) = self.transport.merge_pending(&info) {
                     for commit in commits {
                         if self.settings.commit_visible(&commit) {
                             self.shown = true;
@@ -1397,8 +1375,7 @@ impl Runtime {
                         }
                     }
                 }
-                _ => {}
-            },
+            }
             Ok(_) => {}
             Err(error) => {
                 self.lifecycle.append(Commit::error(&error));
@@ -1407,6 +1384,27 @@ impl Runtime {
             }
         }
         self.settle_turn().await;
+    }
+
+    /// G-272/G-540 — the step's usage patch (transport.ts:1371-1380):
+    /// the summed tokens with the step model for the percent's context
+    /// limit (`Math.round((total / limit) * 100)`) and the turn's cost.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)] // terminal-bounded token counts; the ref computes in JS number space
+    fn apply_usage_patch(
+        &mut self,
+        model: Option<&(String, String)>,
+        tokens: u64,
+        cost: Option<f64>,
+    ) {
+        let percent = model.and_then(|model| {
+            let limit = self.context_limits.get(model).copied().unwrap_or(0);
+            if limit == 0 {
+                return None;
+            }
+            let ratio = (tokens as f64 / limit as f64) * 100.0;
+            Some((ratio + 0.5) as u32)
+        });
+        self.lifecycle.pane.usage = Some(super::lifecycle::UsageInfo { tokens, percent, cost });
     }
 
     /// The turn settle loop (`runTurnWait` → `settleSession`): pump

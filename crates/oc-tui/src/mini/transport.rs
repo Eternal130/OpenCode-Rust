@@ -236,7 +236,7 @@ impl TransportState {
             .find(|part| part.message_id == message_id && part.part_id == part_id)
         {
             if replace {
-                part.text = text.to_owned();
+                text.clone_into(&mut part.text);
             } else {
                 part.text.push_str(text);
             }
@@ -2181,6 +2181,23 @@ impl SubagentTracker {
                 }
                 fold.changed = true;
             }
+            // G-540 — the quiet-text flush paired with the usage
+            // patch (transport.ts:1370-1381): the COMMITS belong to
+            // the child's detail transcript (the ref's child writes
+            // route the same `write(commits)`); only the usage half
+            // is parent-owned.
+            Fold::CommitsWithUsage { commits, .. } => {
+                if !commits.is_empty() {
+                    for commit in commits {
+                        slot.child.commits.push(commit);
+                        let excess = slot.child.commits.len().saturating_sub(CHILD_COMMIT_LIMIT);
+                        if excess > 0 {
+                            slot.child.commits.drain(0..excess);
+                        }
+                    }
+                    fold.changed = true;
+                }
+            }
             Fold::Ignored | Fold::Idle => {}
             Fold::Permission(_)
             | Fold::PermissionReplied(_)
@@ -2189,10 +2206,6 @@ impl SubagentTracker {
             // G-272 — the parent-owned folds (usage, the root
             // session's title) never reach a child transcript.
             | Fold::Usage { .. }
-            // G-540 — the quiet flush + usage pair is parent-owned
-            // (the child's commits land via the detail transcript's
-            // own fold sites, never the paired usage half).
-            | Fold::CommitsWithUsage { .. }
             | Fold::SessionTitle(_) => {}
         }
         fold

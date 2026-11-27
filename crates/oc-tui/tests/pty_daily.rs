@@ -1917,6 +1917,23 @@ fn subagent_script(parent: &str) -> Vec<vt_harness::ScriptEvent> {
                 r#"{{"id":"evt_kid_a_t","created":{now_ms},"type":"session.text.delta","data":{{"sessionID":"ses_kid_a","messageID":"m_kid","partID":"p_kid","delta":"Working on it"}}}}"#
             ),
         },
+        // G-540 — the child's part closes + the step ends: the mini's
+        // hidden-tools quiet-text path buffers the child's delta and
+        // flushes at the step end (the ref's `flushQuietText`,
+        // transport.ts:1370) — a real child turn always carries these
+        // two events.
+        vt_harness::ScriptEvent {
+            delay_ms: 110,
+            body: format!(
+                r#"{{"id":"evt_kid_a_te","created":{now_ms},"type":"session.text.ended","data":{{"sessionID":"ses_kid_a","messageID":"m_kid","partID":"p_kid","text":"Working on it"}}}}"#
+            ),
+        },
+        vt_harness::ScriptEvent {
+            delay_ms: 115,
+            body: format!(
+                r#"{{"id":"evt_kid_a_step","created":{now_ms},"type":"session.step.ended","data":{{"sessionID":"ses_kid_a","assistantMessageID":"m_kid","tokens":{{"input":10,"output":5}},"cost":0.0}}}}"#
+            ),
+        },
         vt_harness::ScriptEvent {
             delay_ms: 120,
             body: format!(
