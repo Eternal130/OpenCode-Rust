@@ -34,10 +34,22 @@
 //! libtest prints `test … has been running for over 60 seconds` at
 //! the 60 s mark (then every 60 s): a sweep longer than a minute
 //! poisons its own composer draft (observed: the warning text landed
-//! in the session composer mid-sweep). Every test here therefore
-//! finishes well under 60 s — the full sweep is simply split into
-//! row bands, one boot each. Same reason the repo's other PTY suites
-//! stay under a minute.
+//! in the session composer mid-sweep). Same reason the repo's other
+//! PTY suites stay under a minute.
+//!
+//! va10 neutralized the warning itself (`vt_harness`'s reader drops
+//! the line before the parser sees it), but the bands STAY: a merged
+//! full-screen sweep (1920 probes × ~30 ms attribution window) runs
+//! ~70 s solo — under CI's 2-core runners that inflates past the
+//! 120 s `run_tui` cap and turns load jitter into a hard kill, and a
+//! single 70 s test serializes what the bands run 4-way in the merge
+//! gate (the family's gate cost is total self-time, not per-test
+//! latency). The sweep's per-cell window is a genuine observation
+//! window (see the constants block: the paint latency is ~constant
+//! 9 ms@80col / 16 ms@160col; the 30 ms window is 3.3x/1.4x that) —
+//! slowD measured and kept it; the eliminations were the inert
+//! probes' phase-2 clear, the home bands' pointless row-0 retry, and
+//! the unconditional per-probe blank-check grid clone.
 //!
 //! Anti-flake: the caret blinks (500 ms phase) while we sweep —
 //! `capture_baseline` derives the VOLATILE cells from grid samples
@@ -45,7 +57,8 @@
 //! the caret is caught deterministically) and diffs skip them, so
 //! animation can never masquerade as a hover change. Strip probes
 //! that read `NoChange` get one retry (response latency is a few ms —
-//! the run loop wakes on input — but a loaded runner may jitter). A
+//! the run loop wakes on input — but a loaded runner may jitter); the
+//! HOME bands have no strip, so their row-0 probes do not retry. A
 //! mid-sweep blank grid (alternate-screen teardown) aborts the sweep
 //! as fatal — no cell may crash the app.
 
@@ -79,13 +92,23 @@ enum Response {
 //
 //   n=240 median=10ms p90=11ms p99=11ms max=12ms
 //
-// The effective NoChange attribution window is
-// RESPONSE_WINDOW + LATE_WATCH = 36 ms ≥ 3× median (10) and 3× the
-// measured tail (12) — a responding surface is never truncated by the
-// window, and a diff observed late is still attributed to its own
-// probe (see `probe_hover`). Stability/clear spans cover one paint's
-// span-group settling plus the frame-queue drain of a later motion.
-// Re-run the harness to re-derive.
+// slowD re-derivation (2026-11-28, solo serial runs,
+// `.test-logs/oc-tui-20261128-003514-slowD-inst.log`): the paint
+// latency is ~CONSTANT per geometry — 80x24 n=66 median=9 p99=9
+// max=9ms; 160x50 n=33 median=16 p99=18 max=22ms (the frame build
+// scales with the cell count). The attribution window therefore
+// stays: RESPONSE_WINDOW (30ms) = 3.3x the 80col max, 1.4x the 160col
+// max, and the family's full detection horizon (window + the next
+// probe's window) is 60ms = 2.7x the worst observed 160col max — a
+// responding surface is never truncated by the window. Stability/
+// clear spans cover one paint's span-group settling plus the
+// frame-queue drain of a later motion. Re-run the harness to
+// re-derive.
+//
+// The former HOVER_LATE_WATCH_MS (6ms of post-window watching for
+// inert probes) was removed by slowD: phase 2 is elided for probes
+// whose window closed with no diff (see `probe_hover`) — the watch
+// never fired across 5985 inert probes in the measured baselines.
 
 /// Poll granularity while waiting for a hover paint (and between
 /// stability checks).
@@ -97,10 +120,6 @@ const HOVER_STABLE_MS: u64 = 12;
 /// Quiet span confirming the return-to-baseline after the neutral
 /// corner motion (for probes whose paint was already observed).
 const HOVER_CLEAR_QUIET_MS: u64 = 6;
-/// Extra late-paint watch after the neutral corner motion for probes
-/// whose observation window closed with NO diff — a paint arriving
-/// here is still attributed to this probe (never the next one).
-const HOVER_LATE_WATCH_MS: u64 = 6;
 
 impl Response {
     fn label(self) -> &'static str {
@@ -200,6 +219,86 @@ fn latency_report() -> String {
     )
 }
 
+// ---- slowD lane instrumentation: per-phase probe budget -------------------
+//
+// Per-PROCESS counters (nextest = one process per test, so these are
+// per-test): where a probe's wall goes — phase 1 (the response
+// window: motion → first diff or window close) vs phase 2 (the
+// neutral-corner clear + its watch), split by verdict. The sweep's
+// budget model (validated against the solo baseline 2026-11-28):
+// an inert probe ≈ RESPONSE_WINDOW + LATE_WATCH + poll overshoot
+// ≈ 37 ms, an observed probe ≈ paint latency + STABLE + CLEAR_QUIET.
+static PROBE_STATS: Mutex<ProbeStats> = Mutex::new(ProbeStats::EMPTY);
+
+#[derive(Default)]
+struct ProbeStats {
+    probes: u64,
+    probe_ms: u128,
+    inert: u64,
+    inert_ms: u128,
+    phase1_ms: u128,
+    phase2_ms: u128,
+    observed: u64,
+    observed_ms: u128,
+    retries: u64,
+}
+
+impl ProbeStats {
+    /// A const initializer (statics cannot call `Default::default`).
+    const EMPTY: Self = Self {
+        probes: 0,
+        probe_ms: 0,
+        inert: 0,
+        inert_ms: 0,
+        phase1_ms: 0,
+        phase2_ms: 0,
+        observed: 0,
+        observed_ms: 0,
+        retries: 0,
+    };
+}
+
+/// Record one probe's phase split (slowD instrumentation).
+fn note_probe(inert: bool, phase1: Duration, phase2: Duration) {
+    let mut sink = PROBE_STATS.lock().expect("probe stats");
+    sink.probes += 1;
+    let total = phase1.as_millis() + phase2.as_millis();
+    sink.probe_ms += total;
+    sink.phase1_ms += phase1.as_millis();
+    sink.phase2_ms += phase2.as_millis();
+    if inert {
+        sink.inert += 1;
+        sink.inert_ms += total;
+    } else {
+        sink.observed += 1;
+        sink.observed_ms += total;
+    }
+}
+
+/// One line: the per-test probe budget (mean ms per class).
+fn probe_stats_line() -> String {
+    let sink = PROBE_STATS.lock().expect("probe stats");
+    let mean = |n: u64, ms: u128| {
+        if n == 0 {
+            "n=0".to_owned()
+        } else {
+            #[allow(clippy::cast_precision_loss)] // bounded magnitudes
+            let mean_ms = (ms / u128::from(n.max(1))) as f64;
+            format!("n={n} mu={mean_ms:.1}ms")
+        }
+    };
+    format!(
+        "probes={} total={}ms | inert {} (p1={}ms p2={}ms) | obs {} | retries={}",
+        sink.probes,
+        sink.probe_ms,
+        mean(sink.inert, sink.inert_ms),
+        sink.phase1_ms,
+        sink.phase2_ms,
+        mean(sink.observed, sink.observed_ms),
+        sink.retries,
+    )
+}
+
 /// The neutral clear cell: the trailing end of the PROBE'S OWN row —
 /// a no-op on every swept view (strip trailing cells past the '+'
 /// affordance and all off-strip cells are inert), and it keeps the
@@ -282,12 +381,11 @@ fn settle_classify(
 /// covers the measured tail paint latency (≥3× median), so a slow
 /// surface is never truncated.
 ///
-/// Phase 2 moves to the neutral corner and waits back to baseline:
-/// any diff appearing there is a LATE paint of THIS probe (the corner
-/// is a no-op on every swept view) and is attributed to it, so a
-/// barely-missed slow surface can neither poison the next probe nor
-/// shift the interactive map. Assertion semantics are unchanged —
-/// only the waiting mechanism was rebuilt.
+/// Phase 2 (observed probes only) moves to the neutral corner and
+/// waits back to baseline, so the next probe's diffing starts from
+/// the same baseline. For UNOBSERVED probes phase 2 is elided (the
+/// grid is provably at baseline; see the slowD comment in the body) —
+/// assertion semantics are unchanged, only the waiting was rebuilt.
 fn probe_hover(
     harness: &mut HarnessHandle,
     x: u16,
@@ -322,15 +420,38 @@ fn probe_hover(
         ));
         break;
     }
-    // Phase 2: neutral corner, back to the known baseline. An
-    // observed probe only needs one quiet baseline span; an
-    // unobserved one keeps watching for a late paint for
-    // `HOVER_LATE_WATCH_MS`.
+    let phase1_done = std::time::Instant::now();
+    // slowD (2026-11-28): phase 2 is ELIDED for probes whose response
+    // window closed with NO diff. The grid is provably at baseline (a
+    // window with no diff means nothing painted), so the neutral-corner
+    // motion is grid-neutral — it exists for the mouse-state hygiene
+    // documented in `clear_cell`, and moving to the NEXT probe's cell
+    // is the same class of within-row motion (adjacent cells, never a
+    // region exit; the va10 poisoning shape was an off-strip CORNER
+    // motion, and today's design already ends the sweep's off-strip
+    // rows pointing at an off-strip cell before the plus-probes). The
+    // late-paint watch this removes never fired in the measured
+    // baselines (5985 inert probes across 11 solo runs: zero late
+    // paints; paint latency is ~constant 9ms@80col / 16ms@160col vs
+    // the 30ms window). The attribution horizon for a hypothetical
+    // slow surface shrinks from window+watch+next-window (66ms) to
+    // window+next-window (60ms) — a paint that lands in the NEXT
+    // probe's window is still DETECTED (it misattributes to the next
+    // cell, which fails the off-strip/home absence assertions); only
+    // surfaces slower than 60ms (2.7x the observed 160col max of
+    // 22ms) would escape, vs 66ms before.
+    if observed.is_none() {
+        note_probe(true, phase1_done.duration_since(sent), Duration::from_millis(0));
+        return Response::NoChange;
+    }
+    // Phase 2: neutral corner, back to the known baseline. The
+    // observed probe's face must be cleared and the grid must hold
+    // one quiet baseline span (`HOVER_CLEAR_QUIET_MS`) before the
+    // next probe's diffing starts from the same baseline.
     let clear = clear_cell(baseline, y);
     harness.sgr_motion(clear.0, clear.1);
-    let watch_ms =
-        if observed.is_some() { HOVER_CLEAR_QUIET_MS + HOVER_POLL_MS } else { HOVER_LATE_WATCH_MS };
-    let clear_deadline = std::time::Instant::now() + Duration::from_millis(watch_ms);
+    let clear_deadline =
+        std::time::Instant::now() + Duration::from_millis(HOVER_CLEAR_QUIET_MS + HOVER_POLL_MS);
     let mut baseline_since: Option<std::time::Instant> = None;
     loop {
         std::thread::sleep(Duration::from_millis(HOVER_POLL_MS));
@@ -341,38 +462,29 @@ fn probe_hover(
             baseline.diff(&harness.grid_now(), volatile)
         };
         if diffs.is_empty() {
-            // For an observed probe the baseline only needs to hold
-            // one quiet span; an unobserved probe keeps watching for
-            // its late paint until the window closes.
-            if observed.is_some()
-                && baseline_since.is_some_and(|since| {
-                    now.duration_since(since).as_millis() >= u128::from(HOVER_CLEAR_QUIET_MS)
-                })
-            {
+            // The baseline only needs to hold one quiet span.
+            if baseline_since.is_some_and(|since| {
+                now.duration_since(since).as_millis() >= u128::from(HOVER_CLEAR_QUIET_MS)
+            }) {
                 break;
             }
-            if observed.is_none() {
-                baseline_since.get_or_insert(now);
-            }
+            baseline_since.get_or_insert(now);
         } else {
+            // The clear repaint is still settling (or a late chunk of
+            // the probe's own frame) — keep waiting for baseline.
             baseline_since = None;
-            if observed.is_none() {
-                note_latency(now.duration_since(sent));
-                observed = Some(settle_classify(
-                    harness,
-                    baseline,
-                    volatile,
-                    baseline_digest,
-                    u128::from(HOVER_STABLE_MS),
-                    clear_deadline,
-                ));
-            }
         }
         if now >= clear_deadline {
             break;
         }
     }
-    observed.unwrap_or(Response::NoChange)
+    let verdict = observed.unwrap_or(Response::NoChange);
+    note_probe(
+        verdict == Response::NoChange,
+        phase1_done.duration_since(sent),
+        phase1_done.elapsed(),
+    );
+    verdict
 }
 
 /// Targeted probes of the `" + "` affordance's EXACT columns: the
@@ -393,19 +505,35 @@ fn probe_plus_rect(
         .collect()
 }
 
+/// One band of the sweep: rows `[y0, y1)` at `stride`, and whether
+/// row 0 carries the session strip (the retry's jitter guard — see
+/// `sweep_band`).
+#[derive(Debug, Clone, Copy)]
+struct Band {
+    y0: usize,
+    y1: usize,
+    stride: usize,
+    strip_row: bool,
+}
+
 /// Sweep the strided cells of rows `[y0, y1)` of the settled screen,
 /// guarding against teardown (a blank grid mid-sweep means the app
 /// died). Strip-row (`y == 0`) `NoChange` probes get ONE retry (jitter
-/// guard — the surface assertions live on that row).
+/// guard — the strip's surface assertions live on that row;
+/// `Band::strip_row` is false for the HOME bands, which have no
+/// strip: their row 0 is inert hero chrome, so a re-probe of an
+/// already-`NoChange` cell can only re-confirm `NoChange` — the
+/// retry widened home's false-negative horizon without ever guarding
+/// an assertion there, 80 probes / ~2.9s of pure re-confirmation per
+/// home band).
 fn sweep_band(
     harness: &mut HarnessHandle,
     baseline: &Grid,
     volatile: &HashSet<(usize, usize)>,
     baseline_digest: u64,
-    stride: usize,
-    y0: usize,
-    y1: usize,
+    band: Band,
 ) -> SweepResult {
+    let Band { y0, y1, stride, strip_row } = band;
     let mut result = SweepResult::default();
     let mut y = y0;
     while y < y1.min(baseline.rows) {
@@ -413,27 +541,39 @@ fn sweep_band(
         while x < baseline.cols {
             let mut response =
                 probe_hover(harness, x as u16, y as u16, baseline, volatile, baseline_digest);
-            if y == 0 && response == Response::NoChange && x % stride == 0 {
+            if strip_row && y == 0 && response == Response::NoChange && x % stride == 0 {
+                PROBE_STATS.lock().expect("probe stats").retries += 1;
                 response =
                     probe_hover(harness, x as u16, y as u16, baseline, volatile, baseline_digest);
             }
-            let grid = harness.grid_now();
-            if grid.is_blank() {
-                result.fatal = Some(format!(
-                    "the screen went blank after hovering ({x},{y}) — the app tore down mid-sweep"
-                ));
-                return result;
-            }
-            if y > 0 && response != Response::NoChange && result.anomaly.is_none() {
-                let diffs = baseline.diff(&grid, volatile);
-                let cells: Vec<(usize, usize)> = diffs.iter().map(|d| (d.x, d.y)).take(8).collect();
-                result.anomaly = Some(format!(
-                    "{} at ({x},{y}) diffed cells {:?} row {y} now {:?} base {:?}",
-                    response.label(),
-                    cells,
-                    grid.row_text(y.min(grid.rows.saturating_sub(1))),
-                    baseline.row_text(y),
-                ));
+            // Blank guard + anomaly readout: clone the full grid ONLY
+            // when the screen actually moved off the baseline digest
+            // (slowD — the settled baseline is never blank, so an
+            // unchanged digest cannot be a teardown; a teardown blanks
+            // the grid, which changes the digest and takes this path;
+            // a responding probe's paint or its still-settling clear
+            // repaint also lands here, exactly where the old
+            // unconditional clone was needed).
+            if harness.grid_digest() != baseline_digest || response != Response::NoChange {
+                let grid = harness.grid_now();
+                if grid.is_blank() {
+                    result.fatal = Some(format!(
+                        "the screen went blank after hovering ({x},{y}) — the app tore down mid-sweep"
+                    ));
+                    return result;
+                }
+                if y > 0 && response != Response::NoChange && result.anomaly.is_none() {
+                    let diffs = baseline.diff(&grid, volatile);
+                    let cells: Vec<(usize, usize)> =
+                        diffs.iter().map(|d| (d.x, d.y)).take(8).collect();
+                    result.anomaly = Some(format!(
+                        "{} at ({x},{y}) diffed cells {:?} row {y} now {:?} base {:?}",
+                        response.label(),
+                        cells,
+                        grid.row_text(y.min(grid.rows.saturating_sub(1))),
+                        baseline.row_text(y),
+                    ));
+                }
             }
             match response {
                 Response::NoChange => result.no_change += 1,
@@ -452,21 +592,36 @@ fn sweep_band(
 /// open BOTH history sessions as tabs (short + long-truncating
 /// title), settle the 2-tab session view.
 fn boot_to_two_tabs(harness: &mut HarnessHandle) -> Result<(), String> {
+    let mark = |h: &HarnessHandle, label: &str| {
+        eprintln!("[slowD mark {label}] {}ms", h.now_ms());
+    };
     if !harness.wait_for(WORDMARK, Duration::from_secs(8)) {
         return Err("the home wordmark never rendered".to_owned());
     }
+    mark(harness, "wordmark");
     open_first_session(harness, b"Alpha")?;
     if !harness.wait_for(b"Alpha", Duration::from_secs(5)) {
         return Err("the first tab's title never painted".to_owned());
     }
+    mark(harness, "tab1");
     std::thread::sleep(Duration::from_millis(400));
     open_second_session(harness, b"Long Session Title")?;
     // The long title truncates in the strip — match on its head.
     if !harness.wait_for(b"Long Session", Duration::from_secs(5)) {
         return Err("the second (long-titled) tab never painted".to_owned());
     }
+    mark(harness, "tab2");
     std::thread::sleep(Duration::from_millis(500));
+    mark(harness, "settle");
     Ok(())
+}
+
+/// The driver's report: the band's outcome plus its phase walls
+/// (slowD instrumentation — drive wall, exit-chord wall).
+struct DriverReport {
+    outcome: Result<SweepOutcome, String>,
+    drive: Duration,
+    chord: Duration,
 }
 
 /// The shared runner: sandbox + `FakeLlm` + PTY + a driver thread that
@@ -484,18 +639,27 @@ fn run_sweep_test(
     let _sandbox = sandbox_env(tag);
     let fake = FakeLlm::spawn(standard_sessions());
     let harness = LiveHarness::attach(cols, rows);
-    let result_slot: Arc<Mutex<Option<Result<SweepOutcome, String>>>> = Arc::new(Mutex::new(None));
+    // slowD instrumentation: the slot carries the driver's phase split
+    // (drive wall, exit-chord wall) alongside the outcome.
+    let result_slot: Arc<Mutex<Option<DriverReport>>> = Arc::new(Mutex::new(None));
     let slot = Arc::clone(&result_slot);
     let ack_from = harness.handle().raw_len();
     let mut driver = harness.handle();
     std::thread::spawn(move || {
+        let drive_start = std::time::Instant::now();
         let outcome = drive(&mut driver);
+        let drive_wall = drive_start.elapsed();
         // ALWAYS leave the exit chord so the run loop terminates even
         // on driver error (the ack is verified below).
+        let chord_start = std::time::Instant::now();
         vt_harness::exit_chord(&mut driver);
-        *slot.lock().expect("slot") = Some(outcome);
+        let chord_wall = chord_start.elapsed();
+        *slot.lock().expect("slot") =
+            Some(DriverReport { outcome, drive: drive_wall, chord: chord_wall });
     });
+    let run_tui_start = std::time::Instant::now();
     run_tui(&fake.url, cols, rows, Duration::from_secs(120));
+    let run_tui_wall = run_tui_start.elapsed();
     fake.stop();
     // The driver writes its result AFTER the exit chord — the app may
     // tear down (and unblock run_tui) a beat before the slot lands.
@@ -503,19 +667,30 @@ fn run_sweep_test(
     while result_slot.lock().expect("slot").is_none() && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
-    let swept = match result_slot.lock().expect("slot").take() {
-        Some(Ok(outcome)) => outcome,
-        Some(Err(error)) => panic!("driver failed: {error}"),
+    let (swept, drive_wall, chord_wall) = match result_slot.lock().expect("slot").take() {
+        Some(DriverReport { outcome: Ok(swept), drive, chord }) => (swept, drive, chord),
+        Some(DriverReport { outcome: Err(error), .. }) => panic!("driver failed: {error}"),
         None => panic!("the driver thread never reported (deadlock?)"),
     };
+    let ack_start = std::time::Instant::now();
+    let acked = harness.handle().wait_for_after(
+        vt_harness::ALT_SCREEN_LEAVE,
+        ack_from,
+        Duration::from_secs(5),
+    );
+    let ack_wall = ack_start.elapsed();
+    eprintln!(
+        "[slowD budget {tag}] drive={}ms (chord={}ms) run_tui={}ms ack={}ms | {}",
+        drive_wall.as_millis(),
+        chord_wall.as_millis(),
+        run_tui_wall.as_millis(),
+        ack_wall.as_millis(),
+        probe_stats_line(),
+    );
     // The app must have been alive through the whole sweep: the exit
     // chord's teardown arrived AFTER the sweep finished.
     assert!(
-        harness.handle().wait_for_after(
-            vt_harness::ALT_SCREEN_LEAVE,
-            ack_from,
-            Duration::from_secs(5)
-        ),
+        acked,
         "the exit teardown never arrived — the app died before the sweep completed: {}",
         swept.sweep.summary()
     );
@@ -555,11 +730,18 @@ fn home_band(y0: usize, y1: usize) -> SweepOutcome {
         }
         std::thread::sleep(Duration::from_millis(200));
         let (baseline, volatile) = harness.capture_baseline();
+        eprintln!("[slowD mark baseline] {}ms", harness.now_ms());
         let baseline_digest = harness.grid_digest();
         if baseline.is_blank() {
             return Err("the settled home screen is blank".to_owned());
         }
-        let result = sweep_band(harness, &baseline, &volatile, baseline_digest, 1, y0, y1);
+        let result = sweep_band(
+            harness,
+            &baseline,
+            &volatile,
+            baseline_digest,
+            Band { y0, y1, stride: 1, strip_row: false },
+        );
         Ok(SweepOutcome {
             sweep: result,
             strip: baseline.row_text(0),
@@ -705,6 +887,7 @@ fn session_band(y0: usize, y1: usize) -> SweepOutcome {
     let outcome = run_sweep_test(&tag, 80, 24, move |harness| {
         boot_to_two_tabs(harness)?;
         let (baseline, volatile) = harness.capture_baseline();
+        eprintln!("[slowD mark baseline] {}ms", harness.now_ms());
         let baseline_digest = harness.grid_digest();
         if baseline.is_blank() {
             return Err("the settled session screen is blank".to_owned());
@@ -713,7 +896,13 @@ fn session_band(y0: usize, y1: usize) -> SweepOutcome {
         if !strip.contains('+') {
             return Err(format!("the strip never painted its affordance: {strip:?}"));
         }
-        let result = sweep_band(harness, &baseline, &volatile, baseline_digest, 1, y0, y1);
+        let result = sweep_band(
+            harness,
+            &baseline,
+            &volatile,
+            baseline_digest,
+            Band { y0, y1, stride: 1, strip_row: true },
+        );
         let plus_probes = probe_plus_rect(harness, &strip, &baseline, &volatile, baseline_digest);
         Ok(SweepOutcome {
             sweep: result,
@@ -737,6 +926,7 @@ fn session_band_160(y0: usize, y1: usize) -> SweepOutcome {
     let outcome = run_sweep_test(&tag, 160, 50, move |harness| {
         boot_to_two_tabs(harness)?;
         let (baseline, volatile) = harness.capture_baseline();
+        eprintln!("[slowD mark baseline] {}ms", harness.now_ms());
         let baseline_digest = harness.grid_digest();
         if baseline.is_blank() {
             return Err("the settled session screen is blank".to_owned());
@@ -747,7 +937,13 @@ fn session_band_160(y0: usize, y1: usize) -> SweepOutcome {
         }
         // Strided subset (every 2nd cell both axes) for speed — still
         // hits the strip's marks at 2-cell resolution.
-        let result = sweep_band(harness, &baseline, &volatile, baseline_digest, 2, y0, y1);
+        let result = sweep_band(
+            harness,
+            &baseline,
+            &volatile,
+            baseline_digest,
+            Band { y0, y1, stride: 2, strip_row: true },
+        );
         let plus_probes = probe_plus_rect(harness, &strip, &baseline, &volatile, baseline_digest);
         Ok(SweepOutcome {
             sweep: result,
