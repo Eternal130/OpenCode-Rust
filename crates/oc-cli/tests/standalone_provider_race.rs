@@ -212,21 +212,44 @@ async fn standalone_boot_spawn_loop_custom_provider_stable() {
     let mut completed = 0usize;
     let mut next_index = 0usize;
     let mut failures: Vec<String> = Vec::new();
+    let diag = std::env::var_os("OC_RACE_DIAG").is_some();
 
     while next_index < ITERATIONS && start.elapsed() < DEADLINE {
+        let wave_start = Instant::now();
         let wave = (next_index..(next_index + CONCURRENCY).min(ITERATIONS)).collect::<Vec<_>>();
         next_index = wave.last().expect("non-empty wave") + 1;
         let mut tasks = tokio::task::JoinSet::new();
         for &index in &wave {
             let binary = binary.clone();
             let project = sandbox.project.clone();
-            tasks.spawn(async move { probe(&binary, &project, index).await });
+            let spawned_at = Instant::now();
+            tasks.spawn(async move {
+                let result = probe(&binary, &project, index).await;
+                (index, spawned_at.elapsed().as_millis(), result)
+            });
         }
+        let mut wave_child_ms: Vec<(usize, u128)> = Vec::new();
         while let Some(joined) = tasks.join_next().await {
-            match joined.expect("probe task panics nowhere") {
+            let (index, elapsed_ms, result) = joined.expect("probe task panics nowhere");
+            wave_child_ms.push((index, elapsed_ms));
+            match result {
                 Ok(()) => completed += 1,
                 Err(failure) => failures.push(failure),
             }
+        }
+        if diag {
+            wave_child_ms.sort();
+            let max = wave_child_ms.iter().map(|(_, ms)| *ms).max().unwrap_or(0);
+            let min = wave_child_ms.iter().map(|(_, ms)| *ms).min().unwrap_or(0);
+            eprintln!(
+                "[race-diag] wave {}..={} wall={}ms children min/{} max/{}ms total_elapsed={}ms",
+                wave[0],
+                wave[wave.len() - 1],
+                wave_start.elapsed().as_millis(),
+                min,
+                max,
+                start.elapsed().as_millis()
+            );
         }
     }
 

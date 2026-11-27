@@ -68,6 +68,14 @@ const COLS: usize = 80;
 /// After this many keys the boot has settled and the void-screen
 /// invariant switches on.
 const BOOT_SETTLE_KEYS: usize = 30;
+/// A screen cell that changed again within this many settle polls is
+/// "fast-flipping" — clock-driven animation (a busy tab's spinner
+/// advancing every 80 ms, sampled at the 60 ms poll = gaps of at most
+/// 3 polls), not new content. Its flips do NOT re-arm the settle's
+/// stability window; the fastest legitimate content cadence (one
+/// paint per 100 ms run-loop tick, ~2 polls) still does. 4 polls ≈
+/// 240 ms — the same window the stability check itself uses.
+const TRANSIENT_POLLS: usize = 4;
 /// Max fresh child processes per seed when an intended exit chord ends
 /// one mid-run (the remaining keys continue in the new child).
 const MAX_RESPAWNS: usize = 2;
@@ -551,6 +559,82 @@ fn utf8_len(byte: u8) -> usize {
     }
 }
 
+// -- TEMPORARY lane slowA diagnostics (never committed; OC_PTY_FUZZ_DIAG=1) ---
+//
+// Per-settle cost + volatile-cell map: which (row, col) keep changing
+// while a settle burns its budget, with their value transitions. Pure
+// bookkeeping around the untouched convergence logic.
+struct SettleDiagRecord {
+    label: String,
+    elapsed_ms: u128,
+    polls: usize,
+    changed_polls: usize,
+    bytes_growth: usize,
+    capped: bool,
+    cells: std::collections::BTreeMap<(usize, usize), (usize, Vec<(char, char)>)>,
+}
+
+static SETTLE_DIAG: std::sync::OnceLock<std::sync::Mutex<Vec<SettleDiagRecord>>> =
+    std::sync::OnceLock::new();
+
+fn settle_diag_on() -> bool {
+    std::env::var_os("OC_PTY_FUZZ_DIAG").is_some()
+}
+
+/// Append one line to the diag sink (stderr + /tmp/opencode file).
+fn settle_diag_line(seed: u64, line: &str) {
+    eprintln!("[slowA] {line}");
+    let path = std::path::Path::new("/tmp/opencode").join(format!("pty-fuzz-diag-s{seed}.txt"));
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        use std::io::Write as _;
+        let _ = writeln!(file, "{line}");
+    }
+}
+
+/// Record one finished settle; capped settles print immediately (the
+/// volatile rows' text + the changed cells with transitions).
+fn settle_diag_record(seed: u64, record: SettleDiagRecord, rows: &[Vec<char>]) {
+    if record.capped {
+        let volatile_rows: Vec<usize> =
+            record.cells.keys().map(|(row, _)| *row).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+        let mut rows_dump = String::new();
+        for row in volatile_rows.iter().take(4) {
+            let text: String = rows[*row].iter().filter(|c| **c != '\u{0}').collect();
+            rows_dump.push_str(&format!("\n    row {:02} |{}|", row, text.trim_end()));
+        }
+        let cells_dump = record
+            .cells
+            .iter()
+            .take(12)
+            .map(|((row, col), (count, transitions))| {
+                format!(
+                    "({row},{col})x{count}[{}]",
+                    transitions
+                        .iter()
+                        .map(|(a, b)| format!("{a:?}>{b:?}"))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        settle_diag_line(
+            seed,
+            &format!(
+                "settle {} CAPPED polls={} changed={} bytes=+{} cells({}) {}{}",
+                record.label,
+                record.polls,
+                record.changed_polls,
+                record.bytes_growth,
+                record.cells.len(),
+                cells_dump,
+                rows_dump
+            ),
+        );
+    }
+    SETTLE_DIAG.get_or_init(Default::default).lock().expect("diag lock").push(record);
+}
+
 // -- the pty driver -----------------------------------------------------------
 
 /// The real binary over a pty with a controlling terminal, a sandboxed
@@ -562,6 +646,10 @@ struct FuzzPty {
     master: std::fs::File,
     output: Arc<Mutex<Vec<u8>>>,
     vt: Vt,
+    /// [slowA] How many output bytes have been fed into `vt` — the
+    /// incremental `refresh_screen` offset (a respawn resets both the
+    /// analyzer and the capture).
+    fed: usize,
     /// The exit code once OUR waitpid (the job-control poll) reaped
     /// the child — std's `try_wait` then ECHILDs, so the poll caches it.
     reaped: Option<i32>,
@@ -687,7 +775,7 @@ impl FuzzPty {
                 }
             });
         }
-        FuzzPty { child, master, output, vt: Vt::new(), reaped: None }
+        FuzzPty { child, master, output, vt: Vt::new(), fed: 0, reaped: None }
     }
 
     fn capture(&self) -> Vec<u8> {
@@ -712,30 +800,135 @@ impl FuzzPty {
     /// 100 ms tick whenever any clock-driven UI (caret/spinner/toast)
     /// is live, so byte quiescence never happens — settle on CELL
     /// stability instead (unchanged parsed screen for ~240 ms).
-    fn settle(&mut self, cap: Duration) {
+    ///
+    /// [slowA] Clock-driven UI is PERIODIC — the caret toggles its
+    /// cell on a 500 ms phase, a busy tab's spinner and the
+    /// reconnecting overlay's glyph advance every 80-100 ms — so a
+    /// screen whose only changes are those flips NEVER holds 240 ms
+    /// of stable cells and every settle burns its full cap (the
+    /// pre-fix seeds 1/2 spent 79-92 % of their settle budget exactly
+    /// that way: the only volatile cells for 30+ consecutive keys
+    /// were (0,1)=tab-strip busy glyph and (10,18)=reconnecting
+    /// overlay glyph, cycling the braille SPINNER_FRAMES alphabet).
+    /// Tolerate the flips without waiting out their full alphabet: a
+    /// change re-arms the stability window only when it is NEW
+    /// content — the cell presents a value it has not shown within
+    /// this settle AND is not fast-flipping (changed again within
+    /// [`TRANSIENT_POLLS`] polls; a cell's FIRST change always
+    /// counts — the key echo must re-arm). A flip among already-seen
+    /// values on a fast-flipping cell is animation, not a screen the
+    /// invariants need to wait for. The post-key screen still gates
+    /// the return: the key echo, dialogs, transcripts and toasts all
+    /// present novel values, so the invariants keep sampling a
+    /// digested screen — with the clock-UI noise out of the window,
+    /// the settle converges in ~300 ms instead of the full cap, and
+    /// the convergence no longer depends on the child's tick cadence
+    /// (the pre-fix 85 s ↔ 181 s run-to-run swing was exactly that
+    /// dependence: under box load the child's clock ticks stretch
+    /// past 240 ms and the flips stopped re-arming).
+    fn settle(&mut self, cap: Duration, label: &str, seed: u64) {
+        let diag = settle_diag_on();
         let start = Instant::now();
         let mut stable_since = Instant::now();
         self.refresh_screen();
         let mut last_cells = self.vt.cells.clone();
+        let start_len = self.output.lock().expect("lock").len();
+        let mut polls = 0usize;
+        let mut changed_polls = 0usize;
+        let mut converged = false;
+        // (row, col) -> (values the cell has shown this settle, the
+        // poll index of its last change; 0 = never changed — polls
+        // start at 1).
+        let mut tracker: std::collections::HashMap<
+            (usize, usize),
+            (std::collections::BTreeSet<char>, usize),
+        > = std::collections::HashMap::new();
+        let mut cells: std::collections::BTreeMap<(usize, usize), (usize, Vec<(char, char)>)> =
+            std::collections::BTreeMap::new();
         while start.elapsed() < cap {
             std::thread::sleep(Duration::from_millis(60));
             self.resume_if_stopped();
             self.refresh_screen();
-            if self.vt.cells == last_cells {
-                if stable_since.elapsed() >= Duration::from_millis(240) {
-                    return;
+            polls += 1;
+            if self.vt.cells != last_cells {
+                changed_polls += 1;
+                let mut re_arm = false;
+                for (row, (prev, cur)) in
+                    last_cells.iter().zip(self.vt.cells.iter()).enumerate()
+                {
+                    for (col, (a, b)) in prev.iter().zip(cur.iter()).enumerate() {
+                        if a != b {
+                            let (seen, last_change) = tracker
+                                .entry((row, col))
+                                .or_insert((std::collections::BTreeSet::new(), 0));
+                            let novel = seen.insert(*b);
+                            let fast =
+                                *last_change > 0 && polls - *last_change <= TRANSIENT_POLLS;
+                            *last_change = polls;
+                            if novel && !fast {
+                                re_arm = true;
+                            }
+                            if diag {
+                                let entry = cells.entry((row, col)).or_insert((0, Vec::new()));
+                                entry.0 += 1;
+                                if !entry.1.contains(&(*a, *b)) && entry.1.len() < 8 {
+                                    entry.1.push((*a, *b));
+                                }
+                            }
+                        }
+                    }
                 }
-            } else {
-                last_cells.clone_from(&self.vt.cells);
-                stable_since = Instant::now();
+                if re_arm {
+                    stable_since = Instant::now();
+                } else if stable_since.elapsed() >= Duration::from_millis(240) {
+                    converged = true;
+                    break;
+                }
+            } else if stable_since.elapsed() >= Duration::from_millis(240) {
+                converged = true;
+                break;
             }
+            last_cells.clone_from(&self.vt.cells);
+        }
+        if diag {
+            let rows = self.vt.cells.clone();
+            settle_diag_record(
+                seed,
+                SettleDiagRecord {
+                    label: format!("{label} ({cap:?})"),
+                    elapsed_ms: start.elapsed().as_millis(),
+                    polls,
+                    changed_polls,
+                    bytes_growth: self.output.lock().expect("lock").len().saturating_sub(start_len),
+                    capped: !converged,
+                    cells,
+                },
+                &rows,
+            );
         }
     }
 
-    /// Feed appended output into the screen analyzer.
+    /// Feed appended output into the screen analyzer. [slowA]
+    /// Incremental: `Vt::feed` parks partial trailing sequences
+    /// itself ("partial trailing sequences wait for more bytes"), so
+    /// feeding only the bytes appended since the last refresh parses
+    /// each byte exactly once. The former full-capture re-feed
+    /// re-parsed the whole session output on every poll (O(output)
+    /// per poll, O(n²) over a run) and re-executed the history from
+    /// the CURRENT cursor state — it only stayed correct because the
+    /// emitter's frames are absolutely addressed — and it mis-parsed
+    /// the capture's head seam whenever a partial sequence straddled
+    /// a read boundary.
     fn refresh_screen(&mut self) {
-        let data = self.capture();
-        self.vt.feed(&data);
+        let fresh: Vec<u8> = {
+            let output = self.output.lock().expect("lock");
+            output[self.fed.min(output.len())..].to_vec()
+        };
+        if fresh.is_empty() {
+            return;
+        }
+        self.fed += fresh.len();
+        self.vt.feed(&fresh);
     }
 
     fn type_key(&mut self, bytes: &[u8]) {
@@ -934,6 +1127,12 @@ fn gen_action(rng: &mut StdRng) -> Action {
 async fn fuzz_one(seed: u64, keys: usize) -> Result<(), String> {
     let stub = start_stub().await;
     let actions = gen_actions(seed, keys);
+    let wall_start = Instant::now();
+    if settle_diag_on() {
+        let labels =
+            actions.iter().map(|action| action.label.as_str()).collect::<Vec<_>>().join(",");
+        settle_diag_line(seed, &format!("keys seed {seed} ({keys}): {labels}"));
+    }
     // 5 evenly-spaced recoverability checkpoints (past boot settle).
     let checkpoints: Vec<usize> = (1..=5).map(|k| keys * k / 6).collect();
 
@@ -964,7 +1163,7 @@ async fn fuzz_one(seed: u64, keys: usize) -> Result<(), String> {
     while index < actions.len() {
         let action = &actions[index];
         pty.type_key(&action.bytes);
-        pty.settle(Duration::from_millis(1500));
+        pty.settle(Duration::from_millis(1500), &format!("key#{index} {}", action.label), seed);
         exitish_window = if action.exitish { 0 } else { exitish_window + 1 };
 
         // (a) alive — running, or an intended, panic-free exit.
@@ -1144,7 +1343,7 @@ async fn fuzz_one(seed: u64, keys: usize) -> Result<(), String> {
         // stable shape or leave a responding composer.
         if checkpoints.contains(&(index + 1)) {
             recover_probes += 1;
-            if let Err(detail) = probe_recoverable(&mut pty) {
+            if let Err(detail) = probe_recoverable(&mut pty, seed) {
                 let dump = dump_failure(
                     seed,
                     "recoverability",
@@ -1197,18 +1396,68 @@ async fn fuzz_one(seed: u64, keys: usize) -> Result<(), String> {
          {recover_probes} recover probes, {respawns} respawns, {} prompts",
         stub.prompts.load(Ordering::SeqCst)
     );
+    if settle_diag_on() {
+        let records = SETTLE_DIAG.get_or_init(Default::default).lock().expect("diag lock");
+        let total_ms: u128 = records.iter().map(|record| record.elapsed_ms).sum();
+        let capped = records.iter().filter(|record| record.capped).count();
+        let mut buckets = [0usize; 6];
+        for record in records.iter() {
+            let bucket = if record.capped {
+                5
+            } else {
+                match record.elapsed_ms {
+                    ms if ms <= 360 => 0,
+                    ms if ms <= 720 => 1,
+                    ms if ms <= 1080 => 2,
+                    ms if ms <= 1440 => 3,
+                    _ => 4,
+                }
+            };
+            buckets[bucket] += 1;
+        }
+        let output_len = capture.len();
+        settle_diag_line(
+            seed,
+            &format!(
+                "hist seed {seed}: settles={} capped={capped} settle_total_ms={total_ms} \
+                 wall_ms={} output_bytes={output_len} \
+                 buckets(<=360/<=720/<=1080/<=1440/<cap/capped)={:?}",
+                records.len(),
+                wall_start.elapsed().as_millis(),
+                buckets
+            ),
+        );
+        let mut agg: std::collections::BTreeMap<
+            (usize, usize),
+            (usize, std::collections::BTreeSet<(char, char)>),
+        > = std::collections::BTreeMap::new();
+        for record in records.iter().filter(|record| record.capped) {
+            for (cell, (count, transitions)) in &record.cells {
+                let entry = agg.entry(*cell).or_default();
+                entry.0 += count;
+                entry.1.extend(transitions.iter().copied());
+            }
+        }
+        let mut top: Vec<_> = agg.into_iter().collect::<Vec<_>>();
+        top.sort_by_key(|(_, (count, _))| std::cmp::Reverse(*count));
+        for ((row, col), (count, transitions)) in top.iter().take(16) {
+            let pairs: Vec<String> =
+                transitions.iter().map(|(a, b)| format!("{a:?}>{b:?}")).collect();
+            settle_diag_line(seed, &format!("cells ({row:02},{col:02}) flips={count} {}", pairs.join(" ")));
+        }
+    }
     Ok(())
 }
 
 /// Invariant (d): escape ×3, then within 2s a known stable shape
 /// (wordmark / composer rail) or a composer that still responds
 /// (typing a char changes the capture).
-fn probe_recoverable(pty: &mut FuzzPty) -> Result<(), String> {
+fn probe_recoverable(pty: &mut FuzzPty, seed: u64) -> Result<(), String> {
     for _ in 0..3 {
         pty.type_key(b"\x1b");
         std::thread::sleep(Duration::from_millis(250));
     }
-    pty.settle(Duration::from_millis(2000));
+    pty.settle(Duration::from_millis(2000), "recover-probe", seed);
     let screen = pty.vt.screen_text();
     if screen.contains('┃') || screen.contains("█▀▀█") {
         return Ok(());
@@ -1235,24 +1484,35 @@ fn probe_recoverable(pty: &mut FuzzPty) -> Result<(), String> {
 }
 
 /// The documented exit chords, in order: ctrl+c (clear/exit), ctrl+c
-/// again (two-press exit), then <leader>q.
+/// again (two-press exit), then <leader>q. [slowA] Each chord's wait
+/// POLLS the exit status inside the SAME deadline the fixed sleep
+/// used (300/500/600 ms, 4 s) — a child that exits at 100 ms no
+/// longer idles out the full sleep; the deadlines and the chord
+/// sequence are unchanged.
 fn exit_protocol(pty: &mut FuzzPty) -> Result<(), String> {
+    fn exited_within(pty: &mut FuzzPty, deadline: Duration) -> Option<i32> {
+        let end = Instant::now() + deadline;
+        loop {
+            pty.resume_if_stopped();
+            if let Some(code) = pty.exit_code() {
+                return Some(code);
+            }
+            if Instant::now() >= end {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
     pty.type_key(b"\x1b");
-    std::thread::sleep(Duration::from_millis(300));
-    pty.resume_if_stopped();
-    if pty.exit_code() == Some(0) {
+    if exited_within(pty, Duration::from_millis(300)) == Some(0) {
         return Ok(());
     }
     pty.type_key(b"\x03");
-    std::thread::sleep(Duration::from_millis(500));
-    pty.resume_if_stopped();
-    if pty.exit_code() == Some(0) {
+    if exited_within(pty, Duration::from_millis(500)) == Some(0) {
         return Ok(());
     }
     pty.type_key(b"\x03");
-    std::thread::sleep(Duration::from_millis(600));
-    pty.resume_if_stopped();
-    if pty.exit_code() == Some(0) {
+    if exited_within(pty, Duration::from_millis(600)) == Some(0) {
         return Ok(());
     }
     pty.type_key(b"\x18q");
@@ -1261,7 +1521,7 @@ fn exit_protocol(pty: &mut FuzzPty) -> Result<(), String> {
         match pty.exit_code() {
             Some(0) => return Ok(()),
             Some(code) => return Err(format!("exit chord exited with code {code}")),
-            None => std::thread::sleep(Duration::from_millis(100)),
+            None => std::thread::sleep(Duration::from_millis(50)),
         }
     }
     Err("the process ignored escape + ctrl+c ×2 + <leader>q (dead end)".to_owned())
