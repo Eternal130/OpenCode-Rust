@@ -74,6 +74,28 @@ macro_rules! skip_without_ref_lane {
 
 /// The committed tool-loop corpora (bootstrap-recorded engine request
 /// shapes, turn-tagged interactions).
+/// 2026-11-27 slow-audit fix A (battery family): wait BOTH ends
+/// CONCURRENTLY — the serial two-line form (rust first, then ref)
+/// doubled every wait's wall-clock; the concurrent legs run in
+/// threads and the tuple carries both verdicts.
+fn wait_both(
+    rust_tui: &TuiProcess,
+    ref_tui: &TuiProcess,
+    needle: &[u8],
+    rust_from: usize,
+    rust_secs: u64,
+    ref_from: usize,
+    ref_secs: u64,
+) -> (bool, bool) {
+    std::thread::scope(|scope| {
+        let rust_leg = scope
+            .spawn(move || rust_tui.wait_for(needle, rust_from, Duration::from_secs(rust_secs)));
+        let ref_leg =
+            scope.spawn(move || ref_tui.wait_for(needle, ref_from, Duration::from_secs(ref_secs)));
+        (rust_leg.join().unwrap_or(false), ref_leg.join().unwrap_or(false))
+    })
+}
+
 fn corpus_tools_dir() -> PathBuf {
     worktree_dir("tools/diff/realchain/corpus-tools")
 }
@@ -224,8 +246,7 @@ macro_rules! tl_wait {
 fn tl_tool_loop_pair() {
     skip_without_ref_lane!();
     let mut rig = toolloop_rig("tl");
-    let rust_booted = rig.rust_tui.wait_for(WORDMARK, 0, Duration::from_secs(30));
-    let ref_booted = rig.ref_tui.wait_for(WORDMARK, 0, Duration::from_secs(60));
+    let (rust_booted, ref_booted) = wait_both(&rig.rust_tui, &rig.ref_tui, WORDMARK, 0, 30, 0, 60);
     assert!(
         rust_booted && ref_booted,
         "TL precondition RED: booted rust={rust_booted} ref={ref_booted}; \
@@ -246,8 +267,21 @@ fn tl_tool_loop_pair() {
     // comparable but hid the divergence from every gate). The race
     // surface now shows up in the exported diff and is adjudicated
     // from the registry (accepted-gap, G-442 residual).
-    let rust_out = rig.rust_tui.wait_for_screen(TOOL_OUTPUT_NEEDLE, Duration::from_secs(15));
-    let ref_out = rig.ref_tui.wait_for_screen(TOOL_OUTPUT_NEEDLE, Duration::from_secs(20));
+    // 2026-11-27 slow-audit fix A: concurrent legs (the serial form
+    // doubled the wait's wall-clock).
+    let (rust_out, ref_out) = {
+        let rust_leg = &rig.rust_tui;
+        let ref_leg = &rig.ref_tui;
+        std::thread::scope(|scope| {
+            let r = scope.spawn(move || {
+                rust_leg.wait_for_screen(TOOL_OUTPUT_NEEDLE, Duration::from_secs(15))
+            });
+            let f = scope.spawn(move || {
+                ref_leg.wait_for_screen(TOOL_OUTPUT_NEEDLE, Duration::from_secs(20))
+            });
+            (r.join().unwrap_or(false), f.join().unwrap_or(false))
+        })
+    };
     if !rust_out {
         dump_grid("tl-fail-rust-out", &rig.rust_tui.screen_text());
     }

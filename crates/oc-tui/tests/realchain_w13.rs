@@ -54,6 +54,27 @@ macro_rules! skip_without_ref_lane {
         }
     };
 }
+/// 2026-11-27 slow-audit fix A (battery family): wait BOTH ends
+/// CONCURRENTLY — the serial two-line form (rust first, then ref)
+/// doubled every wait's wall-clock; the concurrent legs run in
+/// threads and the tuple carries both verdicts.
+fn wait_both(
+    rust_tui: &TuiProcess,
+    ref_tui: &TuiProcess,
+    needle: &[u8],
+    rust_from: usize,
+    rust_secs: u64,
+    ref_from: usize,
+    ref_secs: u64,
+) -> (bool, bool) {
+    std::thread::scope(|scope| {
+        let rust_leg = scope
+            .spawn(move || rust_tui.wait_for(needle, rust_from, Duration::from_secs(rust_secs)));
+        let ref_leg =
+            scope.spawn(move || ref_tui.wait_for(needle, ref_from, Duration::from_secs(ref_secs)));
+        (rust_leg.join().unwrap_or(false), ref_leg.join().unwrap_or(false))
+    })
+}
 
 fn settle(secs: u64) {
     std::thread::sleep(Duration::from_secs(secs));
@@ -365,8 +386,7 @@ impl Drop for PermRig {
 }
 
 fn perm_boot(rig: &mut PermRig) {
-    let rust_booted = rig.rust_tui.wait_for(WORDMARK, 0, Duration::from_secs(30));
-    let ref_booted = rig.ref_tui.wait_for(WORDMARK, 0, Duration::from_secs(60));
+    let (rust_booted, ref_booted) = wait_both(&rig.rust_tui, &rig.ref_tui, WORDMARK, 0, 30, 0, 60);
     assert!(
         rust_booted && ref_booted,
         "PERM precondition RED: booted rust={rust_booted} ref={ref_booted}"
@@ -564,8 +584,7 @@ fn w13_omo_sections_at_trigger_width_pair() {
     let refs: Vec<&str> = roots.iter().map(String::as_str).collect();
     let normalize = |grid: &str| normalize_grid(grid, &refs);
 
-    let rust_booted = rust_tui.wait_for(WORDMARK, 0, Duration::from_secs(30));
-    let ref_booted = ref_tui.wait_for(WORDMARK, 0, Duration::from_secs(60));
+    let (rust_booted, ref_booted) = wait_both(&rust_tui, &ref_tui, WORDMARK, 0, 30, 0, 60);
     assert!(
         rust_booted && ref_booted,
         "OMO precondition RED: boot rust/rust={rust_booted}/{ref_booted}"
@@ -691,8 +710,7 @@ fn g_scenario(suffix: &str, prompt: &str) {
     let refs: Vec<&str> = roots.iter().map(String::as_str).collect();
     let normalize = |grid: &str| normalize_grid(grid, &refs);
 
-    let rust_booted = rust_tui.wait_for(WORDMARK, 0, Duration::from_secs(30));
-    let ref_booted = ref_tui.wait_for(WORDMARK, 0, Duration::from_secs(60));
+    let (rust_booted, ref_booted) = wait_both(&rust_tui, &ref_tui, WORDMARK, 0, 30, 0, 60);
     assert!(
         rust_booted && ref_booted,
         "G-{suffix} precondition RED: boot {rust_booted}/{ref_booted}"

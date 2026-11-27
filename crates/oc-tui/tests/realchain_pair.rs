@@ -106,6 +106,28 @@ impl PairRig {
 }
 
 /// Settle both ends for `secs` (render/event quiescence).
+/// 2026-11-27 slow-audit fix A (battery family): wait BOTH ends
+/// CONCURRENTLY — the serial two-line form (rust first, then ref)
+/// doubled every wait's wall-clock; the concurrent legs run in
+/// threads and the tuple carries both verdicts.
+fn wait_both(
+    rust_tui: &TuiProcess,
+    ref_tui: &TuiProcess,
+    needle: &[u8],
+    rust_from: usize,
+    rust_secs: u64,
+    ref_from: usize,
+    ref_secs: u64,
+) -> (bool, bool) {
+    std::thread::scope(|scope| {
+        let rust_leg = scope
+            .spawn(move || rust_tui.wait_for(needle, rust_from, Duration::from_secs(rust_secs)));
+        let ref_leg =
+            scope.spawn(move || ref_tui.wait_for(needle, ref_from, Duration::from_secs(ref_secs)));
+        (rust_leg.join().unwrap_or(false), ref_leg.join().unwrap_or(false))
+    })
+}
+
 fn settle(secs: u64) {
     std::thread::sleep(Duration::from_secs(secs));
 }
@@ -173,8 +195,8 @@ impl Drop for PairRig {
 }
 
 fn boot_both(rig: &mut PairRig) {
-    let rust_settled = rig.rust_tui.wait_for(WORDMARK, 0, Duration::from_secs(30));
-    let ref_settled = rig.ref_tui.wait_for(WORDMARK, 0, Duration::from_secs(60));
+    let (rust_settled, ref_settled) =
+        wait_both(&rig.rust_tui, &rig.ref_tui, WORDMARK, 0, 30, 0, 60);
     assert!(
         rust_settled && ref_settled,
         "PAIR precondition RED: rust settled={rust_settled}, ref settled={ref_settled}; \
@@ -215,12 +237,11 @@ fn s2_reply_grid_pair() {
     let rust_from = rig.rust_tui.raw_len();
     let ref_from = rig.ref_tui.raw_len();
     rig.write_both(b"hello\r");
-    let rust_replied = rig.rust_tui.wait_for(REPLY_NEEDLE, rust_from, Duration::from_secs(30));
-    let ref_replied = rig.ref_tui.wait_for(REPLY_NEEDLE, ref_from, Duration::from_secs(60));
+    let (rust_replied, ref_replied) =
+        wait_both(&rig.rust_tui, &rig.ref_tui, REPLY_NEEDLE, rust_from, 30, ref_from, 60);
     // Both titles should ALSO settle to the distinct seed text.
-    let rust_title =
-        rig.rust_tui.wait_for(TITLE_TEXT.as_bytes(), rust_from, Duration::from_secs(20));
-    let ref_title = rig.ref_tui.wait_for(TITLE_TEXT.as_bytes(), ref_from, Duration::from_secs(30));
+    let (rust_title, ref_title) =
+        wait_both(&rig.rust_tui, &rig.ref_tui, TITLE_TEXT.as_bytes(), rust_from, 20, ref_from, 30);
     settle(3);
     let ref_raw = rig.ref_tui.screen_text();
     let rust_raw = rig.rust_tui.screen_text();
@@ -272,8 +293,8 @@ fn s3_palette_grid_pair() {
     // assertion that sidesteps the G-434 catalog-vintage free tier
     // (asserted separately below for presence).
     rig.write_both(b"\x18m");
-    let rust_open = rig.rust_tui.wait_for(b"claude-opus-4-7", 0, Duration::from_secs(20));
-    let ref_open = rig.ref_tui.wait_for(b"claude-opus-4-7", 0, Duration::from_secs(30));
+    let (rust_open, ref_open) =
+        wait_both(&rig.rust_tui, &rig.ref_tui, b"claude-opus-4-7", 0, 20, 0, 30);
     rig.write_both(b"claude-opus-4-7");
     // CI-slower runners paint the selection dot asynchronously — the
     // first CI triggers asserted a pre-settle capture (forensics dumps
@@ -339,19 +360,17 @@ fn s4_restart_session_grid_pair() {
     let rust_from = rig.rust_tui.raw_len();
     let ref_from = rig.ref_tui.raw_len();
     rig.write_both(b"hello\r");
-    let rust_replied = rig.rust_tui.wait_for(REPLY_NEEDLE, rust_from, Duration::from_secs(30));
-    let ref_replied = rig.ref_tui.wait_for(REPLY_NEEDLE, ref_from, Duration::from_secs(60));
+    let (rust_replied, ref_replied) =
+        wait_both(&rig.rust_tui, &rig.ref_tui, REPLY_NEEDLE, rust_from, 30, ref_from, 60);
     settle(2);
     // Restart BOTH TUIs against the SAME sandboxes/servers.
     rig.rust_tui.shutdown(Duration::from_secs(10));
     rig.ref_tui.shutdown(Duration::from_secs(10));
     let mut rust_tui = TuiProcess::spawn(&rig.rust, COLS, ROWS);
     let mut ref_tui = ref_tui_spawn(&rig.refbox, &rig.stage, COLS, ROWS);
-    let rust_settled = rust_tui.wait_for(WORDMARK, 0, Duration::from_secs(30));
-    let ref_settled = ref_tui.wait_for(WORDMARK, 0, Duration::from_secs(60));
+    let (rust_settled, ref_settled) = wait_both(&rust_tui, &ref_tui, WORDMARK, 0, 30, 0, 60);
     // The session tab carries the (seeded) title on both ends.
-    let rust_tab = rust_tui.wait_for(TITLE_TEXT.as_bytes(), 0, Duration::from_secs(20));
-    let ref_tab = ref_tui.wait_for(TITLE_TEXT.as_bytes(), 0, Duration::from_secs(30));
+    let (rust_tab, ref_tab) = wait_both(&rust_tui, &ref_tui, TITLE_TEXT.as_bytes(), 0, 20, 0, 30);
     std::thread::sleep(Duration::from_secs(3));
     let ref_grid = rig.normalize(&capture_settled(&ref_tui));
     let rust_grid = rig.normalize(&capture_settled(&rust_tui));
@@ -383,12 +402,11 @@ fn s5_sidebar_grid_pair() {
     let rust_from = rig.rust_tui.raw_len();
     let ref_from = rig.ref_tui.raw_len();
     rig.write_both(b"hello\r");
-    let rust_replied = rig.rust_tui.wait_for(REPLY_NEEDLE, rust_from, Duration::from_secs(30));
-    let ref_replied = rig.ref_tui.wait_for(REPLY_NEEDLE, ref_from, Duration::from_secs(60));
+    let (rust_replied, ref_replied) =
+        wait_both(&rig.rust_tui, &rig.ref_tui, REPLY_NEEDLE, rust_from, 30, ref_from, 60);
     // Condition-wait the needle BEFORE capturing (settle class): the
     // block paints with the settle, not with the reply text.
-    let _ = rig.rust_tui.wait_for(b"Context", 0, Duration::from_secs(30));
-    let _ = rig.ref_tui.wait_for(b"Context", 0, Duration::from_secs(30));
+    let (_, _) = wait_both(&rig.rust_tui, &rig.ref_tui, b"Context", 0, 30, 0, 30);
     settle(3);
     let ref_grid = rig.normalize(&capture_settled(&rig.ref_tui));
     let rust_grid = rig.normalize(&capture_settled(&rig.rust_tui));
@@ -451,8 +469,7 @@ fn s6_hot_reload_palette_grid_pair() {
     // compare exactly (mask_model retired).
     // Settle-class wait (quiescence before capture); the rust listing
     // outcome rides the exported diff.
-    let _ = rig.rust_tui.wait_for(b"claude-sonnet-4-6", 0, Duration::from_secs(10));
-    let ref_open = rig.ref_tui.wait_for(b"claude-sonnet-4-6", 0, Duration::from_secs(30));
+    let (_, ref_open) = wait_both(&rig.rust_tui, &rig.ref_tui, b"claude-sonnet-4-6", 0, 10, 0, 30);
     settle(2);
     let ref_grid = rig.normalize(&capture_settled(&rig.ref_tui));
     let rust_grid = rig.normalize(&capture_settled(&rig.rust_tui));
@@ -819,8 +836,8 @@ fn p4_sidebar_deep_compare_pair() {
     let rust_from = rig.rust_tui.raw_len();
     let ref_from = rig.ref_tui.raw_len();
     rig.write_both(b"hello\r");
-    let rust_replied = rig.rust_tui.wait_for(REPLY_NEEDLE, rust_from, Duration::from_secs(30));
-    let ref_replied = rig.ref_tui.wait_for(REPLY_NEEDLE, ref_from, Duration::from_secs(60));
+    let (rust_replied, ref_replied) =
+        wait_both(&rig.rust_tui, &rig.ref_tui, REPLY_NEEDLE, rust_from, 30, ref_from, 60);
     let _ = rig.ref_tui.wait_for(TITLE_TEXT.as_bytes(), ref_from, Duration::from_secs(30));
     settle(3);
     let b_ref = rig.normalize(&capture_settled(&rig.ref_tui));
@@ -835,8 +852,8 @@ fn p4_sidebar_deep_compare_pair() {
         let rust_from = rig.rust_tui.raw_len();
         let ref_from = rig.ref_tui.raw_len();
         rig.write_both(msg.as_bytes());
-        let rust_ok = rig.rust_tui.wait_for(REPLY_NEEDLE, rust_from, Duration::from_secs(30));
-        let ref_ok = rig.ref_tui.wait_for(REPLY_NEEDLE, ref_from, Duration::from_secs(60));
+        let (rust_ok, ref_ok) =
+            wait_both(&rig.rust_tui, &rig.ref_tui, REPLY_NEEDLE, rust_from, 30, ref_from, 60);
         assert!(
             rust_ok && ref_ok,
             "P4 RED: long-transcript turn {turn} did not settle rust={rust_ok} ref={ref_ok}"
@@ -873,8 +890,8 @@ fn p4b_sidebar_120_pair() {
     let rust_from = rig.rust_tui.raw_len();
     let ref_from = rig.ref_tui.raw_len();
     rig.write_both(b"hello\r");
-    let rust_replied = rig.rust_tui.wait_for(REPLY_NEEDLE, rust_from, Duration::from_secs(30));
-    let ref_replied = rig.ref_tui.wait_for(REPLY_NEEDLE, ref_from, Duration::from_secs(60));
+    let (rust_replied, ref_replied) =
+        wait_both(&rig.rust_tui, &rig.ref_tui, REPLY_NEEDLE, rust_from, 30, ref_from, 60);
     settle(3);
     let b_ref = rig.normalize(&capture_settled(&rig.ref_tui));
     let b_rust = rig.normalize(&capture_settled(&rig.rust_tui));
@@ -1264,8 +1281,8 @@ fn p5_selection_copy_toast_pair() {
     let rust_from = rig.rust_tui.raw_len();
     let ref_from = rig.ref_tui.raw_len();
     rig.write_both(b"hello\r");
-    let rust_replied = rig.rust_tui.wait_for(REPLY_NEEDLE, rust_from, Duration::from_secs(30));
-    let ref_replied = rig.ref_tui.wait_for(REPLY_NEEDLE, ref_from, Duration::from_secs(60));
+    let (rust_replied, ref_replied) =
+        wait_both(&rig.rust_tui, &rig.ref_tui, REPLY_NEEDLE, rust_from, 30, ref_from, 60);
     settle(2);
     // Each end drags over ITS OWN reply row (the anchor cell sits a
     // couple of cells inside the needle so the press lands on text, not
