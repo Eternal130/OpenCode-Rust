@@ -253,13 +253,15 @@ mod rider_quiescence_tests {
         flood.shutdown(Duration::from_secs(2));
     }
 
-    /// W38 third arm — the settle needs THREE consecutive identical
-    /// quiet-window grids. A stream that shows frame A for exactly
-    /// TWO quiet windows then changes to B: the retired N=2 arm froze
-    /// on the stale A grid; the settle must wait past the change and
-    /// export B, annotated settled. (Fourth-arm note: windows are now
-    /// 500 ms + a 1 s re-verification, so the same script settles
-    /// through the wider gate.)
+    /// W38 third arm — the settle must wait past a mid-capture frame
+    /// change. A stream that shows frame A briefly then changes to B
+    /// (frame A's 0.58 s life is shorter than the certification
+    /// window, so A's novel cells never certify): the retired N=2 arm
+    /// froze on the stale A grid; the settle must wait past the
+    /// change and export B, annotated settled. (slowE note: the
+    /// window is now the 2.5 s grid-stability certification — the
+    /// contract is unchanged: the FINAL frame exports, never the
+    /// short-lived one.)
     #[test]
     fn grid_stability_requires_three_matching_quiet_windows() {
         let script = "printf 'frameA\r\n'; sleep 0.58; printf 'frameA2\r\n'; sleep 9";
@@ -280,12 +282,13 @@ mod rider_quiescence_tests {
         proc.shutdown(Duration::from_secs(2));
     }
 
-    /// W38 third arm — a grid that keeps CHANGING across quiet
-    /// windows (a growing tick line each 0.4 s burst, the mid-state
-    /// cadence shape) never produces three identical consecutive
-    /// windows: capped, exported anyway, annotated. (Fourth-arm note:
-    /// the cap is now 10 s — a forever-changing grid still caps and
-    /// exports, just with the longer conservative budget.)
+    /// W38 third arm — a grid that keeps CHANGING (a growing tick
+    /// line each 0.4 s burst — each tick is NOVEL cell content that
+    /// re-arms the certification window, the mid-state cadence
+    /// shape) never certifies: capped, exported anyway, annotated.
+    /// (slowE note: the 0.4 s cadence is slower than the flip window
+    /// AND its values are novel — the paced-stream trap class; the
+    /// cap is 10 s.)
     #[test]
     fn changing_grid_caps_inside_three_second_window() {
         let script = "i=0; while true; do i=$((i+1)); printf 'tick %s\r\n' \"$i\"; sleep 0.4; done";
@@ -325,11 +328,13 @@ mod rider_quiescence_tests {
         proc.shutdown(Duration::from_secs(2));
     }
 
-    /// W38 fourth arm, mechanism B — a grid that stays IDENTICAL
-    /// across three quiet windows (the candidate settle) and THEN
-    /// completes (frameX ~1.8 s → frameY): the 1 s post-settle
-    /// re-verification catches the late completion, the history
-    /// resets, and the export settles on the FINAL grid.
+    /// W38 fourth arm, mechanism B — a grid that stays unchanged for
+    /// a candidate window (frameX's 1.8 s life) and THEN completes
+    /// (frameX → frameY): the late completion's novel cells land
+    /// inside the 2.5 s certification window, so the window never
+    /// certifies the stale candidate and the export settles on the
+    /// FINAL grid. (slowE note: this rider is WHY the window is 2.5 s
+    /// and not slowA's 240 ms — a 1.8 s-lived face must not certify.)
     #[test]
     fn post_settle_recheck_rewaits_on_late_completion() {
         let script = "printf 'frameX\r\n'; sleep 1.8; printf 'frameY\r\n'; sleep 9";

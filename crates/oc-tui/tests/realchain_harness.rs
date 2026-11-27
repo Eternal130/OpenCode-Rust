@@ -1013,18 +1013,18 @@ impl TuiProcess {
 
     /// Rider (the s3-palette export settle race): wait until the
     /// render stream is QUIET — `window` of wall time with no new
-    /// bytes on the raw stream — before a grid capture. A capture
-    /// taken mid-paint (one end between two partial writes of a
-    /// state change) is exactly the "mid-state grid" the s3 race
-    /// exported: deterministic on rerun, intermittent under full
-    /// battery load. A screen that never goes quiet inside `cap`
-    /// (a live spinner/toast cadence) still exports — annotated via
-    /// [`quiescence_note`] so the adjudication side sees the capture
-    /// was NOT settled. Returns true when quiescent, false on cap.
+    /// bytes on the raw stream. slowE NOTE: this is NO LONGER the
+    /// capture gate — `capture_settled` certifies on GRID stability
+    /// now (the run loop's 100 ms render tick keeps this quiet gate
+    /// from ever certifying on the rust end; see the slowE notes
+    /// there). Kept pub: the quiescence riders exercise it directly
+    /// and a family may still want a raw stream-quiet probe. Returns
+    /// true when quiescent, false on cap.
     ///
-    /// Byte-stream quiet is the right quiescence signal here: every
-    /// grid mutation the VT parser applies arrives as stream bytes,
-    /// so `raw_len` stalling means the screen stopped changing.
+    /// Byte-stream quiet is a strictly STRONGER condition than grid
+    /// stability: every grid mutation arrives as stream bytes, but
+    /// not every byte changes the parsed grid (render chatter, the
+    /// per-draw cursor sequences).
     #[must_use]
     pub fn wait_quiescent(&self, window: Duration, cap: Duration) -> bool {
         let deadline = Instant::now() + cap;
