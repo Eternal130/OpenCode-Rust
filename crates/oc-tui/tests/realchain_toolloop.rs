@@ -27,6 +27,13 @@
 //! Asserted: the tool call line, the folded tool output, the applied
 //! file state, and the settled terminal grid (EXACT pair compare).
 //!
+//! Timing contract (2026-11-27 slowC dwell audit): every both-ends
+//! wait runs CONCURRENTLY (boot/folded-output since slow-audit fix A;
+//! cmd/edit/done since slowC — the serial rust-first form doubled
+//! each wait's wall-clock), and both blind settles are 1 s ordering
+//! floors (wordmark→send, CONFIRM→capture) — the EXACT pair grids
+//! re-exported byte-identical.
+//!
 //! Corpus bootstrap (once per engine request-shape change):
 //! `T9_RECORD=1 cargo nextest run -p oc-tui --test realchain_toolloop
 //!   --exact tlx_rust_bootstrap_seed` then `--exact tlx_ref_bootstrap_seed`.
@@ -92,6 +99,30 @@ fn wait_both(
             .spawn(move || rust_tui.wait_for(needle, rust_from, Duration::from_secs(rust_secs)));
         let ref_leg =
             scope.spawn(move || ref_tui.wait_for(needle, ref_from, Duration::from_secs(ref_secs)));
+        (rust_leg.join().unwrap_or(false), ref_leg.join().unwrap_or(false))
+    })
+}
+
+/// 2026-11-27 slowC fix: the remaining serial two-line SCREEN waits
+/// (cmd / edit / done) ran rust-first-then-ref — the serial form
+/// doubles the wall-clock whenever the second leg's needle lags the
+/// first's and burns BOTH timeouts on a red leg. Same per-end
+/// needles, same windows, same screen-based matching (the
+/// `wait_for_screen` semantics the pairs always had) — the legs just
+/// overlap now, mirroring the boot/folded-output legs above.
+fn wait_both_screen(
+    rust_tui: &TuiProcess,
+    ref_tui: &TuiProcess,
+    rust_needle: &str,
+    rust_secs: u64,
+    ref_needle: &str,
+    ref_secs: u64,
+) -> (bool, bool) {
+    std::thread::scope(|scope| {
+        let rust_leg = scope
+            .spawn(move || rust_tui.wait_for_screen(rust_needle, Duration::from_secs(rust_secs)));
+        let ref_leg =
+            scope.spawn(move || ref_tui.wait_for_screen(ref_needle, Duration::from_secs(ref_secs)));
         (rust_leg.join().unwrap_or(false), ref_leg.join().unwrap_or(false))
     })
 }
@@ -229,19 +260,6 @@ impl TuiProcess {
 // The scenario (pair): full tool loop on both engines, fast lane.
 // ---------------------------------------------------------------------------
 
-/// A screen wait that dumps the CURRENT screen to `.test-logs` when it
-/// fails (the settled dump comes later; the failing-moment screen is
-/// the forensic that separates "never rendered" from "rendered late").
-macro_rules! tl_wait {
-    ($tui:expr, $needle:expr, $secs:expr, $label:expr) => {{
-        let ok = $tui.wait_for_screen($needle, Duration::from_secs($secs));
-        if !ok {
-            dump_grid($label, &$tui.screen_text());
-        }
-        ok
-    }};
-}
-
 #[test]
 fn tl_tool_loop_pair() {
     skip_without_ref_lane!();
@@ -254,13 +272,27 @@ fn tl_tool_loop_pair() {
         rig.rust_tui.screen_text(),
         rig.ref_tui.screen_text()
     );
-    std::thread::sleep(Duration::from_secs(2));
+    // Post-boot ordering floor: both wordmarks landed (the composer
+    // mounts with the first frame); 1 s covers the input routing
+    // settle before the send (was a 2 s blind sleep — the 2026-11-27
+    // slowC dwell audit found no state change riding the second
+    // second).
+    std::thread::sleep(Duration::from_secs(1));
     rig.rust_tui.write(b"hello\r");
     rig.ref_tui.write(b"hello\r");
 
     // Tool call line: the shell row names the recorded command.
-    let rust_cmd = tl_wait!(rig.rust_tui, "cargo test", 30, "tl-fail-rust-cmd");
-    let ref_cmd = tl_wait!(rig.ref_tui, "cargo test", 60, "tl-fail-ref-cmd");
+    // 2026-11-27 slowC fix: concurrent legs (the serial form doubled
+    // the wait's wall-clock whenever the ref needle lagged the rust
+    // one — and burns both timeouts on a red leg).
+    let (rust_cmd, ref_cmd) =
+        wait_both_screen(&rig.rust_tui, &rig.ref_tui, "cargo test", 30, "cargo test", 60);
+    if !rust_cmd {
+        dump_grid("tl-fail-rust-cmd", &rig.rust_tui.screen_text());
+    }
+    if !ref_cmd {
+        dump_grid("tl-fail-ref-cmd", &rig.ref_tui.screen_text());
+    }
     // Folded tool output: the shim's recorded cargo output renders.
     // W12/2.2#12: the G-442 repaint nudge is RETIRED — it masked the
     // shell-row projection race (both ends nudged made the grids
@@ -291,12 +323,30 @@ fn tl_tool_loop_pair() {
     // File edit landed: the tool ROW plus the diff PREVIEW rows on
     // both ends (G-441 closed); the file state itself is asserted
     // byte-exactly after the teardown.
-    let rust_edited = tl_wait!(rig.rust_tui, "Edit README.md", 30, "tl-fail-rust-edit");
-    let ref_edited = tl_wait!(rig.ref_tui, "(tests green)", 60, "tl-fail-ref-edit");
+    // 2026-11-27 slowC fix: concurrent legs (same needles the serial
+    // pair waited: "Edit README.md" on rust, "(tests green)" on ref).
+    let (rust_edited, ref_edited) =
+        wait_both_screen(&rig.rust_tui, &rig.ref_tui, "Edit README.md", 30, "(tests green)", 60);
+    if !rust_edited {
+        dump_grid("tl-fail-rust-edit", &rig.rust_tui.screen_text());
+    }
+    if !ref_edited {
+        dump_grid("tl-fail-ref-edit", &rig.ref_tui.screen_text());
+    }
     // Final confirmation text.
-    let rust_done = tl_wait!(rig.rust_tui, CONFIRM_NEEDLE, 30, "tl-fail-rust-done");
-    let ref_done = tl_wait!(rig.ref_tui, CONFIRM_NEEDLE, 60, "tl-fail-ref-done");
-    std::thread::sleep(Duration::from_secs(4));
+    let (rust_done, ref_done) =
+        wait_both_screen(&rig.rust_tui, &rig.ref_tui, CONFIRM_NEEDLE, 30, CONFIRM_NEEDLE, 60);
+    if !rust_done {
+        dump_grid("tl-fail-rust-done", &rig.rust_tui.screen_text());
+    }
+    if !ref_done {
+        dump_grid("tl-fail-ref-done", &rig.ref_tui.screen_text());
+    }
+    // Settled-capture floor: the CONFIRM needle is the last content
+    // row; 1 s covers the trailing repaint (usage row) before the
+    // grid capture (was a 4 s blind sleep — the slowC dwell audit
+    // re-exported the EXACT pair grids byte-identical at 1 s).
+    std::thread::sleep(Duration::from_secs(1));
 
     let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
     let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
