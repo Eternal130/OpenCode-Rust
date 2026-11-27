@@ -1058,24 +1058,47 @@ impl TuiProcess {
     /// chord: escapes clear dialogs, ctrl+u clears a dirty draft, then
     /// the double ctrl+c).
     pub fn exit_chord(&mut self) {
-        self.write(b"\x1b\x1b\x15\x03\x03");
+        self.write(EXIT_CHORD);
     }
 
     /// Graceful teardown: chord, wait, escalate only through the OWN
     /// child handle if the app is wedged.
+    ///
+    /// slowE — the chord RE-SEND: a modal error toast (app.rs
+    /// `error_toast_live`, e.g. the failed turn's "Session failed")
+    /// swallows keystrokes for its 5 s lifetime, so a chord sent while
+    /// it is up is consumed and the exit never lands — the grace then
+    /// burns to the kill. After ~2 s of no exit, re-send the chord
+    /// (its leading escapes clear any modal first; the slowC g454 fix
+    /// generalizes here). Teardown runs AFTER the export is written,
+    /// so screen states are unaffected by the extra keystrokes. The
+    /// re-send is LOSSY: the child may have exited between try_wait
+    /// polls, and a write into its dead PTY master must not panic.
     pub fn shutdown(&mut self, grace: Duration) {
         self.exit_chord();
         let deadline = Instant::now() + grace;
+        let mut last_send = Instant::now();
         while Instant::now() < deadline {
             match self.child.try_wait() {
                 Ok(Some(_)) | Err(_) => return,
-                Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+                Ok(None) => {}
             }
+            if last_send.elapsed() >= Duration::from_secs(2) {
+                let _ = self.master.write_all(EXIT_CHORD);
+                let _ = self.master.flush();
+                last_send = Instant::now();
+            }
+            std::thread::sleep(Duration::from_millis(100));
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
 }
+
+/// The exit chord bytes (the re-send path shares the exact chord —
+/// escapes clear any modal, ctrl+u clears a dirty draft, the double
+/// ctrl+c exits).
+const EXIT_CHORD: &[u8] = b"\x1b\x1b\x15\x03\x03";
 
 // ---------------------------------------------------------------------------
 // The managed server (production boot step 1)
@@ -1955,7 +1978,7 @@ pub fn plugin_lane_skip_reason() -> Option<String> {
     Some(reason)
 }
 
-fn plugin_lane_skip_reason_at(root: &Path) -> Option<String> {
+pub(crate) fn plugin_lane_skip_reason_at(root: &Path) -> Option<String> {
     for (name, spec) in PLUGIN_SPECS {
         let source = root.join(name);
         if plugin_payload_stamp(&source).is_none() {
@@ -1969,69 +1992,6 @@ fn plugin_lane_skip_reason_at(root: &Path) -> Option<String> {
     None
 }
 
-#[cfg(test)]
-mod rider_payload_root_tests {
-    use super::*;
-
-    /// Rider (Lane D pitfall) — the git-ignored payload registry lives
-    /// only in the main checkout: in a lane worktree the local path is
-    /// absent and the root MUST fall back to the main checkout's copy
-    /// (a silent skip once fake-greened a whole omo lane).
-    #[test]
-    fn payload_root_falls_back_to_main_checkout() {
-        let local = worktree_dir("tools/diff/realchain/plugin-payload");
-        let root = plugin_payload_root();
-        if local.is_dir() {
-            // Main-checkout shape: the local copy wins outright.
-            assert_eq!(root, local);
-        } else if !root.is_dir() {
-            // No payload registry anywhere on this machine (CI does not
-            // provision the git-ignored registry; a checkout that is its
-            // own "main checkout" resolves the fallback to `local`).
-            // Availability gap, not a contract breach — skip with the
-            // reason (mirrors `ref_lane_skip_reason`); on a dev box the
-            // registry exists and the fallback assertions below run.
-            let ci_shape = root == local;
-            eprintln!(
-                "PAYLOAD-ROOT SKIP: no plugin payload registry available \
-                 (local={}, fallback root={}; {})",
-                local.display(),
-                root.display(),
-                if ci_shape {
-                    "CI shape: checkout is its own main checkout, fallback == local"
-                } else {
-                    "worktree shape: fallback target missing"
-                }
-            );
-            let log = worktree_dir(".test-logs");
-            let _ = std::fs::create_dir_all(&log);
-            let _ = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(log.join("skips.log"))
-                .and_then(|mut file| {
-                    use std::io::Write;
-                    writeln!(file, "[payload-root] no plugin payload registry available")
-                });
-        } else {
-            // Dev-box worktree shape: the fallback MUST be the main
-            // checkout's copy, never the (absent) worktree-local path.
-            assert_ne!(root, local);
-        }
-    }
-
-    /// Skip semantics survive without a payload supply: an empty root
-    /// yields a reason naming the missing tree (never a red).
-    #[test]
-    fn payload_skip_reason_names_missing_root() {
-        let tmp = std::env::temp_dir().join(format!("t9-payload-empty-{}", std::process::id()));
-        std::fs::create_dir_all(&tmp).expect("tmp payload root");
-        let reason = plugin_lane_skip_reason_at(&tmp)
-            .expect("empty payload root must produce a skip reason");
-        assert!(reason.contains("oh-my-opencode-slim"), "reason names the spec dir: {reason}");
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-}
 
 /// The newest `<stamp>` generation under a payload registry entry that
 /// carries `node_modules` (the install layout both engines share).
@@ -2167,33 +2127,44 @@ impl Drop for LaneGuard {
 // must list everything the normalizer stripped, so the adjudication
 // side sees it). Accumulated per test process (nextest isolates each
 // test in its own process), read by the diff exporter.
+//
+// String-keyed (slowE): the pair-concurrent capture re-emits a scope
+// leg's drained remarks on the calling thread (thread-locals cannot
+// cross threads) — the replay needs to re-insert by value.
 thread_local! {
-    static FIRED_NORMALIZATIONS: std::cell::RefCell<std::collections::BTreeSet<&'static str>> =
+    static FIRED_NORMALIZATIONS: std::cell::RefCell<std::collections::BTreeSet<String>> =
         const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
 }
 
-fn mark_fired(name: &'static str) {
+fn mark_fired(name: &str) {
     FIRED_NORMALIZATIONS.with(|set| {
-        set.borrow_mut().insert(name);
+        set.borrow_mut().insert(name.to_owned());
     });
 }
 
 // Rider (the s3-palette settle race): the quiescence state of the
 // LAST capture_settled pair (per capture, like FIRED_NORMALIZATIONS
-// per export) — "settled" (a full quiet window before the capture)
-// or "capped" (the stream never went quiet inside the cap; the grid
+// per export) — "settled" (the grid-stability arm certified) or
+// "capped" (the capture never certified inside the cap; the grid
 // exported anyway, annotated). Null = the capture did not go through
 // the quiescence gate.
 thread_local! {
-    static QUIESCENCE: std::cell::RefCell<Vec<&'static str>> =
+    static QUIESCENCE: std::cell::RefCell<Vec<String>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Record one end's quiescence verdict (called by
 /// [`capture_settled`]).
 fn mark_quiescence(settled: bool) {
+    mark_quiescence_verdict(if settled { "settled" } else { "capped" });
+}
+
+/// slowE — record a verdict by name (the pair-concurrent replay
+/// path: a scope leg's drained verdict re-emitted on the calling
+/// thread).
+fn mark_quiescence_verdict(verdict: &str) {
     QUIESCENCE.with(|state| {
-        state.borrow_mut().push(if settled { "settled" } else { "capped" });
+        state.borrow_mut().push(verdict.to_owned());
     });
 }
 
@@ -2201,78 +2172,145 @@ fn mark_quiescence(settled: bool) {
 /// (drained per report, mirroring [`normalization_names`]).
 #[must_use]
 pub fn quiescence_names() -> Vec<String> {
-    QUIESCENCE.with(|state| {
-        std::mem::take(&mut *state.borrow_mut()).into_iter().map(str::to_owned).collect()
-    })
+    QUIESCENCE.with(|state| std::mem::take(&mut *state.borrow_mut()))
 }
 
-/// A SETTLED grid capture: [`TuiProcess::wait_quiescent`] gates the
-/// read, then the GRID itself must be STABLE — THREE consecutive
-/// quiet-window captures identical. The stream gate alone still let
-/// one load-race shape through (the workspace battery's s3 export:
-/// the byte stream was quiet at the capture instant but the app's
-/// composed screen was MID-STATE — a state change half-applied across
-/// components paints its rows in separate quiet bursts). The
-/// grid-stability arm closes that: a transitional screen keeps
-/// changing across quiet windows. W38 third-arm hardening
-/// (2026-11-21, controller ruling after the SECOND full-load
-/// sighting — w13-perm-reject, same shape both times): N=3. W38
-/// FOURTH arm (2026-11-22, controller ruling after a THIRD sighting
-/// — the mid-state export recurred under full battery load even with
-/// N=3; controlled reproduction did not reproduce, so the ruling was
-/// conservative COMBINED hardening of both candidate mechanisms):
-/// * mechanism A (a settlement chain slower than the cap): the cap
-///   rises to 10 s and the quiet window to 500 ms — a slow chain now
-///   settles inside the gate instead of capping through it;
-/// * mechanism B (three windows fooled by a long-lived incomplete
-///   grid): every candidate settle re-verifies across ONE more
-///   relaxed 1 s window — a grid that completes after the three
-///   matching windows re-enters the loop (history reset), bounded by
-///   the cap.
+/// A SETTLED grid capture — the GRID-STABILITY certification arm
+/// (slowE, 2026-11-28: the caret-blink quiescence trap).
 ///
-/// A never-stable screen (a live spinner) still exports at the cap,
-/// annotated via [`mark_quiescence`]. Conservative by construction:
-/// a settled export now proves ≥3×500 ms identical + a further 1 s
-/// unchanged (≈2.5 s of grid stability); better slow than exporting a mid-state again.
+/// HISTORY (why the gate looks like this): the W38-W12 machinery
+/// gated the read on STREAM QUIESCENCE (`wait_quiescent`) + three
+/// identical quiet-window grids + a 1 s re-verify. That gate could
+/// never certify on the rust end: the run loop re-renders on every
+/// 100 ms clock tick while any clock-driven UI (the composer caret)
+/// is live and the frame writer emits its per-draw cursor chatter
+/// (the vt_temporal DEBOUNCE finding), so the byte stream never goes
+/// 500 ms quiet — every settled export burned the FULL 10 s cap
+/// (slowB's evidence: `quiescence: ["settled","capped"]` on ~150
+/// corpus reports, ~12.5 s per paired export, serial). The PARSED
+/// GRID, however, IS stable in exactly those states: the caret is a
+/// reverse-video block toggling its STYLE every 500 ms — invisible
+/// to `screen_text` — and the escape chatter changes no cell.
+///
+/// THE ARM: certify on GRID stability sampled on a poll cadence,
+/// with slowA's cell-level classification (crates/oc-cli
+/// tests/pty_fuzz.rs, the controller-steered reuse) deciding which
+/// cell changes RE-ARM the stability window:
+///   * a cell's FIRST observed change always re-arms (key echoes,
+///     dialog mounts, transcript rows — content the capture must
+///     wait behind);
+///   * later changes re-arm only for a value the cell has NOT shown
+///     in this capture AND the cell not being fast-flipping (changed
+///     again within [`TRANSIENT_POLLS`] polls). Spinner cells (the
+///     80 ms braille frames) flip among a small seen alphabet
+///     faster than the flip window — animation, not new content;
+///     the caret's 500 ms half-period toggles two seen values —
+///     neither blocks the window.
+/// A paced stream's content chunks land NOVEL values on transcript
+/// cells at every chunk (25-150 ms apart) — the window keeps
+/// re-arming for as long as content lands, so a mid-stream capture
+/// still waits (the v21b 40 s lesson: a momentarily grid-stable
+/// gap BETWEEN chunks must not certify; a chunk gap that outlasts
+/// the window would, which is why the window is 2.5 s — see below).
+///
+/// THE WINDOW is 2.5 s, NOT slowA's 240 ms: it preserves the retired
+/// gate's certification strength (3×500 ms identical quiet-window
+/// grids + the 1 s re-verify ≈ 2.5 s of proven stability) and keeps
+/// the rider `post_settle_recheck_rewaits_on_late_completion` green
+/// (a candidate frame that lives 1.8 s before a late completion must
+/// NOT certify — the late frame's novel values land inside the
+/// window). Slower than it could be, deliberately: this capture's
+/// output is the anchor corpus, and an early certify changes the
+/// export content wherever a face mutates after the window (the
+/// acceptance bar for this arm is BYTE-IDENTICAL re-exports).
+///
+/// A screen that never certifies inside the cap (content still
+/// landing, or a spinner cell whose alphabet is still novel) still
+/// exports AT the cap, annotated via [`mark_quiescence`] — the
+/// historical capped path.
 #[must_use]
 pub fn capture_settled(tui: &TuiProcess) -> String {
     let start = Instant::now();
     let cap = Duration::from_secs(10);
-    let window = Duration::from_millis(500);
-    let mut prev: Option<String> = None;
-    let mut prev2: Option<String> = None;
+    let window = Duration::from_millis(SETTLE_WINDOW_MS);
+    let mut stable_since = Instant::now();
+    let mut last = grid_cells(tui);
+    // (row, col) -> (values the cell has shown this capture, the
+    // poll index of its last change; 0 = never changed — polls start
+    // at 1).
+    let mut tracker: std::collections::HashMap<
+        (usize, usize),
+        (std::collections::BTreeSet<char>, usize),
+    > = std::collections::HashMap::new();
+    let mut polls = 0usize;
     loop {
         let remaining = cap.saturating_sub(start.elapsed());
         if remaining.is_zero() {
             mark_quiescence(false);
+            // Fresh sample at the cap instant (the historical capped
+            // export shape — the grid ON screen at the deadline).
             return tui.screen_text();
         }
-        let quiet = tui.wait_quiescent(window, remaining);
-        let grid = tui.screen_text();
-        if quiet
-            && prev.as_deref() == Some(grid.as_str())
-            && prev2.as_deref() == Some(grid.as_str())
-        {
-            // Mechanism B: re-verify the candidate across one relaxed
-            // 1 s window — quiet is measured from THIS call, so any
-            // late completion inside the window mismatches and the
-            // loop re-settles on the final grid.
-            let remaining = cap.saturating_sub(start.elapsed());
-            if remaining.is_zero() {
-                mark_quiescence(false);
+        std::thread::sleep(remaining.min(Duration::from_millis(SETTLE_POLL_MS)));
+        let cells = grid_cells(tui);
+        polls += 1;
+        if cells != last {
+            let mut re_arm = false;
+            for (row, (prev, cur)) in last.iter().zip(cells.iter()).enumerate() {
+                if prev.len() != cur.len() {
+                    // A row reflowing to a different width is content
+                    // motion by definition — wait behind it.
+                    re_arm = true;
+                    continue;
+                }
+                for (col, (a, b)) in prev.iter().zip(cur.iter()).enumerate() {
+                    if a != b {
+                        let (seen, last_change) =
+                            tracker.entry((row, col)).or_insert((std::collections::BTreeSet::new(), 0));
+                        let novel = seen.insert(*b);
+                        let fast = *last_change > 0 && polls - *last_change <= TRANSIENT_POLLS;
+                        *last_change = polls;
+                        if novel && !fast {
+                            re_arm = true;
+                        }
+                    }
+                }
+            }
+            if last.len() != cells.len() {
+                re_arm = true;
+            }
+            if re_arm {
+                stable_since = Instant::now();
+            } else if stable_since.elapsed() >= window {
+                mark_quiescence(true);
                 return tui.screen_text();
             }
-            if tui.wait_quiescent(Duration::from_secs(1), remaining) && tui.screen_text() == grid {
-                mark_quiescence(true);
-                return grid;
-            }
-            prev = None;
-            prev2 = None;
-            continue;
+        } else if stable_since.elapsed() >= window {
+            mark_quiescence(true);
+            return tui.screen_text();
         }
-        prev2 = prev;
-        prev = Some(grid);
+        last = cells;
     }
+}
+
+/// The settle poll cadence (slowA's pty_fuzz cadence: fast enough
+/// that the 80 ms spinner frames register as fast-flipping, slow
+/// enough that a 120×36 cell diff stays negligible).
+const SETTLE_POLL_MS: u64 = 60;
+
+/// The grid-stability certification window (see [`capture_settled`]):
+/// the retired quiet-gate's ≈2.5 s certification strength, preserved.
+const SETTLE_WINDOW_MS: u64 = 2_500;
+
+/// A cell counts as fast-flipping when it changed again within this
+/// many polls (slowA's classification): spinner-class animation, not
+/// content the capture must wait behind.
+const TRANSIENT_POLLS: usize = 4;
+
+/// The parsed grid as per-cell chars (the diff substrate of the
+/// grid-stability arm).
+fn grid_cells(tui: &TuiProcess) -> Vec<Vec<char>> {
+    tui.screen_text().lines().map(|line| line.chars().collect()).collect()
 }
 
 /// va21g — the TRANSIENT-state capture (G-545's 3 s notice window):
@@ -2285,6 +2323,81 @@ pub fn capture_transient(tui: &TuiProcess) -> String {
     tui.screen_text()
 }
 
+// ---------------------------------------------------------------------------
+// slowE — the PAIR-CONCURRENT capture + the remark replay API.
+//
+// The families' serial shape is `capture_settled(&ref)` then
+// `capture_settled(&rust)` (the annotation order the reports carry:
+// ["settled","capped"] = ref verdict first, rust second). Running the
+// two legs in std::thread::scope halves the wall time (the legs are
+// independent processes/PTYs), BUT the quiescence/normalization
+// remarks are THREAD-LOCAL: a scope leg's marks land in the leg
+// thread's storage and the calling thread's export drains NOTHING
+// (slowB's blocker). The leg therefore drains its own remarks and
+// hands them back; [`replay_remarks`] re-emits them on the CALLING
+// thread, preserving the serial annotation order.
+// ---------------------------------------------------------------------------
+
+/// One capture leg's outcome: the settled grid plus the remarks the
+/// capture recorded on the LEG's thread (drained there — thread-locals
+/// cannot cross the join).
+pub struct CaptureLeg {
+    /// The grid [`capture_settled`] returned.
+    pub grid: String,
+    /// The quiescence verdicts the leg's capture pushed (usually one).
+    pub quiescence: Vec<String>,
+    /// The normalizations that fired on the leg thread (empty for a
+    /// plain capture leg — families normalize on the calling thread;
+    /// a leg that normalizes in-flight needs the replay to carry it).
+    pub normalizations: Vec<String>,
+}
+
+/// Run [`capture_settled`] on THIS thread and drain the remarks it
+/// recorded here (the scope-leg building block).
+#[must_use]
+pub fn capture_settled_leg(tui: &TuiProcess) -> CaptureLeg {
+    let grid = capture_settled(tui);
+    CaptureLeg { quiescence: quiescence_names(), normalizations: normalization_names(), grid }
+}
+
+/// Re-emit one leg's drained remarks on the CALLING thread (the pub
+/// remark API): the quiescence verdicts push in order, the
+/// normalizations re-mark, so the next export's report lists exactly
+/// what the leg's own grids triggered — as if the capture had run
+/// serially on this thread.
+pub fn replay_remarks(leg: &CaptureLeg) {
+    for verdict in &leg.quiescence {
+        mark_quiescence_verdict(verdict);
+    }
+    for name in &leg.normalizations {
+        mark_fired(name);
+    }
+}
+
+/// The PAIR-CONCURRENT settled capture: both ends' captures run as
+/// std::thread::scope legs (independent PTYs/processes — no shared
+/// mutable state between them), the grids come back as
+/// `(ref_grid, rust_grid)`, and each leg's remarks are re-emitted on
+/// the calling thread in the SERIAL order the families produced
+/// before (ref verdict first, rust second — the argument order IS the
+/// annotation order). Teardown semantics are unchanged: the grids are
+/// the same settled grids the serial calls would return, just
+/// overlapped in wall time.
+#[must_use]
+pub fn capture_settled_pair(ref_tui: &TuiProcess, rust_tui: &TuiProcess) -> (String, String) {
+    let (ref_leg, rust_leg) = std::thread::scope(|scope| {
+        let ref_handle = scope.spawn(|| capture_settled_leg(ref_tui));
+        let rust_handle = scope.spawn(|| capture_settled_leg(rust_tui));
+        (
+            ref_handle.join().expect("the ref capture leg panicked"),
+            rust_handle.join().expect("the rust capture leg panicked"),
+        )
+    });
+    replay_remarks(&ref_leg);
+    replay_remarks(&rust_leg);
+    (ref_leg.grid, rust_leg.grid)
+}
+
 /// The names of every normalization that fired SINCE THE LAST EXPORT
 /// (M-1, review fix: a per-report snapshot, not a process-lifetime
 /// accumulation — the set is drained by each export, so each report
@@ -2293,9 +2406,7 @@ pub fn capture_transient(tui: &TuiProcess) -> String {
 /// stripped).
 #[must_use]
 pub fn normalization_names() -> Vec<String> {
-    FIRED_NORMALIZATIONS.with(|set| {
-        std::mem::take(&mut *set.borrow_mut()).into_iter().map(|name| name.to_owned()).collect()
-    })
+    FIRED_NORMALIZATIONS.with(|set| std::mem::take(&mut *set.borrow_mut()).into_iter().collect())
 }
 
 /// Normalize a settled screen grid for cross-end comparison:
@@ -2417,7 +2528,7 @@ pub fn normalize_grid(grid: &str, roots: &[&str]) -> String {
 /// are wall-clock artifacts (W5: the paced-stream duration differs by
 /// fractions of a second between ends — same schedule, jittered
 /// render clocks).
-fn replace_timings(row: &str) -> String {
+pub(crate) fn replace_timings(row: &str) -> String {
     let chars: Vec<char> = row.chars().collect();
     let is_digit =
         |chars: &[char], index: usize| chars.get(index).is_some_and(char::is_ascii_digit);
@@ -2508,7 +2619,7 @@ fn collapse_spaces(row: &mut String) {
     *row = out;
 }
 
-fn replace_version_pill(row: &str) -> String {
+pub(crate) fn replace_version_pill(row: &str) -> String {
     let trimmed = row.trim();
     let looks_like_version = |text: &str| {
         text == "local"
@@ -2566,7 +2677,7 @@ fn replace_version_pill(row: &str) -> String {
     }
 }
 
-fn replace_id_shapes(row: &str) -> String {
+pub(crate) fn replace_id_shapes(row: &str) -> String {
     // The WIRE id prefixes of the v2 schema (oc-schema id.rs — the
     // `check "<prefix>"` registry): ses/msg/evt/wrk/per/sh/frm/psv/
     // cred/con. W4 Minor ③: narrowed to exactly this list — the old
@@ -2817,235 +2928,4 @@ fn write_diff_report(
     let _ = std::fs::write(dir.join(format!("{base}.txt")), text);
 }
 
-#[cfg(test)]
-mod rider_quiescence_tests {
-    use super::*;
 
-    /// Rider (s3-palette settle race): the quiescence gate returns
-    /// settled=true once the stream stops growing (a `cat` echo tail)
-    /// and settled=false inside the cap while the stream never stops
-    /// (a `yes` flood) — the annotated export-anyway path.
-    #[test]
-    fn quiescent_when_stream_stops_capped_under_flood() {
-        let mut quiet = TuiProcess::spawn_command(std::process::Command::new("cat"), 40, 10);
-        quiet.write(b"quiesce-probe");
-        assert!(
-            quiet.wait_quiescent(Duration::from_millis(250), Duration::from_secs(5)),
-            "an echo tail never went quiescent"
-        );
-        quiet.shutdown(Duration::from_secs(2));
-
-        let mut flood = TuiProcess::spawn_command(std::process::Command::new("yes"), 40, 10);
-        std::thread::sleep(Duration::from_millis(300)); // let the flood fill the stream
-        assert!(
-            !flood.wait_quiescent(Duration::from_millis(250), Duration::from_millis(1200)),
-            "a forever-growing stream reported quiescent"
-        );
-        flood.shutdown(Duration::from_secs(2));
-    }
-
-    /// W38 third arm — the settle needs THREE consecutive identical
-    /// quiet-window grids. A stream that shows frame A for exactly
-    /// TWO quiet windows then changes to B: the retired N=2 arm froze
-    /// on the stale A grid; the settle must wait past the change and
-    /// export B, annotated settled. (Fourth-arm note: windows are now
-    /// 500 ms + a 1 s re-verification, so the same script settles
-    /// through the wider gate.)
-    #[test]
-    fn grid_stability_requires_three_matching_quiet_windows() {
-        let script = "printf 'frameA\r\n'; sleep 0.58; printf 'frameA2\r\n'; sleep 9";
-        let mut command = std::process::Command::new("sh");
-        command.arg("-c").arg(script);
-        let mut proc = TuiProcess::spawn_command(command, 40, 10);
-        let grid = capture_settled(&proc);
-        let verdict = quiescence_names();
-        assert_eq!(
-            verdict,
-            ["settled".to_owned()],
-            "the two-window-then-change stream settled on the FINAL grid"
-        );
-        assert!(
-            grid.contains("frameA2"),
-            "the exported grid is the final frame, not the two-window stale one: {grid:?}"
-        );
-        proc.shutdown(Duration::from_secs(2));
-    }
-
-    /// W38 third arm — a grid that keeps CHANGING across quiet
-    /// windows (a growing tick line each 0.4 s burst, the mid-state
-    /// cadence shape) never produces three identical consecutive
-    /// windows: capped, exported anyway, annotated. (Fourth-arm note:
-    /// the cap is now 10 s — a forever-changing grid still caps and
-    /// exports, just with the longer conservative budget.)
-    #[test]
-    fn changing_grid_caps_inside_three_second_window() {
-        let script = "i=0; while true; do i=$((i+1)); printf 'tick %s\r\n' \"$i\"; sleep 0.4; done";
-        let mut command = std::process::Command::new("sh");
-        command.arg("-c").arg(script);
-        let mut proc = TuiProcess::spawn_command(command, 40, 10);
-        let _grid = capture_settled(&proc);
-        let verdict = quiescence_names();
-        assert_eq!(verdict, ["capped".to_owned()], "a forever-changing grid must cap, not settle");
-        proc.shutdown(Duration::from_secs(2));
-    }
-
-    /// W38 fourth arm, mechanism A — a settlement chain SLOWER than
-    /// the retired 3 s cap (one changed burst each 0.9 s for ~4 s,
-    /// then the final frame + quiet): the 10 s / 500 ms gate settles
-    /// on the FINAL frame instead of capping through the chain and
-    /// exporting a mid-burst grid.
-    #[test]
-    fn slow_settlement_chain_settles_in_the_fourth_arm_gate() {
-        let script = "printf 'chain1\r\n'; sleep 0.9; printf 'chain2\r\n'; sleep 0.9; \
-                      printf 'chain3\r\n'; sleep 0.9; printf 'chain4\r\n'; sleep 0.9; \
-                      printf 'final-frame\r\n'; sleep 9";
-        let mut command = std::process::Command::new("sh");
-        command.arg("-c").arg(script);
-        let mut proc = TuiProcess::spawn_command(command, 40, 10);
-        let grid = capture_settled(&proc);
-        let verdict = quiescence_names();
-        assert_eq!(
-            verdict,
-            ["settled".to_owned()],
-            "the slow chain settles inside the 10 s gate (the 3 s cap would have exported mid-chain)"
-        );
-        assert!(
-            grid.contains("final-frame"),
-            "the exported grid is the settled final frame, not a mid-chain burst: {grid:?}"
-        );
-        proc.shutdown(Duration::from_secs(2));
-    }
-
-    /// W38 fourth arm, mechanism B — a grid that stays IDENTICAL
-    /// across three quiet windows (the candidate settle) and THEN
-    /// completes (frameX ~1.8 s → frameY): the 1 s post-settle
-    /// re-verification catches the late completion, the history
-    /// resets, and the export settles on the FINAL grid.
-    #[test]
-    fn post_settle_recheck_rewaits_on_late_completion() {
-        let script = "printf 'frameX\r\n'; sleep 1.8; printf 'frameY\r\n'; sleep 9";
-        let mut command = std::process::Command::new("sh");
-        command.arg("-c").arg(script);
-        let mut proc = TuiProcess::spawn_command(command, 40, 10);
-        let grid = capture_settled(&proc);
-        let verdict = quiescence_names();
-        assert_eq!(
-            verdict,
-            ["settled".to_owned()],
-            "the late completion re-settles instead of exporting the stale candidate"
-        );
-        assert!(
-            grid.lines().any(|line| line.trim() == "frameY"),
-            "the exported grid carries the completed frame: {grid:?}"
-        );
-        // The completion is the LAST content row (the printf rig
-        // appends — like a transcript, the settled export ends on it).
-        let last_content = grid.lines().rev().find(|line| !line.trim().is_empty());
-        assert_eq!(
-            last_content.map(str::trim),
-            Some("frameY"),
-            "the settled grid ends on the completed frame: {grid:?}"
-        );
-        proc.shutdown(Duration::from_secs(2));
-    }
-}
-
-#[cfg(test)]
-mod g461_ref_port_tests {
-    use super::*;
-
-    /// Mirror of the deterministic hashed base in `Sandbox::ref_service_port`.
-    fn hashed_base(root: &Path) -> u16 {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        root.hash(&mut hasher);
-        50_000 + (hasher.finish() % 10_000) as u16
-    }
-
-    /// G-461 — an incumbent listener on a sandbox's hashed base port
-    /// (the shape of a stray user-run `ref serve --service` DETACH
-    /// child) must never be handed out: the probe walks past it, stays
-    /// in the 50000-60000 band, and the pick is pinned so a re-call
-    /// cannot silently re-point the sandbox at its own live daemon.
-    ///
-    /// Adaptive incumbent: we try to bind the hashed base ourselves.
-    /// If the bind succeeds we own a dummy incumbent; if it fails with
-    /// AddrInUse a real listener (e.g. a parallel test's live ref
-    /// service in the same band) IS the incumbent — the walk must
-    /// still clear it. No "band free by construction" assumption.
-    #[test]
-    fn ref_port_walks_past_incumbent_listener() {
-        let sb = sandbox("g461incumbent", 0);
-        let other = sandbox("g461other", 0);
-        let base = hashed_base(&sb.root);
-        // Distinct sandbox roots pin distinct bases (no cross-sandbox
-        // fights inside one test process).
-        assert_ne!(base, hashed_base(&other.root));
-        let incumbent = match std::net::TcpListener::bind(("127.0.0.1", base)) {
-            Ok(l) => Some(l),
-            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-                // A real listener already owns the base port — that
-                // occupant itself is the incumbent to walk past.
-                None
-            }
-            Err(e) => panic!("unexpected bind error on base port {base}: {e}"),
-        };
-        let port = sb.ref_service_port();
-        assert!((50_000..60_000).contains(&port), "port {port} outside the pinned band");
-        assert_ne!(port, base, "must walk past the incumbent listener");
-        drop(incumbent);
-        // The pin is cached: even after the incumbent is gone, the
-        // sandbox keeps its port (a live daemon owns it now).
-        assert_eq!(sb.ref_service_port(), port);
-        let _ = std::fs::remove_dir_all(&sb.root);
-        let _ = std::fs::remove_dir_all(&other.root);
-    }
-}
-
-#[cfg(test)]
-mod w4_normalizer_tests {
-    use super::*;
-
-    #[test]
-    fn seconds_durations_mask_but_words_survive() {
-        assert_eq!(
-            replace_timings("Build · claude-opus-4-7 · 3.6s · 5.1 tok/s"),
-            "Build · claude-opus-4-7 · __SECS__ · __TOKS__"
-        );
-        assert_eq!(replace_timings("12ms later"), "__MS__ later");
-        // `s` inside a word is not a duration.
-        assert_eq!(replace_timings("38 tokens used"), "38 tokens used");
-        assert_eq!(replace_timings("4 steps"), "4 steps");
-    }
-
-    #[test]
-    fn id_shapes_use_the_schema_wire_prefix_list() {
-        assert_eq!(replace_id_shapes("tab ses_0001abcdEFGhij"), "tab __ID__");
-        assert_eq!(replace_id_shapes("row msg_1e64066090019u8zd"), "row __ID__");
-        // `pty` is NOT a schema wire prefix (local attachment shape).
-        assert_eq!(replace_id_shapes("attach pty_0001abcdEFGhij"), "attach pty_0001abcdEFGhij");
-        // Short words that share a prefix stay intact.
-        assert_eq!(replace_id_shapes("session message"), "session message");
-    }
-
-    /// va21g — the wordmark's inline v-prefixed version token (the
-    /// mini splash row: `▪ oc mini vlocal · …` vs `v2.0.24 · …`).
-    #[test]
-    fn version_pill_collapses_the_inline_vtoken() {
-        assert_eq!(
-            replace_version_pill("▪ oc mini vlocal · __ROOT__/project"),
-            "▪ oc mini __VERSION__ · __ROOT__/project"
-        );
-        assert_eq!(
-            replace_version_pill("▪ oc mini v2.0.24 · __ROOT__/project"),
-            "▪ oc mini __VERSION__ · __ROOT__/project"
-        );
-        // EOL-terminated token (the narrow form: the detail truncates).
-        assert_eq!(replace_version_pill("▪ oc mini vlocal"), "▪ oc mini __VERSION__");
-        // NOT a version: plain words with a v stay intact.
-        assert_eq!(replace_version_pill("very good text"), "very good text");
-        assert_eq!(replace_version_pill("value vlocal-ish and more"), "value vlocal-ish and more");
-        // A mid-word v (no leading space) stays intact.
-        assert_eq!(replace_version_pill("savedvlocal row"), "savedvlocal row");
-    }
-}
