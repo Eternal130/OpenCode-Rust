@@ -28,6 +28,9 @@
     clippy::needless_continue,
     clippy::redundant_closure_for_method_calls,
     clippy::similar_names,
+    // slowF: the omo scenario's rig + three exported states ride one
+    // fn (the plugin-loaded needle pushed it past the 100-line floor).
+    clippy::too_many_lines,
     clippy::unnecessary_debug_formatting
 )]
 

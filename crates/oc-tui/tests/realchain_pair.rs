@@ -38,6 +38,10 @@
     clippy::redundant_closure_for_method_calls,
     clippy::semicolon_if_nothing_returned,
     clippy::similar_names,
+    // slowF: geom_probe carries the boot-1/seed/boot-2 + three-state
+    // script inline (the width-dependent boot faces and the state-B/C
+    // needles pushed it past the 100-line floor).
+    clippy::too_many_lines,
     clippy::unnecessary_debug_formatting
 )]
 
