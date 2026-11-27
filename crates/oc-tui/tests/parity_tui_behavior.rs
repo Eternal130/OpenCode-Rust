@@ -555,8 +555,8 @@ fn ui_dialog_prompt_edit_table() {
     assert_eq!(entry.prompt_cursor(), 4);
     assert_eq!(
         entry.prompt_visible_line(),
-        ("d".to_owned(), 0),
-        "the height-1 viewport reads the caret's line"
+        ("d".to_owned(), Some(0)),
+        "the height-1 viewport's band followed the caret's crossing onto the new line"
     );
     // ctrl+k deletes to the caret's LINE end — the first line keeps
     // its text.

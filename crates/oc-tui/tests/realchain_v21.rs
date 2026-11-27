@@ -277,7 +277,10 @@ export default {
 "#,
     ),
     // 3 — toast-session-action: the sessionID arm — the fixture
-    // navigates HOME at t+18 s (the router home arm) so the t+20 s
+    // CHAINS off the session's appearance (the rig's exchange creates
+    // it; the v21b-toast waitSessionRoute poll pattern — va21g's
+    // slow-audit addendum: the old t+18 s/t+20 s absolute timers were
+    // dead dwell AND raced the exchange), then navigates HOME so the
     // toast targets a session whose family is NOT the open route —
     // the `Open` action affordance shows on both ends.
     (
@@ -285,45 +288,56 @@ export default {
         r#"export default {
   id: "v21.toast.tui",
   async setup(ctx) {
-    setTimeout(() => {
+    const listSessions = async () => {
+      const raw =
+        ctx.data && ctx.data.session && typeof ctx.data.session.list === "function"
+          ? ctx.data.session.list()
+          : await ctx.session.list();
+      return Array.isArray(raw)
+        ? raw
+        : raw && Array.isArray(raw.data)
+          ? raw.data
+          : [];
+    };
+    const waitSession = async () => {
+      for (let i = 0; i < 300; i++) {
+        try {
+          const target = (await listSessions()).find(
+            (session) => session && typeof session.id === "string",
+          );
+          if (target) return target;
+        } catch {}
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      return undefined;
+    };
+    (async () => {
+      const target = await waitSession();
+      // The dwell BEFORE the navigate: the session row appears the
+      // moment the exchange's POST admits the prompt — navigating
+      // home at that instant hides the ref's session transcript
+      // before the reply's needle lands (the exchange assert fires).
+      // 6 s covers the reply's settle at the rig's instant pace.
+      await new Promise((resolve) => setTimeout(resolve, 6000));
       try {
         ctx.ui.router.navigate({ type: "home" });
       } catch {}
-    }, 18000);
-    setTimeout(async () => {
-      try {
-        const raw =
-          ctx.data && ctx.data.session && typeof ctx.data.session.list === "function"
-            ? ctx.data.session.list()
-            : await ctx.session.list();
-        const sessions = Array.isArray(raw)
-          ? raw
-          : raw && Array.isArray(raw.data)
-            ? raw.data
-            : [];
-        const target = sessions.find((session) => session && typeof session.id === "string");
-        if (target) {
-          ctx.ui.toast.show({
-            sessionID: target.id,
-            title: "v21 background",
-            message: "not the open family",
-            duration: 600000,
-          });
-        } else {
-          ctx.ui.toast.show({
-            title: "v21 toast",
-            message: "no sessions",
-            duration: 600000,
-          });
-        }
-      } catch (error) {
+      await new Promise((resolve) => setTimeout(resolve, 4000));
+      if (target) {
+        ctx.ui.toast.show({
+          sessionID: target.id,
+          title: "v21 background",
+          message: "not the open family",
+          duration: 600000,
+        });
+      } else {
         ctx.ui.toast.show({
           title: "v21 toast",
-          message: "list failed",
+          message: "no sessions",
           duration: 600000,
         });
       }
-    }, 20000);
+    })();
     return () => {};
   },
 };

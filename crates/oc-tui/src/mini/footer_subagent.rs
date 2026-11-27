@@ -159,6 +159,7 @@ pub fn render_subagent_body(
                 commit,
                 region,
                 true,
+                view.mono,
             );
             for line in lines {
                 if y >= detail_top + detail_height {

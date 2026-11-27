@@ -812,7 +812,17 @@ async fn mini_pty_prompt_reply_scrollback_and_exit_splash() {
         "the stub's reply landed in the scrollback: {}",
         mini.output()
     );
-    assert!(mini.output().contains("> hello stub"), "the user echo carries the mono prefix");
+    // G-543 — the ref's user echo NEVER prints locally (onSend →
+    // rememberLocal buffers for the resize replay only; the live row
+    // renders from the SSE `session.inbox.delivered` → renderUser,
+    // stream-v2.transport.ts:1050-1059). This stub emits no inbox
+    // events, so NO user row renders — matching the ref against the
+    // same stub.
+    assert!(
+        !mini.output().contains("> hello stub"),
+        "no local user echo (the ref renders it from the SSE delivery only): {}",
+        mini.output()
+    );
 
     // Two-press ctrl+c exits with the exit splash (shown + session).
     mini.exit_sequence();
@@ -863,8 +873,14 @@ async fn mini_pty_styled_scrollback_commits_carry_sgr() {
         .match_indices("Stub says hello.")
         .any(|(at, _)| out[at.saturating_sub(48)..at].contains("\x1b[38;5;"));
     assert!(styled, "an SGR color run precedes the reply text: tail of {out:?}");
-    // The user echo still carries the mono `>` prefix shape.
-    assert!(out.contains("> hello stub"), "the user echo row keeps its shape");
+    // G-543 — the user row renders from the SSE delivery only (the
+    // local echo is gone); this stub delivers no inbox events, so NO
+    // user row lands — the glyph face rides the paired anchors
+    // (v21f-rs/v21g) and the scrollback unit's mono-gate test.
+    assert!(
+        !out.contains("> hello stub") && !out.contains("› hello stub"),
+        "no local user echo against the delivery-less stub: {out:?}"
+    );
 
     mini.exit_sequence();
     assert!(
@@ -931,8 +947,11 @@ async fn mini_pty_cli_json_tools_hide_drops_tool_rows() {
     mini.type_text("\r");
     // The turn completes: the summary row lands after the tool would
     // have rendered (ordering — a gated caption can no longer appear).
+    // G-544 — the model face is the modelLabel's fallback string
+    // ("Default model", runtime.lifecycle.ts:218) — the stub rig
+    // carries no model.
     assert!(
-        mini.wait_for("Build · default ·", Duration::from_secs(30)),
+        mini.wait_for("Build · Default model ·", Duration::from_secs(30)),
         "the turn summary row: {}",
         mini.output()
     );
@@ -1002,11 +1021,14 @@ async fn mini_pty_g221_inbox_skill_shell_compaction_tool_input() {
     assert!(mini.wait_for("oc mini", Duration::from_secs(30)), "boot");
     mini.type_text("run the blocks\r");
 
-    // Block 1 — the footer's queued-prompts view: two rows queue (the
-    // count reaches 2), one cancels, one delivers (the user echo).
+    // Block 1 — the footer's queued-prompts view: the prompt POST's
+    // response echo merges one pending row (`mergePending`,
+    // transport.ts:620-630 — the optimistic admit), then two scripted
+    // rows queue (the count reaches 3), one cancels, one delivers
+    // (the user echo).
     assert!(
-        mini.wait_for("2 pending", Duration::from_secs(30)),
-        "the footer's queued count: {}",
+        mini.wait_for("3 pending", Duration::from_secs(30)),
+        "the footer's queued count (the admit echo + the two scripted rows): {}",
         mini.output()
     );
     assert!(

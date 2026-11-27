@@ -454,9 +454,9 @@ mod t4 {
             ..Default::default()
         };
 
-        let hidden = format_commit_with(None, &bash_progress, 80, false);
+        let hidden = format_commit_with(None, &bash_progress, 80, false, true);
         assert!(hidden.is_empty(), "shell live rows hidden: {hidden:?}");
-        let shown = format_commit_with(None, &bash_progress, 80, true);
+        let shown = format_commit_with(None, &bash_progress, 80, true, true);
         assert!(
             shown.iter().any(|row| row.contains("echo hi")),
             "shell_output=show streams the live rows: {shown:?}"
@@ -464,7 +464,7 @@ mod t4 {
         // G-272 — the part's FIRST caption (the ref's "start" commit)
         // renders regardless of the knob (tool.ts:1301 gates the
         // streamed output only).
-        let start_hidden = format_commit_with(None, &bash_start, 80, false);
+        let start_hidden = format_commit_with(None, &bash_start, 80, false, true);
         assert!(
             start_hidden.iter().any(|row| row.contains("Bash")),
             "the start caption survives: {start_hidden:?}"
@@ -472,15 +472,15 @@ mod t4 {
 
         // The shell family's completed final suppresses
         // (`TOOL_RULES.shell.final === false`); errors always render.
-        let final_hidden = format_commit_with(None, &bash_final, 80, false);
+        let final_hidden = format_commit_with(None, &bash_final, 80, false, true);
         assert!(final_hidden.is_empty(), "completed final gated: {final_hidden:?}");
-        let error_rows = format_commit_with(None, &bash_error, 80, false);
+        let error_rows = format_commit_with(None, &bash_error, 80, false, true);
         assert!(
             error_rows.iter().any(|row| row.contains("Bash")),
             "error finals always render: {error_rows:?}"
         );
         // Non-shell tools ignore the knob (batch streams regardless).
-        let batch_hidden = format_commit_with(None, &batch_progress, 80, false);
+        let batch_hidden = format_commit_with(None, &batch_progress, 80, false, true);
         assert!(
             batch_hidden.iter().any(|row| row.contains("Batch")),
             "non-shell tools ignore the knob: {batch_hidden:?}"

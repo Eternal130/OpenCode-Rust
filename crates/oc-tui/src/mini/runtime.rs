@@ -353,6 +353,10 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
     // `hydrate(attempt, {render: true})` before `apply`, transport.ts:
     // 955-991).
     let mut transport = TransportState::new(&session_id);
+    // G-540 — `input.tools` (runtime.ts:802's `configState.current.
+    // tools === "show"`): the transport's quiet-text gate follows the
+    // same knob the commit-visibility gate reads.
+    transport.set_tools_visible(settings.tools);
     // TUI-17 — the subagent tracker exists BEFORE the boot replay so
     // the hydrate's mainTool walk + family index feed it (G-529's
     // :1061/:946 sites — the ref's `hydrate(next)` admits children
@@ -360,6 +364,19 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
     let mut subagents = super::transport::SubagentTracker::new(&session_id);
     let mut shown = false;
     if input.target.resume && input.replay {
+        // G-540-adjacent (the resume corpus's row order): the entry
+        // splash's write PRECEDES the hydrate's rows on the ref
+        // (`queueSplash` at the lifecycle boot, runtime.lifecycle.ts:
+        // 188-203; the hydrate's fetch latency lands after it). The
+        // port's fast boot beats the startup one-shot — wait the
+        // launch animation out and flush the splash BEFORE the replay
+        // walk so the wordmark row precedes the replayed transcript.
+        let startup = std::time::Duration::from_millis(crate::mini::lifecycle::STARTUP_DURATION_MS);
+        let deadline = std::time::Instant::now() + startup;
+        while std::time::Instant::now() < deadline && !lifecycle.is_closed() {
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        }
+        let _ = lifecycle.flush();
         replay_history(
             &mut lifecycle,
             &client,
@@ -719,24 +736,29 @@ impl Runtime {
             FooterEffect::AgentSelect(agent) => {
                 self.next_agent = Some(agent.clone());
                 self.turn_agent = Some(agent.clone());
-                // G-535 — the notice's LABEL face (`agent ${this.
-                // currentAgent()}`, footer.ts:879): the resolved
-                // agent NAME (`Locale.titlecase` of the id when
-                // unresolvable — footer.ts:275-280), never the raw id.
+                // G-535+G-545 — the notice `agent ${this.currentAgent()}`
+                // (footer.ts:879): the resolved agent NAME
+                // (`Locale.titlecase` of the id when unresolvable —
+                // footer.ts:275-280) as a TRANSIENT 3 s statusline
+                // notice (`setNotice`), never a scrollback row.
                 let label = crate::components::footer::state::current_agent_label(
                     &self.agents,
                     Some(agent.as_str()),
                 );
-                self.lifecycle.append(Commit::system(&format!("agent {label}")));
+                self.lifecycle.set_notice(&format!("agent {label}"));
             }
             // G-272 — the model panel's pick (`switchModel` before
             // the next turn); the label feeds the footer + turn
             // summary (`formatModelLabel`).
             FooterEffect::ModelSelect { provider_id, model_id } => {
+                let notice = format!("model {model_id}");
                 let label = format!("{provider_id}/{model_id}");
                 self.next_model = Some((provider_id, model_id));
                 self.turn_model = Some(label.clone());
-                self.lifecycle.append(Commit::system(&label));
+                // G-545 — `model ${model.modelID}` (runtime.ts:340's
+                // result.status via applySelectionResult → setNotice,
+                // footer.ts:908): a transient 3 s statusline notice.
+                self.lifecycle.set_notice(&notice);
             }
             // G-272 — the variant panel's pick (`onVariantSelect` →
             // `saveVariant`, runtime.ts:360-374): persist the choice.
@@ -746,16 +768,20 @@ impl Runtime {
                 if let Some(target) = &self.boot_target {
                     self.preferences.save_variant(target, variant.as_deref());
                 }
+                // G-545 — `variant ${variant}` / `variant default`
+                // (runtime.ts:368's result.status): a transient 3 s
+                // statusline notice.
                 let status = variant.as_deref().map_or_else(
                     || "variant default".to_owned(),
                     |variant| format!("variant {variant}"),
                 );
-                self.lifecycle.append(Commit::system(&status));
+                self.lifecycle.set_notice(&status);
             }
             // G-272 — a queued-prompt action (`onQueuedPromptAction`,
             // runtime.ts:394-402): steer/queue PATCH the delivery,
-            // cancel DELETEs the row; failures surface as system rows
-            // (`failed to … pending prompt: …`, footer.view.tsx:340).
+            // cancel DELETEs the row; failures surface as the notice
+            // (`failed to … pending prompt: …`, footer.view.tsx:335
+            // via onStatus → setStatus → setNotice).
             FooterEffect::QueuedPromptAction { action, inbox_id } => {
                 if !self.demo {
                     if let Err(error) = transport::inbox_prompt_action(
@@ -766,9 +792,10 @@ impl Runtime {
                     )
                     .await
                     {
-                        self.lifecycle.append(Commit::system(&format!(
-                            "failed to {action} pending prompt: {error}"
-                        )));
+                        self.lifecycle.set_notice(&format!(
+                            "failed to {} pending prompt: {error}",
+                            if action == "cancel" { "delete" } else { action },
+                        ));
                     }
                 }
             }
@@ -844,8 +871,12 @@ impl Runtime {
                     self.active_variant.as_deref(),
                     &self.variants,
                 ) {
+                    // G-545 — `handleCycle`'s notices (footer.ts:837
+                    // + applySelectionResult → setNotice, footer.ts:
+                    // 908): transient statusline rows, never
+                    // scrollback.
                     CycleVariantDecision::NoVariants => {
-                        self.lifecycle.append(Commit::system("no variants available"));
+                        self.lifecycle.set_notice("no variants available");
                     }
                     CycleVariantDecision::Cycle { next, status, label } => {
                         self.active_variant.clone_from(&next);
@@ -856,7 +887,7 @@ impl Runtime {
                             self.preferences.save_variant(target, next.as_deref());
                         }
                         self.turn_model = label;
-                        self.lifecycle.append(Commit::system(&status));
+                        self.lifecycle.set_notice(&status);
                     }
                 }
             }
@@ -1103,24 +1134,27 @@ impl Runtime {
                         self.lifecycle.append(commit);
                     }
                 }
+                // G-540 — the quiet-text flush + the step's usage
+                // patch (the ref's two `write` calls,
+                // transport.ts:1370-1381): the commits append through
+                // the same visibility gates, the usage patch rides
+                // the `Fold::Usage` shape.
+                Fold::CommitsWithUsage { commits, model, tokens, cost } => {
+                    for commit in commits {
+                        if !self.settings.commit_visible(&commit) {
+                            continue;
+                        }
+                        self.shown = true;
+                        self.lifecycle.append(commit);
+                    }
+                    self.apply_usage_patch(model.as_ref(), tokens, cost);
+                }
                 Fold::Idle => {}
                 // G-272 — `session.step.ended`'s usage patch
                 // (transport.ts:1361-1381): the statusline's context/
                 // cost groups (footer.view.tsx:213-218, 493-500).
                 Fold::Usage { model, tokens, cost } => {
-                    let percent = model.as_ref().and_then(|model| {
-                        let limit = self.context_limits.get(model).copied().unwrap_or(0);
-                        if limit == 0 {
-                            return None;
-                        }
-                        // `Math.round((total / limit) * 100)`
-                        // (transport.ts:1376).
-                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                        let ratio = (tokens as f64 / limit as f64) * 100.0;
-                        Some((ratio + 0.5) as u32)
-                    });
-                    self.lifecycle.pane.usage =
-                        Some(super::lifecycle::UsageInfo { tokens, percent, cost });
+                    self.apply_usage_patch(model.as_ref(), tokens, cost);
                 }
                 // G-272 — the ROOT session's rename
                 // (`input.onSessionTitle`, transport.ts:1036-1039 →
@@ -1205,6 +1239,7 @@ impl Runtime {
                             // (`setTitle(undefined)` → "OpenCode").
                             self.lifecycle.set_title(None);
                             self.transport = TransportState::new(&new_id);
+                            self.transport.set_tools_visible(self.settings.tools);
                             self.subagents = super::transport::SubagentTracker::new(&new_id);
                             self.queue = PromptQueue::new(true);
                             self.history = PromptHistory::new();
@@ -1309,23 +1344,67 @@ impl Runtime {
             self.settle_turn().await;
             return;
         }
-        // The user echo (`onSend` → `rememberLocal`,
-        // `runtime.ts:895-907`): pending rows can still be cancelled,
-        // so the echo prints before the POST resolves.
-        self.lifecycle.append(Commit::user(&prompt.text));
+        // G-543 — the user echo: the ref's `onSend → rememberLocal`
+        // (runtime.ts:895-907) buffers the row for the RESIZE REPLAY
+        // only (`replayOnResize({ localRows })`, runtime.ts:851-857) —
+        // it NEVER prints to the scrollback (the queue's
+        // `onSend(sent, false)` leaves `emittedUser` false,
+        // runtime.queue.ts:175/270). The live user row renders from
+        // the SSE delivery (`session.inbox.delivered` → renderUser,
+        // stream-v2.transport.ts:1050-1059) — exactly once, exactly
+        // when the server admits the prompt.
         // G-272 — the per-turn switches land BEFORE the POST
         // (`switchAgent`/`switchModel`, stream-v2.transport.ts:
         // 1832-1840).
         self.apply_turn_switches().await;
         let message_id = oc_schema::id::MessageId::new().to_string();
-        if let Err(error) =
-            transport::send_prompt_parts(&self.client, &self.session_id, &message_id, prompt).await
+        match transport::send_prompt_parts(&self.client, &self.session_id, &message_id, prompt)
+            .await
         {
-            self.lifecycle.append(Commit::error(&error));
-            self.exit_code = 1;
-            return;
+            // G-543 — `runTurnWait`'s admit echo (stream-v2.transport.
+            // ts:1600-1605): the POST's response merges into the
+            // transport's pending (`mergePending`, :620-630) so the
+            // `session.inbox.delivered` event renders the user row
+            // (the promoted fast path renders immediately).
+            Ok(info) if !info.is_null() => {
+                if let Fold::Commits(commits) = self.transport.merge_pending(&info) {
+                    for commit in commits {
+                        if self.settings.commit_visible(&commit) {
+                            self.shown = true;
+                            self.lifecycle.append(commit);
+                        }
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(error) => {
+                self.lifecycle.append(Commit::error(&error));
+                self.exit_code = 1;
+                return;
+            }
         }
         self.settle_turn().await;
+    }
+
+    /// G-272/G-540 — the step's usage patch (transport.ts:1371-1380):
+    /// the summed tokens with the step model for the percent's context
+    /// limit (`Math.round((total / limit) * 100)`) and the turn's cost.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)] // terminal-bounded token counts; the ref computes in JS number space
+    fn apply_usage_patch(
+        &mut self,
+        model: Option<&(String, String)>,
+        tokens: u64,
+        cost: Option<f64>,
+    ) {
+        let percent = model.and_then(|model| {
+            let limit = self.context_limits.get(model).copied().unwrap_or(0);
+            if limit == 0 {
+                return None;
+            }
+            let ratio = (tokens as f64 / limit as f64) * 100.0;
+            Some((ratio + 0.5) as u32)
+        });
+        self.lifecycle.pane.usage = Some(super::lifecycle::UsageInfo { tokens, percent, cost });
     }
 
     /// The turn settle loop (`runTurnWait` → `settleSession`): pump
@@ -1371,7 +1450,14 @@ impl Runtime {
                 &self.agents,
                 self.turn_agent.as_deref(),
             );
-            let model = self.turn_model.clone().unwrap_or_else(|| "default".to_owned());
+            // G-544 — the model face: the ref reads
+            // `currentModel() ?? this.state().model` (footer.ts:466) —
+            // the boot modelLabel when no turn model resolved, never
+            // a "default" literal (the modelLabel's own fallback is
+            // the "Default model" string, runtime.lifecycle.ts:218).
+            // `turn_model` STARTS as the boot label (the runtime's
+            // boot binding), so the None case means "no model at all".
+            let model = self.turn_model.clone().unwrap_or_else(|| "Default model".to_owned());
             #[allow(clippy::cast_possible_truncation)]
             let duration = crate::components::message::model::locale_duration(
                 u64::try_from(turn_started.elapsed().as_millis()).unwrap_or(0),
@@ -1610,12 +1696,13 @@ fn replay_message_commits(
         // text row (once per message — the `visible` guard), then the
         // image files' commits. G-221 — the skill rows ride the
         // queued-prompt seam (`skillCommits`, transport.ts:612).
-        let joined = parts
-            .iter()
-            .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
-            .map(|part| text(part).to_owned())
-            .collect::<Vec<_>>()
-            .join("\n");
+        // G-543 — the user arm reads the TOP-LEVEL `text` field
+        // (`renderUser(message.id, message.text, …)`,
+        // transport.ts:777): the wire user rows carry no `content`
+        // (the Session.Message.User shape is `{id, metadata, time,
+        // text, files, agents, skills, type}`), so a parts-join
+        // always produced "" and the empty-text gate dropped the row.
+        let joined = text_field_of(value, "text");
         let skills = value
             .get("skills")
             .and_then(Value::as_array)
@@ -2235,11 +2322,18 @@ mod tests {
     fn replay_projects_fragments_and_commits_images() {
         let settings = MiniSettings { tools: false, thinking: true, ..MiniSettings::default() };
         let mut transport = TransportState::new("s1");
+        // G-540 — the covered/fresh delta walk below documents the
+        // TOOLS-SHOWN arm (the runtime wires the real knob via
+        // `set_tools_visible(settings.tools)`).
+        transport.set_tools_visible(true);
 
         // A user message with an image file: text row + image commit.
+        // G-543 — the WIRE user row carries the top-level `text`
+        // field (the Session.Message.User shape, types.gen.rs:7668-
+        // 7693 — no `content` array): the replay arm reads it like
+        // the ref's renderMessage user arm (transport.ts:777).
         let user = serde_json::json!({
-            "id": "msg_u1", "type": "user",
-            "content": [{ "type": "text", "text": "look" }],
+            "id": "msg_u1", "type": "user", "text": "look",
             "files": [{ "mime": "image/png", "data": "AAEC", "name": "shot.png" }],
         });
         let commits = replay_message_commits(&user, 0, &mut transport, &settings);

@@ -209,19 +209,22 @@ const FIXTURES: &[(&str, &str)] = &[
         })
         .then((value) => {
           report("select " + String(value));
+          // va21g (the controller's slow-audit addendum): the confirm
+          // phase CHAINS off the select's settle (the v21c-sel
+          // template) — the old t+96 s absolute timer was dead dwell.
+          setTimeout(() => {
+            ctx.ui.dialog
+              .confirm({
+                title: "v21d confirm",
+                message: "run the plan?",
+                label: { confirm: "merge-dry-run", cancel: "never-mind" },
+              })
+              .then((value) => {
+                report("confirm " + String(value));
+              });
+          }, 4000);
         });
     }, 6000);
-    setTimeout(() => {
-      ctx.ui.dialog
-        .confirm({
-          title: "v21d confirm",
-          message: "run the plan?",
-          label: { confirm: "merge-dry-run", cancel: "never-mind" },
-        })
-        .then((value) => {
-          report("confirm " + String(value));
-        });
-    }, 96000);
     return () => {};
   },
 };

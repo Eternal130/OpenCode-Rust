@@ -640,6 +640,7 @@ mod golden_tests {
             value: String::new(),
             prompt_cursor: None,
             prompt_viewport: None,
+            prompt_vband: None,
             prompt_history: crate::store::DialogPromptHistory::default(),
             theme_initial: None,
         };
@@ -659,6 +660,7 @@ mod golden_tests {
             value: "feat".to_owned(),
             prompt_cursor: None,
             prompt_viewport: None,
+            prompt_vband: None,
             prompt_history: crate::store::DialogPromptHistory::default(),
             theme_initial: None,
         };

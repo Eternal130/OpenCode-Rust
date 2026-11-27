@@ -2275,6 +2275,16 @@ pub fn capture_settled(tui: &TuiProcess) -> String {
     }
 }
 
+/// va21g — the TRANSIENT-state capture (G-545's 3 s notice window):
+/// a raw grid snapshot annotated as NOT settled (the settle
+/// machinery's ≥2.5 s stability proof would wait the window out — the
+/// transient face lives INSIDE it).
+#[must_use]
+pub fn capture_transient(tui: &TuiProcess) -> String {
+    mark_quiescence(false);
+    tui.screen_text()
+}
+
 /// The names of every normalization that fired SINCE THE LAST EXPORT
 /// (M-1, review fix: a per-report snapshot, not a process-lifetime
 /// accumulation — the set is drained by each export, so each report
@@ -2524,6 +2534,32 @@ fn replace_version_pill(row: &str) -> String {
                 // sits one column further left for `2.0.24` than for
                 // `local` (same one-column artifact as above).
                 return format!("{} __VERSION__", before.trim_end());
+            }
+        }
+        // va21g — the mini wordmark's INLINE v-prefixed token
+        // (`▪ oc mini vlocal · __ROOT__/project` on a ref-from-source
+        // build vs `v2.0.24` on the release binary — G-490's channel
+        // face riding the splash row): a ` vlocal`/` v2.0.24` token
+        // followed by " · " or EOL collapses to ` __VERSION__` (the
+        // same build-source artifact; the mini never pins it as the
+        // trailing cell).
+        let mut search = 0usize;
+        while let Some(offset) = row[search..].find('v') {
+            let start = search + offset;
+            search = start + 1;
+            if start == 0 || row.as_bytes()[start - 1] != b' ' {
+                continue;
+            }
+            let body = &row[start + 1..];
+            let len = body.find([' ', '·']).unwrap_or(body.len());
+            let token = &body[..len];
+            if looks_like_version(token) {
+                let after = &body[len..];
+                if after.is_empty() || after.trim_start().starts_with('·') {
+                    // `row[..start]` already ends with the token's
+                    // leading space — the replacement keeps ONE.
+                    return format!("{}__VERSION__{}", &row[..start], after);
+                }
             }
         }
         row.to_owned()
@@ -2990,5 +3026,26 @@ mod w4_normalizer_tests {
         assert_eq!(replace_id_shapes("attach pty_0001abcdEFGhij"), "attach pty_0001abcdEFGhij");
         // Short words that share a prefix stay intact.
         assert_eq!(replace_id_shapes("session message"), "session message");
+    }
+
+    /// va21g — the wordmark's inline v-prefixed version token (the
+    /// mini splash row: `▪ oc mini vlocal · …` vs `v2.0.24 · …`).
+    #[test]
+    fn version_pill_collapses_the_inline_vtoken() {
+        assert_eq!(
+            replace_version_pill("▪ oc mini vlocal · __ROOT__/project"),
+            "▪ oc mini __VERSION__ · __ROOT__/project"
+        );
+        assert_eq!(
+            replace_version_pill("▪ oc mini v2.0.24 · __ROOT__/project"),
+            "▪ oc mini __VERSION__ · __ROOT__/project"
+        );
+        // EOL-terminated token (the narrow form: the detail truncates).
+        assert_eq!(replace_version_pill("▪ oc mini vlocal"), "▪ oc mini __VERSION__");
+        // NOT a version: plain words with a v stay intact.
+        assert_eq!(replace_version_pill("very good text"), "very good text");
+        assert_eq!(replace_version_pill("value vlocal-ish and more"), "value vlocal-ish and more");
+        // A mid-word v (no leading space) stays intact.
+        assert_eq!(replace_version_pill("savedvlocal row"), "savedvlocal row");
     }
 }
