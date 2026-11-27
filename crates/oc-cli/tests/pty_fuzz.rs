@@ -68,6 +68,14 @@ const COLS: usize = 80;
 /// After this many keys the boot has settled and the void-screen
 /// invariant switches on.
 const BOOT_SETTLE_KEYS: usize = 30;
+/// A screen cell that changed again within this many settle polls is
+/// "fast-flipping" — clock-driven animation (a busy tab's spinner
+/// advancing every 80 ms, sampled at the 60 ms poll = gaps of at most
+/// 3 polls), not new content. Its flips do NOT re-arm the settle's
+/// stability window; the fastest legitimate content cadence (one
+/// paint per 100 ms run-loop tick, ~2 polls) still does. 4 polls ≈
+/// 240 ms — the same window the stability check itself uses.
+const TRANSIENT_POLLS: usize = 4;
 /// Max fresh child processes per seed when an intended exit chord ends
 /// one mid-run (the remaining keys continue in the new child).
 const MAX_RESPAWNS: usize = 2;
@@ -562,6 +570,10 @@ struct FuzzPty {
     master: std::fs::File,
     output: Arc<Mutex<Vec<u8>>>,
     vt: Vt,
+    /// [slowA] How many output bytes have been fed into `vt` — the
+    /// incremental `refresh_screen` offset (a respawn resets both the
+    /// analyzer and the capture).
+    fed: usize,
     /// The exit code once OUR waitpid (the job-control poll) reaped
     /// the child — std's `try_wait` then ECHILDs, so the poll caches it.
     reaped: Option<i32>,
@@ -687,7 +699,7 @@ impl FuzzPty {
                 }
             });
         }
-        FuzzPty { child, master, output, vt: Vt::new(), reaped: None }
+        FuzzPty { child, master, output, vt: Vt::new(), fed: 0, reaped: None }
     }
 
     fn capture(&self) -> Vec<u8> {
@@ -712,30 +724,100 @@ impl FuzzPty {
     /// 100 ms tick whenever any clock-driven UI (caret/spinner/toast)
     /// is live, so byte quiescence never happens — settle on CELL
     /// stability instead (unchanged parsed screen for ~240 ms).
+    ///
+    /// [slowA] Clock-driven UI is PERIODIC — the caret toggles its
+    /// cell on a 500 ms phase, a busy tab's spinner and the
+    /// reconnecting overlay's glyph advance every 80-100 ms — so a
+    /// screen whose only changes are those flips NEVER holds 240 ms
+    /// of stable cells and every settle burns its full cap (the
+    /// pre-fix seeds 1/2 spent 79-92 % of their settle budget exactly
+    /// that way: the only volatile cells for 30+ consecutive keys
+    /// were (0,1)=tab-strip busy glyph and (10,18)=reconnecting
+    /// overlay glyph, cycling the braille `SPINNER_FRAMES` alphabet).
+    /// Tolerate the flips without waiting out their full alphabet: a
+    /// change re-arms the stability window only when it is NEW
+    /// content — the cell presents a value it has not shown within
+    /// this settle AND is not fast-flipping (changed again within
+    /// [`TRANSIENT_POLLS`] polls; a cell's FIRST change always
+    /// counts — the key echo must re-arm). A flip among already-seen
+    /// values on a fast-flipping cell is animation, not a screen the
+    /// invariants need to wait for. The post-key screen still gates
+    /// the return: the key echo, dialogs, transcripts and toasts all
+    /// present novel values, so the invariants keep sampling a
+    /// digested screen — with the clock-UI noise out of the window,
+    /// the settle converges in ~300 ms instead of the full cap, and
+    /// the convergence no longer depends on the child's tick cadence
+    /// (the pre-fix 85 s ↔ 181 s run-to-run swing was exactly that
+    /// dependence: under box load the child's clock ticks stretch
+    /// past 240 ms and the flips stopped re-arming).
     fn settle(&mut self, cap: Duration) {
         let start = Instant::now();
         let mut stable_since = Instant::now();
         self.refresh_screen();
         let mut last_cells = self.vt.cells.clone();
+        // (row, col) -> (values the cell has shown this settle, the
+        // poll index of its last change; 0 = never changed — polls
+        // start at 1).
+        let mut tracker: std::collections::HashMap<
+            (usize, usize),
+            (std::collections::BTreeSet<char>, usize),
+        > = std::collections::HashMap::new();
+        let mut polls = 0usize;
         while start.elapsed() < cap {
             std::thread::sleep(Duration::from_millis(60));
             self.resume_if_stopped();
             self.refresh_screen();
-            if self.vt.cells == last_cells {
-                if stable_since.elapsed() >= Duration::from_millis(240) {
+            polls += 1;
+            if self.vt.cells != last_cells {
+                let mut re_arm = false;
+                for (row, (prev, cur)) in last_cells.iter().zip(self.vt.cells.iter()).enumerate() {
+                    for (col, (a, b)) in prev.iter().zip(cur.iter()).enumerate() {
+                        if a != b {
+                            let (seen, last_change) = tracker
+                                .entry((row, col))
+                                .or_insert((std::collections::BTreeSet::new(), 0));
+                            let novel = seen.insert(*b);
+                            let fast = *last_change > 0 && polls - *last_change <= TRANSIENT_POLLS;
+                            *last_change = polls;
+                            if novel && !fast {
+                                re_arm = true;
+                            }
+                        }
+                    }
+                }
+                if re_arm {
+                    stable_since = Instant::now();
+                } else if stable_since.elapsed() >= Duration::from_millis(240) {
                     return;
                 }
-            } else {
-                last_cells.clone_from(&self.vt.cells);
-                stable_since = Instant::now();
+            } else if stable_since.elapsed() >= Duration::from_millis(240) {
+                return;
             }
+            last_cells.clone_from(&self.vt.cells);
         }
     }
 
-    /// Feed appended output into the screen analyzer.
+    /// Feed appended output into the screen analyzer. [slowA]
+    /// Incremental: `Vt::feed` parks partial trailing sequences
+    /// itself ("partial trailing sequences wait for more bytes"), so
+    /// feeding only the bytes appended since the last refresh parses
+    /// each byte exactly once. The former full-capture re-feed
+    /// re-parsed the whole session output on every poll (O(output)
+    /// per poll, O(n²) over a run) and re-executed the history from
+    /// the CURRENT cursor state — it only stayed correct because the
+    /// emitter's frames are absolutely addressed — and it mis-parsed
+    /// the capture's head seam whenever a partial sequence straddled
+    /// a read boundary.
     fn refresh_screen(&mut self) {
-        let data = self.capture();
-        self.vt.feed(&data);
+        let fresh: Vec<u8> = {
+            let output = self.output.lock().expect("lock");
+            output[self.fed.min(output.len())..].to_vec()
+        };
+        if fresh.is_empty() {
+            return;
+        }
+        self.fed += fresh.len();
+        self.vt.feed(&fresh);
     }
 
     fn type_key(&mut self, bytes: &[u8]) {
@@ -1235,24 +1317,35 @@ fn probe_recoverable(pty: &mut FuzzPty) -> Result<(), String> {
 }
 
 /// The documented exit chords, in order: ctrl+c (clear/exit), ctrl+c
-/// again (two-press exit), then <leader>q.
+/// again (two-press exit), then <leader>q. [slowA] Each chord's wait
+/// POLLS the exit status inside the SAME deadline the fixed sleep
+/// used (300/500/600 ms, 4 s) — a child that exits at 100 ms no
+/// longer idles out the full sleep; the deadlines and the chord
+/// sequence are unchanged.
 fn exit_protocol(pty: &mut FuzzPty) -> Result<(), String> {
+    fn exited_within(pty: &mut FuzzPty, deadline: Duration) -> Option<i32> {
+        let end = Instant::now() + deadline;
+        loop {
+            pty.resume_if_stopped();
+            if let Some(code) = pty.exit_code() {
+                return Some(code);
+            }
+            if Instant::now() >= end {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
     pty.type_key(b"\x1b");
-    std::thread::sleep(Duration::from_millis(300));
-    pty.resume_if_stopped();
-    if pty.exit_code() == Some(0) {
+    if exited_within(pty, Duration::from_millis(300)) == Some(0) {
         return Ok(());
     }
     pty.type_key(b"\x03");
-    std::thread::sleep(Duration::from_millis(500));
-    pty.resume_if_stopped();
-    if pty.exit_code() == Some(0) {
+    if exited_within(pty, Duration::from_millis(500)) == Some(0) {
         return Ok(());
     }
     pty.type_key(b"\x03");
-    std::thread::sleep(Duration::from_millis(600));
-    pty.resume_if_stopped();
-    if pty.exit_code() == Some(0) {
+    if exited_within(pty, Duration::from_millis(600)) == Some(0) {
         return Ok(());
     }
     pty.type_key(b"\x18q");
@@ -1261,7 +1354,7 @@ fn exit_protocol(pty: &mut FuzzPty) -> Result<(), String> {
         match pty.exit_code() {
             Some(0) => return Ok(()),
             Some(code) => return Err(format!("exit chord exited with code {code}")),
-            None => std::thread::sleep(Duration::from_millis(100)),
+            None => std::thread::sleep(Duration::from_millis(50)),
         }
     }
     Err("the process ignored escape + ctrl+c ×2 + <leader>q (dead end)".to_owned())
