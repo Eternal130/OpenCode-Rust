@@ -80,6 +80,16 @@ pub enum Fold {
     /// the delivered inbox row's skill+user rows — `write(commits)`
     /// with a list, stream-v2.transport.ts).
     Commits(Vec<Commit>),
+    /// G-540 — the quiet-text flush paired with the step's usage
+    /// patch (`flushQuietText` before the usage write,
+    /// transport.ts:1370-1381): the ref emits two `write` calls; the
+    /// port's single fold carries both halves.
+    CommitsWithUsage {
+        commits: Vec<Commit>,
+        model: Option<(String, String)>,
+        tokens: u64,
+        cost: Option<f64>,
+    },
     /// The running turn finished (`session.execution.*`).
     Idle,
     /// G-272 — `session.step.ended`'s usage patch (transport.ts:1371-
@@ -108,6 +118,19 @@ pub struct TransportState {
     fragments: FragmentReconciler,
     /// G-68 — the image-commit dedup set (`state.imageIDs`).
     image_ids: std::collections::HashSet<String>,
+    /// G-540 — `input.tools` (transport.ts:682's `showTools()`): the
+    /// mini's tools knob — `false` (the default, `config?.mini?.tools
+    /// ?? "hide"`, runtime.boot.ts:90) routes the assistant text
+    /// through the quiet-text buffer instead of per-delta commits.
+    tools_visible: bool,
+    /// G-540 — `state.quietText` (transport.ts:146): the per-message
+    /// buffered text parts, in arrival order
+    /// (`bufferQuietText`/`flushQuietText`, :689-712).
+    quiet_text: Vec<QuietPart>,
+    /// G-540 — `state.toolMessages` (transport.ts:145): messages that
+    /// rendered a tool part — their quiet text is dropped
+    /// (`rememberToolMessage`, :684-688).
+    tool_messages: std::collections::HashSet<String>,
     /// G-221 — `state.messageIDs` (the rendered-message dedup set —
     /// `renderUser`'s `visible`, the compaction header's once-guard).
     message_ids: std::collections::HashSet<String>,
@@ -167,6 +190,105 @@ pub struct QueuedSkill {
 
 fn text_field(value: &Value, key: &str) -> String {
     value.get(key).and_then(Value::as_str).unwrap_or_default().to_owned()
+}
+
+/// G-540 — one `state.quietText` entry (transport.ts:146's
+/// `Array<{ partID: text }>` per messageID).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QuietPart {
+    message_id: String,
+    part_id: String,
+    text: String,
+}
+
+/// The quiet-text commit for one buffered part (`flushQuietText`,
+/// transport.ts:701-712): kind assistant, phase `progress`, the FULL
+/// part text — one row write per part, never per delta.
+fn quiet_commit(part: &QuietPart) -> Commit {
+    Commit {
+        kind: CommitKind::Assistant,
+        phase: Phase::Progress,
+        text: part.text.clone(),
+        message_id: Some(part.message_id.clone()),
+        part_id: Some(part.part_id.clone()),
+        ..Commit::default()
+    }
+}
+
+impl TransportState {
+    /// G-540 — the mini's tools knob rides the transport
+    /// (`input.tools`, runtime.ts:802): `true` only for
+    /// `tools === "show"`.
+    pub fn set_tools_visible(&mut self, visible: bool) {
+        self.tools_visible = visible;
+    }
+
+    /// `bufferQuietText` (transport.ts:689-699): append (delta) or
+    /// replace (`text.ended`'s final) — a message that rendered a
+    /// tool part never buffers.
+    fn buffer_quiet_text(&mut self, message_id: &str, part_id: &str, text: &str, replace: bool) {
+        if text.is_empty() || self.tool_messages.contains(message_id) {
+            return;
+        }
+        if let Some(part) = self
+            .quiet_text
+            .iter_mut()
+            .find(|part| part.message_id == message_id && part.part_id == part_id)
+        {
+            if replace {
+                part.text = text.to_owned();
+            } else {
+                part.text.push_str(text);
+            }
+            return;
+        }
+        self.quiet_text.push(QuietPart {
+            message_id: message_id.to_owned(),
+            part_id: part_id.to_owned(),
+            text: text.to_owned(),
+        });
+    }
+
+    /// `flushQuietText` (transport.ts:701-712): the message's parts
+    /// as progress commits — one per part, order preserved; the
+    /// message leaves the buffer.
+    fn flush_quiet_text(&mut self, message_id: &str) -> Vec<Commit> {
+        let mut parts: Vec<QuietPart> = Vec::new();
+        self.quiet_text.retain(|part| {
+            if part.message_id == message_id {
+                parts.push(part.clone());
+                false
+            } else {
+                true
+            }
+        });
+        if self.tool_messages.contains(message_id) {
+            return Vec::new();
+        }
+        parts.iter().filter(|part| !part.text.is_empty()).map(quiet_commit).collect()
+    }
+
+    /// The execution-end drain (:1413's `for (const messageID of
+    /// [...state.quietText.keys()]) flushQuietText(messageID)`).
+    fn flush_all_quiet_text(&mut self) -> Vec<Commit> {
+        let parts: Vec<QuietPart> = std::mem::take(&mut self.quiet_text);
+        parts
+            .iter()
+            .filter(|part| !part.text.is_empty() && !self.tool_messages.contains(&part.message_id))
+            .map(quiet_commit)
+            .collect()
+    }
+
+    /// `rememberToolMessage` (transport.ts:684-688): a message that
+    /// rendered a tool part drops its quiet text for good.
+    fn remember_tool_message(&mut self, message_id: &str) {
+        if message_id.is_empty() || self.tools_visible {
+            return;
+        }
+        if self.tool_messages.insert(message_id.to_owned()) {
+            self.quiet_text.retain(|part| part.message_id != message_id);
+        }
+    }
 }
 
 fn data_field(value: &Value) -> Value {
@@ -251,18 +373,15 @@ impl TransportState {
             // G-221 — the direct-shell rows (transport.ts:1125-1164).
             "session.shell.started" | "session.shell.ended" => self.shell_event(event_type, data),
             "session.execution.started" | "session.execution.resumed" => {
+                // G-540-adjacent (the first-turn corpus face): the ref
+                // writes NO scrollback row for the execution events
+                // (`write([], { phase: "running" })` — the phase patch
+                // only, transport.ts:1401-1406); the pre-fix
+                // `Fold::Commit(Commit::system(""))` invented a BLANK
+                // row per turn.
                 self.running = true;
                 self.terminated = false;
-                Fold::Commit(Commit {
-                    kind: CommitKind::System,
-                    text: if event_type == "session.execution.resumed" {
-                        "resumed".to_owned()
-                    } else {
-                        String::new()
-                    },
-                    phase: Phase::Progress,
-                    ..Commit::default()
-                })
+                Fold::Ignored
             }
             "session.execution.succeeded"
             | "session.execution.failed"
@@ -298,6 +417,22 @@ impl TransportState {
             + cache_number("write");
         let cost = data.get("cost").and_then(Value::as_f64).unwrap_or(0.0);
         let model = self.step_model.take();
+        // G-540 — the quiet-text flush precedes the usage write
+        // (`if (!showTools()) flushQuietText(...)`, transport.ts:
+        // 1370): the message's buffered text lands as progress
+        // commits BEFORE the footer's usage patch.
+        let flush = self.flush_quiet_text(text_field(data, "assistantMessageID").as_str());
+        if !flush.is_empty() && (total > 0 || cost != 0.0) {
+            return Fold::CommitsWithUsage {
+                commits: flush,
+                model,
+                tokens: total,
+                cost: (cost != 0.0).then_some(cost),
+            };
+        }
+        if !flush.is_empty() {
+            return Fold::Commits(flush);
+        }
         if total == 0 && cost == 0.0 {
             return Fold::Ignored;
         }
@@ -310,8 +445,11 @@ impl TransportState {
     fn step_failed(&mut self, data: &Value) -> Fold {
         self.step_model = None;
         let message_id = text_field(data, "assistantMessageID");
+        // G-540 — the flush precedes the error write (`if
+        // (!showTools()) flushQuietText(...)`, transport.ts:1385).
+        let flush = self.flush_quiet_text(&message_id);
         if !self.error_messages.insert(message_id) {
-            return Fold::Ignored;
+            return if flush.is_empty() { Fold::Ignored } else { Fold::Commits(flush) };
         }
         let error = data.get("error").cloned().unwrap_or(Value::Null);
         let message = match &error {
@@ -319,19 +457,25 @@ impl TransportState {
             value => text_field(value, "message"),
         };
         let message = if message.is_empty() { "step failed".to_owned() } else { message };
-        Fold::Commit(Commit::error(&message))
+        let error_commit = Commit::error(&message);
+        if flush.is_empty() {
+            Fold::Commit(error_commit)
+        } else {
+            let mut commits = flush;
+            commits.push(error_commit);
+            Fold::Commits(commits)
+        }
     }
 
     fn text_started(&mut self, data: &Value) -> Fold {
         let key = part_key(data);
-        self.texts.insert(key.clone(), String::new());
-        Fold::Commit(Commit {
-            kind: CommitKind::Assistant,
-            phase: Phase::Start,
-            message_id: message_id(data),
-            part_id: Some(key),
-            ..Commit::default()
-        })
+        self.texts.insert(key, String::new());
+        // G-540 — the ref's `session.text.started` arm returns
+        // WITHOUT a write (transport.ts:1170-1172): no scrollback row
+        // (the pre-fix `Phase::Start` commit invented an empty row
+        // that ate the user→assistant separator — the first-turn
+        // corpus's one-row-up face).
+        Fold::Ignored
     }
 
     fn text_delta(&mut self, data: &Value) -> Fold {
@@ -348,6 +492,21 @@ impl TransportState {
         let _ = update;
         let accumulated = self.texts.entry(key.clone()).or_default();
         accumulated.push_str(&delta);
+        // G-540 — the quiet-text gate (`if (!showTools())
+        // bufferQuietText(...)`, transport.ts:1177-1181): with the
+        // mini's tools hidden (the default) the deltas never paint —
+        // the part's full text flushes once at the step/execution
+        // end (the per-delta row writes belong to the tools-shown
+        // arm only).
+        if !self.tools_visible {
+            self.buffer_quiet_text(
+                message_id(data).as_deref().unwrap_or_default(),
+                &key,
+                &delta,
+                false,
+            );
+            return Fold::Ignored;
+        }
         // G-241 — the commit carries the CHUNK, never the
         // reconciler's accumulated text (`text: event.data.delta`,
         // transport.ts:1180): the mono writer is append-only (no
@@ -388,6 +547,19 @@ impl TransportState {
         // committed text snaps to the final text verbatim).
         let update = self.fragments.end(&fragment, &text);
         self.texts.remove(&key);
+        // G-540 — the quiet-text replace (`bufferQuietText(..., true)`,
+        // transport.ts:1184-1191): with tools hidden the final text
+        // REPLACES the buffered accumulation — the flush lands at the
+        // step/execution end.
+        if !self.tools_visible {
+            self.buffer_quiet_text(
+                message_id(data).as_deref().unwrap_or_default(),
+                &key,
+                &text,
+                true,
+            );
+            return Fold::Ignored;
+        }
         // G-241 — `ended` replays only the UNSEEN suffix as a
         // progress commit (transport.ts:1197-1207): the writer
         // already printed the streamed chunks, and the Assistant
@@ -484,6 +656,10 @@ impl TransportState {
         self.streaming_tools.insert(key.clone());
         self.tool_names.insert(key.clone(), tool_name_field(data));
         self.tools.insert(key.clone(), caption.clone());
+        // G-540 — `rememberToolMessage` (transport.ts:684-688, called
+        // from `renderTool`'s hidden-tools arm, :717-721): a message
+        // with a tool part drops its quiet text for good.
+        self.remember_tool_message(message_id(data).as_deref().unwrap_or_default());
         Fold::Commit(Commit {
             kind: CommitKind::Tool,
             phase: Phase::Progress,
@@ -545,6 +721,9 @@ impl TransportState {
         let caption = self.tools.remove(&key).unwrap_or_else(|| tool_caption(data));
         let failed = event_type == "session.tool.failed";
         let tool = text_field(data, "tool");
+        // G-540 — `rememberToolMessage` on the finished render too
+        // (`renderTool`'s hidden-tools arm, transport.ts:717-721).
+        self.remember_tool_message(message_id(data).as_deref().unwrap_or_default());
         // G-134 — the completed structured snapshot (`toolView(name)
         // .snap`, mini/tool.ts:920-967): Write/Edit/Patch/Task cards
         // (the caption families keep the caption row).
@@ -585,23 +764,44 @@ impl TransportState {
     fn execution_ended(&mut self, event_type: &str, data: &Value) -> Fold {
         self.running = false;
         self.terminated = true;
+        // G-540 — the execution-end drain (:1412-1413): every
+        // remaining quiet part flushes BEFORE the terminal fold.
+        let flush = self.flush_all_quiet_text();
         if event_type == "session.execution.failed" {
             let error = data.get("error").cloned().unwrap_or(Value::Null);
             let message = error
                 .get("message")
                 .and_then(Value::as_str)
                 .map_or_else(|| "execution failed".to_owned(), str::to_owned);
-            return Fold::Commit(Commit::error(&message));
+            let error_commit = Commit::error(&message);
+            return if flush.is_empty() {
+                Fold::Commit(error_commit)
+            } else {
+                let mut commits = flush;
+                commits.push(error_commit);
+                Fold::Commits(commits)
+            };
         }
         if event_type == "session.execution.interrupted" {
-            return Fold::Commit(Commit {
+            let interrupted = Commit {
                 kind: CommitKind::System,
                 text: "interrupted".to_owned(),
                 phase: Phase::Final,
                 ..Commit::default()
-            });
+            };
+            return if flush.is_empty() {
+                Fold::Commit(interrupted)
+            } else {
+                let mut commits = flush;
+                commits.push(interrupted);
+                Fold::Commits(commits)
+            };
         }
-        Fold::Idle
+        if flush.is_empty() {
+            Fold::Idle
+        } else {
+            Fold::Commits(flush)
+        }
     }
 
     /// Is a turn mid-flight (the footer phase)?
@@ -1989,6 +2189,10 @@ impl SubagentTracker {
             // G-272 — the parent-owned folds (usage, the root
             // session's title) never reach a child transcript.
             | Fold::Usage { .. }
+            // G-540 — the quiet flush + usage pair is parent-owned
+            // (the child's commits land via the detail transcript's
+            // own fold sites, never the paired usage half).
+            | Fold::CommitsWithUsage { .. }
             | Fold::SessionTitle(_) => {}
         }
         fold
@@ -2160,11 +2364,17 @@ mod tests {
     #[test]
     fn text_deltas_accumulate_into_one_part_group() {
         let mut state = TransportState { session_id: "s1".into(), ..Default::default() };
+        // G-540 — these document the TOOLS-SHOWN arm (`input.tools !==
+        // false`): the per-delta chunk commits. The default (hidden)
+        // arm is the quiet-text buffer below.
+        state.set_tools_visible(true);
         let started = state.fold(&event(
             "session.text.started",
             &json!({ "sessionID": "s1", "messageID": "m1", "partID": "p1" }),
         ));
-        assert!(matches!(started, Fold::Commit(ref commit) if commit.phase == Phase::Start));
+        // G-540 — the ref's `text.started` writes nothing
+        // (transport.ts:1170-1172).
+        assert_eq!(started, Fold::Ignored);
         let delta = state.fold(&event(
             "session.text.delta",
             &json!({ "sessionID": "s1", "messageID": "m1", "partID": "p1", "delta": "Hello " }),
@@ -2200,6 +2410,10 @@ mod tests {
     #[test]
     fn text_ended_replays_the_unseen_suffix() {
         let mut state = TransportState { session_id: "s1".into(), ..Default::default() };
+        // G-540 — these document the TOOLS-SHOWN arm (`input.tools !==
+        // false`): the per-delta chunk commits. The default (hidden)
+        // arm is the quiet-text buffer below.
+        state.set_tools_visible(true);
         state.fold(&event(
             "session.text.started",
             &json!({ "sessionID": "s1", "messageID": "m1", "partID": "p1" }),
@@ -2370,6 +2584,10 @@ mod tests {
     #[test]
     fn projected_parts_consume_covered_deltas() {
         let mut state = TransportState { session_id: "s1".into(), ..Default::default() };
+        // G-540 — these document the TOOLS-SHOWN arm (`input.tools !==
+        // false`): the per-delta chunk commits. The default (hidden)
+        // arm is the quiet-text buffer below.
+        state.set_tools_visible(true);
         // Hydrate rendered the part in full.
         let update = state.project_part("m1", "text", 0, "one two three", true);
         assert_eq!(update.previous, "");
@@ -2397,6 +2615,76 @@ mod tests {
         ));
         assert_eq!(ended, Fold::Ignored);
         assert_eq!(state.part_value("m1", "text:0"), Some("FINAL".to_owned()));
+    }
+
+    /// G-540 — the quiet-text path (tools hidden — the mini default):
+    /// deltas buffer silently, `text.ended` replaces the buffer, the
+    /// step end flushes ONE progress commit per part with the FULL
+    /// text, and a message that rendered a tool part drops its text
+    /// (`rememberToolMessage`).
+    #[test]
+    fn quiet_text_buffers_and_flushes_per_part() {
+        let mut state = TransportState { session_id: "s1".into(), ..Default::default() };
+        let started = state.fold(&event(
+            "session.text.started",
+            &json!({ "sessionID": "s1", "messageID": "m1", "partID": "p1" }),
+        ));
+        assert_eq!(started, Fold::Ignored, "no scrollback row for text.started");
+        let delta = state.fold(&event(
+            "session.text.delta",
+            &json!({ "sessionID": "s1", "messageID": "m1", "partID": "p1", "delta": "the " }),
+        ));
+        assert_eq!(delta, Fold::Ignored, "a hidden-tools delta never paints");
+        state.fold(&event(
+            "session.text.delta",
+            &json!({ "sessionID": "s1", "messageID": "m1", "partID": "p1", "delta": "subagent" }),
+        ));
+        // The server's final REPLACES the buffer.
+        state.fold(&event(
+            "session.text.ended",
+            &json!({ "sessionID": "s1", "messageID": "m1", "partID": "p1", "text": "the subagent round-trip" }),
+        ));
+        // The step end flushes: ONE progress commit, the FULL text.
+        let ended = state.fold(&event(
+            "session.step.ended",
+            &json!({ "sessionID": "s1", "assistantMessageID": "m1", "tokens": {}, "cost": 0 }),
+        ));
+        match ended {
+            Fold::Commits(commits) => {
+                assert_eq!(commits.len(), 1);
+                assert_eq!(commits[0].text, "the subagent round-trip");
+                assert_eq!(commits[0].phase, Phase::Progress);
+                assert_eq!(commits[0].part_id.as_deref(), Some("p1"));
+            }
+            other => panic!("step end flushed: {other:?}"),
+        }
+        // A second step end never re-flushes (the buffer drained).
+        let again = state.fold(&event(
+            "session.step.ended",
+            &json!({ "sessionID": "s1", "assistantMessageID": "m1", "tokens": {}, "cost": 0 }),
+        ));
+        assert_eq!(again, Fold::Ignored);
+    }
+
+    /// G-540 — a message that renders a tool part drops its quiet
+    /// text (`rememberToolMessage`, transport.ts:684-688).
+    #[test]
+    fn quiet_text_drops_for_tool_messages() {
+        let mut state = TransportState { session_id: "s1".into(), ..Default::default() };
+        state.fold(&event(
+            "session.text.delta",
+            &json!({ "sessionID": "s1", "messageID": "m1", "partID": "p1", "delta": "hidden" }),
+        ));
+        // The same message starts a tool part.
+        let tool = state.fold(&event(
+            "session.tool.input.started",
+            &json!({ "sessionID": "s1", "messageID": "m1", "partID": "t0", "tool": "read" }),
+        ));
+        assert!(matches!(tool, Fold::Commit(_)));
+        // The execution-end drain: the message's quiet text is GONE.
+        let drained =
+            state.fold(&event("session.execution.succeeded", &json!({ "sessionID": "s1" })));
+        assert_eq!(drained, Fold::Idle, "the tool message's quiet text dropped");
     }
 
     /// G-68 — the restore modes over the transport seam: `append`

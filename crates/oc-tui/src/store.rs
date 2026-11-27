@@ -637,8 +637,7 @@ impl DialogEntry {
     #[must_use]
     pub fn prompt_visible_line(&self) -> (String, Option<usize>) {
         let band = self.prompt_vband.unwrap_or(0);
-        let line: String =
-            self.value.split('\n').nth(band).unwrap_or_default().to_owned();
+        let line: String = self.value.split('\n').nth(band).unwrap_or_default().to_owned();
         let cursor = (self.prompt_caret_line() == band).then(|| {
             let cursor = self.prompt_cursor();
             let byte = char_boundary(&self.value, cursor);

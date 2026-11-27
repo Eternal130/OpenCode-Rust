@@ -166,11 +166,10 @@ const FIXTURES: &[(&str, &str)] = &[
     // (the wrap shape) + a LONG seeded value (the tail-visibility
     // probe) + an explicit placeholder, esc → settle-undefined (the
     // G-519 arm — the toast's String(value) distinguishes undefined
-    // from null). The 90 s gap after the confirm gives the
-    // key-driven states dwell room on BOTH ends (the rig's key arms
-    // complete at the SLOWER end's pace — a narrow gap let the
-    // leading end cross into the next timer state mid-capture in
-    // the first run).
+    // from null). va21g (the controller's slow-audit addendum): the
+    // prompt phase CHAINS off the confirm's settle (the rig's enter
+    // marker) — the v21c-sel chaining template; the old t+96 s
+    // absolute timer was dead dwell (any leg speedup raced it).
     (
         "v21c-cp",
         r#"export default {
@@ -187,21 +186,21 @@ const FIXTURES: &[(&str, &str)] = &[
         })
         .then((value) => {
           report("confirm " + String(value));
+          setTimeout(() => {
+            ctx.ui.dialog
+              .prompt({
+                title: "v21c prompt",
+                description:
+                  "a fairly long description line that should wrap at the dialog edge when rendered by the generic prompt face of both implementations",
+                placeholder: "type here",
+                value: "0123456789012345678901234567890123456789012345678901234567890123456789",
+              })
+              .then((value) => {
+                report("prompt " + String(value));
+              });
+          }, 4000);
         });
     }, 6000);
-    setTimeout(() => {
-      ctx.ui.dialog
-        .prompt({
-          title: "v21c prompt",
-          description:
-            "a fairly long description line that should wrap at the dialog edge when rendered by the generic prompt face of both implementations",
-          placeholder: "type here",
-          value: "0123456789012345678901234567890123456789012345678901234567890123456789",
-        })
-        .then((value) => {
-          report("prompt " + String(value));
-        });
-    }, 96000);
     return () => {};
   },
 };
@@ -404,9 +403,10 @@ fn v21c_confirm_prompt_arms_pair() {
 // Anchor 2 — the select arms: the t+6 s search select opens (the
 // G-522 flat-from-empty-query shape + the category-as-footer); a
 // typed query (the degraded native filter's rows); esc →
-// settle-undefined; the t+51 s categorized select with NO search (the
-// grouped shape); the t+96 s plain select (pre-tab enter submits the
-// selected row).
+// settle-undefined; the categorized select with NO search (the
+// grouped shape) and the plain select (pre-tab enter submits the
+// selected row) CHAIN off the previous phase's settle (the v21c
+// slow-audit fix C — no absolute timers).
 // ===========================================================================
 #[test]
 fn v21c_select_search_grouped_pair() {

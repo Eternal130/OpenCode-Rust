@@ -1997,6 +1997,13 @@ pub struct Lifecycle {
     /// `height - max(FOOTER_HEIGHT, pane height)` — the pane's
     /// blocker bodies grow the dock upward, shrinking the band.
     region_bottom: usize,
+    /// G-540 — the transcript's PAINTED tail column (0-based; the
+    /// mini's own model over the UNTRIMMED row widths — the engine's
+    /// `row_widths` walks back the trailing blanks its own tail
+    /// tracks, but the painted bytes keep them, so the park must sit
+    /// at the painted end or the next continuing chunk overwrites
+    /// them).
+    painted_tail: usize,
     /// The last painted footer signature (the dirty check) + a force
     /// flag for post-scroll invalidation (a scrollback write scrolls
     /// the screen, so the next footer draw must repaint fully).
@@ -2116,6 +2123,7 @@ impl Lifecycle {
             drawn_footer_rows: 0,
             transcript_row: 1,
             region_bottom: 0,
+            painted_tail: 0,
             splash_enabled: input.splash,
             mono: input.mono,
             entry_look: crate::mini::entry_styled::EntryLook::fallback_dark(),
@@ -2267,9 +2275,22 @@ impl Lifecycle {
         }
         let separator = separator_rows(self.last_commit.as_ref(), &commit) > 0;
         let (entry_start, entry_trailing) = entry_flags(&commit);
+        // G-540 — the separator is its OWN write (`writeSpacer`,
+        // scrollback.surface.ts:236-243 → `spacerWriter`): a fresh
+        // row that closes with its own newline, never an in-band
+        // blank row — the entry's own flags (a PROGRESS chunk
+        // CONTINUES, `entryFlags`, entry.body.ts:105-159) decide the
+        // entry batch's newline intent, so an in-band blank would
+        // paint as a no-op CR on the CURRENT row (the first-turn
+        // corpus's one-row-up face). The entry rows render with
+        // `prev = None` — the separator prepend belongs to the
+        // footer-panel callers (`footer_subagent.rs`).
+        if separator {
+            self.queue_rows(vec![String::new()]);
+        }
         let rows = append_rows(
             self.mono,
-            self.last_commit.as_ref(),
+            None,
             &commit,
             self.width.max(1),
             self.shell_output,
@@ -2281,16 +2302,12 @@ impl Lifecycle {
             PendingRowsKind::Plain(rows) => {
                 self.pending.push(PendingRows {
                     rows: PendingRowsKind::Plain(rows),
-                    start_on_new_line: separator || entry_start,
+                    start_on_new_line: entry_start,
                     trailing_newline: entry_trailing,
                 });
             }
             PendingRowsKind::EntryStyled(rows) => {
-                self.queue_entry_styled_rows(
-                    rows,
-                    separator || entry_start,
-                    entry_trailing,
-                );
+                self.queue_entry_styled_rows(rows, entry_start, entry_trailing);
             }
             PendingRowsKind::Styled(_) => unreachable!("append_rows never produces the splash arm"),
         }
@@ -2378,11 +2395,14 @@ impl Lifecycle {
         let row_columns = u32::try_from(self.width.max(1)).unwrap_or(u32::MAX);
         let width = self.width.max(1);
         while let Some(batch) = self.pending.first().cloned() {
-            // The queue is empty at the loop head (the previous
-            // iteration drained its own commits), so the engine's
-            // pending tail IS the current tail — where THIS batch
-            // starts (the ref's `ctx.tailColumn`).
-            let start_tail =
+            // The batch's start column: the mini's PAINTED tail (the
+            // engine's pending tail lags the painted content by the
+            // trailing blanks its `row_widths` walks back — see the
+            // tail update at the loop's end), and the ENGINE's own
+            // tail (pre-flush — the queue was drained by the previous
+            // iteration) for the leading-newline decision.
+            let start_tail = self.painted_tail;
+            let engine_tail =
                 usize::try_from(self.solid.renderer.get_pending_split_tail_column()).unwrap_or(0);
             let row_count = batch.rows.len();
             // G-272⑩ — styled ENTRY batches ride the opentui styled
@@ -2438,47 +2458,77 @@ impl Lifecycle {
                 }
             }
             self.pending.remove(0);
-            // Park the cursor at the batch's start column (the dock
-            // paint left it mid-dock; the engine's stream writes from
-            // the cursor), then flush THIS batch before the next one
-            // queues — a continuing batch's bytes must land at the
-            // recorded tail, which the NEXT park re-derives from the
-            // flushed state.
-            self.park_transcript_cursor_at(start_tail)?;
+            // Park the cursor at the batch's start position (the
+            // dock paint left it mid-dock; the engine's stream
+            // writes from the cursor), then flush THIS batch before
+            // the next one queues — a continuing batch's bytes must
+            // land at the recorded tail, which the NEXT park
+            // re-derives from the flushed state. A fresh-row batch
+            // parks at COLUMN 1: the session is in raw mode (OPOST
+            // off), so the engine's leading '\n' (startOnNewLine
+            // with the tail mid-row) moves DOWN one row KEEPING the
+            // column — parked at column 1, the payload lands at
+            // column 0 of the next row; parked at the tail, it would
+            // staircase.
+            if batch.start_on_new_line {
+                self.park_transcript_cursor()?;
+            } else {
+                self.park_transcript_cursor_at(start_tail)?;
+            }
             let _ = self.solid.renderer.flush_pending_split_commits(true, true);
-            // The row advance: the first row continues at the tail
-            // (the terminal's auto-wrap may consume extra rows —
-            // `(tail + width0 - 1) / width`, the engine's
-            // `advanceSplitTailColumn` row half), the later rows are
-            // newline-separated, and the trailing newline closes the
-            // final row.
-            let first_width = self.pending_first_row_width(&batch).min(row_columns as usize);
+            // The row advance — the CURSOR's row after the batch's
+            // bytes: the engine's leading '\n' (when the batch opens
+            // a fresh row over an open one) consumes a row, the
+            // first row continues at the tail (the terminal's
+            // auto-wrap may consume extra rows — `(tail + width0 -
+            // 1) / width`, the engine's `advanceSplitTailColumn` row
+            // half), the later rows are newline-separated, and the
+            // trailing newline closes the final row.
+            let leading = usize::from(batch.start_on_new_line && engine_tail > 0);
+            let start_column = if batch.start_on_new_line { 0 } else { start_tail };
+            let widths = self.pending_row_widths(&batch);
+            let first_width = widths.first().copied().unwrap_or(0);
             let wraps =
-                if first_width > 0 { (start_tail + first_width - 1) / width.max(1) } else { 0 };
+                if first_width > 0 { (start_column + first_width - 1) / width.max(1) } else { 0 };
             let trailing = usize::from(batch.trailing_newline);
-            let advance = wraps + row_count.saturating_sub(1) + trailing;
+            let advance = leading + wraps + row_count.saturating_sub(1) + trailing;
             let bottom = self.region_bottom.max(1);
             self.transcript_row = (self.transcript_row + advance).min(bottom);
+            // The PAINTED tail (G-540's join correction): the engine's
+            // `row_widths` walks back the trailing blanks
+            // (renderer.ts:2497-2519) but the PAINTED bytes keep them
+            // (the raw-mode CR blocks the plain arm's trim; the styled
+            // spans carry them), so the engine's tail model lags the
+            // painted content by the last row's trailing blanks — a
+            // park there lets the NEXT continuing chunk overwrite
+            // them (the `thesubagent` corpus face). The mini keeps its
+            // own tail over the UNTRIMMED widths (the engine's
+            // `advanceSplitTailColumn` shape, scrollback.rs:323-341).
+            let mut tail = start_column;
+            for (index, row_width) in widths.iter().enumerate() {
+                tail = advance_painted_tail(tail, *row_width, width);
+                if index < widths.len() - 1 || batch.trailing_newline {
+                    tail = 0;
+                }
+            }
+            self.painted_tail = tail;
         }
         self.force_draw = true;
         Ok(())
     }
 
-    /// The batch's FIRST row display width (the engine's
-    /// `rowWidths` shape: the occupied cells, trailing blanks
-    /// trimmed — renderer.ts:2497-2519) — the wrap math for a
-    /// continuing row.
-    fn pending_first_row_width(&self, batch: &PendingRows) -> usize {
-        if batch.rows.len() == 0 {
-            return 0;
-        }
-        let text: String = match &batch.rows {
-            PendingRowsKind::Plain(rows) => rows[0].clone(),
-            PendingRowsKind::Styled(rows) | PendingRowsKind::EntryStyled(rows) => {
-                rows[0].iter().map(|span| span.text.as_str()).collect()
-            }
+    /// The batch's row display widths (the PAINTED cells — the raw-mode
+    /// CR terminator excluded, the trailing blanks KEPT: they are
+    /// painted content on a continuing row).
+    fn pending_row_widths(&self, batch: &PendingRows) -> Vec<usize> {
+        let texts: Vec<String> = match &batch.rows {
+            PendingRowsKind::Plain(rows) => rows.clone(),
+            PendingRowsKind::Styled(rows) | PendingRowsKind::EntryStyled(rows) => rows
+                .iter()
+                .map(|spans| spans.iter().map(|span| span.text.as_str()).collect())
+                .collect(),
         };
-        crate::wrap::display_width(text.trim_end_matches([' ', '\r']))
+        texts.iter().map(|text| crate::wrap::display_width(text.trim_end_matches('\r'))).collect()
     }
 
     /// CUP to the transcript band's tracked row at the batch's start
@@ -2487,8 +2537,7 @@ impl Lifecycle {
     /// onto the next row).
     fn park_transcript_cursor_at(&mut self, tail: usize) -> Result<(), String> {
         let width = self.width.max(1);
-        let row = (self.transcript_row + tail / width)
-            .clamp(1, self.height.max(1));
+        let row = (self.transcript_row + tail / width).clamp(1, self.height.max(1));
         let col = tail % width + 1;
         self.write_raw(format!("\x1b[{row};{col}H").as_bytes())
     }
@@ -2499,7 +2548,6 @@ impl Lifecycle {
         let row = self.transcript_row.clamp(1, self.height.max(1));
         self.write_raw(format!("\x1b[{row};1H").as_bytes())
     }
-
     /// The transcript scroll region (`syncSplitScrollback`'s DECSTBM
     /// arm, `renderer.ts:2921-2972`): rows `1..=region_bottom` scroll
     /// with the engine's newline stream while the reserved footer band
@@ -2803,6 +2851,31 @@ fn observe_window_size() -> Option<(u16, u16)> {
     (winsize.ws_col > 0 && winsize.ws_row > 0).then_some((winsize.ws_col, winsize.ws_row))
 }
 
+/// G-540 — `advanceSplitTailColumn`'s shape over the PAINTED (untrimmed)
+/// row width (opentui-core scrollback.rs:323-341): the tail advances by
+/// the columns, wrapping at the width (a row whose painted cells fill
+/// the width exactly leaves the full-row state; the engine's own
+/// `row_widths` trim makes ITS tail lag by the trailing blanks).
+fn advance_painted_tail(tail: usize, columns: usize, width: usize) -> usize {
+    if width == 0 {
+        return tail;
+    }
+    let mut tail = tail;
+    let mut remaining = columns;
+    while remaining > 0 {
+        if tail >= width {
+            tail = 0;
+        }
+        let step = remaining.min(width - tail);
+        tail += step;
+        remaining -= step;
+        if remaining > 0 && tail >= width {
+            tail = 0;
+        }
+    }
+    tail
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2897,11 +2970,7 @@ mod tests {
             start_on_new_line: true,
             trailing_newline: true,
         };
-        assert!(
-            wide.rows.ansi_rows(3)[0].contains("abc"),
-            "clamped: {:?}",
-            wide.rows.ansi_rows(3)
-        );
+        assert!(wide.rows.ansi_rows(3)[0].contains("abc"), "clamped: {:?}", wide.rows.ansi_rows(3));
     }
 
     /// G-181③ — the poll's size-decision table: only a real 0×0-free

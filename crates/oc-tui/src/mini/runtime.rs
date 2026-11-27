@@ -353,6 +353,10 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
     // `hydrate(attempt, {render: true})` before `apply`, transport.ts:
     // 955-991).
     let mut transport = TransportState::new(&session_id);
+    // G-540 — `input.tools` (runtime.ts:802's `configState.current.
+    // tools === "show"`): the transport's quiet-text gate follows the
+    // same knob the commit-visibility gate reads.
+    transport.set_tools_visible(settings.tools);
     // TUI-17 — the subagent tracker exists BEFORE the boot replay so
     // the hydrate's mainTool walk + family index feed it (G-529's
     // :1061/:946 sites — the ref's `hydrate(next)` admits children
@@ -360,6 +364,19 @@ pub async fn run(input: MiniInput) -> Result<i32, String> {
     let mut subagents = super::transport::SubagentTracker::new(&session_id);
     let mut shown = false;
     if input.target.resume && input.replay {
+        // G-540-adjacent (the resume corpus's row order): the entry
+        // splash's write PRECEDES the hydrate's rows on the ref
+        // (`queueSplash` at the lifecycle boot, runtime.lifecycle.ts:
+        // 188-203; the hydrate's fetch latency lands after it). The
+        // port's fast boot beats the startup one-shot — wait the
+        // launch animation out and flush the splash BEFORE the replay
+        // walk so the wordmark row precedes the replayed transcript.
+        let startup = std::time::Duration::from_millis(crate::mini::lifecycle::STARTUP_DURATION_MS);
+        let deadline = std::time::Instant::now() + startup;
+        while std::time::Instant::now() < deadline && !lifecycle.is_closed() {
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        }
+        let _ = lifecycle.flush();
         replay_history(
             &mut lifecycle,
             &client,
@@ -1117,6 +1134,31 @@ impl Runtime {
                         self.lifecycle.append(commit);
                     }
                 }
+                // G-540 — the quiet-text flush + the step's usage
+                // patch (the ref's two `write` calls,
+                // transport.ts:1370-1381): the commits append through
+                // the same visibility gates, the usage patch rides
+                // the `Fold::Usage` shape.
+                Fold::CommitsWithUsage { commits, model, tokens, cost } => {
+                    for commit in commits {
+                        if !self.settings.commit_visible(&commit) {
+                            continue;
+                        }
+                        self.shown = true;
+                        self.lifecycle.append(commit);
+                    }
+                    let percent = model.as_ref().and_then(|model| {
+                        let limit = self.context_limits.get(model).copied().unwrap_or(0);
+                        if limit == 0 {
+                            return None;
+                        }
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                        let ratio = (tokens as f64 / limit as f64) * 100.0;
+                        Some((ratio + 0.5) as u32)
+                    });
+                    self.lifecycle.pane.usage =
+                        Some(super::lifecycle::UsageInfo { tokens, percent, cost });
+                }
                 Fold::Idle => {}
                 // G-272 — `session.step.ended`'s usage patch
                 // (transport.ts:1361-1381): the statusline's context/
@@ -1219,6 +1261,7 @@ impl Runtime {
                             // (`setTitle(undefined)` → "OpenCode").
                             self.lifecycle.set_title(None);
                             self.transport = TransportState::new(&new_id);
+                            self.transport.set_tools_visible(self.settings.tools);
                             self.subagents = super::transport::SubagentTracker::new(&new_id);
                             self.queue = PromptQueue::new(true);
                             self.history = PromptHistory::new();
@@ -1416,10 +1459,7 @@ impl Runtime {
             // the "Default model" string, runtime.lifecycle.ts:218).
             // `turn_model` STARTS as the boot label (the runtime's
             // boot binding), so the None case means "no model at all".
-            let model = self
-                .turn_model
-                .clone()
-                .unwrap_or_else(|| "Default model".to_owned());
+            let model = self.turn_model.clone().unwrap_or_else(|| "Default model".to_owned());
             #[allow(clippy::cast_possible_truncation)]
             let duration = crate::components::message::model::locale_duration(
                 u64::try_from(turn_started.elapsed().as_millis()).unwrap_or(0),
@@ -2284,6 +2324,10 @@ mod tests {
     fn replay_projects_fragments_and_commits_images() {
         let settings = MiniSettings { tools: false, thinking: true, ..MiniSettings::default() };
         let mut transport = TransportState::new("s1");
+        // G-540 — the covered/fresh delta walk below documents the
+        // TOOLS-SHOWN arm (the runtime wires the real knob via
+        // `set_tools_visible(settings.tools)`).
+        transport.set_tools_visible(true);
 
         // A user message with an image file: text row + image commit.
         // G-543 — the WIRE user row carries the top-level `text`

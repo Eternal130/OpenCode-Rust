@@ -252,41 +252,44 @@ const FIXTURES: &[(&str, &str)] = &[
         })
         .then((value) => {
           report("weak " + String(value));
+          // va21g (the controller's slow-audit addendum): the search
+          // phase CHAINS off the weak select's settle (the v21c-sel
+          // template) — the old t+96 s absolute timer was dead dwell.
+          setTimeout(() => {
+            ctx.ui.dialog
+              .select({
+                title: "v21e search",
+                // NB: the ref's search callback is SYNCHRONOUS
+                // (context.ts:386-389 returns the rows, never a promise —
+                // an async callback crashes the ref's filtered() memo at
+                // dialog-select.tsx:185 `.filter` on the promise).
+                search: (query, options) =>
+                  options.filter((option) =>
+                    option.title.toLowerCase().includes(String(query ?? "").toLowerCase()),
+                  ),
+                options: [
+                  {
+                    title: "North",
+                    value: "north",
+                    description: "the search face",
+                    footer: "n1",
+                    category: "Cardinal",
+                  },
+                  {
+                    title: "South",
+                    value: "south",
+                    description: "the search face",
+                    footer: "s2",
+                    category: "Cardinal",
+                  },
+                ],
+              })
+              .then((value) => {
+                report("search " + String(value));
+              });
+          }, 4000);
         });
     }, 6000);
-    setTimeout(() => {
-      ctx.ui.dialog
-        .select({
-          title: "v21e search",
-          // NB: the ref's search callback is SYNCHRONOUS
-          // (context.ts:386-389 returns the rows, never a promise —
-          // an async callback crashes the ref's filtered() memo at
-          // dialog-select.tsx:185 `.filter` on the promise).
-          search: (query, options) =>
-            options.filter((option) =>
-              option.title.toLowerCase().includes(String(query ?? "").toLowerCase()),
-            ),
-          options: [
-            {
-              title: "North",
-              value: "north",
-              description: "the search face",
-              footer: "n1",
-              category: "Cardinal",
-            },
-            {
-              title: "South",
-              value: "south",
-              description: "the search face",
-              footer: "s2",
-              category: "Cardinal",
-            },
-          ],
-        })
-        .then((value) => {
-          report("search " + String(value));
-        });
-    }, 96000);
     return () => {};
   },
 };

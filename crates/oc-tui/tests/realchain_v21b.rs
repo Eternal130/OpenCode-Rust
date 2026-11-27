@@ -323,23 +323,29 @@ export default {
         report("close1");
       });
     }, 6000);
+    // va21g (the controller's slow-audit addendum): the show-lifecycle
+    // phases are TIMER-driven per end (no promise settle to chain —
+    // the replace fires the previous phase's onClose), so the gaps
+    // SHRINK instead: 45 s of dead dwell per transition → 12 s (the
+    // boot skew between the two TUIs stays inside the margin; the
+    // marker needles complete at the slower end either way).
     setTimeout(() => {
       ctx.ui.dialog.show(body("two", false), () => {
         log.push("close2");
         report("close2");
       });
-    }, 51000);
+    }, 18000);
     setTimeout(() => {
       ctx.ui.dialog.set({ size: "large" });
       report("large");
-    }, 96000);
+    }, 30000);
     setTimeout(() => {
       ctx.ui.dialog.set({ centered: true });
       report("centered");
-    }, 141000);
+    }, 42000);
     setTimeout(() => {
       ctx.ui.dialog.clear();
-    }, 186000);
+    }, 54000);
     return () => {};
   },
 };
@@ -389,11 +395,15 @@ export default {
         message: "v21b plain same-family",
         duration: 600000,
       });
-      await new Promise((resolve) => setTimeout(resolve, 40000));
+      // va21g (the controller's slow-audit addendum): the phases CHAIN
+      // off the previous toast's dwell (the rig's marker captures
+      // complete ~1 s after the needle) — the old 40 s/5 s absolute
+      // gaps were dead dwell.
+      await new Promise((resolve) => setTimeout(resolve, 4000));
       try {
         ctx.ui.router.navigate({ type: "home" });
       } catch {}
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      await new Promise((resolve) => setTimeout(resolve, 4000));
       ctx.ui.toast.show({
         sessionID: target.id,
         message: "v21b background fallback",
@@ -475,11 +485,14 @@ export default {
         message: parts.join(" ; "),
         duration: 600000,
       });
-      await new Promise((resolve) => setTimeout(resolve, 40000));
+      // va21g (the slow-audit addendum): the phases CHAIN off the
+      // previous toast's dwell — the old 40 s/5 s gaps were dead
+      // dwell.
+      await new Promise((resolve) => setTimeout(resolve, 4000));
       try {
         ctx.ui.router.navigate({ type: "home" });
       } catch {}
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      await new Promise((resolve) => setTimeout(resolve, 4000));
       let closed = "err";
       try {
         closed = String(ctx.ui.tabs.close());

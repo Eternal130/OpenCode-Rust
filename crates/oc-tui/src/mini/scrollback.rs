@@ -645,7 +645,10 @@ mod tests {
         // G-543 — the NON-mono arm carries `userBody`'s `›` glyph
         // (`mono ? ">" : "›"`, entry.body.ts:52-60 — the v2 default
         // writer).
-        assert_eq!(entry_body_with(&Commit::user("hello world"), true, false), vec!["› hello world"]);
+        assert_eq!(
+            entry_body_with(&Commit::user("hello world"), true, false),
+            vec!["› hello world"]
+        );
     }
 
     #[test]

@@ -2275,6 +2275,16 @@ pub fn capture_settled(tui: &TuiProcess) -> String {
     }
 }
 
+/// va21g — the TRANSIENT-state capture (G-545's 3 s notice window):
+/// a raw grid snapshot annotated as NOT settled (the settle
+/// machinery's ≥2.5 s stability proof would wait the window out — the
+/// transient face lives INSIDE it).
+#[must_use]
+pub fn capture_transient(tui: &TuiProcess) -> String {
+    mark_quiescence(false);
+    tui.screen_text()
+}
+
 /// The names of every normalization that fired SINCE THE LAST EXPORT
 /// (M-1, review fix: a per-report snapshot, not a process-lifetime
 /// accumulation — the set is drained by each export, so each report
@@ -2546,7 +2556,9 @@ fn replace_version_pill(row: &str) -> String {
             if looks_like_version(token) {
                 let after = &body[len..];
                 if after.is_empty() || after.trim_start().starts_with('·') {
-                    return format!("{} __VERSION__{}", &row[..start], after);
+                    // `row[..start]` already ends with the token's
+                    // leading space — the replacement keeps ONE.
+                    return format!("{}__VERSION__{}", &row[..start], after);
                 }
             }
         }
@@ -3032,10 +3044,7 @@ mod w4_normalizer_tests {
         assert_eq!(replace_version_pill("▪ oc mini vlocal"), "▪ oc mini __VERSION__");
         // NOT a version: plain words with a v stay intact.
         assert_eq!(replace_version_pill("very good text"), "very good text");
-        assert_eq!(
-            replace_version_pill("value vlocal-ish and more"),
-            "value vlocal-ish and more"
-        );
+        assert_eq!(replace_version_pill("value vlocal-ish and more"), "value vlocal-ish and more");
         // A mid-word v (no leading space) stays intact.
         assert_eq!(replace_version_pill("savedvlocal row"), "savedvlocal row");
     }

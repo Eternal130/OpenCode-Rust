@@ -267,7 +267,22 @@ pub fn styled_rows_to_captured(
                 })
                 .collect();
             // The raw-mode CR rides the final span (cluster width 0 —
-            // the tail-column math is unaffected).
+            // the tail-column math is unaffected). G-540 — an EMPTY
+            // row (the separator blanks) still needs its CR half: the
+            // engine's between-row LF only moves DOWN (raw mode keeps
+            // the column), so without it the rows 1.. of a multi-row
+            // batch start wherever the park left the cursor instead
+            // of column 0 (the plain arm's `ansi_rows` appends the CR
+            // to every row — this is the styled arm's twin).
+            if spans.is_empty() {
+                spans.push(opentui_core::buffer::CapturedSpan {
+                    text: "\r".to_owned(),
+                    fg: opentui_core::Rgba::default_color(255, 255, 255, 255),
+                    bg: opentui_core::Rgba::default_color(0, 0, 0, 255),
+                    attributes: 0,
+                    width: 0,
+                });
+            }
             if let Some(last) = spans.last_mut() {
                 last.text.push('\r');
             }
