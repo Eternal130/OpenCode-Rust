@@ -505,25 +505,35 @@ fn probe_plus_rect(
         .collect()
 }
 
+/// One band of the sweep: rows `[y0, y1)` at `stride`, and whether
+/// row 0 carries the session strip (the retry's jitter guard — see
+/// `sweep_band`).
+#[derive(Debug, Clone, Copy)]
+struct Band {
+    y0: usize,
+    y1: usize,
+    stride: usize,
+    strip_row: bool,
+}
+
 /// Sweep the strided cells of rows `[y0, y1)` of the settled screen,
 /// guarding against teardown (a blank grid mid-sweep means the app
 /// died). Strip-row (`y == 0`) `NoChange` probes get ONE retry (jitter
-/// guard — the strip's surface assertions live on that row; `strip_row`
-/// is false for the HOME bands, which have no strip: their row 0 is
-/// inert hero chrome, so a re-probe of an already-`NoChange` cell can
-/// only re-confirm `NoChange` — the retry widened home's false-negative
-/// horizon without ever guarding an assertion there, 80 probes / ~2.9s
-/// of pure re-confirmation per home band).
+/// guard — the strip's surface assertions live on that row;
+/// `Band::strip_row` is false for the HOME bands, which have no
+/// strip: their row 0 is inert hero chrome, so a re-probe of an
+/// already-`NoChange` cell can only re-confirm `NoChange` — the
+/// retry widened home's false-negative horizon without ever guarding
+/// an assertion there, 80 probes / ~2.9s of pure re-confirmation per
+/// home band).
 fn sweep_band(
     harness: &mut HarnessHandle,
     baseline: &Grid,
     volatile: &HashSet<(usize, usize)>,
     baseline_digest: u64,
-    stride: usize,
-    y0: usize,
-    y1: usize,
-    strip_row: bool,
+    band: Band,
 ) -> SweepResult {
+    let Band { y0, y1, stride, strip_row } = band;
     let mut result = SweepResult::default();
     let mut y = y0;
     while y < y1.min(baseline.rows) {
@@ -606,6 +616,14 @@ fn boot_to_two_tabs(harness: &mut HarnessHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// The driver's report: the band's outcome plus its phase walls
+/// (slowD instrumentation — drive wall, exit-chord wall).
+struct DriverReport {
+    outcome: Result<SweepOutcome, String>,
+    drive: Duration,
+    chord: Duration,
+}
+
 /// The shared runner: sandbox + `FakeLlm` + PTY + a driver thread that
 /// performs `drive` (boot → settle → sweep one band) and always leaves
 /// the exit chord, while the test body runs the real TUI loop; then
@@ -623,8 +641,7 @@ fn run_sweep_test(
     let harness = LiveHarness::attach(cols, rows);
     // slowD instrumentation: the slot carries the driver's phase split
     // (drive wall, exit-chord wall) alongside the outcome.
-    let result_slot: Arc<Mutex<Option<(Result<SweepOutcome, String>, Duration, Duration)>>> =
-        Arc::new(Mutex::new(None));
+    let result_slot: Arc<Mutex<Option<DriverReport>>> = Arc::new(Mutex::new(None));
     let slot = Arc::clone(&result_slot);
     let ack_from = harness.handle().raw_len();
     let mut driver = harness.handle();
@@ -637,7 +654,8 @@ fn run_sweep_test(
         let chord_start = std::time::Instant::now();
         vt_harness::exit_chord(&mut driver);
         let chord_wall = chord_start.elapsed();
-        *slot.lock().expect("slot") = Some((outcome, drive_wall, chord_wall));
+        *slot.lock().expect("slot") =
+            Some(DriverReport { outcome, drive: drive_wall, chord: chord_wall });
     });
     let run_tui_start = std::time::Instant::now();
     run_tui(&fake.url, cols, rows, Duration::from_secs(120));
@@ -650,8 +668,8 @@ fn run_sweep_test(
         std::thread::sleep(Duration::from_millis(10));
     }
     let (swept, drive_wall, chord_wall) = match result_slot.lock().expect("slot").take() {
-        Some((Ok(outcome), drive_wall, chord_wall)) => (outcome, drive_wall, chord_wall),
-        Some((Err(error), _, _)) => panic!("driver failed: {error}"),
+        Some(DriverReport { outcome: Ok(swept), drive, chord }) => (swept, drive, chord),
+        Some(DriverReport { outcome: Err(error), .. }) => panic!("driver failed: {error}"),
         None => panic!("the driver thread never reported (deadlock?)"),
     };
     let ack_start = std::time::Instant::now();
@@ -717,7 +735,13 @@ fn home_band(y0: usize, y1: usize) -> SweepOutcome {
         if baseline.is_blank() {
             return Err("the settled home screen is blank".to_owned());
         }
-        let result = sweep_band(harness, &baseline, &volatile, baseline_digest, 1, y0, y1, false);
+        let result = sweep_band(
+            harness,
+            &baseline,
+            &volatile,
+            baseline_digest,
+            Band { y0, y1, stride: 1, strip_row: false },
+        );
         Ok(SweepOutcome {
             sweep: result,
             strip: baseline.row_text(0),
@@ -872,7 +896,13 @@ fn session_band(y0: usize, y1: usize) -> SweepOutcome {
         if !strip.contains('+') {
             return Err(format!("the strip never painted its affordance: {strip:?}"));
         }
-        let result = sweep_band(harness, &baseline, &volatile, baseline_digest, 1, y0, y1, true);
+        let result = sweep_band(
+            harness,
+            &baseline,
+            &volatile,
+            baseline_digest,
+            Band { y0, y1, stride: 1, strip_row: true },
+        );
         let plus_probes = probe_plus_rect(harness, &strip, &baseline, &volatile, baseline_digest);
         Ok(SweepOutcome {
             sweep: result,
@@ -907,7 +937,13 @@ fn session_band_160(y0: usize, y1: usize) -> SweepOutcome {
         }
         // Strided subset (every 2nd cell both axes) for speed — still
         // hits the strip's marks at 2-cell resolution.
-        let result = sweep_band(harness, &baseline, &volatile, baseline_digest, 2, y0, y1, true);
+        let result = sweep_band(
+            harness,
+            &baseline,
+            &volatile,
+            baseline_digest,
+            Band { y0, y1, stride: 2, strip_row: true },
+        );
         let plus_probes = probe_plus_rect(harness, &strip, &baseline, &volatile, baseline_digest);
         Ok(SweepOutcome {
             sweep: result,
