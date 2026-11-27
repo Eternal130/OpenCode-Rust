@@ -28,6 +28,9 @@
     clippy::needless_continue,
     clippy::redundant_closure_for_method_calls,
     clippy::similar_names,
+    // slowF: the omo scenario's rig + three exported states ride one
+    // fn (the plugin-loaded needle pushed it past the 100-line floor).
+    clippy::too_many_lines,
     clippy::unnecessary_debug_formatting
 )]
 
@@ -89,6 +92,27 @@ fn wait_screen(tui: &TuiProcess, needle: &str, secs: u64) -> bool {
         std::thread::sleep(Duration::from_millis(150));
     }
     false
+}
+
+/// slowF (2026-11-28, the battery w13 family): wait BOTH ends' screens
+/// CONCURRENTLY — the old form ran the two `wait_screen` calls back to
+/// back (the rust leg's window gated the ref leg's start), doubling
+/// every screen wait's wall-clock. The legs are independent PTYs.
+/// Every converted state re-verified byte-identical (the lane report's
+/// before/after table; the divergent states' spinner-phase rows are
+/// the registered capture-phase families).
+fn wait_screen_both(
+    rust_tui: &TuiProcess,
+    ref_tui: &TuiProcess,
+    needle: &str,
+    rust_secs: u64,
+    ref_secs: u64,
+) -> (bool, bool) {
+    std::thread::scope(|scope| {
+        let rust_leg = scope.spawn(move || wait_screen(rust_tui, needle, rust_secs));
+        let ref_leg = scope.spawn(move || wait_screen(ref_tui, needle, ref_secs));
+        (rust_leg.join().unwrap_or(false), ref_leg.join().unwrap_or(false))
+    })
 }
 
 // ===========================================================================
@@ -391,16 +415,19 @@ fn perm_boot(rig: &mut PermRig) {
         rust_booted && ref_booted,
         "PERM precondition RED: booted rust={rust_booted} ref={ref_booted}"
     );
+    // slowF: the post-boot settle(2) RESTORED (the pair lane's
+    // forensics apply here identically — the ref's FIRST PROMPT submit
+    // typed at wordmark+0 wedges the app ~50% under rig concurrency;
+    // the 2 s beat is the historical never-flaked form; see
+    // realchain_pair.rs boot_both for the full evidence).
     settle(2);
 }
 
 /// Wait for the ask dialog on BOTH ends (the header is the shared
-/// anchor: permission.tsx "Permission required").
+/// anchor: permission.tsx "Permission required"). slowF: the legs run
+/// CONCURRENTLY (they were serial two-liners before).
 fn wait_dialog(rig: &PermRig, secs: u64) -> (bool, bool) {
-    (
-        wait_screen(&rig.rust_tui, "Permission required", secs),
-        wait_screen(&rig.ref_tui, "Permission required", secs),
-    )
+    wait_screen_both(&rig.rust_tui, &rig.ref_tui, "Permission required", secs, secs)
 }
 
 /// B-once — the default selection ("Allow once") runs the tool; the
@@ -425,10 +452,10 @@ fn w13_perm_once_pair() {
     export_grid_diff("w13-perm-once", "dialog", &dialog_ref, &dialog_rust);
     // "Allow once" is the default selection — plain Enter.
     rig.write_both(b"\r");
-    let (rust_out, ref_out) = (
-        wait_screen(&rig.rust_tui, "test result: ok", 30),
-        wait_screen(&rig.ref_tui, "test result: ok", 45),
-    );
+    // slowF: the tool-output and confirm waits run CONCURRENTLY on both
+    // ends (they were serial two-liners before).
+    let (rust_out, ref_out) =
+        wait_screen_both(&rig.rust_tui, &rig.ref_tui, "test result: ok", 30, 45);
     // Second ask: the edit turn.
     let (rust_ask2, ref_ask2) = wait_dialog(&rig, 40);
     assert!(
@@ -437,11 +464,12 @@ fn w13_perm_once_pair() {
          rust={rust_ask2} ref={ref_ask2}"
     );
     rig.write_both(b"\r");
-    let (rust_done, ref_done) = (
-        wait_screen(&rig.rust_tui, CONFIRM_NEEDLE, 40),
-        wait_screen(&rig.ref_tui, CONFIRM_NEEDLE, 60),
-    );
-    settle(4);
+    let (rust_done, ref_done) =
+        wait_screen_both(&rig.rust_tui, &rig.ref_tui, CONFIRM_NEEDLE, 40, 60);
+    // slowF: settle(4) -> settle(1) — the CONFIRM needle is the turn's
+    // last content; 1 s is the paint floor for the trailing meta rows
+    // (the slowC post-turn precedent).
+    settle(1);
     let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
     let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
     let rust_readme =
@@ -473,20 +501,19 @@ fn w13_perm_always_pair() {
     // left/h + right/l (not tab), so drive the shift with right-arrow —
     // both engines move once → always.
     rig.write_both(b"\x1b[C\r");
-    let (rust_out, ref_out) = (
-        wait_screen(&rig.rust_tui, "test result: ok", 30),
-        wait_screen(&rig.ref_tui, "test result: ok", 45),
-    );
+    let (rust_out, ref_out) =
+        wait_screen_both(&rig.rust_tui, &rig.ref_tui, "test result: ok", 30, 45);
     assert!(rust_out && ref_out, "PERM-always RED: turn-0 output rust={rust_out} ref={ref_out}");
     // The edit ask is a DIFFERENT action — always again.
     let (rust_ask2, ref_ask2) = wait_dialog(&rig, 40);
     assert!(rust_ask2 && ref_ask2, "PERM-always RED: edit ask rust={rust_ask2} ref={ref_ask2}");
     rig.write_both(b"\x1b[C\r");
-    let (rust_done, ref_done) = (
-        wait_screen(&rig.rust_tui, CONFIRM_NEEDLE, 40),
-        wait_screen(&rig.ref_tui, CONFIRM_NEEDLE, 60),
-    );
-    settle(4);
+    let (rust_done, ref_done) =
+        wait_screen_both(&rig.rust_tui, &rig.ref_tui, CONFIRM_NEEDLE, 40, 60);
+    // slowF: settle(4) -> settle(1) — the CONFIRM needle is the turn's
+    // last content; 1 s is the paint floor (the slowC post-turn
+    // precedent).
+    settle(1);
     let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
     let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
     drop(rig);
@@ -515,9 +542,13 @@ fn w13_perm_reject_pair() {
     // on escape for a top-level session (rust permission_key /
     // ref escapeKey="reject" → dismiss → onSelect("reject")).
     rig.write_both(b"\x1b");
-    // The reply lands as a rejected tool state; give both engines time
-    // to settle their post-rejection surfaces, then export.
-    settle(8);
+    // The reply lands as a rejected tool state; the OLD gate settled
+    // on TIME (a blind 8 s beat). slowF: needle-ized — the rejected
+    // turn's meta row ends with the "· interrupted" token (the
+    // w13-perm-reject settled grid on BOTH ends — the export is
+    // EXACT), which lands when the reject processing completes.
+    let _ = wait_screen_both(&rig.rust_tui, &rig.ref_tui, "· interrupted", 20, 30);
+    settle(1);
     let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
     let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
     dump_grid("w13-pr-reject-ref", &ref_grid);
@@ -599,8 +630,23 @@ fn w13_omo_sections_at_trigger_width_pair() {
     let count_pills = |screen: &str| -> u64 {
         pill_needles.iter().map(|needle| screen.matches(needle).count() as u64).sum()
     };
-    // Plugin load is async — settle past the wordmark.
-    settle(8);
+    // Plugin load is async — the OLD gate was a blind 8 s settle past
+    // the wordmark. slowF: NEEDLE-GATED on the plugin-loaded face —
+    // the composer's agent row flips from the base "Build ·" to the
+    // omo plugin's "Orchestrator ·" agent (the plugin's agent
+    // registration reaching the store; both ends carry the row, the
+    // w13-omo-home export is EXACT). Bounded 15 s.
+    {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let face = |t: &TuiProcess| t.screen_text().contains("Orchestrator ·");
+        while !(face(&rust_tui) && face(&ref_tui)) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(150));
+        }
+    }
+    // slowF: a 2 s beat after the plugin face — the prompt below must
+    // clear the ref's first-submit boot-race window (the pair lane's
+    // forensics; wordmark+2+2 covers the pair lane's settle(3) form).
+    settle(2);
     let home_ref = normalize(&ref_tui.screen_text());
     let home_rust = normalize(&rust_tui.screen_text());
     dump_grid("w13-omo-home-ref", &home_ref);
@@ -619,9 +665,15 @@ fn w13_omo_sections_at_trigger_width_pair() {
     // sidebar's remote model hydration (agent.list → agent→model
     // rows, config.providers → model display names, both proxied
     // through the tui-bridge SDK port on the rust end) lands after
-    // the plugin's 1 s render timer; a second settle past the first
+    // the plugin's 1 s render timer; a second dwell past the first
     // export captures the post-hydration sidebar rows.
-    settle(8);
+    // slowF: settle(8) -> settle(1) — the hydrated grids are
+    // BYTE-IDENTICAL to the home grids in the baseline (the
+    // hydration completes inside the plugin-load window above; the
+    // 8 s beat carried no live duty on this face — the lane's
+    // evidence table). 1 s keeps the two exports as distinct
+    // moments past the render timer.
+    settle(1);
     let hydrated_ref = normalize(&ref_tui.screen_text());
     let hydrated_rust = normalize(&rust_tui.screen_text());
     dump_grid("w13-omo-home-hydrated-ref", &hydrated_ref);
@@ -637,10 +689,13 @@ fn w13_omo_sections_at_trigger_width_pair() {
     let ref_from = ref_tui.raw_len();
     rust_tui.write(b"hello\r");
     ref_tui.write(b"hello\r");
-    let ref_replied = ref_tui.wait_for(b"REALCHAIN-REPLAY-OK", ref_from, Duration::from_secs(60));
-    let rust_replied =
-        rust_tui.wait_for(b"REALCHAIN-REPLAY-OK", rust_from, Duration::from_secs(30));
-    settle(4);
+    // slowF: the two serial reply waits run CONCURRENTLY (the
+    // wait_both form — same windows, same needles).
+    let (rust_replied, ref_replied) =
+        wait_both(&rust_tui, &ref_tui, b"REALCHAIN-REPLAY-OK", rust_from, 30, ref_from, 60);
+    // slowF: settle(4) -> settle(1) — the reply needle gates the
+    // state; 1 s is the paint floor for the tab/meta rows.
+    settle(1);
     let session_ref = normalize(&ref_tui.screen_text());
     let session_rust = normalize(&rust_tui.screen_text());
     dump_grid("w13-omo-session-ref", &session_ref);
@@ -715,12 +770,25 @@ fn g_scenario(suffix: &str, prompt: &str) {
         rust_booted && ref_booted,
         "G-{suffix} precondition RED: boot {rust_booted}/{ref_booted}"
     );
+    // slowF: the post-wordmark settle(2) KEPT (retiring it exposes the
+    // ref's first-submit boot race — the pair lane's forensics; the
+    // prompt must not be typed at wordmark+0).
     settle(2);
     rust_tui.write(format!("{prompt}\r").as_bytes());
     ref_tui.write(format!("{prompt}\r").as_bytes());
     // The reply's shape is payload-specific (the empty seed renders
-    // nothing) — settle on TIME, not a needle.
-    settle(12);
+    // no text) — the OLD gate settled on TIME (a blind 12 s beat).
+    // slowF: needle-ized — the assistant META ROW ("Build ·
+    // claude-opus-4-7 · <timings>") renders at TURN END on both ends
+    // (the timings are end-of-turn facts; the trailing " ·" separates
+    // the needle from the composer's "Build · <model> Replay
+    // Anthropic" hint row), and the session TITLE ("Sandbox Replay
+    // Session" — s2's needle family) lands in the tab strip right
+    // after. The empty seed's error face carries the same meta row
+    // (the w13-g-empty settled grid). A 1 s paint floor follows both.
+    let _ = wait_screen_both(&rust_tui, &ref_tui, "Build · claude-opus-4-7 ·", 20, 30);
+    let _ = wait_both(&rust_tui, &ref_tui, b"Sandbox Replay Session", 0, 20, 0, 30);
+    settle(1);
     let ref_grid = normalize(&ref_tui.screen_text());
     let rust_grid = normalize(&rust_tui.screen_text());
     dump_grid(&format!("w13-g-{suffix}-ref"), &ref_grid);
