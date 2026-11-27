@@ -98,12 +98,26 @@ async fn start_stub() -> Stub {
     let shutdown = Arc::new(AtomicBool::new(false));
     let prompts = Arc::new(AtomicUsize::new(0));
     let created = Arc::new(AtomicUsize::new(0));
+    // The event-id counter — the stub's mirror of the real server's
+    // IdGen seam (`state.ids.new_id("evt")`, oc-server sse.rs:357; the
+    // ref's `Event.ID.create()` = `"evt_" + ascending()`,
+    // packages/schema/src/event.ts:9-11): every frame this stub
+    // publishes — the `server.connected` boot frame AND each scripted
+    // turn event — takes the next `evt_<n>`. Unique per event, exactly
+    // like the real wire: the store's F2 replay-dedup
+    // (oc-tui store.rs:14446-14463) drops exact id re-deliveries
+    // before any reducer runs, so a scripted turn whose events share
+    // one id would land only its first event and silently drop the
+    // rest (no reply text, no `execution.succeeded` → the session
+    // stays busy and the prompt inbox never drains).
+    let ids = Arc::new(AtomicUsize::new(0));
 
     {
         let events_tx = events_tx;
         let shutdown = Arc::clone(&shutdown);
         let prompts = Arc::clone(&prompts);
         let created = Arc::clone(&created);
+        let ids = Arc::clone(&ids);
         tokio::spawn(async move {
             loop {
                 if shutdown.load(Ordering::SeqCst) {
@@ -113,8 +127,9 @@ async fn start_stub() -> Stub {
                 let events_tx = events_tx.clone();
                 let prompts = Arc::clone(&prompts);
                 let created = Arc::clone(&created);
+                let ids = Arc::clone(&ids);
                 tokio::spawn(async move {
-                    serve_connection(&mut socket, events_tx, &prompts, &created).await;
+                    serve_connection(&mut socket, events_tx, &prompts, &created, &ids).await;
                 });
             }
         });
@@ -153,11 +168,13 @@ fn session_json(id: &str, title: &str) -> String {
     )
 }
 
+#[allow(clippy::too_many_lines)] // the stub's protocol walk + the SSE handshake frame
 async fn serve_connection(
     socket: &mut TcpStream,
     events_tx: tokio::sync::broadcast::Sender<String>,
     prompts: &AtomicUsize,
     created: &AtomicUsize,
+    ids: &AtomicUsize,
 ) {
     let head = read_request(socket).await;
     let mut parts = head.lines().next().unwrap_or_default().split_whitespace();
@@ -165,10 +182,38 @@ async fn serve_connection(
     let path = parts.next().unwrap_or_default().to_owned();
     let path_only = path.split('?').next().unwrap_or_default().to_owned();
 
-    // SSE: headers then park, forwarding whatever the script emits.
+    // SSE: the real server's subscription handshake. The ref prepends
+    // ONE synthesized frame to every live subscription
+    // (`Stream.make(EventFeed.frame(connected)).concat(live)`,
+    // packages/server/src/handlers/event.ts:18-20 — `connected` is
+    // `{ id: Event.ID.create(), type: "server.connected", data: {} }`,
+    // :13-17) and the port mirrors it byte-for-byte
+    // (`connected_frame`, oc-server sse.rs:356-359, chained first in
+    // `event_response`, sse.rs:463-483). The handshake matters: the
+    // port client's G-300 first-frame marker check (data.rs:1193-1213,
+    // the port of connection.ts:106-107) drops any stream whose first
+    // frame is not `server.connected`, and the ref client's
+    // `server.connected` handler drives `input.connected({ reconnect })`
+    // (connection.ts:14-20). A stub that parks on the broadcast without
+    // the boot frame leaves the app in a connect-window reconnect loop
+    // — permanently reconnecting, never connected: no transcript or
+    // reply surface, prompts never drain. So: headers, then the
+    // connected frame (id from the same `evt_<n>` IdGen seam the turn
+    // events ride), then the broadcast tail.
     if method == "GET" && path_only == "/api/event" {
         let response = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n";
         if socket.write_all(response.as_bytes()).await.is_err() {
+            return;
+        }
+        let connected = format!(
+            "data: {}\n\n",
+            serde_json::json!({
+                "id": next_event_id(ids),
+                "type": "server.connected",
+                "data": {},
+            })
+        );
+        if socket.write_all(connected.as_bytes()).await.is_err() {
             return;
         }
         let mut subscription = events_tx.subscribe();
@@ -253,7 +298,7 @@ async fn serve_connection(
             ),
         )
         .await;
-        emit_turn_script(&events_tx, &session_id, n);
+        emit_turn_script(&events_tx, &session_id, n, ids);
         return;
     }
     if method == "POST" && path_only.ends_with("/reply") {
@@ -263,32 +308,64 @@ async fn serve_connection(
     respond_json(socket, "{}").await;
 }
 
-/// The scripted turn a prompt triggers (the `mini_pty.rs`
-/// `PlainReply` script, per-prompt distinct text so transcripts grow
-/// visibly).
-fn emit_turn_script(tx: &tokio::sync::broadcast::Sender<String>, session_id: &str, n: usize) {
+/// The scripted turn a prompt triggers (the `mini_pty.rs` `PlainReply`
+/// script's REAL-WIRE shape, per-prompt distinct text so transcripts
+/// grow visibly). [slowG] Two fidelity corrections the connected state
+/// exposed (the pre-connect stream never reached the store, so the
+/// legacy normalized shape was never caught):
+/// * every event takes a FRESH id off the stub's `evt_<n>` counter —
+///   the real server assigns a unique ascending id to each published
+///   event (`Event.ID.create()` / `state.ids.new_id("evt")`), and the
+///   port store's F2 replay-dedup (store.rs:14446-14463) drops exact
+///   id re-deliveries before any reducer runs, so per-turn shared ids
+///   would drop every event after the first;
+/// * `session.text.*` carries `assistantMessageID` + `ordinal` with NO
+///   partID — the ref schema's exact shape (packages/schema/src/
+///   session-event.ts:393-417, `Base` = `{sessionID}` :38-40) — and
+///   the assistant message id is its OWN id, never the user echo's.
+///   The port store's text reducers dispatch on `assistantMessageID`
+///   (store.rs:16244-16246 `session_and_assistant`) and only fold
+///   into `Message::Assistant` rows (store.rs:16368-16374), so the
+///   legacy `messageID`/`partID` stub shape silently dropped every
+///   scripted reply.
+fn emit_turn_script(
+    tx: &tokio::sync::broadcast::Sender<String>,
+    session_id: &str,
+    n: usize,
+    ids: &AtomicUsize,
+) {
     let event = |kind: &str, data: serde_json::Value| {
         let _ = tx.send(
-            serde_json::json!({ "type": kind, "data": data, "created": 1, "id": format!("evt_{n}") })
+            serde_json::json!({ "type": kind, "data": data, "created": 1, "id": next_event_id(ids) })
                 .to_string(),
         );
     };
     let session = serde_json::json!({ "sessionID": session_id });
+    let assistant = format!("msg_asst_{n}");
+    let text = format!("Fuzz reply #{n}: the harness says hello.");
     event("session.execution.started", session.clone());
     event(
         "session.text.started",
-        serde_json::json!({ "sessionID": session_id, "messageID": format!("msg_{n}"), "partID": format!("prt_{n}") }),
+        serde_json::json!({ "sessionID": session_id, "assistantMessageID": assistant, "ordinal": 0 }),
     );
     event(
         "session.text.delta",
-        serde_json::json!({ "sessionID": session_id, "messageID": format!("msg_{n}"), "partID": format!("prt_{n}"),
-                             "delta": format!("Fuzz reply #{n}: the harness says hello.") }),
+        serde_json::json!({ "sessionID": session_id, "assistantMessageID": assistant,
+                            "ordinal": 0, "delta": text }),
     );
     event(
         "session.text.ended",
-        serde_json::json!({ "sessionID": session_id, "messageID": format!("msg_{n}"), "partID": format!("prt_{n}") }),
+        serde_json::json!({ "sessionID": session_id, "assistantMessageID": assistant,
+                            "ordinal": 0, "text": text }),
     );
     event("session.execution.succeeded", session);
+}
+
+/// The next wire id for a stub-published frame (`evt_<n>`, ascending —
+/// the real server's `IdGen` shape, oc-server sse.rs:357 /
+/// ref schema event.ts:9-11).
+fn next_event_id(ids: &AtomicUsize) -> String {
+    format!("evt_{}", ids.fetch_add(1, Ordering::SeqCst))
 }
 
 /// Read one request (head + content-length body) into a string.
