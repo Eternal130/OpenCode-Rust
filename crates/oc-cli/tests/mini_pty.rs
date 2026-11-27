@@ -140,6 +140,7 @@ async fn start_stub(mode: PromptMode) -> Stub {
 }
 
 #[allow(clippy::too_many_lines)] // the stub server's full protocol walk
+#[allow(clippy::too_many_arguments)] // the stub's per-connection state handles (the ids seam joins them)
 async fn serve_connection(
     socket: &mut tokio::net::TcpStream,
     sub_tx: tokio::sync::broadcast::Sender<String>,
