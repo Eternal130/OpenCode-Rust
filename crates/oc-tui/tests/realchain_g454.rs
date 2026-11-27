@@ -35,7 +35,7 @@
 mod realchain_harness;
 
 use realchain_harness::{
-    default_pace, dump_grid, lane_lock, plugin_lane_skip_reason, sandbox, service_start,
+    default_pace, dump_grid, http_get, lane_lock, plugin_lane_skip_reason, sandbox, service_start,
     service_stop, stage_plugins_g454, worktree_dir, Gateway, TuiProcess, WORDMARK,
 };
 use std::time::{Duration, Instant};
@@ -82,6 +82,39 @@ fn run(tag: &str, only: Option<&str>, writable: bool) -> (bool, u64, Vec<String>
     // Plugin load is async — settle past the wordmark.
     settle(8);
     phase(&t0, tag, "settle8_done");
+    // TEMPORARY slowC probe: when did the daemon's plugin table
+    // actually report the staged plugins loaded (id resolves from the
+    // versioned target to the bare plugin id)?
+    {
+        let bare: Vec<String> = specs
+            .iter()
+            .map(|spec| spec.rsplit_once('@').map_or(spec.clone(), |(pkg, _)| pkg.to_owned()))
+            .collect();
+        let probe_start = Instant::now();
+        let mut loaded_at: Option<Duration> = None;
+        while probe_start.elapsed() < Duration::from_secs(10) {
+            let (status, body) =
+                http_get(&format!("{}/api/plugin", server.url), server.password.as_deref())
+                    .unwrap_or((0, String::new()));
+            let ids: Vec<String> = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|value| {
+                    value.get("data").and_then(|data| data.as_array()).map(|rows| {
+                        rows.iter()
+                            .filter_map(|row| row.get("id").and_then(|id| id.as_str()))
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                })
+                .unwrap_or_default();
+            if status == 200 && bare.iter().all(|want| ids.contains(want)) {
+                loaded_at = Some(probe_start.elapsed());
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        eprintln!("[slowC] {tag} plugin_table_loaded={:?} (since settle8_done)", loaded_at);
+    }
     let home = rust_tui.screen_text();
     dump_grid(&format!("g454-{tag}-home"), &home);
     let from = rust_tui.raw_len();

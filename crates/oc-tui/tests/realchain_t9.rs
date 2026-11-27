@@ -208,22 +208,33 @@ fn t9x_bootstrap_seed() {
 
 #[test]
 fn t9_4_sessions_survive_tui_restart() {
+    let t0 = Instant::now();
+    let phase = |what: &str| {
+        eprintln!("[slowC] t9-4 +{:.3}s {what}", t0.elapsed().as_secs_f64());
+    };
     let mut rig = rig("t9-4", false);
     assert!(
         rig.tui.wait_for(WORDMARK, 0, Duration::from_secs(30)),
         "T9-4 leg-1 RED: the TUI never settled"
     );
+    phase("wordmark");
     let from = rig.tui.raw_len();
     rig.tui.write(b"hello\r");
     let replied = rig.tui.wait_for(b"REALCHAIN-REPLAY-OK", from, Duration::from_secs(30));
+    phase(&format!("replied={replied}"));
     // Restart the TUI against the SAME sandbox + same managed server.
     rig.teardown_tui();
+    phase("leg1_torn_down");
     let server_url = rig.server_url.clone();
     let password = rig.password.clone();
     let mut restarted = TuiProcess::spawn(&rig.sandbox, COLS, ROWS);
+    phase("restarted_spawned");
     let settled = restarted.wait_for(WORDMARK, 0, Duration::from_secs(30));
+    phase(&format!("restart_settled={settled}"));
     let screen = restarted.screen_text();
+    phase("restart_screen_read");
     restarted.shutdown(Duration::from_secs(10));
+    phase("restart_torn_down");
     // Server-side truth: the session list survives the restart.
     let (status, body) = http_get(&format!("{server_url}/api/session"), password.as_deref())
         .unwrap_or((0, String::new()));
@@ -239,6 +250,7 @@ fn t9_4_sessions_survive_tui_restart() {
         })
         .unwrap_or(0);
     service_stop(&rig.sandbox);
+    phase("service_stopped");
     assert!(
         replied && settled && status == 200 && sessions >= 1,
         "T9-4 RED: first-turn reply={replied}, restart settled={settled}, \
@@ -254,14 +266,21 @@ fn t9_4_sessions_survive_tui_restart() {
 fn t9_5_sidebar_assembles_ref_content() {
     // WIDE spawn — the sidebar only auto-docks above 120 cols (ref
     // session-frame.tsx:106-110); at COLS=120 its absence is correct.
+    let t0 = Instant::now();
+    let phase = |what: &str| {
+        eprintln!("[slowC] t9-5 +{:.3}s {what}", t0.elapsed().as_secs_f64());
+    };
     let mut rig = rig_cols("t9-5", false, 160);
     assert!(
         rig.tui.wait_for(WORDMARK, 0, Duration::from_secs(30)),
         "T9-5 precondition RED: the TUI never settled"
     );
+    phase("wordmark");
     let from = rig.tui.raw_len();
     rig.tui.write(b"hello\r");
+    phase("sent_hello");
     let replied = rig.tui.wait_for(b"REALCHAIN-REPLAY-OK", from, Duration::from_secs(30));
+    phase(&format!("replied={replied}"));
     let screen = rig.tui.screen_text();
     dump_grid("t9-5-rust-160", &screen);
     drop(rig);
@@ -288,23 +307,31 @@ fn t9_5_sidebar_assembles_ref_content() {
 
 #[test]
 fn t9_6_config_hot_reload_updates_models() {
+    let t0 = Instant::now();
+    let phase = |what: &str| {
+        eprintln!("[slowC] t9-6 +{:.3}s {what}", t0.elapsed().as_secs_f64());
+    };
     let rig = rig("t9-6", false);
     assert!(
         rig.tui.wait_for(WORDMARK, 0, Duration::from_secs(30)),
         "T9-6 precondition RED: the TUI never settled"
     );
+    phase("wordmark");
     // Hot change: add a second model entry to the global config.
     rig.sandbox
         .write_config(&[("claude-sonnet-4-6", "claude-sonnet-4-6")], "replay/claude-opus-4-7");
+    phase("config_rewritten");
     let (reload_status, _reload_body) = http_post(
         &format!("{}/api/location/reload", rig.server_url),
         "{}",
         rig.password.as_deref(),
     )
     .unwrap_or((0, String::new()));
+    phase(&format!("reload_status={reload_status}"));
     let (status, body) =
         http_get(&format!("{}/api/model", rig.server_url), rig.password.as_deref())
             .unwrap_or((0, String::new()));
+    phase(&format!("model_status={status}"));
     drop(rig);
     assert!(
         (200..300).contains(&reload_status) && status == 200 && body.contains("claude-sonnet-4-6"),
