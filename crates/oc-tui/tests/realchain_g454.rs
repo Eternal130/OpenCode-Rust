@@ -46,13 +46,22 @@ fn settle(secs: u64) {
     std::thread::sleep(Duration::from_secs(secs));
 }
 
+// TEMPORARY slowC lane instrumentation (per-wait breakdown; stripped
+// before commit).
+fn phase(t0: &Instant, tag: &str, what: &str) {
+    eprintln!("[slowC] {tag} +{:.3}s {what}", t0.elapsed().as_secs_f64());
+}
+
 /// One discriminator/regression run: boot with the staged plugin set,
 /// send `hello`, and return (replied, gateway requests, specs).
 fn run(tag: &str, only: Option<&str>, writable: bool) -> (bool, u64, Vec<String>) {
+    let t0 = Instant::now();
     let logs = worktree_dir(".test-logs");
     let gateway = Gateway::spawn_paced(&format!("g454-{tag}"), None, &default_pace());
+    phase(&t0, tag, "gateway_ready");
     let rust = sandbox(&format!("g454-{tag}"), gateway.port);
     let specs = stage_plugins_g454(&rust, false, only, writable);
+    phase(&t0, tag, "staged_plugins");
     // A PLUGIN_SPECS rename (or a filtered-out registry name) would
     // stage NOTHING and still boot plugin-less — an empty-staging
     // hollow green. The single-select cases must stage exactly one.
@@ -64,18 +73,25 @@ fn run(tag: &str, only: Option<&str>, writable: bool) -> (bool, u64, Vec<String>
     let spec_refs: Vec<&str> = specs.iter().map(String::as_str).collect();
     rust.write_config_ext(&[], "replay/claude-opus-4-7", &spec_refs);
     let server = service_start(&rust);
+    phase(&t0, tag, "daemon_up");
     let mut rust_tui = TuiProcess::spawn(&rust, 96, ROWS);
+    phase(&t0, tag, "tui_spawned");
     let booted = rust_tui.wait_for(WORDMARK, 0, Duration::from_secs(30));
     assert!(booted, "G454 {tag}: rust TUI never booted");
+    phase(&t0, tag, "wordmark");
     // Plugin load is async — settle past the wordmark.
     settle(8);
+    phase(&t0, tag, "settle8_done");
     let home = rust_tui.screen_text();
     dump_grid(&format!("g454-{tag}-home"), &home);
     let from = rust_tui.raw_len();
     let sent_at = Instant::now();
     rust_tui.write(b"hello\r");
+    phase(&t0, tag, "sent_hello");
     let replied = rust_tui.wait_for(b"REALCHAIN-REPLAY-OK", from, Duration::from_secs(60));
+    phase(&t0, tag, &format!("needle_wait_done replied={replied}"));
     settle(4);
+    phase(&t0, tag, "settle4_done");
     let session = rust_tui.screen_text();
     dump_grid(&format!("g454-{tag}-session"), &session);
     let stats = format!("{}", gateway.stats());
@@ -83,10 +99,14 @@ fn run(tag: &str, only: Option<&str>, writable: bool) -> (bool, u64, Vec<String>
         .ok()
         .and_then(|value| value.get("requests").and_then(serde_json::Value::as_u64))
         .unwrap_or_default();
+    phase(&t0, tag, "stats_fetched");
     let _ = server.url;
     rust_tui.shutdown(Duration::from_secs(10));
+    phase(&t0, tag, "tui_down");
     service_stop(&rust);
+    phase(&t0, tag, "service_stopped");
     drop(gateway);
+    phase(&t0, tag, "gateway_dropped");
     let _ = std::fs::write(
         logs.join(format!("g454-{tag}-verdict.txt")),
         format!(

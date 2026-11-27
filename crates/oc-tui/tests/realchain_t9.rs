@@ -28,7 +28,7 @@ use realchain_harness::{
     corpus_dir, dump_grid, export_survey, http_get, http_post, lane_lock, sandbox, service_start,
     service_stop, Gateway, LaneGuard, Sandbox, TuiProcess, WORDMARK,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const COLS: u16 = 120;
 const ROWS: u16 = 36;
@@ -54,12 +54,19 @@ fn rig(tag: &str, record: bool) -> Rig {
 /// legitimately absent and the ref-anchored Context/tokens/spent
 /// expectations are untestable.
 fn rig_cols(tag: &str, record: bool, cols: u16) -> Rig {
+    let t0 = Instant::now();
+    let phase = |what: &str| {
+        eprintln!("[slowC] t9 {tag} +{:.3}s {what}", t0.elapsed().as_secs_f64());
+    };
     let lane = lane_lock();
     // Gateway first: its port goes into the config.
     let gateway = Gateway::spawn(tag, record.then_some(corpus_dir().as_path()));
+    phase("gateway_ready");
     let box_ = sandbox(tag, gateway.port);
     box_.write_config(&[], "replay/claude-opus-4-7");
+    phase("config_written");
     let server = service_start(&box_);
+    phase("daemon_up");
     // W6 harness hardening: a panic between the daemon start and the
     // Rig taking ownership must still stop the daemon (the pair lane
     // covered its own window; the T9 rig builds the TUI after the
@@ -71,6 +78,7 @@ fn rig_cols(tag: &str, record: bool, cols: u16) -> Rig {
         daemon_clean.disarm();
         tui
     };
+    phase("tui_spawned");
     Rig {
         _lane: lane,
         sandbox: box_,
@@ -83,7 +91,9 @@ fn rig_cols(tag: &str, record: bool, cols: u16) -> Rig {
 
 impl Rig {
     fn teardown_tui(&mut self) {
+        let t0 = Instant::now();
         self.tui.shutdown(Duration::from_secs(10));
+        eprintln!("[slowC] t9 teardown_tui +{:.3}s", t0.elapsed().as_secs_f64());
     }
 }
 
@@ -320,14 +330,20 @@ fn t9_6_config_hot_reload_updates_models() {
 #[test]
 fn t9_8_slow_boot_window_stays_clean_of_connection_lost() {
     use realchain_harness::service_start_with_env;
+    let t0 = std::time::Instant::now();
+    let phase = |what: &str| {
+        eprintln!("[slowC] t9-8 +{:.3}s {what}", t0.elapsed().as_secs_f64());
+    };
     let lane = lane_lock();
     let gateway = Gateway::spawn("t9-8", None);
+    phase("gateway_ready");
     let box_ = sandbox("t9-8", gateway.port);
     box_.write_config(&[], "replay/claude-opus-4-7");
     let server = service_start_with_env(
         &box_,
         &[("OPENCODE_TEST_SSE_FIRST_FRAME_DELAY_MS".to_owned(), "6000".to_owned())],
     );
+    phase("daemon_up");
     // W7 Minor ① (W6 review): the guard previously disarmed right
     // after the spawn, leaving the WHOLE polling/assert body without a
     // panic-safe daemon cleaner (a mid-loop panic stranded the daemon
@@ -336,6 +352,7 @@ fn t9_8_slow_boot_window_stays_clean_of_connection_lost() {
     // below is idempotent with its Drop.
     let mut daemon_clean = realchain_harness::ServiceClean::new(&box_);
     let mut tui = TuiProcess::spawn(&box_, COLS, ROWS);
+    phase("tui_spawned");
     // The boot window: poll the rendered screen for 12 s (the 6 s
     // first-frame hold + margins) — the raw stream check catches even
     // a one-frame flash of the overlay.
@@ -357,15 +374,19 @@ fn t9_8_slow_boot_window_stays_clean_of_connection_lost() {
         }
         std::thread::sleep(Duration::from_millis(200));
     }
+    phase("boot_window_loop_done");
     // The delay elapses, the handshake lands, the wordmark settles.
     let settled = tui.wait_for(WORDMARK, 0, Duration::from_secs(30));
+    phase(&format!("wordmark settled={settled}"));
     let raw_flash = {
         let raw = tui.raw.lock().expect("raw").clone();
         raw.windows(b"Connection lost".len()).any(|w| w == b"Connection lost")
     };
     let raw_flash_count = u64::from(raw_flash);
     tui.shutdown(Duration::from_secs(10));
+    phase("tui_down");
     service_stop(&box_);
+    phase("service_stopped");
     daemon_clean.disarm(); // the explicit stop above covered the Drop's duty
     drop(tui);
     drop(gateway);

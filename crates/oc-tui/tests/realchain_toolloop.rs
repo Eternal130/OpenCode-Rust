@@ -162,6 +162,10 @@ impl ToolLoopRig {
 }
 
 fn toolloop_rig(tag: &str) -> ToolLoopRig {
+    let t0 = Instant::now();
+    let phase = |what: &str| {
+        eprintln!("[slowC] toolloop +{:.3}s {what}", t0.elapsed().as_secs_f64());
+    };
     let lane = lane_lock();
     // Layer 1: ONE turn-anchored gateway PER ENGINE (independent turn
     // counters); both load BOTH engines' turn-tagged corpora so the
@@ -173,6 +177,7 @@ fn toolloop_rig(tag: &str) -> ToolLoopRig {
     let corpus = [corpus_tools_dir(), corpus_tools_ref_dir()];
     let rust_gateway = Gateway::spawn_turn(tag, &corpus, None);
     let ref_gateway = Gateway::spawn_turn(tag, &corpus, None);
+    phase("gateways_ready");
     let mut rust = sandbox(tag, rust_gateway.port);
     let mut refbox = sandbox(&format!("{tag}ref"), ref_gateway.port);
     // Layer 2: the shim dir shadows `cargo` inside both sandboxes.
@@ -190,12 +195,15 @@ fn toolloop_rig(tag: &str) -> ToolLoopRig {
     // AFTER ref_stage (it writes its own project README) — both ends
     // must carry the identical edit target.
     align_projects(&rust, &refbox);
+    phase("sandboxes_configured");
     let server = service_start(&rust);
     let _ = server.url;
+    phase("daemon_up");
     // AFTER ref_stage (it writes its own project README) — both ends
     // must carry the identical edit target.
     let rust_tui = TuiProcess::spawn(&rust, COLS, ROWS);
     let ref_tui = ref_tui_spawn(&refbox, &stage, COLS, ROWS);
+    phase("tuis_spawned");
     ToolLoopRig { _lane: lane, rust_gateway, ref_gateway, rust, refbox, stage, rust_tui, ref_tui }
 }
 
@@ -245,8 +253,13 @@ macro_rules! tl_wait {
 #[test]
 fn tl_tool_loop_pair() {
     skip_without_ref_lane!();
+    let t0 = Instant::now();
+    let phase = |what: &str| {
+        eprintln!("[slowC] tl +{:.3}s {what}", t0.elapsed().as_secs_f64());
+    };
     let mut rig = toolloop_rig("tl");
     let (rust_booted, ref_booted) = wait_both(&rig.rust_tui, &rig.ref_tui, WORDMARK, 0, 30, 0, 60);
+    phase(&format!("booted rust={rust_booted} ref={ref_booted}"));
     assert!(
         rust_booted && ref_booted,
         "TL precondition RED: booted rust={rust_booted} ref={ref_booted}; \
@@ -255,12 +268,16 @@ fn tl_tool_loop_pair() {
         rig.ref_tui.screen_text()
     );
     std::thread::sleep(Duration::from_secs(2));
+    phase("post_boot_settle2");
     rig.rust_tui.write(b"hello\r");
     rig.ref_tui.write(b"hello\r");
+    phase("sent_hello");
 
     // Tool call line: the shell row names the recorded command.
     let rust_cmd = tl_wait!(rig.rust_tui, "cargo test", 30, "tl-fail-rust-cmd");
+    phase(&format!("rust_cmd={rust_cmd}"));
     let ref_cmd = tl_wait!(rig.ref_tui, "cargo test", 60, "tl-fail-ref-cmd");
+    phase(&format!("ref_cmd={ref_cmd}"));
     // Folded tool output: the shim's recorded cargo output renders.
     // W12/2.2#12: the G-442 repaint nudge is RETIRED — it masked the
     // shell-row projection race (both ends nudged made the grids
@@ -288,20 +305,27 @@ fn tl_tool_loop_pair() {
     if !ref_out {
         dump_grid("tl-fail-ref-out", &rig.ref_tui.screen_text());
     }
+    phase(&format!("tool_output rust={rust_out} ref={ref_out}"));
     // File edit landed: the tool ROW plus the diff PREVIEW rows on
     // both ends (G-441 closed); the file state itself is asserted
     // byte-exactly after the teardown.
     let rust_edited = tl_wait!(rig.rust_tui, "Edit README.md", 30, "tl-fail-rust-edit");
+    phase(&format!("rust_edited={rust_edited}"));
     let ref_edited = tl_wait!(rig.ref_tui, "(tests green)", 60, "tl-fail-ref-edit");
+    phase(&format!("ref_edited={ref_edited}"));
     // Final confirmation text.
     let rust_done = tl_wait!(rig.rust_tui, CONFIRM_NEEDLE, 30, "tl-fail-rust-done");
+    phase(&format!("rust_done={rust_done}"));
     let ref_done = tl_wait!(rig.ref_tui, CONFIRM_NEEDLE, 60, "tl-fail-ref-done");
+    phase(&format!("ref_done={ref_done}"));
     std::thread::sleep(Duration::from_secs(4));
+    phase("post_confirm_settle4");
 
     let ref_grid = rig.normalize(&rig.ref_tui.screen_text());
     let rust_grid = rig.normalize(&rig.rust_tui.screen_text());
     dump_grid("tl-toolloop-ref", &ref_grid);
     dump_grid("tl-toolloop-rust", &rust_grid);
+    phase("grids_captured");
     let rust_readme =
         std::fs::read_to_string(rig.rust.project.join("README.md")).unwrap_or_default();
     let ref_readme =
@@ -309,6 +333,7 @@ fn tl_tool_loop_pair() {
     let rust_stats = rig.rust_gateway.stats();
     let ref_stats = rig.ref_gateway.stats();
     drop(rig);
+    phase("rig_dropped");
     assert!(
         rust_cmd && ref_cmd,
         "TL RED: tool call line rust={rust_cmd} ref={ref_cmd} (stats rust {rust_stats} / ref \
