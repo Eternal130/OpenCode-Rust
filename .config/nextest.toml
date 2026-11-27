@@ -118,5 +118,15 @@ test-threads = 1
 # toolloop/w13/g454，T9_LANE_SHARDS 分片）+ harness。
 # SOP：每波新锚 target 合并时，把 binary(realchain_v<new>) 追加进枚举——
 # 漏加的后果=门多跑一族（变慢但不漏检），永不误跳过电池。
+[profile.anchors]
+# 2026-11-27 (controller, the rig-parallelism curve): realchain rigs are
+# CPU-sensitive — at 4 test-threads the multi-rig dual-end processes
+# starve the 4-core quota and per-test self-time inflates ~3x (va21g
+# t1f evidence: v21e 685s vs its 218s low-concurrency baseline). 2 rigs
+# x 2 ends = 4 processes = the quota saturated without starvation.
+# SOP: ALL realchain_v* anchor runs/re-exports use --profile anchors
+# (bakes the --test-threads 2 lesson in so lanes cannot forget it).
+test-threads = 2
+
 [profile.merge]
 default-filter = 'not(binary(realchain_va17) or binary(realchain_va18) or binary(realchain_va19) or binary(realchain_va20) or binary(realchain_v21) or binary(realchain_v21b) or binary(realchain_v21c) or binary(realchain_v21d) or binary(realchain_v21e) or binary(realchain_v21f) or binary(realchain_v21g))'
